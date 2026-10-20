@@ -1,23 +1,20 @@
 /* @vitest-environment jsdom */
-import { afterEach, assert, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow, ModelCatalogResult } from "../../api/types.ts";
 import { disposeQuestionPromptState } from "../../app/question-prompt.ts";
 import { buildCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
-import { sessionsResult as sessions } from "../../lib/sessions/session-capability.test-support.ts";
-import { sessionMutationGatewayHello as gatewayHello } from "../../test-helpers/gateway-methods.ts";
+import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   createComposerContainer,
+  disposeComposer,
   renderComposerInto,
   resetComposerFixture,
 } from "./chat-composer.test-support.ts";
-import { createRefreshChatPane as createPane } from "./chat-pane-history.test-support.ts";
+import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import { ChatPaneRuntime } from "./chat-pane-render.ts";
-import {
-  createGatewayBrowserClientFixture as createClient,
-  createPaneTestHost,
-} from "./chat-pane.test-support.ts";
+import { createGatewayBrowserClientFixture, createPaneTestHost } from "./chat-pane.test-support.ts";
 import { refreshChatMetadata, retireChatMetadataRequests } from "./chat-state-refresh.ts";
 import { disposeChatView, renderChatPropsInto } from "./chat-view.test-helpers.ts";
 import type { ChatProps } from "./chat-view.tsx";
@@ -26,300 +23,344 @@ import {
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
 
-type Fixture = ReturnType<typeof createPane>;
-type Row = Partial<GatewaySessionRow>;
 const defaults = { modelProvider: null, model: null, contextTokens: null };
-const restrictedReason = "No models are permitted by your administrator.";
-const parentKey = "agent:main:parent";
-const row = (key: string, extra: Row = {}): GatewaySessionRow => ({
-  key,
-  kind: "direct",
-  ...extra,
+
+afterEach(async () => {
+  await resetComposerFixture();
 });
-function selectSession(state: Fixture["state"], key: string, extra: Row = {}) {
-  const selected = row(key, extra);
-  state.sessionKey = key;
-  state.sessionsResult = sessions([selected]);
-  return selected;
-}
-const queries =
-  (root: HTMLElement) =>
-  <T extends HTMLElement = HTMLElement>(selector: string): T | null =>
-    root.querySelector<T>(selector);
-function composerView(pane: Fixture["pane"]) {
-  const root = createComposerContainer();
-  return {
-    root,
-    q: queries(root),
-    draw: () => {
-      pane.render();
-      assert(pane.chatProps);
-      renderComposerInto(root, pane.chatProps);
-      return pane.chatProps;
-    },
+
+function createRecoveringComposer(draft: string) {
+  let recoveryReady = false;
+  const client = createGatewayBrowserClientFixture();
+  Object.defineProperty(client, "recoveryScopeReady", { get: () => recoveryReady });
+  const { pane, state, context } = createRefreshChatPane(client);
+  context.gateway.snapshot.hello = sessionMutationGatewayHello(["operator.write"]);
+  state.chatLoading = true;
+  state.currentSessionId = null;
+  state.chatMessage = draft;
+  state.handleSendChat = vi.fn();
+  const container = createComposerContainer();
+  const draw = () => {
+    pane.render();
+    assert(pane.chatProps);
+    renderComposerInto(container, pane.chatProps);
+    const input = container.querySelector<HTMLTextAreaElement>("textarea");
+    const send = container.querySelector<HTMLButtonElement>(".chat-send-btn--send");
+    assert(input);
+    assert(send);
+    return { input, send, props: pane.chatProps };
   };
-}
-function transcriptView(client?: Parameters<typeof createPane>[0]) {
-  installTranscriptDomMocks();
-  const fixture = createPane(client);
-  const { pane, context } = fixture;
-  const root = document.body.appendChild(createComposerContainer());
-  onTestFinished(() => {
-    disposeChatView(root);
-    resetTranscriptTestDom();
-  });
   return {
-    ...fixture,
-    root,
-    q: queries(root),
-    draw: () => {
-      pane.render();
-      renderChatPropsInto(root, pane.chatProps!, context);
-    },
-  };
-}
-function modelPane(
-  client = createClient({ recoveryScopeReady: true }),
-  model?: { primary?: string },
-) {
-  const fixture = createPane(client);
-  fixture.context.agents.state.agentsList = {
-    defaultId: "main",
-    mainKey: "main",
-    scope: "global",
-    agents: [{ id: "main", ...(model ? { model } : {}) }],
-  };
-  fixture.state.handleSendChat = vi.fn();
-  return fixture;
-}
-function recovering(draft: string) {
-  let ready = false;
-  const client = createClient();
-  Object.defineProperty(client, "recoveryScopeReady", { get: () => ready });
-  const fixture = createPane(client);
-  fixture.context.gateway.snapshot.hello = gatewayHello(["operator.write"]);
-  Object.assign(fixture.state, {
-    chatLoading: true,
-    currentSessionId: null,
-    chatMessage: draft,
-    handleSendChat: vi.fn(),
-  });
-  const view = composerView(fixture.pane);
-  return {
-    ...fixture,
-    ...view,
+    pane,
+    state,
+    context,
+    container,
+    draw,
     finishRecovery: () => {
-      ready = true;
+      recoveryReady = true;
     },
   };
 }
+
 class SuggestionRecoveryPane extends ChatPaneRuntime {
   chatProps: ChatProps | undefined;
-  initialize({ state, context }: Fixture) {
+
+  initialize({ state, context }: ReturnType<typeof createRefreshChatPane>) {
     this.state = state;
     this.context = context;
     this.connectedClient = state.client;
     Object.defineProperty(this, "isConnected", { value: true });
     this.presence.update({
-      presence: ["owner", "viewer"].map((id) => ({ user: { id }, ts: 1 })),
+      presence: [
+        { user: { id: "owner" }, ts: 1 },
+        { user: { id: "viewer" }, ts: 1 },
+      ],
     });
     onTestFinished(() => disposeQuestionPromptState(this.questionPromptState));
   }
+
   protected override renderChatPaneLayout({ chatProps }: { chatProps: ChatProps }) {
     this.chatProps = chatProps;
     return null;
   }
 }
-afterEach(() => resetComposerFixture());
 
 it.each([
   { draft: "Keep this draft", control: false, cached: false },
   { draft: "/stop", control: true, cached: false },
   { draft: "Keep the cached reader in place", control: false, cached: true },
 ])(
-  "holds early input until recovery, preserving live controls: $draft",
+  "holds early input until recovery is ready, preserving live controls: $draft",
   ({ draft, control, cached }) => {
-    const { state, q, draw, finishRecovery } = recovering(draft);
+    const { state, container, draw, finishRecovery } = createRecoveringComposer(draft);
     if (cached) {
-      Object.assign(state, {
-        currentSessionId: "cached-session",
-        chatLoading: false,
-        chatMessages: [{ role: "assistant", content: "Cached reply", timestamp: 1 }],
-      });
+      state.currentSessionId = "cached-session";
+      state.chatMessages = [{ role: "assistant", content: "Cached reply", timestamp: 1 }];
+      state.chatLoading = false;
     }
-    const held = draw();
-    const input = q<HTMLTextAreaElement>("textarea");
-    const send = q<HTMLButtonElement>(".chat-send-btn--send");
-    assert(input);
-    assert(send);
-    expect(input).toMatchObject({ disabled: false, value: draft });
-    expect(send.disabled).toBe(!control);
-    expect(q(".agent-chat__composer-status")).toBeNull();
-    if (!control) {
-      expect(send.getAttribute("aria-label")).toBe(
-        "Finishing connection recovery. Try sending again when it is ready.",
-      );
-      expect(send.getAttribute("aria-busy")).toBe("true");
-      send.click();
-      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-      void held.onSend();
-      expect(state.handleSendChat).not.toHaveBeenCalled();
-      expect(input.value).toBe(draft);
-    } else {
-      send.click();
-      expect(state.handleSendChat).toHaveBeenCalledOnce();
+    try {
+      const held = draw();
+      expect(held.input.disabled).toBe(false);
+      expect(held.input.value).toBe(draft);
+      expect(held.send.disabled).toBe(!control);
+      expect(container.querySelector(".agent-chat__composer-status")).toBeNull();
+      if (!control) {
+        expect(held.send.getAttribute("aria-label")).toBe(
+          "Finishing connection recovery. Try sending again when it is ready.",
+        );
+        expect(held.send.getAttribute("aria-busy")).toBe("true");
+        held.send.click();
+        held.input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+        void held.props.onSend();
+        expect(state.handleSendChat).not.toHaveBeenCalled();
+        expect(held.input.value).toBe(draft);
+      } else {
+        held.send.click();
+        expect(state.handleSendChat).toHaveBeenCalledOnce();
+      }
+
+      finishRecovery();
+      const ready = draw();
+      expect(state.chatLoading).toBe(!cached);
+      expect(ready.input.value).toBe(draft);
+      expect(ready.send.disabled).toBe(false);
+      expect(ready.send.getAttribute("aria-busy")).toBe("false");
+      ready.send.click();
+      expect(state.handleSendChat).toHaveBeenCalledTimes(control ? 2 : 1);
+    } finally {
+      disposeComposer(container);
     }
-    finishRecovery();
-    draw();
-    expect(state.chatLoading).toBe(!cached);
-    expect(q("textarea")).toMatchObject({ value: draft });
-    const ready = q<HTMLButtonElement>(".chat-send-btn--send");
-    expect(ready).toMatchObject({ disabled: false });
-    expect(ready?.getAttribute("aria-busy")).toBe("false");
-    ready?.click();
-    expect(state.handleSendChat).toHaveBeenCalledTimes(control ? 2 : 1);
   },
 );
 
-it.each([false, true])("keeps initial-turn input usable (offline=%s)", (offline) => {
-  const { state, context, q, draw, finishRecovery } = recovering("Queue this follow-up");
+it("keeps ordinary input usable while the initial placement turn is pending", () => {
+  const { state, context, container, draw, finishRecovery } =
+    createRecoveringComposer("Queue this follow-up");
+  finishRecovery();
   state.hasPendingInitialTurn = () => true;
-  if (offline) {
-    state.connected = false;
-  } else {
-    finishRecovery();
-    vi.spyOn(context.placementStartup, "get").mockReturnValue({
-      sessionKey: state.sessionKey,
-      phase: "provisioning",
-      startedAt: 1,
-    });
+  vi.spyOn(context.placementStartup, "get").mockReturnValue({
+    sessionKey: state.sessionKey,
+    phase: "provisioning",
+    startedAt: 1,
+  });
+  try {
+    const { input, send } = draw();
+    expect(input.disabled).toBe(false);
+    expect(send.disabled).toBe(false);
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(state.handleSendChat).toHaveBeenCalledOnce();
+  } finally {
+    disposeComposer(container);
   }
-  draw();
-  expect(q("textarea")).toMatchObject({ disabled: false });
-  expect(q(".chat-send-btn--send")).toMatchObject({ disabled: false });
-  if (offline) {
-    expect(q(".agent-chat__composer-status-band")?.textContent).toBe(
+});
+
+it("explains an unresolved initial turn while offline without blocking the outbox", () => {
+  const { state, container, draw } = createRecoveringComposer("Queue this follow-up");
+  state.hasPendingInitialTurn = () => true;
+  state.connected = false;
+  try {
+    const { input, send } = draw();
+    expect(container.querySelector(".agent-chat__composer-status-band")?.textContent).toBe(
       "The initial message is unresolved. Reconnect if needed, then review it before sending another message.",
     );
-  } else {
-    q("textarea")?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    expect(state.handleSendChat).toHaveBeenCalledOnce();
+    expect(input.disabled).toBe(false);
+    expect(send.disabled).toBe(false);
+  } finally {
+    disposeComposer(container);
   }
 });
 
 it.each(["Keep this suggestion", "/stop"])(
-  "submits suggestions independently of chat recovery: %s",
+  "keeps suggestion submission independent of chat recovery: %s",
   async (draft) => {
-    const fixture = recovering(draft);
-    const { state, context, root, q } = fixture;
-    selectSession(state, "agent:main:suggestion-recovery", {
-      visibility: "suggest",
-      sharingRole: "viewer",
-    });
+    const fixture = createRecoveringComposer(draft);
+    const { state, context, container } = fixture;
+    state.sessionKey = "agent:main:suggestion-recovery";
     const pane = createPaneTestHost("openclaw-suggestion-recovery-test", SuggestionRecoveryPane);
     pane.initialize(fixture);
     const methods = context.gateway.snapshot.hello?.features?.methods;
     assert(methods);
     methods.push("session.suggestions.add", "session.suggestions.list");
+    state.sessionsResult = {
+      ts: 1,
+      path: "",
+      count: 1,
+      defaults,
+      sessions: [
+        { key: state.sessionKey, kind: "direct", visibility: "suggest", sharingRole: "viewer" },
+      ],
+    };
     assert(state.client);
-    pane.render();
-    const props = pane.chatProps;
-    assert(props);
-    renderComposerInto(root, props);
-    expect(props.suggestionComposer).toBe(true);
-    expect(q(".chat-send-btn--send")).toMatchObject({ disabled: false });
-    const request = vi.spyOn(state.client, "request").mockResolvedValue({
-      suggestion: {
-        id: "suggestion-1",
+    try {
+      pane.render();
+      const props = pane.chatProps;
+      assert(props);
+      renderComposerInto(container, props);
+      const send = container.querySelector<HTMLButtonElement>(".chat-send-btn--send");
+      assert(send);
+      expect(props.suggestionComposer).toBe(true);
+      expect(send.disabled).toBe(false);
+      const request = vi.spyOn(state.client, "request").mockResolvedValue({
+        suggestion: {
+          id: "suggestion-1",
+          sessionKey: state.sessionKey,
+          agentId: "main",
+          author: { type: "human", id: "viewer", label: "Viewer" },
+          text: draft,
+          createdAt: 1,
+          state: "pending",
+        },
+      });
+      await props.onSend();
+      expect(request).toHaveBeenCalledExactlyOnceWith("session.suggestions.add", {
         sessionKey: state.sessionKey,
-        agentId: "main",
-        author: { type: "human", id: "viewer", label: "Viewer" },
         text: draft,
-        createdAt: 1,
-        state: "pending",
-      },
-    });
-    await props.onSend();
-    expect(request).toHaveBeenCalledExactlyOnceWith("session.suggestions.add", {
-      sessionKey: state.sessionKey,
-      text: draft,
-    });
-    expect(state.chatMessage).toBe("");
-    expect(state.handleSendChat).not.toHaveBeenCalled();
+      });
+      expect(state.chatMessage).toBe("");
+      expect(state.handleSendChat).not.toHaveBeenCalled();
+    } finally {
+      disposeComposer(container);
+    }
   },
 );
 
 it.each([
   { reason: "Your operator role requires a sandboxed session.", scope: "operator.write" },
   { reason: null, scope: "operator.read" },
-])("disables denied sends ($reason, $scope), then recovers", ({ reason, scope }) => {
-  const { pane, state, context } = createPane(createClient({ recoveryScopeReady: true }));
-  context.gateway.snapshot.hello = gatewayHello([scope]);
-  const selected = selectSession(state, state.sessionKey, {
+])("disables composition before a denied send ($reason, $scope)", ({ reason, scope }) => {
+  const { pane, state, context } = createRefreshChatPane(
+    createGatewayBrowserClientFixture({ recoveryScopeReady: true }),
+  );
+  context.gateway.snapshot.hello = sessionMutationGatewayHello([scope]);
+  const row: GatewaySessionRow = {
+    key: state.sessionKey,
+    kind: "direct",
     sharingRole: "owner",
     sendDisabledReason: reason,
-  });
+  };
+  state.sessionsResult = { ts: 1, path: "", count: 1, defaults, sessions: [row] };
   state.chatMessage = "Keep this draft";
   state.handleSendChat = vi.fn();
-  const { q, draw } = composerView(pane);
-  draw();
-  const input = q<HTMLTextAreaElement>("textarea");
-  expect(input).toMatchObject({ disabled: true, value: "Keep this draft" });
-  expect(q('button[aria-label="Send message"]')).toMatchObject({ disabled: true });
-  const displayedReason = reason ?? pane.chatProps?.disabledReason;
-  expect(displayedReason).toBeTruthy();
-  expect(q(".agent-chat__composer-status-text")?.textContent).toBe(displayedReason);
-  expect(input?.getAttribute("aria-describedby")).toContain("disabled-reason");
-  input?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-  void pane.chatProps?.onSend();
-  expect(state.handleSendChat).not.toHaveBeenCalled();
-  selected.sendDisabledReason = null;
-  context.gateway.snapshot.hello = gatewayHello(["operator.write"]);
-  draw();
-  expect(q("textarea")).toMatchObject({ disabled: false, value: "Keep this draft" });
-  expect(q(".agent-chat__composer-status-text")).toBeNull();
-  void pane.chatProps?.onSend();
-  expect(state.handleSendChat).toHaveBeenCalledOnce();
+  const container = createComposerContainer();
+  const draw = () => {
+    pane.render();
+    assert(pane.chatProps);
+    renderComposerInto(container, pane.chatProps);
+  };
+  try {
+    draw();
+    const input = container.querySelector<HTMLTextAreaElement>("textarea");
+    expect(input?.disabled).toBe(true);
+    expect(input?.value).toBe("Keep this draft");
+    expect(
+      container.querySelector<HTMLButtonElement>('button[aria-label="Send message"]')?.disabled,
+    ).toBe(true);
+    const displayedReason = reason ?? pane.chatProps?.disabledReason;
+    expect(displayedReason).toBeTruthy();
+    expect(container.querySelector(".agent-chat__composer-status-text")?.textContent).toBe(
+      displayedReason,
+    );
+    expect(input?.getAttribute("aria-describedby")).toContain("disabled-reason");
+    input?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    void pane.chatProps?.onSend();
+    expect(state.handleSendChat).not.toHaveBeenCalled();
+
+    row.sendDisabledReason = null;
+    context.gateway.snapshot.hello = sessionMutationGatewayHello(["operator.write"]);
+    draw();
+    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(false);
+    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("Keep this draft");
+    expect(container.querySelector(".agent-chat__composer-status-text")).toBeNull();
+    void pane.chatProps?.onSend();
+    expect(state.handleSendChat).toHaveBeenCalledOnce();
+  } finally {
+    disposeComposer(container);
+  }
 });
 
 it.each([
-  ["Hello", false, false, undefined],
-  ["Hello", false, true, undefined],
-  ["/models", true, true, undefined],
-  ["Hello", true, true, { override: "example/custom", stored: "retired" }],
-  ["Hello", false, true, { override: null, stored: "custom" }],
-] satisfies [string, boolean, boolean, { override: string | null; stored: string } | undefined][])(
-  "admits %s without a role default (allowed=%s, restricted=%s)",
-  (draft, allowed, restricted, choice) => {
-    const { pane, state } = modelPane();
+  { draft: "Hello", allowed: false, restricted: false },
+  { draft: "Hello", allowed: false, restricted: true },
+  { draft: "/models", allowed: true, restricted: true },
+])(
+  "admits $draft with no default (restricted: $restricted): $allowed",
+  ({ draft, allowed, restricted }) => {
+    const { pane, state, context } = createRefreshChatPane(
+      createGatewayBrowserClientFixture({ recoveryScopeReady: true }),
+    );
     state.sessionKey = "agent:main:setup";
+    context.agents.state.agentsList = {
+      defaultId: "main",
+      mainKey: "main",
+      scope: "global",
+      agents: [{ id: "main" }],
+    };
+    state.handleSendChat = vi.fn();
     state.chatMessage = draft;
     state.chatModelCatalogInitialized = true;
     if (restricted) {
       state.chatModelSelectionPolicy = { restricted: true, defaultModel: null };
       state.chatModelCatalog = [];
     }
-    if (choice) {
-      selectSession(state, "agent:main:choice", { model: choice.stored, modelProvider: "example" });
-      state.sessions.state.modelOverrides = { [state.sessionKey]: choice.override };
-      state.chatModelCatalog = [{ id: "custom", name: "Custom model", provider: "example" }];
-    }
     pane.render();
+
     expect(pane.chatProps?.modelSetupRequired).toBe(!restricted);
-    if (!choice) {
-      expect(pane.chatProps).toMatchObject({ disabledReason: null, canSend: true });
-    }
+    expect(pane.chatProps?.disabledReason).toBeNull();
+    expect(pane.chatProps?.canSend).toBe(true);
     void pane.chatProps?.onSend();
     expect(state.handleSendChat).toHaveBeenCalledTimes(allowed ? 1 : 0);
-    if (choice) {
-      expect(pane.chatProps?.modelRequiredReason).toBe(allowed ? undefined : "Choose a model");
-    } else if (restricted) {
-      expect(pane.chatProps?.modelRequiredReason).toBe(restrictedReason);
-      const { q, draw } = composerView(pane);
-      draw();
-      expect(q(".agent-chat__disabled-banner-detail")?.textContent).toBe(restrictedReason);
-      expect(q(".agent-chat__disabled-banner button")).toBeNull();
+    if (restricted) {
+      assert(pane.chatProps);
+      expect(pane.chatProps.modelRequiredReason).toBe(
+        "No models are permitted by your administrator.",
+      );
+      const container = createComposerContainer();
+      renderComposerInto(container, pane.chatProps);
+      expect(container.querySelector(".agent-chat__disabled-banner-detail")?.textContent).toBe(
+        "No models are permitted by your administrator.",
+      );
+      expect(container.querySelector(".agent-chat__disabled-banner button")).toBeNull();
+      disposeComposer(container);
     }
+  },
+);
+
+it.each([
+  { override: "example/custom", storedModel: "retired", allowed: true },
+  { override: null, storedModel: "custom", allowed: false },
+])(
+  "uses the current model choice $override when the role has no default",
+  ({ override, storedModel, allowed }) => {
+    const { pane, state, context } = createRefreshChatPane(
+      createGatewayBrowserClientFixture({ recoveryScopeReady: true }),
+    );
+    state.sessionKey = "agent:main:choice";
+    context.agents.state.agentsList = {
+      defaultId: "main",
+      mainKey: "main",
+      scope: "global",
+      agents: [{ id: "main" }],
+    };
+    state.sessionsResult = {
+      ts: 1,
+      path: "",
+      count: 1,
+      defaults,
+      sessions: [
+        { key: state.sessionKey, kind: "direct", model: storedModel, modelProvider: "example" },
+      ],
+    };
+    state.sessions.state.modelOverrides = { [state.sessionKey]: override };
+    state.chatModelCatalog = [{ id: "custom", name: "Custom model", provider: "example" }];
+    state.chatModelCatalogInitialized = true;
+    state.chatModelSelectionPolicy = { restricted: true, defaultModel: null };
+    state.chatMessage = "Hello";
+    state.handleSendChat = vi.fn();
+    pane.render();
+    expect(pane.chatProps?.modelSetupRequired).toBe(false);
+    expect(pane.chatProps?.modelRequiredReason).toBe(allowed ? undefined : "Choose a model");
+    void pane.chatProps?.onSend();
+    expect(state.handleSendChat).toHaveBeenCalledTimes(allowed ? 1 : 0);
   },
 );
 
@@ -329,85 +370,116 @@ it.each([
   { restricted: false, cachedDefault: true },
   { restricted: true, cachedDefault: true },
 ])(
-  "waits for first catalog receipt (restricted=$restricted, cached=$cachedDefault)",
+  "waits for the first catalog receipt before presenting setup or historical choices (restricted: $restricted, cached default: $cachedDefault)",
   async ({ restricted, cachedDefault }) => {
     const catalog = createDeferred<ModelCatalogResult>();
-    const client = createClient({
+    const client = createGatewayBrowserClientFixture({
       recoveryScopeReady: true,
       request: (method) =>
         method === "models.list" ? catalog.promise : { commands: [], swarmEnabled: false },
     });
-    const { pane, state } = modelPane(
-      client,
-      cachedDefault ? { primary: "example/cached-default" } : {},
-    );
-    const historyRow = selectSession(state, "agent:main:first-catalog", {
-      model: "primary-model",
-      modelProvider: "example",
-      modelOverrideSource: "user",
-    });
-    if (cachedDefault) {
-      state.sessionsResult!.defaults = {
-        ...defaults,
-        model: "cached-default",
-        modelProvider: "example",
-      };
-    }
+    const { pane, state, context } = createRefreshChatPane(client);
+    state.sessionKey = "agent:main:first-catalog";
+    context.agents.state.agentsList = {
+      defaultId: "main",
+      mainKey: "main",
+      scope: "global",
+      agents: [{ id: "main", model: cachedDefault ? { primary: "example/cached-default" } : {} }],
+    };
+    state.sessionsResult = {
+      ts: 1,
+      path: "",
+      count: 1,
+      defaults: cachedDefault
+        ? { ...defaults, model: "cached-default", modelProvider: "example" }
+        : defaults,
+      sessions: [
+        {
+          key: state.sessionKey,
+          kind: "direct",
+          model: "primary-model",
+          modelProvider: "example",
+          modelOverrideSource: "user",
+        },
+      ],
+    };
+    const historyRow = state.sessionsResult.sessions[0];
+    state.handleSendChat = vi.fn();
     const pending = refreshChatMetadata(state);
-    onTestFinished(async () => {
+    const container = createComposerContainer();
+    const draw = () => {
+      pane.render();
+      assert(pane.chatProps);
+      renderComposerInto(container, pane.chatProps);
+      return pane.chatProps;
+    };
+    try {
+      const initial = draw();
+      await waitForSolid(() =>
+        expect(container.querySelector("[data-chat-model-select]")).not.toBeNull(),
+      );
+      expect(state.chatModelCatalogInitialized).toBe(false);
+      expect(initial.modelSetupRequired).toBe(false);
+      expect(initial.modelRequiredReason).toBeUndefined();
+      expect(container.querySelector(".agent-chat__disabled-banner")).toBeNull();
+      expect(container.querySelector("[data-chat-model-select]")?.getAttribute("aria-busy")).toBe(
+        "true",
+      );
+      expect(
+        container.querySelector("[data-chat-model-select]")?.getAttribute("aria-label"),
+      ).toContain("Loading models…");
+      expect(container.textContent).not.toContain("primary-model");
+      expect(container.textContent).not.toContain("cached-default");
+      expect(container.querySelector("[data-chat-model-option]")).toBeNull();
+      state.chatMessage = "Ordinary message";
+      void draw().onSend();
+      expect(state.handleSendChat).toHaveBeenCalledOnce();
+      state.chatMessage = "/models";
+      void draw().onSend();
+      expect(state.handleSendChat).toHaveBeenCalledTimes(2);
+      catalog.resolve({
+        models: [],
+        ...(restricted
+          ? { modelSelectionPolicy: { restricted: true as const, defaultModel: null } }
+          : {}),
+      });
+      await pending;
+      const settled = draw();
+      expect(state.chatModelCatalogInitialized).toBe(true);
+      expect(settled.modelSetupRequired).toBe(!restricted && !cachedDefault);
+      if (restricted) {
+        expect(settled.modelRequiredReason).toBe("No models are permitted by your administrator.");
+        expect(container.querySelector(".agent-chat__disabled-banner button")).toBeNull();
+        expect(container.textContent).not.toContain("primary-model");
+        expect(container.textContent).not.toContain("cached-default");
+      }
+      expect(state.sessionsResult.sessions[0]).toBe(historyRow);
+      expect(historyRow?.model).toBe("primary-model");
+      retireChatMetadataRequests(state);
+      expect(state.chatModelCatalogInitialized).toBe(false);
+    } finally {
       catalog.resolve({ models: [] });
       await pending;
       retireChatMetadataRequests(state);
-    });
-    const { root, q, draw } = composerView(pane);
-    const expectHistoryHidden = () => {
-      expect(root.textContent).not.toContain("primary-model");
-      expect(root.textContent).not.toContain("cached-default");
-    };
-    const initial = draw();
-    await waitForSolid(() => expect(q("[data-chat-model-select]")).not.toBeNull());
-    expect(state.chatModelCatalogInitialized).toBe(false);
-    expect(initial.modelSetupRequired).toBe(false);
-    expect(initial.modelRequiredReason).toBeUndefined();
-    expect(q(".agent-chat__disabled-banner")).toBeNull();
-    expect(q("[data-chat-model-select]")?.getAttribute("aria-busy")).toBe("true");
-    expect(q("[data-chat-model-select]")?.getAttribute("aria-label")).toContain("Loading models…");
-    expectHistoryHidden();
-    expect(q("[data-chat-model-option]")).toBeNull();
-    state.chatMessage = "Ordinary message";
-    void draw().onSend();
-    expect(state.handleSendChat).toHaveBeenCalledOnce();
-    state.chatMessage = "/models";
-    void draw().onSend();
-    expect(state.handleSendChat).toHaveBeenCalledTimes(2);
-    catalog.resolve({
-      models: [],
-      ...(restricted
-        ? { modelSelectionPolicy: { restricted: true as const, defaultModel: null } }
-        : {}),
-    });
-    await pending;
-    const settled = draw();
-    expect(state.chatModelCatalogInitialized).toBe(true);
-    expect(settled.modelSetupRequired).toBe(!restricted && !cachedDefault);
-    if (restricted) {
-      expect(settled.modelRequiredReason).toBe(restrictedReason);
-      expect(q(".agent-chat__disabled-banner button")).toBeNull();
-      expectHistoryHidden();
+      disposeComposer(container);
     }
-    expect(state.sessionsResult!.sessions[0]).toBe(historyRow);
-    expect(historyRow.model).toBe("primary-model");
-    retireChatMetadataRequests(state);
-    expect(state.chatModelCatalogInitialized).toBe(false);
   },
 );
 
 it("keeps catalog composition independent of local model credentials", () => {
-  const { pane, state } = modelPane(undefined, { primary: "example/model" });
+  const { pane, state, context } = createRefreshChatPane(
+    createGatewayBrowserClientFixture({ recoveryScopeReady: true }),
+  );
   state.sessionKey = buildCatalogSessionKey(
     { catalogId: "fixture", hostId: "gateway:local", threadId: "thread-1" },
     "main",
   );
+  context.agents.state.agentsList = {
+    defaultId: "main",
+    mainKey: "main",
+    scope: "global",
+    agents: [{ id: "main", model: { primary: "example/model" } }],
+  };
   state.chatModelCatalog = [
     {
       id: "model",
@@ -421,106 +493,188 @@ it("keeps catalog composition independent of local model credentials", () => {
   expect(pane.chatProps?.modelRequiredReason).toBeUndefined();
 });
 
-it("keeps spawned persistent dashboard sessions editable", () => {
-  const { pane, state } = createPane();
-  selectSession(state, "agent:main:dashboard:01234567-89ab-cdef-0123-456789abcdef", {
-    spawnedBy: parentKey,
-  });
-  state.chatMessage = "Continue this work";
-  const { root, q, draw } = composerView(pane);
-  draw();
-  expect(q("textarea")).not.toBeNull();
-  expect(pane.chatProps?.canSend).toBe(true);
-  expect(root.textContent).not.toContain("View-only subagent");
-});
-
-it.each([
-  ["subagent key", undefined],
-  ["classification", { classification: "subagent", spawnedBy: parentKey }],
-  ["archive", { archived: true }],
-  ["restart recovery", { restartRecoveryStatus: "tombstoned" }],
-] satisfies [string, Row | undefined][])("keeps Copy but not Reply for %s", (_name, override) => {
-  const { state, root, q, draw } = transcriptView();
-  const key = override ? "agent:main:reply-owner" : "agent:main:subagent:reply-owner";
-  state.sessionKey = key;
-  state.sessionsResult = sessions(override ? [row(key, override)] : []);
-  state.chatLoading = false;
-  state.chatMessages = [
-    {
-      role: "assistant",
-      content: "The workspace review is complete.",
-      timestamp: 1_000,
-      __openclaw: { id: "review-result", seq: 1 },
-    },
-  ];
-  draw();
-  expect(root.textContent).toContain("The workspace review is complete.");
-  expect(q("textarea, .chat-reply-btn")).toBeNull();
-  expect(q(".chat-copy-btn")).not.toBeNull();
-});
-
-it.each([
-  [{ spawnedBy: parentKey }, true],
-  [{ parentSessionKey: parentKey }, true],
-  [{ spawnedBy: "agent:main:controller", parentSessionKey: parentKey }, true],
-  [{ key: "agent:main:worker", classification: "subagent", spawnedBy: parentKey }, true],
-  [{ spawnedBy: "agent:main:missing" }, false],
-  [null, false],
-] satisfies [Row | null, boolean][])(
-  "navigates to the subagent parent for %j",
-  (lineage, parentLoaded) => {
-    const { pane, state } = createPane();
-    const parent = row(parentKey, { label: "Investigation request", updatedAt: 1 });
-    const child = row("agent:main:subagent:worker", {
-      label: "Check onboarding",
-      updatedAt: 2,
-      ...lineage,
-    });
-    state.sessionKey = child.key;
-    state.sessionsResult = sessions(lineage ? (parentLoaded ? [parent, child] : [child]) : [], 2);
-    state.chatMessage = "Retained draft";
-    pane.onPaneSessionChange = vi.fn();
-    state.handleSendChat = vi.fn();
+describe("subagent composer", () => {
+  it("keeps a spawned persistent dashboard session editable", () => {
+    const { pane, state } = createRefreshChatPane();
+    state.sessionKey = "agent:main:dashboard:01234567-89ab-cdef-0123-456789abcdef";
+    state.sessionsResult = {
+      ts: 1,
+      path: "",
+      count: 1,
+      defaults,
+      sessions: [{ key: state.sessionKey, kind: "direct", spawnedBy: "agent:main:parent" }],
+    };
+    state.chatMessage = "Continue this work";
     pane.render();
-    const props = pane.chatProps!;
-    const root = createComposerContainer();
-    const q = queries(root);
-    renderComposerInto(root, { ...props, canAbort: true, onAbort: vi.fn() });
-    expect(props.canSend).toBe(false);
-    void props.onSend();
-    expect(state.handleSendChat).not.toHaveBeenCalled();
-    expect(
-      q('textarea, input[type=file], .agent-chat__composer-footer, [aria-label="Stop generating"]'),
-    ).toBeNull();
-    const banner = q(".agent-chat__disabled-banner");
-    expect(banner?.textContent).toContain("View-only subagent");
-    const navigate = banner?.querySelector<HTMLButtonElement>("button");
-    expect(navigate?.disabled).toBe(lineage === null);
-    if (parentLoaded) {
-      expect(banner?.textContent).toContain("Investigation request");
-      navigate?.click();
-      expect(pane.onPaneSessionChange).toHaveBeenCalledWith(pane.paneId, parent.key);
-    }
-  },
-);
+    const container = createComposerContainer();
+    renderComposerInto(container, pane.chatProps!);
 
-it.each([true, false])("keeps ordinary nested replies editable (connected=%s)", (connected) => {
-  const { pane, state, q, draw } = transcriptView(connected ? createClient() : undefined);
-  selectSession(state, "agent:main:fork", { updatedAt: 0, parentSessionKey: parentKey });
-  state.sessionsResult!.ts = 0;
-  Object.assign(state, {
-    chatLoading: false,
-    chatModelCatalogInitialized: true,
-    chatMessage: "Keep this draft",
-    chatMessages: [{ role: "assistant", content: "Review complete.", timestamp: 1_000 }],
+    expect(container.querySelector("textarea")).not.toBeNull();
+    expect(pane.chatProps?.canSend).toBe(true);
+    expect(container.textContent).not.toContain("View-only subagent");
   });
-  draw();
-  expect(pane.chatProps?.canSend).toBe(true);
-  expect(q(".agent-chat__disabled-banner")).toBeNull();
-  const reply = q<HTMLButtonElement>(".chat-reply-btn");
-  expect(reply).not.toBeNull();
-  reply!.click();
-  draw();
-  expect(q(".chat-reply-preview__text")?.textContent).toBe("Review complete.");
-  expect(q<HTMLTextAreaElement>("textarea")?.value).toBe("Keep this draft");
+
+  it.each([
+    { name: "subagent key", key: "agent:main:subagent:reply-owner" },
+    {
+      name: "subagent classification",
+      key: "agent:main:reply-owner",
+      row: { classification: "subagent", spawnedBy: "agent:main:parent" },
+    },
+    { name: "archive", key: "agent:main:reply-owner", row: { archived: true } },
+    {
+      name: "restart recovery",
+      key: "agent:main:reply-owner",
+      row: { restartRecoveryStatus: "tombstoned" },
+    },
+  ] satisfies { name: string; key: string; row?: Partial<GatewaySessionRow> }[])(
+    "keeps copy but not Reply when $name replaces the composer",
+    ({ key, ...scenario }) => {
+      installTranscriptDomMocks();
+      const { pane, state, context } = createRefreshChatPane();
+      state.sessionKey = key;
+      state.sessionsResult = {
+        ts: 1,
+        path: "",
+        count: "row" in scenario ? 1 : 0,
+        defaults,
+        sessions: "row" in scenario ? [{ key, kind: "direct", ...scenario.row }] : [],
+      };
+      state.chatLoading = false;
+      state.chatMessages = [
+        {
+          role: "assistant",
+          content: "The workspace review is complete.",
+          timestamp: 1_000,
+          __openclaw: { id: "review-result", seq: 1 },
+        },
+      ];
+      const container = document.body.appendChild(createComposerContainer());
+      try {
+        pane.render();
+        renderChatPropsInto(container, pane.chatProps!, context);
+        expect(container.textContent).toContain("The workspace review is complete.");
+        expect(container.querySelector("textarea")).toBeNull();
+        expect(container.querySelector(".chat-reply-btn")).toBeNull();
+        expect(container.querySelector(".chat-copy-btn")).not.toBeNull();
+      } finally {
+        disposeChatView(container);
+        resetTranscriptTestDom();
+      }
+    },
+  );
+
+  it.each([
+    { lineage: { spawnedBy: "agent:main:parent" }, parentLoaded: true },
+    { lineage: { parentSessionKey: "agent:main:parent" }, parentLoaded: true },
+    {
+      lineage: { spawnedBy: "agent:main:controller", parentSessionKey: "agent:main:parent" },
+      parentLoaded: true,
+    },
+    {
+      lineage: {
+        key: "agent:main:worker",
+        classification: "subagent",
+        spawnedBy: "agent:main:parent",
+      },
+      parentLoaded: true,
+    },
+    { lineage: { spawnedBy: "agent:main:missing" }, parentLoaded: false },
+    { lineage: null, parentLoaded: false },
+  ] satisfies { lineage: Partial<GatewaySessionRow> | null; parentLoaded: boolean }[])(
+    "replaces subagent input with parent navigation for %j",
+    ({ lineage, parentLoaded }) => {
+      const { pane, state } = createRefreshChatPane();
+      const parent: GatewaySessionRow = {
+        key: "agent:main:parent",
+        kind: "direct",
+        label: "Investigation request",
+        updatedAt: 1,
+      };
+      const child: GatewaySessionRow = {
+        key: "agent:main:subagent:worker",
+        kind: "direct",
+        label: "Check onboarding",
+        updatedAt: 2,
+        ...lineage,
+      };
+      state.sessionKey = child.key;
+      const sessions = lineage ? (parentLoaded ? [parent, child] : [child]) : [];
+      state.sessionsResult = { ts: 2, path: "", count: sessions.length, defaults, sessions };
+      state.chatMessage = "Retained draft";
+      pane.onPaneSessionChange = vi.fn();
+      state.handleSendChat = vi.fn();
+      pane.render();
+      const props = pane.chatProps!;
+      const container = createComposerContainer();
+      renderComposerInto(container, { ...props, canAbort: true, onAbort: vi.fn() });
+      expect(props.canSend).toBe(false);
+      void props.onSend();
+      expect(state.handleSendChat).not.toHaveBeenCalled();
+      expect(container.querySelector("textarea, input[type=file]")).toBeNull();
+      expect(container.querySelector(".agent-chat__composer-footer")).toBeNull();
+      expect(container.querySelector('[aria-label="Stop generating"]')).toBeNull();
+      const banner = container.querySelector(".agent-chat__disabled-banner");
+      expect(banner?.textContent).toContain("View-only subagent");
+      const navigate = banner?.querySelector<HTMLButtonElement>("button");
+      expect(navigate?.disabled).toBe(lineage === null);
+      if (parentLoaded) {
+        expect(banner?.textContent).toContain("Investigation request");
+        navigate?.click();
+        expect(pane.onPaneSessionChange).toHaveBeenCalledWith(pane.paneId, parent.key);
+      }
+    },
+  );
+
+  it.each([true, false])(
+    "keeps an ordinary nested session reply editable while connected=%s",
+    (connected) => {
+      installTranscriptDomMocks();
+      const { pane, state, context } = createRefreshChatPane(
+        connected ? createGatewayBrowserClientFixture() : undefined,
+      );
+      state.sessionKey = "agent:main:fork";
+      state.sessionsResult = {
+        ts: 0,
+        path: "",
+        count: 1,
+        defaults,
+        sessions: [
+          {
+            key: state.sessionKey,
+            kind: "direct",
+            updatedAt: 0,
+            parentSessionKey: "agent:main:parent",
+          },
+        ],
+      };
+      state.chatLoading = false;
+      state.chatModelCatalogInitialized = true;
+      state.chatMessage = "Keep this draft";
+      state.chatMessages = [{ role: "assistant", content: "Review complete.", timestamp: 1_000 }];
+      const container = document.body.appendChild(createComposerContainer());
+      const draw = () => {
+        pane.render();
+        renderChatPropsInto(container, pane.chatProps!, context);
+      };
+      try {
+        draw();
+        expect(pane.chatProps?.canSend).toBe(true);
+        expect(container.querySelector(".agent-chat__disabled-banner")).toBeNull();
+        const reply = container.querySelector<HTMLButtonElement>(".chat-reply-btn");
+        expect(reply).not.toBeNull();
+        reply!.click();
+        draw();
+        expect(container.querySelector(".chat-reply-preview__text")?.textContent).toBe(
+          "Review complete.",
+        );
+        expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(
+          "Keep this draft",
+        );
+      } finally {
+        disposeChatView(container);
+        resetTranscriptTestDom();
+      }
+    },
+  );
 });
