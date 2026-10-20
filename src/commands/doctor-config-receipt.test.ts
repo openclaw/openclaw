@@ -56,14 +56,7 @@ async function files(directory: string): Promise<Record<string, string>> {
 }
 
 function renameAgent(ctx: DoctorHealthFlowContext, name: string) {
-  const agents = ctx.cfg.agents;
-  ctx.cfg = {
-    ...ctx.cfg,
-    agents: {
-      ...agents,
-      entries: { ...agents?.entries, main: { ...agents?.entries?.main, name } },
-    },
-  };
+  ctx.cfg = { ...ctx.cfg, agents: { entries: { main: { name } } } };
 }
 
 async function expectRefusal(ctx: DoctorHealthFlowContext, run: () => Promise<unknown>) {

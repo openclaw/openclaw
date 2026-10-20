@@ -48,69 +48,68 @@ async function damageState(databasePath: string, sql: string) {
   database.exec(`PRAGMA foreign_keys=OFF; ${sql}`);
 }
 
-function injectDamage(databasePath: string, phase: string, sql: string, before = () => {}) {
-  let injected = false;
-  return {
-    ...repairOptions,
-    measure: async <T>(name: string, run: () => T | Promise<T>): Promise<T> => {
-      if (!injected && name === `doctor.config-preflight.${phase}`) {
-        before();
-        await damageState(databasePath, sql);
-        injected = true;
-      }
-      return await run();
-    },
-    assertInjected: () => expect(injected).toBe(true),
-  };
-}
-
-it("recovers orphan delivery before plugin preparation reads current state", async () => {
-  await withPreparedState(async (databasePath) => {
-    const injection = injectDamage(
-      databasePath,
-      "state-schema",
-      "INSERT INTO task_delivery_state(task_id) VALUES('missing-task')",
-    );
-    await runDoctorConfigPreflight(injection);
-    injection.assertInjected();
-    const { db } = openOpenClawStateDatabase();
-    expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-    expect(
-      db
-        .prepare("SELECT id FROM migration_runs WHERE id = ? AND status = 'pending'")
-        .get("deferred-plugin-migration:missing-preparation-fixture"),
-    ).toEqual({ id: "deferred-plugin-migration:missing-preparation-fixture" });
-  });
-});
-
-it("preserves plugin obligations when integrity fails after current-schema preparation", async () => {
-  await withPreparedState(async (databasePath) => {
-    const repair = vi.spyOn(stateRepair, "repairStateSchema");
-    const injection = injectDamage(
-      databasePath,
-      "legacy-state-migrations",
-      `INSERT INTO workspace_generated_bootstrap_hashes
+it.each([
+  {
+    phase: "state-schema",
+    sql: "INSERT INTO task_delivery_state(task_id) VALUES('missing-task')",
+    refuses: false,
+  },
+  {
+    phase: "legacy-state-migrations",
+    sql: `INSERT INTO workspace_generated_bootstrap_hashes
             (workspace_key,filename,sha256) VALUES('missing-workspace','fixture.md','fixture-hash')`,
-      () => expect(repair).not.toHaveBeenCalled(),
-    );
-    await expect(runDoctorConfigPreflight(injection)).rejects.toThrow(
-      /foreign_key_check|state migration refused/,
-    );
-    injection.assertInjected();
-    expect(repair).toHaveBeenCalledOnce();
-    using inspected = new DatabaseSync(databasePath, { readOnly: true });
-    expect(inspected.prepare("PRAGMA user_version").get()?.user_version).toBe(
-      OPENCLAW_STATE_SCHEMA_VERSION,
-    );
-    expect(
-      inspected.prepare("SELECT workspace_key FROM workspace_generated_bootstrap_hashes").all(),
-    ).toEqual([{ workspace_key: "missing-workspace" }]);
-    expect(
-      inspected
-        .prepare(
-          "SELECT id FROM migration_runs WHERE id LIKE 'deferred-plugin-migration:%' AND status='pending'",
-        )
-        .all(),
-    ).toEqual([{ id: "deferred-plugin-migration:missing-preparation-fixture" }]);
-  });
-});
+    refuses: true,
+  },
+])(
+  "preserves plugin obligations after damage at $phase (refuses=$refuses)",
+  async ({ phase, sql, refuses }) => {
+    await withPreparedState(async (databasePath) => {
+      const repair = vi.spyOn(stateRepair, "repairStateSchema");
+      let injected = false;
+      const operation = runDoctorConfigPreflight({
+        ...repairOptions,
+        measure: async (name, run) => {
+          if (!injected && name === `doctor.config-preflight.${phase}`) {
+            if (refuses) {
+              expect(repair).not.toHaveBeenCalled();
+            }
+            await damageState(databasePath, sql);
+            injected = true;
+          }
+          return await run();
+        },
+      });
+      if (refuses) {
+        await expect(operation).rejects.toThrow(/foreign_key_check|state migration refused/);
+        expect(repair).toHaveBeenCalledOnce();
+      } else {
+        await operation;
+        const { db } = openOpenClawStateDatabase();
+        expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+        expect(
+          db
+            .prepare("SELECT id FROM migration_runs WHERE id = ? AND status = 'pending'")
+            .get("deferred-plugin-migration:missing-preparation-fixture"),
+        ).toEqual({ id: "deferred-plugin-migration:missing-preparation-fixture" });
+      }
+      expect(injected).toBe(true);
+      if (!refuses) {
+        return;
+      }
+      using inspected = new DatabaseSync(databasePath, { readOnly: true });
+      expect(inspected.prepare("PRAGMA user_version").get()?.user_version).toBe(
+        OPENCLAW_STATE_SCHEMA_VERSION,
+      );
+      expect(
+        inspected.prepare("SELECT workspace_key FROM workspace_generated_bootstrap_hashes").all(),
+      ).toEqual([{ workspace_key: "missing-workspace" }]);
+      expect(
+        inspected
+          .prepare(
+            "SELECT id FROM migration_runs WHERE id LIKE 'deferred-plugin-migration:%' AND status='pending'",
+          )
+          .all(),
+      ).toEqual([{ id: "deferred-plugin-migration:missing-preparation-fixture" }]);
+    });
+  },
+);

@@ -19,9 +19,9 @@ vi.mock("../channels/plugins/read-only.js", () => ({
 type OwnershipRepairCase = {
   name: string;
   agents?: OpenClawConfig["agents"];
-  discord: NonNullable<OpenClawConfig["channels"]>["discord"];
-  bindings: NonNullable<OpenClawConfig["bindings"]>;
-  added: NonNullable<OpenClawConfig["bindings"]>;
+  discord?: NonNullable<OpenClawConfig["channels"]>["discord"];
+  bindings?: OpenClawConfig["bindings"];
+  added?: OpenClawConfig["bindings"];
   sourceConfig?: unknown;
 };
 
@@ -30,11 +30,8 @@ const routeBinding = (agentId: string, match: { guildId?: string; accountId?: st
   match: { channel: "discord", ...match },
 });
 const legacyRoster = (...ids: string[]) => ({ agents: { list: ids.map((id) => ({ id })) } });
-const ownershipCase = (name: string, overrides: Partial<Omit<OwnershipRepairCase, "name">>) => ({
+const ownershipCase = (name: string, overrides: Omit<OwnershipRepairCase, "name">) => ({
   name,
-  discord: {},
-  bindings: [],
-  added: [],
   ...overrides,
 });
 
@@ -76,7 +73,7 @@ describe("doctor channel account ownership repair", () => {
       bindings: [routeBinding("   ", { guildId: "guild-a" })],
     }),
   ])("repairs only proven ownership for $name", (testCase) => {
-    const { discord, bindings, added } = testCase;
+    const { discord = {}, bindings = [], added = [] } = testCase;
     vi.stubEnv("DISCORD_BOT_TOKEN", undefined);
     const config: OpenClawConfig = {
       agents: testCase.agents ?? { ownership: "explicit", entries: { ops: {}, research: {} } },

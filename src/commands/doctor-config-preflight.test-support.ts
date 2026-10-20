@@ -27,46 +27,46 @@ class DoctorFixtureObservation {
     readonly id: number,
     readonly suite: "billing-route" | "preflight",
   ) {}
+  record(phase: string, event: "started" | "settled") {
+    this.events.push({ phase, event, elapsedMs: Math.round(performance.now() - this.started) });
+    if (this.events.length > 16) {
+      this.events.shift();
+    }
+  }
+  report(event: string) {
+    const otherActive = [...activeObservations].filter((other) => other !== this);
+    const { suite, id, bodySettled, fixtureSettled, omittedPending, events: phases } = this;
+    process.stderr.write(
+      `[doctor-fixture] ${JSON.stringify({
+        suite,
+        id,
+        event,
+        elapsedMs: Math.round(performance.now() - this.started),
+        bodySettled,
+        fixtureSettled,
+        ownsHome: this.ownsHome?.() ?? null,
+        pending: [...this.pending.values()],
+        omittedPending,
+        otherActive: otherActive.slice(0, 8).map((other) => other.id),
+        omittedActive: Math.max(0, otherActive.length - 8),
+        phases,
+      })}\n`,
+    );
+  }
+  async during<T>(phase: "body" | "fixture", run: () => Promise<T>): Promise<T> {
+    this.record(phase, "started");
+    try {
+      return await run();
+    } finally {
+      this[phase === "body" ? "bodySettled" : "fixtureSettled"] = true;
+      this.record(phase, "settled");
+    }
+  }
 }
 
 const fixtureObservation = new AsyncLocalStorage<DoctorFixtureObservation>();
 const activeObservations = new Set<DoctorFixtureObservation>();
 let nextObservation = 0;
-
-function recordFixturePhase(
-  observation: DoctorFixtureObservation,
-  phase: string,
-  event: "started" | "settled",
-) {
-  observation.events.push({
-    phase,
-    event,
-    elapsedMs: Math.round(performance.now() - observation.started),
-  });
-  if (observation.events.length > 16) {
-    observation.events.shift();
-  }
-}
-
-function reportFixtureObservation(observation: DoctorFixtureObservation, event: string) {
-  const otherActive = [...activeObservations].filter((other) => other !== observation);
-  process.stderr.write(
-    `[doctor-fixture] ${JSON.stringify({
-      suite: observation.suite,
-      id: observation.id,
-      event,
-      elapsedMs: Math.round(performance.now() - observation.started),
-      bodySettled: observation.bodySettled,
-      fixtureSettled: observation.fixtureSettled,
-      ownsHome: observation.ownsHome?.() ?? null,
-      pending: [...observation.pending.values()],
-      omittedPending: observation.omittedPending,
-      otherActive: otherActive.slice(0, 8).map((other) => other.id),
-      omittedActive: Math.max(0, otherActive.length - 8),
-      phases: observation.events,
-    })}\n`,
-  );
-}
 
 /** Observe the original promise without supplying cancellation or changing its deadline. */
 export async function observeDoctorConfigStep<T>(
@@ -84,7 +84,7 @@ export async function observeDoctorConfigStep<T>(
   } else {
     observation.omittedPending++;
   }
-  recordFixturePhase(observation, name, "started");
+  observation.record(name, "started");
   try {
     return await run();
   } finally {
@@ -93,7 +93,7 @@ export async function observeDoctorConfigStep<T>(
     } else {
       observation.omittedPending--;
     }
-    recordFixturePhase(observation, name, "settled");
+    observation.record(name, "settled");
   }
 }
 
@@ -108,31 +108,24 @@ export function useDoctorConfigPreflightHome(diagnostic?: DoctorFixtureObservati
     onTestFinished(({ task }) => {
       observation.testFinished = true;
       if (task.result?.state === "fail" || !observation.fixtureSettled) {
-        reportFixtureObservation(observation, "test-finished");
+        observation.report("test-finished");
       }
     });
     if (activeObservations.size > 1) {
-      reportFixtureObservation(observation, "successor-started-before-settlement");
+      observation.report("successor-started-before-settlement");
     }
     return fixtureObservation.run(observation, async () => {
-      recordFixturePhase(observation, "fixture", "started");
       try {
-        return await withDoctorConfigPreflightHome(async (home) => {
-          observation.ownsHome = () => process.env.HOME === home;
-          recordFixturePhase(observation, "body", "started");
-          try {
-            return await run(home);
-          } finally {
-            observation.bodySettled = true;
-            recordFixturePhase(observation, "body", "settled");
-          }
-        });
+        return await observation.during("fixture", () =>
+          withDoctorConfigPreflightHome((home) => {
+            observation.ownsHome = () => process.env.HOME === home;
+            return observation.during("body", () => run(home));
+          }),
+        );
       } finally {
-        observation.fixtureSettled = true;
-        recordFixturePhase(observation, "fixture", "settled");
         activeObservations.delete(observation);
         if (observation.testFinished) {
-          reportFixtureObservation(observation, "late-fixture-settlement");
+          observation.report("late-fixture-settlement");
         }
       }
     });
@@ -167,13 +160,11 @@ export async function withDoctorConfigPreflightHome<T>(
         throw outcome.reason;
       }
       try {
-        try {
-          await workers.run(() =>
+        await workers
+          .run(() =>
             cleanupSessionStateForTest({ stateDir: path.join(home, ".openclaw"), rootPath: home }),
-          );
-        } finally {
-          await workers.close();
-        }
+          )
+          .finally(() => workers.close());
         // Rehearsals put the broker socket under this home; retire it before removal.
         const source = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
         expect(
