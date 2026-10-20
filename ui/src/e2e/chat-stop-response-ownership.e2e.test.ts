@@ -32,13 +32,17 @@ suite.define(() => {
         const composer = page.locator(".agent-chat__input textarea");
         const send = page.getByRole("button", { name: "Send message", exact: true });
         const stop = page.getByRole("button", { name: "Stop generating" });
-        await composer.fill("Start the original task.");
-        await send.click();
-        const original = await gateway.waitForRequest("chat.send");
-        expect(original.params).toMatchObject({ sessionKey, idempotencyKey: expect.any(String) });
-        const runId = String(asOptionalRecord(original.params)?.idempotencyKey);
+        const start = async (prompt: string, reply: string, after = 0) => {
+          await composer.fill(prompt);
+          await send.click();
+          const request = await gateway.waitForRequest("chat.send", { after });
+          expect(request.params).toMatchObject({ sessionKey, idempotencyKey: expect.any(String) });
+          const id = String(asOptionalRecord(request.params)?.idempotencyKey);
+          await emitReply(id, "delta", reply);
+          return id;
+        };
         const progress = "Original task is working.";
-        await emitReply(runId, "delta", progress);
+        const runId = await start("Start the original task.", progress);
         await page.locator(".chat-bubble").getByText(progress, { exact: true }).waitFor();
         const abortMethod = scenario === "command" ? "sessions.abort" : "chat.abort";
         await gateway.deferNext(abortMethod);
@@ -59,13 +63,8 @@ suite.define(() => {
         }
         let visibleReply = progress;
         if (scenario === "replacement") {
-          await composer.fill("Start the replacement task.");
-          await send.click();
-          const replacement = await gateway.waitForRequest("chat.send", { after: 1 });
-          const replacementRunId = String(asOptionalRecord(replacement.params)?.idempotencyKey);
-          expect(replacementRunId).not.toBe(runId);
           visibleReply = "Replacement task is working.";
-          await emitReply(replacementRunId, "delta", visibleReply);
+          expect(await start("Start the replacement task.", visibleReply, 1)).not.toBe(runId);
         }
         const reply = page.locator(".chat-bubble").getByText(visibleReply, { exact: true });
         await reply.waitFor();

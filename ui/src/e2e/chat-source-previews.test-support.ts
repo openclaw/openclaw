@@ -12,7 +12,7 @@ export const sourcePreviewFixture = {
     "Check the [wind and rain forecast](https://weather.example.org/weekend) before leaving.",
 };
 
-export function sourcePreviewHistory(sessionUrl?: string) {
+export function sourcePreviewHistory(sessionUrl: string) {
   const fixture = sourcePreviewFixture;
   const start = Date.UTC(2026, 8, 14, 12, 0);
   const message = (seq: number, role: string, text: string, extra = {}) => ({
@@ -34,9 +34,7 @@ export function sourcePreviewHistory(sessionUrl?: string) {
   ];
   const search = {
     kind: "results",
-    provider: "fixture",
     query: "weekend cycling checklist and weather",
-    count: sessionUrl ? 5 : 3,
     results: [
       { title: wrapWebContent(fixture.checklistTitle, "web_search"), url: fixture.checklistUrl },
       {
@@ -51,17 +49,13 @@ export function sourcePreviewHistory(sessionUrl?: string) {
         title: wrapWebContent("City bike rentals", "web_search"),
         url: "https://rentals.example.com/",
       },
-      ...(sessionUrl
-        ? [
-            { title: wrapWebContent("Trip planning session", "web_search"), url: sessionUrl },
-            {
-              title: wrapWebContent("Route planner issue", "web_search"),
-              url: "https://github.com/example/route-planner/issues/42",
-            },
-          ]
-        : []),
+      { title: wrapWebContent("Trip planning session", "web_search"), url: sessionUrl },
+      {
+        title: wrapWebContent("Route planner issue", "web_search"),
+        url: "https://github.com/example/route-planner/issues/42",
+      },
     ],
-    externalContent: { untrusted: true, source: "web_search", wrapped: true, provider: "fixture" },
+    externalContent: { untrusted: true, source: "web_search", wrapped: true },
   };
   const page = {
     url: fixture.checklistUrl,
@@ -72,9 +66,6 @@ export function sourcePreviewHistory(sessionUrl?: string) {
       "web_fetch",
     ),
     status: 200,
-    extractMode: "markdown",
-    extractor: "fixture",
-    truncated: false,
     externalContent: { untrusted: true, source: "web_fetch", wrapped: true },
   };
   return [
@@ -85,9 +76,7 @@ export function sourcePreviewHistory(sessionUrl?: string) {
       6,
       "assistant",
       fixture.answer +
-        (sessionUrl
-          ? `\n\nRelated: [trip planning session](${sessionUrl}) · [route planner issue](https://github.com/example/route-planner/issues/42).`
-          : ""),
+        `\n\nRelated: [trip planning session](${sessionUrl}) · [route planner issue](https://github.com/example/route-planner/issues/42).`,
       { phase: "final_answer", stopReason: "stop" },
     ),
   ];

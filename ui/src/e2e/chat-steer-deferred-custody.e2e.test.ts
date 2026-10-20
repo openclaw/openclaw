@@ -3,6 +3,7 @@ import { expect, it } from "vitest";
 import { prepareChatHistoryFixture } from "../test-helpers/chat-activity-fixtures.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { expectCount, expectVisible } from "./sidebar-assertions.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Deferred steering custody" });
 
@@ -12,6 +13,7 @@ suite.define(() => {
       const sessionKey = "agent:main:main";
       const runId = "active-run";
       const timestamp = Date.now();
+      const progress = "Checking the shared queue now.";
       const messages = [
         {
           role: "user",
@@ -33,7 +35,7 @@ suite.define(() => {
         ...prepareChatHistoryFixture(messages),
         sessionId: sessionInfo.sessionId,
         sessionInfo,
-        inFlightRun: { runId, text: "Checking the shared queue now.", startedAt: timestamp },
+        inFlightRun: { runId, text: progress, startedAt: timestamp },
       };
       const gateway = await installMockGateway(page, {
         sessionKey,
@@ -46,18 +48,17 @@ suite.define(() => {
       await page.locator("[data-settings-send-shortcut]").selectOption("enter");
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       const composer = page.locator(".agent-chat__input textarea");
-      await page.getByRole("button", { name: "Stop generating" }).waitFor();
+      const stop = page.getByRole("button", { name: "Stop generating" });
+      await stop.waitFor();
       await gateway.emitGatewayEvent("chat", {
         sessionKey,
         runId,
         state: "delta",
-        message: { role: "assistant", content: "Checking the shared queue now." },
+        message: { role: "assistant", content: progress },
       });
-      await page
-        .locator(".chat-bubble")
-        .getByText("Checking the shared queue now.", { exact: true })
-        .waitFor();
+      await page.locator(".chat-bubble").getByText(progress, { exact: true }).waitFor();
       const correction = "This also happens outside Claude CLI";
+      const bubble = page.locator(".chat-group.user", { hasText: correction });
       await composer.fill(correction);
       await gateway.deferNext("chat.send");
       await composer.press("Control+Enter");
@@ -66,9 +67,7 @@ suite.define(() => {
       expect(sent.params).toMatchObject({ queueMode: "steer" });
       const pendingRunId = (sent.params as { idempotencyKey: string }).idempotencyKey;
       await gateway.resolveDeferred("chat.send", { runId: pendingRunId, status: "started" });
-      await expect
-        .poll(() => page.locator(".chat-group.user", { hasText: correction }).count())
-        .toBe(1);
+      await expectCount(bubble, 1);
       await page.screenshot({
         path: path.join(suite.artifactDir, "before-queue-confirmation.png"),
       });
@@ -99,13 +98,9 @@ suite.define(() => {
         updatedAt: Date.now(),
       });
       await gateway.waitForRequest("chat.history", { after: reads });
-      await expect.poll(() => queued.count()).toBe(1);
-      await expect
-        .poll(() => page.locator(".chat-group.user", { hasText: correction }).count())
-        .toBe(0);
-      await expect
-        .poll(() => page.getByRole("button", { name: "Stop generating" }).isVisible())
-        .toBe(true);
+      await expectCount(queued, 1);
+      await expectCount(bubble, 0);
+      await expectVisible(stop);
       await page.screenshot({ path: path.join(suite.artifactDir, "after-queue-confirmation.png") });
     });
   });

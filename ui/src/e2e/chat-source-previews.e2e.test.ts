@@ -2,6 +2,12 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  polledAttribute,
+  polledCount,
+  polledFocus,
+  polledVisible,
+} from "./chat-presentation.test-support.ts";
 import { sourcePreviewFixture, sourcePreviewHistory } from "./chat-source-previews.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -22,6 +28,11 @@ suite.define(() => {
         { viewport: { width, height }, colorScheme },
         async ({ page, context }) => {
           const fixture = sourcePreviewFixture;
+          const capture = (file: string) =>
+            page.screenshot({
+              path: path.join(artifactDir, file + ".png"),
+              animations: "disabled",
+            });
           const requests: string[] = [];
           await context.route(
             /https:\/\/(cycling\.example\.com|weather\.example\.org)\//u,
@@ -53,7 +64,7 @@ suite.define(() => {
           });
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, fixture.sessionKey));
           const cards = page.locator(".chat-source-card");
-          await expect.poll(() => cards.count()).toBe(2);
+          await polledCount(cards).toBe(2);
           const checklist = cards.filter({ hasText: fixture.checklistTitle });
           const forecast = cards.filter({ hasText: fixture.forecastTitle });
           expect(
@@ -79,7 +90,7 @@ suite.define(() => {
             await expect
               .poll(() => checklistIcon.evaluate((icon: HTMLImageElement) => icon.naturalWidth))
               .toBeGreaterThan(0);
-            await expect.poll(() => forecast.locator("img").count()).toBe(0);
+            await polledCount(forecast.locator("img")).toBe(0);
             expect(await forecast.locator(".chat-source-card__domain svg").count()).toBe(1);
             expect(faviconRequests.some((url) => url.endsWith("/cycling.example.com"))).toBe(true);
             expect(faviconRequests.some((url) => url.endsWith("/weather.example.org"))).toBe(true);
@@ -97,28 +108,20 @@ suite.define(() => {
             );
             expect(positions[0]).toBe(positions[1]);
           }
-          await page.screenshot({
-            path: path.join(artifactDir, "sources.png"),
-            animations: "disabled",
-          });
+          await capture("sources");
           await checklist.click();
-          await expect.poll(() => checklist.getAttribute("aria-expanded")).toBe("true");
+          await polledAttribute(checklist, "aria-expanded").toBe("true");
           const popover = page.locator(
             `[popover].chat-source-popover[data-source-url="${fixture.checklistUrl}"]`,
           );
-          await expect
-            .poll(() => popover.locator(".chat-source-popover__excerpt").isVisible())
-            .toBe(true);
+          await polledVisible(popover.locator(".chat-source-popover__excerpt")).toBe(true);
           expect(await popover.textContent()).toContain("Page excerpt");
           expect(await popover.textContent()).toContain("spare tube, tire levers, a pump");
           const openSource = popover.getByRole("link", { name: "Open source" });
           expect(await openSource.getAttribute("href")).toBe(fixture.checklistUrl);
           expect(await openSource.getAttribute("rel")).toContain("noopener");
           expect(requests).toEqual([]);
-          await page.screenshot({
-            path: path.join(artifactDir, "excerpt.png"),
-            animations: "disabled",
-          });
+          await capture("excerpt");
           const bounds = await popover.locator("section").boundingBox();
           expect(bounds).not.toBeNull();
           expect(bounds!.x).toBeGreaterThanOrEqual(0);
@@ -131,14 +134,12 @@ suite.define(() => {
           await page.bringToFront();
           expect(requests).toEqual([fixture.checklistUrl]);
           await page.keyboard.press("Escape");
-          await expect.poll(() => checklist.getAttribute("aria-expanded")).toBe("false");
-          expect(await checklist.evaluate((element) => element === document.activeElement)).toBe(
-            true,
-          );
+          await polledAttribute(checklist, "aria-expanded").toBe("false");
+          await polledFocus(checklist).toBe(true);
 
           await forecast.focus();
           await page.keyboard.press("Enter");
-          await expect.poll(() => forecast.getAttribute("aria-expanded")).toBe("true");
+          await polledAttribute(forecast, "aria-expanded").toBe("true");
           const forecastPopover = page.locator(
             `[popover].chat-source-popover[data-source-url="${fixture.forecastUrl}"]`,
           );
@@ -147,13 +148,11 @@ suite.define(() => {
             "rain arriving on Sunday afternoon",
           );
           await forecastPopover.getByRole("button", { name: "Close", exact: true }).click();
-          await expect.poll(() => forecast.getAttribute("aria-expanded")).toBe("false");
-          expect(await forecast.evaluate((element) => element === document.activeElement)).toBe(
-            true,
-          );
+          await polledAttribute(forecast, "aria-expanded").toBe("false");
+          await polledFocus(forecast).toBe(true);
           expect(requests).toEqual([fixture.checklistUrl]);
           await page.reload();
-          await expect.poll(() => cards.count()).toBe(2);
+          await polledCount(cards).toBe(2);
           expect(await cards.first().getAttribute("aria-expanded")).toBe("false");
         },
       );
