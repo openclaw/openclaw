@@ -1,12 +1,7 @@
-// Memory Wiki tests cover corpus supplement agent routing.
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
-import {
-  resolveMemoryWikiAgentConfig,
-  resolveMemoryWikiConfig,
-  type MemoryWikiConfigResolver,
-} from "./config.js";
+import { resolveMemoryWikiAgentConfig, resolveMemoryWikiConfig } from "./config.js";
 import { createWikiCorpusSupplement } from "./corpus-supplement.js";
 
 const queryMocks = vi.hoisted(() => ({
@@ -20,9 +15,7 @@ vi.mock("./query.js", async (importOriginal) => ({
 }));
 
 describe("memory-wiki corpus supplement", () => {
-  const appConfig = {
-    agents: { entries: { support: {}, marketing: {} } },
-  } as OpenClawConfig;
+  const appConfig: OpenClawConfig = { agents: { entries: { support: {}, marketing: {} } } };
   const config = resolveMemoryWikiConfig({
     vault: { scope: "agent", path: "/tmp/memory-wiki-agents" },
   });
@@ -32,12 +25,33 @@ describe("memory-wiki corpus supplement", () => {
     queryMocks.getMemoryWikiPage.mockReset().mockResolvedValue(null);
   });
 
-  it("resolves search and get from each invocation's agent context", async () => {
-    const resolveConfig = vi.fn<MemoryWikiConfigResolver>((agentId, currentAppConfig) =>
+  function createSupplement() {
+    const resolveConfig = vi.fn((agentId?: string, currentAppConfig?: OpenClawConfig) =>
       resolveMemoryWikiAgentConfig({ config, appConfig: currentAppConfig, agentId }),
     );
-    const getAppConfig = vi.fn(() => appConfig);
-    const supplement = createWikiCorpusSupplement({ resolveConfig, getAppConfig });
+    return {
+      resolveConfig,
+      supplement: createWikiCorpusSupplement({ resolveConfig, getAppConfig: () => appConfig }),
+    };
+  }
+
+  function expectedContext(agentId: string, sandboxed: boolean) {
+    return {
+      config: expect.objectContaining({
+        agentId,
+        vault: expect.objectContaining({ path: path.join(config.vault.path, agentId) }),
+      }),
+      appConfig,
+      agentId,
+      agentSessionKey: `agent:${agentId}:main`,
+      sandboxed,
+      searchBackend: "local",
+      searchCorpus: "wiki",
+    };
+  }
+
+  it("resolves search and get from each invocation's agent context", async () => {
+    const { resolveConfig, supplement } = createSupplement();
 
     await supplement.search({
       query: "support handbook",
@@ -58,46 +72,20 @@ describe("memory-wiki corpus supplement", () => {
     expect(resolveConfig).toHaveBeenNthCalledWith(1, "support", appConfig);
     expect(resolveConfig).toHaveBeenNthCalledWith(2, "marketing", appConfig);
     expect(queryMocks.searchMemoryWiki).toHaveBeenCalledWith({
-      config: expect.objectContaining({
-        agentId: "support",
-        vault: expect.objectContaining({
-          path: path.join(config.vault.path, "support"),
-        }),
-      }),
-      appConfig,
-      agentId: "support",
-      agentSessionKey: "agent:support:main",
-      sandboxed: true,
+      ...expectedContext("support", true),
       query: "support handbook",
       maxResults: 4,
-      searchBackend: "local",
-      searchCorpus: "wiki",
     });
     expect(queryMocks.getMemoryWikiPage).toHaveBeenCalledWith({
-      config: expect.objectContaining({
-        agentId: "marketing",
-        vault: expect.objectContaining({
-          path: path.join(config.vault.path, "marketing"),
-        }),
-      }),
-      appConfig,
-      agentId: "marketing",
-      agentSessionKey: "agent:marketing:main",
-      sandboxed: false,
+      ...expectedContext("marketing", false),
       lookup: "marketing-plan",
       fromLine: 3,
       lineCount: 8,
-      searchBackend: "local",
-      searchCorpus: "wiki",
     });
   });
 
   it("fails closed before querying when multi-agent context is missing", async () => {
-    const supplement = createWikiCorpusSupplement({
-      resolveConfig: (agentId, currentAppConfig) =>
-        resolveMemoryWikiAgentConfig({ config, appConfig: currentAppConfig, agentId }),
-      getAppConfig: () => appConfig,
-    });
+    const { supplement } = createSupplement();
 
     await expect(supplement.search({ query: "shared data" })).rejects.toThrow(
       "agentId is required",

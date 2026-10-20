@@ -1,4 +1,3 @@
-// Memory Wiki tests cover bridge plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -12,6 +11,7 @@ import { root } from "openclaw/plugin-sdk/security-runtime";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { syncMemoryWikiBridgeSources } from "./bridge.js";
+import type { MemoryWikiPluginConfig } from "./config.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const { createVault } = createMemoryWikiTestHarness();
@@ -47,6 +47,42 @@ describe("syncMemoryWikiBridgeSources", () => {
     return workspaceDir;
   }
 
+  function createBridgeVault(name: string, config: MemoryWikiPluginConfig = {}) {
+    return createVault({
+      rootDir: nextCaseRoot(name),
+      config: {
+        ...config,
+        vaultMode: "bridge",
+        bridge: {
+          enabled: true,
+          readMemoryArtifacts: true,
+          indexMemoryRoot: true,
+          ...config.bridge,
+        },
+      },
+    });
+  }
+
+  function artifact(
+    workspaceDir: string,
+    relativePath = "MEMORY.md",
+    kind: MemoryPluginPublicArtifact["kind"] = "memory-root",
+    agentIds = ["main"],
+  ): MemoryPluginPublicArtifact {
+    return {
+      kind,
+      workspaceDir,
+      relativePath,
+      absolutePath: path.join(workspaceDir, relativePath),
+      agentIds,
+      contentType: kind === "event-log" ? "json" : "markdown",
+    };
+  }
+
+  const appFor = (workspaceDir: string): OpenClawConfig => ({
+    agents: { entries: { main: { workspace: workspaceDir } } },
+  });
+
   function registerBridgeArtifacts(artifacts: MemoryPluginPublicArtifact[]) {
     registerMemoryCapability("memory-core", {
       publicArtifacts: {
@@ -59,18 +95,8 @@ describe("syncMemoryWikiBridgeSources", () => {
 
   it("imports public memory artifacts and stays idempotent across reruns", async () => {
     const workspaceDir = await createBridgeWorkspace("workspace");
-    const { rootDir: vaultDir, config } = await createVault({
-      rootDir: nextCaseRoot("vault"),
-      config: {
-        vaultMode: "bridge",
-        bridge: {
-          enabled: true,
-          readMemoryArtifacts: true,
-          indexMemoryRoot: true,
-          indexDailyNotes: true,
-          indexDreamReports: true,
-        },
-      },
+    const { rootDir: vaultDir, config } = await createBridgeVault("vault", {
+      bridge: { indexDailyNotes: true, indexDreamReports: true },
     });
 
     await fs.mkdir(path.join(workspaceDir, "memory", "dreaming"), { recursive: true });
@@ -86,37 +112,12 @@ describe("syncMemoryWikiBridgeSources", () => {
       "utf8",
     );
     registerBridgeArtifacts([
-      {
-        kind: "memory-root",
-        workspaceDir,
-        relativePath: "MEMORY.md",
-        absolutePath: path.join(workspaceDir, "MEMORY.md"),
-        agentIds: ["main"],
-        contentType: "markdown",
-      },
-      {
-        kind: "daily-note",
-        workspaceDir,
-        relativePath: "memory/2026-04-05.md",
-        absolutePath: path.join(workspaceDir, "memory", "2026-04-05.md"),
-        agentIds: ["main"],
-        contentType: "markdown",
-      },
-      {
-        kind: "dream-report",
-        workspaceDir,
-        relativePath: "memory/dreaming/2026-04-05.md",
-        absolutePath: path.join(workspaceDir, "memory", "dreaming", "2026-04-05.md"),
-        agentIds: ["main"],
-        contentType: "markdown",
-      },
+      artifact(workspaceDir, "MEMORY.md", "memory-root"),
+      artifact(workspaceDir, "memory/2026-04-05.md", "daily-note"),
+      artifact(workspaceDir, "memory/dreaming/2026-04-05.md", "dream-report"),
     ]);
 
-    const appConfig: OpenClawConfig = {
-      agents: {
-        entries: { main: { workspace: workspaceDir } },
-      },
-    };
+    const appConfig = appFor(workspaceDir);
 
     const first = await syncMemoryWikiBridgeSources({ config, appConfig });
 
@@ -198,37 +199,16 @@ describe("syncMemoryWikiBridgeSources", () => {
     await fs.writeFile(generatedIndexPath, "# Generated Index\n", "utf8");
 
     registerBridgeArtifacts([
-      {
-        kind: "daily-note",
+      artifact(workspaceDir, "memory/2026-06-22.md", "daily-note"),
+      artifact(
         workspaceDir,
-        relativePath: "memory/2026-06-22.md",
-        absolutePath: dailyNotePath,
-        agentIds: ["main"],
-        contentType: "markdown",
-      },
-      {
-        kind: "daily-note",
-        workspaceDir,
-        relativePath: "memory/wiki/sources/bridge-workspace-remote-memory-daily-old.md",
-        absolutePath: generatedSourcePath,
-        agentIds: ["main"],
-        contentType: "markdown",
-      },
-      {
-        kind: "daily-note",
-        workspaceDir,
-        relativePath: "memory/wiki/index.md",
-        absolutePath: generatedIndexPath,
-        agentIds: ["main"],
-        contentType: "markdown",
-      },
+        "memory/wiki/sources/bridge-workspace-remote-memory-daily-old.md",
+        "daily-note",
+      ),
+      artifact(workspaceDir, "memory/wiki/index.md", "daily-note"),
     ]);
 
-    const appConfig: OpenClawConfig = {
-      agents: {
-        entries: { main: { workspace: workspaceDir } },
-      },
-    };
+    const appConfig = appFor(workspaceDir);
 
     const result = await syncMemoryWikiBridgeSources({ config, appConfig });
 
@@ -243,17 +223,7 @@ describe("syncMemoryWikiBridgeSources", () => {
 
   it("imports bridge artifacts from legacy providers without agent ids", async () => {
     const workspaceDir = await createBridgeWorkspace("legacy-agentids-workspace");
-    const { rootDir: vaultDir, config } = await createVault({
-      rootDir: nextCaseRoot("legacy-agentids-vault"),
-      config: {
-        vaultMode: "bridge",
-        bridge: {
-          enabled: true,
-          readMemoryArtifacts: true,
-          indexMemoryRoot: true,
-        },
-      },
-    });
+    const { rootDir: vaultDir, config } = await createBridgeVault("legacy-agentids-vault");
     const memoryPath = path.join(workspaceDir, "MEMORY.md");
     await fs.writeFile(memoryPath, "# Durable Memory\n", "utf8");
     registerBridgeArtifacts([
@@ -266,11 +236,7 @@ describe("syncMemoryWikiBridgeSources", () => {
       } as Omit<MemoryPluginPublicArtifact, "agentIds"> as MemoryPluginPublicArtifact,
     ]);
 
-    const appConfig: OpenClawConfig = {
-      agents: {
-        entries: { main: { workspace: workspaceDir } },
-      },
-    };
+    const appConfig = appFor(workspaceDir);
 
     const result = await syncMemoryWikiBridgeSources({ config, appConfig });
 
@@ -296,30 +262,9 @@ describe("syncMemoryWikiBridgeSources", () => {
     await fs.writeFile(unknownMemory, "# Unknown Sentinel\n", "utf8");
 
     registerBridgeArtifacts([
-      {
-        kind: "memory-root",
-        workspaceDir: supportWorkspace,
-        relativePath: "MEMORY.md",
-        absolutePath: supportMemory,
-        agentIds: [" SUPPORT "],
-        contentType: "markdown",
-      },
-      {
-        kind: "memory-root",
-        workspaceDir: marketingWorkspace,
-        relativePath: "MEMORY.md",
-        absolutePath: marketingMemory,
-        agentIds: ["marketing"],
-        contentType: "markdown",
-      },
-      {
-        kind: "memory-root",
-        workspaceDir: sharedWorkspace,
-        relativePath: "MEMORY.md",
-        absolutePath: sharedMemory,
-        agentIds: ["support", "MARKETING"],
-        contentType: "markdown",
-      },
+      artifact(supportWorkspace, "MEMORY.md", "memory-root", [" SUPPORT "]),
+      artifact(marketingWorkspace, "MEMORY.md", "memory-root", ["marketing"]),
+      artifact(sharedWorkspace, "MEMORY.md", "memory-root", ["support", "MARKETING"]),
       {
         kind: "memory-root",
         workspaceDir: unknownWorkspace,
@@ -329,22 +274,14 @@ describe("syncMemoryWikiBridgeSources", () => {
       } as Omit<MemoryPluginPublicArtifact, "agentIds"> as MemoryPluginPublicArtifact,
     ]);
 
-    const { rootDir: supportVault, config: unresolvedSupportConfig } = await createVault({
-      rootDir: nextCaseRoot("support-vault"),
-      config: {
-        vaultMode: "bridge",
-        vault: { scope: "agent" },
-        bridge: { enabled: true, indexMemoryRoot: true },
-      },
-    });
-    const { rootDir: marketingVault, config: unresolvedMarketingConfig } = await createVault({
-      rootDir: nextCaseRoot("marketing-vault"),
-      config: {
-        vaultMode: "bridge",
-        vault: { scope: "agent" },
-        bridge: { enabled: true, indexMemoryRoot: true },
-      },
-    });
+    const { rootDir: supportVault, config: unresolvedSupportConfig } = await createBridgeVault(
+      "support-vault",
+      { vault: { scope: "agent" } },
+    );
+    const { rootDir: marketingVault, config: unresolvedMarketingConfig } = await createBridgeVault(
+      "marketing-vault",
+      { vault: { scope: "agent" } },
+    );
     const supportConfig = { ...unresolvedSupportConfig, agentId: "support" };
     const marketingConfig = { ...unresolvedMarketingConfig, agentId: "marketing" };
     const appConfig: OpenClawConfig = {
@@ -397,15 +334,8 @@ describe("syncMemoryWikiBridgeSources", () => {
 
   it("imports the public memory event journal when followMemoryEvents is enabled", async () => {
     const workspaceDir = await createBridgeWorkspace("events-workspace");
-    const { rootDir: vaultDir, config } = await createVault({
-      rootDir: nextCaseRoot("events-vault"),
-      config: {
-        vaultMode: "bridge",
-        bridge: {
-          enabled: true,
-          followMemoryEvents: true,
-        },
-      },
+    const { rootDir: vaultDir, config } = await createBridgeVault("events-vault", {
+      bridge: { followMemoryEvents: true },
     });
 
     const eventContent = `${JSON.stringify({
@@ -426,21 +356,10 @@ describe("syncMemoryWikiBridgeSources", () => {
     await fs.mkdir(path.dirname(eventPath), { recursive: true });
     await fs.writeFile(eventPath, eventContent, "utf8");
     registerBridgeArtifacts([
-      {
-        kind: "event-log",
-        workspaceDir,
-        relativePath: "memory/events/memory-host-events.jsonl",
-        absolutePath: eventPath,
-        agentIds: ["main"],
-        contentType: "json",
-      },
+      artifact(workspaceDir, "memory/events/memory-host-events.jsonl", "event-log"),
     ]);
 
-    const appConfig: OpenClawConfig = {
-      agents: {
-        entries: { main: { workspace: workspaceDir } },
-      },
-    };
+    const appConfig = appFor(workspaceDir);
 
     const result = await syncMemoryWikiBridgeSources({ config, appConfig });
 
@@ -455,36 +374,13 @@ describe("syncMemoryWikiBridgeSources", () => {
   it("salvages bridge page Notes when the source artifact disappears", async () => {
     const humanNotes = "Durable bridge annotation";
     const workspaceDir = await createBridgeWorkspace("prune-workspace");
-    const { rootDir: vaultDir, config } = await createVault({
-      rootDir: nextCaseRoot("prune-vault"),
-      config: {
-        vaultMode: "bridge",
-        bridge: {
-          enabled: true,
-          indexMemoryRoot: true,
-          indexDailyNotes: false,
-          indexDreamReports: false,
-          followMemoryEvents: false,
-        },
-      },
+    const { rootDir: vaultDir, config } = await createBridgeVault("prune-vault", {
+      bridge: { indexDailyNotes: false, indexDreamReports: false, followMemoryEvents: false },
     });
 
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "# Durable Memory\n", "utf8");
-    registerBridgeArtifacts([
-      {
-        kind: "memory-root",
-        workspaceDir,
-        relativePath: "MEMORY.md",
-        absolutePath: path.join(workspaceDir, "MEMORY.md"),
-        agentIds: ["main"],
-        contentType: "markdown",
-      },
-    ]);
-    const appConfig: OpenClawConfig = {
-      agents: {
-        entries: { main: { workspace: workspaceDir } },
-      },
-    };
+    registerBridgeArtifacts([artifact(workspaceDir, "MEMORY.md", "memory-root")]);
+    const appConfig = appFor(workspaceDir);
 
     const first = await syncMemoryWikiBridgeSources({ config, appConfig });
     const firstPagePath = first.pagePaths[0] ?? "";
@@ -515,22 +411,10 @@ describe("syncMemoryWikiBridgeSources", () => {
 
   it("keeps stale pages when the memory capability closes during a source read", async () => {
     const workspaceDir = await createBridgeWorkspace("closing-capability-workspace");
-    const { rootDir: vaultDir, config } = await createVault({
-      rootDir: nextCaseRoot("closing-capability-vault"),
-      config: { vaultMode: "bridge", bridge: { enabled: true, indexMemoryRoot: true } },
-    });
-    const artifacts: MemoryPluginPublicArtifact[] = ["previous.md", "current.md"].map(
-      (relativePath) => ({
-        kind: "memory-root",
-        workspaceDir,
-        relativePath,
-        absolutePath: path.join(workspaceDir, relativePath),
-        agentIds: ["main"],
-        contentType: "markdown",
-      }),
-    );
-    for (const artifact of artifacts) {
-      await fs.writeFile(artifact.absolutePath, `# ${artifact.relativePath}\n`, "utf8");
+    const { rootDir: vaultDir, config } = await createBridgeVault("closing-capability-vault");
+    const artifacts = ["previous.md", "current.md"].map((name) => artifact(workspaceDir, name));
+    for (const entry of artifacts) {
+      await fs.writeFile(entry.absolutePath, `# ${entry.relativePath}\n`, "utf8");
     }
     registerBridgeArtifacts(artifacts.slice(0, 1));
     const appConfig: OpenClawConfig = {};
@@ -565,34 +449,11 @@ describe("syncMemoryWikiBridgeSources", () => {
 
   it("refuses to overwrite bridge source pages through vault symlinks", async () => {
     const workspaceDir = await createBridgeWorkspace("symlink-workspace");
-    const { rootDir: vaultDir, config } = await createVault({
-      rootDir: nextCaseRoot("symlink-vault"),
-      config: {
-        vaultMode: "bridge",
-        bridge: {
-          enabled: true,
-          readMemoryArtifacts: true,
-          indexMemoryRoot: true,
-        },
-      },
-    });
+    const { rootDir: vaultDir, config } = await createBridgeVault("symlink-vault");
     const memoryPath = path.join(workspaceDir, "MEMORY.md");
     await fs.writeFile(memoryPath, "# Durable Memory\n", "utf8");
-    registerBridgeArtifacts([
-      {
-        kind: "memory-root",
-        workspaceDir,
-        relativePath: "MEMORY.md",
-        absolutePath: memoryPath,
-        agentIds: ["main"],
-        contentType: "markdown",
-      },
-    ]);
-    const appConfig: OpenClawConfig = {
-      agents: {
-        entries: { main: { workspace: workspaceDir } },
-      },
-    };
+    registerBridgeArtifacts([artifact(workspaceDir, "MEMORY.md", "memory-root")]);
+    const appConfig = appFor(workspaceDir);
     const first = await syncMemoryWikiBridgeSources({ config, appConfig });
     const pagePath = first.pagePaths[0] ?? "";
     const pageAbsPath = path.join(vaultDir, pagePath);
@@ -614,34 +475,11 @@ describe("syncMemoryWikiBridgeSources", () => {
     populateDirectory?: boolean;
   }) {
     const workspaceDir = await createBridgeWorkspace(params.workspaceName);
-    const { rootDir: vaultDir, config } = await createVault({
-      rootDir: nextCaseRoot(params.vaultName),
-      config: {
-        vaultMode: "bridge",
-        bridge: {
-          enabled: true,
-          readMemoryArtifacts: true,
-          indexMemoryRoot: true,
-        },
-      },
-    });
+    const { rootDir: vaultDir, config } = await createBridgeVault(params.vaultName);
     const memoryPath = path.join(workspaceDir, "MEMORY.md");
     await fs.writeFile(memoryPath, "# Durable Memory\n", "utf8");
-    registerBridgeArtifacts([
-      {
-        kind: "memory-root",
-        workspaceDir,
-        relativePath: "MEMORY.md",
-        absolutePath: memoryPath,
-        agentIds: ["main"],
-        contentType: "markdown",
-      },
-    ]);
-    const appConfig: OpenClawConfig = {
-      agents: {
-        entries: { main: { workspace: workspaceDir } },
-      },
-    };
+    registerBridgeArtifacts([artifact(workspaceDir, "MEMORY.md", "memory-root")]);
+    const appConfig = appFor(workspaceDir);
     const first = await syncMemoryWikiBridgeSources({ config, appConfig });
     const pagePath = first.pagePaths[0] ?? "";
     const pageAbsPath = path.join(vaultDir, pagePath);
@@ -670,34 +508,11 @@ describe("syncMemoryWikiBridgeSources", () => {
 
   it("replaces bridge source page hardlinks without clobbering their target", async () => {
     const workspaceDir = await createBridgeWorkspace("hardlink-workspace");
-    const { rootDir: vaultDir, config } = await createVault({
-      rootDir: nextCaseRoot("hardlink-vault"),
-      config: {
-        vaultMode: "bridge",
-        bridge: {
-          enabled: true,
-          readMemoryArtifacts: true,
-          indexMemoryRoot: true,
-        },
-      },
-    });
+    const { rootDir: vaultDir, config } = await createBridgeVault("hardlink-vault");
     const memoryPath = path.join(workspaceDir, "MEMORY.md");
     await fs.writeFile(memoryPath, "# Durable Memory\n", "utf8");
-    registerBridgeArtifacts([
-      {
-        kind: "memory-root",
-        workspaceDir,
-        relativePath: "MEMORY.md",
-        absolutePath: memoryPath,
-        agentIds: ["main"],
-        contentType: "markdown",
-      },
-    ]);
-    const appConfig: OpenClawConfig = {
-      agents: {
-        entries: { main: { workspace: workspaceDir } },
-      },
-    };
+    registerBridgeArtifacts([artifact(workspaceDir, "MEMORY.md", "memory-root")]);
+    const appConfig = appFor(workspaceDir);
     const first = await syncMemoryWikiBridgeSources({ config, appConfig });
     const pagePath = first.pagePaths[0] ?? "";
     const pageAbsPath = path.join(vaultDir, pagePath);

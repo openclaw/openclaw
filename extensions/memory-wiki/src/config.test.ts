@@ -1,4 +1,3 @@
-// Memory Wiki tests cover config plugin behavior.
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -40,19 +39,12 @@ describe("resolveMemoryWikiConfig", () => {
 
   it("resolves normalized agent ids to distinct vault roots", () => {
     const base = resolveMemoryWikiConfig(
-      {
-        vault: {
-          scope: "agent",
-          path: "~/vaults/wiki",
-        },
-      },
+      { vault: { scope: "agent", path: "~/vaults/wiki" } },
       { homedir: "/Users/tester" },
     );
-    const appConfig = {
-      agents: {
-        entries: { "support-team": {}, marketing: {} },
-      },
-    } as OpenClawConfig;
+    const appConfig: OpenClawConfig = {
+      agents: { entries: { "support-team": {}, marketing: {} } },
+    };
 
     const support = resolveMemoryWikiAgentConfig({
       config: base,
@@ -93,47 +85,37 @@ describe("resolveMemoryWikiConfig", () => {
     expect(resolved.vault.path).toBe(path.join(expectedRoot, "support"));
   });
 
-  it("rejects unsafe-local access for agent-scoped vaults", () => {
-    const parsed = memoryWikiConfigSchema.safeParse?.({
-      vaultMode: "unsafe-local",
-      vault: { scope: "agent" },
-    });
-
+  function expectScopeIssue(config: unknown, issuePath: string[], message: string) {
+    const parsed = memoryWikiConfigSchema.safeParse?.(config);
     expect(parsed?.success).toBe(false);
     if (parsed?.success === false) {
       expect(parsed.error?.issues).toContainEqual(
-        expect.objectContaining({
-          path: ["vaultMode"],
-          message: "vaultMode=unsafe-local cannot be combined with vault.scope=agent",
-        }),
+        expect.objectContaining({ path: issuePath, message }),
       );
     }
+  }
+
+  it("rejects unsafe-local access for agent-scoped vaults", () => {
+    expectScopeIssue(
+      { vaultMode: "unsafe-local", vault: { scope: "agent" } },
+      ["vaultMode"],
+      "vaultMode=unsafe-local cannot be combined with vault.scope=agent",
+    );
   });
 
   it("rejects the global Obsidian CLI selector for agent-scoped vaults", () => {
-    const parsed = memoryWikiConfigSchema.safeParse?.({
-      vault: { scope: "agent" },
-      obsidian: { useOfficialCli: true },
-    });
-
-    expect(parsed?.success).toBe(false);
-    if (parsed?.success === false) {
-      expect(parsed.error?.issues).toContainEqual(
-        expect.objectContaining({
-          path: ["obsidian", "useOfficialCli"],
-          message: "obsidian.useOfficialCli cannot be enabled with vault.scope=agent",
-        }),
-      );
-    }
+    expectScopeIssue(
+      { vault: { scope: "agent" }, obsidian: { useOfficialCli: true } },
+      ["obsidian", "useOfficialCli"],
+      "obsidian.useOfficialCli cannot be enabled with vault.scope=agent",
+    );
   });
 });
 
 describe("memory-wiki manifest config schema", () => {
   it("rejects unsafe-local access for agent-scoped vaults", () => {
-    const validate = compileManifestConfigSchema();
-
     expect(
-      validate({
+      compileManifestConfigSchema()({
         vaultMode: "unsafe-local",
         vault: { scope: "agent" },
       }),
@@ -141,10 +123,8 @@ describe("memory-wiki manifest config schema", () => {
   });
 
   it("rejects the global Obsidian CLI selector for agent-scoped vaults", () => {
-    const validate = compileManifestConfigSchema();
-
     expect(
-      validate({
+      compileManifestConfigSchema()({
         vault: { scope: "agent" },
         obsidian: { useOfficialCli: true },
       }),
