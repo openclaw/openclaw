@@ -110,7 +110,7 @@ All actions are enabled by default; use `channels.imessage.actions` to turn indi
 
     Operator notes:
     - Poll and reaction bindings are stored both in memory and in the gateway's persistent keyed store (TTL matched to the approval expiry), and the gateway also polls pending prompts for tapbacks. After a gateway restart, a tap on an old control is recognized and swallowed instead of entering agent chat, but the restart ends the in-flight command; request a new approval rather than expecting the old control to resume it.
-    - The operator's own `is_from_me=true` tapback (for example from a paired Apple device) resolves the approval when that handle is an explicit approver.
+    - The operator's own `is_from_me=true` tapback or poll vote (for example from a paired Apple device) resolves the approval as the local account it was sent from (`destination_caller_id`), including in a direct chat with someone else, when that account is an explicit approver.
     - Approval prompts route into a group conversation only when explicit approvers are configured; otherwise any group member could approve.
     - Legacy text-style tapbacks (`Liked "…"` plain text from very old Apple clients) cannot resolve approvals because they carry no message GUID; reaction resolution requires the structured tapback metadata that current macOS / iOS clients emit.
 
