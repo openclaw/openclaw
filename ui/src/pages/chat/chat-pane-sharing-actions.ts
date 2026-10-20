@@ -23,9 +23,9 @@ import type { ChatPaneConnectionScope } from "./chat-pane-shared.ts";
 import { ChatPaneSidePanels } from "./chat-pane-side-panels.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
 import type { PreparedChatSessionSharing } from "./components/chat-session-sharing-shared.tsx";
-import type { ChatSessionSharingOutcome } from "./components/chat-session-sharing.solid.tsx";
 import {
   canManageChatSessionSharing,
+  type ChatSessionSharingOutcome,
   type ChatSessionSharingProps,
   type ChatSessionSharingState,
 } from "./components/chat-session-sharing.solid.tsx";
