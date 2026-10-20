@@ -76,7 +76,10 @@ import {
   resolveCliAuthBindingFingerprint,
   resolveCliAuthEpoch,
 } from "../cli-auth-epoch.js";
-import { resolveCliBackendConfig } from "../cli-backends.js";
+import {
+  cliBackendSupportsExactToolAvailability,
+  resolveCliBackendConfig,
+} from "../cli-backends.js";
 import { hashCliSessionText, resolveCliSessionReuse } from "../cli-session.js";
 import {
   claudeCliSessionTranscriptHasContent,
@@ -286,12 +289,7 @@ async function prepareCliRunContextWithinReadFence(
   }
   params = prepareCliRunModelAuthority(params);
   const backendAuthPolicy = resolveBundledCliBackendAuthPolicy(backendResolved.id);
-  const canEnforceExactToolAvailability =
-    backendResolved.nativeToolMode === "selectable" &&
-    ((backendResolved.toolAvailabilityEnforcement === "execution-args" &&
-      backendResolved.resolveExecutionArgs !== undefined) ||
-      (backendResolved.toolAvailabilityEnforcement === "prepare-execution" &&
-        backendResolved.prepareExecution !== undefined));
+  const canEnforceExactToolAvailability = cliBackendSupportsExactToolAvailability(backendResolved);
   using callerToolAuthorityResources = new DisposableStack();
   const callerToolAuthority = callerToolAuthorityResources.use(
     captureCliRunToolAuthority(params, {

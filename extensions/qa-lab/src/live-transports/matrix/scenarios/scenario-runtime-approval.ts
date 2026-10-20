@@ -39,13 +39,6 @@ type MatrixQaApprovalOptionReactionParams = {
   targetEventId: string;
 };
 
-function requireMatrixQaGatewayCall(context: MatrixQaScenarioContext) {
-  if (!context.gatewayCall) {
-    throw new Error("Matrix approval QA scenario requires a live gateway RPC client");
-  }
-  return context.gatewayCall;
-}
-
 function isApprovalOptionReaction(
   event: MatrixQaObservedEvent,
   params: MatrixQaApprovalOptionReactionParams,
@@ -273,8 +266,7 @@ async function requestApproval(
   kind: ChannelApprovalKind,
   request: Record<string, unknown>,
 ) {
-  const gatewayCall = requireMatrixQaGatewayCall(context);
-  return await gatewayCall(
+  return await context.gatewayCall(
     `${kind}.approval.request`,
     {
       ...request,
@@ -314,7 +306,7 @@ async function waitForApprovalDecision(params: {
 }) {
   return waitForLiveQaApprovalDecision({
     approvalId: params.approvalId,
-    gateway: { call: requireMatrixQaGatewayCall(params.context) },
+    gateway: { call: params.context.gatewayCall },
     kind: params.kind,
     timeoutMs: MATRIX_QA_APPROVAL_DECISION_TIMEOUT_MS + 5_000,
   });
@@ -329,7 +321,7 @@ async function resolveApprovalDecision(params: {
   return resolveLiveQaApprovalDecision({
     approvalId: params.approvalId,
     decision: params.decision,
-    gateway: { call: requireMatrixQaGatewayCall(params.context) },
+    gateway: { call: params.context.gatewayCall },
     kind: params.kind,
     timeoutMs: 5_000,
   });

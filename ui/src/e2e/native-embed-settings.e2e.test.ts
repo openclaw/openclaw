@@ -277,8 +277,6 @@ suite.define(() => {
               } satisfies WebSearchStatusResult,
             };
             await installMockGateway(page, {
-              // Embedded layout waits for its route/content, not the absent sidebar roster.
-              awaitInitialRoster: false,
               methodResponses,
               featureMethods: [
                 ...defaultControlUiFeatureMethods,
@@ -302,11 +300,7 @@ suite.define(() => {
                     ? "/cron"
                     : pathForRoute(route);
               expect(
-                (
-                  await page.goto(new URL(pathname, suite.server.baseUrl).toString(), {
-                    waitUntil: "commit",
-                  })
-                )?.status(),
+                (await page.goto(new URL(pathname, suite.server.baseUrl).toString()))?.status(),
               ).toBe(200);
               await waitForControlUiRoute(page, { routeId: route });
               await page.locator("html.openclaw-native-embed .shell--embed").waitFor();
@@ -385,15 +379,18 @@ suite.define(() => {
               if (route === "cron") {
                 await page.getByText("Healthy automation", { exact: true }).first().waitFor();
               }
-              const overflow = await page.locator("main.content").evaluate(async (main) => {
-                await main.ownerDocument.fonts.ready;
-                return {
-                  documentFits: main.ownerDocument.documentElement.scrollWidth <= window.innerWidth,
-                  contentFits: main.scrollWidth <= main.clientWidth,
-                };
-              });
-              expect(overflow.documentFits, route).toBe(true);
-              expect(overflow.contentFits, route).toBe(true);
+              expect(
+                await page.evaluate(
+                  () => document.documentElement.scrollWidth <= window.innerWidth,
+                ),
+                route,
+              ).toBe(true);
+              expect(
+                await page
+                  .locator("main.content")
+                  .evaluate((main) => main.scrollWidth <= main.clientWidth),
+                route,
+              ).toBe(true);
               if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
                 await page.screenshot({
                   animations: "disabled",

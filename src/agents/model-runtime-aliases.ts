@@ -17,6 +17,7 @@ import {
   listCliRuntimeProviderIds,
   resolveCliRuntimeCanonicalProvider,
   resolveCliRuntimeModelBackendBinding,
+  resolveCliRuntimeProfileAlias,
 } from "./cli-backends.js";
 import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import { resolveModelRuntimePolicy } from "./model-runtime-policy.js";
@@ -252,32 +253,6 @@ function resolveRuntimeAuthProvider(
   });
 }
 
-function resolveProfileRuntimeAlias(
-  params: RuntimeAuthAliasParams & {
-    provider: string;
-    profileProvider: string | undefined;
-  },
-): string | undefined {
-  const provider = normalizeProviderId(params.provider);
-  const profileProvider = normalizeProviderId(params.profileProvider ?? "");
-  if (!provider || !profileProvider) {
-    return undefined;
-  }
-  const providerAuthKey = resolveRuntimeAuthProvider(provider, params);
-  const profileAuthKey = resolveRuntimeAuthProvider(profileProvider, params, true);
-  if (providerAuthKey !== profileAuthKey) {
-    return undefined;
-  }
-  if (profileProvider === provider) {
-    return undefined;
-  }
-  return resolveCliRuntimeModelBackendBinding({
-    config: params.cfg,
-    provider,
-    runtime: profileProvider,
-  })?.runtime;
-}
-
 function resolveCliRuntimeFromAuthProfile(
   params: RuntimeAuthAliasParams & {
     provider: string;
@@ -303,7 +278,7 @@ function resolveCliRuntimeFromAuthProfile(
     );
   if (params.authProfileId?.trim()) {
     const profileId = params.authProfileId.trim();
-    return resolveProfileRuntimeAlias({
+    return resolveCliRuntimeProfileAlias({
       ...params,
       provider: params.provider,
       profileProvider: (configuredProfiles[profileId] ?? store?.profiles[profileId])?.provider,
@@ -327,7 +302,7 @@ function resolveCliRuntimeFromAuthProfile(
     if (profileAuthKey !== providerAuthKey) {
       continue;
     }
-    return resolveProfileRuntimeAlias({
+    return resolveCliRuntimeProfileAlias({
       ...params,
       provider,
       profileProvider: profile.provider,
@@ -357,7 +332,7 @@ function resolveCliRuntimeFromAuthProfile(
   }
   const [profileId] = compatibleProfileIds;
   return profileId
-    ? resolveProfileRuntimeAlias({
+    ? resolveCliRuntimeProfileAlias({
         ...params,
         provider,
         profileProvider: configuredProfiles[profileId]?.provider,

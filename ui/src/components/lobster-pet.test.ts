@@ -601,12 +601,30 @@ describe("lobster pet element", () => {
     expect(container.querySelector(".lob-eye-peek")).toBeNull();
   });
 
-  it("props an open book against the claws while keeping both eyes open", () => {
-    const container = paletteSvg("crimson", { reading: true });
-    expect(container.querySelector(".lob-reading-book")).not.toBeNull();
-    expect(container.querySelectorAll(".lob-eye-open circle")).toHaveLength(4);
-    expect(container.querySelector<SVGElement>(".lob-eye-closed")?.style.display).toBe("none");
-  });
+  it.each([
+    ["crimson", "3", "#0a1014"],
+    ["flatpack", "2.5", "#0a1014"],
+    ["actual", "2", "#17100e"],
+    ["balloon", "2.5", "#0a1014"],
+    ["portal", "2.2", "#0a1014"],
+  ])(
+    "keeps %s's closed eyes styled in snapshots and both eyes open while reading",
+    (id, width, stroke) => {
+      const sleeping = paletteSvg(id, { sleeping: true });
+      const closed = sleeping.querySelector<SVGElement>(".lob-eye-closed");
+      expect(closed?.localName).toBe("g");
+      expect(closed?.getAttribute("stroke")).toBe(stroke);
+      expect(closed?.getAttribute("stroke-width")).toBe(width);
+      expect(closed?.getAttribute("stroke-linecap")).toBe("round");
+      expect(closed?.getAttribute("fill")).toBe("none");
+      expect(closed?.style.opacity).toBe("1");
+      expect(closed?.querySelectorAll(":scope > path")).toHaveLength(2);
+      const container = paletteSvg(id, { reading: true });
+      expect(container.querySelector(".lob-reading-book")).not.toBeNull();
+      expect(container.querySelectorAll(".lob-eye-open circle")).toHaveLength(4);
+      expect(container.querySelector<SVGElement>(".lob-eye-closed")?.style.display).toBe("none");
+    },
+  );
 
   it("renders full replacement geometry without the standard dome", () => {
     const flatpackContainer = paletteSvg("flatpack", {}, "crown");

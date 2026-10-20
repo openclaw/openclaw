@@ -219,6 +219,8 @@ it.each(["installation repair", "settlement receipt"] as const)(
 );
 
 it("settles a dead original's cancelled family with its retained service root", async () => {
+  // Redact all sibling roots so host temp-path length cannot truncate this receipt.
+  env = { ...env, HOME: path.dirname(fixture.root) };
   const keys = fixture.seedCancellation();
   const family = fixture.rows();
   expect(nextUpdate()).toBe("busy");
@@ -230,12 +232,15 @@ it("settles a dead original's cancelled family with its retained service root", 
   repair.complete(run.runId);
   const detail = settlement(run.runId)?.detail ?? "";
   expect(detail).toContain(`cancelled update custody settled: updater PID ${keys.updater.pid}`);
-  // History shortens paths under the fixture home; sibling roots stay verbatim.
+  // History shortens every family key under the fixture home.
   const settled = /Settled keys: (.*)\. Current-installation/.exec(detail)?.[1]?.split(", ");
   expect(settled).toHaveLength(family.length);
   expect(settled).toEqual(
     expect.arrayContaining(
-      [keys.slot, keys.service].flatMap((key) => [key, `${key}${keys.lineage}`]),
+      [keys.slot, keys.service].flatMap((key) => {
+        const shortened = `~/${path.basename(key)}`;
+        return [shortened, `${shortened}${keys.lineage}`];
+      }),
     ),
   );
   expect(fixture.rows()).toEqual([]);

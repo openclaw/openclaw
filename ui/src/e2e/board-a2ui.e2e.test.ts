@@ -161,6 +161,295 @@ suite.define(() => {
     });
   });
 
+  it("keeps v0.8 bindings, templated rows, and actions live in the rendered catalog", async () => {
+    const page = await suite.newPage();
+    await page.addScriptTag({
+      path: path.join(bundleDirectory, bundleFiles["v0.8"]),
+      type: "module",
+    });
+    await page.evaluate(() => {
+      Reflect.set(globalThis, "canvasActions", []);
+      Reflect.set(globalThis, "canvasValidation", []);
+      Reflect.set(globalThis, "openclaw", {
+        state: {
+          emit: async (action: unknown) => {
+            Reflect.get(globalThis, "canvasActions").push(action);
+          },
+        },
+      });
+      const host = document.createElement("openclaw-a2ui-host");
+      host.style.width = "300px";
+      host.addEventListener("a2ui-validation-input", (event) => {
+        Reflect.get(globalThis, "canvasValidation").push(Reflect.get(event, "detail"));
+      });
+      document.body.append(host);
+      Reflect.get(globalThis, "openclawA2UI").applyMessages([
+        {
+          surfaceUpdate: {
+            surfaceId: "main",
+            components: [
+              {
+                id: "root",
+                component: {
+                  Column: {
+                    children: {
+                      explicitList: [
+                        "field",
+                        "long-text",
+                        "unsafe-pattern",
+                        "mirror",
+                        "list",
+                        "choice",
+                        "date",
+                        "time",
+                        "preview-list",
+                        "rule",
+                        "progress",
+                        "save",
+                      ],
+                    },
+                  },
+                },
+              },
+              {
+                id: "field",
+                component: {
+                  TextField: { label: { literalString: "Name" }, text: { path: "/name" } },
+                },
+              },
+              { id: "mirror", component: { Text: { text: { path: "/name" } } } },
+              {
+                id: "long-text",
+                component: {
+                  TextField: {
+                    label: { literalString: "Uppercase details" },
+                    text: { path: "/details" },
+                    textFieldType: "longText",
+                    validationRegexp: "[A-Z]+",
+                  },
+                },
+              },
+              {
+                id: "unsafe-pattern",
+                component: {
+                  TextField: {
+                    label: { literalString: "Unrestricted details" },
+                    text: { path: "/unrestricted" },
+                    validationRegexp: "^(a+)+$",
+                  },
+                },
+              },
+              {
+                id: "preview-list",
+                component: {
+                  List: {
+                    direction: "horizontal",
+                    children: { explicitList: ["card-a", "card-b", "card-c"] },
+                  },
+                },
+              },
+              ...["a", "b", "c"].flatMap((key) => [
+                { id: `card-${key}`, component: { Card: { child: `card-text-${key}` } } },
+                {
+                  id: `card-text-${key}`,
+                  component: {
+                    Text: {
+                      text: {
+                        literalString:
+                          "Synthetic content keeps each card readable in a narrow horizontal list.",
+                      },
+                    },
+                  },
+                },
+              ]),
+              { id: "rule", component: { Divider: { thickness: 4, color: "#ff0000" } } },
+              {
+                id: "progress",
+                component: {
+                  Slider: {
+                    label: { literalString: "Completion" },
+                    value: { path: "/progress" },
+                    minValue: 0,
+                    maxValue: 100,
+                  },
+                },
+              },
+              {
+                id: "date",
+                component: { DateTimeInput: { value: { path: "/date" }, enableTime: false } },
+              },
+              {
+                id: "time",
+                component: { DateTimeInput: { value: { path: "/time" }, enableDate: false } },
+              },
+              {
+                id: "list",
+                component: {
+                  List: { children: { template: { componentId: "row", dataBinding: "/items" } } },
+                },
+              },
+              {
+                id: "row",
+                component: { Column: { children: { explicitList: ["row-label", "choose"] } } },
+              },
+              { id: "row-label", component: { Text: { text: { path: "label" } } } },
+              {
+                id: "choose",
+                component: {
+                  Button: {
+                    child: "choose-label",
+                    action: {
+                      name: "choose",
+                      context: [{ key: "label", value: { path: "label" } }],
+                    },
+                  },
+                },
+              },
+              {
+                id: "choose-label",
+                component: { Text: { text: { literalString: "Choose row" } } },
+              },
+              {
+                id: "choice",
+                component: {
+                  MultipleChoice: {
+                    selections: { path: "/selected" },
+                    variant: "chips",
+                    options: [{ label: { literalString: "Alpha" }, value: "alpha" }],
+                  },
+                },
+              },
+              {
+                id: "save",
+                component: {
+                  Button: {
+                    child: "save-label",
+                    action: {
+                      name: "save",
+                      context: ["name", "date", "time", "details", "unrestricted", "progress"].map(
+                        (key) => ({ key, value: { path: `/${key}` } }),
+                      ),
+                    },
+                  },
+                },
+              },
+              { id: "save-label", component: { Text: { text: { literalString: "Save" } } } },
+            ],
+          },
+        },
+        {
+          dataModelUpdate: {
+            surfaceId: "main",
+            contents: [
+              { key: "name", valueString: "Initial" },
+              { key: "date", valueString: "2026-10-15" },
+              { key: "time", valueString: "12:30" },
+              { key: "details", valueString: "" },
+              { key: "unrestricted", valueString: "" },
+              { key: "progress", valueNumber: 37 },
+              { key: "selected", valueString: '["alpha"]' },
+              {
+                key: "items",
+                valueMap: [
+                  { key: "first", valueMap: [{ key: "label", valueString: "First row" }] },
+                ],
+              },
+            ],
+          },
+        },
+        { beginRendering: { surfaceId: "main", root: "root" } },
+      ]);
+    });
+    await page.getByText("First row", { exact: true }).waitFor();
+    await page.locator('input[type="date"]').fill("2026-10-16");
+    await page.locator('input[type="time"]').fill("13:30");
+    const details = page.getByRole("textbox", { name: "Uppercase details", exact: true });
+    await details.fill("lowercase");
+    await expect
+      .poll(() => page.evaluate(() => Reflect.get(globalThis, "canvasValidation").at(-1)))
+      .toMatchObject({ componentId: "long-text", value: "lowercase", valid: false });
+    await details.fill("ABC");
+    await expect
+      .poll(() => page.evaluate(() => Reflect.get(globalThis, "canvasValidation").at(-1)))
+      .toMatchObject({ componentId: "long-text", value: "ABC", valid: true });
+    const unrestricted = page.getByRole("textbox", { name: "Unrestricted details", exact: true });
+    expect(await unrestricted.getAttribute("pattern")).toBeNull();
+    await unrestricted.fill("arbitrary");
+    await expect
+      .poll(() => page.evaluate(() => Reflect.get(globalThis, "canvasValidation").at(-1)))
+      .toMatchObject({ componentId: "unsafe-pattern", value: "arbitrary", valid: true });
+    const horizontalList = page.locator("#preview-list > section");
+    expect(await horizontalList.evaluate((element) => element.scrollWidth)).toBeGreaterThan(300);
+    expect(
+      await horizontalList.evaluate((element) => {
+        element.scrollLeft = 100;
+        return element.scrollLeft;
+      }),
+    ).toBeGreaterThan(0);
+    await expect
+      .poll(() =>
+        page.locator("#rule hr").evaluate((element) => {
+          const style = getComputedStyle(element);
+          return { height: style.height, color: style.backgroundColor };
+        }),
+      )
+      .toEqual({ height: "4px", color: "rgb(255, 0, 0)" });
+    await expect.poll(() => page.locator("#progress output").textContent()).toBe("37");
+    await page.getByRole("slider", { name: "Completion", exact: true }).press("ArrowRight");
+    await expect.poll(() => page.locator("#progress output").textContent()).toBe("38");
+    const choice = page.getByRole("button", { name: "Alpha" });
+    await choice.click();
+    await expect.poll(() => choice.getAttribute("aria-pressed")).toBe("false");
+    await choice.click();
+    await expect.poll(() => choice.getAttribute("aria-pressed")).toBe("true");
+    const field = page.getByRole("textbox", { name: "Name", exact: true });
+    await field.fill("Edited");
+    await page.getByText("Edited", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect
+      .poll(() => page.evaluate(() => Reflect.get(globalThis, "canvasActions")))
+      .toMatchObject([
+        {
+          eventType: "a2ui.action",
+          action: {
+            name: "save",
+            context: {
+              name: "Edited",
+              date: "2026-10-16",
+              time: "13:30",
+              details: "ABC",
+              unrestricted: "arbitrary",
+              progress: 38,
+            },
+          },
+        },
+      ]);
+    await page.getByRole("button", { name: "Choose row", exact: true }).click();
+    await expect
+      .poll(() => page.evaluate(() => Reflect.get(globalThis, "canvasActions")))
+      .toMatchObject([
+        { action: { name: "save" } },
+        { action: { name: "choose", context: { label: "First row" } } },
+      ]);
+    const retained = await field.elementHandle();
+    await page.evaluate(() =>
+      Reflect.get(globalThis, "openclawA2UI").applyMessages([
+        {
+          dataModelUpdate: {
+            surfaceId: "main",
+            path: "/items",
+            contents: [{ key: "second", valueMap: [{ key: "label", valueString: "Second row" }] }],
+          },
+        },
+      ]),
+    );
+    await page.getByText("Second row", { exact: true }).waitFor();
+    expect(await field.evaluate((element, previous) => element === previous, retained)).toBe(true);
+    expect(await field.inputValue()).toBe("Edited");
+    await page.getByText("Updated: choose", { exact: true }).waitFor();
+    await retained?.dispose();
+  });
+
   for (const { version, colorScheme, rejectsAction, name } of [
     ...(["v0.8", "v0.9"] as const).flatMap((protocol) =>
       (["dark", "light"] as const).map((theme) => ({

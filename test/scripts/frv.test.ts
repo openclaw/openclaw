@@ -4,7 +4,9 @@ import {
   continueFailed,
   createClient,
   inspectContinuation,
+  inspectUnsealedPlan,
   loadPlan,
+  loadPlanForCommand,
   preflightContinuation,
   watchRelease,
 } from "../../scripts/frv.mjs";
@@ -252,6 +254,105 @@ describe("FRV immutable plan eligibility", () => {
     await expect(
       loadPlan({ repository: REPOSITORY, runId: "77" }, async () => focused),
     ).rejects.toThrow("FRV continuation requires an all-group root");
+  });
+  it.each([
+    [1, "not-yet-sealed"],
+    [2, "reseal-in-progress"],
+  ])("projects authenticated attempt %s plan lifecycle facts", async (attempt, state) => {
+    const active = rootRun(attempt, null);
+    const client = {
+      repository: REPOSITORY,
+      getRun: async () => structuredClone(active),
+      getAttemptJobs: async () => [
+        {
+          ...job("Seal release execution plan"),
+          conclusion: null,
+          run_attempt: attempt,
+          status: "in_progress",
+        },
+      ],
+    };
+    await expect(
+      loadPlanForCommand(
+        { command: "status", repository: REPOSITORY, runId: "77" },
+        client,
+        async () => undefined,
+      ),
+    ).resolves.toMatchObject({
+      pending: {
+        action: "waiting-for-plan",
+        planAvailability: { runAttempt: attempt, state },
+        nextCommand: "pnpm frv watch --run 77",
+      },
+    });
+  });
+
+  it("keeps plan-dependent mutations unavailable before sealing", async () => {
+    const active = rootRun(1, null);
+    const client = {
+      repository: REPOSITORY,
+      getRun: async () => structuredClone(active),
+      getAttemptJobs: async () => [],
+    };
+    await expect(
+      loadPlanForCommand(
+        { command: "rerun", repository: REPOSITORY, runId: "77" },
+        client,
+        async () => undefined,
+      ),
+    ).rejects.toThrow(
+      "plan is not-yet-sealed; rerun is unavailable until the immutable plan is sealed",
+    );
+  });
+
+  it("keeps a newly uploaded plan retryable while GitHub propagates its artifact", async () => {
+    const active = rootRun(1, null);
+    const upload = {
+      ...job("Upload immutable release execution plan"),
+      completed_at: new Date().toISOString(),
+    };
+    await expect(
+      inspectUnsealedPlan(
+        { repository: REPOSITORY, runId: "77" },
+        {
+          getRun: async () => structuredClone(active),
+          getAttemptJobs: async () => [
+            { ...job("Seal release execution plan"), run_attempt: 1, steps: [upload] },
+          ],
+        },
+      ),
+    ).resolves.toMatchObject({
+      action: "waiting-for-plan",
+      planAvailability: { state: "artifact-propagating" },
+    });
+  });
+
+  it("does not downgrade a successful upload or untrusted parent to pending", async () => {
+    const active = rootRun(1, null);
+    const terminal = rootRun(1, "success");
+    const successfulUpload = {
+      ...job("Seal release execution plan"),
+      run_attempt: 1,
+      steps: [job("Upload immutable release execution plan")],
+    };
+    await expect(
+      inspectUnsealedPlan(
+        { repository: REPOSITORY, runId: "77" },
+        {
+          getRun: async () => structuredClone(terminal),
+          getAttemptJobs: async () => [successfulUpload],
+        },
+      ),
+    ).rejects.toThrow("after its successful upload");
+    await expect(
+      inspectUnsealedPlan(
+        { repository: REPOSITORY, runId: "77" },
+        {
+          getRun: async () => ({ ...active, path: ".github/workflows/ci.yml" }),
+          getAttemptJobs: async () => [],
+        },
+      ),
+    ).rejects.toThrow("not the exact Full Release Validation parent");
   });
 });
 
