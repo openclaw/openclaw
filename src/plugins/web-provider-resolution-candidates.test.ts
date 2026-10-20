@@ -30,84 +30,47 @@ vi.mock("./plugin-metadata-snapshot.js", () => ({
 }));
 
 describe("resolveManifestDeclaredWebProviderCandidatePluginIds", () => {
+  const resolve = (params: { onlyPluginIds?: string[]; origin?: "bundled" } = {}) =>
+    resolveManifestDeclaredWebProviderCandidatePluginIds({
+      contract: "webSearchProviders",
+      configKey: "webSearch",
+      ...params,
+    });
+
   beforeEach(() => {
-    mocks.loadPluginRegistrySnapshot.mockReset();
-    mocks.loadPluginRegistrySnapshot.mockReturnValue({ plugins: [] });
-    mocks.loadPluginManifestRegistryForInstalledIndex.mockReset();
-    mocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
+    mocks.loadPluginRegistrySnapshot.mockReset().mockReturnValue({ plugins: [] });
+    mocks.loadPluginManifestRegistryForInstalledIndex.mockReset().mockReturnValue({
       plugins: [
-        {
-          id: "alpha",
-          origin: "bundled",
-          configSchema: {
-            properties: {
-              webSearch: {},
-            },
-          },
-        },
-        {
-          id: "beta",
-          origin: "bundled",
-          contracts: {
-            webSearchProviders: ["beta-search"],
-          },
-        },
+        { id: "alpha", origin: "bundled", configSchema: { properties: { webSearch: {} } } },
+        { id: "beta", origin: "bundled", contracts: { webSearchProviders: ["beta-search"] } },
       ],
       diagnostics: [],
     });
-    mocks.loadPluginMetadataSnapshot.mockReset();
-    mocks.loadPluginMetadataSnapshot.mockImplementation((...args: unknown[]) => ({
+    mocks.loadPluginMetadataSnapshot.mockReset().mockImplementation((...args: unknown[]) => ({
       plugins: mocks.loadPluginManifestRegistryForInstalledIndex(...args).plugins,
     }));
-    mocks.resolvePluginMetadataSnapshot.mockReset();
-    mocks.resolvePluginMetadataSnapshot.mockImplementation((...args: unknown[]) => ({
+    mocks.resolvePluginMetadataSnapshot.mockReset().mockImplementation((...args: unknown[]) => ({
       plugins: mocks.loadPluginManifestRegistryForInstalledIndex(...args).plugins,
     }));
   });
 
   it("treats explicit empty plugin scopes as scoped-empty", () => {
-    expect(
-      resolveManifestDeclaredWebProviderCandidatePluginIds({
-        contract: "webSearchProviders",
-        configKey: "webSearch",
-        onlyPluginIds: [],
-      }),
-    ).toStrictEqual([]);
+    expect(resolve({ onlyPluginIds: [] })).toStrictEqual([]);
     expect(mocks.loadPluginManifestRegistryForInstalledIndex).not.toHaveBeenCalled();
   });
 
   it("keeps scoped plugins with no declared web candidates scoped-empty", () => {
-    expect(
-      resolveManifestDeclaredWebProviderCandidatePluginIds({
-        contract: "webSearchProviders",
-        configKey: "webSearch",
-        onlyPluginIds: ["missing-plugin"],
-      }),
-    ).toStrictEqual([]);
+    expect(resolve({ onlyPluginIds: ["missing-plugin"] })).toStrictEqual([]);
     expect(mocks.resolvePluginMetadataSnapshot).toHaveBeenCalledOnce();
   });
 
   it("keeps origin filters with no declared web candidates scoped-empty", () => {
     mocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
-      plugins: [
-        {
-          id: "workspace-tool",
-          origin: "workspace",
-          configSchema: {
-            properties: {},
-          },
-        },
-      ],
+      plugins: [{ id: "workspace-tool", origin: "workspace", configSchema: { properties: {} } }],
       diagnostics: [],
     });
 
-    expect(
-      resolveManifestDeclaredWebProviderCandidatePluginIds({
-        contract: "webSearchProviders",
-        configKey: "webSearch",
-        origin: "bundled",
-      }),
-    ).toStrictEqual([]);
+    expect(resolve({ origin: "bundled" })).toStrictEqual([]);
   });
 
   it("limits sandboxed web fetch candidates to bundled and trusted official installs", () => {
@@ -148,12 +111,7 @@ describe("resolveManifestDeclaredWebProviderCandidatePluginIds", () => {
   });
 
   it("derives provider candidates from a single manifest-registry read", () => {
-    expect(
-      resolveManifestDeclaredWebProviderCandidatePluginIds({
-        contract: "webSearchProviders",
-        configKey: "webSearch",
-      }),
-    ).toEqual(["alpha", "beta"]);
+    expect(resolve()).toEqual(["alpha", "beta"]);
     expect(mocks.resolvePluginMetadataSnapshot).toHaveBeenCalledTimes(1);
     expect(mocks.loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledTimes(1);
   });
