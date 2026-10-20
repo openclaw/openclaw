@@ -280,24 +280,11 @@ function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number):
   return new Error(message, err instanceof Error ? { cause: err } : undefined);
 }
 
-function createBrowserRequestAbort(timeoutMs: number, upstreamSignal?: AbortSignal | null) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(new Error("timed out")), timeoutMs);
-  return {
-    signal: upstreamSignal
-      ? AbortSignal.any([upstreamSignal, controller.signal])
-      : controller.signal,
-    dispose: () => clearTimeout(timer),
-  };
-}
-
 async function fetchHttpJson<T>(
   url: string,
   init: RequestInit & { timeoutMs: number },
 ): Promise<T> {
   const { timeoutMs } = init;
-  const abort = createBrowserRequestAbort(timeoutMs, init.signal);
-  const { signal } = abort;
   let release: (() => Promise<void>) | undefined;
   try {
     const guarded = await fetchWithSsrFGuard({
@@ -307,7 +294,6 @@ async function fetchHttpJson<T>(
       // forward the resolved budget so a hung control peer fails closed via the
       // guarded dispatcher instead of waiting on OS timeouts.
       timeoutMs,
-      signal,
       policy: { allowPrivateNetwork: true },
       auditContext: "browser-control-client",
     });
@@ -342,7 +328,6 @@ async function fetchHttpJson<T>(
     });
     return JSON.parse(decodeBrowserControlResponseUtf8(body, res.status)) as T;
   } finally {
-    abort.dispose();
     await release?.();
   }
 }

@@ -1,8 +1,9 @@
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import * as authRevisionRuntime from "../agents/auth-profiles/runtime-snapshots.js";
 import type { RuntimeAuthProfileStore } from "../agents/auth-profiles/types.js";
-import type { PreparedModelRuntimeSnapshot } from "../agents/prepared-model-runtime.js";
+import * as catalogRuntime from "../agents/prepared-model-catalog.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   getSessionCostUsageUpdatedAt,
@@ -17,6 +18,8 @@ import {
 } from "../skills/runtime/refresh-state.js";
 import { publishOperatorRoleConfigChange } from "./operator-role-policy.js";
 import { createChatMetadataOwner } from "./server-methods/chat-metadata-runtime.test-support.js";
+import * as projectionRuntime from "./server-methods/chat-metadata-session-projection.js";
+import * as commands from "./server-methods/commands-list-result.js";
 import { createPreparedReadHandler } from "./server-methods/prepared-read.js";
 import type {
   GatewayRequestContext,
@@ -75,6 +78,7 @@ afterEach(async () => {
   }
   sidecarOwners.clear();
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 beforeEach(() => {
@@ -272,21 +276,25 @@ async function createRealMetadataLifecycle(
       authSnapshots.registerRuntimeAuthProfileStoreMutationListener,
     );
   }
+  vi.spyOn(catalogRuntime, "getPublishedPreparedModelCatalogOwnerSnapshot").mockImplementation(
+    () => (ownerAvailable ? owner : undefined),
+  );
+  if (!options.authStore) {
+    vi.spyOn(authRevisionRuntime, "getRuntimeAuthProfileStoreMetadataRevision").mockReturnValue(
+      revision,
+    );
+  }
+  vi.spyOn(commands, "buildCommandsListResult").mockImplementation(buildCommands);
+  vi.spyOn(projectionRuntime, "prepareChatMetadataModelProjection").mockImplementation(
+    async ({ facts }) => ({
+      modelCatalog: facts.modelCatalog.entries,
+      read: () => ({ models: facts.modelCatalog.entries }),
+      isCurrent: () => true,
+    }),
+  );
   mocks.createRuntime.mockImplementation(
     (params: Parameters<typeof actual.createGatewayChatMetadataRuntime>[0]) => {
-      const runtime = actual.createGatewayChatMetadataRuntime({
-        ...params,
-        deps: {
-          getPreparedOwner: () => (ownerAvailable ? owner : undefined),
-          ...(!options.authStore ? { getAuthStoreRevision: () => revision } : {}),
-          buildCommands,
-          buildProjection: async ({ facts }) => ({
-            modelCatalog: facts.modelCatalog.entries,
-            read: () => ({ models: facts.modelCatalog.entries }),
-            isCurrent: () => true,
-          }),
-        },
-      });
+      const runtime = actual.createGatewayChatMetadataRuntime(params);
       refresh.mockImplementation(() => {
         latestRefresh = runtime.refresh();
         return latestRefresh;
@@ -534,27 +542,25 @@ describe("gateway chat metadata lifecycle", () => {
         throw new Error("metadata must not create live model stores");
       },
     };
-    const getPreparedOwner = vi.fn<() => PreparedModelRuntimeSnapshot | undefined>();
+    const getPreparedOwner = vi
+      .spyOn(catalogRuntime, "getPublishedPreparedModelCatalogOwnerSnapshot")
+      .mockReturnValue(undefined);
     let available = false;
     let revision = 0;
-    const buildProjection = vi.fn(async () => {
-      const projection = {
-        modelCatalog: owner.modelCatalog.entries,
-        models: [{ ...owner.modelCatalog.entries[0], available }],
-      };
-      return { read: () => projection, isCurrent: () => true };
-    });
-    mocks.createRuntime.mockImplementation((params) =>
-      actual.createGatewayChatMetadataRuntime({
-        ...params,
-        deps: {
-          getPreparedOwner,
-          getAuthStoreRevision: () => revision,
-          buildCommands: async () => ({ commands: [] }),
-          buildProjection,
-        },
-      }),
+    vi.spyOn(projectionRuntime, "prepareChatMetadataModelProjection").mockImplementation(
+      async () => {
+        const projection = {
+          modelCatalog: owner.modelCatalog.entries,
+          models: [{ id: "model", name: "model", provider: "test", available }],
+        };
+        return { ...projection, read: () => projection, isCurrent: () => true };
+      },
     );
+    vi.spyOn(authRevisionRuntime, "getRuntimeAuthProfileStoreMetadataRevision").mockImplementation(
+      () => revision,
+    );
+    vi.spyOn(commands, "buildCommandsListResult").mockResolvedValue({ commands: [] });
+    mocks.createRuntime.mockImplementation(actual.createGatewayChatMetadataRuntime);
     const { lifecycle: pendingLifecycle, sidecarOwner } = createLifecycle();
     const lifecycle = await pendingLifecycle;
     const outcomes: unknown[] = [];
@@ -637,26 +643,24 @@ describe("gateway chat metadata lifecycle", () => {
         events.push("work settled");
       }
     };
-    const buildProjection = vi.fn(async () => {
-      await holdWork();
-      return {
-        modelCatalog: owner.modelCatalog.entries,
-        read: () => ({ models: owner.modelCatalog.entries }),
-        isCurrent: () => true,
-      };
-    });
-    mocks.createRuntime.mockImplementation(
-      (params: Parameters<typeof actual.createGatewayChatMetadataRuntime>[0]) =>
-        actual.createGatewayChatMetadataRuntime({
-          ...params,
-          deps: {
-            getPreparedOwner: () => (ownerAvailable ? owner : undefined),
-            getAuthStoreRevision: () => revision,
-            buildCommands: async () => ({ commands: [] }),
-            buildProjection,
-          },
-        }),
+    vi.spyOn(projectionRuntime, "prepareChatMetadataModelProjection").mockImplementation(
+      async () => {
+        await holdWork();
+        return {
+          modelCatalog: owner.modelCatalog.entries,
+          read: () => ({ models: owner.modelCatalog.entries }),
+          isCurrent: () => true,
+        };
+      },
     );
+    vi.spyOn(catalogRuntime, "getPublishedPreparedModelCatalogOwnerSnapshot").mockImplementation(
+      () => (ownerAvailable ? owner : undefined),
+    );
+    vi.spyOn(authRevisionRuntime, "getRuntimeAuthProfileStoreMetadataRevision").mockImplementation(
+      () => revision,
+    );
+    vi.spyOn(commands, "buildCommandsListResult").mockResolvedValue({ commands: [] });
+    mocks.createRuntime.mockImplementation(actual.createGatewayChatMetadataRuntime);
     const { lifecycle: pendingLifecycle, sidecarOwner, warn } = createLifecycle();
     const lifecycle = await pendingLifecycle;
     const broadcast = vi.fn();

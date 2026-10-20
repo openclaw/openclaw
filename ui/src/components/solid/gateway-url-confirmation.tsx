@@ -7,7 +7,6 @@ import {
 import { formatGatewayHost } from "../../lib/gateway-host.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
-import { defineSolidBridge } from "../../lib/solid-bridge.ts";
 import { Icon } from "./icon.tsx";
 import { LazyElementStateView } from "./lazy-view-error.tsx";
 
@@ -114,15 +113,12 @@ function renderConfirmation(props: () => ConfirmationProps) {
   );
 }
 
-export const GatewayUrlConfirmation = defineSolidBridge<{ props?: ConfirmationProps }>(
-  "openclaw-gateway-url-confirmation",
-  (props, host) => {
-    host.style.display = "contents";
-    return (
-      <Show when={props.props?.pendingGatewayUrl ? props.props : undefined}>
+export function GatewayUrlConfirmation(input: { props?: ConfirmationProps }) {
+  return (
+    <openclaw-gateway-url-confirmation style="display: contents">
+      <Show when={input.props?.pendingGatewayUrl ? input.props : undefined}>
         {(confirmation) => renderConfirmation(confirmation)}
       </Show>
-    );
-  },
-  { properties: { props: { default: undefined, attribute: false } } },
-);
+    </openclaw-gateway-url-confirmation>
+  );
+}

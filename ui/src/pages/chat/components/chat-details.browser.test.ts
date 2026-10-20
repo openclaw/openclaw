@@ -174,7 +174,7 @@ describe("chat Details presentation", () => {
     expect(panel.getAttribute("role")).toBe("dialog");
     expect(conversation.getBoundingClientRect().width).toBe(600);
     frame.style.width = "1320px";
-    await expect.poll(() => panel.getAttribute("role")).toBe("complementary");
+    await expect.poll(() => panel.getAttribute("role"), { timeout: 5_000 }).toBe("complementary");
     expect(panel.matches(":popover-open")).toBe(false);
     update({ presentation: false });
     flush();

@@ -66,6 +66,7 @@ async function loadDoctorPairingSnapshot(params: {
       const payload = await requestGateway<GatewayDevicePairingPayload>({
         method: "device.pair.list",
         timeoutMs: 5_000,
+        sharedStateMode: "read-only",
         config: params.cfg,
       });
       return {

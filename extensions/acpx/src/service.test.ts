@@ -40,21 +40,18 @@ const { cleanupOpenClawOwnedAcpxProcessTreeMock } = vi.hoisted(() => ({
         (typeof import("./process-reaper.js"))["cleanupOpenClawOwnedAcpxProcessTree"]
       >[0],
     ): Promise<CleanupResult> => ({
-      inspectedPids: [],
       terminatedPids: [],
     }),
   ),
 }));
 const { cleanupOpenClawOwnedAcpxPendingLeaseMock } = vi.hoisted(() => ({
   cleanupOpenClawOwnedAcpxPendingLeaseMock: vi.fn(async (): Promise<CleanupResult> => ({
-    inspectedPids: [],
     terminatedPids: [],
     skippedReason: "missing-root",
   })),
 }));
 const { reapStaleOpenClawOwnedAcpxOrphansMock } = vi.hoisted(() => ({
   reapStaleOpenClawOwnedAcpxOrphansMock: vi.fn(async (): Promise<CleanupResult> => ({
-    inspectedPids: [],
     terminatedPids: [],
   })),
 }));
@@ -491,7 +488,6 @@ describe("createAcpxRuntimeService", () => {
       rootPid: 101,
     });
     cleanupOpenClawOwnedAcpxProcessTreeMock.mockResolvedValueOnce({
-      inspectedPids: [101, 102],
       terminatedPids: [101, 102],
     });
     const service = createAcpxRuntimeService(ctx, {

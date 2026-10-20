@@ -66,7 +66,6 @@ export type MenuNavigationOptions = {
   surface?: "menu" | "listbox";
   /** Searchable lists keep focus in their input while Zag moves the highlight. */
   focus?: "item" | "retain";
-  scrollRegion?: () => HTMLElement | undefined;
   pointerFocus?: () => "menu" | "trigger";
   items?: () => readonly { value: string; disabled?: boolean }[];
   value?: () => string | null;
@@ -105,7 +104,7 @@ export function useMenuMachine(
     const rows = items();
     const node = id ? rows.find((item) => item.id === id) : undefined;
     if (node && options.focus === "retain") {
-      revealInScrollRegion(options.scrollRegion?.() ?? overlay.surface, node);
+      revealInScrollRegion(overlay.surface, node);
     }
     const active = service.scope.getActiveElement();
     if (

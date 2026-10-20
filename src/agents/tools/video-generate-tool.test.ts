@@ -779,7 +779,7 @@ describe("createVideoGenerateTool", () => {
     mockVideoPluginProvider({ imageToVideo: { enabled: true, maxInputImages: 2 } });
     const generateSpy = mockSavedVideoResult();
     const tool = createConfiguredVideoTool();
-    await tool.execute("call-1", {
+    const result = await tool.execute("call-1", {
       prompt: "lobster",
       aspectRatio: "17:9",
       resolution: "draft-large",
@@ -792,6 +792,7 @@ describe("createVideoGenerateTool", () => {
     expect(call.inputImages?.map((image) => image.buffer?.toString())).toEqual(["first", "first"]);
     expect(call.inputImages?.map((image) => image.role)).toEqual(["first_frame", "last_frame"]);
     expect(call).toMatchObject({ aspectRatio: "17:9", resolution: "draft-large" });
+    expect(resultDetails(result)).toMatchObject({ aspectRatio: "17:9", resolution: "draft-large" });
   });
 
   it.each([

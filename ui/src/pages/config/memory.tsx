@@ -32,12 +32,7 @@ registerEnglishCatalog(registerPluginManagementEnglish);
 registerEnglishCatalog(registerMemoryImportEnglish);
 
 /** One installed plugin that can claim the exclusive `plugins.slots.memory` slot. */
-type MemoryEngineOption = {
-  id: string;
-  label: string;
-  /** False when config names an engine absent from the current plugin catalog. */
-  available: boolean;
-};
+type MemoryEngineOption = ReturnType<typeof buildMemoryEngineOptions>[number];
 
 /**
  * Enablement as the page actually knows it, shared by the engine row and the
@@ -54,7 +49,7 @@ export type MemoryCatalogState =
 export function buildMemoryEngineOptions(
   catalog: MemoryCatalogState,
   selection: MemoryEngineSelection,
-): MemoryEngineOption[] {
+) {
   if (catalog.kind !== "ready") {
     return [];
   }
@@ -115,15 +110,7 @@ export function findMemoryCatalogPlugin(catalog: MemoryCatalogState, pluginId: s
 }
 
 /** Additive memory plugin: no `kind`, so it layers on top of whichever engine wins the slot. */
-type MemoryAddonRow = {
-  id: string;
-  label: string;
-  description: string;
-  state: MemoryPluginState;
-  busy: boolean;
-  error: string | null;
-  notice: string | null;
-};
+type MemoryAddonRow = ReturnType<typeof buildMemoryAddonRows>[number];
 
 export function buildMemoryAddonRows(
   catalog: MemoryCatalogState,
@@ -133,7 +120,7 @@ export function buildMemoryAddonRows(
     notices: ReadonlyMap<string, { message: string }>;
     refreshWarnings: ReadonlyMap<string, string>;
   },
-): MemoryAddonRow[] {
+) {
   return memoryAddonPresentations.map((addon) => {
     const entry = findMemoryCatalogPlugin(catalog, addon.id);
     return {

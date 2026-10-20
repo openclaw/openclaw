@@ -6,7 +6,11 @@ import { ContentPresentation } from "../../lib/solid/presentation.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { mountSolid as mountSolidProps } from "../../test-helpers/solid-render.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { createComposerContainer, createComposerProps } from "./chat-composer.test-support.ts";
+import {
+  composerContextWrapper,
+  createComposerContainer,
+  createComposerProps,
+} from "./chat-composer.test-support.ts";
 import type { ChatAttachmentControlsProps } from "./components/chat-attachment-controls.types.ts";
 import { AttachmentPreview } from "./components/chat-attachments.tsx";
 import { ChatGoal } from "./components/chat-composer-goal.tsx";
@@ -44,11 +48,14 @@ describe("composer overflow presentation", () => {
   let attachmentsView: ReturnType<typeof mountSolidProps<ChatAttachmentControlsProps>> | undefined;
 
   function ComposerFixture(props: ComposerFixtureProps) {
+    const Provider = composerContextWrapper(container)!;
     return (
-      <ContentPresentation value={presented}>
-        {props.thread ? <div class="chat-thread" /> : null}
-        <ChatComposer {...props.input} />
-      </ContentPresentation>
+      <Provider>
+        <ContentPresentation value={presented}>
+          {props.thread ? <div class="chat-thread" /> : null}
+          <ChatComposer {...props.input} />
+        </ContentPresentation>
+      </Provider>
     );
   }
 

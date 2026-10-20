@@ -16,20 +16,7 @@ function collectDatabaseEngineHealthFindings(
   observed: ObservedDatabaseEngines = {},
 ): HealthFinding[] {
   const families = describeDatabaseEngineSelection(cfg);
-  const findings: HealthFinding[] = families.some((family) => family.effective === "postgres")
-    ? [
-        {
-          checkId: "core/doctor/database-engine",
-          severity: "warning",
-          source: "doctor",
-          path: "database.engine",
-          message:
-            "The PostgreSQL database engine is experimental. Stores without a registered PostgreSQL schema remain on SQLite.",
-          fixHint:
-            "Review the store engine selections and https://docs.openclaw.ai/reference/database-engines before using this configuration.",
-        },
-      ]
-    : [];
+  const findings: HealthFinding[] = [];
   for (const family of families) {
     if (observed[family.id]?.some((engine) => engine !== family.effective)) {
       findings.push({

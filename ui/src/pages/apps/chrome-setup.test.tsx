@@ -3,14 +3,14 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createNativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
 import { i18n } from "../../i18n/index.ts";
-import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { createChromeExtensionSetupResult } from "../../test-helpers/chrome-extension-setup.ts";
 /* @vitest-environment jsdom */
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createNativeDeviceSettingsSnapshot } from "../../test-helpers/native-device-settings.ts";
+import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { Apps } from "./view.tsx";
 
-type SetupElement = HTMLElement & { updateComplete: Promise<boolean> };
 const result = createChromeExtensionSetupResult;
 const connected = {
   action: "verify",
@@ -50,14 +50,14 @@ function bridge(postMessage: (message: { action: string }) => Promise<unknown>) 
   );
 }
 async function mount() {
-  const host = createApplicationContextProvider({
+  const fixture = createSolidApplicationContextProvider({
     nativeDeviceSettings: defaultCapability,
   } as ApplicationContext);
-  mountSolid(() => <Apps onNavigate={vi.fn()} />, { container: host });
-  document.body.append(host);
-  const setup = host.querySelector<SetupElement>("openclaw-native-chrome-setup")!;
-  await setup.updateComplete;
-  return { host, setup, card: setup.closest(".apps-card")! };
+  const mounted = mountSolid(() => <Apps onNavigate={vi.fn()} />, { wrapper: fixture.wrapper });
+  const host = mounted.container;
+  flush();
+  const setup = host.querySelector<HTMLElement>("openclaw-native-chrome-setup")!;
+  return { host, setup, card: setup.closest(".apps-card")!, unmount: mounted.unmount };
 }
 function click(setup: HTMLElement, label: string) {
   const button = [...setup.querySelectorAll("button")].find(
@@ -68,8 +68,8 @@ function click(setup: HTMLElement, label: string) {
 }
 const expectText = (setup: HTMLElement, text: string) =>
   vi.waitFor(() => expect(setup.textContent).toContain(text));
-async function idle(setup: SetupElement) {
-  await setup.updateComplete;
+async function idle(setup: HTMLElement) {
+  flush();
   await vi.waitFor(() => expect(setup.querySelector("button")!.disabled).toBe(false));
 }
 beforeEach(() => i18n.setLocale("en"));
@@ -176,17 +176,15 @@ describe("Apps local Chrome setup", () => {
     const old = createDeferred<unknown>();
     const post = vi.fn().mockReturnValueOnce(old.promise).mockResolvedValue(result(connected));
     bridge(post);
+    const first = await mount();
+    click(first.setup, "Refresh setup status");
+    first.unmount();
     const { setup } = await mount();
-    const parent = setup.parentElement!;
-    click(setup, "Refresh setup status");
-    setup.remove();
-    parent.append(setup);
-    await setup.updateComplete;
     click(setup, "Verify connection");
     await expectText(setup, "Extension connected on this device.");
     old.resolve(result());
     await old.promise;
-    await setup.updateComplete;
+    flush();
     expect(setup.textContent).toContain("Extension connected on this device.");
     expect(setup.textContent).not.toContain("Setup required");
   });
