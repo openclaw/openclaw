@@ -93,6 +93,9 @@ export function registerWorkerGoalChatCases(
       const loadNative = vi
         .spyOn(runtimePlugins, "loadAgentRuntimePluginRegistryHandle")
         .mockReturnValue(getTestPluginRegistry());
+      const loadNativeAsync = vi
+        .spyOn(runtimePlugins, "loadAgentRuntimePluginRegistryHandleAsync")
+        .mockResolvedValue(getTestPluginRegistry());
       const baseline = getRuntimeConfig();
       const config: OpenClawConfig = {
         ...baseline,
@@ -423,6 +426,7 @@ export function registerWorkerGoalChatCases(
         commitAdmission.mockRestore();
         releasePlacement();
         loadNative.mockRestore();
+        loadNativeAsync.mockRestore();
         if (replacementClaim && placements.validateTurnClaim(replacementClaim)) {
           await placements.releaseTurn(replacementClaim);
         }
