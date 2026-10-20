@@ -30,6 +30,7 @@ import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import { stripMalformedXmlArgValueSuffixFromKeys } from "./agent-tools.params.js";
 import { DEFAULT_PATH, applyPathPrepend, applyShellPath } from "./bash-tools.exec-runtime.js";
+import { resolveExecHost } from "./bash-tools.exec-target.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import { type ExecWorkdirResolution, resolveExecWorkdir } from "./bash-tools.exec-workdir.js";
 import { buildSandboxEnv, coerceEnv } from "./bash-tools.shared.js";
@@ -203,7 +204,6 @@ export function resolveExecPreparedRunEnvironment(defaults?: ExecToolDefaults) {
 export function createExecRequestPreparation(params: {
   defaults?: ExecToolDefaults;
   agentId?: string;
-  resolveHostForParams: (params: ExecToolArgs) => ExecHost;
 }) {
   const normalizeParams = (rawArgs: unknown): ExecToolArgs =>
     stripMalformedXmlArgValueSuffixFromKeys(rawArgs as ExecToolArgs, XML_ARG_VALUE_EXEC_PARAM_KEYS);
@@ -215,7 +215,7 @@ export function createExecRequestPreparation(params: {
     const execParams = normalizeParams(rawArgs);
     let host: ExecHost;
     try {
-      host = params.resolveHostForParams(execParams);
+      host = resolveExecHost(execParams, params.defaults);
     } catch {
       return execParams;
     }
@@ -243,7 +243,7 @@ export function createExecRequestPreparation(params: {
   const shouldDeferResolveExecEnvUntilWorkdirValidated = (execParams: ExecToolArgs): boolean => {
     try {
       return (
-        params.resolveHostForParams(execParams) === "sandbox" &&
+        resolveExecHost(execParams, params.defaults) === "sandbox" &&
         params.defaults?.sandbox?.workdirValidation === "backend"
       );
     } catch {
@@ -272,7 +272,7 @@ export function createExecRequestPreparation(params: {
     }
     let host: ExecHost;
     try {
-      host = params.resolveHostForParams(execParams);
+      host = resolveExecHost(execParams, params.defaults);
     } catch {
       return execParams;
     }
@@ -342,7 +342,7 @@ export function createExecRequestPreparation(params: {
     };
     let host: ExecHost | undefined;
     const resolveFinalHost = () => {
-      host ??= params.resolveHostForParams(execParams);
+      host ??= resolveExecHost(execParams, params.defaults);
       return host;
     };
     try {
