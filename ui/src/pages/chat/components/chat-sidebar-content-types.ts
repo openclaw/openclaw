@@ -9,13 +9,13 @@ import type { SessionLinkTarget } from "../../../components/markdown-session-lin
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import type { ChatMediaPlaybackMode } from "./chat-media-playback.ts";
-import type { SessionWorkspaceProps } from "./chat-session-workspace.ts";
 import type {
   AssistantAttachmentItem,
   ImageBlock,
   ImageRenderOptions,
   ArtifactDownloadResolver,
 } from "./chat-message-media.ts";
+import type { SessionWorkspaceProps } from "./chat-session-workspace.ts";
 import type {
   SessionDiffFileTextLoader,
   SessionDiffLoader,
