@@ -36,14 +36,15 @@ export function readClientCredentialAdmission(database: DatabaseSync): {
   version: number;
   stored: ClientCredentialReceiptState | null;
 } {
-  // sqlite-allow-raw -- Read the native header and its migration receipt in one bounded statement.
-  const row = database
-    .prepare(`
+  const row =
+    // sqlite-allow-raw -- Read the native header and its migration receipt in one bounded statement.
+    database
+      .prepare(`
     SELECT header.user_version, receipt.source_store, receipt.phase
     FROM pragma_user_version AS header
     LEFT JOIN client_credential_migration AS receipt ON receipt.version = 1
   `)
-    .get();
+      .get();
   if (!row || typeof row.user_version !== "number") {
     throw notReady();
   }
