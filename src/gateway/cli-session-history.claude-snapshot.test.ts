@@ -8,13 +8,9 @@ import { readClaudeCliFallbackSeed } from "./cli-session-history.claude.js";
 import {
   readClaudeCliSessionMessagesAsync,
   createClaudeTextHistoryLines,
+  claudeUser,
   withClaudeProjectsDir,
 } from "./cli-session-history.test-support.js";
-import { expectRecordFields, requireGatewayRecord } from "./test-helpers.assertions.js";
-
-function readRecord(value: unknown): Record<string, unknown> {
-  return requireGatewayRecord(value, "record");
-}
 
 function history(uuid: string, content: string, role: "user" | "assistant" = "user") {
   return createClaudeTextHistoryLines([{ role, uuid, content }]);
@@ -23,9 +19,10 @@ function history(uuid: string, content: string, role: "user" | "assistant" = "us
 const writeHistory = (file: string, ...entry: Parameters<typeof history>) =>
   fs.writeFile(file, history(...entry));
 
-function expectMessage(message: unknown, externalId: string, content: unknown) {
-  expect(message).toMatchObject({ __openclaw: { externalId }, content });
-}
+const messageShape = (externalId: string, content: unknown) => ({
+  __openclaw: { externalId },
+  content,
+});
 
 it("imports and seeds history only from the selected Claude config root", () =>
   withClaudeProjectsDir(async ({ homeDir, sessionId, filePath, readMessages }) => {
@@ -56,16 +53,13 @@ it("reads changed Claude sources and preserves discovery precedence", () =>
     await fs.appendFile(filePath, `\n${history("appended-user", "appended")}`, "utf8");
     const appended = await read();
     expect(appended).toHaveLength(4);
-    expect(appended.map((message) => readRecord(message)["__openclaw"])).toContainEqual(
+    expect(appended.map((message) => message["__openclaw"])).toContainEqual(
       expect.objectContaining({ externalId: "appended-user" }),
     );
 
     await writeHistory(filePath, "replacement-assistant", "replacement", "assistant");
     const replaced = await read();
-    expect(replaced).toHaveLength(1);
-    expectRecordFields(readRecord(replaced[0])["__openclaw"], "fields", {
-      externalId: "replacement-assistant",
-    });
+    expect(replaced).toMatchObject([messageShape("replacement-assistant", "replacement")]);
 
     const movedProjectDir = path.join(path.dirname(path.dirname(filePath)), "moved-workspace");
     await fs.mkdir(movedProjectDir);
@@ -122,12 +116,7 @@ it("preserves project precedence when a later matching transcript is found first
 it("bounds oversized Claude messages and continues after malformed records", () =>
   withClaudeProjectsDir(async ({ filePath, readMessages }) => {
     const record = (uuid: string, content: unknown) =>
-      JSON.stringify({
-        type: "user",
-        uuid,
-        timestamp: "2026-03-26T16:29:54.700Z",
-        message: { role: "user", content },
-      });
+      JSON.stringify(claudeUser(content, { uuid }));
     const oversized = "q".repeat(2 * 1024 * 1024);
     await fs.writeFile(
       filePath,
@@ -144,21 +133,13 @@ it("bounds oversized Claude messages and continues after malformed records", () 
     );
     const messages = await readMessages();
 
-    expect(messages).toHaveLength(4);
-    for (let index = 0; index < 2; index++) {
-      expectMessage(
-        messages[index],
-        `oversized-user-${index}`,
-        expect.stringContaining("exceeded 1 MiB"),
-      );
-    }
+    const omitted = expect.stringContaining("exceeded 1 MiB");
     // A tool result must keep its shape, or the placeholder renders as a user turn.
-    expectMessage(messages[2], "oversized-tool-result", [
-      {
-        type: "tool_result",
-        tool_use_id: "tool-1",
-        content: expect.stringContaining("exceeded 1 MiB"),
-      },
+    expect(messages).toMatchObject([
+      ...[0, 1].map((index) => messageShape(`oversized-user-${index}`, omitted)),
+      messageShape("oversized-tool-result", [
+        { type: "tool_result", tool_use_id: "tool-1", content: omitted },
+      ]),
+      messageShape("visible-after-oversized", "visible"),
     ]);
-    expectMessage(messages[3], "visible-after-oversized", "visible");
   }));

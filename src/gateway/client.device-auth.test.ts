@@ -14,6 +14,7 @@ const fixture = vi.hoisted(() => ({
   readOnlyLoad: vi.fn(),
 }));
 const scope = { deviceId: "fixture-device", role: "operator" };
+const issued = { ...scope, token: "fixture-issued", scopes: [] };
 const scoped = (origin: boolean) => ({
   ...scope,
   ...(origin ? { gatewayScope: "wss://gateway.example.test" } : {}),
@@ -79,18 +80,14 @@ function host(origin: boolean, readOnly = false, explicit = true) {
   };
 }
 
-const observations = [
-  { name: "malformed scopes", token: "fixture-existing", malformed: true },
-  { name: "absent", token: undefined, malformed: false },
-  { name: "raw whitespace", token: " fixture-existing ", malformed: false },
-];
-
 it.each(
-  observations.flatMap(({ name, token, malformed }) =>
-    [false, true].map((origin) => ({ name, token, malformed, origin })),
-  ),
+  [false, true].flatMap((origin) => [
+    { origin, token: "fixture-existing", malformed: true },
+    { origin, token: undefined, malformed: false },
+    { origin, token: " fixture-existing ", malformed: false },
+  ]),
 )(
-  "forwards the exact $name observation after rotation (origin: $origin)",
+  "fences rotation with raw token $token (origin: $origin, malformed: $malformed)",
   async ({ token, malformed, origin }) => {
     fixture.token = token;
     fixture.malformed = malformed;
@@ -102,7 +99,6 @@ it.each(
       expect(loaded?.token).toBe(token);
     }
     fixture.token = "fixture-newer";
-    const issued = { ...scope, token: "fixture-issued", scopes: [] };
     await deps.store({ ...issued, expectedToken: loaded?.token?.trim() ?? null });
     expect(fixture.store).toHaveBeenCalledWith({
       ...issued,
@@ -136,9 +132,7 @@ it.each([false, true])(
 it("keeps explicit read-only origin auth off storage reads and writes", async () => {
   const deps = host(true, true);
   expect(await deps.load(scope)).toBeNull();
-  expect(
-    deps.store({ ...scope, token: "fixture-issued", scopes: [], expectedToken: null }),
-  ).toBeUndefined();
+  expect(deps.store({ ...issued, expectedToken: null })).toBeUndefined();
   expect(fixture.load).not.toHaveBeenCalled();
   expect(fixture.readOnlyLoad).not.toHaveBeenCalled();
   expect(fixture.store).not.toHaveBeenCalled();

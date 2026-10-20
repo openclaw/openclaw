@@ -1,6 +1,6 @@
 import { Buffer } from "node:buffer";
 import { EventEmitter } from "node:events";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { DeviceIdentity } from "../infra/device-identity.js";
 import { createClientTestIdentity } from "./client.test-support.js";
@@ -50,108 +50,88 @@ vi.mock("../infra/net/proxy/proxy-lifecycle.js", () => ({
 
 const { GatewayClient } = await import("./client.js");
 const defaultIdentity = createClientTestIdentity("fixture-client-device");
+let pending: ReturnType<typeof createDeferred<DeviceIdentity | null>>;
+let closed: ReturnType<typeof createDeferred<void>>;
+const onConnectError = vi.fn();
+const makeClient = (options: ConstructorParameters<typeof GatewayClient>[0] = {}) =>
+  new GatewayClient({
+    url: "ws://127.0.0.1:18789",
+    onConnectError,
+    onClose: () => closed.resolve(),
+    ...options,
+  });
 
 beforeEach(() => {
+  wsInstances.length = 0;
+  pending = createDeferred<DeviceIdentity | null>();
+  closed = createDeferred();
+  onConnectError.mockReset();
   loadDeviceIdentityIfPresentAsyncMock.mockReset();
-  loadOrCreateDeviceIdentityAsyncMock.mockReset();
+  loadOrCreateDeviceIdentityAsyncMock.mockReset().mockReturnValue(pending.promise);
 });
 
-describe("GatewayClient identity admission", () => {
-  beforeEach(() => {
-    wsInstances.length = 0;
+it.each([false, true])("prepares identity before transport (read-only: %s)", async (readOnly) => {
+  const env = { OPENCLAW_STATE_DIR: "/fixture/client-identity" };
+  const loadOrCreateDeviceIdentity = vi.fn(() => defaultIdentity);
+  loadDeviceIdentityIfPresentAsyncMock.mockReturnValue(pending.promise);
+  const client = makeClient({
+    env,
+    ...(readOnly ? { sharedStateMode: "read-only", hostDeps: { loadOrCreateDeviceIdentity } } : {}),
   });
+  expect(loadOrCreateDeviceIdentityAsyncMock).not.toHaveBeenCalled();
+  client.start();
+  client.start();
+  const [used, unused] = readOnly
+    ? [loadDeviceIdentityIfPresentAsyncMock, loadOrCreateDeviceIdentityAsyncMock]
+    : [loadOrCreateDeviceIdentityAsyncMock, loadDeviceIdentityIfPresentAsyncMock];
+  expect(used).toHaveBeenCalledExactlyOnceWith({ env });
+  expect(wsInstances).toHaveLength(0);
+  pending.resolve(readOnly ? null : defaultIdentity);
+  await pending.promise;
+  expect(wsInstances).toHaveLength(1);
+  expect(client.getConnectionMetadata().hasDeviceIdentity).toBe(!readOnly);
+  expect(unused).not.toHaveBeenCalled();
+  expect(loadOrCreateDeviceIdentity).not.toHaveBeenCalled();
+  await client.stopAndWait();
+});
 
-  it("prepares default identity before opening the transport", async () => {
-    const pending = createDeferred<DeviceIdentity>();
-    loadOrCreateDeviceIdentityAsyncMock.mockReturnValue(pending.promise);
-    const env = { OPENCLAW_STATE_DIR: "/fixture/client-identity" };
-    const client = new GatewayClient({ url: "ws://127.0.0.1:18789", env });
-    expect(loadOrCreateDeviceIdentityAsyncMock).not.toHaveBeenCalled();
+it.each(["stop", "stopAndWait"] as const)(
+  "joins accepted identity admission after %s without opening a transport",
+  async (stopMethod) => {
+    const client = makeClient();
     client.start();
-    client.start();
-    expect(loadOrCreateDeviceIdentityAsyncMock).toHaveBeenCalledExactlyOnceWith({ env });
-    expect(wsInstances).toHaveLength(0);
+    void client[stopMethod]();
+    const stopped = vi.fn();
+    const stopping = client.stopAndWait().then(stopped);
+    await Promise.resolve();
+    expect(stopped).not.toHaveBeenCalled();
     pending.resolve(defaultIdentity);
-    await pending.promise;
-    expect(wsInstances).toHaveLength(1);
-    expect(client.getConnectionMetadata().hasDeviceIdentity).toBe(true);
-    await client.stopAndWait();
-  });
-
-  it.each(["stop", "stopAndWait"] as const)(
-    "joins accepted identity admission after %s without opening a transport",
-    async (stopMethod) => {
-      const pending = createDeferred<DeviceIdentity>();
-      loadOrCreateDeviceIdentityAsyncMock.mockReturnValue(pending.promise);
-      const onConnectError = vi.fn();
-      const client = new GatewayClient({ url: "ws://127.0.0.1:18789", onConnectError });
-      client.start();
-      void client[stopMethod]();
-      let stopped = false;
-      const stopping = client.stopAndWait().then(() => {
-        stopped = true;
-      });
-      await Promise.resolve();
-      expect(stopped).toBe(false);
-      pending.resolve(defaultIdentity);
-      await stopping;
-      client.start();
-      expect(stopped).toBe(true);
-      expect(wsInstances).toHaveLength(0);
-      expect(loadOrCreateDeviceIdentityAsyncMock).toHaveBeenCalledOnce();
-      expect(onConnectError).not.toHaveBeenCalled();
-    },
-  );
-
-  it("keeps read-only discovery authoritative over a custom creating callback", async () => {
-    const pending = createDeferred<DeviceIdentity | null>();
-    loadDeviceIdentityIfPresentAsyncMock.mockReturnValue(pending.promise);
-    const loadOrCreateDeviceIdentity = vi.fn(() => defaultIdentity);
-    const client = new GatewayClient({
-      url: "ws://127.0.0.1:18789",
-      sharedStateMode: "read-only",
-      hostDeps: { loadOrCreateDeviceIdentity },
-    });
+    await stopping;
     client.start();
+    expect(stopped).toHaveBeenCalledOnce();
     expect(wsInstances).toHaveLength(0);
-    pending.resolve(null);
-    await pending.promise;
-    expect(wsInstances).toHaveLength(1);
-    expect(client.getConnectionMetadata().hasDeviceIdentity).toBe(false);
-    expect(loadOrCreateDeviceIdentity).not.toHaveBeenCalled();
-    expect(loadOrCreateDeviceIdentityAsyncMock).not.toHaveBeenCalled();
-    await client.stopAndWait();
-  });
+    expect(loadOrCreateDeviceIdentityAsyncMock).toHaveBeenCalledOnce();
+    expect(onConnectError).not.toHaveBeenCalled();
+  },
+);
 
-  it("retains synchronous custom identity callbacks", async () => {
-    const loadOrCreateDeviceIdentity = vi.fn(() => defaultIdentity);
-    const client = new GatewayClient({
-      url: "ws://127.0.0.1:18789",
-      hostDeps: { loadOrCreateDeviceIdentity },
-    });
-    expect(loadOrCreateDeviceIdentity).toHaveBeenCalledOnce();
-    client.start();
-    expect(wsInstances).toHaveLength(1);
-    expect(loadOrCreateDeviceIdentityAsyncMock).not.toHaveBeenCalled();
-    await client.stopAndWait();
-  });
+it("retains synchronous custom identity callbacks", async () => {
+  const loadOrCreateDeviceIdentity = vi.fn(() => defaultIdentity);
+  const client = makeClient({ hostDeps: { loadOrCreateDeviceIdentity } });
+  expect(loadOrCreateDeviceIdentity).toHaveBeenCalledOnce();
+  client.start();
+  expect(wsInstances).toHaveLength(1);
+  expect(loadOrCreateDeviceIdentityAsyncMock).not.toHaveBeenCalled();
+  await client.stopAndWait();
+});
 
-  it("reports identity admission failure without opening the transport", async () => {
-    const pending = createDeferred<DeviceIdentity>();
-    const closed = createDeferred();
-    const onConnectError = vi.fn();
-    loadOrCreateDeviceIdentityAsyncMock.mockReturnValue(pending.promise);
-    const client = new GatewayClient({
-      url: "ws://127.0.0.1:18789",
-      onConnectError,
-      onClose: () => closed.resolve(),
-    });
-    client.start();
-    const failure = new Error("identity store unavailable");
-    pending.reject(failure);
-    await closed.promise;
-    await client.stopAndWait();
-    expect(onConnectError).toHaveBeenCalledExactlyOnceWith(failure);
-    expect(wsInstances).toHaveLength(0);
-  });
+it("reports identity admission failure without opening the transport", async () => {
+  const client = makeClient();
+  client.start();
+  const failure = new Error("identity store unavailable");
+  pending.reject(failure);
+  await closed.promise;
+  await client.stopAndWait();
+  expect(onConnectError).toHaveBeenCalledExactlyOnceWith(failure);
+  expect(wsInstances).toHaveLength(0);
 });
