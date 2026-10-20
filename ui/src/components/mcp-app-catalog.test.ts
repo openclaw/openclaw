@@ -13,7 +13,6 @@ import {
 } from "../lib/sessions/session-capability.test-support.ts";
 import { AppsPage } from "../pages/apps/apps-page.tsx";
 import { createApplicationGateway } from "../test-helpers/application-context-fixtures.ts";
-import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import {
   createGatewayRequestMock,
   createTestGatewayClient,
@@ -24,7 +23,7 @@ import { createSolidApplicationContextProvider } from "../test-helpers/solid-app
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { McpAppCatalog } from "./mcp-app-catalog.tsx";
 import { MCP_APP_OPEN_EVENT, type McpAppOpenDetail } from "./mcp-app-launch.ts";
-import "./mcp-app-resources.tsx";
+import { McpAppResources } from "./mcp-app-resources.tsx";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -403,13 +402,12 @@ describe("app launch catalog", () => {
       sessionKey: "agent:main:one",
       agentId: "main",
     });
-    const resources = document.createElement("openclaw-mcp-app-resources");
-    resources.sessionKey = "agent:main:one";
-    resources.agentId = "main";
-    const provider = createApplicationContextProvider(sidebarMount.application);
-    provider.append(resources);
-    document.body.append(provider);
-    await resources.updateComplete;
+    const resourcesMount = mountSolid(
+      () => createComponent(McpAppResources, { sessionKey: "agent:main:one", agentId: "main" }),
+      { wrapper: createSolidApplicationContextProvider(sidebarMount.application).wrapper },
+    );
+    onTestFinished(resourcesMount.unmount);
+    const resources = resourcesMount.container;
     await waitForSolid(() => expect(request).toHaveBeenCalledOnce());
     expect(request).toHaveBeenCalledExactlyOnceWith("mcp.app.discover", {
       sessionKey: "agent:main:one",

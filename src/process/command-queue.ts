@@ -567,31 +567,12 @@ export function enqueueCommandInLane<T>(
   });
 }
 
-export function getQueueSize(
-  lane: string = CommandLane.Main,
-  matches?: (target: CommandQueueEnqueueOptions["sessionTarget"]) => boolean,
-) {
+export function getQueueSize(lane: string = CommandLane.Main) {
   const state = getQueueState().lanes.get(normalizeLane(lane));
   if (!state) {
     return 0;
   }
-  if (!matches) {
-    return getLaneDepth(state);
-  }
-  let count = 0;
-  for (const queue of [state.queue.foreground, state.queue.normal, state.queue.background]) {
-    for (let entry = queue.head; entry; entry = entry.next) {
-      if (matches(entry.sessionTarget)) {
-        count += 1;
-      }
-    }
-  }
-  for (const target of state.activeTasks.values()) {
-    if (matches(target)) {
-      count += 1;
-    }
-  }
-  return count;
+  return getLaneDepth(state);
 }
 
 export function getCommandLaneSnapshot(lane: string = CommandLane.Main): CommandLaneSnapshot {

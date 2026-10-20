@@ -1,3 +1,4 @@
+import { groupPluginRecords as groupRecords } from "../../plugins/record-groups.js";
 import type { PreparedPatchTarget } from "./sessions-patch-types.js";
 
 /** Tree archival commits descendants before ancestors, including across physical stores. */
@@ -26,12 +27,6 @@ export async function runSessionPatchGroups(
     }
     return;
   }
-  const groups = new Map<string, PreparedPatchTarget[]>();
-  for (const target of ready) {
-    const key = target.storePath + "\0" + target.targetAgentId;
-    const group = groups.get(key) ?? [];
-    group.push(target);
-    groups.set(key, group);
-  }
+  const groups = groupRecords(ready, (target) => target.storePath + "\0" + target.targetAgentId);
   await Promise.all([...groups.values()].map(apply));
 }

@@ -202,7 +202,7 @@ it("keeps cached agent rows while the live roster settles", async () => {
         return { ts: 1, path: "", count: 0, defaults: {}, sessions: [] };
       }
       if (method === "sessions.groups.list") {
-        return { names: [], sectionOrder: [] };
+        return { groups: [], sectionOrder: [] };
       }
       if (method === "sessions.subscribe") {
         return { subscribed: true };

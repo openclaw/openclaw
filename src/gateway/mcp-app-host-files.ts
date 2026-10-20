@@ -16,8 +16,12 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { logDebug } from "../logger.js";
 import { retainGatewayDeviceRevocation } from "./device-revocation.js";
 import { requireMcpAppInteraction, resolveMcpAppRequesterId } from "./mcp-app-operations.js";
+import {
+  assertSessionFileReadPolicy,
+  sessionFileWorkspaceMatches,
+} from "./server-methods/session-file-read-authority.js";
 import { retainSessionScopedRead } from "./server-methods/session-scoped-read.js";
-import { resolveLocalSessionWorkspaceRoot } from "./server-methods/sessions-files.js";
+import { prepareLocalSessionWorkspaceRoot } from "./server-methods/sessions-files.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import {
   updateWorkspaceFile,
@@ -53,7 +57,7 @@ async function captureHostFileSession(
         target.sessionKey,
         {
           agentId: target.agentId,
-          projection: "list",
+          projection: ["skillsSnapshot"],
         },
         config,
       );
@@ -66,26 +70,42 @@ async function captureHostFileSession(
             agentId: loaded.readSource?.agentId ?? loaded.agentId,
             path: loaded.readSource?.path ?? loaded.storePath,
           },
-          { sessionKeys: [loaded.canonicalKey], projection: "exact", snapshotFields: [] },
+          {
+            sessionKeys: [loaded.canonicalKey],
+            projection: "exact",
+            snapshotFields: ["skillsSnapshot"],
+          },
         )?.entries.find((row) => row.sessionKey === loaded.canonicalKey)?.entry;
   const initial = readEntry();
+  const workspace = await prepareLocalSessionWorkspaceRoot({
+    ...target,
+    source: { entry: initial, cfg: config },
+  });
   return {
     assertCurrent() {
       assertRoutingCurrent(getConfig());
       const current = readEntry();
-      if (
-        current?.sessionId !== initial?.sessionId ||
-        current?.lifecycleRevision !== initial?.lifecycleRevision
-      ) {
-        throw new Error("App file session generation changed");
+      if (!sessionFileWorkspaceMatches(initial, current)) {
+        throw new Error("App file session workspace changed");
       }
     },
     readEntry,
-    readRoot: () =>
-      resolveLocalSessionWorkspaceRoot({
-        ...target,
-        source: { entry: readEntry(), cfg: getConfig() },
-      }),
+    readRoot: (options?: GatewayRequestHandlerOptions) => {
+      const current = readEntry();
+      if (!current) {
+        return undefined;
+      }
+      workspace?.assertCurrent(getConfig(), current);
+      if (options) {
+        assertSessionFileReadPolicy(options, {
+          agentId: target.agentId,
+          canonicalKey: target.sessionKey,
+          entry: current,
+          unscopedHostRoot: workspace?.unscopedHostRoot,
+        });
+      }
+      return workspace?.root;
+    },
   };
 }
 
@@ -99,7 +119,7 @@ export async function prepareMcpAppHostFile(
     requireMaterialized: true,
   });
   try {
-    const rootDir = session.readRoot();
+    const rootDir = session.readRoot(options);
     const entry = session.readEntry();
     if (!rootDir || !entry?.sessionId) {
       throw new Error("Local workspace file access is unavailable");
@@ -113,7 +133,7 @@ export async function prepareMcpAppHostFile(
         options.hasCurrentClientAuthority?.() === false ||
         resolveMcpAppRequesterId(options.client) !== requesterId ||
         session.readEntry()?.sessionId !== sessionId ||
-        session.readRoot() !== rootDir
+        session.readRoot(options) !== rootDir
       ) {
         throw new Error("App file workspace authority changed");
       }
@@ -179,7 +199,7 @@ async function withHostFile<T>(
       view.allowedAppToolNames === undefined ||
       resolveMcpAppRequesterId(options.client) !== file.requesterId ||
       session.readEntry()?.sessionId !== file.sessionId ||
-      session.readRoot() !== file.rootDir
+      session.readRoot(options) !== file.rootDir
     ) {
       throw new Error("MCP App file authority expired");
     }
@@ -366,7 +386,7 @@ export async function subscribeMcpAppHostFile(
         resolveMcpAppRequesterId(client) === file.requesterId &&
         options.context.getRuntimeConfig().mcp?.apps?.enabled === true &&
         session.readEntry()?.sessionId === file.sessionId &&
-        session.readRoot() === file.rootDir
+        session.readRoot(options) === file.rootDir
       );
     };
     const notify = async () => {

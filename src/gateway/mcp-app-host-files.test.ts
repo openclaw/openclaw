@@ -21,7 +21,13 @@ import { makeClient } from "./server-broadcast.test-helpers.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 
-const state = vi.hoisted(() => ({ root: "", sessionId: "session-1", prepare: vi.fn() }));
+const state = vi.hoisted(() => ({
+  root: "",
+  sessionId: "session-1",
+  execNode: undefined as string | undefined,
+  repositoryWorkspaceId: undefined as string | undefined,
+  prepare: vi.fn(),
+}));
 vi.mock("./mcp-app-extension-runtime.js", () => ({
   prepareMcpAppExtensionRuntime: state.prepare,
 }));
@@ -39,8 +45,19 @@ vi.mock("./operator-role-policy.js", () => ({ resolveGatewayOperatorRoleActor: (
 vi.mock("./server-methods/session-scoped-read.js", () => ({
   retainSessionScopedRead: () => undefined,
 }));
+// mock-isolation: File handles use a fixture workspace without opening real session storage.
 vi.mock("./server-methods/sessions-files.js", () => ({
-  resolveLocalSessionWorkspaceRoot: () => state.root,
+  prepareLocalSessionWorkspaceRoot: async () => {
+    const root = state.root;
+    return {
+      root,
+      assertCurrent: () => {
+        if (root !== state.root) {
+          throw new Error("App file workspace authority changed");
+        }
+      },
+    };
+  },
 }));
 vi.mock("./session-utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-utils.js")>()),
@@ -49,7 +66,11 @@ vi.mock("./session-utils.js", async (importOriginal) => ({
     agentId: "main",
     canonicalKey: sessionKey,
     storePath: state.root,
-    entry: { sessionId: state.sessionId },
+    entry: {
+      sessionId: state.sessionId,
+      execNode: state.execNode,
+      repositoryWorkspaceId: state.repositoryWorkspaceId,
+    },
   }),
 }));
 vi.mock("../config/sessions/session-entry-read-facts.js", async (importOriginal) => ({
@@ -57,13 +78,23 @@ vi.mock("../config/sessions/session-entry-read-facts.js", async (importOriginal)
   readRetainedSessionEntryFacts: (_database: unknown, request: { sessionKeys: string[] }) => ({
     entries: request.sessionKeys.map((sessionKey) => ({
       sessionKey,
-      entry: { sessionId: state.sessionId },
+      entry: {
+        sessionId: state.sessionId,
+        execNode: state.execNode,
+        repositoryWorkspaceId: state.repositoryWorkspaceId,
+      },
     })),
   }),
 }));
 // mock-isolation: Host-file tests supply the bound session identity without opening session storage.
 vi.mock("./session-utils-store-worker.js", () => ({
-  loadGatewaySessionEntryReadOnlyInWorker: async () => ({ entry: { sessionId: state.sessionId } }),
+  loadGatewaySessionEntryReadOnlyInWorker: async () => ({
+    entry: {
+      sessionId: state.sessionId,
+      execNode: state.execNode,
+      repositoryWorkspaceId: state.repositoryWorkspaceId,
+    },
+  }),
 }));
 vi.mock("../agents/agent-bundle-mcp-manager-cleanup.js", () => ({
   completeDeferredSessionMcpRuntimeRetirement: async () => false,
@@ -186,6 +217,8 @@ async function launchFileView() {
 beforeEach(async () => {
   state.root = dirs.make("mcp-host-file-");
   state.sessionId = "session-1";
+  state.execNode = undefined;
+  state.repositoryWorkspaceId = undefined;
   allowed = true;
   connection = new AbortController();
   publish.mockReset();
@@ -326,6 +359,17 @@ describe("registered MCP App host-file routes", () => {
     state.sessionId = "replacement";
     expect((await read())[0]).toBe(false);
   });
+
+  it.each(["execNode", "repositoryWorkspaceId"] as const)(
+    "revokes retained file reads and writes after %s ownership changes",
+    async (field) => {
+      expect((await read())[0]).toBe(true);
+      state[field] = "remote-owner";
+      expect((await read())[0]).toBe(false);
+      expect((await write({ text: "not committed" }))[0]).toBe(false);
+      expect(await fileContents("utf8")).toBe("solid original");
+    },
+  );
 
   it("publishes after a rename gap and subsequent writes", async () => {
     let notified = nextUpdate();

@@ -1,14 +1,19 @@
 import { setImmediate } from "node:timers/promises";
 import * as providerHttp from "openclaw/plugin-sdk/provider-http";
 import { afterEach, expect, it, vi } from "vitest";
+import { evaluate } from "./client.js";
 import { MAX_JSON_BYTES } from "./schema.js";
-import { requestEvaluation } from "./transport.js";
 import { mockResponse } from "./transport.test-support.js";
 
 const request = {
   apiKey: "synthetic-key",
   timeoutMs: 1000,
   body: { model: "jev-test", state: null, questions: { q: { type: "noul" as const } } },
+};
+const response = {
+  model: "jev-test",
+  answers: { q: { type: "noul", noul: 0.37 } },
+  usage: { input_tokens: 1, output_tokens: 1 },
 };
 afterEach(() => {
   vi.restoreAllMocks();
@@ -20,21 +25,28 @@ it("never follows redirects to a credential sink", async () => {
     status: 302,
     headers: { location: "https://other.example/credential-sink" },
   });
-  await expect(requestEvaluation(request)).rejects.toMatchObject({ reason: "transport" });
+  await expect(evaluate(request.body, request)).rejects.toMatchObject({ reason: "transport" });
   expect(fetch).toHaveBeenCalledOnce();
   expect(fetch.mock.calls[0]?.[0]).toBe("https://api.typesafe.ai/v1/systemone");
 });
-it("bounds the serialized request including its model field", async () => {
+it("bounds the serialized local request after adding instructions", async () => {
   const fetch = mockResponse(undefined);
+  const emptyBody = { ...request.body, state: "" };
   await expect(
-    requestEvaluation({ ...request, body: { ...request.body, state: "x".repeat(MAX_JSON_BYTES) } }),
+    evaluate(
+      {
+        ...emptyBody,
+        state: "x".repeat(MAX_JSON_BYTES - Buffer.byteLength(JSON.stringify(emptyBody))),
+      },
+      { ...request, baseUrl: "http://127.0.0.1:8009" },
+    ),
   ).rejects.toThrow("request exceeds");
   expect(fetch).not.toHaveBeenCalled();
 });
 it("keeps the deadline active after response headers", async () => {
   const cancelled = vi.fn();
   mockResponse(new ReadableStream({ pull() {}, cancel: cancelled }));
-  await expect(requestEvaluation({ ...request, timeoutMs: 25 })).rejects.toThrow(
+  await expect(evaluate(request.body, { ...request, timeoutMs: 25 })).rejects.toThrow(
     "TypeSafe evaluation timed out.",
   );
   expect(cancelled).toHaveBeenCalledOnce();
@@ -51,20 +63,24 @@ it("rejects cancellation concurrent with body EOF", async () => {
     { highWaterMark: 0 },
   );
   mockResponse(body);
-  await expect(requestEvaluation({ ...request, signal: controller.signal })).rejects.toThrow(
+  await expect(evaluate(request.body, request, controller.signal)).rejects.toThrow(
     "TypeSafe evaluation cancelled.",
   );
 });
 it("preserves bounded multi-chunk JSON responses", async () => {
   const body = new ReadableStream<Uint8Array>({
     start(stream) {
-      stream.enqueue(new TextEncoder().encode('{"value":'));
-      stream.enqueue(new TextEncoder().encode("0.37}"));
+      stream.enqueue(
+        new TextEncoder().encode('{"model":"jev-test","answers":{"q":{"type":"noul","noul":'),
+      );
+      stream.enqueue(
+        new TextEncoder().encode('0.37}},"usage":{"input_tokens":1,"output_tokens":1}}'),
+      );
       stream.close();
     },
   });
   mockResponse(body);
-  await expect(requestEvaluation(request)).resolves.toEqual({ value: 0.37 });
+  await expect(evaluate(request.body, request)).resolves.toEqual({ evaluation: response });
 });
 it.each<[number, string, HeadersInit, number?]>([
   [400, "unsupported-input", {}],
@@ -85,7 +101,7 @@ it.each<[number, string, HeadersInit, number?]>([
       status,
       headers: new Headers(headers),
     });
-    const error = await requestEvaluation(request).catch((caught: unknown) => caught);
+    const error = await evaluate(request.body, request).catch((caught: unknown) => caught);
     expect(error).toMatchObject({ name: "EvaluationError", reason, retryAfterMs });
     if (reason === "unsupported-input") {
       expect(error).toHaveProperty("message", "TypeSafe rejected the supplied input.");
@@ -138,7 +154,7 @@ it.each([
       };
     });
     let settled = false;
-    const outcome = requestEvaluation({ ...request, signal: controller.signal })
+    const outcome = evaluate(request.body, request, controller.signal)
       .catch((error: unknown) => error)
       .finally(() => {
         settled = true;
@@ -175,8 +191,8 @@ it.each([
 );
 
 it("binds standard provider credentials to the provider's own API origin", async () => {
-  const fetch = mockResponse("{}");
-  await requestEvaluation({
+  const fetch = mockResponse(JSON.stringify(response));
+  await evaluate(request.body, {
     ...request,
     baseUrl: "https://unrelated.example",
     providerConfig: { baseUrl: "https://decision.example.com/v1", models: [] },

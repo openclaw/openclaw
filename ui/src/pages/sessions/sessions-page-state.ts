@@ -43,7 +43,7 @@ import {
   type SessionListSnapshot,
 } from "../../lib/sessions/index.ts";
 import { fetchPagedSessionRows } from "../../lib/sessions/paged-session-rows.ts";
-import type { SessionPatchResult } from "../../lib/sessions/patch.ts";
+import type { SessionPatch, SessionPatchResult } from "../../lib/sessions/patch.ts";
 import {
   resolveSessionPreferredFaceForKey,
   resolveSessionNavigationAgentId,
@@ -79,8 +79,8 @@ import {
   handleSessionManagementNavigationAction,
   type SessionsPageMenuProps,
 } from "./session-menu.tsx";
+import type { SessionsAdvancedFiltersProps } from "./sessions-filters.tsx";
 import type { SessionsPageState } from "./sessions-page-state.types.ts";
-import type { SessionsProps } from "./view-types.ts";
 
 registerSessionOrganizationEnglish();
 
@@ -286,11 +286,10 @@ export function createSessionsPage(
   });
 
   function captureRequestScope(): SessionsPageRequestScope | null {
-    const context = application;
     if (!active) {
       return null;
     }
-    const gateway = context.gateway;
+    const gateway = application.gateway;
     const client = gatewayLifecycle.gateway === gateway ? gatewayLifecycle.client : null;
     if (!gatewayLifecycle.connected || !client) {
       return null;
@@ -298,22 +297,21 @@ export function createSessionsPage(
     return {
       epoch: pageEpoch,
       signal: pluginActionLifetime.signal,
-      context,
+      context: application,
       gateway,
-      sessions: context.sessions,
+      sessions: application.sessions,
       client,
     };
   }
 
   function isRequestScopeCurrent(scope: SessionsPageRequestScope): boolean {
-    const context = application;
-    const gateway = context.gateway;
+    const gateway = application.gateway;
     return (
       active &&
       pageEpoch === scope.epoch &&
-      context === scope.context &&
+      application === scope.context &&
       gateway === scope.gateway &&
-      context.sessions === scope.sessions &&
+      application.sessions === scope.sessions &&
       gateway.snapshot.phase === "connected" &&
       gateway.snapshot.client === scope.client
     );
@@ -414,15 +412,14 @@ export function createSessionsPage(
   }
 
   function bindSessionList(refreshMissing = true): SessionsPageListBinding | undefined {
-    const context = application;
     if (!active) {
       return undefined;
     }
-    const sessions = context.sessions;
-    const query = sessionListOptions(context);
+    const sessions = application.sessions;
+    const query = sessionListOptions(application);
     const key = JSON.stringify(query);
     const current = listBinding;
-    const transcriptKey = JSON.stringify(sessionListOptions(context, ""));
+    const transcriptKey = JSON.stringify(sessionListOptions(application, ""));
     if (current?.sessions !== sessions || current.key !== key) {
       // An event refresh can already own the old query's request.
       if (current?.sessions === sessions && sessions.listSnapshot(current.query).loading) {
@@ -446,7 +443,7 @@ export function createSessionsPage(
     if (unsubscribeList) {
       return binding;
     }
-    state.loading = context.gateway.snapshot.phase === "connected";
+    state.loading = application.gateway.snapshot.phase === "connected";
     if (!captureRequestScope() || searchTimer !== undefined || listRequest) {
       return binding;
     }
@@ -569,7 +566,7 @@ export function createSessionsPage(
     await searchTranscripts(query);
   }
 
-  function updateFilters(next: Parameters<SessionsProps["onFiltersChange"]>[0]) {
+  function updateFilters(next: Parameters<SessionsAdvancedFiltersProps["onFiltersChange"]>[0]) {
     state.activeMinutes = next.activeMinutes;
     state.limit = next.limit;
     state.includeGlobal = next.includeGlobal;
@@ -582,7 +579,6 @@ export function createSessionsPage(
   }
 
   function updateStatusFilter(statusFilter: SessionArchivedFilter) {
-    const context = application;
     if (statusFilter === state.statusFilter) {
       return;
     }
@@ -595,7 +591,7 @@ export function createSessionsPage(
     // until its current list subscription publishes.
     state.loading = true;
     state.error = null;
-    context.navigate(
+    application.navigate(
       "sessions",
       statusFilter === "active" ? undefined : { search: `?status=${statusFilter}` },
     );
@@ -981,7 +977,7 @@ export function createSessionsPage(
 
   async function patchSession(
     key: string,
-    patch: Parameters<SessionsProps["onPatch"]>[1],
+    patch: SessionPatch,
     scope: SessionsPageRequestScope | null = captureRequestScope(),
     expectedSessionId?: string,
     options: { onConfirmed?: (result: SessionPatchResult) => void; sessionScope?: boolean } = {},
@@ -1156,7 +1152,6 @@ export function createSessionsPage(
 
   function sessionMenuProps(): SessionsPageMenuProps | null {
     const menu = state.sessionMenu;
-    const context = application;
     const row = menu
       ? state.result?.sessions.find(
           (session) => session.key === menu.key && session.sessionId === menu.sessionId,
@@ -1166,7 +1161,7 @@ export function createSessionsPage(
       return null;
     }
     return {
-      context,
+      context: application,
       row,
       menu,
       trigger: sessionMenuTrigger,
@@ -1176,7 +1171,7 @@ export function createSessionsPage(
       onClose: () => closeSessionMenu(),
       onAction: (requestedAction) => {
         const action = handleSessionManagementNavigationAction(requestedAction, {
-          context,
+          context: application,
           row,
           isCurrent: () => active,
         });
@@ -1185,7 +1180,7 @@ export function createSessionsPage(
         }
         switch (action.kind) {
           case "toggle-pin":
-            togglePinnedSession(context.navigation, row.key);
+            togglePinnedSession(application.navigation, row.key);
             break;
           case "toggle-involving-me": {
             const scope = captureRequestScope();
@@ -1320,33 +1315,33 @@ export function createSessionsPage(
     };
   }
 
-  function viewProps(): SessionsProps {
-    const context = application;
+  function viewProps() {
     const { selectedSessions, sessionMenuWork: _sessionMenuWork, ...viewState } = state;
     const personGroupingAvailable = (state.result?.owners?.length ?? 0) > 1;
     return {
       ...viewState,
       loading: state.loading || details.loading(),
-      refreshDisabled: context.gateway.snapshot.phase !== "connected",
+      refreshDisabled: application.gateway.snapshot.phase !== "connected",
       error: details.error() ?? state.error,
-      basePath: context.basePath,
-      agentId: resolveSessionNavigationAgentId(context),
-      allAgentsScope: context.agentSelection.state.scopeId === null,
+      basePath: application.basePath,
+      agentId: resolveSessionNavigationAgentId(application),
+      allAgentsScope: application.agentSelection.state.scopeId === null,
       mainKey: resolveUiConfiguredMainKey({
-        agentsList: context.agents.state.agentsList,
-        hello: context.gateway.snapshot.hello,
+        agentsList: application.agents.state.agentsList,
+        hello: application.gateway.snapshot.hello,
       }),
-      transcriptSearchAvailable: context.gateway.snapshot.phase === "connected",
+      transcriptSearchAvailable: application.gateway.snapshot.phase === "connected",
       agentIdentityById: sessionAgentIdentityById(
         state.result,
-        (agentId) => context.agentIdentity.get(agentId) ?? undefined,
+        (agentId) => application.agentIdentity.get(agentId) ?? undefined,
       ),
       personGroupingAvailable,
       // Keep the stored Person preference while the owner roster is unavailable.
-      groupBy: personGroupingAvailable || state.groupBy !== "person" ? state.groupBy : "none",
+      groupBy:
+        personGroupingAvailable || state.groupBy !== "person" ? state.groupBy : ("none" as const),
       knownCategories: knownCategories(),
       selectedKeys: new Set(selectedSessions.keys()),
-      labelDisabledReason: (row) =>
+      labelDisabledReason: (row: GatewaySessionRow) =>
         mutationDisabledReason({
           method: "sessions.patch",
           params: { key: row.key, label: null },
@@ -1366,7 +1361,7 @@ export function createSessionsPage(
         params: { key: "", archivedOnly: true, deleteTranscript: true },
       }),
       deleteSelectedDisabledReason: selectedDeleteDisabledReason(),
-      onFiltersChange: (next) => updateFilters(next),
+      onFiltersChange: (next: Parameters<typeof updateFilters>[0]) => updateFilters(next),
       onClearFilters: () => {
         state.searchQuery = "";
         updateFilters({
@@ -1376,7 +1371,7 @@ export function createSessionsPage(
           includeUnknown: false,
         });
       },
-      onSearchChange: (query) => {
+      onSearchChange: (query: string) => {
         deepLinkSessionKey = null;
         state.searchQuery = query;
         state.page = 0;
@@ -1391,20 +1386,24 @@ export function createSessionsPage(
         bindSessionList();
       },
       onTranscriptSearchChange: actions.updateTranscriptSearchQuery,
-      onTranscriptSearch: () => void actions.runTranscriptSearch(),
+      onTranscriptSearch: (): void => void actions.runTranscriptSearch(),
       onClearTranscriptSearch: () => resetTranscriptSearchState(""),
-      onSortChange: (column, direction) => {
+      onSortChange: (
+        column: SessionsPageState["sortColumn"],
+        direction: SessionsPageState["sortDir"],
+      ) => {
         state.sortColumn = column;
         state.sortDir = direction;
         state.page = 0;
       },
-      onGroupByChange: (mode) => {
+      onGroupByChange: (mode: SessionsPageState["groupBy"]) => {
         state.groupBy = mode;
         state.page = 0;
         saveStoredGroupBy(mode);
       },
       onAssignCategory: assignCategory,
-      onRequestNewCategory: (sessionKey) => void actions.requestNewCategory(sessionKey),
+      onRequestNewCategory: (sessionKey?: string): void =>
+        void actions.requestNewCategory(sessionKey),
       onLoadMore: () => {
         const binding = listBinding;
         const offset = state.result?.nextOffset;
@@ -1412,38 +1411,39 @@ export function createSessionsPage(
           void loadSessionList(binding, { offset, append: true });
         }
       },
-      onPageChange: (page) => {
+      onPageChange: (page: number) => {
         state.page = page;
       },
-      onPageSizeChange: (pageSize) => {
+      onPageSizeChange: (pageSize: number) => {
         state.pageSize = pageSize;
         state.page = 0;
       },
-      onRefresh: () => void refreshSessionList(),
-      onStatusFilterChange: (statusFilter) => updateStatusFilter(statusFilter),
-      onDeleteAllArchived: () => void actions.deleteAllArchived(),
-      onPatch: (key, patch, options) =>
+      onRefresh: (): void => void refreshSessionList(),
+      onStatusFilterChange: (statusFilter: SessionArchivedFilter) =>
+        updateStatusFilter(statusFilter),
+      onDeleteAllArchived: (): void => void actions.deleteAllArchived(),
+      onPatch: (key: string, patch: SessionPatch, options?: { sessionScope?: boolean }): void =>
         void actions.patchSession(key, patch, undefined, undefined, options),
-      onToggleSelect: (key) => updateSelection([key], "toggle"),
-      onSelectPage: (keys) => updateSelection(keys, "select"),
-      onDeselectPage: (keys) => updateSelection(keys, "deselect"),
+      onToggleSelect: (key: string) => updateSelection([key], "toggle"),
+      onSelectPage: (keys: string[]) => updateSelection(keys, "select"),
+      onDeselectPage: (keys: string[]) => updateSelection(keys, "deselect"),
       onDeselectAll: () => {
         state.selectedSessions = new Map();
       },
-      onDeleteSelected: () => void actions.deleteSelected(),
-      onNavigateToChat: (sessionKey) => {
-        const face = resolveSessionPreferredFaceForKey(context, sessionKey);
+      onDeleteSelected: (): void => void actions.deleteSelected(),
+      onNavigateToChat: (sessionKey: string) => {
+        const face = resolveSessionPreferredFaceForKey(application, sessionKey);
         const target = sessionNavigationTarget({
-          context,
+          context: application,
           face,
           sessionKey,
-          agentId: sessionPathAgentId(sessionKey, context),
+          agentId: sessionPathAgentId(sessionKey, application),
           preferenceDerivedFace: true,
         });
-        context.navigate(face, target.options);
+        application.navigate(face, target.options);
       },
       onOpenSessionMenu: actions.openSessionMenu,
-      onToggleDetails: (key) => {
+      onToggleDetails: (key: string) => {
         state.expandedSessionKey = state.expandedSessionKey === key ? null : key;
         details.synchronize();
         if (deepLinkSessionKey !== null) {
@@ -1523,7 +1523,7 @@ export function createSessionsPage(
       revision();
       return sessionMenuProps();
     },
-    view: (): SessionsProps => {
+    view: () => {
       revision();
       return viewProps();
     },
