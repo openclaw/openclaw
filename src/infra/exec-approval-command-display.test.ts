@@ -1,4 +1,3 @@
-// Verifies shell command display strings for exec approval prompts.
 import { describe, expect, it } from "vitest";
 import { resolveExecApprovalCommandDisplay } from "./exec-approval-command-display.js";
 import {
@@ -11,6 +10,17 @@ function hasLoneSurrogate(value: string): boolean {
     const codePoint = char.codePointAt(0) ?? 0;
     return codePoint >= 0xd800 && codePoint <= 0xdfff;
   });
+}
+
+function runPlan(commandText: string, commandPreview: string) {
+  return {
+    argv: ["echo", "hi"],
+    cwd: null,
+    commandText,
+    commandPreview,
+    agentId: null,
+    sessionKey: null,
+  };
 }
 
 describe("sanitizeExecApprovalDisplayText", () => {
@@ -70,58 +80,43 @@ describe("sanitizeExecApprovalWarningText", () => {
 });
 
 describe("resolveExecApprovalCommandDisplay", () => {
-  it.each([
-    {
-      name: "prefers explicit command fields and drops identical previews after trimming",
-      input: {
-        command: "echo hi",
-        commandPreview: "  echo hi  ",
-        host: "gateway" as const,
-      },
-      expected: {
-        commandText: "echo hi",
-        commandPreview: null,
-      },
-    },
-    {
-      name: "falls back to node systemRunPlan values and sanitizes preview text",
-      input: {
+  it.each<
+    [
+      string,
+      Parameters<typeof resolveExecApprovalCommandDisplay>[0],
+      ReturnType<typeof resolveExecApprovalCommandDisplay>,
+    ]
+  >([
+    [
+      "prefers explicit command fields and drops identical previews after trimming",
+      { command: "echo hi", commandPreview: "  echo hi  ", host: "gateway" as const },
+      { commandText: "echo hi", commandPreview: null },
+    ],
+    [
+      "falls back to node systemRunPlan values and sanitizes preview text",
+      {
         command: "",
         host: "node" as const,
         systemRunPlan: {
+          ...runPlan('python3 -c "print(1)"', "print\u200B(1)"),
           argv: ["python3", "-c", "print(1)"],
-          cwd: null,
-          commandText: 'python3 -c "print(1)"',
-          commandPreview: "print\u200B(1)",
-          agentId: null,
-          sessionKey: null,
         },
       },
-      expected: {
+      {
         commandText: 'python3 -c "print(1)"',
         commandPreview: "print\\u{200B}(1)",
       },
-    },
-    {
-      name: "ignores systemRunPlan fallback for non-node hosts",
-      input: {
+    ],
+    [
+      "ignores systemRunPlan fallback for non-node hosts",
+      {
         command: "",
         host: "sandbox" as const,
-        systemRunPlan: {
-          argv: ["echo", "hi"],
-          cwd: null,
-          commandText: "echo hi",
-          commandPreview: "echo hi",
-          agentId: null,
-          sessionKey: null,
-        },
+        systemRunPlan: runPlan("echo hi", "echo hi"),
       },
-      expected: {
-        commandText: "",
-        commandPreview: null,
-      },
-    },
-  ])("$name", ({ input, expected }) => {
+      { commandText: "", commandPreview: null },
+    ],
+  ])("%s", (_name, input, expected) => {
     expect(resolveExecApprovalCommandDisplay(input)).toEqual(expected);
   });
 });

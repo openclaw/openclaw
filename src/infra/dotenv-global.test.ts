@@ -1,7 +1,7 @@
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   loadGlobalRuntimeDotEnvFilesAsyncCore,
   loadGlobalRuntimeDotEnvFilesCore,
@@ -15,24 +15,12 @@ vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ warn: logWarnSpy }),
 }));
 
-const cleanups: Array<() => void> = [];
-
-afterEach(() => {
-  logWarnSpy.mockClear();
-  for (const fn of cleanups.splice(0)) {
-    fn();
-  }
-});
-
-function tmpDir(): string {
-  const d = mkdtempSync(join(tmpdir(), "openclaw-dotenv-global-"));
-  cleanups.push(() => rmSync(d, { recursive: true, force: true }));
-  return d;
-}
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => logWarnSpy.mockClear());
+const tmpDir = () => tempDirs.make("openclaw-dotenv-global-");
 
 function tmpFile(name: string, contents: string): string {
-  const d = tmpDir();
-  const p = join(d, name);
+  const p = join(tmpDir(), name);
   writeFileSync(p, contents, "utf8");
   return p;
 }
@@ -41,37 +29,30 @@ describe("readDotEnvFile", () => {
   it("reads a small .env file", () => {
     const filePath = tmpFile(".env", "API_KEY=secret\nOTHER_KEY=value\n");
     const result = readDotEnvFile({ filePath });
-    expect(result).not.toBeNull();
-    expect(result!.entries).toContainEqual({ key: "API_KEY", value: "secret" });
-    expect(result!.entries).toContainEqual({ key: "OTHER_KEY", value: "value" });
+    expect(result?.entries).toEqual(
+      expect.arrayContaining([
+        { key: "API_KEY", value: "secret" },
+        { key: "OTHER_KEY", value: "value" },
+      ]),
+    );
     expect(logWarnSpy).not.toHaveBeenCalled();
   });
 
   it("reads a symlinked .env file", () => {
-    const d = tmpDir();
-    const realPath = join(d, "real.env");
-    writeFileSync(realPath, "REAL_KEY=from_symlink_target\n", "utf8");
-    const linkPath = join(d, ".env");
+    const realPath = tmpFile("real.env", "REAL_KEY=from_symlink_target\n");
+    const linkPath = join(tmpDir(), ".env");
     symlinkSync(realPath, linkPath);
     const result = readDotEnvFile({ filePath: linkPath });
-    expect(result).not.toBeNull();
-    expect(result!.entries).toContainEqual({
-      key: "REAL_KEY",
-      value: "from_symlink_target",
-    });
+    expect(result?.entries).toContainEqual({ key: "REAL_KEY", value: "from_symlink_target" });
   });
 
   it("returns null for a missing file (quiet)", () => {
-    const d = tmpDir();
-    const result = readDotEnvFile({ filePath: join(d, "nonexistent.env"), quiet: true });
-    expect(result).toBeNull();
+    expect(readDotEnvFile({ filePath: join(tmpDir(), "nonexistent.env"), quiet: true })).toBeNull();
     expect(logWarnSpy).not.toHaveBeenCalled();
   });
 
   it("warns when an oversized .env file is skipped", () => {
-    const d = tmpDir();
-    // Create a file larger than 1 MiB so the bounded read rejects it.
-    const filePath = join(d, "oversized.env");
+    const filePath = join(tmpDir(), "oversized.env");
     const large = Buffer.alloc(2 * 1024 * 1024, "x");
     large.write("KEY=value\n", 0, "utf8");
     writeFileSync(filePath, large);

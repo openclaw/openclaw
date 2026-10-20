@@ -33,6 +33,8 @@ const input: ExecAuthorizationCommitInput = {
     allowlistSatisfied: true,
   },
 };
+const usage = { ...input, matches: [entry] };
+const changed = { ok: false, message: "Exec approval changed before execution" };
 function fixture() {
   const root = tempDirs.make("openclaw-exec-authorization-batch-");
   const options = {
@@ -66,19 +68,23 @@ function fixture() {
       }
     },
   };
-  return { context, database };
+  return {
+    database,
+    commit: (...items: ExecAuthorizationCommitInput[]) =>
+      commitExecAuthorizationsInWorker({ items }, context),
+  };
 }
 
 it("does not acquire writer admission for an unchanged authorization batch", () => {
-  const { context } = fixture();
+  const { commit } = fixture();
   const writes = vi.spyOn(stateDatabase, "runOpenClawStateWriteTransaction");
-  const outcomes = commitExecAuthorizationsInWorker({ items: [input, input] }, context);
+  const outcomes = commit(input, input);
   expect(outcomes.map((outcome) => outcome.ok)).toEqual([true, true]);
   expect(writes).not.toHaveBeenCalled();
 });
 
 it("coalesces usage writes and rereads policy after writer admission", () => {
-  const { context, database } = fixture();
+  const { commit, database } = fixture();
   const write = stateDatabase.runOpenClawStateWriteTransaction;
   const writes = vi
     .spyOn(stateDatabase, "runOpenClawStateWriteTransaction")
@@ -89,24 +95,13 @@ it("coalesces usage writes and rereads policy after writer admission", () => {
       });
       return write(operation, owner, transactionOptions);
     });
-  const outcomes = commitExecAuthorizationsInWorker(
-    {
-      items: [
-        { ...input, matches: [entry] },
-        { ...input, matches: [entry], command: "echo last" },
-      ],
-    },
-    context,
-  );
+  const outcomes = commit(usage, { ...usage, command: "echo last" });
   expect(writes).toHaveBeenCalledTimes(1);
-  expect(outcomes).toEqual([
-    { ok: false, message: "Exec approval changed before execution" },
-    { ok: false, message: "Exec approval changed before execution" },
-  ]);
+  expect(outcomes).toEqual([changed, changed]);
 });
 
 it("commits accepted usage once and preserves the agent deletion fence", () => {
-  const { context, database } = fixture();
+  const { commit, database } = fixture();
   writeExecApprovalsConfigRow({
     db: database.db,
     file: { version: 1, agents: { main: { allowlist: [entry] }, deleted: { allowlist: [entry] } } },
@@ -118,47 +113,33 @@ it("commits accepted usage once and preserves the agent deletion fence", () => {
     .run();
   publishAgentDeletionJournalStatus(database.db, "deleted", "pending");
   const writes = vi.spyOn(stateDatabase, "runOpenClawStateWriteTransaction");
-  const outcomes = commitExecAuthorizationsInWorker(
-    {
-      items: [
-        { ...input, matches: [entry] },
-        { ...input, agentId: "deleted", matches: [entry] },
-        { ...input, matches: [entry], command: "echo last" },
-      ],
-    },
-    context,
+  const outcomes = commit(
+    usage,
+    { ...usage, agentId: "deleted" },
+    { ...usage, command: "echo last" },
   );
   expect(writes).toHaveBeenCalledTimes(1);
   expect(outcomes.map((outcome) => outcome.ok)).toEqual([true, false, true]);
-  expect(outcomes[0]).toMatchObject({
-    ok: true,
-    snapshot: { file: { agents: { main: { allowlist: [{ lastUsedCommand: "echo first" }] } } } },
-  });
-  expect(outcomes[2]).toMatchObject({
-    ok: true,
-    snapshot: {
-      file: {
-        agents: {
-          main: { allowlist: [{ lastUsedCommand: "echo last" }] },
-          deleted: { allowlist: [entry] },
-        },
-      },
+  expect(
+    outcomes.map((outcome) => (outcome.ok ? outcome.snapshot.file.agents : null)),
+  ).toMatchObject([
+    { main: { allowlist: [{ lastUsedCommand: "echo first" }] } },
+    null,
+    {
+      main: { allowlist: [{ lastUsedCommand: "echo last" }] },
+      deleted: { allowlist: [entry] },
     },
-  });
+  ]);
 });
 
 it.each(["explicit-approval", "auto-review"] as const)(
   "rejects %s usage without its delayed policy snapshot",
   (source) => {
-    const { context } = fixture();
-    const outcomes = commitExecAuthorizationsInWorker(
-      {
-        items: [{ ...input, matches: [entry], authorization: { ...input.authorization, source } }],
-      },
-      context,
-    );
-    expect(outcomes).toEqual([{ ok: false, message: "Exec approval changed before execution" }]);
-    const [unchanged] = commitExecAuthorizationsInWorker({ items: [input] }, context);
+    const { commit } = fixture();
+    expect(commit({ ...usage, authorization: { ...input.authorization, source } })).toEqual([
+      changed,
+    ]);
+    const [unchanged] = commit(input);
     expect(unchanged?.ok && unchanged.snapshot.file.agents?.main?.allowlist).toEqual([entry]);
   },
 );

@@ -1,4 +1,3 @@
-// Covers exec approval allowlist evaluation.
 import { describe, expect, it } from "vitest";
 import { resolveSafeBins } from "./exec-approvals-allowlist.js";
 import {
@@ -24,17 +23,6 @@ function segment(
   };
 }
 
-function toolSegment() {
-  return segment(["tool"], { resolvedPath: "/usr/bin/tool" });
-}
-
-function headSegment() {
-  return segment(["head", "-n", "1"], {
-    resolvedPath: "/usr/bin/head",
-    resolvedRealPath: "/usr/bin/head",
-  });
-}
-
 function evaluateAutoAllowSkills(command: ReturnType<typeof segment>, resolvedPath: string) {
   return evaluateExecAllowlist({
     analysis: { ok: true, segments: [command] },
@@ -47,8 +35,7 @@ function evaluateAutoAllowSkills(command: ReturnType<typeof segment>, resolvedPa
 }
 
 function expectAutoAllowSkillsMiss(result: ReturnType<typeof evaluateExecAllowlist>): void {
-  expect(result.allowlistSatisfied).toBe(false);
-  expect(result.segmentSatisfiedBy).toEqual([null]);
+  expect(result).toMatchObject({ allowlistSatisfied: false, segmentSatisfiedBy: [null] });
 }
 
 describe("exec approvals allowlist evaluation", () => {
@@ -80,7 +67,7 @@ describe("exec approvals allowlist evaluation", () => {
   });
 
   it("returns empty segment details for chain misses", () => {
-    const command = toolSegment();
+    const command = segment(["tool"], { resolvedPath: "/usr/bin/tool" });
     const result = evaluateExecAllowlist({
       analysis: { ok: true, segments: [command], chains: [[command]] },
       allowlist: [{ pattern: "/usr/bin/other" }],
@@ -88,13 +75,15 @@ describe("exec approvals allowlist evaluation", () => {
       cwd: "/tmp",
     });
     expect(result.allowlistSatisfied).toBe(false);
-    expect(result.allowlistMatches).toStrictEqual([]);
-    expect(result.segmentSatisfiedBy).toStrictEqual([]);
+    expect([result.allowlistMatches, result.segmentSatisfiedBy]).toStrictEqual([[], []]);
   });
 
   it("aggregates segment satisfaction across chains", () => {
-    const allowlistSegment = toolSegment();
-    const safeBinSegment = headSegment();
+    const allowlistSegment = segment(["tool"], { resolvedPath: "/usr/bin/tool" });
+    const safeBinSegment = segment(["head", "-n", "1"], {
+      resolvedPath: "/usr/bin/head",
+      resolvedRealPath: "/usr/bin/head",
+    });
     const result = evaluateExecAllowlist({
       analysis: {
         ok: true,
