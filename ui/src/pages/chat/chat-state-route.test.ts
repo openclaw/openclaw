@@ -4,22 +4,17 @@ import { selectedChatSessionRow } from "./chat-state-route.ts";
 
 type IdentityFields = "sessionKey" | "assistantAgentId" | "agentsList" | "hello";
 type LookupState = Pick<ChatPageHost, IdentityFields | "sessionsResult" | "sessionsResultAgentId">;
-
 type SessionRow = NonNullable<LookupState["sessionsResult"]>["sessions"][number];
 
 function lookup(sessions: SessionRow[], overrides: Partial<LookupState> = {}): ChatPageHost {
+  const defaults = { modelProvider: null, model: null, contextTokens: null };
+  const sessionsResult = { ts: 0, path: "", count: sessions.length, defaults, sessions };
   const state: LookupState = {
     sessionKey: "agent:main:current",
     assistantAgentId: "main",
     agentsList: null,
     hello: null,
-    sessionsResult: {
-      ts: 0,
-      path: "",
-      count: sessions.length,
-      defaults: { modelProvider: null, model: null, contextTokens: null },
-      sessions,
-    },
+    sessionsResult,
     sessionsResultAgentId: "main",
     ...overrides,
   };
@@ -42,10 +37,7 @@ it("reuses rows for interleaved panes without rescanning a shared session result
     selected,
   ]);
   expect(selectedChatSessionRow(state)).toBe(selected);
-  const otherPane = lookup([], {
-    sessionKey: "agent:main:other",
-    sessionsResult: state.sessionsResult,
-  });
+  const otherPane = lookup([], { sessionKey: other.key, sessionsResult: state.sessionsResult });
   expect(selectedChatSessionRow(otherPane)).toBe(other);
   const initialReads = readKey.mock.calls.length;
   for (let i = 0; i < 10; i++) {

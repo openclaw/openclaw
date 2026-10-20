@@ -4,15 +4,13 @@ import { createChatPageStateContext } from "./chat-page.test-support.ts";
 import { createPageState } from "./chat-state-page.ts";
 import { activatePanel, openSlot } from "./sidebar-layout.ts";
 
-function page(context = createChatPageStateContext(), height = 900) {
-  return createPageState(
-    context,
-    { afterCommit: () => () => {} },
-    {
-      dispatchEvent: () => true,
-      getBoundingClientRect: () => new DOMRect(0, 0, 1440, height),
-    },
-  );
+function page(context = createChatPageStateContext()) {
+  const lifecycle = { afterCommit: () => () => {} };
+  const host = {
+    dispatchEvent: () => true,
+    getBoundingClientRect: () => new DOMRect(0, 0, 1440, 0),
+  };
+  return createPageState(context, lifecycle, host);
 }
 const panels = (state: ReturnType<typeof page>) =>
   state.sidebarLayout.columns.flatMap((column) => column.panels);
@@ -23,62 +21,50 @@ beforeEach(() => {
   saveSettings({ ...saved, sidebarSessionLayouts: {} });
 });
 
-it.each(["minimize", "close-resource", "explicit-desktop"])(
-  "preserves resource layout intent through %s",
-  (action) => {
-    const context = createChatPageStateContext();
-    const state = page(context);
-    state.updateSidebarLayout(openSlot(state.sidebarLayout, "desktop"), {
-      persist: false,
-      automaticResource: "desktop",
+it.each(["minimize", "close", "explicit"])("persists %s resource intent", (action) => {
+  const context = createChatPageStateContext();
+  const state = page(context);
+  state.updateSidebarLayout(openSlot(state.sidebarLayout, "desktop"), {
+    persist: false,
+    automaticResource: "desktop",
+  });
+  expect(page(context).sidebarLayout.columns).toEqual([]);
+  state.updateSidebarLayout({ ...openSlot(state.sidebarLayout, "workspace"), dock: "bottom" });
+  const afterLayoutChange = page(context);
+  expect(slots(afterLayoutChange)).toEqual(["workspace"]);
+  expect(afterLayoutChange.sidebarLayout.dock).toBe("bottom");
+  expect(state.sidebarLayout.resourceAutoOpenDismissed).toBeUndefined();
+  if (action === "explicit") {
+    const explicit = openSlot(state.sidebarLayout, "desktop");
+    explicit.columns
+      .flatMap((column) => column.panels)
+      .find((panel) => panel.slot === "desktop")!.environmentId = "manual-desktop";
+    state.updateSidebarLayout(explicit);
+    const reloaded = page(context);
+    expect(panels(reloaded).find((panel) => panel.slot === "desktop")).toMatchObject({
+      environmentId: "manual-desktop",
     });
-    expect(page(context).sidebarLayout.columns).toEqual([]);
-    state.updateSidebarLayout({ ...openSlot(state.sidebarLayout, "workspace"), dock: "bottom" });
-    const afterLayoutChange = page(context);
-    expect(slots(afterLayoutChange)).toEqual(["workspace"]);
-    expect(afterLayoutChange.sidebarLayout.dock).toBe("bottom");
-    expect(state.sidebarLayout.resourceAutoOpenDismissed).toBeUndefined();
-    if (action === "explicit-desktop") {
-      const explicit = openSlot(state.sidebarLayout, "desktop");
-      explicit.columns
-        .flatMap((column) => column.panels)
-        .find((panel) => panel.slot === "desktop")!.environmentId = "manual-desktop";
-      state.updateSidebarLayout(explicit);
-      const reloaded = page(context);
-      expect(panels(reloaded).find((panel) => panel.slot === "desktop")).toMatchObject({
-        environmentId: "manual-desktop",
-      });
-      expect(slots(reloaded)).not.toContain("browser");
-      expect(reloaded.sidebarLayout.resourceAutoOpenDismissed).toBeUndefined();
-      return;
-    }
-    state.updateSidebarLayout({
-      ...state.sidebarLayout,
-      ...(action === "minimize" ? { open: false } : { columns: [] }),
-    });
-    expect(state.sidebarLayout.resourceAutoOpenDismissed).toBe(true);
-    expect(page(context).sidebarLayout.resourceAutoOpenDismissed).toBe(true);
-    state.updateSidebarLayout(openSlot(state.sidebarLayout, "browser"));
-    expect(state.sidebarLayout).toMatchObject({ resourceAutoOpenDismissed: true, open: true });
-  },
-);
+    expect(slots(reloaded)).not.toContain("browser");
+    expect(reloaded.sidebarLayout.resourceAutoOpenDismissed).toBeUndefined();
+    return;
+  }
+  state.updateSidebarLayout({
+    ...state.sidebarLayout,
+    ...(action === "minimize" ? { open: false } : { columns: [] }),
+  });
+  expect(state.sidebarLayout.resourceAutoOpenDismissed).toBe(true);
+  expect(page(context).sidebarLayout.resourceAutoOpenDismissed).toBe(true);
+  state.updateSidebarLayout(openSlot(state.sidebarLayout, "browser"));
+  expect(state.sidebarLayout).toMatchObject({ resourceAutoOpenDismissed: true, open: true });
+});
 
 it("owns attachment views in Files without replacing Detail content", () => {
-  const state = page(undefined, 0);
-  const detailContent = {
-    kind: "markdown" as const,
-    content: "review",
-    rawText: "review",
-  };
+  const state = page();
+  const detailContent = { kind: "markdown" as const, content: "review", rawText: "review" };
   state.sidebarContent = detailContent;
   state.sidebarLayout = openSlot(state.sidebarLayout, "detail");
 
-  state.handleOpenSidebar({
-    kind: "attachment",
-    attachmentKind: "document",
-    title: "a.pdf",
-    src: "/a.pdf",
-  });
+  state.handleOpenSidebar({ kind: "attachment", title: "a.pdf", src: "/a.pdf" });
 
   for (const [slot, expected] of [
     ["detail", ["detail", "workspace"]],
