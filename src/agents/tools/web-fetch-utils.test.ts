@@ -123,6 +123,18 @@ describe("web-fetch-utils", () => {
     );
   });
 
+  it("keeps links inside preformatted blocks literal in basic extraction", async () => {
+    const html =
+      '<pre>curl <a href="https://example.com">https://example.com\n  /path</a>\n  --header X</pre>';
+
+    expect(htmlToMarkdown(html).text).toBe(
+      "```\ncurl https://example.com\n  /path\n  --header X\n```",
+    );
+    await expect(extractText(html)).resolves.toBe(
+      "curl https://example.com\n  /path\n  --header X",
+    );
+  });
+
   it("preserves entity-decoded prose that resembles preformatted markers", () => {
     const malformed = "&lt;p>Keep&#0;openclaw-pre-bad&#0; tail&lt;/p><pre>x</pre>";
     const validIndex = "&lt;p>Keep&#0;openclaw-pre-0&#0; tail&lt;/p><pre>x</pre>";

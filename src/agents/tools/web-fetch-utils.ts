@@ -38,7 +38,13 @@ const PRE_MARKER_PREFIX = "\u0000openclaw-pre-";
 type RenderContext =
   | { kind: "root"; parts: string[] }
   | { kind: "title"; parts: string[] }
-  | { kind: "anchor"; href: string | undefined; hasText: boolean; parts: string[] }
+  | {
+      kind: "anchor";
+      href: string | undefined;
+      hasText: boolean;
+      literal: boolean;
+      parts: string[];
+    }
   | { kind: "heading"; level: number; parts: string[] }
   | { kind: "list-item"; parts: string[] }
   | { kind: "pre"; parts: string[] };
@@ -67,7 +73,10 @@ function escapePreMarkerText(value: string): string {
 
 function appendText(stack: RenderContext[], value: string): void {
   const context = stack[stack.length - 1];
-  const safeValue = context?.kind === "pre" ? value : escapePreMarkerText(value);
+  const safeValue =
+    context?.kind === "pre" || (context?.kind === "anchor" && context.literal)
+      ? value
+      : escapePreMarkerText(value);
   context?.parts.push(safeValue);
   if (context?.kind === "anchor" && /\S/.test(safeValue)) {
     context.hasText = true;
@@ -148,6 +157,14 @@ function closeContext(context: RenderContext, parent: RenderContext, state: Rend
       parent.parts.push(`${PRE_MARKER_PREFIX}${index}\u0000\n`);
     } else {
       parent.parts.push("\n");
+    }
+    return;
+  }
+  if (context.kind === "anchor" && context.literal) {
+    const literal = context.parts.join("");
+    parent.parts.push(literal);
+    if (parent.kind === "anchor" && /\S/.test(literal)) {
+      parent.hasText = true;
     }
     return;
   }
@@ -328,7 +345,13 @@ export function htmlToMarkdown(html: string): { text: string; title?: string } {
     }
     const context: Exclude<RenderContext, { kind: "root" }> =
       kind === "anchor"
-        ? { kind, href: readAnchorHref(token.raw), hasText: false, parts: [] }
+        ? {
+            kind,
+            href: readAnchorHref(token.raw),
+            hasText: false,
+            literal: stack.some((parent) => parent.kind === "pre"),
+            parts: [],
+          }
         : kind === "heading"
           ? { kind, level: Number.parseInt(token.name[1] ?? "1", 10), parts: [] }
           : { kind, parts: [] };
