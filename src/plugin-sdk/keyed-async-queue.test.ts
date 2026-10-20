@@ -1,7 +1,3 @@
-/**
- * Tests keyed async queue serialization and cancellation behavior.
- */
-
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { enqueueKeyedTask, KeyedAsyncQueue } from "./keyed-async-queue.js";
@@ -11,32 +7,18 @@ describe("enqueueKeyedTask", () => {
     const tails = new Map<string, Promise<void>>();
     const gate = createDeferred();
     const order: string[] = [];
-
-    const first = enqueueKeyedTask({
-      tails,
-      key: "a",
-      task: async () => {
-        order.push("a1:start");
-        await gate.promise;
-        order.push("a1:end");
-      },
-    });
-    const second = enqueueKeyedTask({
-      tails,
-      key: "a",
-      task: async () => {
-        order.push("a2:start");
-        order.push("a2:end");
-      },
-    });
-    const third = enqueueKeyedTask({
-      tails,
-      key: "b",
-      task: async () => {
-        order.push("b1:start");
-        order.push("b1:end");
-      },
-    });
+    const enqueue = (key: string, task: () => Promise<void>) =>
+      enqueueKeyedTask({ tails, key, task });
+    const record = async (name: string, wait?: Promise<unknown>) => {
+      order.push(`${name}:start`);
+      if (wait) {
+        await wait;
+      }
+      order.push(`${name}:end`);
+    };
+    const first = enqueue("a", () => record("a1", gate.promise));
+    const second = enqueue("a", () => record("a2"));
+    const third = enqueue("b", () => record("b1"));
 
     await Promise.resolve();
     await Promise.resolve();
@@ -88,6 +70,9 @@ describe("enqueueKeyedTask", () => {
     const right = {};
     const gate = createDeferred();
     const order: string[] = [];
+    const record = async (name: string) => {
+      order.push(name);
+    };
     const first = enqueueKeyedTask({
       tails,
       keys: [left, shared],
@@ -99,24 +84,18 @@ describe("enqueueKeyedTask", () => {
     const second = enqueueKeyedTask({
       tails,
       keys: [shared, right],
-      task: async () => {
-        order.push("second");
-      },
+      task: () => record("second"),
     });
     const third = enqueueKeyedTask({
       tails,
       key: right,
-      task: async () => {
-        order.push("third");
-      },
+      task: () => record("third"),
     });
     try {
       await enqueueKeyedTask({
         tails,
         key: {},
-        task: async () => {
-          order.push("independent");
-        },
+        task: () => record("independent"),
       });
       expect(order).toEqual(["first", "independent"]);
     } finally {

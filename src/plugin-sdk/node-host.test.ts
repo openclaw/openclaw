@@ -7,9 +7,29 @@ import { resolveNodeHostExecutable } from "./node-host.js";
 
 const tempDirs: string[] = [];
 
-async function createNpmShimPair(executable: string) {
+async function createBinDir(executable: string) {
   const binDir = await fs.mkdtemp(path.join(os.tmpdir(), `openclaw-node-host-${executable}-`));
   tempDirs.push(binDir);
+  return binDir;
+}
+
+function resolve(
+  executable: string,
+  pathEnv: string,
+  strategy: "direct" | "fallback" | "prefer" = "direct",
+  includeExtensionless?: boolean,
+  pathext = ".CMD",
+) {
+  return resolveNodeHostExecutable(executable, {
+    env: { PATH: pathEnv, PATHEXT: pathext },
+    pathEnv,
+    strategy,
+    ...(includeExtensionless === undefined ? {} : { includeExtensionless }),
+  });
+}
+
+async function createNpmShimPair(executable: string) {
+  const binDir = await createBinDir(executable);
   const barePath = path.join(binDir, executable);
   const commandPath = path.join(binDir, `${executable}.cmd`);
   await fs.writeFile(barePath, "#!/bin/sh\nexit 0\n", "utf8");
@@ -21,8 +41,7 @@ async function createNpmShimPair(executable: string) {
 }
 
 async function createBareNativeHost(executable: string) {
-  const binDir = await fs.mkdtemp(path.join(os.tmpdir(), `openclaw-node-host-${executable}-`));
-  tempDirs.push(binDir);
+  const binDir = await createBinDir(executable);
   const barePath = path.join(binDir, executable);
   await fs.copyFile(process.execPath, barePath);
   return { barePath, binDir };
@@ -44,13 +63,7 @@ describe("resolveNodeHostExecutable", () => {
     async (executable, strategy) => {
       const { binDir, commandPath } = await createNpmShimPair(executable);
 
-      expect(
-        resolveNodeHostExecutable(executable, {
-          env: { PATH: binDir, PATHEXT: ".CMD" },
-          pathEnv: binDir,
-          strategy,
-        }),
-      ).toEqual({ executable: commandPath });
+      expect(resolve(executable, binDir, strategy)).toEqual({ executable: commandPath });
     },
   );
 
@@ -59,14 +72,7 @@ describe("resolveNodeHostExecutable", () => {
     async () => {
       const { barePath, binDir } = await createNpmShimPair("custom-host");
 
-      expect(
-        resolveNodeHostExecutable("custom-host", {
-          env: { PATH: binDir, PATHEXT: ".CMD" },
-          includeExtensionless: true,
-          pathEnv: binDir,
-          strategy: "direct",
-        }),
-      ).toEqual({ executable: barePath });
+      expect(resolve("custom-host", binDir, "direct", true)).toEqual({ executable: barePath });
     },
   );
 
@@ -75,13 +81,9 @@ describe("resolveNodeHostExecutable", () => {
     async (strategy) => {
       const { barePath, binDir } = await createBareNativeHost(`bare-${strategy}`);
 
-      const resolution = resolveNodeHostExecutable(`bare-${strategy}`, {
-        env: { PATH: binDir, PATHEXT: ".CMD;.EXE" },
-        pathEnv: binDir,
-        strategy,
+      expect(resolve(`bare-${strategy}`, binDir, strategy, undefined, ".CMD;.EXE")).toEqual({
+        executable: barePath,
       });
-
-      expect(resolution).toEqual({ executable: barePath });
     },
   );
 
@@ -92,13 +94,7 @@ describe("resolveNodeHostExecutable", () => {
       const { binDir: launcherDir, commandPath } = await createNpmShimPair(`later-${strategy}`);
       const pathEnv = `${bareDir};${launcherDir}`;
 
-      expect(
-        resolveNodeHostExecutable(`later-${strategy}`, {
-          env: { PATH: pathEnv, PATHEXT: ".CMD" },
-          pathEnv,
-          strategy,
-        }),
-      ).toEqual({ executable: commandPath });
+      expect(resolve(`later-${strategy}`, pathEnv, strategy)).toEqual({ executable: commandPath });
     },
   );
 
@@ -107,14 +103,7 @@ describe("resolveNodeHostExecutable", () => {
     async () => {
       const { binDir } = await createBareNativeHost("suffix-only-host");
 
-      expect(
-        resolveNodeHostExecutable("suffix-only-host", {
-          env: { PATH: binDir, PATHEXT: ".CMD" },
-          includeExtensionless: false,
-          pathEnv: binDir,
-          strategy: "direct",
-        }),
-      ).toBeUndefined();
+      expect(resolve("suffix-only-host", binDir, "direct", false)).toBeUndefined();
     },
   );
 
@@ -123,13 +112,7 @@ describe("resolveNodeHostExecutable", () => {
     async () => {
       const { barePath, binDir } = await createNpmShimPair("codex");
 
-      expect(
-        resolveNodeHostExecutable("codex", {
-          env: { PATH: binDir },
-          pathEnv: binDir,
-          strategy: "direct",
-        }),
-      ).toEqual({ executable: barePath });
+      expect(resolve("codex", binDir)).toEqual({ executable: barePath });
     },
   );
 });
