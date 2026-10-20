@@ -32,15 +32,15 @@ it("publishes deferred official Teams listener pins before candidate startup", a
   const bundledRoot = path.join(home, "bundled");
   const bundledTeams = path.join(bundledRoot, "msteams");
   await fs.mkdir(bundledTeams, { recursive: true });
+  const write = (root: string, name: string, data: unknown) =>
+    fs.writeFile(path.join(root, name), typeof data === "string" ? data : JSON.stringify(data));
   // Retain the real Teams contract without scanning unrelated bundled plugins.
   const contract = `export * from ${JSON.stringify(pathToFileURL(path.resolve("extensions/msteams/config-doctor-api.ts")).href)};\n`;
-  await fs.writeFile(path.join(bundledTeams, "package.json"), '{"type":"module"}\n');
-  await fs.writeFile(path.join(bundledTeams, "config-doctor-api.js"), contract);
-  await fs.writeFile(path.join(bundledTeams, "doctor-contract-api.js"), contract);
-  await fs.writeFile(
-    path.join(bundledTeams, "openclaw.plugin.json"),
-    JSON.stringify({ id: "msteams", channels: ["msteams"], configSchema: { type: "object" } }),
-  );
+  await write(bundledTeams, "package.json", '{"type":"module"}\n');
+  await write(bundledTeams, "config-doctor-api.js", contract);
+  await write(bundledTeams, "doctor-contract-api.js", contract);
+  const manifest = { id: "msteams", channels: ["msteams"], configSchema: { type: "object" } };
+  await write(bundledTeams, "openclaw.plugin.json", manifest);
   await withEnvAsync(
     {
       HOME: home,
@@ -65,27 +65,20 @@ it("publishes deferred official Teams listener pins before candidate startup", a
       await fs.writeFile(configPath, original);
       const root = path.join(home, ".openclaw", "extensions", "msteams");
       await fs.mkdir(root, { recursive: true });
-      await fs.writeFile(
-        path.join(root, "package.json"),
-        JSON.stringify({
-          name: "@openclaw/msteams",
-          version: "2026.9.9",
-          openclaw: { extensions: ["./index.cjs"] },
-        }),
-      );
-      await fs.writeFile(path.join(root, "index.cjs"), "module.exports = {};\n");
-      await fs.writeFile(
-        path.join(root, "openclaw.plugin.json"),
-        JSON.stringify({
-          id: "msteams",
-          channels: ["msteams"],
-          configSchema: { type: "object" },
-          channelConfigs: { msteams: { schema: { type: "object" } } },
-          doctorContract: { configRepair: true },
-        }),
-      );
-      await fs.writeFile(
-        path.join(root, "doctor-contract-api.cjs"),
+      await write(root, "package.json", {
+        name: "@openclaw/msteams",
+        version: "2026.9.9",
+        openclaw: { extensions: ["./index.cjs"] },
+      });
+      await write(root, "index.cjs", "module.exports = {};\n");
+      await write(root, "openclaw.plugin.json", {
+        ...manifest,
+        channelConfigs: { msteams: { schema: { type: "object" } } },
+        doctorContract: { configRepair: true },
+      });
+      await write(
+        root,
+        "doctor-contract-api.cjs",
         "module.exports = { normalizeCompatibilityConfig: ({ cfg }) => ({ config: cfg, changes: [] }) };\n",
       );
       await seedInstalledPluginIndex(

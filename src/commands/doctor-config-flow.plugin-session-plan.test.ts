@@ -39,29 +39,25 @@ it.each([false, true])(
         const markerPath = path.join(stateDir, `${pluginId}-migrated`);
         const action = { id: "session-state", phase: "after-session-repair", doctorOnly: true };
         fs.mkdirSync(root, { recursive: true });
-        fs.writeFileSync(
-          path.join(root, "package.json"),
-          JSON.stringify({
-            name: `@test/${pluginId}`,
-            version: "0.0.0",
-            type: "commonjs",
-            openclaw: { extensions: ["./index.cjs"] },
-          }),
-        );
-        fs.writeFileSync(
-          path.join(root, "openclaw.plugin.json"),
-          JSON.stringify({
-            id: pluginId,
-            configSchema: {},
-            doctorContract: { stateMigrations: [action] },
-          }),
-        );
-        fs.writeFileSync(
-          path.join(root, "index.cjs"),
-          "throw new Error('runtime must stay unloaded');\n",
-        );
-        fs.writeFileSync(
-          path.join(root, "doctor-contract-api.cjs"),
+        const write = (name: string, data: unknown) =>
+          fs.writeFileSync(
+            path.join(root, name),
+            typeof data === "string" ? data : JSON.stringify(data),
+          );
+        write("package.json", {
+          name: `@test/${pluginId}`,
+          version: "0.0.0",
+          type: "commonjs",
+          openclaw: { extensions: ["./index.cjs"] },
+        });
+        write("openclaw.plugin.json", {
+          id: pluginId,
+          configSchema: {},
+          doctorContract: { stateMigrations: [action] },
+        });
+        write("index.cjs", "throw new Error('runtime must stay unloaded');\n");
+        write(
+          "doctor-contract-api.cjs",
           `const fs = require("node:fs");
 module.exports = { stateMigrations: [{
   ...${JSON.stringify(action)}, label: ${JSON.stringify(pluginId)},
