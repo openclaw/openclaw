@@ -11,14 +11,13 @@ const schemaMeta = `CREATE TABLE schema_meta (
 ) STRICT;`;
 
 export async function createFormatFixture(databasePath: string): Promise<void> {
-  const database = new DatabaseSync(databasePath, { allowExtension: true });
+  using database = new DatabaseSync(databasePath, { allowExtension: true });
   const insert = (table: string, ...values: SQLInputValue[]) =>
     database
       .prepare(`INSERT INTO ${table} VALUES (${values.map(() => "?").join(", ")})`)
       .run(...values);
-  try {
-    await loadSqliteVecExtension({ db: database });
-    database.exec(`
+  await loadSqliteVecExtension({ db: database });
+  database.exec(`
       PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};
       ${schemaMeta}
       CREATE TABLE device_auth_tokens (
@@ -48,98 +47,61 @@ export async function createFormatFixture(databasePath: string): Promise<void> {
       CREATE TABLE session_transcript_fts_rows (session_id TEXT NOT NULL, fts_rowid INTEGER PRIMARY KEY);
       INSERT INTO session_transcript_fts_rows VALUES ('main', 99);
     `);
-    insert("schema_meta", "primary", "global", OPENCLAW_STATE_SCHEMA_VERSION, null, null, 1, 1);
-    insert(
-      "content",
-      1,
-      "hello lobster",
-      9_007_199_254_740_993n,
-      Buffer.from([0, 1, 254, 255]),
-      "",
-    );
-    insert("content", 2, "second row", -9_007_199_254_740_994n, Buffer.from([42]), null);
-    insert("session_transcript_index_state", "main", 99);
-    insert("device_auth_tokens", "device", "operator", "secret-token", "[]", 1);
-    insert(
-      "channel_pairing_requests",
-      "telegram",
-      "default",
-      "request",
-      "pairing-code",
-      "now",
-      "now",
-      null,
-    );
-    insert(
-      "device_pairing_join_codes",
-      "join-code",
-      JSON.stringify({ url: "wss://gateway.example", bootstrapToken: "bootstrap-secret" }),
-      1,
-      2,
-    );
-  } finally {
-    database.close();
-  }
+  insert("schema_meta", "primary", "global", OPENCLAW_STATE_SCHEMA_VERSION, null, null, 1, 1);
+  insert("content", 1, "hello lobster", 9_007_199_254_740_993n, Buffer.from([0, 1, 254, 255]), "");
+  insert("content", 2, "second row", -9_007_199_254_740_994n, Buffer.from([42]), null);
+  insert("session_transcript_index_state", "main", 99);
+  insert("device_auth_tokens", "device", "operator", "secret-token", "[]", 1);
+  insert("channel_pairing_requests", "telegram", "default", "r", "code", "now", "now", null);
+  const joinPayload = JSON.stringify({ url: "wss://example.org", bootstrapToken: "secret" });
+  insert("device_pairing_join_codes", "join-code", joinPayload, 1, 2);
 }
 
 export function createCatalogFixture(databasePath: string) {
-  const catalog = {
+  const catalogFor = <T>(fixture: T) => ({
     generatedBy: "openclaw-plugin-model-catalog-v1",
-    providers: {
-      fixture: {
-        api: "openai-completions",
-        apiKey: "provider-secret",
-        headers: { Authorization: "Bearer header-secret" },
-        models: [{ id: "model", apiKey: "model-secret", headers: { "X-Key": "model-key" } }],
-      },
-    },
-  };
-  const malformedHeaders = {
-    generatedBy: "openclaw-plugin-model-catalog-v1",
-    providers: {
-      fixture: {
-        api: "openai-completions",
-        apiKey: { value: "provider-secret" },
-        headers: ["provider-header-secret"],
-        models: [
-          { id: "array-header", headers: { Authorization: ["model-header-secret"] } },
-          { id: "object-header", headers: { Authorization: { token: "model-secret" } } },
-          { id: "string-headers", headers: "model-secret" },
-        ],
-      },
-    },
-  };
+    providers: { fixture },
+  });
+  const catalog = catalogFor({
+    api: "openai-completions",
+    apiKey: "provider-secret",
+    headers: { Authorization: "Bearer header-secret" },
+    models: [{ id: "model", apiKey: "model-secret", headers: { "X-Key": "model-key" } }],
+  });
+  const malformedHeaders = catalogFor({
+    api: "openai-completions",
+    apiKey: { value: "provider-secret" },
+    headers: ["provider-header-secret"],
+    models: [
+      { id: "array-header", headers: { Authorization: ["model-header-secret"] } },
+      { id: "object-header", headers: { Authorization: { token: "model-secret" } } },
+      { id: "string-headers", headers: "model-secret" },
+    ],
+  });
   const unusableCatalogs = [
     '{"apiKey":"malformed-secret"',
-    JSON.stringify({ ...catalog, providers: { fixture: ["provider-secret"] } }),
-    JSON.stringify({
-      ...catalog,
-      providers: { fixture: { models: { Authorization: "model-secret" } } },
-    }),
-    JSON.stringify({ ...catalog, providers: { fixture: { models: ["model-secret"] } } }),
+    JSON.stringify(catalogFor(["provider-secret"])),
+    JSON.stringify(catalogFor({ models: { Authorization: "model-secret" } })),
+    JSON.stringify(catalogFor({ models: ["model-secret"] })),
   ];
   const scopes = ["plugin-model-catalog-v1", "plugin-model-catalog-migration-v1"];
-  const database = new DatabaseSync(databasePath);
-  try {
-    database.exec(`
+  using database = new DatabaseSync(databasePath);
+  database.exec(`
       PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};
       ${schemaMeta}
       INSERT INTO schema_meta VALUES
         ('primary', 'agent', ${OPENCLAW_AGENT_SCHEMA_VERSION}, 'main', NULL, 1, 1);
       CREATE TABLE cache_entries (scope TEXT, key TEXT, value_json TEXT);
     `);
-    const insert = database.prepare("INSERT INTO cache_entries VALUES (?, ?, ?)");
-    for (const scope of scopes) {
-      insert.run(scope, "fixture", JSON.stringify(catalog));
-      insert.run(scope, "malformed-headers", JSON.stringify(malformedHeaders));
-      for (const [index, contents] of unusableCatalogs.entries()) {
-        insert.run(scope, `broken-${index}`, contents);
-      }
+  const insert = database.prepare("INSERT INTO cache_entries VALUES (?, ?, ?)");
+  for (const scope of scopes) {
+    insert.run(scope, "fixture", JSON.stringify(catalog));
+    insert.run(scope, "malformed-headers", JSON.stringify(malformedHeaders));
+    for (const [index, contents] of unusableCatalogs.entries()) {
+      insert.run(scope, `broken-${index}`, contents);
     }
-    insert.run("unrelated-cache", "keep", '{"value":"retained"}');
-  } finally {
-    database.close();
   }
+  insert.run("unrelated-cache", "keep", '{"value":"retained"}');
   return { catalog, malformedHeaders, unusableCatalogs, scopes };
 }
 

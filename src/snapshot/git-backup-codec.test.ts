@@ -1,22 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { SQLInputValue } from "node:sqlite";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { ensureOpenClawAgentSchema } from "../state/openclaw-agent-db-schema.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
 import { dumpGitBackupDatabase, restoreGitBackupDirectory } from "./git-backup-codec.js";
+import { createGlobalDatabase } from "./local-repository.schema.test-support.js";
 import { withDatabase } from "./local-repository.test-support.js";
 
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(() => {
-    closeOpenClawStateDatabaseForTest();
-    cleanup();
-  }),
-);
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let root: string, sourcePath: string, outputPath: string, targetPath: string;
 beforeEach(() => {
   root = tempDirs.make("git-backup-codec-");
@@ -36,8 +29,6 @@ it("restores historical agent data without migration and rejects incompatible ve
   const version = 24;
   const expected = { value: 9_223_372_036_854_775_806n, bytes: "000102FF" };
   withDatabase(sourcePath, (source) => {
-    // Build the complete historical representation through its canonical owner,
-    // rather than relabeling a current schema with an older PRAGMA.
     ensureOpenClawAgentSchema(source, "main", sourcePath, version);
     // Deployed schema-24 backups used this older index order (2026.10.2).
     source.exec(`
@@ -82,13 +73,20 @@ it("restores historical agent data without migration and rejects incompatible ve
 });
 
 it("preserves TEXT, storage classes, key order, quoted DDL, and CASE triggers", async () => {
-  const keys = ["\0leading", "\nline", " space", "shared\0left", "shared\0right", "雪🦀\0尾"];
-  const values = ["text\0suffix", "", null, 9_007_199_254_740_993n, Buffer.from([0, 255]), 1.25];
+  const rows = [
+    ["\0leading", "text\0suffix", "text\0suffix"],
+    ["\nline", "", ""],
+    [" space", null, null],
+    ["shared\0left", 9_007_199_254_740_993n, { $int: "9007199254740993" }],
+    ["shared\0right", Buffer.from([0, 255]), { $hex: "00ff" }],
+    ["雪🦀\0尾", 1.25, 1.25],
+  ] satisfies [string, SQLInputValue, unknown][];
   const byteQuery =
     'SELECT hex("key") AS key, typeof(value) AS type, hex(value) AS bytes FROM text_values ORDER BY "key"';
-  const source = openOpenClawStateDatabase({ path: sourcePath });
-  source.db.exec('CREATE TABLE text_values ("key" TEXT PRIMARY KEY, value ANY) STRICT');
-  source.db.exec(`
+  createGlobalDatabase(sourcePath);
+  const expectedBytes = withDatabase(sourcePath, (source) => {
+    source.exec('CREATE TABLE text_values ("key" TEXT PRIMARY KEY, value ANY) STRICT');
+    source.exec(`
       CREATE TABLE quoted_ddl (
         "double;quote" TEXT PRIMARY KEY DEFAULT 'semi;''colon',
         [bracket;quote] TEXT /* ; not a statement boundary */ DEFAULT 'bracket',
@@ -103,33 +101,26 @@ it("preserves TEXT, storage classes, key order, quoted DDL, and CASE triggers", 
       END;
       INSERT INTO trigger_values VALUES (1);
     `);
-  const insert = source.db.prepare('INSERT INTO text_values ("key", value) VALUES (?, ?)');
-  for (let index = keys.length - 1; index >= 0; index -= 1) {
-    insert.run(keys[index]!, values[index]!);
-  }
-  const expectedBytes = source.db.prepare(byteQuery).all();
-  closeOpenClawStateDatabaseForTest();
+    const insert = source.prepare('INSERT INTO text_values ("key", value) VALUES (?, ?)');
+    for (const [key, value] of rows.toReversed()) {
+      insert.run(key, value);
+    }
+    return source.prepare(byteQuery).all();
+  });
 
   await dump({ role: "global" });
   const content = await fs.readFile(path.join(outputPath, "tables/text_values.jsonl"), "utf8");
-  expect(
-    content
-      .trimEnd()
-      .split("\n")
-      .map((line) => JSON.parse(line)),
-  ).toEqual([
-    { key: keys[0], value: "text\0suffix" },
-    { key: keys[1], value: "" },
-    { key: keys[2], value: null },
-    { key: keys[3], value: { $int: "9007199254740993" } },
-    { key: keys[4], value: { $hex: "00ff" } },
-    { key: keys[5], value: 1.25 },
-  ]);
+  const records = content
+    .trimEnd()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  expect(records).toEqual(rows.map(([key, , value]) => ({ key, value })));
   const restored = await restore({ role: "global" });
   expect(restored.tables.every((table) => table.ok)).toBe(true);
   withDatabase(targetPath, (database) => {
-    expect(database.prepare(byteQuery).all()).toEqual(expectedBytes);
-    expect(database.prepare("SELECT * FROM quoted_ddl").all()).toEqual([
+    const query = (sql: string) => database.prepare(sql).all();
+    expect(query(byteQuery)).toEqual(expectedBytes);
+    expect(query("SELECT * FROM quoted_ddl")).toEqual([
       {
         "double;quote": "semi;'colon",
         "bracket;quote": "bracket",
@@ -137,7 +128,7 @@ it("preserves TEXT, storage classes, key order, quoted DDL, and CASE triggers", 
       },
     ]);
     database.exec("INSERT INTO trigger_values VALUES (1)");
-    expect(database.prepare("SELECT value FROM trigger_values ORDER BY rowid").all()).toEqual([
+    expect(query("SELECT value FROM trigger_values ORDER BY rowid")).toEqual([
       { value: 2 },
       { value: 2 },
     ]);
