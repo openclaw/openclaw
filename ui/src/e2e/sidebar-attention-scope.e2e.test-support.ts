@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { Browser, Page } from "playwright";
+import type { Browser } from "playwright";
 import { expect } from "vitest";
 import type { CronJob } from "../api/types.ts";
 import {

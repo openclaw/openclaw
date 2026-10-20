@@ -468,10 +468,14 @@ describe("chat pane session menu boundary", () => {
     expect(draw(undefined)).toBe("Retained conversation");
     expect(draw(row)).toBe("Retained conversation");
     expect(draw({ ...row, label: "Older scoped label" })).toBe("Retained conversation");
+    expect(container.querySelector("openclaw-chat-header-session-menu")).toBeNull();
+    state.connected = true;
+    expect(draw(row)).toBe("Retained conversation");
     const menu = container.querySelector<HTMLElement & { session: { label: string } }>(
       "openclaw-chat-header-session-menu",
     );
     expect(menu?.session.label).toBe("Retained conversation");
+    state.connected = false;
     pane.history.catalogSession = {
       threadId: "catalog",
       name: "Imported conversation",
