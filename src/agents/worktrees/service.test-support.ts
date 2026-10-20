@@ -14,7 +14,7 @@ import {
   releaseTemplateReaderAsync,
   retainTemplateReaderAsync,
 } from "./template-registry-async.js";
-import type { ManagedWorktreeOwnerKind, ManagedWorktreeRecord } from "./types.js";
+import type { ManagedWorktreeRecord } from "./types.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -79,33 +79,13 @@ export function useManagedWorktreeTestRepository(
   };
 }
 
-async function copyProvisionedFiles(
-  record: ManagedWorktreeRecord,
-  provisionedPaths: readonly string[],
-): Promise<void> {
-  for (const provisionedPath of provisionedPaths) {
-    const source = path.join(record.repoRoot, provisionedPath);
-    const target = path.join(record.path, provisionedPath);
-    const sourceStat = await fs.lstat(source);
-    await fs.mkdir(path.dirname(target), { recursive: true });
-    await fs.copyFile(source, target, fsConstants.COPYFILE_FICLONE);
-    if (process.platform !== "win32") {
-      await fs.chmod(target, sourceStat.mode & 0o7777);
-    }
-  }
-}
-
-type ManagedWorktreeFixtureParams = {
-  env: NodeJS.ProcessEnv;
-  name: string;
-  now: number;
-  ownerKind?: ManagedWorktreeOwnerKind;
-  ownerId?: string;
-  provisionedPaths?: readonly string[];
-  repoFingerprint?: string;
-  repoRoot: string;
-  stateDir: string;
-};
+type ManagedWorktreeFixtureParams = Pick<ManagedWorktreeRecord, "name" | "repoRoot"> &
+  Partial<Pick<ManagedWorktreeRecord, "ownerKind" | "ownerId" | "repoFingerprint">> & {
+    env: NodeJS.ProcessEnv;
+    now: number;
+    provisionedPaths?: readonly string[];
+    stateDir: string;
+  };
 
 export async function materializeManagedWorktreeFixtures(
   params: Omit<ManagedWorktreeFixtureParams, "name"> & { names: string[] },
@@ -157,7 +137,16 @@ export async function materializeManagedWorktreeFixtures(
   }
   const provisionedPaths = params.provisionedPaths ?? [];
   for (const record of records) {
-    await copyProvisionedFiles(record, provisionedPaths);
+    for (const provisionedPath of provisionedPaths) {
+      const source = path.join(record.repoRoot, provisionedPath);
+      const target = path.join(record.path, provisionedPath);
+      const sourceStat = await fs.lstat(source);
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      await fs.copyFile(source, target, fsConstants.COPYFILE_FICLONE);
+      if (process.platform !== "win32") {
+        await fs.chmod(target, sourceStat.mode & 0o7777);
+      }
+    }
   }
   for (const record of records) {
     await insertRegistryWorktree(params.env, record, { provisionedPaths });
@@ -172,18 +161,13 @@ export async function ageManagedWorktreeTemplates(
   for (const template of await listTemplatesAsync(env)) {
     await withWorktreeMutationLease({ env, id: `template:${template.cacheKey}` }, async (guard) => {
       const key = `age-template:${template.id}`;
-      assert(
-        await retainTemplateReaderAsync(
-          env,
-          {
-            id: template.id,
-            key,
-            owner: { pid: process.pid, host: hostname(), startedAt: null },
-            unpublish: true,
-          },
-          guard.commitGuard,
-        ),
-      );
+      const reader = {
+        id: template.id,
+        key,
+        owner: { pid: process.pid, host: hostname(), startedAt: null },
+        unpublish: true,
+      } satisfies Parameters<typeof retainTemplateReaderAsync>[1];
+      assert(await retainTemplateReaderAsync(env, reader, guard.commitGuard));
       try {
         assert(await markTemplateReadyAsync(env, template.id, lastUsedAt, guard.commitGuard));
       } finally {

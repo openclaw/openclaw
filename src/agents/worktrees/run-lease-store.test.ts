@@ -1,6 +1,5 @@
 import fs from "node:fs";
-import { afterEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { expect, it, vi } from "vitest";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -15,12 +14,9 @@ import {
   releaseWorktreeRunLeaseRowAsync,
 } from "./run-lease-store.js";
 import { makeWorktreeRecord } from "./service.test-support.js";
+import { useWorktreeStateRoots } from "./state-fixture.test-support.js";
 
-const dirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(async () => {
-  vi.restoreAllMocks();
-  await closeOpenClawStateDatabaseAsync();
-});
+const dirs = useWorktreeStateRoots();
 
 it("settles exact lease deletions without host SQL or fsync and refuses a retired store", async () => {
   const env = { ...process.env, OPENCLAW_STATE_DIR: dirs.make("worktree-release-worker-") };
@@ -40,13 +36,16 @@ it("settles exact lease deletions without host SQL or fsync and refuses a retire
     { database, env },
   );
   const context = captureOpenClawStateWorkerContext({ env });
+  const release = (token: string) =>
+    releaseWorktreeRunLeaseRowAsync(env, "synthetic", token, context);
   const deleted: string[] = [];
   const unsubscribe = worktreeRegistryPublication.subscribeFacts((change) => {
-    if (change.kind === "committed") {
-      for (const [key, fact] of change.receipt.facts) {
-        if (fact.kind === "absent") {
-          deleted.push(key);
-        }
+    if (change.kind !== "committed") {
+      return;
+    }
+    for (const [key, fact] of change.receipt.facts) {
+      if (fact.kind === "absent") {
+        deleted.push(key);
       }
     }
   });
@@ -54,7 +53,7 @@ it("settles exact lease deletions without host SQL or fsync and refuses a retire
   const sync = vi.spyOn(fs, "fsyncSync");
   try {
     for (let index = 0; index < 99; index++) {
-      await releaseWorktreeRunLeaseRowAsync(env, "synthetic", `run-${index}`, context);
+      await release(`run-${index}`);
     }
     sql.expectIdle();
     expect(sync).not.toHaveBeenCalled();
@@ -73,36 +72,27 @@ it("settles exact lease deletions without host SQL or fsync and refuses a retire
   } finally {
     unsubscribe();
   }
-  expect(
-    database.db
-      .prepare("SELECT scope, lease_key FROM state_leases ORDER BY scope, lease_key")
-      .all(),
-  ).toEqual([
+  const remaining = database.db.prepare(
+    "SELECT scope, lease_key FROM state_leases ORDER BY scope, lease_key",
+  );
+  expect(remaining.all()).toEqual([
     { scope: "worktree-run:other", lease_key: "run-0" },
     { scope: "worktree-run:synthetic", lease_key: "successor" },
   ]);
   await closeOpenClawStateDatabaseAsync();
-  await expect(
-    releaseWorktreeRunLeaseRowAsync(env, "synthetic", "successor", context),
-  ).rejects.toThrow();
+  await expect(release("successor")).rejects.toThrow();
   const settlement = vi.fn();
-  await expect(
-    admitWorktreeRunLeaseRowAsync(
-      context,
-      {
-        worktreeId: "synthetic",
-        token: "retired-admission",
-        pid: process.pid,
-        startTime: null,
-        now: 1,
-      },
-      settlement,
-    ),
-  ).rejects.toThrow();
+  const retired = {
+    worktreeId: "synthetic",
+    token: "retired-admission",
+    pid: process.pid,
+    startTime: null,
+    now: 1,
+  };
+  await expect(admitWorktreeRunLeaseRowAsync(context, retired, settlement)).rejects.toThrow();
   expect(settlement).toHaveBeenCalledExactlyOnceWith("not-entered");
-  expect(
-    openOpenClawStateDatabase({ env })
-      .db.prepare("SELECT COUNT(*) AS count FROM state_leases")
-      .get(),
-  ).toMatchObject({ count: 2 });
+  const reopened = openOpenClawStateDatabase({ env }).db;
+  expect(reopened.prepare("SELECT COUNT(*) AS count FROM state_leases").get()).toMatchObject({
+    count: 2,
+  });
 });

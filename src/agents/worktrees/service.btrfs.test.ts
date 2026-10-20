@@ -1,13 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { addManagedWorktree } from "./checkout.js";
 import { detectWorktreeFilesystemBackend } from "./filesystem-backend.js";
 import { createCopyWorktreeBackend } from "./filesystem-backend.test-support.js";
 import { ManagedWorktreeService } from "./service.js";
 import { git, useManagedWorktreeTestRepository } from "./service.test-support.js";
+import { useWorktreeStateRoots } from "./state-fixture.test-support.js";
 import { listTemplatesAsync } from "./template-registry-async.js";
 
 // mock-isolation: exercise Btrfs selection on every host without native filesystem probes.
@@ -15,14 +14,7 @@ vi.mock("./filesystem-backend.js", () => ({ detectWorktreeFilesystemBackend: vi.
 
 describe("managed Btrfs checkout selection", () => {
   const initializeRepository = useManagedWorktreeTestRepository();
-  const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-    afterEach(async () => {
-      vi.restoreAllMocks();
-      vi.unstubAllEnvs();
-      await closeStateDatabaseForTest();
-      cleanup();
-    }),
-  );
+  const tempDirs = useWorktreeStateRoots();
   let root: string;
   let repo: string;
   let env: NodeJS.ProcessEnv;

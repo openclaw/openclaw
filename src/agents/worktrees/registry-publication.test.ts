@@ -1,8 +1,6 @@
-import { afterEach, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { expect, it } from "vitest";
 import { deferSqlitePostCommitPublication } from "../../infra/sqlite-post-commit.js";
 import {
-  closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
@@ -13,9 +11,9 @@ import {
   type WorktreeRegistryPatch,
 } from "./registry-run-end.worker.js";
 import { makeWorktreeRecord } from "./service.test-support.js";
+import { useWorktreeStateRoots } from "./state-fixture.test-support.js";
 
-const dirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => closeOpenClawStateDatabaseAsync());
+const dirs = useWorktreeStateRoots();
 
 it("installs the whole committed registry batch before observers and discards savepoint/outer rollback", () => {
   const env = { ...process.env, OPENCLAW_STATE_DIR: dirs.make("worktree-publication-") };
@@ -41,17 +39,19 @@ it("installs the whole committed registry batch before observers and discards sa
   const expectFact = (value: object) =>
     expect(installed.get(keys[0]!)).toMatchObject({ kind: "postimage", value });
   const keys = ["first", "second"].map((id) => JSON.stringify(["worktrees", id]));
+  const rollback = (message: string, patch: WorktreeRegistryPatch) =>
+    expect(() =>
+      write(() => {
+        update(patch);
+        observe();
+        throw new Error(message);
+      }),
+    ).toThrow(message);
   try {
     write(() => {
       insertRegistryWorktreeInDatabase(database.db, { record });
       observe();
-      expect(() =>
-        write(() => {
-          update({ lastActiveAt: 2 });
-          observe();
-          throw new Error("rollback savepoint");
-        }),
-      ).toThrow("rollback savepoint");
+      rollback("rollback savepoint", { lastActiveAt: 2 });
       insertRegistryWorktreeInDatabase(database.db, {
         record: {
           ...record,
@@ -66,13 +66,7 @@ it("installs the whole committed registry batch before observers and discards sa
     });
     expect(observed).toEqual([keys, keys]);
     expectFact({ last_active_at: 1 });
-    expect(() =>
-      write(() => {
-        update({ removedAt: 3 });
-        observe();
-        throw new Error("rollback outer");
-      }),
-    ).toThrow("rollback outer");
+    rollback("rollback outer", { removedAt: 3 });
     expect(observed).toHaveLength(2);
     expectFact({ removed_at: null });
     installed.clear();
