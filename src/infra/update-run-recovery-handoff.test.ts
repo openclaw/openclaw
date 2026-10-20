@@ -60,6 +60,11 @@ function shape(pathname: string) {
         .prepare("SELECT type,name,tbl_name,sql FROM sqlite_schema ORDER BY type,name")
         .all(),
       metadata: db.prepare("SELECT * FROM schema_meta ORDER BY meta_key").all(),
+      recovery: db
+        .prepare(
+          "SELECT value_json FROM config_machine_state WHERE state_key LIKE 'update.recovery.%'",
+        )
+        .get(),
     };
   } finally {
     db.close();
@@ -109,19 +114,8 @@ it.each(["future", "metadata", "trigger"])(
     const before = shape(f.pathname);
     expect(() => probeExistingWriter(f)).toThrow();
     expect(shape(f.pathname)).toEqual(before);
-    const read = openNodeSqliteDatabase(f.pathname, { readOnly: true });
-    try {
-      const row = read
-        .prepare(
-          "SELECT value_json FROM config_machine_state WHERE state_key LIKE 'update.recovery.%'",
-        )
-        .get();
-      // Match the exact retained row without opening it through a schema-mutating runtime.
-      expect(row).toBeDefined();
-      expect(JSON.parse(String(row?.value_json))).toEqual(f.record);
-    } finally {
-      read.close();
-    }
+    expect(before.recovery).toBeDefined();
+    expect(JSON.parse(String(before.recovery?.value_json))).toEqual(f.record);
   },
 );
 

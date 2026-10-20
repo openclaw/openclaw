@@ -15,12 +15,33 @@ import { renderUpdateRunReport } from "./update-run-report.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeOpenClawStateDatabaseForTest());
+function fixture(busyTimeoutMs?: number, trigger: "cli" | "api" = "cli") {
+  const options = { env: { OPENCLAW_STATE_DIR: dirs.make("update-diagnostics-") }, busyTimeoutMs };
+  return { options, run: createUpdateRun({ trigger }, options) };
+}
+const recovery = { serviceRestartSafe: false, reason: "runtime-verification-failed" } as const;
+const healthy = {
+  serviceRunning: true,
+  runningVersion: "2026.9.5",
+  versionMatch: true,
+  readyz: true,
+  settled: true,
+};
+const observation = (exitCode: number | null) => ({
+  name: "gateway recovery verification",
+  command: "verify",
+  cwd: "",
+  durationMs: 0,
+  exitCode,
+});
+function unexpected() {
+  throw new Error("diagnostics were not recorded");
+}
 
 it.each(["failed", "succeeded", "skipped", "rolled-back"] as const)(
   "enriches only failed terminal diagnostics without replacing the %s outcome",
   (status) => {
-    const options = { env: { OPENCLAW_STATE_DIR: dirs.make("update-late-failure-") } };
-    const run = createUpdateRun({ trigger: "api" }, options);
+    const { options, run } = fixture(undefined, "api");
     const original = { check: "managed-service", code: "EACCES", message: "Permission denied" };
     const late = { check: "managed-service", code: "handoff-permission-denied" };
     recordUpdateRunStep(
@@ -46,9 +67,7 @@ it.each(["failed", "succeeded", "skipped", "rolled-back"] as const)(
             failureFacts: [original, late],
           },
         },
-        () => {
-          throw new Error("diagnostics were not recorded");
-        },
+        unexpected,
         options,
       );
     const recorded = append();
@@ -68,38 +87,19 @@ it.each(["failed", "succeeded", "skipped", "rolled-back"] as const)(
 );
 
 it("records serving health without replacing a persisted restart refusal", () => {
-  const options = { env: { OPENCLAW_STATE_DIR: dirs.make("update-unsafe-observation-") } };
-  const run = createUpdateRun({ trigger: "cli" }, options);
-  const recovery = { serviceRestartSafe: false, reason: "runtime-verification-failed" } as const;
+  const { options, run } = fixture();
   recordUpdateRunVerification(run.runId, { recovery }, options);
-  const verification = {
-    serviceRunning: true,
-    runningVersion: "2026.9.5",
-    versionMatch: true,
-    readyz: true,
-    settled: true,
-  };
   const recorded = recordUpdateRunDiagnostics(
     run.runId,
     {
       recovery: { serviceRestartSafe: true, version: "2026.9.5", service: "healthy" },
-      verification,
-      steps: [
-        {
-          name: "gateway recovery verification",
-          command: "verify",
-          cwd: "",
-          durationMs: 0,
-          exitCode: 0,
-        },
-      ],
+      verification: healthy,
+      steps: [observation(0)],
     },
-    () => {
-      throw new Error("observation was not recorded");
-    },
+    unexpected,
     options,
   );
-  expect(recorded?.verification).toEqual({ ...verification, recovery });
+  expect(recorded?.verification).toEqual({ ...healthy, recovery });
   expect(renderUpdateRunReport(recorded!).markdown).toContain(
     "Recorded recovery: verified serving 2026.9.5; restart remains unsafe (runtime-verification-failed)",
   );
@@ -108,40 +108,36 @@ it("records serving health without replacing a persisted restart refusal", () =>
 it.each([undefined, "active-mutation"] as const)(
   "preserves named data risk over an older refusal (%s) and healthy observation",
   (existingRisk) => {
-    const options = { env: { OPENCLAW_STATE_DIR: dirs.make("update-data-risk-") } };
-    const run = createUpdateRun({ trigger: "cli" }, options);
+    const { options, run } = fixture();
     recordUpdateRunVerification(
       run.runId,
       {
         recovery: {
-          serviceRestartSafe: false,
-          reason: "runtime-verification-failed",
+          ...recovery,
           ...(existingRisk ? { dataAtRisk: existingRisk } : {}),
         },
       },
       options,
     );
-    const recovery = {
-      serviceRestartSafe: false,
-      reason: "runtime-verification-failed",
+    const incoming = {
+      ...recovery,
       dataAtRisk: "unreadable-state",
     } as const;
     recordUpdateRunDiagnostics(
       run.runId,
-      { recovery, verification: { serviceRunning: true, readyz: true } },
+      { recovery: incoming, verification: { serviceRunning: true, readyz: true } },
       () => {},
       options,
     );
     expect(getUpdateRun(run.runId, options)?.verification.recovery).toEqual({
-      ...recovery,
-      dataAtRisk: existingRisk ?? recovery.dataAtRisk,
+      ...incoming,
+      dataAtRisk: existingRisk ?? incoming.dataAtRisk,
     });
   },
 );
 
 it("keeps the first terminal receipt when a stale publisher carries success verification", () => {
-  const options = { env: { OPENCLAW_STATE_DIR: dirs.make("update-terminal-diagnostics-") } };
-  const run = createUpdateRun({ trigger: "cli" }, options);
+  const { options, run } = fixture();
   const terminal = finishUpdateRun(
     run.runId,
     {
@@ -169,22 +165,16 @@ it("keeps the first terminal receipt when a stale publisher carries success veri
 });
 
 it("keeps recovery observations atomic across a busy write without revising the failed outcome", () => {
-  const env = { OPENCLAW_STATE_DIR: dirs.make("update-observation-atomic-") };
-  const options = { env, busyTimeoutMs: 0 };
-  const run = createUpdateRun({ trigger: "cli" }, options);
+  const { options, run } = fixture(0);
   recordUpdateRunVerification(
     run.runId,
     {
       booted: true,
       noticeDelivered: true,
       doctorHint: "run doctor",
-      serviceRunning: true,
+      ...healthy,
       channelsReady: true,
       pluginErrors: [],
-      runningVersion: "2026.9.5",
-      versionMatch: true,
-      readyz: true,
-      settled: true,
       recovery: { serviceRestartSafe: false, reason: "state-migration-started" },
     },
     options,
@@ -206,11 +196,8 @@ it("keeps recovery observations atomic across a busy write without revising the 
         verification: { readyz: false, settled: false },
         steps: [
           {
-            name: "gateway recovery verification",
+            ...observation(null),
             command: "gateway verification",
-            cwd: "",
-            durationMs: 0,
-            exitCode: null,
             advisory: { kind: "recoverable-maintenance", message: "Gateway readiness is pending" },
           },
         ],
@@ -218,7 +205,7 @@ it("keeps recovery observations atomic across a busy write without revising the 
       warn,
       options,
     );
-  const writer = new DatabaseSync(resolveOpenClawStateSqlitePath(env));
+  const writer = new DatabaseSync(resolveOpenClawStateSqlitePath(options.env));
   try {
     writer.exec("BEGIN IMMEDIATE");
     recordPending();

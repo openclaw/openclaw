@@ -50,10 +50,7 @@ it.each([
   for (const receipt of updateRunStepsFromResultStep(step)) {
     recordUpdateRunStep(run.runId, { ...receipt, endedAtMs: 2 }, options);
   }
-  const recorded = getUpdateRun(run.runId, options);
-  if (!recorded) {
-    throw new Error("Missing recorded update run");
-  }
+  const recorded = getUpdateRun(run.runId, options)!;
   const decoded = releasedSteps.parse(recorded.steps);
   expect(decoded).toEqual([
     ...releasedSteps.parse(run.steps),
@@ -75,15 +72,10 @@ it.each([
   };
   const sentinel = buildUpdateRestartSentinelPayload({ result, meta: {} });
   expect(sentinel.stats?.steps?.map((entry) => entry.name)).toEqual([releasedName]);
+  const failed = decoded.filter((entry) => entry.status === "failed");
+  const measured = sentinel.stats?.steps?.filter((entry) => !entry.advisory);
   expect(
-    decoded
-      .filter((entry) => entry.status === "failed")
-      .map(
-        (entry) =>
-          sentinel.stats?.steps?.find(
-            (measured) => !measured.advisory && measured.name === entry.step,
-          )?.log?.exitCode,
-      ),
+    failed.map((entry) => measured?.find((item) => item.name === entry.step)?.log?.exitCode),
   ).toEqual([0]);
   const report = await prepareUpdateFailureReport(
     { attemptId: run.runId, result, recordedRun: recorded },

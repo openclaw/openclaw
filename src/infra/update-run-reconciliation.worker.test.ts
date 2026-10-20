@@ -73,6 +73,24 @@ async function expiredLegacyRun() {
   return { options, run };
 }
 
+async function deadDriverRun() {
+  const options = { env: { OPENCLAW_STATE_DIR: tempDirs.make("update-dead-driver-") } };
+  const driver = readUpdateRunDriver();
+  if (!driver) {
+    throw new Error("The fixture requires process start identity");
+  }
+  const run = createUpdateRun(
+    {
+      trigger: "cli",
+      origin: { driver: { ...driver, startIdentity: String(Number(driver.startIdentity) + 1) } },
+    },
+    options,
+  );
+  const recorded = recordUpdateRunPhase(run.runId, "activating", {}, options);
+  await closeOpenClawStateDatabaseAsync();
+  return { options, driver, run, recorded };
+}
+
 describe("update run reconciliation workers", () => {
   it("releases the live ledger when admission has no prior runs to reconcile", async () => {
     const state = tempDirs.make("update-empty-reconciliation-");
@@ -95,20 +113,7 @@ describe("update run reconciliation workers", () => {
   });
 
   it("preserves an owner that adopts dead-driver work before reconciliation commits", async () => {
-    const options = { env: { OPENCLAW_STATE_DIR: tempDirs.make("update-settling-owner-") } };
-    const driver = readUpdateRunDriver();
-    if (!driver) {
-      throw new Error("The fixture requires process start identity");
-    }
-    const run = createUpdateRun(
-      {
-        trigger: "cli",
-        origin: { driver: { ...driver, startIdentity: String(Number(driver.startIdentity) + 1) } },
-      },
-      options,
-    );
-    recordUpdateRunPhase(run.runId, "activating", {}, options);
-    await closeOpenClawStateDatabaseAsync();
+    const { options, driver, run } = await deadDriverRun();
     let adopted: ReturnType<typeof adoptUpdateRun> | undefined;
     admission.created = () => {
       admission.created = undefined;
@@ -120,22 +125,8 @@ describe("update run reconciliation workers", () => {
   });
 
   it("status projects recent driver loss until explicit reconciliation", async () => {
-    const state = tempDirs.make("update-driver-loss-");
-    const options = { env: { OPENCLAW_STATE_DIR: state } };
-    const driver = readUpdateRunDriver();
-    if (!driver) {
-      throw new Error("The fixture requires process start identity");
-    }
-    const run = createUpdateRun(
-      {
-        trigger: "cli",
-        origin: { driver: { ...driver, startIdentity: String(Number(driver.startIdentity) + 1) } },
-      },
-      options,
-    );
-    const recorded = recordUpdateRunPhase(run.runId, "activating", {}, options);
-    await closeOpenClawStateDatabaseAsync();
-    vi.stubEnv("OPENCLAW_STATE_DIR", state);
+    const { options, run, recorded } = await deadDriverRun();
+    vi.stubEnv("OPENCLAW_STATE_DIR", options.env.OPENCLAW_STATE_DIR);
     try {
       expect(await readUpdateRunStatus()).toMatchObject({
         activeRun: { runId: run.runId, status: "running", phase: "activating" },

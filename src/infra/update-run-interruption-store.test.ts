@@ -35,20 +35,15 @@ it("publishes interrupted cleanup through workers only against its captured run 
   const driver = { ...ownDriver, startIdentity: ownDriver.startIdentity === "0" ? "1" : "0" };
   expect(inspectUpdateRunDriver(driver)).toBe("dead");
   const run = createUpdateRun({ trigger: "cli", origin: { driver } }, options);
-  recordUpdateRunStep(
-    run.runId,
+  for (const step of [
     {
       step: "finalize:installed-candidate",
-      status: "completed",
       detail: JSON.stringify({ version: "2026.9.4", buildId: "worker-candidate" }),
     },
-    options,
-  );
-  recordUpdateRunStep(
-    run.runId,
-    { step: "post-update verification", status: "completed" },
-    options,
-  );
+    { step: "post-update verification" },
+  ]) {
+    recordUpdateRunStep(run.runId, { ...step, status: "completed" }, options);
+  }
   recordUpdateRunPhase(run.runId, "verifying", {}, options);
   const read = () =>
     withArtifactPreservingStateReads(() =>
@@ -72,16 +67,19 @@ it("publishes interrupted cleanup through workers only against its captured run 
         ),
       },
     );
+  const requireRun = (result: Awaited<ReturnType<typeof publish>>) => {
+    if (!result?.run) {
+      throw new Error("The write worker did not publish the observation");
+    }
+    return result.run;
+  };
   const pending = await publish({
     expected: snapshot.run,
     detail: "Timeout; cleanup pending",
     cleanup: "pending",
   });
   expect(pending).toMatchObject({ accepted: true, run: { status: "running" } });
-  const captured = pending?.run;
-  if (!captured) {
-    throw new Error("The write worker did not publish the pending observation");
-  }
+  const captured = requireRun(pending);
   const failed = await publish({
     expected: captured,
     detail: "Timeout; cleanup failed",
@@ -102,10 +100,7 @@ it("publishes interrupted cleanup through workers only against its captured run 
       ]),
     },
   });
-  const expected = failed?.run;
-  if (!expected) {
-    throw new Error("The write worker did not publish cleanup uncertainty");
-  }
+  const expected = requireRun(failed);
   recordUpdateRunStep(
     run.runId,
     { step: "warning:fixture:new-owner", status: "completed" },
