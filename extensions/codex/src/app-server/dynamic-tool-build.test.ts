@@ -754,7 +754,7 @@ it("exposes pinned node shell tools for node-targeted Codex app-server runs", as
   };
   vi.mocked(execTool.execute).mockResolvedValueOnce({
     content: textContent(
-      "Command still running (session exec-1, pid 123). Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.",
+      "Command still running (session exec-1, pid 123). Running means the process was started and was alive when this result was written; it says nothing about progress, waiting for input, or a later exit or failure. Do not report progress from this result alone. Completion will wake this conversation automatically. The completion turn may not be allowed to message the user, so if only waiting remains, report that the job is running without promising to report back and end this turn; do not keep polling. Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.",
       "text",
     ),
     details: { status: "running" },
@@ -814,7 +814,7 @@ it("exposes pinned node shell tools for node-targeted Codex app-server runs", as
   );
   expect(result?.content).toEqual(
     textContent(
-      "Command still running (session exec-1, pid 123). Remote-node background follow-up is unavailable. Wait for the command to complete.",
+      "Command still running (session exec-1, pid 123). Running means the process was started and was alive when this result was written; it says nothing about progress, waiting for input, or a later exit or failure. Do not report progress from this result alone. Completion will wake this conversation automatically. The completion turn may not be allowed to message the user, so if only waiting remains, report that the job is running without promising to report back and end this turn; do not keep polling. Remote-node background follow-up is unavailable. Wait for the command to complete.",
       "text",
     ),
   );

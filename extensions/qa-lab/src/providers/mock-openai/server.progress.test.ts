@@ -21,7 +21,7 @@ const EXEC_PROMPT =
 const ERROR_PROMPT =
   "Tool progress error QA check: read `denied.txt` before answering. After the read fails, reply exactly `PROGRESS_OK`.";
 const RUNNING_OUTPUT =
-  "Command still running (session lucky-slug, pid 3128). Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.";
+  "Command still running (session lucky-slug, pid 3128). Running means the process was started and was alive when this result was written; it says nothing about progress, waiting for input, or a later exit or failure. Do not report progress from this result alone. Completion will wake this conversation automatically. The completion turn may not be allowed to message the user, so if only waiting remains, report that the job is running without promising to report back and end this turn; do not keep polling. Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.";
 
 const APPROVAL_OUTPUT =
   "Approval required (id abc123, full abc12345).\nHost: gateway\nCWD: /workspace\nCommand:\n```sh\ntrue\n```\nMode: foreground (interactive approvals available).\nBackground mode requires pre-approved policy (allow-always or ask=off).\nReply with: /approve abc123 allow-once|allow-always|deny\nIf the short code is ambiguous, use the full id in /approve.";

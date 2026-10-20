@@ -170,6 +170,40 @@ it.each([
   }
 });
 
+it("keeps the running caution while rewriting sandbox process follow-up", async () => {
+  // The sandbox alias rewrites only the trailing follow-up sentence by exact
+  // literal, so the shared caution before it must survive unchanged.
+  const guidance =
+    "Running means the process was started and was alive when this result was written; it says nothing about progress, waiting for input, or a later exit or failure. Do not report progress from this result alone. Completion will wake this conversation automatically. The completion turn may not be allowed to message the user, so if only waiting remains, report that the job is running without promising to report back and end this turn; do not keep polling.";
+  const execTool = createRuntimeDynamicTool("exec");
+  vi.mocked(execTool.execute).mockResolvedValueOnce({
+    content: [
+      {
+        type: "text",
+        text: `Command still running (session exec-1, pid 123). ${guidance} Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.`,
+      },
+    ],
+    details: { status: "running" },
+  });
+  setCodexTestToolFactory(params, () => [
+    execTool,
+    createRuntimeDynamicTool("process"),
+    createRuntimeDynamicTool("message"),
+  ]);
+  const tools = await buildTools({ sandbox: { enabled: true, backendId: "ssh" } as never });
+  const result = await toolNamed(tools, "sandbox_exec").execute(
+    "call-1",
+    { command: "sleep 1" },
+    undefined,
+  );
+  expect(result.content).toEqual([
+    {
+      type: "text",
+      text: `Command still running (session exec-1, pid 123). ${guidance} Use sandbox_process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.`,
+    },
+  ]);
+});
+
 it("preserves completion-only sandbox exec when policy denies process", async () => {
   const buildExecSpec = vi.fn(async () => ({
     // A synthetic backend transport proves dispatch without Docker or SSH access.

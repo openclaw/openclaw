@@ -301,6 +301,64 @@ test.for(["ordinary", "live cron", "queued cron", "ended cron", "cron ended duri
   },
 );
 
+const RUNNING_CAUTION =
+  "Running means the process was started and was alive when this result was written; it says nothing about progress, waiting for input, or a later exit or failure. Do not report progress from this result alone.";
+const UNDELIVERABLE_WAKE = "The completion turn may not be allowed to message the user";
+const PROMISE_CAUTION =
+  "do not promise the user updates unless you poll this session until it finishes and report the outcome yourself.";
+
+test.for([
+  { mode: "wake on every exit", notifyOnExit: true, notifyOnExitEmptySuccess: true },
+  { mode: "silent empty success", notifyOnExit: true, notifyOnExitEmptySuccess: false },
+  { mode: "no wake", notifyOnExit: false, notifyOnExitEmptySuccess: false },
+])(
+  "warns what a running result proves and that a wake may not reach the user: $mode",
+  async ({ mode, notifyOnExit, notifyOnExitEmptySuccess }, { signal }) => {
+    const sessionKey = `agent:main:running-caution-${mode.replaceAll(" ", "-")}`;
+    await seedOrigin(sessionKey);
+    const exec = backgroundExec(sessionKey, {
+      agentId: "main",
+      notifyOnExit,
+      notifyOnExitEmptySuccess,
+    });
+    const started = await exec.execute("running-caution", {
+      command: nodeCommand('process.stdout.write("EXEC_STARTED")'),
+      background: true,
+    });
+    const handle = runningSession(started.details);
+    const followUp = expectDefined(handle.followUp, "background continuation guidance");
+    // A live session proves neither progress nor a later report; the model
+    // must read that before it relays "running" or promises to report back.
+    expect(started.content).toContainEqual({
+      type: "text",
+      text: expect.stringContaining(`${RUNNING_CAUTION} ${followUp}`),
+    });
+    // A wake may land in a turn that cannot message the user. The default
+    // chat-channel mode tells the model to stop polling, so it must drop the
+    // promise instead of being told to poll for it.
+    expect(followUp.includes(UNDELIVERABLE_WAKE)).toBe(notifyOnExit);
+    expect(followUp.includes("without promising to report back")).toBe(
+      notifyOnExit && notifyOnExitEmptySuccess,
+    );
+    expect(followUp.includes(PROMISE_CAUTION)).toBe(!(notifyOnExit && notifyOnExitEmptySuccess));
+    expect(followUp.includes("Automatic completion wake is disabled")).toBe(!notifyOnExit);
+    await withinTest(waitForExecScope(sessionKey), signal);
+    if (notifyOnExit) {
+      await completion(signal);
+    }
+    expect(receipts).toHaveLength(notifyOnExit ? 1 : 0);
+    expectCompleted(
+      (
+        await createProcessTool({ scopeKey: sessionKey }).execute("collect", {
+          action: "poll",
+          sessionId: handle.sessionId,
+        })
+      ).details,
+      "EXEC_STARTED",
+    );
+  },
+);
+
 test("starts and notifies when identity enrichment fails, then resolves child identity again", async ({
   signal,
 }) => {
