@@ -1,5 +1,6 @@
 import { channel } from "node:diagnostics_channel";
 import {
+  constants,
   createHistogram,
   monitorEventLoopDelay,
   performance,
@@ -215,10 +216,24 @@ export function startGatewayBenchDiagnostics() {
     return () => source.unsubscribe(listener);
   });
   const gc: Record<string, Metric> = {};
-  const collectGc = (entries: readonly { startTime: number; duration: number }[]) => {
+  const collectGc = (
+    entries: readonly { startTime: number; duration: number; detail?: unknown }[],
+  ) => {
     for (const entry of entries) {
       if (entry.startTime >= startedAt) {
         add(gc, "durationMs", entry.duration);
+        const kind = isRecord(entry.detail) ? entry.detail.kind : undefined;
+        const name =
+          kind === constants.NODE_PERFORMANCE_GC_MAJOR
+            ? "major"
+            : kind === constants.NODE_PERFORMANCE_GC_MINOR
+              ? "minor"
+              : kind === constants.NODE_PERFORMANCE_GC_INCREMENTAL
+                ? "incremental"
+                : kind === constants.NODE_PERFORMANCE_GC_WEAKCB
+                  ? "weakCallback"
+                  : "unknown";
+        add(gc, `${name}DurationMs`, entry.duration);
       }
     }
   };
