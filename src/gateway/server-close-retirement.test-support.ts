@@ -152,9 +152,7 @@ export function registerGatewayResourceRetirementTests(
       const resolveGatewayContext = () => undefined;
       const cleanupError = new Error("queued engine disposal failed");
       const failure = retained ? new PluginRuntimeCloseRetainedError(cleanupError) : cleanupError;
-      const onRemoved = vi.fn(async () => {
-        throw failure;
-      });
+      const onRemoved = vi.fn(() => Promise.reject(failure));
       enqueueSwarmRun({
         groupId: `failed-queued-cleanup-${ownership}`,
         runId: `failed-queued-${ownership}`,
