@@ -682,7 +682,7 @@ export function applyConfiguredProviderOverrides(params: {
             ),
             metadataOverrideModel?.mediaInput,
           ),
-        } as Model,
+        } as Model, // SAFETY: Runtime models allow an omitted unknown output cap.
         providerRequest,
       ),
       providerConfig.localService,
