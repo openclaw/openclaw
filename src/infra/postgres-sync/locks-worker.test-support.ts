@@ -29,11 +29,9 @@ if (!parentPort) {
 }
 const port = parentPort;
 const gates = new Int32Array(input.gates);
-function wait(index: number, enabled = true) {
-  if (!enabled) {
-    return;
-  }
-  while (Atomics.load(gates, index) === 0) {
+const held = [true, input.holdAdmission, input.holdStatement, input.holdRead];
+function wait(index: number) {
+  while (held[index] && Atomics.load(gates, index) === 0) {
     Atomics.wait(gates, index, 0);
   }
 }
@@ -50,11 +48,11 @@ try {
     const before = token();
     const statement = () => {
       post("statement");
-      wait(2, input.holdStatement ?? false);
+      wait(2);
       if (input.mode === "deferred") {
         const value = Number(db.prepare("SELECT value FROM counter").get()!.value);
         post("read", { value });
-        wait(3, input.holdRead ?? false);
+        wait(3);
         return db.prepare("UPDATE counter SET value = ?").run(value + 1);
       }
       return db.prepare("INSERT INTO events (id) VALUES (?)").run(input.id);
@@ -72,7 +70,7 @@ try {
           admit(stage) {
             if (stage === "transaction") {
               post("admission");
-              wait(1, input.holdAdmission ?? false);
+              wait(1);
             }
           },
         },

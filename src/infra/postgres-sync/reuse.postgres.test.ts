@@ -1,8 +1,5 @@
-import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import { getEnvironmentData } from "node:worker_threads";
-import { Client } from "pg";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { withEngineStoreAdmission } from "../database-engine/admission-scope.js";
 import {
   readSqliteDatabasePendingScopedWriteToken as pendingToken,
@@ -10,20 +7,21 @@ import {
   withSqliteDatabaseWriteScope,
 } from "../sqlite-database-admission.js";
 import { PostgresSyncConnection } from "./connection.js";
+import { usePostgresTestHarness } from "./postgres.test-support.js";
 
-const configured = getEnvironmentData("openclaw.test.workboard.connection");
-const connection = typeof configured === "string" ? configured : undefined;
+const harness = usePostgresTestHarness("reuse");
+const { connection, prefix: schema, client: admin } = harness;
 
 describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () => {
-  const admin = new Client({ connectionString: connection });
-  const schema = `reuse_${randomUUID().replaceAll("-", "")}`;
   const anchor = new DatabaseSync(":memory:");
   const opened: PostgresSyncConnection[] = [];
   const run = withEngineStoreAdmission;
-  function open(dsn = connection!, namespace = schema) {
-    const db = run(
-      () => new PostgresSyncConnection(dsn, namespace, anchor, schema, { reuse: true }),
-    );
+  function open(
+    dsn = connection!,
+    namespace = schema,
+    options: ConstructorParameters<typeof PostgresSyncConnection>[4] = { reuse: true },
+  ) {
+    const db = run(() => new PostgresSyncConnection(dsn, namespace, anchor, schema, options));
     opened.push(db);
     return db;
   }
@@ -42,17 +40,10 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
     transaction(db, () => withSqliteDatabaseWriteScope(db, [scope], body));
 
   beforeAll(async () => {
-    await admin.connect();
     await admin.query(`CREATE SCHEMA "${schema}"; CREATE TABLE "${schema}".entries (id integer)`);
   });
-  afterAll(async () => {
-    for (const db of opened) {
-      close(db);
-    }
-    anchor.close();
-    await admin.query(`DROP SCHEMA "${schema}" CASCADE`);
-    await admin.end();
-  });
+  afterEach(() => opened.splice(0).forEach(close));
+  harness.onClose(() => anchor.close());
 
   it("reuses an idle backend, but overlapping transactions have exclusive connections", () => {
     const first = open();
@@ -69,7 +60,6 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
     // Closing a live transaction must roll it back and discard that backend.
     close(writer);
     expect(get(reader, "SELECT count(*)::int AS count FROM entries")).toEqual({ count: 0 });
-    close(reader);
   });
 
   it("retains unrelated replicas and predicts only the written scope across commits", () => {
@@ -88,16 +78,14 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
       expect(token(db, "second")).toBe(second);
     });
     expect(pending).not.toBe(second);
-    expect(token(db, "second")).toBe(pending);
-    expect(token(db, "first")).toBe(before);
+    expect([token(db, "second"), token(db, "first")]).toEqual([pending, before]);
 
-    run(() => db.runTransaction(() => db.prepare("SELECT count(*) FROM scoped_entries").get()));
-    run(() => db.runTransaction(() => {}));
-    expect(token(db, "first")).toBe(before);
-    expect(token(db, "second")).toBe(pending);
+    transaction(db, () => db.prepare("SELECT count(*) FROM scoped_entries").get());
+    transaction(db, () => {});
+    expect([token(db, "first"), token(db, "second")]).toEqual([before, pending]);
 
     // Uncertified writes still invalidate both scopes.
-    run(() => db.runTransaction(() => db.exec("INSERT INTO scoped_entries VALUES (8); SELECT 1")));
+    transaction(db, () => db.exec("INSERT INTO scoped_entries VALUES (8); SELECT 1"));
     expect(token(db, "first")).not.toBe(before);
     expect(token(db, "second")).not.toBe(pending);
     const beforeCte = token(db, "first");
@@ -107,8 +95,6 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
       ),
     );
     expect(token(db, "first")).not.toBe(beforeCte);
-    exec(db, "DROP TABLE scoped_entries");
-    close(db);
   });
 
   it("keeps read snapshots pure when columns use qualified SQL keywords", () => {
@@ -120,8 +106,6 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
       readOnly(db, "SELECT t.update, t . /* column */ into FROM keyword_entries AS t").rows,
     ).toEqual([{ update: 7, into: 8 }]);
     expect(token(db, "first")).toBe(before);
-    exec(db, "DROP TABLE keyword_entries");
-    close(db);
   });
 
   it("rejects mutation hints in read snapshots without settling a sibling writer", () => {
@@ -142,9 +126,6 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
     });
     expect(token(writer, "entry")).toBe(pending);
     expect(query(reader, "SELECT * FROM snapshot_entries")).toEqual([{ merge: 7 }]);
-    exec(writer, "DROP TABLE snapshot_entries");
-    close(reader);
-    close(writer);
   });
 
   it("preserves certified CTE write scopes but fences SELECT INTO across scopes", () => {
@@ -161,8 +142,7 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
       ).toEqual([{ id: 7 }]);
       pending = pendingToken(db, "second");
     });
-    expect(token(db, "first")).toBe(first);
-    expect(token(db, "second")).toBe(pending);
+    expect([token(db, "first"), token(db, "second")]).toEqual([first, pending]);
     expect(pending).not.toBe(second);
 
     scoped(db, "second", () =>
@@ -172,8 +152,6 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
     const afterQuoted = token(db, "first");
     scoped(db, "second", () => db.exec("SELECT 1. INTO cte_number"));
     expect(token(db, "first")).not.toBe(afterQuoted);
-    exec(db, "DROP TABLE cte_copy; DROP TABLE cte_number; DROP TABLE cte_entries");
-    close(db);
   });
 
   it("reconnects after an idle backend is terminated, without reusing the broken backend", async () => {
@@ -186,7 +164,6 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
     const recovered = open();
     expect(pid(recovered)).not.toBe(killedPid);
     expect(get(recovered, "SELECT 7::int AS value")).toEqual({ value: 7 });
-    close(recovered);
   });
 
   it("settles committed batches and retains transactions opened later in a batch", () => {
@@ -207,8 +184,6 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
     const reader = open();
     expect(pid(reader)).not.toBe(uncommittedPid);
     expect(rows(reader, "SELECT id FROM batch_entries")).toEqual([{ id: 1 }]);
-    exec(reader, "DROP TABLE batch_entries");
-    close(reader);
   });
 
   it("does not reuse across connection settings or namespaces", () => {
@@ -225,41 +200,29 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
     dsn.searchParams.set("application_name", "reuse-independent");
     const differentSettings = open(dsn.href);
     expect(pid(differentSettings)).not.toBe(originalPid);
-    close(differentSettings);
   });
 
   it("applies all session settings with a quoted, comma-containing schema name", async () => {
     const namespace = `${schema}_"first,second`;
     const quoted = `"${namespace.replaceAll('"', '""')}"`;
     await admin.query(`CREATE SCHEMA ${quoted}`);
-    const db = run(
-      () =>
-        new PostgresSyncConnection(connection!, namespace, anchor, schema, {
-          lockTimeoutMs: 321,
-          statementTimeoutMs: 654,
-        }),
+    const db = open(connection!, namespace, { lockTimeoutMs: 321, statementTimeoutMs: 654 });
+    const settings = query(
+      db,
+      `SELECT
+      current_setting('synchronous_commit') AS synchronous_commit,
+      current_setting('lock_timeout') AS lock_timeout,
+      current_setting('statement_timeout') AS statement_timeout,
+      current_setting('search_path') AS search_path, current_schema() AS schema`,
     );
-    try {
-      expect(
-        query(
-          db,
-          "SELECT current_setting('synchronous_commit') AS synchronous_commit, " +
-            "current_setting('lock_timeout') AS lock_timeout, " +
-            "current_setting('statement_timeout') AS statement_timeout, " +
-            "current_setting('search_path') AS search_path, current_schema() AS schema",
-        ),
-      ).toEqual([
-        {
-          synchronous_commit: "off",
-          lock_timeout: "321ms",
-          statement_timeout: "654ms",
-          search_path: quoted,
-          schema: namespace,
-        },
-      ]);
-    } finally {
-      close(db);
-      await admin.query(`DROP SCHEMA ${quoted}`);
-    }
+    expect(settings).toEqual([
+      {
+        synchronous_commit: "off",
+        lock_timeout: "321ms",
+        statement_timeout: "654ms",
+        search_path: quoted,
+        schema: namespace,
+      },
+    ]);
   });
 });

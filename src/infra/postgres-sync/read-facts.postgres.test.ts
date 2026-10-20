@@ -1,8 +1,6 @@
 import assert from "node:assert/strict";
 import path from "node:path";
-import { getEnvironmentData } from "node:worker_threads";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   buildAcpDatabaseSessionKey,
   getAcpSessionKysely,
@@ -28,21 +26,16 @@ import { isPostgresSqlConnection, type PostgresSqlConnection } from "../sql-conn
 import { readSqliteDatabaseWriteRevision } from "../sqlite-database-admission.js";
 import { admitSqliteSchema } from "../sqlite-schema-facts.js";
 import { runSqliteReadSnapshotSync } from "../sqlite-transaction.js";
+import { usePostgresTestHarness } from "./postgres.test-support.js";
 
-const configured: unknown = getEnvironmentData("openclaw.test.workboard.connection");
-const connection = typeof configured === "string" ? configured : undefined;
+const harness = usePostgresTestHarness("read_facts");
+const { connection, prefix, directories } = harness;
 type StoreFixture = ReturnType<typeof openStore>;
 const stores: StoreFixture[] = [];
-const directories = useAutoCleanupTempDirTracker((cleanup) =>
-  afterAll(() => {
-    try {
-      withEngineStoreAdmission(() => {
-        for (const store of stores.splice(0)) {
-          store.close();
-        }
-      });
-    } finally {
-      cleanup();
+harness.onClose(() =>
+  withEngineStoreAdmission(() => {
+    for (const store of stores) {
+      store.close();
     }
   }),
 );
@@ -59,7 +52,7 @@ function openStore(schema: StoreSchema) {
       const db = openEngineStore({
         anchor,
         schema,
-        input: { connection: connection!, schemaPrefix: "read_facts" },
+        input: { connection: connection!, schemaPrefix: prefix },
         openSqlite: () => {
           throw new Error("Expected PostgreSQL store");
         },
@@ -78,20 +71,15 @@ function openStore(schema: StoreSchema) {
     }
   };
   const writer = open();
-  const facts = getPostgresPhysicalFacts(writer);
-  assert(facts, "Expected production schema admission");
+  assert(getPostgresPhysicalFacts(writer), "Expected production schema admission");
   const store = {
     pathname,
     writer,
     open,
     close() {
-      try {
-        writer.exec(`DROP SCHEMA "${facts.namespace}" CASCADE`);
-      } finally {
-        for (const { db, anchor } of handles) {
-          db.close();
-          anchor.close();
-        }
+      for (const { db, anchor } of handles) {
+        db.close();
+        anchor.close();
       }
     },
   };
@@ -212,7 +200,7 @@ describe.skipIf(!connection)("PostgreSQL admitted read facts", () => {
         const expected = failureAt === "callback" ? ["durable", null] : [null, null];
         const failure = new Error("snapshot failure");
         const exec = reader.exec.bind(reader);
-        const close =
+        using close =
           failureAt === "close"
             ? vi.spyOn(reader, "exec").mockImplementation((sql) => {
                 exec(sql);
@@ -221,19 +209,16 @@ describe.skipIf(!connection)("PostgreSQL admitted read facts", () => {
                 }
               })
             : undefined;
-        try {
-          expect(() =>
-            snapshot(() => {
-              expectRows(read(), ...expected);
-              if (failureAt === "callback") {
-                throw failure;
-              }
-            }),
-          ).toThrow(failure.message);
-          expect(published()).toBeUndefined();
-        } finally {
-          close?.mockRestore();
-        }
+        expect(() =>
+          snapshot(() => {
+            expectRows(read(), ...expected);
+            if (failureAt === "callback") {
+              throw failure;
+            }
+          }),
+        ).toThrow(failure.message);
+        expect(published()).toBeUndefined();
+        close?.mockRestore();
         snapshot();
         expectRows(published(), ...expected);
       });
@@ -286,12 +271,9 @@ describe.skipIf(!connection)("PostgreSQL admitted read facts", () => {
         const rowReads = () =>
           query.mock.calls.filter(([sql]) => /\bfrom\s+"?session_nodes\b/iu.test(sql));
         const expectRow = (id: string | undefined) => {
-          const row = queries.row(key);
-          if (id === undefined) {
-            expect(row).toBeUndefined();
-          } else {
-            expect(row?.current_session_id).toBe(id);
-          }
+          expect(queries.row(key)).toEqual(
+            id === undefined ? undefined : expect.objectContaining({ current_session_id: id }),
+          );
         };
         runSqliteReadSnapshotSync(reader, () => {
           expectRow(initial);

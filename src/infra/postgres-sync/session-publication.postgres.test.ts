@@ -1,11 +1,7 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
 import { channel } from "node:diagnostics_channel";
 import path from "node:path";
-import { getEnvironmentData } from "node:worker_threads";
-import pg from "pg";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
 import { assertCompactionPathAlias } from "../../config/sessions/compaction-pathalias.test-support.js";
 import { readPreparedSessionEntryChange } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
@@ -33,47 +29,29 @@ import { resetDatabaseEngineSelectionForTest } from "../database-engine/context.
 import { getPostgresPhysicalFactsForPath } from "../database-engine/physical-facts.js";
 import { resolveDatabaseFamilyEngines } from "../database-engine/registry.js";
 import { isPostgresSqlConnection } from "../sql-connection.js";
+import { usePostgresTestHarness } from "./postgres.test-support.js";
 
-const configured: unknown = getEnvironmentData("openclaw.test.workboard.connection");
-const connection = typeof configured === "string" ? configured : undefined;
-const prefix = `publication_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
+const harness = usePostgresTestHarness("publication");
+const { connection, prefix, client, directories } = harness;
 let root: string;
 let rootPath: string;
-let client: pg.Client;
 let owners: Awaited<ReturnType<typeof loadOwners>>;
 let database: ReturnType<typeof owners.openOpenClawAgentDatabase>;
 if (connection) {
   owners = await loadOwners();
 }
-const directories = useAutoCleanupTempDirTracker((cleanup) =>
-  afterAll(async () => {
-    if (!connection) {
-      return;
-    }
-    try {
-      if (database) {
-        withEngineStoreAdmission(() => owners.closeOpenClawAgentDatabaseByPath(database.path));
-      }
-      if (root) {
-        await owners.cleanupSessionStateForTest({ stateDir: root, rootPath });
-      }
-      if (client) {
-        const schemas = await client.query<{ nspname: string }>(
-          "SELECT nspname FROM pg_namespace WHERE left(nspname, $1) = $2",
-          [prefix.length + 1, `${prefix}_`],
-        );
-        for (const { nspname } of schemas.rows) {
-          await client.query(`DROP SCHEMA "${nspname.replaceAll('"', '""')}" CASCADE`);
-        }
-      }
-    } finally {
-      await client?.end();
-      resetDatabaseEngineSelectionForTest();
-      vi.unstubAllEnvs();
-      cleanup();
-    }
-  }),
-);
+harness.onClose(async () => {
+  if (database) {
+    withEngineStoreAdmission(() => owners.closeOpenClawAgentDatabaseByPath(database.path));
+  }
+  if (root) {
+    await owners.cleanupSessionStateForTest({ stateDir: root, rootPath });
+  }
+});
+harness.onReset(() => {
+  resetDatabaseEngineSelectionForTest();
+  vi.unstubAllEnvs();
+});
 
 function scopeFor(name: string) {
   return {
@@ -133,8 +111,6 @@ describe.skipIf(!connection)("PostgreSQL committed session publications", () => 
       effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
       postgres: { connection: connection!, schemaPrefix: prefix },
     });
-    client = new pg.Client({ connectionString: connection });
-    await client.connect();
     await client.query("CREATE EXTENSION IF NOT EXISTS unaccent WITH SCHEMA public");
     database = withEngineStoreAdmission(() =>
       owners.openOpenClawAgentDatabase({ agentId: "main" }),
