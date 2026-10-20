@@ -313,7 +313,7 @@ function AutomationHistory(props: { job: CronJob; history: SessionAutomationMobi
           {t("cron.linkedRun.label")}{" "}
           <button
             type="button"
-            onClick={() => void history().onRunsFiltersChange({ cronRunsRunId: null })}
+            onClick={() => history().onRunsFiltersChange({ cronRunsRunId: null })}
           >
             {t("cron.linkedRun.showAll")}
           </button>
@@ -327,7 +327,7 @@ function AutomationHistory(props: { job: CronJob; history: SessionAutomationMobi
             value={history().runsQuery}
             placeholder={t("cron.runs.searchPlaceholder")}
             onInput={(event) =>
-              void history().onRunsFiltersChange({ cronRunsQuery: event.currentTarget.value })
+              history().onRunsFiltersChange({ cronRunsQuery: event.currentTarget.value })
             }
           />
         </label>
@@ -339,7 +339,7 @@ function AutomationHistory(props: { job: CronJob; history: SessionAutomationMobi
             onChange={(event) => {
               const order = event.currentTarget.value;
               if (order === "asc" || order === "desc" || order === "status") {
-                void history().onRunsFiltersChange({
+                history().onRunsFiltersChange({
                   cronRunsSortBy: order === "status" ? "status" : "time",
                   cronRunsSortDir: order === "asc" ? "asc" : "desc",
                   cronRunsStatuses: [],

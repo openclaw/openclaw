@@ -99,7 +99,7 @@ export function createMobileAutomationBinding(props: {
     },
     { equals: (a, b) => a.every((value, index) => value === b[index]) },
   );
-  const run = (operation: (captured: typeof state) => Promise<unknown>) => {
+  const run = (operation: (captured: typeof state) => Promise<unknown>): undefined => {
     const captured = state;
     const pending = operation(captured);
     publish();
@@ -287,11 +287,11 @@ export function createMobileAutomationBinding(props: {
         runsSortDir: state.cronRunsSortDir,
         runsSortBy: state.cronRunsSortBy,
         highlightedRunId: state.cronRunsRunId,
-        onLoadMoreRuns: () => void run((owner) => loadCronRuns(owner, { append: true })),
-        onRefresh: () => void run(loadCronRuns),
+        onLoadMoreRuns: () => run((owner) => loadCronRuns(owner, { append: true })),
+        onRefresh: () => run(loadCronRuns),
         onRunsFiltersChange: (patch) => {
           updateCronRunsFilter(state, patch);
-          return void run(loadCronRuns);
+          return run(loadCronRuns);
         },
         onViewRunTranscript: (entry, trigger) => {
           void transcript.open(entry, trigger);
