@@ -7,6 +7,7 @@ import {
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import type { SessionMaintenanceAgeContinuation } from "./session-accessor.sqlite-lifecycle-types.js";
 import { readSessionMaintenanceAgeQueries } from "./session-accessor.sqlite-maintenance-age-queries.js";
 import { hasCanonicalSessionValidationProjection } from "./session-canonical-key.js";
 import { getSessionMaintenanceActivityAt } from "./store-maintenance-activity.js";
@@ -38,6 +39,23 @@ export type SessionEntryMaintenanceAgeChange = {
   entry: MaintenanceActivity;
   previousEntry?: MaintenanceActivity;
 };
+
+export function restartSessionMaintenanceAgeScan(
+  continuation: SessionMaintenanceAgeContinuation | undefined,
+  changes: ReadonlyMap<string, SessionEntryMaintenanceAgeChange>,
+): SessionMaintenanceAgeContinuation | undefined {
+  const after = continuation?.after;
+  if (
+    after &&
+    [...changes.values()].some(
+      ({ entry }) => entry.archivedAt === undefined && entry.updatedAt <= after.updatedAt,
+    )
+  ) {
+    // A late historical write can sort behind the cursor. Keep the initial age policy.
+    return { at: continuation.at, modelRunPrune: continuation.modelRunPrune };
+  }
+  return undefined;
+}
 const changeObservers = new Map<
   string | symbol,
   Set<(change: SessionEntryMaintenanceAgeChange) => void>

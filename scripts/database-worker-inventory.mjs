@@ -868,6 +868,28 @@ const reviewedOperations = new Map([
     ],
   ],
   [
+    "src/config/sessions/session-accessor.sqlite-entry-write.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["writeArchivedSessionEntries.flush"],
+        evidence:
+          "Only maintenance-store calls the archive batch writer. Its captured apply runs in execution-worker maintenance or immediate inline lifecycle/replacement/purge/reclamation commits whose native branches require maintenance custody. Ordinary entry writes retain their existing mixed ownership.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-transcript-context-versions.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["readTranscriptContextVersionsInTransaction"],
+        evidence:
+          "Only maintenance-store calls the batch version reader, during worker preparation and captured apply or immediate inline maintenance. Native lifecycle/replacement/purge/reclamation commits require maintenance custody, matching maintenance-store readInputs ownership.",
+      },
+    ],
+  ],
+  [
     "src/config/sessions/session-accessor.sqlite-history-recency.ts",
     [
       {
@@ -2139,7 +2161,7 @@ const reviewedOperations = new Map([
         tier: "T3",
         operations: ["clearSessionCollaborationForKey", "readSessionNodeArtifactTables"],
         evidence:
-          "Collaboration clear runs only when entry-store.ts replaces a canonical sessionId. Those writes use reset/replacement/message-cut/fork/recovery workers or Doctor; native transcript/compaction compatibility preserves identity. Catalog fallback additionally serves repair/copy/delete/fingerprint kernels already classified as maintenance; admitted schema facts bypass it for normal handles.",
+          "Collaboration clear runs only when entry-write.ts replaces a canonical sessionId. Those writes use reset/replacement/message-cut/fork/recovery workers or Doctor; native transcript/compaction compatibility preserves identity. Archive batching retains the same sessionId and cannot enter this branch. Catalog fallback additionally serves repair/copy/delete/fingerprint kernels already classified as maintenance; admitted schema facts bypass it for normal handles.",
       },
       {
         tier: "T2",
