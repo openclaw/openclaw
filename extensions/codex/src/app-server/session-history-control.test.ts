@@ -9,19 +9,22 @@ import {
 } from "./settled-turn-context.js";
 
 const { writeSession, writeSqliteSession } = setupSessionHistoryFixtures();
+type CustomMessage = Extract<AgentMessage, { role: "custom" }>;
+function custom(
+  customType: string,
+  content: CustomMessage["content"],
+  timestamp: number,
+  options: Partial<CustomMessage> = {},
+): CustomMessage {
+  return { role: "custom", customType, content, timestamp, display: false, ...options };
+}
 
 it.each(["file", "sqlite"] as const)(
   "captures settled evidence after durable control history from %s",
   async (storage) => {
     const yieldText = "Continue after the worker finishes.";
     const prior: AgentMessage[] = [
-      {
-        role: "custom",
-        customType: "plugin.durable-note",
-        content: [{ type: "text", text: "Keep the agreed task scope." }],
-        display: false,
-        timestamp: 1,
-      },
+      custom("plugin.durable-note", [{ type: "text", text: "Keep the agreed task scope." }], 1),
       {
         role: "bashExecution",
         command: "check",
@@ -31,33 +34,18 @@ it.each(["file", "sqlite"] as const)(
         truncated: false,
         timestamp: 2,
       },
-      {
-        role: "branchSummary",
-        summary: "Prior branch decision.",
-        fromId: "branch",
-        timestamp: 3,
-      },
+      { role: "branchSummary", summary: "Prior branch decision.", fromId: "branch", timestamp: 3 },
       {
         role: "compactionSummary",
         summary: "Prior task context.",
         tokensBefore: 100,
         timestamp: 4,
       },
-      {
-        role: "custom",
-        customType: "openclaw.context-compaction",
-        content: "excluded compaction notice",
+      custom("openclaw.context-compaction", "excluded compaction notice", 5, {
         display: true,
         excludeFromContext: true,
-        timestamp: 5,
-      },
-      {
-        role: "custom",
-        customType: "openclaw.runtime-context",
-        content: "obsolete runtime instructions",
-        display: false,
-        timestamp: 6,
-      },
+      }),
+      custom("openclaw.runtime-context", "obsolete runtime instructions", 6),
     ];
     const { upstreamPrompt, settledMessages } = settledFixture();
     const records = [
@@ -88,11 +76,7 @@ it.each(["file", "sqlite"] as const)(
       }
     }
     const target = fixture
-      ? {
-          ...fixture.sessionTarget,
-          sessionTarget: fixture.sessionTarget,
-          sessionFile: fixture.marker,
-        }
+      ? fixture.target
       : {
           sessionFile: await writeSession(records),
           sessionId: "codex-session",

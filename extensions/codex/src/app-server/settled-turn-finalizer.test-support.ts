@@ -68,6 +68,9 @@ export async function createCodexSettledFinalizerTestFixture(
   params.authProfileStore = { version: 1, profiles: {} };
   params.timeoutMs = 60_000;
   const projector = await createProjector(params);
+  const emit = (...args: Parameters<typeof forCurrentTurn>) =>
+    projector.handleNotification(forCurrentTurn(...args));
+  const completed = options.terminalStatus === "completed";
   const command = {
     type: "commandExecution",
     id: "command-settled",
@@ -77,45 +80,35 @@ export async function createCodexSettledFinalizerTestFixture(
     source: "agent",
     commandActions: [],
   };
-  await projector.handleNotification(
-    forCurrentTurn("item/started", {
-      item: { ...command, status: "inProgress", aggregatedOutput: null, exitCode: null },
-    }),
-  );
-  await projector.handleNotification(
-    forCurrentTurn("item/completed", {
-      item: {
-        ...command,
-        status: options.failedTool ? "failed" : "completed",
-        aggregatedOutput: options.failedTool ? "command failed" : "settled",
-        exitCode: options.failedTool ? 1 : 0,
-        durationMs: 1,
-      },
-    }),
-  );
-  await projector.handleNotification(
-    forCurrentTurn("turn/completed", {
-      turn: {
-        id: TURN_ID,
-        status: options.terminalStatus ?? "failed",
-        items: [],
-        error:
-          options.terminalStatus === "completed"
-            ? null
-            : { message: "Provider overloaded", codexErrorInfo: "serverOverloaded" },
-      },
-    }),
-  );
-  expect(projector.settledTurnFailureFinalizationAllowed).toBe(
-    options.terminalStatus !== "completed",
-  );
+  await emit("item/started", {
+    item: { ...command, status: "inProgress", aggregatedOutput: null, exitCode: null },
+  });
+  await emit("item/completed", {
+    item: {
+      ...command,
+      status: options.failedTool ? "failed" : "completed",
+      aggregatedOutput: options.failedTool ? "command failed" : "settled",
+      exitCode: options.failedTool ? 1 : 0,
+      durationMs: 1,
+    },
+  });
+  await emit("turn/completed", {
+    turn: {
+      id: TURN_ID,
+      status: options.terminalStatus ?? "failed",
+      items: [],
+      error: completed
+        ? null
+        : { message: "Provider overloaded", codexErrorInfo: "serverOverloaded" },
+    },
+  });
+  expect(projector.settledTurnFailureFinalizationAllowed).toBe(!completed);
   const attempt = projector.buildResult(buildEmptyToolTelemetry());
   await projector.closeProjection();
-  const context = new CodexSettledTurnContext(
+  attempt.settledTurnFinalizationContext = new CodexSettledTurnContext(
     projectSettledCodexMessages(attempt.messagesSnapshot),
     { model: params.modelId, modelProvider: "openai" },
   );
-  attempt.settledTurnFinalizationContext = context;
   const registerAgentHarness =
     vi.fn<ReturnType<typeof createTestPluginApi>["registerAgentHarness"]>();
   plugin.register(
