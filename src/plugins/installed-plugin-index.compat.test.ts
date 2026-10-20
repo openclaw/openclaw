@@ -17,6 +17,7 @@ import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const PLUGIN_ID = "contract-provider";
+const policyConfig = () => ({ plugins: { allow: ["listed"] } });
 const tempDirs: string[] = [];
 
 afterEach(async () => {
@@ -88,7 +89,7 @@ describe("bundled provider compatibility in installed plugin indexes", () => {
 
   it("applies fresh and dynamic policy to a contract-only provider", () => {
     const { candidate, env } = createFixture();
-    const config = { plugins: { allow: ["listed"] } };
+    const config = policyConfig();
     setMode(env, "compat");
     const { index, manifestRegistry } = loadInstalledPluginIndexWithDiscovery({
       candidates: [candidate],
@@ -113,28 +114,19 @@ describe("bundled provider compatibility in installed plugin indexes", () => {
 
     setMode(env, "compat");
     expect(listValues()).toEqual([PLUGIN_ID]);
-    expect(
-      isInstalledPluginEnabled(
-        index,
-        PLUGIN_ID,
-        { plugins: { ...config.plugins, deny: [PLUGIN_ID] } },
-        env,
-      ),
-    ).toBe(false);
+    const denied = { plugins: { ...config.plugins, deny: [PLUGIN_ID] } };
+    expect(isInstalledPluginEnabled(index, PLUGIN_ID, denied, env)).toBe(false);
   });
 
   it("keeps bundled compatibility separate from external policy in each batch", () => {
     const { candidate, env } = createFixture();
-    const config = { plugins: { allow: ["listed"] } };
+    const config = policyConfig();
     setMode(env, "compat");
     const index = loadInstalledPluginIndex({ candidates: [candidate], config, env });
     const plugins = [
       ...index.plugins,
       ...index.plugins.map((record) =>
-        Object.assign({}, record, {
-          pluginId: "external-tool",
-          origin: "global" as const,
-        }),
+        Object.assign({}, record, { pluginId: "external-tool", origin: "global" as const }),
       ),
     ];
     const compatible = createInstalledPluginEnabledPredicate(plugins, config, env);
@@ -155,35 +147,23 @@ describe("bundled provider compatibility in installed plugin indexes", () => {
 
   it("refreshes persisted contract-only provider policy without rebuilding source records", async () => {
     const { candidate, env, stateDir } = createFixture();
-    const config = { plugins: { allow: ["listed"] } };
+    const config = policyConfig();
     setMode(env, "compat");
+    const params = { stateDir, config, env };
     const initial = await refreshPersistedInstalledPluginIndex({
+      ...params,
       reason: "manual",
-      stateDir,
       candidates: [candidate],
-      config,
-      env,
     });
     expect(initial.plugins[0]?.enabled).toBe(true);
-
-    setMode(env, "allowlist");
-    const strict = await refreshPersistedInstalledPluginIndex({
-      reason: "policy-changed",
-      stateDir,
-      config,
-      env,
-      policyPluginIds: [PLUGIN_ID],
-    });
-    expect(strict.plugins[0]?.enabled).toBe(false);
-
-    setMode(env, "compat");
-    const compatible = await refreshPersistedInstalledPluginIndex({
-      reason: "policy-changed",
-      stateDir,
-      config,
-      env,
-      policyPluginIds: [PLUGIN_ID],
-    });
-    expect(compatible.plugins[0]?.enabled).toBe(true);
+    for (const mode of ["allowlist", "compat"] as const) {
+      setMode(env, mode);
+      const refreshed = await refreshPersistedInstalledPluginIndex({
+        ...params,
+        reason: "policy-changed",
+        policyPluginIds: [PLUGIN_ID],
+      });
+      expect(refreshed.plugins[0]?.enabled).toBe(mode === "compat");
+    }
   });
 });

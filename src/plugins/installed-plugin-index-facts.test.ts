@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as installRecordMap from "../config/plugin-install-record-map.js";
 import * as safeRegex from "../security/safe-regex.js";
-import { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index-install-records.js";
-import { createInstalledPluginIndexScopeLookup } from "./installed-plugin-index-scope-lookup.js";
+import { extractPluginInstallRecordsFromInstalledPluginIndex as recordsFrom } from "./installed-plugin-index-install-records.js";
+import { createInstalledPluginIndexScopeLookup as scopeLookup } from "./installed-plugin-index-scope-lookup.js";
 import { isInstalledPluginEnabled } from "./installed-plugin-index.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { finalizePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
@@ -36,7 +36,7 @@ function createSnapshot(provider = "shared") {
   return snapshot;
 }
 
-function ownerIds(lookup: ReturnType<typeof createInstalledPluginIndexScopeLookup>, id: string) {
+function ownerIds(lookup: ReturnType<typeof scopeLookup>, id: string) {
   const ids = new Set<string>();
   lookup.addProviderContributionOwners(ids, [id]);
   return [...ids];
@@ -53,7 +53,7 @@ describe("prepared installed-index readers", () => {
       transcriptSourceProviders: ["fixture-transcript-source"],
       meetingNotesSourceProviders: ["fixture-legacy-source"],
     };
-    const lookup = createInstalledPluginIndexScopeLookup(snapshot.index);
+    const lookup = scopeLookup(snapshot.index);
     expect(ownerIds(lookup, "fixture-transcript-source")).toEqual(["alpha"]);
     expect(ownerIds(lookup, "fixture-legacy-source")).toEqual(["alpha"]);
   });
@@ -63,14 +63,14 @@ describe("prepared installed-index readers", () => {
       const snapshot = finalizePluginMetadataSnapshot(createSnapshot());
       const compile = vi.spyOn(safeRegex, "compileSafeRegex");
       const parse = vi.spyOn(installRecordMap, "parsePluginInstallRecordMap");
-      const first = createInstalledPluginIndexScopeLookup(snapshot.index);
-      const records = extractPluginInstallRecordsFromInstalledPluginIndex(snapshot.index);
+      const first = scopeLookup(snapshot.index);
+      const records = recordsFrom(snapshot.index);
       assert(records.alpha);
       records.alpha.spec = "caller-owned";
       records.alpha.clawhubTrustReasons?.push("caller-owned");
       first.addProviderContributionOwners = () => {};
       for (let call = 0; call < 5; call++) {
-        const lookup = createInstalledPluginIndexScopeLookup(snapshot.index);
+        const lookup = scopeLookup(snapshot.index);
         expect(ownerIds(lookup, " SHARED ")).toEqual(["alpha", "beta"]);
         expect(lookup.canResolveDirectProviderIds(["shared"], new Set())).toBe(false);
         expect(lookup.canResolveDirectProviderIds(["alpha"], new Set())).toBe(true);
@@ -81,7 +81,7 @@ describe("prepared installed-index readers", () => {
         expect(lookup.hasAgentHarnessOwners(["fixture-runtime"])).toBe(true);
         expect(lookup.hasChannelContributionOwners(["fixture-channel"])).toBe(true);
         expect(lookup.hasDirectChannelOwners(["fixture-channel"])).toBe(false);
-        expect(extractPluginInstallRecordsFromInstalledPluginIndex(snapshot.index)).toEqual({
+        expect(recordsFrom(snapshot.index)).toEqual({
           alpha: { source: "npm", spec: "alpha@1", clawhubTrustReasons: ["reviewed"] },
         });
       }
@@ -114,11 +114,11 @@ describe("prepared installed-index readers", () => {
     };
     finalizePluginMetadataSnapshot(snapshot);
     withPluginCache(createPluginCache(), () => {
-      const first = extractPluginInstallRecordsFromInstalledPluginIndex(snapshot.index);
+      const first = recordsFrom(snapshot.index);
       assert(first.alpha?.acceptedSurface);
-      first.alpha.acceptedSurface!.channels.push("caller-owned");
+      first.alpha.acceptedSurface.channels.push("caller-owned");
       delete first.alpha;
-      const next = extractPluginInstallRecordsFromInstalledPluginIndex(snapshot.index);
+      const next = recordsFrom(snapshot.index);
       expect(next.alpha?.acceptedSurface?.channels).toEqual(["fixture-channel"]);
       expect(Object.getPrototypeOf(next)).toBeNull();
     });
@@ -130,26 +130,18 @@ describe("prepared installed-index readers", () => {
       if (freezeShell) {
         Object.freeze(snapshot.index);
       }
-      expect(ownerIds(createInstalledPluginIndexScopeLookup(snapshot.index), "shared")).toEqual([
-        "alpha",
-        "beta",
-      ]);
-      expect(extractPluginInstallRecordsFromInstalledPluginIndex(snapshot.index).alpha?.spec).toBe(
-        "alpha@1",
-      );
+      const owners = (id: string) => ownerIds(scopeLookup(snapshot.index), id);
+      expect(owners("shared")).toEqual(["alpha", "beta"]);
+      expect(recordsFrom(snapshot.index).alpha?.spec).toBe("alpha@1");
       for (const plugin of snapshot.index.plugins) {
         plugin.contributions!.providers = ["replacement"];
         plugin.contributions!.contracts = {};
       }
       assert(snapshot.index.installRecords.alpha);
       snapshot.index.installRecords.alpha.spec = "alpha@2";
-      expect(ownerIds(createInstalledPluginIndexScopeLookup(snapshot.index), "shared")).toEqual([]);
-      expect(
-        ownerIds(createInstalledPluginIndexScopeLookup(snapshot.index), "replacement"),
-      ).toEqual(["alpha", "beta"]);
-      expect(extractPluginInstallRecordsFromInstalledPluginIndex(snapshot.index).alpha?.spec).toBe(
-        "alpha@2",
-      );
+      expect(owners("shared")).toEqual([]);
+      expect(owners("replacement")).toEqual(["alpha", "beta"]);
+      expect(recordsFrom(snapshot.index).alpha?.spec).toBe("alpha@2");
     });
   });
 
@@ -157,8 +149,8 @@ describe("prepared installed-index readers", () => {
     const snapshot = finalizePluginMetadataSnapshot(createSnapshot());
     const cache = createPluginCache();
     const read = () => {
-      extractPluginInstallRecordsFromInstalledPluginIndex(snapshot.index);
-      return createInstalledPluginIndexScopeLookup(snapshot.index);
+      recordsFrom(snapshot.index);
+      return scopeLookup(snapshot.index);
     };
     const parse = vi.spyOn(installRecordMap, "parsePluginInstallRecordMap");
     const retained = withPluginCache(cache, read);
@@ -166,9 +158,7 @@ describe("prepared installed-index readers", () => {
     withPluginCache(cache, read);
     expect(parse).toHaveBeenCalledTimes(2);
     const replacement = finalizePluginMetadataSnapshot(createSnapshot("replacement"));
-    const current = withPluginCache(cache, () =>
-      createInstalledPluginIndexScopeLookup(replacement.index),
-    );
+    const current = withPluginCache(cache, () => scopeLookup(replacement.index));
     expect(ownerIds(current, "shared")).toEqual([]);
     expect(ownerIds(current, "replacement")).toEqual(["alpha", "beta"]);
     expect(ownerIds(retained, "shared")).toEqual(["alpha", "beta"]);

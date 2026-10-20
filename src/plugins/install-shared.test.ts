@@ -8,6 +8,7 @@ import { createSyncSuiteTempRootTracker } from "./test-helpers/fs-fixtures.js";
 describe("installPluginDirectoryIntoExtensions", () => {
   const tempRoots = createSyncSuiteTempRootTracker("openclaw-install-shared");
   afterAll(() => tempRoots.cleanup());
+  const read = (dir: string) => fs.readFileSync(path.join(dir, "index.js"), "utf8");
 
   function fixture(contents = "export default {};\n") {
     const fixtureRoot = tempRoots.makeTempDir();
@@ -39,30 +40,23 @@ describe("installPluginDirectoryIntoExtensions", () => {
       reason: "Review the installed dependency tree",
     };
 
-    const result = await installPluginDirectoryIntoExtensions({
-      ...options,
-      afterInstall: async () => ({
-        ok: false,
-        error: installPolicyWarning.reason,
-        code: PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED,
-        installPolicyWarning,
-      }),
-    });
-
-    expect(result).toEqual({
-      ok: false,
+    const failure = {
+      ok: false as const,
       error: installPolicyWarning.reason,
       code: PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED,
       installPolicyWarning,
+    };
+    const result = await installPluginDirectoryIntoExtensions({
+      ...options,
+      afterInstall: async () => failure,
     });
+    expect(result).toEqual(failure);
     expect(fs.existsSync(options.targetDir)).toBe(false);
   });
 
   it("reviews the final staged artifact after source-copy mutations", async () => {
     const options = fixture("original capabilities");
-    let reviewedArtifactDir: string | undefined;
-    let reviewedArtifactContents: string | undefined;
-
+    let reviewed: { dir: string; contents: string } | undefined;
     const result = await installPluginDirectoryIntoExtensions({
       ...options,
       afterInstall: async (installedDir) => {
@@ -70,23 +64,15 @@ describe("installPluginDirectoryIntoExtensions", () => {
         return null;
       },
       onBeforePluginArtifactCommit: async ({ stagedArtifactDir }) => {
-        reviewedArtifactDir = stagedArtifactDir;
-        reviewedArtifactContents = await fs.promises.readFile(
-          path.join(stagedArtifactDir, "index.js"),
-          "utf8",
-        );
+        reviewed = { dir: stagedArtifactDir, contents: read(stagedArtifactDir) };
       },
     });
 
     expect(result.ok).toBe(true);
-    expect(reviewedArtifactDir).not.toBe(options.sourceDir);
-    expect(reviewedArtifactContents).toBe("final capabilities");
-    expect(fs.readFileSync(path.join(options.targetDir, "index.js"), "utf8")).toBe(
-      "final capabilities",
-    );
-    expect(fs.readFileSync(path.join(options.sourceDir, "index.js"), "utf8")).toBe(
-      "original capabilities",
-    );
+    expect(reviewed?.contents).toBe("final capabilities");
+    expect(reviewed?.dir).not.toBe(options.sourceDir);
+    expect(read(options.targetDir)).toBe("final capabilities");
+    expect(read(options.sourceDir)).toBe("original capabilities");
   });
 
   it("preserves the original consent rejection while rolling back the staged artifact", async () => {

@@ -19,6 +19,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     cleanup();
   }),
 );
+const freshCache = <T>(read: () => T) => withPluginCache(createPluginCache(), read);
 
 function createAliasedPlugin() {
   const parent = fs.realpathSync(tempDirs.make("plugin-manifest-alias-"));
@@ -38,7 +39,11 @@ function createAliasedPlugin() {
   return {
     roots: { canonical: root, alias: path.join(alias, "demo") },
     manifestPath,
-    manifestHash: crypto.createHash("sha256").update(contents).digest("hex"),
+    identity: {
+      manifestPath,
+      manifestHash: crypto.createHash("sha256").update(contents).digest("hex"),
+      manifestFile: { size: fs.statSync(manifestPath).size },
+    },
     env: {
       OPENCLAW_HOME: path.join(parent, "home"),
       OPENCLAW_STATE_DIR: path.join(parent, "state"),
@@ -53,10 +58,8 @@ describe("installed plugin manifest identity", () => {
     { prewarm: "canonical", configured: "alias" },
   ] as const)("hashes $configured roots after $prewarm prewarming", ({ prewarm, configured }) => {
     const fixture = createAliasedPlugin();
-    withPluginCache(createPluginCache(), () => {
-      if (prewarm) {
-        expect(loadPluginManifest(fixture.roots[prewarm]).ok).toBe(true);
-      }
+    freshCache(() => {
+      expect(loadPluginManifest(fixture.roots[prewarm]).ok).toBe(true);
       const index = loadInstalledPluginIndex({
         config: { plugins: { load: { paths: [fixture.roots[configured]] } } },
         env: fixture.env,
@@ -65,9 +68,7 @@ describe("installed plugin manifest identity", () => {
       expect(index.plugins).toHaveLength(1);
       expect(index.plugins[0]).toMatchObject({
         rootDir: fixture.roots.canonical,
-        manifestPath: fixture.manifestPath,
-        manifestHash: fixture.manifestHash,
-        manifestFile: { size: fs.statSync(fixture.manifestPath).size },
+        ...fixture.identity,
         packageJson: { path: "package.json" },
       });
       expect(index.diagnostics).toEqual([]);
@@ -101,7 +102,7 @@ describe("installed plugin manifest identity", () => {
       } else {
         fs.symlinkSync(target, fixture.manifestPath);
       }
-      withPluginCache(createPluginCache(), () => {
+      freshCache(() => {
         if (mode === "hardlink" || mode === "oversized") {
           expect(
             readPluginCacheFile({
@@ -127,9 +128,7 @@ describe("installed plugin manifest identity", () => {
       env: fixture.env,
       stateDir: fixture.env.OPENCLAW_STATE_DIR,
     };
-    const broken = withPluginCache(createPluginCache(), () =>
-      loadInstalledPluginIndex({ ...params, installRecords: {} }),
-    );
+    const broken = freshCache(() => loadInstalledPluginIndex({ ...params, installRecords: {} }));
     for (const plugin of broken.plugins) {
       plugin.manifestPath = path.join(fixture.roots.alias, "openclaw.plugin.json");
       plugin.manifestHash = "";
@@ -139,18 +138,10 @@ describe("installed plugin manifest identity", () => {
     await inspectPluginRegistry(params);
     expect(readPersistedInstalledPluginIndexSync(params)?.plugins[0]?.manifestHash).toBe("");
 
-    await withPluginCache(createPluginCache(), () =>
-      refreshPluginRegistry({ ...params, reason: "manual" }),
-    );
+    await freshCache(() => refreshPluginRegistry({ ...params, reason: "manual" }));
     await closeStateDatabaseForTest();
-    const persisted = withPluginCache(createPluginCache(), () =>
-      readPersistedInstalledPluginIndexSync(params),
-    );
-    expect(persisted?.plugins[0]).toMatchObject({
-      manifestPath: fixture.manifestPath,
-      manifestHash: fixture.manifestHash,
-      manifestFile: { size: fs.statSync(fixture.manifestPath).size },
-    });
+    const persisted = freshCache(() => readPersistedInstalledPluginIndexSync(params));
+    expect(persisted?.plugins[0]).toMatchObject(fixture.identity);
     expect(await inspectPluginRegistry(params)).toMatchObject({
       state: "fresh",
       refreshReasons: [],

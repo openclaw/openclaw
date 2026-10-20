@@ -14,25 +14,23 @@ const transport = vi.hoisted(() => ({
 }));
 const archiveSha = "a9eac48c6129bc44b6f93c9a9f48f6c700d191b7279a1e1915f28df6f59bb1af";
 const archiveIntegrity = "sha256-qerEjGEpvES2+Tyan0j2xwDRkbcnmh4ZFfKN9vWbsa8=";
+const version = { version: "2026.3.22", sha256hash: archiveSha };
+const installOptions = { mode: "update" as const, timeoutMs: 1000 };
 
 vi.mock("./install.js", async (original) => ({
   ...(await original<typeof import("./install.js")>()),
-  installPluginFromArchive: (...args: unknown[]) => transport.archive(...args),
-  installPluginFromPath: (...args: unknown[]) => transport.directory(...args),
+  installPluginFromArchive: transport.archive,
+  installPluginFromPath: transport.directory,
 }));
 vi.mock("../infra/clawhub-packages.js", async (original) => ({
   ...(await original<typeof import("../infra/clawhub-packages.js")>()),
-  fetchClawHubPackageDetail: (...args: unknown[]) => transport.metadata(...args),
-  fetchClawHubPackageVersion: async () => ({
-    version: { version: "2026.3.22", sha256hash: archiveSha },
-  }),
-  fetchClawHubPackageArtifact: async () => ({
-    version: { version: "2026.3.22", sha256hash: archiveSha },
-  }),
+  fetchClawHubPackageDetail: transport.metadata,
+  fetchClawHubPackageVersion: async () => ({ version }),
+  fetchClawHubPackageArtifact: async () => ({ version }),
 }));
 vi.mock("../infra/clawhub-artifacts.js", async (original) => ({
   ...(await original<typeof import("../infra/clawhub-artifacts.js")>()),
-  downloadClawHubPackageArchive: (...args: unknown[]) => transport.download(...args),
+  downloadClawHubPackageArchive: transport.download,
 }));
 
 beforeEach(() => {
@@ -63,8 +61,7 @@ describe("plugin transport work deadlines", () => {
     async (workTimeoutMs) => {
       const result = await installPluginFromClawHub({
         spec: "clawhub:demo@2026.3.22",
-        mode: "update",
-        timeoutMs: 1000,
+        ...installOptions,
         workTimeoutMs,
       });
       expect(result.ok).toBe(true);
@@ -92,8 +89,7 @@ describe("plugin transport work deadlines", () => {
         const result = await installPluginFromMarketplace({
           marketplace: manifest,
           plugin: "demo",
-          mode: "update",
-          timeoutMs: 1000,
+          ...installOptions,
           workTimeoutMs,
           trustedSourceLinkedOfficialInstall: true,
         });
