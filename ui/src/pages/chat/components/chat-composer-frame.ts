@@ -19,7 +19,7 @@ import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { insertComposerDictation, type ComposerDictationOwner } from "../composer-dictation.ts";
 import { normalizeChatComposerDraft } from "../composer-draft.ts";
 import type { ComposerMicrophoneOwner } from "../composer-microphone-picker.ts";
-import type { ChatRunControlsProps, MicrophonePickerProps } from "./chat-composer-controls.tsx";
+import type { MicrophonePickerProps } from "./chat-composer-controls.tsx";
 import {
   adjustTextareaHeight,
   disconnectTextareaOverflowObserver,
@@ -528,7 +528,7 @@ export function createChatComposerContext(
       }
     }
   };
-  const runControlsProps: ChatRunControlsProps = {
+  const runControlsProps = {
     canAbort: showAbortableUi,
     canSend: canSubmitDraft(visibleDraft),
     submitDisabledReason: props.submitDisabledReason,
@@ -552,14 +552,14 @@ export function createChatComposerContext(
     voiceVideoEnabled: Boolean(props.realtimeTalkVideoStream),
     voiceVideoPending: props.realtimeTalkVideoPending,
     onAbort: props.onAbort,
-    onSend: (event) => submitDraft(state.composerTextarea?.value ?? props.draft, event),
+    onSend: (event?: Event) => submitDraft(state.composerTextarea?.value ?? props.draft, event),
     onToggleVoice: props.onToggleRealtimeTalk ? handleVoicePrimaryAction : undefined,
     onToggleCamera: props.onToggleRealtimeCamera,
     microphonePicker,
     readDictation: dictation ? () => dictation : undefined,
     onDictationPointerDown: handleDictationStart,
     onDirectDictationStart: handleDictationStart,
-    onPrimaryActionPointerDown: (event) => {
+    onPrimaryActionPointerDown: (event: PointerEvent) => {
       if (state.composerTextarea?.matches(":focus")) {
         event.preventDefault();
       }
