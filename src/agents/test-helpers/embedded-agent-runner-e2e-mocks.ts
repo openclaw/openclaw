@@ -1,3 +1,8 @@
+/**
+ * Fast embedded-runner E2E mocks.
+ *
+ * Installs targeted Vitest module mocks for tests that do not need live plugin/runtime boot.
+ */
 import { vi } from "vitest";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createEmptyPluginMetadataSnapshot } from "../../plugins/plugin-metadata-empty.test-support.js";
@@ -20,7 +25,10 @@ type EmbeddedRunnerFastRunMockOptions = {
 };
 
 type EmbeddedRunnerBackoffMockOptions = {
-  computeBackoff: typeof import("../../infra/backoff.js").computeBackoff;
+  computeBackoff: (
+    policy: { initialMs: number; maxMs: number; factor: number; jitter: number },
+    attempt: number,
+  ) => number;
   sleepWithAbort: (ms: number, abortSignal?: AbortSignal) => unknown;
 };
 
@@ -53,21 +61,25 @@ function createEmptyPreparedModelRuntimeSnapshot(
   };
 }
 
+/** Installs baseline mocks for hook runner, context engine, and runtime plugin loading. */
 export function installEmbeddedRunnerBaseE2eMocks(options?: {
   hookRunner?: "minimal" | "full";
   pluginRegistry?: PreparedModelRuntimeSnapshot["pluginRegistry"];
 }): void {
-  vi.doMock("../../plugins/hook-runner-global.js", () => ({
-    getGlobalHookRunner: vi.fn(() => undefined),
-    initializeGlobalHookRunner: vi.fn(),
-    ...(options?.hookRunner === "full"
+  vi.doMock("../../plugins/hook-runner-global.js", () =>
+    options?.hookRunner === "full"
       ? {
+          getGlobalHookRunner: vi.fn(() => undefined),
           getGlobalPluginRegistry: vi.fn(() => null),
           hasGlobalHooks: vi.fn(() => false),
+          initializeGlobalHookRunner: vi.fn(),
           resetGlobalHookRunner: vi.fn(),
         }
-      : {}),
-  }));
+      : {
+          getGlobalHookRunner: vi.fn(() => undefined),
+          initializeGlobalHookRunner: vi.fn(),
+        },
+  );
   vi.doMock("../../context-engine/init.js", () => ({
     ensureContextEnginesInitialized: vi.fn(),
   }));
@@ -76,17 +88,22 @@ export function installEmbeddedRunnerBaseE2eMocks(options?: {
     hasSameContextEngineInstance: vi.fn(
       (left: ContextEngine, right: ContextEngine) => left === right,
     ),
-    resolveContextEngine: vi.fn(async () => ({ dispose: async () => undefined })),
+    resolveContextEngine: vi.fn(async () => ({
+      dispose: async () => undefined,
+    })),
     resolveContextEngineOwnerPluginId: vi.fn(() => undefined),
     resolveLogicalTurnContextEngines: vi.fn(async () => {
       const engine = {
         info: { id: "legacy", name: "Legacy Context Engine" },
-        ingest: async () => ({ ingested: false }),
-        assemble: async ({ messages }: { messages: unknown[] }) => ({
-          messages,
-          estimatedTokens: 0,
-        }),
-        compact: async () => ({ ok: true, compacted: false, reason: "nothing to compact" }),
+        async ingest() {
+          return { ingested: false };
+        },
+        async assemble({ messages }: { messages: unknown[] }) {
+          return { messages, estimatedTokens: 0 };
+        },
+        async compact() {
+          return { ok: true, compacted: false, reason: "nothing to compact" };
+        },
         async dispose() {},
       };
       const ref = { engine, registeredId: "legacy" };
@@ -124,22 +141,30 @@ export function installEmbeddedRunnerBaseE2eMocks(options?: {
   });
   vi.doMock("../../plugins/provider-hook-runtime.js", () => ({
     attachModelProviderRuntimePluginHandle: (model: unknown) => model,
+    prepareProviderExtraParams: vi.fn(() => undefined),
     resolveLoadedProviderPluginsForHooks: vi.fn(() => undefined),
     resolveLoadedProviderRuntimePlugin: vi.fn(() => undefined),
+    resolveProviderExtraParamsForTransport: vi.fn(() => undefined),
     resolveProviderHookPlugin: vi.fn(() => undefined),
     resolveProviderPluginsForHooks: vi.fn(() => []),
     resolveProviderRuntimePlugin: vi.fn(() => undefined),
     resolveProviderRuntimePluginHandle: vi.fn((params: object) => params),
+    wrapProviderStreamFn: vi.fn(() => undefined),
   }));
   vi.doMock("../harness/runtime-plugin.js", () => ({
     ensureSelectedAgentHarnessPlugin: vi.fn(async () => {}),
   }));
 }
 
+/** Installs mocks that route embedded attempts through a caller-provided fast run function. */
 export function installEmbeddedRunnerFastRunE2eMocks(
   options: EmbeddedRunnerFastRunMockOptions,
 ): void {
-  const createMockAgentHarness = (params: Parameters<typeof resolveMockHarnessId>[0]) => {
+  const createMockAgentHarness = (params: {
+    provider?: string;
+    agentHarnessId?: string;
+    agentHarnessRuntimeOverride?: string;
+  }) => {
     const id = resolveMockHarnessId(params);
     return {
       id,
@@ -159,52 +184,68 @@ export function installEmbeddedRunnerFastRunE2eMocks(
   // mock-isolation: harness fixtures supply runtime plans without loading live plugin or auth catalogs.
   vi.doMock("../runtime-plan/build.js", () => ({
     buildAgentRuntimePlan: vi.fn(
-      (params: Parameters<typeof import("../runtime-plan/build.js").buildAgentRuntimePlan>[0]) => {
-        const resolvedRef = {
+      (params: {
+        provider: string;
+        modelId: string;
+        modelApi?: string | null;
+        harnessId?: string;
+        sessionAuthProfileId?: string;
+      }) => ({
+        resolvedRef: {
           provider: params.provider,
           modelId: params.modelId,
           ...(params.modelApi ? { modelApi: params.modelApi } : {}),
           ...(params.harnessId ? { harnessId: params.harnessId } : {}),
-        };
-        return {
-          resolvedRef,
-          auth: {
-            providerForAuth: params.provider,
-            authProfileProviderForAuth: params.sessionAuthProfileId?.split(":", 1)[0] ?? "",
-            forwardedAuthProfileId: params.sessionAuthProfileId,
+        },
+        auth: {
+          providerForAuth: params.provider,
+          authProfileProviderForAuth: params.sessionAuthProfileId?.split(":", 1)[0] ?? "",
+          forwardedAuthProfileId: params.sessionAuthProfileId,
+        },
+        prompt: {
+          provider: params.provider,
+          modelId: params.modelId,
+          resolveSystemPromptContribution: vi.fn(() => undefined),
+          transformSystemPrompt: vi.fn((context) => context.systemPrompt),
+        },
+        tools: {
+          normalize: vi.fn((tools: unknown[]) => tools),
+          logDiagnostics: vi.fn(),
+        },
+        transcript: {
+          policy: {
+            sanitizeMode: "full",
+            sanitizeToolCallIds: true,
+            preserveNativeAnthropicToolUseIds: false,
+            repairToolUseResultPairing: true,
+            preserveSignatures: false,
+            dropThinkingBlocks: false,
+            applyGoogleTurnOrdering: false,
+            validateGeminiTurns: false,
+            validateAnthropicTurns: false,
+            allowSyntheticToolResults: true,
           },
-          prompt: {
-            provider: params.provider,
-            modelId: params.modelId,
-            resolveSystemPromptContribution: vi.fn(() => undefined),
-            transformSystemPrompt: vi.fn((context) => context.systemPrompt),
-          },
-          tools: { normalize: vi.fn((tools: unknown[]) => tools), logDiagnostics: vi.fn() },
-          transcript: {
-            policy: {
-              sanitizeMode: "full",
-              sanitizeToolCallIds: true,
-              preserveNativeAnthropicToolUseIds: false,
-              repairToolUseResultPairing: true,
-              preserveSignatures: false,
-              dropThinkingBlocks: false,
-              applyGoogleTurnOrdering: false,
-              validateGeminiTurns: false,
-              validateAnthropicTurns: false,
-              allowSyntheticToolResults: true,
-            },
-            resolvePolicy: vi.fn(() => undefined),
-          },
-          delivery: { resolveFollowupRoute: vi.fn(() => undefined) },
-          outcome: { classifyRunResult: vi.fn(() => undefined) },
-          transport: { extraParams: {}, resolveExtraParams: vi.fn(() => ({})) },
-          observability: {
-            resolvedRef: `${params.provider}/${params.modelId}`,
-            ...resolvedRef,
-            ...(params.sessionAuthProfileId ? { authProfileId: params.sessionAuthProfileId } : {}),
-          },
-        };
-      },
+          resolvePolicy: vi.fn(() => undefined),
+        },
+        delivery: {
+          resolveFollowupRoute: vi.fn(() => undefined),
+        },
+        outcome: {
+          classifyRunResult: vi.fn(() => undefined),
+        },
+        transport: {
+          extraParams: {},
+          resolveExtraParams: vi.fn(() => ({})),
+        },
+        observability: {
+          resolvedRef: `${params.provider}/${params.modelId}`,
+          provider: params.provider,
+          modelId: params.modelId,
+          ...(params.modelApi ? { modelApi: params.modelApi } : {}),
+          ...(params.harnessId ? { harnessId: params.harnessId } : {}),
+          ...(params.sessionAuthProfileId ? { authProfileId: params.sessionAuthProfileId } : {}),
+        },
+      }),
     ),
   }));
   vi.doMock("../runtime-plan/prepare-auth.js", async () => {
@@ -214,25 +255,43 @@ export function installEmbeddedRunnerFastRunE2eMocks(
     return {
       ...actual,
       prepareAgentRuntimeAuth: vi.fn(
-        (params: Parameters<typeof actual.prepareAgentRuntimeAuth>[0]) => {
+        (params: {
+          provider: string;
+          modelId: string;
+          config?: Parameters<typeof resolveAuthProfileOrder>[0]["cfg"];
+          authProfileStore?: AuthProfileStore;
+          sessionAuthProfileId?: string;
+          sessionAuthProfileSource?: "auto" | "user";
+          harnessId?: string;
+          harnessRuntime?: string;
+        }) => {
           const store: AuthProfileStore = params.authProfileStore ?? { version: 1, profiles: {} };
           const authProvider =
             params.harnessId === "codex" || params.harnessRuntime === "codex"
               ? "openai"
               : params.provider;
-          const requested = params.sessionAuthProfileId?.trim() || undefined;
-          const requestedCredential = requested ? store.profiles[requested] : undefined;
-          const preferred = requestedCredential?.provider === authProvider ? requested : undefined;
-          const pinned = params.sessionAuthProfileSource === "user" ? preferred : undefined;
-          const resolved = resolveAuthProfileOrder({
+          const requestedProfileId = params.sessionAuthProfileId?.trim() || undefined;
+          const requestedCredential = requestedProfileId
+            ? store.profiles[requestedProfileId]
+            : undefined;
+          const matchingRequestedProfileId =
+            requestedCredential?.provider === authProvider ? requestedProfileId : undefined;
+          const userPinnedProfileId =
+            params.sessionAuthProfileSource === "user" ? matchingRequestedProfileId : undefined;
+          const resolvedProfileIds = resolveAuthProfileOrder({
             cfg: params.config,
             store,
             provider: authProvider,
-            preferredProfile: preferred,
+            preferredProfile: matchingRequestedProfileId,
             forModel: params.modelId,
           });
-          const ordered = pinned ? [pinned, ...resolved.filter((id) => id !== pinned)] : resolved;
-          const profileIds = ordered.length > 0 ? ordered : [undefined];
+          const orderedProfileIds = userPinnedProfileId
+            ? [
+                userPinnedProfileId,
+                ...resolvedProfileIds.filter((profileId) => profileId !== userPinnedProfileId),
+              ]
+            : resolvedProfileIds;
+          const profileIds = orderedProfileIds.length > 0 ? orderedProfileIds : [undefined];
           const attempts = profileIds.map((profileId, index) => {
             const credential = profileId ? store.profiles[profileId] : undefined;
             const canForwardProfile = credential?.provider === authProvider;
@@ -244,7 +303,7 @@ export function installEmbeddedRunnerFastRunE2eMocks(
                 ? {
                     forwardedAuthProfileId: profileId,
                     forwardedAuthProfileSource:
-                      pinned === profileId ? ("user" as const) : ("auto" as const),
+                      userPinnedProfileId === profileId ? ("user" as const) : ("auto" as const),
                     forwardedAuthProfileCandidateIds: profileIds
                       .slice(index)
                       .filter((candidate): candidate is string => Boolean(candidate)),
@@ -256,7 +315,11 @@ export function installEmbeddedRunnerFastRunE2eMocks(
               ? { kind: "profile" as const, profileId, plan }
               : { kind: "implicit" as const, plan };
           });
-          return { plan: attempts[0]!.plan, attempts };
+          const firstAttempt = attempts[0];
+          if (!firstAttempt) {
+            throw new Error("fast embedded runner auth mock produced no attempts");
+          }
+          return { plan: firstAttempt.plan, attempts };
         },
       ),
     };
@@ -284,6 +347,7 @@ export function installEmbeddedRunnerFastRunE2eMocks(
     prepareProviderRuntimeAuth: options.prepareProviderRuntimeAuth ?? vi.fn(async () => undefined),
     prepareProviderSyntheticAuthWithPlugin: vi.fn(async () => undefined),
     resolveProviderAuthProfileId: vi.fn(() => undefined),
+    resolveProviderCapabilitiesWithPlugin: vi.fn(() => undefined),
     resolveProviderDeprecatedAuthProfileIds: vi.fn(() => []),
     resolveProviderReasoningOutputModeWithPlugin: vi.fn(() => undefined),
     resolveProviderSyntheticAuthWithPlugin: vi.fn(() => undefined),
@@ -306,13 +370,16 @@ function resolveMockHarnessId(params: {
     : "openclaw";
 }
 
+/** Installs deterministic backoff mocks for retry/timeout E2E tests. */
 export function installEmbeddedRunnerBackoffE2eMocks(
   options: EmbeddedRunnerBackoffMockOptions,
 ): void {
   vi.doMock("../../infra/backoff.js", () => ({
-    computeBackoff: (...args: Parameters<EmbeddedRunnerBackoffMockOptions["computeBackoff"]>) =>
-      options.computeBackoff(...args),
-    sleepWithAbort: (...args: Parameters<EmbeddedRunnerBackoffMockOptions["sleepWithAbort"]>) =>
-      options.sleepWithAbort(...args),
+    computeBackoff: (
+      policy: { initialMs: number; maxMs: number; factor: number; jitter: number },
+      attempt: number,
+    ) => options.computeBackoff(policy, attempt),
+    sleepWithAbort: (ms: number, abortSignal?: AbortSignal) =>
+      options.sleepWithAbort(ms, abortSignal),
   }));
 }
