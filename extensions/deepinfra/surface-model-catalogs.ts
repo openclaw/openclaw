@@ -42,9 +42,12 @@ async function listDeepInfraGenerationCatalog(
     return null;
   }
   const catalog = await discoverDeepInfraSurfaces({ hasApiKey: true, env: ctx.env });
+  if (!catalog) {
+    return null;
+  }
   const models = kind === "image_generation" ? catalog.imageGen : catalog.videoGen;
-  // Non-live and empty surfaces leave the static fallback authoritative.
-  if (!catalog.live || models.length === 0) {
+  // Empty surfaces leave the registered provider's fallback authoritative.
+  if (models.length === 0) {
     return null;
   }
   return models.map((model) => {
@@ -84,7 +87,7 @@ export async function resolveDeepInfraVideoModelCapabilities(
     env: process.env,
   });
   const entry =
-    catalog.videoGen.find((m) => m.id === normalized) ??
-    catalog.videoGen.find((m) => m.id === rawId);
+    catalog?.videoGen.find((m) => m.id === normalized) ??
+    catalog?.videoGen.find((m) => m.id === rawId);
   return entry ? buildDeepInfraVideoModelCapabilities() : undefined;
 }
