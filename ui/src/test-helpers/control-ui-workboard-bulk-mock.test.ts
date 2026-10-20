@@ -50,13 +50,15 @@ it.for(["move", "archive", "delete"] as const)(
       expect(result).toEqual({ deleted: true });
       expect((await socket.request("deleted", "workboard.cards.list", {})).cards).toEqual([]);
     } else {
-      expect(result).toMatchObject({ card: { updatedAt: expect.any(Number) } });
+      expect(result).toMatchObject({
+        card: {
+          updatedAt: expect.any(Number),
+          ...(action === "move"
+            ? { status: "done", position: 2000 }
+            : { metadata: { archivedAt: expect.any(Number) } }),
+        },
+      });
       expect(result).not.toMatchObject({ card: { updatedAt: card.updatedAt } });
-      if (action === "move") {
-        expect(result).toMatchObject({ card: { status: "done", position: 2000 } });
-      } else {
-        expect(result).toMatchObject({ card: { metadata: { archivedAt: expect.any(Number) } } });
-      }
     }
     expect(socket.frames.filter((frame) => frame.type === "event")).toHaveLength(events.length + 1);
   },
@@ -78,23 +80,15 @@ it("returns link cleanup revisions so the next guarded mock delete can succeed",
   installBoard(gatewayPage, [parent, child]);
   const socket = gatewayPage.connect();
   await flushMockTimers();
-  expect(
-    await socket.request("parent", "workboard.cards.delete", {
-      id: parent.id,
-      expectedUpdatedAt: 10,
-    }),
-  ).toEqual({
+  const deleteCard = (id: string, expectedUpdatedAt: number) =>
+    socket.request(id, "workboard.cards.delete", { id, expectedUpdatedAt });
+  expect(await deleteCard(parent.id, 10)).toEqual({
     deleted: true,
     referenceUpdates: [{ id: child.id, previousUpdatedAt: 10, updatedAt: 11 }],
   });
   expect((await socket.request("list", "workboard.cards.list", {})).cards).toEqual([
     { ...child, updatedAt: 11, metadata: parent.metadata },
   ]);
-  expect(
-    await socket.request("child", "workboard.cards.delete", {
-      id: child.id,
-      expectedUpdatedAt: 11,
-    }),
-  ).toEqual({ deleted: true });
+  expect(await deleteCard(child.id, 11)).toEqual({ deleted: true });
   expect((await socket.request("empty", "workboard.cards.list", {})).cards).toEqual([]);
 });

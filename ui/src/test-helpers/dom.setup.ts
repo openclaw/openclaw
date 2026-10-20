@@ -28,86 +28,71 @@ if (typeof document !== "undefined" && !("__vitest_browser__" in globalThis)) {
 
   // JSDOM has no layout. Geometry/visibility tests install controlled observers;
   // ordinary rendering fixtures treat their mounted content as visible.
-  if (typeof matchMedia === "undefined") {
-    Object.defineProperty(globalThis, "matchMedia", {
-      configurable: true,
-      writable: true,
-      value: (media: string) => ({
-        media,
-        matches: false,
-        onchange: null,
-        addListener() {},
-        removeListener() {},
-        addEventListener() {},
-        removeEventListener() {},
-        dispatchEvent: () => true,
-      }),
-    });
-  }
-  if (typeof ResizeObserver === "undefined") {
-    Object.defineProperty(globalThis, "ResizeObserver", {
-      configurable: true,
-      writable: true,
-      value: class {
-        observe() {}
-        unobserve() {}
-        disconnect() {}
-      },
-    });
-  }
-  if (typeof IntersectionObserver === "undefined") {
-    Object.defineProperty(globalThis, "IntersectionObserver", {
-      configurable: true,
-      writable: true,
-      value: class implements IntersectionObserver {
-        readonly root: Document | Element | null;
-        readonly rootMargin: string;
-        readonly scrollMargin = "0px";
-        readonly thresholds = [0];
-        private readonly targets = new Set<Element>();
+  const globals = {
+    matchMedia: (media: string) => ({
+      media,
+      matches: false,
+      onchange: null,
+      addListener() {},
+      removeListener() {},
+      addEventListener() {},
+      removeEventListener() {},
+      dispatchEvent: () => true,
+    }),
+    ResizeObserver: class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+    IntersectionObserver: class implements IntersectionObserver {
+      readonly root: Document | Element | null;
+      readonly rootMargin: string;
+      readonly scrollMargin = "0px";
+      readonly thresholds = [0];
+      private readonly targets = new Set<Element>();
 
-        constructor(
-          private readonly callback: IntersectionObserverCallback,
-          options?: IntersectionObserverInit,
-        ) {
-          this.root = options?.root ?? null;
-          this.rootMargin = options?.rootMargin ?? "0px";
-        }
+      constructor(
+        private readonly callback: IntersectionObserverCallback,
+        options?: IntersectionObserverInit,
+      ) {
+        this.root = options?.root ?? null;
+        this.rootMargin = options?.rootMargin ?? "0px";
+      }
 
-        observe(target: Element) {
-          this.targets.add(target);
-          queueMicrotask(() => {
-            if (!this.targets.has(target)) {
-              return;
-            }
-            const bounds = target.getBoundingClientRect();
-            this.callback(
-              [
-                {
-                  target,
-                  time: performance.now(),
-                  rootBounds: null,
-                  boundingClientRect: bounds,
-                  intersectionRect: bounds,
-                  intersectionRatio: 1,
-                  isIntersecting: true,
-                },
-              ],
-              this,
-            );
-          });
-        }
-        unobserve(target: Element) {
-          this.targets.delete(target);
-        }
-        disconnect() {
-          this.targets.clear();
-        }
-        takeRecords(): IntersectionObserverEntry[] {
-          return [];
-        }
-      },
-    });
+      observe(target: Element) {
+        this.targets.add(target);
+        queueMicrotask(() => {
+          if (!this.targets.has(target)) {
+            return;
+          }
+          const bounds = target.getBoundingClientRect();
+          const entry = {
+            target,
+            time: performance.now(),
+            rootBounds: null,
+            boundingClientRect: bounds,
+            intersectionRect: bounds,
+            intersectionRatio: 1,
+            isIntersecting: true,
+          };
+          this.callback([entry], this);
+        });
+      }
+      unobserve(target: Element) {
+        this.targets.delete(target);
+      }
+      disconnect() {
+        this.targets.clear();
+      }
+      takeRecords(): IntersectionObserverEntry[] {
+        return [];
+      }
+    },
+  };
+  for (const [key, value] of Object.entries(globals)) {
+    if (Reflect.get(globalThis, key) === undefined) {
+      Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
+    }
   }
 
   defineMissing(Element.prototype, "checkVisibility", {

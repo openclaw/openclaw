@@ -1,26 +1,26 @@
 import type { NativeDeviceSettingsSnapshot } from "../app/native-device-settings.ts";
 
+type Present<T, K extends keyof T> = T & { [P in K]-?: NonNullable<T[P]> };
+const deviceInfo = { appVersion: "2026.9.3", appBuild: "42", profileName: null };
+
 type NativeDeviceSettingsWithLocation = NativeDeviceSettingsSnapshot & {
   permissions: NativeDeviceSettingsSnapshot["permissions"] & {
     location: NonNullable<NativeDeviceSettingsSnapshot["permissions"]["location"]>;
   };
 };
 
-type MacDeviceSettingsSnapshot = NativeDeviceSettingsWithLocation & {
-  app: NonNullable<NativeDeviceSettingsSnapshot["app"]>;
-  capabilities: NonNullable<NativeDeviceSettingsSnapshot["capabilities"]>;
-  browser: NonNullable<NativeDeviceSettingsSnapshot["browser"]> & {
-    cookieSync: NonNullable<NonNullable<NativeDeviceSettingsSnapshot["browser"]>["cookieSync"]>;
-  };
-  voice: NativeDeviceSettingsSnapshot["voice"] &
-    Required<Pick<NativeDeviceSettingsSnapshot["voice"], "microphone" | "locale">>;
-  updates: NonNullable<NativeDeviceSettingsSnapshot["updates"]>;
+type MacDeviceSettingsSnapshot = Present<
+  NativeDeviceSettingsWithLocation,
+  "app" | "capabilities" | "updates"
+> & {
+  browser: Present<NonNullable<NativeDeviceSettingsSnapshot["browser"]>, "cookieSync">;
+  voice: Present<NativeDeviceSettingsSnapshot["voice"], "microphone" | "locale">;
 };
 
 export function createNativeDeviceSettingsSnapshot(): MacDeviceSettingsSnapshot {
   return {
     contract: 1,
-    device: { platform: "macos", appVersion: "2026.9.3", appBuild: "42", profileName: null },
+    device: { ...deviceInfo, platform: "macos" },
     app: {
       showDockIcon: true,
       nativeExperienceEnabled: false,
@@ -107,14 +107,7 @@ export function createNativeDeviceSettingsSnapshot(): MacDeviceSettingsSnapshot 
 export function createIosNativeDeviceSettingsSnapshot(): NativeDeviceSettingsWithLocation {
   return {
     contract: 1,
-    device: {
-      platform: "ios",
-      formFactor: "phone",
-      modelName: "iPhone",
-      appVersion: "2026.9.3",
-      appBuild: "42",
-      profileName: null,
-    },
+    device: { ...deviceInfo, platform: "ios", formFactor: "phone", modelName: "iPhone" },
     app: { appearance: "system", notificationsEnabled: true },
     capabilities: {
       cameraEnabled: true,
@@ -151,13 +144,7 @@ export function createTauriDeviceSettingsSnapshot(platform: "linux" | "windows" 
   return {
     contract: 1,
     revision: 1,
-    device: {
-      platform,
-      formFactor: "desktop",
-      appVersion: "2026.9.3",
-      appBuild: "42",
-      profileName: null,
-    },
+    device: { ...deviceInfo, platform, formFactor: "desktop" },
     browser: { chromeSetupActions: ["inspect", "install", "verify"] },
     capabilities: { desktopSharingEnabled: true },
     desktopSharing: { state: "running" },

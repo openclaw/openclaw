@@ -18,14 +18,10 @@ export function createTeamScaleSessionInventory({
 }: {
   now: number;
   people: ControlUiMockPresenceUser[];
-  counts: {
-    sessions: number;
-    owners: number;
-    pinned: number;
-    childSessions: number;
-    cronSessions: number;
-    systemSessions: number;
-  };
+  counts: Record<
+    "sessions" | "owners" | "pinned" | "childSessions" | "cronSessions" | "systemSessions",
+    number
+  >;
 }) {
   const sessions: TeamScaleSession[] = Array.from({ length: counts.sessions }, (_, index) => {
     const pinned = index >= counts.sessions - counts.pinned;
@@ -50,7 +46,6 @@ export function createTeamScaleSessionInventory({
       snoozedUntil: index >= 160 && index < 220 ? now + 3_600_000 + index * 60_000 : undefined,
       createdAt: now - 86_400_000 - index * 1_000,
       snapshotAt: now,
-      owner: { actor: { type: "human", id: owner.id, label: owner.name } },
       participants: [{ identity: { type: "profile", id: owner.id }, label: owner.name }],
       hasActiveRun: running,
       status: running ? "running" : "done",
