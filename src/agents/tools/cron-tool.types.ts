@@ -48,6 +48,8 @@ export type CronCreatorToolAuthoritySnapshot = Omit<
 };
 
 export type CronToolOptions = {
+  /** Recovery may inspect recorded state without changing automations or waking work. */
+  readOnly?: boolean;
   agentSessionKey?: string;
   agentId?: string;
   /** Authenticated source account; authority must not be inferred from delivery. */

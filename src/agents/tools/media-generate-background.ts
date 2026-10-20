@@ -380,7 +380,7 @@ export async function runMediaGenerationTask(params: {
           return { execution: start() };
         });
       } catch (error) {
-        lifecycle.failTaskRun({ handle, error });
+        lifecycle.failTaskRun({ handle });
         throw error;
       }
     };
@@ -429,8 +429,6 @@ export async function runMediaGenerationTask(params: {
       const executed = await execution;
       lifecycle.completeTaskRun({
         handle,
-        provider: executed.provider,
-        model: executed.model,
         count: executed.count,
       });
       return {
@@ -438,7 +436,7 @@ export async function runMediaGenerationTask(params: {
         details: executed.details,
       };
     } catch (error) {
-      lifecycle.failTaskRun({ handle, error });
+      lifecycle.failTaskRun({ handle });
       throw error;
     }
   } catch (error) {

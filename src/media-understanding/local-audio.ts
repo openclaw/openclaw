@@ -280,6 +280,9 @@ export async function inspectLocalAudioSelection(
     "--output-template",
     "{filename}",
   ];
+  // Both Whisper CLIs take bare language codes and reject region tags such as "pt-BR".
+  const languageCode = options.language?.trim().split(/[-_]/, 1)[0];
+  const languageArgs = languageCode ? ["--language", languageCode] : [];
   const whisperArgs = [
     "-m",
     // Args are only executed when whisperReady, which requires a model.
@@ -288,6 +291,8 @@ export async function inspectLocalAudioSelection(
     "-of",
     "{{OutputBase}}",
     "-nt",
+    // whisper.cpp assumes English without a language, unlike Python Whisper's autodetection.
+    ...languageArgs,
     "{{AttachmentPath}}",
   ];
   const sherpaArgs = [
@@ -306,7 +311,7 @@ export async function inspectLocalAudioSelection(
     "{{OutputDir}}",
     "--verbose",
     "False",
-    ...(options.language ? ["--language", "{{Language}}"] : []),
+    ...languageArgs,
     "{{AttachmentPath}}",
   ];
 

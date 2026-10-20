@@ -528,6 +528,7 @@ async function readSessionTranscriptSummary(
 export {
   createSession,
   readEffectiveTools,
+  readQaSessionTranscriptEvents,
   readRawQaSessionStore,
   readSessionTranscriptSummary,
   readSessionToolActivity,

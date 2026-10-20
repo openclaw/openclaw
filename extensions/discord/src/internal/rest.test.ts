@@ -150,22 +150,26 @@ describe("RequestClient", () => {
     ]);
   });
 
-  it("drops stale background requests instead of replaying obsolete reads", async () => {
+  it("executes an aged queued read after the active request finishes", async () => {
     fakeClock();
     const firstResponse = createDeferred<Response>();
-    const fetchSpy = vi.fn(async () => await firstResponse.promise);
+    const fetchSpy = vi.fn(async () =>
+      fetchSpy.mock.calls.length === 1
+        ? await firstResponse.promise
+        : createJsonResponse({ ok: "second" }),
+    );
     const client = requestClient(fetchSpy, { timeout: 30_000 });
 
     const first = client.get("/guilds/g1/roles");
-    const stale = client.get("/guilds/g1/roles");
+    const second = client.get("/guilds/g1/roles");
     await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
 
     await vi.advanceTimersByTimeAsync(20_001);
     firstResponse.resolve(createJsonResponse({ ok: "first" }));
 
     await expect(first).resolves.toEqual({ ok: "first" });
-    await expect(stale).rejects.toThrow(/Dropped stale background request/);
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    await expect(second).resolves.toEqual({ ok: "second" });
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 
   it("keeps standard mutations queued until Discord accepts or rejects them", async () => {

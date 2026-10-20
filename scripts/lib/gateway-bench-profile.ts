@@ -33,6 +33,12 @@ export type GatewayResourceSnapshot = GatewayCpuUsageSnapshot & {
   memory: NodeJS.MemoryUsage;
   activeResources: Record<string, number>;
   runtime: { node: string; platform: string; arch: string };
+  sessionCensus?: {
+    scope: "source-main-isolate";
+    SessionManager: number;
+    AgentSession: number;
+    Agent: number;
+  };
 };
 
 export type GatewayBenchCommand =
@@ -50,6 +56,7 @@ export type GatewayBenchCommand =
       action: "sample";
       initial?: boolean;
       collectGarbage?: boolean;
+      sessionCensus?: boolean;
       snapshotPath?: string;
     };
 
@@ -248,7 +255,12 @@ export async function readGatewayCpuUsage(child: ChildProcess): Promise<GatewayC
 /** Samples the Gateway itself, not the controller or its descendants. */
 export async function readGatewayResources(
   child: ChildProcess,
-  options: { initial?: boolean; collectGarbage?: boolean; snapshotPath?: string } = {},
+  options: {
+    initial?: boolean;
+    collectGarbage?: boolean;
+    sessionCensus?: boolean;
+    snapshotPath?: string;
+  } = {},
 ): Promise<GatewayResourceSnapshot> {
   const reply = await sendGatewayBenchCommand(child, {
     channel: GATEWAY_PROFILE_CHANNEL,

@@ -44,7 +44,6 @@ import {
 import {
   appendMemoryWikiLog,
   hashMemoryWikiVaultSources,
-  loadMemoryWikiValidatedVaultIdentity,
   loadMemoryWikiVaultIdentity,
 } from "./log.js";
 import {
@@ -1001,7 +1000,7 @@ async function compileMemoryWikiVaultUnlocked(
       });
       options?.signal?.throwIfAborted();
     },
-    () => loadMemoryWikiValidatedVaultIdentity(rootDir),
+    () => loadMemoryWikiVaultIdentity(rootDir),
   );
   await appendMemoryWikiLog(rootDir, {
     type: "compile",

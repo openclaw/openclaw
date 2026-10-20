@@ -190,6 +190,7 @@ export async function createCreatorTransportTools(params: {
   admitted: runContext.AdmittedRunContext;
   creator?: cronAuthority.CronCreatorAuthorityCapability;
   senderIsOwner: boolean;
+  forceRestartSafeTools?: boolean;
   workspaceDir?: string;
   sessionPermissionPolicy?: PreparedSessionPermissionPolicy;
   sandbox?: SandboxContext;
@@ -303,6 +304,7 @@ export async function createCreatorTransportTools(params: {
       config,
       agentId: "main",
       ...toolContext,
+      forceRestartSafeTools: params.forceRestartSafeTools,
       sessionPermissionPolicy: params.sessionPermissionPolicy,
       sandbox: params.sandbox,
       cronCreatorToolAllowlistRef: creatorTools,

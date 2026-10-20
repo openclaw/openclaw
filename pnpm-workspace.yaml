@@ -130,6 +130,10 @@ allowBuilds:
   node-pty: true
 
 packageExtensions:
+  # rc14 imports long directly; protobufjs's transitive edge is not visible in isolated graphs.
+  "baileys@7.0.0-rc14":
+    dependencies:
+      long: 5.3.2
   # The transient npm lock generator also needs the peer marked optional.
   baileys:
     peerDependenciesMeta:

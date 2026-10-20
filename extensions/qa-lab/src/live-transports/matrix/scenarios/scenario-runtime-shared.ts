@@ -146,9 +146,7 @@ export function buildMatrixReplyArtifact(
   event: MatrixQaObservedEvent,
   token?: string,
 ): MatrixQaReplyArtifact {
-  const replyBody = event.body?.trim();
   return {
-    bodyPreview: truncateMatrixQaPreview(replyBody),
     eventId: event.eventId,
     mentions: event.mentions,
     relatesTo: event.relatesTo,
@@ -399,14 +397,6 @@ export async function runTopologyScopedTopLevelScenario(params: {
   });
   assertTopLevelReplyArtifact(`reply in ${params.roomKey}`, result.reply);
   return {
-    artifacts: {
-      actorUserId,
-      driverEventId: result.driverEventId,
-      reply: result.reply,
-      roomKey: params.roomKey,
-      token: result.token,
-      triggerBody: result.body,
-    },
     details: [
       `room key: ${params.roomKey}`,
       `room id: ${roomId}`,
@@ -469,13 +459,6 @@ export async function runNoReplyExpectedScenario(
     throw new Error("Matrix no-reply observation did not observe the trigger event");
   }
   return {
-    artifacts: {
-      actorUserId: params.actorUserId,
-      driverEventId: triggerEventId,
-      expectedNoReplyWindowMs: params.timeoutMs,
-      token: params.token,
-      triggerBody: params.body,
-    },
     details: [
       `trigger event: ${triggerEventId}`,
       `trigger sender: ${params.actorUserId}`,

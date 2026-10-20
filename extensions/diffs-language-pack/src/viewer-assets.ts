@@ -17,7 +17,6 @@ type ServedViewerAsset = {
 };
 
 type RuntimeAssetCache = {
-  mtimeMs: number;
   runtimeBody: Buffer;
   loaderBody: string;
 };
@@ -65,17 +64,15 @@ export async function getServedViewerAsset(pathname: string): Promise<ServedView
 }
 
 async function loadViewerAssets(): Promise<RuntimeAssetCache> {
-  const runtimeUrl = await resolveViewerRuntimeFileUrl();
-  const runtimePath = fileURLToPath(runtimeUrl);
-  const runtimeStat = await fs.stat(runtimePath);
-  if (runtimeAssetCache && runtimeAssetCache.mtimeMs === runtimeStat.mtimeMs) {
+  if (runtimeAssetCache) {
     return runtimeAssetCache;
   }
 
+  const runtimeUrl = await resolveViewerRuntimeFileUrl();
+  const runtimePath = fileURLToPath(runtimeUrl);
   const runtimeBody = await fs.readFile(runtimePath);
   const hash = crypto.createHash("sha1").update(runtimeBody).digest("hex").slice(0, 12);
   runtimeAssetCache = {
-    mtimeMs: runtimeStat.mtimeMs,
     runtimeBody,
     loaderBody: `import "${VIEWER_RUNTIME_RELATIVE_IMPORT_PATH}?v=${hash}";\n`,
   };

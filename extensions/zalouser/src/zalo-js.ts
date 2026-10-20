@@ -424,11 +424,6 @@ async function ensureApi(
   apiInitByProfile.set(profile, initPromise);
   try {
     return await initPromise;
-  } catch (error) {
-    if (apiInitByProfile.get(profile) === initPromise) {
-      apiByProfile.delete(profile);
-    }
-    throw error;
   } finally {
     if (apiInitByProfile.get(profile) === initPromise) {
       apiInitByProfile.delete(profile);

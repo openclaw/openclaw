@@ -36,13 +36,6 @@ export async function runHomeserverRestartResumeScenario(context: MatrixQaScenar
     tokenPrefix: "MATRIX_QA_HOMESERVER",
   });
   return {
-    artifacts: {
-      driverEventId: resumed.driverEventId,
-      reply: resumed.reply,
-      roomId,
-      token: resumed.token,
-      transportInterruption: "homeserver-restart",
-    },
     details: [
       `room id: ${roomId}`,
       "transport interruption: homeserver-restart",
@@ -95,16 +88,6 @@ export async function runInitialCatchupThenIncrementalScenario(context: MatrixQa
   });
 
   return {
-    artifacts: {
-      catchupDriverEventId,
-      catchupReply,
-      catchupToken,
-      incrementalDriverEventId: incremental.driverEventId,
-      incrementalReply: incremental.reply,
-      incrementalToken: incremental.token,
-      restartSignal: "SIGUSR2",
-      roomId,
-    },
     details: [
       `room id: ${roomId}`,
       "restart signal: SIGUSR2",
@@ -159,7 +142,6 @@ export async function runStaleSyncReplayDedupeScenario(context: MatrixQaScenario
     await rewriteMatrixSyncStoreCursor({
       cursor: staleCursor,
       pathname: syncStore.pathname,
-      source: syncStore.source,
       stateKey: syncStore.stateKey,
     });
   });
@@ -200,19 +182,6 @@ export async function runStaleSyncReplayDedupeScenario(context: MatrixQaScenario
   });
 
   return {
-    artifacts: {
-      dedupeCommitObserved: true,
-      duplicateWindowMs: resolveMatrixQaNoReplyWindowMs(context.timeoutMs),
-      firstDriverEventId: replayDriverEventId,
-      firstReply,
-      firstToken: replayToken,
-      freshDriverEventId: postRestart.driverEventId,
-      freshReply: postRestart.reply,
-      freshToken: postRestart.token,
-      restartSignal: "hard-restart",
-      roomId,
-      staleSyncCursor: staleCursor,
-    },
     details: [
       `room id: ${roomId}`,
       "restart signal: hard-restart",

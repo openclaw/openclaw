@@ -1,9 +1,10 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { resolveControlUiAssetHealth } from "./control-ui-assets.js";
-import { hasErrnoCode } from "./errno.js";
+import { hasErrnoCode, ignoreMissingPath } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import { readPackageManagerSpec } from "./package-json.js";
 import { DEV_BRANCH } from "./update-channels.js";
@@ -330,6 +331,24 @@ async function testPreflightCandidate(
     // Global source exposure can run package lifecycle scripts. Validate and retain
     // the resulting candidate only after that preparation finishes.
     await params.prepareGitExposure?.(params.worktreeDir, candidateSha, candidateCommand.env);
+    // Exposure can run another install after postbuild. Its final topology, not
+    // the earlier build graph, must own the packaged plugin dependency links.
+    const metadataScript = "scripts/copy-bundled-plugin-metadata.mjs";
+    if (
+      params.prepareGitExposure &&
+      (
+        await fs.stat(path.join(params.worktreeDir, metadataScript)).catch(ignoreMissingPath)
+      )?.isFile()
+    ) {
+      const relink = await runCandidateCheck(
+        "bundled-plugin-dependency-links",
+        ["node", metadataScript],
+        candidateCommand.env,
+      );
+      if (relink) {
+        return { status: classifyPreflightFailure(relink) };
+      }
+    }
     await candidateCommand.restoreWorkspace?.();
     params.steps.push(...((await params.validateCandidate(params.worktreeDir)) ?? []));
     // Activation checks out candidateSha and promotes only generated runtime paths.

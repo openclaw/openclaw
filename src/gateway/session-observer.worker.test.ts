@@ -108,13 +108,15 @@ function observerFixture(
   const persisted = vi.fn<NonNullable<SessionObserverDeps["persistDigest"]>>(async () => true);
   let now = 1_000;
   vi.spyOn(Date, "now").mockImplementation(() => now);
-  const cfg = { session: { store: useDefaultStore ? undefined : database.path } };
+  const cfg = {
+    session: { store: useDefaultStore ? undefined : database.path },
+    agents: { defaults: { utilityModel: "" } },
+  };
   const observer = createSessionObserver({
     getConfig: () => cfg,
     subscribers,
     broadcastToConnIds: broadcast,
     ...(persistDigests ? {} : { persistDigest: persisted }),
-    resolveUtilityModelRef: () => undefined,
     prepareModel: async () => preparedModel(),
     completeModel: async () => modelMessage({ headline: "Completed observation", health: "done" }),
   });
@@ -431,8 +433,8 @@ it("lets the publisher finish its nested write before persisting the background 
       config: {
         session: { store: options.path },
         gateway: { controlUi: { sessionObserver: true } },
+        agents: { defaults: { utilityModel: "" } },
       },
-      utilityModelRef: null,
       persistDigest,
     });
     let successor: Promise<void> | undefined;
@@ -475,7 +477,9 @@ it.for(["model", "failed model", "synthesized terminal"] as const)(
       const config: OpenClawConfig = {
         session: { store: state.path("original.sqlite") },
         gateway: { controlUi: { sessionObserver: true } },
-        agents: { defaults: { utilityModel: "openai/gpt-test" } },
+        agents: {
+          defaults: { utilityModel: kind === "synthesized terminal" ? "" : "openai/gpt-test" },
+        },
       };
       const replacementStore = state.path("replacement.sqlite");
       let changeSourceOnRead = false;
@@ -518,7 +522,6 @@ it.for(["model", "failed model", "synthesized terminal"] as const)(
       try {
         harness = createHarness({
           config,
-          utilityModelRef: kind === "synthesized terminal" ? null : "openai/gpt-test",
           readSession: vi.fn(() => ({ ...initialEntry, lifecycleRevision: "owned" })),
           prepareModel: vi.fn(async () => preparedModel()),
           completeModel: vi.fn(async () => {

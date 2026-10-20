@@ -110,7 +110,7 @@ it("rejects CLI failure without POST evidence", async () => {
 it("accepts POST plus backup failure and rejects an unrelated CLI failure", async () => {
   configureCli(["GET", "POST"]);
   await expect(run()).resolves.toMatchObject({
-    artifacts: { bootstrapSuccess: false, faultHitCount: 2 },
+    details: expect.stringContaining("fault hits: 2"),
   });
   configureCli(["POST"], "unrelated failure");
   await expect(run()).rejects.toThrow("unexpected reason");

@@ -168,7 +168,7 @@ export async function createTestSession(options: TestSessionOptions = {}) {
     model,
     thinkingLevel: settingsManager.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL,
     tools: options.customTools?.map((tool) => tool.name) ?? [],
-    resourceLoader: options.resourceLoader ?? createResourceLoader(),
+    resourceLoader: options.resourceLoader ?? (await createResourceLoader()),
     sessionManager,
     settingsManager,
     modelRegistry,

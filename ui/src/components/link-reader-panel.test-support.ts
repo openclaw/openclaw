@@ -1,15 +1,40 @@
-import { expect } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterEach, beforeEach, expect, vi } from "vitest";
 import type {
   ControlUiLinkReaderDocument,
   ControlUiLinkReaderDescriptor,
 } from "../../../src/shared/control-ui-link-reader.js";
+import { createDeferred } from "../../../test/helpers/promise.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid as waitForFast } from "../test-helpers/solid-settle.ts";
+import { createStorageMock } from "../test-helpers/storage.ts";
 import { LINK_READER_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import "./link-reader-panel.tsx";
 
+export function installPanelFixture() {
+  beforeEach(() => {
+    vi.stubGlobal("localStorage", createStorageMock());
+    // Section selection owns loading; suppress viewport preloads.
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class extends IntersectionObserver {
+        override observe() {}
+      },
+    );
+  });
+  afterEach(() => {
+    document.body.replaceChildren();
+    vi.unstubAllGlobals();
+  });
+}
+
 export type Panel = HTMLElementTagNameMap["openclaw-link-reader-panel"];
+export type DetailRequest<T = ControlUiLinkReaderDocument> = (
+  method: string,
+  params?: unknown,
+  options?: { signal?: AbortSignal },
+) => Promise<T>;
 export const storageKey = "openclaw.link-reader.panel.v1";
 export const itemUrl = (number: number) => "https://forge.example/items/" + number;
 export const reader: ControlUiLinkReaderDescriptor = {
@@ -27,41 +52,27 @@ export function item(number = 1): ControlUiLinkReaderDocument {
   return {
     url: itemUrl(number),
     title: "Item " + number,
-    author: "reporter",
     badge: { label: "Open", tone: "positive" },
     createdAt: "2026-09-01T12:00:00Z",
-    updatedAt: "2026-09-02T12:00:00Z",
     body: "**Description**",
     comments: [
       {
         id: "comment-4",
         url: itemUrl(number) + "#comment-4",
         author: "reviewer",
-        createdAt: "2026-09-02T12:00:00Z",
         body: "Comment text",
       },
     ],
-    commentsTotal: 1,
   };
 }
 export function requestedItem(params: unknown): ControlUiLinkReaderDocument {
   return item(Number(new URL((params as { url: string }).url).pathname.split("/").at(-1)));
 }
 
-export function deferredDetail() {
-  let resolve!: (value: ControlUiLinkReaderDocument) => void;
-  const promise = new Promise<ControlUiLinkReaderDocument>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
+export const deferredDetail = () => createDeferred<ControlUiLinkReaderDocument>();
 
 export async function mount(
-  request: (
-    method: string,
-    params?: unknown,
-    options?: { signal?: AbortSignal },
-  ) => Promise<unknown>,
+  request: DetailRequest<unknown>,
   options: Partial<
     Pick<Panel, "embedded" | "presented" | "sessionKey" | "tabsInHeader" | "onClose">
   > = {},
@@ -86,11 +97,10 @@ export function open(panel: Panel, url = itemUrl(1), trigger?: HTMLElement, newT
 }
 
 export function button(panel: Panel, label: string) {
-  const result = panel.querySelector<HTMLButtonElement>('button[aria-label="' + label + '"]');
-  if (!result) {
-    throw new Error("Missing button: " + label);
-  }
-  return result;
+  return expectDefined(
+    panel.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`),
+    "Missing button: " + label,
+  );
 }
 
 export async function expectTitle(panel: Panel, title: string) {

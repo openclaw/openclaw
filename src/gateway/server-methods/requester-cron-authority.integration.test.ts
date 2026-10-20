@@ -2,9 +2,14 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import {
   type AdmittedRunContext,
+  closeAdmittedRunDelegatedAuthority,
   getAdmittedRunDelegatedAuthority,
   resolveAdmittedRunActiveAssertion,
 } from "../../agents/admitted-run-context.js";
@@ -39,7 +44,11 @@ import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import { resolveMcpLoopbackClientGrant, revokeMcpLoopbackClientGrant } from "../mcp-grant-store.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "../mcp-http.js";
 import { dispatchGatewayRequestInProcess } from "../server-in-process-dispatch.js";
-import { handleGatewayRequest } from "../server-methods.js";
+import {
+  coreGatewayHandlers,
+  createRequestGatewayMethodRegistry,
+  handleGatewayRequest,
+} from "../server-methods.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import {
   SESSION,
@@ -283,6 +292,115 @@ async function createStoredJob(
 }
 
 describe("requester continuation persisted automation management", () => {
+  it("keeps recovery reads scoped and withholds a record when authority closes during its read", async ({
+    signal,
+  }) => {
+    const config: OpenClawConfig = { ...cfg, tools: { allow: [AUTOMATIONS_TOOL_NAME] } };
+    setRuntimeConfigSnapshot(config);
+    const fixture = createCronFixture(undefined, config);
+    const addOwnedJob = (sessionKey: string, name: string) =>
+      cron.add(
+        {
+          name,
+          enabled: false,
+          schedule: { kind: "every", everyMs: 60_000 },
+          sessionTarget: "current",
+          sessionKey,
+          agentId: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "agentTurn", message: name, toolsAllow: [] },
+          delivery: { mode: "none" },
+          owner: { agentId: "main", sessionKey, accountId: "default" },
+        },
+        {
+          scheduledToolPolicy: {
+            version: 1,
+            mode: "account",
+            ownerSessionKey: sessionKey,
+            ownerAccountId: "default",
+          },
+        },
+      );
+    const own = await addOwnedJob(SESSION, "Recovery-visible record");
+    const foreign = await addOwnedJob("agent:main:another-conversation", "Private foreign record");
+    const responses = vi.fn<RespondFn>();
+    const get = expectDefined(coreGatewayHandlers["cron.get"], "cron.get handler");
+    fixture.context.getGatewayMethodRegistry = () =>
+      createRequestGatewayMethodRegistry({
+        "cron.get": (options) =>
+          get({
+            ...options,
+            respond: (...args) => {
+              responses(...args);
+              options.respond(...args);
+            },
+          }),
+      });
+
+    await inRun("recovery-inspection", undefined, async (_identity, admitted) => {
+      bindGatewayContextResolver(admitted, () => fixture.context);
+      const entered = createDeferred();
+      const release = createDeferred();
+      const readJob = cron.readJob.bind(cron);
+      let holdRead = false;
+      const readSpy = vi.spyOn(cron, "readJob").mockImplementation(async (id) => {
+        const recorded = await readJob(id);
+        if (holdRead) {
+          expect(recorded?.id).toBe(own.id);
+          entered.resolve();
+          await withinTest(release.promise, signal);
+        }
+        return recorded;
+      });
+      let pending: Promise<unknown> | undefined;
+      try {
+        const tools = await createCreatorTransportTools({
+          transport: "embedded",
+          config,
+          admitted,
+          senderIsOwner: false,
+          forceRestartSafeTools: true,
+        });
+        const inspect = (jobId: string) =>
+          tools.invoke(AUTOMATIONS_TOOL_NAME, { action: "get", jobId });
+        await expect(inspect(own.id)).resolves.toMatchObject({
+          details: { id: own.id, name: own.name, enabled: false },
+        });
+        expect(responses).toHaveBeenLastCalledWith(
+          true,
+          expect.objectContaining({ id: own.id, name: own.name }),
+          undefined,
+        );
+        await expect(inspect(foreign.id)).rejects.toThrow("cron job not found");
+        expect(responses).toHaveBeenLastCalledWith(false, undefined, expect.anything());
+        responses.mockClear();
+
+        holdRead = true;
+        pending = inspect(own.id);
+        await withinTest(
+          awaitGateBeforeSettlement(entered.promise, pending, "Read settled before its owner gate"),
+          signal,
+        );
+        expect(closeAdmittedRunDelegatedAuthority(admitted)).toBe(true);
+        release.resolve();
+        await expect(pending).rejects.toThrow(/authority|admitted run/i);
+        expect(responses).toHaveBeenCalledExactlyOnceWith(
+          false,
+          undefined,
+          expect.objectContaining({
+            code: "INVALID_REQUEST",
+            message: expect.stringMatching(/authority|admitted run/i),
+          }),
+        );
+      } finally {
+        release.resolve();
+        await pending?.catch(() => undefined);
+        readSpy.mockRestore();
+        clearGatewayContextResolver(admitted);
+      }
+    });
+  });
+
   it("rejects a socket stream request without its own exec policy", async () => {
     const fixture = createCronFixture();
     await inRun("socket-stream-policy", undefined, async (identity) => {

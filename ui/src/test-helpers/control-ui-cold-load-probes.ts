@@ -348,6 +348,17 @@ function installColdLoadProbes(
         if (typeof data === "string") {
           const frame = JSON.parse(data);
           if (frame.type === "req") {
+            const connectDelay = (input.connectNotBeforeMs ?? 0) - performance.now();
+            if (frame.method === "connect" && connectDelay > 0) {
+              queued++;
+              window.setTimeout(() => {
+                queued--;
+                if (socket.readyState === WebSocket.OPEN) {
+                  socket.send(data);
+                }
+              }, connectDelay);
+              return;
+            }
             pending.set(frame.id, {
               socket,
               method: frame.method,

@@ -334,11 +334,7 @@ export function projectionOperations(
                         },
                 );
               } catch (error) {
-                throw new AcceptedWorkspacePublicationIndeterminateError(
-                  "commit",
-                  error,
-                  undefined,
-                );
+                throw new AcceptedWorkspacePublicationIndeterminateError("commit", error);
               }
             },
           },

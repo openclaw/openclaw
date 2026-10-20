@@ -236,6 +236,81 @@ it.each([false, true])(
   },
 );
 
+it.each([true, false])(
+  "keeps answers and independent automation deliveries visible (foreground run identity: %s)",
+  (keyed) => {
+    const runId = "approval-question-run";
+    const props = threadProps("pane-automation-replies", "agent:main:dashboard:approval", [
+      {
+        role: "user",
+        content: "How was that approved?",
+        timestamp: 1_000,
+        __openclaw: { id: "question", ...(keyed ? { idempotencyKey: `${runId}:user` } : {}) },
+      },
+      {
+        role: "assistant",
+        phase: "commentary",
+        content: "Checking the saved approval.",
+        timestamp: 2_000,
+        __openclaw: { id: "commentary", ...(keyed ? { runId } : {}) },
+      },
+      {
+        role: "assistant",
+        content: "An operator approved it. It keeps running until stopped.",
+        stopReason: "stop",
+        timestamp: 3_000,
+        __openclaw: { id: "answer", ...(keyed ? { runId } : {}) },
+      },
+    ]);
+    const { container, rerender } = threadView(props);
+    rerender(true);
+    expect(requireElement(container, '[data-entry-id="answer"]').textContent).toContain(
+      "An operator approved it.",
+    );
+    expect(container.querySelector('[data-entry-id="commentary"]')).toBeNull();
+    for (const index of [1, 2]) {
+      props.messages = [
+        ...props.messages,
+        {
+          role: "assistant",
+          api: "openclaw-transcript",
+          provider: "openclaw",
+          model: "automation-result",
+          stopReason: "stop",
+          content: `New application error ${index}.`,
+          timestamp: (3 + index) * 1_000,
+          openclawAutomation: { kind: "cron", jobId: "saved-watcher", runId: `cron-${index}` },
+          __openclaw: { id: `alert-${index}` },
+        },
+      ];
+      rerender();
+      expect(requireElement(container, '[data-entry-id="answer"]').textContent).toContain(
+        "An operator approved it.",
+      );
+      for (let alert = 1; alert <= index; alert++) {
+        expect(requireElement(container, `[data-entry-id="alert-${alert}"]`).textContent).toContain(
+          `New application error ${alert}.`,
+        );
+      }
+      expect(container.querySelector('[data-entry-id="commentary"]')).toBeNull();
+    }
+    props.messages = structuredClone(props.messages);
+    rerender();
+    expect(requireElement(container, '[data-entry-id="answer"]').textContent).toContain(
+      "An operator approved it.",
+    );
+    props.runId = "next-foreground-run";
+    props.runActive = true;
+    props.runWorking = true;
+    props.streamStartedAt = 6_000;
+    rerender();
+    const alert = requireElement(container, '[data-entry-id="alert-2"]');
+    const progress = requireElement(container, ".chat-working-indicator");
+    expect(alert.closest(".chat-group")?.contains(progress)).toBe(false);
+    expect(alert.closest(".chat-agent-run-frame")?.contains(progress) ?? false).toBe(false);
+  },
+);
+
 const person = (id: string, name: string) => ({
   senderId: id,
   senderName: name,

@@ -133,6 +133,8 @@ function createTestPane(
     chatLoading: false,
     chatHistoryPagination: { hasMore: false },
     chatMessages: [],
+    chatMessagesBySession: new Map(),
+    settings: loadSettings(),
     chatToolMessages: [],
     chatQueue: [],
     chatRunId: null,

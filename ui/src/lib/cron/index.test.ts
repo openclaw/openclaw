@@ -401,7 +401,6 @@ describe("cron controller", () => {
       cronJobsTotal: 2,
       cronRunsJobId: removedJob.id,
       cronRuns: [{ ts: 1, jobId: removedJob.id, action: "finished", status: "ok" }],
-      cronRunsTotal: 1,
     });
 
     await removeCronJob(state, removedJob);
@@ -916,7 +915,6 @@ describe("cron controller", () => {
     await expect(pending).resolves.toBe("skipped");
     expect(state).toMatchObject({
       cronRuns: [current],
-      cronRunsTotal: 1,
       cronRunsHasMore: false,
       cronRunsLoadingMore: false,
     });

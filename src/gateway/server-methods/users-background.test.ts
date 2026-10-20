@@ -7,6 +7,7 @@ import { getUserBackground } from "../../state/user-background.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import { createSessionMutationTestClient } from "./sessions-mutations.owner.test-support.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 vi.mock("../../state/user-background-image.js", async (importOriginal) => ({
@@ -25,22 +26,13 @@ beforeEach(async () => {
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("background-rpc-"));
   const profile = ensureProfileForEmail("reader@example.test");
   releaseProfileCatalog = (await prepareUserProfileCatalog()).release;
-  client = {
-    connId: "background-client",
-    authenticatedUserProfile: {
-      profileId: profile.id,
-      displayName: null,
-      hasAvatar: false,
-      updatedAt: profile.updatedAt,
-    },
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      role: "operator",
-      scopes: ["operator.read", "operator.write"],
-      client: { id: "test", mode: "test", version: "1", platform: "test" },
-    },
-  };
+  client = createSessionMutationTestClient(profile.id);
+  delete client.authenticatedUserId;
+  client.connId = "background-client";
+  client.authenticatedUserProfile!.displayName = null;
+  client.authenticatedUserProfile!.updatedAt = profile.updatedAt;
+  client.connect.scopes = ["operator.read", "operator.write"];
+  client.connect.client = { id: "test", mode: "test", version: "1", platform: "test" };
   connected = true;
   broadcast = vi.fn();
   context = {

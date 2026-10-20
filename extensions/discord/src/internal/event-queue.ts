@@ -1,7 +1,6 @@
 export type DiscordEventQueueOptions = {
   maxQueueSize?: number;
   maxConcurrency?: number;
-  slowListenerThreshold?: number;
 };
 
 type DiscordEventQueueJob = {
@@ -26,7 +25,6 @@ export class DiscordEventQueue {
     this.options = {
       maxQueueSize: options.maxQueueSize ?? DEFAULT_MAX_QUEUE_SIZE,
       maxConcurrency: options.maxConcurrency ?? DEFAULT_MAX_CONCURRENCY,
-      slowListenerThreshold: options.slowListenerThreshold ?? DEFAULT_SLOW_LISTENER_THRESHOLD_MS,
     };
   }
 
@@ -91,7 +89,7 @@ export class DiscordEventQueue {
   }
 
   private logSlowListener(job: DiscordEventQueueJob, durationMs: number): void {
-    if (durationMs < this.options.slowListenerThreshold) {
+    if (durationMs < DEFAULT_SLOW_LISTENER_THRESHOLD_MS) {
       return;
     }
     console.warn(

@@ -52,38 +52,6 @@ function resolveArchiveRoot(sourceRoot: string, now: number): string {
   return fsSync.existsSync(base) ? `${base}-${randomUUID()}` : base;
 }
 
-function rollbackImportedSnapshots(params: {
-  snapshots: LegacyMeetingTranscriptSnapshot[];
-  runId: string;
-  env: NodeJS.ProcessEnv;
-  stateDir: string;
-}): void {
-  runOpenClawStateWriteTransaction(
-    ({ db: database }) => {
-      const db = migrationDb(database);
-      for (const snapshot of params.snapshots) {
-        executeSqliteQuerySync(
-          database,
-          db
-            .deleteFrom("meeting_transcript_sessions")
-            .where("session_id", "=", snapshot.session.sessionId)
-            .where("started_at", "=", snapshot.session.startedAt),
-        );
-      }
-      executeSqliteQuerySync(
-        database,
-        db.deleteFrom("migration_sources").where("last_run_id", "=", params.runId),
-      );
-      executeSqliteQuerySync(
-        database,
-        db.deleteFrom("migration_runs").where("id", "=", params.runId),
-      );
-    },
-    { env: { ...params.env, OPENCLAW_STATE_DIR: params.stateDir } },
-    { operationLabel: "meeting-transcripts.legacy-import.rollback" },
-  );
-}
-
 function finishPendingMigration(params: {
   runId: string;
   archiveRoot: string;
@@ -567,20 +535,6 @@ export async function migrateLegacyMeetingTranscripts(params: {
         env,
         stateDir: params.stateDir,
       });
-      try {
-        if (!(await rehashLegacyMeetingTranscriptSnapshots(snapshots))) {
-          rollbackImportedSnapshots({ snapshots, runId, env, stateDir: params.stateDir });
-          return {
-            changes: recoveryChanges,
-            warnings: [
-              "Legacy meeting transcript files changed after import; rolled back SQLite rows and left every source in place for a Doctor retry",
-            ],
-          };
-        }
-      } catch (error) {
-        rollbackImportedSnapshots({ snapshots, runId, env, stateDir: params.stateDir });
-        throw error;
-      }
       params.testHooks?.afterImport?.();
       try {
         await archiveLegacyMeetingTranscriptSnapshots({
@@ -602,11 +556,13 @@ export async function migrateLegacyMeetingTranscripts(params: {
             ],
           };
         }
-        rollbackImportedSnapshots({ snapshots, runId, env, stateDir: params.stateDir });
         return {
-          changes: recoveryChanges,
+          changes: [
+            ...recoveryChanges,
+            `Imported ${snapshots.length} meeting transcript session${snapshots.length === 1 ? "" : "s"} into shared SQLite state`,
+          ],
           warnings: [
-            `Failed archiving verified legacy meeting transcripts; rolled back SQLite rows and left every source in place for Doctor retry: ${String(error)}`,
+            `Failed archiving verified legacy meeting transcripts; retained imported SQLite rows and source receipts for Doctor retry: ${String(error)}`,
           ],
         };
       }

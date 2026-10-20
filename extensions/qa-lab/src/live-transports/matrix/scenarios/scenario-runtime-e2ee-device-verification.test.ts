@@ -128,32 +128,16 @@ const cases = [
 ] as const;
 
 describe.each(cases)("Matrix device $method verification", ({ method, run, label }) => {
-  it("completes its native protocol and preserves the exact result contract", async () => {
+  it("completes its native protocol and reports exact verification details", async () => {
     installNativeClients();
     const result = await run(context());
     expect(result).toEqual(
       method === "sas"
         ? {
-            artifacts: {
-              completedVerificationIds: ["driver-request", "observer-request"],
-              currentDeviceId: "DRIVER",
-              driverTrustsObserverDevice: true,
-              observerTrustsDriverDevice: true,
-              sasEmoji: ["🐈 Cat"],
-              secondaryDeviceId: "OBSERVER",
-            },
             details:
               "driver-to-observer device verification completed with real SAS\ninitiator transaction: transaction-1\nrecipient transaction: transaction-1\ndriver trusts observer device: yes\nobserver trusts driver device: yes\nemoji: 🐈 Cat",
           }
         : {
-            artifacts: {
-              completedVerificationIds: ["driver-request", "observer-request"],
-              driverTrustsObserverDevice: true,
-              identityVerificationCompleted: true,
-              observerTrustsDriverDevice: true,
-              qrBytes: 4,
-              secondaryDeviceId: "OBSERVER",
-            },
             details:
               "driver-to-observer QR verification completed through real QR scan\ntransaction: transaction-1\ndriver trusts observer device: yes\nobserver trusts driver device: yes\nqr bytes: 4",
           },

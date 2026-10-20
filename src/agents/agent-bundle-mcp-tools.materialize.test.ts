@@ -391,6 +391,38 @@ describe("createBundleMcpToolRuntime", () => {
     expect(result.details ?? {}).not.toHaveProperty("mcpAppPreview");
   });
 
+  it("carries server instructions onto resource and prompt utility tools", () => {
+    const tools = buildBundleMcpToolsFromCatalog({
+      catalog: {
+        version: 1,
+        generatedAt: 0,
+        servers: {
+          bundleProbe: {
+            serverName: "bundleProbe",
+            launchSummary: "bundleProbe",
+            toolCount: 0,
+            instructions: "Read the catalogue before citing a resource.",
+            resources: { listChanged: false },
+            prompts: { listChanged: false },
+          },
+        },
+        tools: [],
+      },
+    });
+
+    expect(tools.map((tool) => getPluginToolMeta(tool)?.mcp?.operation)).toEqual([
+      "prompts_get",
+      "prompts_list",
+      "resources_list",
+      "resources_read",
+    ]);
+    for (const tool of tools) {
+      expect(getPluginToolMeta(tool)?.mcp?.instructions).toBe(
+        "Read the catalogue before citing a resource.",
+      );
+    }
+  });
+
   it("marks MCP tools parallel only when the server advertises parallel support", async () => {
     const runtime = await materializeBundleMcpToolsForRun({
       runtime: makeToolRuntime({

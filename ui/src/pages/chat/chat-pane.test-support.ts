@@ -472,6 +472,11 @@ export function createSessionContext(
         terminalEnabled: false,
       },
     },
+    runtimeConfig: {
+      state: { configNeedsApply: false, configSnapshot: null },
+      ensureLoaded: async () => undefined,
+      subscribe: () => () => {},
+    },
     chatSubmissions: createChatSubmissions(),
     nativeChatDrafts: { subscribe: () => () => undefined },
     placementStartup: {
