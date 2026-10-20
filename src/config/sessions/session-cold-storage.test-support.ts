@@ -1,4 +1,3 @@
-import { sql } from "kysely";
 import { expect } from "vitest";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
@@ -17,8 +16,6 @@ import { CURRENT_SESSION_VERSION } from "./version.js";
 
 export const historicalId = "cold-history-window";
 export const currentId = "current-window";
-type EventSnapshot = Record<"session_id" | "event_json", string> &
-  Record<"seq" | "created_at" | "event_bytes", number>;
 const history = [
   ["user", "你好 🦞\n".repeat(12_000)],
   ["assistant", "Preserved response"],
@@ -79,10 +76,17 @@ export async function createSessionColdStorageFixture(
     return {
       events: executeSqliteQuerySync(
         db,
-        sql<EventSnapshot>`SELECT session_id, seq, created_at,
-          ${transcriptEventJsonSql(db)} AS event_json,
-          ${transcriptEventReadBytesSql()} AS event_bytes
-          FROM transcript_events ORDER BY session_id, seq`,
+        getNodeSqliteKysely<DB>(db)
+          .selectFrom("transcript_events")
+          .select([
+            "session_id",
+            "seq",
+            "created_at",
+            transcriptEventJsonSql(db).as("event_json"),
+            transcriptEventReadBytesSql().as("event_bytes"),
+          ])
+          .orderBy("session_id")
+          .orderBy("seq"),
       ).rows,
       identities: rows("transcript_event_identities", "session_id, seq, event_id"),
       active: rows("session_transcript_active_events", "session_id, active_position"),
