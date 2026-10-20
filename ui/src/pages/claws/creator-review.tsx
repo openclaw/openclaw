@@ -1,6 +1,6 @@
 import type { ClawDraftReviewItem } from "@openclaw/gateway-protocol";
-import { For, Show } from "solid-js";
-import { useApplication } from "../../lib/reactive/context.ts";
+import { createMemo, For, Show } from "solid-js";
+import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectOwner, type SourceProjection } from "../../lib/reactive/projection.ts";
 import { clawCreatorFlow, type ClawCreatorFlow } from "./creator-flow.ts";
@@ -191,15 +191,19 @@ function ClawReviewDialog(props: { flow: ClawCreatorFlow; view: CreatorView }) {
   );
 }
 
-export function ClawCreatorReview() {
-  const flow = clawCreatorFlow(useApplication());
-  const view = projectOwner(flow, (owner) => owner);
+export function ClawCreatorReview(props: { context: ApplicationContext }) {
+  const current = createMemo(() => {
+    const flow = clawCreatorFlow(props.context);
+    return { flow, view: projectOwner(flow, (owner) => owner) };
+  });
+  const flow = () => current().flow;
+  const view = () => current().view;
   return (
     <>
-      <Show when={view.read().modalOpen && view.read().review}>
-        <ClawReviewDialog flow={flow} view={view} />
+      <Show when={view().read().modalOpen && view().read().review}>
+        <ClawReviewDialog flow={flow()} view={view()} />
       </Show>
-      <Show when={view.read().publication}>
+      <Show when={view().read().publication}>
         {(result) => (
           <div class="claw-creator__notice" role="status">
             <strong>
@@ -217,23 +221,23 @@ export function ClawCreatorReview() {
       </Show>
       <Show
         when={
-          view.read().error &&
-          view.read().hasActiveDraft &&
-          !view.read().modalOpen &&
-          !view.read().publication
+          view().read().error &&
+          view().read().hasActiveDraft &&
+          !view().read().modalOpen &&
+          !view().read().publication
         }
       >
         {(error) => (
           <div class="claw-creator__notice claw-creator__notice--error" role="alert">
             {error()}
-            <button class="btn btn--sm" onClick={() => flow.retryReview()}>
+            <button class="btn btn--sm" onClick={() => flow().retryReview()}>
               {t("clawsDraft.retryReview")}
             </button>
           </div>
         )}
       </Show>
-      <Show when={view.read().review && !view.read().modalOpen && !view.read().publication}>
-        <button class="claw-creator__reopen btn btn--sm" onClick={() => flow.reopen()}>
+      <Show when={view().read().review && !view().read().modalOpen && !view().read().publication}>
+        <button class="claw-creator__reopen btn btn--sm" onClick={() => flow().reopen()}>
           {t("clawsDraft.reopen")}
         </button>
       </Show>

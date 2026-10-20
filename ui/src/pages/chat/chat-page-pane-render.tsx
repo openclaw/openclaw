@@ -384,6 +384,7 @@ function SplitLayout(props: { snapshot: ChatPageSnapshot }) {
 }
 
 export function ChatPageBody(props: {
+  context: ApplicationContext;
   snapshot: ChatPageSnapshot | null;
   indicator: DropIndicator | null;
   containerRef: (element: HTMLDivElement) => void;
@@ -393,7 +394,7 @@ export function ChatPageBody(props: {
       {(snapshot) => (
         <div class="chat-split-view__drop-container" ref={props.containerRef}>
           <SplitLayout snapshot={snapshot()} />
-          <ClawCreatorReview />
+          <ClawCreatorReview context={props.context} />
           <Show when={props.indicator}>
             {(indicator) => (
               <div
