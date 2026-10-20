@@ -174,6 +174,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
         let acquired: Awaited<ReturnType<typeof acquireAgentRuntimePluginRegistry>> | undefined;
         let lease: Awaited<ReturnType<typeof createLease>> | undefined;
         let disposal: Promise<void> | undefined;
+        using warnings = vi.spyOn(console, "warn").mockImplementation(() => {});
         try {
           await sdkHost.run(async () => {
             acquired = await acquireAgentRuntimePluginRegistry({
@@ -194,16 +195,17 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
               expect(donorCurrent?.()).toBe(false);
             }
             expect(connections.every((connection) => connection.database.isOpen)).toBe(true);
-            const warnings: string[] = [];
             const openLease = () =>
               createLease({
                 identity: { runId: "copied-source-run", sessionId: "copied-source-session" },
                 config,
                 workspaceDir: state.workspaceDir,
-                warn: (message) => warnings.push(message),
               });
             lease = await withRegistry(copied, openLease);
-            expect(lease.effectiveEngineId, warnings.join("\n")).toBe(id);
+            expect(
+              lease.effectiveEngineId,
+              warnings.mock.calls.map(([message]) => message).join("\n"),
+            ).toBe(id);
             expect(lease.degraded).toBe(false);
             expect(bridge.factoryCalls).toBe(1);
             expect(connections.length).toBe(2);
@@ -302,7 +304,6 @@ it("does not treat an uncovered view as a retired donor's owner after a failed d
       createLease({
         identity: { runId: "uncovered-run", sessionId: "uncovered-session" },
         config: { plugins: { slots: { contextEngine: record.id } } },
-        warn: () => {},
       }),
     );
     expect(lease.degraded).toBe(true);

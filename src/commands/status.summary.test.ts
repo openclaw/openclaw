@@ -3,6 +3,10 @@ import { resolveContextTokensForModelFromCache } from "../agents/context-resolut
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
 import type { DatabaseStoreDiagnostic } from "../infra/database-engine/diagnostics.js";
+import {
+  recordReasoningSuppressedDiagnostic,
+  resetDiagnosticSessionStateForTest,
+} from "../logging/diagnostic-session-state.js";
 import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import {
@@ -226,6 +230,7 @@ describe("getStatusSummary", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    resetDiagnosticSessionStateForTest();
     vi.mocked(resolveSessionStorePathCore).mockReturnValue("/tmp/sessions.json");
     setActiveDegradedPlugins([]);
     clearActiveCredentialDegradedOwner("account", "telegram:work");
@@ -396,6 +401,24 @@ describe("getStatusSummary", () => {
     });
     expect(summary.heartbeat.agents[0]).toMatchObject({ enabled: false, waitingForRoute: false });
     expect(statusSummaryMocks.withSessionEntriesFromStoresInWorker).not.toHaveBeenCalled();
+  });
+
+  it("projects observed reasoning mismatches without exposing incognito or redacted model names", async () => {
+    recordReasoningSuppressedDiagnostic(
+      { sessionId: "private-session", sessionKey: "agent:main:dashboard:incognito-fixture" },
+      "ollama",
+      "private-model",
+    );
+    expect((await getStatusSummary()).modelReasoningWarning).toBeUndefined();
+    recordReasoningSuppressedDiagnostic({ sessionId: "visible-session" }, "ollama", "qwen3:4b");
+
+    const visible = await getStatusSummary();
+    expect(visible.modelReasoningWarning).toContain('"ollama/qwen3:4b"');
+    expect(visible.modelReasoningWarning).toContain("Set reasoning: true");
+    expect(visible.modelReasoningWarning).not.toContain("private-model");
+    const redacted = await getStatusSummary({ includeSensitive: false });
+    expect(redacted.modelReasoningWarning).toContain("Set reasoning: true");
+    expect(redacted.modelReasoningWarning).not.toContain("qwen3:4b");
   });
 
   it("skips session model discovery and projection when sensitive output is disabled", async () => {

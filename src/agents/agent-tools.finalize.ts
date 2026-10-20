@@ -1,8 +1,10 @@
 import {
   isStrictOpenAIJsonSchemaCompatible,
   normalizeOpenAIStrictToolParameters,
+  normalizeToolParameterSchema,
   prepareAnthropicInputSchema,
   publishRuntimeToolInputSchema,
+  type ToolParameterSchemaOptions,
 } from "@openclaw/ai/internal/tool-schema";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveRuntimeConfigCacheKey } from "../config/runtime-snapshot.js";
@@ -21,7 +23,6 @@ import {
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.wrapper.js";
 import { applyToolAvailabilityDescriptions } from "./agent-tools.deferred-followup.js";
-import { bindToolParameterSchema, normalizeToolParameters } from "./agent-tools.schema.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { isToolWrappedWithBeforeToolCallHook } from "./before-tool-call-metadata.js";
 
@@ -47,6 +48,63 @@ registerPluginMetadataProcessMemoLifecycleClear(() => {
   snapshots.clear();
   latestByKey.clear();
 });
+
+function isObjectSchemaWithNoRequiredParams(schema: unknown): boolean {
+  if (!isRecord(schema)) {
+    return false;
+  }
+  const type = schema.type;
+  const hasObjectType =
+    type === "object" || (Array.isArray(type) && type.some((entry) => entry === "object"));
+  if (!hasObjectType) {
+    return false;
+  }
+  return !schemaHasRequiredParams(schema);
+}
+
+function schemaHasRequiredParams(schema: Record<string, unknown>): boolean {
+  if (Array.isArray(schema.required) && schema.required.length > 0) {
+    return true;
+  }
+  for (const key of ["allOf", "anyOf", "oneOf"]) {
+    const variants = schema[key];
+    if (!Array.isArray(variants)) {
+      continue;
+    }
+    if (variants.some((variant) => isRecord(variant) && schemaHasRequiredParams(variant))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function normalizeToolParameters(
+  tool: AnyAgentTool,
+  options?: ToolParameterSchemaOptions,
+): AnyAgentTool {
+  const schema =
+    tool.parameters && typeof tool.parameters === "object" ? tool.parameters : undefined;
+  if (!schema) {
+    return tool;
+  }
+  const parameters = normalizeToolParameterSchema(schema, { ...options, toolName: tool.name });
+  return bindToolParameterSchema(tool, parameters);
+}
+
+/** Bind a prepared descriptor to this attempt's argument preparation and metadata. */
+function bindToolParameterSchema(
+  tool: AnyAgentTool,
+  parameters: AnyAgentTool["parameters"],
+): AnyAgentTool {
+  const normalized = { ...tool, parameters };
+  if (isObjectSchemaWithNoRequiredParams(parameters)) {
+    normalized.prepareArguments = (args: unknown) => {
+      const prepared = tool.prepareArguments ? tool.prepareArguments(args) : args;
+      return prepared === null || prepared === undefined ? {} : prepared;
+    };
+  }
+  return copyAgentToolMetadata(tool, normalized);
+}
 
 function publishParameters(parameters: AnyAgentTool["parameters"], name: string) {
   const projected = publishRuntimeToolInputSchema(parameters, `${name}.parameters`, name);

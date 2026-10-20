@@ -8,15 +8,16 @@ import {
   finiteSecondsToTimerSafeMilliseconds,
 } from "openclaw/plugin-sdk/number-runtime";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
+import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
 import {
   createOpenAICompatibleCompletionsThinkingOffWrapper,
   createPlainTextToolCallCompatWrapper,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import {
   buildAssistantMessage,
+  buildGuardedModelFetch,
   createEmptyTransportUsage,
 } from "openclaw/plugin-sdk/provider-transport-runtime";
-import { ssrfPolicyFromHttpBaseUrlAllowedHostname } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asPositiveSafeInteger,
   asRecord,
@@ -79,33 +80,32 @@ async function resolveLmstudioPreloadRequest(params: {
   requestedContextLength?: number;
   timeoutMs?: number;
   options: StreamOptions;
+  model: StreamModel;
   ctx: ProviderWrapStreamFnContext;
-  modelHeaders?: Record<string, string>;
 }) {
   const providerConfig = params.ctx.config?.models?.providers?.[LMSTUDIO_PROVIDER_ID];
-  const providerHeaders = { ...providerConfig?.headers, ...params.modelHeaders };
-  const runtimeApiKey = params.options?.apiKey?.trim() || undefined;
+  const providerHeaders = { ...providerConfig?.headers, ...params.model.headers };
+  const runtimeApiKey = params.options?.apiKey?.trim();
+  const timeoutMs = params.timeoutMs ?? 120_000;
   const headers = await resolveLmstudioProviderHeaders({
     config: params.ctx.config,
     headers: providerHeaders,
   });
-  const configuredApiKey =
-    runtimeApiKey !== undefined
-      ? undefined
-      : await resolveLmstudioRuntimeApiKey({
-          config: params.ctx.config,
-          agentDir: params.ctx.agentDir,
-          headers: providerHeaders,
-        });
-
   return {
     baseUrl: params.baseUrl,
-    apiKey: runtimeApiKey ?? configuredApiKey,
+    apiKey:
+      runtimeApiKey && !isNonSecretApiKeyMarker(runtimeApiKey)
+        ? runtimeApiKey
+        : await resolveLmstudioRuntimeApiKey({
+            config: params.ctx.config,
+            agentDir: params.ctx.agentDir,
+            headers: providerHeaders,
+          }),
     headers,
-    ssrfPolicy: ssrfPolicyFromHttpBaseUrlAllowedHostname(params.baseUrl),
+    fetchImpl: buildGuardedModelFetch({ ...params.model, baseUrl: params.baseUrl }, timeoutMs),
     modelKey: params.modelKey,
     requestedContextLength: params.requestedContextLength,
-    timeoutMs: params.timeoutMs ?? 120_000,
+    timeoutMs,
   };
 }
 
@@ -147,8 +147,8 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
             clampPositiveTimerTimeoutMs(options?.timeoutMs ?? asRecord(model).requestTimeoutMs) ??
             finiteSecondsToTimerSafeMilliseconds(providerConfig?.timeoutSeconds),
           options,
+          model,
           ctx,
-          modelHeaders: model.headers,
         });
       } catch (error) {
         options?.signal?.throwIfAborted();

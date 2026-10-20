@@ -46,7 +46,8 @@ internal inputs: recovery does not inherit a sender's channel delivery rights,
 and a follow-up without an authenticated operator source cannot reconstruct
 authority from its transcript.
 
-An accepted child continuation, including a child created with `sessions_spawn`,
+An accepted child continuation, including a child created with `sessions_spawn`
+or an interrupted child resumed with `sessions_send`,
 keeps the restored operator's current identity and permission checks independently
 of the parent's recovery claim. Completing the parent does not cancel that child.
 Explicitly stopping the parent still cancels its children. Revoking the operator,
@@ -102,10 +103,28 @@ grant the recovery caller access to unrelated personal account actions.
 If an input exhausts the existing bounded attempts on a transient failure, later
 inputs in that session remain interrupted too, preserving their replay order.
 This also applies when the earlier input is an inter-session update.
-Other sessions continue recovery. No additional retry loop is started.
+Up to four sessions replay concurrently; each session retains acceptance order,
+including across retries. No additional retry loop is started. Replay and its
+backoff run outside the subagent recovery span, so registry activation does not
+wait for saved-input delivery. Gateway shutdown still joins that delivery work.
+The existing chat-send startup gate and main-session recovery sweep wait until
+replay and registry recovery settle. This prevents new input from overtaking
+saved input and the sweep from racing saved-input predecessor admission; HTTP
+readiness does not wait for replay.
 Before replaying queued inter-session updates, the Gateway resumes any interrupted
 main turn through its existing recovery owner, preserving the predecessor's order.
 The updates remain queued when that owner defers recovery.
+
+Per-input replay diagnostics record the input kind, outcome, wait reason, attempt
+count, and elapsed milliseconds without message content or session/input IDs.
+`sourceLoadMs` measures the saved-input read, `sessionLoadMs` the current session
+reads, `authorityRestoreMs` operator restoration, and `communicationAdmissionMs`
+the peer communication check. `dispatchAckMs` ends at the dispatch acknowledgment;
+it includes preparation before that acknowledgment, not provider execution or
+model completion afterward. `retryWaitMs` separates retry backoff from active
+work. Timings accumulate across attempts and are inclusive: session checks during
+operator restoration also appear in `authorityRestoreMs`, so phase timings must
+not be added together. `totalMs` is the elapsed time for that input's replay.
 
 Automatic chat-input recovery selects inputs accepted in the past 24 hours;
 the existing bounded recovery attempts may finish after that window. Cancelled

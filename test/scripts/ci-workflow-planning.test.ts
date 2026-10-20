@@ -12305,19 +12305,24 @@ describe("ci workflow guards", () => {
     },
   );
 
-  it("captures all iOS families in one native job and retains phase timings", () => {
+  it("captures all iOS families in one native job and retains phase and resource diagnostics", () => {
     const capture = readCiWorkflow().jobs["ios-screenshot-capture"];
     expect(capture.strategy).toBeUndefined();
     const step = capture.steps.find(
       (candidate: WorkflowStep) => candidate.id === "device_screenshots",
     );
-    expect(step.run).toBe("pnpm ios:screenshots");
+    expect(step.run.trim()).toBe(
+      'node scripts/ios-resource-timeline.mjs --output "$RUNNER_TEMP/ios-resource-timeline.jsonl" -- \\\n  pnpm ios:screenshots',
+    );
     expect(step.env).toEqual({ OPENCLAW_SNAPSHOT_DIAGNOSTICS: "1" });
     const diagnostics = capture.steps.find(
       (candidate: WorkflowStep) => candidate.name === "Upload iOS screenshot timing diagnostics",
     );
     expect(diagnostics.if).toBe("always()");
-    expect(diagnostics.with.path).toBe("apps/ios/build/screenshot-diagnostics.json");
+    expect(diagnostics.with.path.trim().split("\n")).toEqual([
+      "apps/ios/build/screenshot-diagnostics.json",
+      "${{ runner.temp }}/ios-resource-timeline.jsonl",
+    ]);
   });
 
   it("reduces iOS screenshots only after the combined capture succeeded", () => {

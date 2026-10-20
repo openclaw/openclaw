@@ -316,6 +316,13 @@ ID. Historical archive discovery, restore, and recovery cleanup accept a device-
 change after a volume remount; inode, modification time, size, and SHA-256 must
 still match. Copying, replacing, touching, or editing an archive can invalidate
 that receipt.
+For a byte-identical registry copied back to its recorded path, explicit
+`openclaw doctor --session-sqlite recover` can record the new inode in its completed
+migration receipts. The device, modification time, size, and SHA-256 must still
+match, and the registry must remain an unaliased regular file with verified agent
+ownership. Recovery preserves current SQLite settings and the archive's protection
+and disposal status. Automatic discovery keeps its strict identity checks; changed
+contents or other metadata remain deferred.
 The identity format is the same in 2026.9.4 and 2026.9.5; 2026.9.5 added historical
 archive discovery that checks these older receipts.
 

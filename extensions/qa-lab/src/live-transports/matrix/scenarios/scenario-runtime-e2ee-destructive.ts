@@ -18,7 +18,6 @@ import {
   isMatrixQaVerifyStatusHealthy,
   loginMatrixQaRecoveryDevice,
   requireMatrixQaGatewayConfigPath,
-  requireMatrixQaE2eeOutputDir,
   runMatrixQaCliJson,
   type MatrixQaCliRuntime,
 } from "./scenario-runtime-e2ee-destructive-recovery.js";
@@ -144,7 +143,7 @@ async function prepareMatrixQaDestructiveSetup(
     baseUrl: context.baseUrl,
     deviceId: account.deviceId,
     observedEvents: context.observedEvents,
-    outputDir: requireMatrixQaE2eeOutputDir(context),
+    outputDir: context.outputDir,
     password: account.password,
     scenarioId,
     timeoutMs: context.timeoutMs,
@@ -730,7 +729,7 @@ export async function runMatrixQaE2eeServerDeviceDeletedReloginRecoversScenario(
 export async function runMatrixQaE2eeSyncStateLossCryptoIntactScenario(
   context: MatrixQaScenarioContext,
 ): Promise<MatrixQaScenarioExecution> {
-  if (!context.gatewayStateDir || !context.restartGatewayAfterStateMutation) {
+  if (!context.gatewayStateDir) {
     throw new Error("Matrix E2EE sync-state loss scenario requires gateway state restart support");
   }
   const restoreAccountId = context.sutAccountId ?? "sut";
@@ -810,10 +809,9 @@ export async function runMatrixQaE2eeSyncStateLossCryptoIntactScenario(
         waitAccountId: accountId,
       },
     );
-    await context.waitGatewayAccountReady?.(accountId, {
+    await context.waitGatewayAccountReady(accountId, {
       timeoutMs: context.timeoutMs,
     });
-    requireMatrixQaE2eeOutputDir(context);
     driver = await createMatrixQaE2eeActorClient(
       context,
       "matrix-e2ee-sync-state-loss-crypto-intact",

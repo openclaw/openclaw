@@ -4,11 +4,6 @@ import path from "node:path";
 import { z } from "zod";
 import { sha256Hex } from "./crypto-digest.js";
 import { formatErrorMessage } from "./errors.js";
-import {
-  prepareSqliteDatabaseAdmission,
-  readSqliteDatabaseWriteTokenForPath,
-  retainSqliteDatabaseWriteScopesForPath,
-} from "./sqlite-database-admission.js";
 import type { UpdateDatabaseGenerations } from "./update-database-generations.js";
 
 // Optional, operation-local IPC through the existing Doctor invocation/result channel.
@@ -55,15 +50,13 @@ export function beginUpdateDoctorHistoricalScan(pathname: string, identity: read
   return scans.getStore()?.(pathname, sha256Hex(JSON.stringify(identity)));
 }
 
-/** Piggyback on the update owner's existing full physical generations; never hash history again.
- * Native write receipts cover the interval between those observations, including workers, DDL,
- * rewrites and deletes. Retain their existing admission generation across reader handle closes. */
+/** Reuse the update owner's full physical generations and bracket admission with file observations.
+ * The maintenance owner holds write custody; these optional hints never authorize a repair. */
 export function createUpdateDoctorHistoricalScanCapture(options: {
   env: NodeJS.ProcessEnv;
   warn(message: string): void;
 }) {
-  const retained = new Map<string, { token: string; release(): void }>();
-  const completed = new Map<string, { databasePath: string; token: string }>();
+  const completed = new Map<string, string>();
   const observed = new Map<string, string>();
   let admitted: UpdateDatabaseGenerations = {};
   let previous: UpdateDoctorHistoricalScans = [];
@@ -76,33 +69,14 @@ export function createUpdateDoctorHistoricalScanCapture(options: {
       );
     }
   };
-  const token = (pathname: string) => {
-    // Replacements must not borrow the old pathname admission, even within maintenance.
-    prepareSqliteDatabaseAdmission(pathname);
-    return readSqliteDatabaseWriteTokenForPath(pathname);
-  };
-  const release = () => {
-    for (const entry of retained.values()) {
-      try {
-        entry.release();
-      } catch (error) {
-        fallback(formatErrorMessage(error));
-      }
-    }
-    retained.clear();
-  };
   const begin = (pathname: string, key: string): Scan | undefined => {
     try {
-      // Backup generations and native admission use the resolved database owner,
-      // while profile/session paths can still traverse a symlinked state directory.
+      // Backup generations name canonical owners, while profile paths can traverse symlinks.
       const databasePath = fs.realpathSync.native(pathname);
-      const admission = retained.get(databasePath);
-      if (!admission) {
+      if (typeof admitted[databasePath] !== "string") {
         return undefined;
       }
-      const current = token(databasePath);
       const reused =
-        current === admission.token &&
         observed.get(databasePath) === observeFileFamily(databasePath) &&
         previous.some(
           (entry) =>
@@ -120,10 +94,7 @@ export function createUpdateDoctorHistoricalScanCapture(options: {
             if (fs.realpathSync.native(pathname) !== databasePath) {
               return;
             }
-            const completedToken = token(databasePath);
-            if (completedToken) {
-              completed.set(key, { databasePath, token: completedToken });
-            }
+            completed.set(key, databasePath);
           } catch (error) {
             fallback(formatErrorMessage(error));
           }
@@ -143,7 +114,6 @@ export function createUpdateDoctorHistoricalScanCapture(options: {
       for (const pathname of paths) {
         try {
           // Bracket the existing full generation read, not just the later scan.
-          // Child processes do not publish this process's native write token.
           observed.set(pathname, observeFileFamily(pathname));
         } catch (error) {
           fallback(formatErrorMessage(error));
@@ -151,7 +121,6 @@ export function createUpdateDoctorHistoricalScanCapture(options: {
       }
     },
     admit(generations: UpdateDatabaseGenerations) {
-      release();
       completed.clear();
       admitted = generations;
       const encoded = options.env[UPDATE_DOCTOR_HISTORICAL_SCANS_ENV];
@@ -160,55 +129,24 @@ export function createUpdateDoctorHistoricalScanCapture(options: {
           encoded && encoded.length <= 64 * 1024
             ? UpdateDoctorHistoricalScansSchema.parse(JSON.parse(encoded))
             : [];
-        for (const [pathname, generation] of Object.entries(generations)) {
-          if (generation === null) {
-            continue;
-          }
-          prepareSqliteDatabaseAdmission(pathname);
-          const dispose = retainSqliteDatabaseWriteScopesForPath(pathname, []);
-          if (!dispose) {
-            continue;
-          }
-          try {
-            const current = token(pathname);
-            if (current) {
-              retained.set(pathname, { token: current, release: dispose });
-            } else {
-              dispose();
-            }
-          } catch (error) {
-            dispose();
-            throw error;
-          }
-        }
       } catch (error) {
         previous = [];
         fallback(formatErrorMessage(error));
       }
     },
     settle(generations: UpdateDatabaseGenerations | undefined): UpdateDoctorHistoricalScans {
-      try {
-        return [...completed]
-          .flatMap(([key, entry]) => {
-            const generation = generations?.[entry.databasePath];
-            // Deliberately reuse only an entirely unchanged maintenance interval.
-            // Child-process writes may not publish this process's native token.
-            return typeof generation === "string" &&
-              generation === admitted[entry.databasePath] &&
-              entry.token === retained.get(entry.databasePath)?.token &&
-              token(entry.databasePath) === entry.token
-              ? [{ key, databasePath: entry.databasePath, generation }]
-              : [];
-          })
-          .slice(0, 128);
-      } catch (error) {
-        fallback(formatErrorMessage(error));
-        return [];
-      } finally {
-        release();
-        completed.clear();
-        observed.clear();
-      }
+      const result = [...completed]
+        .flatMap(([key, databasePath]) => {
+          const generation = generations?.[databasePath];
+          // Only certify an entirely unchanged maintenance interval, including child writes.
+          return typeof generation === "string" && generation === admitted[databasePath]
+            ? [{ key, databasePath, generation }]
+            : [];
+        })
+        .slice(0, 128);
+      completed.clear();
+      observed.clear();
+      return result;
     },
   };
 }

@@ -437,13 +437,12 @@ it("persists management disable before a cold context-engine runtime turn", asyn
 
   // A fresh real loader has no disabled factory; subsequent turns are baseline, not failures.
   const registry = loadPluginRegistryHandle({ config: fresh.config, cache: false });
-  const warn = vi.fn();
+  using warn = vi.spyOn(console, "warn").mockImplementation(() => {});
   await withPluginRuntimeRegistryScope(registry, async () => {
     for (const runId of ["first", "second"]) {
       const lease = await createTurn({
         config: fresh.config,
         identity: { runId, sessionId: "synthetic-session" },
-        warn,
       });
       try {
         lease.begin();

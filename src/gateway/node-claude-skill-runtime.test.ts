@@ -6,6 +6,7 @@ import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
+import * as execApprovalRequests from "../agents/bash-tools.exec-approval-request.js";
 import { buildPreparedCliRunContext } from "../agents/cli-runner.test-helpers.js";
 import { executeNodeClaudeRun } from "../agents/cli-runner/execute-node-claude.js";
 import { createLibrarySkillWorkshopTool } from "../agents/tools/skill-workshop-tool-library.js";
@@ -278,6 +279,12 @@ async function fixture(
     } as GatewayWsClient,
     { pairingIdentity: "node-1", pairingGeneration: "generation-1" },
   );
+  vi.spyOn(execApprovalRequests, "registerExecApprovalRequestForHostOrThrow").mockRejectedValue(
+    new Error("unexpected approval"),
+  );
+  vi.spyOn(execApprovalRequests, "resolveRegisteredExecApprovalDecision").mockRejectedValue(
+    new Error("unexpected approval"),
+  );
   let output = "";
   const execute = (stdin = "hello") =>
     withPluginRuntimeGatewayRequestScope(
@@ -295,12 +302,10 @@ async function fixture(
           consumeStderr: () => {},
           deps: {
             invokeNodeClaudeCliRun,
-            registerExecApprovalRequestForHostOrThrow: async () => {
-              throw new Error("unexpected approval");
-            },
-            resolveRegisteredExecApprovalDecision: async () => {
-              throw new Error("unexpected approval");
-            },
+            registerExecApprovalRequestForHostOrThrow:
+              execApprovalRequests.registerExecApprovalRequestForHostOrThrow,
+            resolveRegisteredExecApprovalDecision:
+              execApprovalRequests.resolveRegisteredExecApprovalDecision,
           },
         }),
     );

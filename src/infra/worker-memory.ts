@@ -2,7 +2,7 @@ import { getHeapSpaceStatistics, getHeapStatistics } from "node:v8";
 import { MessageChannel, type MessagePort } from "node:worker_threads";
 import type { WorkerGcProfiles } from "../logging/diagnostic-worker-gc-profile.js";
 import type { DiagnosticWorkerRetainedData } from "./diagnostic-process-types.js";
-import { observeGcSamples, type GcSample } from "./gc-observer.js";
+import { getOldGenerationAfterGcBytes, observeGcSamples, type GcSample } from "./gc-observer.js";
 
 export type WorkerGcStorm = {
   workerId?: string;
@@ -74,6 +74,7 @@ export function serveWorkerMemorySamples(
       external,
       arrayBuffers,
       heapSizeLimitBytes,
+      oldGenerationAfterGcBytes: getOldGenerationAfterGcBytes(),
       heapSpaces,
       retainedData: retainedData?.(),
       gc,

@@ -45,9 +45,9 @@ Ordinary immediate squash prefers REST. Explicit recovery of a validated retaine
 intent starts with GraphQL; normal fallback and immediate-only recovery gates
 still apply. Admission reads switch transports only
 for confirmed primary quota exhaustion or unsupported REST policy or mergeability
-projections, including UNKNOWN; secondary throttles and access failures never authorize a switch. REST requires proven absence
-of classic protection and merge queues, supported effective rules, exact-head publisher-bound
-checks, and the retained-outcome lifecycle. It preserves configured message content
+projections, including UNKNOWN; secondary throttles and access failures never authorize a switch. REST requires absence of merge queues, supported applicable rules, exact-head
+publisher-bound checks, and the retained-outcome lifecycle. Classic-protection
+discovery is not required; GitHub enforces it at the pinned merge request. It preserves configured message content
 from pinned published commits or the PR body and leaves the title to GitHub.
 Choose the transport before dispatch; never replay an uncertain mutation through
 another API. Completion comments use the receipt observation's transport and keep

@@ -3,6 +3,7 @@ import { createMemo, For, onSettled } from "solid-js";
 import { comparePluginCatalogEntries } from "../../../../packages/plugin-package-contract/src/catalog-order.js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../components/solid/panel-empty-state.tsx";
+import { StrokeIcon } from "../../components/solid/stroke-icon.tsx";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import type { PluginDiscoveryEntry, PluginInstallRequest } from "../../lib/plugins/index.ts";
@@ -56,19 +57,7 @@ const PROMOTED_SECTIONS = [
 ] as const;
 
 function CategoryStrokeIcon(props: { children: JSX.Element }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="2"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-    >
-      {" "}
-      {props.children}
-    </svg>
-  );
+  return <StrokeIcon> {props.children}</StrokeIcon>;
 }
 
 // Category-only SVGs stay in the deferred Plugins page, outside the startup icon registry.

@@ -325,6 +325,10 @@ def with_screenshot_simulator(template, diagnostics: nil)
       sh("xcrun", "simctl", "bootstatus", udid, "-b")
       require_exclusive_screenshot_simulator!(udid, diagnostics)
     end
+    if ENV["OPENCLAW_SNAPSHOT_STARTUP_PROBE"] == "1"
+      screenshot_phase(diagnostics, "simulator-idle", device: name, udid: udid) { sleep(120) }
+      require_exclusive_screenshot_simulator!(udid, diagnostics)
+    end
     result = yield udid
     require_exclusive_screenshot_simulator!(udid, diagnostics)
     result
@@ -2435,6 +2439,9 @@ platform :ios do
         ],
         log_path: File.join(log_directory, "build.log")
       )
+    end
+    if ENV["OPENCLAW_SNAPSHOT_STARTUP_PROBE"] == "1"
+      screenshot_phase(diagnostics, "host-idle") { sleep(60) }
     end
 
     # SnapshotHelper.swift consumes these files from SIMULATOR_HOST_HOME.
