@@ -3,24 +3,24 @@ import { resolveContextTokensForModelFromCache } from "../../../agents/context-r
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { migrateLegacyContextBudgetConfig } from "./legacy-context-budget.js";
 
+function expectIdempotent(config: Parameters<typeof migrateLegacyContextBudgetConfig>[0]) {
+  const repeated = migrateLegacyContextBudgetConfig(config);
+  expect(repeated.config).toBe(config);
+  expect(repeated).toEqual({ config, changed: false, changes: [], warnings: [] });
+}
+
 describe("legacy context-budget config migration", () => {
   it.each([true, false])("migrates provider defaults with explicit models=%s", (hasModels) => {
     const models = [
       { id: "default", name: "Default" },
       { id: "custom", name: "Custom", contextTokens: 8_000, contextWindow: 16_000 },
     ];
-    const raw = {
-      models: {
-        providers: {
-          example: {
-            contextTokens: 32_000,
-            contextWindow: 64_000,
-            ...(hasModels ? { models } : {}),
-          },
-        },
-      },
+    const example = {
+      contextTokens: 32_000,
+      contextWindow: 64_000,
+      ...(hasModels ? { models } : {}),
     };
-    const migrated = migrateLegacyContextBudgetConfig(raw);
+    const migrated = migrateLegacyContextBudgetConfig({ models: { providers: { example } } });
     const config = migrated.config as OpenClawConfig;
     const provider = config.models?.providers?.example;
     expect(provider).not.toHaveProperty("contextTokens");
@@ -60,14 +60,7 @@ describe("legacy context-budget config migration", () => {
             message: `models.providers.example.${key} had no explicit model entries to receive its value; use models.providers.<provider>.models[].contextTokens instead.`,
           })),
     );
-    const repeated = migrateLegacyContextBudgetConfig(migrated.config);
-    expect(repeated.config).toBe(migrated.config);
-    expect(repeated).toEqual({
-      config: migrated.config,
-      changed: false,
-      changes: [],
-      warnings: [],
-    });
+    expectIdempotent(migrated.config);
   });
 
   it("removes every agent-level cap surface and is idempotent", () => {
@@ -84,27 +77,14 @@ describe("legacy context-budget config migration", () => {
     expect(migrated.config).toEqual({
       agents: { defaults: {}, entries: { ops: {}, writer: {} }, list: [{ id: "legacy" }] },
     });
-    expect(migrated.changes).toEqual([
-      {
-        path: "agents.defaults.contextTokens",
-        message: "Removed agents.defaults.contextTokens.",
-      },
-      {
-        path: "agents.entries.ops.contextTokens",
-        message: "Removed agents.entries.ops.contextTokens.",
-      },
-      {
-        path: "agents.list[0].contextTokens",
-        message: "Removed agents.list[0].contextTokens.",
-      },
-    ]);
+    expect(migrated.changes).toEqual(
+      ["agents.defaults", "agents.entries.ops", "agents.list[0]"].map((scope) => ({
+        path: `${scope}.contextTokens`,
+        message: `Removed ${scope}.contextTokens.`,
+      })),
+    );
     expect(migrated.warnings).toHaveLength(3);
-    expect(migrateLegacyContextBudgetConfig(migrated.config)).toEqual({
-      config: migrated.config,
-      changed: false,
-      changes: [],
-      warnings: [],
-    });
+    expectIdempotent(migrated.config);
     expect(raw.agents.defaults).toHaveProperty("contextTokens", 128_000);
   });
 });

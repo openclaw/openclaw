@@ -41,23 +41,13 @@ export function officialPluginEntry(params: {
   manifest?: Record<string, unknown>;
   overrides?: Record<string, unknown>;
 }) {
-  const label = params.label ?? params.id;
+  const { id, npmSpec, label = id, manifest, overrides } = params;
   return {
-    id: params.id,
+    id,
     label,
-    install: {
-      npmSpec: params.npmSpec,
-      defaultChoice: "npm",
-    },
-    ...(params.manifest
-      ? {
-          openclaw: {
-            plugin: { id: params.id, label },
-            ...params.manifest,
-          },
-        }
-      : {}),
-    ...params.overrides,
+    install: { npmSpec, defaultChoice: "npm" },
+    ...(manifest ? { openclaw: { plugin: { id, label }, ...manifest } } : {}),
+    ...overrides,
   };
 }
 
@@ -100,17 +90,15 @@ export function channelPluginEntry(params: {
   label?: string;
   trustedSourceLinkedOfficialInstall?: boolean;
 }) {
+  const { id, npmSpec, label = id, trustedSourceLinkedOfficialInstall } = params;
   return {
-    id: params.id,
-    pluginId: params.id,
-    meta: { label: params.label ?? params.id },
-    install: {
-      npmSpec: params.npmSpec,
-      defaultChoice: "npm",
-    },
-    ...(params.trustedSourceLinkedOfficialInstall === undefined
+    id,
+    pluginId: id,
+    meta: { label },
+    install: { npmSpec, defaultChoice: "npm" },
+    ...(trustedSourceLinkedOfficialInstall === undefined
       ? {}
-      : { trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall }),
+      : { trustedSourceLinkedOfficialInstall }),
   };
 }
 
@@ -118,12 +106,7 @@ export function installedRecords(
   pluginId: string,
   overrides: Record<string, unknown>,
 ): Record<string, Record<string, unknown>> {
-  return {
-    [pluginId]: {
-      source: "npm",
-      ...overrides,
-    },
-  };
+  return { [pluginId]: { source: "npm", ...overrides } };
 }
 
 export function successfulInstall(params: {
@@ -157,13 +140,7 @@ export function successfulUpdate(
   return {
     changed: true,
     config: { plugins: { installs } },
-    outcomes: [
-      {
-        pluginId,
-        status: "updated",
-        message: `Updated ${pluginId}.`,
-      },
-    ],
+    outcomes: [{ pluginId, status: "updated", message: `Updated ${pluginId}.` }],
   };
 }
 

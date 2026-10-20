@@ -18,6 +18,54 @@ import { runDoctorSessionSqlite } from "../../doctor-session-sqlite.js";
 import { maybeRepairCodexSessionRoutes } from "./codex-route-session-repair.js";
 
 const states: OpenClawTestState[] = [];
+const runtimeConfig: OpenClawConfig = {
+  plugins: { enabled: false },
+  agents: { entries: { main: {} }, defaults: { model: "openai/current-model" } },
+};
+const accountPin = {
+  authProfileOverride: "authored:account",
+  authProfileOverrideSource: "user" as const,
+};
+const bindings = { "claude-cli": { sessionId: "retained-binding" } };
+async function createState(prefix: string) {
+  const state = await createOpenClawTestState({ layout: "state-only", prefix });
+  states.push(state);
+  state.applyEnv();
+  return state;
+}
+async function seedRuntimeSession(
+  sessionId: string,
+  entry: Omit<Parameters<typeof replaceSessionEntry>[1], "sessionId" | "updatedAt">,
+) {
+  const state = await createState(`runtime-${sessionId}-`);
+  const scope = {
+    storePath: path.join(state.sessionsDir(), "sessions.json"),
+    sessionKey: `agent:main:${sessionId}`,
+    env: state.env,
+  };
+  await replaceSessionEntry(scope, {
+    sessionId,
+    updatedAt: 1,
+    ...accountPin,
+    claudeCliSessionId: "retained-binding",
+    ...entry,
+  });
+  const repair = (shouldRepair = true) =>
+    maybeRepairCodexSessionRoutes({ cfg: runtimeConfig, env: state.env, shouldRepair });
+  const before = loadSessionEntry(scope);
+  await repair(false);
+  expect(loadSessionEntry(scope)).toEqual(before);
+  return { scope, repair };
+}
+async function expectStableRepair(
+  scope: Parameters<typeof loadSessionEntry>[0],
+  repair: () => ReturnType<typeof maybeRepairCodexSessionRoutes>,
+) {
+  const entry = loadSessionEntry(scope);
+  expect(entry).not.toHaveProperty("claudeCliSessionId");
+  expect((await repair()).repairedSessions).toBe(0);
+  expect(loadSessionEntry(scope)).toEqual(entry);
+}
 afterEach(async () => {
   for (const state of states.splice(0)) {
     await state.cleanup();
@@ -28,12 +76,7 @@ describe("legacy runtime session model migration", () => {
   it.each([false, true])(
     "repairs canonical routes without rewriting a receipted index (plugin completed: %s)",
     async (pluginCompleted) => {
-      const state = await createOpenClawTestState({
-        layout: "state-only",
-        prefix: "retained-route-",
-      });
-      states.push(state);
-      state.applyEnv();
+      const state = await createState("retained-route-");
       const { cfg, storePath, scope } = await seedDeferredPluginSessionSource(state, "default");
       const sessionKey = "agent:main:kept";
       const store = JSON.parse(fs.readFileSync(storePath, "utf8"));
@@ -74,7 +117,7 @@ describe("legacy runtime session model migration", () => {
       expect(loadSessionEntry({ ...scope, sessionKey })).toMatchObject({
         modelProvider: "openai",
         model: "current-model",
-        cliSessionBindings: { "claude-cli": { sessionId: "retained-binding" } },
+        cliSessionBindings: bindings,
       });
       expect(fs.readFileSync(storePath)).toEqual(source);
       expect(readDeferredPluginSessionImport(receiptParams)).toEqual(receipt);
@@ -82,115 +125,44 @@ describe("legacy runtime session model migration", () => {
   );
 
   it("repairs a legacy route without inventing a harness", async () => {
-    const state = await createOpenClawTestState({
-      layout: "state-only",
-      prefix: "runtime-no-harness-",
-    });
-    states.push(state);
-    state.applyEnv();
-    const cfg: OpenClawConfig = {
-      plugins: { enabled: false },
-      agents: { entries: { main: {} }, defaults: { model: "openai/current-model" } },
-    };
-    const scope = {
-      storePath: path.join(state.sessionsDir(), "sessions.json"),
-      sessionKey: "agent:main:retired-runtime",
-      env: state.env,
-    };
-    await replaceSessionEntry(scope, {
-      sessionId: "retired-runtime",
-      updatedAt: 1,
+    const { scope, repair } = await seedRuntimeSession("retired-runtime", {
       modelProvider: "openai-codex",
       model: "current-model",
       agentRuntimeOverride: "codex-cli",
-      authProfileOverride: "authored:account",
-      authProfileOverrideSource: "user",
-      claudeCliSessionId: "retained-binding",
     });
-    const before = loadSessionEntry(scope);
-    await maybeRepairCodexSessionRoutes({ cfg, env: state.env, shouldRepair: false });
-    expect(loadSessionEntry(scope)).toEqual(before);
-
-    const repaired = await maybeRepairCodexSessionRoutes({
-      cfg,
-      env: state.env,
-      shouldRepair: true,
-    });
-
-    expect(repaired.repairedSessions).toBe(1);
+    expect((await repair()).repairedSessions).toBe(1);
     const entry = loadSessionEntry(scope);
     expect(entry).toMatchObject({
       modelProvider: "openai",
       model: "current-model",
       agentRuntimeOverride: "codex",
-      authProfileOverride: "authored:account",
-      authProfileOverrideSource: "user",
-      cliSessionBindings: { "claude-cli": { sessionId: "retained-binding" } },
+      ...accountPin,
+      cliSessionBindings: bindings,
     });
-    expect(entry).not.toHaveProperty("claudeCliSessionId");
     expect(entry?.agentHarnessId).toBeUndefined();
-    expect(
-      (await maybeRepairCodexSessionRoutes({ cfg, env: state.env, shouldRepair: true }))
-        .repairedSessions,
-    ).toBe(0);
-    expect(loadSessionEntry(scope)).toEqual(entry);
+    await expectStableRepair(scope, repair);
   });
 
   it("repairs the legacy pair while preserving account pins", async () => {
-    const state = await createOpenClawTestState({
-      layout: "state-only",
-      prefix: "runtime-pair-",
-    });
-    states.push(state);
-    state.applyEnv();
-    const cfg: OpenClawConfig = {
-      plugins: { enabled: false },
-      agents: { entries: { main: {} }, defaults: { model: "openai/current-model" } },
-    };
-    const scope = {
-      storePath: path.join(state.sessionsDir(), "sessions.json"),
-      sessionKey: "agent:main:legacy-pair",
-      env: state.env,
-    };
-    await replaceSessionEntry(scope, {
-      sessionId: "legacy-pair",
-      updatedAt: 1,
+    const { scope, repair } = await seedRuntimeSession("legacy-pair", {
       modelProvider: "claude-cli",
       model: "assistant-a",
       providerOverride: "claude-cli",
       modelOverride: "assistant-a",
       modelOverrideSource: "user",
-      authProfileOverride: "authored:account",
-      authProfileOverrideSource: "user",
       agentRuntimeOverride: undefined,
-      claudeCliSessionId: "retained-binding",
     });
-    const before = loadSessionEntry(scope);
-    await maybeRepairCodexSessionRoutes({ cfg, env: state.env, shouldRepair: false });
-    expect(loadSessionEntry(scope)).toEqual(before);
-
-    const result = await maybeRepairCodexSessionRoutes({
-      cfg,
-      env: state.env,
-      shouldRepair: true,
-    });
-
-    expect(result.repairedSessions).toBe(1);
+    expect((await repair()).repairedSessions).toBe(1);
     expect(loadSessionEntry(scope)).toMatchObject({
       modelProvider: "anthropic",
       model: "assistant-a",
       providerOverride: "anthropic",
       modelOverride: "assistant-a",
       modelOverrideSource: "user",
-      authProfileOverride: "authored:account",
-      authProfileOverrideSource: "user",
+      ...accountPin,
       agentRuntimeOverride: "claude-cli",
-      cliSessionBindings: { "claude-cli": { sessionId: "retained-binding" } },
+      cliSessionBindings: bindings,
     });
-    expect(loadSessionEntry(scope)).not.toHaveProperty("claudeCliSessionId");
-    expect(
-      (await maybeRepairCodexSessionRoutes({ cfg, env: state.env, shouldRepair: true }))
-        .repairedSessions,
-    ).toBe(0);
+    await expectStableRepair(scope, repair);
   });
 });

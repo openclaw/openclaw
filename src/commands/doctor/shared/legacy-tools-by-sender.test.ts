@@ -7,6 +7,18 @@ import { validateConfigObjectRaw } from "../../../config/validation-core.js";
 import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
 
+const migrate = (raw: unknown) => migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
+function expectLegacyIssue(raw: unknown) {
+  expect(findLegacyConfigIssues(raw)).toContainEqual(
+    expect.objectContaining({ message: expect.stringContaining("Untyped toolsBySender") }),
+  );
+}
+function expectCleanMigration(raw: unknown, original: unknown, config: unknown) {
+  expect(raw).toEqual(original);
+  expect(findLegacyConfigIssues(config)).toEqual([]);
+  expect(migrate(config).changes).toEqual([]);
+}
+
 describe("Doctor sender tool policy migration", () => {
   const opaque = { toolsBySender: { external: { template: "unchanged" } } };
   const canonical: GroupToolPolicyBySenderConfig = {
@@ -37,7 +49,7 @@ describe("Doctor sender tool policy migration", () => {
         pluginContracts: false,
       }),
     ).toEqual({ next: null, changes: [] });
-    expect(migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw }).changes).toEqual([]);
+    expect(migrate(raw).changes).toEqual([]);
     expect(raw).toEqual(original);
   });
 
@@ -52,9 +64,7 @@ describe("Doctor sender tool policy migration", () => {
     const raw: Record<string, unknown> = {};
     const path = location.split(".");
     setConfigValueAtPath(raw, path, { Alice: { deny: ["exec"] } });
-    expect(findLegacyConfigIssues(raw)).toContainEqual(
-      expect.objectContaining({ message: expect.stringContaining("Untyped toolsBySender") }),
-    );
+    expectLegacyIssue(raw);
     const migrated = applyLegacyDoctorMigrations(raw, {
       sourceConfigBeforeMigrations: raw,
       pluginContracts: false,
@@ -65,19 +75,16 @@ describe("Doctor sender tool policy migration", () => {
   });
 
   it("removes no-effect empty keys without creating sender identities and is idempotent", () => {
-    const raw = {
-      tools: {
-        toolsBySender: {
-          "": { allow: ["exec"] },
-          " \t ": { deny: ["read"] },
-          "@": { allow: ["write"] },
-          Alice: { deny: ["exec"] },
-          "*": { deny: ["write"] },
-        },
-      },
+    const policies = {
+      "": { allow: ["exec"] },
+      " \t ": { deny: ["read"] },
+      "@": { allow: ["write"] },
+      Alice: { deny: ["exec"] },
+      "*": { deny: ["write"] },
     };
+    const raw = { tools: { toolsBySender: policies } };
     const original = structuredClone(raw);
-    const migrated = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
+    const migrated = migrate(raw);
     expect(migrated.partiallyValid).toBeUndefined();
     const toolsBySender = migrated.sourceConfig?.tools?.toolsBySender;
     expect(toolsBySender).toEqual({
@@ -90,13 +97,7 @@ describe("Doctor sender tool policy migration", () => {
     expect(migrated.changes).toContain(
       "tools.toolsBySender: removed 3 empty untyped sender key(s) that matched no sender; original entries remain in the config backup.",
     );
-    expect(raw).toEqual(original);
-    expect(findLegacyConfigIssues(migrated.sourceConfig)).toEqual([]);
-    expect(
-      migrateLegacyConfig(migrated.sourceConfig, {
-        sourceConfigBeforeMigrations: migrated.sourceConfig,
-      }).changes,
-    ).toEqual([]);
+    expectCleanMigration(raw, original, migrated.sourceConfig);
   });
 
   it.each([
@@ -104,21 +105,18 @@ describe("Doctor sender tool policy migration", () => {
       name: "legacy before typed",
       policies: { " @Alice ": { deny: ["exec"] }, "ID: ALICE": { allow: ["exec"] } },
       expectedKey: "id:Alice",
-      senderId: "@ALICE",
     },
     {
       name: "typed before legacy",
       policies: { "ID: ALICE": { deny: ["exec"] }, " @Alice ": { allow: ["exec"] } },
       expectedKey: "ID: ALICE",
-      senderId: "@ALICE",
     },
     {
       name: "normalized legacy collision",
       policies: { " @Alice ": { deny: ["exec"] }, ALICE: { allow: ["exec"] } },
       expectedKey: "id:Alice",
-      senderId: "@ALICE",
     },
-  ])("preserves the first effective policy for $name", ({ policies, expectedKey, senderId }) => {
+  ])("preserves the first effective policy for $name", ({ policies, expectedKey }) => {
     const raw = {
       channels: { whatsapp: { groups: { "123@g.us": { toolsBySender: policies } } } },
     };
@@ -129,50 +127,33 @@ describe("Doctor sender tool policy migration", () => {
         expect.objectContaining({ message: expect.stringContaining("openclaw doctor --fix") }),
       ]),
     });
-    expect(findLegacyConfigIssues(raw)).toContainEqual(
-      expect.objectContaining({ message: expect.stringContaining("Untyped toolsBySender") }),
-    );
+    expectLegacyIssue(raw);
 
-    const migrated = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
+    const migrated = migrate(raw);
     expect(migrated.partiallyValid).toBeUndefined();
     const toolsBySender =
       migrated.sourceConfig?.channels?.whatsapp?.groups?.["123@g.us"]?.toolsBySender;
     expect(toolsBySender).toEqual({ [expectedKey]: { deny: ["exec"] } });
-    expect(resolveToolsBySender({ toolsBySender, senderId })).toEqual({ deny: ["exec"] });
+    expect(resolveToolsBySender({ toolsBySender, senderId: "@ALICE" })).toEqual({ deny: ["exec"] });
     expect(migrated.changes).toContainEqual(expect.stringContaining("first matching policy"));
-    expect(raw).toEqual(original);
-    expect(findLegacyConfigIssues(migrated.sourceConfig)).toEqual([]);
-    expect(
-      migrateLegacyConfig(migrated.sourceConfig, {
-        sourceConfigBeforeMigrations: migrated.sourceConfig,
-      }).changes,
-    ).toEqual([]);
+    expectCleanMigration(raw, original, migrated.sourceConfig);
   });
 
   it("migrates nested account policies without changing typed matching or colon IDs", () => {
-    const raw = {
-      channels: {
-        whatsapp: {
-          accounts: {
-            work: {
-              groups: {
-                "123@g.us": {
-                  toolsBySender: {
-                    "@alice:example.invalid": { deny: ["exec"] },
-                    "id:@alice:example.invalid": { deny: ["write"] },
-                    "discord:user:alice": { allow: ["read"] },
-                    "channel:discord:user:alice": { deny: ["read"] },
-                    "username:alice": { allow: ["exec"] },
-                    "*": { deny: ["write", "exec"] },
-                  },
-                },
-              },
-            },
-          },
-        },
+    const group = {
+      toolsBySender: {
+        "@alice:example.invalid": { deny: ["exec"] },
+        "id:@alice:example.invalid": { deny: ["write"] },
+        "discord:user:alice": { allow: ["read"] },
+        "channel:discord:user:alice": { deny: ["read"] },
+        "username:alice": { allow: ["exec"] },
+        "*": { deny: ["write", "exec"] },
       },
     };
-    const migrated = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
+    const raw = {
+      channels: { whatsapp: { accounts: { work: { groups: { "123@g.us": group } } } } },
+    };
+    const migrated = migrate(raw);
     expect(migrated.partiallyValid).toBeUndefined();
     const toolsBySender =
       migrated.sourceConfig?.channels?.whatsapp?.accounts?.work?.groups?.["123@g.us"]

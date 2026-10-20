@@ -41,10 +41,10 @@ describe("configured plugin install health findings", () => {
               trustedSourceLinkedOfficialInstall: true,
             },
       ]);
-      const [issue] = await detectConfiguredPluginInstallHealthIssues({
+      const issues = await detectConfiguredPluginInstallHealthIssues({
         cfg: deferred
           ? {
-              plugins: { entries: { discord: { enabled: true } } },
+              plugins: { entries: { [pluginId]: { enabled: true } } },
               channels: { discord: { enabled: true } },
             }
           : {
@@ -60,6 +60,7 @@ describe("configured plugin install health findings", () => {
           : testEnv,
       });
 
+      const issue = expectDefined(issues[0], "health issue");
       expect(mocks.installPluginFromClawHub).not.toHaveBeenCalled();
       expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
       expect(mocks.resolveNpmSpecMetadata).not.toHaveBeenCalled();
@@ -71,10 +72,7 @@ describe("configured plugin install health findings", () => {
           ? { kind: "deferred-package-manager-repair", pluginId, installPath }
           : { kind: "missing-install-record", pluginId, installSpec: npmSpec },
       );
-      const finding = configuredPluginInstallIssueToHealthFinding(
-        expectDefined(issue, "health issue"),
-      );
-      expect(finding).toMatchObject({
+      expect(configuredPluginInstallIssueToHealthFinding(issue)).toMatchObject({
         checkId: "core/doctor/configured-plugin-installs",
         severity: "warning",
         target: pluginId,
@@ -82,9 +80,7 @@ describe("configured plugin install health findings", () => {
           ? { path: installPath }
           : { fixHint: "Run `openclaw doctor --fix` to install @openclaw/plugin-matrix." }),
       });
-      expect(
-        configuredPluginInstallIssueToRepairEffect(expectDefined(issue, "issue test invariant")),
-      ).toEqual({
+      expect(configuredPluginInstallIssueToRepairEffect(issue)).toEqual({
         kind: "package",
         action: deferred
           ? "would-defer-configured-plugin-install-repair"
@@ -144,11 +140,12 @@ describe("configured plugin install health findings", () => {
       env: testEnv,
     });
 
-    expect(
-      configuredPluginInstallIssueToHealthFinding(
-        expectDefined(issues[0], "missing payload issue"),
-      ),
-    ).toMatchObject({ target: "demo", source: fixture.source, fixHint: fixture.fixHint });
+    const issue = expectDefined(issues[0], "missing payload issue");
+    expect(configuredPluginInstallIssueToHealthFinding(issue)).toMatchObject({
+      target: "demo",
+      source: fixture.source,
+      fixHint: fixture.fixHint,
+    });
     expect(issues).toEqual([
       {
         kind: "missing-installed-payload",

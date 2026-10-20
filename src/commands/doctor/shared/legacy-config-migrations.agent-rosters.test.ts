@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import { findLegacyConfigIssues } from "../../../config/legacy.js";
 import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
 
+const migrate = (raw: unknown) =>
+  applyLegacyDoctorMigrations(raw, { sourceConfigBeforeMigrations: raw }).next;
+
 describe("per-agent legacy migrations after roster normalization", () => {
   // Keep the migration sources independent: default params must not create the
   // model row that the inherited-agent case claims to exercise.
@@ -9,21 +12,15 @@ describe("per-agent legacy migrations after roster normalization", () => {
     "creates absent provider ancestors for Qwen params from %s",
     (source) => {
       const legacyParams = { qwenThinkingFormat: "chat-template" };
-      const raw = {
-        agents: {
-          defaults: {
-            model: "vllm/Qwen/selected@local",
-            params: { temperature: 0.2, ...(source === "defaults" ? legacyParams : {}) },
-          },
-          list: [
-            {
-              id: "local",
-              params: { temperature: 0.4, ...(source === "inherited agent" ? legacyParams : {}) },
-            },
-          ],
-        },
+      const defaults = {
+        model: "vllm/Qwen/selected@local",
+        params: { temperature: 0.2, ...(source === "defaults" ? legacyParams : {}) },
       };
-      const { next } = applyLegacyDoctorMigrations(raw, { sourceConfigBeforeMigrations: raw });
+      const local = {
+        id: "local",
+        params: { temperature: 0.4, ...(source === "inherited agent" ? legacyParams : {}) },
+      };
+      const next = migrate({ agents: { defaults, list: [local] } });
 
       expect(next).toHaveProperty("models.providers.vllm", {
         models: [
@@ -49,57 +46,51 @@ describe("per-agent legacy migrations after roster normalization", () => {
       model: "vllm/qwen-test",
       params: { qwenThinkingFormat: "chat-template", temperature: 0.2 },
     };
-    const raw: Record<string, unknown> = {
+    const old = {
+      id: "old",
+      model: "vllm/discarded",
+      params: { qwenThinkingFormat: "chat-template" },
+    };
+    const raw = {
       agents: {
         ownership: "explicit",
         ...(shape === "entries"
-          ? {
-              entries: { worker: agent },
-              list: [
-                {
-                  id: "old",
-                  model: "vllm/discarded",
-                  params: { qwenThinkingFormat: "chat-template" },
-                },
-              ],
-            }
+          ? { entries: { worker: agent }, list: [old] }
           : { list: [{ id: "worker", ...agent }] }),
       },
     };
-    expect(findLegacyConfigIssues(raw)).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ message: expect.stringContaining("Final layout aliases") }),
-        expect.objectContaining({ message: expect.stringContaining("tts.enabled") }),
-        expect.objectContaining({ message: expect.stringContaining("qwenThinkingFormat") }),
-      ]),
-    );
+    const issues = findLegacyConfigIssues(raw);
+    for (const message of ["Final layout aliases", "tts.enabled", "qwenThinkingFormat"]) {
+      expect(issues).toContainEqual(
+        expect.objectContaining({ message: expect.stringContaining(message) }),
+      );
+    }
 
-    const { next } = applyLegacyDoctorMigrations(raw, { sourceConfigBeforeMigrations: raw });
+    const next = migrate(raw);
 
+    const worker = {
+      tools: { exec: { timeoutSeconds: 45 } },
+      sandbox: { browser: { noVncEnabled: false } },
+      tts: { auto: "always", providers: { custom: { speakerVoice: "operator-voice" } } },
+      params: { temperature: 0.2 },
+    };
+    const vllm = {
+      models: [{ id: "qwen-test", compat: { thinkingFormat: "qwen-chat-template" } }],
+    };
     expect(next).toMatchObject({
-      agents: {
-        ownership: "explicit",
-        entries: {
-          worker: {
-            tools: { exec: { timeoutSeconds: 45 } },
-            sandbox: { browser: { noVncEnabled: false } },
-            tts: { auto: "always", providers: { custom: { speakerVoice: "operator-voice" } } },
-            params: { temperature: 0.2 },
-          },
-        },
-      },
-      models: {
-        providers: {
-          vllm: { models: [{ id: "qwen-test", compat: { thinkingFormat: "qwen-chat-template" } }] },
-        },
-      },
+      agents: { ownership: "explicit", entries: { worker } },
+      models: { providers: { vllm } },
     });
     expect(next).toHaveProperty("models.providers.vllm.models.length", 1);
     expect(next).not.toHaveProperty("agents.list");
-    expect(next).not.toHaveProperty("agents.entries.worker.params.qwenThinkingFormat");
-    expect(next).not.toHaveProperty("agents.entries.worker.tools.exec.timeoutSec");
-    expect(next).not.toHaveProperty("agents.entries.worker.sandbox.browser.enableNoVnc");
-    expect(next).not.toHaveProperty("agents.entries.worker.tts.enabled");
-    expect(next).not.toHaveProperty("agents.entries.worker.tts.providers.custom.voice");
+    for (const key of [
+      "params.qwenThinkingFormat",
+      "tools.exec.timeoutSec",
+      "sandbox.browser.enableNoVnc",
+      "tts.enabled",
+      "tts.providers.custom.voice",
+    ]) {
+      expect(next).not.toHaveProperty(`agents.entries.worker.${key}`);
+    }
   });
 });
