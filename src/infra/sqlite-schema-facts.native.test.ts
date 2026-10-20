@@ -271,6 +271,8 @@ describe("native SQLite schema snapshots and callbacks", () => {
     const sender = new SqliteDatabaseAdmissionRegistry();
     sender.install(structuredClone([snapshot!]));
     const receipts = createSqliteDatabaseWriteReceipts({
+      retain() {},
+      release() {},
       admission: () => sender.records.get(snapshot!.identity),
       pathAdmission: () => sender.records.get(snapshot!.identity),
       readRevision: () => 0,

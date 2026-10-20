@@ -117,6 +117,8 @@ export function prepareSqliteDatabaseCleanClose(database: DatabaseSync) {
 const scopedWrites = createSqliteDatabaseWriteReceipts({
   admission,
   pathAdmission,
+  retain: retainReference,
+  release: releaseReference,
   readRevision: readSqliteDatabaseWriteRevision,
   writer: (database) => state.dataWriters.get(database),
   suspended: (database) => state.suspended.has(database),
@@ -127,6 +129,7 @@ const scopedWrites = createSqliteDatabaseWriteReceipts({
 });
 export const {
   retireSqliteDatabaseWriteScopes,
+  retainSqliteDatabaseWriteScopesForPath,
   withSqliteDatabaseWriteScope,
   withoutSqliteDatabaseWriteScope,
   readSqliteDatabaseScopedWriteToken,
@@ -397,6 +400,12 @@ export function releaseSqliteDatabaseAdmission(database: DatabaseSync): void {
   if (state.openedIdentities.delete(database) && record) {
     state.local.delete(database);
     releaseReference(record);
+  }
+}
+
+function retainReference(record: Admission): void {
+  if (state.registry.changeReferences(record, 1)) {
+    exchange(record);
   }
 }
 

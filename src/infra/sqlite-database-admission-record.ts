@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs, { type BigIntStats } from "node:fs";
 import path from "node:path";
 import { setEnvironmentData, threadId } from "node:worker_threads";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
 import {
   isSoleDatabaseFileDescriptor,
@@ -39,9 +40,64 @@ export type StagedAdmissionFact = Pick<AdmissionFact, "value" | "revision" | "sc
 };
 export type ScopedWriteRevision = {
   identity: string;
-  // The revision and retirement flag share custody across all admission snapshots.
+  // Revision, retirement, and active effect pins share custody across admission snapshots.
   state: Int32Array<SharedArrayBuffer>;
 };
+
+const MAX_WRITE_SCOPE_BYTES = 1024 * 1024;
+const scopeRetention = resolveGlobalSingleton(
+  Symbol.for("openclaw.sqliteDatabaseWriteScopeRetention"),
+  () => new WeakMap<Map<string, ScopedWriteRevision>, { bytes: number }>(),
+);
+// Account for UTF-16 keys plus the UUID, shared cell, and map/snapshot entries.
+const writeScopeBytes = (key: string) => key.length * 2 + 256;
+
+/** Idle receipts cache freshness; active effect guards retain their exact shared cells. */
+export function retainSqliteDatabaseWriteScope(
+  record: Admission,
+  key: string,
+  revision: ScopedWriteRevision,
+): void {
+  const scopes = record.writeScopes;
+  let retention = scopeRetention.get(scopes);
+  if (!retention) {
+    retention = {
+      bytes: [...scopes.keys()].reduce((bytes, scopeKey) => bytes + writeScopeBytes(scopeKey), 0),
+    };
+    scopeRetention.set(scopes, retention);
+  }
+  if (!scopes.delete(key)) {
+    retention.bytes += writeScopeBytes(key);
+  }
+  scopes.set(key, revision);
+  pruneSqliteDatabaseWriteScopes(record);
+}
+
+/** Active effect scopes may exceed the idle budget until their final release. */
+export function pruneSqliteDatabaseWriteScopes(record: Admission): boolean {
+  const retention = scopeRetention.get(record.writeScopes)!;
+  if (retention.bytes <= MAX_WRITE_SCOPE_BYTES) {
+    return false;
+  }
+  let changed = false;
+  for (const [oldest, value] of record.writeScopes) {
+    // Claim an unpinned cell before another isolate can retain it for an effect.
+    const pins = Atomics.compareExchange(value.state, 2, 0, -1);
+    if (pins > 0 && Atomics.load(value.state, 1) === 0) {
+      continue;
+    }
+    Atomics.store(value.state, 1, 1);
+    // A writer missing this cell must fence receipts registered after its dispatch.
+    advanceSqliteDatabaseGeneration(record, "writeScopeRevision");
+    record.writeScopes.delete(oldest);
+    retention.bytes -= writeScopeBytes(oldest);
+    changed = true;
+    if (retention.bytes <= MAX_WRITE_SCOPE_BYTES) {
+      break;
+    }
+  }
+  return changed;
+}
 
 export type Admission = {
   identity: string;
@@ -336,6 +392,10 @@ export class SqliteDatabaseAdmissionRegistry {
       for (const [key, revision] of current.writeScopes) {
         if (Atomics.load(revision.state, 1) !== 0) {
           current.writeScopes.delete(key);
+          const retention = scopeRetention.get(current.writeScopes);
+          if (retention) {
+            retention.bytes -= writeScopeBytes(key);
+          }
           changed = true;
         }
       }
@@ -419,7 +479,13 @@ export class SqliteDatabaseAdmissionRegistry {
         record = undefined;
       }
       if (!record) {
-        record = { ...incoming, hostRevision: undefined };
+        record = {
+          ...incoming,
+          facts: new Map(incoming.facts),
+          writeScopes: new Map(),
+          references: new Map(incoming.references),
+          hostRevision: undefined,
+        };
         this.records.set(incoming.identity, record);
         this.observeLocation(incoming.location, incoming.identity);
         changed = true;
@@ -451,7 +517,7 @@ export class SqliteDatabaseAdmissionRegistry {
         if (threadId === 0) {
           advanceSqliteDatabaseGeneration(record, "writeScopeRevision");
         }
-        record.writeScopes.set(key, revision);
+        retainSqliteDatabaseWriteScope(record, key, revision);
         changed = true;
       }
       const writeScopeRevision = readSqliteDatabaseGeneration(record, "writeScopeRevision");

@@ -25,6 +25,7 @@ import {
   readActiveTranscriptEntryAnchor,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { runWithSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { registerChatAbortController } from "../gateway/chat-abort.js";
@@ -35,6 +36,7 @@ import {
   registerAgentRunContext,
   releaseAgentRunContext,
 } from "../infra/agent-run-registry.js";
+import { readSqliteDatabaseScopedWriteTokenForPath } from "../infra/sqlite-database-admission.js";
 import { deliverAgentHarnessCompletion } from "../plugin-sdk/agent-harness-completion.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import {
@@ -174,6 +176,39 @@ function prepareCompletionAdmission(
 }
 
 describe("host-owned harness completion recovery", () => {
+  it("keeps an unchanged completion source current while unrelated receipts are evicted", () =>
+    withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const { claim, target, entry } = await admit(state);
+      await appendCompletionSource({ target, entry });
+      const admission = prepareCompletionAdmission({ claim, target });
+      try {
+        const context = await admission.admit("embedded");
+        const assertion = resolveAdmittedRunActiveAssertion(context);
+        if (!assertion) {
+          throw new Error("Source effect was not captured.");
+        }
+        await runWithAgentToolSourceExecutionScope(assertion, async () => {
+          const databasePath = resolveSqliteTargetFromSessionStorePath(target.storePath).path;
+          for (let index = 0; index < 160; index++) {
+            readSqliteDatabaseScopedWriteTokenForPath(databasePath, `${index}:${"x".repeat(4096)}`);
+          }
+          await Promise.resolve();
+          assertion();
+        });
+        await expect(
+          runWithAgentToolSourceExecutionScope(assertion, async () => {
+            await appendTranscriptMessage(
+              { ...target, sessionId: entry.sessionId },
+              { message: { role: "user", content: "new instruction" } },
+            );
+            assertion();
+          }),
+        ).rejects.toThrow("no longer active");
+      } finally {
+        admission.close();
+      }
+    }));
+
   it.each(["human", "reset", "queued-after-fence"])(
     "rechecks the admitted recovery input at %s",
     async (phase) => {
