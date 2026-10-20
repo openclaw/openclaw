@@ -70,21 +70,48 @@ function projectOpenAIToolDescriptors(
   tools: readonly OpenAIToolDescriptor[],
   schemas?: Map<Record<string, unknown>, PreparedToolSchemaNormalization>,
 ): OpenAIToolProjection {
-  const inputToolCount = tools.length;
+  let inputToolCount: number;
+  try {
+    inputToolCount = tools.length;
+  } catch {
+    return {
+      inputToolCount: 0,
+      tools: [],
+      diagnostics: [unreadableToolDiagnostic(0)],
+    };
+  }
+
   const projectedTools: OpenAIProjectedTool[] = [];
   const diagnostics: OpenAIToolProjectionDiagnostic[] = [];
   for (let toolIndex = 0; toolIndex < inputToolCount; toolIndex += 1) {
-    const tool = tools[toolIndex];
-    if (!tool) {
-      diagnostics.push(unreadableToolDiagnostic(toolIndex));
+    let tool: OpenAIToolDescriptor;
+    let name: string | undefined;
+    let parameters: unknown;
+    let readPath = `tool[${toolIndex}]`;
+    try {
+      const candidate = tools[toolIndex];
+      if (!candidate) {
+        diagnostics.push(unreadableToolDiagnostic(toolIndex));
+        continue;
+      }
+      tool = candidate;
+      readPath += ".name";
+      const nameValue = tool.name;
+      if (typeof nameValue !== "string" || !nameValue) {
+        diagnostics.push({ toolIndex, violations: [`${readPath} is empty`] });
+        continue;
+      }
+      name = nameValue;
+      readPath = `${name}.parameters`;
+      parameters = tool.parameters;
+    } catch {
+      diagnostics.push({
+        toolIndex,
+        ...(name ? { toolName: name } : {}),
+        violations: [`${readPath} is unreadable`],
+      });
       continue;
     }
-    const name = tool.name;
-    if (typeof name !== "string" || !name) {
-      diagnostics.push({ toolIndex, violations: [`tool[${toolIndex}].name is empty`] });
-      continue;
-    }
-    const parameters = tool.parameters;
     const prepared = schemas
       ? prepareRuntimeToolInputSchema(parameters ?? {}, `${name}.parameters`, name)
       : undefined;
@@ -106,7 +133,12 @@ function projectOpenAIToolDescriptors(
       schemas?.set(schemaProjection.schema, prepared.normalization);
     }
 
-    const descriptionValue = tool.description;
+    let descriptionValue: unknown;
+    try {
+      descriptionValue = tool.description;
+    } catch {
+      // Description is optional; preserve the usable function schema.
+    }
     const description = typeof descriptionValue === "string" ? descriptionValue : undefined;
     projectedTools.push({
       toolIndex,
