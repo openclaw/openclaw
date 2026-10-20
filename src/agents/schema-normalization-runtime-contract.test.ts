@@ -1,4 +1,3 @@
-// Verifies OpenAI tool schema normalization remains stable across runtime paths.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
   createNativeOpenAIResponsesModel,
@@ -14,59 +13,47 @@ import { testing as openAITransportTesting } from "./openai-transport-stream.tes
 
 const { buildOpenAIResponsesParams } = openAITransportTesting;
 
+function responseParams(tools: Parameters<typeof buildOpenAIResponsesParams>[1]["tools"]) {
+  return buildOpenAIResponsesParams(
+    createNativeOpenAIResponsesModel() as never,
+    { systemPrompt: "system", messages: [], tools },
+    undefined,
+  ) as { tools?: Array<{ strict?: boolean; parameters?: unknown }> };
+}
+
+function preparedTools() {
+  return buildProviderToolCompatFamilyHooks("openai").normalizeToolSchemas({
+    provider: "openai",
+    modelId: "gpt-5.4",
+    modelApi: "openai-responses",
+    tools: [createParameterFreeTool()] as never,
+  });
+}
+
 describe("OpenAI transport schema normalization runtime contract", () => {
   it("keeps HTTP Responses strict decisions stable for the same tool set", () => {
-    const tools = [createStrictCompatibleTool(), createPermissiveTool()] as never;
-    const httpParams = buildOpenAIResponsesParams(
-      createNativeOpenAIResponsesModel() as never,
-      { systemPrompt: "system", messages: [], tools } as never,
-      undefined,
-    ) as { tools?: Array<{ strict?: boolean; parameters?: unknown }> };
-
+    const httpParams = responseParams([
+      createStrictCompatibleTool(),
+      createPermissiveTool(),
+    ] as never);
     expect(httpParams.tools?.map((tool) => tool.strict)).toEqual([false, false]);
   });
 
   it("normalizes parameter-free tool schemas to the strict-compatible HTTP Responses shape", () => {
-    const tools = [createParameterFreeTool()] as never;
-    const httpParams = buildOpenAIResponsesParams(
-      createNativeOpenAIResponsesModel() as never,
-      { systemPrompt: "system", messages: [], tools } as never,
-      undefined,
-    ) as { tools?: Array<{ strict?: boolean; parameters?: unknown }> };
-    const normalizedSchema = normalizedParameterFreeSchema();
-
-    expect(httpParams.tools?.[0]?.strict).toBe(true);
-    expect(httpParams.tools?.[0]?.parameters).toEqual(normalizedSchema);
+    const tool = responseParams([createParameterFreeTool()] as never).tools?.[0];
+    expect(tool?.strict).toBe(true);
+    expect(tool?.parameters).toEqual(normalizedParameterFreeSchema());
   });
 
   it("keeps provider-prepared parameter-free schemas strict-compatible for HTTP Responses", () => {
-    const hooks = buildProviderToolCompatFamilyHooks("openai");
-    const tools = hooks.normalizeToolSchemas({
-      provider: "openai",
-      modelId: "gpt-5.4",
-      modelApi: "openai-responses",
-      tools: [createParameterFreeTool()] as never,
-    }) as never;
-    const httpParams = buildOpenAIResponsesParams(
-      createNativeOpenAIResponsesModel() as never,
-      { systemPrompt: "system", messages: [], tools } as never,
-      undefined,
-    ) as { tools?: Array<{ strict?: boolean; parameters?: unknown }> };
-    const normalizedSchema = normalizedParameterFreeSchema();
-
-    expect(httpParams.tools?.[0]?.strict).toBe(true);
-    expect(httpParams.tools?.[0]?.parameters).toEqual(normalizedSchema);
+    const tool = responseParams(preparedTools() as never).tools?.[0];
+    expect(tool?.strict).toBe(true);
+    expect(tool?.parameters).toEqual(normalizedParameterFreeSchema());
   });
 
   it("passes prepared executable schemas through compaction-triggered Responses requests", () => {
     // Server-side compaction must not strip provider-prepared strict tool schemas.
-    const hooks = buildProviderToolCompatFamilyHooks("openai");
-    const tools = hooks.normalizeToolSchemas({
-      provider: "openai",
-      modelId: "gpt-5.4",
-      modelApi: "openai-responses",
-      tools: [createParameterFreeTool()] as never,
-    }) as never;
+    const tools = preparedTools() as never;
     const model = createNativeOpenAIResponsesModel() as never;
     let payload:
       | { context_management?: unknown; tools?: Array<{ parameters?: unknown }> }
@@ -74,12 +61,7 @@ describe("OpenAI transport schema normalization runtime contract", () => {
     const baseStreamFn: StreamFn = (modelArg, contextArg, optionsArg) => {
       payload = buildOpenAIResponsesParams(
         modelArg,
-        {
-          ...(contextArg as unknown as Record<string, unknown>),
-          systemPrompt: "system",
-          messages: [],
-          tools,
-        } as never,
+        contextArg,
         optionsArg as never,
       ) as typeof payload;
       optionsArg?.onPayload?.(payload, modelArg);
@@ -92,10 +74,7 @@ describe("OpenAI transport schema normalization runtime contract", () => {
     void streamFn(model, { systemPrompt: "system", messages: [], tools } as never, {});
 
     expect(payload?.context_management).toEqual([
-      {
-        type: "compaction",
-        compact_threshold: 140_000,
-      },
+      { type: "compaction", compact_threshold: 140_000 },
     ]);
     expect(payload?.tools?.[0]?.parameters).toEqual(normalizedParameterFreeSchema());
   });

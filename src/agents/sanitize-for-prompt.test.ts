@@ -1,4 +1,3 @@
-// Verifies prompt literals and data blocks strip control/spoofing characters.
 import { describe, expect, it } from "vitest";
 import {
   hasPromptUnsafeControlCharacter,
@@ -7,24 +6,10 @@ import {
 } from "./sanitize-for-prompt.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
 
-function hasLoneSurrogate(value: string): boolean {
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code >= 0xd800 && code <= 0xdbff) {
-      const next = value.charCodeAt(index + 1);
-      if (next < 0xdc00 || next > 0xdfff) {
-        return true;
-      }
-      index += 1;
-    } else if (code >= 0xdc00 && code <= 0xdfff) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function extractPromptData(block: string): string {
-  const result = block.match(/<prompt-data>\n([\s\S]*?)\n<\/prompt-data>/)?.[1];
+function promptData(params: Omit<Parameters<typeof wrapPromptDataBlock>[0], "label">): string {
+  const result = wrapPromptDataBlock({ label: "Data", ...params }).match(
+    /<prompt-data>\n([\s\S]*?)\n<\/prompt-data>/,
+  )?.[1];
   if (result === undefined) {
     throw new Error("Expected prompt data block");
   }
@@ -34,13 +19,9 @@ function extractPromptData(block: string): string {
 describe("hasPromptUnsafeControlCharacter", () => {
   it("rejects every character the shared prompt sanitizer strips", () => {
     expect(hasPromptUnsafeControlCharacter("ok-name.jpg")).toBe(false);
-    expect(hasPromptUnsafeControlCharacter("foo\nbar")).toBe(true);
-    expect(hasPromptUnsafeControlCharacter("foo\u007fbar")).toBe(true);
-    expect(hasPromptUnsafeControlCharacter("foo\u0085bar")).toBe(true);
-    expect(hasPromptUnsafeControlCharacter("foo\u009Bbar")).toBe(true);
-    expect(hasPromptUnsafeControlCharacter("foo\u2028bar")).toBe(true);
-    expect(hasPromptUnsafeControlCharacter("foo\u2029bar")).toBe(true);
-    expect(hasPromptUnsafeControlCharacter("foo\u202Ebar")).toBe(true);
+    for (const control of ["\n", "\u007f", "\u0085", "\u009B", "\u2028", "\u2029", "\u202E"]) {
+      expect(hasPromptUnsafeControlCharacter(`foo${control}bar`)).toBe(true);
+    }
   });
 });
 
@@ -76,33 +57,19 @@ describe("buildAgentSystemPrompt uses sanitized workspace/sandbox strings", () =
 
 describe("wrapPromptDataBlock", () => {
   it("returns empty string when sanitized input is empty", () => {
-    const block = wrapPromptDataBlock({
-      label: "Data",
-      text: "\n\u2028\n",
-    });
-    expect(block).toBe("");
+    expect(wrapPromptDataBlock({ label: "Data", text: "\n\u2028\n" })).toBe("");
   });
 
   it("does not split surrogate pairs when applying max char limits", () => {
-    const block = wrapPromptDataBlock({
-      label: "Data",
-      text: `${"a".repeat(3)}😀tail`,
-      maxChars: 4,
-    });
-
-    expect(block).toContain(`\n${"a".repeat(3)}\n`);
-    expect(hasLoneSurrogate(block)).toBe(false);
+    expect(promptData({ text: "aaa😀tail", maxChars: 4 })).toBe("aaa");
   });
 
   it("reserves the marker after escaping within the character budget", () => {
-    const result = extractPromptData(
-      wrapPromptDataBlock({
-        label: "Data",
-        text: "<".repeat(20),
-        maxEscapedChars: 10,
-        truncationMarker: "[cut]",
-      }),
-    );
+    const result = promptData({
+      text: "<".repeat(20),
+      maxEscapedChars: 10,
+      truncationMarker: "[cut]",
+    });
 
     expect(result).toBe("&lt;[cut]");
     expect(result.length).toBeLessThanOrEqual(10);

@@ -2,26 +2,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSessionGitCoauthorPrompt } from "./git-coauthor-prompt.js";
 import { resolveAgentRuntimePrompt } from "./runtime-prompt.js";
 
-const {
-  resolveChannelCapabilitiesMock,
-  getMachineDisplayNameMock,
-  resolveChannelMessageToolHintsMock,
-  resolveChannelReactionGuidanceMock,
-} = vi.hoisted(() => ({
-  resolveChannelCapabilitiesMock: vi.fn(() => ["voice"]),
-  getMachineDisplayNameMock: vi.fn(async () => "test-host"),
-  resolveChannelMessageToolHintsMock: vi.fn(() => ["Use the message tool."]),
-  resolveChannelReactionGuidanceMock: vi.fn(() => ({
-    level: "minimal" as const,
-    channel: "Telegram",
-  })),
+const channelMocks = vi.hoisted(() => ({
+  capabilities: vi.fn(() => ["voice"]),
+  hints: vi.fn(() => ["Use the message tool."]),
+  reactions: vi.fn(() => ({ level: "minimal" as const, channel: "Telegram" })),
 }));
 
 vi.mock("./channel-tools.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./channel-tools.js")>()),
-  resolveChannelMessageToolHints: resolveChannelMessageToolHintsMock,
+  resolveChannelMessageToolHints: channelMocks.hints,
   resolveChannelPromptCapabilities: vi.fn(() => []),
-  resolveChannelReactionGuidance: resolveChannelReactionGuidanceMock,
+  resolveChannelReactionGuidance: channelMocks.reactions,
 }));
 
 vi.mock("./model-selection.js", () => ({
@@ -30,7 +21,7 @@ vi.mock("./model-selection.js", () => ({
 
 vi.mock("../config/channel-capabilities.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/channel-capabilities.js")>()),
-  resolveChannelCapabilities: resolveChannelCapabilitiesMock,
+  resolveChannelCapabilities: channelMocks.capabilities,
 }));
 
 vi.mock("./shell-utils.js", () => ({
@@ -42,7 +33,7 @@ vi.mock("./git-coauthor-prompt.js", () => ({
 }));
 
 vi.mock("../infra/machine-name.js", () => ({
-  getMachineDisplayName: getMachineDisplayNameMock,
+  getMachineDisplayName: vi.fn(async () => "test-host"),
 }));
 
 vi.mock("../infra/os-summary.js", () => ({
@@ -75,9 +66,9 @@ describe("resolveAgentRuntimePrompt", () => {
     });
 
     const channelContext = { cfg: config, channel: "telegram", accountId: "work" };
-    expect(resolveChannelCapabilitiesMock).toHaveBeenCalledWith(channelContext);
-    expect(resolveChannelReactionGuidanceMock).toHaveBeenCalledWith(channelContext);
-    expect(resolveChannelMessageToolHintsMock).toHaveBeenCalledWith(channelContext);
+    for (const mock of Object.values(channelMocks)) {
+      expect(mock).toHaveBeenCalledWith(channelContext);
+    }
     expect(resolveSessionGitCoauthorPrompt).toHaveBeenCalledExactlyOnceWith({
       config,
       agentId: "main",
