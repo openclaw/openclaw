@@ -17,12 +17,10 @@ function createFile(body: string) {
 }
 
 function expectClosed() {
+  const opened = vi.mocked(fs.openSync).mock;
   expect(fs.openSync).toHaveBeenCalled();
   expect(vi.mocked(fs.closeSync).mock.calls.map(([fd]) => fd)).toEqual(
-    vi
-      .mocked(fs.openSync)
-      .mock.results.filter((result) => result.type === "return")
-      .map((result) => result.value),
+    opened.results.filter((result) => result.type === "return").map((result) => result.value),
   );
 }
 

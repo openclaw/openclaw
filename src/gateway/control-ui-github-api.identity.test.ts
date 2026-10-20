@@ -33,43 +33,43 @@ describe("Control UI GitHub credential", () => {
     { enabled: false },
     { entries: { github: { enabled: false } } },
     { allow: ["another-plugin"] },
-  ])(
-    "keeps the packaged host read library available independently of plugin activation: %j",
-    async (plugins) => {
-      setRuntimeConfigSnapshot({ plugins });
-      const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
-        new Response(JSON.stringify({ id: 1 }), {
-          headers: { "content-type": "application/json" },
-        }),
-      );
-      expect(gitHubPublicApi.resolveGitHubApiCredentialScope({}).token).toBeUndefined();
-      await expect(
-        gitHubPublicApi.fetchGitHubJson("https://api.github.com/user", fetchMock),
-      ).resolves.toEqual({ id: 1 });
-      expect(fetchMock).toHaveBeenCalledOnce();
-    },
-  );
+  ])("keeps host reads available with plugins %j", async (plugins) => {
+    setRuntimeConfigSnapshot({ plugins });
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ id: 1 }));
+    expect(gitHubPublicApi.resolveGitHubApiCredentialScope({}).token).toBeUndefined();
+    await expect(
+      gitHubPublicApi.fetchGitHubJson("https://api.github.com/user", fetchMock),
+    ).resolves.toEqual({ id: 1 });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
 
-  it("keeps the explicit preview credential separate and preserves ambient fallback by omission", () => {
-    const env = { GH_TOKEN: "ambient-gh", GITHUB_TOKEN: "ambient-github" };
+  it.each([
+    ["ambient fallback", {}, "ambient-gh"],
+    ["no public token on Enterprise", previewConfig(undefined, enterpriseHost), undefined],
+    [
+      "separate preview credential",
+      {
+        ...previewConfig({ token: "preview-service-token" }),
+        tools: { github: { profileId: "ghp_99999999999999999999999999999999" } },
+      },
+      "preview-service-token",
+    ],
+    [
+      "host-bound Enterprise credential",
+      previewConfig({ host: enterpriseHost, token: "enterprise-token" }, enterpriseHost),
+      "enterprise-token",
+    ],
+  ] satisfies [string, OpenClawConfig, string | undefined][])("%s", (_name, config, expected) => {
+    expect(githubApiToken({ GH_TOKEN: "ambient-gh", GITHUB_TOKEN: "ambient-github" }, config)).toBe(
+      expected,
+    );
+  });
 
-    expect(githubApiToken(env, {})).toBe("ambient-gh");
-    expect(
-      githubApiToken(env, {
-        gateway: { github: { host: "ghe.example.test" } },
-      }),
-    ).toBeUndefined();
-    expect(
-      githubApiToken(env, {
-        gateway: { controlUi: { github: { token: "preview-service-token" } } },
-        tools: {
-          github: {
-            profileId: "ghp_99999999999999999999999999999999",
-          },
-        },
-      }),
-    ).toBe("preview-service-token");
-    expect(() => githubApiToken(env, previewConfig({ token: coldToken }))).toThrow(
+  it.each([
+    ["unmaterialized SecretRef", previewConfig({ token: coldToken })],
+    ["mismatched host", previewConfig({ token: "public-service-token" }, enterpriseHost)],
+  ] satisfies [string, OpenClawConfig][])("fails closed for %s", (_name, config) => {
+    expect(() => githubApiToken({ GH_TOKEN: "public-token" }, config)).toThrow(
       SecretSurfaceUnavailableError,
     );
   });
@@ -93,20 +93,5 @@ describe("Control UI GitHub credential", () => {
     );
     expect(hasConfiguredGitHubApiCredential({}, config)).toBe(true);
     expect(githubApiToken({ GH_TOKEN: "ambient" }, {})).toBe("ambient");
-  });
-
-  it("requires the structured service credential to name the selected Enterprise host", () => {
-    expect(() =>
-      githubApiToken(
-        { GH_TOKEN: "public-token" },
-        previewConfig({ token: "public-service-token" }, enterpriseHost),
-      ),
-    ).toThrow(SecretSurfaceUnavailableError);
-    expect(
-      githubApiToken(
-        { GH_TOKEN: "public-token" },
-        previewConfig({ host: enterpriseHost, token: "enterprise-token" }, enterpriseHost),
-      ),
-    ).toBe("enterprise-token");
   });
 });
