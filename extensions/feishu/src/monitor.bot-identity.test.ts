@@ -17,7 +17,6 @@ vi.mock("./monitor.state.js", () => ({
 
 const account: ResolvedFeishuAccount = {
   accountId: "person-2",
-  selectionSource: "explicit",
   enabled: true,
   configured: true,
   domain: "feishu",

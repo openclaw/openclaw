@@ -270,7 +270,7 @@ extensions/discord/src/voice/segment.ts	1
 extensions/elevenlabs/config-compat.ts	2
 extensions/exa/src/exa-web-search-provider.runtime.ts	1
 extensions/fal/video-generation-provider.ts	3
-extensions/feishu/src/accounts.ts	3
+extensions/feishu/src/accounts.ts	2
 extensions/feishu/src/bitable.ts	1
 extensions/feishu/src/bot-content.ts	1
 extensions/feishu/src/bot-identity-cache.ts	1
@@ -636,7 +636,6 @@ extensions/qa-lab/src/live-transports/matrix/substrate/client.ts	3
 extensions/qa-lab/src/live-transports/matrix/substrate/config.ts	8
 extensions/qa-lab/src/live-transports/matrix/substrate/e2ee-client.ts	4
 extensions/qa-lab/src/live-transports/matrix/substrate/fault-proxy.ts	1
-extensions/qa-lab/src/live-transports/matrix/substrate/recording-proxy.ts	1
 extensions/qa-lab/src/live-transports/matrix/substrate/request.ts	3
 extensions/qa-lab/src/live-transports/shared/credential-lease.runtime.ts	1
 extensions/qa-lab/src/live-transports/shared/live-approval-result.ts	2

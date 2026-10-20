@@ -1,5 +1,4 @@
 import {
-  DEFAULT_ACCOUNT_ID,
   type OpenClawConfig as ClawdbotConfig,
   createAccountListHelpers,
   hasConfiguredAccountValue,
@@ -12,7 +11,6 @@ import { normalizeOptionalString as normalizeString } from "openclaw/plugin-sdk/
 import type {
   FeishuAccountConfig,
   FeishuConfig,
-  FeishuDefaultAccountSelectionSource,
   FeishuDomain,
   ResolvedFeishuAccount,
 } from "./types.js";
@@ -145,32 +143,6 @@ function resolveFeishuEventSecrets(
   };
 }
 
-export function resolveDefaultFeishuAccountSelection(cfg: ClawdbotConfig): {
-  accountId: string;
-  source: FeishuDefaultAccountSelectionSource;
-} {
-  const preferred = normalizeOptionalAccountId(
-    (cfg.channels?.feishu as FeishuConfig | undefined)?.defaultAccount,
-  );
-  if (preferred) {
-    return {
-      accountId: preferred,
-      source: "explicit-default",
-    };
-  }
-  const ids = listFeishuAccountIds(cfg);
-  if (ids.includes(DEFAULT_ACCOUNT_ID)) {
-    return {
-      accountId: DEFAULT_ACCOUNT_ID,
-      source: "mapped-default",
-    };
-  }
-  return {
-    accountId: ids[0] ?? DEFAULT_ACCOUNT_ID,
-    source: "fallback",
-  };
-}
-
 export function mergeFeishuAccountConfig(
   cfg: ClawdbotConfig,
   accountId: string,
@@ -222,10 +194,10 @@ function buildResolvedFeishuAccount(params: {
   eventSecretMode: FeishuCredentialResolutionMode;
 }): ResolvedFeishuAccount {
   const explicitAccountKey = params.accountId?.trim() ? params.accountId.trim() : undefined;
-  const { accountId, source: selectionSource } =
+  const accountId =
     explicitAccountKey !== undefined
-      ? { accountId: normalizeAccountId(explicitAccountKey), source: "explicit" as const }
-      : resolveDefaultFeishuAccountSelection(params.cfg);
+      ? normalizeAccountId(explicitAccountKey)
+      : resolveDefaultFeishuAccountId(params.cfg);
   const feishuCfg = params.cfg.channels?.feishu as FeishuConfig | undefined;
 
   // Merge with the exact authored key: an explicit or default alias that matches
@@ -240,7 +212,6 @@ function buildResolvedFeishuAccount(params: {
 
   return {
     accountId,
-    selectionSource,
     enabled: feishuCfg?.enabled !== false && merged.enabled !== false,
     configured: Boolean(baseCreds),
     name: normalizeString(merged.name),
