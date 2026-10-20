@@ -49,5 +49,5 @@ export function materializeRuntimeConfig(
   normalizeConfigPaths(next, options);
   normalizeExecSafeBinProfilesInConfig(next);
   carryResolutionFacts(next);
-  return asRuntimeConfig(attachAgentListProjection(next));
+  return asRuntimeConfig(next.agents?.entries ? attachAgentListProjection(next) : next);
 }

@@ -2,6 +2,7 @@ import { normalizeModelCostConfig } from "@openclaw/llm-core";
 // Verifies default config values and environment-sensitive overrides.
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { listAgentIds } from "../agents/agent-roster.js";
 import type { ProviderResolveModelRoutesContext } from "../plugin-sdk/provider-model-types.js";
 import { resolveProviderModelRoutes } from "../plugins/provider-model-routes.js";
 import { estimateUsageCost } from "../utils/usage-format.js";
@@ -114,6 +115,12 @@ describe("config defaults", () => {
       id: "PENDING_TOKEN",
     });
     expect(collectEnvSecretRefIds(runtime)).toEqual(new Set(["PENDING_TOKEN", "KEEP_PASSWORD"]));
+  });
+
+  it("preserves the implicit main agent when materializing a pre-roster config", () => {
+    const runtime = materializeRuntimeConfig({}, { env: {}, manifestRegistry: { plugins: [] } });
+
+    expect(listAgentIds(runtime)).toEqual(["main"]);
   });
 
   it("rebuilds the SDK roster projection from the final materialized entries", () => {
