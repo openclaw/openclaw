@@ -33,12 +33,12 @@ it.each([
     const tool = String.raw`#!/bin/bash
 set -euo pipefail
 printf "%s %s\n" "$(basename "$0")" "$*" >> "$FIXTURE_CALLS"
+missing_runtime() { echo "runtime path not found" >&2; exit 145; }
 if [[ "$(basename "$0")" == "xcrun" ]]; then
   case "$1 $2" in
     "simctl create")
       if [[ "$FIXTURE_SCENARIO" == "missing" && ! -f "$FIXTURE_ROOT/imported" ]]; then
-        echo "runtime path not found" >&2
-        exit 145
+        missing_runtime
       fi
       # Creating metadata need not boot (or even mount) the runtime.
       mkdir "$FIXTURE_ROOT/device"
@@ -47,8 +47,7 @@ if [[ "$(basename "$0")" == "xcrun" ]]; then
     "simctl bootstatus")
       if [[ "$FIXTURE_SCENARIO" == "unrecoverable" || ( "$FIXTURE_SCENARIO" != "ready" && "$FIXTURE_SCENARIO" != "cleanup-failed" && ! -f "$FIXTURE_ROOT/imported" ) ]]; then
         if [[ "$FIXTURE_SCENARIO" == "boot-stopped" ]]; then exit 0; fi
-        echo "runtime path not found" >&2
-        exit 145
+        missing_runtime
       fi
       touch "$FIXTURE_ROOT/device/booted"
       ;;
@@ -86,10 +85,9 @@ fi
       writeFileSync(file, tool);
       chmodSync(file, 0o755);
     }
-    const workflow = parse(readFileSync(".github/workflows/ci.yml", "utf8"));
-    const step = workflow.jobs["ios-screenshot-capture"].steps.find(
-      (entry: { name?: string }) => entry.name === "Install Watch screenshot runtime",
-    );
+    const step = parse(readFileSync(".github/workflows/ci.yml", "utf8")).jobs[
+      "ios-screenshot-capture"
+    ].steps.find((entry: { name?: string }) => entry.name === "Install Watch screenshot runtime");
     const result = spawnSync("/bin/bash", ["-e", "-c", step.run], {
       encoding: "utf8",
       env: {

@@ -14,8 +14,7 @@ import { installIosFixtureCleanup, writeIosFixture } from "./ios-version.test-su
 
 installIosFixtureCleanup();
 const unreleased = "# OpenClaw iOS Changelog\n\n## Unreleased\n\n";
-const fixture = (packageVersion: string) =>
-  writeIosFixture({ packageVersion, changelog: `${unreleased}Notes.\n` });
+const fixture = (packageVersion: string) => writeIosFixture({ packageVersion, changelog: "" });
 const release = (releaseVersion: string, appStoreRevision?: number) =>
   resolveIosVersion(".", { releaseVersion, appStoreRevision });
 

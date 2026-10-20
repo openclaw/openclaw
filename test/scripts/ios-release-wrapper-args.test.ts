@@ -39,22 +39,20 @@ describe("iOS release shell wrapper arguments", () => {
   it("requires stamped build metadata for App Store release preparation", () => {
     const script = readFileSync(path.join(process.cwd(), "scripts/ios-release-prepare.sh"), "utf8");
 
-    expect(script).toContain("OPENCLAW_REQUIRE_BUILD_METADATA=1");
-    expect(script).toContain(
+    for (const marker of [
+      "OPENCLAW_REQUIRE_BUILD_METADATA=1",
       'RELEASE_SOURCE_HELPER="${ROOT_DIR}/scripts/apple-release-source-check.sh"',
-    );
-    expect(script).toContain('--expected-commit "${RELEASE_GIT_COMMIT}"');
+      '--expected-commit "${RELEASE_GIT_COMMIT}"',
+      'export GIT_COMMIT="${RELEASE_GIT_COMMIT}"',
+    ]) {
+      expect(script).toContain(marker);
+    }
     expect(script.indexOf('bash "${RELEASE_SOURCE_HELPER}"')).toBeLessThan(
       script.lastIndexOf("prepare_build_dir"),
     );
-    expect(script).toContain('export GIT_COMMIT="${RELEASE_GIT_COMMIT}"');
   });
 
-  function runSharedFastlane(options: {
-    bundleGemfile?: string;
-    changeDirectoryAfterSource?: boolean;
-    uploadArgs?: string[];
-  }) {
+  function runSharedFastlane(args: string[], bundleGemfile = "") {
     const binDir = tempDirs.make("openclaw-fastlane-test-");
     const bundle = path.join(binDir, "bundle");
     const fastlane = path.join(binDir, "fastlane");
@@ -71,33 +69,24 @@ describe("iOS release shell wrapper arguments", () => {
     writeFileSync(fastlane, `#!/usr/bin/env bash\nprintf '%s\\n' "$*"\nexit 0\n`);
     chmodSync(bundle, 0o755);
     chmodSync(fastlane, 0o755);
-    return spawnSync(
-      BASH_BIN,
-      options.uploadArgs
-        ? ["scripts/ios-release-upload.sh", ...options.uploadArgs]
-        : [
-            "-c",
-            options.changeDirectoryAfterSource
-              ? "source scripts/lib/ios-fastlane.sh; cd apps/ios; run_ios_fastlane ios release_plan"
-              : "source scripts/lib/ios-fastlane.sh; run_ios_fastlane ios release_plan",
-          ],
-      {
-        cwd: process.cwd(),
-        env: {
-          ...process.env,
-          BUNDLE_GEMFILE: options.bundleGemfile ?? "",
-          OPENCLAW_FASTLANE_EXPECTED_GEMFILE: gemfilePath,
-          PATH: `${binDir}:${process.env.PATH ?? ""}`,
-        },
-        encoding: "utf8",
+    return spawnSync(BASH_BIN, args, {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        BUNDLE_GEMFILE: bundleGemfile,
+        OPENCLAW_FASTLANE_EXPECTED_GEMFILE: gemfilePath,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
       },
-    );
+      encoding: "utf8",
+    });
   }
 
   it("routes stage recovery to the non-uploading lane with the saved identity", () => {
-    const result = runSharedFastlane({
-      uploadArgs: ["--stage-only", ...releaseArgs],
-    });
+    const result = runSharedFastlane([
+      "scripts/ios-release-upload.sh",
+      "--stage-only",
+      ...releaseArgs,
+    ]);
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toBe(
       "ios release_stage release_version:2026.7.2 app_store_revision:1 build_number:3\n",
@@ -105,10 +94,10 @@ describe("iOS release shell wrapper arguments", () => {
   });
 
   it("keeps the repository Gemfile after the caller changes directories", () => {
-    const result = runSharedFastlane({
-      bundleGemfile: "/tmp/hostile/Gemfile",
-      changeDirectoryAfterSource: true,
-    });
+    const result = runSharedFastlane(
+      ["-c", "source scripts/lib/ios-fastlane.sh; cd apps/ios; run_ios_fastlane ios release_plan"],
+      "/tmp/hostile/Gemfile",
+    );
 
     expect(result.status).toBe(0);
   });

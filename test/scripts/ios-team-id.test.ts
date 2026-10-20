@@ -25,15 +25,13 @@ function runScript(
   extraEnv: Record<string, string> = {},
   scriptArgs: string[] = [],
 ) {
-  const binDir = path.join(homeDir, "bin");
-  const env = {
-    HOME: homeDir,
-    PATH: `${binDir}${path.delimiter}${sharedBinDir}${path.delimiter}${BASE_PATH}`,
-    LANG: BASE_LANG,
-    ...extraEnv,
-  };
   const { status, stdout, stderr } = spawnSync(BASH_BIN, [...BASH_ARGS, ...scriptArgs], {
-    env,
+    env: {
+      HOME: homeDir,
+      LANG: BASE_LANG,
+      PATH: [path.join(homeDir, "bin"), sharedBinDir, BASE_PATH].join(path.delimiter),
+      ...extraEnv,
+    },
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -78,14 +76,11 @@ printf 'BBBBB22222\\t0\\tBeta Team\\r\\n'`,
     );
   });
 
-  afterAll(() => {
-    cleanupTempDirs(tempDirs);
-  });
+  afterAll(() => cleanupTempDirs(tempDirs));
 
   it("prefers the canonical OpenClaw iOS team when it is present", async () => {
     const homeDir = await makeHome();
-    const binDir = path.join(homeDir, "bin");
-    const fakePythonPath = path.join(binDir, "fake-python");
+    const fakePythonPath = path.join(homeDir, "bin", "fake-python");
     await writeExecutable(
       fakePythonPath,
       `#!/usr/bin/env bash
@@ -94,15 +89,13 @@ printf '${CANONICAL_TEAM_ID}\\t0\\tOpenClaw\\r\\n'`,
     );
 
     const result = runScript(homeDir, { IOS_PYTHON_BIN: fakePythonPath });
-    expect(result.ok).toBe(true);
-    expect(result.stdout).toBe(CANONICAL_TEAM_ID);
+    expect(result).toMatchObject({ ok: true, stdout: CANONICAL_TEAM_ID });
   });
 
   it("loads teams from Xcode account identifier team metadata", async () => {
     const homeDir = await makeHome();
-    const binDir = path.join(homeDir, "bin");
     await writeExecutable(
-      path.join(binDir, "plutil"),
+      path.join(homeDir, "bin", "plutil"),
       `#!/usr/bin/env bash
 if [[ "$1" == "-extract" && "$2" == "IDEProvisioningTeamByIdentifier" ]]; then
   cat <<'JSON'
@@ -114,25 +107,28 @@ echo '{}'`,
     );
 
     const result = runScript(homeDir, { IOS_PYTHON_BIN: "python3" }, ["--require-canonical"]);
-    expect(result.ok).toBe(true);
-    expect(result.stdout).toBe(CANONICAL_TEAM_ID);
+    expect(result).toMatchObject({ ok: true, stdout: CANONICAL_TEAM_ID });
   });
 
   it("fails canonical-only resolution when only fallback teams are available", () => {
     const result = runScript(sharedHomeDir, { IOS_PYTHON_BIN: sharedFakePythonPath }, [
       "--require-canonical",
     ]);
-    expect(result.ok).toBe(false);
-    expect(result.stderr).toContain(
-      `Official OpenClaw iOS Team ID '${CANONICAL_TEAM_ID}' is not available`,
-    );
+    expect(result).toMatchObject({
+      ok: false,
+      stderr: expect.stringContaining(
+        `Official OpenClaw iOS Team ID '${CANONICAL_TEAM_ID}' is not available`,
+      ),
+    });
   });
 
   it("rejects explicit non-canonical teams in canonical-only mode", () => {
     const result = runScript(sharedHomeDir, { IOS_DEVELOPMENT_TEAM: "BBBBB22222" }, [
       "--require-canonical",
     ]);
-    expect(result.ok).toBe(false);
-    expect(result.stderr).toContain("is not the official OpenClaw iOS team");
+    expect(result).toMatchObject({
+      ok: false,
+      stderr: expect.stringContaining("is not the official OpenClaw iOS team"),
+    });
   });
 });

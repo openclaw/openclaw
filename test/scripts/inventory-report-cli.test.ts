@@ -30,21 +30,9 @@ describe.each([
     expect(main([])).toBe(0);
     expect(stdout).toHaveBeenLastCalledWith(expect.stringContaining("... 2 more finding(s)"));
 
-    expect(
-      main([
-        "--repo-root",
-        "unused",
-        "--",
-        "--repo-root",
-        repoRoot,
-        "--limit",
-        "1",
-        "--",
-        "--limit",
-        "0002",
-        "--",
-      ]),
-    ).toBe(0);
+    const roots = ["--repo-root", "unused", "--", "--repo-root", repoRoot];
+    const limits = ["--limit", "1", "--", "--limit", "0002", "--"];
+    expect(main([...roots, ...limits])).toBe(0);
     expect(stdout).toHaveBeenLastCalledWith(expect.stringContaining("... 120 more finding(s)"));
 
     for (const limit of ["0", "000", String(Number.MAX_SAFE_INTEGER)]) {
@@ -74,21 +62,23 @@ describe.each([
 });
 
 describe("shared inventory argument validation", () => {
+  const limitError = "--limit expects a non-negative integer";
+  const rootError = "--repo-root expects a path";
   it.each([
-    { argv: ["--limit"], error: "--limit expects a non-negative integer" },
+    { argv: ["--limit"], error: limitError },
     ...["-1", "9007199254740992", "--"].map((value) => ({
       argv: ["--limit", value],
-      error: "--limit expects a non-negative integer",
+      error: limitError,
     })),
-    { argv: ["--repo-root"], error: "--repo-root expects a path" },
-    { argv: ["--repo-root", "-h"], error: "--repo-root expects a path" },
+    { argv: ["--repo-root"], error: rootError },
+    { argv: ["--repo-root", "-h"], error: rootError },
     { argv: ["--limit=1"], error: "Unknown argument: --limit=1" },
-    { argv: ["--limit", "1", "--limit", "bad"], error: "--limit expects a non-negative integer" },
-    { argv: ["--limit", "bad", "--limit", "1"], error: "--limit expects a non-negative integer" },
-    { argv: ["--repo-root", "valid", "--repo-root", ""], error: "--repo-root expects a path" },
-    { argv: ["--repo-root", "", "--repo-root", "valid"], error: "--repo-root expects a path" },
+    { argv: ["--limit", "1", "--limit", "bad"], error: limitError },
+    { argv: ["--limit", "bad", "--limit", "1"], error: limitError },
+    { argv: ["--repo-root", "valid", "--repo-root", ""], error: rootError },
+    { argv: ["--repo-root", "", "--repo-root", "valid"], error: rootError },
     { argv: ["--unknown", "--limit", "bad"], error: "Unknown argument: --unknown" },
-    { argv: ["--limit", "bad", "--unknown"], error: "--limit expects a non-negative integer" },
+    { argv: ["--limit", "bad", "--unknown"], error: limitError },
   ])("rejects argv %# before output or scanning, even with help", ({ argv, error }) => {
     const scan = vi.spyOn(fileUtils, "listRepoFilesSync");
     const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
