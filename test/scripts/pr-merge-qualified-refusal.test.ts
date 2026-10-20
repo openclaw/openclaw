@@ -45,19 +45,9 @@ function qualifiedAutoRefusal(
           version,
           sourceRevision: "00c442d8084ad26eb5a5003f7372170e75a20c8a",
           parserSha256: "f6ff8cd7e59503f71f94fefd561b671193df11b3aac9ba0986a0dc3ba91ca32b",
-          args: [
-            "pr",
-            "merge",
-            "123",
-            "--repo",
-            "https://github.com/fixture/repo",
-            "--squash",
-            "--auto",
-            "--match-head-commit",
-            f.head,
-            "--body-file",
-            ".local/merge-body.fixture",
-          ],
+          args: `pr merge 123 --repo https://github.com/fixture/repo --squash --auto --match-head-commit ${f.head} --body-file .local/merge-body.fixture`.split(
+            " ",
+          ),
         }),
   };
   writeFileSync(join(directory, "qualification.json"), JSON.stringify(qualification));

@@ -41,7 +41,6 @@ import { writeCombinedBuildFixture } from "./prepublish-plugin-registry-build.fi
 const SOURCE_SHA = "a".repeat(40);
 const VERSION = "2026.8.1-beta.1";
 const PACKAGE_NAME = "@openclaw/discord";
-const TARBALL = "openclaw-discord-2026.8.1-beta.1.tgz";
 const SCRIPT = path.resolve("scripts/prepublish-plugin-registry-artifact.mjs");
 const BUILD_AND_PACK = path.resolve("scripts/lib/plugin-npm-build-and-pack.mts");
 const registryTempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -98,22 +97,34 @@ function writeFixtureTarball(root: string, tarballPath: string, name: string, ve
   packageTarballs.set(cacheKey, readFileSync(tarballPath));
 }
 
-function fixture(packageName = PACKAGE_NAME) {
+function fixture(packageNames = [PACKAGE_NAME]) {
   const root = registryTempDirs.make("openclaw-prepublish-plugin-registry-");
   const artifactDir = path.join(root, "artifact");
   mkdirSync(artifactDir);
-  const tarballPath = path.join(artifactDir, TARBALL);
   const manifestPath = path.join(artifactDir, PREPUBLISH_PLUGIN_REGISTRY_MANIFEST);
   const manifest = {
     schema: "openclaw.prepublish-plugin-registry/v1",
     schemaVersion: 1,
     sourceSha: SOURCE_SHA,
     candidateVersion: VERSION,
-    packages: [artifactEntry(root, artifactDir, packageName, TARBALL)],
+    packages: packageNames.map((name) =>
+      artifactEntry(
+        root,
+        artifactDir,
+        name,
+        `${name.replace(/^@/u, "").replace("/", "-")}-${VERSION}.tgz`,
+      ),
+    ),
   };
   const writeManifest = () => writeJson(manifestPath, manifest);
   writeManifest();
-  return { artifactDir, manifest, manifestPath, tarballPath, writeManifest };
+  return {
+    artifactDir,
+    manifest,
+    manifestPath,
+    tarballPath: path.join(artifactDir, manifest.packages[0]!.tarball),
+    writeManifest,
+  };
 }
 
 function immutableTuple(paths: ReturnType<typeof fixture>) {
@@ -128,23 +139,6 @@ function immutableTuple(paths: ReturnType<typeof fixture>) {
 
 function validate(paths: ReturnType<typeof fixture>, overrides = {}) {
   return validatePrepublishPluginRegistryArtifact({ ...immutableTuple(paths), ...overrides });
-}
-
-function firstPackage(paths: ReturnType<typeof fixture>) {
-  return paths.manifest.packages[0]!;
-}
-
-function addCompanionPackage(paths: ReturnType<typeof fixture>) {
-  const archiveRoot = path.join(path.dirname(paths.artifactDir), "feishu-package");
-  paths.manifest.packages.push(
-    artifactEntry(
-      archiveRoot,
-      paths.artifactDir,
-      "@openclaw/feishu",
-      "openclaw-feishu-2026.8.1-beta.1.tgz",
-    ),
-  );
-  paths.writeManifest();
 }
 
 function crossOsTuple(paths: ReturnType<typeof fixture>) {
@@ -302,65 +296,51 @@ describe("prepublish plugin registry artifact", () => {
     },
   );
 
-  it.each(["source", "conflicting dependency", "tarball bytes"])(
-    "rejects prepared bundle %s drift before accepting its registry",
-    (drift) => {
-      const { repoRoot, sourceSha } = cliFixture([]);
-      const { preparedBundleDir, bundle, entries, writeBundle } = preparedBundleFixture(
-        repoRoot,
-        sourceSha,
-      );
-      if (drift === "source") {
-        bundle.releaseSha = "b".repeat(40);
-      }
-      if (drift === "conflicting dependency") {
-        bundle.dependencyTarballs = [{ ...entries[1]!, tarballSha256: "c".repeat(64) }];
-      }
-      if (drift === "tarball bytes") {
-        writeFileSync(path.join(preparedBundleDir, entries[1]!.tarballName), "tampered");
-      }
-      writeBundle();
+  it.each([
+    ["source", "bundle identity differs"],
+    ["conflicting dependency", "conflicting package"],
+    ["tarball bytes", "tarball SHA-256 mismatch"],
+  ])("rejects prepared bundle %s drift before accepting its registry", (drift, error) => {
+    const { repoRoot, sourceSha } = cliFixture([]);
+    const { preparedBundleDir, bundle, entries, writeBundle } = preparedBundleFixture(
+      repoRoot,
+      sourceSha,
+    );
+    if (drift === "source") {
+      bundle.releaseSha = "b".repeat(40);
+    }
+    if (drift === "conflicting dependency") {
+      bundle.dependencyTarballs = [{ ...entries[1]!, tarballSha256: "c".repeat(64) }];
+    }
+    if (drift === "tarball bytes") {
+      writeFileSync(path.join(preparedBundleDir, entries[1]!.tarballName), "tampered");
+    }
+    writeBundle();
 
-      expect(() =>
-        createRegistry(
-          { repoRoot, sourceSha },
-          {
-            requiredPackages: [],
-            preparedBundleDir,
-          },
-        ),
-      ).toThrow(
-        drift === "source"
-          ? "bundle identity differs"
-          : drift === "conflicting dependency"
-            ? "conflicting package"
-            : "tarball SHA-256 mismatch",
-      );
-    },
-  );
+    expect(() =>
+      createRegistry({ repoRoot, sourceSha }, { requiredPackages: [], preparedBundleDir }),
+    ).toThrow(error);
+  });
 
-  it.each(["slack"])(
-    "stages the planned %s candidate and Codex in one verified artifact",
-    (channel) => {
-      const lane = findLaneByName(`npm-onboard-${channel}-candidate-channel-agent`);
-      expect(lane).toBeDefined();
-      const requiredPackages = requiredPrepublishPluginPackagesForLanes([lane!]);
-      const expectedPackages = ["@openclaw/codex", `@openclaw/${channel}`];
-      const { repoRoot, sourceSha } = cliFixture(expectedPackages);
-      const artifactDir = path.join(repoRoot, "artifact");
-      const result = createRegistry({ repoRoot, sourceSha }, { requiredPackages });
-      const verified = validatePrepublishPluginRegistryArtifact({
-        artifactDir,
-        expectedSourceSha: sourceSha,
-        expectedCandidateVersion: VERSION,
-        expectedManifestSha256: result.manifestSha256,
-        requiredPackages: expectedPackages,
-      });
-      expect(verified.manifest.packages.map(({ name, version }) => ({ name, version }))).toEqual(
-        expectedPackages.map((name) => ({ name, version: VERSION })),
-      );
-    },
-  );
+  it("stages the planned slack candidate and Codex in one verified artifact", () => {
+    const lane = findLaneByName("npm-onboard-slack-candidate-channel-agent");
+    expect(lane).toBeDefined();
+    const requiredPackages = requiredPrepublishPluginPackagesForLanes([lane!]);
+    const expectedPackages = ["@openclaw/codex", "@openclaw/slack"];
+    const { repoRoot, sourceSha } = cliFixture(expectedPackages);
+    const artifactDir = path.join(repoRoot, "artifact");
+    const result = createRegistry({ repoRoot, sourceSha }, { requiredPackages });
+    const verified = validatePrepublishPluginRegistryArtifact({
+      artifactDir,
+      expectedSourceSha: sourceSha,
+      expectedCandidateVersion: VERSION,
+      expectedManifestSha256: result.manifestSha256,
+      requiredPackages: expectedPackages,
+    });
+    expect(verified.manifest.packages.map(({ name, version }) => ({ name, version }))).toEqual(
+      expectedPackages.map((name) => ({ name, version: VERSION })),
+    );
+  });
 
   it("can be imported from stdin without running the CLI", () => {
     const result = spawnSync(process.execPath, ["--input-type=module", "-"], {
@@ -375,7 +355,7 @@ describe("prepublish plugin registry artifact", () => {
   it.runIf(process.platform !== "win32")(
     "serves a Parallels candidate with its companion packages and closes both endpoints",
     async () => {
-      const core = fixture("openclaw");
+      const core = fixture(["openclaw"]);
       const companion = fixture();
       vi.spyOn(packageArtifact, "packOpenClaw").mockResolvedValue({
         path: core.tarballPath,
@@ -435,8 +415,7 @@ describe("prepublish plugin registry artifact", () => {
   });
 
   it("extracts only required cross-OS companions from the validated registry", () => {
-    const paths = fixture();
-    addCompanionPackage(paths);
+    const paths = fixture([PACKAGE_NAME, "@openclaw/feishu"]);
 
     expect(
       resolveCrossOsPackageSet({ ...crossOsTuple(paths), requiredPackages: ["@openclaw/feishu"] })
@@ -563,15 +542,13 @@ describe("prepublish plugin registry artifact", () => {
     const paths = fixture();
     const common = crossOsTuple(paths);
 
-    expect(() => resolveCrossOsPackageSet({ ...common, sourceSha: "b".repeat(40) })).toThrow(
-      "source SHA differs",
-    );
-    expect(() =>
-      resolveCrossOsPackageSet({ ...common, candidateVersion: "2026.8.1-beta.2" }),
-    ).toThrow("version differs");
-    expect(() => resolveCrossOsPackageSet({ ...common, manifestSha256: "c".repeat(64) })).toThrow(
-      "manifest SHA-256 differs",
-    );
+    for (const [field, value, error] of [
+      ["sourceSha", "b".repeat(40), "source SHA differs"],
+      ["candidateVersion", "2026.8.1-beta.2", "version differs"],
+      ["manifestSha256", "c".repeat(64), "manifest SHA-256 differs"],
+    ] as const) {
+      expect(() => resolveCrossOsPackageSet({ ...common, [field]: value })).toThrow(error);
+    }
 
     writeFileSync(paths.tarballPath, "tampered");
     expect(() => resolveCrossOsPackageSet(common)).toThrow("tarball SHA-256 mismatch");
@@ -591,12 +568,12 @@ describe("prepublish plugin registry artifact", () => {
 
   it("rejects traversal and duplicate package entries", () => {
     const traversal = fixture();
-    firstPackage(traversal).tarball = "../escape.tgz";
+    traversal.manifest.packages[0]!.tarball = "../escape.tgz";
     traversal.writeManifest();
     expect(() => validate(traversal)).toThrow("invalid package entry");
 
     const duplicate = fixture();
-    duplicate.manifest.packages.push({ ...firstPackage(duplicate) });
+    duplicate.manifest.packages.push({ ...duplicate.manifest.packages[0]! });
     duplicate.writeManifest();
     expect(() =>
       validate(duplicate, { requiredPackages: [PACKAGE_NAME, "@openclaw/feishu"] }),
@@ -615,7 +592,7 @@ describe("prepublish plugin registry artifact", () => {
 
   it("rejects package identity and required-set mismatches", () => {
     const identity = fixture();
-    firstPackage(identity).name = "@openclaw/feishu";
+    identity.manifest.packages[0]!.name = "@openclaw/feishu";
     identity.writeManifest();
     expect(() => validate(identity, { requiredPackages: ["@openclaw/feishu"] })).toThrow(
       "tarball identity mismatch",

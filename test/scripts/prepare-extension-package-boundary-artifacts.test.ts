@@ -5,7 +5,6 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
-import { setTimeout as delay } from "node:timers/promises";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -26,10 +25,13 @@ import {
 } from "../../scripts/prepare-extension-package-boundary-artifacts.mts";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
-import { isProcessAlive } from "../helpers/process-wait.js";
+import { isProcessAlive, waitForDead } from "../helpers/process-wait.js";
 import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
 import { installDistArtifactScripts } from "./dist-artifact-fixture.js";
-import { resolveInstalledNativeCompiler } from "./native-boundary-fixture.js";
+import {
+  resolveInstalledNativeCompiler,
+  writeNativeFixtureFile,
+} from "./native-boundary-fixture.js";
 
 const fixture = createFixtureLifetime();
 const { createTempDir } = fixture;
@@ -56,24 +58,12 @@ function observeFixtureLine(expected: string) {
   };
 }
 
-// Emergency cleanup has only a foreign PID after the product's group owner settled.
-// No retained ChildProcess can report its exit; the test signal bounds this final check.
-async function waitForDescendantExit(pid: number, signal: AbortSignal): Promise<void> {
-  try {
-    while (isProcessAlive(pid)) {
-      await delay(5, undefined, { signal });
-    }
-  } catch (cause) {
-    throw new Error(`process still alive: ${pid}`, { cause });
-  }
-}
-
 const readPid = (file: string) => Number(fs.readFileSync(file, "utf8"));
 async function rescueDescendant(file: string, signal: AbortSignal, fallback = 0) {
   const pid = fs.existsSync(file) ? readPid(file) : fallback;
   if (pid && isProcessAlive(pid)) {
     process.kill(pid, "SIGKILL");
-    await waitForDescendantExit(pid, signal);
+    await waitForDead(pid, signal);
   }
   return pid;
 }
@@ -109,8 +99,8 @@ setInterval(() => { if (fs.existsSync(${JSON.stringify(file)})) process.exit(2);
   };
 }
 
-function waitForReady(
-  ready: Promise<unknown>,
+function waitForReady<T>(
+  ready: Promise<T>,
   outcome: Promise<unknown>,
   file: string,
   signal: AbortSignal,
@@ -125,11 +115,12 @@ function waitForReady(
 // and the terminal compiler workload. Retry executes the real native compiler.
 function createPreparationCli(workload = "", preparationCheckpoint = "") {
   const root = fs.realpathSync.native(createTempDir("openclaw-preparation-cli-"));
-  const write = (relative: string, content: string | object) => {
-    const target = path.join(root, relative);
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, typeof content === "string" ? content : JSON.stringify(content));
-  };
+  const write = (relative: string, content: string | object) =>
+    writeNativeFixtureFile(
+      root,
+      relative,
+      typeof content === "string" ? content : JSON.stringify(content),
+    );
   const wrapScript = (name: string, content: string) => {
     fs.renameSync(
       path.join(root, `scripts/${name}.mts`),
@@ -220,7 +211,7 @@ process.exitCode = await withDistArtifactOwnership(process.cwd(), () => runManag
     processes.push({ child, closed });
     return { child, closed, output: () => output };
   };
-  const ownerPath = path.join(resolveDistArtifactLockPath(root), "owner.json");
+  const claims = () => fs.readdirSync(resolveDistArtifactLockPath(root));
   const recordPath = path.join(root, ".artifacts/extension-package-boundary/plugin-sdk.json");
   const declarationPath = path.join(
     root,
@@ -243,7 +234,7 @@ process.exitCode = await withDistArtifactOwnership(process.cwd(), () => runManag
   };
   const cancel = (signal: NodeJS.Signals) =>
     process.kill(readPid(path.join(root, "preparation.pid")), signal);
-  return { root, write, start, cleanup, retry, cancel, ownerPath, recordPath, declarationPath };
+  return { root, write, start, cleanup, retry, cancel, claims, recordPath, declarationPath };
 }
 
 describe("prepare-extension-package-boundary-artifacts", () => {
@@ -528,32 +519,22 @@ if (!fs.existsSync("retry")) {
         output.on("line", ready.onStdoutLine);
         let descendantPid = 0;
         try {
-          await withinTest(
-            awaitGateBeforeSettlement(
-              ready.promise,
-              runner.closed,
-              "Compiler did not reach its checkpoint",
-            ),
-            signal,
-          );
+          await waitForReady(ready.promise, runner.closed, "compiler checkpoint", signal);
           descendantPid = readPid(path.join(f.root, "descendant.pid"));
-          expect(fs.existsSync(f.ownerPath)).toBe(true);
-          expect(
-            fs.readdirSync(path.dirname(f.ownerPath)).filter((name) => name.startsWith("child-")),
-          ).toHaveLength(1);
+          expect(f.claims()).toContain("owner.json");
+          expect(f.claims().filter((name) => name.startsWith("child-"))).toHaveLength(1);
           f.cancel(termination);
           expect(await withinTest(runner.closed, signal), runner.output()).toEqual([
             termination === "SIGINT" ? 130 : 143,
             null,
           ]);
           expect(isProcessAlive(descendantPid)).toBe(false);
-          expect(
-            fs.readdirSync(path.dirname(f.ownerPath)),
-            "Joined cancellation must release owner and inherited claim",
-          ).toEqual([]);
+          expect(f.claims(), "Joined cancellation must release owner and inherited claim").toEqual(
+            [],
+          );
           expect(fs.existsSync(f.recordPath)).toBe(false);
           await f.retry(signal);
-          expect(fs.readdirSync(path.dirname(f.ownerPath))).toEqual([]);
+          expect(f.claims()).toEqual([]);
         } finally {
           await fixture.verifyCleanup(async () => {
             await f.cleanup();
@@ -597,18 +578,16 @@ if (!fs.existsSync("retry")) {
         const runner = f.start();
         let socket: net.Socket | undefined;
         try {
-          const checkpoint = await withinTest(
-            awaitGateBeforeSettlement(
-              connected.promise,
-              runner.closed,
-              "Generator did not reach its checkpoint",
-            ),
+          const checkpoint = await waitForReady(
+            connected.promise,
+            runner.closed,
+            "generator checkpoint",
             signal,
           );
           socket = checkpoint.socket;
           await withinTest(checkpoint.ready, signal);
           const observed = once(socket, "data");
-          expect(fs.existsSync(f.ownerPath)).toBe(true);
+          expect(f.claims()).toContain("owner.json");
           expect(fs.existsSync(path.join(f.root, "compiler-started"))).toBe(false);
           f.cancel("SIGTERM");
           await withinTest(observed, signal);
@@ -620,7 +599,7 @@ if (!fs.existsSync("retry")) {
           ).toBe(false);
           expect(fs.existsSync(f.declarationPath)).toBe(false);
           expect(fs.existsSync(f.recordPath)).toBe(false);
-          expect(fs.readdirSync(path.dirname(f.ownerPath))).toEqual([]);
+          expect(f.claims()).toEqual([]);
           await f.retry(signal);
         } finally {
           await fixture.verifyCleanup(async () => {
@@ -635,9 +614,9 @@ if (!fs.existsSync("retry")) {
       }),
   );
 
-  it.runIf(process.platform !== "win32").for([0])(
-    "rejects and joins descendants left behind by a step exiting %s",
-    (exitCode, { signal }) =>
+  it.runIf(process.platform !== "win32")(
+    "rejects and joins descendants left behind by a successful step",
+    ({ signal }) =>
       fixture.run(async () => {
         const rootDir = createTempDir("openclaw-boundary-unjoined-");
         const pidFile = path.join(rootDir, "descendant.pid");
@@ -654,7 +633,7 @@ const { spawn } = require("node:child_process");
 const child = spawn(process.execPath, ["--eval", ${JSON.stringify(leafScript)}], {
   stdio: ["ignore", "ignore", "ignore", "ipc"],
 });
-child.once("message", () => process.exit(${exitCode}));
+child.once("message", () => process.exit(0));
 `;
         try {
           await expect(
@@ -782,16 +761,10 @@ child.once("message", () => process.exit(${exitCode}));
   ])(
     "bounds CI declaration children to $expected ($cpus CPUs, $memoryGiB GiB, local=$local)",
     async ({ cpus, memoryGiB, local, expected }) => {
-      const children = Array.from({ length: 4 }, () => {
-        const started = createDeferred();
-        const finished = createDeferred<number>();
-        return {
-          started: started.promise,
-          finished: finished.promise,
-          start: started.resolve,
-          finish: finished.resolve,
-        };
-      });
+      const children = Array.from({ length: 4 }, () => ({
+        started: createDeferred(),
+        finished: createDeferred<number>(),
+      }));
       const commands: string[] = [];
       const capacityBytes = memoryGiB === null ? null : memoryGiB * 1024 ** 3;
       vi.spyOn(os, "availableParallelism").mockReturnValue(cpus);
@@ -810,8 +783,8 @@ child.once("message", () => process.exit(${exitCode}));
         }
         commands.push(index);
         const child = children[Number(index)]!;
-        child.start();
-        return child.finished;
+        child.started.resolve();
+        return child.finished.promise;
       });
       const count = process.platform === "linux" ? expected : 1;
       const running = runNodeSteps(
@@ -824,18 +797,18 @@ child.once("message", () => process.exit(${exitCode}));
       );
       try {
         for (let offset = 0; offset < children.length; offset += count) {
-          await children[offset]!.started;
+          await children[offset]!.started.promise;
           expect(commands).toEqual(
             Array.from({ length: offset + count }, (_, index) => String(index)),
           );
           for (const child of children.slice(offset, offset + count)) {
-            child.finish(0);
+            child.finished.resolve(0);
           }
         }
         await running;
       } finally {
         for (const child of children) {
-          child.finish(0);
+          child.finished.resolve(0);
         }
         await running;
         vi.restoreAllMocks();

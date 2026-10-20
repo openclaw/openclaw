@@ -43,6 +43,10 @@ type Tool = {
   tools?: Tool[];
 };
 const readText = (...parts: string[]) => fs.readFileSync(path.join(...parts), "utf8");
+function writeFixture(file: string, value: unknown) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, typeof value === "string" ? value : JSON.stringify(value));
+}
 
 function readCommittedSnapshot(fileName: string): string {
   return readText(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, fileName);
@@ -57,7 +61,11 @@ function renderedPromptSection(content: string, heading: string, nextHeading: st
   return content.slice(start, end);
 }
 
-function renderedJson<T>(content: string, heading: string, nextHeading: string): T {
+function renderedJson<T>(
+  content: string,
+  heading = "## Turn Start Params",
+  nextHeading = "## Reconstructed Model-Bound Prompt Layers",
+): T {
   return JSON.parse(
     renderedPromptSection(content, heading, nextHeading).match(/```json\n([\s\S]*?)\n```/u)![1]!,
   );
@@ -198,9 +206,6 @@ describe("happy path prompt snapshots", () => {
 
   it("deletes stale generated snapshot artifacts", async () => {
     const root = tempDirs.make("openclaw-prompt-snapshot-stale-");
-    const snapshotDir = path.join(root, CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR);
-    fs.mkdirSync(snapshotDir, { recursive: true });
-    fs.mkdirSync(path.join(root, LOCAL_OLLAMA_PROMPT_SNAPSHOT_DIR), { recursive: true });
     const stalePaths = ["stale-snapshot.md", "stale-snapshot.md.patch"].map((fileName) =>
       path.join(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, fileName),
     );
@@ -210,9 +215,9 @@ describe("happy path prompt snapshots", () => {
       "current-snapshot.md.diff",
     );
     for (const stalePath of stalePaths) {
-      fs.writeFileSync(path.join(root, stalePath), "stale\n");
+      writeFixture(path.join(root, stalePath), "stale\n");
     }
-    fs.writeFileSync(path.join(root, currentPath), "current\n");
+    writeFixture(path.join(root, currentPath), "current\n");
 
     const deleted = await deleteStalePromptSnapshotFiles(root, [{ path: currentPath }]);
 
@@ -227,7 +232,7 @@ describe("happy path prompt snapshots", () => {
     const telegram = generatedContent(baseFile);
     const turn = renderedJson<{
       additionalContext: Record<string, { kind: "application" | "untrusted"; value: string }>;
-    }>(telegram, "## Turn Start Params", "## Reconstructed Model-Bound Prompt Layers");
+    }>(telegram);
     expect(Object.keys(turn.additionalContext)).toEqual(
       expect.arrayContaining(["openclaw_current_sender", "openclaw_temporal_context"]),
     );
@@ -267,7 +272,7 @@ describe("happy path prompt snapshots", () => {
       const snapshot = await materializeCodexPromptSnapshot(scenario);
       const turn = renderedJson<{
         collaborationMode: { settings: { developer_instructions: string | null } };
-      }>(snapshot, "## Turn Start Params", "## Reconstructed Model-Bound Prompt Layers");
+      }>(snapshot);
       expect(turn.collaborationMode.settings.developer_instructions).toBeNull();
       const parentLocal = renderedPromptSection(
         snapshot,
@@ -278,25 +283,19 @@ describe("happy path prompt snapshots", () => {
       for (const name of personaFiles) {
         expect(parentLocal).toContain("<" + name + " contents will be here>");
       }
-      const shared = renderedPromptSection(
-        snapshot,
+      const boundaries = [
         "### Developer: OpenClaw Runtime Instructions",
         "### Developer: Codex Collaboration Mode Instructions",
-      );
-      const collaboration = renderedPromptSection(
-        snapshot,
-        "### Developer: Codex Collaboration Mode Instructions",
-        "### User: Turn Input Text",
-      );
-      const input = renderedPromptSection(
-        snapshot,
         "### User: Turn Input Text",
         "### Tools: Dynamic Tool Catalog",
-      );
-      for (const nativeHistory of [shared, collaboration, input]) {
+      ];
+      const history = boundaries
+        .slice(0, -1)
+        .map((heading, index) => renderedPromptSection(snapshot, heading, boundaries[index + 1]!));
+      for (const nativeHistory of history) {
         expect(nativeHistory).not.toMatch(/<(?:SOUL|IDENTITY|USER)\.md contents will be here>/);
       }
-      expect(collaboration).not.toContain("HEARTBEAT.md");
+      expect(history[1]).not.toContain("HEARTBEAT.md");
       expect(snapshot).not.toContain("Heartbeat = useful proactive progress");
       expect(snapshot).not.toContain("This is an OpenClaw heartbeat turn.");
       expect(snapshot).not.toContain("simulatedHeartbeatWorkspaceFile");
@@ -327,8 +326,7 @@ describe("happy path prompt snapshots", () => {
   it("finds the first available default Codex model catalog source", async () => {
     const root = tempDirs.make("openclaw-codex-catalog-");
     const cachePath = path.join(root, ".codex", "models_cache.json");
-    fs.mkdirSync(path.dirname(cachePath), { recursive: true });
-    fs.writeFileSync(cachePath, JSON.stringify({ models: [] }));
+    writeFixture(cachePath, { models: [] });
 
     await expect(findDefaultCatalogPath({ env: {}, homeDir: root })).resolves.toEqual({
       catalogPath: cachePath,
@@ -360,23 +358,20 @@ describe("happy path prompt snapshots", () => {
     const root = tempDirs.make("openclaw-codex-catalog-write-");
     const catalogPath = path.join(root, "models_cache.json");
     const outputDir = path.join(root, "out");
-    fs.writeFileSync(
-      catalogPath,
-      JSON.stringify({
-        models: [
-          {
-            slug: "gpt-6-astra",
-            base_instructions: "fallback",
-            model_messages: {
-              instructions_template: "System\n{{ personality }}\nEnd",
-              instructions_variables: {
-                personality_pragmatic: "Use terse engineering judgement.",
-              },
+    writeFixture(catalogPath, {
+      models: [
+        {
+          slug: "gpt-6-astra",
+          base_instructions: "fallback",
+          model_messages: {
+            instructions_template: "System\n{{ personality }}\nEnd",
+            instructions_variables: {
+              personality_pragmatic: "Use terse engineering judgement.",
             },
           },
-        ],
-      }),
-    );
+        },
+      ],
+    });
 
     const result = await runCodexModelPromptFixtureSync([
       "--catalog",

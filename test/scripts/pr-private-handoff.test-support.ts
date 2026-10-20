@@ -5,9 +5,9 @@ import { pathToFileURL } from "node:url";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 
 const readLines = (file: string) => readFileSync(file, "utf8").trim().split("\n").filter(Boolean);
+const sortedPids = (pids: number[]) => pids.toSorted((a, b) => a - b);
 type Observation = { kind: string; pid: number; databasePath: string };
 
-/** Bind each cold provisioner process through the existing sealed-runtime DI seam. */
 export function createPrivateHandoffStoreFixture(
   directory: string,
   inheritedPath = process.env.PATH ?? "",
@@ -21,14 +21,13 @@ export function createPrivateHandoffStoreFixture(
   const preload = join(root, "preload.mjs");
   const launches = join(root, "launches.txt");
   const bin = join(root, "bin");
-  const node = join(bin, "node");
   const preloadOption = `--import=${pathToFileURL(preload).href}`;
   const shellQuote = (value: string) => `'${value.replace(/'/gu, `'\\''`)}'`;
   mkdirSync(bin, { recursive: true });
   writeFileSync(launches, "");
   // Record independently of NODE_OPTIONS, and refuse access without injection.
   writeFileSync(
-    node,
+    join(bin, "node"),
     `#!/bin/sh
 set -eu
 for arg in "$@"; do
@@ -44,7 +43,7 @@ done
 exec ${shellQuote(realpathSync(resolveTestNodeExecPath()))} "$@"
 `,
   );
-  chmodSync(node, 0o755);
+  chmodSync(join(bin, "node"), 0o755);
   writeFileSync(observations, "");
   writeFileSync(
     preload,
@@ -59,9 +58,7 @@ import { pathToFileURL } from "node:url";
 const entry = process.argv[1];
 if (entry?.endsWith("/scripts/pr-lib/worktree-provision.mts")) {
   const sourceRoot = path.resolve(path.dirname(realpathSync(entry)), "../..");
-  const storeRoot = ${JSON.stringify(storeRoot)};
-  const databasePath = ${JSON.stringify(databasePath)};
-  const observations = ${JSON.stringify(observations)};
+  const [storeRoot, databasePath, observations] = ${JSON.stringify([storeRoot, databasePath, observations])};
   assert.equal(realpathSync(storeRoot), storeRoot);
   const require = createRequire(path.join(sourceRoot, "package.json"));
   const load = (file) => import(pathToFileURL(path.join(sourceRoot, file)).href);
@@ -110,22 +107,11 @@ if (entry?.endsWith("/scripts/pr-lib/worktree-provision.mts")) {
       assert.ok(launched.length > 0, "cold provisioner never launched through the private owner");
       assert.ok(launched.every((pid) => Number.isSafeInteger(pid) && pid > 0));
       assert.equal(new Set(launched).size, launched.length, "ambiguous reused provisioner PID");
-      assert.deepEqual(
-        injected.map((row) => row.pid).toSorted((a, b) => a - b),
-        launched.toSorted((a, b) => a - b),
-        "not every launched provisioner received its private store",
-      );
-      assert.ok(
-        rows.every((row) => row.databasePath === databasePath),
-        "unexpected handoff store",
-      );
-      for (const row of injected) {
-        for (const kind of ["preflight-store-verified", "preflight-resolved"]) {
-          assert.ok(
-            rows.some((other) => other.pid === row.pid && other.kind === kind),
-            `provisioner ${row.pid} missing ${kind}`,
-          );
-        }
+      assert.deepEqual(sortedPids(injected.map((row) => row.pid)), sortedPids(launched));
+      assert.ok(rows.every((row) => row.databasePath === databasePath));
+      for (const { pid } of injected) {
+        const kinds = new Set(rows.filter((row) => row.pid === pid).map((row) => row.kind));
+        assert.ok(kinds.has("preflight-store-verified") && kinds.has("preflight-resolved"));
       }
       assert.equal(realpathSync(storeRoot), storeRoot);
     },

@@ -17,27 +17,24 @@ function fixture(mode: "native" | "managed" = "native", files = 128) {
   return createProvisionOwnerFixture(tempDirs.make("openclaw-pr-owner-"), mode, files);
 }
 describePosix("PR worktree interruption", () => {
-  it.each(["native"] as const)(
-    "scales the %s checkout deadline with the tree and survives five minutes of progress",
-    (mode) => {
-      const deadlines: number[] = [];
-      for (const files of [128, 256]) {
-        const f = fixture(mode, files);
-        const receipt = installCheckoutDeadline(f);
-        const result = f.run();
-        expect(result.status, result.stderr).toBe(0);
-        const observed = readJson(receipt);
-        expect(observed.elapsed).toBe(300001);
-        deadlines.push(observed.deadline);
-        expectProvisionSeed(f);
-        expect(f.git(f.worktree, "write-tree")).toBe(
-          f.git(f.canonical, "rev-parse", `${f.main}^{tree}`),
-        );
-        expect(f.git(f.canonical, "for-each-ref", "refs/openclaw/pr-operation-locks")).toBe("");
-      }
-      expect(deadlines[1]).toBeGreaterThan(deadlines[0]!);
-    },
-  );
+  it("scales the native checkout deadline with the tree and survives five minutes of progress", () => {
+    const deadlines: number[] = [];
+    for (const files of [128, 256]) {
+      const f = fixture("native", files);
+      const receipt = installCheckoutDeadline(f);
+      const result = f.run();
+      expect(result.status, result.stderr).toBe(0);
+      const observed = readJson(receipt);
+      expect(observed.elapsed).toBe(300001);
+      deadlines.push(observed.deadline);
+      expectProvisionSeed(f);
+      expect(f.git(f.worktree, "write-tree")).toBe(
+        f.git(f.canonical, "rev-parse", `${f.main}^{tree}`),
+      );
+      expect(f.git(f.canonical, "for-each-ref", "refs/openclaw/pr-operation-locks")).toBe("");
+    }
+    expect(deadlines[1]).toBeGreaterThan(deadlines[0]!);
+  });
 
   it.each([
     { mode: "native", interruption: "retained-gitfile" },
