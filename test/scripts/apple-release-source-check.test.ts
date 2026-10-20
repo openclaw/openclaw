@@ -1,39 +1,32 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT = path.join(process.cwd(), "scripts", "apple-release-source-check.sh");
 const BASH_BIN = process.platform === "win32" ? "bash" : "/bin/bash";
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function makeRepository(): { root: string; commit: string } {
-  const root = mkdtempSync(path.join(tmpdir(), "openclaw-apple-release-source-"));
-  tempDirs.push(root);
-  execFileSync("git", ["init", "--quiet"], { cwd: root });
+  const root = tempDirs.make("openclaw-apple-release-source-");
+  const git = (...args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8" });
+  git("init", "--quiet");
   writeFileSync(path.join(root, "tracked.txt"), "clean\n", "utf8");
-  execFileSync("git", ["add", "tracked.txt"], { cwd: root });
-  execFileSync(
-    "git",
-    [
-      "-c",
-      "commit.gpgsign=false",
-      "-c",
-      "user.email=release-test@openclaw.test",
-      "-c",
-      "user.name=OpenClaw Release Test",
-      "commit",
-      "--quiet",
-      "-m",
-      "initial",
-    ],
-    { cwd: root },
+  git("add", "tracked.txt");
+  git(
+    "-c",
+    "commit.gpgsign=false",
+    "-c",
+    "user.email=release-test@openclaw.test",
+    "-c",
+    "user.name=OpenClaw Release Test",
+    "commit",
+    "--quiet",
+    "-m",
+    "initial",
   );
-  const commit = execFileSync("git", ["rev-parse", "HEAD"], {
-    cwd: root,
-    encoding: "utf8",
-  }).trim();
+  const commit = git("rev-parse", "HEAD").trim();
   return { root, commit };
 }
 
@@ -44,12 +37,6 @@ function runCheck(root: string, commit: string) {
     encoding: "utf8",
   });
 }
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
 
 describe("Apple release source check", () => {
   it("accepts a matching full commit from a clean checkout", () => {
@@ -74,27 +61,12 @@ describe("Apple release source check", () => {
   });
 
   it("rejects tracked, staged, and untracked release checkout changes", () => {
-    const fixtures = [
-      () => {
-        const repository = makeRepository();
-        writeFileSync(path.join(repository.root, "tracked.txt"), "dirty\n", "utf8");
-        return repository;
-      },
-      () => {
-        const repository = makeRepository();
-        writeFileSync(path.join(repository.root, "staged.txt"), "staged\n", "utf8");
-        execFileSync("git", ["add", "staged.txt"], { cwd: repository.root });
-        return repository;
-      },
-      () => {
-        const repository = makeRepository();
-        writeFileSync(path.join(repository.root, "untracked.txt"), "untracked\n", "utf8");
-        return repository;
-      },
-    ];
-
-    for (const makeFixture of fixtures) {
-      const repository = makeFixture();
+    for (const file of ["tracked.txt", "staged.txt", "untracked.txt"]) {
+      const repository = makeRepository();
+      writeFileSync(path.join(repository.root, file), "dirty\n", "utf8");
+      if (file === "staged.txt") {
+        execFileSync("git", ["add", file], { cwd: repository.root });
+      }
       const result = runCheck(repository.root, repository.commit);
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("Apple release builds require a clean Git checkout.");

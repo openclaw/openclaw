@@ -1,44 +1,24 @@
-// Audit Seams tests cover audit seams script behavior.
 import { describe, expect, it } from "vitest";
 import { describeSeamKinds, determineSeamTestStatus } from "../../scripts/audit-seams.mts";
 
-describe("audit-seams cron seam classification", () => {
+describe("audit-seams classification and status", () => {
   it("detects scheduler-state seams in cron service orchestration", () => {
     const source = `
       import { recomputeNextRunsForMaintenance, computeJobNextRunAtMs } from "./jobs-scheduling.js";
       import { ensureLoaded, persist } from "./store.js";
       import { armTimer, runMissedJobs } from "./timer.js";
-
-      export async function start(state) {
-        await ensureLoaded(state);
-        recomputeNextRunsForMaintenance(state, { deferredNotifications: [] });
-        await persist(state);
-        armTimer(state);
-        await runMissedJobs(state);
-        return computeJobNextRunAtMs(state.store.jobs[0], Date.now());
-      }
     `;
 
     expect(describeSeamKinds("src/cron/service/ops-lifecycle.ts", source)).toContain(
       "cron-scheduler-state",
     );
   });
-});
-
-describe("audit-seams subagent seam classification", () => {
   it("detects relocated native spawn executor seams", () => {
     const source = `
       import { callGateway } from "../../../gateway/call.js";
       import { registerSubagentRun } from "../../subagent-registry.js";
       import { emitSessionLifecycleEvent } from "./subagent-spawn.runtime.js";
-
-      export async function spawnSubagentDirect() {
-        const response = await callGateway({ method: "agent.run", params: { task: "do it" } });
-        registerSubagentRun({ childSessionKey: "agent:main:subagent:child" });
-        await callGateway({ method: "sessions.delete", params: { key: "agent:main:subagent:child" } });
-        emitSessionLifecycleEvent({ sessionKey: "agent:main:subagent:child", type: "spawned" });
-        return response;
-      }
+      await callGateway({ method: "sessions.delete" });
     `;
 
     expect(describeSeamKinds("src/agents/subagents/spawn/subagent-spawn.ts", source)).toEqual([
@@ -54,14 +34,6 @@ describe("audit-seams subagent seam classification", () => {
       import { captureSubagentCompletionReply, runSubagentAnnounceFlow } from "../announce/subagent-announce.js";
       import { emitSubagentEndedHookOnce } from "./subagent-registry-completion.js";
       import { persistSubagentRunsToDisk } from "./subagent-registry-state.js";
-
-      export async function completeRun(entry) {
-        await resolveContextEngine({});
-        await captureSubagentCompletionReply(entry.childSessionKey);
-        await emitSubagentEndedHookOnce({ runId: entry.runId });
-        persistSubagentRunsToDisk(new Map());
-        return runSubagentAnnounceFlow({ childSessionKey: entry.childSessionKey });
-      }
     `;
 
     expect(describeSeamKinds("src/agents/subagents/registry/subagent-registry.ts", source)).toEqual(
@@ -74,27 +46,12 @@ describe("audit-seams subagent seam classification", () => {
       import { onAgentEvent } from "../../../infra/agent-events.js";
       import { requestHeartbeat } from "../../../infra/heartbeat-wake.js";
       import { enqueueSystemEvent } from "../../../infra/system-events.js";
-
-      export function startAcpSpawnParentStreamRelay() {
-        onAgentEvent("agent-output", () => {});
-        requestHeartbeat({
-          source: "acp-spawn",
-          intent: "event",
-          reason: "acp:spawn:stream",
-          sessionKey: "agent:main",
-        });
-        enqueueSystemEvent("progress", { sessionKey: "agent:main", contextKey: "stream" });
-        return { streamTo: "parent" };
-      }
     `;
 
     expect(
       describeSeamKinds("src/agents/subagents/spawn/acp-spawn-parent-stream.ts", source),
     ).toEqual(["subagent-parent-stream"]);
   });
-});
-
-describe("audit-seams status", () => {
   it("keeps subagent seam statuses conservative when nearby tests exist", () => {
     expect(
       determineSeamTestStatus(

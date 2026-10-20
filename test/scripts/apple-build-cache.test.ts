@@ -62,22 +62,18 @@ describe("Apple build cache contracts", () => {
     };
     const writeLock = () => put("pnpm-lock.yaml", stringify(lock));
     writeLock();
-    mkdirSync(path.join(root, "scripts/lib"), { recursive: true });
     mkdirSync(path.join(root, "patches"));
     for (const file of [
-      "prepare-apple-mermaid.mjs",
-      "lib/pnpm-lockfile-documents.mjs",
-      "pnpm-runner.mts",
-      "windows-cmd-helpers.mjs",
-      "run-node-package-bin.mts",
-    ]) {
-      copyFileSync(`scripts/${file}`, path.join(root, "scripts", file));
-    }
-    mkdirSync(path.join(root, "src/infra"), { recursive: true });
-    copyFileSync(
+      "scripts/prepare-apple-mermaid.mjs",
+      "scripts/lib/pnpm-lockfile-documents.mjs",
+      "scripts/pnpm-runner.mts",
+      "scripts/windows-cmd-helpers.mjs",
+      "scripts/run-node-package-bin.mts",
       "src/infra/update-runtime-staging.ts",
-      path.join(root, "src/infra/update-runtime-staging.ts"),
-    );
+    ]) {
+      mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+      copyFileSync(file, path.join(root, file));
+    }
     put(
       "pnpm.cjs",
       `const fs = require("node:fs");
@@ -87,18 +83,16 @@ fs.mkdirSync(target, { recursive: true });
 fs.writeFileSync(target + "/native.js", "verified bundle");
 fs.appendFileSync("builds", "built\\n");`,
     );
-    const cacheKey = () => {
-      const result = spawnSync(
-        process.execPath,
-        ["scripts/prepare-apple-mermaid.mjs", "--cache-key"],
-        {
-          cwd: root,
-          encoding: "utf8",
-        },
-      );
+    const prepare = (...args: string[]) => {
+      const result = spawnSync(process.execPath, ["scripts/prepare-apple-mermaid.mjs", ...args], {
+        cwd: root,
+        encoding: "utf8",
+        env: { ...process.env, npm_execpath: path.join(root, "pnpm.cjs") },
+      });
       expect(result.status, result.stderr).toBe(0);
       return result.stdout.trim();
     };
+    const cacheKey = () => prepare("--cache-key");
     const key = cacheKey();
     expect(key).toMatch(/^[a-z0-9-]+-v[\d.]+-[a-f0-9]{64}$/);
     const retained =
@@ -120,12 +114,7 @@ fs.appendFileSync("builds", "built\\n");`,
     expect(cacheKey()).not.toBe(key);
     expect(() => readFileSync(path.join(root, "builds"))).toThrow();
     const run = () => {
-      const result = spawnSync(process.execPath, ["scripts/prepare-apple-mermaid.mjs"], {
-        cwd: root,
-        encoding: "utf8",
-        env: { ...process.env, npm_execpath: path.join(root, "pnpm.cjs") },
-      });
-      expect(result.status, result.stderr).toBe(0);
+      prepare();
       return readFileSync(path.join(root, "builds"), "utf8").trim().split("\n").length;
     };
     expect(run()).toBe(1);
@@ -246,13 +235,11 @@ echo built >> "$FIXTURE_BUILDS"
       ["macos-periphery.yml", "scan-ios", "Build iOS consumer index"],
     ] as const) {
       const steps = parse(readFileSync(`.github/workflows/${file}`, "utf8")).jobs[jobName].steps;
-      const identify = steps.findIndex(
-        (step: { name?: string }) => step.name === "Identify Watch RTC cache inputs",
-      );
-      const restore = steps.findIndex(
-        (step: { name?: string }) => step.name === "Restore Watch RTC build inputs",
-      );
-      const build = steps.findIndex((step: { name?: string }) => step.name === buildName);
+      const index = (name: string) =>
+        steps.findIndex((step: { name?: string }) => step.name === name);
+      const identify = index("Identify Watch RTC cache inputs");
+      const restore = index("Restore Watch RTC build inputs");
+      const build = index(buildName);
       expect(identify, file).toBeGreaterThan(-1);
       expect(restore, file).toBeGreaterThan(identify);
       expect(build, file).toBeGreaterThan(restore);

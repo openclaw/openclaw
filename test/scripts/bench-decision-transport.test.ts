@@ -1,18 +1,13 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { benchmarkDecisionTransport } from "../../scripts/bench-decision-transport-worker.ts";
 import * as transportPool from "../../src/agents/provider-transport-dispatcher-pool.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const roots: string[] = [];
-afterEach(() => {
-  for (const root of roots.splice(0)) {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
+const roots = useAutoCleanupTempDirTracker(afterEach);
 
 it("completes real registered-provider requests and drains reusable connections", async () => {
   const result = await benchmarkDecisionTransport(6);
@@ -33,8 +28,7 @@ it("fails teardown when the client pool leaves its reusable connection open", as
 });
 
 function fixture(candidateResult: Record<string, unknown> = {}) {
-  const root = mkdtempSync(path.join(tmpdir(), "decision-transport-bench-"));
-  roots.push(root);
+  const root = roots.make("decision-transport-bench-");
   const memory = { rss: 100, heapTotal: 80, heapUsed: 40, external: 10, arrayBuffers: 5 };
   const result = {
     requests: 2,
@@ -94,21 +88,16 @@ it("runs serial ABAB samples and reports bounded evidence without unsupported ta
   const result = run();
   expect(result.error).toBeUndefined();
   expect(result.status, result.stderr).toBe(0);
-  const report = JSON.parse(result.stdout);
-  expect(report.samples.map((row: { variant: string }) => row.variant)).toEqual([
+  const { samples, summary, scope } = JSON.parse(result.stdout);
+  expect(samples.map((row: { variant: string }) => row.variant)).toEqual([
     "baseline",
     "candidate",
     "baseline",
     "candidate",
   ]);
-  expect(report.summary.candidate.connectionsPerSample).toEqual({
-    count: 2,
-    min: 1,
-    p50: 1,
-    max: 1,
-  });
-  expect(report.samples[0].result.memoryAfterDrain.rss).toBe(100);
-  expect(report.scope).toContain("no model inference, TLS or Gateway startup claims");
+  expect(summary.candidate.connectionsPerSample).toEqual({ count: 2, min: 1, p50: 1, max: 1 });
+  expect(samples[0].result.memoryAfterDrain.rss).toBe(100);
+  expect(scope).toContain("no model inference, TLS or Gateway startup claims");
 });
 
 it.each(["workerSourceSha256", "harnessSourceSha256", "node"] as const)(
@@ -119,24 +108,19 @@ it.each(["workerSourceSha256", "harnessSourceSha256", "node"] as const)(
     candidate.manifest[field] = "f".repeat(64);
     writeFileSync(candidate.file, JSON.stringify(candidate.manifest));
     const result = run();
-    expect(result.status).toBe(1);
+    expect(result).toMatchObject({ status: 1, stdout: "" });
     expect(result.stderr).not.toContain("worker 1/4 start");
     expect(result.stderr.trim()).toMatch(/\[bench-decision-transport\] FAILED \(exit 1\)$/u);
-    expect(result.stdout).toBe("");
   },
 );
 
 it("rejects changed build output instead of publishing a successful report", () => {
   const { manifests, run } = fixture();
   writeFileSync(path.join(path.dirname(manifests[1]!.file), "worker.mjs"), "process.exit(0);");
-  const result = run();
-  expect(result.status).toBe(1);
-  expect(result.stdout).toBe("");
+  expect(run()).toMatchObject({ status: 1, stdout: "" });
 });
 
 it("rejects an incomplete worker result even when its process succeeds", () => {
   const { run } = fixture({ warmTimingsMs: [] });
-  const result = run();
-  expect(result.status).toBe(1);
-  expect(result.stdout).toBe("");
+  expect(run()).toMatchObject({ status: 1, stdout: "" });
 });
