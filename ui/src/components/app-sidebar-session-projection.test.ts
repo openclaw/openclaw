@@ -43,7 +43,7 @@ function projectionInput(
     knownGroups: [],
     collapsedSections: new Set(),
     emptyGroupsMode: "filtering",
-    ownerFiltered: false,
+    ownerFilter: null,
     visibleSessionLimits: new Map(),
     sortMode: "created",
     statusFilter: "active",
@@ -109,6 +109,33 @@ it("retains unloaded group destinations until the session list establishes their
   expect(project([], input).sections.map(({ id }) => id)).not.toContain(
     "category:Awaiting sessions",
   );
+});
+
+it("renders a single selected owner's sessions inline instead of under a person header", () => {
+  const owned = (key: string, id: string) =>
+    sessionRow(key, {
+      owner: { actor: { type: "human", id, identity: { type: "profile", id } } },
+    });
+  const headers = (rows: SidebarRecentSession[], overrides: Partial<ProjectionInput>) =>
+    project(rows, { grouping: "person", selfOwnerId: "patrick", ...overrides })
+      .sections.filter((section) => section.id.startsWith("person:"))
+      .map((section) => [section.id, section.renderHeader, section.visibleRowCount]);
+
+  expect(
+    headers([owned("mine", "patrick")], {
+      ownerFilter: "owner",
+      collapsedSections: new Set(["person:profile:patrick"]),
+    }),
+  ).toEqual([["person:profile:patrick", false, 1]]);
+  expect(
+    headers([owned("mine", "patrick"), owned("theirs", "ada")], { ownerFilter: "involvingMe" }),
+  ).toEqual([
+    ["person:profile:patrick", true, 1],
+    ["person:profile:ada", true, 1],
+  ]);
+  expect(headers([owned("mine", "patrick")], { ownerFilter: null })).toEqual([
+    ["person:profile:patrick", true, 1],
+  ]);
 });
 
 it("prunes only absent rows when the bounded registry exceeds its cap", () => {
