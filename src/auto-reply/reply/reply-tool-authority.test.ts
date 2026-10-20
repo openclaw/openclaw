@@ -23,9 +23,33 @@ import {
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 import {
   createQueueTestRun,
-  resolveFollowupRunToolAuthorityFingerprintAsync,
+  resolveFollowupRunToolAuthorityFingerprintAsync as fingerprintFor,
   toolAuthorityOverlay,
 } from "./reply-tool-authority.test-support.js";
+
+const rejected = { status: "rejected", reason: "tool_authority_mismatch" } as const;
+
+async function admit(
+  run: ReturnType<typeof createQueueTestRun>,
+  sessionId: string,
+  route = { provider: run.run.provider, model: run.run.model },
+  isStreaming?: () => boolean,
+) {
+  const operation = createTestReplyOperation({ sessionId });
+  await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(run));
+  const fingerprint = await operation.bindToolAuthorityRouteAsync(route);
+  const queueMessage = vi.fn(
+    async (_text: string, _options?: ReplyBackendQueueMessageOptions) => {},
+  );
+  operation.attachBackend({
+    kind: "embedded",
+    cancel: vi.fn(),
+    queueMessage,
+    ...(isStreaming ? { isStreaming } : {}),
+  });
+  operation.setPhase("running");
+  return { operation, fingerprint, queueMessage };
+}
 
 describe("reply tool authority", () => {
   afterEach(() => {
@@ -64,8 +88,8 @@ describe("reply tool authority", () => {
         second.toolsAllow = attachToolAllowlistIntersection(["exec"], [["exec"], ["message"]]);
       }
 
-      expect(await resolveFollowupRunToolAuthorityFingerprintAsync(first, firstRoute)).not.toBe(
-        await resolveFollowupRunToolAuthorityFingerprintAsync(second, secondRoute),
+      expect(await fingerprintFor(first, firstRoute)).not.toBe(
+        await fingerprintFor(second, secondRoute),
       );
     },
   );
@@ -85,29 +109,22 @@ describe("reply tool authority", () => {
         source: {},
         assertCurrent: () => {},
       });
-      const operation = createTestReplyOperation({ sessionId: "personal-steering" });
-      await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(run));
-      const fingerprint = await operation.bindToolAuthorityRouteAsync(run.run);
-      const queueMessage = vi.fn(
-        async (_text: string, _options?: ReplyBackendQueueMessageOptions) => {},
+      const { operation, fingerprint, queueMessage } = await admit(
+        run,
+        "personal-steering",
+        run.run,
+        () => true,
       );
-      operation.attachBackend({
-        kind: "embedded",
-        cancel: vi.fn(),
-        isStreaming: () => true,
-        queueMessage,
-      });
-      operation.setPhase("running");
       const incoming = {
         ...run,
         run: { ...run.run, senderId: participantId, bootstrapUserProfileId: participantId },
       };
       // An owner reassignment can update the next turn's bootstrap selection,
       // but it is not a permission change and must not rewrite the active turn.
-      expect(await resolveFollowupRunToolAuthorityFingerprintAsync(incoming)).toBe(fingerprint);
+      expect(await fingerprintFor(incoming)).toBe(fingerprint);
       for (const options of [
         {
-          toolAuthorityFingerprint: await resolveFollowupRunToolAuthorityFingerprintAsync(incoming),
+          toolAuthorityFingerprint: await fingerprintFor(incoming),
         },
         { toolAuthorityOverlay: toolAuthorityOverlay(incoming) },
       ]) {
@@ -143,7 +160,7 @@ describe("reply tool authority", () => {
             isInboundUserMessage: true,
             toolAuthorityOverlay: { ...toolAuthorityOverlay(incoming), ...changed },
           }),
-        ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
+        ).resolves.toMatchObject(rejected);
       }
       expect(queueMessage).toHaveBeenCalledTimes(2);
     }));
@@ -162,12 +179,7 @@ describe("reply tool authority", () => {
       run.run.authProfileId = "openai:primary";
       run.run.authProfileIdSource = source;
       run.run.permissionMode = "full";
-      const operation = createTestReplyOperation({ sessionId: "profile-steering" });
-      await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(run));
-      await operation.bindToolAuthorityRouteAsync(run.run);
-      const queueMessage = vi.fn(async () => {});
-      operation.attachBackend({ kind: "embedded", cancel: vi.fn(), queueMessage });
-      operation.setPhase("running");
+      const { queueMessage } = await admit(run, "profile-steering");
       const incoming = {
         ...run,
         run: {
@@ -181,13 +193,9 @@ describe("reply tool authority", () => {
       await expect(
         queueCurrentReplyRunMessage("profile-steering", "change direction", {
           isInboundUserMessage: true,
-          toolAuthorityFingerprint: await resolveFollowupRunToolAuthorityFingerprintAsync(incoming),
+          toolAuthorityFingerprint: await fingerprintFor(incoming),
         }),
-      ).resolves.toMatchObject(
-        accepted
-          ? { status: "accepted" }
-          : { status: "rejected", reason: "tool_authority_mismatch" },
-      );
+      ).resolves.toMatchObject(accepted ? { status: "accepted" } : rejected);
       expect(queueMessage).toHaveBeenCalledTimes(accepted ? 1 : 0);
       expect(run.run.authProfileId).toBe("openai:primary");
     },
@@ -210,7 +218,7 @@ describe("reply tool authority", () => {
       await operation.bindToolAuthoritySnapshotAsync(snapshot);
       expect(await operation.projectToolAuthorityFingerprintAsync(overlay)).toBeUndefined();
 
-      const fingerprint = await resolveFollowupRunToolAuthorityFingerprintAsync(run, route);
+      const fingerprint = await fingerprintFor(run, route);
       expect(await operation.bindToolAuthorityRouteAsync(route)).toBe(fingerprint);
       expect(await operation.projectToolAuthorityFingerprintAsync(overlay)).toBe(fingerprint);
 
@@ -230,11 +238,8 @@ describe("reply tool authority", () => {
     const snapshot = prepareReplyToolAuthority(run);
     const primary = { provider: "openai", model: "gpt-primary" };
     const fallback = { provider: "anthropic", model: "claude-fallback" };
-    const primaryFingerprint = await resolveFollowupRunToolAuthorityFingerprintAsync(run, primary);
-    const fallbackFingerprint = await resolveFollowupRunToolAuthorityFingerprintAsync(
-      run,
-      fallback,
-    );
+    const primaryFingerprint = await fingerprintFor(run, primary);
+    const fallbackFingerprint = await fingerprintFor(run, fallback);
     const overlay = toolAuthorityOverlay(run);
     await operation.bindToolAuthoritySnapshotAsync(snapshot);
 
@@ -288,25 +293,17 @@ describe("reply tool authority", () => {
           "operator.read",
           "operator.write",
         ];
+        const defaultModel = { primary: "openai/gpt-test", fallbacks: ["openai/gpt-fallback"] };
+        const writer: GatewayOperatorRoleDefinition = {
+          scopes,
+          agents: "*",
+          sessions: { others: "none" },
+          modelPolicy: {},
+        };
         let config: OpenClawConfig = withModelPolicy
           ? {
-              agents: {
-                defaults: {
-                  model: { primary: "openai/gpt-test", fallbacks: ["openai/gpt-fallback"] },
-                },
-              },
-              gateway: {
-                roles: {
-                  definitions: {
-                    writer: {
-                      scopes,
-                      agents: "*",
-                      sessions: { others: "none" },
-                      modelPolicy: {},
-                    },
-                  },
-                },
-              },
+              agents: { defaults: { model: defaultModel } },
+              gateway: { roles: { definitions: { writer } } },
             }
           : {};
         const context = { getRuntimeConfig: () => config };
@@ -372,14 +369,7 @@ describe("reply tool authority", () => {
             reconnectedRevocation.signal,
             grant,
           );
-          const operation = createTestReplyOperation({ sessionId: "reconnected-steering" });
-          await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(run));
-          const fingerprint = await operation.bindToolAuthorityRouteAsync(run.run);
-          const queueMessage = vi.fn(
-            async (_text: string, _options?: ReplyBackendQueueMessageOptions) => {},
-          );
-          operation.attachBackend({ kind: "embedded", cancel: vi.fn(), queueMessage });
-          operation.setPhase("running");
+          const { fingerprint, queueMessage } = await admit(run, "reconnected-steering");
           const overlay = {
             ...toolAuthorityOverlay(run),
             operatorAuthority: reconnectedAuthority,
@@ -403,9 +393,7 @@ describe("reply tool authority", () => {
           // An unrelated config publication must not change the effective model ceiling.
           config = { ...config };
           await expect(inject()).resolves.toEqual(
-            grant === undefined
-              ? { status: "rejected", reason: "tool_authority_mismatch" }
-              : { status: "accepted" },
+            grant === undefined ? rejected : { status: "accepted" },
           );
           const otherAuthority = await capture(
             createOperatorClient({ profileId: otherProfileId, scopes, caps: ["ui-commands"] }),
@@ -417,7 +405,7 @@ describe("reply tool authority", () => {
               operatorAuthority: otherAuthority,
               gatewayUiCommandTarget: { connId: "other-browser", profileId: otherProfileId },
             }),
-          ).resolves.toEqual({ status: "rejected", reason: "tool_authority_mismatch" });
+          ).resolves.toEqual(rejected);
           const acceptedMessages = grant === undefined ? 1 : 2;
           expect(queueMessage).toHaveBeenCalledTimes(acceptedMessages);
           expect(queueMessage).toHaveBeenLastCalledWith(
@@ -445,7 +433,7 @@ describe("reply tool authority", () => {
                   changedGrant,
                 ),
               }),
-            ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
+            ).resolves.toMatchObject(rejected);
             expect(queueMessage).toHaveBeenCalledTimes(acceptedMessages);
           }
           if (grant !== null) {
@@ -457,10 +445,9 @@ describe("reply tool authority", () => {
               revokedGrant.signal,
             );
             revokedGrant.abort();
-            await expect(inject({ operatorAuthority: revokedAuthority })).resolves.toMatchObject({
-              status: "rejected",
-              reason: "tool_authority_mismatch",
-            });
+            await expect(inject({ operatorAuthority: revokedAuthority })).resolves.toMatchObject(
+              rejected,
+            );
             expect(queueMessage).toHaveBeenCalledTimes(acceptedMessages);
           }
           for (const changed of [
@@ -476,47 +463,31 @@ describe("reply tool authority", () => {
             },
             { gatewayUiCommandTarget: { connId: "other-browser", profileId: otherProfileId } },
             { gatewayUiCommandTarget: undefined },
-            {
+            ...["openai/gpt-test", "openai/another-model"].map((model) => ({
               operatorAuthority: createAdmittedRunOperatorAuthority({
                 ...reconnectedAuthority,
                 modelPolicy: prepareOperatorModelPolicy({
                   cfg: config,
-                  policy: { allow: ["openai/gpt-test"] },
+                  policy: { allow: [model] },
                 }),
               }),
-            },
-            {
-              operatorAuthority: createAdmittedRunOperatorAuthority({
-                ...reconnectedAuthority,
-                modelPolicy: prepareOperatorModelPolicy({
-                  cfg: config,
-                  policy: { allow: ["openai/another-model"] },
-                }),
-              }),
-            },
+            })),
             { clientCaps: [] },
             { toolBindings: { browser: { kind: "tab", targetId: "different-tab" } } },
           ]) {
-            await expect(inject(changed)).resolves.toMatchObject({
-              status: "rejected",
-              reason: "tool_authority_mismatch",
-            });
+            await expect(inject(changed)).resolves.toMatchObject(rejected);
           }
           reconnectedRevocation.abort();
-          await expect(inject()).resolves.toMatchObject({
-            status: "rejected",
-            reason: "tool_authority_mismatch",
-          });
+          await expect(inject()).resolves.toMatchObject(rejected);
           const liveReplacement = await capture(
             reconnectedClient,
             new AbortController().signal,
             grant,
           );
           originalRevocation.abort();
-          await expect(inject({ operatorAuthority: liveReplacement })).resolves.toMatchObject({
-            status: "rejected",
-            reason: "tool_authority_mismatch",
-          });
+          await expect(inject({ operatorAuthority: liveReplacement })).resolves.toMatchObject(
+            rejected,
+          );
           expect(queueMessage).toHaveBeenCalledTimes(acceptedMessages);
         } finally {
           for (const release of cleanups.toReversed()) {
@@ -535,19 +506,7 @@ describe("reply tool authority", () => {
     run.run.permissionMode = "full";
     const route = { provider: "openai", model: "gpt-primary" };
     const overlay = { ...toolAuthorityOverlay(run), approvalReviewerDeviceId: "device-b" };
-    const queueMessage = vi.fn(
-      async (_text: string, _options?: ReplyBackendQueueMessageOptions) => {},
-    );
-    const operation = createTestReplyOperation({ sessionId: "session-projected-authority" });
-    await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(run));
-    await operation.bindToolAuthorityRouteAsync(route);
-    operation.attachBackend({
-      kind: "embedded",
-      cancel: vi.fn(),
-      isStreaming: () => true,
-      queueMessage,
-    });
-    operation.setPhase("running");
+    const { queueMessage } = await admit(run, "session-projected-authority", route, () => true);
 
     await expect(
       queueCurrentReplyRunMessage("session-projected-authority", "same authority", {
@@ -559,7 +518,7 @@ describe("reply tool authority", () => {
     const forwardedOptions = queueMessage.mock.calls[0]?.[1];
     expect(forwardedOptions).toMatchObject({
       isInboundUserMessage: true,
-      toolAuthorityFingerprint: await resolveFollowupRunToolAuthorityFingerprintAsync(run, route),
+      toolAuthorityFingerprint: await fingerprintFor(run, route),
     });
     expect(forwardedOptions).not.toHaveProperty("toolAuthorityOverlay");
     expect(forwardedOptions).not.toHaveProperty("approvalReviewerDeviceId");
@@ -580,7 +539,7 @@ describe("reply tool authority", () => {
           isInboundUserMessage: true,
           toolAuthorityOverlay: { ...overlay, ...restricted },
         }),
-      ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
+      ).resolves.toMatchObject(rejected);
       expect(queueMessage).toHaveBeenCalledOnce();
     }
   });
@@ -617,20 +576,7 @@ describe("reply tool authority", () => {
       if (restriction === "policy-theme-deny") {
         run.run.config = { tools: { deny: ["screen", "theme"] } };
       }
-      const queueMessage = vi.fn(async () => {});
-      const operation = createTestReplyOperation({ sessionId: "screen-unavailable" });
-      await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(run));
-      await operation.bindToolAuthorityRouteAsync({
-        provider: run.run.provider,
-        model: run.run.model,
-      });
-      operation.attachBackend({
-        kind: "embedded",
-        cancel: vi.fn(),
-        isStreaming: () => true,
-        queueMessage,
-      });
-      operation.setPhase("running");
+      const { queueMessage } = await admit(run, "screen-unavailable", run.run, () => true);
 
       await expect(
         queueCurrentReplyRunMessage("screen-unavailable", "steer from another browser", {
@@ -653,11 +599,7 @@ describe("reply tool authority", () => {
             isInboundUserMessage: true,
             toolAuthorityOverlay: { ...toolAuthorityOverlay(run), gatewayUiCommandTarget },
           }),
-        ).resolves.toEqual(
-          themeAvailable
-            ? { status: "rejected", reason: "tool_authority_mismatch" }
-            : { status: "accepted" },
-        );
+        ).resolves.toEqual(themeAvailable ? rejected : { status: "accepted" });
       }
       expect(queueMessage).toHaveBeenCalledTimes(themeAvailable ? 1 : 4);
     },

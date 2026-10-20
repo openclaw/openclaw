@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import {
   claimSessionControllerTask,
@@ -12,7 +13,7 @@ import { createReplyOperation } from "../../sessions/session-controller.operatio
 import { testing } from "../../sessions/session-controller.test-support.js";
 import type { TurnAdoptionLifecycle } from "../get-reply-options.types.js";
 import { prepareInternalGetReplyOptions } from "./get-reply.types.js";
-import type { FollowupRun } from "./queue/types.js";
+import { createQueueTestRun } from "./queue.test-helpers.js";
 import {
   bindReplySourceInput,
   bindReplySourceToFollowup,
@@ -29,24 +30,17 @@ const target = captureSessionTarget({ storeScope: "/test/source.sqlite", session
 function reserve() {
   return reserveSessionControllerSource(key, { target, policy: { mode: "followup" } });
 }
-function followup(): FollowupRun {
-  return {
-    prompt: "hello",
-    enqueuedAt: 1,
-    run: {
-      sessionId: "source-session",
-      sessionKey: key,
-      agentId: "main",
-      agentDir: "/test/agent",
-      config: {},
-      sessionFile: key,
-      workspaceDir: "/test",
-      provider: "openai",
-      model: "test",
-      timeoutMs: 1000,
-      blockReplyBreak: "text_end",
-    },
-  };
+function followup() {
+  const source = createQueueTestRun({ prompt: "hello" });
+  source.run.sessionKey = key;
+  return source;
+}
+function prepare(sessionKey = key, store = "/test/source.sqlite", commandTarget?: string) {
+  return prepareReplySourceInput(
+    { SessionKey: sessionKey, CommandTargetSessionKey: commandTarget },
+    { session: { store } },
+    undefined,
+  );
 }
 
 describe("host-private reply source binding", () => {
@@ -69,31 +63,19 @@ describe("host-private reply source binding", () => {
   });
 
   it("captures physical source rather than native command target before preparation", () => {
-    const source = prepareReplySourceInput(
-      { SessionKey: key, CommandTargetSessionKey: "agent:main:other" },
-      { session: { store: "/test/actual.sqlite" } },
-      undefined,
-    );
+    const source = prepare(key, "/test/actual.sqlite", "agent:main:other");
     expect(source.input?.mailbox.owner.target).toMatchObject({
       sessionKey: key,
       storeScope: "/test/actual.sqlite",
     });
-    const otherStore = prepareReplySourceInput(
-      { SessionKey: key },
-      { session: { store: "/test/other.sqlite" } },
-      undefined,
-    );
+    const otherStore = prepare(key, "/test/other.sqlite");
     expect(otherStore.input?.mailbox).not.toBe(source.input?.mailbox);
     retireUnadoptedReplySource(source.input);
     retireUnadoptedReplySource(otherStore.input);
   });
 
   it("moves the native continuation itself, preserving custody and target backlog", async () => {
-    const source = prepareReplySourceInput(
-      { SessionKey: "agent:main:slash" },
-      { session: { store: "/test/source.sqlite" } },
-      undefined,
-    );
+    const source = prepare("agent:main:slash");
     const input = source.input!;
     const previous = input.mailbox;
     const identity = input.instance;
@@ -162,11 +144,8 @@ describe("host-private reply source binding", () => {
     const run = followup();
     bindReplySourceToFollowup(bindReplySourceInput({}, newest), run);
     expect(newest.mailbox.entries).toEqual([older, newest]);
-    let releaseRaw!: () => void;
-    const raw = new Promise<void>((resolve) => {
-      releaseRaw = resolve;
-    });
-    operation.completeWithAfterClearBarrier(raw);
+    const raw = createDeferred();
+    operation.completeWithAfterClearBarrier(raw.promise);
     releaseSessionControllerClaim(claim);
     let selected = false;
     const next = claimSessionControllerTask(
@@ -178,7 +157,7 @@ describe("host-private reply source binding", () => {
     );
     await Promise.resolve();
     expect(selected).toBe(false);
-    releaseRaw();
+    raw.resolve();
     await operation.ownerSettlement;
     const nextClaim = await next;
     expect(selected).toBe(true);

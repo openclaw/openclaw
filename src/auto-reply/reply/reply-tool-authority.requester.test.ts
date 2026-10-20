@@ -14,96 +14,42 @@ import {
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 import { createQueueTestRun, toolAuthorityOverlay } from "./reply-tool-authority.test-support.js";
 
+type RequesterOptions = {
+  accountId?: string;
+  senderName?: string;
+  unknownOwner?: boolean;
+  collaborative?: true;
+  conversationId?: string | null;
+  threadId?: string;
+};
+
 describe("reply requester authority", () => {
   afterEach(() => {
     testing.resetSessionControllerForTest();
   });
 
-  it.each<{
-    name: string;
-    senderId: string | undefined;
-    accountId?: string;
-    senderName?: string;
-    unknownOwner?: boolean;
-    collaborative?: true;
-    conversationId?: string | null;
-    threadId?: string;
-    accepted: boolean;
-  }>([
-    { name: "same channel requester", senderId: "alice", accepted: true },
-    {
-      name: "same requester with changed permissions while collaboration is enabled",
-      senderId: "alice",
-      collaborative: true,
-      accepted: false,
-    },
-    { name: "another channel requester with equal permissions", senderId: "bob", accepted: false },
-    {
-      name: "collaborator with fewer permissions",
-      senderId: "bob",
-      collaborative: true,
-      accepted: true,
-    },
-    {
-      name: "collaborator in another conversation",
-      senderId: "bob",
-      collaborative: true,
-      conversationId: "other-room",
-      accepted: false,
-    },
-    {
-      name: "collaborator without conversation facts",
-      senderId: "bob",
-      collaborative: true,
-      conversationId: null,
-      accepted: false,
-    },
-    {
-      name: "collaborator in another thread",
-      senderId: "bob",
-      collaborative: true,
-      threadId: "other-thread",
-      accepted: false,
-    },
-    {
-      name: "collaborator on another account",
-      senderId: "bob",
-      collaborative: true,
-      accountId: "other",
-      accepted: false,
-    },
-    {
-      name: "unidentified collaborator",
-      senderId: undefined,
-      collaborative: true,
-      accepted: false,
-    },
-    {
-      name: "same sender on another account",
-      senderId: "alice",
-      accountId: "other",
-      accepted: false,
-    },
-    { name: "display-name drift", senderId: "alice", senderName: "Alice renamed", accepted: true },
-    { name: "unidentified input", senderId: undefined, accepted: false },
-    {
-      name: "unidentified owner and input",
-      senderId: undefined,
-      unknownOwner: true,
-      accepted: false,
-    },
+  it.each<[string, string | undefined, boolean, RequesterOptions?]>([
+    ["same requester", "alice", true],
+    ["changed permissions", "alice", false, { collaborative: true }],
+    ["other requester", "bob", false],
+    ["restricted collaborator", "bob", true, { collaborative: true }],
+    ["other room", "bob", false, { collaborative: true, conversationId: "other-room" }],
+    ["missing room", "bob", false, { collaborative: true, conversationId: null }],
+    ["other thread", "bob", false, { collaborative: true, threadId: "other-thread" }],
+    ["other account", "bob", false, { collaborative: true, accountId: "other" }],
+    ["unidentified collaborator", undefined, false, { collaborative: true }],
+    ["same sender, other account", "alice", false, { accountId: "other" }],
+    ["display-name drift", "alice", true, { senderName: "Alice renamed" }],
+    ["unidentified input", undefined, false],
+    ["unidentified owner and input", undefined, false, { unknownOwner: true }],
   ])(
-    "preserves requester identity for $name",
-    async ({
+    "preserves requester identity: %s",
+    async (
+      _name,
       senderId,
-      accountId,
-      senderName,
-      unknownOwner,
-      collaborative,
-      conversationId,
-      threadId,
       accepted,
-    }) => {
+      { accountId, senderName, unknownOwner, collaborative, conversationId, threadId } = {},
+    ) => {
       const run = createQueueTestRun({ prompt: "Alice's work" });
       run.run.conversationId = "shared-room";
       if (unknownOwner) {
@@ -202,25 +148,17 @@ describe("reply requester authority", () => {
   it("uses the new human requester when steering an origin-bearing continuation", async () => {
     const run = createQueueTestRun({ prompt: "accepted continuation" });
     run.run.sessionKey = "agent:agent:main";
-    run.run.config = {
-      tools: {
-        toolsBySender: {
-          "id:permitted": { allow: ["read", "message"] },
-          "*": { allow: ["read"] },
-        },
-      },
+    const toolsBySender = {
+      "id:permitted": { allow: ["read", "message"] },
+      "*": { allow: ["read"] },
     };
-    const continuation = {
-      ...run,
-      run: {
-        ...run.run,
-        requesterOrigin: {
-          sessionKey: "agent:agent:telegram:direct:requester",
-          messageProvider: "telegram",
-          senderId: "permitted",
-        },
-      },
+    run.run.config = { tools: { toolsBySender } };
+    const requesterOrigin = {
+      sessionKey: "agent:agent:telegram:direct:requester",
+      messageProvider: "telegram",
+      senderId: "permitted",
     };
+    const continuation = { ...run, run: { ...run.run, requesterOrigin } };
     const operation = createTestReplyOperation({ sessionId: "continuation-human-steering" });
     await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(continuation));
     await operation.bindToolAuthorityRouteAsync(run.run);
