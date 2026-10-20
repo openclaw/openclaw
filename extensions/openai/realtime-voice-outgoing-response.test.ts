@@ -28,6 +28,35 @@ const {
   buildOpenAIRealtimeVoiceProvider,
 });
 
+type Socket = Parameters<typeof parseSent>[0];
+const responses = (socket: Socket, type = "response.create") =>
+  parseSent(socket).filter((event) => event.type === type);
+function emitAudio(socket: Socket, item_id: string) {
+  emitServerEvent(socket, {
+    type: "response.audio.delta",
+    item_id,
+    delta: Buffer.alloc(320).toString("base64"),
+  });
+}
+function finishResponse(socket: Socket, id: string, status = "completed") {
+  emitServerEvent(socket, { type: "response.done", response: { id, status, output: [] } });
+}
+async function preparingBridge(onClearAudio: (bridge: RealtimeVoiceBridge) => void) {
+  let cancelSuppression = false;
+  const bridge = createNativeBridge({
+    onClearAudio: () => onClearAudio(bridge),
+    onEvent: (event) => {
+      if (cancelSuppression && event.direction === "client" && event.type === "session.update") {
+        cancelSuppression = false;
+        bridge.handleBargeIn?.({ force: true });
+      }
+    },
+  });
+  const socket = await connectReadyBridge(bridge);
+  cancelSuppression = true;
+  return { bridge, socket };
+}
+
 describe("OpenAI realtime outgoing response ownership", () => {
   beforeEach(resetTestState);
   afterEach(restoreTestEnvironment);
@@ -59,25 +88,14 @@ describe("OpenAI realtime outgoing response ownership", () => {
           .map((event) => event.type),
       ).toEqual(["response.create", "response.cancel"]);
       emitServerEvent(socket, { type: "response.created", response: { id: "cancelled" } });
-      emitServerEvent(socket, {
-        type: "response.audio.delta",
-        item_id: "discarded",
-        delta: Buffer.alloc(320).toString("base64"),
-      });
+      emitAudio(socket, "discarded");
       expect(onAudio).not.toHaveBeenCalled();
       bridge.sendUserMessage?.("Follow-up response.");
-      expect(parseSent(socket).filter((event) => event.type === "response.create")).toHaveLength(1);
-      emitServerEvent(socket, {
-        type: "response.done",
-        response: { id: "cancelled", status: "cancelled", output: [] },
-      });
-      expect(parseSent(socket).filter((event) => event.type === "response.create")).toHaveLength(2);
+      expect(responses(socket)).toHaveLength(1);
+      finishResponse(socket, "cancelled", "cancelled");
+      expect(responses(socket)).toHaveLength(2);
       emitServerEvent(socket, { type: "response.created", response: { id: "recovery" } });
-      emitServerEvent(socket, {
-        type: "response.audio.delta",
-        item_id: "heard",
-        delta: Buffer.alloc(320).toString("base64"),
-      });
+      emitAudio(socket, "heard");
       expect(onAudio).toHaveBeenCalledTimes(1);
       await bridge.close();
     },
@@ -86,51 +104,25 @@ describe("OpenAI realtime outgoing response ownership", () => {
   it.each([false, true])(
     "cancels during VAD suppression and preserves replacement admission (clear requests replacement=%s)",
     async (replaceOnClear) => {
-      let cancelSuppression = false;
-      const bridge: RealtimeVoiceBridge = createNativeBridge({
-        onClearAudio: () => {
-          if (replaceOnClear) {
-            bridge.sendUserMessage?.("Replacement from the clear callback.");
-          }
-        },
-        onEvent: (event) => {
-          if (
-            cancelSuppression &&
-            event.direction === "client" &&
-            event.type === "session.update"
-          ) {
-            cancelSuppression = false;
-            bridge.handleBargeIn?.({ force: true });
-          }
-        },
+      const { bridge, socket } = await preparingBridge((activeBridge) => {
+        if (replaceOnClear) {
+          activeBridge.sendUserMessage?.("Replacement from the clear callback.");
+        }
       });
-      const socket = await connectReadyBridge(bridge);
-      cancelSuppression = true;
       bridge.sendUserMessage?.("Cancelled before response creation.");
-      expect(parseSent(socket).filter((event) => event.type === "response.cancel")).toEqual([]);
-      expect(parseSent(socket).filter((event) => event.type === "response.create")).toHaveLength(
-        replaceOnClear ? 1 : 0,
-      );
+      expect(responses(socket, "response.cancel")).toEqual([]);
+      expect(responses(socket)).toHaveLength(replaceOnClear ? 1 : 0);
       if (replaceOnClear) {
         bridge.sendUserMessage?.("Queued behind the replacement.");
-        expect(parseSent(socket).filter((event) => event.type === "response.create")).toHaveLength(
-          1,
-        );
-        emitServerEvent(socket, {
-          type: "response.done",
-          response: { id: "replacement", status: "completed", output: [] },
-        });
-        expect(parseSent(socket).filter((event) => event.type === "response.create")).toHaveLength(
-          2,
-        );
+        expect(responses(socket)).toHaveLength(1);
+        finishResponse(socket, "replacement");
+        expect(responses(socket)).toHaveLength(2);
       } else {
         expect(
           parseSent(socket).at(-1)?.session?.audio?.input?.turn_detection?.create_response,
         ).toBe(true);
         bridge.sendUserMessage?.("Follow-up without a native terminal for the unsent response.");
-        expect(parseSent(socket).filter((event) => event.type === "response.create")).toHaveLength(
-          1,
-        );
+        expect(responses(socket)).toHaveLength(1);
       }
       await bridge.close();
     },
@@ -151,10 +143,7 @@ describe("OpenAI realtime outgoing response ownership", () => {
     });
     const socket = await connectReadyBridge(bridge);
     emitServerEvent(socket, { type: "response.created", response: { id: "a" } });
-    emitServerEvent(socket, {
-      type: "response.done",
-      response: { id: "a", status: "completed", output: [] },
-    });
+    finishResponse(socket, "a");
     vi.spyOn(socket, "send").mockImplementation((payload: string) => {
       socket.sent.push(payload);
       const event = JSON.parse(payload) as { type: string };
@@ -167,25 +156,14 @@ describe("OpenAI realtime outgoing response ownership", () => {
     await bridge.close();
   });
   it("does not drain a replacement when preparing-response cleanup throws", async () => {
-    let cancelSuppression = false;
-    const bridge = createNativeBridge({
-      onClearAudio: () => {
-        bridge.sendUserMessage?.("Queued replacement.");
-        throw new Error("sink clear failed");
-      },
-      onEvent: (event) => {
-        if (cancelSuppression && event.direction === "client" && event.type === "session.update") {
-          cancelSuppression = false;
-          bridge.handleBargeIn?.({ force: true });
-        }
-      },
+    const { bridge, socket } = await preparingBridge((activeBridge) => {
+      activeBridge.sendUserMessage?.("Queued replacement.");
+      throw new Error("sink clear failed");
     });
-    const socket = await connectReadyBridge(bridge);
-    cancelSuppression = true;
     expect(() => bridge.sendUserMessage?.("Cancelled preparation.")).toThrow("sink clear failed");
     expect(parseSent(socket).filter((event) => event.type.startsWith("response."))).toEqual([]);
     bridge.sendUserMessage?.("Explicit follow-up after the failed clear.");
-    expect(parseSent(socket).filter((event) => event.type === "response.create")).toHaveLength(1);
+    expect(responses(socket)).toHaveLength(1);
     await bridge.close();
   });
 });
