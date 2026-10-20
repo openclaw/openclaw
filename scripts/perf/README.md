@@ -65,6 +65,12 @@ session; an empty or unrelated roster does not count. `startupTraceLines` preser
 trace line, including repeated spans; `startupTrace` retains the existing numeric
 summary. All benchmark Gateway ports are at least 40000.
 
+Samples record teardown duration in `shutdownMs` and forced process-tree cleanup
+in `shutdownForced`; the summary includes shutdown timing statistics. The
+`teamBoot` case allows 30 seconds for graceful teardown and fails if the child
+exits nonzero, dies from a signal, or requires forced cleanup. Other cases keep
+their existing teardown policy.
+
 For paired comparisons, prepare separate roots from the same seed inputs and
 pass the same future `--start-at` to both controllers. Use the host's exclusive
 measurement lock, pin each side to its assigned 16-core half, swap the halves on

@@ -55,6 +55,8 @@ function gatewaySample(overrides: Partial<GatewaySample> = {}): GatewaySample {
     maxRssMb: 120,
     outputTail: "",
     readyz: startupProbe(18, "http-503"),
+    shutdownForced: false,
+    shutdownMs: 5,
     signal: null,
     startupTrace: {},
     startupTraceLines: [],
@@ -79,7 +81,7 @@ async function listenOnLoopback(handler: RequestListener) {
 describe("gateway startup benchmark script", () => {
   // Strict managed process-group verification is not supported on Windows.
   it.skipIf(process.platform === "win32")(
-    "reports startup metrics and requires the seeded session only for populated fixtures",
+    "requires seeded session access and clean shutdown only for populated fixtures",
     async ({ signal }) => {
       const fixtures = createTempDirTracker();
       const root = fixtures.make("openclaw-bench-count-report-");
@@ -114,7 +116,9 @@ import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs
 import { createRequire } from "node:module";
 const { WebSocketServer } = createRequire(${JSON.stringify(path.resolve("package.json"))})("ws");
 const counter = ${JSON.stringify(counter)};
-const teamBoot = existsSync(process.env.OPENCLAW_HOME + "/team-boot-fixture.json");
+const teamBootFixture = process.env.OPENCLAW_HOME + "/team-boot-fixture.json";
+const teamBoot = existsSync(teamBootFixture);
+const shutdownExitCode = teamBoot ? JSON.parse(readFileSync(teamBootFixture, "utf8")).shutdownExitCode ?? 0 : 0;
 const record = (phase, extra = {}) => appendFileSync(${JSON.stringify(eventsPath)}, JSON.stringify({ phase, pid: process.pid, ...extra }) + "\\n");
 const sample = (existsSync(counter) ? JSON.parse(readFileSync(counter, "utf8")) : 0) + 1;
 writeFileSync(counter, JSON.stringify(sample));
@@ -146,7 +150,7 @@ let stopping = false;
 const stop = (reason) => {
   if (stopping) return;
   stopping = true;
-  server.close(() => { record("closed", { reason }); process.exit(0); });
+  server.close(() => { record("closed", { reason }); process.exit(shutdownExitCode); });
 };
 process.on("SIGTERM", () => stop("signal"));
 // The CLI owns stdin; EOF retires this detached fixture when the CLI is cancelled.
@@ -239,50 +243,70 @@ server.listen(port, "127.0.0.1", () => {
         // This fake Gateway tests the driver protocol, not the heavyweight seed generator.
         const teamRoot = path.join(root, "prepared-team-boot");
         fs.mkdirSync(teamRoot);
-        fs.writeFileSync(path.join(teamRoot, "team-boot-fixture.json"), "{}");
-        const populated = await runNodeScript(
-          [
-            "--import",
-            "tsx",
-            "scripts/bench-gateway-startup.ts",
-            "--entry",
-            entry,
-            "--case",
-            "teamBoot",
-            "--fixture-root",
-            teamRoot,
-            "--runs",
-            "1",
-            "--warmup",
-            "0",
-            "--output",
-            reportPath,
-          ],
-          { ...process.env, TMPDIR: root },
-          undefined,
-          { cwd: process.cwd(), signal, maxBuffer: 1024 * 1024, requireProcessTreeExit: true },
-        );
-        expect(populated.error).toBeUndefined();
-        expect(populated.status, populated.stderr).toBe(0);
-        const populatedReport = JSON.parse(fs.readFileSync(reportPath, "utf8"));
-        expect(populatedReport.results[0].samples[0].firstSessionRpc).toMatchObject({
-          ms: expect.any(Number),
-          attempts: 4,
-        });
-        const populatedPid = readEvents().find(
-          (event) => event.phase === "started" && event.home === teamRoot,
-        )?.pid;
-        expect(populatedPid).toEqual(expect.any(Number));
-        expect(
-          readEvents()
-            .filter((event) => event.pid === populatedPid && event.method === "sessions.list")
-            .map(({ ok, sessionCount }) => ({ ok, sessionCount })),
-        ).toEqual([
-          { ok: false, sessionCount: 0 },
-          { ok: true, sessionCount: 0 },
-          { ok: true, sessionCount: 1 },
-          { ok: true, sessionCount: 1 },
-        ]);
+        const runPopulated = () =>
+          runNodeScript(
+            [
+              "--import",
+              "tsx",
+              "scripts/bench-gateway-startup.ts",
+              "--entry",
+              entry,
+              "--case",
+              "teamBoot",
+              "--fixture-root",
+              teamRoot,
+              "--runs",
+              "1",
+              "--warmup",
+              "0",
+              "--output",
+              reportPath,
+            ],
+            { ...process.env, TMPDIR: root },
+            undefined,
+            { cwd: process.cwd(), signal, maxBuffer: 1024 * 1024, requireProcessTreeExit: true },
+          );
+        for (const shutdownExitCode of [0, 23]) {
+          fs.writeFileSync(
+            path.join(teamRoot, "team-boot-fixture.json"),
+            JSON.stringify({ shutdownExitCode }),
+          );
+          const populated = await runPopulated();
+          expect(populated.error).toBeUndefined();
+          expect(populated.status, populated.stderr).toBe(shutdownExitCode === 0 ? 0 : 1);
+          if (shutdownExitCode !== 0) {
+            expect(populated.stderr).toContain("unclean shutdown");
+          }
+          const populatedReport = JSON.parse(fs.readFileSync(reportPath, "utf8"));
+          expect(populatedReport.results[0].samples[0]).toMatchObject({
+            exitCode: shutdownExitCode,
+            shutdownForced: false,
+            shutdownMs: expect.any(Number),
+            signal: null,
+          });
+          expect(populatedReport.results[0].summary.shutdownMs).toMatchObject({
+            p50: expect.any(Number),
+          });
+          expect(populated.stdout).toContain("shutdown:     p50=");
+          expect(populatedReport.results[0].samples[0].firstSessionRpc).toMatchObject({
+            ms: expect.any(Number),
+            attempts: 4,
+          });
+          const populatedPid = readEvents().findLast(
+            (event) => event.phase === "started" && event.home === teamRoot,
+          )?.pid;
+          expect(populatedPid).toEqual(expect.any(Number));
+          expect(
+            readEvents()
+              .filter((event) => event.pid === populatedPid && event.method === "sessions.list")
+              .map(({ ok, sessionCount }) => ({ ok, sessionCount })),
+          ).toEqual([
+            { ok: false, sessionCount: 0 },
+            { ok: true, sessionCount: 0 },
+            { ok: true, sessionCount: 1 },
+            { ok: true, sessionCount: 1 },
+          ]);
+        }
       } finally {
         // Never signal retired PIDs; retain fixture evidence if an unclosed child remains alive.
         const events = readEvents();

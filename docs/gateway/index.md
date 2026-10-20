@@ -89,7 +89,7 @@ temporary directory by default. Set `NODE_COMPILE_CACHE` to a writable persisten
 root to retain worker caches across host reboots. OpenClaw namespaces that root
 by package version and build identity; each new build starts with its own cache.
 `NODE_DISABLE_COMPILE_CACHE=1` disables caching for the Gateway and its workers.
-An unavailable cache produces a diagnostic and startup continues.
+An unavailable cache never prevents startup.
 
 An inherited active cache requires a startup respawn before OpenClaw can select
 the main-thread cache policy; platforms with `execve` preserve the serving PID. Node's permission

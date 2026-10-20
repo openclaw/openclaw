@@ -92,6 +92,8 @@ type GatewaySample = {
   maxRssMb: number | null;
   outputTail: string;
   readyz: InitialProbeResult;
+  shutdownForced: boolean;
+  shutdownMs: number;
   signal: string | null;
   startupTrace: Record<string, number>;
   startupTraceLines: string[];
@@ -490,6 +492,7 @@ function summarizeCase(benchCase: GatewayBenchCase, samples: GatewaySample[]) {
       httpListenLogMs: summarize((sample) => sample.httpListenLogMs),
       maxRssMb: summarize((sample) => sample.maxRssMb),
       readyzMs: summarize((sample) => sample.readyz.ms),
+      shutdownMs: summarize((sample) => sample.shutdownMs),
       startupTrace,
     },
   };
@@ -566,6 +569,15 @@ function collectResultFailures(results: CaseResult[]): BenchmarkFailure[] {
               : `child exited by ${sample.signal}`,
           sampleIndex: index + 1,
         });
+      } else if (
+        result.id === "teamBoot" &&
+        (sample.shutdownForced || sample.exitCode !== 0 || sample.signal !== null)
+      ) {
+        failures.push({
+          id: result.id,
+          reason: `unclean shutdown (exitCode=${sample.exitCode}, signal=${sample.signal}, forced=${sample.shutdownForced})`,
+          sampleIndex: index + 1,
+        });
       }
     });
     if (result.id !== "incidentCombined") {
@@ -593,7 +605,7 @@ function printBenchmarkFailures(failures: BenchmarkFailure[]): void {
     return;
   }
   console.error(
-    `[gateway-startup-bench] failed: ${failures.length} sample(s) did not produce ready probes or process metrics`,
+    `[gateway-startup-bench] failed: ${failures.length} sample(s) did not satisfy startup or lifecycle checks`,
   );
   for (const failure of failures.slice(0, 8)) {
     console.error(
@@ -1377,7 +1389,15 @@ async function runGatewaySample(
       const cpuMs =
         cpuStartMs == null || cpuEndMs == null ? null : Math.max(0, cpuEndMs - cpuStartMs);
       const cpuCoreRatio = cpuMs == null ? null : cpuMs / Math.max(1, completedAt - startAt);
-      const exit = await stopChild(startedChild);
+      const shutdownStartedAt = performance.now();
+      let shutdownForced = false;
+      const exit = await stopChild(startedChild, {
+        ...(options.benchCase.id === "teamBoot" ? { teardownGraceMs: 30_000 } : {}),
+        onForceKill: () => {
+          shutdownForced = true;
+        },
+      });
+      const shutdownMs = performance.now() - shutdownStartedAt;
       const maxRssMb = rssSampler.sample();
       child = undefined;
       flushOutputLineBuffers(outputBuffers, onLine, performance.now() - startAt);
@@ -1399,6 +1419,8 @@ async function runGatewaySample(
         maxRssMb,
         outputTail: output.join("").split(/\r?\n/u).slice(-20).join("\n"),
         readyz,
+        shutdownForced,
+        shutdownMs,
         signal: exit.signal,
         startupTrace,
         startupTraceLines,
@@ -1470,6 +1492,7 @@ function printResult(result: CaseResult): void {
   console.log(`  gateway ready: ${formatStats(result.summary.gatewayReadyLogMs)}`);
   console.log(`  /readyz:      ${formatStats(result.summary.readyzMs)}`);
   console.log(`  sessions RPC: ${formatStats(result.summary.firstSessionRpcMs)}`);
+  console.log(`  shutdown:     ${formatStats(result.summary.shutdownMs)}`);
   console.log(`  max RSS:      ${formatStats(result.summary.maxRssMb, formatMb)}`);
   console.log(
     `  ready memory: rss=${formatStats(result.summary.startupTrace["memory.ready.rssMb"], formatMb)} heap=${formatStats(result.summary.startupTrace["memory.ready.heapUsedMb"], formatMb)} external=${formatStats(result.summary.startupTrace["memory.ready.externalMb"], formatMb)}`,
