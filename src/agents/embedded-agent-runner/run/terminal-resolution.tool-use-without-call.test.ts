@@ -3,6 +3,7 @@ import { buildEmbeddedRunnerAssistant } from "../../test-helpers/embedded-agent-
 import { buildEmbeddedRunPayloads } from "./payloads.js";
 import { resolveEmbeddedRunTerminal } from "./terminal-resolution.js";
 import {
+  textAssistant,
   assistantAttempt,
   expectComplete,
   makeTerminalInput,
@@ -61,13 +62,7 @@ describe("terminal resolution for a tool-use stop without a tool call", () => {
           modelApi: "anthropic-messages",
         }
       : {
-          ...toolUseStopWithoutCall(
-            buildEmbeddedRunnerAssistant({
-              stopReason: kind,
-              content: [{ type: "text", text: "NO_REPLY" }],
-            }),
-            sessionKey,
-          ),
+          ...toolUseStopWithoutCall(textAssistant("NO_REPLY", { stopReason: kind }), sessionKey),
           runParams: { messageChannel: "telegram", sessionKey },
         };
     if (pseudo) {

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resetGeneratedMediaTaskActivityForTests } from "../../media-generation-activity.test-support.js";
-import { buildEmbeddedRunnerAssistant } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import {
+  textAssistant,
   expectComplete,
   emptyAssistant,
   resolveTerminal,
@@ -24,10 +24,8 @@ describe("terminal auth resolution", () => {
     const text = "The turn completed.";
     const onSuccessfulAuthProfile = vi.fn();
     const resolved = await resolveTerminal({
-      assistant: buildEmbeddedRunnerAssistant({ content: [{ type: "text", text }] }),
-      attemptOverrides: {
-        assistantTexts: [text],
-      },
+      assistant: textAssistant(text),
+      attemptOverrides: { assistantTexts: [text] },
       payloadsWithToolMedia: [{ text }],
       authProfileId,
       runParams: { authProfileStateMode: "read-only", onSuccessfulAuthProfile },

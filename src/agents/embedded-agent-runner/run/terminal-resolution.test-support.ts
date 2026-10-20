@@ -25,10 +25,14 @@ type TerminalInputOverrides = Omit<
 };
 
 export function emptyAssistant(overrides: Parameters<typeof buildEmbeddedRunnerAssistant>[0] = {}) {
-  return buildEmbeddedRunnerAssistant({
-    content: [{ type: "text", text: "" }],
-    ...overrides,
-  });
+  return textAssistant("", overrides);
+}
+
+export function textAssistant(
+  text: string,
+  overrides: Parameters<typeof buildEmbeddedRunnerAssistant>[0] = {},
+) {
+  return buildEmbeddedRunnerAssistant({ content: [{ type: "text", text }], ...overrides });
 }
 
 export function assistantAttempt(
@@ -87,11 +91,7 @@ export function makeTerminalInput(input: TerminalInputOverrides = {}): TerminalI
       assistant: resolveCurrentAttemptAssistant(attempt),
     }),
     payloadsWithToolMedia: [],
-    agentMeta: {
-      sessionId: runParams.sessionId,
-      provider: "openai",
-      model: "gpt-5.6-luna",
-    },
+    agentMeta: { sessionId: runParams.sessionId, provider: "openai", model: "gpt-5.6-luna" },
     attemptCompactionCount: 0,
     replayState: { ...attempt.replayMetadata, replayInvalid: false },
     sessionPromptState: {
