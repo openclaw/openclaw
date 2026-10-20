@@ -124,28 +124,20 @@ describe("gateway session row change publications", () => {
     const owner = Symbol("activity-owner");
     const successor = Symbol("next-activity-owner");
     const activityTarget = { key: target.sessionKey, agentId: target.agentId };
+    const set = setSessionActivitySummaryState.bind(null, activityTarget);
     const value = {
       sessionId: entry.sessionId,
       storePath: target.storePath,
       state: "stale" as const,
     };
     try {
-      expect(setSessionActivitySummaryState(activityTarget, owner, value)).toBe(true);
-      expect(setSessionActivitySummaryState(activityTarget, owner, value)).toBe(false);
-      expect(
-        setSessionActivitySummaryState(activityTarget, owner, { ...value, state: "updating" }),
-      ).toBe(true);
-      expect(
-        setSessionActivitySummaryState(
-          activityTarget,
-          owner,
-          { ...value, state: "updating" },
-          true,
-        ),
-      ).toBe(true);
-      expect(setSessionActivitySummaryState(activityTarget, successor, value)).toBe(true);
-      expect(setSessionActivitySummaryState(activityTarget, owner)).toBe(false);
-      expect(setSessionActivitySummaryState(activityTarget, successor)).toBe(true);
+      expect(set(owner, value)).toBe(true);
+      expect(set(owner, value)).toBe(false);
+      expect(set(owner, { ...value, state: "updating" })).toBe(true);
+      expect(set(owner, { ...value, state: "updating" }, true)).toBe(true);
+      expect(set(successor, value)).toBe(true);
+      expect(set(owner)).toBe(false);
+      expect(set(successor)).toBe(true);
       expect(changed.mock.calls).toEqual(
         Array.from({ length: 5 }, () => [
           {
@@ -157,8 +149,8 @@ describe("gateway session row change publications", () => {
       );
     } finally {
       unsubscribe();
-      setSessionActivitySummaryState(activityTarget, owner);
-      setSessionActivitySummaryState(activityTarget, successor);
+      set(owner);
+      set(successor);
     }
   });
 });
