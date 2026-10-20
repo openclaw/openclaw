@@ -1,6 +1,8 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { JSDOM } from "jsdom";
 import { expect, onTestFinished, test, vi } from "vitest";
+import type { WebSocket } from "ws";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { GatewayChatEvents } from "../../ui/src/api/gateway-chat-events.ts";
@@ -43,15 +45,12 @@ installGatewayTestHooks({
   setup: async () => {
     const module = await import("./server-kernel.js");
     const create = module.createGatewayKernel;
-    const capture = vi.spyOn(module, "createGatewayKernel").mockImplementation(async (...args) => {
+    using capture = vi.spyOn(module, "createGatewayKernel").mockImplementation(async (...args) => {
       kernel = await create(...args);
       return kernel;
     });
-    try {
-      harness = await startGatewayServerHarness();
-    } finally {
-      capture.mockRestore();
-    }
+    void capture;
+    harness = await startGatewayServerHarness();
   },
   cleanup: async () => harness?.close(),
 });
@@ -61,23 +60,48 @@ function decodeFrame(decoder: GatewayChatEvents, frame: EventFrame): EventFrame 
   decoder.dispatch(frame, (event) => {
     decoded = event;
   });
-  if (!decoded) {
-    throw new Error("Decoder discarded a valid stream");
-  }
-  return decoded;
+  return expectDefined(decoded, "decoded frame");
 }
 
-function expectFullSessionRowFrame(
+function expectSessionRowFrame(
   frame: EventFrame | undefined,
   legacy: EventFrame | undefined,
   decoder: GatewayChatEvents,
+  kind: "full" | "base",
 ): void {
-  if (!frame || !legacy) {
-    throw new Error("Expected paired recovery frames");
-  }
-  expect(frame.payload).toHaveProperty("session.full");
-  expect(decodeFrame(decoder, frame).payload).toEqual(legacy.payload);
+  const encoded = expectDefined(frame, "encoded frame");
+  expect(encoded.payload).toHaveProperty(`session.${kind}`);
+  expect(decodeFrame(decoder, encoded).payload).toEqual(
+    expectDefined(legacy, "legacy frame").payload,
+  );
 }
+
+async function request(ws: WebSocket, method: string, params: unknown = {}) {
+  const response = await rpcReq(ws, method, params);
+  expect(response.ok).toBe(true);
+  return response.payload;
+}
+
+async function sessionTarget(sessionKey: string) {
+  const loaded = await loadGatewaySessionEntryReadOnlyAsync(sessionKey, { agentId: "main" });
+  return {
+    agentId: "main",
+    sessionKey,
+    storePath: loaded.storePath,
+    sessionId: expectDefined(loaded.entry, "durable session").sessionId,
+  };
+}
+
+const textContent = (text: string) => [{ type: "text", text }];
+const transcriptEvent = (
+  eventId: string,
+  role: string,
+  content: unknown[],
+  fields: Record<string, unknown> = {},
+) => ({
+  eventId,
+  message: { role, content, timestamp: Date.now(), ...fields },
+});
 
 test("capable and legacy sockets produce identical session payloads and consumer state", async () => {
   const readRetention = observeSessionEventRowRetention();
@@ -91,78 +115,72 @@ test("capable and legacy sockets produce identical session payloads and consumer
   const legacy = await harness.openClient({ caps: ["session-scoped-events"] });
   const roster = await harness.openClient({ caps: deltaCaps });
   const keys = Array.from({ length: 5 }, (_, depth) => `agent:main:row-delta-depth-${depth}`);
-  const key = keys.at(-1);
-  if (!key) {
-    throw new Error("Expected nested leaf");
-  }
+  const key = expectDefined(keys.at(-1), "nested leaf");
   const runId = "row-delta-controlled-turn";
   for (const [depth, childKey] of keys.entries()) {
-    const created = await rpcReq(capable.ws, "sessions.create", {
+    await request(capable.ws, "sessions.create", {
       key: childKey,
       agentId: "main",
       visibility: "shared",
       ...(depth > 0 ? { parentSessionKey: keys[depth - 1], spawnDepth: depth } : {}),
     });
-    expect(created.ok).toBe(true);
   }
-  const projection = getSessionRowProjection(kernel.gatewayRequestContext);
-  if (!projection) {
-    throw new Error("Expected runtime session projection");
-  }
+  const projection = expectDefined(
+    getSessionRowProjection(kernel.gatewayRequestContext),
+    "projection",
+  );
+  const summaryContext = {
+    getSessionRowProjection: () => projection,
+    broadcast: kernel.gatewayRequestContext.broadcast,
+  };
+  const publishSummary = (target: Awaited<ReturnType<typeof sessionTarget>>) =>
+    broadcastSessionActivitySummary(
+      { key: target.sessionKey, agentId: "main", storePath: target.storePath },
+      summaryContext,
+    );
   const drain = async (sockets = [capable.ws, legacy.ws, roster.ws]) => {
     await flushPendingSessionsChangedEvents(kernel.gatewayRequestContext);
     await drainSessionEventPublications(projection);
     // Replies order each socket's already handed-off event frames before comparison.
     for (const ws of sockets) {
-      expect((await rpcReq(ws, "sessions.list", { agentId: "main", rowMode: "sidebar" })).ok).toBe(
-        true,
-      );
+      await request(ws, "sessions.list", { agentId: "main", rowMode: "sidebar" });
     }
   };
   await drain();
   for (const { ws } of [capable, legacy]) {
-    expect((await rpcReq(ws, "sessions.subscribe", {})).ok).toBe(true);
-    expect((await rpcReq(ws, "sessions.messages.subscribe", { key })).ok).toBe(true);
+    await request(ws, "sessions.subscribe");
+    await request(ws, "sessions.messages.subscribe", { key });
   }
-  expect((await rpcReq(roster.ws, "sessions.subscribe", {})).ok).toBe(true);
+  await request(roster.ws, "sessions.subscribe");
   // Every exact kind retains bodies, including independently identified observers.
   for (const [depth, childKey] of keys.slice(0, -1).entries()) {
-    expect(
-      (
-        await rpcReq(capable.ws, "sessions.messages.subscribe", {
-          key: childKey,
-          subscriptionId: `observer-${depth}`,
-          ...(depth === 1 ? { mode: "narration" } : {}),
-          ...(depth === 2 ? { includeApprovals: true } : {}),
-        })
-      ).ok,
-    ).toBe(true);
+    await request(capable.ws, "sessions.messages.subscribe", {
+      key: childKey,
+      subscriptionId: `observer-${depth}`,
+      ...(depth === 1 ? { mode: "narration" } : {}),
+      ...(depth === 2 ? { includeApprovals: true } : {}),
+    });
   }
   const initial = await rpcReq<SessionsListResult>(legacy.ws, "sessions.list", {
     agentId: "main",
     rowMode: "sidebar",
   });
-  if (!initial.payload) {
-    throw new Error("Expected roster");
-  }
+  const initialRows = expectDefined(initial.payload, "roster");
   const streams = [collectSessionRowFrames(capable.ws), collectSessionRowFrames(legacy.ws)];
   const rosterFrames = collectSessionRowFrames(roster.ws);
   let fullBodiesFrom = Number.POSITIVE_INFINITY;
   let finishSubagents = () => {};
   onTestFinished(() => finishSubagents());
-  let finish!: () => void;
-  const completed = new Promise<void>((resolve) => {
-    finish = resolve;
-  });
+  const completed = createDeferred();
   let dispatchFailure: unknown;
   const rootReleased = createDeferred<"settled" | "reset">();
   dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
     const { dispatcher, replyOptions } = args as Parameters<typeof dispatchInboundMessage>[0];
     try {
-      const observeRelease = captureGatewayRootWorkReleaseObserver();
-      if (!observeRelease) {
-        throw new Error("Expected chat send root admission");
-      }
+      const observeRelease = expectDefined(
+        captureGatewayRootWorkReleaseObserver(),
+        "root admission",
+      );
       observeRelease(rootReleased.resolve);
       const userReceived = onceMessage(legacy.ws, (frame) => {
         const message = frame.payload?.message;
@@ -192,51 +210,32 @@ test("capable and legacy sockets produce identical session payloads and consumer
           expect(rosterFrames.filter((frame) => frame.event === "session.message")).toHaveLength(
             13,
           );
-          expect(
-            (await rpcReq(roster.ws, "sessions.subscribe", { includeMessageBodies: true })).ok,
-          ).toBe(true);
+          await request(roster.ws, "sessions.subscribe", { includeMessageBodies: true });
           fullBodiesFrom = rosterFrames.length;
           // A regular roster subscription must not reset the plugin preference.
-          expect((await rpcReq(roster.ws, "sessions.subscribe", {})).ok).toBe(true);
+          await request(roster.ws, "sessions.subscribe");
         }
-        const loaded = await loadGatewaySessionEntryReadOnlyAsync(childKey, { agentId: "main" });
-        if (!loaded.entry) {
-          throw new Error("Expected durable child");
-        }
-        const target = {
-          agentId: "main",
-          sessionKey: childKey,
-          sessionId: loaded.entry.sessionId,
-          storePath: loaded.storePath,
-        };
+        const target = await sessionTarget(childKey);
         for (let index = 0; index < 2; index++) {
           const callId = `${depth}-${index}`;
           const messages = [
-            {
-              eventId: `${callId}:call`,
-              message: {
-                role: "assistant",
-                content: [
-                  {
-                    type: "toolCall",
-                    id: callId,
-                    name: "exec",
-                    arguments: { command: "rg rowDelta src/gateway" },
-                  },
-                ],
-                timestamp: Date.now(),
+            transcriptEvent(`${callId}:call`, "assistant", [
+              {
+                type: "toolCall",
+                id: callId,
+                name: "exec",
+                arguments: { command: "rg rowDelta src/gateway" },
               },
-            },
-            {
-              eventId: `${callId}:result`,
-              message: {
-                role: "toolResult",
+            ]),
+            transcriptEvent(
+              `${callId}:result`,
+              "toolResult",
+              textContent("Synthetic tool output.\n".repeat(300)),
+              {
                 toolCallId: callId,
                 toolName: "exec",
-                content: [{ type: "text", text: "Synthetic tool output.\n".repeat(300) }],
-                timestamp: Date.now(),
               },
-            },
+            ),
             {
               eventId: `${callId}:nested`,
               message: createNestedToolActivity({
@@ -248,9 +247,7 @@ test("capable and legacy sockets produce identical session payloads and consumer
                 toolCallId: `${callId}-nested`,
                 toolName: "read",
                 input: { path: "src/gateway/server-session-events.ts" },
-                result: {
-                  content: [{ type: "text", text: "Synthetic nested output.\n".repeat(300) }],
-                },
+                result: { content: textContent("Synthetic nested output.\n".repeat(300)) },
                 isError: false,
                 startedAt: Date.now(),
                 timestamp: Date.now(),
@@ -280,20 +277,18 @@ test("capable and legacy sockets produce identical session payloads and consumer
           }
         }
         const fresh = await loadGatewaySessionEntryReadOnlyAsync(childKey, { agentId: "main" });
-        if (!fresh.entry) {
-          throw new Error("Expected current child");
-        }
+        const entry = expectDefined(fresh.entry, "current child");
         replaceSessionEntrySync(
           { agentId: "main", sessionKey: childKey, storePath: fresh.storePath },
           {
-            ...fresh.entry,
+            ...entry,
             activitySummary: {
               version: 1,
               formatRevision: 3,
               text: "Verified the nested tool run and transport receipts.",
               updatedAt: Date.now(),
-              sessionId: fresh.entry.sessionId,
-              lifecycleRevision: fresh.entry.lifecycleRevision,
+              sessionId: entry.sessionId,
+              lifecycleRevision: entry.lifecycleRevision,
               generation: null,
               maxSeq: null,
               leafEntryId: null,
@@ -304,42 +299,19 @@ test("capable and legacy sockets produce identical session payloads and consumer
           },
         );
         for (let repeat = 0; repeat < 2; repeat++) {
-          await broadcastSessionActivitySummary(
-            { key: childKey, agentId: "main", storePath: fresh.storePath },
-            {
-              getSessionRowProjection: () => projection,
-              broadcast: kernel.gatewayRequestContext.broadcast,
-            },
-          );
+          await publishSummary({ ...target, storePath: fresh.storePath });
         }
       }
-      const leaf = await loadGatewaySessionEntryReadOnlyAsync(key, { agentId: "main" });
-      if (!leaf.entry) {
-        throw new Error("Expected leaf");
-      }
-      await persistSessionTranscriptTurn(
-        {
-          agentId: "main",
-          sessionKey: key,
-          sessionId: leaf.entry.sessionId,
-          storePath: leaf.storePath,
-        },
-        {
-          touchSessionEntry: true,
-          runId,
-          messages: [
-            {
-              eventId: `${runId}:reply`,
-              message: {
-                role: "assistant",
-                content: [{ type: "text", text: "Synthetic final reply." }],
-                stopReason: "stop",
-                timestamp: Date.now(),
-              },
-            },
-          ],
-        },
-      );
+      const leaf = await sessionTarget(key);
+      await persistSessionTranscriptTurn(leaf, {
+        touchSessionEntry: true,
+        runId,
+        messages: [
+          transcriptEvent(`${runId}:reply`, "assistant", textContent("Synthetic final reply."), {
+            stopReason: "stop",
+          }),
+        ],
+      });
       const queuedFinal = dispatcher.sendFinalReply({ text: "Synthetic final reply." });
       dispatcher.markComplete();
       await dispatcher.waitForIdle();
@@ -355,18 +327,17 @@ test("capable and legacy sockets produce identical session payloads and consumer
       dispatchFailure = error;
       throw error;
     } finally {
-      finish();
+      completed.resolve();
     }
   });
   // Both recipient projections must observe the same producer clock, as one publication does.
   const producerClock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
-  const sent = await rpcReq(capable.ws, "chat.send", {
+  await request(capable.ws, "chat.send", {
     sessionKey: key,
     message: "Synthetic controlled nested tool run.",
     idempotencyKey: runId,
   });
-  expect(sent.ok).toBe(true);
-  await completed;
+  await completed.promise;
   if (dispatchFailure !== undefined) {
     throw new Error("Session row proof dispatch failed", { cause: dispatchFailure });
   }
@@ -374,10 +345,8 @@ test("capable and legacy sockets produce identical session payloads and consumer
   expect(getActiveGatewayRootWorkCount()).toBe(0);
   await drain();
   producerClock.mockRestore();
-  const [encoded, baseline] = streams;
-  if (!encoded || !baseline) {
-    throw new Error("Expected paired socket streams");
-  }
+  const encoded = expectDefined(streams[0], "encoded stream");
+  const baseline = expectDefined(streams[1], "legacy stream");
   expect(encoded.length).toBeGreaterThan(20);
   expect(encoded).toHaveLength(baseline.length);
   const reconnect = vi.fn();
@@ -420,7 +389,6 @@ test("capable and legacy sockets produce identical session payloads and consumer
   }
   const { createSessionRowDeltaConsumers } =
     await import("../../ui/src/test-helpers/session-row-delta-consumers.ts");
-  const initialRows = initial.payload;
   // Receipt sampling belongs to each UI owner; both streams observe the same client clock.
   const clientClock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
   const consumers = await Promise.all(
@@ -432,17 +400,11 @@ test("capable and legacy sockets produce identical session payloads and consumer
   disposeConsumers = () => consumers.forEach((consumer) => consumer.dispose());
   let patches = 0;
   for (const [index, frame] of encoded.entries()) {
-    const original = baseline[index];
-    if (!original) {
-      throw new Error("Missing corresponding legacy frame");
-    }
+    const original = expectDefined(baseline[index], "corresponding legacy frame");
     patches += JSON.stringify(frame.payload).includes('"base":') ? 1 : 0;
     const decoded = decodeFrame(decoder, frame);
     expect(decoded.payload, `frame ${index} ${frame.event}`).toEqual(original.payload);
-    const rosterFrame = rosterFrames[index];
-    if (!rosterFrame) {
-      throw new Error("Missing corresponding roster frame");
-    }
+    const rosterFrame = expectDefined(rosterFrames[index], "corresponding roster frame");
     const rosterDecoded = decodeFrame(rosterDecoder, rosterFrame);
     const expectedPayload = { ...(decoded.payload as Record<string, unknown>) };
     if (frame.event === "session.message") {
@@ -506,46 +468,27 @@ test("capable and legacy sockets produce identical session payloads and consumer
     "sessions.messages.unsubscribe",
     { key },
   );
-  expect((await rpcReq(legacy.ws, "sessions.messages.unsubscribe", { key })).ok).toBe(true);
+  await request(legacy.ws, "sessions.messages.unsubscribe", { key });
   expect(await readRetention()).toEqual(retainedBeforeUnsubscribe);
-  const summaryTarget = await loadGatewaySessionEntryReadOnlyAsync(key, { agentId: "main" });
-  const publishRecap = () =>
-    broadcastSessionActivitySummary(
-      { key, agentId: "main", storePath: summaryTarget.storePath },
-      {
-        getSessionRowProjection: () => projection,
-        broadcast: kernel.gatewayRequestContext.broadcast,
-      },
-    );
+  const summaryTarget = await sessionTarget(key);
+  const publishRecap = () => publishSummary(summaryTarget);
   await publishRecap();
   await drain();
-  const afterUnsubscribe = encoded.at(-1);
-  if (!afterUnsubscribe) {
-    throw new Error("Expected warm recap after unsubscribe");
-  }
-  expect(afterUnsubscribe.payload).toHaveProperty("session.base");
-  expect(decodeFrame(decoder, afterUnsubscribe).payload).toEqual(baseline.at(-1)?.payload);
+  expectSessionRowFrame(encoded.at(-1), baseline.at(-1), decoder, "base");
   await closeSessionRowSocket(roster.ws);
   await closeSessionRowSocket(capable.ws);
   const reopened = await harness.openClient({
     caps: ["session-scoped-events", "session-row-deltas"],
   });
   const reopenedFrames = collectSessionRowFrames(reopened.ws);
-  expect((await rpcReq(reopened.ws, "sessions.subscribe", {})).ok).toBe(true);
+  await request(reopened.ws, "sessions.subscribe");
   const reopenedDecoder = new GatewayChatEvents(reconnect);
   await publishRecap();
   await drain([reopened.ws, legacy.ws]);
-  expectFullSessionRowFrame(reopenedFrames.at(-1), baseline.at(-1), reopenedDecoder);
+  expectSessionRowFrame(reopenedFrames.at(-1), baseline.at(-1), reopenedDecoder, "full");
   await publishRecap();
   await drain([reopened.ws, legacy.ws]);
-  const reverseOrderWarmFrame = reopenedFrames.at(-1);
-  if (!reverseOrderWarmFrame) {
-    throw new Error("Expected warm frame with legacy recipient first");
-  }
-  expect(reverseOrderWarmFrame.payload).toHaveProperty("session.base");
-  expect(decodeFrame(reopenedDecoder, reverseOrderWarmFrame).payload).toEqual(
-    baseline.at(-1)?.payload,
-  );
+  expectSessionRowFrame(reopenedFrames.at(-1), baseline.at(-1), reopenedDecoder, "base");
   expect(reconnect).not.toHaveBeenCalled();
   await Promise.all([closeSessionRowSocket(reopened.ws), closeSessionRowSocket(legacy.ws)]);
   await vi.waitFor(async () =>
