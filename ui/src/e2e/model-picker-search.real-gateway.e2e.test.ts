@@ -27,9 +27,6 @@ const models = [
   "elm",
   "forest",
   "granite",
-  "harbor",
-  "iris",
-  "juniper",
 ].map((id) => ({ id, name: id }));
 let owner: OpenClawTestInstance;
 const suite = createControlUiE2eSuite({
@@ -129,21 +126,18 @@ suite.define(() => {
                 frame.type === "req" &&
                 frame.method !== "connect" &&
                 typeof frame.id === "string" &&
-                typeof frame.method === "string"
+                typeof frame.method === "string" &&
+                [
+                  "config.patch",
+                  "config.set",
+                  "cron.add",
+                  "cron.update",
+                  "cron.run",
+                  "cron.scratch.set",
+                  "sessions.patch",
+                ].includes(frame.method)
               ) {
-                if (
-                  [
-                    "config.patch",
-                    "config.set",
-                    "cron.add",
-                    "cron.update",
-                    "cron.run",
-                    "cron.scratch.set",
-                    "sessions.patch",
-                  ].includes(frame.method)
-                ) {
-                  mutations.push(frame.method);
-                }
+                mutations.push(frame.method);
               }
             });
           });
@@ -287,18 +281,12 @@ suite.define(() => {
           await search.fill("no-matches-741");
           const phone = await capture("draft-phone-no-results", picker);
           expect(phone.menu.scrollX).toBe(0);
-          expect(phone.triggerBounds.x).toBeGreaterThanOrEqual(0);
-          expect(phone.triggerBounds.x + phone.triggerBounds.width).toBeLessThanOrEqual(
-            phone.menu.viewportWidth,
-          );
-          expect(phone.triggerBounds.y).toBeGreaterThanOrEqual(0);
-          expect(phone.triggerBounds.y + phone.triggerBounds.height).toBeLessThanOrEqual(
-            phone.menu.viewportHeight,
-          );
-          expect(phone.menu.x).toBeGreaterThanOrEqual(0);
-          expect(phone.menu.x + phone.menu.width).toBeLessThanOrEqual(phone.menu.viewportWidth);
-          expect(phone.menu.y).toBeGreaterThanOrEqual(0);
-          expect(phone.menu.y + phone.menu.height).toBeLessThanOrEqual(phone.menu.viewportHeight);
+          for (const box of [phone.triggerBounds, phone.menu]) {
+            expect(box.x).toBeGreaterThanOrEqual(0);
+            expect(box.x + box.width).toBeLessThanOrEqual(phone.menu.viewportWidth);
+            expect(box.y).toBeGreaterThanOrEqual(0);
+            expect(box.y + box.height).toBeLessThanOrEqual(phone.menu.viewportHeight);
+          }
           await press("Escape");
           expect(await page.locator("#cron-name").inputValue()).toBe("Keep this draft");
           expect(await page.locator("#cron-payload-text").inputValue()).toBe(

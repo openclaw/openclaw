@@ -1,9 +1,4 @@
-// Renders detected-Codex activation responses through the real Model Setup UI.
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import * as setup from "./model-setup-fixtures.test-support.ts";
 import { installSetupGateway, openModelSetup } from "./model-setup.test-support.ts";
@@ -17,12 +12,6 @@ suite.define(() => {
   it.each(["before", "after"] as const)(
     "renders detected Codex activation %s guided sign-in",
     async (state) => {
-      const artifacts = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR
-        ? createControlUiE2eArtifactDir(
-            "codex-sign-in-" + state,
-            process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR,
-          )
-        : undefined;
       await suite.withPage(
         setup.setupContext({
           viewport: { width: 1280, height: 900 },
@@ -57,21 +46,16 @@ suite.define(() => {
                         setup.runningStep("scope", "note", "Scope: System / agent", {
                           executor: "client",
                         }),
-                        setup.runningStep(
-                          "device-code",
-                          "progress",
-                          "Sign in to connect OpenAI to OpenClaw.",
-                          {
-                            executor: "gateway",
-                            title: "OpenAI device code",
-                            externalUrl: "https://example.com/device",
-                            deviceCode: {
-                              code: "DEMO-1234",
-                              expiresInMinutes: 15,
-                              message: "Enter this one-time code on the sign-in page.",
-                            },
+                        setup.runningStep("device-code", "progress", "Sign in to OpenAI.", {
+                          executor: "gateway",
+                          title: "OpenAI device code",
+                          externalUrl: "https://example.com/device",
+                          deviceCode: {
+                            code: "DEMO-1234",
+                            expiresInMinutes: 15,
+                            message: "Enter this one-time code on the sign-in page.",
                           },
-                        ),
+                        }),
                         setup.activated("openai/default"),
                       ],
                     },
@@ -97,12 +81,6 @@ suite.define(() => {
             await page
               .getByText('No API key found for provider "openai".', { exact: true })
               .waitFor();
-          }
-          if (artifacts) {
-            await writeFile(
-              path.join(artifacts, state + ".png"),
-              await takeControlUiViewportScreenshot(page, page.locator(".model-setup-wizard"), []),
-            );
           }
           if (state === "after") {
             await gateway.resolveDeferred("wizard.next");
