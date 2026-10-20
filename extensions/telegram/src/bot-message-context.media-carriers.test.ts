@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
 
+// mock-isolation: keep model-catalog loading out of deterministic media-carrier fixtures.
 vi.mock("./sticker-vision.runtime.js", () => ({
   resolveStickerVisionSupportRuntime: vi.fn(async () => false),
 }));
