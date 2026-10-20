@@ -1,5 +1,4 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import * as ttsRuntime from "../../tts/tts.js";
@@ -8,12 +7,10 @@ import { createTtsTool } from "./tts-tool.js";
 
 let textToSpeechSpy: ReturnType<typeof vi.spyOn>;
 
-const requireRecord = createRequireRecord("object", "expected-label");
 const speechResult = {
   success: true,
   audioPath: "/tmp/reply.opus",
   provider: "test",
-  voiceCompatible: true,
 };
 
 async function render(text: string) {
@@ -41,9 +38,8 @@ describe("createTtsTool", () => {
     const result = await createTtsTool().execute("call-1", { text: spoken });
 
     expect(result.content).toEqual([{ type: "text", text: `(spoken) ${spoken}` }]);
-    const details = requireRecord(result.details, "TTS result details");
-    expect(details).toMatchObject({ audioPath: "/tmp/reply.opus", provider: "test" });
-    expect(requireRecord(details.media, "TTS media details")).toEqual({
+    expect(result.details).toMatchObject({ audioPath: "/tmp/reply.opus", provider: "test" });
+    expect(result.details).toHaveProperty("media", {
       mediaUrl: "/tmp/reply.opus",
       trustedLocalMedia: true,
       audioAsVoice: true,
@@ -62,7 +58,7 @@ describe("createTtsTool", () => {
       agentId: "voice-agent",
       accountId: "feishu-main",
     });
-    expect(requireRecord(result.details, "TTS result details").timeoutMs).toBe(12_345);
+    expect(result.details).toMatchObject({ timeoutMs: 12_345 });
   });
 
   it("rejects fractional timeout before calling speech generation", async () => {

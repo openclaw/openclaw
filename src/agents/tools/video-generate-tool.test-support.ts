@@ -3,6 +3,7 @@ import { resolveInstalledPluginIndexPolicyHash } from "../../plugins/installed-p
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import { createEmptyPluginMetadataSnapshot } from "../../plugins/plugin-metadata-empty.test-support.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { createPluginManifestRecordFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { buildDeclaredProviderOwnerIndex } from "../../plugins/provider-owner-index.js";
 
 export function createVideoProviderSnapshot(params: {
@@ -14,33 +15,22 @@ export function createVideoProviderSnapshot(params: {
   videoPluginCount?: number;
   workspaceDir?: string;
 }): PluginMetadataSnapshot {
+  const { id, origin, referenceAudioInputs } = params;
   const policyHash = resolveInstalledPluginIndexPolicyHash(params.config);
-  const providerPlugin: PluginManifestRecord = {
-    id: params.id,
-    origin: params.origin,
-    rootDir: `/plugins/${params.id}`,
-    source: `/plugins/${params.id}/index.js`,
-    manifestPath: `/plugins/${params.id}/openclaw.plugin.json`,
-    channels: [],
-    providers: [],
-    cliBackends: [],
-    skills: [],
-    hooks: [],
-    contracts: { videoGenerationProviders: [params.id] },
+  const providerPlugin = createPluginManifestRecordFixture({
+    id,
+    origin,
+    rootDir: `/plugins/${id}`,
     videoGenerationProviderMetadata:
-      params.referenceAudioInputs === undefined
-        ? undefined
-        : {
-            [params.id]: { referenceAudioInputs: params.referenceAudioInputs },
-          },
-  };
+      referenceAudioInputs === undefined ? undefined : { [id]: { referenceAudioInputs } },
+  });
   const plugins = [
     ...Array.from({ length: params.videoPluginCount ?? 1 }, (_, index) => {
-      const id = index === 0 ? params.id : `${params.id}-${index}`;
+      const pluginId = index === 0 ? id : `${id}-${index}`;
       return {
         ...providerPlugin,
-        id,
-        contracts: { videoGenerationProviders: [id] },
+        id: pluginId,
+        contracts: { videoGenerationProviders: [pluginId] },
       };
     }),
     ...Array.from({ length: params.unrelatedPluginCount ?? 0 }, (_, index) => ({

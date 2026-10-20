@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "../../infra/net/fetch-guard.js";
 import {
@@ -25,13 +26,8 @@ vi.mock("../../infra/net/fetch-guard.js", () => {
   };
 });
 
-function firstFetchCall() {
-  const call = vi.mocked(fetchWithSsrFGuard).mock.calls[0]?.[0];
-  if (!call || typeof call !== "object") {
-    throw new Error("Expected guarded fetch call");
-  }
-  return call;
-}
+const firstFetchCall = () =>
+  expectDefined(vi.mocked(fetchWithSsrFGuard).mock.calls[0]?.[0], "guarded fetch call");
 
 const strictFetch = (params: Parameters<typeof withStrictWebToolsEndpoint>[0]) =>
   withStrictWebToolsEndpoint(params, async () => undefined);
@@ -81,26 +77,20 @@ describe("web-guarded-fetch", () => {
     expect(firstFetchCall().policy).toBeUndefined();
   });
 
-  it("normalizes string timeouts before guarded fetch dispatch", async () => {
-    await strictFetch({ url: "https://example.com", timeoutSeconds: "7" as never });
-    expect(firstFetchCall().timeoutMs).toBe(7000);
-
-    vi.clearAllMocks();
-
-    await strictFetch({
-      url: "https://example.com",
-      timeoutMs: "2500" as never,
-      timeoutSeconds: "7" as never,
-    });
-    expect(firstFetchCall().timeoutMs).toBe(2500);
+  it.each([
+    { timeouts: { timeoutSeconds: "7" as never }, expected: 7000 },
+    { timeouts: { timeoutMs: "2500" as never, timeoutSeconds: "7" as never }, expected: 2500 },
+  ])("normalizes string timeouts to $expected milliseconds", async ({ timeouts, expected }) => {
+    await strictFetch({ url: "https://example.com", ...timeouts });
+    expect(firstFetchCall().timeoutMs).toBe(expected);
   });
 
-  it("rejects malformed timeouts before guarded fetch dispatch", async () => {
-    await expect(
-      strictFetch({ url: "https://example.com", timeoutMs: "2.5" as never }),
-    ).rejects.toThrow("timeoutMs must be a positive integer");
-    await expect(strictFetch({ url: "https://example.com", timeoutSeconds: -1 })).rejects.toThrow(
-      "timeoutSeconds must be a positive integer",
+  it.each([
+    { timeouts: { timeoutMs: "2.5" as never }, field: "timeoutMs" },
+    { timeouts: { timeoutSeconds: -1 }, field: "timeoutSeconds" },
+  ])("rejects malformed $field before dispatch", async ({ timeouts, field }) => {
+    await expect(strictFetch({ url: "https://example.com", ...timeouts })).rejects.toThrow(
+      `${field} must be a positive integer`,
     );
     expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
   });

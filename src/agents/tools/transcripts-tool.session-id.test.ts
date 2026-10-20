@@ -9,7 +9,6 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { deriveMeetingTranscriptSessionColumns } from "../../transcripts/store-columns.js";
 import { summarizeTranscripts } from "../../transcripts/summary.js";
 import { createTranscriptsTool } from "./transcripts-tool.js";
 import {
@@ -19,6 +18,10 @@ import {
 
 const testState = useTranscriptTestState();
 const note = "Keep the captured notes.";
+async function reopenDatabase() {
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
+}
 
 function createHarness() {
   const { stateDir, store } = testState();
@@ -33,27 +36,21 @@ function createHarness() {
   return { databaseOptions, store, tool };
 }
 
-async function importTranscript(harness: ReturnType<typeof createHarness>, sessionId: string) {
-  const result = await harness.tool.execute("import", {
-    action: "import",
-    sessionId,
-    providerId: "room-audio",
-    transcript: note,
-  });
-  const handle = asOptionalRecord(result.details)?.sessionId;
-  expect(typeof handle).toBe("string");
-  expect(asOptionalRecord(result.details)?.summaryExportError).toBeUndefined();
-}
-
 describe("transcripts bounded export names", () => {
   it("separates IDs with identical safe prefixes and different discarded punctuation", async () => {
     const harness = createHarness();
     const ids = ["?", "!"].map((suffix) => "notes-" + "x".repeat(900) + suffix);
     for (const sessionId of ids) {
-      await importTranscript(harness, sessionId);
+      const result = await harness.tool.execute("import", {
+        action: "import",
+        sessionId,
+        providerId: "room-audio",
+        transcript: note,
+      });
+      expect(typeof asOptionalRecord(result.details)?.sessionId).toBe("string");
+      expect(asOptionalRecord(result.details)?.summaryExportError).toBeUndefined();
     }
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
+    await reopenDatabase();
     const entries = await harness.store.listSessionEntries();
     expect(new Set(entries.map((entry) => entry.selector)).size).toBe(2);
     expect(entries.every((entry) => path.basename(entry.sessionDir).startsWith("notes-"))).toBe(
@@ -77,12 +74,8 @@ describe("transcripts bounded export names", () => {
     const selector = `2026-07-01/${sessionId}`;
     await store.listSessionEntries();
     const { db } = openOpenClawStateDatabase(databaseOptions);
-    const queries =
-      getNodeSqliteKysely<Pick<DB, "meeting_transcript_sessions" | "meeting_transcript_summaries">>(
-        db,
-      );
+    const queries = getNodeSqliteKysely<DB>(db);
     // Pre-fix admission could persist an overlong projection before an export failed.
-    const sourceJson = JSON.stringify(session.source);
     executeSqliteQuerySync(
       db,
       queries.insertInto("meeting_transcript_sessions").values({
@@ -92,14 +85,7 @@ describe("transcripts bounded export names", () => {
         session_slug: sessionId,
         export_key: selector,
         provider_id: session.source.providerId,
-        source_json: sourceJson,
-        ...deriveMeetingTranscriptSessionColumns(sourceJson, null),
-        title: null,
-        stopped_at: null,
-        metadata_json: null,
-        export_manifest_json: "{}",
-        export_pending_json: "[]",
-        next_utterance_seq: 0,
+        source_json: JSON.stringify(session.source),
         created_at_ms: 0,
         updated_at_ms: 0,
       }),
@@ -115,18 +101,12 @@ describe("transcripts bounded export names", () => {
         .set({ markdown })
         .where("session_id", "=", sessionId),
     );
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
+    await reopenDatabase();
 
     await store.writeSession({ ...session, stoppedAt: "2026-07-01T11:00:00.000Z" });
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
+    await reopenDatabase();
     const entry = await store.readSessionEntry(sessionId);
-    expect(entry?.session).toMatchObject({
-      sessionId,
-      startedAt: session.startedAt,
-      stoppedAt: "2026-07-01T11:00:00.000Z",
-    });
+    expect(entry?.session).toMatchObject({ ...session, stoppedAt: "2026-07-01T11:00:00.000Z" });
     expect(entry!.selector).toBe(`2026-07-01/${path.basename(entry!.sessionDir)}`);
     expect((await store.readSession(entry!.selector))?.sessionId).toBe(sessionId);
     expect(await store.readSummary(session)).toEqual({ summary, markdown });
@@ -139,7 +119,7 @@ describe("transcripts bounded export names", () => {
     const reopened = openOpenClawStateDatabase(databaseOptions).db;
     const row = executeSqliteQuerySync(
       reopened,
-      getNodeSqliteKysely<Pick<DB, "meeting_transcript_sessions">>(reopened)
+      getNodeSqliteKysely<DB>(reopened)
         .selectFrom("meeting_transcript_sessions")
         .select(["session_slug", "export_key"])
         .where("session_id", "=", sessionId),
