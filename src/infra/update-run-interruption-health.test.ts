@@ -17,7 +17,8 @@ vi.mock("../cli/daemon-cli/restart-health-probe.js", () => ({
   resolveGatewayRestartProbeContext: probes.context,
   waitForGatewayHttpReadiness: probes.http,
 }));
-vi.mock("../cli/daemon-cli/restart-health.js", () => ({
+vi.mock("../cli/daemon-cli/restart-health.js", async (original) => ({
+  ...(await original<typeof import("../cli/daemon-cli/restart-health.js")>()),
   waitForGatewayHealthyRestart: probes.wait,
 }));
 vi.mock("../config/paths.js", () => ({ resolveGatewayPort: () => 18789 }));
