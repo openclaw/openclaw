@@ -1,14 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
 import type { CostDailyEntry } from "./types.ts";
 import { dailyEntry } from "./usage-chart.test-support.ts";
 import { renderUsageHeatmap } from "./view-heatmap.tsx";
+import { mountView } from "./view-render.test-support.ts";
 
 function mountHeatmap(daily: CostDailyEntry[], start: string, end: string) {
-  const { container } = mountSolid(() => renderUsageHeatmap(daily, start, end));
-  flush();
-  return container;
+  return mountView(() => renderUsageHeatmap(daily, start, end)).container;
 }
 
 describe("renderUsageHeatmap", () => {

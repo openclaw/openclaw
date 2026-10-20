@@ -1,9 +1,8 @@
 import { expect, it, vi } from "vitest";
 import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-usage-totals.js";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
 import { selectUsageExport } from "./export-menu.test-support.ts";
-import type { UsageProps } from "./types.ts";
+import type { UsageSessionEntry } from "./types.ts";
+import { mountView, texts } from "./view-render.test-support.ts";
 import { projectUsageData, createUsageProps, usageSession } from "./view.test-support.ts";
 import { renderUsage } from "./view.tsx";
 
@@ -33,72 +32,55 @@ function creatorSession(id: string, multiplier: number) {
   };
 }
 
-function mountUsage(props: UsageProps) {
-  const { container } = mountSolid(() => renderUsage(props));
-  flush();
-  return container;
+function mountSessions(sessions: UsageSessionEntry[], limit: number, selectedDays?: string[]) {
+  const base = createUsageProps();
+  const projected = projectUsageData(sessions, selectedDays ? { selectedDays } : undefined);
+  const onExportJson = vi.fn();
+  const onExportCsv = vi.fn();
+  const props = {
+    ...base,
+    data: { ...base.data, ...projected, sessions: projected.sessions.slice(0, limit) },
+    filters: selectedDays ? { ...base.filters, endDate: "2026-05-15", selectedDays } : base.filters,
+    callbacks: {
+      ...base.callbacks,
+      display: { ...base.callbacks.display, onExportJson, onExportCsv },
+    },
+  };
+  return { ...mountView(() => renderUsage(props)), onExportJson, onExportCsv };
 }
 
+const creatorCells = (tokens: string, cost: string) => [tokens, cost, "1"];
+
 it.each([
-  { selectedDays: ["2026-05-14"], tokens: "300", cost: "$3.00", costs: [1, 2] },
+  {
+    selectedDays: ["2026-05-14"],
+    metrics: ["300", "$3.00", "2"],
+    rows: [creatorCells("200", "$2.00"), creatorCells("100", "$1.00")],
+  },
   {
     selectedDays: ["2026-05-14", "2026-05-15"],
-    tokens: "3.0K",
-    cost: "$30.00",
-    costs: [10, 20],
+    metrics: ["3.0K", "$30.00", "2"],
+    rows: [creatorCells("2.0K", "$20.00"), creatorCells("1.0K", "$10.00")],
   },
 ])(
   "keeps creators beyond the visible session cap for $selectedDays",
-  async ({ selectedDays, tokens, cost, costs }) => {
-    const base = createUsageProps();
+  async ({ selectedDays, metrics, rows }) => {
     const sessions = [creatorSession("Alex", 1), creatorSession("Jordan", 2)];
-    const onExportJson = vi.fn();
-    const projected = projectUsageData(sessions, { selectedDays });
-    const container = mountUsage({
-      ...base,
-      data: {
-        ...base.data,
-        ...projected,
-        sessions: projected.sessions.slice(0, 1),
-      },
-      filters: { ...base.filters, endDate: "2026-05-15", selectedDays },
-      callbacks: { ...base.callbacks, display: { ...base.callbacks.display, onExportJson } },
-    });
+    const { container, onExportJson } = mountSessions(sessions, 1, selectedDays);
     expect(container.querySelector(".usage-creators-table")?.textContent).toContain("Jordan");
-    expect(container.querySelectorAll(".usage-creators-table tbody tr")).toHaveLength(2);
     expect(
       [...container.querySelectorAll(".usage-creators-table tbody tr")].map((row) =>
-        [...row.querySelectorAll("td")].map((cell) => cell.textContent?.trim()),
+        texts(row, "td"),
       ),
-    ).toEqual(
-      costs
-        .toReversed()
-        .map((value) => [
-          value < 10 ? String(value * 100) : `${value / 10}.0K`,
-          `$${value.toFixed(2)}`,
-          "1",
-        ]),
-    );
-    expect(
-      Array.from(
-        container.querySelectorAll(".usage-metric-badge strong"),
-        (node) => node.textContent,
-      ),
-    ).toEqual([tokens, cost, "2"]);
+    ).toEqual(rows);
+    expect(texts(container, ".usage-metric-badge strong", false)).toEqual(metrics);
     await selectUsageExport(container.querySelector(".usage-export-menu")!, "json");
     expect(onExportJson).toHaveBeenCalledWith();
   },
 );
 
 it("exports all matched sessions even when the current roster page is empty", async () => {
-  const base = createUsageProps();
-  const session = creatorSession("Alex", 1);
-  const onExportCsv = vi.fn();
-  const container = mountUsage({
-    ...base,
-    data: { ...base.data, ...projectUsageData([session]), sessions: [] },
-    callbacks: { ...base.callbacks, display: { ...base.callbacks.display, onExportCsv } },
-  });
+  const { container, onExportCsv } = mountSessions([creatorSession("Alex", 1)], 0);
   expect(container.querySelectorAll(".session-bar-row")).toHaveLength(0);
   expect(container.querySelectorAll(".usage-metric-badge strong")[2]?.textContent).toBe("1");
   const menu = container.querySelector(".usage-export-menu")!;

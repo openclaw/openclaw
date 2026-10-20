@@ -2,9 +2,14 @@ import { createSignal } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-usage-totals.js";
 import type { SessionUsageCreator } from "../../../../src/shared/usage-types.js";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { UsageCreatorFilter, UsageCreators } from "./view-creators.tsx";
+import { mountView, texts } from "./view-render.test-support.ts";
+
+function human(id: string, label: string, profile = false): SessionUsageCreator {
+  const identity = profile ? { type: "profile" as const, id } : undefined;
+  return { key: `profile:opaque-${id}`, actor: { type: "human", id, label, identity } };
+}
 
 function group(creator: SessionUsageCreator, totalTokens = 0, totalCost = 0, sessionCount = 2) {
   return {
@@ -22,22 +27,11 @@ function selectIdentity(select: HTMLSelectElement, value: string) {
 }
 
 it("keeps all creator choices after filtering and passes opaque identities through row and select actions", () => {
-  const alex: SessionUsageCreator = {
-    key: "profile:opaque-alex",
-    actor: {
-      type: "human",
-      id: "alex",
-      identity: { type: "profile", id: "alex" },
-      label: "Alex Morgan",
-    },
-  };
-  const jordan: SessionUsageCreator = {
-    key: "profile:opaque-jordan",
-    actor: { type: "human", id: "jordan", label: "Jordan Lee" },
-  };
+  const alex = human("alex", "Alex Morgan", true);
+  const jordan = human("jordan", "Jordan Lee");
   const onSelect = vi.fn<(key: string | null) => void>();
   const [options, setOptions] = createSignal<SessionUsageCreator[]>([alex, jordan]);
-  const { container } = mountSolid(() => [
+  const { container } = mountView(() => [
     UsageCreatorFilter({
       get options() {
         return options();
@@ -52,21 +46,13 @@ it("keeps all creator choices after filtering and passes opaque identities throu
       onSelect,
     }),
   ]);
-  flush();
-
   const select = container.querySelector("select")!;
   expect(select.getAttribute("aria-label")).toBe("Filter by session creator");
   expect(select.value).toBe(alex.key);
-  expect(Array.from(select.options, (option) => option.textContent?.trim())).toEqual([
-    "All identities",
-    "Alex Morgan",
-    "Jordan Lee",
-  ]);
+  expect(texts(select, "option")).toEqual(["All identities", "Alex Morgan", "Jordan Lee"]);
   expect(container.textContent).not.toContain("opaque-");
   const row = container.querySelector("tbody tr")!;
-  expect(row.textContent).toContain("1.2K");
-  expect(row.textContent).toContain("$2.50");
-  expect(row.lastElementChild?.textContent?.trim()).toBe("3");
+  expect(texts(row, "td")).toEqual(["1.2K", "$2.50", "3"]);
   const rowButton = row.querySelector("button")!;
   expect(rowButton.getAttribute("aria-pressed")).toBe("true");
   rowButton.click();
@@ -95,7 +81,7 @@ it.each([
   { actor: { type: "system" as const }, label: "System" },
 ])("labels $label attribution explicitly without displaying the filter key", ({ actor, label }) => {
   const onSelect = vi.fn<(key: string | null) => void>();
-  const { container } = mountSolid(() =>
+  const { container } = mountView(() =>
     UsageCreators({
       groups: [group({ key: "unattributed:opaque-key", actor })],
       selectedKey: null,
@@ -103,8 +89,6 @@ it.each([
       onSelect,
     }),
   );
-  flush();
-
   const button = container.querySelector<HTMLButtonElement>("tbody button")!;
   expect(button.textContent).toContain(label);
   expect(container.textContent).not.toContain("opaque-key");

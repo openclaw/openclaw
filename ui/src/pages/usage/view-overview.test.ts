@@ -1,30 +1,21 @@
 import { createSignal } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
-import type { UsageAggregates, UsageProps, UsageSessionEntry, UsageTotals } from "./types.ts";
+import type { UsageAggregates, UsageSessionEntry, UsageTotals } from "./types.ts";
 import { totals, dailyEntry } from "./usage-chart.test-support.ts";
 import { renderCostWindowComparison, renderFilterChips, UsageInsights } from "./view-overview.tsx";
+import { mountView, text, texts, usageState } from "./view-render.test-support.ts";
 import { SessionsCard } from "./view-sessions-card.tsx";
-import { createUsageOverview, createUsageProps } from "./view.test-support.ts";
+import {
+  buildAggregatesFromSessions,
+  createUsageOverview,
+  createUsageProps,
+} from "./view.test-support.ts";
 
-const aggregates = {
-  messages: { total: 4, user: 2, assistant: 2, toolCalls: 0, toolResults: 0, errors: 0 },
-  tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
-  byModel: [],
-  byProvider: [],
-  byAgent: [],
-  byChannel: [],
-  daily: [],
-} as unknown as UsageAggregates;
-
-function mountView(render: Parameters<typeof mountSolid>[0]) {
-  const view = mountSolid(render);
-  flush();
-  return view;
-}
+const aggregates = buildAggregatesFromSessions([]);
+Object.assign(aggregates.messages, { total: 4, user: 2, assistant: 2 });
 
 function mountInsights(currentTotals: () => UsageTotals, currentAggregates: () => UsageAggregates) {
   return mountView(() =>
@@ -45,27 +36,6 @@ function mountInsights(currentTotals: () => UsageTotals, currentAggregates: () =
   );
 }
 
-function sessionDisplay() {
-  const base = createUsageProps();
-  const [display, setDisplay] = createSignal(base.display);
-  const onChange = vi.fn((patch: Partial<UsageProps["display"]>) =>
-    setDisplay((current) => ({ ...current, ...patch })),
-  );
-  const usage = {
-    ...base,
-    get display() {
-      return display();
-    },
-    callbacks: { ...base.callbacks, display: { ...base.callbacks.display, onChange } },
-  };
-  return { base, usage, setDisplay, onChange };
-}
-
-afterEach(() => {
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
-});
-
 describe("UsageInsights", () => {
   it("renders overview hints as focusable tooltip anchors and identifies agents in the breakdown", async () => {
     const [currentTotals, setCurrentTotals] = createSignal(totals);
@@ -83,10 +53,8 @@ describe("UsageInsights", () => {
     const cacheCard = container
       .querySelector("#usage-summary-hint-cache-hit-rate")
       ?.closest(".usage-summary-card");
-    expect(cacheCard?.querySelector(".usage-summary-value")?.textContent).toBe("30.0%");
-    expect(cacheCard?.querySelector(".usage-summary-sub")?.textContent).toBe(
-      "300 cached · 1.0K prompt",
-    );
+    expect(text(cacheCard, ".usage-summary-value")).toBe("30.0%");
+    expect(text(cacheCard, ".usage-summary-sub")).toBe("300 cached · 1.0K prompt");
     const tooltips = [...container.querySelectorAll("openclaw-tooltip")];
     expect(buttons).toHaveLength(9);
     expect(tooltips).toHaveLength(9);
@@ -129,9 +97,7 @@ describe("UsageInsights", () => {
     expect(button.closest("openclaw-tooltip")).toBe(tooltip);
     expect(tooltip.shadowRoot?.querySelector(".tooltip-surface[popover]")).toBe(popup);
     expect(document.activeElement).toBe(button);
-    expect(
-      button.closest(".usage-summary-card")?.querySelector(".usage-summary-value")?.textContent,
-    ).toBe("8");
+    expect(text(button.closest(".usage-summary-card"), ".usage-summary-value")).toBe("8");
   });
   it("hides cost shares while the overall total is a lower bound", () => {
     const complete = { ...totals, totalCost: 10 };
@@ -154,59 +120,55 @@ describe("UsageInsights", () => {
     const provider = [...container.querySelectorAll(".usage-list-item")].find((item) =>
       item.textContent?.includes("ollama"),
     );
-    expect(provider?.querySelector(".usage-list-value")?.textContent).toContain("Unpriced");
+    expect(text(provider, ".usage-list-value")).toContain("Unpriced");
     expect(provider?.textContent).not.toContain("$0.00");
   });
 });
 
-describe("usage overview presentation owners", () => {
-  it("preserves filter-chip order, session-only title, labels, and clear callbacks", () => {
-    const onClearDays = vi.fn();
-    const onClearHours = vi.fn();
-    const onClearSessions = vi.fn();
-    const props = createUsageProps();
-    Object.assign(props.filters, {
-      selectedDays: ["2026-08-01"],
-      selectedHours: [8],
-      selectedSessions: ["agent:main:usage"],
-    });
-    Object.assign(props.callbacks.filters, { onClearDays, onClearHours, onClearSessions });
-    const { container } = mountView(() =>
-      renderFilterChips(
-        [{ key: "agent:main:usage", label: "Usage thread" } as UsageSessionEntry],
-        props,
-      ),
-    );
-
-    const chips = [...container.querySelectorAll<HTMLElement>(".filter-chip")];
-    expect(chips.map((chip) => chip.querySelector("button")?.getAttribute("aria-label"))).toEqual([
-      "Remove days filter",
-      "Remove hours filter",
-      "Remove session filter",
-    ]);
-    expect(chips.map((chip) => chip.getAttribute("title"))).toEqual([null, null, "Usage thread"]);
-    chips.forEach((chip) => chip.querySelector<HTMLButtonElement>("button")?.click());
-    expect(onClearDays).toHaveBeenCalledOnce();
-    expect(onClearHours).toHaveBeenCalledOnce();
-    expect(onClearSessions).toHaveBeenCalledOnce();
+it("preserves filter-chip order, session-only title, labels, and clear callbacks", () => {
+  const onClearDays = vi.fn();
+  const onClearHours = vi.fn();
+  const onClearSessions = vi.fn();
+  const props = createUsageProps();
+  Object.assign(props.filters, {
+    selectedDays: ["2026-08-01"],
+    selectedHours: [8],
+    selectedSessions: ["agent:main:usage"],
   });
+  Object.assign(props.callbacks.filters, { onClearDays, onClearHours, onClearSessions });
+  const { container } = mountView(() =>
+    renderFilterChips(
+      [{ key: "agent:main:usage", label: "Usage thread" } as UsageSessionEntry],
+      props,
+    ),
+  );
+
+  const chips = [...container.querySelectorAll<HTMLElement>(".filter-chip")];
+  expect(chips.map((chip) => chip.querySelector("button")?.getAttribute("aria-label"))).toEqual([
+    "Remove days filter",
+    "Remove hours filter",
+    "Remove session filter",
+  ]);
+  expect(chips.map((chip) => chip.getAttribute("title"))).toEqual([null, null, "Usage thread"]);
+  chips.forEach((chip) => chip.querySelector<HTMLButtonElement>("button")?.click());
+  expect(onClearDays).toHaveBeenCalledOnce();
+  expect(onClearHours).toHaveBeenCalledOnce();
+  expect(onClearSessions).toHaveBeenCalledOnce();
 });
 
-describe("renderCostWindowComparison", () => {
-  it("preserves sub-cent totals and daily averages", () => {
-    const { container } = mountView(() =>
-      renderCostWindowComparison(
-        [dailyEntry("2026-07-01", 300, 0.003)],
-        "2026-06-02",
-        "2026-07-01",
-        "local",
-      ),
-    );
+it("cost windows preserve sub-cent totals and daily averages", () => {
+  const { container } = mountView(() =>
+    renderCostWindowComparison(
+      [dailyEntry("2026-07-01", 300, 0.003)],
+      "2026-06-02",
+      "2026-07-01",
+      "local",
+    ),
+  );
 
-    const range = container.querySelector(".cost-window-card--range");
-    expect(range?.querySelector(".cost-window-card__value")?.textContent?.trim()).toBe("$0.0030");
-    expect(range?.querySelector(".cost-window-card__meta")?.textContent).toContain("$0.0001 / day");
-  });
+  const range = container.querySelector(".cost-window-card--range");
+  expect(text(range, ".cost-window-card__value")?.trim()).toBe("$0.0030");
+  expect(text(range, ".cost-window-card__meta")).toContain("$0.0001 / day");
 });
 
 describe("SessionsCard", () => {
@@ -218,7 +180,7 @@ describe("SessionsCard", () => {
   });
 
   it("exposes the selected session view to assistive technology", () => {
-    const { usage, onChange } = sessionDisplay();
+    const { usage, onChange } = usageState();
     const view = mountView(() => SessionsCard({ sessions: [], usage, totalSessions: 0 }));
 
     const all = view.getByRole<HTMLButtonElement>("button", { name: "All", pressed: true });
@@ -240,7 +202,7 @@ describe("SessionsCard", () => {
   });
 
   it("preserves sort focus while waiting for the server to reorder rows", () => {
-    const { usage, onChange } = sessionDisplay();
+    const { usage, onChange } = usageState();
     const [sessions, setSessions] = createSignal([session("Alpha"), session("Beta")]);
     const { container } = mountView(() =>
       SessionsCard({
@@ -257,33 +219,22 @@ describe("SessionsCard", () => {
     select.dispatchEvent(new Event("change", { bubbles: true }));
     flush();
     expect(onChange).toHaveBeenCalledWith({ sessionSort: "cost" });
-    expect(container.querySelector(".session-bar-title")?.textContent).toBe("Alpha");
+    expect(text(container, ".session-bar-title")).toBe("Alpha");
     setSessions([session("Beta"), session("Alpha")]);
     flush();
-    expect(container.querySelector(".session-bar-title")?.textContent).toBe("Beta");
+    expect(text(container, ".session-bar-title")).toBe("Beta");
     expect(container.querySelector(".sessions-sort select")).toBe(select);
     expect(document.activeElement).toBe(select);
   });
 
   it("updates retained rows and shift selection across selection, mode, and roster changes", () => {
-    const base = createUsageProps();
-    const [display, setDisplay] = createSignal(base.display);
-    const [filters, setFilters] = createSignal(base.filters);
     const [sessions, setSessions] = createSignal([session("Alpha"), session("Beta")]);
+    const { base, usage, setDisplay, setFilters } = usageState({}, (data) => ({
+      ...data,
+      overview: createUsageOverview({ selectedRows: sessions() }),
+    }));
     const onSelectSession = vi.fn();
-    const usage = {
-      ...base,
-      get display() {
-        return display();
-      },
-      get filters() {
-        return filters();
-      },
-      get data() {
-        return { ...base.data, overview: createUsageOverview({ selectedRows: sessions() }) };
-      },
-      callbacks: { ...base.callbacks, details: { ...base.callbacks.details, onSelectSession } },
-    };
+    usage.callbacks.details.onSelectSession = onSelectSession;
     const { container } = mountView(() =>
       SessionsCard({
         get sessions() {
@@ -311,11 +262,9 @@ describe("SessionsCard", () => {
     flush();
     const buttons = [...container.querySelectorAll<HTMLButtonElement>(".session-bar-selection")];
     expect(buttons[1]).toBe(first);
-    expect(first.querySelector(".session-bar-title")?.textContent).toBe("Renamed");
-    expect(first.querySelector(".session-bar-meta")?.textContent).toContain("channel:web");
-    expect(
-      first.closest(".session-bar-row")?.querySelector(".session-bar-value")?.textContent,
-    ).toBe("250");
+    expect(text(first, ".session-bar-title")).toBe("Renamed");
+    expect(text(first, ".session-bar-meta")).toContain("channel:web");
+    expect(text(first.closest(".session-bar-row"), ".session-bar-value")).toBe("250");
     first.dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
     expect(onSelectSession).toHaveBeenLastCalledWith("Alpha", true, ["Beta", "Alpha"]);
   });
@@ -326,7 +275,7 @@ describe("SessionsCard", () => {
     const sessionUsage = entry.usage!;
     sessionUsage.durationMs = 60_000;
     sessionUsage.usageReport = { state: "unavailable" };
-    const { base, usage, setDisplay } = sessionDisplay();
+    const { base, usage, setDisplay } = usageState();
     const overview = createUsageOverview({
       total: 1,
       tableSessionCount: 1,
@@ -343,10 +292,9 @@ describe("SessionsCard", () => {
         SessionsCard({ sessions: [entry], usage, overview, totalSessions: 1 }),
       );
       const row = container.querySelector(".session-bar-row");
-      const value = () => row?.querySelector(".session-bar-value")?.textContent;
-      const average = () => container.querySelector(".sessions-card-stats > span")?.textContent;
-      expect(row?.querySelector(".session-bar-meta")?.textContent).toContain("dur:1m");
-      // A response that ended before final usage leaves its subtotal as a lower bound.
+      const value = () => text(row, ".session-bar-value");
+      const average = () => text(container, ".sessions-card-stats > span");
+      expect(text(row, ".session-bar-meta")).toContain("dur:1m");
       expect(value()).toMatch(/^≥ \d/);
       expect(average()).toMatch(/^≥ /);
       const englishValue = value();
@@ -358,8 +306,7 @@ describe("SessionsCard", () => {
         unit: "minute",
         unitDisplay: "narrow",
       }).format(1);
-      expect(row?.querySelector(".session-bar-meta")?.textContent).toContain(`dur:${germanMinute}`);
-      // The lower bound keeps the same number in every locale.
+      expect(text(row, ".session-bar-meta")).toContain(`dur:${germanMinute}`);
       expect(value()).toBe(englishValue);
       expect(average()).toMatch(/^≥ /);
       setDisplay({ ...base.display, chartMode: "cost" });
@@ -394,9 +341,7 @@ describe("SessionsCard", () => {
     const { container } = mountView(() =>
       SessionsCard({ sessions: [session("B"), session("A")], usage, overview, totalSessions: 2 }),
     );
-    expect(
-      [...container.querySelectorAll(".session-bar-title")].map((entry) => entry.textContent),
-    ).toEqual(["B", "A"]);
-    expect(container.querySelector(".sessions-card-stats")?.textContent).toContain("500 avg");
+    expect(texts(container, ".session-bar-title", false)).toEqual(["B", "A"]);
+    expect(text(container, ".sessions-card-stats")).toContain("500 avg");
   });
 });
