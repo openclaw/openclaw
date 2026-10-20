@@ -332,7 +332,7 @@ export function createDesktopPanel(
       const inventory = await inventoryRequest.result;
       if (inventory && inventoryRequest.isCurrent()) {
         requestedSource = inventory.selectedSource;
-        hostSetup.set(automaticPicker() ? (inventory.hostSetup ?? null) : null);
+        hostSetup.set(usesAutomaticSource() ? (inventory.hostSetup ?? null) : null);
         environments = inventory.environments;
         notify();
         refreshed = true;

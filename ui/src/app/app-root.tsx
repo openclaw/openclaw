@@ -357,6 +357,7 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
             <openclaw-desktop-panel
               prop:client={connected() ? snapshot().client : null}
               prop:sessions={context.sessions}
+              prop:runtimeConfig={context.runtimeConfig}
               prop:available={available()}
               prop:documentMode={true}
               prop:requestedSource={

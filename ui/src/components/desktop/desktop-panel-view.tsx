@@ -207,7 +207,7 @@ export function DesktopPicker(props: {
 }) {
   return (
     <>
-      {props.automatic && props.hostSetup ? (
+      {props.hostSetup ? (
         <DesktopHostSetupNotice setup={props.hostSetup} loading={props.loading} />
       ) : props.automatic ? (
         <div class="desktop-status" role="status">
