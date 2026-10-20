@@ -79,12 +79,9 @@ async function readMenuColors(page: Page): Promise<{ background: string; foregro
 let browser: Browser;
 let fixtureServer: FixtureServer;
 
-function withFixturePage(
-  run: (page: Page) => Promise<void>,
-  options: Parameters<Browser["newPage"]>[0] = {},
-) {
+function withFixturePage(run: (page: Page) => Promise<void>) {
   return async () => {
-    const page = await browser.newPage(options);
+    const page = await browser.newPage();
     try {
       await run(page);
     } finally {
@@ -676,8 +673,9 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
     );
   });
 
-  for (const mode of ["dark", "light"] as const) {
-    it(`themes dropdown items and widget frames in ${mode} mode`, async () => {
+  it.each(["dark", "light"] as const)(
+    "themes dropdown items and widget frames in %s mode",
+    async (mode) => {
       const context = await browser.newContext({ colorScheme: mode });
       try {
         const page = await context.newPage();
@@ -721,11 +719,17 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
             widgetFrame!.evaluate(() => getComputedStyle(document.documentElement).colorScheme),
           )
           .toBe(mode);
+        if (mode === "dark") {
+          await page.emulateMedia({ colorScheme: "light" });
+          await expect
+            .poll(() => page.locator("html").getAttribute("data-theme-mode"))
+            .toBe("light");
+        }
       } finally {
         await context.close();
       }
-    });
-  }
+    },
+  );
 
   it(
     "renders consistent menu options with a leading trash icon",
@@ -759,18 +763,6 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         iconSvg: true,
       });
     }),
-  );
-
-  it(
-    "follows live system color-scheme changes",
-    withFixturePage(
-      async (page) => {
-        await page.goto(fixtureServer.url, { waitUntil: "networkidle" });
-        await page.emulateMedia({ colorScheme: "light" });
-        await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("light");
-      },
-      { colorScheme: "dark" },
-    ),
   );
 
   it(

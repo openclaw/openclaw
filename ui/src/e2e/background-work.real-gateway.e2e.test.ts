@@ -97,12 +97,13 @@ function payloadOf<T = unknown>(rpc: BackgroundWorkRpc): T {
 const button = (surface: Page | Locator, name: string) =>
   surface.getByRole("button", { name, exact: true });
 
-function recordRpc(key: string, rpc: BackgroundWorkRpc) {
+function recordRpc(key: string, rpc: BackgroundWorkRpc, extra: Record<string, unknown> = {}) {
   proof[key] = {
     method: rpc.request.method,
     params: paramsOf(rpc),
     response: rpc.response.payload,
     ok: rpc.response.ok,
+    ...extra,
   };
 }
 
@@ -123,8 +124,6 @@ async function capture(page: Page, name: string, focus: Locator) {
     name + " interaction must fit the viewport",
   ).toBe(true);
   const visibleText = (await page.locator("body").textContent()) ?? "";
-  // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- innerText separately proves rendered visible text.
-  const renderedText = await page.locator("body").innerText();
   // Synthetic content only. Never retain handoffs, fixture secrets or private fixture paths.
   for (const [category, secret] of [
     ["gatewayToken", instance.gatewayToken],
@@ -133,10 +132,7 @@ async function capture(page: Page, name: string, focus: Locator) {
     ["homeDir", instance.homeDir],
     ["fixtureKey", "synthetic-background-fixture-key"],
   ] as const) {
-    expect(
-      visibleText.includes(secret),
-      `${category}: visible-text-match=${renderedText.includes(secret)}`,
-    ).toBe(false);
+    expect(visibleText.includes(secret), category).toBe(false);
   }
   expect(new URL(page.url()).hash).toBe("");
   expect(await page.locator(".community-invite-card:visible").count()).toBe(0);
@@ -250,13 +246,11 @@ async function runBackgroundWork(signal: AbortSignal) {
   await openChatSidePanelType(page, "Subagents");
   const subagents = parent.locator("openclaw-chat-subagents-panel");
   const childOpen = button(subagents, fixture.childLabel);
-  proof.stage = "wait for child row";
   await childOpen.waitFor();
   const childKey = await childOpen
     .locator("xpath=ancestor::*[@data-session-key]")
     .getAttribute("data-session-key");
   expect(childKey).toMatch(/^agent:main:subagent:/);
-  proof.stage = "wait for child roster response";
   const roster = await waitForPayload<SessionsListResult>(
     "sessions.list",
     (payload) => payload?.sessions?.some((row) => row.key === childKey) === true,
@@ -271,9 +265,7 @@ async function runBackgroundWork(signal: AbortSignal) {
   await capture(page, "desktop-subagents-list", childOpen);
   await childOpen.click();
   const detail = subagents.locator(".chat-subagent-detail");
-  proof.stage = "wait for child task transcript";
   await detail.getByText(fixture.childTask, { exact: false }).waitFor();
-  proof.stage = "observe child in-flight startup response";
   const history = await waitForPayload<ChatHistoryResult>(
     "chat.startup",
     (payload, rpc) => paramsOf(rpc).sessionKey === childKey && Boolean(payload?.inFlightRun),
@@ -284,7 +276,6 @@ async function runBackgroundWork(signal: AbortSignal) {
   expect(run.runId).not.toBe(parentRunId);
   proof.stage = "render child streaming progress";
   provider.writeChildProgress();
-  proof.stage = "wait for child progress";
   await detail.getByText(fixture.childText, { exact: true }).waitFor();
   const childStop = button(detail, "Stop generating");
   await childStop.waitFor();
@@ -295,7 +286,6 @@ async function runBackgroundWork(signal: AbortSignal) {
   proof.stage = "independent process list and retained output";
   await openChatSidePanelType(page, "Processes");
   const processes = parent.locator("openclaw-chat-processes-panel");
-  proof.stage = "wait for process list with retained output";
   const processList = await waitForPayload<SessionsProcessesListResult>(
     "sessions.processes.list",
     (payload, rpc) =>
@@ -353,12 +343,7 @@ async function runBackgroundWork(signal: AbortSignal) {
   await childStop.waitFor({ state: "hidden" });
   expect(provider.processIsOpen(), "child Stop must not stop parent exec").toBe(true);
   await assertParent();
-  proof.childStop = {
-    method: childMethod,
-    params: paramsOf(stoppedChild),
-    response: childReply,
-    providerConnectionClosed: true,
-  };
+  recordRpc("childStop", stoppedChild, { providerConnectionClosed: true });
   await button(detail, "Back to Subagents").click();
   await button(subagents.locator(".chat-subagents__finished"), fixture.childLabel).waitFor();
 
@@ -420,12 +405,8 @@ async function runBackgroundWork(signal: AbortSignal) {
   };
   await reopenFinished("mobile-process-stopped-output");
   await assertParent();
-  proof.processStop = {
-    params: paramsOf(stoppedProcess),
-    response: payloadOf(stoppedProcess),
-    socketClosed: true,
-    terminal,
-  };
+  payloadOf(stoppedProcess);
+  recordRpc("processStop", stoppedProcess, { socketClosed: true, terminal });
 
   proof.stage = "reload parent with independent panels and durable draft";
   await page.setViewportSize({ width: 1440, height: 1000 });

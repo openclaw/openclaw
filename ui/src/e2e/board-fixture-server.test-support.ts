@@ -1,10 +1,9 @@
 import { spawn, type ChildProcessByStdio } from "node:child_process";
-import { once } from "node:events";
-import { type AddressInfo, createServer } from "node:net";
 import path from "node:path";
 import type { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { afterAll } from "vitest";
+import { getFreePort } from "../../../src/test-utils/ports.js";
 import { stopChildProcess } from "../../../test/helpers/stop-child-process.ts";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -21,41 +20,21 @@ export type FixtureServer = {
   url: string;
 };
 
-async function reservePort(): Promise<number> {
-  const server = createServer();
-  const listening = once(server, "listening");
-  server.listen(0, "127.0.0.1");
-  await listening;
-  const port = (server.address() as AddressInfo).port;
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
-  return port;
-}
-
 export async function startFixtureServer(
   fixture?: "attachments" | "workboard",
 ): Promise<FixtureServer> {
-  const port = await reservePort();
+  const port = await getFreePort();
   const url = `http://127.0.0.1:${port}/__fixtures/board/`;
-  const child = spawn(
-    process.execPath,
-    [
-      "--import",
-      "./scripts/tsx.mjs",
-      "scripts/control-ui-mock-dev.ts",
-      "--host",
-      "127.0.0.1",
-      "--port",
-      String(port),
-      ...(fixture ? ["--fixture", fixture] : []),
-    ],
-    {
-      cwd: repoRoot,
-      env: { ...process.env, CI: "1" },
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  );
+  const args = ["--import", "./scripts/tsx.mjs", "scripts/control-ui-mock-dev.ts"];
+  args.push("--host", "127.0.0.1", "--port", String(port));
+  if (fixture) {
+    args.push("--fixture", fixture);
+  }
+  const child = spawn(process.execPath, args, {
+    cwd: repoRoot,
+    env: { ...process.env, CI: "1" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
   // Retain startup children too, so a hook timeout still reaches their cleanup.
   fixtureProcesses.add(child);
   child.once("close", () => fixtureProcesses.delete(child));
@@ -69,7 +48,6 @@ export async function startFixtureServer(
   const mockServer = { child, url };
 
   try {
-    // The CLI publishes this only after listen; cold imports are not readiness failures.
     await new Promise<void>((resolve, reject) => {
       const settle = (error?: Error) => {
         child.stdout.off("data", onOutput);

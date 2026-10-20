@@ -49,22 +49,19 @@ suite.define(() => {
         reads.length = 0;
         await page.reload();
         await gateway.waitForRequest("users.prefs.get");
-        const background = backgroundOf(page),
-          source = () => backgroundKind(background);
-        await expect.poll(source).toBe("custom");
+        const background = backgroundOf(page);
+        await expect.poll(() => backgroundKind(background)).toBe("custom");
         await background.evaluate(async (element) => {
           await (element as SessionBackground).updateComplete;
         });
-        expect(await background.getAttribute("data-custom")).toBeNull();
-        expect(reads).toEqual([]);
+        expect([await background.getAttribute("data-custom"), reads]).toEqual([null, []]);
         const saved = choice === "none" ? selectBackgroundSource({ kind: "none" }) : custom;
         await gateway.resolveDeferred("users.prefs.get", preferences({ "ui.background": saved }));
         if (choice === "none") {
-          await expect.poll(source).toBe("none");
-          expect(await background.getAttribute("data-custom")).toBeNull();
-          expect(reads).toEqual([]);
+          await expect.poll(() => backgroundKind(background)).toBe("none");
+          expect([await background.getAttribute("data-custom"), reads]).toEqual([null, []]);
         } else {
-          // Identical preference values still publish readiness and release the private read.
+          // Unchanged preferences must still release the private read.
           await expect.poll(() => reads.length).toBe(1);
           expect(await background.getAttribute("data-custom")).not.toBeNull();
         }
@@ -92,8 +89,7 @@ suite.define(() => {
               imageRequests.push(request.url());
             }
           });
-          // Both a cold document and a reload of the newly saved profile mirror must
-          // preserve the startup ordering. Never seed synthetic root attributes.
+          // Cover both cold startup and the saved mirror without seeding root attributes.
           for (const reload of [false, true]) {
             imageRequests.length = 0;
             await (reload ? page.reload() : page.goto(suite.server.baseUrl + "new"));
@@ -112,8 +108,6 @@ suite.define(() => {
               expect(imageRequests).toEqual([]);
             } else {
               await expect.poll(shellImage).toMatch(/^url\(/u);
-              // A no-change empty profile still completes readiness and reveals the
-              // existing palette artwork; it is not treated as indefinitely pending.
               expect(await shell.getAttribute("data-background-managed")).toBeNull();
             }
           }

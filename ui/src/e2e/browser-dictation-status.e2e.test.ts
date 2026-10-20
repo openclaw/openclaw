@@ -200,18 +200,16 @@ suite.define(() => {
       await page.mouse.move(0, 0);
       const dictationStop = button(page, "Stop and keep text");
       await dictationStop.evaluate(finishElementAnimations);
-      const dictationAppearance = await dictationStop.evaluate((element) => {
-        const textColor = document.createElement("span");
-        textColor.style.color = "var(--text-strong)";
-        element.append(textColor);
-        const appearance = {
-          color: getComputedStyle(element).color,
-          textStrong: getComputedStyle(textColor).color,
-        };
-        textColor.remove();
-        return appearance;
-      });
-      expect(dictationAppearance.color).toBe(dictationAppearance.textStrong);
+      expect(
+        await dictationStop.evaluate((element) => {
+          const textColor = document.createElement("span");
+          textColor.style.color = "var(--text-strong)";
+          element.append(textColor);
+          const matches = getComputedStyle(element).color === getComputedStyle(textColor).color;
+          textColor.remove();
+          return matches;
+        }),
+      ).toBe(true);
       if (cancel) {
         await button(page, "Sessions", true).click();
         await page.locator(".shell--nav-collapsed").waitFor();
@@ -230,27 +228,12 @@ suite.define(() => {
   );
 
   it.each([
-    {
-      name: "captured selection",
-      route: "chat",
-      editedDraft: null,
-      expected: "ship please now it",
-    },
-    {
-      name: "live draft edits",
-      route: "chat",
-      editedDraft: "ship it today",
-      expected: "ship it today please now",
-    },
-    {
-      name: "new-session edits",
-      route: "new",
-      editedDraft: "keep draft today",
-      expected: "keep draft today spoken task",
-    },
+    ["captured selection", "chat", null, "ship please now it"],
+    ["live draft edits", "chat", "ship it today", "ship it today please now"],
+    ["new-session edits", "new", "keep draft today", "keep draft today spoken task"],
   ] as const)(
-    "keeps every matching final after Stop with $name",
-    ({ route, editedDraft, expected }) =>
+    "keeps every matching final after Stop with %s",
+    (_name, route, editedDraft, expected) =>
       suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
         const isNew = route === "new";
         const { gateway, textarea, admit, emit, close } = await openDictation(page, {
@@ -457,37 +440,28 @@ suite.define(() => {
         await captureFullPage(page, "dictation-latched-after-release");
         // Read one rendered frame: owner publications can replace the status
         // between Playwright's element lookup and its separate box request.
-        const violations = await composer.evaluate((element) => {
+        const layout = await composer.evaluate((element) => {
           const composerBox = element.getBoundingClientRect();
-          const failures: string[] = [];
-          if (!(composerBox.width > 0 && composerBox.height > 0)) {
-            failures.push("composer size");
-          }
-          for (const selector of [
+          const controls = [
             ".agent-chat__dictation-phase",
             ".chat-mobile-dictation-action .chat-send-btn--dictating",
             ".chat-send-btn--dictation-commit",
-          ]) {
+          ].map((selector) => {
             const control = element.querySelector(selector);
             if (!control?.checkVisibility({ visibilityProperty: true })) {
-              failures.push(`${selector}: invisible`);
-              continue;
+              return false;
             }
             const box = control.getBoundingClientRect();
-            if (
-              !(
-                box.width > 0 &&
-                box.height > 0 &&
-                box.x >= composerBox.x &&
-                box.right <= composerBox.right
-              )
-            ) {
-              failures.push(`${selector}: bounds`);
-            }
-          }
-          return failures;
+            return (
+              box.width > 0 &&
+              box.height > 0 &&
+              box.x >= composerBox.x &&
+              box.right <= composerBox.right
+            );
+          });
+          return { composerSized: composerBox.width > 0 && composerBox.height > 0, controls };
         });
-        expect(violations).toEqual([]);
+        expect(layout).toEqual({ composerSized: true, controls: [true, true, true] });
 
         await stop.click();
         await expect.poll(() => microphone.isVisible()).toBe(true);
