@@ -39,20 +39,19 @@ const user = {
 
 function tool(
   id: string,
-  title: string,
   status: AgentActivityItem["status"] = "running",
   owner = runId,
   timestamp = 2,
 ) {
-  const activity: AgentActivityItem = {
-    itemId: id,
-    toolCallId: id,
+  const activity = (itemId: string, title: string, state = status): AgentActivityItem => ({
+    itemId,
+    toolCallId: itemId,
     kind: "tool",
     name: "read",
     title,
-    status,
-    phase: status === "running" ? "start" : "end",
-  };
+    status: state,
+    phase: state === "running" ? "start" : "end",
+  });
   return {
     role: "assistant",
     runId: owner,
@@ -64,24 +63,14 @@ function tool(
       { type: "toolCall", id, name: "read", arguments: { path: "/repo/" + id + ".ts" } },
     ],
     activity: [
-      {
-        ...activity,
-        itemId: "prior-" + id,
-        toolCallId: "prior-" + id,
-        title: "Prior file",
-        status: "completed",
-        phase: "end",
-      },
-      activity,
-    ] satisfies AgentActivityItem[],
+      activity("prior-" + id, "Prior file", "completed"),
+      activity(id, `Inspect the ${id} file`),
+    ],
   };
 }
 
-function labels() {
-  return Array.from(
-    container.querySelectorAll(".chat-activity-group__label"),
-    (node) => node.textContent,
-  );
+function labels(selector = ".chat-activity-group__label") {
+  return Array.from(container.querySelectorAll(selector), (node) => node.textContent);
 }
 
 function draw(messages: unknown[], overrides: Partial<Parameters<typeof renderChatInto>[1]> = {}) {
@@ -96,16 +85,12 @@ function draw(messages: unknown[], overrides: Partial<Parameters<typeof renderCh
 }
 
 it("renders current operation copy through the real transcript and retains completion between tools", () => {
-  draw([user, tool("first", "Inspect the first file")]);
+  draw([user, tool("first")]);
   expect(labels()).toEqual(["Inspect the first file…"]);
   vi.advanceTimersByTime(2_000);
-  draw([user, tool("first", "Inspect the first file", "completed")]);
+  draw([user, tool("first", "completed")]);
   expect(labels()).toEqual(["Inspect the first file"]);
-  draw([
-    user,
-    tool("first", "Inspect the first file", "completed"),
-    tool("next", "Inspect the next file", "running", runId, 3),
-  ]);
+  draw([user, tool("first", "completed"), tool("next", "running", runId, 3)]);
   expect(labels()).toEqual(["Inspect the first file"]);
   vi.advanceTimersByTime(999);
   expect(labels()).toEqual(["Inspect the first file"]);
@@ -115,7 +100,7 @@ it("renders current operation copy through the real transcript and retains compl
 });
 
 it("retains live running activity when history contains an unfinished call", () => {
-  const call = tool("active", "Inspect the active file");
+  const call = tool("active");
   const history = {
     ...call,
     activity: [
@@ -130,7 +115,7 @@ it("retains live running activity when history contains an unfinished call", () 
     ] satisfies AgentActivityItem[],
   };
   const live = {
-    ...tool("active", "Inspect the active file"),
+    ...tool("active"),
     __openclawToolStreamLive: true,
     __openclawToolStreamResultReceived: false,
     __openclawToolStreamItemEnded: false,
@@ -149,9 +134,9 @@ it("limits live copy to the newest activity group in the active run, not history
   });
   draw(
     [
-      tool("history", "Historical file", "completed", "old-run", 0),
+      tool("history", "completed", "old-run", 0),
       user,
-      tool("earlier", "Earlier active file", "completed"),
+      tool("earlier", "completed"),
       {
         role: "assistant",
         content: "Now inspect the next file.",
@@ -160,36 +145,27 @@ it("limits live copy to the newest activity group in the active run, not history
         timestamp: 3,
         __openclaw: { id: "commentary", runId },
       },
-      tool("latest", "Latest active file", "running", runId, 4),
+      tool("latest", "running", runId, 4),
       {
         role: "user",
         content: "A separate request.",
         timestamp: 5,
         __openclaw: { id: "peer-user", idempotencyKey: "peer-run:user" },
       },
-      tool("peer", "Peer run file", "running", "peer-run", 6),
+      tool("peer", "running", "peer-run", 6),
     ],
     { persistCommentary: true },
   );
-  expect(
-    Array.from(
-      container.querySelectorAll(".chat-activity-group__label--live"),
-      (node) => node.textContent,
-    ),
-  ).toEqual(["Latest active file…"]);
+  expect(labels(".chat-activity-group__label--live")).toEqual(["Inspect the latest file…"]);
   expect(labels().filter((label) => label === "2 reads")).toHaveLength(3);
 });
 
 it.each(["end", "session", "run", "connection"] as const)(
   "does not carry a pending title across a %s scope change",
   async (scope) => {
-    draw([user, tool("first", "Inspect the first file")]);
+    draw([user, tool("first")]);
     vi.advanceTimersByTime(100);
-    const messages = [
-      user,
-      tool("first", "Inspect the first file", "completed"),
-      tool("next", "Stale pending file", "running", runId, 3),
-    ];
+    const messages = [user, tool("first", "completed"), tool("next", "running", runId, 3)];
     draw(messages);
     expect(labels()).toEqual(["Inspect the first file"]);
     if (scope === "end") {
@@ -198,15 +174,15 @@ it.each(["end", "session", "run", "connection"] as const)(
       expect(labels()).toEqual(["4 reads"]);
       vi.advanceTimersByTime(3_000);
       expect(labels()).toEqual(["4 reads"]);
-      expect(container.textContent).not.toContain("Stale pending file…");
+      expect(container.textContent).not.toContain("Inspect the next file…");
       return;
     }
     const owner = scope === "run" ? "replacement-run" : runId;
     draw(
       [
         { ...user, __openclaw: { ...user["__openclaw"], idempotencyKey: owner + ":user" } },
-        tool("first", "Inspect the first file", "completed", owner),
-        tool("fresh", "Fresh scope file", "running", owner, 4),
+        tool("first", "completed", owner),
+        tool("fresh", "running", owner, 4),
       ],
       {
         runId: owner,
@@ -214,8 +190,8 @@ it.each(["end", "session", "run", "connection"] as const)(
         ...(scope === "connection" ? { connectionEpoch: 2 } : {}),
       },
     );
-    await waitForSolid(() => expect(labels()).toEqual(["Fresh scope file…"]));
+    await waitForSolid(() => expect(labels()).toEqual(["Inspect the fresh file…"]));
     vi.advanceTimersByTime(3_000);
-    expect(labels()).toEqual(["Fresh scope file…"]);
+    expect(labels()).toEqual(["Inspect the fresh file…"]);
   },
 );
