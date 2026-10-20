@@ -143,13 +143,30 @@ const HISTORY_BLOCK_FIELDS = new Set([
   "index",
 ]);
 
+function unpackHistoryFingerprint(fingerprint: PromptHistoryFingerprint) {
+  const [, contentKind, blocks]: [string, "string" | "blocks", string[]] = JSON.parse(
+    fingerprint.identity,
+  );
+  const [envelopeFields, blockFields]: [[string, string][], [string, string][][]] = JSON.parse(
+    fingerprint.details,
+  );
+  return {
+    contentKind,
+    blocks,
+    envelopeFields: new Map(envelopeFields),
+    blockFields: blockFields.map((fields) => new Map(fields)),
+  };
+}
+
 function describeHistoryChange(
-  previous: PromptHistoryFingerprint,
-  next: PromptHistoryFingerprint | undefined,
+  previousFingerprint: PromptHistoryFingerprint,
+  nextFingerprint: PromptHistoryFingerprint | undefined,
 ): string {
-  if (!next) {
+  if (!nextFingerprint) {
     return "message removed";
   }
+  const previous = unpackHistoryFingerprint(previousFingerprint);
+  const next = unpackHistoryFingerprint(nextFingerprint);
   const fields: string[] = [];
   if (previous.contentKind !== next.contentKind) {
     fields.push("content.type");

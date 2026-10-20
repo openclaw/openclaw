@@ -1,6 +1,6 @@
 import { stableStringify } from "@openclaw/normalization-core";
-import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isOwnedTranscriptPayload } from "../../config/sessions/transcript-json.js";
+import { sha256Base64Url } from "../../infra/crypto-digest.js";
 import type { Message } from "../../llm/types.js";
 
 const MAX_HISTORY_DIFF_FIELDS = 8;
@@ -9,11 +9,8 @@ const MESSAGE_ENVELOPE_OMITTED_FIELDS = new Set(["content", "__openclaw"]);
 
 export type PromptHistoryFingerprint = {
   role: string;
-  envelopeFields: Map<string, string>;
-  envelopeDigest: string;
-  contentKind: "string" | "blocks";
-  blocks: string[];
-  blockFields: Map<string, string>[];
+  identity: string;
+  details: string;
   stringBlock?: WeakRef<PromptStringFingerprint>;
 };
 
@@ -36,18 +33,18 @@ function fingerprintValue(value: unknown): string {
     if (cached) {
       return cached;
     }
-    const digest = sha256Hex(stableStringify(value));
+    const digest = sha256Base64Url(stableStringify(value));
     immutableValueFingerprints.set(value, digest);
     return digest;
   }
-  return sha256Hex(stableStringify(value));
+  return sha256Base64Url(stableStringify(value));
 }
 
 function fingerprintText(value: string): string {
   // UTF-8 replaces lone surrogates; escape those without serializing ordinary prompt text.
   return value.isWellFormed()
-    ? `text:${sha256Hex(value)}`
-    : `escaped:${sha256Hex(stableStringify(value))}`;
+    ? `text:${sha256Base64Url(value)}`
+    : `escaped:${sha256Base64Url(stableStringify(value))}`;
 }
 
 function fingerprintRecord(record: object, omit?: ReadonlySet<string>): RecordFingerprint {
@@ -87,7 +84,7 @@ function fingerprintRecord(record: object, omit?: ReadonlySet<string>): RecordFi
     return previous;
   }
   const fingerprint = {
-    digest: sha256Hex(stableStringify(Object.fromEntries(fields!))),
+    digest: sha256Base64Url(stableStringify(Object.fromEntries(fields!))),
     fields: fields!,
     primitives,
   };
@@ -101,7 +98,7 @@ export function fingerprintMessage(
 ): PromptHistoryFingerprint {
   const cached = messageFingerprints.get(message);
   if (cached) {
-    return previous && sameHistoryFingerprint(previous, cached) ? previous : cached;
+    return previous?.identity === cached.identity ? previous : cached;
   }
   const { content } = message;
   let stringBlock: PromptHistoryFingerprint["stringBlock"];
@@ -123,37 +120,26 @@ export function fingerprintMessage(
     blocks = fingerprints.map(({ digest }) => digest);
   }
   const envelope = fingerprintRecord(message, MESSAGE_ENVELOPE_OMITTED_FIELDS);
-  if (
-    previous?.envelopeDigest === envelope.digest &&
-    previous.contentKind === (typeof content === "string" ? "string" : "blocks") &&
-    previous.blocks.length === blocks.length &&
-    previous.blocks.every((digest, index) => digest === blocks[index])
-  ) {
+  const identity = JSON.stringify([
+    envelope.digest,
+    typeof content === "string" ? "string" : "blocks",
+    blocks,
+  ]);
+  if (previous?.identity === identity) {
     return previous;
   }
   const fingerprint: PromptHistoryFingerprint = {
     role: message.role,
-    envelopeFields: envelope.fields,
-    envelopeDigest: envelope.digest,
-    contentKind: typeof content === "string" ? "string" : "blocks",
-    blocks,
-    blockFields: fingerprints.slice(0, MAX_HISTORY_DIFF_FIELDS).map(({ fields }) => fields),
+    identity,
+    // Idle baselines retain compact hashes; field Maps are only needed on divergence.
+    details: JSON.stringify([
+      [...envelope.fields],
+      fingerprints.slice(0, MAX_HISTORY_DIFF_FIELDS).map(({ fields }) => Array.from(fields)),
+    ]),
     stringBlock,
   };
   if (isOwnedTranscriptPayload(message)) {
     messageFingerprints.set(message, fingerprint);
   }
   return fingerprint;
-}
-
-function sameHistoryFingerprint(
-  previous: PromptHistoryFingerprint,
-  next: PromptHistoryFingerprint,
-) {
-  return (
-    previous.envelopeDigest === next.envelopeDigest &&
-    previous.contentKind === next.contentKind &&
-    previous.blocks.length === next.blocks.length &&
-    previous.blocks.every((digest, index) => digest === next.blocks[index])
-  );
 }

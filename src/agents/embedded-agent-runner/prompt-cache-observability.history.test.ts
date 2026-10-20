@@ -1,10 +1,10 @@
-import * as cryptoDigest from "@openclaw/normalization-core/node-crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { convertToLlm } from "../../../packages/agent-core/src/harness/messages.js";
 import {
   normalizeTranscriptJsonValue,
   isOwnedTranscriptPayload,
 } from "../../config/sessions/transcript-json.js";
+import * as cryptoDigest from "../../infra/crypto-digest.js";
 import type { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import type { Message, TextContent } from "../../llm/types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
@@ -46,7 +46,7 @@ describe("prompt cache history fingerprints", () => {
           timestamp: 2,
         },
       ];
-      const hashes = vi.spyOn(cryptoDigest, "sha256Hex");
+      const hashes = vi.spyOn(cryptoDigest, "sha256Base64Url");
       const observed = vi.fn();
       const observer = createPromptCacheRequestObserver(
         { sessionId, streamStrategy: "test" },
@@ -119,7 +119,7 @@ describe("prompt cache history fingerprints", () => {
     );
     const message = publish("sealed-history-fixture");
     expect(isOwnedTranscriptPayload(message)).toBe(true);
-    const hashes = vi.spyOn(cryptoDigest, "sha256Hex");
+    const hashes = vi.spyOn(cryptoDigest, "sha256Base64Url");
     const messages: Message[] = [message];
     await observer.onModelRequest(model, { messages });
     expect(
@@ -210,7 +210,7 @@ describe("prompt cache history fingerprints", () => {
     >(Symbol.for("openclaw.providerPromptHashPool"), () => {
       throw new Error("Expected the prompt observer to initialize its worker pool");
     });
-    const hashes = vi.spyOn(cryptoDigest, "sha256Hex");
+    const hashes = vi.spyOn(cryptoDigest, "sha256Base64Url");
     const prepare = vi.spyOn(pool, "run").mockImplementation((_input, options) => {
       expect(options.inputBytes).toBeGreaterThanOrEqual(entry.message.content.length * 2);
       const error = new Error("fixture request canceled");
@@ -236,7 +236,7 @@ describe("prompt cache history fingerprints", () => {
       content: [{ type: "text", text: `Synthetic history ${timestamp}` }],
       timestamp,
     }));
-    const hashes = vi.spyOn(cryptoDigest, "sha256Hex");
+    const hashes = vi.spyOn(cryptoDigest, "sha256Base64Url");
     beginOpenAIObservation({ sessionId, messages });
     hashes.mockClear();
     messages.push({ role: "user", content: "Next turn", timestamp: 100 });
@@ -361,7 +361,7 @@ describe("prompt cache history fingerprints", () => {
         content: kind === "string" ? text : [{ type: "text", text }],
         timestamp: 1,
       };
-      const hashes = vi.spyOn(cryptoDigest, "sha256Hex");
+      const hashes = vi.spyOn(cryptoDigest, "sha256Base64Url");
       for (let index = 0; index < 3; index++) {
         expect(
           beginOpenAIObservation({ sessionId, messages: [{ ...message }] }).changes,
