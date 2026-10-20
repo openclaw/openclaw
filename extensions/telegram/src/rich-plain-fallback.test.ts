@@ -1,66 +1,35 @@
 import { describe, expect, it, vi } from "vitest";
 import { isTelegramEmptyContentError, withTelegramPlainFallback } from "./rich-plain-fallback.js";
 
+// message, rich fallback, HTML fallback
 const fallbackCases = [
-  {
-    name: "rich-entity-invalid",
-    message: "Bad Request: RICH_MESSAGE_URL_INVALID",
-    richTrigger: "rich-entity-invalid",
-  },
-  {
-    name: "rich-structure-invalid",
-    message: "Bad Request: RICH_MESSAGE_BLOCKS_TOO_MANY",
-    richTrigger: "rich-structure-invalid",
-  },
-  {
-    name: "rich-content-required",
-    message: "Bad Request: RICH_MESSAGE_CONTENT_REQUIRED",
-    richTrigger: "rich-content-required",
-    htmlTrigger: "empty-content",
-  },
-  {
-    name: "rich-message-non-empty",
-    message: "Bad Request: rich message must be non-empty",
-    richTrigger: "rich-content-required",
-    htmlTrigger: "empty-content",
-  },
-  {
-    name: "html-parse",
-    message: "Bad Request: can't parse entities: unsupported tag",
-    richTrigger: "html-parse",
-    htmlTrigger: "html-parse",
-  },
-  {
-    name: "empty-content",
-    message: "Bad Request: message text is empty",
-    htmlTrigger: "empty-content",
-  },
-  {
-    name: "network error",
-    message: "read ECONNRESET",
-  },
+  ["Bad Request: RICH_MESSAGE_URL_INVALID", "rich-entity-invalid", undefined],
+  ["Bad Request: RICH_MESSAGE_BLOCKS_TOO_MANY", "rich-structure-invalid", undefined],
+  ["Bad Request: RICH_MESSAGE_CONTENT_REQUIRED", "rich-content-required", "empty-content"],
+  ["Bad Request: rich message must be non-empty", "rich-content-required", "empty-content"],
+  ["Bad Request: can't parse entities: unsupported tag", "html-parse", "html-parse"],
+  ["Bad Request: message text is empty", undefined, "empty-content"],
+  ["read ECONNRESET", undefined, undefined],
 ] as const;
 
 describe("withTelegramPlainFallback", () => {
   it.each(
     (["rich", "html"] as const).flatMap((kind) =>
-      fallbackCases.map((testCase) => Object.assign({ kind }, testCase)),
+      fallbackCases.map(([message, richTrigger, htmlTrigger]) => ({
+        kind,
+        message,
+        richTrigger,
+        htmlTrigger,
+      })),
     ),
-  )("classifies $kind $name consistently", async (testCase) => {
+  )("classifies $kind $message consistently", async (testCase) => {
     const error = new Error(testCase.message);
     const warn = vi.fn();
     const sendFormatted = vi.fn(async () => {
       throw error;
     });
     const sendPlain = vi.fn(async () => "plain");
-    const trigger =
-      testCase.kind === "rich"
-        ? "richTrigger" in testCase
-          ? testCase.richTrigger
-          : undefined
-        : "htmlTrigger" in testCase
-          ? testCase.htmlTrigger
-          : undefined;
+    const trigger = testCase.kind === "rich" ? testCase.richTrigger : testCase.htmlTrigger;
     const run = withTelegramPlainFallback({
       kind: testCase.kind,
       context: "test send",
@@ -81,10 +50,7 @@ describe("withTelegramPlainFallback", () => {
 
     await expect(run).resolves.toBe("plain");
     expect(sendPlain).toHaveBeenCalledWith(
-      {
-        plainText: "fallback body",
-        chunks: ["fallback", " body"],
-      },
+      { plainText: "fallback body", chunks: ["fallback", " body"] },
       "test send-plain",
     );
     expect(warn).toHaveBeenCalledTimes(1);

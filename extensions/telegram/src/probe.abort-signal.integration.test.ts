@@ -14,6 +14,47 @@ describe("probeTelegram startup retry loop honors abortSignal", () => {
   let connectionCount = 0;
   let stallMode: "all" | "webhook" | null = null;
   const liveSockets = new Set<Socket>();
+  function startProbe(token: string, webhook = false) {
+    const controller = new AbortController();
+    return {
+      controller,
+      requestsBefore: requestCount,
+      connectionsBefore: connectionCount,
+      promise: probeTelegram(token, 10_000, {
+        apiRoot,
+        ...(webhook ? {} : { includeWebhookInfo: false }),
+        abortSignal: controller.signal,
+        // Isolate the outer retry loop from transport dispatcher fallbacks.
+        network: { autoSelectFamily: false, dnsResultOrder: "verbatim" },
+      }),
+    };
+  }
+
+  async function abortStalledRequest(webhook: boolean) {
+    const requestStarted = createDeferred<void>();
+    const onRequest = (req: IncomingMessage) => {
+      if (!webhook || req.url?.endsWith("/getWebhookInfo")) {
+        server.off("request", onRequest);
+        requestStarted.resolve();
+      }
+    };
+    server.on("request", onRequest);
+    stallMode = webhook ? "webhook" : "all";
+    const startedAt = Date.now();
+    const probe = startProbe(
+      webhook ? "abort-webhook-request-token" : "abort-active-request-token",
+      webhook,
+    );
+    await requestStarted.promise;
+    probe.controller.abort();
+    expect((await probe.promise).ok).toBe(false);
+    stallMode = null;
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+    expect(requestCount).toBe(probe.requestsBefore + (webhook ? 2 : 1));
+    if (!webhook) {
+      expect(connectionCount).toBe(probe.connectionsBefore + 1);
+    }
+  }
 
   beforeAll(async () => {
     for (const name of [
@@ -43,9 +84,7 @@ describe("probeTelegram startup retry loop honors abortSignal", () => {
         res.end(JSON.stringify({ ok: true, result: { id: 1, is_bot: true } }));
         return;
       }
-      // Abruptly terminate the first request so the probe enters its retry
-      // backoff. The abort controller fires while sleepWithAbort is waiting,
-      // which must prevent a second connection attempt.
+      // Force outer retry backoff; abort must prevent the second connection.
       res.socket?.destroy();
     });
     server.on("connection", (socket) => {
@@ -72,10 +111,6 @@ describe("probeTelegram startup retry loop honors abortSignal", () => {
   });
 
   it("stops retrying getMe after abortSignal fires during the backoff", async () => {
-    const abortController = new AbortController();
-    const previousRequestCount = requestCount;
-    const previousConnectionCount = connectionCount;
-
     const backoffStarted = createDeferred<{ sleep: Promise<void> }>();
     const realSleepWithAbort = runtimeEnv.sleepWithAbort;
     const sleepSpy = vi.spyOn(runtimeEnv, "sleepWithAbort").mockImplementation((...args) => {
@@ -86,96 +121,38 @@ describe("probeTelegram startup retry loop honors abortSignal", () => {
       return sleep;
     });
 
-    const probePromise = probeTelegram("abort-test-token", 10_000, {
-      apiRoot,
-      includeWebhookInfo: false,
-      abortSignal: abortController.signal,
-      // Disable the transport's internal dispatcher fallbacks so request
-      // counts isolate the outer startup-probe retry loop under test.
-      network: { autoSelectFamily: false, dnsResultOrder: "verbatim" },
-    });
+    const { controller, promise, requestsBefore, connectionsBefore } =
+      startProbe("abort-test-token");
 
     try {
       const { sleep } = await Promise.race([
         backoffStarted.promise,
-        probePromise.then(() => {
+        promise.then(() => {
           throw new Error("Probe completed before entering retry backoff");
         }),
       ]);
-      abortController.abort();
+      controller.abort();
       await expect(sleep).rejects.toMatchObject({
         name: "AbortError",
-        cause: abortController.signal.reason,
+        cause: controller.signal.reason,
       });
-      const result = await probePromise;
+      const result = await promise;
 
       expect(result.ok).toBe(false);
-      expect(requestCount).toBe(previousRequestCount + 1);
-      expect(connectionCount).toBe(previousConnectionCount + 1);
+      expect(requestCount).toBe(requestsBefore + 1);
+      expect(connectionCount).toBe(connectionsBefore + 1);
     } finally {
-      abortController.abort();
+      controller.abort();
       sleepSpy.mockRestore();
-      await probePromise;
+      await promise;
     }
   });
 
   it("aborts a stalled in-flight getMe request", async () => {
-    const abortController = new AbortController();
-    const previousRequestCount = requestCount;
-    const previousConnectionCount = connectionCount;
-    let markRequestStarted: (() => void) | undefined;
-    const requestStarted = new Promise<void>((resolve) => {
-      markRequestStarted = resolve;
-    });
-    server.once("request", () => markRequestStarted?.());
-    stallMode = "all";
-
-    const startedAt = Date.now();
-    const probePromise = probeTelegram("abort-active-request-token", 10_000, {
-      apiRoot,
-      includeWebhookInfo: false,
-      abortSignal: abortController.signal,
-      network: { autoSelectFamily: false, dnsResultOrder: "verbatim" },
-    });
-    await requestStarted;
-    abortController.abort();
-    const result = await probePromise;
-    stallMode = null;
-
-    expect(result.ok).toBe(false);
-    expect(Date.now() - startedAt).toBeLessThan(1_000);
-    expect(requestCount).toBe(previousRequestCount + 1);
-    expect(connectionCount).toBe(previousConnectionCount + 1);
+    await abortStalledRequest(false);
   });
 
   it("does not report success when aborting a stalled webhook-info request", async () => {
-    const abortController = new AbortController();
-    const previousRequestCount = requestCount;
-    const webhookRequestStarted = new Promise<void>((resolve) => {
-      const onRequest = (req: IncomingMessage) => {
-        if (!req.url?.endsWith("/getWebhookInfo")) {
-          return;
-        }
-        server.off("request", onRequest);
-        resolve();
-      };
-      server.on("request", onRequest);
-    });
-    stallMode = "webhook";
-
-    const startedAt = Date.now();
-    const probePromise = probeTelegram("abort-webhook-request-token", 10_000, {
-      apiRoot,
-      abortSignal: abortController.signal,
-      network: { autoSelectFamily: false, dnsResultOrder: "verbatim" },
-    });
-    await webhookRequestStarted;
-    abortController.abort();
-    const result = await probePromise;
-    stallMode = null;
-
-    expect(result.ok).toBe(false);
-    expect(Date.now() - startedAt).toBeLessThan(1_000);
-    expect(requestCount).toBe(previousRequestCount + 2);
+    await abortStalledRequest(true);
   });
 });
