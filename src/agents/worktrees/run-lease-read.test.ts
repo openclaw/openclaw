@@ -11,6 +11,7 @@ import { readWorktreeRunLeaseStateInDatabase, worktreeRunLeaseScope } from "./ru
 import { reapWorktreeRunLeases } from "./run-lease-store.js";
 import { admitWorktreeRunLeaseInDatabase } from "./run-lease-store.kernel.js";
 import { hasLiveWorktreeRunLease as hasLiveWorktreeRunLeaseRow } from "./run-lease.test-support.js";
+import { makeWorktreeRecord } from "./service.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
@@ -31,18 +32,12 @@ it("reads live, dead, reused, and unverifiable owners without reaping or writer 
     { id: "foreign", pid: 12345, startTime: 1, live: true },
   ];
   for (const entry of cases) {
-    await insertRegistryWorktree(env, {
-      id: entry.id,
-      name: entry.id,
-      repoFingerprint: "0123456789abcdef",
-      repoRoot: root,
-      path: path.join(root, entry.id),
-      branch: entry.id,
-      baseRef: "HEAD",
-      ownerKind: "session",
-      createdAt: 1,
-      lastActiveAt: 1,
-    });
+    await insertRegistryWorktree(
+      env,
+      makeWorktreeRecord(root, entry.id, {
+        path: path.join(root, entry.id),
+      }),
+    );
     stateDatabase.runOpenClawStateWriteTransaction(
       ({ db }) =>
         admitWorktreeRunLeaseInDatabase(db, {

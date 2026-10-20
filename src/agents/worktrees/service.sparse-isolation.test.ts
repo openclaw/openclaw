@@ -1,7 +1,5 @@
-import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
@@ -9,14 +7,10 @@ import { detectWorktreeFilesystemBackend } from "./filesystem-backend.js";
 import { createCopyWorktreeBackend } from "./filesystem-backend.test-support.js";
 import type { WorktreeFilesystemBackend } from "./filesystem-backend.types.js";
 import { ManagedWorktreeService } from "./service.js";
-import { useManagedWorktreeTestRepository } from "./service.test-support.js";
+import { git, useManagedWorktreeTestRepository } from "./service.test-support.js";
 import { listTemplatesAsync } from "./template-registry-async.js";
 
 vi.mock("./filesystem-backend.js", () => ({ detectWorktreeFilesystemBackend: vi.fn() }));
-const execFileAsync = promisify(execFile);
-async function git(cwd: string, ...args: string[]): Promise<string> {
-  return (await execFileAsync("git", ["-C", cwd, ...args])).stdout.trim();
-}
 const read = (target: string, file: string) => fs.readFile(path.join(target, file), "utf8");
 
 async function gitMetadata(target: string) {
@@ -117,9 +111,6 @@ describe("ManagedWorktreeService sparse isolation", () => {
       await observe();
       return created;
     };
-    // Original order: cold full -> warm full -> sparse -> native disable ->
-    // subsequent full -> sparse/reuse -> full. Companion adds a full create
-    // while the first sparse checkout is still sparse to catch contamination.
     const cold = await create("full-cold");
     const warm = await create("full-warm");
     const sparseA = await create("sparse-a", ["selected"]);

@@ -18,11 +18,32 @@ import type { ManagedWorktreeOwnerKind, ManagedWorktreeRecord } from "./types.js
 
 const execFileAsync = promisify(execFile);
 
-async function git(cwd: string, ...args: string[]): Promise<void> {
-  await execFileAsync("git", ["-C", cwd, ...args]);
+export async function git(cwd: string, ...args: string[]): Promise<string> {
+  return (await execFileAsync("git", ["-C", cwd, ...args])).stdout.trim();
 }
 
-async function initializeRepository(repo: string): Promise<void> {
+export function makeWorktreeRecord(
+  repoRoot: string,
+  id: string,
+  overrides: Partial<ManagedWorktreeRecord> = {},
+): ManagedWorktreeRecord {
+  return {
+    id,
+    name: id,
+    repoRoot,
+    repoFingerprint: "0123456789abcdef",
+    path: repoRoot,
+    branch: id,
+    baseRef: "HEAD",
+    ownerKind: "session",
+    createdAt: 1,
+    lastActiveAt: 1,
+    ...overrides,
+  };
+}
+
+export async function initializeManagedWorktreeTestRepository(root: string): Promise<string> {
+  const repo = path.join(root, "repo");
   await fs.mkdir(repo, { recursive: true });
   await git(repo, "init", "-b", "main");
   await git(repo, "config", "user.name", "OpenClaw Test");
@@ -30,20 +51,11 @@ async function initializeRepository(repo: string): Promise<void> {
   await fs.writeFile(path.join(repo, "README.md"), "base\n");
   await git(repo, "add", "README.md");
   await git(repo, "commit", "-m", "initial");
-}
-
-async function addRemote(root: string, repo: string): Promise<string> {
   const remote = path.join(root, "remote.git");
   await git(root, "init", "--bare", "-b", "main", remote);
   await git(repo, "remote", "add", "origin", remote);
   await git(repo, "push", "-u", "origin", "main");
   return await fs.realpath(repo);
-}
-
-export async function initializeManagedWorktreeTestRepository(root: string): Promise<string> {
-  const repo = path.join(root, "repo");
-  await initializeRepository(repo);
-  return await addRemote(root, repo);
 }
 
 export function useManagedWorktreeTestRepository(
@@ -67,14 +79,13 @@ export function useManagedWorktreeTestRepository(
   };
 }
 
-async function copyProvisionedFiles(params: {
-  repoRoot: string;
-  worktreePath: string;
-  provisionedPaths: readonly string[];
-}): Promise<void> {
-  for (const provisionedPath of params.provisionedPaths) {
-    const source = path.join(params.repoRoot, provisionedPath);
-    const target = path.join(params.worktreePath, provisionedPath);
+async function copyProvisionedFiles(
+  record: ManagedWorktreeRecord,
+  provisionedPaths: readonly string[],
+): Promise<void> {
+  for (const provisionedPath of provisionedPaths) {
+    const source = path.join(record.repoRoot, provisionedPath);
+    const target = path.join(record.path, provisionedPath);
     const sourceStat = await fs.lstat(source);
     await fs.mkdir(path.dirname(target), { recursive: true });
     await fs.copyFile(source, target, fsConstants.COPYFILE_FICLONE);
@@ -100,31 +111,30 @@ export async function materializeManagedWorktreeFixtures(
   params: Omit<ManagedWorktreeFixtureParams, "name"> & { names: string[] },
 ): Promise<ManagedWorktreeRecord[]> {
   const repoFingerprint = params.repoFingerprint ?? "downstream-fixture";
-  const records = params.names.map((name): ManagedWorktreeRecord => ({
-    id: `fixture-${name}`,
-    name,
-    repoFingerprint,
-    repoRoot: params.repoRoot,
-    path: path.join(params.stateDir, "worktrees", repoFingerprint, name),
-    branch: `openclaw/${name}`,
-    baseRef: "HEAD",
-    ownerKind: params.ownerKind ?? "manual",
-    ...(params.ownerId ? { ownerId: params.ownerId } : {}),
-    createdAt: params.now,
-    lastActiveAt: params.now,
-  }));
+  const records = params.names.map((name) =>
+    makeWorktreeRecord(params.repoRoot, `fixture-${name}`, {
+      name,
+      repoFingerprint,
+      path: path.join(params.stateDir, "worktrees", repoFingerprint, name),
+      branch: `openclaw/${name}`,
+      ownerKind: params.ownerKind ?? "manual",
+      ...(params.ownerId ? { ownerId: params.ownerId } : {}),
+      createdAt: params.now,
+      lastActiveAt: params.now,
+    }),
+  );
   for (const record of records) {
     await fs.mkdir(path.dirname(record.path), { recursive: true });
   }
-  const commands = records.map((record) => [
+  const commands = records.map(({ repoRoot, branch, path: target }) => [
     "-C",
-    record.repoRoot,
+    repoRoot,
     "worktree",
     "add",
     "-b",
-    record.branch,
+    branch,
     "--",
-    record.path,
+    target,
     "HEAD",
   ]);
   if (records.length > 1) {
@@ -147,11 +157,7 @@ export async function materializeManagedWorktreeFixtures(
   }
   const provisionedPaths = params.provisionedPaths ?? [];
   for (const record of records) {
-    await copyProvisionedFiles({
-      repoRoot: record.repoRoot,
-      worktreePath: record.path,
-      provisionedPaths,
-    });
+    await copyProvisionedFiles(record, provisionedPaths);
   }
   for (const record of records) {
     await insertRegistryWorktree(params.env, record, { provisionedPaths });

@@ -14,6 +14,7 @@ import {
   admitWorktreeRunLeaseRowAsync,
   releaseWorktreeRunLeaseRowAsync,
 } from "./run-lease-store.js";
+import { makeWorktreeRecord } from "./service.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(async () => {
@@ -24,18 +25,7 @@ afterEach(async () => {
 it("settles exact lease deletions without host SQL or fsync and refuses a retired store", async () => {
   const env = { ...process.env, OPENCLAW_STATE_DIR: dirs.make("worktree-release-worker-") };
   const database = openOpenClawStateDatabase({ env });
-  await insertRegistryWorktree(env, {
-    id: "synthetic",
-    name: "synthetic",
-    repoFingerprint: "0123456789abcdef",
-    repoRoot: env.OPENCLAW_STATE_DIR,
-    path: env.OPENCLAW_STATE_DIR,
-    branch: "synthetic",
-    baseRef: "HEAD",
-    ownerKind: "session",
-    createdAt: 1,
-    lastActiveAt: 1,
-  });
+  await insertRegistryWorktree(env, makeWorktreeRecord(env.OPENCLAW_STATE_DIR, "synthetic"));
   runOpenClawStateWriteTransaction(
     ({ db }) => {
       const insert = db.prepare(

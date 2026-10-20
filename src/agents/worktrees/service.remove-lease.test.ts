@@ -1,8 +1,6 @@
-import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   resetConfigRuntimeState,
@@ -14,14 +12,7 @@ import { getRegistryWorktree } from "./registry.test-support.js";
 import { acquireWorktreeRunLease } from "./run-lease.js";
 import { hasLiveWorktreeRunLease, testing as runLeaseTesting } from "./run-lease.test-support.js";
 import { classifyWorktreeRemovalError, IDLE_GC_MS, ManagedWorktreeService } from "./service.js";
-import { useManagedWorktreeTestRepository } from "./service.test-support.js";
-
-const execFileAsync = promisify(execFile);
-
-async function git(cwd: string, ...args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], { encoding: "utf8" });
-  return stdout.trim();
-}
+import { git, useManagedWorktreeTestRepository } from "./service.test-support.js";
 
 describe("ManagedWorktreeService removal against a live run lease", () => {
   const initializeRepository = useManagedWorktreeTestRepository();
@@ -29,6 +20,7 @@ describe("ManagedWorktreeService removal against a live run lease", () => {
   let repo: string;
   let env: NodeJS.ProcessEnv;
   let service: ManagedWorktreeService;
+  let created: { id: string; path: string };
 
   beforeEach(async () => {
     const tempRoot = await fs.realpath(os.tmpdir());
@@ -37,6 +29,13 @@ describe("ManagedWorktreeService removal against a live run lease", () => {
     env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "openclaw-state") };
     setRuntimeConfigSnapshot({}, {});
     service = new ManagedWorktreeService({ env });
+    created = await service.create({
+      repoRoot: repo,
+      name: "removal-session",
+      baseRef: "HEAD",
+      ownerKind: "session",
+      ownerId: "agent:main:removal",
+    });
   });
 
   afterEach(async () => {
@@ -46,23 +45,18 @@ describe("ManagedWorktreeService removal against a live run lease", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  async function createSessionWorktree(): Promise<{ id: string; path: string }> {
-    const created = await service.create({
-      repoRoot: repo,
-      name: "removal-session",
-      baseRef: "HEAD",
-      ownerKind: "session",
-      ownerId: "agent:main:removal",
-    });
-    return { id: created.id, path: created.path };
+  const remove = (allowSnapshotLoss?: true) =>
+    service.remove({ id: created.id, reason: "manual-delete", allowSnapshotLoss });
+  async function createNestedRepository(target: string) {
+    const nested = path.join(target, "nested");
+    await fs.mkdir(nested);
+    await git(nested, "init", "-b", "main");
   }
 
   it("rejects removal before snapshotting while a run lease is live", async () => {
-    const created = await createSessionWorktree();
     const lease = await acquireWorktreeRunLease(created.id, { env });
 
-    const removalError = await service
-      .remove({ id: created.id, reason: "manual-delete" })
+    const removalError = await remove()
       .then(() => undefined)
       .catch((error: unknown) => error);
     expect(removalError).toBeInstanceOf(Error);
@@ -73,35 +67,27 @@ describe("ManagedWorktreeService removal against a live run lease", () => {
     expect(await fs.stat(created.path)).toBeTruthy();
 
     await lease.release();
-    expect((await service.remove({ id: created.id, reason: "manual-delete" })).removed).toBe(true);
+    expect((await remove()).removed).toBe(true);
     await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("does not let snapshot-loss permission bypass a foreign Git lock", async () => {
-    const created = await createSessionWorktree();
     await git(repo, "worktree", "lock", "--reason", "other-tool", created.path);
 
-    await expect(
-      service.remove({ id: created.id, reason: "manual-delete", allowSnapshotLoss: true }),
-    ).rejects.toThrow("worktree has a foreign lock: other-tool");
+    await expect(remove(true)).rejects.toThrow("worktree has a foreign lock: other-tool");
     expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
     expect(await fs.stat(created.path)).toBeTruthy();
   });
 
   it("rejects a snapshot-loss retry when a run starts after snapshot failure", async () => {
-    const created = await createSessionWorktree();
-    const nested = path.join(created.path, "nested");
-    await fs.mkdir(nested);
-    await git(nested, "init", "-b", "main");
+    await createNestedRepository(created.path);
 
-    await expect(service.remove({ id: created.id, reason: "manual-delete" })).rejects.toThrow(
+    await expect(remove()).rejects.toThrow(
       "nested git repositories cannot be snapshotted losslessly",
     );
     const lease = await acquireWorktreeRunLease(created.id, { env });
 
-    await expect(
-      service.remove({ id: created.id, reason: "manual-delete", allowSnapshotLoss: true }),
-    ).rejects.toThrow("worktree is busy");
+    await expect(remove(true)).rejects.toThrow("worktree is busy");
     expect(hasLiveWorktreeRunLease(env, created.id)).toBe(true);
     expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
     expect(await fs.stat(created.path)).toBeTruthy();
@@ -110,17 +96,10 @@ describe("ManagedWorktreeService removal against a live run lease", () => {
   });
 
   it("continues after snapshot failure when snapshot loss is allowed", async () => {
-    const created = await createSessionWorktree();
-    const nested = path.join(created.path, "nested");
-    await fs.mkdir(nested);
-    await git(nested, "init", "-b", "main");
+    await createNestedRepository(created.path);
 
     const started = Date.now();
-    const result = await service.remove({
-      id: created.id,
-      reason: "manual-delete",
-      allowSnapshotLoss: true,
-    });
+    const result = await remove(true);
 
     expect(result).toEqual({
       removed: true,
@@ -134,11 +113,7 @@ describe("ManagedWorktreeService removal against a live run lease", () => {
   });
 
   it("allows only one concurrent remover to own the claim", async () => {
-    const created = await createSessionWorktree();
-    const results = await Promise.allSettled([
-      service.remove({ id: created.id, reason: "manual-delete" }),
-      service.remove({ id: created.id, reason: "manual-delete" }),
-    ]);
+    const results = await Promise.allSettled([remove(), remove()]);
     const completed = results.filter((result) => result.status === "fulfilled");
     const rejected = results.filter((result) => result.status === "rejected");
     expect(completed).toHaveLength(1);
@@ -151,7 +126,6 @@ describe("ManagedWorktreeService removal against a live run lease", () => {
   });
 
   it("skips idle garbage collection for a worktree with a live run lease", async () => {
-    const created = await createSessionWorktree();
     await updateRegistryWorktree(env, created.id, { lastActiveAt: Date.now() - IDLE_GC_MS - 1 });
     const lease = await acquireWorktreeRunLease(created.id, { env });
 
