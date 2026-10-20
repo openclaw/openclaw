@@ -5,11 +5,9 @@ import { spawnNodeEvalSync } from "../test-utils/node-process.js";
 import { cliOutputScript } from "./cli-process-fixture.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-// Reuse temporary source transforms while each child keeps its own scenario state.
 const childTempDir = useAutoCleanupTempDirTracker(afterAll).make("openclaw-cron-child-tmp-");
-const summaryBytes = 128 * 1024;
 const sentinel = "\nEND-CRON-SUMMARY\n";
-const summary = "x".repeat(summaryBytes - sentinel.length) + sentinel;
+const summary = "x".repeat(128 * 1024 - sentinel.length) + sentinel;
 
 it.each([
   ["wait success", ["run", "job-1", "--wait"], 0, "wait"],
@@ -29,7 +27,7 @@ it.each([
     const admission =
       exitCode === 0 ? { ok: true, enqueued: true, runId: "run-1" } : { ok: true, ran: false };
     const rpcSource = `
-      const summary = "x".repeat(${summaryBytes} - ${sentinel.length}) + ${JSON.stringify(sentinel)};
+      const summary = "x".repeat(${summary.length} - ${sentinel.length}) + ${JSON.stringify(sentinel)};
       const row = { ts: 1700000001000, ...${JSON.stringify(run)}, action: "finished",
         summary, runAtMs: 1700000000000, durationMs: 1000 };
       export async function callGatewayFromCliRuntime(method) {
@@ -62,28 +60,26 @@ it.each([
           });
     `,
     });
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
-      OPENCLAW_STATE_DIR: path.join(root, "state"),
-      OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
-      TMPDIR: childTempDir,
-      TEMP: childTempDir,
-      TMP: childTempDir,
-      NODE_DISABLE_COMPILE_CACHE: "1",
-      NO_COLOR: "1",
-    };
-    delete env.VITEST;
-    delete env.VITEST_POOL_ID;
-    delete env.VITEST_WORKER_ID;
     const result = spawnNodeEvalSync(script, {
       imports: ["tsx"],
-      env,
-      maxBuffer: 2 * summaryBytes,
+      env: {
+        ...process.env,
+        OPENCLAW_STATE_DIR: path.join(root, "state"),
+        OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
+        TMPDIR: childTempDir,
+        TEMP: childTempDir,
+        TMP: childTempDir,
+        NODE_DISABLE_COMPILE_CACHE: "1",
+        NO_COLOR: "1",
+        VITEST: undefined,
+        VITEST_POOL_ID: undefined,
+        VITEST_WORKER_ID: undefined,
+      },
+      maxBuffer: 2 * summary.length,
       timeout: 30_000,
     });
 
-    expect(result.error).toBeUndefined();
-    expect(result, result.stderr).toMatchObject({ signal: null, status: exitCode });
+    expect([result.error, result.signal, result.status]).toEqual([undefined, null, exitCode]);
     if (kind === "error") {
       expect(result.stdout).toBe("");
       expect(result.stderr).toContain(
