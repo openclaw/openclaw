@@ -20,8 +20,8 @@ describe("agent harness attempt deadlines", () => {
     timeoutMs = 60_000,
     startedAtMs = Date.now(),
     startedAtMonotonicMs = startedAtMs,
+    abort = new AbortController(),
   ) {
-    const abort = new AbortController();
     const onTimeout = vi.fn();
     const onDeadlineChanged = vi.fn();
     const controller = createAgentHarnessAttemptDeadlineController({
@@ -34,6 +34,11 @@ describe("agent harness attempt deadlines", () => {
       onDeadlineChanged,
     });
     return { controller, abort, onTimeout, onDeadlineChanged };
+  }
+
+  function expectTimeout(onTimeout: ReturnType<typeof vi.fn>, kind: "execution" | "settlement") {
+    const timeoutMs = kind === "execution" ? 60_000 : SETTLEMENT_TIMEOUT_MS;
+    expect(onTimeout).toHaveBeenCalledExactlyOnceWith({ kind, elapsedMs: timeoutMs, timeoutMs });
   }
 
   it.each(["timer", "clock"] as const)("expires the admitted execution budget via %s", (expiry) => {
@@ -54,11 +59,7 @@ describe("agent harness attempt deadlines", () => {
     expect(onTimeout).not.toHaveBeenCalled();
     vi.advanceTimersByTime(1);
 
-    expect(onTimeout).toHaveBeenCalledExactlyOnceWith({
-      kind: "execution",
-      elapsedMs: 60_000,
-      timeoutMs: 60_000,
-    });
+    expectTimeout(onTimeout, "execution");
     expect(controller.ownsExecutionWait()).toBe(false);
     controller.beginSettlement(Date.now());
     vi.advanceTimersByTime(SETTLEMENT_TIMEOUT_MS);
@@ -96,11 +97,7 @@ describe("agent harness attempt deadlines", () => {
     expect(onTimeout).not.toHaveBeenCalled();
     vi.advanceTimersByTime(1);
 
-    expect(onTimeout).toHaveBeenCalledExactlyOnceWith({
-      kind: "settlement",
-      elapsedMs: SETTLEMENT_TIMEOUT_MS,
-      timeoutMs: SETTLEMENT_TIMEOUT_MS,
-    });
+    expectTimeout(onTimeout, "settlement");
     expect(onDeadlineChanged).toHaveBeenCalledTimes(2);
   });
 
@@ -115,11 +112,7 @@ describe("agent harness attempt deadlines", () => {
     vi.setSystemTime(Date.now() + jumpMs);
     expect(controller.ownsExecutionWait()).toBe(true);
     vi.advanceTimersByTime(1);
-    expect(onTimeout).toHaveBeenCalledExactlyOnceWith({
-      kind: "execution",
-      elapsedMs: 60_000,
-      timeoutMs: 60_000,
-    });
+    expectTimeout(onTimeout, "execution");
     expect(controller.ownsExecutionWait()).toBe(false);
   });
 
@@ -141,17 +134,7 @@ describe("agent harness attempt deadlines", () => {
   it("does not schedule work for an already-aborted attempt", () => {
     const abort = new AbortController();
     abort.abort("cancelled");
-    const onTimeout = vi.fn();
-    const onDeadlineChanged = vi.fn();
-    const controller = createAgentHarnessAttemptDeadlineController({
-      startedAtMs: 0,
-      startedAtMonotonicMs: 0,
-      timeoutMs: 60_000,
-      settlementTimeoutMs: SETTLEMENT_TIMEOUT_MS,
-      signal: abort.signal,
-      onTimeout,
-      onDeadlineChanged,
-    });
+    const { controller, onTimeout, onDeadlineChanged } = createController(60_000, 0, 0, abort);
     controller.beginSettlement(0);
     vi.advanceTimersByTime(SETTLEMENT_TIMEOUT_MS);
     expect(controller.ownsExecutionWait()).toBe(false);

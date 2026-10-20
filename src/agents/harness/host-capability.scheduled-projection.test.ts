@@ -11,6 +11,12 @@ import { createAdmittedHostCapabilityTestFixture } from "./host-capability.test-
 import { resolveAgentHarnessScheduledToolProjectionCapability } from "./host-private-capabilities.js";
 
 const hosts: Array<Awaited<ReturnType<typeof createAdmittedHostCapabilityTestFixture>>> = [];
+const projection = {
+  kind: "exec",
+  name: "gateway_exec",
+  description: "Gateway exec",
+  followupText: "Use gateway_process for follow-up.",
+} as const;
 async function createHost(runId: string) {
   setRuntimeConfigSnapshot({});
   const host = await createAdmittedHostCapabilityTestFixture({
@@ -38,27 +44,18 @@ afterEach(() => {
 describe("agent harness scheduled tool projection", () => {
   it("issues scheduled shell projections only from this host-created tool surface", async () => {
     const host = await createHost("run-scheduled-tool-projection");
-    expect(
+    const resolveProjection = (ownerPluginId: string) =>
       resolveAgentHarnessScheduledToolProjectionCapability({
         hostCapabilities: host.hostCapabilities,
-        ownerPluginId: "other-harness",
-      }),
-    ).toBeUndefined();
+        ownerPluginId,
+      });
+    expect(resolveProjection("other-harness")).toBeUndefined();
     const sourceTools = (await host.hostCapabilities.createToolSurfaceAsync?.({})) ?? [];
     const execTool = sourceTools.find((tool) => tool.name === "exec");
-    const createProjection = resolveAgentHarnessScheduledToolProjectionCapability({
-      hostCapabilities: host.hostCapabilities,
-      ownerPluginId: "codex",
-    });
+    const createProjection = resolveProjection("codex");
     if (!execTool || !createProjection) {
       throw new Error("expected host-created exec projection test surface");
     }
-    const projection = {
-      kind: "exec" as const,
-      name: "gateway_exec",
-      description: "Gateway exec",
-      followupText: "Use gateway_process for follow-up.",
-    };
     const alias = createProjection(execTool, projection);
     expect(readCronScheduledToolProjection(alias)).toEqual({
       targetTool: "exec",
@@ -67,6 +64,10 @@ describe("agent harness scheduled tool projection", () => {
 
     // A shallow same-name copy is a different object: no projection identity.
     expect(readCronScheduledToolProjection({ ...alias })).toBeUndefined();
+    const expectRejectedSource = (source: AnyAgentTool) =>
+      expect(() => createProjection(source, projection)).toThrow(
+        "was not created by this host capability",
+      );
 
     // Swapping the alias executable after host creation is a tamper signal.
     const renamedAlias = { ...alias };
@@ -78,17 +79,13 @@ describe("agent harness scheduled tool projection", () => {
     const forgedExecute = async () => ({ content: [], details: {} });
     const sourceExecute = execTool.execute;
     execTool.execute = forgedExecute;
-    expect(() => createProjection(execTool, projection)).toThrow(
-      "was not created by this host capability",
-    );
+    expectRejectedSource(execTool);
     execTool.execute = sourceExecute;
 
     // A plugin-bound copy of exec is not the host-created source object.
     const pluginExec = { ...execTool, name: "exec" };
     const [boundPluginExec] = host.hostCapabilities.bindToolSurface([pluginExec]);
-    expect(() => createProjection(boundPluginExec!, projection)).toThrow(
-      "was not created by this host capability",
-    );
+    expectRejectedSource(boundPluginExec!);
 
     // A non-shell host tool renamed to exec never gains shell projection rights.
     const nonShellTool = sourceTools.find(
@@ -98,9 +95,7 @@ describe("agent harness scheduled tool projection", () => {
       throw new Error("expected a non-shell host-created tool");
     }
     nonShellTool.name = "exec";
-    expect(() => createProjection(nonShellTool, projection)).toThrow(
-      "was not created by this host capability",
-    );
+    expectRejectedSource(nonShellTool);
 
     host.closeHost();
     expect(() => readCronScheduledToolProjection(alias)).toThrow();
@@ -124,10 +119,7 @@ describe("agent harness scheduled tool projection", () => {
       execute,
     } satisfies AnyAgentTool;
     const alias = createCronScheduledToolProjection(source, () => {}, "exec", {
-      kind: "exec",
-      name: "gateway_exec",
-      description: "Gateway exec",
-      followupText: "Use gateway_process for follow-up.",
+      ...projection,
       ask: "always",
     });
 
