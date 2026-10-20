@@ -1,3 +1,5 @@
+// Temporary #174343 upgrade dead-end repair; remove after 2026-11-29 with
+// Doctor compat record doctor-pre-july-retired-state.
 import os from "node:os";
 import path from "node:path";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";

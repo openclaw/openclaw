@@ -3,7 +3,7 @@ import { toUSVString } from "node:util";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
@@ -72,7 +72,7 @@ export function readUserProfileSnapshotCommand(
     { type: "userProfiles.reconcile" | "userProfiles.catalog" }
   >,
 ) {
-  return runSqliteDeferredTransactionSync(db, () =>
+  return runSqliteReadSnapshotSync(db, () =>
     command.type === "userProfiles.reconcile"
       ? {
           type: command.type,

@@ -36,7 +36,11 @@ import {
 import { withTimeout } from "../../../infra/fs-safe.js";
 import { getActivePluginRegistry } from "../../../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
-import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-admission.js";
+import { beginSessionEffect } from "../../../sessions/session-controller.lifecycle.js";
+import {
+  getRpcSource,
+  getRpcSourceIdentity,
+} from "../../../sessions/session-controller.rpc-sources.js";
 import { prepareUserProfileCatalog } from "../../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../../state/user-profiles.js";
 import { createTestRegistry } from "../../../test-utils/channel-plugins.js";
@@ -78,19 +82,20 @@ import { callSubagentGateway } from "./subagent-spawn-gateway.js";
 import { registerNativeCancellationCases } from "./subagent-spawn.cancellation.test-support.js";
 import { registerGuestSpawnCases } from "./subagent-spawn.guest.test-support.js";
 import { registerParticipantSpawnCases } from "./subagent-spawn.participants.test-support.js";
+import { readBoundExecutionState } from "./subagent-spawn.production-boundary.diagnostics.test-support.js";
 import {
   createBoundSpawnInvocation,
   createBoundWorker,
+  createEmbeddedRunWaiter,
   createSpawnBoundaryParent,
   createSpawnOperatorSource,
-  createSpawnBoundaryConfig,
   prepareIsolatedChildAdmissionProof,
-  readBoundExecutionState,
   recordSpawnBoundaryFinal,
   registerYieldedRequesterBatchCase,
 } from "./subagent-spawn.production-boundary.test-support.js";
 import { registerRequestCustodySpawnCases } from "./subagent-spawn.request-custody.test-support.js";
 import { registerOperatorSpawnRollbackCases } from "./subagent-spawn.rollback.test-support.js";
+import { createSpawnBoundaryConfig, throwBoundFailures } from "./subagent-spawn.test-helpers.js";
 import { registerManagedWorktreeSpawnCases } from "./subagent-spawn.worktree.test-support.js";
 
 vi.mock("../announce/subagent-announce.js", { spy: true });
@@ -101,23 +106,22 @@ const runEmbeddedAgent = vi.hoisted(() =>
   vi.fn<typeof import("../../embedded-agent.js").runEmbeddedAgent>(),
 );
 
+// mock-isolation: the Gateway boundary fixture replaces the embedded producer while using real control owners.
 vi.mock("../../embedded-agent.js", async () => {
-  const lifecycle = await import("../../embedded-agent-runner/runs.js");
-  const { resolveEmbeddedSessionLane } = await import("../../embedded-agent-runner/lanes.js");
-  const { resolveActiveEmbeddedRunSessionId } =
-    await import("../../embedded-agent-runner/active-run-projections.js");
+  const { abortEmbeddedAgentRun } = await import("../../embedded-agent-runner/runs.js");
+  const { waitForSessionRunEnd } =
+    await import("../../../sessions/session-controller.native-runtime.js");
+  const { isSessionRunActive } = await import("../../../sessions/session-controller.queries.js");
   return {
-    ...lifecycle,
-    resolveActiveEmbeddedRunSessionId,
-    resolveEmbeddedSessionLane,
+    abortEmbeddedAgentRun,
+    isSessionRunActive,
     runEmbeddedAgent,
-  } satisfies typeof import("../../embedded-agent.runtime.js");
+    waitForSessionRunEnd,
+  };
 });
 
 const parentSessionKey = "agent:main:subagent:production-boundary-parent";
 const parentRunId = "production-boundary-parent";
-// Two loaded exact-head CI runs reached this cold model boundary in 28–37 seconds.
-const COLD_MODEL_ENTRY_TIMEOUT_MS = 60_000;
 let state: OpenClawTestState;
 let stateDir = "";
 let runtimeConfig: OpenClawConfig;
@@ -229,7 +233,6 @@ async function createBoundGateway(bound: Awaited<ReturnType<typeof createBoundPa
     defaultWorkspaceDir: stateDir,
   });
   const context = bound.context as unknown as GatewayRequestContext;
-  context.resolveGatewayContext = () => bound.gatewayBinding.current;
   context.addChatRun = context.chatRunState.registry.add;
   context.removeChatRun = context.chatRunState.registry.remove;
   context.loadGatewayModelCatalogSnapshot = (request) =>
@@ -254,34 +257,10 @@ async function createBoundGateway(bound: Awaited<ReturnType<typeof createBoundPa
   context.recoveryRuntime = runtime.recovery;
   vi.spyOn(runtime.recovery, "waitForAgent").mockResolvedValue({ status: "pending" });
   context.getGatewayMethodRegistry = () => methodRegistry;
-  return { context, runtime, identities };
+  return { context, runtime, identities, readAgentRuntimeExecutionLineage };
 }
 
-async function waitForEmbeddedRun(
-  bound: Awaited<ReturnType<typeof createBoundParent>>,
-  childRunId: string,
-  started?: Promise<void>,
-  calls = 1,
-) {
-  try {
-    if (started) {
-      await withTimeout(started, COLD_MODEL_ENTRY_TIMEOUT_MS, {
-        message: "embedded execution entry timed out",
-      });
-      expect(runEmbeddedAgent).toHaveBeenCalledTimes(calls);
-    } else {
-      await vi.waitFor(() => expect(runEmbeddedAgent).toHaveBeenCalledTimes(calls), {
-        timeout: 15_000,
-      });
-    }
-  } catch (cause) {
-    // Only report owner facts; terminal messages can contain workspace paths or private input.
-    throw new Error(
-      `Embedded execution did not arrive: ${JSON.stringify(readBoundExecutionState(bound, childRunId))}`,
-      { cause },
-    );
-  }
-}
+const waitForEmbeddedRun = createEmbeddedRunWaiter(runEmbeddedAgent);
 
 async function closeBoundGateway(
   bound: Awaited<ReturnType<typeof createBoundParent>>,
@@ -296,7 +275,7 @@ async function closeBoundGateway(
       () => {
         expect(bound.execution.hasPendingWork).toBe(false);
         if (childRunId) {
-          expect(bound.context.chatAbortControllers.has(childRunId)).toBe(false);
+          expect(getRpcSource(childRunId)).toBeUndefined();
         }
         // Fence new work in the same turn that observes idle; never start an unbounded drain.
         return bound.execution.drain();
@@ -324,17 +303,6 @@ async function closeBoundGateway(
     }
   }
   return failures;
-}
-
-function throwBoundFailures(failures: unknown[]) {
-  if (failures.length === 1) {
-    throw failures[0];
-  }
-  if (failures.length > 1) {
-    throw new AggregateError(failures, "Spawn proof and fixture cleanup failed", {
-      cause: failures[0],
-    });
-  }
 }
 
 async function createGuestParent(audit = true) {
@@ -483,7 +451,7 @@ describe("recursive spawn production boundary", () => {
         modelOverrideSource: "user",
       },
     );
-    const { context, runtime, identities } = await createBoundGateway(bound);
+    const { runtime, identities } = await createBoundGateway(bound);
     const childProof = await prepareIsolatedChildAdmissionProof(bound);
     const modelRun = createDeferred<EmbeddedAgentRunResult>();
     const modelRunStarted = createDeferred();
@@ -529,9 +497,12 @@ describe("recursive spawn production boundary", () => {
         provider: "custom",
         model: "child-model",
       });
-      expect(context.chatAbortControllers.get(details.runId)).toMatchObject({
+      const source = expectDefined(getRpcSource(details.runId), "accepted child source");
+      expect(getRpcSourceIdentity(source)).toMatchObject({
         agentId: "main",
         sessionKey: details.childSessionKey,
+      });
+      expect(source.adapter).toMatchObject({
         operationalRunInstance: { runId: details.runId },
       });
       const observedRuntimeIdentity = identities.at(-1);
@@ -681,7 +652,7 @@ describe("recursive spawn production boundary", () => {
             dispatchGatewayMethodInProcess(
               "chat.abort",
               { sessionKey: parentSessionKey, runId: parentRunId },
-              { resolveGatewayContext: () => context },
+              { resolveGatewayContext: bound.resolveGatewayContext },
             ),
         );
       try {
@@ -751,7 +722,7 @@ describe("recursive spawn production boundary", () => {
             );
           }
           expect(runEmbeddedAgent).not.toHaveBeenCalled();
-          expect(context.chatAbortControllers.has(childRunId)).toBe(false);
+          expect(getRpcSource(childRunId)).toBeUndefined();
           expect(
             loadSessionEntry({ storePath: bound.storePath, sessionKey: parentSessionKey }),
           ).toMatchObject({ sessionId: "parent-session" });
@@ -769,7 +740,7 @@ describe("recursive spawn production boundary", () => {
         if (parentState === "stopped" || parentState === "operator-stopped") {
           await Promise.resolve();
           expect(runEmbeddedAgent).not.toHaveBeenCalled();
-          expect(context.chatAbortControllers.has(childRunId)).toBe(false);
+          expect(getRpcSource(childRunId)).toBeUndefined();
           expect(subagentRuns.get(childRunId)).toMatchObject({
             collectorCompletion: { status: "killed" },
           });
@@ -779,8 +750,11 @@ describe("recursive spawn production boundary", () => {
             runId: childRunId,
             sessionKey: details.childSessionKey,
           });
-          expect(context.chatAbortControllers.get(childRunId)).toMatchObject({
+          const childSource = expectDefined(getRpcSource(childRunId), "started child source");
+          expect(getRpcSourceIdentity(childSource)).toMatchObject({
             sessionKey: details.childSessionKey,
+          });
+          expect(childSource.adapter).toMatchObject({
             operationalRunInstance: { runId: childRunId },
           });
           expect(subagentRuns.get(childRunId)).toMatchObject({
@@ -859,7 +833,7 @@ describe("recursive spawn production boundary", () => {
     const errors: unknown[] = [];
     const failures: unknown[] = [];
     const interrupted = createDeferred();
-    let work: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+    let work: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
     const caller = createAdmittedGatewayToolCallerIdentity({
       admittedRunContext: bound.admitted,
       agentId: "main",
@@ -903,7 +877,7 @@ describe("recursive spawn production boundary", () => {
       );
     try {
       if (target === "worker-reassigned-during-delete") {
-        work = await beginSessionWorkAdmission({
+        work = await beginSessionEffect({
           scope: bound.storePath,
           identities: [childSessionKey, original.sessionId],
           assertAllowed: () => {},

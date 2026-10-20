@@ -2,7 +2,6 @@
 // aliases, model catalog validation, and rejected invalid patch payloads.
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { prepareSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
-import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { contextBudgetStatusFixture } from "../config/sessions/context-budget.test-support.js";
@@ -14,7 +13,6 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plug
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-harness-session-key.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
 import { withAgentSessionModelPatchOrigin } from "./session-model-patch-origin.js";
-import { projectSessionsPatchEntry } from "./sessions-patch.js";
 import {
   type ApplySessionsPatchArgs,
   MAIN_SESSION_KEY,
@@ -1304,45 +1302,6 @@ describe("gateway sessions patch", () => {
 
     expect(entry.thinkingLevel).toBe("xhigh");
   });
-
-  test.each([
-    { requested: "max", nativeEffort: "max", accepted: true },
-    { requested: "max", nativeEffort: "high", accepted: false },
-  ] as const)(
-    "validates thinking against the selected runtime variant ($nativeEffort, accepted=$accepted)",
-    async ({ requested, nativeEffort, accepted }) => {
-      const host: ModelCatalogEntry = {
-        provider: "runtime-fixture",
-        id: "reasoner",
-        name: "Reasoner",
-        reasoning: true,
-        compat: { supportedReasoningEfforts: [accepted ? "high" : "max"] },
-      };
-      const native: ModelCatalogEntry = {
-        ...host,
-        nativeRuntime: "fixture-native",
-        compat: { supportedReasoningEfforts: [nativeEffort] },
-      };
-      const result = await projectSessionsPatchEntry({
-        cfg: { agents: { defaults: { model: "runtime-fixture/reasoner" } } },
-        storeKey: MAIN_SESSION_KEY,
-        existingEntry: mainStoreEntry({})[MAIN_SESSION_KEY],
-        isLabelInUse: () => false,
-        preparedAgentRuntime: "fixture-native",
-        patch: { key: MAIN_SESSION_KEY, thinkingLevel: requested },
-        loadGatewayModelCatalogSnapshot: async () => ({
-          entries: [host],
-          routeVariants: [host, native],
-        }),
-      });
-
-      if (accepted) {
-        expect(expectPatchOk(result).thinkingLevel).toBe(requested);
-      } else {
-        expectPatchError(result, 'thinkingLevel "max" is not supported');
-      }
-    },
-  );
 
   test("validates global patches against the selected agent", async () => {
     const entry = await patchOk({

@@ -9,7 +9,7 @@ import { readWorktreeRunLeaseStateInDatabase } from "../agents/worktrees/run-lea
 import { readPreparedPoolPresenceDemandInDatabase } from "../gateway/worker-environments/prepared-pool-presence-store.worker.js";
 import { readWorkerEnvironmentFacts } from "../gateway/worker-environments/store-row-codec.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { readAgentDeletionJournalStatusInDatabase } from "./agent-deletion-journal.read.js";
 import type { OpenClawStateReadCommand } from "./openclaw-state-read.types.js";
 
@@ -36,9 +36,7 @@ export function readStateRegistryCommand(
   if (command.type === "workerEnvironments.snapshot") {
     return {
       type: command.type,
-      facts: runSqliteDeferredTransactionSync(db, () =>
-        readWorkerEnvironmentFacts(db, command.ids),
-      ),
+      facts: runSqliteReadSnapshotSync(db, () => readWorkerEnvironmentFacts(db, command.ids)),
     };
   }
   if (command.type === "agentDeletionJournal.status") {

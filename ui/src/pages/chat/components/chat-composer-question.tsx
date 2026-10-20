@@ -1,4 +1,4 @@
-import { createEffect, createMemo, Show, untrack } from "solid-js";
+import { createEffect, createMemo, Show } from "solid-js";
 import { createAsyncQuestionPanelProps } from "./chat-async-question.ts";
 import { commitComposerDraft, composerDraftKey } from "./chat-composer-state.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
@@ -71,10 +71,9 @@ export function createComposerQuestionPanel(
   const syncTakeover = (active: boolean, draftKey: string) => {
     if (active && !state.questionTakeoverActive) {
       // Commit an interrupted IME draft before the store update unmounts its input.
-      const composition = untrack(() => readComposition?.());
+      const composition = readComposition?.();
       if (state.composerComposing && composition?.key === draftKey) {
-        // Sample the live draft owner without subscribing this imperative commit.
-        untrack(() => commitComposerDraft(readProps(), composition.value));
+        commitComposerDraft(readProps(), composition.value);
       }
       state.composerComposing = false;
     }
@@ -134,7 +133,7 @@ export function createComposerQuestionPanel(
       });
       syncTakeover(selected.asyncIdentity === null, staticRequestContext.draftKey);
     };
-    return request.panel({
+    const panel = request.panel({
       collapsed: state.presentation.questionCollapsed,
       onCollapsedChange: (collapsed) => {
         state.updatePresentation((draft) => {
@@ -156,5 +155,6 @@ export function createComposerQuestionPanel(
       onPreviousRequest: () => selectRequest((index - 1 + requests.length) % requests.length),
       onNextRequest: () => selectRequest((index + 1) % requests.length),
     });
+    return { ...panel, getTranscriptElement: readProps().getTranscriptElement };
   });
 }

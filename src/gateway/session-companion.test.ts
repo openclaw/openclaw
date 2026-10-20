@@ -30,7 +30,6 @@ function askRequest(
 
 function createHarness(overrides?: {
   scheduler?: GatewayScheduler;
-  now?: () => number;
   currentSessionId?: () => string | undefined | Promise<string | undefined>;
   readContext?: () => ReturnType<SessionCompanionContextReader["read"]>;
   run?: Parameters<typeof createSessionCompanion>[0]["run"];
@@ -60,13 +59,13 @@ function createHarness(overrides?: {
       })),
   );
   const service = createSessionCompanion({
-    scheduler: overrides?.scheduler ?? createTestGatewayScheduler(),
+    scheduler:
+      overrides?.scheduler ?? createTestGatewayScheduler(createGatewaySchedulerClock(100).clock),
     contextReader: { currentSessionId, read: readContext },
     getConfig: () => cfg,
     sessionObserver: { getCompanionSnapshotAsync: async () => getCompanionSnapshot() },
     resolveUtilityModelRef: () => "openai/gpt-5.6-luna",
     run,
-    now: overrides?.now ?? (() => 100),
   });
   onTestFinished(() => service.dispose());
   return { currentSessionId, getCompanionSnapshot, readContext, run, service };
@@ -393,7 +392,7 @@ it("caps replay by exchange count and UTF-8 bytes", () => {
 it("sweeps idle threads after two hours", async () => {
   const clock = createGatewaySchedulerClock();
   const scheduler = createTestGatewayScheduler(clock.clock);
-  const harness = createHarness({ now: clock.clock.now, scheduler });
+  const harness = createHarness({ scheduler });
   await harness.service.ask(askRequest("Before idle?"));
   await clock.advanceBy(2 * 60 * 60_000);
   expectEmpty(harness.service);

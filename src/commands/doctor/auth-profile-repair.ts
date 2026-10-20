@@ -61,3 +61,17 @@ export async function repairAuthProfileMigration(params: {
     profileIdMap: aliases.profileIdMap,
   };
 }
+
+export async function refreshGatewayAuthStateAfterAuthProfileRepair(): Promise<void> {
+  const { callGateway } = await import("../../gateway/call.js");
+  for (const request of [
+    { method: "secrets.reload", params: {} },
+    { method: "models.authStatus", params: { refresh: true } },
+  ]) {
+    try {
+      await callGateway({ ...request, timeoutMs: 3000 });
+    } catch {
+      // Doctor repair remains best effort when the Gateway is stopped or cannot reload.
+    }
+  }
+}

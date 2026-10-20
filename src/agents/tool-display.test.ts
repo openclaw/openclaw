@@ -41,7 +41,6 @@ describe("tool display details", () => {
     ).toMatchObject({
       name: "web_search",
       label: "Web Search",
-      verb: "search",
       detail: 'for "OpenClaw release notes"',
     });
   });

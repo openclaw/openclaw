@@ -314,8 +314,9 @@ async function constructMcpLoopbackTools(
   // Restricted CLI grants use OpenClaw's implementations for coding tools;
   // native CLI tools bypass path, approval, sandbox, and exec policy.
   const mediatedNativeTools =
-    context.trustedInternalHandoff ||
-    toolPolicyRestrictsTools(pickSandboxToolPolicy(context.conversationToolPolicy))
+    toolsAllow === undefined &&
+    (context.trustedInternalHandoff ||
+      toolPolicyRestrictsTools(pickSandboxToolPolicy(context.conversationToolPolicy)))
       ? new Set(NATIVE_TOOL_EXCLUDE)
       : resolveMediatedNativeTools(toolsAllow, mode);
   for (const toolName of params.defaultMediatedToolNames ?? []) {

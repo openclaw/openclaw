@@ -38,6 +38,9 @@ export const optimisticSessionRowFields = [
   "pinnedAt",
   "unread",
   "category",
+  "label",
+  "icon",
+  "color",
   "thinkingLevel",
   "fastMode",
   "effectiveFastMode",
@@ -60,6 +63,8 @@ export type SessionPatchRowFact = {
   readCutoff?: number;
   fields:
     | { label: GatewaySessionRow["label"] }
+    | { icon: GatewaySessionRow["icon"] }
+    | { color: GatewaySessionRow["color"] }
     | { category: GatewaySessionRow["category"] }
     | SessionPinFields
     | { pinned: true }
@@ -317,7 +322,14 @@ function createOptimisticRowPatches<T>(
 }
 
 export function createOptimisticRowField<
-  Field extends "category" | "unread" | "thinkingLevel" | "contextWindow",
+  Field extends
+    | "label"
+    | "icon"
+    | "color"
+    | "category"
+    | "unread"
+    | "thinkingLevel"
+    | "contextWindow",
 >(host: PendingRowCopyHost, field: Field) {
   return createOptimisticRowPatches(host, {
     read: (row) => row?.[field],

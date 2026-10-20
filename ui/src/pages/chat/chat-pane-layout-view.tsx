@@ -6,12 +6,13 @@ import { SessionBackgroundView } from "../../components/session-background-view.
 import { Icon } from "../../components/solid/icon.tsx";
 import type { PresentationValue } from "../../lib/presentation.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { PaneDetails, PaneSubagentStop, type PaneDetailsProps } from "./chat-pane-header-view.tsx";
+import { PaneSubagentStop } from "./chat-pane-header-view.tsx";
 import { usePanePresentation } from "./chat-pane-presentation.ts";
 import { SidebarRegionView, type SidebarRegionViewProps } from "./chat-pane-sidebar-view.tsx";
 import { ChatBoardResetConfirmation } from "./chat-pane-surfaces.tsx";
 import { renderChatTopbarNotices } from "./chat-view-notices.tsx";
 import { ChatView, type ChatProps } from "./chat-view.tsx";
+import { ChatDetails, type ChatDetailsViewProps } from "./components/chat-details.tsx";
 import { ChatImageLightbox } from "./components/chat-image-lightbox-view.tsx";
 import { PaneHeaderView, type ChatPaneHeaderPresentation } from "./components/chat-pane-header.tsx";
 
@@ -19,7 +20,7 @@ function PaneSubagentHeader(props: {
   title: string;
   onBack: () => void;
   stop: Parameters<typeof PaneSubagentStop>[0] | undefined;
-  details: PaneDetailsProps | undefined;
+  details: ChatDetailsViewProps | undefined;
 }) {
   return (
     <header class="chat-subagent-detail__header">
@@ -31,7 +32,7 @@ function PaneSubagentHeader(props: {
         <strong class="chat-subagent-detail__title">{props.title}</strong>
         <Show when={props.stop}>{(stop) => <PaneSubagentStop {...stop()} />}</Show>
         <Show when={props.details !== undefined}>
-          <PaneDetails {...props.details!} />
+          <ChatDetails {...props.details!} />
         </Show>
       </div>
     </header>

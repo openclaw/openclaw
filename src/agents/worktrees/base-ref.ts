@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { hasErrnoCode } from "../../infra/errno.js";
+import { ignoreMissingPath } from "../../infra/errno.js";
 import {
   enqueueGitRefMutation,
   executeGitCommand,
@@ -368,12 +368,9 @@ async function assertWorktreeGitOperationsIdle(
 ): Promise<void> {
   try {
     const worktreesDir = path.join(commonDir, "worktrees");
-    const worktrees = await fs.readdir(worktreesDir).catch((error: unknown) => {
-      if (hasErrnoCode(error, "ENOENT")) {
-        return [];
-      }
-      throw error;
-    });
+    const worktrees = await fs
+      .readdir(worktreesDir)
+      .catch((error: unknown) => ignoreMissingPath(error) ?? []);
     const busy = () =>
       new LocalDefaultBusyError(
         "Local default retained: finish or abort the Git rebase, am, or bisect operation reserving it before advancing it.",
@@ -383,12 +380,7 @@ async function assertWorktreeGitOperationsIdle(
       throw busy();
     }
     const read = async (directory: string, name: string) =>
-      await fs.readFile(path.join(directory, name), "utf8").catch((error: unknown) => {
-        if (hasErrnoCode(error, "ENOENT")) {
-          return undefined;
-        }
-        throw error;
-      });
+      await fs.readFile(path.join(directory, name), "utf8").catch(ignoreMissingPath);
     // Rebase exec can reattach HEAD; reservations cannot be inferred from detached status.
     // Read only reservation files, with bounded I/O and no per-worktree directory listing.
     const checked = await runTasksWithConcurrency({

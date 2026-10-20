@@ -287,22 +287,7 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
     }
   }
 
-  protected setSessionVisibility(
-    row: GatewaySessionRow,
-    visibility: SessionVisibility,
-  ): Promise<void> {
-    return this.mutateSessionSharing(row, { visibility });
-  }
-
-  protected setSessionMember(
-    row: GatewaySessionRow,
-    identityId: string,
-    member: boolean,
-  ): Promise<void> {
-    return this.mutateSessionSharing(row, { identityId, member });
-  }
-
-  private async mutateSessionSharing(
+  protected async mutateSessionSharing(
     row: GatewaySessionRow,
     change: { visibility: SessionVisibility } | { identityId: string; member: boolean },
   ): Promise<void> {

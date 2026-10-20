@@ -1,6 +1,7 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { type Stats, stat, unwatchFile, watch, watchFile } from "node:fs";
 import path from "node:path";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   getMcpAppViewLease,
@@ -36,7 +37,6 @@ const fileSources = new WeakMap<
 
 const writeAdmissions = new WeakSet<McpAppViewLease>();
 const subscriptions = new WeakMap<McpAppViewLease, Map<string, () => void>>();
-const etag = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 
 async function captureHostFileSession(
   target: { sessionKey: string; agentId: string },
@@ -237,7 +237,7 @@ export async function readMcpAppHostFile(
         {
           uri: file.resourceUri,
           ...content,
-          _meta: { "openai/resource": { writable, etag: etag(result.buffer) } },
+          _meta: { "openai/resource": { writable, etag: sha256Hex(result.buffer) } },
         },
       ],
     };

@@ -105,6 +105,31 @@ export function registerChannelAutostartRecoveryTests({
       expect(tryRecover).toHaveBeenCalledOnce();
     });
 
+    it("retires the breaker error on accounts that stay unlinked after recovery", async () => {
+      installTestRegistry(
+        createTestPlugin({
+          startAccount: vi.fn(stayRunning),
+          isLinked: () => "not-linked",
+          listAccountIds: () => [DEFAULT_ACCOUNT_ID, "work"],
+        }),
+      );
+      const manager = createManager({ tryRecoverAutostartSuppression: async () => undefined });
+      manager.setAutostartSuppression({ reason: "crash-loop-breaker", message: "safe mode" });
+      await manager.startChannels();
+      manager.markChannelLoggedOut("discord", true, "work");
+      const lastErrors = () =>
+        Object.fromEntries(
+          Object.entries(manager.getRuntimeSnapshot().channelAccounts.discord ?? {}).map(
+            ([id, account]) => [id, account.lastError],
+          ),
+        );
+      expect(lastErrors()).toEqual({ [DEFAULT_ACCOUNT_ID]: "safe mode", work: "logged out" });
+
+      await manager.recoverAutostartSuppression();
+
+      expect(lastErrors()).toEqual({ [DEFAULT_ACCOUNT_ID]: null, work: "logged out" });
+    });
+
     it("prepares a healthy boot synchronously without reading the breaker owner", () => {
       const tryRecover = vi.fn(async () => undefined);
       const manager = createManager({ tryRecoverAutostartSuppression: tryRecover });

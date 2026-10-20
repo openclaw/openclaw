@@ -506,11 +506,11 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
                   settlement = capture(
                     entries.filter(({ sessionKey }) => removedKeys.has(sessionKey)),
                   );
-                  settlement.beforeCommit();
+                  return settlement.beforeCommit();
                 },
+                settled: (settledOutcome) => settlement?.settle(settledOutcome.kind),
               },
             );
-            settlement?.settle(outcome.kind);
             const result = readSessionActorStorageResult(outcome);
             return new Set(result.removedSessionKeys);
           },

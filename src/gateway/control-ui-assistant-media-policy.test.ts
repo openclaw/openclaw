@@ -1,9 +1,12 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { finished } from "node:stream/promises";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { mockStoppedWorkspaceContainer } from "../agents/sandbox/mount-plan.test-helpers.js";
+import { insertRegistryWorktree } from "../agents/worktrees/registry.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { GatewayOperatorRolesConfig } from "../config/types.gateway.js";
@@ -78,6 +81,22 @@ async function image(name = "image.png", root = project, contents: string | Buff
   await fs.mkdir(path.dirname(source), { recursive: true });
   await fs.writeFile(source, contents);
   return source;
+}
+
+async function managedWorkspace() {
+  entry.sandbox = "required";
+  entry.worktree = { id: randomUUID(), branch: "screenshots", repoRoot: temp };
+  await insertRegistryWorktree(process.env, {
+    ...entry.worktree,
+    name: "screenshots",
+    path: project,
+    repoFingerprint: "test",
+    baseRef: "main",
+    ownerKind: "session",
+    ownerId: sessionKey,
+    createdAt: 0,
+    lastActiveAt: 0,
+  });
 }
 
 async function namedReader(
@@ -281,20 +300,27 @@ it("uses configured protection when there is no explicit session mode", async ()
   await expectMetadata(source, { available: false, canAllow: true });
 });
 
-it("offers an explicit exact-image grant and renews it without granting siblings", async () => {
-  const source = await image("outside.png", temp);
-  const sibling = await image("sibling.png", temp);
-  await expectMetadata(source, {
-    available: false,
-    code: "outside-allowed-folders",
-    canAllow: true,
-    retryable: false,
-  });
-  const ticket = await mediaTicket(source, { allow: true });
-  await expectMetadata(source, { available: true }, { ticket });
-  await expectMetadata(sibling, { available: false }, { ticket });
-  await expectBytes(source, { ticket }, PNG, "image/png");
-});
+it.each([undefined, "required"] as const)(
+  "offers and renews an exact-image administrator grant with sandbox %s without granting siblings",
+  async (sandbox) => {
+    entry.sandbox = sandbox;
+    if (sandbox) {
+      entry.permissionMode = "full";
+    }
+    const source = await image("outside.png", temp);
+    const sibling = await image("sibling.png", temp);
+    await expectMetadata(source, {
+      available: false,
+      code: "outside-allowed-folders",
+      canAllow: true,
+      retryable: false,
+    });
+    const ticket = await mediaTicket(source, { allow: true });
+    await expectMetadata(source, { available: true }, { ticket });
+    await expectMetadata(sibling, { available: false }, { ticket });
+    await expectBytes(source, { ticket }, PNG, "image/png");
+  },
+);
 
 it("does not let a reader grant outside access or renew an administrator's allowance", async () => {
   const source = await image("outside.png", temp);
@@ -601,4 +627,68 @@ it("preserves legacy Full Access PDF attachments under the configured agent work
   const outside = path.join(temp, name);
   await fs.writeFile(outside, content);
   expect((await request(outside, { bytes: true })).res.statusCode).toBe(404);
+});
+
+it.each(["tmpfs", "bind", "volume"] as const)(
+  "does not read a worktree image hidden by a sandbox %s mount",
+  async (kind) => {
+    await managedWorkspace();
+    cfg.agents!.defaults = {
+      sandbox: {
+        backend: "docker",
+        docker:
+          kind === "tmpfs"
+            ? { tmpfs: ["/workspace/cache"] }
+            : { binds: ["/unverified-engine-source:/workspace/cache:rw"] },
+      },
+    };
+    await image("cache/screenshot.png");
+    await mockStoppedWorkspaceContainer(project, "/workspace", [
+      {
+        Type: kind,
+        Source: "/unverified-engine-source",
+        Destination: "/workspace/cache",
+        RW: true,
+      },
+    ]);
+    for (const source of ["/workspace/cache/screenshot.png", "cache/screenshot.png"]) {
+      await expectMetadata(source, { available: false });
+      await expectWithheld(source, { bytes: true });
+    }
+  },
+);
+
+it("contains mapped managed sandbox images and revokes tickets when the workspace changes", async () => {
+  await managedWorkspace();
+  const worktree = entry.worktree!;
+  cfg.agents!.defaults = { sandbox: { backend: "podman", docker: { workdir: "/project" } } };
+  entry.spawnedCwd = path.join(project, "nested");
+  await fs.mkdir(entry.spawnedCwd);
+  const local = await image("screenshot.png");
+  await mockStoppedWorkspaceContainer(project, "/project");
+  const source = "/project/screenshot.png";
+  const ticket = await mediaTicket(source);
+  await expectBytes(source, { ticket });
+  const relativeSource = "../screenshot.png";
+  await expectBytes(relativeSource, { ticket: await mediaTicket(relativeSource) });
+  await expectWithheld(local, { ticket, bytes: true });
+  const outside = await image("outside.png", temp);
+  await fs.symlink(outside, path.join(project, "escape.png"));
+  for (const denied of ["/project/escape.png", "/project/../outside.png"]) {
+    await expectMetadata(denied, { available: false });
+    await expectWithheld(denied, { bytes: true });
+  }
+  {
+    using _ = onOpen(local, () => {
+      entry.worktree = { ...entry.worktree!, id: "replacement-worktree" };
+    });
+    await expectWithheld(source, { ticket, bytes: true });
+  }
+  await expectWithheld(source, { ticket, bytes: true });
+  await expectMetadata(source, { available: false });
+  entry.worktree = worktree;
+  const renewed = await mediaTicket(source);
+  await expectBytes(source, { ticket: renewed });
+  cfg.agents!.defaults!.sandbox!.docker!.workdir = "/renamed";
+  await expectWithheld(source, { ticket: renewed, bytes: true });
 });

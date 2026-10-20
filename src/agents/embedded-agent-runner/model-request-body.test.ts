@@ -21,6 +21,9 @@ import {
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./run/attempt.model-diagnostic-events.js";
 
 const originalHost = getAiTransportHost();
+const digest = (value: unknown) => hash("sha256", JSON.stringify(value));
+const fieldDigests = (fields: Record<string, unknown>) =>
+  Object.fromEntries(Object.entries(fields).map(([name, value]) => [name, digest(value)]));
 afterEach(() => {
   configureAiTransportHost(originalHost);
   resetDiagnosticEventsForTest();
@@ -52,12 +55,15 @@ it("encodes the final large provider body off-thread and shares its exact bytes 
         : []),
     ],
   }));
-  const replacement = {
+  const parameters = {
     model: model.id,
     prompt_cache_key: "private-affinity",
     previous_response_id: "private-response",
-    messages,
     stream: true,
+  };
+  const replacement = {
+    ...parameters,
+    messages,
     tools: [...allowedTools, { type: "function", function: { name: "hidden" } }],
   };
   const expectedPayload = { ...replacement, tools: allowedTools };
@@ -157,7 +163,7 @@ it("encodes the final large provider body off-thread and shares its exact bytes 
         cacheKeyPresent: true,
         cacheKeyHash: hash("sha256", '"private-affinity"').slice(0, 16),
         previousResponseIdPresent: true,
-        modelHash: hash("sha256", JSON.stringify(model.id)).slice(0, 16),
+        modelHash: digest(model.id).slice(0, 16),
         routeHash: hash("sha256", model.baseUrl).slice(0, 16),
         attempts: 1,
         retried: false,
@@ -175,37 +181,17 @@ it("encodes the final large provider body off-thread and shares its exact bytes 
       },
       cachePrefix: {
         system: hash("sha256", "{}"),
-        tools: hash("sha256", JSON.stringify({ tools: allowedTools })),
-        messages: messages.map((message, index) => {
-          const digest = hash("sha256", JSON.stringify(message));
-          return index < 32
-            ? {
-                digest,
-                fields: {
-                  role: hash("sha256", JSON.stringify(message.role)),
-                  content: hash("sha256", JSON.stringify(message.content)),
-                },
-              }
-            : { digest };
-        }),
+        tools: digest({ tools: allowedTools }),
+        messages: messages.map((message, index) =>
+          index < 32
+            ? { digest: digest(message), fields: fieldDigests(message) }
+            : { digest: digest(message) },
+        ),
         messageField: "messages",
         messageCount: 100,
         parameters: {
-          digest: hash(
-            "sha256",
-            JSON.stringify({
-              model: model.id,
-              prompt_cache_key: "private-affinity",
-              previous_response_id: "private-response",
-              stream: true,
-            }),
-          ),
-          fields: {
-            model: hash("sha256", JSON.stringify(model.id)),
-            prompt_cache_key: hash("sha256", '"private-affinity"'),
-            previous_response_id: hash("sha256", '"private-response"'),
-            stream: hash("sha256", "true"),
-          },
+          digest: digest(parameters),
+          fields: fieldDigests(parameters),
         },
         continuation: true,
       },

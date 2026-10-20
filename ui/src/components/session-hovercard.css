@@ -679,6 +679,12 @@ button.session-hovercard__attribution-others:is(:hover, :focus-visible) {
   color: var(--session-pr-state-color);
 }
 
+.session-hovercard__pr-source {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  overflow-wrap: anywhere;
+}
+
 .session-hovercard__pr-checks {
   font-size: var(--control-ui-text-xs);
   color: var(--muted);

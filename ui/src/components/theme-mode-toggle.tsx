@@ -5,11 +5,11 @@ import { Icon } from "./solid/icon.tsx";
 import type { MenuItemBindings } from "./solid/menu.tsx";
 import "./tooltip.ts";
 
-export type ThemeModeChangeDetail = { mode: ThemeMode; element: HTMLElement };
 type Props = {
   mode: ThemeMode;
   menuItem: boolean;
   menuAttributes?: MenuItemBindings;
+  onChange?: (mode: ThemeMode, element: HTMLElement) => void;
 };
 
 defineSolidBridge<Props>(
@@ -28,16 +28,9 @@ defineSolidBridge<Props>(
           role={props.menuItem ? "menuitem" : undefined}
           aria-label={tooltip()}
           onClick={(event) => {
-            host.dispatchEvent(
-              new CustomEvent<ThemeModeChangeDetail>("theme-change", {
-                detail: {
-                  mode:
-                    props.mode === "system" ? "light" : props.mode === "light" ? "dark" : "system",
-                  element: event.currentTarget,
-                },
-                bubbles: true,
-                composed: true,
-              }),
+            props.onChange?.(
+              props.mode === "system" ? "light" : props.mode === "light" ? "dark" : "system",
+              event.currentTarget,
             );
             const onClick = props.menuAttributes?.onClick;
             if (typeof onClick === "function") {
@@ -57,6 +50,7 @@ defineSolidBridge<Props>(
       mode: { default: "system", attribute: false },
       menuItem: { default: false, attribute: false },
       menuAttributes: { default: undefined, attribute: false },
+      onChange: { default: undefined, attribute: false },
     },
   },
 );

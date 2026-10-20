@@ -559,7 +559,6 @@ export class AgentsApiMessageProjection {
     }
     this.lastReasoningText = text;
     this.reasoningOpen = true;
-    this.assertCurrent();
     await this.params.onReasoningStream?.({ text, isReasoningSnapshot: true });
     this.assertCurrent();
   }

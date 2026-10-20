@@ -1,13 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "../config/state-dir.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../infra/sqlite-worker-contract.js";
+import { getMediaDir } from "../media/store.js";
 import { captureChannelReadScope } from "../shared/channel-read-authority.js";
 import {
   captureManagedImageContext,
   claimManagedImageRecordCleanupIfCurrent,
   deleteClaimedManagedImageRecord,
   insertManagedImageRecord,
+  listManagedImageOriginalMediaIds,
   MANAGED_OUTGOING_ORIGINALS_SUBDIR,
   type ManagedImageRecord,
 } from "./managed-image-record-store.js";
@@ -108,4 +111,63 @@ export async function insertManagedImageRecordWithFile(
   }
   const insertion = insertManagedImageRecord(record, stateDir, context);
   await insertion;
+}
+
+function resolveManagedImageOriginalsDir(stateDir: string): string {
+  const runtimeMediaRoot =
+    path.resolve(stateDir) === path.resolve(resolveStateDir())
+      ? getMediaDir()
+      : path.join(stateDir, "media");
+  return path.join(runtimeMediaRoot, MANAGED_OUTGOING_ORIGINALS_SUBDIR);
+}
+
+async function hasUnmigratedManagedImageMetadata(stateDir: string): Promise<boolean> {
+  try {
+    const names = await fs.readdir(path.join(stateDir, "media", "outgoing", "records"));
+    return names.some((name) => name.endsWith(".json") || name.includes(".json.doctor-importing-"));
+  } catch (error) {
+    return !hasErrnoCode(error, "ENOENT");
+  }
+}
+
+export async function deleteAgedOrphanManagedImageFiles(params: {
+  stateDir: string;
+  nowMs: number;
+  minAgeMs: number;
+}): Promise<number> {
+  // Destructive migration barrier only: runtime never parses or serves legacy metadata.
+  // Any legacy source may own an old file, so Doctor must retire all JSON before orphan reaping.
+  if (await hasUnmigratedManagedImageMetadata(params.stateDir)) {
+    return 0;
+  }
+  let referencedMediaIds: Set<string> | undefined;
+  const originalsDir = resolveManagedImageOriginalsDir(params.stateDir);
+  let names: string[];
+  try {
+    names = await fs.readdir(originalsDir);
+  } catch {
+    return 0;
+  }
+  let deletedCount = 0;
+  for (const name of names) {
+    if (referencedMediaIds?.has(name)) {
+      continue;
+    }
+    const filePath = path.join(originalsDir, name);
+    const stat = await fs.lstat(filePath).catch(() => undefined);
+    if (!stat?.isFile() || params.nowMs - stat.mtimeMs < params.minAgeMs) {
+      continue;
+    }
+    referencedMediaIds ??= new Set(await listManagedImageOriginalMediaIds(params.stateDir));
+    if (referencedMediaIds.has(name)) {
+      continue;
+    }
+    try {
+      await fs.rm(filePath, { force: true });
+      deletedCount += 1;
+    } catch {
+      // A later maintenance pass retries transient filesystem failures and races.
+    }
+  }
+  return deletedCount;
 }

@@ -10,7 +10,6 @@ import {
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { resolveMessageActionAgentRuntimeIdentity } from "../../agents/tools/gateway.js";
-import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { createReplyRestartRecoveryClaimController } from "../../auto-reply/reply/restart-recovery-claim.js";
 import { createReplyRecoveryActorFixture } from "../../auto-reply/reply/restart-recovery-claim.test-support.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
@@ -26,6 +25,7 @@ import {
 } from "../../infra/agent-run-registry.js";
 import type { QaBusStateSnapshot } from "../../plugin-sdk/qa-channel-protocol.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createReplyOperation } from "../../sessions/session-controller.operation.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";

@@ -20,6 +20,7 @@ import { handleContextMenuEvent } from "../../lib/keyboard-shortcuts.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { formatSessionTokens } from "../../lib/presenter.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { liveValue as createLiveValue } from "../../lib/reactive/live-value.ts";
 import { resolveSessionDisplayKind } from "../../lib/session-display.ts";
 import { formatGoalDetail, formatGoalSummary } from "../../lib/session-goal.ts";
 import { SESSION_DRAG_MIME } from "../../lib/sessions/drag.ts";
@@ -155,6 +156,7 @@ function isRowControlTarget(target: EventTarget | null): boolean {
 
 export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
   let menuTrigger: HTMLButtonElement | null = null;
+  let sessionLink: HTMLAnchorElement | undefined;
   const row = createMemo(() => props.row);
   const updated = createMemo(() =>
     row().updatedAt ? formatRelativeTimestamp(row().updatedAt) : t("common.na"),
@@ -270,7 +272,10 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
           />
         </td>
         <td class="data-table-key-col">
-          <openclaw-tooltip prop:content={keyCellTitle()}>
+          <openclaw-tooltip
+            prop:content={keyCellTitle()}
+            prop:descriptionTarget={canLink() ? () => sessionLink ?? null : undefined}
+          >
             <div class={["session-key-cell", { mono: !friendlyKeyLabel() }]}>
               <div class="session-key-cell__text">
                 <span class="session-key-cell__primary">
@@ -283,6 +288,7 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
                   ) : undefined}
                   {canLink() ? (
                     <a
+                      ref={(element) => (sessionLink = element)}
                       href={chatUrl()}
                       class="session-link"
                       onClick={(e: MouseEvent) => {
@@ -362,6 +368,8 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
   function SessionDetails() {
     const labelDisabledReason = createMemo(() => props.labelDisabledReason?.(row()));
     const labelValue = createMemo(() => row().label ?? "");
+    // Commit-on-change drafts belong to the native input until the label itself changes.
+    const labelRef = createLiveValue(labelValue);
     const rawThinking = createMemo(() => row().thinkingLevel ?? "");
     const thinking = createMemo(() =>
       rawThinking() ? normalizeThinkingOptionValue(rawThinking()) : "",
@@ -440,7 +448,7 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
                   <span class="session-override-field__label">{t("sessionsView.label")}</span>
                   <input
                     class="settings-input"
-                    value={labelValue()}
+                    ref={labelRef}
                     disabled={props.loading || Boolean(labelDisabledReason())}
                     title={labelDisabledReason() ?? undefined}
                     placeholder={t("sessionsView.optionalPlaceholder")}

@@ -64,6 +64,7 @@ export class CreationComposer {
       attachments: this.attachmentDraft.attachments,
       pendingAttachmentReads: this.attachmentDraft.reads.pendingReads,
     }),
+    // The shared composer projection consumes this synchronous draft-owner contract.
     subscribe: (listener) => this.subscribe(listener),
   };
   message = "";
@@ -331,6 +332,7 @@ export function retainCreatedComposer(
       entries.clear();
       registry?.release();
     };
+    // Scope changes release accepted input custody even while its view is unmounted.
     const unsubscribe = context.gateway.subscribe(() => {
       for (const [entryKey, value] of entries) {
         if (!value.canRecover()) {

@@ -2,20 +2,32 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { createOpenClawCodingTools } from "../agents/agent-tools.js";
 import {
-  setActiveEmbeddedRun,
-  clearActiveEmbeddedRun,
-  type EmbeddedAgentQueueHandle,
-} from "../agents/embedded-agent-runner/runs.js";
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+} from "../agents/admitted-run-context.js";
+import { createOpenClawCodingTools } from "../agents/agent-tools.js";
+import type { EmbeddedAgentQueueHandle } from "../agents/embedded-agent-runner/runs.js";
+import {
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
+} from "../agents/embedded-agent-runner/runs.test-support.js";
+import { withPreparedEmbeddedRunToolAuthority } from "../agents/harness/tool-authority.runtime.js";
+import { captureRequesterOrigin } from "../agents/requester-origin.js";
 import {
   seedSubagentRunForReadTest,
   resetSubagentRegistryForTests,
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
-import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
+import {
+  withGatewayToolCallerIdentity,
+  withoutGatewayToolCallerIdentity,
+} from "../agents/tools/gateway-caller-context.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
-import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import {
+  resolveSessionStorePathCore,
+  resolveSessionTranscriptPath,
+} from "../config/sessions/paths.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { assignSessionOwner } from "../config/sessions/session-accessor.sqlite-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -24,11 +36,15 @@ import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
-import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
+import {
+  beginSessionEffect,
+  captureSessionTarget,
+} from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "./chat-abort.js";
 import { withLocalGatewayRequestScope } from "./local-request-context.js";
+import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { withOperatorToolGatewayAuthority } from "./server-plugin-in-process-dispatch.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
@@ -237,7 +253,12 @@ describe("scoped session archive tools", () => {
           );
         }
         const run = registerChatAbortController({
-          chatAbortControllers: request.context.chatAbortControllers,
+          target: captureSessionTarget({
+            storeScope: resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" }),
+            sessionKey: targetKey,
+            incarnation: TARGET_ID,
+            agentId: "main",
+          }),
           runId: "ordinary-stop-run",
           sessionKey: targetKey,
           sessionId: TARGET_ID,
@@ -320,8 +341,10 @@ describe("scoped session archive tools", () => {
       const legacyQueue = vi.fn(async () => {
         throw new Error("unexpected legacy queue path");
       });
+      const runId = "ordinary-steer-run";
+      const sessionFile = resolveSessionTranscriptPath(TARGET_ID, "main");
       const handle: EmbeddedAgentQueueHandle = {
-        runId: "ordinary-steer-run",
+        runId,
         queueMessage: legacyQueue,
         isStreaming: () => true,
         isCompacting: () => false,
@@ -337,39 +360,81 @@ describe("scoped session archive tools", () => {
           },
         },
       };
-      setActiveEmbeddedRun(TARGET_ID, handle, TARGET, undefined, "main");
+      const captured = expectDefined(
+        await captureGatewayOperatorRunAuthority({ client, context: request.context }),
+        "steering operator authority",
+      );
+      const requesterOrigin = captureRequesterOrigin({
+        sessionKey: requesterKey,
+        operatorProfileId: captured.authority.profileId,
+      });
+      const admission = prepareAgentRunAdmission({
+        cfg,
+        operationalRunInstance: createOperationalRunInstanceRef(runId),
+        operatorAuthority: captured.authority,
+        facts: {
+          agentId: "main",
+          runId,
+          ingress: { kind: "system", state: "present", boundary: "archive-steering-test" },
+        },
+      });
       try {
-        await withPluginRuntimeGatewayRequestScope({ ...request, client }, () =>
-          withOperatorToolGatewayAuthority(
-            { authenticatedUserProfile: profile, scopes: ["operator.write"] },
-            async () => {
-              const tool = expectDefined(
-                createOpenClawCodingTools({
-                  config: cfg,
-                  agentId: "main",
-                  sessionKey: requesterKey,
-                  sessionId: "steer-requester-id",
-                  senderIsOwner: false,
-                }).find((candidate) => candidate.name === "sessions_send"),
-                "session steering",
+        await withPreparedEmbeddedRunToolAuthority(
+          { admittedRunContext: await admission.admit("embedded", "archive-steering-test") },
+          {
+            agentId: "main",
+            sessionId: TARGET_ID,
+            sessionKey: TARGET,
+            sessionFile,
+            runId,
+            workspaceDir: expectDefined(cfg.agents?.entries?.main?.workspace, "fixture workspace"),
+            config: cfg,
+            provider: "openai",
+            modelId: "gpt-test",
+            requesterOrigin,
+          },
+          undefined,
+          async (prepared) => {
+            handle.toolAuthorityFingerprint = prepared.toolAuthorityFingerprint;
+            setActiveEmbeddedRun(TARGET_ID, handle, TARGET, prepared.sessionFile, "main");
+            await withoutGatewayToolCallerIdentity(async () => {
+              await withPluginRuntimeGatewayRequestScope({ ...request, client }, () =>
+                withOperatorToolGatewayAuthority(
+                  { authenticatedUserProfile: profile, scopes: ["operator.write"] },
+                  async () => {
+                    const tool = expectDefined(
+                      createOpenClawCodingTools({
+                        config: cfg,
+                        agentId: "main",
+                        sessionKey: requesterKey,
+                        sessionId: "steer-requester-id",
+                        senderIsOwner: false,
+                        requesterOrigin,
+                      }).find((candidate) => candidate.name === "sessions_send"),
+                      "session steering",
+                    );
+                    const result = await tool.execute("steer-ordinary", {
+                      mode: "steer",
+                      sessionKey: TARGET,
+                      message: "Use the updated requirements",
+                      timeoutSeconds: 0,
+                    });
+                    expect(result.details, JSON.stringify(result.details)).toMatchObject({
+                      status: "accepted",
+                      targetDisposition: "steered",
+                    });
+                  },
+                ),
               );
-              const result = await tool.execute("steer-ordinary", {
-                mode: "steer",
-                sessionKey: TARGET,
-                message: "Use the updated requirements",
-                timeoutSeconds: 0,
-              });
-              expect(result.details, JSON.stringify(result.details)).toMatchObject({
-                status: "accepted",
-                targetDisposition: "steered",
-              });
-            },
-          ),
+            });
+          },
         );
         expect(accepted).toHaveBeenCalledOnce();
         expect(legacyQueue).not.toHaveBeenCalled();
       } finally {
         clearActiveEmbeddedRun(TARGET_ID, handle);
+        admission.close();
+        captured.release();
       }
     });
   });
@@ -412,7 +477,7 @@ describe("scoped session archive tools", () => {
           archived.resolve();
         }
       };
-      const admission = await beginSessionWorkAdmission({
+      const admission = await beginSessionEffect({
         scope: resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" }),
         identities: [sessionKey, sessionId],
         assertAllowed: () => {},

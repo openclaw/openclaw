@@ -1,9 +1,5 @@
+import type { SessionsDescribeParams } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import type {
-  SessionCapability,
-  SessionConnectionOwner,
-  SessionConnectionScope,
-} from "./session-capability.ts";
 import {
   areUiSessionKeysEquivalent,
   normalizeAgentId,
@@ -14,9 +10,14 @@ import {
   readSessionChangedEvent,
   sessionChangedSnapshots,
 } from "./session-row-reconcile.ts";
+import type {
+  SessionConnectionOwner,
+  SessionConnectionScope,
+  SessionRequestClient,
+} from "./session-types.ts";
 
-type Params = Parameters<SessionCapability["describe"]>[0];
-type Result = Awaited<ReturnType<SessionCapability["describe"]>>;
+type Params = SessionsDescribeParams;
+type Result = { session?: GatewaySessionRow | null };
 type Read = {
   params: Params;
   scope: SessionConnectionScope;
@@ -61,7 +62,11 @@ export function createSessionDescribeReads(host: {
       )
     );
   };
-  const describe: SessionCapability["describe"] = async (params, options = {}) => {
+  // Descriptor reads share one connection-owned cache until the session changes.
+  const describe = async (
+    params: Params,
+    options: { refresh?: boolean; timeoutMs?: number; client?: SessionRequestClient } = {},
+  ): Promise<Result> => {
     const scope = host.connection.capture();
     const requestOptions: [] | [{ timeoutMs: number }] =
       options.timeoutMs === undefined ? [] : [{ timeoutMs: options.timeoutMs }];

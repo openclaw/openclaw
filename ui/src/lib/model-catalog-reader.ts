@@ -31,7 +31,7 @@ export class ModelCatalogReader {
     private readonly options: {
       timeoutMs?: GatewayProtocolRequestOptions["timeoutMs"];
       onResult?: (result: ModelCatalogResult) => void;
-      onError?: () => void;
+      onError?: (error: unknown) => void;
     } = {},
   ) {}
 
@@ -66,19 +66,19 @@ export class ModelCatalogReader {
       scope,
     };
     this.binding = binding;
-    const params = modelCatalogParams(scope);
-    const key = modelCatalogKey(params);
-    const unwatchCache = subscribeModelCatalogCache(client, (update) => {
-      // The cache broadcasts invalidations for other sessions and draft accounts.
-      // Only the cache owner's matching scope can invalidate this reader's view.
-      if (!this.owns(binding) || (update.type === "invalidated" && !update.matches(params, key))) {
-        return;
-      }
-      if (this.failed && peekModelCatalog(client, scope)) {
-        this.failed = false;
-      }
-      this.notify();
-    });
+    const unwatchCache = subscribeModelCatalogCache(
+      client,
+      () => {
+        if (!this.owns(binding)) {
+          return;
+        }
+        if (this.failed && peekModelCatalog(client, scope)) {
+          this.failed = false;
+        }
+        this.notify();
+      },
+      () => scope,
+    );
     const unwatchEvents = subscribeModelCatalogChanges(
       gateway,
       () => {
@@ -137,13 +137,13 @@ export class ModelCatalogReader {
         this.notify();
         return result;
       },
-      () => {
+      (error: unknown) => {
         if (!this.owns(binding) || this.controller !== controller) {
           return undefined;
         }
         this.controller = undefined;
         this.failed = true;
-        this.options.onError?.();
+        this.options.onError?.(error);
         this.notify();
         return undefined;
       },

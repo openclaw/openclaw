@@ -1,10 +1,8 @@
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { CallToolRequestSchema, CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
+import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
+import { Server } from "@modelcontextprotocol/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -19,6 +17,7 @@ import {
 import { compileStructuredInputForm } from "../agents/harness/structured-input.js";
 import { bindMcpClientElicitation } from "../agents/mcp-client-elicitation.js";
 import { buildMcpClientCapabilities } from "../agents/mcp-metadata.js";
+import { toLegacyMcpCallToolResult } from "../agents/mcp-sdk-compatibility.js";
 import {
   getMcpAppViewLease,
   type McpAppPrepareToolCall,
@@ -403,21 +402,21 @@ describe("registered MCP form resource route", () => {
     options.context.getGatewayMethodRegistry = () => registry;
     const client = new Client(
       { name: "form-host", version: "1" },
-      { capabilities: buildMcpClientCapabilities(true) },
+      { capabilities: buildMcpClientCapabilities(true), versionNegotiation: { mode: "legacy" } },
     );
     const server = new Server({ name: "origin", version: "1" }, { capabilities: { tools: {} } });
     const call = bindMcpClientElicitation(client);
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
     vi.spyOn(f.runtime, "callTool").mockImplementation(async () =>
-      CallToolResultSchema.parse(
+      toLegacyMcpCallToolResult(
         await call(f.controller.signal, () => client.callTool({ name: "pick" })),
       ),
     );
     try {
-      server.setRequestHandler(CallToolRequestSchema, async () => ({
+      server.setRequestHandler("tools/call", async (_request, ctx) => ({
         content: [],
-        structuredContent: await server.request(
+        structuredContent: await ctx.mcpReq.send(
           { method: "openai/elicitation/create", params: f.snapshot },
           z.object({ action: z.string(), content: z.record(z.string(), z.unknown()).optional() }),
         ),

@@ -1,20 +1,11 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import type { Accessor } from "solid-js";
-import {
-  For,
-  Show,
-  createEffect,
-  createMemo,
-  createSignal,
-  flush,
-  onCleanup,
-  onSettled,
-  untrack,
-} from "solid-js";
-import { createTabList } from "../lib/tabs.ts";
+import { For, Show, createMemo, createSignal, onCleanup, onSettled, untrack } from "solid-js";
+import { createLayoutMeasurement } from "../lib/reactive/layout-measurement.ts";
+import { createShadowStyles } from "../lib/reactive/shadow-styles.ts";
+import { activeElementFor, createTabFocus, createTabList, type TabFocus } from "../lib/tabs.ts";
 import type { PanelTabStripTab } from "./panel-tab-strip-types.ts";
 import { Icon } from "./solid/icon.tsx";
-import { bindShadowStyles } from "./solid/shadow-styles.ts";
 import "./tooltip.ts";
 import "../styles/tabs.css";
 import tabsStyles from "../styles/tabs.css?inline";
@@ -34,6 +25,7 @@ export type PanelTabStripProps<T extends SolidPanelTabStripTab> = {
   activeId: string | null;
   ariaControls: string | ((tab: T) => string);
   onSelect: (id: string) => void;
+  focusOwner?: TabFocus;
   onClose: (id: string) => void | Promise<void>;
   onNew: () => void;
   newLabel: string;
@@ -47,30 +39,6 @@ export type PanelTabStripProps<T extends SolidPanelTabStripTab> = {
 
 const PANEL_TAB_DRAG_TYPE = "application/x-openclaw-panel-tab";
 const keyboardCloseActivations = new WeakSet<Element>();
-
-function activeElementFor(element: Element): Element | null {
-  const root = element.getRootNode();
-  return root instanceof ShadowRoot
-    ? (root.activeElement ?? document.activeElement)
-    : document.activeElement;
-}
-
-function deepestActiveElementId(): string | null {
-  let active = document.activeElement;
-  while (active instanceof HTMLElement && active.shadowRoot?.activeElement) {
-    active = active.shadowRoot.activeElement;
-  }
-  return active instanceof HTMLElement ? active.id : null;
-}
-
-function focusNeedsRecovery(element: Element, current: Element | null): boolean {
-  const root = element.getRootNode();
-  return (
-    current === document.body ||
-    current === document.documentElement ||
-    (root instanceof ShadowRoot && current === root.host)
-  );
-}
 
 /** Array order's leading edge is the physical right edge under RTL. */
 function dropPlacement(event: DragEvent, target: Element): "before" | "after" {
@@ -112,7 +80,9 @@ function NewControl<T extends SolidPanelTabStripTab>(props: {
   );
 }
 
-function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps<T>) {
+function TabGroupView<T extends SolidPanelTabStripTab>(
+  props: PanelTabStripProps<T> & { focusOwner: TabFocus },
+) {
   let group!: HTMLDivElement;
   const labels = new Map<string, HTMLElement>();
   const [dropPreview, setDropPreview] = createSignal<[id: string, placement: "before" | "after"]>();
@@ -135,8 +105,18 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
     }),
     () => props.tabs.map((tab) => ({ value: tab.id })),
     () => group,
+    { revealActive: true },
   );
-  let scheduleMeasurement = () => {};
+  let detachFocus = () => {};
+  onCleanup(() => detachFocus());
+  const groupRef = (element: HTMLDivElement) => {
+    group = element;
+    detachFocus = props.focusOwner.attach({
+      root: group,
+      element: tabs.element,
+      active: tabs.active,
+    });
+  };
   const controlsFor = (tab: T) =>
     typeof props.ariaControls === "string" ? props.ariaControls : props.ariaControls(tab);
   const layoutKey = createMemo(() =>
@@ -146,44 +126,24 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
     JSON.stringify([layoutKey(), props.tabs.map((tab) => tab.className)]),
   );
 
-  onSettled(() => {
-    const styles = bindShadowStyles(group, [tabsStyles]);
-    let disposed = false;
-    let resizeObserver: ResizeObserver | undefined;
-    let observed = new Set<Element>();
-    let frame: number | undefined;
-    const schedule = () => {
-      if (frame !== undefined || disposed) {
-        return;
-      }
-      frame = requestAnimationFrame(() => {
-        frame = undefined;
-        if (disposed || !group.isConnected) {
-          return;
-        }
-        const children = [...group.children];
-        const nextObserved = new Set<Element>([group, ...children, ...labels.values()]);
-        for (const target of observed) {
-          if (!nextObserved.has(target)) {
-            resizeObserver?.unobserve(target);
-          }
-        }
-        for (const target of nextObserved) {
-          if (!observed.has(target)) {
-            resizeObserver?.observe(target);
-          }
-        }
-        observed = nextObserved;
-        // Read the row together before overflow classes can dirty layout.
-        const overflow = [...labels.values()].map((label) => ({
-          label,
-          overflowing: label.scrollWidth > label.clientWidth + 1,
-        }));
-        const rects = children.map((child) => child.getBoundingClientRect());
-        const viewport = group.getBoundingClientRect();
-        // Physical rects handle both directions without scrollLeft normalization.
-        const left = rects.some((rect) => viewport.left - rect.left > 8);
-        const right = rects.some((rect) => rect.right - viewport.right > 8);
+  createShadowStyles(
+    () => group,
+    () => [tabsStyles],
+  );
+
+  const scheduleMeasurement = createLayoutMeasurement(
+    () => [measurementKey(), document.documentElement.dir],
+    () => {
+      const overflow = [...labels.values()].map((label) => ({
+        label,
+        overflowing: label.scrollWidth > label.clientWidth + 1,
+      }));
+      const rects = [...group.children].map((child) => child.getBoundingClientRect());
+      const viewport = group.getBoundingClientRect();
+      // Physical rects handle both directions without scrollLeft normalization.
+      const left = rects.some((rect) => viewport.left - rect.left > 8);
+      const right = rects.some((rect) => rect.right - viewport.right > 8);
+      return () => {
         for (const { label, overflowing } of overflow) {
           label.classList.toggle("is-overflowing", overflowing);
           label.parentElement?.classList.toggle("has-label-overflow", overflowing);
@@ -191,48 +151,12 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
         }
         group.classList.toggle("has-scroll-left", left);
         group.classList.toggle("has-scroll-right", right);
-      });
-    };
-    scheduleMeasurement = schedule;
-    // Label text can overflow without changing its observed width.
-    const mutationObserver = new MutationObserver(schedule);
-    mutationObserver.observe(group, { childList: true, characterData: true, subtree: true });
-    if (typeof ResizeObserver === "function") {
-      resizeObserver = new ResizeObserver(schedule);
-    }
-    schedule();
-    return () => {
-      disposed = true;
-      styles.dispose();
-      mutationObserver.disconnect();
-      resizeObserver?.disconnect();
-      if (frame !== undefined) {
-        cancelAnimationFrame(frame);
-      }
-    };
-  });
-
-  createEffect(
-    () => [measurementKey(), document.documentElement.dir],
-    () => scheduleMeasurement(),
-  );
-  createEffect(
-    () => ({ key: layoutKey(), focusedId: deepestActiveElementId() }),
-    ({ focusedId }) => {
-      queueMicrotask(() => {
-        if (!group.isConnected) {
-          return;
-        }
-        const selected = tabs.element(props.activeId);
-        if (!selected) {
-          return;
-        }
-        // Recover only focus lost by keyed movement, never newer user focus.
-        selected.scrollIntoView?.({ block: "nearest", inline: "nearest" });
-        if (focusedId === selected.id && focusNeedsRecovery(selected, activeElementFor(selected))) {
-          selected.focus({ preventScroll: true });
-        }
-      });
+      };
+    },
+    {
+      targets: () => [group, ...group.children, ...labels.values()],
+      // Label text can overflow without changing its observed width.
+      mutations: () => group,
     },
   );
 
@@ -241,8 +165,7 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
       return;
     }
     const button = event.currentTarget;
-    const root = button instanceof Node ? button.getRootNode() : null;
-    const renderRoot = root instanceof Document || root instanceof ShadowRoot ? root : null;
+    const focusOwner = props.focusOwner;
     const restoreFocus =
       button instanceof Element &&
       (keyboardCloseActivations.delete(button) || activeElementFor(button) === button);
@@ -250,31 +173,14 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
     if (!restoreFocus) {
       return;
     }
-    // Commit the owning callback's projection before locating the surviving tab.
-    flush();
-    const settledGroup = [...(renderRoot?.querySelectorAll<HTMLElement>(".tabstrip") ?? [])].find(
-      (candidate) =>
-        [...candidate.querySelectorAll<HTMLElement>('[role="tab"]')].some((renderedTab) =>
-          props.tabs.some(
-            (entry) => renderedTab.getAttribute("aria-controls") === controlsFor(entry),
-          ),
-        ),
-    );
-    const closingTab = [
-      ...(settledGroup?.querySelectorAll<HTMLElement>('[role="tab"]') ?? []),
-    ].find((candidate) => candidate.dataset.tabValue === tab.id);
-    const fallback = settledGroup?.querySelector<HTMLElement>('[role="tab"][active]');
-    if (!closingTab && fallback && focusNeedsRecovery(fallback, activeElementFor(fallback))) {
-      fallback.focus({ preventScroll: true });
-    }
+    // Locate the surviving tab after the owning callback's projection commits.
+    onSettled(() => focusOwner.restoreAfterClose(tab.id));
   }
 
   return (
     <>
       <div
-        ref={(element) => {
-          group = element;
-        }}
+        ref={groupRef}
         class="oc-tabs tabstrip"
         role="tablist"
         aria-orientation="horizontal"
@@ -283,9 +189,9 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
         <For each={props.tabs} keyed={(tab) => tab.id}>
           {(tab, index) => {
             // The keyed id is this node's lifetime identity.
-            const tabId = untrack(() => tab().id);
-            const ref = tabs.ref(tabId);
-            onCleanup(() => labels.delete(tabId));
+            const initialTabId = untrack(() => tab().id);
+            const ref = tabs.ref(initialTabId);
+            onCleanup(() => labels.delete(initialTabId));
             const selected = () => tab().id === props.activeId;
             const reorderId = () => tab().reorderId ?? tab().id;
             const draggable = () => Boolean(props.onReorder) && tab().draggable !== false;
@@ -319,7 +225,10 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
                     {props.renderIcon ? props.renderIcon(tab) : tab().icon}
                   </span>
                 </Show>
-                <span class="tabstrip-tab__label" ref={(element) => labels.set(tabId, element)}>
+                <span
+                  class="tabstrip-tab__label"
+                  ref={(element) => labels.set(initialTabId, element)}
+                >
                   {tab().label}
                 </span>
                 <Show when={tab().badge}>
@@ -444,9 +353,10 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
 }
 
 export function PanelTabStrip<T extends SolidPanelTabStripTab>(props: PanelTabStripProps<T>) {
+  const focusOwner = createTabFocus();
   return (
     <Show when={props.tabs.length > 0} fallback={<NewControl strip={props} slotted={false} />}>
-      <TabGroupView {...props} />
+      <TabGroupView {...props} focusOwner={props.focusOwner ?? focusOwner} />
     </Show>
   );
 }

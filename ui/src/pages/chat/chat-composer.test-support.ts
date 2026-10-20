@@ -1,6 +1,7 @@
 import { createComponent, createSignal, getOwner, merge } from "solid-js";
 import { expect, onTestFinished, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
+import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import { i18n } from "../../i18n/index.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { createComposerDraftSource } from "../../lib/chat/composer-draft-changes.ts";
@@ -114,6 +115,32 @@ export function createComposerProps(overrides: Partial<ComposerProps> = {}): Com
     onSend: vi.fn(),
     onQueueRemove: vi.fn(),
     ...overrides,
+  };
+}
+
+export function createComposerQuestionPrompt(id: string, question: string): QuestionPrompt {
+  return {
+    id,
+    questions: [
+      {
+        questionId: "choice",
+        header: "Choice",
+        question,
+        options: [{ label: "Yes" }, { label: "No" }],
+        isOther: false,
+      },
+    ],
+    sessionKey: "queue-test",
+    createdAtMs: 1_000,
+    expiresAtMs: Date.now() + 60_000,
+    status: "pending",
+    answeredElsewhere: false,
+    localResolutionConfirmed: false,
+    locallyExpired: false,
+    submitting: false,
+    error: null,
+    drafts: new Map(),
+    revision: 1,
   };
 }
 

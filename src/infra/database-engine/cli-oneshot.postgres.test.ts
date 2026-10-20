@@ -26,7 +26,7 @@ const doctorRepairTimeoutMs = 120_000;
 
 describe.skipIf(!connection)("PostgreSQL one-shot CLI", () => {
   it(
-    "runs onboarding, agent, model, config and Doctor commands without local application tables",
+    "runs onboarding, agent, model, config and Doctor commands without local shared or agent application tables",
     async () => {
       const root = roots.make("postgres-cli-oneshot-");
       const runtimeRoot = createBuiltRuntime(root);
@@ -107,8 +107,19 @@ describe.skipIf(!connection)("PostgreSQL one-shot CLI", () => {
         ["doctor", "--non-interactive", "--no-workspace-suggestions"],
         ["doctor", "--fix", "--non-interactive", "--no-workspace-suggestions"],
       ];
-      // These safety journals are intentionally local even when application stores use PG.
-      const localJournals = new Map([
+      // Credentials and safety journals stay local even when shared and agent stores use PG.
+      const credentialRelativePath = path.join("client", "credentials.sqlite");
+      const localStores = new Map([
+        [
+          credentialRelativePath,
+          [
+            "client_credential_migration",
+            "device_auth_tokens",
+            "device_identities",
+            "gateway_origin_device_tokens",
+            "native_exec_socket_credentials",
+          ],
+        ],
         [
           path.join("state", "openclaw-quarantine.sqlite"),
           ["agent_integrity_verifications", "quarantined_databases"],
@@ -139,19 +150,24 @@ describe.skipIf(!connection)("PostgreSQL one-shot CLI", () => {
             .filter((file) => file.endsWith(".sqlite"))
             .map((file) => path.join(stateDir, file));
           expect(databases).toContain(resolveOpenClawStateSqlitePath(env));
+          expect(databases).toContain(path.join(stateDir, credentialRelativePath));
           expect(databases.some((file) => path.basename(file) === "openclaw-agent.sqlite")).toBe(
             true,
           );
           for (const database of databases) {
             using anchor = openNodeSqliteDatabase(database, { readOnly: true });
-            const journal = localJournals.get(path.relative(stateDir, database));
+            const relativePath = path.relative(stateDir, database);
+            const localTables = localStores.get(relativePath);
             expect(
               anchor
                 .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
                 .all(),
               `${args[0]} left application tables in ${path.relative(stateDir, database)}`,
-            ).toEqual((journal ?? ["openclaw_engine_anchor"]).map((name) => ({ name })));
-            if (journal) {
+            ).toEqual((localTables ?? ["openclaw_engine_anchor"]).map((name) => ({ name })));
+            if (localTables) {
+              if (relativePath === credentialRelativePath) {
+                expect(anchor.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });
+              }
               continue;
             }
             const identity = anchor

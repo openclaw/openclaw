@@ -41,8 +41,10 @@ import {
   createAuthProfileStoreReadScopeAsync,
   saveAuthProfileStoreWithPreparedOwner,
 } from "../auth-profiles/store-runtime.js";
-import { publishAuthProfileStoreUpdate } from "../auth-profiles/store-update-publication.js";
-import { runAuthProfileStoreUpdate } from "../auth-profiles/store-update.js";
+import {
+  createAuthProfileStoreUpdatePublisher,
+  runAuthProfileStoreUpdate,
+} from "../auth-profiles/store-update.js";
 import type {
   AuthProfileCredentialSource,
   AuthProfileStore,
@@ -314,17 +316,7 @@ class SqliteAuthStorageBackend implements StorageBackend {
               },
             };
       },
-      async publish(committed, owner, assertCurrent, nativeCommits, committedIsCurrent) {
-        if (committed) {
-          await publishAuthProfileStoreUpdate(
-            owner,
-            committed,
-            assertCurrent,
-            nativeCommits,
-            committedIsCurrent,
-          );
-        }
-      },
+      publish: createAuthProfileStoreUpdatePublisher(),
     });
     this.captureCredentialSources(selected.store, selected.databasePath);
     return selected.result;

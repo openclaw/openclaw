@@ -109,7 +109,9 @@ export type GatewayConnectAttachTiming =
   | "profileAuthorityMs"
   | "scopeGrantMs"
   | "operatorDeviceMs"
-  | "sessionRegistrationMs";
+  | "sessionRegistrationMs"
+  | "snapshotMs"
+  | "helloDescriptorsMs";
 
 export type GatewayConnectPhaseContext = {
   handler: GatewayWsMessageHandlerParams;

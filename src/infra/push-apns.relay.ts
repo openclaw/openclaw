@@ -8,7 +8,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayConfig } from "../config/types.gateway.js";
 import { loadOrCreateProcessDeviceIdentityAsync } from "./device-identity-async.js";
-import { signDevicePayload, type DeviceIdentity } from "./device-identity.js";
+import { signDevicePayload } from "./device-identity.js";
 import { readResponseWithLimit } from "./http-body.js";
 import { normalizeApnsRelayBaseUrl } from "./push-apns-relay-url.js";
 import { requireCurrentApnsSend } from "./push-apns-send-current.js";
@@ -37,21 +37,6 @@ export type ApnsRelayPushResponse = {
   environment?: ApnsRelayEnvironment;
   tokenSuffix?: string;
 };
-
-export type ApnsRelayRequestSender = (params: {
-  relayConfig: ApnsRelayConfig;
-  sendGrant: string;
-  relayHandle: string;
-  gatewayDeviceId: string;
-  signature: string;
-  signedAtMs: number;
-  bodyJson: string;
-  pushType: ApnsRelayPushType;
-  priority: "10" | "5";
-  payload: object;
-  signal?: AbortSignal;
-  isCurrent?: () => Promise<boolean>;
-}) => Promise<ApnsRelayPushResponse>;
 
 /** Hosted APNs relay origin used only when registrations prove they were minted there. */
 const DEFAULT_APNS_RELAY_BASE_URL = "https://ios-push-relay.openclaw.ai";
@@ -155,9 +140,16 @@ class ApnsRelayResponseTooLargeError extends Error {
   }
 }
 
-async function sendApnsRelayRequest(
-  params: Parameters<ApnsRelayRequestSender>[0],
-): Promise<ApnsRelayPushResponse> {
+async function sendApnsRelayRequest(params: {
+  relayConfig: ApnsRelayConfig;
+  sendGrant: string;
+  gatewayDeviceId: string;
+  signature: string;
+  signedAtMs: number;
+  bodyJson: string;
+  signal?: AbortSignal;
+  isCurrent?: () => Promise<boolean>;
+}): Promise<ApnsRelayPushResponse> {
   await requireCurrentApnsSend(params);
   const timeoutSignal = AbortSignal.timeout(params.relayConfig.timeoutMs);
   const signal = params.signal ? AbortSignal.any([params.signal, timeoutSignal]) : timeoutSignal;
@@ -224,18 +216,17 @@ async function sendApnsRelayRequest(
   };
 }
 
-export async function sendApnsRelayPush(
-  params: Omit<
-    Parameters<ApnsRelayRequestSender>[0],
-    "gatewayDeviceId" | "signature" | "signedAtMs" | "bodyJson"
-  > & {
-    gatewayIdentity?: Pick<DeviceIdentity, "deviceId" | "privateKeyPem">;
-    requestSender?: ApnsRelayRequestSender;
-  },
-): Promise<ApnsRelayPushResponse> {
-  const sender = params.requestSender ?? sendApnsRelayRequest;
-  const gatewayIdentity =
-    params.gatewayIdentity ?? (await loadOrCreateProcessDeviceIdentityAsync());
+export async function sendApnsRelayPush(params: {
+  relayConfig: ApnsRelayConfig;
+  sendGrant: string;
+  relayHandle: string;
+  pushType: ApnsRelayPushType;
+  priority: "10" | "5";
+  payload: object;
+  signal?: AbortSignal;
+  isCurrent?: () => Promise<boolean>;
+}): Promise<ApnsRelayPushResponse> {
+  const gatewayIdentity = await loadOrCreateProcessDeviceIdentityAsync();
   await requireCurrentApnsSend(params);
   const signedAtMs = Date.now();
   const bodyJson = JSON.stringify({
@@ -254,17 +245,13 @@ export async function sendApnsRelayPush(
       bodyJson,
     ].join("\n"),
   );
-  return await sender({
+  return await sendApnsRelayRequest({
     relayConfig: params.relayConfig,
     sendGrant: params.sendGrant,
-    relayHandle: params.relayHandle,
     gatewayDeviceId: gatewayIdentity.deviceId,
     signature,
     signedAtMs,
     bodyJson,
-    pushType: params.pushType,
-    priority: params.priority,
-    payload: params.payload,
     ...(params.signal ? { signal: params.signal } : {}),
     ...(params.isCurrent ? { isCurrent: params.isCurrent } : {}),
   });

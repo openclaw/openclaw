@@ -32,13 +32,10 @@ import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
 import { createMsFormatter } from "../../lib/format.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
-import {
-  PRESENCE_ACTIVE_WINDOW_MS,
-  presenceViewerLastActivity,
-  projectPresencePayload,
-} from "../../lib/presence-users.ts";
+import { createPresenceActivityLifecycle } from "../../lib/presence-activity-lifecycle.ts";
+import { projectPresencePayload } from "../../lib/presence-users.ts";
 import { t, getLocale, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
-import { listen } from "../../lib/reactive/listener.ts";
+import { useStreamAutoFollow } from "../../lib/reactive/stream-auto-follow.ts";
 import {
   isUiGlobalScopeConfigured,
   resolveUiConfiguredMainKey,
@@ -160,83 +157,34 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
     hello: state().context.gateway.snapshot.hello,
   });
   let stream: HTMLDivElement | undefined;
-  let atBottom = true;
-  let previousRevision = -1;
-  let previousEntries: ReturnType<ActivityPageState["liveActivity"]["read"]>["entries"] | undefined;
-  let previousAutoFollow = true;
-  const follow = createMemo(
-    () => ({
-      entries: liveSnapshot().entries,
-      enabled: filters.autoFollow,
-      revision: liveRevision(),
-    }),
-    {
-      equals: (previous, next) =>
-        previous.entries === next.entries &&
-        previous.enabled === next.enabled &&
-        previous.revision === next.revision,
-    },
-  );
-  // Keep the live stream DOM at the bottom while the reader is following it.
-  createEffect(follow, ({ entries, enabled, revision }) => {
-    if (revision !== previousRevision) {
-      atBottom = true;
-      previousRevision = revision;
-    }
-    const force = enabled && !previousAutoFollow;
-    const appended = previousEntries !== undefined && entries !== previousEntries;
-    previousEntries = entries;
-    previousAutoFollow = enabled;
-    if (!force && (!enabled || !appended || !atBottom)) {
-      return undefined;
-    }
-    const frame = requestAnimationFrame(() => {
-      const container = stream;
-      if (!container?.isConnected) {
-        return;
+  const follow = useStreamAutoFollow({
+    container: () => stream,
+    enabled: () => filters.autoFollow,
+    identity: liveRevision,
+  });
+  onSettled(() => {
+    let previous = liveSnapshot();
+    // Ordered append/reset receipts preserve stream-follow intent across each publication.
+    return pageProps.page.liveActivity.subscribe(() => {
+      const current = liveSnapshot();
+      if (current.revision !== previous.revision) {
+        follow.reset();
       }
-      const distance = container.scrollHeight - container.scrollTop - container.clientHeight;
-      if (!force && (!filters.autoFollow || (!atBottom && distance >= 120))) {
-        return;
+      const appended = current.entries !== previous.entries;
+      previous = current;
+      if (filters.autoFollow && appended) {
+        follow.schedule();
       }
-      container.scrollTop = container.scrollHeight;
-      atBottom = true;
     });
-    return () => cancelAnimationFrame(frame);
   });
   const [presentationTime, setPresentationTime] = createSignal(Date.now());
-  const [visible, setVisible] = createSignal(document.visibilityState !== "hidden");
-  const visibilityChanged = () => {
-    setVisible(document.visibilityState !== "hidden");
-    if (document.visibilityState !== "hidden") {
-      setPresentationTime(Date.now());
-    }
-  };
-  onSettled(() => listen(document, "visibilitychange", visibilityChanged));
-  const expiry = createMemo(() => {
-    pageRevision();
-    presentationTime();
-    if (!visible()) {
-      return undefined;
-    }
-    const now = Date.now();
-    const deadlines = presence().flatMap((viewer) => {
-      const activity = presenceViewerLastActivity(viewer);
-      const deadline = activity === undefined ? undefined : activity + PRESENCE_ACTIVE_WINDOW_MS;
-      return deadline !== undefined && deadline > now ? [deadline] : [];
-    });
-    return deadlines.length ? Math.min(...deadlines) : undefined;
-  });
-  // The browser clock expires presence even when no Gateway event arrives.
-  createEffect(expiry, (deadline) => {
-    if (deadline === undefined) {
-      return undefined;
-    }
-    const timer = setTimeout(
-      () => setPresentationTime(Date.now()),
-      Math.max(0, deadline - Date.now()),
-    );
-    return () => clearTimeout(timer);
+  const activityExpiry = createPresenceActivityLifecycle(presence, () =>
+    setPresentationTime(Date.now()),
+  );
+  createEffect(pageRevision, () => activityExpiry.sync());
+  onSettled(() => {
+    activityExpiry.connect();
+    return () => activityExpiry.disconnect();
   });
   function LiveActivityView(liveProps: { basePath: string; entries: readonly ActivityEntry[] }) {
     function StatusFilter(props: { status: ActivityStatus }) {
@@ -353,7 +301,13 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
             <SettingsToggle
               checked={filters.autoFollow}
               ariaLabel={t("activity.autoFollow")}
-              onChange={(next) => update({ autoFollow: next })}
+              onChange={(next) => {
+                const wasFollowing = filters.autoFollow;
+                update({ autoFollow: next });
+                if (next && !wasFollowing) {
+                  follow.schedule(true);
+                }
+              }}
             />
           </span>
           <ToolFilter toolNames={props.toolNames} />
@@ -504,11 +458,7 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
             }}
             role="group"
             aria-label={t("activity.streamLabel")}
-            onScroll={(event) => {
-              const container = event.currentTarget;
-              atBottom =
-                container.scrollHeight - container.scrollTop - container.clientHeight < 120;
-            }}
+            onScroll={follow.handleScroll}
           >
             {filtered().length === 0 ? (
               <div class="activity-empty">
@@ -570,7 +520,6 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
           <Switch>
             <Match when={route()?.mode === "sessions"}>
               <SessionActivityView
-                context={state().context}
                 expandedAutomationDays={expandedAutomationDays()}
                 filters={{
                   ...(sessionRoute()?.filters ?? {
@@ -627,6 +576,7 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
                 </a>
                 <RunInspector
                   basePath={state().context.basePath}
+                  connected={state().context.gateway.snapshot.phase === "connected"}
                   state={state().runInspector}
                   selector={runRoute()?.selector ?? null}
                   selectorId={runRoute()?.selectorId ?? null}

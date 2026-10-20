@@ -36,20 +36,18 @@ import { displayedChatSessionBranches } from "./chat-history-branches.ts";
 import { ChatPaneDiscussion } from "./chat-pane-discussion.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import { ChatPaneHeaderMemo } from "./chat-pane-header-memo.ts";
-import type { PaneDetailsProps } from "./chat-pane-header-view.tsx";
 import { ChatPaneNativeSessionActions } from "./chat-pane-native-session-actions.ts";
 import { resolveChatPaneDesktopTarget, resolveChatPanePlacement } from "./chat-pane-placement.ts";
 import type { createChatPaneRails } from "./chat-pane-rails.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { projectSubagentStatus } from "./chat-subagent-wait.ts";
 import { isChatRunWorking } from "./components/chat-composer.tsx";
-import type { ChatDetails } from "./components/chat-details.tsx";
+import type { ChatDetails, ChatDetailsViewProps } from "./components/chat-details.tsx";
 import type { HeaderPanelAction } from "./components/chat-header-panel-actions.tsx";
 import "./components/chat-header-session-menu.ts";
 import type {
   HeaderMenuAction,
   HeaderMenuActionKind,
-  HeaderMenuQuickAction,
 } from "./components/chat-header-session-menu.ts";
 import {
   canRevealSessionWorkspace,
@@ -65,16 +63,18 @@ import {
 import { hasDirectSessionRun } from "./run-lifecycle.ts";
 import { isSidebarSlotVisible, type SidebarLayout, type SidebarSlotId } from "./sidebar-layout.ts";
 
+type PaneControls = Pick<
+  ReturnType<typeof createChatPaneRails>,
+  "openPanelSlot" | "closePanelSlot"
+>;
+
 export abstract class ChatPaneHeader extends ChatPaneDiscussion {
   protected readonly headerDetailsRef: { value?: ChatDetails } = {};
   private headerMenuRow?: GatewaySessionRow;
   private headerWorkspace?: ReturnType<typeof createChatPaneRails>["sessionWorkspace"];
   private headerAgentWorkspace?: string;
   private headerWorkspaceGit = false;
-  private headerPanelControls?: {
-    openPanelSlot: (slot: SidebarSlotId) => void;
-    closePanelSlot: (slot: SidebarSlotId) => void;
-  };
+  private headerPanelControls?: PaneControls;
   private headerBoardMenu?: BoardWidgetPageMenu;
   private readonly headerPanelsMemo = new ChatPaneHeaderMemo<HeaderPanelAction[]>();
   private readonly headerSessionActions = new ChatPaneNativeSessionActions();
@@ -133,11 +133,8 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     sidebarLayout?: SidebarLayout,
     panelDefinitions = sidebarPanelDefinitions(),
     subagentStop?: ChatPaneHeaderProps["runAction"],
-    detailsControl?: PaneDetailsProps,
-    panelControls?: {
-      openPanelSlot: (slot: SidebarSlotId) => void;
-      closePanelSlot: (slot: SidebarSlotId) => void;
-    },
+    detailsControl?: ChatDetailsViewProps,
+    panelControls?: PaneControls,
   ): ChatPaneHeaderPresentation {
     const headerState = this.headerPresentation;
     this.headerPanelControls = panelControls;
@@ -220,14 +217,14 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
           params: { key: row.key, label: null },
           sessionScope: true,
           session: row,
+          allowDeferred: true,
         })
       : null;
-    const renameDisabledReason =
-      this.state?.connected !== true || !renameAccess
-        ? t("sessionsView.actionRequiresConnection")
-        : renameAccess.allowed
-          ? undefined
-          : renameAccess.reason;
+    const renameDisabledReason = !renameAccess
+      ? t("sessionsView.actionRequiresConnection")
+      : renameAccess.allowed
+        ? undefined
+        : renameAccess.reason;
     const configuredMainKey = resolveUiConfiguredMainKey({
       agentsList: this.context.agents.state.agentsList,
       hello: this.context.gateway.snapshot.hello,
@@ -284,7 +281,6 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     const discussion = this.resolveSessionDiscussionAction();
     const currentLayout = sidebarLayout ?? this.state?.sidebarLayout;
     const sidePanelOpen = currentLayout?.open === true && !currentLayout.expanded;
-    const toggleSidePanel = () => this.setChatSidePanelOpen(!sidePanelOpen, sidebarLayout);
     const sessionRailVisible =
       this.state !== undefined && isSidebarSlotVisible(this.state.sidebarLayout, "companion");
     const subagentsVisible =
@@ -426,9 +422,6 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       },
     );
     const defaultAction = !catalog && this.dashboardDefaultMenuAction(row, currentLayout);
-    const layoutMenuActions: HeaderMenuQuickAction[] = defaultAction
-      ? [{ id: "dashboard-default", icon: "check", ...defaultAction }]
-      : [];
     const placement = resolveChatPanePlacement({
       gatewaySnapshot: this.context.gateway.snapshot,
       requiredProfile: this.context.agents.state.agentsList?.sessionPlacement?.requiredProfile?.id,
@@ -521,9 +514,9 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               showOwner: showOwnerChip && !this.mergedChrome,
               onOpen: () => void this.loadSessionSharing(row),
               onVisibilityChange: (visibility: SessionVisibility) =>
-                void this.setSessionVisibility(row, visibility),
+                void this.mutateSessionSharing(row, { visibility }),
               onMemberChange: (identityId: string, member: boolean) =>
-                void this.setSessionMember(row, identityId, member),
+                void this.mutateSessionSharing(row, { identityId, member }),
             }
           : null,
     );
@@ -533,7 +526,16 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       () => this.headerBoardMenu && { ...this.headerBoardMenu, onSelect: this.onHeaderBoardSelect },
     );
     const parentSession = this.observedParentSessionRow();
+    const subagents = projectSubagentStatus(
+      {
+        ...this.projectChildRoster(this.resolveChatReadTarget()),
+        selectedSession: row,
+        messages: this.state?.chatMessages ?? [],
+      },
+      false,
+    );
     const header: ChatPaneHeaderProps = {
+      onHeaderRef: this.registerHeaderElement,
       paneId: this.paneId,
       presented: { owner: this.element, isPresented: () => this.presented },
       narrow: this.narrow,
@@ -571,19 +573,15 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       renameDisabledReason,
       actionsDisabled: this.state?.connected !== true,
       panelMenuActions,
-      layoutMenuActions,
-      runningSubagentCount: projectSubagentStatus(
-        {
-          ...this.projectChildRoster(this.resolveChatReadTarget()),
-          selectedSession: row,
-          messages: this.state?.chatMessages ?? [],
-        },
-        false,
-      ).running,
+      layoutMenuActions: defaultAction
+        ? [{ id: "dashboard-default", icon: "check", ...defaultAction }]
+        : [],
+      runningSubagentCount: subagents.running,
+      onOpenSubagents: subagents.listed ? detailsControl?.chat?.onOpenSubagents : undefined,
       sidebarLayout: currentLayout,
       panelDefinitions,
       onLayoutChange: (layout, options) => this.state?.updateSidebarLayout(layout, options),
-      onToggleSidePanel: toggleSidePanel,
+      onToggleSidePanel: () => this.setChatSidePanelOpen(!sidePanelOpen, sidebarLayout),
       onCloseSidePanel: (slot) => panelControls?.closePanelSlot(slot),
       detailsControl,
       onOpenDetails: detailsControl ? this.onHeaderDetails : undefined,

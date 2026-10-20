@@ -1,3 +1,8 @@
+export const DIAL_BUNDLES = new Set([
+  "com.apple.FaceTime",
+  "com.apple.FaceTime.FTConversationService",
+]);
+
 export type FaceTimeHelperPeer = {
   bundleIdentifier: string;
   processId: number;

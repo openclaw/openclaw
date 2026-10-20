@@ -1,13 +1,16 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
-import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  capturePluginRegistration,
+  registerSingleProviderPlugin,
+  runProviderCatalog,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
-import { COHERE_LIVE_MODEL_DISCOVERY } from "./provider-catalog.js";
-import { wrapCohereProviderStream } from "./stream.js";
 
 const COHERE_COMMAND_A_PLUS_MODEL_ID = "command-a-plus-05-2026";
 const COHERE_COMMAND_A_REASONING_MODEL_ID = "command-a-reasoning-08-2025";
@@ -50,7 +53,8 @@ function captureCoherePayload(
   };
 
   const model = requireCohereModel(settings?.modelId);
-  const wrappedStreamFn = wrapCohereProviderStream({
+  const [provider] = capturePluginRegistration(plugin).providers;
+  const wrappedStreamFn = provider?.wrapStreamFn?.({
     provider: "cohere",
     modelId: model.id,
     model,
@@ -71,6 +75,11 @@ function captureCoherePayload(
 }
 
 describe("Cohere provider plugin", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    clearLiveCatalogCacheForTests();
+  });
+
   it("keeps North Mini Code text-only with Cohere's binary reasoning contract", () => {
     const model = requireCohereModel("north-mini-code-1-0");
     expect(model.input).toEqual(["text"]);
@@ -88,13 +97,9 @@ describe("Cohere provider plugin", () => {
     });
   });
 
-  it("normalizes Cohere live catalog rows for chat discovery", () => {
-    expect(COHERE_LIVE_MODEL_DISCOVERY.endpointUrl).toEqual({
-      url: "https://api.cohere.com/v1/models?endpoint=chat&page_size=1000",
-      requireBaseUrl: "https://api.cohere.ai/compatibility/v1",
-    });
-    expect(
-      COHERE_LIVE_MODEL_DISCOVERY.readRows?.({
+  it("discovers active chat models through the registered Cohere catalog", async () => {
+    const fetch = vi.fn(async () =>
+      Response.json({
         models: [
           {
             name: "command-fresh",
@@ -105,22 +110,22 @@ describe("Cohere provider plugin", () => {
           { name: "command-retired", is_deprecated: true, endpoints: ["chat"] },
         ],
       }),
-    ).toEqual([
-      {
-        id: "command-fresh",
-        name: "command-fresh",
-        is_deprecated: false,
-        active: true,
-        endpoints: ["chat"],
-        context_length: 256_000,
-      },
-      {
-        id: "command-retired",
-        name: "command-retired",
-        is_deprecated: true,
-        active: false,
-        endpoints: ["chat"],
-      },
+    );
+    vi.stubGlobal("fetch", fetch);
+    const provider = await registerSingleProviderPlugin(plugin);
+    const result = await runProviderCatalog({
+      provider,
+      config: {},
+      env: {},
+      resolveProviderApiKey: () => ({ apiKey: "synthetic-cohere-key" }),
+      resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+    });
+    expect(fetch).toHaveBeenCalledExactlyOnceWith(
+      "https://api.cohere.com/v1/models?endpoint=chat&page_size=1000",
+      expect.anything(),
+    );
+    expect(result && "provider" in result && result.provider.models).toEqual([
+      expect.objectContaining({ id: "command-fresh", contextWindow: 256_000 }),
     ]);
   });
 

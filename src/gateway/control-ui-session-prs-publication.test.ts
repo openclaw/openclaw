@@ -57,11 +57,11 @@ it("reconciles a fourth merged PR without expanding or poisoning displayed PRs",
   owner = createTestControlUiSessionPrSubscriptions({
     scheduler: createTestGatewayScheduler(),
     broadcastToConnIds,
+    prepareRead,
     load: (params, cacheSignal, read) =>
       loadControlUiSessionPullRequests(params, {
         cacheSignal,
-        read,
-        resolveGitContext: async () => testGitContext,
+        read: { ...read, target: { ...read.target, source: testGitContext } },
       }),
   });
   const resolve = await prepareRead("connection", { sessionKey: "agent:main:main" });

@@ -8,7 +8,7 @@ import {
 } from "../infra/kysely-sync.js";
 import { pathMayExistSync } from "../infra/path-existence.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import {
   applyWorkspaceMigrationReceiptMove,
   prepareWorkspaceMigrationReceiptMove,
@@ -127,7 +127,7 @@ export function detectRepointedWorkspaceAlias(
   }
   return withExistingOpenClawStateDatabaseReadOnly(
     (database) =>
-      runSqliteDeferredTransactionSync(
+      runSqliteReadSnapshotSync(
         database.db,
         () => {
           const kysely = getNodeSqliteKysely<WorkspaceDatabase>(database.db);

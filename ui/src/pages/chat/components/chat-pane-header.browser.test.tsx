@@ -7,18 +7,17 @@ import {
   selectChatLayoutAction,
 } from "../../../test-helpers/chat-layout-menu.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import "../../../styles.css";
 import "../../../styles/chat/startup-layout.css";
 import "../../../styles/chat/layout.css";
 import "../../../styles/chat/split-view.css";
 import { openSlot, setSidebarOpen } from "../sidebar-layout.ts";
-import type { ChatDetails } from "./chat-details.tsx";
 import {
   chatPaneHeaderSharing,
   chatPaneHeaderSessionMenu,
   mountChatPaneHeader,
 } from "./chat-pane-header.test-support.ts";
-import "./chat-details.tsx";
 import { ChatSidebarEditorMenu } from "./chat-sidebar-editor-menu.tsx";
 
 describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
@@ -341,7 +340,13 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
               onActivate: onTerminal,
             },
           ],
-          detailsControl: { chat: undefined, mobile: false, presentation: true, setRef: () => {} },
+          detailsControl: {
+            chat: undefined,
+            mobile: false,
+            presentation: true,
+            elements: {},
+            setRef: () => {},
+          },
           sidebarLayout: { columns: [] },
           onLayoutChange: vi.fn(),
           onToggleSidePanel: vi.fn(),
@@ -350,7 +355,7 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
         });
         container.style.width = `${width}px`;
         const header = container.querySelector<HTMLElement>(".chat-pane__header")!;
-        await container.querySelector<ChatDetails>("openclaw-chat-details")?.updateComplete;
+        flush();
         await expect.element(page.elementLocator(header)).toBeVisible();
         expect(header.scrollWidth).toBeLessThanOrEqual(header.clientWidth);
         const bounds = header.getBoundingClientRect();
@@ -414,7 +419,13 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
           state === "idle"
             ? "position: fixed; top: 80px; left: 80px; width: 1000px"
             : "position: fixed; top: 80px; left: 500px; width: 650px";
-        await container.querySelector("openclaw-chat-pane-versions-menu")?.updateComplete;
+        await waitForSolid(() =>
+          expect(
+            container.querySelector(
+              editor ? ".sidebar-file-view__action" : ".chat-pane__branches-trigger",
+            ),
+          ).not.toBeNull(),
+        );
         const trigger = container.querySelector<HTMLButtonElement>(
           editor ? ".sidebar-file-view__action" : ".chat-pane__branches-trigger",
         )!;

@@ -479,7 +479,7 @@ export function registerSubagentRegistrationPersistenceTests({
       queued,
     });
 
-    expect(mocks.persistRegistryRows).toHaveBeenCalledTimes(queued ? 2 : 1);
+    expect(mocks.persistRegistryRows).toHaveBeenCalledOnce();
     expect(mocks.persistRegistryRows).toHaveBeenCalledWith(expect.any(Map), [runId]);
   });
 

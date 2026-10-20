@@ -13,7 +13,6 @@ import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   normalizeVideoGenerationDuration,
-  selectSupportedVideoDuration,
   type GeneratedVideoAsset,
   type VideoGenerationProvider,
   type VideoGenerationRequest,
@@ -96,14 +95,6 @@ function resolveResolution(params: {
   }
   const maxEdge = Math.max(parsedSize.width, parsedSize.height);
   return maxEdge >= 1920 ? "1080p" : maxEdge >= 1280 ? "720p" : undefined;
-}
-
-function resolveDurationSeconds(durationSeconds: number | undefined): number | undefined {
-  const rounded = normalizeVideoGenerationDuration({ durationSeconds });
-  if (rounded === undefined) {
-    return undefined;
-  }
-  return selectSupportedVideoDuration(rounded, GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS);
 }
 
 function resolveInputImage(req: VideoGenerationRequest) {
@@ -421,7 +412,10 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
           transport: "http",
         }),
       };
-      const durationSeconds = resolveDurationSeconds(req.durationSeconds);
+      const durationSeconds = normalizeVideoGenerationDuration({
+        durationSeconds: req.durationSeconds,
+        supportedDurationSeconds: GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS,
+      });
       const model = normalizeOptionalString(req.model) || DEFAULT_GOOGLE_VIDEO_MODEL;
       const aspectRatio = resolveAspectRatio({ aspectRatio: req.aspectRatio, size: req.size });
       const resolution = resolveResolution({ resolution: req.resolution, size: req.size });

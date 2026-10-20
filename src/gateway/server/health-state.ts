@@ -1,8 +1,8 @@
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import type { Snapshot } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentEffectiveModelPrimary } from "../../agents/agent-scope.js";
-import { createConfigIO, getRuntimeConfig } from "../../config/io.js";
-import { STATE_DIR } from "../../config/paths.js";
+import { getRuntimeConfig } from "../../config/io.js";
+import { CONFIG_PATH, STATE_DIR } from "../../config/paths.js";
 import { getRuntimeConfigAppliedHash } from "../../config/runtime-snapshot.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions.js";
 import { listSystemPresence } from "../../infra/system-presence.js";
@@ -17,6 +17,7 @@ import { projectUpdateAvailable } from "../events.js";
 import type { ChannelHealthSummary, HealthSummary } from "../health/types.js";
 import { createPresenceRecipientProjection } from "../presence-projection.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
+import { HEALTH_REFRESH_INTERVAL_MS } from "../server-constants.js";
 import type { GatewayClient } from "../server-methods/types.js";
 import type { SessionRowProjection } from "../session-row-projection.js";
 import type { GatewayEventLoopHealth } from "./event-loop-health.js";
@@ -87,7 +88,7 @@ export function buildGatewaySnapshot(opts: {
   if (opts.includeSensitive === true) {
     const auth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth, env: process.env });
     // Surface resolved paths only to admin callers that already have broader gateway access.
-    snapshot.configPath = createConfigIO().configPath;
+    snapshot.configPath = CONFIG_PATH;
     snapshot.stateDir = STATE_DIR;
     snapshot.authMode = auth.mode;
   }
@@ -125,6 +126,9 @@ function healthEventDigest(snap: HealthSummary): string {
     lastMessageAt: _lastMessageAt,
     lastEventAt: _lastEventAt,
     lastRunActivityAt: _lastRunActivityAt,
+    busy: _busy,
+    activeRuns: _activeRuns,
+    activeRunStartedAt: _activeRunStartedAt,
     accounts,
     ...status
   }: ChannelHealthSummary): unknown => ({
@@ -137,6 +141,10 @@ function healthEventDigest(snap: HealthSummary): string {
         }
       : {}),
   });
+  // The sampler owns continuous degradation age; brief load spikes are diagnostics.
+  const sustainedEventLoopDegradation =
+    snap.eventLoop?.degraded === true &&
+    (snap.eventLoop.degradedSinceMs ?? 0) >= HEALTH_REFRESH_INTERVAL_MS;
   // Keep lifecycle timestamps/errors and plugin-owned status. Sampling noise and
   // routine activity are diagnostics, not health transitions; tick owns liveness
   // and session events own session activity. Full diagnostics remain in the cache.
@@ -145,7 +153,10 @@ function healthEventDigest(snap: HealthSummary): string {
     ts: undefined,
     durationMs: undefined,
     eventLoop: snap.eventLoop
-      ? { degraded: snap.eventLoop.degraded, reasons: snap.eventLoop.reasons }
+      ? {
+          degraded: sustainedEventLoopDegradation,
+          reasons: sustainedEventLoopDegradation ? snap.eventLoop.reasons : [],
+        }
       : undefined,
     channels: Object.fromEntries(
       Object.entries(snap.channels).map(([id, value]) => [id, channel(value)]),

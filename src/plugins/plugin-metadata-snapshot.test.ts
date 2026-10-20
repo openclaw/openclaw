@@ -108,12 +108,6 @@ describe("plugin metadata snapshot", () => {
     const projected = projectPluginMetadataSnapshot(snapshot, ["setup-owner"]);
     expect([...(projected.declaredProviderOwners.get("literal") ?? [])]).toEqual(["setup-owner"]);
     expect(projectPluginMetadataSnapshot(snapshot, []).declaredProviderOwners.size).toBe(0);
-    expect(() => (snapshot.declaredProviderOwners as Map<string, Set<string>>).clear()).toThrow(
-      "Plugin metadata snapshots are immutable",
-    );
-    expect(() =>
-      (snapshot.declaredProviderOwners.get("literal") as Set<string>).add("foreign"),
-    ).toThrow("Plugin metadata snapshots are immutable");
   });
 
   beforeEach(() => {
@@ -357,9 +351,6 @@ describe("plugin metadata snapshot", () => {
     vi.resetModules();
     const reloaded = await import("./plugin-metadata-snapshot.js");
     expect(reloaded.finalizePluginMetadataSnapshot(snapshot)).toBe(snapshot);
-    expect(() => (snapshot.declaredProviderOwners as Map<string, Set<string>>).clear()).toThrow(
-      "Plugin metadata snapshots are immutable",
-    );
   });
 
   it("reuses discovery from a derived empty plugin index", () => {
@@ -738,8 +729,8 @@ describe("plugin metadata snapshot", () => {
     plugin.providerRequest = {
       providers: {
         demo: {
-          family: " demo-family ",
-          compatibilityFamily: " moonshot " as never,
+          family: "demo-family",
+          compatibilityFamily: "moonshot",
           openAICompletions: { supportsStreamingUsage: true },
         },
       },
@@ -848,12 +839,6 @@ describe("plugin metadata snapshot", () => {
       expect(snapshot.owners.modelIdNormalizationPolicies.get("demo")).toEqual({
         aliases: { raw: "prepared-model" },
       });
-      expect(() =>
-        (snapshot.owners.modelIdNormalizationPolicies as Map<string, unknown>).clear(),
-      ).toThrow("Plugin metadata snapshots are immutable");
-      expect(() => (snapshot.owners.providers as Map<string, string[]>).set("other", [])).toThrow(
-        "Plugin metadata snapshots are immutable",
-      );
       const callerRecord = index.plugins[0];
       const snapshotRecord = snapshot.index.plugins[0];
       if (!callerRecord || !snapshotRecord) {

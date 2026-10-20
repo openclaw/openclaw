@@ -7,14 +7,21 @@ import "./subagent-registry.persistence.mocks.test-support.js";
 // oxfmt-ignore
 import { announceSpy, createSubagentPersistenceRuntime, useSubagentPersistenceFixture } from "./subagent-registry.persistence-fixture.test-support.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
-import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
+import { setRuntimeConfigSnapshot } from "../../../config/config.js";
+import {
+  patchSessionEntryCore,
+  replaceSessionEntry,
+} from "../../../config/sessions/session-accessor.js";
+import { captureSessionEntryCurrentCheckAsyncInternal } from "../../../config/sessions/session-entry-current-check.js";
 import * as sessionReads from "../../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import { callGateway } from "../../../gateway/call.js";
-import type { ChatAbortControllerEntry } from "../../../gateway/chat-abort.types.js";
 import { sessionSharingTestContext } from "../../../gateway/server-methods/sessions-sharing.test-support.js";
 import * as agentEvents from "../../../infra/agent-events.js";
-import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
+import {
+  bindGatewayContextResolver,
+  getPluginRuntimeGatewayRequestScope,
+} from "../../../plugins/runtime/gateway-request-scope.js";
 import {
   getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
@@ -22,6 +29,7 @@ import {
   tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../../../process/gateway-work-admission.js";
+import { runSessionMutation } from "../../../sessions/session-controller.lifecycle.js";
 import { closeOpenClawStateDatabaseAsync } from "../../../state/openclaw-state-db.js";
 import * as stateContext from "../../../state/openclaw-state-worker-context.js";
 import { createAgentsWaitTool } from "../../tools/agents-wait-tool.js";
@@ -154,7 +162,6 @@ describe("subagent registry persistence", () => {
     const recoveryRuntime = createSubagentPersistenceRuntime(callGateway);
     const gateway = {
       recoveryRuntime,
-      chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
       resolveGatewayContext: () => gateway as never,
     };
     await activateSubagentRegistry(() => gateway as never);
@@ -252,6 +259,114 @@ describe("subagent registry persistence", () => {
     expect(persisted?.abortedLastRun).toBeUndefined();
   });
 
+  it.each(["reset", "delete"] as const)(
+    "preserves the retained session row when late timing settles during %s",
+    async (kind) => {
+      await fixture.allocateStateDir();
+      const childSessionKey = "agent:main:subagent:mutation-timing";
+      const session = { sessionId: "sess-mutation-timing", updatedAt: 999 };
+      const storePath = await writeChildSessionEntry({ sessionKey: childSessionKey, ...session });
+      const retained = (await readSubagentSessionStore(storePath))[childSessionKey];
+      const current = await captureSessionEntryCurrentCheckAsyncInternal({
+        agentId: "main",
+        storePath,
+        sessionKey: childSessionKey,
+      });
+      if (!current.entryCurrent || current.entryCurrent.source.path === storePath) {
+        current.release();
+        throw new Error("Expected native currency distinct from the logical controller scope");
+      }
+      const entered = createDeferred();
+      const released = createDeferred();
+      const blocker = patchSessionEntryCore(
+        { storePath, sessionKey: childSessionKey },
+        async () => {
+          entered.resolve();
+          await released.promise;
+          return null;
+        },
+        { skipMaintenance: true },
+      );
+      let timing: Promise<void> | undefined;
+      try {
+        await entered.promise;
+        // Start the real timing writer before destructive ownership is acquired.
+        timing = persistSubagentSessionTiming(
+          makeRun("run-mutation-timing", {
+            childSessionKey,
+            startedAt: 1_000,
+            endedAt: 1_500,
+            outcome: { status: "ok" },
+          }),
+          { sessionEntryCurrent: current.entryCurrent },
+        );
+        await runSessionMutation({
+          scope: storePath,
+          identities: [childSessionKey, session.sessionId],
+          kind,
+          run: async () => {
+            released.resolve();
+            await blocker;
+            await timing;
+            expect((await readSubagentSessionStore(storePath))[childSessionKey]).toEqual(retained);
+          },
+        });
+      } finally {
+        released.resolve();
+        try {
+          await blocker;
+          await timing;
+        } finally {
+          current.release();
+        }
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "persists terminal timing inside ordinary kill ownership (queued=%s)",
+    async (queued) => {
+      await fixture.allocateStateDir();
+      const childSessionKey = "agent:main:subagent:kill-timing";
+      const session = { sessionId: "sess-kill-timing", updatedAt: 999 };
+      const storePath = await writeChildSessionEntry({ sessionKey: childSessionKey, ...session });
+      const run = makeRun("run-kill-timing", {
+        childSessionKey,
+        collect: queued,
+        startedAt: queued ? undefined : 1_000,
+        endedAt: 1_500,
+        endedReason: "subagent-killed",
+        killReconciliation: { killedAt: 1_500 },
+      });
+
+      await runSessionMutation({
+        scope: storePath,
+        identities: [childSessionKey, session.sessionId],
+        diagnosticLabel: "subagent-kill",
+        run: () =>
+          persistSubagentSessionTiming(run, {
+            session: { storePath, entry: session, assertCurrent() {} },
+            ...(queued
+              ? { settledQueuedCancellation: { storePath, sessionId: session.sessionId } }
+              : {}),
+          }),
+      });
+
+      const persisted = (await readSubagentSessionStore(storePath))[childSessionKey];
+      expect(persisted).toMatchObject({
+        sessionId: session.sessionId,
+        updatedAt: 999,
+        status: "killed",
+        endedAt: 1_500,
+      });
+      expect(persisted?.startedAt).toBe(queued ? undefined : 1_000);
+      expect(persisted?.runtimeMs).toBe(queued ? undefined : 500);
+      if (queued) {
+        expect(persisted?.lastRunId).toBe("run-kill-timing");
+      }
+    },
+  );
+
   it("normalizes newly registered session keys to canonical trimmed values", async () => {
     await fixture.allocateStateDir();
 
@@ -284,11 +399,25 @@ describe("subagent registry persistence", () => {
     });
   });
 
-  it("reloads waitable swarm collector completions after a gateway restart", async () => {
+  it("reloads waitable swarm collector completions after a gateway restart until retention expires", async () => {
     await fixture.allocateStateDir();
+    setRuntimeConfigSnapshot({
+      agents: { defaults: { subagents: { archiveAfterMinutes: 1 } } },
+    });
+    const completedAt = Date.now();
     const run = makeRun("run-swarm-restart", {
       childSessionKey: "agent:worker:subagent:swarm-restart",
-      execution: { status: "terminal", endedAt: 2 },
+      childAgentId: "worker",
+      childSessionIdentity: {
+        sessionId: "session-swarm-restart",
+        lifecycleRevision: "revision-swarm-restart",
+      },
+      requesterAgentId: "main",
+      requesterTurnRunId: "parent-swarm-restart",
+      expectsCompletionMessage: false,
+      execution: { status: "terminal", endedAt: completedAt },
+      cleanupCompletedAt: completedAt,
+      archiveAtMs: completedAt + 60_000,
       collect: true,
       swarmRequesterSessionKey: "agent:worker:subagent:owner",
       swarmWaitOwnerSessionKeys: ["agent:worker:subagent:owner", "agent:main:main"],
@@ -298,7 +427,7 @@ describe("subagent registry persistence", () => {
         required: false,
         terminalReply: { disposition: "visible", text: "raw answer" },
         resultText: "raw answer",
-        capturedAt: 2,
+        capturedAt: completedAt,
       },
       collectorCompletion: {
         status: "done",
@@ -307,9 +436,13 @@ describe("subagent registry persistence", () => {
       },
     });
     saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
-    await writeChildSessionEntry({
+    await writeSubagentSessionEntry({
+      stateDir: fixture.stateDir,
+      agentId: "worker",
       sessionKey: run.childSessionKey,
       sessionId: "session-swarm-restart",
+      lifecycleRevision: "revision-swarm-restart",
+      defaultSessionId: "session-swarm-restart",
       updatedAt: run.execution.endedAt,
     });
 
@@ -331,7 +464,14 @@ describe("subagent registry persistence", () => {
       },
     });
 
-    await restartRegistry();
+    await resetSubagentRegistryForTests({ persist: false });
+    await initSubagentRegistry();
+    const gateway = {
+      localEmbedded: true,
+      recoveryRuntime: createSubagentPersistenceRuntime(callGateway),
+      resolveGatewayContext: () => gateway as never,
+    };
+    await activateSubagentRegistry(gateway.resolveGatewayContext);
     const wait = createAgentsWaitTool({
       agentSessionKey: "agent:main:main",
       agentId: "main",
@@ -352,6 +492,33 @@ describe("subagent registry persistence", () => {
       ],
       pending: [],
     });
+
+    let deletionGateway: unknown;
+    vi.mocked(callGateway).mockClear();
+    vi.mocked(callGateway).mockImplementationOnce(async () => {
+      deletionGateway = getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext?.();
+      return { ok: true };
+    });
+    const clock = vi.spyOn(Date, "now").mockReturnValue(completedAt + 60_001);
+    try {
+      await testing.sweepOnceForTests();
+    } finally {
+      clock.mockRestore();
+    }
+    expect(deletionGateway).toBe(gateway);
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "sessions.delete",
+        params: expect.objectContaining({
+          key: run.childSessionKey,
+          agentId: "worker",
+          expectedSessionId: "session-swarm-restart",
+          expectedLifecycleRevision: "revision-swarm-restart",
+        }),
+      }),
+    );
+    expect(listSubagentRunsForRequester("agent:main:main")).toEqual([]);
+    expect(readPersistedRun(run.runId)).toBeUndefined();
   });
 
   it.each([

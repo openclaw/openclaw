@@ -531,7 +531,7 @@ describe("chat waiting on subagents", () => {
 
   it.each([false, true])(
     "keeps a working fallback until child activity replaces it (bubble mode: %s)",
-    (bubbleMode) => {
+    async (bubbleMode) => {
       const container = document.body.appendChild(document.createElement("div"));
       const onOpenSubagent = vi.fn();
       const projection = projectSubagentStatus(
@@ -557,6 +557,8 @@ describe("chat waiting on subagents", () => {
         ...options,
         subagentActivity: { rows: projection.activity, onOpenSubagent },
       });
+      await vi.dynamicImportSettled();
+      flush();
       expect(container.textContent).toContain("Backend implementation");
       expect(container.textContent).not.toContain("Waiting on");
       expect(container.querySelector(".chat-working-indicator")).toBeNull();

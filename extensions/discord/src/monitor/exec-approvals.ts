@@ -4,12 +4,15 @@ import {
   type ApprovalResolveResult,
 } from "openclaw/plugin-sdk/approval-gateway-runtime";
 import type { PendingApprovalView } from "openclaw/plugin-sdk/approval-handler-runtime";
-import type { ExecApprovalDecision } from "openclaw/plugin-sdk/approval-runtime";
+import {
+  formatApprovalDecisionLabel,
+  type ExecApprovalDecision,
+} from "openclaw/plugin-sdk/approval-runtime";
 import type {
   DiscordExecApprovalConfig,
   OpenClawConfig,
 } from "openclaw/plugin-sdk/config-contracts";
-import { parseExecApprovalData } from "../approval-custom-id.js";
+import { DISCORD_APPROVAL_DECISIONS, parseExecApprovalData } from "../approval-custom-id.js";
 import {
   DISCORD_APPROVAL_ALLOWED_MENTIONS,
   formatDiscordApprovalDisplayValue,
@@ -45,11 +48,8 @@ type ExecApprovalResolveResult =
   | { ok: false; reason: "error" | "not-found" };
 
 function resolveTerminalLabel(approval: ApprovalResolveResult["approval"]): string {
-  if (approval.status === "allowed") {
-    return approval.decision === "allow-always" ? "Allowed always" : "Allowed once";
-  }
-  if (approval.status === "denied") {
-    return "Denied";
+  if (approval.status === "allowed" || approval.status === "denied") {
+    return formatApprovalDecisionLabel(approval.decision);
   }
   return approval.status === "expired" ? "Expired" : "Cancelled";
 }
@@ -127,12 +127,7 @@ class ExecApprovalButton extends Button {
       return;
     }
 
-    const decisionLabel =
-      parsed.action === "allow-once"
-        ? "Allowed (once)"
-        : parsed.action === "allow-always"
-          ? "Allowed (always)"
-          : "Denied";
+    const decisionLabel = DISCORD_APPROVAL_DECISIONS[parsed.action].label;
 
     try {
       await interaction.acknowledge();

@@ -47,7 +47,7 @@ describe("Logbook view", () => {
     const client = { request } as unknown as GatewayBrowserClient;
 
     const container = document.createElement("div");
-    const view = mountSolid(() => <Logbook client={client} connected={true} />, {
+    const view = mountSolid(() => <Logbook initialClient={client} />, {
       container,
     });
     try {
@@ -123,7 +123,7 @@ describe("Logbook view", () => {
       throw new Error(`Unexpected Logbook request: ${method}`);
     });
     const client = { request } as unknown as GatewayBrowserClient;
-    const view = mountSolid(() => <Logbook client={client} connected={true} />);
+    const view = mountSolid(() => <Logbook initialClient={client} />);
     try {
       await waitForSolid(() =>
         expect(view.queryByRole("button", { name: "Pause" })).not.toBeNull(),

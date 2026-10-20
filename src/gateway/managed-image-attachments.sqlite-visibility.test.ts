@@ -20,6 +20,10 @@ import {
 import { rewriteSqliteTranscriptEventRowsInTransaction } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { runWithSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
+import {
+  onInternalDiagnosticEvent,
+  waitForDiagnosticEventsDrained,
+} from "../infra/diagnostic-events.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import * as brokerReply from "../infra/sqlite-worker-broker-reply.js";
@@ -45,11 +49,12 @@ import {
   MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX,
   resolveManagedOutgoingMediaArtifactDownload,
 } from "./managed-image-attachments.js";
+import { createFixture } from "./managed-image-attachments.test-support.js";
 import {
   insertManagedImageRecord,
   listManagedImageRecordEntries,
-  type ManagedImageRecord,
   MANAGED_OUTGOING_ORIGINALS_SUBDIR,
+  type ManagedImageRecord,
   readManagedImageRecord,
 } from "./managed-image-record-store.js";
 import { createReadonlySessionHistoryReader } from "./session-history-readonly-reader.js";
@@ -77,34 +82,15 @@ async function fixture(messageId = "attached") {
   const scope = { agentId, sessionId, sessionKey, storePath };
   // This fixture owns the competing writer; background entry maintenance must not join it.
   expect(ensureSessionEntrySync(scope, { sessionId, updatedAt: Date.now() })).toBe(true);
-  const attachmentId = randomUUID();
-  const body = Buffer.from("synthetic managed original\n");
-  const mediaRoot = path.join(stateDir, "media");
-  const mediaId = `${attachmentId}.png`;
-  const originalPath = path.join(mediaRoot, MANAGED_OUTGOING_ORIGINALS_SUBDIR, mediaId);
-  fs.mkdirSync(path.dirname(originalPath), { recursive: true });
-  fs.writeFileSync(originalPath, body);
-  await insertManagedImageRecord(
-    {
-      attachmentId,
-      sessionKey,
-      agentId,
-      messageId,
-      createdAt: timestamp,
-      alt: "Synthetic attachment",
-      original: {
-        mediaRoot,
-        mediaId,
-        mediaSubdir: MANAGED_OUTGOING_ORIGINALS_SUBDIR,
-        contentType: "image/png",
-        width: 1,
-        height: 1,
-        sizeBytes: body.length,
-        filename: "fixture.png",
-      },
-    },
-    stateDir,
-  );
+  const { attachmentId, originalPath } = await createFixture(stateDir, {
+    attachmentId: randomUUID(),
+    sessionKey,
+    agentId,
+    messageId,
+    createdAt: timestamp,
+    body: Buffer.from("synthetic managed original\n"),
+    filename: "fixture.png",
+  });
   const url = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;
   const block = { type: "image", url, openUrl: url };
   const download = () =>
@@ -166,6 +152,75 @@ describe("managed attachment SQLite visibility", () => {
     closeOpenClawStateDatabaseForTest();
     clearRuntimeConfigSnapshot();
     savedEnv.restore();
+  });
+
+  it("loads original IDs only when a regular file is old enough for orphan cleanup", async ({
+    onTestFinished,
+  }) => {
+    const nowMs = 2_000_000;
+    const originals = path.join(stateDir, "media", MANAGED_OUTGOING_ORIGINALS_SUBDIR);
+    const kept = path.join(originals, "kept.png");
+    await insertManagedImageRecord(
+      {
+        attachmentId: "11111111-1111-4111-8111-111111111111",
+        sessionKey: "agent:main:main",
+        messageId: null,
+        createdAt: new Date(nowMs).toISOString(),
+        alt: "Retained transient image",
+        original: {
+          mediaRoot: path.join(stateDir, "media"),
+          mediaId: "kept.png",
+          mediaSubdir: MANAGED_OUTGOING_ORIGINALS_SUBDIR,
+          contentType: "image/png",
+          width: 1,
+          height: 1,
+          sizeBytes: 4,
+          filename: "kept.png",
+        },
+      },
+      stateDir,
+    );
+    const reads: string[] = [];
+    onTestFinished(
+      onInternalDiagnosticEvent(
+        (event) => {
+          if (
+            event.type === "worker.request" &&
+            event.phase === "queued" &&
+            event.kind === "stateRead" &&
+            event.requestClass === "managedImages"
+          ) {
+            reads.push(event.kind);
+          }
+        },
+        { include: ["worker.request"] },
+      ),
+    );
+    const cleanup = async (deletedFileCount: number, expectedReads: number) => {
+      reads.length = 0;
+      expect(await cleanupManagedOutgoingMediaRecords({ stateDir, nowMs })).toEqual({
+        deletedRecordCount: 0,
+        deletedFileCount,
+        retainedCount: 1,
+      });
+      await waitForDiagnosticEventsDrained();
+      expect(reads).toHaveLength(expectedReads);
+    };
+
+    await cleanup(0, 1);
+    await fsAsync.mkdir(originals, { recursive: true });
+    await cleanup(0, 1);
+    await fsAsync.writeFile(kept, "kept");
+    await fsAsync.utimes(kept, new Date(nowMs), new Date(nowMs));
+    await cleanup(0, 1);
+
+    const orphan = path.join(originals, "orphan.png");
+    await fsAsync.writeFile(orphan, "orphan");
+    await fsAsync.utimes(orphan, new Date(0), new Date(0));
+    await fsAsync.utimes(kept, new Date(0), new Date(0));
+    await cleanup(1, 2);
+    expect(await fsAsync.readFile(kept, "utf8")).toBe("kept");
+    await expect(fsAsync.stat(orphan)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it.each(["missing", "invalid-row", "ambiguous"] as const)(

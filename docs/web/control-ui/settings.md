@@ -24,13 +24,15 @@ When the Gateway rejects an invalid setting, **Settings not applied** keeps your
 
 Global model defaults apply to every agent. Switching the Settings agent while saving does not change the save target. If a save fails, **Retry** resubmits that change; after recovery, the controls follow the saved configuration, including later updates from another client.
 
+In **Models**, thinking choices follow the primary model's reported reasoning levels, including provider-specific levels. Fast-mode choices follow its reported speed capabilities, with **Ultrafast** shown separately from **On**. A saved preference that is no longer supported stays visible but cannot be selected anew. A saved account-pinned model does not borrow speed capabilities from another account's catalog; unverified speed preferences remain visible but unavailable for new selections. Switching models does not rewrite a saved preference; choose another supported value or **Default** to return to model policy. **Auto** is a timed fast-mode preference, not inheritance.
+
 Configuration edits, including reverting a value while a save is pending, survive refreshes and reconnects. If a save's outcome is unknown, the UI keeps your draft and pauses unrelated settings writes until a refresh confirms the saved revision or you explicitly retry the save or discard the draft. Even when a reverted draft looks unchanged, the save indicator keeps **Retry** available and prevents managed UI reloads from losing the unresolved draft. **Retry** repeats the failed Save or Apply operation. Seeing the old saved value after reconnect does not confirm that an earlier write has stopped; the UI keeps the uncertainty visible so a later commit cannot erase your revert. Changes from another writer retain the original draft and report a conflict instead of silently replacing your edits. Raw-editor drafts remain manual-save-only.
 
 An unsettled Save or Apply stays bound to its original Gateway. Switching Gateways does not transfer that pending change: reconnect to the original Gateway to retry it, or discard the retained draft before editing the new Gateway.
 
 In **Models**, **Connect provider** offers the credential-only sign-in methods declared by installed provider plugins. Connecting saves the credential without selecting its starter model. If model restrictions hide the provider, choose **Show all provider models** or **Keep current restrictions**; saving a credential alone does not widen access. Choose **Models → Connect provider → On this Gateway** to find existing connections or open [setup and explicit model activation](/start/onboarding). Saving credentials does not activate a model; testing and using a model remains a separate choice for the selected agent. If saving has already started, cancellation keeps the dialog open until the saved result arrives. Leaving the page closes pending sign-in input and lets an active save finish, so a later sign-in can start without losing saved credentials.
 
-Model pickers show the authentication methods available to the selected agent. A single subscription or an explicitly selected account includes its email when available; multiple accounts and mixed API/subscription credentials are shown without guessing which account will run. **Utility Model → Auto** also shows the recommended small model derived from the global primary model, including an explicit account selection inherited from that model. Providers without a recommended small model say so. Agent-specific overrides still take precedence when the agent runs.
+Model pickers show the authentication methods available to the selected agent. In **Models** settings, this muted information appears on the right of each open option row; the closed control shows only the model name and icon. A single subscription or an explicitly selected account includes its email when available; multiple accounts and mixed API/subscription credentials are shown without guessing which account will run. **Utility Model → Auto** also shows the recommended small model derived from the global primary model, including an explicit account selection inherited from that model. Providers without a recommended small model say so. Agent-specific overrides still take precedence when the agent runs.
 
 Open panels share provider sign-in status. Configuration edits keep that status until the Gateway publishes updated authentication information; credential changes, reconnects, and expiry deadlines still refresh it.
 
@@ -64,7 +66,7 @@ The choice is saved to your authenticated profile on the connected Gateway and h
 
 ## Community invitation
 
-The sidebar’s compact **Community** entry opens Discord, Reddit, and X links on demand. On phones, the links appear in a bottom sheet; larger screens use a centered dialog. The sheet does not open automatically, and closing it returns focus to **Community** without hiding the entry. Links open in a new tab.
+The **Community** icon at the bottom of the left navigation rail opens Discord, Reddit, and X links on demand without taking space from the session list. On phones, the links appear in a bottom sheet; larger screens use a centered dialog. The sheet does not open automatically, and closing it returns focus to **Community** without hiding the entry. Links open in a new tab.
 
 This replaces the promotional invitation card. Existing browser-local card dismissals are left untouched; they do not hide the compact entry. To hide Community for everyone using a Control UI deployment, run this on the Gateway serving that UI:
 
@@ -408,6 +410,10 @@ bundled with them, the [macOS](/platforms/macos), [Windows](/platforms/windows),
 and [Linux](/platforms/linux) desktop apps, the
 [Chrome extension](/tools/chrome-extension), the in-app Plugins hub with
 [ClawHub](https://clawhub.ai), and the Discord community and docs.
+
+If the app catalog needs a backing session while its agent is still starting,
+closing the catalog or changing its agent or conversation cancels that pending
+creation. Keeping the catalog open lets creation finish when the agent is ready.
 
 ## Settings
 

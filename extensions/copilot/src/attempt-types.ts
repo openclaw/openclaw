@@ -5,17 +5,13 @@ import type {
   AgentHarnessV2,
   AgentMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import {
-  resolveSandboxContext as defaultResolveSandboxContext,
-  runAgentEndSideEffectsAsync,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import { runAgentEndSideEffectsAsync } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { TranscriptEntryAnchor } from "openclaw/plugin-sdk/session-transcript-runtime";
 import type { OnAssistantDeltaPayload } from "./event-bridge.js";
 import type { CopilotHooksConfig } from "./hooks-bridge.js";
 import type { CopilotPermissionPolicy } from "./permission-bridge.js";
 import type { CopilotModelProviderInput as ModelRef } from "./provider-bridge.js";
 import type { CopilotClientPool, PooledClient } from "./runtime.js";
-import type { createCopilotToolBridge } from "./tool-bridge.js";
 export const BACKGROUND_COMPACTION_CANCEL_TIMEOUT_MS = 5_000;
 export const COPILOT_ASK_USER_AVAILABLE_TOOLS = ["builtin:ask_user"] as const;
 export const COPILOT_SETTLED_FINALIZATION_SYSTEM_MESSAGE =
@@ -101,14 +97,9 @@ export type ModelRefInputObject = {
   contextWindow?: number;
   maxTokens?: number;
 };
-type ResolveSandboxContextFn = typeof defaultResolveSandboxContext;
 export interface CopilotAttemptDeps {
   pool: CopilotClientPool;
   operation?: CopilotAttemptOperation;
-  now?: () => number;
-  createToolBridge?: typeof createCopilotToolBridge;
-  isHostScopedToolActive?: (toolName: string) => boolean;
-  resolveSandboxContextOverride?: ResolveSandboxContextFn;
   onSessionEstablished?: (info: {
     compactionSessionConfig?: SessionConfig;
     sdkSessionId: string;

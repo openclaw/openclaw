@@ -48,7 +48,7 @@ vi.mock("../browser/system-profiles.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../browser/system-profiles.js")>()),
   assertSystemCookiePlatform: vi.fn(),
   readSystemProfileCookies: systemProfileMocks.readSystemProfileCookies,
-  resolveSystemCookieSource: vi.fn(() => ({
+  resolveSystemCookieSource: vi.fn(async () => ({
     browser: "chrome",
     cookiesFile: "/synthetic/Cookies",
   })),

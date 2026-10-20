@@ -89,12 +89,10 @@ type QuerySuggestion = {
   value: string;
 };
 
-export type UsageFilterOptions = SessionsUsageOverview["filterOptions"];
-
 const buildQuerySuggestions = (
   query: string,
   terms: ReturnType<typeof extractQueryTerms>,
-  options: UsageFilterOptions,
+  options: SessionsUsageOverview["filterOptions"],
 ): QuerySuggestion[] => {
   if (!query.trim()) {
     return [];

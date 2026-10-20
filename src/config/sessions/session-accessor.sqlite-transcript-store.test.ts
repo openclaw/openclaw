@@ -94,13 +94,30 @@ describe("SQLite transcript append", () => {
       expect(JSON.parse(rows[1]!.eventJson)).toEqual(unicode);
       expect(rows).toEqual(readTranscriptEventRows(database, scope.sessionId));
       const emptyRows: SqliteTranscriptSnapshotRow[] = [];
-      runOpenClawAgentWriteTransaction(
-        (writer) =>
-          replaceSqliteTranscriptEventsInTransaction(writer, scope, [], { writtenRows: emptyRows }),
-        scope,
+      const work = trackSqliteStatementExecutions(
+        requireNativeSqliteDatabase(database.db),
+        ["identityDeletes"],
+        (sql) =>
+          /^delete from "transcript_event_identities" /i.test(sql) ? "identityDeletes" : null,
       );
+      try {
+        runOpenClawAgentWriteTransaction(
+          (writer) =>
+            replaceSqliteTranscriptEventsInTransaction(writer, scope, [], {
+              writtenRows: emptyRows,
+            }),
+          scope,
+        );
+      } finally {
+        work.restore();
+      }
+      expect(work.counts.identityDeletes).toBe(0);
       expect(emptyRows).toEqual([]);
       expect(readTranscriptEventRows(database, scope.sessionId)).toEqual([]);
+      const identities = database.db
+        .prepare("SELECT event_id FROM transcript_event_identities WHERE session_id = ?")
+        .all(scope.sessionId);
+      expect(identities).toEqual([]);
     });
   });
 
@@ -815,22 +832,30 @@ describe("SQLite exact transcript suffix replacement", () => {
     }, events);
   });
 
+  const oldDuplicate = keyedAssistant("duplicate", "root", "old-key");
+  const oldOwner = keyedAssistant("owner", "duplicate", "old-key");
+  const newOwner = keyedAssistant("owner", "duplicate", "new-key", "updated");
+  const insertedOwner = keyedAssistant("new-owner", "owner", "old-key");
+
   it.each([
     {
       name: "promotes a prefix duplicate when the retained owner changes its key",
-      events: [
-        rewriteEvents[0],
-        keyedAssistant("duplicate", "root", "old-key"),
-        keyedAssistant("owner", "duplicate", "old-key"),
-      ],
-      next: [
-        rewriteEvents[0],
-        keyedAssistant("duplicate", "root", "old-key"),
-        keyedAssistant("owner", "duplicate", "new-key", "updated"),
-      ],
+      events: [rewriteEvents[0], oldDuplicate, oldOwner],
+      next: [rewriteEvents[0], oldDuplicate, newOwner],
       reassign: true,
       owners: [
         { event_id: "duplicate", message_idempotency_key: "old-key" },
+        { event_id: "owner", message_idempotency_key: "new-key" },
+      ],
+    },
+    {
+      name: "preserves a key claimed by an earlier suffix insert",
+      events: [rewriteEvents[0], oldDuplicate, oldOwner, assistant("removed", "owner", "removed")],
+      next: [rewriteEvents[0], oldDuplicate, newOwner, insertedOwner],
+      reassign: true,
+      owners: [
+        { event_id: "duplicate", message_idempotency_key: null },
+        { event_id: "new-owner", message_idempotency_key: "old-key" },
         { event_id: "owner", message_idempotency_key: "new-key" },
       ],
     },
@@ -880,7 +905,27 @@ describe("SQLite exact transcript suffix replacement", () => {
           "UPDATE transcript_event_identities SET message_idempotency_key = ? WHERE session_id = ? AND event_id = ?",
         ).run("old-key", scope.sessionId, "owner");
       }
-      replaceTranscriptSuffixForTest(scope, events, next);
+      const work = trackSqliteStatementExecutions(db, ["identityDeletes", "ownerReads"], (sql) => {
+        if (/^delete from "transcript_event_identities" /i.test(sql)) {
+          return "identityDeletes";
+        }
+        return /^select "event_id" from "transcript_event_identities" /i.test(sql) &&
+          sql.includes('"message_idempotency_key" =')
+          ? "ownerReads"
+          : null;
+      });
+      try {
+        replaceTranscriptSuffixForTest(scope, events, next);
+      } finally {
+        work.restore();
+      }
+      expect(work.counts).toEqual({ identityDeletes: 0, ownerReads: 0 });
+      const identities = db
+        .prepare(
+          "SELECT event_id, seq FROM transcript_event_identities WHERE session_id = ? ORDER BY seq",
+        )
+        .all(scope.sessionId);
+      expect(identities).toEqual(next.map((event, seq) => ({ event_id: event.id, seq })));
       expect(
         readIdempotencyOwners(db, scope.sessionId, ...owners.map((row) => row.event_id)),
       ).toEqual(owners);

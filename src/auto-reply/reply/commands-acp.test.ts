@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type { SessionBindingBindInput } from "../../infra/outbound/session-binding.types.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { expectObjectFields, mockFirstObjectArg } from "../../test-utils/mock-call-assertions.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import type { MsgContext } from "../templating.js";
@@ -528,69 +529,72 @@ describe("/acp command", () => {
   it("keeps freshly spawned Slack-bound ACP metadata readable for the immediate follow-up", async () => {
     const directory = tempDirs.make("openclaw-acp-bound-followup-");
     const databasePath = path.join(directory, "state", "openclaw.sqlite");
-    const cfg = {
-      ...baseCfg,
-      session: { ...baseCfg.session, store: path.join(directory, "sessions.json") },
-    } satisfies OpenClawConfig;
-    const sessionMeta = await vi.importActual<typeof import("../../acp/runtime/session-meta.js")>(
-      "../../acp/runtime/session-meta.js",
-    );
-    const { createTestAdmittedRunContext } =
-      await import("../../agents/admitted-run-context.test-support.js");
-    const { closeOpenClawStateDatabaseByPathAsync } =
-      await import("../../state/openclaw-state-db-cache.js");
+    await withEnvAsync({ OPENCLAW_STATE_DIR: directory }, async () => {
+      const cfg = {
+        ...baseCfg,
+        session: { ...baseCfg.session, store: path.join(directory, "sessions.json") },
+      } satisfies OpenClawConfig;
+      const sessionMeta = await vi.importActual<typeof import("../../acp/runtime/session-meta.js")>(
+        "../../acp/runtime/session-meta.js",
+      );
+      const { createTestAdmittedRunContext } =
+        await import("../../agents/admitted-run-context.test-support.js");
+      const { closeOpenClawStateDatabaseByPathAsync } =
+        await import("../../state/openclaw-state-db-cache.js");
 
-    hoisted.upsertAcpSessionMetaMock.mockImplementation((input) =>
-      sessionMeta.upsertAcpSessionMeta({ ...input, cfg, databasePath, now: () => 1 }),
-    );
-    hoisted.readAcpSessionEntryMock.mockImplementation((input) =>
-      sessionMeta.readAcpSessionEntry({ ...input, cfg, databasePath }),
-    );
-    hoisted.readAcpSessionEntryAsyncMock.mockImplementation((input) =>
-      sessionMeta.readAcpSessionEntryAsync({ ...input, cfg, databasePath }),
-    );
-    const manager = new AcpSessionManager();
-    acpManagerTesting.setAcpSessionManagerForTests(manager);
+      hoisted.upsertAcpSessionMetaMock.mockImplementation((input) =>
+        sessionMeta.upsertAcpSessionMeta({ ...input, cfg, databasePath, now: () => 1 }),
+      );
+      hoisted.readAcpSessionEntryMock.mockImplementation((input) =>
+        sessionMeta.readAcpSessionEntry({ ...input, cfg, databasePath }),
+      );
+      hoisted.readAcpSessionEntryAsyncMock.mockImplementation((input) =>
+        sessionMeta.readAcpSessionEntryAsync({ ...input, cfg, databasePath }),
+      );
+      const manager = new AcpSessionManager();
+      acpManagerTesting.setAcpSessionManagerForTests(manager);
 
-    try {
-      const result = await runCommand("/acp spawn codex --bind here", cfg, {
-        Provider: "slack",
-        OriginatingTo: "user:U123",
-        SenderId: "U123",
-      });
-      expect(result?.reply?.text).toContain("Bound this conversation to");
-      const binding = expectBindingBindCall({
-        placement: "current",
-        conversation: {
-          channel: "slack",
-          accountId: "default",
-          conversationId: "user:U123",
-        },
-      });
-      const requestId = "immediate-bound-followup";
-      const sessionKey = binding.targetSessionKey;
-      if (typeof sessionKey !== "string") {
-        throw new Error("Expected the published binding to own an ACP session key");
+      try {
+        const result = await runCommand("/acp spawn codex --bind here", cfg, {
+          Provider: "slack",
+          OriginatingTo: "user:U123",
+          SenderId: "U123",
+        });
+        expect(result?.reply?.text).toContain("Bound this conversation to");
+        const binding = expectBindingBindCall({
+          placement: "current",
+          conversation: {
+            channel: "slack",
+            accountId: "default",
+            conversationId: "user:U123",
+          },
+        });
+        const requestId = "immediate-bound-followup";
+        const sessionKey = binding.targetSessionKey;
+        if (typeof sessionKey !== "string") {
+          throw new Error("Expected the published binding to own an ACP session key");
+        }
+
+        await expect(
+          manager.runTurn({
+            admittedRunContext: createTestAdmittedRunContext(requestId),
+            cfg,
+            sessionKey,
+            provenance: "human",
+            text: "continue the bound ACP session",
+            mode: "prompt",
+            requestId,
+          }),
+        ).resolves.toBeUndefined();
+        expect(hoisted.runTurnMock).toHaveBeenCalledTimes(1);
+      } finally {
+        acpManagerTesting.resetAcpSessionManagerForTests();
+        const { closeOpenClawAgentDatabasesAsync } =
+          await import("../../state/openclaw-agent-db.js");
+        await closeOpenClawAgentDatabasesAsync();
+        await closeOpenClawStateDatabaseByPathAsync(databasePath);
       }
-
-      await expect(
-        manager.runTurn({
-          admittedRunContext: createTestAdmittedRunContext(requestId),
-          cfg,
-          sessionKey,
-          provenance: "human",
-          text: "continue the bound ACP session",
-          mode: "prompt",
-          requestId,
-        }),
-      ).resolves.toBeUndefined();
-      expect(hoisted.runTurnMock).toHaveBeenCalledTimes(1);
-    } finally {
-      acpManagerTesting.resetAcpSessionManagerForTests();
-      const { closeOpenClawAgentDatabasesAsync } = await import("../../state/openclaw-agent-db.js");
-      await closeOpenClawAgentDatabasesAsync();
-      await closeOpenClawStateDatabaseByPathAsync(databasePath);
-    }
+    });
   });
 
   it.each([

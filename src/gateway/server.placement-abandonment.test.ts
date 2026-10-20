@@ -5,6 +5,7 @@ import { it, vi } from "vitest";
 import { stopChild } from "../../scripts/lib/gateway-bench-child.js";
 import { getFreePort } from "../../scripts/lib/gateway-bench-probes.js";
 import { inspectManagedProcessGroup } from "../../scripts/lib/managed-child-process.mts";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { runQaGatewayTestFixture } from "../../test/helpers/qa-gateway-test-lifetime.js";
 import { insertRegistryWorktree } from "../agents/worktrees/registry.js";
@@ -25,6 +26,8 @@ import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.
 import * as nodeTunnel from "./worker-environments/node-worker-tunnel.js";
 import { transport } from "./worker-environments/node-worker-tunnel.test-support.js";
 import {
+  BUNDLE_HASH,
+  MANIFEST_REF,
   REQUEST,
   seedActivePlacement,
 } from "./worker-environments/placement-dispatch-test-fixtures.js";
@@ -38,15 +41,36 @@ const createTunnel = nodeTunnel.createNodeWorkerTunnelManager;
 let fixtureActive = false;
 
 const cases = [
-  { name: "offline move", persisted: false, failed: false },
-  { name: "database reopen", persisted: true, failed: false },
-  { name: "failed recovery reopen", persisted: true, failed: true },
+  {
+    name: "offline move: abandons the pending worker result, completes a fresh turn, and archives deletion",
+    persisted: false,
+    failed: false,
+    queueIsolation: false,
+  },
+  {
+    name: "moves main/global without dropping a queued research/global turn",
+    persisted: false,
+    failed: false,
+    queueIsolation: true,
+  },
+  {
+    name: "database reopen: abandons the pending worker result, completes a fresh turn, and archives deletion",
+    persisted: true,
+    failed: false,
+    queueIsolation: false,
+  },
+  {
+    name: "failed recovery reopen: abandons the pending worker result, completes a fresh turn, and archives deletion",
+    persisted: true,
+    failed: true,
+    queueIsolation: false,
+  },
 ];
 
 it.for(cases)(
-  "$name: abandons the pending worker result, completes a fresh turn, and archives deletion",
+  "$name",
   { timeout: 90_000 },
-  async ({ persisted, failed }, { expect, onTestFinished, signal }) => {
+  async ({ persisted, failed, queueIsolation }, { expect, onTestFinished, signal }) => {
     // Timeout cleanup must release HOME, SQLite, and the spy before another case.
     if (fixtureActive) {
       throw new Error("Previous placement abandonment fixture has not released its state");
@@ -96,16 +120,38 @@ it.for(cases)(
         signal.throwIfAborted();
         const reply = "RECOVERED_SESSION_OK";
         const requestLog = state.path("provider-requests.jsonl");
+        const responseControl = state.path("provider-response-control.json");
+        const scriptedResponses = {
+          hold: queueIsolation,
+          responses: [{ text: "FIRST_GLOBAL_OK" }, { text: "QUEUED_GLOBAL_OK" }],
+        };
+        if (queueIsolation) {
+          await fs.writeFile(responseControl, JSON.stringify(scriptedResponses));
+        }
         const mockPort = await getFreePort();
+        const firstProviderRequest = createDeferred();
+        const queuedProviderRequest = createDeferred();
         signal.throwIfAborted();
         const mock = spawn(process.execPath, ["scripts/e2e/mock-openai-server.mjs"], {
           detached: process.platform !== "win32",
+          stdio: ["ignore", "pipe", "pipe", "ipc"],
           env: {
             PATH: process.env.PATH,
             MOCK_PORT: String(mockPort),
             SUCCESS_MARKER: reply,
             MOCK_REQUEST_LOG: requestLog,
+            ...(queueIsolation ? { MOCK_RESPONSE_CONTROL: responseControl } : {}),
           },
+        });
+        mock.on("message", (message: unknown) => {
+          if (!message || typeof message !== "object" || !("seq" in message)) {
+            return;
+          }
+          if (message.seq === 1) {
+            firstProviderRequest.resolve();
+          } else if (message.seq === 2) {
+            queuedProviderRequest.resolve();
+          }
         });
         childStopped = false;
         cleanups.push(async () => {
@@ -118,9 +164,12 @@ it.for(cases)(
           ).toBe("dead");
           childStopped = true;
         });
-        mock.stdout.resume();
-        mock.stderr.resume();
+        mock.stdout?.resume();
+        mock.stderr?.resume();
         let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
+        const probeRunId = "research-global-probe";
+        const queuedRunId = "research-global-queued";
+        const queuedDelivered = createDeferred();
         let offlineDeviceSeeded = false;
         let cleaningUp = false;
         const offlineTransport = transport();
@@ -192,6 +241,7 @@ it.for(cases)(
         };
         const cfg = {
           agents: {
+            ...(queueIsolation ? { ownership: "explicit" as const } : {}),
             defaults: {
               workspace: state.workspaceDir,
               skipBootstrap: true,
@@ -199,6 +249,7 @@ it.for(cases)(
               model: { primary: provider.modelRef },
               models: { [provider.modelRef]: model },
             },
+            ...(queueIsolation ? { entries: { main: {}, research: {} } } : {}),
           },
           models: { mode: "replace", providers: { [provider.providerId]: providerConfig } },
           plugins: { slots: { memory: "none" } },
@@ -215,6 +266,15 @@ it.for(cases)(
             configPath: state.configPath,
             token,
             scopes: ["operator.admin", "operator.read", "operator.write"],
+            onEvent: ({ event, payload }) => {
+              if (event !== "chat") {
+                return;
+              }
+              const encoded = JSON.stringify(payload ?? {});
+              if (encoded.includes("QUEUED_GLOBAL_OK")) {
+                queuedDelivered.resolve();
+              }
+            },
           });
           await gateway.server.startupSettled;
           signal.throwIfAborted();
@@ -225,7 +285,8 @@ it.for(cases)(
         } else {
           await captureRuntimeConfigAsyncReader()();
         }
-        const { sessionId, sessionKey, agentId } = REQUEST;
+        const { sessionId, agentId } = REQUEST;
+        const sessionKey = queueIsolation ? "global" : REQUEST.sessionKey;
         const session = { sessionId, sessionKey, agentId };
         const worktreeId = "abandonment-worktree";
         await insertRegistryWorktree(process.env, {
@@ -261,7 +322,43 @@ it.for(cases)(
           nodeDeviceId: "offline-device",
         });
         offlineDeviceSeeded = true;
-        const active = await seedActivePlacement(placements, owner);
+        let active: Awaited<ReturnType<typeof seedActivePlacement>>;
+        if (queueIsolation) {
+          let current = await placements.startDispatch({ ...REQUEST, sessionKey });
+          current = await placements.transition({
+            sessionId,
+            from: "requested",
+            to: "provisioning",
+            expectedGeneration: current.generation,
+            patch: { environmentId },
+          });
+          current = await placements.transition({
+            sessionId,
+            from: "provisioning",
+            to: "syncing",
+            expectedGeneration: current.generation,
+            patch: { workerBundleHash: BUNDLE_HASH },
+          });
+          current = await placements.transition({
+            sessionId,
+            from: "syncing",
+            to: "starting",
+            expectedGeneration: current.generation,
+            patch: {
+              workspaceBaseManifestRef: MANIFEST_REF,
+              remoteWorkspaceDir: "/worker/workspace",
+            },
+          });
+          active = await placements.transition({
+            sessionId,
+            from: "starting",
+            to: "active",
+            expectedGeneration: current.generation,
+            patch: { activeOwnerEpoch: 1 },
+          });
+        } else {
+          active = await seedActivePlacement(placements, owner);
+        }
         const source = { generation: active.generation, ...owner };
         const claim = await placements.claimTurn({
           ...session,
@@ -299,21 +396,68 @@ it.for(cases)(
           throw new Error("Gateway fixture did not start");
         }
         const { client } = gateway;
+        if (queueIsolation) {
+          await client.request("chat.send", {
+            sessionKey: "global",
+            agentId: "research",
+            message: "Hold this first research turn open.",
+            idempotencyKey: "research-global-first",
+            queueMode: "followup",
+          });
+          await firstProviderRequest.promise;
+          const probeAccepted = await client.request("chat.send", {
+            sessionKey: "global",
+            agentId: "research",
+            message: "Keep this probe queued until its exact cancellation.",
+            idempotencyKey: probeRunId,
+            queueMode: "followup",
+          });
+          const queuedAccepted = await client.request("chat.send", {
+            sessionKey: "global",
+            agentId: "research",
+            message: "Deliver this queued research turn after the first.",
+            idempotencyKey: queuedRunId,
+            queueMode: "followup",
+          });
+          expect(probeAccepted).toMatchObject({ runId: probeRunId, status: "started" });
+          expect(queuedAccepted).toMatchObject({ runId: queuedRunId, status: "started" });
+        }
         if (!persisted) {
           await expect(
             client.request("sessions.move", {
               key: sessionKey,
+              ...(queueIsolation ? { agentId } : {}),
               expected: source,
               target: { kind: "gateway" },
               abandonSource: true,
             }),
           ).resolves.toMatchObject({ ok: true, placement: { state: "local" } });
         }
+        if (queueIsolation) {
+          const cancelled = await client.request<{ aborted: boolean; runIds: string[] }>(
+            "chat.abort",
+            {
+              sessionKey: "global",
+              agentId: "research",
+              runId: probeRunId,
+            },
+          );
+          await fs.writeFile(
+            responseControl,
+            JSON.stringify({ ...scriptedResponses, hold: false }),
+          );
+          expect(cancelled).toMatchObject({ aborted: true, runIds: [probeRunId] });
+          await queuedProviderRequest.promise;
+          await queuedDelivered.promise;
+        }
         signal.throwIfAborted();
         expect(placements.get(sessionId)).toMatchObject({ state: "local", turnClaim: null });
         expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
         expect(placements.validateTurnClaim(claim)).toBe(false);
         expect(await placements.getPlacementMoveAsync(sessionId)).toBeUndefined();
+        if (queueIsolation) {
+          return;
+        }
         const environments = await createWorkerEnvironmentStore({ database });
         const retainedCleanup = environments.get(environmentId);
         expect(retainedCleanup).toMatchObject({

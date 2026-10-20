@@ -11,7 +11,10 @@ import {
 } from "../../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
-import { buildChatContextCategories } from "./chat-context-breakdown-model.ts";
+import {
+  buildChatContextCategories,
+  buildDeferredContextGroups,
+} from "./chat-context-breakdown-model.ts";
 import { ChatContextBreakdown } from "./chat-context-breakdown.tsx";
 
 const report: SessionSystemPromptReport = {
@@ -120,4 +123,65 @@ it("retires a pending report on session replacement and rejects a report from an
   expect(view.container.textContent).not.toContain("AGENTS.md");
   expect(view.container.querySelector(".chat-context__bar")).toBeNull();
   view.unmount();
+});
+
+it("groups duplicate filenames by producer origin and keeps deferred schemas outside usage", () => {
+  const grouped: SessionSystemPromptReport = {
+    ...report,
+    injectedWorkspaceFiles: [
+      {
+        ...report.injectedWorkspaceFiles[0]!,
+        origin: { kind: "agent-workspace", rootPath: "/private/workspace" },
+      },
+      {
+        name: "AGENTS.md",
+        missing: false,
+        truncated: false,
+        path: "/project/AGENTS.md",
+        rawChars: 4000,
+        injectedChars: 4000,
+        origin: { kind: "execution-project", rootPath: "/project" },
+      },
+    ],
+    tools: {
+      ...report.tools,
+      entries: [
+        { name: "exec", summaryChars: 400, schemaChars: 8000, source: "openclaw" },
+        { name: "read", summaryChars: 400, schemaChars: 4000, source: "mcp", serverName: "Docs" },
+      ],
+      deferred: {
+        schemaChars: 40000,
+        entries: [
+          { name: "search", source: "mcp", serverName: "Docs", schemaChars: 40000 },
+          { name: "remote", source: "client", schemaChars: null },
+        ],
+      },
+    },
+  };
+  const categories = buildChatContextCategories(grouped, 50000);
+  expect(
+    categories
+      .find((category) => category.id === "files")
+      ?.groups?.map((group) => [group.kind, group.tokens, group.entries[0]?.key]),
+  ).toEqual([
+    ["agent-workspace", 4000, "/private/workspace/AGENTS.md"],
+    ["execution-project", 1000, "/project/AGENTS.md"],
+  ]);
+  expect(
+    categories
+      .find((category) => category.id === "tools")
+      ?.groups?.map((group) => [group.kind, group.name, group.tokens]),
+  ).toEqual([
+    ["openclaw", undefined, 2000],
+    ["mcp", "Docs", 1000],
+  ]);
+  expect(categories.reduce((sum, category) => sum + (category.tokens ?? 0), 0)).toBe(50000);
+  expect(buildDeferredContextGroups(grouped).map((group) => [group.kind, group.tokens])).toEqual([
+    ["mcp", 10000],
+    ["client", null],
+  ]);
+  expect(
+    buildChatContextCategories(report, 50000).find((category) => category.id === "files")
+      ?.groups?.[0]?.kind,
+  ).toBe("other");
 });

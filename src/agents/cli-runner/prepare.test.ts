@@ -18,11 +18,6 @@ import {
 } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
-import {
-  createReplyOperation,
-  replyRunRegistry,
-  type ReplyOperation,
-} from "../../auto-reply/reply/reply-run-registry.js";
 import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -67,6 +62,11 @@ import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
+import {
+  createReplyOperation,
+  type ReplyOperation,
+  getSessionControllerOperation,
+} from "../../sessions/session-controller.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import type { SkillLibraryAuthoringCapability } from "../../skills/library/authoring.js";
@@ -144,6 +144,7 @@ import { finalizeCliContextEngineTurn } from "./cli-run-transcript.js";
 import { executePluginOwnedProcess } from "./execute-plugin.js";
 import { prepareCliHistoryBoundary } from "./history-boundary.js";
 import {
+  createJsonlStdinBackendConfig,
   registerCliMcpPreparationTests,
   setRawCliBackendForPrepareTest,
 } from "./prepare-mcp.test-support.js";
@@ -190,7 +191,8 @@ vi.mock("../../config/config.js", async () => ({
   resolveGatewayPort: (await import("../../config/paths.js")).resolveGatewayPort,
 }));
 
-vi.mock("../sandbox.js", () => ({
+vi.mock("../sandbox/context.js", async () => ({
+  ...(await vi.importActual<typeof import("../sandbox/context.js")>("../sandbox/context.js")),
   ensureSandboxWorkspaceForSession: ensureSandboxWorkspaceForSessionMock,
 }));
 
@@ -315,16 +317,6 @@ function createArgBackendConfig(
   output: "text" | "json" = "text",
 ): CliBackendPlugin["config"] {
   return { command, args, output, input: "arg", sessionMode: "existing" };
-}
-
-function createJsonlStdinBackendConfig(command: string): CliBackendPlugin["config"] {
-  return {
-    command,
-    args: ["--print"],
-    output: "jsonl",
-    input: "stdin",
-    sessionMode: "existing",
-  };
 }
 
 type CliContextBudgetTestCase = {
@@ -2448,9 +2440,8 @@ describe("prepareCliRunContext", () => {
     );
     expect(second.promptToolNamesHash).not.toBe(first.promptToolNamesHash);
     expect(second.reusableCliSession).toEqual({
-      mode: "reuse-with-drift",
-      sessionId: "cli-session",
-      drift: { reasons: ["prompt-tools"] },
+      mode: "invalidate",
+      invalidatedReason: "prompt-tools",
     });
   });
 
@@ -2675,9 +2666,8 @@ describe("prepareCliRunContext", () => {
       hashCliSessionText(JSON.stringify(["fake_web_tool", "memory_search"])),
     );
     expect(context.reusableCliSession).toEqual({
-      mode: "reuse-with-drift",
-      sessionId: "cli-session",
-      drift: { reasons: ["prompt-tools"] },
+      mode: "invalidate",
+      invalidatedReason: "prompt-tools",
     });
   });
 
@@ -2880,6 +2870,8 @@ describe("prepareCliRunContext", () => {
       sessionKey: "agent:main:main",
       modelProvider: "policy-provider",
       model: "policy-model",
+      messageProvider: "telegram",
+      senderId: "tools-owner",
       senderIsOwner: false,
       clientCaps: ["original-client"],
       toolsAllow: originalToolsAllow,
@@ -2891,6 +2883,8 @@ describe("prepareCliRunContext", () => {
     const questionAuthority = bindQuestionAuthority(() => {});
     originalToolsAllow.push("exec");
     const caller = {
+      messageProvider: "telegram",
+      senderId: "tools-owner",
       senderIsOwner: false,
       disableTools: false,
       clientCaps: ["original-client"],
@@ -2995,7 +2989,8 @@ describe("prepareCliRunContext", () => {
       modelProvider: "question-policy",
       model: "creator-model",
       config,
-      messageProvider: "webchat",
+      messageProvider: "telegram",
+      senderId: "question-owner",
       senderIsOwner: false,
       clientCaps: ["creator-client"],
       approvalReviewerDeviceId: "creator-reviewer",
@@ -3005,7 +3000,8 @@ describe("prepareCliRunContext", () => {
     const caller = {
       senderIsOwner: false,
       disableTools: false,
-      messageProvider: "webchat",
+      messageProvider: "telegram",
+      senderId: "question-owner",
       clientCaps: ["creator-client"],
       approvalReviewerDeviceId: "creator-reviewer",
       traceAuthorized: mode === "reply-owned",
@@ -3094,7 +3090,7 @@ describe("prepareCliRunContext", () => {
               }),
             );
             await answeringPlaceholder.bindToolAuthorityRouteAsync(nextRoute);
-            expect(replyRunRegistry.get(original.sessionKey)).toBe(answeringPlaceholder);
+            expect(getSessionControllerOperation(original.sessionKey)).toBe(answeringPlaceholder);
           }
           const answer = () =>
             claimPendingAgentQuestionAnswerFromCaller({

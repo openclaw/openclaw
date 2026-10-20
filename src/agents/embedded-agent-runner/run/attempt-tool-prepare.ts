@@ -1,5 +1,4 @@
 import type { SessionPermissionMode } from "../../../../packages/gateway-protocol/src/schema/sessions-row.js";
-import { getReplyOperationSessionReader } from "../../../auto-reply/reply/reply-run-registry.state.js";
 import { messageToolOwnsVisibleReply } from "../../../auto-reply/source-reply-delivery-mode.js";
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import { isEmbeddedMode } from "../../../infra/embedded-mode.js";
@@ -11,6 +10,7 @@ import { resolveStagedInputMediaPaths } from "../../../media/staged-inputs.js";
 import { extractModelCompat } from "../../../plugins/provider-model-compat.js";
 import { getPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
+import { getReplyOperationSessionReader } from "../../../sessions/session-controller.session-reader.js";
 import {
   readAdmittedRunOperatorAuthority,
   resolveAdmittedRunActiveAssertion,
@@ -51,6 +51,7 @@ import type {
   CronCreatorToolAllowlistEntry,
   CronToolsAllowCaptureRef,
 } from "../../tools/cron-tool.js";
+import { getGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { captureAgentWorkspaceReadiness } from "../../workspace-readiness.js";
 import { log } from "../logger.js";
 import { createAttemptNestedToolActivityState } from "./attempt-nested-tool-activity.js";
@@ -475,6 +476,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     return {
       toolHookContext: {
         awaitSessionDiffBaseline,
+        watchdogAttempt: getGatewayToolCallerIdentity()?.watchdogAttempt,
         agentId: params.setup.sessionAgentId,
         config: attempt.config,
         cwd: params.setup.effectiveCwd,

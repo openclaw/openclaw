@@ -149,6 +149,133 @@ describe("Control UI refresh nudge", () => {
 });
 
 describe("application approval overlays", () => {
+  it.each(["account", "recovery scope"] as const)(
+    "retires approvals and old reads when the same client's %s changes",
+    async (replacement) => {
+      const oldList = deferred<unknown>();
+      const currentList = deferred<unknown>();
+      let execReads = 0;
+      const request = vi.fn<RequestFn>((method) => {
+        if (method !== "exec.approval.list") {
+          return Promise.resolve([]);
+        }
+        return ++execReads === 1 ? oldList.promise : currentList.promise;
+      });
+      const harness = createGatewayHarness(client(request));
+      const hello = {
+        auth: { role: "operator", recoveryScope: "scope-first" },
+      } as ApplicationGatewaySnapshot["hello"];
+      harness.update({ selfUser: { id: "first" }, hello });
+      const overlays = createApplicationOverlays(harness.gateway);
+      try {
+        harness.emitApproval("protected-first", 1_000);
+        expect(overlays.snapshot.approvalQueue.map((entry) => entry.id)).toEqual([
+          "protected-first",
+        ]);
+
+        harness.update(
+          replacement === "account"
+            ? { selfUser: { id: "second" } }
+            : {
+                hello: {
+                  auth: { role: "operator", recoveryScope: "scope-second" },
+                } as ApplicationGatewaySnapshot["hello"],
+              },
+        );
+        expect(overlays.snapshot.approvalQueue).toEqual([]);
+        expect(execReads).toBe(2);
+
+        oldList.resolve([approval("stale-first", 1_000)]);
+        await flushMicrotasks();
+        expect(overlays.snapshot.approvalQueue).toEqual([]);
+        currentList.resolve([approval("current-second", 2_000)]);
+        await flushMicrotasks();
+        expect(overlays.snapshot.approvalQueue.map((entry) => entry.id)).toEqual([
+          "current-second",
+        ]);
+      } finally {
+        oldList.resolve([]);
+        currentList.resolve([]);
+        overlays.dispose();
+      }
+    },
+  );
+
+  it("retains approvals offline and retries partial reconnect lists until they recover", async () => {
+    vi.useFakeTimers();
+    let execReads = 0;
+    const request = vi.fn<RequestFn>((method) => {
+      if (method === "exec.approval.list") {
+        execReads += 1;
+        return execReads > 1 && execReads < 5
+          ? Promise.reject(new Error("temporarily unavailable"))
+          : Promise.resolve([approval(execReads === 1 ? "retained" : "fresh", 1_000)]);
+      }
+      return Promise.resolve([]);
+    });
+    const gatewayClient = client(request);
+    const harness = createGatewayHarness(gatewayClient);
+    const hello = harness.gateway.snapshot.hello;
+    const overlays = createApplicationOverlays(harness.gateway);
+    try {
+      await flushMicrotasks();
+      expect(overlays.snapshot.approvalQueue.map((entry) => entry.id)).toEqual(["retained"]);
+
+      harness.update({ phase: "reconnecting", hello: null });
+      expect(overlays.snapshot.approvalQueue.map((entry) => entry.id)).toEqual(["retained"]);
+      expect(overlays.snapshot.approvalCanGrant).toBe(false);
+      await overlays.decideApproval("allow-once", "retained");
+      expect(request.mock.calls.some(([method]) => method.endsWith(".resolve"))).toBe(false);
+
+      harness.update({ phase: "connected", hello });
+      await flushMicrotasks();
+      expect(overlays.snapshot.approvalQueue.map((entry) => entry.id)).toEqual(["retained"]);
+      for (const delay of [1_000, 2_000, 4_000]) {
+        await vi.advanceTimersByTimeAsync(delay);
+      }
+      expect(execReads).toBe(5);
+      expect(overlays.snapshot.approvalQueue.map((entry) => entry.id)).toEqual(["fresh"]);
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(execReads).toBe(5);
+
+      harness.update({ phase: "reconnecting", client: client(request), hello: null });
+      expect(overlays.snapshot.approvalQueue).toEqual([]);
+    } finally {
+      overlays.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels approval list recovery while disconnected or disposed", async () => {
+    vi.useFakeTimers();
+    const request = vi.fn<RequestFn>((method) =>
+      method === "exec.approval.list"
+        ? Promise.reject(new Error("temporarily unavailable"))
+        : Promise.resolve([]),
+    );
+    const harness = createGatewayHarness(client(request));
+    const overlays = createApplicationOverlays(harness.gateway);
+    try {
+      await flushMicrotasks();
+      harness.update({ phase: "reconnecting" });
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(request.mock.calls.filter(([method]) => method === "exec.approval.list")).toHaveLength(
+        1,
+      );
+
+      harness.update({ phase: "connected" });
+      await flushMicrotasks();
+      overlays.dispose();
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(request.mock.calls.filter(([method]) => method === "exec.approval.list")).toHaveLength(
+        2,
+      );
+    } finally {
+      overlays.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps no-auth approvals readable without granting resolution authority", async () => {
     const request = vi.fn<RequestFn>((method) =>
       Promise.resolve(method.endsWith(".list") ? [] : { ok: true }),

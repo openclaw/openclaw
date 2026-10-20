@@ -35,14 +35,12 @@ import {
 } from "./transport-stream-shared.js";
 import {
   createAbortError as createNamedAbortError,
-  readResponseTextSnippet,
+  readAnthropicMessagesErrorSnippet,
   resolveModelHeaderSentinels,
   streamFragmentError,
 } from "./transport-utils.js";
 
-const ANTHROPIC_MESSAGES_ERROR_BODY_MAX_BYTES = 8 * 1024;
 const ANTHROPIC_MESSAGES_ERROR_BODY_MAX_CHARS = 400;
-const ANTHROPIC_MESSAGES_ERROR_BODY_READ_IDLE_TIMEOUT_MS = 10_000;
 // Mirror the fetch sanitizer cap here because compatible routes such as Kimi
 // bypass that layer; without a parser-local guard, partial frames grow forever.
 const ANTHROPIC_MESSAGES_SSE_PENDING_BUFFER_MAX_CHARS = 16 * 1024 * 1024;
@@ -169,16 +167,7 @@ async function* parseAnthropicSseBody(
 
 async function readAnthropicMessagesErrorBody(response: Response): Promise<unknown> {
   try {
-    const text =
-      (await readResponseTextSnippet(response, {
-        maxBytes: ANTHROPIC_MESSAGES_ERROR_BODY_MAX_BYTES,
-        maxChars: ANTHROPIC_MESSAGES_ERROR_BODY_MAX_BYTES,
-        chunkTimeoutMs: ANTHROPIC_MESSAGES_ERROR_BODY_READ_IDLE_TIMEOUT_MS,
-        onIdleTimeout: ({ chunkTimeoutMs }) =>
-          new Error(
-            `Anthropic Messages error response stalled: no data received for ${chunkTimeoutMs}ms`,
-          ),
-      })) ?? "";
+    const text = (await readAnthropicMessagesErrorSnippet(response)) ?? "";
     try {
       // Keep complete JSON for structured redaction; clipping first erases useful errors.
       return JSON.parse(text);

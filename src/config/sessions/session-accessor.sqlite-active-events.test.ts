@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import { openNodeSqliteDatabase, requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -403,6 +404,42 @@ describe("SQLite active transcript event projection", () => {
     expect(page.newestContiguousEventCount).toBe(0);
     expect(page.serializedBytes).toBeLessThanOrEqual(512);
     expect(eventIds(page.events)).toEqual(["small"]);
+  });
+
+  it("reuses page sizes for omission checks and observes an oversized append", async () => {
+    await persistMessages([makeMessage("small", null, "user", "keep")]);
+    const options = { maxBytes: 512, maxMessages: 10, offset: 0 };
+    readTailPage(scope, options);
+    const reads = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+    try {
+      const page = readTailPage(scope, options);
+      const withoutOmissionCheck = reads.queries.length;
+      reads.queries.length = 0;
+      expect(
+        readTailPage(scope, {
+          ...options,
+          oversizedMessageCheck: { roles: ["user", "assistant"] },
+        }),
+      ).toEqual({ ...page, hasOversizedMessages: false });
+      expect(reads.queries).toHaveLength(withoutOmissionCheck);
+    } finally {
+      reads.restore();
+    }
+
+    await persistMessages([makeMessage("oversized", "small", "assistant", "x".repeat(16_384))]);
+    expect(
+      readTailPage(scope, { ...options, oversizedMessageCheck: { roles: ["assistant"] } }),
+    ).toMatchObject({ hasOversizedMessages: true, scannedMessages: 2 });
+    expect(
+      readTailPage(scope, { ...options, oversizedMessageCheck: { roles: ["user"] } }),
+    ).toMatchObject({ hasOversizedMessages: false });
+    expect(
+      readTailPage(scope, {
+        ...options,
+        maxMessages: 0,
+        oversizedMessageCheck: { roles: ["assistant"], includeEarlier: true },
+      }),
+    ).toMatchObject({ hasOversizedMessages: true, scannedMessages: 0 });
   });
 
   it("projects reset kept-tail and post-boundary messages without rewriting raw positions", async () => {

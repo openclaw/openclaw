@@ -2,6 +2,7 @@ import { createSignal } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { createChatAttachmentInputHandle } from "./chat-attachment-inputs.ts";
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
 import { createSlashMenu, SlashMenu, type SlashMenuHost } from "./chat-composer-slash-menu.tsx";
 
@@ -47,8 +48,10 @@ it("retains the slash viewport during selection changes and resets it when switc
 it("retains the focused capability row and management link through catalog refreshes", async () => {
   type Menu = Parameters<typeof ChatComposerPlusMenu>[0]["menu"];
   const onNavigate = vi.fn();
+  const inputHandle = createChatAttachmentInputHandle();
   const [menu, setMenu] = createSignal<Menu>({
     attachments: {},
+    inputHandle,
     disabled: false,
     open: true,
     view: "skills",
@@ -79,6 +82,11 @@ it("retains the focused capability row and management link through catalog refre
     },
   });
   const view = mountSolid(() => <ChatComposerPlusMenu menu={menu()} />);
+  await waitForSolid(() =>
+    expect(
+      view.getByRole("menuitemcheckbox", { name: "Focused skill", hidden: true }),
+    ).toBeTruthy(),
+  );
   for (const name of ["Broken deps missing", "Private not available for this agent"]) {
     expect(
       view.getByRole("menuitemcheckbox", { name, hidden: true }).hasAttribute("disabled"),
@@ -221,6 +229,7 @@ it("retains the focused capability row and management link through catalog refre
 });
 
 it("retains attachment choices while the native menu closes and reopens", async () => {
+  const inputHandle = createChatAttachmentInputHandle();
   const [open, setOpen] = createSignal(false);
   const toggle = {
     value: "test-toggle",
@@ -233,6 +242,7 @@ it("retains attachment choices while the native menu closes and reopens", async 
     <ChatComposerPlusMenu
       menu={{
         attachments: {},
+        inputHandle,
         disabled: false,
         open: open(),
         view: "root",
@@ -247,7 +257,10 @@ it("retains attachment choices while the native menu closes and reopens", async 
     ".agent-chat__input-btn--attach",
   )!;
   trigger.click();
-  await waitForSolid(() => expect(open()).toBe(true));
+  await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
+  await waitForSolid(() =>
+    expect(view.getByRole("menuitemcheckbox", { name: "Test toggle", hidden: true })).toBeTruthy(),
+  );
   const choice = view.getByRole("menuitemcheckbox", { name: "Test toggle", hidden: true });
   expect(choice.querySelector("svg")).not.toBeNull();
   setOpen(false);
@@ -260,6 +273,7 @@ it("retains attachment choices while the native menu closes and reopens", async 
 it.each(["item", "external", "closed"] as const)(
   "preserves newer %s focus after changing capability views",
   async (target) => {
+    const inputHandle = createChatAttachmentInputHandle();
     type Menu = Parameters<typeof ChatComposerPlusMenu>[0]["menu"];
     const [currentView, setView] = createSignal<Menu["view"]>(
       target === "closed" ? "connectors" : "tools:docs",
@@ -271,6 +285,7 @@ it.each(["item", "external", "closed"] as const)(
         <ChatComposerPlusMenu
           menu={{
             attachments: {},
+            inputHandle,
             disabled: false,
             open: open(),
             view: currentView(),
@@ -311,6 +326,9 @@ it.each(["item", "external", "closed"] as const)(
         />
       </>
     ));
+    await waitForSolid(() =>
+      expect(view.getByRole("menuitem", { name: "Back", hidden: true })).toBeTruthy(),
+    );
     const back = view.getByRole("menuitem", { name: "Back", hidden: true });
     await waitForSolid(() =>
       expect(back.closest("[data-menu-content]")?.getAttribute("data-phase")).toBe("open"),

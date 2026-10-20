@@ -1,10 +1,10 @@
 import { bufferedOversizedJsonResponse as oversizedJsonResponse } from "openclaw/plugin-sdk/test-fixtures";
 import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildVydraImageGenerationProvider } from "./image-generation-provider.js";
 import {
   binaryResponse,
   jsonResponse,
+  registerVydraProviders,
   stubFetch,
   stubVydraApiKey,
 } from "./provider-test-helpers.js";
@@ -19,7 +19,7 @@ function fetchCall(fetchMock: ReturnType<typeof vi.fn>, index = 0): [string, Req
 
 describe("vydra image-generation provider", () => {
   installPinnedHostnameTestHooks();
-  const provider = buildVydraImageGenerationProvider();
+  const { imageProvider: provider } = registerVydraProviders();
   const request = { provider: "vydra", model: "grok-imagine", prompt: "draw a cat", cfg: {} };
   const completedImage = () =>
     jsonResponse({

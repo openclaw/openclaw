@@ -4,6 +4,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../runtime-api.js";
 import {
   createAccount,
+  createAllowlistedAccount,
+  createAttachment,
   createMessage,
   createRuntimeEnv,
   requireFirstMockArg,
@@ -113,14 +115,10 @@ describe("nextcloud-talk inbound media security", () => {
         messageId,
         senderId,
         text: "raw-payload-caption-secret",
-        attachment: {
-          fileId: "9014",
+        attachment: createAttachment("9014", {
           name: "private-file-secret.pdf",
-          mimeType: "application/pdf",
-          declaredSizeBytes: 1_024,
           shareUrl: "https://cloud.example.com/s/private-token",
-          hideDownload: false,
-        },
+        }),
       }),
       account: createAccount({
         accountId,
@@ -179,24 +177,9 @@ describe("nextcloud-talk inbound media security", () => {
     await handleNextcloudTalkInbound({
       message: createMessage({
         text: "inspect this receipt",
-        attachment: {
-          fileId: "9004",
-          name: "receipt.pdf",
-          mimeType: "application/pdf",
-          declaredSizeBytes: 1_024,
-          shareUrl,
-          hideDownload: false,
-        },
+        attachment: createAttachment("9004", { shareUrl }),
       }),
-      account: createAccount({
-        config: {
-          dmPolicy: "allowlist",
-          allowFrom: ["user-1"],
-          mediaAllowFrom: ["user-1"],
-          groupPolicy: "allowlist",
-          groupAllowFrom: [],
-        },
-      }),
+      account: createAllowlistedAccount(),
       config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
       runtime,
     });
@@ -224,6 +207,7 @@ describe("nextcloud-talk inbound media security", () => {
 
   it.each([
     { label: "explicit sender match", mediaAllowFrom: ["user-1"] },
+    { label: "normalized sender match", mediaAllowFrom: ["NC-TALK:User-1"] },
     { label: "wildcard", mediaAllowFrom: ["*"] },
   ])(
     "stages admitted media for a $label and passes only returned local facts",
@@ -238,24 +222,9 @@ describe("nextcloud-talk inbound media security", () => {
       await handleNextcloudTalkInbound({
         message: createMessage({
           text: "inspect this receipt",
-          attachment: {
-            fileId: "9005",
-            name: "receipt.pdf",
-            mimeType: "application/pdf",
-            declaredSizeBytes: 1_024,
-            shareUrl: "https://cloud.example.com/s/redacted-share-token",
-            hideDownload: false,
-          },
+          attachment: createAttachment("9005"),
         }),
-        account: createAccount({
-          config: {
-            dmPolicy: "allowlist",
-            allowFrom: ["user-1"],
-            mediaAllowFrom,
-            groupPolicy: "allowlist",
-            groupAllowFrom: [],
-          },
-        }),
+        account: createAllowlistedAccount({ mediaAllowFrom }),
         config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
         runtime: createRuntimeEnv(),
       });
@@ -331,14 +300,7 @@ describe("nextcloud-talk inbound media security", () => {
         roomName: "Ops",
         isGroupChat: true,
         text: "@openclaw inspect this receipt",
-        attachment: {
-          fileId: "9008",
-          name: "receipt.pdf",
-          mimeType: "application/pdf",
-          declaredSizeBytes: 1_024,
-          shareUrl: "https://cloud.example.com/s/redacted-share-token",
-          hideDownload: false,
-        },
+        attachment: createAttachment("9008"),
       }),
       account: createAccount({ config: accountConfig }),
       config,

@@ -3,11 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   failSqliteWorkerSlot,
+  receiveSqliteWorkerReply,
   settleSqliteWorkerJob,
   withSqliteWorkerCleanupFailure,
 } from "./sqlite-worker-broker-reply.js";
 import type { Job } from "./sqlite-worker-broker.types.js";
-import { SqliteWorkerError } from "./sqlite-worker-contract.js";
+import { hasSqliteWorkerOutcomeUnknown, SqliteWorkerError } from "./sqlite-worker-contract.js";
 import type { SqliteWorkerOperationSettlement } from "./sqlite-worker-operation-settlement.js";
 import { SqliteWorkerSlotCustody } from "./sqlite-worker-request-custody.js";
 
@@ -51,7 +52,13 @@ function jobWithCleanup(admissionFailures: readonly unknown[] = [], dispatched =
   if (dispatched) {
     custody.accept();
   }
-  const track = (event: string) => vi.fn((_value: unknown) => record(event));
+  const completion = createDeferredCore<unknown>();
+  void completion.promise.catch(() => {});
+  const track = (event: string, settle: (value: unknown) => void) =>
+    vi.fn((value: unknown) => {
+      record(event);
+      settle(value);
+    });
   const admission = {
     get port() {
       return effects.forbidden();
@@ -72,13 +79,14 @@ function jobWithCleanup(admissionFailures: readonly unknown[] = [], dispatched =
     observation: { started() {}, completed() {} },
     request: { type: "execute", id: 1, actor: 1, input: new Uint8Array() },
     bytes: 0,
+    result: completion.promise,
     operationAdmission: {
       admission,
       releaseService: () => record("release-service"),
     },
     settleNative: vi.fn((_settlement: SqliteWorkerOperationSettlement) => record("settle-native")),
-    resolve: track("resolve"),
-    reject: track("reject"),
+    resolve: track("resolve", completion.resolve),
+    reject: track("reject", completion.reject),
     detach: () => record("detach"),
   } satisfies Job;
   const slot: Parameters<typeof failSqliteWorkerSlot>[0] = {
@@ -170,6 +178,23 @@ afterEach(() => {
 });
 
 describe("SQLite worker settlement cleanup lineage", { concurrent: false }, () => {
+  it("does not canonicalize an ordinary backend error with a public outcome code", () => {
+    const { job } = jobWithCleanup();
+    const finish = vi.fn();
+    receiveSqliteWorkerReply(
+      { current: job, actors: new Set(), worker: { postMessage: effects.forbidden } },
+      {
+        id: job.request.id,
+        ok: false,
+        error: { name: "Error", message: "Backend refused", code: "outcome-unknown" },
+      },
+      { fail: effects.forbidden, finish, dispatch: vi.fn() },
+    );
+    const failure: unknown = finish.mock.calls[0]?.[1];
+    expect(failure).toMatchObject({ name: "Error", code: "outcome-unknown" });
+    expect(hasSqliteWorkerOutcomeUnknown(failure)).toBe(false);
+  });
+
   it.each([true, false])("keeps a lost outcome unknown after retirement: %s", async (retired) => {
     const current = jobWithCleanup();
     const error = new Error("Worker result was lost");

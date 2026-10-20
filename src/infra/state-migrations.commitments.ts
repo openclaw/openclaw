@@ -15,7 +15,6 @@ import {
 import {
   LegacyMigrationSourceClaim,
   legacyMigrationSourceOrClaimMayExist,
-  legacyMigrationSourceSnapshotsMatch,
   readLegacyMigrationSourceSnapshot,
   type LegacyMigrationSourceSnapshot,
 } from "./state-migrations.source-snapshot.js";
@@ -146,9 +145,6 @@ async function migrateWithExclusiveStateOwnership(params: {
   detected: NonNullable<LegacyStateDetection["commitments"]>;
   stateDir: string;
   env: NodeJS.ProcessEnv;
-  beforeClaim?: () => void;
-  beforeVerify?: () => void;
-  removeSource?: (sourcePath: string) => Promise<void> | void;
 }): Promise<MigrationMessages> {
   const sourcePath = params.detected.sourcePath;
   const sourceKey = resolveLegacyMigrationSourceKey("commitments-json", sourcePath);
@@ -197,10 +193,7 @@ async function migrateWithExclusiveStateOwnership(params: {
   let snapshot: LegacyCommitmentsSnapshot;
   try {
     snapshot = await source.read();
-    params.beforeVerify?.();
-    if (!legacyMigrationSourceSnapshotsMatch(snapshot, await source.read())) {
-      throw new Error("retired commitments source changed after Doctor loaded it");
-    }
+    await source.verify(snapshot, "retired commitments source changed after Doctor loaded it");
   } catch (error) {
     return {
       changes: [],
@@ -212,7 +205,6 @@ async function migrateWithExclusiveStateOwnership(params: {
     await source.claim({
       snapshot,
       mismatchMessage: "retired commitments source changed before Doctor could claim it",
-      beforeClaim: params.beforeClaim,
     });
   } catch (error) {
     const restoreError = await source.restore();
@@ -242,11 +234,8 @@ async function migrateWithExclusiveStateOwnership(params: {
   }
 
   try {
-    if (!legacyMigrationSourceSnapshotsMatch(snapshot, await source.read(true))) {
-      throw new Error("retired commitments Doctor claim changed before cleanup");
-    }
+    await source.verify(snapshot, "retired commitments Doctor claim changed before cleanup", true);
     await source.remove({
-      removeSource: params.removeSource,
       sourceReappearedMessage: "retired commitments source reappeared during cleanup",
       sourceRemainingMessage: "retired commitments source remains after cleanup",
       claimRemainingMessage: "retired commitments Doctor claim remains after cleanup",
@@ -282,9 +271,6 @@ export async function migrateLegacyCommitments(params: {
   detected: NonNullable<LegacyStateDetection["commitments"]>;
   stateDir: string;
   env?: NodeJS.ProcessEnv;
-  beforeClaim?: () => void;
-  beforeVerify?: () => void;
-  removeSource?: (sourcePath: string) => Promise<void> | void;
 }): Promise<MigrationMessages> {
   if (!params.detected.hasLegacy) {
     return { changes: [], warnings: [] };

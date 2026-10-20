@@ -121,9 +121,6 @@ export async function runQaDockerUp(params: {
 
   await execCommand("docker", composeArgs, repoRoot);
 
-  // Brief settle delay so Docker Desktop finishes port-forwarding setup.
-  await sleep(3_000);
-
   const qaLabUrl = `http://127.0.0.1:${qaLabPort}`;
   const hostGatewayUrl = `http://127.0.0.1:${gatewayPort}/`;
 

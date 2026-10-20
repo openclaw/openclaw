@@ -56,6 +56,9 @@ export function controlUiStableChunkName(id: string): string | undefined {
   const normalized = normalizeModuleId(id);
 
   switch (controlUiBootManifestKey(id)) {
+    case "ui/src/lib/device-pair-setup.ts":
+      // Pairing loads on interaction; the earlier boot capture must not pull it into either route.
+      return "device-pair-setup-runtime";
     case "ui/src/app/app-root-focus.ts":
     case "ui/src/app/app-root-focus-view.tsx":
       return "focus-dashboard-runtime";
@@ -180,10 +183,10 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 includeDependenciesRecursively: true,
                 // Shared boot needs a smaller partition cap because its dense chat
                 // modules can exceed the compressed-size budget after regrouping.
-                // Fold small post-port partitions back into their boot parents;
-                // route membership and the maximum chunk size stay unchanged.
+                // Keep disclosure JSX in its chat partition instead of splitting
+                // compression dictionaries. Shipped byte/request budgets still apply.
                 minSize: 128 * 1024,
-                maxSize: (route === "shared" ? 1280 : 1408) * 1024,
+                maxSize: (route === "shared" ? 1280 : route === "chat" ? 1440 : 1408) * 1024,
               };
             }),
             ...(["shared", "new", "chat"] as const).map((route) => {

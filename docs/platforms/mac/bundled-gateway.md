@@ -69,11 +69,25 @@ device-auth, device-identity, and exec-approval migrations; this is not a promis
 that all worker startup is read-only. Public `node run`, Gateway, and Doctor
 retain their existing startup policies.
 
-When the native app creates identity, device-auth, or approval tables before
-the worker starts, node startup completes that recognized version-zero database
-through the shared initializer before plugins read their state. Existing
-native rows are preserved. This does not migrate an already-versioned shared
-Gateway database or adopt unknown or occupied bootstrap state.
+The native app loads private identities and cached device tokens from its local
+`client/credentials.sqlite` before connecting, without opening the selected
+Gateway database. The active app serves bounded same-user credential operations,
+holding exclusive SQLite custody only for each operation. A fresh client can create an identity while
+PostgreSQL or the Gateway is unavailable; shared approval policy still requires
+its existing state owner.
+
+Updater or Doctor migrates existing shared credentials before the new clients
+use them. A recognized credential-only native version-zero database can be
+extracted under exclusive custody before PostgreSQL bootstrap. Unknown data or
+other application tables require the supported Doctor/port route. Existing
+private keys are preserved; migration failure never silently creates replacement
+keys. Update older apps after shared credential retirement and run the matching
+`openclaw doctor --fix` for an incomplete migration.
+
+Independent native credential sources remain untouched after their read-only
+import. The previous app can still read them after rollback. The local copy keeps
+source identity and content hash, preserving refreshed tokens for an unchanged
+source and rebuilding after a source change. Consumed JSON imports remain consumed.
 
 ## Automatic setup
 

@@ -28,9 +28,10 @@ temp_dir="$(mktemp -d)"
 archive="$temp_dir/periphery.zip"
 extract_dir="$temp_dir/extract"
 
+# Immutable GETs can retry transport errors too; curl resets --output on retry.
 curl --fail --location --no-progress-meter --show-error \
   --connect-timeout 10 --max-time 120 \
-  --retry 3 --retry-max-time 120 \
+  --retry 3 --retry-all-errors --retry-max-time 120 \
   --output "$archive" \
   "https://github.com/peripheryapp/periphery/releases/download/$periphery_version/periphery-$periphery_version.zip" \
   2> >(sed 's/^Warning: /::warning::/' >&2)

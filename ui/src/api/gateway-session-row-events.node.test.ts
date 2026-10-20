@@ -43,7 +43,7 @@ describe("session row event ingress", () => {
     h.send({ session: full(initial), ancestorSessions: [full(parent)] });
     const patch = event({
       key: "child",
-      runtimeMs: 20,
+      sessionFieldRefs: [4],
       session: {
         key: "child",
         agentId: "work",
@@ -89,6 +89,125 @@ describe("session row event ingress", () => {
       }),
     );
     expect(initial.optional).toBe("remove me");
+    expect(h.reconnect).not.toHaveBeenCalled();
+  });
+
+  it("restores only referenced fields and rejects invalid references before committing rows", () => {
+    const h = harness();
+    const row = { key: "child", label: null, pinned: false, summary: { text: "Synthetic" } };
+    expect(h.send({ session: full(row), sessionFieldRefs: [1, 2, 3] })).toEqual(
+      event({ session: row, label: null, pinned: false, summary: row.summary }),
+    );
+    for (const sessionFieldRefs of [[-1], [4], [1.5], ["label"], null]) {
+      h.listener.mockClear();
+      h.send({
+        session: { key: "child", base: 1, version: 2, set: { label: "Changed" }, remove: [] },
+        sessionFieldRefs,
+      });
+      expect(h.listener).not.toHaveBeenCalled();
+    }
+    expect(h.send({ session: { key: "child", base: 1, version: 2, set: {}, remove: [] } })).toEqual(
+      event({ session: row }),
+    );
+  });
+
+  it.each(["parent-session", undefined])(
+    "expands certified ancestor references with session ID %s without changing the raw delta baseline",
+    (sessionId) => {
+      const h = harness();
+      const parent = {
+        key: "parent",
+        agentId: "work",
+        ...(sessionId === undefined ? {} : { sessionId }),
+        ancestorRevision: "parent-revision",
+        snapshotAt: 100,
+        label: "Original",
+      };
+      h.send({ ancestorSessions: [full(parent)] });
+      expect(
+        h.send({
+          session: full({ key: "child", label: "Child" }),
+          sessionFieldRefs: [1],
+          ancestorSessions: [],
+          ancestorSessionRefs: [
+            {
+              key: parent.key,
+              agentId: parent.agentId,
+              ...(sessionId === undefined ? {} : { sessionId }),
+              revision: parent.ancestorRevision,
+              snapshotAt: 200,
+            },
+          ],
+        }),
+      ).toEqual(
+        event({
+          session: { key: "child", label: "Child" },
+          label: "Child",
+          ancestorSessions: [{ ...parent, snapshotAt: 200 }],
+        }),
+      );
+      expect(
+        h.send({
+          ancestorSessions: [
+            {
+              key: parent.key,
+              agentId: parent.agentId,
+              base: 1,
+              version: 2,
+              set: { label: "Updated" },
+              remove: [],
+            },
+          ],
+        }),
+      ).toEqual(event({ ancestorSessions: [{ ...parent, label: "Updated" }] }));
+      expect(h.reconnect).not.toHaveBeenCalled();
+    },
+  );
+
+  it("preserves unresolved ancestor references without touching the wire row LRU", () => {
+    const h = harness();
+    const parent = {
+      key: "parent",
+      agentId: "work",
+      sessionId: "parent-session",
+      ancestorRevision: "parent-revision",
+      snapshotAt: 100,
+    };
+    const reference = {
+      key: parent.key,
+      agentId: parent.agentId,
+      sessionId: parent.sessionId,
+      revision: parent.ancestorRevision,
+      snapshotAt: 200,
+    };
+    const unresolved = [
+      { ...reference, key: "other-parent" },
+      { ...reference, agentId: "other-agent" },
+      { ...reference, sessionId: "other-generation" },
+      { ...reference, sessionId: undefined },
+      { ...reference, revision: "other-revision" },
+    ];
+    h.send({
+      ancestorSessions: [
+        full(parent),
+        ...Array.from({ length: SESSION_ROW_DELTA_MAX_ENTRIES - 1 }, (_, index) =>
+          full({ key: `row-${index}` }),
+        ),
+      ],
+    });
+    expect(
+      h.send({ ancestorSessions: [], ancestorSessionRefs: [...unresolved, reference] }),
+    ).toEqual(
+      event({
+        ancestorSessions: [{ ...parent, snapshotAt: 200 }],
+        ancestorSessionRefs: unresolved,
+      }),
+    );
+    h.send({ session: full({ key: "new-row" }) });
+    const unavailable = { ancestorSessions: [], ancestorSessionRefs: [reference] };
+    expect(h.send(unavailable)).toEqual(event(unavailable));
+    h.events.clear();
+    expect(h.send(unavailable)).toEqual(event(unavailable));
     expect(h.reconnect).not.toHaveBeenCalled();
   });
 

@@ -1,8 +1,7 @@
 import { resolveAgentModelTimeoutMsValue } from "../config/model-input.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createMediaProviderLookup } from "../media-generation/provider-registry.js";
-import {
+import type {
   getMusicGenerationProvider,
   listMusicGenerationProviders,
 } from "../media-generation/registry.js";
@@ -12,47 +11,28 @@ import {
   runMediaGenerationCandidates,
 } from "../media-generation/runtime-shared.js";
 import { withAcquiredPluginCapabilityProviders } from "../plugins/capability-provider-acquisition.js";
-import { getProviderEnvVarsCore } from "../secrets/provider-env-vars.js";
 import { resolveMusicGenerationOverrides } from "./normalization.js";
 import type { GenerateMusicParams, GenerateMusicRuntimeResult } from "./runtime-types.js";
 import type { MusicGenerationResult } from "./types.js";
 
 const log = createSubsystemLogger("music-generation");
 
-/** Injectable dependencies used by tests and alternate runtime hosts. */
 type MusicGenerationRuntimeDeps = {
-  getProvider?: typeof getMusicGenerationProvider;
-  listProviders?: typeof listMusicGenerationProviders;
-  getProviderEnvVars?: typeof getProviderEnvVarsCore;
-  log?: Pick<typeof log, "debug" | "warn">;
+  getProvider: typeof getMusicGenerationProvider;
+  listProviders: typeof listMusicGenerationProviders;
 };
-
-/** List runtime-visible music generation providers for a config snapshot. */
-export function listRuntimeMusicGenerationProviders(
-  params?: { config?: OpenClawConfig },
-  deps: MusicGenerationRuntimeDeps = {},
-) {
-  return (deps.listProviders ?? listMusicGenerationProviders)(params?.config);
-}
 
 /** Generate music with provider fallback and capability-aware request normalization. */
 export async function generateMusic(
   params: GenerateMusicParams,
-  deps: MusicGenerationRuntimeDeps = {},
+  deps?: MusicGenerationRuntimeDeps,
 ): Promise<GenerateMusicRuntimeResult> {
-  if (deps.getProvider && deps.listProviders) {
+  if (deps) {
     return runMusicGeneration(params, deps);
   }
   return withAcquiredPluginCapabilityProviders(
     { key: "musicGenerationProviders", cfg: params.cfg },
-    (providers) => {
-      const lookup = createMediaProviderLookup(providers);
-      return runMusicGeneration(params, {
-        ...deps,
-        getProvider: deps.getProvider ?? lookup.getProvider,
-        listProviders: deps.listProviders ?? lookup.listProviders,
-      });
-    },
+    (providers) => runMusicGeneration(params, createMediaProviderLookup(providers)),
   );
 }
 
@@ -60,21 +40,17 @@ async function runMusicGeneration(
   params: GenerateMusicParams,
   deps: MusicGenerationRuntimeDeps,
 ): Promise<GenerateMusicRuntimeResult> {
-  const getProvider = deps.getProvider ?? getMusicGenerationProvider;
-  const listProviders = deps.listProviders ?? listMusicGenerationProviders;
-  const logger = deps.log ?? log;
   const timeoutMs =
     params.timeoutMs ??
     resolveAgentModelTimeoutMsValue(params.cfg.agents?.defaults?.mediaModels?.music);
 
   return runMediaGenerationCandidates({
     request: params,
-    listProviders,
-    getProviderEnvVars: deps.getProviderEnvVars,
+    listProviders: deps.listProviders,
     capability: "music",
-    getProvider: (providerId) => getProvider(providerId, params.cfg),
+    getProvider: (providerId) => deps.getProvider(providerId, params.cfg),
     onFailure: (attempt) => {
-      logger.warn(
+      log.warn(
         `music-generation candidate failed: ${attempt.provider}/${attempt.model}: ${attempt.error}`,
       );
     },
@@ -85,7 +61,7 @@ async function runMusicGeneration(
         edit: provider.capabilities.edit,
       });
       if (referenceImageError) {
-        logger.debug(`music-generation candidate skipped: ${referenceImageError}`);
+        log.debug(`music-generation candidate skipped: ${referenceImageError}`);
         return referenceImageError;
       }
 

@@ -219,8 +219,6 @@ async function fetchWithMatrixGuardedRedirects(params: {
         signal,
         dispatcher,
       };
-      assertDispatchCurrent();
-      signal?.throwIfAborted();
       // The runtime fetch preserves the validated pinned-address dispatcher.
       let entered = false;
       const response = await effect

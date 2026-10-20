@@ -14,6 +14,7 @@ import {
   SettingsStatus,
   SettingsValue,
 } from "../../components/solid/settings-ui.tsx";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import type { AgentContext } from "../../lib/agents/display.ts";
 import type { AgentsPanel } from "../../lib/agents/index.ts";
 import { resolveChannelExtras as resolveChannelExtrasFromConfig } from "../../lib/channels/index.ts";
@@ -24,9 +25,11 @@ import {
   formatCronState,
   formatNextRun,
 } from "../../lib/presenter.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { AgentPanelAction } from "./panel-ui.tsx";
 import { renderAgentContextSection } from "./panels-overview.tsx";
+
+registerEnglishCatalog(registerSettingsEnglish);
 
 function resolveChannelEntries(snapshot: ChannelsStatusSnapshot | null) {
   if (!snapshot) {

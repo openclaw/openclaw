@@ -4,8 +4,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { text } from "node:stream/consumers";
-import { Client as McpClient } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { Client as McpClient, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
@@ -275,7 +274,12 @@ describe("registered mcp.authLogin", () => {
     const client = await gateway.openWs({ origin });
     await connectOk(client, {
       scopes,
-      deviceIdentityPath: path.join(resolveStateDir(), `connector-${randomUUID()}.sqlite`),
+      deviceIdentityPath: path.join(
+        resolveStateDir(),
+        `connector-${randomUUID()}`,
+        "client",
+        "credentials.sqlite",
+      ),
       browserOrigin: origin,
       client: {
         id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
@@ -541,7 +545,10 @@ describe("registered mcp.authLogin", () => {
       expect(after.tokensAuthorizationServerUrl).toEqual(before.tokensAuthorizationServerUrl);
       expectPendingCleared(after);
       expect(requests.slice(exchangeRequests)).toEqual(["/token"]);
-      const retainedClient = new McpClient({ name: "retained-credential", version: "1.0.0" });
+      const retainedClient = new McpClient(
+        { name: "retained-credential", version: "1.0.0" },
+        { versionNegotiation: { mode: "legacy" } },
+      );
       try {
         const Authorization = `Bearer ${expectDefined(after.tokens, "retained tokens").access_token}`;
         await retainedClient.connect(

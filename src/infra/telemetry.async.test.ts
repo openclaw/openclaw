@@ -5,10 +5,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import * as workerContext from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { SqliteWorkerCommand } from "./sqlite-worker-contract.js";
 import type { TelemetryWorkerOperations } from "./telemetry-store.worker.js";
 import type { TelemetryState } from "./telemetry-worker-contract.js";
@@ -35,10 +32,30 @@ vi.mock("../state/openclaw-state-worker-store.js", () => ({
 vi.mock("../plugins/plugin-runtime-inventory.js", () => ({ listEnabledPluginRecords: () => [] }));
 
 let sequence = 0;
-let testState: OpenClawTestState;
+let testState: Awaited<ReturnType<typeof createOpenClawTestState>>;
+let fetchImpl: ReturnType<typeof vi.fn<typeof fetch>>;
+let config: OpenClawConfig;
+function check(readConfig: () => OpenClawConfig = () => config, nowMs?: number) {
+  return checkTelemetryUpdate(readConfig, { surface: "gateway", fetchImpl, nowMs });
+}
+function pauseOperation<T>(type: SqliteWorkerCommand<TelemetryWorkerOperations>["type"]) {
+  const result = createDeferredCore<T>();
+  const requested = createDeferredCore();
+  const previous = execute.getMockImplementation()!;
+  execute.mockImplementation((command) => {
+    if (command.type !== type) {
+      return previous(command);
+    }
+    requested.resolve();
+    return result.promise;
+  });
+  return { ...result, requested: requested.promise };
+}
 beforeEach(async () => {
+  config = { telemetry: { enabled: true } };
   testState = await createOpenClawTestState({ layout: "state-only", prefix: "telemetry-async-" });
   contexts.length = 0;
+  fetchImpl = vi.fn<typeof fetch>(async () => Response.json({ version: "2026.8.24" }));
   execute.mockReset().mockImplementation(async (command) => {
     switch (command.type) {
       case "telemetry.readState":
@@ -63,51 +80,32 @@ afterEach(async () => {
   await testState.cleanup();
 });
 
-it("retains best-effort reads and accepted updates when storage cannot admit work", async () => {
+it("keeps reads and accepted updates when storage admission is closed", async () => {
   vi.spyOn(workerContext, "captureOpenClawStateWorkerContext").mockImplementation(() => {
     throw new Error("Storage admission is closed");
   });
-  const config = { telemetry: { enabled: true } };
-  expect(
-    (await buildTelemetryPayload(config, { surface: "gateway" })).features.sessionsLast24h,
-  ).toBe(0);
+  const payload = await buildTelemetryPayload(config, { surface: "gateway" });
+  expect(payload.features.sessionsLast24h).toBe(0);
   expect(await resolveTelemetryStatus(config)).toMatchObject({ enabled: true, reason: "enabled" });
-  const fetchImpl = vi.fn<typeof fetch>(async () => Response.json({ version: "2026.8.24" }));
-  const options = { surface: "gateway" as const, fetchImpl, nowMs: 100 };
-  expect(await checkTelemetryUpdate(() => config, options)).toEqual({ version: "2026.8.24" });
-  expect(await checkTelemetryUpdate(() => config, { ...options, nowMs: 200 })).toEqual({
-    version: "2026.8.24",
-  });
+  expect(await check(() => config, 100)).toEqual({ version: "2026.8.24" });
+  expect(await check(() => config, 200)).toEqual({ version: "2026.8.24" });
   expect(fetchImpl).toHaveBeenCalledOnce();
   expect(execute).not.toHaveBeenCalled();
 });
 
-it("coalesces a cold check through storage preparation and accepted response persistence", async () => {
-  const read = createDeferredCore<TelemetryState>();
-  const persisted = createDeferredCore<TelemetryState>();
-  const persistenceRequested = createDeferredCore();
-  execute.mockImplementation(async (command) => {
-    if (command.type === "telemetry.readState") {
-      return await read.promise;
-    }
-    if (command.type === "telemetry.persistSuccess") {
-      persistenceRequested.resolve();
-      return await persisted.promise;
-    }
-    return 3;
-  });
-  const fetchImpl = vi.fn<typeof fetch>(async () => Response.json({ version: "2026.8.24" }));
-  const options = { surface: "gateway" as const, fetchImpl, nowMs: 100 };
+it("coalesces checks through storage preparation and persistence", async () => {
+  const read = pauseOperation<TelemetryState>("telemetry.readState");
+  const persisted = pauseOperation<TelemetryState>("telemetry.persistSuccess");
   let settled = false;
-  const first = checkTelemetryUpdate(() => ({}), options).then((value) => {
+  const first = check(() => ({}), 100).then((value) => {
     settled = true;
     return value;
   });
-  const second = checkTelemetryUpdate(() => ({}), options);
+  const second = check(() => ({}), 100);
   try {
     expect(fetchImpl).not.toHaveBeenCalled();
     read.resolve({});
-    await persistenceRequested.promise;
+    await persisted.requested;
     expect(fetchImpl).toHaveBeenCalledOnce();
     expect(settled).toBe(false);
   } finally {
@@ -115,22 +113,17 @@ it("coalesces a cold check through storage preparation and accepted response per
     persisted.resolve({ lastPingAt: 101, latestVersion: "2026.8.25" });
     await Promise.all([first, second]);
   }
-  expect(await first).toEqual({ version: "2026.8.25" });
-  expect(await second).toEqual(await first);
+  const expected = { version: "2026.8.25" };
+  expect(await Promise.all([first, second])).toEqual([expected, expected]);
   expect(
     execute.mock.calls.filter(([command]) => command.type === "telemetry.persistSuccess"),
   ).toHaveLength(1);
 });
 
-it("keeps the captured endpoint and storage destination across the first read wait", async () => {
-  const read = createDeferredCore<TelemetryState>();
-  execute.mockImplementationOnce(() => read.promise);
+it("keeps the captured endpoint and storage destination across awaits", async () => {
+  const read = pauseOperation<TelemetryState>("telemetry.readState");
   const endpoint = process.env.OPENCLAW_TELEMETRY_ENDPOINT;
-  const fetchImpl = vi.fn<typeof fetch>(async () => Response.json({ version: "2026.8.24" }));
-  const checking = checkTelemetryUpdate(() => ({ telemetry: { enabled: true } }), {
-    surface: "gateway",
-    fetchImpl,
-  });
+  const checking = check();
   const context = contexts[0];
   try {
     vi.stubEnv("OPENCLAW_STATE_DIR", testState.path("other-state"));
@@ -147,22 +140,12 @@ it("keeps the captured endpoint and storage destination across the first read wa
 it.each(["do-not-track", "opt-out", "update-disabled"] as const)(
   "honors %s when the canonical snapshot changes during the feature count",
   async (change) => {
-    const count = createDeferredCore<number>();
-    const countRequested = createDeferredCore();
-    execute.mockImplementation(async (command) => {
-      if (command.type === "telemetry.countRecentSessions") {
-        countRequested.resolve();
-        return await count.promise;
-      }
-      return command.type === "telemetry.persistSuccess" ? command.input.state : {};
-    });
-    const config: OpenClawConfig = { telemetry: { enabled: true } };
+    const count = pauseOperation<number>("telemetry.countRecentSessions");
     setRuntimeConfigSnapshot(config);
     expect(getRuntimeConfig()).toBe(config);
-    const fetchImpl = vi.fn<typeof fetch>(async () => Response.json({ version: "2026.8.24" }));
-    const checking = checkTelemetryUpdate(getRuntimeConfig, { surface: "gateway", fetchImpl });
+    const checking = check(getRuntimeConfig);
     try {
-      await countRequested.promise;
+      await count.requested;
       const replacement: OpenClawConfig = {
         telemetry: { enabled: change !== "opt-out" },
         update: { checkOnStart: change !== "update-disabled" },
@@ -170,8 +153,7 @@ it.each(["do-not-track", "opt-out", "update-disabled"] as const)(
       setRuntimeConfigSnapshot(replacement);
       expect(getRuntimeConfig()).toBe(replacement);
       expect(getRuntimeConfig()).not.toBe(config);
-      expect(config.telemetry?.enabled).toBe(true);
-      expect(config.update).toBeUndefined();
+      expect(config).toEqual({ telemetry: { enabled: true } });
       if (change === "do-not-track") {
         vi.stubEnv("DO_NOT_TRACK", "1");
       }
@@ -183,10 +165,8 @@ it.each(["do-not-track", "opt-out", "update-disabled"] as const)(
       expect(fetchImpl).not.toHaveBeenCalled();
       expect(await checking).toBeNull();
     } else {
-      expect(fetchImpl).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.objectContaining({ method: "GET" }),
-      );
+      const get = expect.objectContaining({ method: "GET" });
+      expect(fetchImpl).toHaveBeenCalledWith(expect.any(String), get);
       const request = fetchImpl.mock.calls[0]?.[1];
       expect(request).not.toHaveProperty("body");
       expect(request).not.toHaveProperty("headers.Content-Type");

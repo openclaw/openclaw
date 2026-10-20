@@ -4,7 +4,7 @@ import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import type { Browser, ConnectOverCDPTransport } from "playwright-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { closePlaywrightBrowserConnection } from "./pw-session.js";
-import { clickViaPlaywright } from "./pw-tools-core.interactions.js";
+import { clickViaPlaywright } from "./pw-tools-core.interactions.actions.js";
 import { snapshotRoleViaPlaywright } from "./pw-tools-core.snapshot.js";
 
 const { connectOverCdpMock } = vi.hoisted(() => ({

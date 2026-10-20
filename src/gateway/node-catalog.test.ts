@@ -2,7 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it } from "vitest";
 import { NODE_WORKER_PRIVATE_COMMANDS } from "../infra/node-commands.js";
 import { resolveNodePairApprovalScopes } from "../infra/node-pairing-authz.js";
-import { createKnownNodeCatalog, listKnownNodes } from "./node-catalog.js";
+import { createKnownNodeCatalog } from "./node-catalog.js";
 type CatalogInput = Parameters<typeof createKnownNodeCatalog>[0];
 type TestPairedDevice = CatalogInput["pairedDevices"][number];
 type TestPairedNode = NonNullable<CatalogInput["pairedNodes"]>[number];
@@ -84,7 +84,11 @@ function catalogNode(input: NodeInput) {
     ...(pending && { pendingNodes: [pendingNode(pending)] }),
     ...(live && { connectedNodes: [connectedNode(live)] }),
     ...rest,
-  }).get(live?.nodeId ?? pending?.nodeId ?? paired?.nodeId ?? device?.deviceId ?? "mac-1");
+  }).find(
+    (node) =>
+      node.nodeId ===
+      (live?.nodeId ?? pending?.nodeId ?? paired?.nodeId ?? device?.deviceId ?? "mac-1"),
+  );
 }
 
 it("never projects private worker controls from persisted or pending state", () => {
@@ -104,12 +108,11 @@ it("keeps the operator node name across live metadata and reconnects", () => {
       connectedNodes: [connectedNode({ connId, displayName })],
     });
   const connected = namedCatalog("conn-1", "Live Name", "Operator Name");
-  expect(listKnownNodes(connected)[0]?.displayName).toBe("Operator Name");
-  expect(connected.get("mac-1")?.displayName).toBe("Operator Name");
+  expect(connected[0]?.displayName).toBe("Operator Name");
   const reconnected = namedCatalog("conn-2", "Replacement Live Name", "Operator Name");
-  expect(reconnected.get("mac-1")?.displayName).toBe("Operator Name");
+  expect(reconnected[0]?.displayName).toBe("Operator Name");
   const liveFallback = namedCatalog("conn-3", "Live Fallback");
-  expect(liveFallback.get("mac-1")?.displayName).toBe("Live Fallback");
+  expect(liveFallback[0]?.displayName).toBe("Live Fallback");
 });
 
 it("lets live runner consent override stored session-host history", () => {
@@ -131,12 +134,10 @@ it("publishes existing-folder consent only for a connected device", () => {
     sessionHostNodeIds: new Set(["mac-1"]),
     deviceFolderNodeIds: new Set(["mac-1"]),
   };
-  expect(
-    createKnownNodeCatalog({ ...input, connectedNodes: [connectedNode()] }).get("mac-1"),
-  ).toMatchObject({ workerHost: { deviceFolders: true } });
-  expect(
-    createKnownNodeCatalog({ ...input, connectedNodes: [] }).get("mac-1")?.workerHost,
-  ).toBeUndefined();
+  expect(createKnownNodeCatalog({ ...input, connectedNodes: [connectedNode()] })[0]).toMatchObject({
+    workerHost: { deviceFolders: true },
+  });
+  expect(createKnownNodeCatalog({ ...input, connectedNodes: [] })[0]?.workerHost).toBeUndefined();
 });
 
 it("uses the newest durable last-seen source for offline nodes", () => {
@@ -267,11 +268,10 @@ it("ignores malformed node capability entries instead of throwing", () => {
       } as never,
     ],
   });
-  const nodes = listKnownNodes(catalog);
-  expect(nodes).toHaveLength(1);
-  expect(nodes[0]?.nodeId).toBe("bad-node");
-  expect(nodes[0]?.caps).toEqual(["camera"]);
-  expect(nodes[0]?.commands).toEqual(["system.run"]);
+  expect(catalog).toHaveLength(1);
+  expect(catalog[0]?.nodeId).toBe("bad-node");
+  expect(catalog[0]?.caps).toEqual(["camera"]);
+  expect(catalog[0]?.commands).toEqual(["system.run"]);
 });
 
 it("normalizes non-string scalar fields from malformed pairing records (no nodes-status crash)", () => {
@@ -309,7 +309,7 @@ it("drops blind-cast pairing entries whose required id is not a string", () => {
   const catalog = createKnownNodeCatalog({
     pairedDevices: [
       pairedDevice({ deviceId: "good-node" }),
-      // Invalid IDs must not reach listKnownNodes' localeCompare sort.
+      // Invalid IDs must not reach the catalog localeCompare sort.
       pairedDevice({ deviceId: 7 as unknown as string }),
     ],
     pairedNodes: [
@@ -319,9 +319,7 @@ it("drops blind-cast pairing entries whose required id is not a string", () => {
     pendingNodes: [pendingNode({ nodeId: [] as unknown as string })],
     connectedNodes: [],
   });
-  const nodes = listKnownNodes(catalog);
-  expect(nodes.map((entry) => entry.nodeId)).toEqual(["good-node"]);
-  expect(catalog.get("good-node")).toBeDefined();
+  expect(catalog.map((entry) => entry.nodeId)).toEqual(["good-node"]);
 });
 
 it("compares the normalized public pending surface before selecting approval diagnostics", () => {
@@ -336,7 +334,7 @@ it("compares the normalized public pending surface before selecting approval dia
     connectedAtMs: 0,
   });
   const input = { pairedDevices: [], pendingNodes: [pending], connectedNodes: [live] };
-  const node = createKnownNodeCatalog(input).get("mac-1");
+  const node = createKnownNodeCatalog(input)[0];
   expect(node).toMatchObject({
     approvalState: "pending-approval",
     pendingDeclaredCaps: ["screen"],
@@ -345,7 +343,7 @@ it("compares the normalized public pending surface before selecting approval dia
     commands: [],
   });
   live.declaredCommands.push(NODE_WORKER_PRIVATE_COMMANDS[0]);
-  expect(createKnownNodeCatalog(input).get("mac-1")).toMatchObject({
+  expect(createKnownNodeCatalog(input)[0]).toMatchObject({
     approvalState: "unapproved",
     pendingRequestId: undefined,
     pendingDeclaredCaps: undefined,
@@ -353,7 +351,7 @@ it("compares the normalized public pending surface before selecting approval dia
   });
 });
 
-it("keeps row identity while cloning snapshots and excluding private source fields", () => {
+it("projects node metadata without private source fields", () => {
   const permissions = { camera: true };
   const hostStats = {
     cpuCount: 4,
@@ -376,18 +374,12 @@ it("keeps row identity while cloning snapshots and excluding private source fiel
     workerSlotsByNodeId: new Map([["mac-1", workerSlots]]),
     workerBundleByNodeId: new Map([["mac-1", workerBundle]]),
   });
-  const node = expectDefined(catalog.get("mac-1"), "catalog row");
-  expect(listKnownNodes(catalog)[0]).toBe(node);
-  expect(listKnownNodes(catalog)).not.toBe(listKnownNodes(catalog));
-  expect(catalog.get("absent")).toBeUndefined();
+  const node = expectDefined(catalog[0], "catalog row");
   expect(node.permissions).toBe(permissions);
   expect(node.nodePluginTools).toBe(live.nodePluginTools);
   expect(node.hostStats).toEqual(hostStats);
-  expect(node.hostStats).not.toBe(hostStats);
   expect(node.workerSlots).toEqual(workerSlots);
-  expect(node.workerSlots).not.toBe(workerSlots);
   expect(node.workerBundle).toEqual(workerBundle);
-  expect(node.workerBundle).not.toBe(workerBundle);
   expect(Object.keys(node).toSorted()).toEqual(
     `nodeId displayName platform version coreVersion uiVersion clientId clientMode
        deviceFamily modelIdentifier remoteIp caps commands computerUse sessionHost hostStats
@@ -406,12 +398,6 @@ it("keeps row identity while cloning snapshots and excluding private source fiel
     lastDisconnectedAtMs: undefined,
     sessionHost: false,
   });
-  hostStats.memoryFreeBytes = 1;
-  workerSlots.available = 0;
-  permissions.camera = false;
-  expect(node.hostStats?.memoryFreeBytes).toBe(4096);
-  expect(node.workerSlots?.available).toBe(1);
-  expect(node.permissions?.camera).toBe(false);
 });
 
 it("keeps duplicate-source selection and last-seen tie precedence", () => {
@@ -429,7 +415,7 @@ it("keeps duplicate-source selection and last-seen tie precedence", () => {
     pendingNodes: [pendingNode({ requestId: "newest" }), pendingNode({ requestId: "older" })],
     connectedNodes: [],
   });
-  expect(catalog.get("mac-1")).toMatchObject({
+  expect(catalog[0]).toMatchObject({
     displayName: "Selected",
     pendingRequestId: "newest",
     lastSeenAtMs: 7,

@@ -216,7 +216,7 @@ async function resolveContainerEngineTarget(
 export async function resolveNodeWorkerContainerEngine(
   options: { env?: NodeJS.ProcessEnv } = {},
 ): Promise<NodeWorkerContainerEngine> {
-  const env = options.env ? Object.freeze({ ...process.env, ...options.env }) : process.env;
+  const env = options.env ? { ...process.env, ...options.env } : process.env;
   const failures: string[] = [];
   for (const id of ["docker", "podman"] as const) {
     const command = resolveExecutableFromPathEnv(id, env.PATH ?? process.env.PATH ?? "", env);

@@ -4,6 +4,7 @@ import {
   storedChatOutboxScopeKey,
   type StoredChatOutboxScope,
 } from "../../lib/chat/outbox-store-scope.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { visibleSessionMatches } from "../../lib/sessions/index.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { generateUUID } from "../../lib/uuid.ts";
@@ -31,15 +32,12 @@ function yieldChatSubmitToInput(): Promise<void> {
   // The supported browser floor supplies MessageChannel for this input yield.
   return new Promise<void>((resolve) => {
     const channel = new MessageChannel();
-    channel.port1.addEventListener(
-      "message",
-      () => {
-        channel.port1.close();
-        channel.port2.close();
-        resolve();
-      },
-      { once: true },
-    );
+    const stopListening = listen(channel.port1, "message", () => {
+      stopListening();
+      channel.port1.close();
+      channel.port2.close();
+      resolve();
+    });
     channel.port1.start();
     channel.port2.postMessage(undefined);
   });

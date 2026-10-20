@@ -31,6 +31,7 @@ type EvidenceState = "present" | "absent" | "unknown" | "unsupported";
 
 type RunInspectorProps = {
   basePath: string;
+  connected?: boolean;
   state: RunInspectorState;
   selector: RunInspectorSelector | null;
   selectorId: string | null;
@@ -238,6 +239,7 @@ function renderUnavailableResult(
   basePath: string,
   executionPageStatus: "loading" | "error" | undefined,
   onLoadMoreExecutions: () => void,
+  disabled: boolean,
 ) {
   if (result.identity.state === "present") {
     return undefined;
@@ -284,7 +286,12 @@ function renderUnavailableResult(
             </For>
           </ol>
           {result.nextExecutionCursor
-            ? renderRunInspectorPagination("candidates", executionPageStatus, onLoadMoreExecutions)
+            ? renderRunInspectorPagination(
+                "candidates",
+                executionPageStatus,
+                onLoadMoreExecutions,
+                disabled,
+              )
             : undefined}
         </>
       ) : undefined}
@@ -302,6 +309,9 @@ function renderReady(
   const currentCoverageLabel = runInspectorCoverageLabel(result.coverage.state);
   return (
     <>
+      {state.refreshError
+        ? renderPanel(props, { status: "error", recovery: state.refreshError })
+        : undefined}
       <div
         class={["run-inspector__coverage", `run-inspector__coverage--${result.coverage.state}`]}
         role="status"
@@ -333,6 +343,7 @@ function renderReady(
             props.selectorId,
             props.basePath,
             props.onLoadMoreDecisions,
+            props.connected === false,
           )}
         </>
       ) : (
@@ -341,6 +352,7 @@ function renderReady(
           props.basePath,
           state.executionPageStatus,
           props.onLoadMoreExecutions,
+          props.connected === false,
         )
       )}
     </>
@@ -366,7 +378,12 @@ function renderPanel(
       <h3>{t(`activity.runInspector.panels.${key}.title`)}</h3>
       <p>{t(`activity.runInspector.panels.${key}.description`)}</p>
       {action ? (
-        <button type="button" class="btn" onClick={action.onClick}>
+        <button
+          type="button"
+          class="btn"
+          disabled={props.connected === false}
+          onClick={action.onClick}
+        >
           {action.label}
         </button>
       ) : undefined}

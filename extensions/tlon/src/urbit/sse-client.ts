@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
-import type { LookupFn, SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   ensureUrbitChannelOpen,
   pokeUrbitChannel,
@@ -22,8 +22,6 @@ type UrbitSseLogger = {
 type UrbitSseOptions = {
   ship?: string;
   ssrfPolicy?: SsrFPolicy;
-  lookupFn?: LookupFn;
-  fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   onReconnect?: (client: UrbitSSEClient) => Promise<void> | void;
   logger?: UrbitSseLogger;
 };
@@ -74,8 +72,6 @@ export class UrbitSSEClient {
   isConnected = false;
   logger: UrbitSseLogger;
   ssrfPolicy?: SsrFPolicy;
-  lookupFn?: LookupFn;
-  fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   streamRelease: (() => Promise<void>) | null = null;
 
   // Event ack tracking keeps each HTTP channel's delivered window bounded.
@@ -95,8 +91,6 @@ export class UrbitSSEClient {
     this.onReconnect = options.onReconnect ?? null;
     this.logger = options.logger ?? {};
     this.ssrfPolicy = options.ssrfPolicy;
-    this.lookupFn = options.lookupFn;
-    this.fetchImpl = options.fetchImpl;
   }
 
   private channelRequestContext() {
@@ -106,8 +100,6 @@ export class UrbitSSEClient {
       ship: this.ship,
       channelId: this.channelId,
       ssrfPolicy: this.ssrfPolicy,
-      lookupFn: this.lookupFn,
-      fetchImpl: this.fetchImpl,
     };
   }
 
@@ -206,8 +198,6 @@ export class UrbitSSEClient {
           },
         },
         ssrfPolicy: this.ssrfPolicy,
-        lookupFn: this.lookupFn,
-        fetchImpl: this.fetchImpl,
         signal: AbortSignal.any([controller.signal, this.reconnectAbortController.signal]),
         beforeRequest: () => this.reconnectAbortController.signal.throwIfAborted(),
         auditContext: "tlon-urbit-sse-stream",
@@ -549,8 +539,6 @@ export class UrbitSSEClient {
             },
           },
           ssrfPolicy: this.ssrfPolicy,
-          lookupFn: this.lookupFn,
-          fetchImpl: this.fetchImpl,
           timeoutMs: 30_000,
           auditContext: "tlon-urbit-channel-close",
         });

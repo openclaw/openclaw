@@ -502,7 +502,7 @@ async function authenticateGatewayConnectCore(
     authMethod,
   });
   if (trustedProxyAuthOk) {
-    scopes = applyConnectionScopeCap({ scopes, upgradeReq });
+    scopes = applyConnectionScopeCap({ role, scopes, upgradeReq });
     connectParams.scopes = scopes;
   }
   const controlUiPairingKind = shouldSkipControlUiPairing({

@@ -13,14 +13,19 @@ import { formatMessageCliText } from "../src/commands/message-format.js";
 import { setRuntimeConfigSnapshot } from "../src/config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../src/config/types.js";
 import { loadUnfinishedDeliveries } from "../src/infra/outbound/delivery-queue-storage.js";
-import { runMessageAction } from "../src/infra/outbound/message-action-runner.js";
+import * as messageActionRunner from "../src/infra/outbound/message-action-runner.js";
 import { sendMessage } from "../src/infra/outbound/message.js";
 import { setActivePluginRegistry } from "../src/plugins/runtime.js";
 import { onSessionTranscriptUpdate } from "../src/sessions/transcript-events.js";
 import { createTestRegistry } from "../src/test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../src/test-utils/openclaw-test-state.js";
 
-afterEach(() => setActivePluginRegistry(createTestRegistry([])));
+afterEach(() => {
+  vi.restoreAllMocks();
+  setActivePluginRegistry(createTestRegistry([]));
+});
+
+const runMessageAction = messageActionRunner.runMessageAction;
 
 const manager = vi.hoisted(() => ({ sendMessage: vi.fn() }));
 vi.mock("../extensions/twitch/src/client-manager-registry.js", () => ({
@@ -81,7 +86,7 @@ describe("Twitch message-tool delivery", () => {
         config: cfg,
         hasRepliedRef: undefined,
       });
-      const runAction = vi.fn(runMessageAction);
+      const runAction = vi.spyOn(messageActionRunner, "runMessageAction");
       const tool = createMessageTool({
         config: cfg,
         agentId: "main",
@@ -89,14 +94,6 @@ describe("Twitch message-tool delivery", () => {
         ...toolContext,
         sourceReplyDeliveryMode: "message_tool_only",
         workspaceDir: state.workspaceDir,
-        runMessageAction: runAction,
-        getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-        resolveCommandSecretRefsViaGateway: async ({ config }) => ({
-          resolvedConfig: config,
-          diagnostics: [],
-          targetStatesByPath: {},
-          hadUnresolvedTargets: false,
-        }),
       });
       expect(tool.parameters).toMatchObject({
         properties: { action: { enum: expect.arrayContaining(["send"]) } },
@@ -197,6 +194,7 @@ describe("Twitch message-tool delivery", () => {
       } finally {
         unsubscribeAudit();
         unsubscribeTranscript();
+        runAction.mockRestore();
       }
     });
   });

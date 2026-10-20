@@ -101,8 +101,9 @@ test("sidebar wire caches retain deltas across real runtime publications", async
     .mockImplementation((rows, base, history) => {
       const revision = base?.replace(SESSION_ROWS_DELTA_PREFIX, "");
       const found = revision
-        ? [rows, ...(history ?? [])].find((candidate) => share(candidate).rowsRevision === revision)
-        : undefined;
+        ? share(rows).rowsRevision === revision ||
+          history?.some((candidate) => candidate.revision === revision) === true
+        : false;
       const previous = revision ? servedRows.get(revision) : undefined;
       const result = share(rows, base, history);
       if (result.rowsRevision) {
@@ -112,7 +113,7 @@ test("sidebar wire caches retain deltas across real runtime publications", async
         event,
         query,
         baseSent: base !== undefined,
-        baseFound: found !== undefined,
+        baseFound: found,
         changedRows: previous ? rows.filter((row) => !previous.includes(row)).length : rows.length,
         outcome: result.rowsUnchanged ? "unchanged" : result.rowsDelta ? "delta" : "full",
       });

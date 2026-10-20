@@ -312,7 +312,15 @@ function WorkspaceContents(props: { workspace: SessionWorkspaceProps }) {
         when={!props.workspace.error}
         fallback={
           <div class="chat-workspace-rail__state chat-workspace-rail__state--error">
-            {props.workspace.error}
+            <div role="alert">{props.workspace.error}</div>
+            <button
+              type="button"
+              class="btn small"
+              disabled={props.workspace.loading}
+              onClick={() => props.workspace.onRetry()}
+            >
+              {t("common.retry")}
+            </button>
           </div>
         }
       >

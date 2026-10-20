@@ -1,4 +1,3 @@
-// Commander registration for channel discovery, setup, status, auth, and diagnostics commands.
 import { Option, type Command } from "commander";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { ChannelSetupFieldMetadata } from "../channels/plugins/setup-contract.js";

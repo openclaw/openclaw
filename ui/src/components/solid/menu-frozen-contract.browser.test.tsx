@@ -11,19 +11,23 @@ import {
   surface,
   trigger,
 } from "../../test-helpers/solid-menu.tsx";
-import type { MenuItem } from "./menu.tsx";
+import { createMenuControls, type MenuItem } from "./menu.tsx";
 
 afterEach(cleanup);
 
 // These cases preserve owner-boundary contracts from the original dropdown suites.
 describe("Solid menu frozen dropdown contracts", () => {
   it("keeps native autofocus on an input inside grouped content", async () => {
-    mountMenu({
-      children: (
-        <div>
-          <input aria-label="Filter actions" autofocus />
-        </div>
-      ),
+    mountMenu(() => {
+      const controls = createMenuControls();
+      return {
+        controls,
+        children: (
+          <div>
+            <input ref={controls.ref()} aria-label="Filter actions" autofocus />
+          </div>
+        ),
+      };
     });
     await openMenu();
     expect(document.activeElement).toBe(surface().querySelector("input"));
@@ -32,7 +36,13 @@ describe("Solid menu frozen dropdown contracts", () => {
   it.each(["item", "input"] as const)(
     "preserves newer %s focus across opening completion",
     async (target) => {
-      const view = mountMenu({ children: <input aria-label="Filter actions" /> });
+      const view = mountMenu(() => {
+        const controls = createMenuControls();
+        return {
+          controls,
+          children: <input ref={controls.ref()} aria-label="Filter actions" />,
+        };
+      });
       expect(view.handle.open()).toBe(true);
       const focused = target === "item" ? item("Archive") : surface().querySelector("input")!;
       focused.focus();

@@ -24,6 +24,7 @@ import {
   type SecretEgressCertificateStatus,
   type SecretEgressTlsContext,
 } from "./certificates.js";
+import { createSecretEgressProxyEnvironment } from "./environment.js";
 import {
   createSecretEgressBodyBudget,
   forwardSecretEgressRequest,
@@ -644,16 +645,7 @@ export async function startSecretEgressProxyServer(params: {
       const token = registered.token.toString("base64url");
       const proxyUrl = `http://${PROXY_AUTH_USERNAME}:${token}@127.0.0.1:${address.port}`;
       return {
-        env: {
-          HTTPS_PROXY: proxyUrl,
-          HTTP_PROXY: proxyUrl,
-          NODE_USE_ENV_PROXY: "1",
-          NODE_EXTRA_CA_CERTS: trustBundlePath,
-          SSL_CERT_FILE: trustBundlePath,
-          CURL_CA_BUNDLE: trustBundlePath,
-          REQUESTS_CA_BUNDLE: trustBundlePath,
-          GIT_SSL_CAINFO: trustBundlePath,
-        },
+        env: createSecretEgressProxyEnvironment(proxyUrl, trustBundlePath),
         revoke: () => revokeRegistration(registered),
       };
     },

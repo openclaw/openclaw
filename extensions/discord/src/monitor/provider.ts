@@ -1,5 +1,7 @@
+import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
+import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import { formatThreadBindingDurationLabel } from "openclaw/plugin-sdk/conversation-runtime";
 import {
@@ -15,6 +17,7 @@ import {
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   logVerbose,
+  danger,
   warn,
   createSubsystemLogger,
   createNonExitingRuntime,
@@ -37,30 +40,56 @@ import {
   resolveDiscordAccountAllowFrom,
   resolveDiscordAccountDmPolicy,
 } from "../accounts.js";
+import { createDiscordActivityButton } from "../activities/interaction.js";
 import type { DiscordCommandDeployHashStore } from "../command-deploy-store.js";
 import { getDiscordEndpointRuntime } from "../endpoint-runtime.js";
+import {
+  getDiscordExecApprovalApprovers,
+  isDiscordExecApprovalClientEnabled,
+} from "../exec-approvals.js";
+import type {
+  BaseMessageInteractiveComponent,
+  DiscordCommand,
+  Modal,
+} from "../internal/discord.js";
 import { GatewayCloseCodes } from "../internal/gateway.js";
 import { parseApplicationIdFromToken, probeDiscordApplicationId } from "../probe.js";
 import { normalizeDiscordToken } from "../token.js";
+import { createDiscordVoiceCommand, DISCORD_VOICE_COMMAND_SPEC } from "../voice/command.js";
 import { resolveDiscordVoiceEnabled } from "../voice/config.js";
 import { setDiscordTranscriptsVoiceManager } from "../voice/transcripts-source.js";
+import {
+  createAgentComponentControls,
+  createDiscordComponentControls,
+  createDiscordComponentModal,
+} from "./agent-components.js";
 import { resolveDiscordSlashCommandConfig } from "./commands.js";
+import {
+  createDiscordExecApprovalButtonContext,
+  createExecApprovalButton,
+} from "./exec-approvals.js";
 import type { MutableDiscordGateway } from "./gateway-handle.js";
 import { createDiscordGatewaySupervisor } from "./gateway-supervisor.js";
 import { registerDiscordListener } from "./listeners.js";
 import { createDiscordLivePolicyReader } from "./live-policy.js";
+import type { DiscordCommandArgContext } from "./native-command-ui.types.js";
+import {
+  createDiscordCommandArgFallbackButton,
+  createDiscordModelPickerFallbackButton,
+  createDiscordModelPickerFallbackSelect,
+  createDiscordNativeCommand,
+} from "./native-command.js";
 import { probeDiscordAcpBindingHealth } from "./provider.acp.js";
 import { resolveDiscordAllowlistConfig } from "./provider.allowlist.js";
-import { cleanupDiscordProviderStartup } from "./provider.cleanup.js";
 import { resolveDiscordProviderCommandSpecs } from "./provider.commands.js";
 import { runDiscordCommandDeployInBackground } from "./provider.deploy.js";
-import { createDiscordProviderInteractionSurface } from "./provider.interactions.js";
 import { runDiscordGatewayLifecycle } from "./provider.lifecycle.js";
 import {
   createDiscordMonitorClient,
   fetchDiscordBotIdentity,
   registerDiscordMonitorListeners,
 } from "./provider.startup.js";
+import { createDiscordQuestionButton } from "./questions.js";
 import { resolveDiscordRestFetch } from "./rest-fetch.js";
 import { formatDiscordStartupStatusMessage } from "./startup-status.js";
 import { createDiscordReadyStatusPatch, type DiscordMonitorStatusSink } from "./status.js";
@@ -325,28 +354,98 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts) {
     }
     // SAFETY: Gateway startup supplies the full plugin channel runtime; the surface type is the minimal external view.
     const pluginChannelRuntime = opts.channelRuntime as PluginRuntime["channel"] | undefined;
-    const { commands, components, modals } = createDiscordProviderInteractionSurface({
+    const accountContext = {
       readPolicy,
       cfg,
       discordConfig: discordCfg,
       accountId: account.accountId,
-      applicationId,
-      token,
-      commandSpecs,
-      nativeEnabled,
-      voiceEnabled,
-      groupPolicy,
+    };
+    const commandContext: DiscordCommandArgContext = {
+      ...accountContext,
       sessionPrefix,
-      ephemeralDefault,
       threadBindings,
-      voiceManagerRef,
+      buildContext: pluginChannelRuntime?.inbound.buildContext,
+      dispatchReplyFromConfig: pluginChannelRuntime?.reply?.dispatchReplyFromConfig,
+    };
+    const commands: DiscordCommand[] = commandSpecs.map((spec) => {
+      if (nativeEnabled && voiceEnabled && spec.name === DISCORD_VOICE_COMMAND_SPEC.name) {
+        return createDiscordVoiceCommand({
+          ...accountContext,
+          groupPolicy,
+          getManager: () => voiceManagerRef.current,
+          ephemeralDefault,
+        });
+      }
+      return createDiscordNativeCommand({
+        ...commandContext,
+        command: spec,
+        ephemeralDefault,
+      });
+    });
+
+    const execApprovalsConfig = discordCfg.execApprovals ?? {};
+    const execApprovalOptions = {
+      cfg,
+      accountId: account.accountId,
+      configOverride: execApprovalsConfig,
+    };
+    const execApprovalsEnabled = isDiscordExecApprovalClientEnabled(execApprovalOptions);
+    const approvalActionsEnabled = getDiscordExecApprovalApprovers(execApprovalOptions).length > 0;
+    if (execApprovalsEnabled) {
+      registerChannelRuntimeContext({
+        channelRuntime: pluginChannelRuntime,
+        channelId: "discord",
+        accountId: account.accountId,
+        capability: CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
+        context: { token, config: execApprovalsConfig },
+        abortSignal: opts.abortSignal,
+      });
+    }
+
+    const componentContext = {
+      ...accountContext,
+      runtime,
+      token,
       guildEntries,
       allowFrom,
       dmPolicy,
-      runtime,
-      channelRuntime: pluginChannelRuntime,
-      abortSignal: opts.abortSignal,
-    });
+    };
+    const components: BaseMessageInteractiveComponent[] = [
+      createDiscordQuestionButton({
+        cfg,
+        accountId: account.accountId,
+        authContext: componentContext,
+      }),
+      ...[
+        createDiscordCommandArgFallbackButton,
+        createDiscordModelPickerFallbackButton,
+        createDiscordModelPickerFallbackSelect,
+      ].map((create) => create(commandContext)),
+    ];
+    const activityButton = createDiscordActivityButton(
+      { ...componentContext, channelRuntime: pluginChannelRuntime },
+      applicationId,
+    );
+    if (activityButton) {
+      components.push(activityButton);
+    }
+    const modals: Modal[] = [];
+    if (approvalActionsEnabled) {
+      components.push(
+        createExecApprovalButton(
+          createDiscordExecApprovalButtonContext({
+            cfg,
+            accountId: account.accountId,
+            config: execApprovalsConfig,
+          }),
+        ),
+      );
+    }
+    if (discordCfg.agentComponents?.enabled ?? true) {
+      components.push(...createAgentComponentControls.map((create) => create(componentContext)));
+      components.push(...createDiscordComponentControls.map((create) => create(componentContext)));
+      modals.push(createDiscordComponentModal(componentContext));
+    }
     const {
       client,
       gateway,
@@ -488,16 +587,29 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts) {
       gatewaySupervisor,
     });
   } finally {
-    await cleanupDiscordProviderStartup({
-      deactivateMessageHandler,
-      stopMonitorListeners,
-      autoPresenceController,
-      setStatus: opts.setStatus,
-      lifecycleStarted,
-      lifecycleGateway,
-      gatewaySupervisor,
-      threadBindings,
-      runtime,
-    });
+    try {
+      const listenersStopped = stopMonitorListeners?.();
+      try {
+        await deactivateMessageHandler?.();
+      } finally {
+        await listenersStopped;
+      }
+      await autoPresenceController?.stop();
+      opts.setStatus?.({ connected: false });
+      if (!lifecycleStarted) {
+        try {
+          lifecycleGateway?.disconnect();
+        } catch (err) {
+          runtime.error?.(
+            danger(`discord: failed to disconnect gateway during startup cleanup: ${String(err)}`),
+          );
+        }
+      }
+      gatewaySupervisor?.dispose();
+    } finally {
+      if (!lifecycleStarted) {
+        await threadBindings.stop();
+      }
+    }
   }
 }

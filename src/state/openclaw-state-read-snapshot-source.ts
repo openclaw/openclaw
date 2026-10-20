@@ -2,8 +2,13 @@ import path from "node:path";
 import { sleepWithAbort } from "@openclaw/retry";
 import { mapRetainedOperation, type RetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { acquireWithWait } from "../infra/acquire-with-wait.js";
-import { StateDatabaseAdmissionPendingError } from "../infra/gateway-state-owner-record.js";
+import {
+  StateDatabaseAdmissionPendingError,
+  StateDatabaseOfflineMaintenanceError,
+} from "../infra/gateway-state-owner-record.js";
 import { readSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
+import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
+import { captureSqlitePrivateSnapshotFamily } from "../infra/sqlite-private-snapshot-fork.js";
 import {
   deferSqliteSnapshotCleanupAfterRead,
   retainSnapshotTempDirectory,
@@ -13,15 +18,18 @@ import { prepareSqliteReadOnlyLocationSyncInProcess } from "../infra/sqlite-read
 import type {
   AsyncPreparedSqliteReadOnlyLocation,
   RetainedSqliteSnapshotPreparation,
+  SqlitePrivateSnapshotFamily,
 } from "../infra/sqlite-readonly-location.types.js";
 import {
   readSqliteInspectionBudget,
   sqliteInspectionTimeoutError,
 } from "../infra/sqlite-readonly-worker.js";
 import {
+  forkSqlitePrivateSnapshot,
   prepareSqliteReadOnlyLocation,
   startSqliteReadOnlyLocationAsync,
 } from "../infra/sqlite-snapshot-source.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isArtifactPreservingStateRead } from "./artifact-preserving-state-reads.js";
 import {
   captureOpenClawStateDatabaseReadAdmission,
@@ -33,6 +41,8 @@ import {
   maintenanceOwnerMayCopySourcesInProcess,
 } from "./openclaw-state-maintenance-context.js";
 import { captureOpenClawStateReadWorkerContext } from "./openclaw-state-worker-context.js";
+
+const log = createSubsystemLogger("state/db");
 
 export type StateReadSnapshotSource = {
   location: string;
@@ -64,11 +74,13 @@ export async function prepareOpenClawStateReadSnapshotSource({
   const admissionSignal = callerSignal
     ? AbortSignal.any([callerSignal, controller.signal])
     : controller.signal;
+  const artifactPreserving = isArtifactPreservingStateRead();
   const assertHostAdmission = () =>
     openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
   let admission: ReturnType<typeof captureOpenClawStateDatabaseReadAdmission> | undefined;
   let prepared: AsyncPreparedSqliteReadOnlyLocation | undefined;
   let source: StateReadSnapshotSource | undefined;
+  let family: SqlitePrivateSnapshotFamily | undefined;
   let cleanClose = false;
   let postgresSnapshot: string | undefined;
   let releaseSource: (() => void) | undefined;
@@ -78,6 +90,7 @@ export async function prepareOpenClawStateReadSnapshotSource({
   let deadline = Infinity;
   const retainSource = (location: AsyncPreparedSqliteReadOnlyLocation) => {
     prepared = location;
+    family = location.privateFamily;
     // Callers key prepared reads and discovery caches by this scope's source identity.
     source = {
       location: location.location,
@@ -101,10 +114,11 @@ export async function prepareOpenClawStateReadSnapshotSource({
       admission = captured;
       budget = readSqliteInspectionBudget("read-only snapshot", pathname);
       deadline = performance.now() + budget.timeoutMs;
+      const preserveSourceArtifacts = artifactPreserving || isArtifactPreservingStateRead();
       preparation = startSqliteReadOnlyLocationAsync(pathname, {
-        preserveSourceArtifacts: isArtifactPreservingStateRead(),
+        preserveSourceArtifacts,
         signal: admissionSignal,
-        expectedSourceIdentity: isArtifactPreservingStateRead() ? captured.identity : undefined,
+        expectedSourceIdentity: preserveSourceArtifacts ? captured.identity : undefined,
       });
       // Sync readers must publish the same source without waiting for a Promise reaction.
       materialization = mapRetainedOperation(preparation, (location) => {
@@ -118,17 +132,39 @@ export async function prepareOpenClawStateReadSnapshotSource({
     return materialization;
   };
   if (!lazy) {
+    const admissionDeadline = performance.now() + (admissionTimeoutMs ?? 0);
+    let nextWaitLog = 0;
     try {
       // Wait only before capturing private bytes; callbacks and cleanup must never replay.
       admission = await acquireWithWait({
         acquire: capture,
-        shouldRetry: (error) =>
-          error instanceof StateDatabaseAdmissionPendingError && error.databasePath === pathname,
-        deadlineMs: performance.now() + (admissionTimeoutMs ?? 0),
+        shouldRetry: (error) => {
+          if (
+            !(error instanceof StateDatabaseAdmissionPendingError) &&
+            !(error instanceof StateDatabaseOfflineMaintenanceError)
+          ) {
+            return false;
+          }
+          if (error.databasePath !== pathname) {
+            return false;
+          }
+          const now = performance.now();
+          if (now >= nextWaitLog && now < admissionDeadline) {
+            log.warn(
+              `Waiting for shared-state admission (up to ${Math.ceil((admissionDeadline - now) / 1000)} s remaining). ${error.message}`,
+            );
+            nextWaitLog = now + 30_000;
+          }
+          return true;
+        },
+        deadlineMs: admissionDeadline,
         pollIntervalMs: 250,
         sleep: (ms) => sleepWithAbort(ms, admissionSignal),
       });
       admissionSignal.throwIfAborted();
+      if (nextWaitLog > 0) {
+        log.info(`Shared-state admission acquired: ${pathname}`);
+      }
       cleanClose = !postgres && reuseCleanClose === true && readSqliteDatabaseCleanClose(pathname);
       if (postgres) {
         const { openPostgresStateReadSnapshot } =
@@ -145,19 +181,51 @@ export async function prepareOpenClawStateReadSnapshotSource({
       } else if (cleanClose) {
         prepared = { location: pathname, cleanupAsync: async () => true };
       } else if (
-        isArtifactPreservingStateRead() &&
+        artifactPreserving &&
         maintenanceOwnerMayCopySourcesInProcess(getOpenClawDatabaseMaintenanceScope(), pathname) &&
         !openClawStateDatabaseCache.isOpenClawStateDatabaseOpen(pathname)
       ) {
         prepared = prepareSqliteReadOnlyLocationSyncInProcess(pathname);
+        if (prepared.cleanupRoot) {
+          prepared.privateFamily = captureSqlitePrivateSnapshotFamily(
+            prepared.location,
+            prepared.cleanupRoot,
+          );
+        }
+      } else if (artifactPreserving) {
+        // Share only the retained read producer, never a generic mutable snapshot lease.
+        preparation = startSqliteReadOnlyLocationAsync(pathname, {
+          preserveSourceArtifacts: true,
+          signal: admissionSignal,
+          expectedSourceIdentity: admission.identity,
+        });
+        prepared = await preparation.result;
       } else {
         prepared = await prepareSqliteReadOnlyLocation(pathname, {
-          preserveSourceArtifacts: isArtifactPreservingStateRead(),
+          preserveSourceArtifacts: artifactPreserving,
           signal: controller.signal,
         });
       }
       retainSource(prepared);
     } catch (error) {
+      if (nextWaitLog > 0) {
+        log.warn(`Shared-state admission wait ended without a snapshot. ${String(error)}`);
+      }
+      try {
+        releaseSource?.();
+        if (preparation) {
+          // A rejected retained producer still owns its child and unpublished directory.
+          await preparation.startClose().result;
+        } else if (prepared && !(await prepared.cleanupAsync())) {
+          throw new SqliteSnapshotCleanupError("Shared-state snapshot preparation cleanup failed");
+        }
+      } catch (cleanupError) {
+        throw createSqliteLifecycleAggregateError(
+          [error, cleanupError],
+          "Shared-state snapshot preparation and cleanup failed",
+          error,
+        );
+      }
       throw new Error(
         `Cannot read shared state for discovery: ${pathname}. Retry after the current state operation completes. ${String(error)}`,
         { cause: error },
@@ -209,6 +277,22 @@ export async function prepareOpenClawStateReadSnapshotSource({
           await startLazySource()?.result;
         }
       : undefined,
+    forkSource: async (signal?: AbortSignal) => {
+      const forkSignal = signal ? AbortSignal.any([signal, admissionSignal]) : admissionSignal;
+      forkSignal.throwIfAborted();
+      // Join an accepted capture, but do not force unused lazy reports to acquire bytes.
+      await materialization?.result;
+      forkSignal.throwIfAborted();
+      if (!prepared || !family) {
+        return undefined;
+      }
+      const assertCurrent = () => {
+        assertHostAdmission();
+        admission?.assertCurrent();
+      };
+      assertCurrent();
+      return forkSqlitePrivateSnapshot(prepared.location, family, forkSignal, assertCurrent);
+    },
     async cleanup(readSucceeded: boolean) {
       releaseSource?.();
       if (!prepared) {

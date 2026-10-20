@@ -26,7 +26,7 @@ export function observeTranscript(container: HTMLElement, cleanups: Array<() => 
   const owner = {
     state,
     getScrollElement: () => (thread.isConnected ? thread : null),
-    prependAnchor: new TranscriptPrependAnchor(),
+    prependAnchor: new TranscriptPrependAnchor(new Map()),
     endAnchor: new TranscriptEndAnchor(),
     canFollowEnd: () => true,
     isProgrammaticScroll: () => false,
@@ -82,14 +82,23 @@ export function observeTranscript(container: HTMLElement, cleanups: Array<() => 
 type Input = SessionProgressCardProps & { transcript?: boolean; showTranscript?: boolean };
 type FixtureProps = { input: Input; presented: boolean };
 function Fixture(props: FixtureProps) {
+  let transcript: HTMLDivElement | undefined;
+  const getTranscriptElement = () => (transcript?.isConnected ? transcript : null);
   return (
     <ContentPresentation value={() => props.presented}>
       <Show when={props.input.transcript} fallback={<SessionProgressCard {...props.input} />}>
         <div class="chat-main">
           <Show when={props.input.showTranscript !== false}>
-            <div class="chat-thread" />
+            <div class="chat-thread" ref={(element) => (transcript = element)} />
           </Show>
-          <SessionProgressCard {...props.input} />
+          <SessionProgressCard
+            {...props.input}
+            composerDisclosureContext={{
+              ...props.input.composerDisclosureContext,
+              getTranscriptElement:
+                props.input.composerDisclosureContext?.getTranscriptElement ?? getTranscriptElement,
+            }}
+          />
         </div>
       </Show>
     </ContentPresentation>

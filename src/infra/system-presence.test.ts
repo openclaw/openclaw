@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   commitPresence,
+  getSystemPresenceKey,
   listSystemPresence,
   touchPresence,
   updateSystemPresence,
@@ -154,6 +155,7 @@ describe("system-presence", () => {
 
     const normalized = { text, instanceId: "mixed-case-node" };
     const refreshed = updateSystemPresence({ ...normalized, lastInputSeconds: 11 });
+    expect(getSystemPresenceKey(refreshed.next)).toBe(getSystemPresenceKey(update.next));
     expect(refreshed.changedKeys).toEqual([]);
     expect(refreshed.next.lastInputSeconds).toBe(11);
     expect(update.next.lastInputSeconds).toBe(7);
@@ -219,13 +221,16 @@ describe("system-presence", () => {
     vi.useFakeTimers();
     const deviceId = randomUUID();
     connectDevice(deviceId, { host: "stale-host", mode: "ui" });
-
-    expect(listSystemPresence().map((entry) => entry.deviceId)).toContain(deviceId);
+    const original = listSystemPresence().find((entry) => entry.deviceId === deviceId)!;
+    expect(original).toBeDefined();
 
     vi.advanceTimersByTime(5 * 60 * 1000 + 1);
 
     const entries = listSystemPresence();
     expect(entries.map((entry) => entry.deviceId)).not.toContain(deviceId);
     expect(entries.map((entry) => entry.reason)).toContain("self");
+    connectDevice(deviceId, { host: "returned-host", mode: "ui" });
+    const returned = listSystemPresence().find((entry) => entry.deviceId === deviceId)!;
+    expect(getSystemPresenceKey(returned)).not.toBe(getSystemPresenceKey(original));
   });
 });

@@ -57,7 +57,6 @@ export function context(
     getRuntimeConfig: () => runtimeConfig,
     broadcast,
     broadcastToConnIds: vi.fn(),
-    chatAbortControllers: new Map(),
     logGateway: { warn: vi.fn() },
   } as unknown as GatewayRequestContext;
 }

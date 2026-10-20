@@ -40,6 +40,7 @@ import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { createRuntimeAgent } from "../../plugins/runtime/runtime-agent.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import * as sessionController from "../../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import * as storeWriterQueue from "../../shared/store-writer-queue.js";
 import {
@@ -313,20 +314,20 @@ async function revokeWithPublicLifecyclePredecessor(
   invoke: () => ReturnType<typeof invokeMessageCut>,
 ) {
   const storePath = resolveSessionStorePathCore(undefined, { agentId: scope.agentId });
-  const { release, settled: heldLifecycle } = await holdLifecycle(
-    storePath,
-    scope.sessionId,
-    "rewind",
-  );
-  const enqueue = storeWriterQueue.runQueuedStoreWrite;
+  const { release, settled: heldLifecycle } = await holdLifecycle(storePath, scope.sessionId);
+  const enqueue = sessionController.runSessionMutation;
+  const removalQueued = createDeferredCore();
+  const mutationQueued = createDeferredCore();
   let queuedMutations = 0;
-  const queue = vi.spyOn(storeWriterQueue, "runQueuedStoreWrite").mockImplementation((params) => {
+  const queue = vi.spyOn(sessionController, "runSessionMutation").mockImplementation((params) => {
     const pending = enqueue(params);
-    if (
-      params.label === "runExclusiveSessionLifecycleMutation" &&
-      params.storePath === JSON.stringify([storePath, scope.sessionKey])
-    ) {
+    if ("target" in params && params.target.storeScope === storePath) {
       queuedMutations += 1;
+      if (queuedMutations === 1) {
+        removalQueued.resolve();
+      } else if (queuedMutations === 2) {
+        mutationQueued.resolve();
+      }
     }
     return pending;
   });
@@ -355,10 +356,17 @@ async function revokeWithPublicLifecyclePredecessor(
   );
   let mutation: ReturnType<typeof invokeMessageCut> | undefined;
   try {
-    // Both operations now acquire the source key before its physical session id.
-    await vi.waitFor(() => expect(queuedMutations).toBe(1));
+    await awaitGateBeforeSettlement(
+      removalQueued.promise,
+      removal,
+      "Member removal settled before joining its session controller",
+    );
     mutation = invoke();
-    await vi.waitFor(() => expect(queuedMutations).toBe(2));
+    await awaitGateBeforeSettlement(
+      mutationQueued.promise,
+      mutation.error,
+      "Message cut settled before joining its session controller",
+    );
   } finally {
     queue.mockRestore();
     release();

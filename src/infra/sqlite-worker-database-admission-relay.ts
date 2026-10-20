@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { isPromise } from "node:util/types";
 import { MessageChannel, receiveMessageOnPort, type MessagePort } from "node:worker_threads";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-record.js";
+import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-errors.js";
 import {
   readSqliteDatabaseAdmissions,
   type SqliteDatabaseAdmissions,

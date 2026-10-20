@@ -1,3 +1,4 @@
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { racePromiseWithAbortSignal } from "./abort-signal.js";
@@ -14,6 +15,7 @@ import {
   createSqliteLifecycleAggregateError,
   throwSqliteLifecycleErrors,
 } from "./sqlite-lifecycle-errors.js";
+import { SQLITE_WORKER_ADMISSION_TIMEOUT_MS } from "./sqlite-worker-broker-admission.js";
 import {
   receiveSqliteWorkerReply,
   type SqliteWorkerReplyOwner,
@@ -134,9 +136,42 @@ export function createSqliteWorkerLifecycle({
           "overloaded",
         );
       }
-      const selected = available.reduce((left, right) =>
-        left.actors.size <= right.actors.size ? left : right,
-      );
+      const idle = available.filter((slot) => !slot.current);
+      let selected: Slot;
+      if (idle.length === 0) {
+        // Join the first completing carrier's FIFO even if its next job has started.
+        // Requiring an idle window could starve opens behind a steady command stream.
+        selected = await raceWithTimeout(
+          Promise.race(
+            available.map((slot) =>
+              slot.current!.result.then(
+                () => slot,
+                () => slot,
+              ),
+            ),
+          ),
+          SQLITE_WORKER_ADMISSION_TIMEOUT_MS,
+          () => {
+            throw new SqliteWorkerError("SQLite worker queue capacity reached", "overloaded");
+          },
+          {
+            signal: options.signal,
+            onAbort: (signal) => {
+              throw signal.reason;
+            },
+          },
+        );
+        options.signal?.throwIfAborted();
+        options.assertCurrent?.();
+        options.signal?.throwIfAborted();
+        if (selected.failed || selected.retiring || selected.exited) {
+          return acquireSlot(options, limits, createReplyOwner);
+        }
+      } else {
+        selected = idle.reduce((left, right) =>
+          left.actors.size <= right.actors.size ? left : right,
+        );
+      }
       selected.pendingOpens += 1;
       return selected;
     }

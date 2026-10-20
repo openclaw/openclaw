@@ -325,6 +325,7 @@ export function readResidentSessionRow(
     cfg,
     target: row,
     entry: row.entry,
+    preparedRuntimeOwnership: databaseFacts.runtimeOwnership,
     context: params.gatewayContext,
     placementFactsReader: params.placementFactsReader,
     activitySummaryEnabled,

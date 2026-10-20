@@ -51,6 +51,31 @@ function importSelected(parent: Invocation, child: Invocation, id: string | null
 }
 
 describe("evidence invocation owner", () => {
+  it("isolates continuation, imported child evidence, and returned observations", () => {
+    const parent = createInvocation();
+    const first = record(parent, "fail");
+    const continuation = parent.childInput(0);
+    const child = createInvocation({ anchors: parent.anchors, continuation });
+    continuation.entries[0]!.test.title = "mutated continuation";
+    continuation.occurrences.find((item) => item.id === first)!.launch.source.ref = "mutated";
+    const second = record(child, "pass");
+    const input = child.snapshot(snapshotOptions);
+    const expected = child.snapshot(snapshotOptions);
+    parent.importChild(0, input);
+    input.entries[1]!.result.status = "fail";
+    input.occurrences.find((item) => item.id === second)!.launch.source.ref = "mutated";
+    parent.select(0, second);
+    expect(parent.snapshot(snapshotOptions)).toEqual(expected);
+    expect(expected.entries[0]!.test.title).toBe("Synthetic check");
+    expect(expected.occurrences.every((item) => item.launch.source.ref === "source-A")).toBe(true);
+    const selected = parent.selectedObservation(0)!;
+    selected.occurrence.launch.source.ref = "mutated output";
+    selected.entries[0]!.result.status = "fail";
+    const snapshot = parent.snapshot(snapshotOptions);
+    snapshot.occurrences[0]!.parentCell!.scenarioId = "mutated output";
+    expect(parent.snapshot(snapshotOptions)).toEqual(expected);
+  });
+
   it("reconciles admitted open observations before and after child selection without rewriting history", () => {
     const parent = createInvocation();
     const child = createInvocation({ anchors: parent.anchors });

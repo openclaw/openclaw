@@ -165,6 +165,7 @@ struct ExecHostSocketCancellationTests {
         try ExecApprovalsSQLiteStore.write(
             ExecApprovalsFile(version: 1, defaults: nil, agents: [:]),
             stateDirectoryURL: root)
+        try ExecApprovalsSocketTestSupport.seedLocalCredentials(in: root)
     }
 
     private func connect(_ root: URL) throws -> Int32 {

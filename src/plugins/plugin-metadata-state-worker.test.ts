@@ -26,7 +26,10 @@ import {
 } from "../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import * as bundledDiscovery from "./bundled-discovery-state.js";
-import { setGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import {
+  getCurrentPluginMetadataSnapshot,
+  setGatewayPluginMetadataSnapshot,
+} from "./current-plugin-metadata-snapshot.js";
 import { clearCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import { readStartupBundledDiscoveryMode } from "./gateway-startup-plugin-config.js";
 import { resolvePluginInstallRoots, withPluginInstallRoots } from "./install-root-context.js";
@@ -54,6 +57,7 @@ import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import * as metadataWorker from "./plugin-metadata-state-worker.js";
 import { refreshPluginRegistry } from "./plugin-registry-refresh.js";
 import { createPluginSourceAdmissionPublisher } from "./plugin-source-admission-store.js";
+import { createProviderExternalAuthResolver } from "./provider-external-auth-core.js";
 import { createColdPluginFixture } from "./test-helpers/cold-plugin-fixtures.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -195,6 +199,56 @@ it("transfers startup metadata out of its private snapshot and observes same-pro
     }
   } finally {
     adoptProcessPluginCache(processCache);
+  }
+});
+
+it("prepares external auth from the published inventory after an index write without rereading it", async () => {
+  const env = environment();
+  const config = {};
+  await seed(env, index());
+  const resolver = createProviderExternalAuthResolver({ resolveProviderPluginsForHooks: () => [] });
+  try {
+    const coldReads = vi.spyOn(metadataWorker, "readPluginMetadataStateRow");
+    const coldBatches = vi.spyOn(metadataWorker, "readPluginMetadataStateRows");
+    await withoutMainThreadSql(async () => {
+      await resolver.withPreparedExternalAuthProfiles({ config, env }, async () => {
+        expect(getCurrentPluginMetadataSnapshot({ config, env })).toBeDefined();
+      });
+    });
+    expect(coldReads).not.toHaveBeenCalled();
+    expect(coldBatches).toHaveBeenCalledOnce();
+    coldReads.mockRestore();
+    coldBatches.mockRestore();
+    for (const message of ["boot inventory", "replacement inventory"]) {
+      const snapshot = await resolveConfigWidePluginMetadataSnapshotAsync({
+        config,
+        env,
+        allowCurrent: false,
+      });
+      setGatewayPluginMetadataSnapshot(snapshot, { config, env });
+      // Writes invalidate raw index facts; the published runtime inventory remains authoritative.
+      await writePersistedInstalledPluginIndex(index(message), { env });
+      const reads = vi.spyOn(metadataWorker, "readPluginMetadataStateRow");
+      const batches = vi.spyOn(metadataWorker, "readPluginMetadataStateRows");
+      await withoutMainThreadSql(async () => {
+        await resolver.withPreparedExternalAuthProfiles({ config, env }, async () => {
+          expect(getCurrentPluginMetadataSnapshot({ config, env })).toBe(snapshot);
+          expect(
+            resolver.resolveExternalAuthProfilesWithPlugins({
+              config,
+              env,
+              context: { env, store: { version: 1, profiles: {} } },
+            }),
+          ).toEqual([]);
+        });
+      });
+      expect(reads).not.toHaveBeenCalled();
+      expect(batches).not.toHaveBeenCalled();
+      reads.mockRestore();
+      batches.mockRestore();
+    }
+  } finally {
+    clearCurrentPluginMetadataSnapshot();
   }
 });
 

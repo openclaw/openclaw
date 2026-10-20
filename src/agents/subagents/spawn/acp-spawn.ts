@@ -138,6 +138,7 @@ type SpawnAcpContext = SpawnRequesterConversationSource & {
   agentSessionKey?: string;
   /** Trusted parent tool construction facts; never read from model arguments. */
   senderIsOwner?: boolean;
+  gitContributorProfileId?: string;
   expectedParentSessionId?: string;
   requesterTurnRunId?: string;
   completionOwnerKey?: string;
@@ -425,7 +426,6 @@ export async function spawnAcpDirect(
           resolveEventSessionKeyForPolicy(parentSessionKey, parentEventRouting),
         )
       : undefined;
-  ctx.assertActive?.();
   const gatewayAttachments = toGatewayImageAttachments(params.attachments);
   const requesterOrigin = requesterState.origin;
   const progressOrigin = {
@@ -478,7 +478,12 @@ export async function spawnAcpDirect(
       const creationStamp = buildSessionCreationStamp({
         via: "spawn",
         actor: { type: "agent", id: requesterAgentId },
-        inheritedGitContributorProfileIds: inheritSessionGitContributorProfileIds(parentEntry),
+        inheritedGitContributorProfileIds: inheritSessionGitContributorProfileIds(parentEntry, {
+          config: cfg,
+          agentId: requesterAgentId,
+          sessionKey: requesterInternalKey,
+          requesterProfileId: ctx.gitContributorProfileId,
+        }),
       });
       const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: ownerAgentId });
       const childSessionPatch = admission.childSessionPatch

@@ -22,7 +22,6 @@ import {
 import { retainPluginNativeRoot } from "./plugin-native-root-lease.js";
 import { withPluginSourceCaptureDirectory } from "./plugin-package-metadata-capture.js";
 import { withPluginSourceAdmissionPublisher } from "./plugin-source-admission-context.js";
-import type { PluginSourceAdmissionPublication } from "./plugin-source-admission.types.js";
 import { withPluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
 import { recordPluginNativeLoad } from "./plugin-source-capture-native-loads.js";
 
@@ -32,13 +31,15 @@ const orphaned = new Set<Resource>();
 const owned = new WeakSet<Resource>();
 const sentReceipts: PluginNativeAdmissionTransfer["receipts"] = new Map();
 const sentRoots = new Set<string>();
+const borrowedRootIds = new WeakMap<object, number>();
 
 function admissionChanges() {
   const state = nativeAdmissionStateFor();
   const receipts = new Map(
     [...state.receipts].filter(([key, receipt]) => sentReceipts.get(key) !== receipt),
   );
-  if (!receipts.size) {
+  const publications = [...state.publications];
+  if (!receipts.size && !publications.length) {
     return undefined;
   }
   const directories = new Set(
@@ -48,12 +49,24 @@ function admissionChanges() {
     .filter((root) => directories.has(root.directory) && !sentRoots.has(root.directory))
     .map((root) => {
       sentRoots.add(root.directory);
-      return own(retainPluginNativeRoot(root));
+      return retainPluginNativeRoot(root);
     });
   for (const [key, receipt] of receipts) {
     sentReceipts.set(key, receipt);
   }
-  return codec.encode({ receipts, roots } satisfies PluginNativeAdmissionTransfer);
+  const encoded = codec.encode({
+    receipts,
+    roots,
+    publications: publications.map(([, publication]) => publication.data),
+  } satisfies PluginNativeAdmissionTransfer);
+  // Install leases can defer writes beyond source retirement. Hand retry intent
+  // to the admission owner with its native custody, never worker callbacks.
+  for (const [key, publication] of publications) {
+    if (state.publications.get(key) === publication) {
+      state.publications.delete(key);
+    }
+  }
+  return encoded;
 }
 function own<T extends Resource>(resource: T): T {
   if (owned.has(resource)) {
@@ -87,55 +100,43 @@ function ownRecovery(resource: PluginRecoverySource): PluginRecoverySource {
   resource.fork = markPluginSourceCaptureOperation(() => ownRecovery(fork()));
   return resource;
 }
-const codec = new GenerationCodec(() => {
-  throw new Error("Host functions cannot enter plugin preparation");
-}, own);
+const codec = new GenerationCodec(
+  () => {
+    throw new Error("Host functions cannot enter plugin preparation");
+  },
+  {
+    exportRoot(root) {
+      const id = borrowedRootIds.get(root);
+      if (id === undefined) {
+        throw new Error("Plugin native root is not owned by the preparation host");
+      }
+      return id;
+    },
+    importRoot() {
+      throw new Error("Native root leases cannot enter plugin preparation");
+    },
+  },
+);
 let context: Extract<GenerationWorkerInput, { operation: "capture" }> | undefined;
 let callbacks: MessagePort | undefined;
 let nextCallback = 0;
-const publications = new Map<
-  number,
-  { resolve(value: boolean): void; reject(error: Error): void }
->();
-function publishAdmission(publication: PluginSourceAdmissionPublication): Promise<boolean> {
-  if (!callbacks) {
-    return Promise.reject(new Error("Plugin admission publisher is unavailable"));
-  }
-  const id = ++nextCallback;
-  return new Promise((resolve, reject) => {
-    publications.set(id, { resolve, reject });
-    callbacks!.postMessage(
-      { kind: "publish", id, publication } satisfies GenerationWorkerCallback,
-      [],
-    );
-  });
-}
 function observe(message: GenerationWorkerCallback): void {
-  if (message.kind === "published") {
-    const pending = publications.get(message.id);
-    publications.delete(message.id);
-    if (message.error) {
-      pending?.reject(new Error(message.error));
-    } else {
-      pending?.resolve(message.accepted === true);
-    }
-  }
   if (message.kind === "native-load") {
     recordPluginNativeLoad(message.filename);
   }
 }
-function mapSource(captureId: number, filename: string): string {
+function requestHost(
+  request: { kind: "mapping"; captureId: number; filename: string } | { kind: "native-root" },
+): Extract<GenerationWorkerCallback, { kind: "callback-result" }> {
   if (!callbacks) {
-    return filename;
+    throw new Error("Plugin preparation host is unavailable");
   }
   const id = ++nextCallback;
   const signal = new Int32Array(new SharedArrayBuffer(4));
   callbacks.postMessage(
     {
-      kind: "mapping",
+      ...request,
       id,
-      captureId,
-      filename,
       signal,
     } satisfies GenerationWorkerCallback,
     [],
@@ -146,20 +147,41 @@ function mapSource(captureId: number, filename: string): string {
     const message = receiveMessageOnPort(callbacks)?.message as
       | GenerationWorkerCallback
       | undefined;
-    if (message?.kind === "mapped" && message.id === id) {
+    if (message?.kind === "callback-result" && message.id === id) {
       if (message.error) {
         throw new Error(message.error);
       }
-      return message.filename ?? filename;
+      return message;
     }
     if (message) {
       observe(message);
     }
     if (performance.now() > deadline) {
-      throw new Error("Plugin source mapping timed out");
+      throw new Error("Plugin preparation callback timed out");
     }
     Atomics.wait(signal, 0, 0, 2);
   }
+}
+function mapSource(captureId: number, filename: string): string {
+  return callbacks
+    ? (requestHost({ kind: "mapping", captureId, filename }).filename ?? filename)
+    : filename;
+}
+function createNativeRoot() {
+  const reference = requestHost({ kind: "native-root" }).root;
+  if (!reference) {
+    throw new Error("Plugin preparation host did not allocate native custody");
+  }
+  const root = {
+    directory: reference.directory,
+    // The host commits before acknowledging publication and releases custody
+    // after worker exit. This isolate owns neither action on the physical root.
+    commit() {},
+    dispose() {},
+    async disposeAsync() {},
+  };
+  borrowedRootIds.set(root, reference.id);
+  return root;
 }
 function scoped<T>(run: () => T): T {
   if (!context) {
@@ -168,16 +190,20 @@ function scoped<T>(run: () => T): T {
   const current = context;
   // A worker captures one artifact; a management-phase cache would retain an
   // unused second source tree. Explicit recovery forks own their own custody.
-  return withPluginSourceAdmissionPublisher(publishAdmission, () =>
-    withPluginInstallRoots(current.installRoots, () =>
-      withPluginSourceCaptureStorage(current.storage, () =>
-        withPluginSourceCaptureDirectory(
-          current.scratch,
-          () => (current.readOnly ? withArtifactPreservingStateReads(run) : run()),
-          current.managedRoot,
+  // Successful replies transfer every write intent to the host. Keeping writes
+  // in one admission owner prevents stale worker retries replacing newer receipts.
+  return withPluginSourceAdmissionPublisher(
+    async () => false,
+    () =>
+      withPluginInstallRoots(current.installRoots, () =>
+        withPluginSourceCaptureStorage(current.storage, () =>
+          withPluginSourceCaptureDirectory(
+            current.scratch,
+            () => (current.readOnly ? withArtifactPreservingStateReads(run) : run()),
+            current.managedRoot,
+          ),
         ),
       ),
-    ),
   );
 }
 async function close(): Promise<void> {
@@ -214,6 +240,7 @@ serveOwnedWorkerTasks<GenerationWorkerReply>(
       try {
         if (command.operation === "capture") {
           const state = nativeAdmissionStateFor();
+          state.createRoot = createNativeRoot;
           for (const key of [
             "owners",
             "managedRoots",

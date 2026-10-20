@@ -1,10 +1,11 @@
-import { createEffect, createMemo, Match, onCleanup, Show, Switch, untrack } from "solid-js";
+import { createEffect, createMemo, Match, onCleanup, Show, Switch } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { isStaleChunkImportError } from "../../app/stale-chunk-reload.ts";
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
 import { LoadingState } from "../../components/solid/loading-state.tsx";
 import { registerLoginEnglish } from "../../i18n/locales/en-login.ts";
 import { resolveEmbedSandbox } from "../../lib/chat/tool-display.ts";
+import { projectCallbackOwner } from "../../lib/reactive/callback-owner.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
@@ -22,15 +23,15 @@ registerLoginEnglish();
 
 function PluginPageContent(props: PluginPageProps, host: HTMLElement) {
   const context = useApplication();
-  const lifecycle = new PluginPageOwner(props, context, host);
-  const projection = projectOwner(lifecycle, (source) => source);
+  const { owner: lifecycle, view: projection } = projectCallbackOwner(
+    (notify) => new PluginPageOwner(props, context, host, notify),
+    (source) => source,
+  );
   const plugins = context.plugins && projectOwner(context.plugins, (source) => source).read;
   host.style.display = "contents";
   // Gateway receipts retire bundled views and frame-auth work before a replacement connection uses them.
-  const update = () => untrack(lifecycle.update);
-  const unsubscribeGateway = context.gateway.subscribe(update);
-  createEffect(() => [props.pluginId, props.tabId], update);
-  update();
+  const unsubscribeGateway = context.gateway.subscribe(lifecycle.update);
+  createEffect(() => [props.pluginId, props.tabId], lifecycle.update);
   onCleanup(() => {
     unsubscribeGateway();
     lifecycle.dispose();
@@ -113,12 +114,10 @@ function PluginPageContent(props: PluginPageProps, host: HTMLElement) {
             <Show when={view().bundledHost} keyed>
               {(_epoch) =>
                 loaded.render({
-                  get client() {
-                    return projection.read().context.gateway.snapshot.client;
-                  },
-                  get connected() {
-                    return projection.read().context.gateway.snapshot.phase === "connected";
-                  },
+                  initialClient:
+                    context.gateway.snapshot.phase === "connected"
+                      ? context.gateway.snapshot.client
+                      : null,
                 })
               }
             </Show>

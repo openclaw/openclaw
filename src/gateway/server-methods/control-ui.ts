@@ -18,7 +18,7 @@ import type {
   loadControlUiSessionPullRequestChecks,
 } from "../control-ui-session-pr-check-details.js";
 import {
-  prepareControlUiSessionPrRead,
+  createControlUiSessionPrRead,
   resolveControlUiSessionPrTarget,
   type ControlUiSessionPrReadContext,
   type ControlUiSessionPrTarget,
@@ -509,7 +509,7 @@ export function createControlUiHandlers(
       let preparedSession: Awaited<ReturnType<typeof prepareCheckDetailsSession>> = null;
       try {
         const reader = client
-          ? await prepareControlUiSessionPrRead({
+          ? createControlUiSessionPrRead({
               client,
               sessionKey: parsed.sessionKey,
               getRuntimeConfig: context.getRuntimeConfig,
@@ -603,10 +603,19 @@ export function createControlUiHandlers(
           parsed.sessionKeys,
           parsed.refreshSessionKeys.length > 0 ? new Set(parsed.refreshSessionKeys) : undefined,
           resolve,
+          parsed.passiveSessionKeys ? new Set(parsed.passiveSessionKeys) : undefined,
         );
-        void replacement.catch(() => {});
+        void replacement.catch((error: unknown) => {
+          context.logGateway.warn(
+            `Failed to prepare Control UI pull request subscriptions; retry the subscription: ${String(error)}`,
+          );
+        });
       });
-      respond(true, { subscribed: parsed.sessionKeys.length > 0 }, undefined);
+      respond(
+        true,
+        { subscribed: parsed.sessionKeys.length > 0 || Boolean(parsed.passiveSessionKeys?.length) },
+        undefined,
+      );
     },
   };
 }

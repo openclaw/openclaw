@@ -146,6 +146,7 @@ export {
   NodePendingEnqueueParamsSchema,
   NodePendingEnqueueResultSchema,
   SessionsListParamsSchema,
+  SessionsSubscribeParamsSchema,
   SessionCatalogCapabilitiesSchema,
   SessionCatalogDescriptorSchema,
   SessionCatalogPullRequestSummarySchema,

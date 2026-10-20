@@ -384,7 +384,6 @@ function collectMarkdownImageSegments(params: {
   const extractedImages: MarkdownImageMatch[] = [];
   const lineSegments: ParsedMediaOutputSegment[] = [];
   let cursor = 0;
-  let foundMedia = false;
 
   for (const match of matches) {
     const before = params.line.slice(cursor, match.start);
@@ -405,7 +404,6 @@ function collectMarkdownImageSegments(params: {
       const mediaTarget = selectedTarget ?? target;
       params.media.push(mediaTarget);
       lineSegments.push({ type: "media", url: mediaTarget });
-      foundMedia = true;
     } else {
       const original = params.line.slice(match.start, match.end);
       segmentPieces.push(original);
@@ -432,7 +430,7 @@ function collectMarkdownImageSegments(params: {
   return {
     cleanedLine: params.preserveTrailingWhitespace ? cleanedLine : cleanedLine || undefined,
     lineSegments,
-    foundMedia,
+    foundMedia: extractedImages.length > 0,
   };
 }
 

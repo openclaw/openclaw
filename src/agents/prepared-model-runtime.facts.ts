@@ -11,7 +11,6 @@ import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source-projection.js";
 import { prepareMediaCapabilityProviders } from "../plugins/capability-provider-runtime.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
-import { getPluginMetadataSnapshotCache, retainPluginCache } from "../plugins/plugin-cache.js";
 import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import {
   getPreparedMessageToolCatalog,
@@ -151,11 +150,6 @@ export async function prepareWorkspaceBuildGroup(
     }
   }
   const pluginMetadataSnapshot = selectedMetadataSnapshot;
-  // Raw preparation owns its facts across awaited auth/catalog work. Successful
-  // generations acquire their independent borrow before this build scope releases it.
-  using _ = {
-    [Symbol.dispose]: retainPluginCache(getPluginMetadataSnapshotCache(pluginMetadataSnapshot)),
-  };
   const pluginMetadataMs = reusablePluginGeneration
     ? 0
     : performance.now() - pluginMetadataStartedAt;

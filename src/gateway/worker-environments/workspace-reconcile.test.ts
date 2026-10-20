@@ -513,6 +513,21 @@ it("applies the three-way matrix while keeping local conflicts", async () => {
   await result.verifyLocalStable();
 });
 
+it("preserves a local directory deletion instead of recreating the worker ancestor", async () => {
+  await gitInit(local);
+  await fs.mkdir(path.join(local, "retained"));
+  const base = await manifestFor(local);
+  await writeWorkspaceFiles(staged, { "retained/new.txt": "worker addition" });
+  const current = await manifestFor(staged);
+  await fs.rmdir(path.join(local, "retained"));
+
+  const applied = await apply(base, current);
+
+  expect(applied.conflictPaths).toEqual(["retained"]);
+  await expect(fs.stat(path.join(local, "retained"))).rejects.toMatchObject({ code: "ENOENT" });
+  await expectWorkspaceFiles(staged, { "retained/new.txt": "worker addition" });
+});
+
 it("allows a remote file to replace an unchanged base directory", async () => {
   await gitInit(local);
   await writeWorkspaceFiles(local, { "src/old.txt": "base" });
@@ -573,10 +588,13 @@ it("keeps a local-only empty directory beneath a cloud-deleted directory", async
   await expect(fs.stat(path.join(local, "removed", "local-empty"))).resolves.toMatchObject({});
 });
 
-it.each(["addition", "removal"])(
+it.each(["addition", "removal", "last-file removal"])(
   "rolls back an empty directory %s when acceptance fails",
   async (operation) => {
-    if (operation === "removal") {
+    if (operation === "last-file removal") {
+      await writeWorkspaceFiles(local, { "empty/old.txt": "base" });
+      await fs.mkdir(path.join(staged, "empty"));
+    } else if (operation === "removal") {
       await fs.mkdir(path.join(local, "empty"));
       await fs.chmod(path.join(local, "empty"), 0o1755);
     } else {
@@ -591,8 +609,11 @@ it.each(["addition", "removal"])(
       }),
     ).rejects.toThrow("acceptance failed");
     const restored = fs.stat(path.join(local, "empty"));
-    if (operation === "removal") {
+    if (operation !== "addition") {
       expect((await restored).isDirectory()).toBe(true);
+      if (operation === "last-file removal") {
+        await expectWorkspaceFiles(local, { "empty/old.txt": "base" });
+      }
     } else {
       await expect(restored).rejects.toMatchObject({ code: "ENOENT" });
     }

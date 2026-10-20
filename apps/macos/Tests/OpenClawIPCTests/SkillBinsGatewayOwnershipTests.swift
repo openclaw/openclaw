@@ -64,6 +64,8 @@ struct SkillBinsGatewayOwnershipTests {
                 entry.autoAllowSkills = true
                 entry.allowlist = authorizationKind == "manual" ? [ExecAllowlistEntry(pattern: resolvedPath)] : []
             }.get()
+            try ExecApprovalsSocketTestSupport.seedLocalCredentials(in: ExecApprovalsStore.databaseURL()
+                .deletingLastPathComponent().deletingLastPathComponent())
             let evaluation = await ExecApprovalEvaluator.evaluate(
                 command: command,
                 rawCommand: nil,

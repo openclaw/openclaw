@@ -1,3 +1,4 @@
+import "./service-http-mock.test-support.js";
 import { describe, expect, it, vi } from "vitest";
 import {
   createInboundAuthor,
@@ -270,6 +271,7 @@ describe("ClickClack discussion service contracts", () => {
         replacement: {
           enabled: true,
           baseUrl: "https://clickclack-replacement.example",
+          apiBaseUrl: harness.transportBaseUrl,
           token: "test-token-placeholder",
           workspace: "team",
           discussions: { enabled: true },
@@ -291,6 +293,7 @@ describe("ClickClack discussion service contracts", () => {
         replacement: {
           enabled: true,
           baseUrl: "https://clickclack.example",
+          apiBaseUrl: harness.transportBaseUrl,
           token: "test-token-placeholder",
           workspace: "team",
           discussions: { enabled: true },
@@ -305,7 +308,7 @@ describe("ClickClack discussion service contracts", () => {
   it("releases a binding when the same workspace selector resolves to a new id", async () => {
     const sessionKey = "agent:main:canonical-workspace-move";
     const h = await opened(sessionKey, { label: "Canonical workspace move" });
-    vi.mocked(h.client.workspaces).mockResolvedValue([
+    vi.mocked(h.workspaces).mockResolvedValue([
       {
         id: "wsp_replacement",
         route_id: "replacement-route",
@@ -338,11 +341,7 @@ describe("ClickClack discussion service contracts", () => {
   });
 
   it("rotates the external ref after a destination round trip without an intermediate open", async () => {
-    const generations = ["generation-a", "generation-b"];
-    const h = createHarness(
-      { label: "Destination round trip" },
-      { bindingGenerationFactory: () => generations.shift() ?? "unexpected-generation" },
-    );
+    const h = createHarness({ label: "Destination round trip" });
     const sessionKey = "agent:main:destination-round-trip";
 
     await h.service.open(sessionKey);
@@ -352,7 +351,10 @@ describe("ClickClack discussion service contracts", () => {
       },
     };
     await h.service.info(sessionKey);
-    h.config.channels!.clickclack = discussionConfig().channels!.clickclack;
+    h.config.channels!.clickclack = {
+      ...discussionConfig().channels!.clickclack,
+      apiBaseUrl: h.transportBaseUrl,
+    };
     await h.service.open(sessionKey);
 
     const externalRefs = h.createChannel.mock.calls.map((call) => call[1].external_ref);
@@ -533,7 +535,6 @@ describe("ClickClack discussion service contracts", () => {
       accountId: binding.accountId,
       credentialFingerprint: binding.credentialFingerprint,
       destinationIdentity: TEST_DESTINATION_IDENTITY,
-      createGeneration: () => "interrupted-commit-generation",
     });
     await recordPendingDiscussionOpen({
       runtime: harness.runtime,
@@ -567,7 +568,6 @@ describe("ClickClack discussion service contracts", () => {
       accountId: "account-original",
       credentialFingerprint,
       destinationIdentity: TEST_DESTINATION_IDENTITY,
-      createGeneration: () => "ownership-generation",
     });
 
     await expect(
@@ -644,7 +644,7 @@ describe("ClickClack discussion service contracts", () => {
       discussionChannel({
         name: "support",
         external_managed: true,
-        external_ref: testExternalRef(sessionKey),
+        external_ref: testExternalRef(sessionKey, h.runtime),
         external_url: "https://control.example/control/chat/main/support-12345678",
         sidebar_section: "Projects",
         archived: false,
@@ -666,8 +666,16 @@ describe("ClickClack discussion service contracts", () => {
     const harness = createHarness({ label: "Support" });
     const sessionKey = "agent:main:support";
     await harness.service.open(sessionKey);
-    vi.mocked(harness.latestChannelMessages).mockResolvedValue({
+    vi.mocked(harness.messagePage).mockResolvedValue({
       messages: [
+        createInboundMessage({
+          id: "msg_older",
+          workspace_id: "wsp_team",
+          channel_id: "chn_discussion",
+          thread_root_id: "msg_older",
+          body: "This older message must be excluded by the requested limit.",
+          created_at: "2026-07-19T12:29:00.000Z",
+        }),
         {
           id: "msg_1",
           workspace_id: "wsp_team",
@@ -686,12 +694,13 @@ describe("ClickClack discussion service contracts", () => {
           },
         } satisfies ClickClackMessage,
       ],
-      truncated: false,
+      oldest_seq: 0,
+      has_older: false,
     });
 
-    const result = await harness.service.readLatestMessages(sessionKey, 12);
+    const result = await harness.service.readLatestMessages(sessionKey, 1);
 
-    expect(harness.latestChannelMessages).toHaveBeenCalledWith("chn_discussion", 12);
+    expect(harness.messagePage).toHaveBeenCalledWith("chn_discussion", 200);
     expect(result.text).toBe(
       'timestamp="2026-07-19T12:30:00.000Z" [Author "Alice" id="usr_alice"] text="Please relay the rollout concern."',
     );
@@ -745,7 +754,7 @@ describe("ClickClack discussion service contracts", () => {
     expect(await harness.service.readLatestMessages(sessionKey, 30)).toEqual({
       text: "No discussion is bound to this session.",
     });
-    expect(harness.latestChannelMessages).not.toHaveBeenCalled();
+    expect(harness.messagePage).not.toHaveBeenCalled();
   });
 
   it.each(["session reset", "channel revocation"])(
@@ -760,7 +769,7 @@ describe("ClickClack discussion service contracts", () => {
       if (!binding) {
         throw new Error("Expected the opened discussion binding");
       }
-      harness.latestChannelMessages.mockImplementationOnce(async () => {
+      harness.messagePage.mockImplementationOnce(async () => {
         if (change === "session reset") {
           harness.setSessionEntry({ sessionId: "replacement", label: "History authority" });
         } else {
@@ -779,21 +788,22 @@ describe("ClickClack discussion service contracts", () => {
               created_at: "2026-07-19T12:30:00.000Z",
             },
           ],
-          truncated: false,
+          oldest_seq: 0,
+          has_older: false,
         };
       });
 
       expect(await harness.service.readLatestMessages(sessionKey, 30)).toEqual({
         text: "No discussion is bound to this session.",
       });
-      expect(harness.latestChannelMessages).toHaveBeenCalledOnce();
+      expect(harness.messagePage).toHaveBeenCalledOnce();
     },
   );
 
   it("quotes untrusted message and author fields without forgeable transcript lines", async () => {
     const sessionKey = "agent:main:quoted-support";
     const h = await opened(sessionKey, { label: "Support" });
-    h.latestChannelMessages.mockResolvedValue({
+    h.messagePage.mockResolvedValue({
       messages: [
         createInboundMessage({
           id: "msg_1",
@@ -811,7 +821,8 @@ describe("ClickClack discussion service contracts", () => {
           }),
         }),
       ],
-      truncated: false,
+      oldest_seq: 0,
+      has_older: false,
     });
 
     const result = await h.service.readLatestMessages(sessionKey, 30);

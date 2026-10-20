@@ -1,10 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { MemoryPluginPublicArtifact } from "openclaw/plugin-sdk/memory-host-core";
-import { describe, expect, it } from "vitest";
+import * as memoryHost from "openclaw/plugin-sdk/memory-host-core";
+import * as securityRuntime from "openclaw/plugin-sdk/security-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { resolveMemoryWikiConfig } from "./config.js";
 import { renderWikiMarkdown } from "./markdown.js";
+import * as obsidian from "./obsidian.js";
 import {
   buildMemoryWikiDoctorReport,
   renderMemoryWikiDoctor,
@@ -24,7 +27,10 @@ const bridgeOptions = {
   bridge: { enabled: true, readMemoryArtifacts: true },
 } as const;
 
-const statusDeps = { pathExists: async () => true, resolveCommand: async () => null };
+beforeEach(() => {
+  vi.spyOn(obsidian, "probeObsidianCli").mockResolvedValue({ available: false, command: null });
+});
+afterEach(() => vi.restoreAllMocks());
 
 function publicArtifact(
   workspace: string,
@@ -55,6 +61,8 @@ async function writeSource(rootDir: string, name: string, title: string, fields 
 
 async function resolveBridgeMissingArtifactsStatus() {
   const config = statusConfig(bridgeOptions);
+  vi.spyOn(securityRuntime, "pathExists").mockResolvedValue(true);
+  vi.spyOn(memoryHost, "listActiveMemoryPublicArtifacts").mockResolvedValue([]);
 
   return resolveMemoryWikiStatus(config, {
     appConfig: {
@@ -62,8 +70,6 @@ async function resolveBridgeMissingArtifactsStatus() {
         entries: { main: { workspace: "/tmp/workspace" } },
       },
     } as OpenClawConfig,
-    listPublicArtifacts: async () => [],
-    ...statusDeps,
   });
 }
 
@@ -73,10 +79,8 @@ async function resolveMissingVaultStatus() {
     obsidian: { enabled: true, useOfficialCli: true },
   });
 
-  return resolveMemoryWikiStatus(config, {
-    pathExists: async () => false,
-    resolveCommand: async () => null,
-  });
+  vi.spyOn(securityRuntime, "pathExists").mockResolvedValue(false);
+  return resolveMemoryWikiStatus(config);
 }
 
 describe("memory wiki status and doctor", () => {
@@ -85,10 +89,12 @@ describe("memory wiki status and doctor", () => {
       vaultMode: "unsafe-local",
     });
 
-    const status = await resolveMemoryWikiStatus(config, {
-      pathExists: async () => true,
-      resolveCommand: async () => "/usr/local/bin/obsidian",
+    vi.spyOn(securityRuntime, "pathExists").mockResolvedValue(true);
+    vi.mocked(obsidian.probeObsidianCli).mockResolvedValue({
+      available: true,
+      command: "/usr/local/bin/obsidian",
     });
+    const status = await resolveMemoryWikiStatus(config);
 
     expect(status.warnings.map((warning) => warning.code)).toContain("unsafe-local-disabled");
   });
@@ -106,12 +112,12 @@ describe("memory wiki status and doctor", () => {
       publicArtifact("unknown", []),
     ];
 
+    vi.spyOn(securityRuntime, "pathExists").mockResolvedValue(true);
+    vi.spyOn(memoryHost, "listActiveMemoryPublicArtifacts").mockResolvedValue(artifacts);
     const status = await resolveMemoryWikiStatus(config, {
       appConfig: {
         agents: { entries: { support: { workspace: "/tmp/support" } } },
       },
-      listPublicArtifacts: async () => artifacts,
-      ...statusDeps,
     });
 
     expect(status).toMatchObject({
@@ -129,17 +135,17 @@ describe("memory wiki status and doctor", () => {
       publicArtifact("shared", ["support", "marketing"], "daily-note"),
       publicArtifact("legacy", []),
     ];
-    const deps = {
+    vi.spyOn(securityRuntime, "pathExists").mockResolvedValue(true);
+    vi.spyOn(memoryHost, "listActiveMemoryPublicArtifacts").mockResolvedValue(artifacts);
+    const options = {
       appConfig: {} as OpenClawConfig,
-      listPublicArtifacts: async () => artifacts,
-      ...statusDeps,
     };
 
     const agentStatus = await resolveMemoryWikiStatus(config, {
-      ...deps,
+      ...options,
       callerAgentId: " SUPPORT ",
     });
-    const operatorStatus = await resolveMemoryWikiStatus(config, deps);
+    const operatorStatus = await resolveMemoryWikiStatus(config, options);
 
     expect(agentStatus).toMatchObject({
       vaultScope: "global",
@@ -152,7 +158,7 @@ describe("memory wiki status and doctor", () => {
   it("rejects status for an unresolved agent-scoped config", async () => {
     const config = statusConfig({ vault: { scope: "agent", path: "/tmp/wiki/support" } });
 
-    await expect(resolveMemoryWikiStatus(config, statusDeps)).rejects.toThrow(
+    await expect(resolveMemoryWikiStatus(config)).rejects.toThrow(
       "Memory Wiki agent-scoped vault requires a resolved agent id",
     );
   });
@@ -178,7 +184,7 @@ describe("memory wiki status and doctor", () => {
     );
     await writeSource(rootDir, "healthy", "Healthy");
 
-    const status = await resolveMemoryWikiStatus(config, statusDeps);
+    const status = await resolveMemoryWikiStatus(config);
 
     expect(status.pageCounts.source).toBe(1);
     expect(status.sourceCounts.native).toBe(1);
@@ -197,7 +203,7 @@ describe("memory wiki status and doctor", () => {
       provenanceMode: "unsafe-local",
     });
 
-    const status = await resolveMemoryWikiStatus(config, statusDeps);
+    const status = await resolveMemoryWikiStatus(config);
 
     expect(status.pageCounts.source).toBe(4);
     expect(status.sourceCounts).toEqual({

@@ -10,12 +10,8 @@ import {
 } from "./actions.js";
 import { handleLineCardCommand } from "./card-command.js";
 import { createActionCard, createInfoCard } from "./flex-templates/basic-cards.js";
-import {
-  createAppleTvRemoteCard,
-  createDeviceControlCard,
-  createMediaPlayerCard,
-} from "./flex-templates/media-control-cards.js";
 import { createEventCard } from "./flex-templates/schedule-cards.js";
+import { renderLineCard } from "./rich-messages.js";
 import { buildTemplateMessageFromPayload } from "./template-messages.js";
 import type { LineTemplateMessagePayload } from "./types.js";
 
@@ -125,15 +121,23 @@ describe("LINE message cards", () => {
   });
 
   it("limits device controls to 6", () => {
-    const card = createDeviceControlCard({
-      deviceName: "Device",
+    const { contents: card } = renderLineCard({
+      type: "device",
+      name: "Device",
       controls: Array.from({ length: 10 }, (_, i) => ({
         label: `Control ${i}`,
-        data: `action=${i}`,
+        action: `action=${i}`,
       })),
     });
 
-    expect(card.footer?.contents.length).toBeLessThanOrEqual(3);
+    expect(card.footer?.contents).toHaveLength(3);
+    expect(cardButtons(card.footer).map((button) => button.action)).toEqual(
+      Array.from({ length: 6 }, (_, i) => ({
+        type: "postback",
+        label: `Control ${i}`,
+        data: `line.action=action%3D${i}&line.device=device`,
+      })),
+    );
   });
 
   it("keeps event-card optional fields together", () => {
@@ -200,13 +204,17 @@ describe("LINE message cards", () => {
 
   it("device control postback labels count grapheme clusters", () => {
     const label = `${"x".repeat(17)}😀`;
-    const card = createDeviceControlCard({
-      deviceName: "Device",
-      controls: [{ label, data: "extra" }],
+    const { contents: card } = renderLineCard({
+      type: "device",
+      name: "Device",
+      controls: [{ label, action: "extra" }],
     });
     const extraAction = cardButtons(card.footer)
       .map((button) => button.action)
-      .find((action) => action.type === "postback" && action.data === "extra");
+      .find(
+        (action) =>
+          action.type === "postback" && action.data === "line.action=extra&line.device=device",
+      );
 
     expect(extraAction?.label).toBe(label);
     expect(loneHighSurrogate.test(extraAction?.label ?? "")).toBe(false);
@@ -394,14 +402,10 @@ describe("LINE message cards", () => {
   });
 
   it("media control cards visibly disable overlong opaque callbacks", () => {
-    const card = createMediaPlayerCard({
+    const { contents: card } = renderLineCard({
+      type: "media_player",
       title: "Track",
-      controls: {
-        previous: { data: overlongData },
-        play: { data: overlongData },
-        pause: { data: overlongData },
-        next: { data: overlongData },
-      },
+      source: "d".repeat(301),
     });
     const actions = cardButtons(card.footer).map((button) => button.action);
 
@@ -409,22 +413,9 @@ describe("LINE message cards", () => {
   });
 
   it("Apple TV controls visibly disable overlong opaque callbacks", () => {
-    const card = createAppleTvRemoteCard({
-      deviceName: "TV",
-      actionData: {
-        up: overlongData,
-        down: overlongData,
-        left: overlongData,
-        right: overlongData,
-        select: overlongData,
-        menu: overlongData,
-        home: overlongData,
-        play: overlongData,
-        pause: overlongData,
-        volumeUp: overlongData,
-        volumeDown: overlongData,
-        mute: overlongData,
-      },
+    const { contents: card } = renderLineCard({
+      type: "appletv_remote",
+      name: "d".repeat(301),
     });
     const actions = cardButtons(card.body).map((button) => button.action);
 

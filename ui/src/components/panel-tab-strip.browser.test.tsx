@@ -2,6 +2,7 @@ import { render } from "@solidjs/web";
 import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createTabFocus } from "../lib/tabs.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import {
   PanelTabStrip,
@@ -161,6 +162,7 @@ describe.skipIf(!hasBrowserLayout)("panel tab strip browser lifecycle", () => {
     );
     await expectControlledSelection(neighbor, "a");
     let container = host();
+    const focusOwner = createTabFocus();
     const close = createDeferred();
     let tabs = [tab("a"), tab("b")];
     const ariaControls =
@@ -179,7 +181,8 @@ describe.skipIf(!hasBrowserLayout)("panel tab strip browser lifecycle", () => {
         await update();
       }),
     );
-    const update = () => renderControlledStrip(container, tabs, { ariaControls, onClose });
+    const update = () =>
+      renderControlledStrip(container, tabs, { ariaControls, onClose, focusOwner });
     await update();
     await expectControlledSelection(container, "a");
     expect(renderedTabs(container).map((entry) => entry.getAttribute("aria-controls"))).toEqual(

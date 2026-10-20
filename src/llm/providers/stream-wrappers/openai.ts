@@ -36,7 +36,7 @@ import {
   resolveProviderRequestPolicyConfig,
 } from "../../../agents/provider-request-config.js";
 import type { StreamFn } from "../../../agents/runtime/index.js";
-import type { SandboxToolPolicy } from "../../../agents/sandbox.js";
+import type { SandboxToolPolicy } from "../../../agents/sandbox/types.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {

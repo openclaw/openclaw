@@ -568,6 +568,8 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
       configuredAgentDatabaseTargets: [],
       configuredAgentDatabaseCandidatePaths: [
         path.join(profileStateDir(), "agents", "main", "agent", "openclaw-agent.sqlite"),
+        path.join(profileStateDir(), "agents", "openclaw", "agent", "openclaw-agent.sqlite"),
+        path.join(profileStateDir(), "agents", "crestodian", "agent", "openclaw-agent.sqlite"),
       ],
     });
     expect(serviceStop).not.toHaveBeenCalled();

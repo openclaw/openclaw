@@ -1,5 +1,6 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { waitForControlUiGatewayReconnecting } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
   installMockGateway,
   pauseVirtualClock,
@@ -96,10 +97,23 @@ suite.define(() => {
       });
       await expectCount(rows).toBe(1);
       await gateway.setOnline(false);
-      await showText(current, "Connect to the Gateway to load active sessions.");
-      expect(await rows.count()).toBe(0);
+      await waitForControlUiGatewayReconnecting(page);
+      expect(await current.getByText("Check documentation links", { exact: true }).count()).toBe(1);
+      expect(await rows.count()).toBe(1);
+      expect(
+        await current
+          .getByText("Connect to the Gateway to load active sessions.", { exact: true })
+          .count(),
+      ).toBe(0);
       await gateway.setMethodResponse("sessions.list", listing([]));
+      const previousReads = await gateway.deferNext("sessions.list", { activeOnly: true });
       await gateway.setOnline(true);
+      await gateway.waitForRequest("sessions.list", {
+        after: previousReads,
+        match: { activeOnly: true },
+      });
+      expect(await current.getByText("Check documentation links", { exact: true }).count()).toBe(1);
+      await gateway.resolveDeferred("sessions.list", listing([]), { match: { activeOnly: true } });
       await showText(current, "No active sessions.");
       expect(await rows.count()).toBe(0);
       await page.clock.install();

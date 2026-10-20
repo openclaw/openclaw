@@ -16,7 +16,7 @@ type NodeInvokeCall = {
 
 let lastNodeInvokeCall: NodeInvokeCall | null = null;
 
-const callGateway = vi.fn(async (opts: NodeInvokeCall): Promise<unknown> => {
+async function gatewayResponse(opts: NodeInvokeCall): Promise<unknown> {
   if (opts.method === "node.list") {
     return { nodes: [{ nodeId: "mac-1" }] };
   }
@@ -25,14 +25,15 @@ const callGateway = vi.fn(async (opts: NodeInvokeCall): Promise<unknown> => {
     return { payload: { stdout: "", stderr: "", exitCode: 0, success: true, timedOut: false } };
   }
   return { ok: true };
-});
+}
+const callGateway = vi.fn(gatewayResponse);
 
 const mocks = await vi.hoisted(async () => {
   const { createCliRuntimeMock } = await import("./test-runtime-mock.js");
   return createCliRuntimeMock(vi);
 });
 
-const { runtimeErrors, defaultRuntime } = mocks;
+const { runtimeLogs, runtimeErrors, defaultRuntime } = mocks;
 const pairingList = (requestId: string) => ({
   pending: [{ requestId, nodeId: "n1", ts: Date.now() }],
   paired: [],
@@ -95,9 +96,53 @@ describe("nodes-cli coverage", () => {
   });
 
   beforeEach(() => {
+    runtimeLogs.length = 0;
     runtimeErrors.length = 0;
     vi.clearAllMocks();
+    callGateway.mockReset().mockImplementation(gatewayResponse);
     lastNodeInvokeCall = null;
+  });
+
+  it("escapes node mutation confirmations without changing request or JSON values", async () => {
+    const nodeId = "ios-node\u001b[2J\nnext";
+    const name = "Desk\u001b[2J\nrenamed\u0007";
+    callGateway.mockImplementation(async (request) =>
+      request.method === "node.list"
+        ? { nodes: [{ nodeId, displayName: "Desk node" }] }
+        : { ok: true, nodeId, displayName: name },
+    );
+
+    await parseNodes(["nodes", "rename", "--node", "Desk node", "--name", name]);
+
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({ method: "node.rename", params: { nodeId, displayName: name } }),
+    );
+    expect(runtimeLogs.join("\n")).toContain("node rename ok: ios-node\\nnext -> Desk\\nrenamed");
+    expect(runtimeLogs.join("\n")).not.toContain("\u0007");
+    expect(runtimeLogs.join("\n")).not.toContain("\u001b[2J");
+
+    await parseNodes(["nodes", "rename", "--node", "Desk node", "--name", name, "--json"]);
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith({ ok: true, nodeId, displayName: name });
+
+    await parseNodes(["nodes", "remove", "--node", "Desk node"]);
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({ method: "node.pair.remove", params: { nodeId } }),
+    );
+    expect(runtimeLogs.join("\n")).toContain("Removed paired node ios-node\\nnext");
+    expect(runtimeLogs.join("\n")).not.toContain("\u001b[2J");
+  });
+
+  it("escapes node mutation failure diagnostics", async () => {
+    callGateway
+      .mockResolvedValueOnce({ nodes: [{ nodeId: "ios-node" }] })
+      .mockRejectedValueOnce(new Error("unavailable\u001b]2;changed\u0007\rnext"));
+
+    await expectFailure(["nodes", "rename", "--node", "ios-node", "--name", "Desk"]);
+
+    expect(runtimeErrors).toEqual([
+      expect.stringContaining("nodes rename failed: unavailable\\rnext"),
+    ]);
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
   it("shows the registered pending command in node pairing help", () => {

@@ -8,6 +8,7 @@ import { authorizeGatewayMethod } from "../../../gateway/server-methods/method-a
 import { resolveInProcessGatewaySyntheticScopes } from "../../../gateway/server-plugin-in-process-scopes.js";
 import { createSyntheticPluginRuntimeClient } from "../../../gateway/server-plugin-runtime-client.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
+import { captureSessionTarget } from "../../../sessions/session-controller.target.js";
 import * as deliveryRuntime from "./subagent-announce-delivery.runtime.js";
 import { sendSubagentAnnounceDirectly } from "./subagent-announce-direct-delivery.js";
 import { setSubagentAnnounceDeliveryDepsForTest } from "./subagent-announce-overrides.test-support.js";
@@ -23,59 +24,32 @@ import {
 } from "./subagent-announce.requester-settle-dispatch.test-support.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "./subagent-announce.requester-settle-wake.js";
 
+type RouteCase = {
+  name: string;
+  channel?: string;
+  pause: boolean;
+  external: boolean;
+} & Partial<Record<"narrow" | "reset" | "replaced" | "mixed" | "legacy", boolean>>;
+
+function routeCase(name: string, overrides: Partial<Omit<RouteCase, "name">> = {}): RouteCase {
+  return { name, channel: "webchat", pause: false, external: false, ...overrides };
+}
+
 describe("requester settle routing and session authority", () => {
   useRequesterSettleDispatchFixture();
-  beforeEach(() => {
-    setRuntimeConfigSnapshot({});
-  });
-  afterEach(() => {
-    clearRuntimeConfigSnapshot();
-  });
+  beforeEach(() => setRuntimeConfigSnapshot({}));
+  afterEach(() => clearRuntimeConfigSnapshot());
 
   it.each([
-    { name: "WebChat settle", channel: "webchat", pause: false, external: false },
-    { name: "WebChat pause", channel: "webchat", pause: true, external: false },
-    { name: "explicit external completion", channel: "telegram", pause: false, external: true },
-    { name: "saved-route completion", channel: undefined, pause: false, external: true },
-    {
-      name: "visible failed child",
-      channel: "webchat",
-      pause: false,
-      external: false,
-      narrow: true,
-    },
-    {
-      name: "reset visible requester",
-      channel: "webchat",
-      pause: false,
-      external: false,
-      narrow: true,
-      reset: true,
-    },
-    {
-      name: "replaced visible requester",
-      channel: "webchat",
-      pause: false,
-      external: false,
-      narrow: true,
-      replaced: true,
-    },
-    {
-      name: "mixed visible requester",
-      channel: "webchat",
-      pause: false,
-      external: false,
-      narrow: true,
-      mixed: true,
-    },
-    {
-      name: "legacy visible requester",
-      channel: "webchat",
-      pause: false,
-      external: false,
-      narrow: true,
-      legacy: true,
-    },
+    routeCase("WebChat settle"),
+    routeCase("WebChat pause", { pause: true }),
+    routeCase("explicit external completion", { channel: "telegram", external: true }),
+    routeCase("saved-route completion", { channel: undefined, external: true }),
+    routeCase("visible failed child", { narrow: true }),
+    routeCase("reset visible requester", { narrow: true, reset: true }),
+    routeCase("replaced visible requester", { narrow: true, replaced: true }),
+    routeCase("mixed visible requester", { narrow: true, mixed: true }),
+    routeCase("legacy visible requester", { narrow: true, legacy: true }),
   ])("keeps $name on its owning route despite external session history", async (testCase) => {
     const requesterSessionKey = "agent:main:dashboard:completion-route";
     const requesterIdentity = {
@@ -121,10 +95,11 @@ describe("requester settle routing and session authority", () => {
       });
     }
     registryRead.listSubagentRunsForRequester.mockReturnValue(cohort);
-    loadRequester.mockReturnValue({
+    const requester: Awaited<ReturnType<typeof deliveryRuntime.loadRequesterSessionEntry>> = {
       cfg: {},
       canonicalKey: requesterSessionKey,
       agentId: "main",
+      storePath: "/synthetic/requester-settle.sqlite",
       entry: {
         ...requesterIdentity,
         updatedAt: 1,
@@ -135,12 +110,19 @@ describe("requester settle routing and session authority", () => {
           origin: { provider: "webchat", to: requesterSessionKey, surface: "webchat" },
         },
       },
-    });
+    };
+    loadRequester.mockResolvedValue(requester);
     setSubagentAnnounceDeliveryDepsForTest({
       getRuntimeConfig: () => ({}),
-      loadRequesterSessionEntry: loadRequester,
+      loadRequesterSessionEntry: () => requester,
       getRequesterSessionActivity: () => ({
         sessionId: requesterIdentity.sessionId,
+        target: captureSessionTarget({
+          storeScope: "/synthetic/requester-settle.sqlite",
+          sessionKey: requesterSessionKey,
+          agentId: requester.agentId,
+          incarnation: requesterIdentity.sessionId,
+        }),
         isActive: false,
       }),
     });

@@ -211,6 +211,7 @@ describe("CI changed Node test plan", () => {
         "src/agents/command/delivery.settle-reset.integration.test.ts",
         "src/auto-reply/reply/commands-acp.owner.test.ts",
         "src/auto-reply/reply/commands-allowlist.owner.test.ts",
+        "src/gateway/operator-run-recovery.test.ts",
         "src/gateway/server.mcp-session-owner.test.ts",
       ],
       areas: ["src/channels"],
@@ -840,8 +841,13 @@ describe("CI changed Node test plan", () => {
           "selected commands job",
         );
         expect(selectedJob.runner).toBe(fullJob.runner);
-        expect(selectedJob.env).toEqual(fullJob.env);
-        expect(selectedJob.planConcurrency).toBe(fullJob.planConcurrency);
+        const singleton = selectedJob.groups?.length === 1 && fullJob.planConcurrency === 2;
+        expect(selectedJob.env).toEqual(
+          singleton && owner.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined
+            ? { ...fullJob.env, OPENCLAW_VITEST_MAX_WORKERS: "2" }
+            : fullJob.env,
+        );
+        expect(selectedJob.planConcurrency).toBe(singleton ? 1 : fullJob.planConcurrency);
         expect(selectedJob.pretestBuildMode).toBe(fullJob.pretestBuildMode);
         expect(selectedJob.timeoutMinutes).toBe(fullJob.timeoutMinutes);
       }

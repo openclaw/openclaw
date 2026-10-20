@@ -1,4 +1,3 @@
-// Gateway run option resolution and local server startup command implementation.
 import { asOptionalObjectRecord } from "@openclaw/normalization-core";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import {
@@ -217,11 +216,11 @@ async function readGatewayStartupConfigWithShellEnv(params: {
   const plan = await resolveGatewayRunShellEnvFallbackPlan(
     startupConfig.snapshot.valid ? startupConfig.cfg : {},
   );
-  if (!plan.enabled) {
-    return { ...startupConfig, lowerPrecedenceEnv: {} };
-  }
   // Startup uses one shell-env plan; edits during this read take effect on the next start.
-  const lowerPrecedenceEnv = await loadGatewayRunShellEnvFallback(plan);
+  const lowerPrecedenceEnv = plan.enabled ? await loadGatewayRunShellEnvFallback(plan) : {};
+  if (Object.keys(lowerPrecedenceEnv).length === 0) {
+    return { ...startupConfig, lowerPrecedenceEnv };
+  }
   return {
     ...(await readGatewayStartupConfig(params.startupTrace, { lowerPrecedenceEnv })),
     lowerPrecedenceEnv,

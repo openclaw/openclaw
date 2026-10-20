@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { on, once } from "node:events";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
-import type { Profiler } from "node:inspector";
+import type { HeapProfiler, Profiler } from "node:inspector";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,6 +13,7 @@ import {
   readGatewayCpuUsage,
   readGatewayHeapProfile,
   readGatewayResources,
+  startGatewayDiagnostics,
 } from "../../scripts/lib/gateway-bench-profile.js";
 import { requireNodeTool } from "../helpers/node-toolchain.js";
 
@@ -94,6 +95,10 @@ it("measures fixed CPU work including a retired Worker without starting the insp
   const released = await changeTimer("timer-stop");
   expect(held.activeResources.Timeout).toBe((resources.activeResources.Timeout ?? 0) + 1);
   expect(released.activeResources.Timeout ?? 0).toBe(resources.activeResources.Timeout ?? 0);
+  const stopDiagnostics = await startGatewayDiagnostics(child);
+  await expect(startGatewayDiagnostics(child)).rejects.toThrow("already started");
+  const stopBurstDiagnostics = await startGatewayDiagnostics(child, "burst");
+  await expect(startGatewayDiagnostics(child, "burst")).rejects.toThrow("already started");
   const before = await readGatewayCpuUsage(child);
   const mainResult = await sendMessage(child, { run: "main" });
   expect(mainResult, stderr()).toMatchObject({ completed: 1, checksum: expect.any(Number) });
@@ -107,6 +112,8 @@ it("measures fixed CPU work including a retired Worker without starting the insp
   expect(mainUsage.mainThread.totalMs).toBeLessThan(
     (before.mainThread.user + before.mainThread.system) / 1_000,
   );
+  const burstDiagnostics = await stopBurstDiagnostics();
+  await expect(stopBurstDiagnostics()).rejects.toThrow("have not started");
 
   const workerResult = await sendMessage(child, { run: "worker" });
   expect(workerResult, stderr()).toMatchObject({
@@ -118,6 +125,15 @@ it("measures fixed CPU work including a retired Worker without starting the insp
   const workerUsage = measureGatewayCpuUsage(afterMain, afterWorker);
   expect(workerUsage.process.totalMs).toBeGreaterThan(workerUsage.mainThread.totalMs);
   expect(workerUsage.process.totalMs).toBeGreaterThanOrEqual(workerResult.workerCpuMicros / 1_000);
+  const diagnostics = await stopDiagnostics();
+  expect(burstDiagnostics.startedAtEpochMs).toBeGreaterThan(diagnostics.startedAtEpochMs);
+  expect(burstDiagnostics.endedAtEpochMs).toBeLessThan(diagnostics.endedAtEpochMs);
+  expect(diagnostics.eventLoopDelay.count).toBeGreaterThan(0);
+  expect(diagnostics.eventLoopDelay.maxMs).toBeGreaterThan(0);
+  expect(diagnostics.endedAtEpochMs).toBeGreaterThan(diagnostics.startedAtEpochMs);
+  await expect(stopDiagnostics()).rejects.toThrow("have not started");
+  const stopAgain = await startGatewayDiagnostics(child);
+  expect((await stopAgain()).collectionErrors).toBe(0);
 }, 30_000);
 
 it.each(["exit", "disconnect"])("rejects a CPU sample when the child %ss", async (action) => {
@@ -303,7 +319,7 @@ it.each([
   30_000,
 );
 
-it("measures discarded allocation churn and GC per completed operation, and cleans up failures", async () => {
+it("separates discarded allocation churn from retained objects and cleans up failed captures", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "gateway-allocation-"));
   const { child } = spawnFixture(
     [
@@ -313,6 +329,10 @@ it("measures discarded allocation churn and GC per completed operation, and clea
       `
     await import(${JSON.stringify(preloadUrl)});
     process.channel.ref();
+    let retainedRows;
+    function retainedAllocation() {
+      return Array.from({ length: 100000 }, (_, i) => ({ i, values: [i, i + 1] }));
+    }
     function discardedAllocation() {
       let checksum = 0;
       for (let batch = 0; batch < 10; batch++) {
@@ -324,10 +344,11 @@ it("measures discarded allocation churn and GC per completed operation, and clea
     process.on('message', async message => {
       if (!message.run) return;
       for (let operation = 0; operation < 4; operation++) discardedAllocation();
+      if (message.retain) retainedRows = retainedAllocation();
       globalThis.gc();
       await new Promise(setImmediate);
       await new Promise(setImmediate);
-      process.send({ completed: 4 });
+      process.send({ completed: 4, ...(message.retain ? { retained: retainedRows.length } : {}) });
     });
     process.send({ ready: true });
   `,
@@ -342,6 +363,7 @@ it("measures discarded allocation churn and GC per completed operation, and clea
       throw new Error("workload failed");
     }),
   ).rejects.toThrow("workload failed");
+  const stopDiagnostics = await startGatewayDiagnostics(child);
   const result = await measure("completed", 4, async () => {
     expect(await sendMessage(child, { run: true })).toEqual({ completed: 4 });
   });
@@ -353,9 +375,40 @@ it("measures discarded allocation churn and GC per completed operation, and clea
   expect(result.estimatedAllocatedBytesPerOperation).toBeGreaterThan(1_000_000);
   expect(result.gcMsPerOperation).toBeGreaterThan(0);
   expect(result.gcCount).toBeGreaterThan(0);
+  const diagnostics = await stopDiagnostics();
+  expect(diagnostics.gc.durationMs?.total).toBeGreaterThan(0);
+  expect(diagnostics.collectionErrors).toBe(0);
   expect(
     result.topAllocationSites.some((site) =>
       site.stack.some((frame) => frame.startsWith("discardedAllocation (")),
     ),
   ).toBe(true);
+
+  const retainedPath = path.join(directory, "retained");
+  await controlGatewayProfile(child, "heap", "start", retainedPath, {
+    includeCollectedObjects: false,
+  });
+  expect(await sendMessage(child, { run: true, retain: true })).toEqual({
+    completed: 4,
+    retained: 100000,
+  });
+  await readGatewayResources(child, { collectGarbage: true });
+  await controlGatewayProfile(child, "heap", "stop", retainedPath);
+  const retained = await readJson<HeapProfiler.SamplingHeapProfile>(retainedPath);
+  const bytesUnder = (
+    node: HeapProfiler.SamplingHeapProfileNode,
+    functionName: string,
+    inside = false,
+  ): number => {
+    const matches = inside || node.callFrame.functionName === functionName;
+    return (
+      (matches ? node.selfSize : 0) +
+      node.children.reduce(
+        (total, childNode) => total + bytesUnder(childNode, functionName, matches),
+        0,
+      )
+    );
+  };
+  expect(bytesUnder(retained.head, "retainedAllocation")).toBeGreaterThan(1_000_000);
+  expect(bytesUnder(retained.head, "discardedAllocation")).toBe(0);
 });

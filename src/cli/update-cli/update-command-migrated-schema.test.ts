@@ -25,8 +25,8 @@ import { prepareCandidateAuthorityRuntime } from "./update-command-candidate-aut
 import { inspectActivatedUpdateState } from "./update-command-migrated.js";
 
 // The retained updater reads through the real candidate's newer schema contract.
-vi.mock("../../state/openclaw-state-db-contract.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../state/openclaw-state-db-contract.js")>();
+vi.mock("../../state/openclaw-schema-versions.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../state/openclaw-schema-versions.js")>();
   return { ...actual, OPENCLAW_STATE_SCHEMA_VERSION: actual.OPENCLAW_STATE_SCHEMA_VERSION - 1 };
 });
 

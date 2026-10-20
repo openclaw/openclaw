@@ -1,7 +1,7 @@
 import { hostname } from "node:os";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { EngineConnection } from "../infra/sql-connection.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
@@ -63,8 +63,6 @@ function stageLeaseExpiryObservation(
   const value = BigInt(expiresAt ?? 0);
   if (
     !stageSqliteTransactionState(db, {
-      stage() {},
-      rollback() {},
       commit() {
         publishLeaseExpiryObservation(shared, value);
       },
@@ -211,6 +209,8 @@ export function executeOpenClawStateLeaseCommand(
     publishLeaseExpiryObservation(shared, BigInt(expiresAt));
     return expiresAt;
   }
+  const singleStatement =
+    command.type === "stateLease.release" && !isPostgresSqlConnection(database.db);
   const shared =
     command.type === "stateLease.renew"
       ? takeLeaseExpiryObservation(command.input.identity)
@@ -248,12 +248,19 @@ export function executeOpenClawStateLeaseCommand(
         return expiresAt;
       }
       const facts = { kind: "state-lease-release", identity: command.input.identity };
-      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts });
+      requestSqliteWorkerOperationAdmission({
+        stage: singleStatement ? "commit" : "transaction",
+        facts,
+      });
       assertExistingDatabaseIdentity(database.path, command.input.databaseIdentity);
       releaseOpenClawStateLeaseInTransaction(db, command.input.identity);
-      requestSqliteWorkerOperationAdmission({ stage: "commit", facts });
-      assertExistingDatabaseIdentity(database.path, command.input.databaseIdentity);
+      if (!singleStatement) {
+        requestSqliteWorkerOperationAdmission({ stage: "commit", facts });
+        assertExistingDatabaseIdentity(database.path, command.input.databaseIdentity);
+      }
       return undefined;
     },
+    0,
+    singleStatement ? true : undefined,
   );
 }

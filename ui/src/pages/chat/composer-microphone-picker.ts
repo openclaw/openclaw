@@ -24,6 +24,7 @@ export class ComposerMicrophoneOwner extends EventTarget {
   private catalogConnected = false;
   private catalogSessionKey: string | undefined;
   private catalogRequest = 0;
+  private stopFocus: (() => void) | undefined;
   realtimeStatus: ComposerTalkCapabilityStatus = "unknown";
   dictationStatus: ComposerTalkCapabilityStatus = "unknown";
   // Terminal login changes credentials without replacing the Gateway connection.
@@ -43,7 +44,8 @@ export class ComposerMicrophoneOwner extends EventTarget {
     ) {
       return;
     }
-    window.removeEventListener("focus", this.refreshOnFocus);
+    this.stopFocus?.();
+    this.stopFocus = undefined;
     this.catalogClient = client;
     this.catalogConnected = catalogConnected;
     this.catalogSessionKey = sessionKey;
@@ -53,7 +55,7 @@ export class ComposerMicrophoneOwner extends EventTarget {
     if (!client || !catalogConnected) {
       return;
     }
-    window.addEventListener("focus", this.refreshOnFocus);
+    this.stopFocus = listen(window, "focus", this.refreshOnFocus);
     void this.loadCatalog();
   }
 

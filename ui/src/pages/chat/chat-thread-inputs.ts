@@ -45,12 +45,7 @@ export function placeChatInputs(
   props: ChatInputPlacementProps,
   orderState: ChatInputOrderState,
   currentRunId: string | null,
-): {
-  pendingKeys: Set<string>;
-  historicalKeys: Set<string>;
-  hiddenKeys: Set<string>;
-  activeInputKey?: string;
-} {
+) {
   const orderedQueue = (props.queue ?? []).toSorted(compareChatQueueOrder);
   const { queue, pendingInputs } = selectChatInputDisplay(
     history,
@@ -78,7 +73,6 @@ export function placeChatInputs(
     const inputItems = buildPendingInputItems(
       [input],
       undefined,
-      orderedQueue,
       props.workspaceSyncPendingRunIds,
       props.workerSetupPending,
       props.messageRecovery,
@@ -90,8 +84,9 @@ export function placeChatInputs(
     markSearchVisibility(input.message, inputItems);
     if (input.state === "queued") {
       blocks.push({ items: inputItems, runId: input.runId });
-      // The active run owns this floor even when a fresh client has no local send.
-      if (currentRunId && input.runId === currentRunId) {
+      // On an empty transcript, the first accepted input owns the startup floor
+      // even before execution identity arrives. Later inputs remain ceilings.
+      if (currentRunId ? input.runId === currentRunId : history.length === 0 && !activeInputKey) {
         activeInputKey = first.key;
       }
       continue;

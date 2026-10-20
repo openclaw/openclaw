@@ -20,10 +20,9 @@ import {
 import { withEnvAsync } from "../test-utils/env.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { cleanupManagedOutgoingMediaRecords } from "./managed-image-attachments.js";
+import { createFixture } from "./managed-image-attachments.test-support.js";
 import {
   claimManagedImageRecordCleanupIfCurrent,
-  insertManagedImageRecord,
-  MANAGED_OUTGOING_ORIGINALS_SUBDIR,
   readManagedImageRecord,
   type ManagedImageRecord,
 } from "./managed-image-record-store.js";
@@ -37,35 +36,27 @@ let stateDir: string;
 
 async function seedManagedRecord(
   attachmentId: string,
-  overrides: Partial<Omit<ManagedImageRecord, "attachmentId" | "original">> = {},
+  overrides: Partial<
+    Pick<ManagedImageRecord, "agentId" | "sessionKey" | "messageId" | "alt" | "createdAt">
+  > = {},
 ) {
-  const filename = `${attachmentId}-cat-full.png`;
-  const originalPath = path.join(stateDir, "media", MANAGED_OUTGOING_ORIGINALS_SUBDIR, filename);
-  fs.mkdirSync(path.dirname(originalPath), { recursive: true });
-  fs.writeFileSync(originalPath, "original-image");
-  await insertManagedImageRecord(
-    {
-      attachmentId,
-      sessionKey: "agent:main:main",
-      agentId: "main",
-      messageId: "msg-1",
-      createdAt: new Date().toISOString(),
-      alt: "Cat",
-      ...overrides,
-      original: {
-        mediaRoot: path.join(stateDir, "media"),
-        mediaId: filename,
-        mediaSubdir: MANAGED_OUTGOING_ORIGINALS_SUBDIR,
-        contentType: "image/png",
-        width: 1024,
-        height: 768,
-        sizeBytes: "original-image".length,
-        filename: "cat.png",
-      },
-    },
-    stateDir,
-  );
+  const { originalPath } = await createFixture(stateDir, {
+    attachmentId,
+    agentId: "main",
+    ...overrides,
+  });
   return originalPath;
+}
+
+function cleanup(
+  options: Omit<
+    NonNullable<Parameters<typeof cleanupManagedOutgoingMediaRecords>[0]>,
+    "stateDir"
+  > = {},
+) {
+  return withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, () =>
+    cleanupManagedOutgoingMediaRecords({ stateDir, ...options }),
+  );
 }
 
 function dropSessionNodes() {
@@ -98,9 +89,7 @@ describe("cleanupManagedOutgoingMediaRecords availability fail-safe", () => {
     const originalPath = await seedManagedRecord("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
     dropSessionNodes();
 
-    const result = await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, () =>
-      cleanupManagedOutgoingMediaRecords({ stateDir }),
-    );
+    const result = await cleanup();
 
     expect(result.deletedRecordCount).toBe(0);
     expect(
@@ -114,9 +103,7 @@ describe("cleanupManagedOutgoingMediaRecords availability fail-safe", () => {
     openOpenClawAgentDatabase(options);
     const originalPath = await seedManagedRecord("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
 
-    const result = await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, () =>
-      cleanupManagedOutgoingMediaRecords({ stateDir }),
-    );
+    const result = await cleanup();
 
     expect(result.deletedRecordCount).toBe(1);
     expect(
@@ -136,11 +123,7 @@ describe("cleanupManagedOutgoingMediaRecords availability fail-safe", () => {
       });
       database.db.exec(`UPDATE managed_outgoing_image_records SET ${column} = 9007199254740992`);
 
-      await expect(
-        withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, () =>
-          cleanupManagedOutgoingMediaRecords({ stateDir }),
-        ),
-      ).rejects.toBeInstanceOf(RangeError);
+      await expect(cleanup()).rejects.toBeInstanceOf(RangeError);
       expect(fs.readFileSync(originalPath, "utf8")).toBe("original-image");
       expect(fs.readFileSync(orphanPath, "utf8")).toBe("orphan-image");
       expect(
@@ -196,11 +179,11 @@ describe("cleanupManagedOutgoingMediaRecords availability fail-safe", () => {
           : null,
     );
     try {
-      await expect(
-        withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, () =>
-          cleanupManagedOutgoingMediaRecords({ stateDir, sessionKey: "agent:main:main" }),
-        ),
-      ).resolves.toEqual({ deletedRecordCount: 1, deletedFileCount: 2, retainedCount: 3 });
+      await expect(cleanup({ sessionKey: "agent:main:main" })).resolves.toEqual({
+        deletedRecordCount: 1,
+        deletedFileCount: 2,
+        retainedCount: 3,
+      });
       expect(counter.counts.records).toBe(0);
       expect(counter.rowCounts.records).toBe(0);
       expect(counter.textBytes.records).toBe(0);
@@ -253,17 +236,14 @@ describe("cleanupManagedOutgoingMediaRecords availability fail-safe", () => {
       });
       try {
         await expect(
-          withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, () =>
-            cleanupManagedOutgoingMediaRecords({
-              stateDir,
-              hasActiveSessionRun: (sessionKey, agentId) => {
-                expect(sessionKey).toBe("agent:main:main");
-                expect(agentId).toBe("main");
-                events.push("active-run");
-                return true;
-              },
-            }),
-          ),
+          cleanup({
+            hasActiveSessionRun: (sessionKey, agentId) => {
+              expect(sessionKey).toBe("agent:main:main");
+              expect(agentId).toBe("main");
+              events.push("active-run");
+              return true;
+            },
+          }),
         ).rejects.toBeInstanceOf(RangeError);
         expect(events).toEqual(["active-run", "legacy-directory"]);
         expect(fs.readFileSync(originalPath, "utf8")).toBe("original-image");

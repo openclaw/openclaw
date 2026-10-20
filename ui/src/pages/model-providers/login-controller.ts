@@ -42,8 +42,8 @@ type LoginOptions = {
 };
 
 export function createModelProviderLogin(options: LoginOptions) {
-  const listeners = new Set<() => void>();
-  const notify = () => listeners.forEach((listener) => listener());
+  let publish: (() => void) | undefined;
+  const notify = () => publish?.();
   const [query, setQuery] = createSignal("");
   const [providerSelection, setProvider] = createSignal("");
   let currentPicker:
@@ -58,8 +58,10 @@ export function createModelProviderLogin(options: LoginOptions) {
       ))
     | null = null;
   let inventoryRequest: AbortController | undefined;
+  let startChatRequest: AbortController | undefined;
   let searchInput: HTMLInputElement | undefined;
-  let methodChoice: HTMLButtonElement | undefined;
+  let methodChoices: HTMLDivElement | undefined;
+  let apiKeyChoice: HTMLButtonElement | undefined;
   let focusPicker: "search" | "method" | null = null;
   let generation = 0;
   let mutationActive = false;
@@ -100,18 +102,10 @@ export function createModelProviderLogin(options: LoginOptions) {
     },
   });
   const view = projectSource(null, {
-    read: () => ({
-      picker: currentPicker,
-      mutationActive,
-      refreshWarning,
-      message,
-      loginMode,
-      completionModel,
-      startingChat,
-    }),
+    read: () => null,
     subscribe: (_, listener) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
+      publish = listener;
+      return () => (publish = undefined);
     },
     equality: "revision",
   });
@@ -324,12 +318,15 @@ export function createModelProviderLogin(options: LoginOptions) {
 
   function reset(): void {
     generation += 1;
+    startChatRequest?.abort();
+    startChatRequest = undefined;
     inventoryRequest?.abort();
     inventoryRequest = undefined;
     currentPicker = null;
     focusPicker = null;
     searchInput = undefined;
-    methodChoice = undefined;
+    methodChoices = undefined;
+    apiKeyChoice = undefined;
     mutationActive = false;
     refreshWarning = null;
     message = undefined;
@@ -347,28 +344,22 @@ export function createModelProviderLogin(options: LoginOptions) {
 
   function focusPickerTarget() {
     if (focusPicker && currentPicker) {
-      const target = focusPicker === "search" ? searchInput : methodChoice;
-      if (target) {
+      // The method group contains only current choice buttons; quick-key-only groups use the fallback.
+      const target =
+        focusPicker === "search" ? searchInput : (methodChoices?.firstElementChild ?? apiKeyChoice);
+      if (target instanceof HTMLElement) {
         focusPicker = null;
         target.focus({ preventScroll: true });
       }
     }
   }
   onCleanup(() => {
-    listeners.clear();
+    publish = undefined;
     generation += 1;
+    startChatRequest?.abort();
     inventoryRequest?.abort();
     completionCatalog.clear();
   });
-
-  function setSearchInput(element: HTMLInputElement): void {
-    searchInput = element;
-  }
-
-  function setMethodChoice(element: HTMLButtonElement): void {
-    methodChoice = element;
-    focusPickerTarget();
-  }
 
   function wizardViewProps() {
     view.read();
@@ -461,7 +452,6 @@ export function createModelProviderLogin(options: LoginOptions) {
         if (!canSelect()) {
           return;
         }
-        methodChoice = undefined;
         setProvider(providerId);
         focusPicker = "method";
         notify();
@@ -615,14 +605,19 @@ export function createModelProviderLogin(options: LoginOptions) {
     }
     const currentGeneration = generation;
     const client = context.gateway.snapshot.client;
+    const request = new AbortController();
+    startChatRequest = request;
     startingChat = true;
     notify();
     try {
-      const key = await context.sessions.create({
-        agentId,
-        model: `${model.provider}/${model.id}`,
-        ...(model.agentRuntime ? { agentRuntime: model.agentRuntime.id } : {}),
-      });
+      const key = await context.sessions.create(
+        {
+          agentId,
+          model: `${model.provider}/${model.id}`,
+          ...(model.agentRuntime ? { agentRuntime: model.agentRuntime.id } : {}),
+        },
+        { signal: request.signal },
+      );
       if (currentGeneration !== generation || context.gateway.snapshot.client !== client) {
         return;
       }
@@ -637,6 +632,9 @@ export function createModelProviderLogin(options: LoginOptions) {
         refreshWarning = formatUiError(error, t("modelProviders.requestFailed"));
       }
     } finally {
+      if (startChatRequest === request) {
+        startChatRequest = undefined;
+      }
       if (currentGeneration === generation) {
         startingChat = false;
         notify();
@@ -719,8 +717,15 @@ export function createModelProviderLogin(options: LoginOptions) {
     },
     recoveryView,
     pickerView,
-    setSearchInput,
-    setMethodChoice,
+    setSearchInput(element: HTMLInputElement) {
+      searchInput = element;
+    },
+    setMethodChoices(element: HTMLDivElement) {
+      methodChoices = element;
+    },
+    setApiKeyChoice(element: HTMLButtonElement) {
+      apiKeyChoice = element;
+    },
     connectProvider,
     open,
     invalidateInventory,

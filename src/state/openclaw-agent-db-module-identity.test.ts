@@ -116,7 +116,7 @@ it("shares agent ownership, worker publication, reclamation queues, and commit o
           const nativeSdk = await import(${JSON.stringify(sdkUrl.href)});
           const canonical = host.openOpenClawAgentDatabase(options);
           const nativeBorrow = nativeSdk.borrowOpenClawAgentDatabase(options);
-          assert.equal(nativeBorrow.db === canonical.db, true, "native SDK control shares host owner");
+          assert.equal(nativeBorrow.db, canonical.db);
           nativeBorrow.release();
           assert.equal(physicalOpens, 1);
           assert.equal(integrityScans, 1);
@@ -125,12 +125,11 @@ it("shares agent ownership, worker publication, reclamation queues, and commit o
             modulePath, rootDir: root, importerUrl: import.meta.url, tryNative: false,
             aliasMap: { "openclaw/plugin-sdk/sqlite-runtime": ${JSON.stringify(fileURLToPath(sdkUrl))} },
           })(modulePath);
-          assert.equal(plugin.openOpenClawAgentDatabase, nativeSdk.openOpenClawAgentDatabase,
-            "plugin transformation retains the native SDK owner");
+          assert.equal(plugin.openOpenClawAgentDatabase, nativeSdk.openOpenClawAgentDatabase);
           borrowed = plugin.borrowOpenClawAgentDatabase(options);
           assert.equal(physicalOpens, 1, "plugin borrowing must not physically reopen the agent database");
           assert.equal(integrityScans, 1, "plugin borrowing must not repeat integrity validation");
-          assert.equal(borrowed.db === canonical.db, true, "plugin SDK shares the exact owner connection");
+          assert.equal(borrowed.db, canonical.db);
           for (const name of ["runExclusiveSqliteTranscriptArchiveWorker", "runExclusiveSqliteSessionReclamation"]) {
             let release;
             const gate = new Promise(resolve => { release = resolve; });
@@ -147,8 +146,7 @@ it("shares agent ownership, worker publication, reclamation queues, and commit o
             }
             assert.deepEqual(order, ["host", "plugin"]);
           }
-          assert.equal(nativeSdk.getNodeSqliteKysely(canonical.db) === plugin.getNodeSqliteKysely(canonical.db), true,
-            "native and plugin queries share the connection cache lifecycle");
+          assert.equal(nativeSdk.getNodeSqliteKysely(canonical.db), plugin.getNodeSqliteKysely(canonical.db));
 
           const db = canonical.db;
           db.exec("CREATE TABLE module_identity_entries (id TEXT PRIMARY KEY)");
@@ -157,8 +155,7 @@ it("shares agent ownership, worker publication, reclamation queues, and commit o
           for (const sdk of [nativeSdk, nativeSdk, plugin, plugin]) {
             assert.deepEqual(sdk.executeSqliteQuerySync(db, query).rows, []);
           }
-          assert.equal(db.queryPrepares - preparesBefore, 2,
-            "plugin queries reuse the owner's admitted statement cache");
+          assert.equal(db.queryPrepares - preparesBefore, 2);
           const rows = () => db.prepare("SELECT id FROM module_identity_entries ORDER BY id").all().map(row => row.id);
           const insert = id => db.prepare("INSERT INTO module_identity_entries VALUES (?)").run(id);
           const publications = [];
@@ -167,31 +164,25 @@ it("shares agent ownership, worker publication, reclamation queues, and commit o
             assert.deepEqual(rows(), ["committed", "outer"]);
             publications.push(id);
           };
-          host.runOpenClawAgentWriteTransaction(() => {
-            insert("outer");
-            assert.equal(plugin.deferOpenClawAgentPostCommitPublication(canonical, () => publish("outer")), true);
-            plugin.runOpenClawAgentWriteTransaction(() => {
-              insert("committed");
-              assert.equal(host.deferOpenClawAgentPostCommitPublication(canonical, () => publish("committed")), true);
-              assert.throws(() => host.runOpenClawAgentWriteTransaction(() => {
-                insert("discarded");
-                assert.equal(plugin.deferOpenClawAgentPostCommitPublication(canonical, () => publish("discarded")), true);
-                throw new Error("inner rollback");
-              }, options), /inner rollback/);
-            }, options);
-            assert.deepEqual(publications, [], "successful savepoints do not publish early");
+          const write = (writer, observer, id, run) => writer.runOpenClawAgentWriteTransaction(() => {
+            insert(id);
+            assert.equal(observer.deferOpenClawAgentPostCommitPublication(canonical, () => publish(id)), true);
+            run();
           }, options);
-          assert.deepEqual(rows(), ["committed", "outer"]);
-          assert.deepEqual(publications, ["outer", "committed"]);
+          write(host, plugin, "outer", () => {
+            write(plugin, host, "committed", () => {
+              assert.throws(() => write(host, plugin, "discarded", () => {
+                throw new Error("inner rollback");
+              }), /inner rollback/);
+            });
+            assert.deepEqual(publications, [], "successful savepoints do not publish early");
+          });
+          assert.deepEqual([rows(), publications], [["committed", "outer"], ["outer", "committed"]]);
           assert.throws(() => plugin.runOpenClawAgentWriteTransaction(() => {
-            host.runOpenClawAgentWriteTransaction(() => {
-              insert("rolled-back-outer");
-              assert.equal(host.deferOpenClawAgentPostCommitPublication(canonical, () => publish("rolled-back-outer")), true);
-            }, options);
+            write(host, host, "rolled-back-outer", () => {});
             throw new Error("outer rollback");
           }, options), /outer rollback/);
-          assert.deepEqual(rows(), ["committed", "outer"]);
-          assert.deepEqual(publications, ["outer", "committed"]);
+          assert.deepEqual([rows(), publications], [["committed", "outer"], ["outer", "committed"]]);
 
           assert.deepEqual(host.listOpenClawRegisteredAgentDatabases().map(entry => entry.agentId), ["main"]);
           const registryToken = host.readOpenClawAgentDatabaseRegistryToken();
@@ -200,10 +191,9 @@ it("shares agent ownership, worker publication, reclamation queues, and commit o
             path: path.join(process.env.OPENCLAW_STATE_DIR, "agents", "hot-created", "agent", "openclaw-agent.sqlite"),
           };
           const hotBorrow = plugin.borrowOpenClawAgentDatabase(hotOptions);
-          assert.equal(host.openOpenClawAgentDatabase(hotOptions).db === hotBorrow.db, true);
+          assert.equal(host.openOpenClawAgentDatabase(hotOptions).db, hotBorrow.db);
           hotBorrow.release();
-          assert.notEqual(host.readOpenClawAgentDatabaseRegistryToken(), registryToken,
-            "plugin registration invalidates native discovery");
+          assert.notEqual(host.readOpenClawAgentDatabaseRegistryToken(), registryToken);
           assert.deepEqual(host.listOpenClawRegisteredAgentDatabases().map(entry => entry.agentId), ["hot-created", "main"]);
 
           borrowed.release();
@@ -221,8 +211,7 @@ it("shares agent ownership, worker publication, reclamation queues, and commit o
             moduleUrl: new URL(${JSON.stringify(publicationUrl.href)}),
             input: undefined,
           };
-          assert.equal(plugin.openOpenClawAgentSqliteWorkerStore, nativeSdk.openOpenClawAgentSqliteWorkerStore,
-            "plugin publication clients retain the native SDK owner");
+          assert.equal(plugin.openOpenClawAgentSqliteWorkerStore, nativeSdk.openOpenClawAgentSqliteWorkerStore);
           for (const sdk of [nativeSdk, plugin]) {
             publicationClients.push(await sdk.openOpenClawAgentSqliteWorkerStore(options, borrowed.db, publicationModule));
           }
@@ -232,11 +221,9 @@ it("shares agent ownership, worker publication, reclamation queues, and commit o
           );
           const nativeThread = await append(publicationClients[0], "native");
           assert.ok(nativeThread > 0, "publication executes on its native Worker");
-          assert.equal(await append(publicationClients[1], "transformed"), nativeThread,
-            "host and plugin clients borrow the same canonical native execution owner");
+          assert.equal(await append(publicationClients[1], "transformed"), nativeThread);
           await publicationClients[0].close();
-          assert.equal(await append(publicationClients[1], "after-native-client-close"), nativeThread,
-            "closing the host publication client preserves the plugin client's owner");
+          assert.equal(await append(publicationClients[1], "after-native-client-close"), nativeThread);
           assert.deepEqual(
             publicationDatabase.db.prepare("SELECT value FROM worker_proof ORDER BY rowid").all().map(row => row.value),
             ["native", "transformed", "after-native-client-close"],

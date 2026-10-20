@@ -3,6 +3,7 @@ import path from "node:path";
 import { createAssistantMessageEventStream, type Message } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { summarizeOpenAITransportError } from "../../../../packages/ai/src/transports/openai-responses-debug.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import {
@@ -152,13 +153,18 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
           prompt: "reply",
           timeoutMs: 30_000,
         });
-        fixture.input.attempt.sessionTarget = { ...target, ...writer };
+        const selected = {
+          ...target,
+          expectedLifecycleRevision: writer?.expectedLifecycleRevision,
+          expectedWriterRunId: writer?.expectedWriterRunId,
+        };
+        fixture.input.attempt.sessionTarget = selected;
         const transcript = await prepareEmbeddedAttemptTranscriptLifecycle({
           attempt: fixture.input.attempt,
           externalAbortController: { arm: () => {}, throwIfFiredAfterPrepCleanup: async () => {} },
         });
         fixture.input.sessionLock = transcript;
-        const manager = SessionManager.open({ ...target, ...writer });
+        const manager = SessionManager.open(selected);
         const fetchImpl = vi.fn(async () => new Response("ok"));
         fixture.activeSession.prompt.mockImplementation(async () => {
           const requestAuthority = captureGuardedFetchRequestAuthority();
@@ -242,7 +248,11 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
         prompt: "reply",
         timeoutMs: 30_000,
       });
-      const selected = { ...target, ...writer };
+      const selected = {
+        ...target,
+        expectedLifecycleRevision: writer?.expectedLifecycleRevision,
+        expectedWriterRunId: writer?.expectedWriterRunId,
+      };
       fixture.input.attempt.sessionTarget = selected;
       const transcript = await prepareEmbeddedAttemptTranscriptLifecycle({
         attempt: fixture.input.attempt,
@@ -796,6 +806,30 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("preserves session watchdog attribution through model-call recovery", async () => {
+    const fixture = await createFixture({ exerciseTerminalMerges: false });
+    mocks.installStreamGuards.mockImplementationOnce(() => ({
+      onModelRequest: vi.fn(),
+      onModelUsage: vi.fn(),
+      getPromptCacheObservation: vi.fn(),
+      isModelCallActive: () => true,
+    }));
+    fixture.runAbort.mockImplementation((_timeout, reason) =>
+      fixture.input.runAbortController.abort(reason),
+    );
+    await runEmbeddedAttemptExecutionPhase(fixture.input);
+
+    const streamInput = mocks.prepareStream.mock.calls[0]?.[0];
+    expect(streamInput.recoverStalledModelCall()).toBe(true);
+    expect(
+      summarizeOpenAITransportError(
+        new Error("stream aborted"),
+        fixture.input.runAbortController.signal,
+      ),
+    ).toContain("abortReason=session_watchdog");
+    expect(fixture.state.terminal).toMatchObject({ kind: "timeout", source: "idle" });
   });
 
   it("attributes an idle timeout during authoritative compaction to compaction", async () => {

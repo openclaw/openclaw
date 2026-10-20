@@ -323,9 +323,7 @@ describe("matrix harness runtime", () => {
       ({ result }) => {
         expect(result.baseUrl).toBe(container);
         expect(fetchCalls).toEqual(
-          [host, host, container, host, container, container].map(
-            (url) => `${url}_matrix/client/versions`,
-          ),
+          [host, host, container, host, container].map((url) => `${url}_matrix/client/versions`),
         );
       },
     );

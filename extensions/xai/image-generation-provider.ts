@@ -6,7 +6,7 @@ import type {
 } from "openclaw/plugin-sdk/image-generation";
 import {
   createOpenAiCompatibleImageGenerationProvider,
-  toImageDataUrl,
+  resolveImageSourceUrl,
 } from "openclaw/plugin-sdk/image-generation";
 import {
   normalizeOptionalLowercaseString,
@@ -21,18 +21,11 @@ import { XAI_BASE_URL } from "./model-definitions.js";
 
 function resolveImageForEdit(
   input: (ImageGenerationSourceImage & { url?: string }) | undefined,
-): string {
+): string | undefined {
   if (!input) {
     throw new Error("xAI image edit requires an input image.");
   }
-  const url = normalizeOptionalString(input.url);
-  if (url) {
-    return url;
-  }
-  if (!input.buffer) {
-    throw new Error("xAI image edit input is missing both URL and buffer data.");
-  }
-  return toImageDataUrl({ buffer: input.buffer, mimeType: input.mimeType });
+  return resolveImageSourceUrl(input, "xAI image edit input is missing both URL and buffer data.");
 }
 
 function buildRequest(

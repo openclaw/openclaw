@@ -4,7 +4,6 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/config.js";
 import { callGateway } from "../../../gateway/call.js";
-import type { ChatAbortControllerEntry } from "../../../gateway/chat-abort.types.js";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import { onAgentEvent } from "../../../infra/agent-events.js";
 import { isPathInside } from "../../../infra/path-guards.js";
@@ -43,6 +42,7 @@ export function createSubagentPersistenceRuntime(call: typeof callGateway): Gate
     dispatchAgent: (params, timeoutMs) => call({ method: "agent", params, timeoutMs }),
     waitForAgent: (params, timeoutMs) => call({ method: "agent.wait", params, timeoutMs }),
     sendRecoveryNotice: vi.fn(),
+    resumeChatInput: vi.fn(),
   };
 }
 
@@ -56,7 +56,6 @@ export function activateSubagentPersistenceRegistry(
 ) {
   const recoveryRuntime = createSubagentPersistenceRuntime(call);
   const gateway = {
-    chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
     recoveryRuntime,
     resolveGatewayContext: () => gateway as never,
   };

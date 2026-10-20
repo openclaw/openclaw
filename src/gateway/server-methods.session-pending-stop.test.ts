@@ -2,7 +2,8 @@ import { expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { loadOrCreateProcessDeviceIdentityAsync } from "../infra/device-identity-async.js";
-import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
+import { runSessionMutation } from "../sessions/session-controller.lifecycle.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createAgentDedupeLifecycle } from "./agent-turn/agent-dedupe-lifecycle.js";
@@ -55,7 +56,7 @@ async function createPendingOwner(profileName: string) {
 }
 
 it.each(["current", "replacement"] as const)(
-  "uses the agent reservation's original row across %s admission",
+  "does not treat an agent routing reservation as controller admission across %s row state",
   async (target) => {
     await withOpenClawTestState(profileState, async () => {
       const { client, cfg, context, entry, stop } = await createPendingOwner("pending-agent-owner");
@@ -78,17 +79,13 @@ it.each(["current", "replacement"] as const)(
           clearDedupe: lifecycle.clearUnaccepted,
         }),
       ).toBeDefined();
-      expect(context.chatAbortControllers.size).toBe(0);
+      expect(rpcSourceTesting.size).toBe(0);
       const pending = context.dedupe.get(`agent:${runId}`);
       if (target === "replacement") {
         await upsertSessionEntryCore(scope, { ...entry, sessionId: "replacement" });
       }
-      expect(await stop(runId)).toMatchObject({ aborted: target === "current" });
-      if (target === "replacement") {
-        expect(context.dedupe.get(`agent:${runId}`)).toBe(pending);
-      } else {
-        expect(context.dedupe.get(`agent:${runId}`)?.payload).toMatchObject(aborted);
-      }
+      expect(await stop(runId)).toMatchObject({ aborted: false });
+      expect(context.dedupe.get(`agent:${runId}`)).toBe(pending);
     });
   },
 );
@@ -111,7 +108,7 @@ it("keeps a real chat admission abortable while its original session lifecycle i
     }
     const entered = createDeferredCore();
     const release = createDeferredCore();
-    const hold = runExclusiveSessionLifecycleMutation("drain", {
+    const hold = runSessionMutation({
       scope: session.value.storePath,
       identities: [key, "original"],
       run: async () => {
@@ -132,9 +129,8 @@ it("keeps a real chat admission abortable while its original session lifecycle i
       await vi.waitFor(() =>
         expect(context.dedupe.has(pendingChatSendDedupeKey(runId))).toBe(true),
       );
-      expect(context.chatAbortControllers.has(runId)).toBe(false);
+      expect(rpcSourceTesting.has(runId)).toBe(false);
       expect(await stop(runId)).toMatchObject({ aborted: true, runIds: [runId] });
-      expect(context.dedupe.get(`chat:${runId}`)?.payload).toMatchObject(aborted);
     } finally {
       release.resolve();
       await hold;
@@ -143,6 +139,7 @@ it("keeps a real chat admission abortable while its original session lifecycle i
         settled.value.cleanupAdmittedRun();
       }
       expect(settled.ok).toBe(false);
+      expect(context.dedupe.get(`chat:${runId}`)?.payload).toMatchObject(aborted);
     }
   });
 });
