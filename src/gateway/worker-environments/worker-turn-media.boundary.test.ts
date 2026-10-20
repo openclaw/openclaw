@@ -20,20 +20,49 @@ import { prepareWorkerTurnMedia } from "./worker-turn-media.js";
 beforeEach(setupWorkerTurnLauncherTest);
 afterEach(cleanupWorkerTurnLauncherTest);
 
-function mediaTunnel(
-  stageAttachments: WorkerTunnelHandle["stageAttachments"],
-  environmentId = "media-policy-environment",
-): WorkerTunnelHandle {
-  return {
-    environmentId,
-    ownerEpoch: 1,
-    stageAttachments,
-    syncWorkspace: vi.fn(),
-    reconcileWorkspace: vi.fn(),
-    quiesceWorkspace: vi.fn(),
-    runWorkspaceCommand: vi.fn(),
-    stop: vi.fn(),
-  };
+function mediaFixture(
+  workspace: WorkerSessionWorkspace,
+  remoteWorkspaceDir: string,
+  config?: Parameters<typeof prepareWorkerTurnMedia>[0]["turn"]["config"],
+) {
+  const staged: Buffer[] = [];
+  const stageAttachments = vi.fn<NonNullable<WorkerTunnelHandle["stageAttachments"]>>(
+    async (request) => {
+      expect(request.isAuthorized()).toBe(true);
+      for (const name of await fs.readdir(request.localPath, { recursive: true })) {
+        const source = path.join(request.localPath, name);
+        if (path.basename(name) !== ".gitignore" && (await fs.stat(source)).isFile()) {
+          staged.push(await fs.readFile(source));
+        }
+      }
+    },
+  );
+  const input = turn("media-policy");
+  const prepare = (media: MediaFact[], history: AgentMessage[] = []) =>
+    prepareWorkerTurnMedia({
+      turn: {
+        ...input,
+        prompt: "Inspect the attached files",
+        media,
+        config: config ?? input.config,
+      },
+      workspace,
+      remoteWorkspaceDir,
+      history,
+      tunnel: {
+        environmentId: "media-policy-environment",
+        ownerEpoch: 1,
+        stageAttachments,
+        syncWorkspace: vi.fn(),
+        reconcileWorkspace: vi.fn(),
+        quiesceWorkspace: vi.fn(),
+        runWorkspaceCommand: vi.fn(),
+        stop: vi.fn(),
+      },
+      signal: new AbortController().signal,
+      isAuthorized: () => true,
+    });
+  return { stageAttachments, staged, prepare };
 }
 
 describe.each(["local", "repository"] as const)("%s workspace media policy", (kind) => {
@@ -53,40 +82,15 @@ describe.each(["local", "repository"] as const)("%s workspace media policy", (ki
               assertCurrent: () => {},
             }),
           };
-    const staged: Buffer[] = [];
-    const stageAttachments = vi.fn<NonNullable<WorkerTunnelHandle["stageAttachments"]>>(
-      async (request) => {
-        expect(request.isAuthorized()).toBe(true);
-        for (const name of await fs.readdir(request.localPath, { recursive: true })) {
-          const source = path.join(request.localPath, name);
-          if (path.basename(name) !== ".gitignore" && (await fs.stat(source)).isFile()) {
-            staged.push(await fs.readFile(source));
-          }
-        }
-      },
-    );
-    const tunnel = mediaTunnel(stageAttachments);
-    const input = turn("media-policy");
-    const prepare = async (media: MediaFact[]) =>
-      await prepareWorkerTurnMedia({
-        turn: {
-          ...input,
-          prompt: "Inspect the attached files",
-          media,
-          config: {
-            tools: { fs: { workspaceOnly } },
-            agents: { defaults: { workspace: gatewayWorkspace } },
-          },
-        },
-        workspace,
-        // A matching Gateway directory must not turn remote cwd metadata into an allowlist.
-        remoteWorkspaceDir: gatewayWorkspace,
-        history: [],
-        tunnel,
-        signal: new AbortController().signal,
-        isAuthorized: () => true,
-      });
-    return { gatewayWorkspace, localWorkspace, stageAttachments, staged, prepare };
+    // Matching remote cwd metadata must not grant access to the Gateway directory.
+    return {
+      gatewayWorkspace,
+      localWorkspace,
+      ...mediaFixture(workspace, gatewayWorkspace, {
+        tools: { fs: { workspaceOnly } },
+        agents: { defaults: { workspace: gatewayWorkspace } },
+      }),
+    };
   }
 
   it.each([
@@ -147,17 +151,10 @@ describe("device-folder media policy", () => {
   it("refuses current attachments and does not restage a refused one from history", async () => {
     const saved = await saveMediaBuffer(Buffer.from("Refused note"), "text/plain", "inbound");
     const fact: MediaFact = { path: saved.path, contentType: "text/plain" };
-    const stageAttachments = vi.fn<NonNullable<WorkerTunnelHandle["stageAttachments"]>>();
-    const prepare = async (media: MediaFact[], history: AgentMessage[]) =>
-      await prepareWorkerTurnMedia({
-        turn: { ...turn("device-folder-media"), prompt: "Continue", media },
-        workspace: { kind: "device-folder", deviceId: "device-1", path: "/srv/project" },
-        remoteWorkspaceDir: "/srv/project",
-        history,
-        tunnel: mediaTunnel(stageAttachments, "device-folder-environment"),
-        signal: new AbortController().signal,
-        isAuthorized: () => true,
-      });
+    const { prepare, stageAttachments } = mediaFixture(
+      { kind: "device-folder", deviceId: "device-1", path: "/srv/project" },
+      "/srv/project",
+    );
     await expect(prepare([fact], [])).rejects.toThrow("Attachments are not supported");
     const refused = {
       role: "user",

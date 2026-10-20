@@ -17,7 +17,7 @@ import {
 } from "./placement-turn-claim-events.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import * as support from "./service.test-support.js";
-import { claimTarget, seedClaim } from "./worker-turn-rpc-fixtures.test-support.js";
+import { claimAdmission, claimTarget, seedClaim } from "./worker-turn-rpc-fixtures.test-support.js";
 import { createWorkerTurnRpc } from "./worker-turn-rpc.js";
 
 describe("worker inference reconnect source ownership", () => {
@@ -91,15 +91,7 @@ describe("worker inference reconnect source ownership", () => {
       try {
         const credential = "inference-reconnect-fixture";
         await renewCredential(credential);
-        const admission = await rpc.admitWorker({
-          environmentId,
-          credential,
-          sessionId,
-          runId: claim.runId,
-          ownerEpoch: environment.ownerEpoch,
-          rpcSetVersion: environment.rpcSetVersion,
-          handshake: support.BOOTSTRAP_RECEIPT,
-        });
+        const admission = await rpc.admitWorker(claimAdmission(claim, credential));
         assert(admission.ok, "Reconnect fixture worker admission failed");
         const identity = admission.identity;
         const request = support.inferenceRequest(identity);

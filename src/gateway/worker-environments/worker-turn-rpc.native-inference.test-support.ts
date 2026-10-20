@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { expect, it, vi } from "vitest";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
@@ -24,8 +25,7 @@ export function registerWorkerNativeInferenceRpcTests(): void {
         "session-local-proxy-denial",
         { executeInference },
       );
-      // Seed immutable profile facts through the same transaction/publication owner
-      // as the other placement fixtures; do not mutate live config or mock the gate.
+      // Publish immutable profile facts through the real transaction owner.
       runOpenClawStateWriteTransaction(
         ({ db }) => {
           executeSqliteQuerySync(
@@ -60,18 +60,13 @@ export function registerWorkerNativeInferenceRpcTests(): void {
       const start = (overrides: Partial<typeof request> = {}) =>
         workerService.startInference(identity, { ...request, ...overrides }, sink);
 
-      expect(await start({ sessionId: "session-other" })).toEqual({
-        ok: false,
-        reason: "session-not-attached",
-      });
-      expect(await start({ runId: "run-other" })).toEqual({
-        ok: false,
-        reason: "session-not-attached",
-      });
-      expect(await start({ runEpoch: request.runEpoch + 1 })).toEqual({
-        ok: false,
-        reason: "epoch-mismatch",
-      });
+      for (const [overrides, reason] of [
+        [{ sessionId: "session-other" }, "session-not-attached"],
+        [{ runId: "run-other" }, "session-not-attached"],
+        [{ runEpoch: request.runEpoch + 1 }, "epoch-mismatch"],
+      ] as const) {
+        expect(await start(overrides)).toEqual({ ok: false, reason });
+      }
       placementStore.validateWorkerTurn.mockReturnValue(false);
       expect(await start()).toEqual({
         ok: false,
@@ -84,10 +79,7 @@ export function registerWorkerNativeInferenceRpcTests(): void {
       if (providerId === "device") {
         expect(started).toEqual({ ok: false, reason: "model-not-approved" });
       } else {
-        expect(started.ok).toBe(true);
-        if (!started.ok) {
-          throw new Error("opaque provider inference was refused");
-        }
+        assert(started.ok, "opaque provider inference was refused");
         started.launch();
         await support.waitForFast(() => expect(send).toHaveBeenCalledOnce());
         expect(executeInference).toHaveBeenCalledOnce();
