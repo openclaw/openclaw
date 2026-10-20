@@ -22,7 +22,8 @@ const state = vi.hoisted(() => {
   };
 });
 
-vi.mock("../config/config.js", () => ({
+vi.mock("../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/config.js")>()),
   getRuntimeConfig: () => {
     const snapshot = state.loadConfig();
     if (!snapshot) {
