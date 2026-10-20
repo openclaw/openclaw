@@ -183,6 +183,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
   const requestPreparation = createExecRequestPreparation({
     defaults,
     agentId,
+    resolveHostForParams: (params) => resolveExecHost(params, defaults),
   });
   const tool: AgentToolWithMeta<typeof execSchema, ExecToolDetails> = {
     name: "exec",
