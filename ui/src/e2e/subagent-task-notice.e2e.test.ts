@@ -1,5 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
@@ -8,6 +9,25 @@ import { openChatDetails } from "./chat-details.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Subagent task notice" });
+
+function footerBelow(details: Locator, footerSelector: string, margin = 0) {
+  return details.evaluate(
+    (element, { selector, tolerance }) => {
+      const bounds = element.getBoundingClientRect();
+      const footer = element
+        .closest("openclaw-chat-pane")!
+        .querySelector(selector)!
+        .getBoundingClientRect();
+      return bounds.height > 0 &&
+        footer.height > 0 &&
+        bounds.bottom <= footer.top + tolerance &&
+        footer.bottom <= innerHeight
+        ? footer.top
+        : null;
+    },
+    { selector: footerSelector, tolerance: margin },
+  );
+}
 
 suite.define(() => {
   it.each([1440, 768])("keeps task progress above the view-only footer at %ipx", async (width) => {
@@ -84,19 +104,7 @@ suite.define(() => {
         let footerTop = 0;
         await expect
           .poll(async () => {
-            const top = await details.evaluate((element) => {
-              const bounds = element.getBoundingClientRect();
-              const footer = element
-                .closest("openclaw-chat-pane")!
-                .querySelector(".agent-chat__disabled-banner--replacement")!
-                .getBoundingClientRect();
-              return bounds.height > 0 &&
-                footer.height > 0 &&
-                bounds.bottom <= footer.top + 1 &&
-                footer.bottom <= innerHeight
-                ? footer.top
-                : null;
-            });
+            const top = await footerBelow(details, ".agent-chat__disabled-banner--replacement", 1);
             if (top === null) {
               return false;
             }
@@ -130,22 +138,7 @@ suite.define(() => {
         await openChatDetails(pane);
         await progress.waitFor();
         expect(await input.locator("textarea").inputValue()).toBe("Continue the review");
-        await expect
-          .poll(() =>
-            input.evaluate((element) => {
-              const inputBounds = element.getBoundingClientRect();
-              const detailsBounds = element
-                .closest("openclaw-chat-pane")!
-                .querySelector(".chat-details")!
-                .getBoundingClientRect();
-              return (
-                detailsBounds.height > 0 &&
-                detailsBounds.bottom <= inputBounds.top &&
-                inputBounds.bottom <= innerHeight
-              );
-            }),
-          )
-          .toBe(true);
+        await expect.poll(() => footerBelow(details, ".agent-chat__input")).not.toBeNull();
         await input.locator(".chat-send-btn--send:visible").click({ trial: true });
         expect(await pane.getByText("View-only subagent", { exact: true }).count()).toBe(0);
         expect(await gateway.getRequests("progressCard.get")).toContainEqual(

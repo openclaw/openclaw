@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   waitForControlUiGatewayReady,
@@ -21,6 +22,36 @@ const suite = createControlUiE2eSuite({
   startServer: () => startControlUiE2eServer(undefined, { source: true }),
 });
 
+function installTerminal(page: Page, sessionId: string) {
+  return installMockGateway(page, {
+    terminalEnabled: true,
+    featureMethods: ["terminal.open"],
+    methodResponses: {
+      "terminal.list": { sessions: [] },
+      "terminal.open": {
+        agentId: "main",
+        confined: false,
+        cwd: "/workspace",
+        sessionId,
+        shell: "/bin/zsh",
+      },
+    },
+  });
+}
+function expectFontStatus(page: Page, expectedStatus: string) {
+  return expect
+    .poll(() =>
+      page.evaluate(
+        (status) =>
+          [...document.fonts].some(
+            (font) => font.family.includes("OpenClaw Nerd Symbols") && font.status === status,
+          ),
+        expectedStatus,
+      ),
+    )
+    .toBe(true);
+}
+
 suite.define(() => {
   it("renders bundled Nerd Font glyphs in a real terminal", async () => {
     await suite.withPage(
@@ -28,20 +59,7 @@ suite.define(() => {
       async ({ page, context }) => {
         await observeTerminalControllers(page);
         const fontDownload = await holdModuleResponse(page, /symbols-nerd-font-mono\.woff2/);
-        const gateway = await installMockGateway(page, {
-          terminalEnabled: true,
-          featureMethods: ["terminal.open"],
-          methodResponses: {
-            "terminal.list": { sessions: [] },
-            "terminal.open": {
-              agentId: "main",
-              confined: false,
-              cwd: "/workspace",
-              sessionId: "font-proof",
-              shell: "/bin/zsh",
-            },
-          },
-        });
+        const gateway = await installTerminal(page, "font-proof");
         await page.goto(suite.server.baseUrl + "activity");
         await waitForControlUiGatewayReady(page);
         await waitForControlUiTerminalReady(page);
@@ -70,15 +88,7 @@ suite.define(() => {
           (element as HTMLCanvasElement).toDataURL(),
         );
         fontDownload.release();
-        await expect
-          .poll(() =>
-            page.evaluate(() =>
-              [...document.fonts].some(
-                (font) => font.family.includes("OpenClaw Nerd Symbols") && font.status === "loaded",
-              ),
-            ),
-          )
-          .toBe(true);
+        await expectFontStatus(page, "loaded");
         await expect
           .poll(() => canvas.evaluate((element) => (element as HTMLCanvasElement).toDataURL()))
           .not.toBe(fallbackPixels);
@@ -139,33 +149,12 @@ suite.define(() => {
       const errors: string[] = [];
       page.on("pageerror", (error) => errors.push(error.message));
       await page.route("**/symbols-nerd-font-mono.woff2*", (route) => route.abort());
-      const gateway = await installMockGateway(page, {
-        terminalEnabled: true,
-        featureMethods: ["terminal.open"],
-        methodResponses: {
-          "terminal.list": { sessions: [] },
-          "terminal.open": {
-            agentId: "main",
-            confined: false,
-            cwd: "/workspace",
-            sessionId: "failed-font",
-            shell: "/bin/zsh",
-          },
-        },
-      });
+      const gateway = await installTerminal(page, "failed-font");
       await page.goto(suite.server.baseUrl + "terminal");
       await gateway.waitForRequest("terminal.open");
       const canvas = page.locator(".tp-host canvas");
       await canvas.waitFor();
-      await expect
-        .poll(() =>
-          page.evaluate(() =>
-            [...document.fonts].some(
-              (font) => font.family.includes("OpenClaw Nerd Symbols") && font.status === "error",
-            ),
-          ),
-        )
-        .toBe(true);
+      await expectFontStatus(page, "error");
       await canvas.click();
       await page.keyboard.type("echo still-usable");
       await expect

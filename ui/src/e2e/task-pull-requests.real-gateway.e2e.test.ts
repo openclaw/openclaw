@@ -43,6 +43,137 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
 });
 
+function createTaskState(label: string) {
+  return createOpenClawTestState({
+    label,
+    layout: "home",
+    env: {
+      GH_TOKEN: undefined,
+      GITHUB_TOKEN: undefined,
+      OPENCLAW_GATEWAY_PASSWORD: undefined,
+      OPENCLAW_GATEWAY_TOKEN: undefined,
+      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+      OPENCLAW_SKIP_CANVAS_HOST: "1",
+      OPENCLAW_SKIP_CHANNELS: "1",
+      OPENCLAW_SKIP_CRON: "1",
+      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+      OPENCLAW_SKIP_PROVIDERS: "1",
+      OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
+      VITEST: "1",
+    },
+  });
+}
+
+function publishedRow(id: string) {
+  return {
+    ...publicationRowDefaults(id),
+    session_lifecycle_revision: null,
+    requester_authority_json: null,
+    workspace_id: "workspace-" + id,
+    owner_profile_id: null,
+    connection_generation: null,
+    identity_source: "system-configured",
+    identity_profile_id: "fixture-profile",
+    previous_head_commit: null,
+    pushed_head_commit: null,
+    claim_id: null,
+    run_id: null,
+    environment_id: null,
+    owner_epoch: null,
+    placement_generation: null,
+    checkpoint_ref: null,
+    checkpoint_digest: null,
+    status: "published",
+  } as const;
+}
+
+function proxyConfig(
+  workspace: string,
+  routes: Record<string, { target: string; email: string; rewrite?: () => string }>,
+) {
+  return {
+    configFile: false as const,
+    envFile: false as const,
+    root: workspace,
+    appType: "custom" as const,
+    logLevel: "error" as const,
+    server: {
+      host: "127.0.0.1",
+      port: 0,
+      proxy: Object.fromEntries(
+        Object.entries(routes).map(([route, { target, email, rewrite }]) => [
+          route,
+          {
+            target,
+            ws: true,
+            ...(rewrite ? { rewrite } : {}),
+            headers: {
+              "x-forwarded-for": "192.0.2.10",
+              "x-forwarded-proto": "http",
+              "x-forwarded-user": email,
+            },
+          },
+        ]),
+      ),
+    },
+  };
+}
+
+function trustedProxyFor(allowUsers: string[], admin = false) {
+  return {
+    allowLoopback: true,
+    allowUsers,
+    deviceAutoApprove: {
+      enabled: true,
+      scopes: admin ? ["operator.read", "operator.admin"] : ["operator.read"],
+    },
+    requiredHeaders: ["x-forwarded-proto"],
+    userHeader: "x-forwarded-user",
+  };
+}
+function taskConfig(
+  state: OpenClawTestState,
+  port: number,
+  trustedProxy: ReturnType<typeof trustedProxyFor>,
+  origin: string,
+  authority = false,
+) {
+  return {
+    agents: {
+      defaults: { workspace: state.workspaceDir, model: { primary: "openai/gpt-4.1" } },
+      entries: { main: {} },
+    },
+    gateway: {
+      port,
+      trustedProxies: ["127.0.0.1", "::1"],
+      auth: { mode: "trusted-proxy", trustedProxy },
+      controlUi: { enabled: false, allowedOrigins: [origin] },
+      roles: {
+        default: "reader",
+        definitions: {
+          reader: { agents: ["main"], sessions: { others: "view" }, scopes: ["operator.read"] },
+          ...(authority
+            ? {
+                blocked: { agents: ["main"], sessions: { others: "none" }, scopes: [] },
+                admin: {
+                  agents: ["main"],
+                  sessions: { others: "write" },
+                  scopes: ["operator.admin"],
+                },
+              }
+            : {}),
+        },
+      },
+    },
+  };
+}
+type WireEvent = { event: string; payload?: unknown };
+function eventSnapshot(event: WireEvent, key: string) {
+  const payload = event.event === CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT && event.payload;
+  const row = isRecord(payload) && isRecord(payload.sessions) && payload.sessions[key];
+  return isRecord(row) ? row : undefined;
+}
+
 async function seedTask(state: OpenClawTestState, profileId: string) {
   const createdActor = { type: "human", source: "profile", id: profileId } as const;
   replaceSessionEntrySync(
@@ -57,20 +188,22 @@ async function seedTask(state: OpenClawTestState, profileId: string) {
   const root = state.path("coordination");
   await mkdir(root, { recursive: true });
   const git = (...args: string[]) => execFileAsync("git", args, { cwd: root, env: state.env });
+  const commit = (message: string) =>
+    git(
+      "-c",
+      "user.name=Task Proof",
+      "-c",
+      "user.email=proof@example.test",
+      "-c",
+      "commit.gpgSign=false",
+      "commit",
+      "-m",
+      message,
+    );
   await git("init", "--initial-branch=main");
   await writeFile(path.join(root, "README.md"), "# Synthetic task coordination\n");
   await git("add", "README.md");
-  await git(
-    "-c",
-    "user.name=Task Proof",
-    "-c",
-    "user.email=proof@example.test",
-    "-c",
-    "commit.gpgSign=false",
-    "commit",
-    "-m",
-    "test: seed isolated task",
-  );
+  await commit("test: seed isolated task");
   await git("remote", "add", "origin", "https://github.com/" + repository + ".git");
   await git("update-ref", "refs/remotes/origin/main", "HEAD");
   await git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
@@ -80,17 +213,7 @@ async function seedTask(state: OpenClawTestState, profileId: string) {
     "# Synthetic task coordination\nUnpublished parent change.\n",
   );
   await git("add", "README.md");
-  await git(
-    "-c",
-    "user.name=Task Proof",
-    "-c",
-    "user.email=proof@example.test",
-    "-c",
-    "commit.gpgSign=false",
-    "commit",
-    "-m",
-    "test: unpublished parent work",
-  );
+  await commit("test: unpublished parent work");
   // Only a local tracking ref: model an already pushed branch, never push to GitHub.
   await git("update-ref", "refs/remotes/origin/" + branch, "HEAD");
   replaceSessionEntrySync(
@@ -119,26 +242,9 @@ async function seedTask(state: OpenClawTestState, profileId: string) {
     );
     const id = "task-pr-receipt-" + number;
     const row: RepositoryGitHubPublicationRow = {
-      ...publicationRowDefaults(id),
+      ...publishedRow(id),
       session_key: key,
       session_id: sessionId,
-      session_lifecycle_revision: null,
-      requester_authority_json: null,
-      workspace_id: "workspace-" + id,
-      owner_profile_id: null,
-      connection_generation: null,
-      identity_source: "system-configured",
-      identity_profile_id: "fixture-profile",
-      previous_head_commit: null,
-      pushed_head_commit: null,
-      claim_id: null,
-      run_id: null,
-      environment_id: null,
-      owner_epoch: null,
-      placement_generation: null,
-      checkpoint_ref: null,
-      checkpoint_digest: null,
-      status: "published",
       repository,
       push_repository: repository,
       branch: "proof/repair-" + index,
@@ -162,56 +268,14 @@ suite.define(() => {
     await suite.runScenario(test, {
       retainedState: () => state?.root,
       async run() {
-        state = await createOpenClawTestState({
-          label: "task-pr-live",
-          layout: "home",
-          env: {
-            GH_TOKEN: undefined,
-            GITHUB_TOKEN: undefined,
-            OPENCLAW_GATEWAY_PASSWORD: undefined,
-            OPENCLAW_GATEWAY_TOKEN: undefined,
-            OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-            OPENCLAW_SKIP_CANVAS_HOST: "1",
-            OPENCLAW_SKIP_CHANNELS: "1",
-            OPENCLAW_SKIP_CRON: "1",
-            OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-            OPENCLAW_SKIP_PROVIDERS: "1",
-            OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-            VITEST: "1",
-          },
-        });
+        state = await createTaskState("task-pr-live");
         const port = await getFreePort();
         const viewer = ensureProfileForEmail(viewerEmail);
         setUserProfileRole(viewer.id, "reader");
-        const trustedProxy = {
-          allowLoopback: true,
-          allowUsers: [viewerEmail],
-          deviceAutoApprove: { enabled: true, scopes: ["operator.read"] },
-          requiredHeaders: ["x-forwarded-proto"],
-          userHeader: "x-forwarded-user",
-        };
-        await state.writeConfig({
-          agents: {
-            defaults: { workspace: state.workspaceDir, model: { primary: "openai/gpt-4.1" } },
-            entries: { main: {} },
-          },
-          gateway: {
-            port,
-            trustedProxies: ["127.0.0.1", "::1"],
-            roles: {
-              default: "reader",
-              definitions: {
-                reader: {
-                  agents: ["main"],
-                  sessions: { others: "view" },
-                  scopes: ["operator.read"],
-                },
-              },
-            },
-            auth: { mode: "trusted-proxy", trustedProxy },
-            controlUi: { enabled: false, allowedOrigins: [new URL(suite.server.baseUrl).origin] },
-          },
-        });
+        const trustedProxy = trustedProxyFor([viewerEmail]);
+        await state.writeConfig(
+          taskConfig(state, port, trustedProxy, new URL(suite.server.baseUrl).origin),
+        );
         await seedTask(state, viewer.id);
         const githubRequests: string[] = [];
         {
@@ -270,28 +334,11 @@ suite.define(() => {
             sidecarStartup: "defer",
           });
         gateway = await start();
-        proxy = await createServer({
-          configFile: false,
-          envFile: false,
-          root: state.workspaceDir,
-          appType: "custom",
-          logLevel: "error",
-          server: {
-            host: "127.0.0.1",
-            port: 0,
-            proxy: {
-              "/": {
-                target: "http://127.0.0.1:" + port,
-                ws: true,
-                headers: {
-                  "x-forwarded-for": "192.0.2.10",
-                  "x-forwarded-proto": "http",
-                  "x-forwarded-user": viewerEmail,
-                },
-              },
-            },
-          },
-        });
+        proxy = await createServer(
+          proxyConfig(state.workspaceDir, {
+            "/": { target: "http://127.0.0.1:" + port, email: viewerEmail },
+          }),
+        );
         await proxy.listen();
         const proxyUrl = proxy.resolvedUrls?.local[0];
         if (!proxyUrl) {
@@ -321,17 +368,14 @@ suite.define(() => {
               page.on("websocket", (socket) =>
                 socket.on("framereceived", ({ payload }) => {
                   const frame: unknown = JSON.parse(String(payload));
-                  if (
-                    !isRecord(frame) ||
-                    frame.event !== CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT ||
-                    !isRecord(frame.payload) ||
-                    !isRecord(frame.payload.sessions)
-                  ) {
-                    return;
-                  }
-                  const snapshot = frame.payload.sessions[parentKey];
-                  if (isRecord(snapshot)) {
-                    snapshots.push(snapshot);
+                  if (isRecord(frame) && typeof frame.event === "string") {
+                    const row = eventSnapshot(
+                      { event: frame.event, payload: frame.payload },
+                      parentKey,
+                    );
+                    if (row) {
+                      snapshots.push(row);
+                    }
                   }
                 }),
               );
@@ -458,19 +502,8 @@ suite.define(() => {
     const firstChild = "agent:main:task-authority-first";
     const lastChild = "agent:main:task-authority-last";
     const repo = "synthetic/authority-proof";
-    type WireEvent = { event: string; payload?: unknown };
     const snapshots = (events: WireEvent[], key: string) =>
-      events.flatMap((event) => {
-        if (
-          event.event !== CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT ||
-          !isRecord(event.payload) ||
-          !isRecord(event.payload.sessions)
-        ) {
-          return [];
-        }
-        const snapshot = event.payload.sessions[key];
-        return isRecord(snapshot) ? [snapshot] : [];
-      });
+      events.flatMap((event) => eventSnapshot(event, key) ?? []);
     const numbersIn = (snapshot: Record<string, unknown> | undefined) =>
       (Array.isArray(snapshot?.taskPullRequests) ? snapshot.taskPullRequests : [])
         .flatMap((item: unknown) =>
@@ -488,24 +521,7 @@ suite.define(() => {
     await suite.runScenario(test, {
       retainedState: () => state?.root,
       async run(signal) {
-        state = await createOpenClawTestState({
-          label: "task-pr-authority",
-          layout: "home",
-          env: {
-            GH_TOKEN: undefined,
-            GITHUB_TOKEN: undefined,
-            OPENCLAW_GATEWAY_PASSWORD: undefined,
-            OPENCLAW_GATEWAY_TOKEN: undefined,
-            OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-            OPENCLAW_SKIP_CANVAS_HOST: "1",
-            OPENCLAW_SKIP_CHANNELS: "1",
-            OPENCLAW_SKIP_CRON: "1",
-            OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-            OPENCLAW_SKIP_PROVIDERS: "1",
-            OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-            VITEST: "1",
-          },
-        });
+        state = await createTaskState("task-pr-authority");
         const ownerEmail = "task-authority-owner@example.test";
         const aEmail = "task-authority-a@example.test";
         const bEmail = "task-authority-b@example.test";
@@ -538,26 +554,13 @@ suite.define(() => {
         const receipt = (key: string, number: number, time: number, personalOwner?: string) => {
           const id = "authority-receipt-" + number;
           const row: RepositoryGitHubPublicationRow = {
-            ...publicationRowDefaults(id),
+            ...publishedRow(id),
             session_key: key,
             session_id: key + "-id",
-            session_lifecycle_revision: null,
-            requester_authority_json: null,
-            workspace_id: "workspace-" + id,
             owner_profile_id: personalOwner ?? null,
             connection_generation: personalOwner ? "synthetic-personal-generation" : null,
             identity_source: personalOwner ? "personal" : "system-configured",
             identity_profile_id: personalOwner ?? "fixture-profile",
-            previous_head_commit: null,
-            pushed_head_commit: null,
-            claim_id: null,
-            run_id: null,
-            environment_id: null,
-            owner_epoch: null,
-            placement_generation: null,
-            checkpoint_ref: null,
-            checkpoint_digest: null,
-            status: "published",
             repository: repo,
             push_repository: repo,
             branch: "proof/" + number,
@@ -578,45 +581,8 @@ suite.define(() => {
         receipt(lastChild, 1123, 4000);
         const port = await getFreePort();
         const origin = "http://127.0.0.1:" + port;
-        const trustedProxy = {
-          allowLoopback: true,
-          allowUsers: [ownerEmail, aEmail, bEmail],
-          deviceAutoApprove: { enabled: true, scopes: ["operator.read", "operator.admin"] },
-          requiredHeaders: ["x-forwarded-proto"],
-          userHeader: "x-forwarded-user",
-        };
-        await state.writeConfig({
-          agents: {
-            defaults: { workspace: state.workspaceDir, model: { primary: "openai/gpt-4.1" } },
-            entries: { main: {} },
-          },
-          gateway: {
-            port,
-            auth: { mode: "trusted-proxy", trustedProxy },
-            trustedProxies: ["127.0.0.1", "::1"],
-            controlUi: { enabled: false, allowedOrigins: [origin] },
-            roles: {
-              default: "reader",
-              definitions: {
-                reader: {
-                  agents: ["main"],
-                  sessions: { others: "view" },
-                  scopes: ["operator.read"],
-                },
-                blocked: {
-                  agents: ["main"],
-                  sessions: { others: "none" },
-                  scopes: [],
-                },
-                admin: {
-                  agents: ["main"],
-                  sessions: { others: "write" },
-                  scopes: ["operator.admin"],
-                },
-              },
-            },
-          },
-        });
+        const trustedProxy = trustedProxyFor([ownerEmail, aEmail, bEmail], true);
+        await state.writeConfig(taskConfig(state, port, trustedProxy, origin, true));
         const realFetch = globalThis.fetch;
         const provider = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
           const url = new URL(
@@ -656,28 +622,14 @@ suite.define(() => {
           controlUiEnabled: false,
           sidecarStartup: "defer",
         });
-        const route = (email: string) => ({
-          target: origin,
-          ws: true,
-          rewrite: () => "/",
-          headers: {
-            "x-forwarded-for": "192.0.2.10",
-            "x-forwarded-proto": "http",
-            "x-forwarded-user": email,
-          },
-        });
-        proxy = await createServer({
-          configFile: false,
-          envFile: false,
-          root: state.workspaceDir,
-          appType: "custom",
-          logLevel: "error",
-          server: {
-            host: "127.0.0.1",
-            port: 0,
-            proxy: { "/owner": route(ownerEmail), "/a": route(aEmail), "/b": route(bEmail) },
-          },
-        });
+        const route = (email: string) => ({ target: origin, email, rewrite: () => "/" });
+        proxy = await createServer(
+          proxyConfig(state.workspaceDir, {
+            "/owner": route(ownerEmail),
+            "/a": route(aEmail),
+            "/b": route(bEmail),
+          }),
+        );
         await proxy.listen();
         const address = proxy.resolvedUrls?.local[0];
         if (!address) {

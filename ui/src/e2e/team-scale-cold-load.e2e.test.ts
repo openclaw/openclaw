@@ -23,25 +23,29 @@ import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Team-scale cold-load fixture" });
 
-function observeSidebarSnapshotWrite(
+function observeStoreWrite(
   page: Page,
-  expected: { navigationView: "online"; people: number },
+  observation:
+    | { store: "sidebarSnapshots"; navigationView: "online"; people: number }
+    | { store: "composerDrafts"; text: string },
 ) {
-  return page.evaluateHandle(({ navigationView, people }) => {
+  return page.evaluateHandle((expected) => {
     // oxlint-disable-next-line typescript/unbound-method -- call(this, value, key) preserves each store receiver.
     const put = IDBObjectStore.prototype.put;
     return {
       done: new Promise<void>((resolve) => {
         IDBObjectStore.prototype.put = function (
           this: IDBObjectStore,
-          value: { model?: { navigationView?: string; onlineUsers?: unknown[] } },
+          value: { text?: string; model?: { navigationView?: string; onlineUsers?: unknown[] } },
           key?: IDBValidKey,
         ) {
           const request = put.call(this, value, key);
           if (
-            this.name === "sidebarSnapshots" &&
-            value.model?.navigationView === navigationView &&
-            value.model.onlineUsers?.length === people
+            this.name === expected.store &&
+            (expected.store === "composerDrafts"
+              ? value.text === expected.text
+              : value.model?.navigationView === expected.navigationView &&
+                value.model.onlineUsers?.length === expected.people)
           ) {
             IDBObjectStore.prototype.put = put;
             this.transaction.addEventListener("complete", () => resolve(), { once: true });
@@ -50,29 +54,22 @@ function observeSidebarSnapshotWrite(
         };
       }),
     };
-  }, expected);
+  }, observation);
 }
 
 async function readStoredWarmState({ sessionKey }: { sessionKey: string }) {
-  const open = indexedDB.open("openclaw-chat-snapshots");
-  const database = await new Promise<IDBDatabase>((resolve, reject) => {
-    open.addEventListener("success", () => resolve(open.result), { once: true });
-    open.addEventListener("error", () => reject(open.error ?? new Error("Snapshot open failed")), {
-      once: true,
+  const result = <T>(request: IDBRequest<T>, failure: string) =>
+    new Promise<T>((resolve, reject) => {
+      request.addEventListener("success", () => resolve(request.result), { once: true });
+      request.addEventListener("error", () => reject(request.error ?? new Error(failure)), {
+        once: true,
+      });
     });
-  });
+  const database = await result(indexedDB.open("openclaw-chat-snapshots"), "Snapshot open failed");
   try {
     const transaction = database.transaction(["snapshots", "sidebarSnapshots"]);
-    const readAll = <T>(name: string) =>
-      new Promise<T[]>((resolve, reject) => {
-        const request = transaction.objectStore(name).getAll();
-        request.addEventListener("success", () => resolve(request.result), { once: true });
-        request.addEventListener(
-          "error",
-          () => reject(request.error ?? new Error("Snapshot read failed")),
-          { once: true },
-        );
-      });
+    const readAll = <T>(name: string): Promise<T[]> =>
+      result(transaction.objectStore(name).getAll(), "Snapshot read failed");
     const [records, sidebars] = await Promise.all([
       readAll<{ sessionKey: string; snapshot: { messages: unknown[] } }>("snapshots"),
       readAll<{ sessionKey: string; model: { onlineUsers: unknown[] } }>("sidebarSnapshots"),
@@ -91,6 +88,16 @@ async function readStoredWarmState({ sessionKey }: { sessionKey: string }) {
   } finally {
     database.close();
   }
+}
+
+function queryHandler(method: string, run: (params: Record<string, unknown>) => unknown) {
+  return (value: unknown) => {
+    const params = asRecord(value);
+    if (!params) {
+      throw new Error(method + " requires query parameters");
+    }
+    return run(params);
+  };
 }
 
 suite.define(() => {
@@ -151,20 +158,11 @@ suite.define(() => {
         const sessions = createTeamScaleSidebarListOwner(fixture.sidebarListInput);
         const gateway = await installMockGateway(page, fixture.scenario, {
           requestHandlers: {
-            "sessions.list": (value) => {
-              const params = asRecord(value);
-              if (!params) {
-                throw new Error("sessions.list requires query parameters");
-              }
-              return sessions.list(params).result;
-            },
-            "cron.list": (value) => {
-              const params = asRecord(value);
-              if (!params) {
-                throw new Error("cron.list requires query parameters");
-              }
-              return fixture.listCronJobs(params);
-            },
+            "sessions.list": queryHandler(
+              "sessions.list",
+              (params) => sessions.list(params).result,
+            ),
+            "cron.list": queryHandler("cron.list", (params) => fixture.listCronJobs(params)),
           },
         });
         await page.goto(
@@ -214,7 +212,8 @@ suite.define(() => {
           true,
         );
         await page.evaluate("globalThis.__name = (fn) => fn");
-        const onlineWrite = await observeSidebarSnapshotWrite(page, {
+        const onlineWrite = await observeStoreWrite(page, {
+          store: "sidebarSnapshots",
           navigationView: "online",
           people: 120,
         });
@@ -336,7 +335,8 @@ suite.define(() => {
         if (!presence) {
           throw new Error("The Team fixture must include presence events");
         }
-        const sidebarWrite = await observeSidebarSnapshotWrite(page, {
+        const sidebarWrite = await observeStoreWrite(page, {
+          store: "sidebarSnapshots",
           navigationView: "online",
           people: 119,
         });
@@ -360,25 +360,9 @@ suite.define(() => {
         expect(JSON.stringify(mutated.transcript)).toContain(mutation);
         expect(mutated.transcript).not.toEqual(baseline.transcript);
         expect(mutated.sidebar).not.toEqual(baseline.sidebar);
-        const draftWrite = await page.evaluateHandle(() => {
-          // oxlint-disable-next-line typescript/unbound-method -- call(this, value, key) preserves each store receiver.
-          const put = IDBObjectStore.prototype.put;
-          return {
-            done: new Promise<void>((resolve) => {
-              IDBObjectStore.prototype.put = function (
-                this: IDBObjectStore,
-                value: { text?: string },
-                key?: IDBValidKey,
-              ) {
-                const request = put.call(this, value, key);
-                if (this.name === "composerDrafts" && value.text === "Synthetic streaming input") {
-                  IDBObjectStore.prototype.put = put;
-                  this.transaction.addEventListener("complete", () => resolve(), { once: true });
-                }
-                return request;
-              };
-            }),
-          };
+        const draftWrite = await observeStoreWrite(page, {
+          store: "composerDrafts",
+          text: "Synthetic streaming input",
         });
         const composer = page.locator(".agent-chat__composer-combobox textarea").last();
         await composer.fill("Synthetic streaming input");
@@ -386,37 +370,34 @@ suite.define(() => {
         await draftWrite.dispose();
         await restoreColdLoadWarmState(page, warm.storage);
         expect(await page.evaluate(readStoredWarmState, warmInput)).toEqual(baseline);
-        expect(
-          await page.evaluate(
-            () =>
-              new Promise<number>((resolve, reject) => {
-                const request = indexedDB.open("openclaw-control-ui");
-                request.addEventListener(
-                  "success",
-                  () => {
-                    const database = request.result;
-                    const transaction = database.transaction("composerDrafts");
-                    const count = transaction.objectStore("composerDrafts").count();
-                    count.addEventListener("success", () => resolve(count.result), { once: true });
-                    count.addEventListener(
-                      "error",
-                      () => reject(count.error ?? new Error("Draft count failed")),
-                      { once: true },
-                    );
-                    transaction.addEventListener("complete", () => database.close(), {
-                      once: true,
-                    });
-                  },
-                  { once: true },
-                );
-                request.addEventListener(
-                  "error",
-                  () => reject(request.error ?? new Error("Draft database open failed")),
-                  { once: true },
-                );
-              }),
-          ),
-        ).toBe(0);
+        const draftCount = await page.evaluate(
+          () =>
+            new Promise<number>((resolve, reject) => {
+              const request = indexedDB.open("openclaw-control-ui");
+              const fail = (error: DOMException | null, message: string) =>
+                reject(error ?? new Error(message));
+              request.addEventListener(
+                "error",
+                () => fail(request.error, "Draft database open failed"),
+                { once: true },
+              );
+              request.addEventListener(
+                "success",
+                () => {
+                  const database = request.result;
+                  const transaction = database.transaction("composerDrafts");
+                  const count = transaction.objectStore("composerDrafts").count();
+                  count.addEventListener("success", () => resolve(count.result), { once: true });
+                  count.addEventListener("error", () => fail(count.error, "Draft count failed"), {
+                    once: true,
+                  });
+                  transaction.addEventListener("complete", () => database.close(), { once: true });
+                },
+                { once: true },
+              );
+            }),
+        );
+        expect(draftCount).toBe(0);
         await page.reload();
         await sidebar.locator('[data-navigation-view="online"][aria-pressed="true"]').waitFor();
         await sidebar.locator('[data-online-user-id="team-person-120"]').waitFor();

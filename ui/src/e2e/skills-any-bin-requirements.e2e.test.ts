@@ -1,4 +1,4 @@
-// Control UI coverage proves alternative skill binaries remain diagnosable and installable.
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
@@ -30,20 +30,8 @@ function codingAgentSkill(missingAnyBins: string[]) {
     modelVisible: missingAnyBins.length === 0,
     userInvocable: true,
     commandVisible: missingAnyBins.length === 0,
-    requirements: {
-      bins: [],
-      anyBins: ["claude", "codex", "opencode"],
-      env: [],
-      config: [],
-      os: [],
-    },
-    missing: {
-      bins: [],
-      anyBins: missingAnyBins,
-      env: [],
-      config: [],
-      os: [],
-    },
+    requirements: { ...emptyRequirements, anyBins: ["claude", "codex", "opencode"] },
+    missing: { ...emptyRequirements, anyBins: missingAnyBins },
     configChecks: [],
     install: [
       {
@@ -56,27 +44,30 @@ function codingAgentSkill(missingAnyBins: string[]) {
   };
 }
 
+const emptyRequirements = { bins: [], env: [], config: [], os: [] };
+async function openSkill(page: Page, missing: string[], install = false) {
+  const gateway = await installMockGateway(page, {
+    ...(install ? { featureMethods: ["chat.metadata", "chat.startup", "skills.install"] } : {}),
+    methodResponses: {
+      "skills.status": {
+        workspaceDir: "/tmp/openclaw-e2e/workspace",
+        managedSkillsDir: "/tmp/openclaw-e2e/skills",
+        skills: [codingAgentSkill(missing)],
+      },
+      ...(install ? { "skills.install": { message: "Installed Codex CLI" } } : {}),
+    },
+  });
+  expect((await page.goto(`${suite.server.baseUrl}skills`))?.status()).toBe(200);
+  await page.getByRole("button", { name: "Open Coding Agent details" }).click();
+  const dialog = page.locator("openclaw-modal-dialog", { hasText: "Coding Agent" });
+  await expect.poll(() => dialog.count()).toBe(1);
+  return { gateway, dialog };
+}
+
 suite.define(() => {
   it("explains alternative missing binaries and installs one through the Gateway", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        featureMethods: ["chat.metadata", "chat.startup", "skills.install"],
-        methodResponses: {
-          "skills.status": {
-            workspaceDir: "/tmp/openclaw-e2e/workspace",
-            managedSkillsDir: "/tmp/openclaw-e2e/skills",
-            skills: [codingAgentSkill(["claude", "codex", "opencode"])],
-          },
-          "skills.install": { message: "Installed Codex CLI" },
-        },
-      });
-
-      const response = await page.goto(`${suite.server.baseUrl}skills`);
-      expect(response?.status()).toBe(200);
-      await page.getByRole("button", { name: "Open Coding Agent details" }).click();
-
-      const dialog = page.locator("openclaw-modal-dialog", { hasText: "Coding Agent" });
-      await expect.poll(async () => await dialog.count()).toBe(1);
+      const { gateway, dialog } = await openSkill(page, ["claude", "codex", "opencode"], true);
       expect(await dialog.textContent()).toContain("bin:any of (claude, codex, opencode)");
       await dialog.getByRole("button", { name: "Install Codex CLI (npm)" }).click();
 
@@ -91,22 +82,7 @@ suite.define(() => {
 
   it("does not show missing alternatives or an installer for an eligible skill", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      await installMockGateway(page, {
-        methodResponses: {
-          "skills.status": {
-            workspaceDir: "/tmp/openclaw-e2e/workspace",
-            managedSkillsDir: "/tmp/openclaw-e2e/skills",
-            skills: [codingAgentSkill([])],
-          },
-        },
-      });
-
-      const response = await page.goto(`${suite.server.baseUrl}skills`);
-      expect(response?.status()).toBe(200);
-      await page.getByRole("button", { name: "Open Coding Agent details" }).click();
-
-      const dialog = page.locator("openclaw-modal-dialog", { hasText: "Coding Agent" });
-      await expect.poll(async () => await dialog.count()).toBe(1);
+      const { dialog } = await openSkill(page, []);
       expect(await dialog.getByText("bin:any of", { exact: false }).count()).toBe(0);
       expect(await dialog.getByRole("button", { name: "Install Codex CLI (npm)" }).count()).toBe(0);
     });
