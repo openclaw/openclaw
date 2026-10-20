@@ -6,6 +6,7 @@ import type { Page } from "playwright";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../../src/shared/deferred.ts";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.ts";
+import type { ControlUiReadiness } from "../app/control-ui-readiness.ts";
 import { captureSidebarUiProof } from "../e2e/sidebar-customization.test-support.ts";
 import { createControlUiE2eArtifactDir } from "./control-ui-e2e-artifacts.ts";
 import {
@@ -395,7 +396,7 @@ describe("shared proof capture", () => {
       vi.spyOn(performance, "getEntriesByType").mockReturnValue([]);
       const app = document.createElement("openclaw-app");
       vi.stubGlobal("openclawControlUi", {
-        snapshot: () => ({
+        snapshot: (): ReturnType<ControlUiReadiness["hook"]["snapshot"]> => ({
           generation: 7,
           booted: true,
           gatewayPhase: "connected",
@@ -404,7 +405,28 @@ describe("shared proof capture", () => {
           ready: false,
           basePath: "/private-base",
           sessionKey: "private-session",
-          route: {
+          route: null,
+          terminalActivationReady: false,
+        }),
+        diagnostics: () => ({
+          settlementError: failure === "storage" ? "private-settlement-error" : null,
+          gateway: {
+            phase: failure === "storage" ? "private-phase" : "connected",
+            hello: {
+              token: "private-hello",
+              auth: { recoveryScope: "private-recovery" },
+              server: { host: "private-host", address: "private-ip" },
+              device: { id: "private-device" },
+              model: "private-model",
+            },
+          },
+          roster: {
+            connected: true,
+            agentsLoading: failure === "storage" ? "private-loading" : true,
+            agentsError: "private-agent-error",
+            agentsList: { agents: [{ id: "private-agent" }, { id: "private-agent-two" }] },
+          },
+          router: {
             status: failure === "storage" ? "private-router-status" : "success",
             matches: [{ routeId: failure === "screenshot" ? "private-route" : "agents" }],
             pendingMatches: [{ routeId: "private-pending-route" }],
@@ -414,7 +436,6 @@ describe("shared proof capture", () => {
               hash: "#private-hash",
             },
           },
-          terminalActivationReady: false,
         }),
       });
       const composer = document.createElement("div");
@@ -685,13 +706,20 @@ describe("shared proof capture", () => {
                     routeReady: true,
                     rosterReady: false,
                     ready: false,
+                    settlementFailed: failure === "storage",
                   },
-                  gatewayPhase: "connected",
+                  gatewayPhase: failure === "storage" ? "unknown" : "connected",
+                  connected: true,
                   canvasWidgets: [
                     { loading: true, errorPresent: false, framePresent: false },
                     { loading: false, errorPresent: true, framePresent: false },
                     { loading: false, errorPresent: false, framePresent: true },
                   ],
+                  roster: {
+                    loading: failure === "storage" ? null : true,
+                    count: 2,
+                    errorPresent: true,
+                  },
                   agentFiles: {
                     pathname: "other",
                     pagePresent: true,

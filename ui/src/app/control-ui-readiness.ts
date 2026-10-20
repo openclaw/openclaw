@@ -1,6 +1,7 @@
 import type { RouteLocation, RouterState } from "@openclaw/uirouter";
-import type { SessionsListResult } from "../api/types.ts";
+import type { AgentsListResult, SessionsListResult } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
+import type { AgentSelectionCapability } from "./agent-selection.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 import type { RouteElements } from "./route-elements.ts";
 
@@ -20,6 +21,15 @@ type ReadinessRuntime = {
       };
       subscribe: (listener: () => void) => () => void;
     };
+    readonly agents: {
+      readonly state: {
+        agentsError: string | null;
+        agentsList: AgentsListResult | null;
+        agentsLoading: boolean;
+        connected: boolean;
+      };
+    };
+    readonly agentSelection: Pick<AgentSelectionCapability, "state">;
     readonly navigate: (routeId: RouteId, options?: ReadinessNavigationOptions) => void;
   };
   readonly router: {
@@ -48,7 +58,7 @@ export interface ControlUiReadinessOutlet extends HTMLElement {
 
 /**
  * The browser automation contract is window.openclawControlUi. snapshot contains
- * admitted application facts, never runtime handles.
+ * admitted application facts; diagnostics returns data, never runtime handles.
  * data-openclaw-ready identifies the settled generation and is removed as soon
  * as its inputs change. Renderer adapters call invalidate before updating and
  * supply settlePresentation; consumers never await a renderer-specific promise.
@@ -65,11 +75,13 @@ export class ControlUiReadiness {
   private rosterFloor = 0;
   private connectionRevision = -1;
   private connectionClient: object | null = null;
+  private settlementError: string | null = null;
 
   constructor(private readonly root: HTMLElement) {}
 
   readonly hook = {
     snapshot: () => this.snapshot,
+    diagnostics: () => this.diagnostics(),
     navigate: (routeId: RouteId, options?: ReadinessNavigationOptions) => {
       if (!this.runtime) {
         throw new Error("Control UI is disconnected");
@@ -145,6 +157,7 @@ export class ControlUiReadiness {
 
   invalidate(): void {
     this.generation += 1;
+    this.settlementError = null;
     this.root.removeAttribute("data-openclaw-ready");
     if (!this.settlement && this.runtime) {
       void this.settle();
@@ -161,13 +174,14 @@ export class ControlUiReadiness {
         let presentation: ControlUiCommittedPresentation;
         try {
           presentation = await this.settlePresentation();
-        } catch {
+        } catch (error) {
           if (this.settlement !== settlement) {
             return;
           }
           if (runtime !== this.runtime || generation !== this.generation) {
             continue;
           }
+          this.settlementError = String(error);
           break;
         }
         if (this.settlement !== settlement) {
@@ -242,6 +256,26 @@ export class ControlUiReadiness {
       terminalActivationReady:
         this.committedGeneration === this.generation &&
         this.presentation?.terminalActivationReady === true,
+    };
+  }
+
+  private diagnostics() {
+    const context = this.runtime?.context;
+    const agents = context?.agents.state;
+    return {
+      agentSelection: context?.agentSelection.state ?? null,
+      gateway: {
+        assistantAgentId: context?.gateway.snapshot.assistantAgentId ?? null,
+        phase: context?.gateway.snapshot.phase ?? null,
+      },
+      roster: {
+        agentsError: agents?.agentsError ?? null,
+        agentsList: agents?.agentsList ?? null,
+        agentsLoading: agents?.agentsLoading ?? null,
+        connected: agents?.connected ?? null,
+      },
+      router: this.snapshot.route,
+      settlementError: this.settlementError,
     };
   }
 }
