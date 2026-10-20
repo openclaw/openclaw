@@ -12,7 +12,7 @@ function expectReadError(result: Awaited<ReturnType<typeof readClawManifestFile>
   expect(result.ok).toBe(false);
   expect(result.diagnostics).toContainEqual(expect.objectContaining({ code }));
 }
-function jsonFailure(code: string, message: string | ReturnType<typeof expect.stringContaining>) {
+function jsonFailure(code: string, message: unknown) {
   return { ok: false, diagnostics: [{ level: "error", code, phase: "parse", path: "$", message }] };
 }
 const manifestJson = JSON.stringify({

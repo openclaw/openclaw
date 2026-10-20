@@ -190,7 +190,10 @@ it("keeps transcript replacement charges within the shared byte and entry budget
       if (entryFirst) {
         retainEntry(state, { entry: state.entry, snapshots: "full" }, "budget-reader");
       }
-      const replica = replicaFor(state.target, () => "budget-reader");
+      const replica = replicaFor(
+        sessionActorFileTarget(fixture.database, state.target.sessionKey),
+        () => "budget-reader",
+      );
       expect(replica.beginRead()(state)).toBe(true);
       if (!keepOpen) {
         replica.close();

@@ -3,7 +3,9 @@ import { planModelsJsonForTest } from "./models-config.plan.test-support.js";
 import type { resolveImplicitProviders } from "./models-config.providers.implicit.js";
 import { createProviderAuthResolver } from "./models-config.providers.secrets.js";
 
-vi.mock("./model-auth-env.js", () => ({ resolveEnvApiKey: () => null }));
+vi.mock("./model-auth-env.js", () => ({
+  resolveEnvApiKey: () => null,
+}));
 
 vi.mock("./provider-auth-aliases.js", () => ({
   resolveProviderAuthAliasMap: () => ({}),

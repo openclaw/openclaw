@@ -104,7 +104,9 @@ vi.mock("../../process/exec.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../runtime.js", () => ({ defaultRuntime: { error: vi.fn(), log: vi.fn() } }));
+vi.mock("../../runtime.js", () => ({
+  defaultRuntime: { error: vi.fn(), log: vi.fn() },
+}));
 
 vi.mock("./shared.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./shared.js")>()),

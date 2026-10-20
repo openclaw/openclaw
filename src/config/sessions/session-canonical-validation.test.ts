@@ -30,7 +30,7 @@ function withSession(
   sessionId = "selected",
   entry: Partial<Parameters<typeof replaceSessionEntrySync>[1]> = {},
 ) {
-  return withOpenClawTestState({ scenario: "minimal" }, ({ env }) => {
+  return withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const scope = { agentId: "main", env, sessionKey: `agent:main:${sessionId}` };
     replaceSessionEntrySync(scope, { sessionId, updatedAt: 1, ...entry });
     run(scope);

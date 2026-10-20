@@ -46,7 +46,7 @@ function mountProcesses(
   });
   return {
     connection,
-    mount(element: HTMLElement) {
+    mount: (element: HTMLElement) => {
       provider.append(element);
       document.body.append(provider);
     },

@@ -405,13 +405,13 @@ it.each([
       waitForReplacement: true,
     });
     if (boundary === "unpublished replacement close") {
-      work.track(closeSnapshots());
+      void work.track(closeSnapshots());
     } else {
       invalidate("replacement cancelled");
     }
   } else {
     let claimCurrent = true;
-    work.track(
+    void work.track(
       refresh(
         {},
         {
@@ -422,7 +422,7 @@ it.each([
     if (boundary === "lost claim") {
       claimCurrent = false;
     } else {
-      work.track(closeSnapshots());
+      void work.track(closeSnapshots());
     }
   }
   release.resolve();

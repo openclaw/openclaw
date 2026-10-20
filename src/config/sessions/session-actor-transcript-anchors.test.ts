@@ -144,10 +144,21 @@ it("leaves incomplete suffixes, reset visibility, and invalidated anchors to the
   const selection = { entryIds: [], afterSeq: 2, includeMessagesForRunId: "run" };
   expect(read(selection, hot, { ...tail, coveredAfterSeq: 3 })).toBeUndefined();
   expect(
-    read(selection, hot, {
-      ...tail,
-      events: [...tail.events, { rawSeq: 5, event: { type: "reset" } }],
-    }),
+    read(
+      selection,
+      {
+        ...hot,
+        transcript: {
+          ...hot.transcript,
+          watermark: { generation: "generation", maxSeq: 5 },
+          version: { generation: "generation", rawSeq: 5, updatedAt: 2 },
+        },
+      },
+      {
+        ...tail,
+        events: [...tail.events, { rawSeq: 5, event: { type: "reset" } }],
+      },
+    ),
   ).toBeUndefined();
   expect(
     read(selection, { ...hot, transcript: { ...hot.transcript, anchorsState: "unavailable" } }),

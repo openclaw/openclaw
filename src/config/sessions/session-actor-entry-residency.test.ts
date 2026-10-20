@@ -1,4 +1,4 @@
-import { assert, expect, it as baseIt, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { prepareSessionCostUsageRefreshLock } from "../../infra/session-cost-usage-cache.sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
@@ -41,350 +41,344 @@ vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
 // mock-isolation: The fixture owns its database lifetime without background history eviction.
 vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMaintenance() {} }));
 
-const it = baseIt.extend<{ actor: Fixture }>({
-  // oxlint-disable-next-line no-empty-pattern -- Vitest requires destructured fixture dependencies; this fixture has none.
-  actor: async ({}, use) => withActor(use),
-});
-const transaction = <T>(f: Fixture, run: () => T) =>
-  runSqliteImmediateTransactionSync(f.database.db, run);
-const participantInput = (id = "peer", promptedAt = 10) => ({
-  identity: { type: "agent" as const, id },
-  promptedAt,
-});
-const recordParticipant = (f: Fixture, id = "peer", at = 10) =>
-  recordSessionParticipantFromWorker(f.database, f.scope, participantInput(id, at));
-const participants = (f: Fixture) =>
-  participantRecordsBySessionKey(f.database.db, [f.target.sessionKey]).get(f.target.sessionKey);
-function refuse(f: Fixture, message: string, refused = "commit") {
-  f.hooks.admit = (stage) => {
-    if (stage === refused) {
-      throw new Error(message);
-    }
-  };
-}
-function counts<Key extends string>(
-  f: Fixture,
-  keys: readonly Key[],
-  classify: (sql: string) => Key | null,
-) {
-  const tracked = trackSqliteStatementExecutions(f.database.db, keys, classify);
-  return { ...tracked, [Symbol.dispose]: tracked.restore };
-}
-const entrySelection = (f: Fixture, exact = true, sessionKey = f.target.sessionKey) =>
-  ({ kind: "entry", sessionKey, exact }) as const;
-const entrySnapshot = (f: Fixture) => readSessionEntryPatchSnapshot(f.database, entrySelection(f));
-const messageEvent = (id: string, parentId: string | null, content: string, role = "user") => ({
-  type: "message" as const,
-  id,
-  parentId,
-  message: { role, content },
-});
-const headerEvent = (f: Fixture) => ({
-  type: "session",
-  id: f.scope.sessionId,
-  version: 3,
-  cwd: "/synthetic",
-});
-const steer = <T extends { message: object }>(event: T, steerTargetRunId: string) => ({
-  ...event,
-  message: { ...event.message, __openclaw: { steerTargetRunId } },
-});
-const rewrite = (
-  f: Fixture,
-  seq: number,
-  expectedEventJson: string,
-  event: Parameters<typeof rewriteSqliteTranscriptEventRowsInTransaction>[2][number]["event"],
-) =>
-  rewriteSqliteTranscriptEventRowsInTransaction(f.database, f.scope, [
-    { seq, expectedEventJson, event },
-  ]);
-async function commit(f: Fixture, command: Mutation) {
-  await f.prepare(command);
-  const result = f.mutate(command);
-  assert(result.kind === "committed");
-  return result;
-}
+it("persists run adoption and its reducers once, then skips an unchanged hydrated row", async () => {
+  await withActor(async (f) => {
+    const initial = f.read();
+    const command: Mutation = {
+      type: "session.actor.adoptRun",
+      input: {
+        target: f.target,
+        expected: initial.version,
+        commandId: "adopt-with-activity",
+        phaseId: "adoption",
+        sessionId: f.scope.sessionId,
+        expectedState: buildRestartRecoveryExpectedState(initial.entry!),
+        runId: "current-run",
+        lifecycle: { startedAt: 2 },
+        reducers: [{ kind: "activity", updatedAt: 20 }],
+      },
+    };
+    await f.prepare(command);
+    const writes = trackSqliteStatementExecutions(f.database.db, ["nodes", "windows"], (sql) => {
+      const table = /^(?:insert into|update|delete from) "([^"]+)"/iu.exec(sql)?.[1];
+      return table === "session_nodes" ? "nodes" : table === "session_windows" ? "windows" : null;
+    });
+    try {
+      expect(f.mutate(command)).toMatchObject({
+        kind: "committed",
+        receipt: {
+          postimage: { entry: { activeWriterRunId: "current-run", startedAt: 2, updatedAt: 20 } },
+        },
+      });
+      expect(writes.counts).toEqual({ nodes: 1, windows: 1 });
+      writes.counts.nodes = 0;
+      writes.counts.windows = 0;
+      f.restartActor();
+      const hydrated = f.read();
+      expect(hydrated.entry).toMatchObject({
+        activeWriterRunId: "current-run",
+        startedAt: 2,
+        updatedAt: 20,
+      });
+      expect(
+        f.mutate({
+          ...command,
+          input: {
+            ...command.input,
+            expected: hydrated.version,
+            commandId: "unchanged-after-hydration",
+            expectedState: buildRestartRecoveryExpectedState(hydrated.entry!),
+            // Clearing an absent optional field changes the in-memory shape, not the stored row.
+            lifecycle: { endedAt: undefined },
+            reducers: [],
+          },
+        }),
+      ).toMatchObject({ kind: "committed" });
+      expect(writes.counts).toEqual({ nodes: 0, windows: 0 });
+      expect(f.nativeEntry()).toEqual(hydrated.entry);
 
-function activityCommand(
-  f: Fixture,
-  commandId: string,
-  updatedAt: number,
-): Extract<Mutation, { type: "session.actor.patch" }> {
-  const current = f.read();
-  return {
-    type: "session.actor.patch",
-    input: {
-      target: current.target,
-      expected: current.version,
-      commandId,
-      phaseId: "terminal-accounting",
-      reducers: [{ kind: "activity", updatedAt }],
-    },
-  };
-}
-
-it("persists adoption once, skips unchanged hydration, and repairs stale columns", async ({
-  actor: f,
-}) => {
-  const initial = f.read();
-  const command: Mutation = {
-    type: "session.actor.adoptRun",
-    input: {
-      target: f.target,
-      expected: initial.version,
-      commandId: "adopt-with-activity",
-      phaseId: "adoption",
-      sessionId: f.scope.sessionId,
-      expectedState: buildRestartRecoveryExpectedState(initial.entry!),
-      runId: "current-run",
-      lifecycle: { startedAt: 2 },
-      reducers: [{ kind: "activity", updatedAt: 20 }],
-    },
-  };
-  await f.prepare(command);
-  using writes = counts(f, ["nodes", "windows"], (sql) => {
-    const table = /^(?:insert into|update|delete from) "([^"]+)"/iu.exec(sql)?.[1];
-    return table === "session_nodes" ? "nodes" : table === "session_windows" ? "windows" : null;
-  });
-  expect(f.mutate(command)).toMatchObject({
-    kind: "committed",
-    receipt: {
-      postimage: { entry: { activeWriterRunId: "current-run", startedAt: 2, updatedAt: 20 } },
-    },
-  });
-  expect(writes.counts).toEqual({ nodes: 1, windows: 1 });
-  for (const repair of [false, true]) {
-    if (repair) {
-      transaction(f, () =>
+      runSqliteImmediateTransactionSync(f.database.db, () =>
         f.database.db
           .prepare("UPDATE session_nodes SET label = ? WHERE session_key = ?")
           .run("stale-derived-label", f.target.sessionKey),
       );
+      f.restartActor();
+      const repair = f.read();
+      expect(repair.entry?.label).toBe("initial");
+      writes.counts.nodes = 0;
+      writes.counts.windows = 0;
+      expect(
+        f.mutate({
+          ...command,
+          input: {
+            ...command.input,
+            expected: repair.version,
+            commandId: "repair-hydrated-column",
+            expectedState: buildRestartRecoveryExpectedState(repair.entry!),
+            lifecycle: { endedAt: undefined },
+            reducers: [],
+          },
+        }),
+      ).toMatchObject({ kind: "committed" });
+      expect(writes.counts).toEqual({ nodes: 1, windows: 0 });
+      expect(
+        f.database.db
+          .prepare("SELECT label FROM session_nodes WHERE session_key = ?")
+          .get(f.target.sessionKey),
+      ).toMatchObject({ label: "initial" });
+    } finally {
+      writes.restore();
     }
-    f.restartActor();
-    const hydrated = f.read();
-    expect(hydrated.entry).toMatchObject({
-      activeWriterRunId: "current-run",
-      startedAt: 2,
-      updatedAt: 20,
-      label: "initial",
-    });
-    Object.assign(writes.counts, { nodes: 0, windows: 0 });
-    expect(
-      f.mutate({
-        ...command,
-        input: {
-          ...command.input,
-          expected: hydrated.version,
-          commandId: repair ? "repair-hydrated-column" : "unchanged-after-hydration",
-          expectedState: buildRestartRecoveryExpectedState(hydrated.entry!),
-          // Clearing an absent optional field changes the in-memory shape, not the stored row.
-          lifecycle: { endedAt: undefined },
-          reducers: [],
-        },
-      }),
-    ).toMatchObject({ kind: "committed" });
-    expect(writes.counts).toEqual({ nodes: Number(repair), windows: 0 });
-    expect(f.nativeEntry()).toEqual(hydrated.entry);
-    expect(
-      f.database.db
-        .prepare("SELECT label FROM session_nodes WHERE session_key = ?")
-        .get(f.target.sessionKey),
-    ).toMatchObject({ label: "initial" });
-  }
+  });
 });
 
-it("reads participant counts and ordering across turns without SQL", ({ actor: f }) => {
-  f.read();
-  using reads = counts(f, ["participant", "hydration"], (sql) => {
-    if (sql.includes('as "actor_participants"')) {
-      return "hydration";
+it("reads committed participant counts and ordering in the same and next turn without SQL", async () => {
+  await withActor((f) => {
+    f.read();
+    const reads = trackSqliteStatementExecutions(
+      f.database.db,
+      ["participant", "hydration"],
+      (sql) => {
+        if (sql.includes('as "actor_participants"')) {
+          return "hydration";
+        }
+        return /^select\b/iu.test(sql) && sql.includes('"session_participants"')
+          ? "participant"
+          : null;
+      },
+    );
+    const record = (id: string, promptedAt: number) =>
+      recordSessionParticipantFromWorker(f.database, f.scope, {
+        identity: { type: "agent", id },
+        promptedAt,
+      });
+    const participants = () =>
+      participantRecordsBySessionKey(f.database.db, [f.target.sessionKey]).get(f.target.sessionKey);
+    try {
+      runSqliteImmediateTransactionSync(f.database.db, () => {
+        expect(record("second", 20).value).toBe("inserted");
+        expect(participants()).toMatchObject([participantRecord("second", 1, 20)]);
+        expect(record("first", 10).value).toBe("inserted");
+        expect(record("second", 5).value).toBe("updated");
+        expect(participants()?.map((participant) => participant.identity.id)).toEqual([
+          "second",
+          "first",
+        ]);
+      });
+      expect(f.read().participants).toEqual(participants());
+      expect(participants()).toMatchObject([
+        participantRecord("second", 2, 5, 20),
+        participantRecord("first", 1, 10),
+      ]);
+      runSqliteImmediateTransactionSync(f.database.db, () => record("second", 30));
+      const next = f.read();
+      expect(next.participants[0]).toMatchObject({ contributionCount: 3, lastPromptedAt: 30 });
+      expect(
+        projectSqliteSessionParticipants(f.database.db, f.target.sessionKey, next.entry!),
+      ).toMatchObject({
+        participantCount: 2,
+        participants: [{ identity: { id: "second" } }, { identity: { id: "first" } }],
+      });
+      expect(reads.counts).toEqual({ participant: 0, hydration: 0 });
+    } finally {
+      reads.restore();
     }
-    return /^select\b/iu.test(sql) && sql.includes('"session_participants"') ? "participant" : null;
   });
-  transaction(f, () => {
-    expect(recordParticipant(f, "second", 20).value).toBe("inserted");
-    expect(participants(f)).toMatchObject([participantRecord("second", 1, 20)]);
-    expect(recordParticipant(f, "first", 10).value).toBe("inserted");
-    expect(recordParticipant(f, "second", 5).value).toBe("updated");
-    expect(participants(f)?.map((participant) => participant.identity.id)).toEqual([
-      "second",
-      "first",
-    ]);
-  });
-  expect(f.read().participants).toEqual(participants(f));
-  expect(participants(f)).toMatchObject([
-    participantRecord("second", 2, 5, 20),
-    participantRecord("first", 1, 10),
-  ]);
-  transaction(f, () => recordParticipant(f, "second", 30));
-  const next = f.read();
-  expect(next.participants[0]).toMatchObject({ contributionCount: 3, lastPromptedAt: 30 });
-  expect(
-    projectSqliteSessionParticipants(f.database.db, f.target.sessionKey, next.entry!),
-  ).toMatchObject({
-    participantCount: 2,
-    participants: [{ identity: { id: "second" } }, { identity: { id: "first" } }],
-  });
-  expect(reads.counts).toEqual({ participant: 0, hydration: 0 });
 });
 
-it("autocommits consecutive resident contributions", ({ actor: f }) => {
-  f.read();
-  const input = participantInput();
-  f.participant(input);
-  {
-    using sql = counts(f, ["contribution", "read"], (text) =>
+it("autocommits resident contributions and keeps consecutive actor counts current", async () => {
+  await withActor((f) => {
+    f.read();
+    const input = { identity: { type: "agent" as const, id: "peer" }, promptedAt: 10 };
+    f.participant(input);
+    const sql = trackSqliteStatementExecutions(f.database.db, ["contribution", "read"], (text) =>
       /^insert into "session_participants"/iu.test(text)
         ? "contribution"
         : /^select\b/iu.test(text)
           ? "read"
           : null,
     );
-    using exec = vi.spyOn(f.database.db, "exec");
-    f.participant({ ...input, promptedAt: 20 });
-    f.participant({ ...input, promptedAt: 30 });
-    expect(f.read().participants).toMatchObject([participantRecord("peer", 3, 10, 30)]);
-    expect(sql.counts).toEqual({ contribution: 2, read: 0 });
-    expect(exec.mock.calls.some(([text]) => /BEGIN|COMMIT/iu.test(text))).toBe(false);
-  }
-  f.restartActor();
-  expect(f.read().participants).toMatchObject([{ contributionCount: 3, lastPromptedAt: 30 }]);
-});
-
-it("refuses contributions before writing and survives publication failure", ({ actor: f }) => {
-  f.read();
-  const input = participantInput();
-  f.participant(input);
-  for (const refused of ["transaction", "commit"] as const) {
-    refuse(f, "participant admission refused", refused);
-    expect(() => f.participant(input)).toThrow("participant admission refused");
-  }
-  f.hooks.admit = undefined;
-  expect(f.read().participants).toMatchObject([{ contributionCount: 1 }]);
-  {
-    using publish = vi.spyOn(participantCache, "publishSessionEntryCacheParticipantUpdate");
-    publish.mockImplementation(() => {
-      throw new Error("participant publication failed");
-    });
-    expect(f.participant({ ...input, promptedAt: 20 })).toMatchObject({ value: "updated" });
-    expect(f.read().participants).toMatchObject([{ contributionCount: 2, lastPromptedAt: 20 }]);
-  }
-  f.restartActor();
-  expect(f.read().participants).toMatchObject([{ contributionCount: 2, lastPromptedAt: 20 }]);
-});
-
-it("discards rolled-back participant facts, then retains committed ones", ({ actor: f }) => {
-  const before = f.read();
-  const record = () => recordParticipant(f);
-  expect(() =>
-    transaction(f, () => {
-      record();
-      expect(participants(f)).toMatchObject([{ identity: { id: "peer" }, contributionCount: 1 }]);
-      throw new Error("rollback participant");
-    }),
-  ).toThrow("rollback participant");
-  const rolledBack = f.read();
-  expect({ participants: rolledBack.participants, entry: rolledBack.entry }).toEqual({
-    participants: before.participants,
-    entry: before.entry,
+    const exec = vi.spyOn(f.database.db, "exec");
+    try {
+      f.participant({ ...input, promptedAt: 20 });
+      f.participant({ ...input, promptedAt: 30 });
+      expect(f.read().participants).toMatchObject([participantRecord("peer", 3, 10, 30)]);
+      expect(sql.counts).toEqual({ contribution: 2, read: 0 });
+      expect(exec.mock.calls.some(([text]) => /BEGIN|COMMIT/iu.test(text))).toBe(false);
+    } finally {
+      exec.mockRestore();
+      sql.restore();
+    }
+    f.restartActor();
+    expect(f.read().participants).toMatchObject([{ contributionCount: 3, lastPromptedAt: 30 }]);
   });
-  transaction(f, record);
-  const committed = [{ identity: { id: "peer" }, contributionCount: 1 }];
-  expect(f.read().participants).toMatchObject(committed);
-  f.restartActor();
-  expect(f.read().participants).toMatchObject(committed);
 });
 
-it("keeps residency across usage writes and reloads session changes", async ({ actor: f }) => {
-  const initial = f.read();
-  const usage = prepareSessionCostUsageRefreshLock(f.database.agentId, f.database.path);
-  using reads = counts(f, ["hydration"], (sql) =>
-    sql.includes('as "actor_participants"') ? "hydration" : null,
-  );
-  const unchanged = () => {
-    expect(f.read()).toEqual(initial);
-    expect(reads.counts.hydration).toBe(0);
-  };
-  try {
-    expect(await usage.acquire()).toBe(true);
-    unchanged();
-    expect(
-      await usage.writeRollup([
+it("refuses a prepared contribution before its statement and retains it after publication failure", async () => {
+  await withActor((f) => {
+    f.read();
+    const input = { identity: { type: "agent" as const, id: "peer" }, promptedAt: 10 };
+    f.participant(input);
+    for (const refused of ["transaction", "commit"] as const) {
+      f.hooks.admit = (stage) => {
+        if (stage === refused) {
+          throw new Error("participant admission refused");
+        }
+      };
+      expect(() => f.participant(input)).toThrow("participant admission refused");
+    }
+    f.hooks.admit = undefined;
+    expect(f.read().participants).toMatchObject([{ contributionCount: 1 }]);
+    const publish = vi
+      .spyOn(participantCache, "publishSessionEntryCacheParticipantUpdate")
+      .mockImplementation(() => {
+        throw new Error("participant publication failed");
+      });
+    try {
+      expect(f.participant({ ...input, promptedAt: 20 })).toMatchObject({ value: "updated" });
+      expect(f.read().participants).toMatchObject([{ contributionCount: 2, lastPromptedAt: 20 }]);
+    } finally {
+      publish.mockRestore();
+    }
+    f.restartActor();
+    expect(f.read().participants).toMatchObject([{ contributionCount: 2, lastPromptedAt: 20 }]);
+  });
+});
+
+it("discards rolled-back participant facts and retains the next committed contribution", async () => {
+  await withActor((f) => {
+    const before = f.read();
+    const record = () =>
+      recordSessionParticipantFromWorker(f.database, f.scope, {
+        identity: { type: "agent", id: "peer" },
+        promptedAt: 10,
+      });
+    expect(() =>
+      runSqliteImmediateTransactionSync(f.database.db, () => {
+        record();
+        expect(
+          participantRecordsBySessionKey(f.database.db, [f.target.sessionKey]).get(
+            f.target.sessionKey,
+          ),
+        ).toMatchObject([{ identity: { id: "peer" }, contributionCount: 1 }]);
+        throw new Error("rollback participant");
+      }),
+    ).toThrow("rollback participant");
+    const rolledBack = f.read();
+    expect(rolledBack.participants).toEqual(before.participants);
+    expect(rolledBack.entry).toEqual(before.entry);
+    runSqliteImmediateTransactionSync(f.database.db, record);
+    expect(f.read().participants).toMatchObject([
+      { identity: { id: "peer" }, contributionCount: 1 },
+    ]);
+    f.restartActor();
+    expect(f.read().participants).toMatchObject([
+      { identity: { id: "peer" }, contributionCount: 1 },
+    ]);
+  });
+});
+
+it("retains resident session facts across usage cache writes and reloads actual session changes", async () => {
+  await withActor(async (f) => {
+    const initial = f.read();
+    const usage = prepareSessionCostUsageRefreshLock(f.database.agentId, f.database.path);
+    const reads = trackSqliteStatementExecutions(f.database.db, ["hydration"], (sql) =>
+      sql.includes('as "actor_participants"') ? "hydration" : null,
+    );
+    const unchanged = () => {
+      expect(f.read()).toEqual(initial);
+      expect(reads.counts.hydration).toBe(0);
+    };
+    try {
+      expect(await usage.acquire()).toBe(true);
+      unchanged();
+      expect(
+        await usage.writeRollup([
+          {
+            rollupId: "synthetic-rollup",
+            valueJson: new TextEncoder().encode("{}"),
+            blob: null,
+            updatedAt: 2,
+          },
+        ]),
+      ).toBe(true);
+      unchanged();
+      await usage.pruneRows([{ key: "synthetic-rollup", valueJson: "{}", updatedAt: 2 }]);
+      unchanged();
+      await usage.release();
+      unchanged();
+
+      f.writeEntry({ ...initial.entry!, label: "changed by the session owner" });
+      expect(f.read().entry?.label).toBe("changed by the session owner");
+      expect(reads.counts.hydration).toBe(1);
+    } finally {
+      reads.restore();
+      await usage.release();
+    }
+  });
+});
+
+it("keeps transcript residency across entry patches without losing either owner's writes", async () => {
+  await withActor(async (f) => {
+    f.database.db
+      .prepare(
+        "INSERT INTO board_tabs (session_key, tab_id, title, position, created_by, revision) VALUES (?, 'main', 'Synthetic board', 0, 'user', 0)",
+      )
+      .run(f.target.sessionKey);
+    runSqliteImmediateTransactionSync(f.database.db, () =>
+      appendTranscriptEventsInTransaction(f.database, f.scope, [
         {
-          rollupId: "synthetic-rollup",
-          valueJson: new TextEncoder().encode("{}"),
-          blob: null,
-          updatedAt: 2,
+          type: "session",
+          id: f.scope.sessionId,
+          version: 3,
+          timestamp: "2026-01-01T00:00:00Z",
+          cwd: "/synthetic",
+        },
+        {
+          type: "message",
+          id: "before-patch",
+          parentId: null,
+          timestamp: "2026-01-01T00:00:01Z",
+          message: { role: "user", content: "retain this input" },
         },
       ]),
-    ).toBe(true);
-    unchanged();
-    await usage.pruneRows([{ key: "synthetic-rollup", valueJson: "{}", updatedAt: 2 }]);
-    unchanged();
-    await usage.release();
-    unchanged();
-
-    f.writeEntry({ ...initial.entry!, label: "changed by the session owner" });
-    expect(f.read().entry?.label).toBe("changed by the session owner");
-    expect(reads.counts.hydration).toBe(1);
-  } finally {
-    await usage.release();
-  }
-});
-
-it("keeps entry and transcript owners' writes resident across patches", async ({ actor: f }) => {
-  f.database.db
-    .prepare(
-      "INSERT INTO board_tabs (session_key, tab_id, title, position, created_by, revision) VALUES (?, 'main', 'Synthetic board', 0, 'user', 0)",
-    )
-    .run(f.target.sessionKey);
-  transaction(f, () =>
-    appendTranscriptEventsInTransaction(f.database, f.scope, [
-      { ...headerEvent(f), timestamp: "2026-01-01T00:00:00Z" },
-      {
-        ...messageEvent("before-patch", null, "retain this input"),
-        timestamp: "2026-01-01T00:00:01Z",
+    );
+    f.writeEntry({
+      ...f.nativeEntry()!,
+      activitySummary: {
+        version: 1,
+        text: "Retained input",
+        updatedAt: 10,
+        sessionId: f.scope.sessionId,
+        generation: null,
+        maxSeq: null,
+        leafEntryId: null,
+        coveredMessages: 1,
+        totalMessages: 1,
+        omittedContent: false,
       },
-    ]),
-  );
-  f.writeEntry({
-    ...f.nativeEntry()!,
-    activitySummary: {
-      version: 1,
-      text: "Retained input",
-      updatedAt: 10,
-      sessionId: f.scope.sessionId,
-      generation: null,
-      maxSeq: null,
-      leafEntryId: null,
-      coveredMessages: 1,
-      totalMessages: 1,
-      omittedContent: false,
-    },
-  });
-  const before = f.read();
-  const predicate: SessionEntryPatchGuard["shouldCommitIf"] = {
-    kind: "transcript",
-    sessionId: f.scope.sessionId,
-    generation: before.transcript.watermark.generation,
-    leafEntryId: "before-patch",
-  };
-  const entryPatch = (
-    fields: { label?: string; lifecycleRevision?: string; model?: string },
-    shouldCommitIf = predicate,
-  ) =>
-    f.patchEntry({
-      selection: entrySelection(f),
-      sessionKey: f.target.sessionKey,
-      operation: { kind: "fields", patch: fields },
-      operationLabel: "session-entry.patch",
-      validateCanonicalKeys: false,
-      preserveActivity: true,
-      shouldCommitIf,
     });
-  {
-    using reads = counts(f, ["select", "watermark"], (sql) =>
+    const before = f.read();
+    const predicate: SessionEntryPatchGuard["shouldCommitIf"] = {
+      kind: "transcript",
+      sessionId: f.scope.sessionId,
+      generation: before.transcript.watermark.generation,
+      leafEntryId: "before-patch",
+    };
+    const entryPatch = (
+      fields: { label?: string; lifecycleRevision?: string; model?: string },
+      shouldCommitIf = predicate,
+    ) =>
+      f.patchEntry({
+        selection: { kind: "entry", sessionKey: f.target.sessionKey, exact: true },
+        sessionKey: f.target.sessionKey,
+        operation: { kind: "fields", patch: fields },
+        operationLabel: "session-entry.patch",
+        validateCanonicalKeys: false,
+        preserveActivity: true,
+        shouldCommitIf,
+      });
+    const reads = trackSqliteStatementExecutions(f.database.db, ["select", "watermark"], (sql) =>
       sql.startsWith("select coalesce(") &&
       sql.includes('as "max_seq"') &&
       sql.includes('"session_transcript_cold_archives"')
@@ -393,80 +387,103 @@ it("keeps entry and transcript owners' writes resident across patches", async ({
           ? "select"
           : null,
     );
-    entryPatch({ label: "entry owner committed", model: "updated-model" });
-    expect(reads.counts).toEqual({ watermark: 0, select: 0 });
-    transaction(f, () => recordParticipant(f));
-    reads.counts.select = 0;
-    const after = f.read();
-    expect(after).toMatchObject({
-      entry: { label: "entry owner committed", model: "updated-model" },
-      hasBoard: true,
-      participants: [{ identity: { id: "peer" }, contributionCount: 1 }],
-    });
-    expect({ transcript: after.transcript, version: after.version }).toEqual({
-      transcript: before.transcript,
-      version: { ...before.version, sequence: before.version.sequence + 2 },
-    });
-    const accounting = activityCommand(f, "activity-20", 20);
-    expect((await commit(f, accounting)).receipt.postimage.entry).toMatchObject({
-      updatedAt: 20,
-      label: "entry owner committed",
-    });
-    const append: Mutation = {
-      type: "session.actor.appendTranscriptEvent",
-      input: {
-        target: f.target,
-        expected: f.read().version,
-        commandId: "append-after-entry-patch",
-        phaseId: "model",
-        sessionId: f.scope.sessionId,
-        lifecycleRevision: after.entry!.lifecycleRevision ?? null,
-        eventJson: JSON.stringify({
-          type: "model_change",
-          id: "after-patch",
-          parentId: "before-patch",
-          timestamp: "2026-01-01T00:00:02Z",
-          provider: "synthetic",
-          modelId: "test-model",
+    try {
+      entryPatch({ label: "entry owner committed", model: "updated-model" });
+      expect(reads.counts.watermark).toBe(0);
+      expect(reads.counts.select).toBe(0);
+      runSqliteImmediateTransactionSync(f.database.db, () =>
+        recordSessionParticipantFromWorker(f.database, f.scope, {
+          identity: { type: "agent", id: "peer" },
+          promptedAt: 10,
         }),
-      },
-    };
-    await commit(f, append);
-    expect(entrySnapshot(f)[0]?.row?.transcriptWatermark).toEqual({
-      sessionId: f.scope.sessionId,
-      generation: expect.any(String),
-      maxSeq: 2,
-    });
-    expect(reads.counts.select).toBe(0);
-    entryPatch({ label: "wrong generation" }, { ...predicate, generation: "superseded" });
-    entryPatch({ label: "wrong branch" }, { ...predicate, leafEntryId: "off-path" });
-    expect(f.read().entry?.label).toBe("entry owner committed");
-    entryPatch({ label: "entry owner committed" }, { ...predicate, leafEntryId: "after-patch" });
-    expect(reads.counts.watermark).toBe(0);
-  }
-  expect(f.nativeEntry()).toMatchObject({ updatedAt: 20, label: "entry owner committed" });
-  expect(
-    readTranscriptEventRows(f.database, f.scope.sessionId).map(
-      (row) => JSON.parse(row.eventJson).id,
-    ),
-  ).toEqual([f.scope.sessionId, "before-patch", "after-patch"]);
+      );
+      reads.counts.select = 0;
+      const after = f.read();
+      expect(after.entry?.label).toBe("entry owner committed");
+      expect(after.entry?.model).toBe("updated-model");
+      expect(after.hasBoard).toBe(true);
+      expect(after.participants).toMatchObject([
+        { identity: { id: "peer" }, contributionCount: 1 },
+      ]);
+      expect(after.transcript).toEqual(before.transcript);
+      expect(after.version).toEqual({ ...before.version, sequence: before.version.sequence + 2 });
+      const accounting: Mutation = {
+        type: "session.actor.patch",
+        input: {
+          target: after.target,
+          expected: after.version,
+          commandId: "activity-20",
+          phaseId: "terminal-accounting",
+          reducers: [{ kind: "activity", updatedAt: 20 }],
+        },
+      };
+      await f.prepare(accounting);
+      expect(f.mutate(accounting)).toMatchObject({
+        kind: "committed",
+        receipt: { postimage: { entry: { updatedAt: 20, label: "entry owner committed" } } },
+      });
+      const append: Mutation = {
+        type: "session.actor.appendTranscriptEvent",
+        input: {
+          target: f.target,
+          expected: f.read().version,
+          commandId: "append-after-entry-patch",
+          phaseId: "model",
+          sessionId: f.scope.sessionId,
+          lifecycleRevision: after.entry!.lifecycleRevision ?? null,
+          eventJson: JSON.stringify({
+            type: "model_change",
+            id: "after-patch",
+            parentId: "before-patch",
+            timestamp: "2026-01-01T00:00:02Z",
+            provider: "synthetic",
+            modelId: "test-model",
+          }),
+        },
+      };
+      await f.prepare(append);
+      expect(f.mutate(append).kind).toBe("committed");
+      expect(
+        readSessionEntryPatchSnapshot(f.database, {
+          kind: "entry",
+          sessionKey: f.target.sessionKey,
+          exact: true,
+        })[0]?.row?.transcriptWatermark,
+      ).toEqual({ sessionId: f.scope.sessionId, generation: expect.any(String), maxSeq: 2 });
+      expect(reads.counts.select).toBe(0);
+      entryPatch({ label: "wrong generation" }, { ...predicate, generation: "superseded" });
+      entryPatch({ label: "wrong branch" }, { ...predicate, leafEntryId: "off-path" });
+      expect(f.read().entry?.label).toBe("entry owner committed");
+      entryPatch({ label: "entry owner committed" }, { ...predicate, leafEntryId: "after-patch" });
+      expect(reads.counts.watermark).toBe(0);
+    } finally {
+      reads.restore();
+    }
+    expect(f.nativeEntry()).toMatchObject({ updatedAt: 20, label: "entry owner committed" });
+    expect(
+      readTranscriptEventRows(f.database, f.scope.sessionId).map(
+        (row) => JSON.parse(row.eventJson).id,
+      ),
+    ).toEqual([f.scope.sessionId, "before-patch", "after-patch"]);
 
-  const retained = f.read();
-  refuse(f, "entry patch refused");
-  expect(() => entryPatch({ label: "must roll back" })).toThrow("entry patch refused");
-  delete f.hooks.admit;
-  const rolledBack = f.read();
-  expect([rolledBack.entry, rolledBack.transcript, rolledBack.pendingInputs]).toEqual([
-    retained.entry,
-    retained.transcript,
-    retained.pendingInputs,
-  ]);
-  entryPatch({ lifecycleRevision: "new-lifecycle" });
-  const replaced = f.read();
-  expect(replaced.version.epoch).not.toBe(rolledBack.version.epoch);
-  expect(replaced).toMatchObject({
-    entry: { lifecycleRevision: "new-lifecycle", model: "updated-model" },
-    hasBoard: true,
+    const retained = f.read();
+    f.hooks.admit = (stage) => {
+      if (stage === "commit") {
+        throw new Error("entry patch refused");
+      }
+    };
+    expect(() => entryPatch({ label: "must roll back" })).toThrow("entry patch refused");
+    delete f.hooks.admit;
+    const rolledBack = f.read();
+    expect(rolledBack.entry).toEqual(retained.entry);
+    expect(rolledBack.transcript).toEqual(retained.transcript);
+    expect(rolledBack.pendingInputs).toEqual(retained.pendingInputs);
+    entryPatch({ lifecycleRevision: "new-lifecycle" });
+    const replaced = f.read();
+    expect(replaced.version.epoch).not.toBe(rolledBack.version.epoch);
+    expect(replaced.entry?.lifecycleRevision).toBe("new-lifecycle");
+    expect(replaced.entry?.model).toBe("updated-model");
+    expect(replaced.hasBoard).toBe(true);
   });
 });
 
@@ -477,23 +494,25 @@ it.each(["entry", "target"] as const)(
       f.read();
       const selection =
         kind === "entry"
-          ? entrySelection(f, false)
+          ? { kind, sessionKey: f.target.sessionKey, exact: false }
           : {
               kind,
               target: { canonicalKey: f.target.sessionKey, storeKeys: [f.target.sessionKey] },
             };
       if (kind === "entry") {
         expect(
-          readSessionEntryPatchSnapshot(
-            f.database,
-            entrySelection(f, true, ` ${f.target.sessionKey} `),
-          ),
+          readSessionEntryPatchSnapshot(f.database, {
+            kind,
+            sessionKey: ` ${f.target.sessionKey} `,
+            exact: true,
+          }),
         ).toEqual([]);
         expect(
-          readSessionEntryPatchSnapshot(
-            f.database,
-            entrySelection(f, false, ` ${f.target.sessionKey} `),
-          )[0]?.sessionKey,
+          readSessionEntryPatchSnapshot(f.database, {
+            kind,
+            sessionKey: ` ${f.target.sessionKey} `,
+            exact: false,
+          })[0]?.sessionKey,
         ).toBe(f.target.sessionKey);
       }
       const snapshot = () => readSessionEntryPatchSnapshot(f.database, selection);
@@ -512,8 +531,10 @@ it.each(["entry", "target"] as const)(
       };
       // Warm publication setup before measuring ordinary patches.
       f.patchEntry(prepare("warm publication"));
-      {
-        using reads = counts(f, ["select"], (sql) => (/^select\b/iu.test(sql) ? "select" : null));
+      const reads = trackSqliteStatementExecutions(f.database.db, ["select"], (sql) =>
+        /^select\b/iu.test(sql) ? "select" : null,
+      );
+      try {
         const stale = prepare("stale replacement");
         f.patchEntry(prepare("first committed patch"));
         expect(snapshot()[0]?.entry.label).toBe("first committed patch");
@@ -523,10 +544,16 @@ it.each(["entry", "target"] as const)(
         expect(reads.counts.select).toBe(0);
 
         const refused = prepare("must roll back");
-        refuse(f, "patch commit refused");
+        f.hooks.admit = (stage) => {
+          if (stage === "commit") {
+            throw new Error("patch commit refused");
+          }
+        };
         expect(() => f.patchEntry(refused)).toThrow("patch commit refused");
         delete f.hooks.admit;
         expect(snapshot()[0]?.entry.label).toBe("second committed patch");
+      } finally {
+        reads.restore();
       }
       expect(f.nativeEntry()?.label).toBe("second committed patch");
 
@@ -543,15 +570,25 @@ it.each(["entry", "target"] as const)(
   },
 );
 
-const question = messageEvent("question", null, "A question about 🦞");
-const answer = messageEvent("answer", "question", "An answer", "assistant");
+const question = {
+  type: "message",
+  id: "question",
+  parentId: null,
+  message: { role: "user", content: "A question about 🦞" },
+};
+const answer = {
+  type: "message",
+  id: "answer",
+  parentId: "question",
+  message: { role: "assistant", content: "An answer" },
+};
 
 const storedBytes = (event: unknown) => Buffer.byteLength(JSON.stringify(event)) + 1;
 
 function seed(f: Fixture, prettyQuestion = false) {
-  const header = headerEvent(f);
+  const header = { type: "session", id: f.scope.sessionId, version: 3, cwd: "/synthetic" };
   const questionJson = JSON.stringify(question, null, prettyQuestion ? 2 : undefined);
-  transaction(f, () => {
+  runSqliteImmediateTransactionSync(f.database.db, () => {
     appendTranscriptEventInTransaction(f.database, f.scope, header);
     appendTranscriptEventInTransaction(f.database, f.scope, question, { eventJson: questionJson });
     appendTranscriptEventInTransaction(f.database, f.scope, answer);
@@ -591,9 +628,7 @@ function reader(f: Fixture) {
       ),
     );
   return {
-    [Symbol.dispose]() {
-      replica.close();
-    },
+    replica,
     receipt,
     install() {
       expect(replica.beginRead()(f.read())).toBe(true);
@@ -611,34 +646,55 @@ function reader(f: Fixture) {
   };
 }
 
-it("tracks rewritten bytes in compact receipts, including rollback", ({ actor: f }) => {
-  const { header, questionJson } = seed(f, true);
-  using context = reader(f);
-  context.install();
-  expect(context.receipt().facts?.contextMetadata).toBeUndefined();
-  context.expectAccounting(2, Buffer.byteLength(questionJson) + 1 + storedBytes(answer));
+it("reads rewritten stored bytes from compact receipts and preserves committed totals on rollback", async () => {
+  await withActor((f) => {
+    const { header, questionJson } = seed(f, true);
+    const context = reader(f);
+    try {
+      context.install();
+      expect(context.receipt().facts?.contextMetadata).toBeUndefined();
+      context.expectAccounting(2, Buffer.byteLength(questionJson) + 1 + storedBytes(answer));
 
-  const rewritten = steer(question, "committed-next-run");
-  transaction(f, () => rewrite(f, 1, questionJson, rewritten));
-  // The compact publication updates exact totals without copying row metadata.
-  expect(context.receipt().facts?.contextMetadata).toBeUndefined();
-  const expected = { eventCount: 2, byteSize: storedBytes(rewritten) + storedBytes(answer) };
-  context.expectAccounting(expected.eventCount, expected.byteSize);
-  expect(context.bounded()).toMatchObject({
-    events: [header, rewritten, answer],
-    serializedBytes: storedBytes(header) + expected.byteSize,
+      const rewritten = {
+        ...question,
+        message: { ...question.message, __openclaw: { steerTargetRunId: "committed-next-run" } },
+      };
+      runSqliteImmediateTransactionSync(f.database.db, () => {
+        rewriteSqliteTranscriptEventRowsInTransaction(f.database, f.scope, [
+          { seq: 1, expectedEventJson: questionJson, event: rewritten },
+        ]);
+      });
+      // The compact publication updates exact totals without copying row metadata.
+      expect(context.receipt().facts?.contextMetadata).toBeUndefined();
+      const expected = { eventCount: 2, byteSize: storedBytes(rewritten) + storedBytes(answer) };
+      context.expectAccounting(expected.eventCount, expected.byteSize);
+      expect(context.bounded()).toMatchObject({
+        events: [header, rewritten, answer],
+        serializedBytes: storedBytes(header) + expected.byteSize,
+      });
+
+      const rolledBack = {
+        ...rewritten,
+        message: {
+          ...rewritten.message,
+          __openclaw: { steerTargetRunId: "uncommitted-run-with-a-different-size" },
+        },
+      };
+      expect(() =>
+        runSqliteImmediateTransactionSync(f.database.db, () => {
+          rewriteSqliteTranscriptEventRowsInTransaction(f.database, f.scope, [
+            { seq: 1, expectedEventJson: JSON.stringify(rewritten), event: rolledBack },
+          ]);
+          throw new Error("Synthetic context rewrite rollback");
+        }),
+      ).toThrow("Synthetic context rewrite rollback");
+      context.install();
+      context.expectAccounting(expected.eventCount, expected.byteSize);
+      expect(context.bounded().events).toEqual([header, rewritten, answer]);
+    } finally {
+      context.replica.close();
+    }
   });
-
-  const rolledBack = steer(rewritten, "uncommitted-run-with-a-different-size");
-  expect(() =>
-    transaction(f, () => {
-      rewrite(f, 1, JSON.stringify(rewritten), rolledBack);
-      throw new Error("Synthetic context rewrite rollback");
-    }),
-  ).toThrow("Synthetic context rewrite rollback");
-  context.install();
-  context.expectAccounting(expected.eventCount, expected.byteSize);
-  expect(context.bounded().events).toEqual([header, rewritten, answer]);
 });
 
 it.each(["reset", "compaction", "leaf"] as const)(
@@ -646,200 +702,252 @@ it.each(["reset", "compaction", "leaf"] as const)(
   async (kind) => {
     await withActor((f) => {
       const { header } = seed(f);
-      using context = reader(f);
-      context.install();
-      expect(context.receipt().facts?.contextMetadata).toBeUndefined();
-      const control =
-        kind === "leaf"
-          ? { type: kind, id: "control", parentId: "answer", targetId: "question" }
-          : kind === "compaction"
-            ? {
-                type: kind,
-                id: "control",
-                parentId: "answer",
-                summary: "The earlier conversation",
-                tokensBefore: 20,
-              }
-            : { type: kind, id: "control", parentId: "answer", reason: "new" };
-      const tail = messageEvent(
-        "tail",
-        kind === "leaf" ? "question" : "control",
-        "Continue in the selected window",
-      );
-      transaction(f, () => {
-        appendTranscriptEventsInTransaction(f.database, f.scope, [control, tail], {
-          scheduleProjectionReconcile: false,
+      const context = reader(f);
+      try {
+        context.install();
+        expect(context.receipt().facts?.contextMetadata).toBeUndefined();
+        const control =
+          kind === "leaf"
+            ? { type: kind, id: "control", parentId: "answer", targetId: "question" }
+            : kind === "compaction"
+              ? {
+                  type: kind,
+                  id: "control",
+                  parentId: "answer",
+                  summary: "The earlier conversation",
+                  tokensBefore: 20,
+                }
+              : { type: kind, id: "control", parentId: "answer", reason: "new" };
+        const tail = {
+          ...question,
+          id: "tail",
+          parentId: kind === "leaf" ? "question" : "control",
+          message: { role: "user", content: "Continue in the selected window" },
+        };
+        runSqliteImmediateTransactionSync(f.database.db, () => {
+          appendTranscriptEventsInTransaction(f.database, f.scope, [control, tail], {
+            scheduleProjectionReconcile: false,
+          });
+          reconcileSessionTranscriptIndexInTransaction(f.database.db, f.scope.sessionId);
         });
-        reconcileSessionTranscriptIndexInTransaction(f.database.db, f.scope.sessionId);
-      });
-      context.install();
-      expect(context.receipt().facts?.contextMetadata).toBeUndefined();
-      const counted =
-        kind === "reset" ? [tail] : kind === "compaction" ? [control, tail] : [question, tail];
-      context.expectAccounting(
-        counted.length,
-        counted.reduce((total, event) => total + storedBytes(event), 0),
-      );
-      const bounded = context.bounded();
-      expect(bounded.boundaryCount).toBe(kind === "leaf" ? 0 : 1);
-      expect(bounded.events).toEqual(
-        kind === "leaf" ? [header, question, tail] : [header, question, answer, control, tail],
-      );
+        context.install();
+        expect(context.receipt().facts?.contextMetadata).toBeUndefined();
+        const counted =
+          kind === "reset" ? [tail] : kind === "compaction" ? [control, tail] : [question, tail];
+        context.expectAccounting(
+          counted.length,
+          counted.reduce((total, event) => total + storedBytes(event), 0),
+        );
+        const bounded = context.bounded();
+        expect(bounded.boundaryCount).toBe(kind === "leaf" ? 0 : 1);
+        expect(bounded.events).toEqual(
+          kind === "leaf" ? [header, question, tail] : [header, question, answer, control, tail],
+        );
+      } finally {
+        context.replica.close();
+      }
     });
   },
 );
 
-it("accounts for appends and rewrites beyond the resident window without scans", async ({
-  actor: f,
-}) => {
-  const events = Array.from({ length: 600 }, (_, index) =>
-    messageEvent(`message-${index}`, index === 0 ? null : `message-${index - 1}`, "x"),
-  );
-  transaction(f, () =>
-    appendTranscriptEventsInTransaction(f.database, f.scope, events, {
-      scheduleProjectionReconcile: false,
-    }),
-  );
-  using context = reader(f);
-  context.install();
-  using stats = counts(f, ["aggregate"], (sql) =>
-    /\bsum\(/iu.test(sql) && sql.includes('"transcript_events"') ? "aggregate" : null,
-  );
-  const originalBytes = events.reduce((total, event) => total + storedBytes(event), 0);
-  context.expectAccounting(events.length, originalBytes);
-  const appended = {
-    ...messageEvent("after-window", events.at(-1)!.id, question.message.content),
-    timestamp: "2026-01-01T00:00:00.000Z",
-  };
-  const command: Mutation = {
-    type: "session.actor.appendTranscriptEvent",
-    input: {
-      target: f.target,
-      commandId: "append-after-window",
-      phaseId: "append",
-      append: {
-        kind: "metadata",
-        input: {
-          scope: f.scope,
-          event: appended,
-          message: {
-            messageJson: JSON.stringify(appended.message),
-            cwd: "/synthetic",
-            validateTurn: false,
-          },
-          options: {},
-        },
-      },
-    },
-  };
-  const rewritten = steer(appended, "new-run");
-  await commit(f, command);
-  context.install();
-  context.expectAccounting(events.length + 1, originalBytes + storedBytes(appended));
-  transaction(f, () => rewrite(f, events.length, JSON.stringify(appended), rewritten));
-  context.expectAccounting(events.length + 1, originalBytes + storedBytes(rewritten));
-  expect(stats.counts.aggregate).toBe(0);
-  expect(
-    readSessionTranscriptBoundedActiveContextCore(f.scope, {
-      maxBytes: 1024 * 1024,
-      maxEvents: 100,
-    }),
-  ).toMatchObject({ events: [...events.slice(-99), rewritten], truncated: true });
-});
-
-it("retains an oversized actor until replaced by another oversized actor", async ({ actor: f }) => {
-  const largeLabel = "x".repeat(9 * 1024 * 1024);
-  const other = { ...f.target, sessionKey: "agent:main:byte-budget-other" };
-  const companion = { ...f.target, sessionKey: "agent:main:byte-budget-companion" };
-  transaction(f, () => {
-    for (const [target, sessionId, label] of [
-      [f.target, f.scope.sessionId, largeLabel],
-      [other, "byte-budget-other", undefined],
-      [companion, "byte-budget-companion", undefined],
-    ] as const) {
-      writeSessionEntry(f.database, target.sessionKey, { sessionId, updatedAt: 1, label });
-    }
-  });
-
-  const small = f.read(other);
-  f.read(companion);
-  expect(f.read(other).version).toEqual(small.version);
-
-  const initial = f.read();
-  const command = activityCommand(f, "oversized-activity", 2);
-  const committed = await commit(f, command);
-  expect(committed.failure).toBeUndefined();
-  expect(f.reply()).toEqual({ kind: "committed" });
-  expect(committed.receipt.afterVersion).toEqual({
-    epoch: initial.version.epoch,
-    sequence: initial.version.sequence + 1,
-  });
-  const current = f.read();
-  expect(current.version).toEqual(committed.receipt.afterVersion);
-  expect(current.entry).toMatchObject({ updatedAt: 2, label: largeLabel });
-
-  const competing = f.read(other);
-  expect(f.read().version).toEqual(current.version);
-  expect(f.read(other).version).toEqual(competing.version);
-  const neighboring = f.read(companion);
-  expect(f.read(other).version).toEqual(competing.version);
-  expect(f.read(companion).version).toEqual(neighboring.version);
-
-  expect(
-    f.mutate({
-      ...command,
-      input: { ...command.input, expected: current.version, commandId: "competing-activity" },
-    }).kind,
-  ).toBe("committed");
-
-  f.writeEntry(
-    { sessionId: "byte-budget-companion", updatedAt: 2, label: largeLabel },
-    companion.sessionKey,
-  );
-  const secondOversized = f.read(companion);
-  expect(secondOversized.version.epoch).not.toBe(neighboring.version.epoch);
-  expect(f.read(other).version).toEqual(competing.version);
-  const rehydrated = f.read();
-  expect(rehydrated.version.epoch).not.toBe(current.version.epoch);
-  expect(rehydrated.entry).toMatchObject({ updatedAt: 2, label: largeLabel });
-  expect(f.read(other).version).toEqual(competing.version);
-  expect(f.read(companion).version.epoch).not.toBe(secondOversized.version.epoch);
-
-  f.read();
-  f.writeEntry({ sessionId: f.scope.sessionId, updatedAt: 3, label: "small replacement" });
-  const smaller = f.read();
-  f.read(other);
-  f.read(companion);
-  expect(f.read().version).toEqual(smaller.version);
-  expect(f.read().entry?.label).toBe("small replacement");
-});
-
-it("evicts ordinary actors under byte pressure, but keeps the oversized actor", ({ actor: f }) => {
-  const ordinary = { ...f.target, sessionKey: "agent:main:ordinary" };
-  const newcomers = Array.from({ length: 3 }, (_, index) => ({
-    ...f.target,
-    sessionKey: `agent:main:newcomer-${index}`,
-  }));
-  transaction(f, () => {
-    // Stored JSON, parsed rows, and hot entries together exceed the ordinary budget.
-    for (const [target, mib] of [
-      [f.target, 9],
-      [ordinary, 1],
-      ...newcomers.map((newcomer) => [newcomer, 1] as const),
-    ] as const) {
-      writeSessionEntry(f.database, target.sessionKey, {
-        sessionId: target.sessionKey,
-        updatedAt: 1,
-        label: "x".repeat(mib * 1024 * 1024),
+it("keeps exact accounting through appends and rewrites beyond the actor's resident window without rescanning", async () => {
+  await withActor(async (f) => {
+    const events = Array.from({ length: 600 }, (_, index) => ({
+      type: "message",
+      id: `message-${index}`,
+      parentId: index === 0 ? null : `message-${index - 1}`,
+      message: { role: "user", content: "x" },
+    }));
+    runSqliteImmediateTransactionSync(f.database.db, () => {
+      appendTranscriptEventsInTransaction(f.database, f.scope, events, {
+        scheduleProjectionReconcile: false,
       });
+    });
+    const context = reader(f);
+    try {
+      context.install();
+      const stats = trackSqliteStatementExecutions(f.database.db, ["aggregate"], (sql) =>
+        /\bsum\(/iu.test(sql) && sql.includes('"transcript_events"') ? "aggregate" : null,
+      );
+      const originalBytes = events.reduce((total, event) => total + storedBytes(event), 0);
+      context.expectAccounting(events.length, originalBytes);
+      const appended = {
+        type: "message" as const,
+        id: "after-window",
+        parentId: events.at(-1)!.id,
+        timestamp: "2026-01-01T00:00:00.000Z",
+        message: question.message,
+      };
+      const command: Mutation = {
+        type: "session.actor.appendTranscriptEvent",
+        input: {
+          target: f.target,
+          commandId: "append-after-window",
+          phaseId: "append",
+          append: {
+            kind: "metadata",
+            input: {
+              scope: f.scope,
+              event: appended,
+              message: {
+                messageJson: JSON.stringify(appended.message),
+                cwd: "/synthetic",
+                validateTurn: false,
+              },
+              options: {},
+            },
+          },
+        },
+      };
+      const rewritten = {
+        ...appended,
+        message: { ...appended.message, __openclaw: { steerTargetRunId: "new-run" } },
+      };
+      try {
+        await f.prepare(command);
+        expect(f.mutate(command)).toMatchObject({ kind: "committed" });
+        context.install();
+        context.expectAccounting(events.length + 1, originalBytes + storedBytes(appended));
+        runSqliteImmediateTransactionSync(f.database.db, () => {
+          rewriteSqliteTranscriptEventRowsInTransaction(f.database, f.scope, [
+            { seq: events.length, expectedEventJson: JSON.stringify(appended), event: rewritten },
+          ]);
+        });
+        context.expectAccounting(events.length + 1, originalBytes + storedBytes(rewritten));
+        expect(stats.counts.aggregate).toBe(0);
+      } finally {
+        stats.restore();
+      }
+      expect(
+        readSessionTranscriptBoundedActiveContextCore(f.scope, {
+          maxBytes: 1024 * 1024,
+          maxEvents: 100,
+        }),
+      ).toMatchObject({ events: [...events.slice(-99), rewritten], truncated: true });
+    } finally {
+      context.replica.close();
     }
   });
-  const oversizedVersion = f.read().version;
-  const ordinaryVersion = f.read(ordinary).version;
-  for (const newcomer of newcomers) {
-    f.read(newcomer);
-  }
-  expect(f.read().version).toEqual(oversizedVersion);
-  expect(f.read(ordinary).version.epoch).not.toBe(ordinaryVersion.epoch);
-  expect(f.read().version).toEqual(oversizedVersion);
+});
+
+it("retains one oversized actor across competing small actors and replaces it with a second oversized actor", async () => {
+  await withActor(async (f) => {
+    const largeLabel = "x".repeat(9 * 1024 * 1024);
+    const other = { ...f.target, sessionKey: "agent:main:byte-budget-other" };
+    const companion = { ...f.target, sessionKey: "agent:main:byte-budget-companion" };
+    runSqliteImmediateTransactionSync(f.database.db, () => {
+      writeSessionEntry(f.database, f.target.sessionKey, {
+        sessionId: f.scope.sessionId,
+        updatedAt: 1,
+        label: largeLabel,
+      });
+      writeSessionEntry(f.database, other.sessionKey, {
+        sessionId: "byte-budget-other",
+        updatedAt: 1,
+      });
+      writeSessionEntry(f.database, companion.sessionKey, {
+        sessionId: "byte-budget-companion",
+        updatedAt: 1,
+      });
+    });
+
+    const small = f.read(other);
+    f.read(companion);
+    expect(f.read(other).version).toEqual(small.version);
+
+    const initial = f.read();
+    const command: Mutation = {
+      type: "session.actor.patch",
+      input: {
+        target: initial.target,
+        expected: initial.version,
+        commandId: "oversized-activity",
+        phaseId: "terminal-accounting",
+        reducers: [{ kind: "activity", updatedAt: 2 }],
+      },
+    };
+    await f.prepare(command);
+    const committed = f.mutate(command);
+    if (committed.kind !== "committed") {
+      throw new Error("Expected the oversized sole actor to commit without rehydration");
+    }
+    expect(committed.failure).toBeUndefined();
+    expect(f.reply()).toEqual({ kind: "committed" });
+    expect(committed.receipt.afterVersion).toEqual({
+      epoch: initial.version.epoch,
+      sequence: initial.version.sequence + 1,
+    });
+    const current = f.read();
+    expect(current.version).toEqual(committed.receipt.afterVersion);
+    expect(current.entry?.updatedAt).toBe(2);
+    expect(current.entry?.label === largeLabel).toBe(true);
+
+    const competing = f.read(other);
+    expect(f.read().version).toEqual(current.version);
+    expect(f.read(other).version).toEqual(competing.version);
+    const neighboring = f.read(companion);
+    expect(f.read(other).version).toEqual(competing.version);
+    expect(f.read(companion).version).toEqual(neighboring.version);
+
+    expect(
+      f.mutate({
+        ...command,
+        input: { ...command.input, expected: current.version, commandId: "competing-activity" },
+      }).kind,
+    ).toBe("committed");
+
+    f.writeEntry(
+      { sessionId: "byte-budget-companion", updatedAt: 2, label: largeLabel },
+      companion.sessionKey,
+    );
+    const secondOversized = f.read(companion);
+    expect(secondOversized.version.epoch).not.toBe(neighboring.version.epoch);
+    expect(f.read(other).version).toEqual(competing.version);
+    const rehydrated = f.read();
+    expect(rehydrated.version.epoch).not.toBe(current.version.epoch);
+    expect(rehydrated.entry?.updatedAt).toBe(2);
+    expect(rehydrated.entry?.label === largeLabel).toBe(true);
+    expect(f.read(other).version).toEqual(competing.version);
+    expect(f.read(companion).version.epoch).not.toBe(secondOversized.version.epoch);
+
+    f.read();
+    f.writeEntry({ sessionId: f.scope.sessionId, updatedAt: 3, label: "small replacement" });
+    const smaller = f.read();
+    f.read(other);
+    f.read(companion);
+    expect(f.read().version).toEqual(smaller.version);
+    expect(f.read().entry?.label).toBe("small replacement");
+  });
+});
+
+it("evicts ordinary actors under byte pressure while keeping the oversized working set", async () => {
+  await withActor((f) => {
+    const ordinary = { ...f.target, sessionKey: "agent:main:ordinary" };
+    const newcomers = Array.from({ length: 3 }, (_, index) => ({
+      ...f.target,
+      sessionKey: `agent:main:newcomer-${index}`,
+    }));
+    runSqliteImmediateTransactionSync(f.database.db, () => {
+      // Stored JSON, parsed rows, and hot entries together exceed the ordinary budget.
+      for (const [target, mib] of [
+        [f.target, 9],
+        [ordinary, 1],
+        ...newcomers.map((newcomer) => [newcomer, 1] as const),
+      ] as const) {
+        writeSessionEntry(f.database, target.sessionKey, {
+          sessionId: target.sessionKey,
+          updatedAt: 1,
+          label: "x".repeat(mib * 1024 * 1024),
+        });
+      }
+    });
+    const oversizedVersion = f.read().version;
+    const ordinaryVersion = f.read(ordinary).version;
+    for (const newcomer of newcomers) {
+      f.read(newcomer);
+    }
+    expect(f.read().version).toEqual(oversizedVersion);
+    expect(f.read(ordinary).version.epoch).not.toBe(ordinaryVersion.epoch);
+    expect(f.read().version).toEqual(oversizedVersion);
+  });
 });
