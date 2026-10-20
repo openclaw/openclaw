@@ -41,30 +41,13 @@ import { installDoctorGatewayService } from "./doctor-gateway-installation.js";
 import { maybeRepairGatewayServiceConfig } from "./doctor-gateway-services.js";
 
 const refusals = [
-  {
-    scenario: "sealed",
-    kind: "sealed",
-    reason: "sealed-mount",
-    guidance: "deployment owner",
-    tokenPresent: false,
-  },
-  {
-    scenario: "unsafe",
-    kind: "unknown",
-    reason: "unsafe-permissions",
-    guidance: "chmod go-w",
-    tokenPresent: true,
-  },
-  {
-    scenario: "uninspectable",
-    kind: "unknown",
-    reason: "inspection-failed",
-    guidance: "native service-manager availability",
-    tokenPresent: false,
-  },
+  ["sealed", "sealed", "sealed-mount", "deployment owner", false],
+  ["unsafe", "unknown", "unsafe-permissions", "chmod go-w", true],
+  ["uninspectable", "unknown", "inspection-failed", "native service-manager availability", false],
+  ["rejected", "unknown", "inspection-failed", "native service-manager availability", false],
 ] as const;
-type Scenario = (typeof refusals)[number]["scenario"] | "writable" | "repairable" | "rejected";
-type CustodyLoss = keyof typeof custodyActions;
+type Scenario = (typeof refusals)[number][0] | "writable" | "repairable";
+type CustodyLoss = (typeof custodyCases)[number][0];
 
 // All tokens are synthetic. Assertions report equality booleans, never token bytes.
 const embeddedToken = "doctor-fixture-embedded-token";
@@ -80,15 +63,15 @@ const untouchedRepair = {
   unitDirectoryEntries: ["openclaw-gateway.service"],
   nativeActions: [],
 };
-const custodyActions = {
-  "before-publication": [],
-  "backup-published": [],
-  "environment-published": [],
-  "definition-published": ["daemon-reload"],
-  "daemon-reload": ["daemon-reload", "daemon-reload"],
-  enable: ["daemon-reload", "enable", "daemon-reload"],
-  restart: ["daemon-reload", "enable", "restart", "daemon-reload", "stop"],
-};
+const custodyCases = [
+  ["before-publication", []],
+  ["backup-published", []],
+  ["environment-published", []],
+  ["definition-published", ["daemon-reload"]],
+  ["daemon-reload", ["daemon-reload", "daemon-reload"]],
+  ["enable", ["daemon-reload", "enable", "daemon-reload"]],
+  ["restart", ["daemon-reload", "enable", "restart", "daemon-reload", "stop"]],
+] as const;
 
 describe.skipIf(process.platform === "win32")("Doctor native repair authority ordering", () => {
   let state: OpenClawTestState | undefined;
@@ -261,6 +244,9 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
     });
     edges.command.mockImplementation(async (argv, options) => {
       const [binary, ...args] = argv;
+      const action = args.find((arg) =>
+        ["daemon-reload", "enable", "restart", "stop"].includes(arg),
+      );
       let stdout: string;
       let code = 0;
       if (
@@ -303,19 +289,10 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
       } else if (binary === "systemctl" && args.includes("is-active")) {
         stdout = running ? "active\n" : "inactive\n";
         code = running ? 0 : 3;
-      } else if (
-        binary === "systemctl" &&
-        args.some((arg) => ["daemon-reload", "enable", "restart", "stop"].includes(arg))
-      ) {
-        nativeActions.push(
-          args.find((arg) => ["daemon-reload", "enable", "restart", "stop"].includes(arg))!,
-        );
-        const action = nativeActions.at(-1);
-        if (action === "restart") {
-          running = true;
-        }
-        if (action === "stop") {
-          running = false;
+      } else if (binary === "systemctl" && action) {
+        nativeActions.push(action);
+        if (action === "restart" || action === "stop") {
+          running = action === "restart";
         }
         if (action === custodyLoss) {
           current = false;
@@ -496,34 +473,32 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
     );
   }
 
-  it.each<CustodyLoss>([
-    "before-publication",
-    "backup-published",
-    "environment-published",
-    "definition-published",
-    "daemon-reload",
-    "enable",
-    "restart",
-  ])("Doctor custody fences real native installation at %s", async (custodyLoss) => {
-    const { observations } = await runRepair("writable", { tokenPresent: true, custodyLoss });
-    expect.soft(observations).toMatchObject({
-      unitBytesPreserved: true,
-      environmentBytesPreserved: true,
-      running: false,
-      unitDirectoryEntries: ["openclaw-gateway.service"],
-      nativeActions: custodyActions[custodyLoss],
-    });
-    expect(observations.authorityFailure).toMatchObject({
-      code: "service-authority-revoked",
-      outcome: custodyLoss === "before-publication" ? "unchanged" : "restored",
-    });
-  });
+  it.each(custodyCases)(
+    "Doctor custody fences real native installation at %s",
+    async (custodyLoss, actions) => {
+      const { observations } = await runRepair("writable", { tokenPresent: true, custodyLoss });
+      expect.soft(observations).toMatchObject({
+        unitBytesPreserved: true,
+        environmentBytesPreserved: true,
+        running: false,
+        unitDirectoryEntries: ["openclaw-gateway.service"],
+        nativeActions: actions,
+      });
+      expect(observations.authorityFailure).toMatchObject({
+        code: "service-authority-revoked",
+        outcome: custodyLoss === "before-publication" ? "unchanged" : "restored",
+      });
+    },
+  );
 
   it.each(refusals)(
-    "preserves config and service when $scenario repair is refused (existing token=$tokenPresent)",
-    async ({ scenario, kind, reason, guidance, tokenPresent }) => {
+    "preserves config and service when %s repair is refused",
+    async (scenario, kind, reason, guidance, tokenPresent) => {
       const { observations, diagnostics } = await runRepair(scenario, { tokenPresent });
-      expect(observations.capability).toMatchObject({ kind, reason });
+      // Rejected adapters fail after native inspection; both paths must preserve the repair.
+      if (scenario !== "rejected") {
+        expect(observations.capability).toMatchObject({ kind, reason });
+      }
       expect(diagnostics).toContain(`SERVICE_DEFINITION_${kind.toUpperCase()}: [${reason}]`);
       expect(diagnostics).toContain(guidance);
       expect.soft(observations).toMatchObject({ ...untouchedRepair, returnedTokenPreserved: true });
@@ -556,14 +531,6 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
       expect(observations.events).not.toContain("service-published");
     },
   );
-
-  it("redacts a rejected capability inspection and leaves the repair untouched", async () => {
-    const { observations, diagnostics } = await runRepair("rejected");
-    expect(diagnostics).toContain("SERVICE_DEFINITION_UNKNOWN: [inspection-failed]");
-    expect(diagnostics).toContain("native service-manager availability");
-    expect(observations).toMatchObject(untouchedRepair);
-    expect(observations.events).not.toContain("service-published");
-  });
 
   it.each(["writable", "repairable"] as const)(
     "preserves authentication while publishing an authorized %s service repair",

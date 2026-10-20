@@ -12,10 +12,7 @@ vi.mock("node:fs/promises", async () => {
   const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
   return {
     ...actual,
-    default: {
-      ...actual,
-      realpath: fsMocks.realpath,
-    },
+    default: { ...actual, realpath: fsMocks.realpath },
     realpath: fsMocks.realpath,
   };
 });
@@ -26,9 +23,7 @@ const mocks = vi.hoisted(() => ({
   stage: vi.fn(),
   install: vi.fn(),
   restart: vi.fn(),
-  writeConfig: vi.fn<(nextConfig: OpenClawConfig) => Promise<OpenClawConfig>>(
-    async (nextConfig) => nextConfig,
-  ),
+  writeConfig: vi.fn(async (nextConfig: OpenClawConfig) => nextConfig),
   auditGatewayServiceConfig: vi.fn(),
   buildGatewayInstallPlan: vi.fn(),
   resolveGatewayAuthTokenForService: vi.fn(),
@@ -128,9 +123,7 @@ vi.mock("../daemon/launchd-exec.js", async (importOriginal) => ({
   execLaunchctl: mocks.execLaunchctl,
 }));
 
-vi.mock("../../packages/terminal-core/src/note.js", () => ({
-  note: mocks.note,
-}));
+vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: mocks.note }));
 
 vi.mock("./daemon-install-helpers.js", () => ({
   buildGatewayInstallPlan: mocks.buildGatewayInstallPlan,
@@ -144,10 +137,7 @@ vi.mock("./doctor-gateway-auth-token.js", () => ({
 export { fsMocks, mocks };
 
 export function mockProcessPlatform(platform: NodeJS.Platform) {
-  Object.defineProperty(process, "platform", {
-    value: platform,
-    configurable: true,
-  });
+  Object.defineProperty(process, "platform", { value: platform, configurable: true });
 }
 
 function noteMessages(title: string) {

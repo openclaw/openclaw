@@ -36,9 +36,6 @@ const reason = "gateway.installation_replaced: on-disk 2026.9.5 differs from run
 const installationReplacementWarning =
   "Installation replaced: on-disk 2026.9.5 differs from running 2026.9.4; draining active work.";
 const completedAtMs = Date.UTC(2026, 8, 19, 12);
-const historyMessage = `Previous installation replacement (${new Date(completedAtMs).toISOString()}): ${reason}`;
-const historyTitle = "Previous Gateway installation replacement";
-const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
 beforeEach(async () => {
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-doctor-replacement-"));
@@ -70,7 +67,10 @@ describe("Doctor installation replacement diagnostics", () => {
       const pending = scope.run(() =>
         mode === "lint"
           ? collectGatewayHealthFindings({ cfg: {}, env: process.env })
-          : checkGatewayHealth({ cfg: {}, runtime }),
+          : checkGatewayHealth({
+              cfg: {},
+              runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+            }),
       );
       scope.beginClose(new Error("History inspection deadline"));
       try {
@@ -81,7 +81,10 @@ describe("Doctor installation replacement diagnostics", () => {
           expect(result).toContainEqual(expect.objectContaining({ severity: "warning", message }));
         } else {
           expect(result).toMatchObject({ healthOk: true });
-          expect(mocks.note).toHaveBeenCalledWith(message, historyTitle);
+          expect(mocks.note).toHaveBeenCalledWith(
+            message,
+            "Previous Gateway installation replacement",
+          );
         }
         expect(mocks.callGateway).toHaveBeenCalledWith(
           expect.objectContaining({ method: "status" }),
@@ -98,11 +101,15 @@ describe("Doctor installation replacement diagnostics", () => {
       if (!reachable) {
         mocks.callGateway.mockRejectedValue(new Error("Gateway unavailable"));
       }
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
       const result = await checkGatewayHealth({ cfg: {}, runtime });
 
       expect(mocks.callGateway).toHaveBeenCalledWith(expect.objectContaining({ method: "status" }));
       expect(result.healthOk).toBe(reachable);
-      expect(mocks.note).toHaveBeenCalledWith(historyMessage, historyTitle);
+      expect(mocks.note).toHaveBeenCalledWith(
+        `Previous installation replacement (${new Date(completedAtMs).toISOString()}): ${reason}`,
+        "Previous Gateway installation replacement",
+      );
     },
   );
 
@@ -134,7 +141,7 @@ describe("Doctor installation replacement diagnostics", () => {
         expect.objectContaining({
           checkId: "core/doctor/gateway-health",
           severity: "info",
-          message: historyMessage,
+          message: `Previous installation replacement (${new Date(completedAtMs).toISOString()}): ${reason}`,
         }),
       );
       if (probe === "healthy") {
@@ -172,8 +179,10 @@ describe("Doctor installation replacement diagnostics", () => {
       if (mode === "lint") {
         expect(await collectGatewayHealthFindings({ cfg })).toEqual([]);
       } else {
-        await checkGatewayHealth({ cfg, runtime });
-        expect(mocks.note.mock.calls.map(([, title]) => title)).not.toContain(historyTitle);
+        await checkGatewayHealth({ cfg, runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() } });
+        expect(mocks.note.mock.calls.map(([, title]) => title)).not.toContain(
+          "Previous Gateway installation replacement",
+        );
       }
     },
   );

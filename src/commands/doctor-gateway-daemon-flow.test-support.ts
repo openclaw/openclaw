@@ -1,4 +1,3 @@
-/** Prompt fixture for interactive Doctor service repair. */
 import { expect, it, vi, type Mock } from "vitest";
 import * as runtimePaths from "../daemon/runtime-paths.js";
 import type { GatewayService } from "../daemon/service-types.js";
@@ -39,14 +38,7 @@ export function createPrompter(confirmImpl: (message: string) => boolean) {
 }
 
 export function setPlatform(platform: NodeJS.Platform) {
-  const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
-  if (!originalPlatformDescriptor) {
-    return;
-  }
-  Object.defineProperty(process, "platform", {
-    ...originalPlatformDescriptor,
-    value: platform,
-  });
+  Object.defineProperty(process, "platform", { value: platform });
 }
 
 export function mockGatewayInstall(

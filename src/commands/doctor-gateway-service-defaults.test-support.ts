@@ -85,14 +85,7 @@ export function registerDoctorServiceDefaultsTests({
     });
     mocks.auditGatewayServiceConfig.mockResolvedValue({
       ok: false,
-      issues: [
-        {
-          code: "gateway-port-mismatch",
-          message: "Gateway service port does not match current gateway config.",
-          detail: "18789 -> 18888",
-          level: "recommended",
-        },
-      ],
+      issues: [{ code: "gateway-port-mismatch", message: "Port mismatch", level: "recommended" }],
     });
     mocks.install.mockResolvedValue(undefined);
 
