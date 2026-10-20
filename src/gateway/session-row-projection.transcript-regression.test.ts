@@ -11,7 +11,7 @@ import { sessionByKeyReadHandlers } from "./server-methods/sessions-read-by-key.
 import { requestContext } from "./server-methods/sessions-read-cache.test-support.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
-import { createSessionRowProjection } from "./session-row-projection.js";
+import { createTestProjection } from "./session-row-projection.read-fixture.test-support.js";
 import { seedSessionRowProjectionTranscriptFixture } from "./session-row-projection.transcript-fixture.test-support.js";
 import * as rowInputs from "./session-utils-row.js";
 
@@ -22,17 +22,14 @@ it("serves describe during a 2,048-session drain without transcript reads in row
     const cfg = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(cfg);
     const count = seedSessionRowProjectionTranscriptFixture();
+    const readPage = transcripts.readSessionTranscriptMessageEventPage;
     for (const index of [0, count - 1]) {
-      expect(
-        transcripts.readSessionTranscriptMessageEventPage(
-          {
-            agentId: "main",
-            sessionId: `legacy-${index}`,
-            sessionKey: `agent:main:legacy-${index}`,
-          },
-          { maxMessages: 2, offset: 0 },
-        ),
-      ).toMatchObject({ totalMessages: 2, events: [expect.anything(), expect.anything()] });
+      const sessionId = `legacy-${index}`;
+      const scope = { agentId: "main", sessionId, sessionKey: `agent:main:${sessionId}` };
+      expect(readPage(scope, { maxMessages: 2, offset: 0 })).toMatchObject({
+        totalMessages: 2,
+        events: [expect.anything(), expect.anything()],
+      });
     }
     let inMaterialization = false;
     let materializationReads = 0;
@@ -58,7 +55,7 @@ it("serves describe during a 2,048-session drain without transcript reads in row
         }
         return read(...args);
       };
-    const page = observeRead(transcripts.readSessionTranscriptMessageEventPage);
+    const page = observeRead(readPage);
     const recent = observeRead(activeEvents.readRecentSessionTranscriptMessageEvents);
     const tail = observeRead(activeEvents.readSessionTranscriptBoundedMessageTailPage);
     vi.spyOn(transcripts, "readSessionTranscriptMessageEventPage").mockImplementation(page);
@@ -66,9 +63,9 @@ it("serves describe during a 2,048-session drain without transcript reads in row
     vi.spyOn(activeEvents, "readSessionTranscriptBoundedMessageTailPage").mockImplementation(tail);
     const context = requestContext(cfg);
     const indexBuilds = vi.spyOn(registryRead, "buildSubagentSessionListReadIndex");
-    const initializing = createSessionRowProjection({ cfg });
+    const initializing = createTestProjection({ cfg });
     await nextTurn();
-    const projection = await initializing;
+    using projection = await initializing;
     bindSessionRowProjection(context, () => projection);
     const describe = async (id: string, includeDerivedTitles?: boolean) => {
       let remainingAtResponse = 0;
@@ -98,15 +95,11 @@ it("serves describe during a 2,048-session drain without transcript reads in row
       expect(remainingAtResponse).toBeGreaterThan(0);
       expect(describeMaterializations).toBeLessThanOrEqual(MAX_SESSION_ROW_FACTS_KEYS + 1);
     };
-    try {
-      await describe("under-drain", true);
-      await projection.ensureMaterialized();
-      expect(indexBuilds).toHaveBeenCalledTimes(1);
-      sessionChanges.emit({ all: true, scope: "config" });
-      await describe("dirty-drain");
-      expect(materializationReads).toBe(0);
-    } finally {
-      projection.dispose();
-    }
+    await describe("under-drain", true);
+    await projection.ensureMaterialized();
+    expect(indexBuilds).toHaveBeenCalledTimes(1);
+    sessionChanges.emit({ all: true, scope: "config" });
+    await describe("dirty-drain");
+    expect(materializationReads).toBe(0);
   });
 }, 120_000);

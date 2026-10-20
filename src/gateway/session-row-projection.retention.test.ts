@@ -2,18 +2,17 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { queryObjects } from "node:v8";
 import { expect, it } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
-import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
-import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { ready } from "./session-row-projection-record.js";
-import { createSessionRowProjection } from "./session-row-projection.js";
+import {
+  createTestProjection,
+  holdForeground,
+  seedRow as writeEntry,
+} from "./session-row-projection.read-fixture.test-support.js";
 import { listProjectedSessions, prepareSessionRowSelection } from "./session-utils-list.js";
 
 const weak = (value: object) => new WeakRef(value);
-const writeEntry = (sessionKey: string, entry: SessionEntry) =>
-  replaceSessionEntrySync({ agentId: "main", sessionKey }, entry);
 async function collect() {
   // End the WeakRef creation job; dereferencing before GC would keep targets alive.
   await nextTurn();
@@ -39,8 +38,8 @@ it("collects superseded resident rows and their materializations after metadata 
       write(key, 0);
     }
     // Optional transcript work must not borrow a row while collection is measured.
-    const release = retainSessionListForegroundWork();
-    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    const release = holdForeground();
+    const projection = await createTestProjection({ cfg, modelCatalog: [] });
     const retired: WeakRef<object>[] = [];
     const selections: WeakRef<object>[] = [];
     const snapshots: WeakRef<object>[] = [];
@@ -123,24 +122,19 @@ it("does not retain a superseded child entry through a held parent display row",
     const writeChild = (updatedAt: number) =>
       writeEntry(child, { sessionId: "compact-child", updatedAt, parentSessionKey: parent });
     writeChild(1);
-    const release = retainSessionListForegroundWork();
-    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
-    try {
-      await projection.ensureMaterialized();
-      const heldParent = projection.describe({ agentId: "main", key: parent })!;
-      const retiredChild = new WeakRef(projection.describe({ agentId: "main", key: child })!.entry);
-      writeChild(2);
-      await projection.ensureMaterialized();
-      await collect();
-      expect(retiredChild.deref()).toBeUndefined();
-      // Retained consumers may still hold the old parent; it needs only child display facts.
-      expect(heldParent.materialized.source.childLinks?.[0]?.entry.sessionId).toBe("compact-child");
-      expect(
-        projection.snapshot({ agentId: "main", key: parent }, { now: 2 }).row?.childSessions,
-      ).toEqual([child]);
-    } finally {
-      projection.dispose();
-      release();
-    }
+    using _ = holdForeground();
+    using projection = await createTestProjection({ cfg, modelCatalog: [] });
+    await projection.ensureMaterialized();
+    const heldParent = projection.describe({ agentId: "main", key: parent })!;
+    const retiredChild = new WeakRef(projection.describe({ agentId: "main", key: child })!.entry);
+    writeChild(2);
+    await projection.ensureMaterialized();
+    await collect();
+    expect(retiredChild.deref()).toBeUndefined();
+    // Retained consumers may still hold the old parent; it needs only child display facts.
+    expect(heldParent.materialized.source.childLinks?.[0]?.entry.sessionId).toBe("compact-child");
+    expect(
+      projection.snapshot({ agentId: "main", key: parent }, { now: 2 }).row?.childSessions,
+    ).toEqual([child]);
   });
 });

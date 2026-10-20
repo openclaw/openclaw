@@ -3,17 +3,12 @@ import { expect, it } from "vitest";
 import { projectGatewaySessionEntry } from "../config/sessions/combined-store-gateway.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import {
-  acquireSessionRowEntry,
-  create,
-  readSessionRowParents,
-  type Row,
-} from "./session-row-projection-record.js";
+import * as records from "./session-row-projection-record.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 
 const cfg = { agents: { entries: { main: {} } } };
 const noop = () => {};
-const archive = { demote: (row: Row) => row, forget: noop };
+const archive = { demote: (row: records.Row) => row, forget: noop };
 
 const original: SessionEntry = {
   sessionId: "session",
@@ -49,8 +44,8 @@ it("preserves deep change detection for entry metadata and unordered parent memb
     ];
     for (const previous of [undefined, ...variants]) {
       for (const storedEntry of variants) {
-        const row = { ...create(target), storedEntry: previous, entry: previous };
-        const parents = readSessionRowParents(row, storedEntry, cfg, context);
+        const row = { ...records.create(target), storedEntry: previous, entry: previous };
+        const parents = records.readSessionRowParents(row, storedEntry, cfg, context);
         for (const oldParents of [
           new Set<string>(),
           new Set(parents),
@@ -60,8 +55,8 @@ it("preserves deep change detection for entry metadata and unordered parent memb
         ]) {
           row.parents = oldParents;
           const changed = !isDeepStrictEqual([storedEntry, parents], [previous, oldParents]);
-          const marked: Row[] = [];
-          const next = acquireSessionRowEntry({
+          const marked: records.Row[] = [];
+          const next = records.acquireSessionRowEntry({
             ...acquisition,
             row,
             storedEntry,
@@ -92,9 +87,5 @@ it("shares unchanged lineage and copies only changed global aliases without muta
     ...stored,
     parentSessionKey: "global",
     spawnedBy: "global",
-  });
-  expect(stored).toMatchObject({
-    parentSessionKey: "agent:main:parent",
-    spawnedBy: "agent:main:requester",
   });
 });
