@@ -1,33 +1,28 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { expect, it } from "vitest";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { useSqliteTempDirs } from "./sqlite-shard-lifecycle.test-support.js";
 import { sqliteSnapshotStagingEntrypoints } from "./sqlite-snapshot-staging-runtime.test-support.js";
 
 const unsettledDrivers = new Set<string>();
-const directories = useAutoCleanupTempDirTracker((cleanup) => {
-  afterEach(() => {
-    if (unsettledDrivers.size > 0) {
-      throw new Error(
-        `Snapshot driver did not acknowledge cleanup; retained fixtures: ${[...directories.dirs].join(", ")}`,
-      );
-    }
-    cleanup();
-  });
+const directories = useSqliteTempDirs(() => {
+  if (unsettledDrivers.size > 0) {
+    throw new Error(
+      `Snapshot cleanup unacknowledged; retained: ${[...directories.dirs].join(", ")}`,
+    );
+  }
 });
 
-it.each([true, false])(
-  "services snapshots without yielding (preserveSourceArtifacts=%s)",
-  (preserveSourceArtifacts) => {
-    const root = directories.make("sqlite-retained-source-");
-    const source = path.join(root, "source.sqlite");
-    const cache = path.join(root, "cache");
-    fs.mkdirSync(cache);
-    const sourceUrl = resolveRuntimeWorkerUrl(sqliteSnapshotStagingEntrypoints.source);
-    const cleanupUrl = resolveRuntimeWorkerUrl(sqliteSnapshotStagingEntrypoints.cleanup);
-    const script = `
+it.each([true, false])("services snapshots without yielding (preserve=%s)", (preserve) => {
+  const root = directories.make("sqlite-retained-source-");
+  const source = path.join(root, "source.sqlite");
+  const cache = path.join(root, "cache");
+  fs.mkdirSync(cache);
+  const sourceUrl = resolveRuntimeWorkerUrl(sqliteSnapshotStagingEntrypoints.source);
+  const cleanupUrl = resolveRuntimeWorkerUrl(sqliteSnapshotStagingEntrypoints.cleanup);
+  const script = `
       import assert from 'node:assert/strict';
       import fs from 'node:fs';
       import { spawnSync } from 'node:child_process';
@@ -65,26 +60,24 @@ it.each([true, false])(
           Atomics.wait(barrier, 0, 0, 2);
         }
       }
-      let microtaskRan = false;
-      let timerRan = false;
-      queueMicrotask(() => { microtaskRan = true; });
-      const timer = setTimeout(() => { timerRan = true; }, 0);
+      const idle = { microtask: false, timer: false };
+      queueMicrotask(() => { idle.microtask = true; });
+      const timer = setTimeout(() => { idle.timer = true; }, 0);
       let operation, joined, prepared, joinedSource;
       const failures = [];
       let cleanupJoined = false;
       try {
         const start = () => startSqliteReadOnlyLocationAsync(source, {
-          preserveSourceArtifacts: ${JSON.stringify(preserveSourceArtifacts)},
+          preserveSourceArtifacts: ${JSON.stringify(preserve)},
           signal: controller.signal,
         });
         operation = start();
         joined = start();
         prepared = serviceToCompletion(operation);
         joinedSource = serviceToCompletion(joined);
-        assert.equal(joinedSource.location, prepared.location);
-        assert.equal(joinedSource.privateFamily, prepared.privateFamily);
-        assert.equal(Boolean(prepared.privateFamily), ${JSON.stringify(preserveSourceArtifacts)});
-        assert.deepEqual([microtaskRan, timerRan], [false, false]);
+        assert.deepEqual([joinedSource.location === prepared.location, joinedSource.privateFamily === prepared.privateFamily], [true, true]);
+        assert.equal(Boolean(prepared.privateFamily), ${JSON.stringify(preserve)});
+        assert.deepEqual([idle.microtask, idle.timer], [false, false]);
         assert.equal(fs.existsSync(prepared.location), true);
         const reader = spawnSync(process.execPath, ['--input-type=module', '-e',
           "import { DatabaseSync } from 'node:sqlite';" +
@@ -93,15 +86,11 @@ it.each([true, false])(
           "finally { database.close(); }",
           prepared.location,
         ], { encoding: 'utf8', timeout: 30_000 });
-        assert.equal(reader.error, undefined, reader.stderr);
-        assert.equal(reader.status, 0, reader.stderr);
-        const row = JSON.parse(reader.stdout);
-        assert.deepEqual(row, { value: 'preserved' });
-        assert.equal(serviceToCompletion(prepared.startCleanup()), true);
-        assert.equal(fs.existsSync(prepared.cleanupRoot), true);
-        assert.equal(serviceToCompletion(joinedSource.startCleanup()), true);
-        assert.equal(fs.existsSync(prepared.cleanupRoot), false);
-        assert.deepEqual([microtaskRan, timerRan, nativeConstructions], [false, false, 0]);
+        assert.deepEqual([reader.error, reader.status], [undefined, 0], reader.stderr);
+        assert.deepEqual(JSON.parse(reader.stdout), { value: 'preserved' });
+        assert.deepEqual([serviceToCompletion(prepared.startCleanup()), fs.existsSync(prepared.cleanupRoot)], [true, true]);
+        assert.deepEqual([serviceToCompletion(joinedSource.startCleanup()), fs.existsSync(prepared.cleanupRoot)], [true, false]);
+        assert.deepEqual([idle.microtask, idle.timer, nativeConstructions], [false, false, 0]);
       } catch (error) {
         failures.push(error);
       } finally {
@@ -115,10 +104,8 @@ it.each([true, false])(
           }
         }
         try {
-          if (prepared) assert.equal(await prepared.cleanupAsync(), true);
-          if (joinedSource) assert.equal(await joinedSource.cleanupAsync(), true);
-          await operation?.startClose().result;
-          await joined?.startClose().result;
+          for (const copy of [prepared, joinedSource]) if (copy) assert.equal(await copy.cleanupAsync(), true);
+          for (const request of [operation, joined]) await request?.startClose().result;
           await cleanupSnapshotOperations();
           cleanupJoined = !prepared || !fs.existsSync(prepared.cleanupRoot);
           assert.deepEqual(fs.readFileSync(source), original);
@@ -133,32 +120,30 @@ it.each([true, false])(
         errors: failures.map(error => error instanceof Error ? error.stack : String(error)) }));
       if (failures.length || !cleanupJoined) process.exitCode = 1;
     `;
-    unsettledDrivers.add(root);
-    const args = [
-      ...resolveRuntimeWorkerArgv(sourceUrl).slice(0, -1),
-      "--input-type=module",
-      "-e",
-      script,
-    ];
-    const result = spawnSync(process.execPath, args, {
-      encoding: "utf8",
-      timeout: 30_000,
-      env: { ...process.env, XDG_CACHE_HOME: cache },
-    });
-    const receipt = result.stdout.trim() ? JSON.parse(result.stdout) : undefined;
-    const driverSettled =
-      !result.error &&
-      result.signal === null &&
-      receipt?.cleanupJoined === true &&
-      receipt.errors.length === 0;
-    if (driverSettled) {
-      unsettledDrivers.delete(root);
-    }
-    expect(
-      [result.error, result.signal, result.status],
-      `${result.stderr}\n${result.stdout}`,
-    ).toEqual([undefined, null, 0]);
-    // The child asserts the row, cleanup, idle event loop and zero native constructions.
-    expect(receipt).toEqual({ cleanupJoined: true, errors: [] });
-  },
-);
+  unsettledDrivers.add(root);
+  const args = [
+    ...resolveRuntimeWorkerArgv(sourceUrl).slice(0, -1),
+    "--input-type=module",
+    "-e",
+    script,
+  ];
+  const result = spawnSync(process.execPath, args, {
+    encoding: "utf8",
+    timeout: 30_000,
+    env: { ...process.env, XDG_CACHE_HOME: cache },
+  });
+  const receipt = result.stdout.trim() ? JSON.parse(result.stdout) : undefined;
+  const driverSettled =
+    !result.error &&
+    result.signal === null &&
+    receipt?.cleanupJoined === true &&
+    receipt.errors.length === 0;
+  if (driverSettled) {
+    unsettledDrivers.delete(root);
+  }
+  expect(
+    [result.error, result.signal, result.status],
+    `${result.stderr}\n${result.stdout}`,
+  ).toEqual([undefined, null, 0]);
+  expect(receipt).toEqual({ cleanupJoined: true, errors: [] });
+});

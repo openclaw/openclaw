@@ -1,31 +1,22 @@
-import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
-import { afterEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { createDeferredCore } from "../shared/deferred.js";
+import { expect, it, vi } from "vitest";
+import {
+  sqliteMaintenanceFixture,
+  sqliteWriteGate,
+} from "./sqlite-maintenance-fixture.test-support.js";
 import { runSqliteImmediateTransaction } from "./sqlite-transaction.js";
 
-const directories = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => vi.restoreAllMocks());
+const resources = sqliteMaintenanceFixture();
 
 function fixture() {
-  const directory = directories.make("sqlite-inherited-deadline-");
-  const db = new DatabaseSync(path.join(directory, "index.sqlite"));
-  const blocker = new DatabaseSync(path.join(directory, "index.sqlite"));
+  const file = resources.file();
+  const db = resources.open(file);
+  const blocker = resources.open(file);
   db.exec("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; CREATE TABLE entries(value TEXT)");
-  return {
-    db,
-    blocker,
-    [Symbol.dispose]() {
-      db.close();
-      blocker.close();
-    },
-  };
+  return { db, blocker };
 }
 
 it.each([false, true])("attempts expired BEGIN once (locked: %s)", async (locked) => {
-  using state = fixture();
-  const { db, blocker } = state;
+  const { db, blocker } = fixture();
   if (locked) {
     blocker.exec("BEGIN IMMEDIATE");
   }
@@ -64,26 +55,19 @@ it.each([false, true])("attempts expired BEGIN once (locked: %s)", async (locked
 });
 
 it.each(["prepare", "admit"] as const)("retains an eligible BEGIN delayed in %s", async (phase) => {
-  using state = fixture();
-  const { db, blocker } = state;
+  const { db, blocker } = fixture();
   blocker.exec("BEGIN IMMEDIATE");
   const beginDeadlineNs = 1_000_000_000n;
   let now = 0n;
   vi.spyOn(process.hrtime, "bigint").mockImplementation(() => now);
-  const delayed = createDeferredCore();
-  const resume = createDeferredCore();
-  let preparations = 0;
-  let admissions = 0;
-  const wait = async () => {
-    delayed.resolve();
-    await resume.promise;
-  };
+  const gate = sqliteWriteGate();
+  const calls = { prepare: 0, admit: 0 };
   const pending = runSqliteImmediateTransaction(
     db,
     async () => {
-      preparations += 1;
-      if (phase === "prepare" && preparations === 2) {
-        await wait();
+      calls.prepare += 1;
+      if (phase === "prepare" && calls.prepare === 2) {
+        await gate.wait();
       }
       return () => {
         expect(db.prepare("PRAGMA busy_timeout").get()?.timeout).toBe(5000);
@@ -92,26 +76,26 @@ it.each(["prepare", "admit"] as const)("retains an eligible BEGIN delayed in %s"
     },
     { beginDeadlineNs },
     async (write) => {
-      admissions += 1;
-      if (phase === "admit" && admissions === 2) {
-        await wait();
+      calls.admit += 1;
+      if (phase === "admit" && calls.admit === 2) {
+        await gate.wait();
       }
       return write();
     },
   );
   void pending.catch(() => undefined);
   try {
-    await Promise.race([delayed.promise, pending]);
-    expect(preparations).toBe(2);
+    await Promise.race([gate.entered, pending]);
+    expect(calls.prepare).toBe(2);
     now = beginDeadlineNs + 1n;
     blocker.exec("COMMIT");
-    resume.resolve();
+    gate.release();
     await pending;
-    expect(admissions).toBe(2);
+    expect(calls.admit).toBe(2);
     expect(db.prepare("SELECT value FROM entries").all()).toEqual([{ value: "eligible" }]);
     expect(db.prepare("PRAGMA busy_timeout").get()?.timeout).toBe(5000);
   } finally {
-    resume.resolve();
+    gate.release();
     if (blocker.isTransaction) {
       blocker.exec("ROLLBACK");
     }

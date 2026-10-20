@@ -1,29 +1,23 @@
-import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { expect, it, vi } from "vitest";
 import * as durability from "./directory-durability.js";
-import { deferAsync } from "./sqlite-shard-lifecycle.test-support.js";
+import { deferAsync, useSqliteTempDirs } from "./sqlite-shard-lifecycle.test-support.js";
 import {
   prepareVerifiedSqliteFile,
   publishVerifiedSqliteFile,
   SqliteReplacementOutcomeUnknownError,
 } from "./sqlite-snapshot.js";
+import { snapshotContent as content } from "./sqlite-snapshot.test-support.js";
 
 vi.mock("./directory-durability.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./directory-durability.js")>();
   return { ...actual, syncDirectory: vi.fn(actual.syncDirectory) };
 });
 
-const directories = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => vi.restoreAllMocks());
-const content = (bytes: Buffer) => ({
-  sha256: createHash("sha256").update(bytes).digest("hex"),
-  sizeBytes: bytes.length,
-});
+const directories = useSqliteTempDirs(undefined, () => vi.restoreAllMocks());
 
 async function fixture() {
   const directory = directories.make("sqlite-replacement-");

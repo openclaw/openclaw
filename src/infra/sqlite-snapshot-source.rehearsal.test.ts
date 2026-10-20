@@ -2,16 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  isArtifactPreservingStateRead,
-  withArtifactPreservingStateReads,
-} from "../state/artifact-preserving-state-reads.js";
+import * as reads from "../state/artifact-preserving-state-reads.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { withOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
+import * as state from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
@@ -52,7 +46,7 @@ it.each(["prepared", "outside", "symlink", "sidecar-symlink", "incomplete", "sha
     const options = { env, path: file };
     const seed = "CREATE TABLE probe(value INTEGER); INSERT INTO probe VALUES (1)";
     if (kind === "shared") {
-      openOpenClawStateDatabase(options).db.exec(seed);
+      state.openOpenClawStateDatabase(options).db.exec(seed);
       await closeOpenClawStateDatabaseAsync();
     } else {
       exec(file, seed);
@@ -69,14 +63,14 @@ it.each(["prepared", "outside", "symlink", "sidecar-symlink", "incomplete", "sha
     await withEnvAsync(env, async () => {
       for (const value of [1, 2]) {
         let reader: ReturnType<typeof openSqliteReadOnlyDatabase> | undefined;
-        withArtifactPreservingStateReads(
+        reads.withArtifactPreservingStateReads(
           () => {
             if (kind === "shared") {
               withOpenClawStateDatabaseReadOnly(({ db }) => {
                 expect(requireNativeSqliteDatabase(db).location()).toBe(file);
                 expect(db.prepare("SELECT value FROM probe").get()).toEqual({ value });
               }, options);
-              expect(() => runOpenClawStateWriteTransaction(() => {}, options)).toThrow(
+              expect(() => state.runOpenClawStateWriteTransaction(() => {}, options)).toThrow(
                 "shared-state write during artifact-preserving inspection",
               );
               return;
@@ -84,7 +78,7 @@ it.each(["prepared", "outside", "symlink", "sidecar-symlink", "incomplete", "sha
             reader = openSqliteReadOnlyDatabase(source, { readOnly: false });
             expect(reader.prepare("SELECT value FROM probe").get()).toEqual({ value });
             expect(reader.location() === source).toBe(kind === "prepared");
-            expect(isArtifactPreservingStateRead("agent", source)).toBe(true);
+            expect(reads.isArtifactPreservingStateRead("agent", source)).toBe(true);
             expect(() => reader!.exec("UPDATE probe SET value = 99")).toThrow(/readonly/);
           },
           { agentDatabases: true },

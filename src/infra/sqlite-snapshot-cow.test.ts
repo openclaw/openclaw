@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -12,7 +11,7 @@ import {
 } from "./sqlite-readonly-location.js";
 import { defer, deferAsync } from "./sqlite-shard-lifecycle.test-support.js";
 import { createVerifiedSqliteSnapshot, publishVerifiedSqliteFile } from "./sqlite-snapshot.js";
-import { readDatabasePathIdentity } from "./sqlite-worker-identity.js";
+import { snapshotContent } from "./sqlite-snapshot.test-support.js";
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
 
@@ -51,11 +50,7 @@ async function fixture() {
       .run(71, Buffer.alloc(131071, 42));
   }
   const bytes = await fs.readFile(sourcePath);
-  const content = {
-    sha256: createHash("sha256").update(bytes).digest("hex"),
-    sizeBytes: bytes.length,
-  };
-  return { directory, sourcePath, bytes, content };
+  return { directory, sourcePath, bytes, content: snapshotContent(bytes) };
 }
 
 it.each(["auto", "off"] as const)("keeps synchronous snapshots independent (%s)", async (mode) => {
@@ -82,11 +77,9 @@ it.each(["auto", "off"] as const)(
   "preserves independent recovery generations (%s)",
   async (mode) => {
     const { directory, sourcePath, bytes, content } = await fixture();
-    const paths = [
-      sourcePath,
-      path.join(directory, "original.sqlite"),
-      path.join(directory, "transaction.sqlite"),
-    ];
+    const paths = ["source", "original", "transaction"].map((name) =>
+      path.join(directory, `${name}.sqlite`),
+    );
     {
       const previous = getFsSafeNativeConfig();
       using _ = defer(() => configureFsSafeNative(previous));
@@ -127,27 +120,11 @@ it.each(["auto", "off"] as const)(
     expect(await fs.readFile(paths[1]!)).toEqual(bytes);
     expect(read(paths[3]!, "SELECT value FROM payload")).toEqual([{ value: "restored-write" }]);
     expect(read(paths[3]!, "PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
-    expect((await fs.readdir(directory)).toSorted()).toEqual([
-      "original.sqlite",
-      "restored.sqlite",
-      "source.sqlite",
-    ]);
+    expect((await fs.readdir(directory)).toSorted()).toEqual(
+      ["original", "restored", "source"].map((name) => `${name}.sqlite`),
+    );
   },
 );
-
-it("rejects an identical replacement without retaining scratch", async () => {
-  const { directory, sourcePath, bytes } = await fixture();
-  const identity = await readDatabasePathIdentity(sourcePath);
-  const original = path.join(directory, "displaced.sqlite");
-  await fs.rename(sourcePath, original);
-  await fs.writeFile(sourcePath, bytes);
-  await expect(prepareSqliteReadOnlyCopyInProcess(sourcePath, directory, identity)).rejects.toThrow(
-    "file identity changed",
-  );
-  expect(await fs.readFile(sourcePath)).toEqual(bytes);
-  expect(await fs.readFile(original)).toEqual(bytes);
-  expect((await fs.readdir(directory)).toSorted()).toEqual(["displaced.sqlite", "source.sqlite"]);
-});
 
 it.each(["empty WAL", "source alias"])("keeps an independent raw copy with %s", async (layout) => {
   const { directory, sourcePath } = await fixture();
@@ -176,9 +153,7 @@ it.each(["empty WAL", "source alias"])("keeps an independent raw copy with %s", 
       }
     } else {
       exec(prepared.location, "DELETE FROM payload");
-      expect(read(prepared.location, "SELECT count(*) AS count FROM payload")).toEqual([
-        { count: 0 },
-      ]);
+      expect(read(prepared.location, "SELECT count(*) count FROM payload")).toEqual([{ count: 0 }]);
       expect(await fs.readFile(alias)).toEqual(bytes);
     }
     expect(await fs.readFile(sourcePath)).toEqual(bytes);

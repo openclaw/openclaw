@@ -1,27 +1,21 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { expect, it, vi } from "vitest";
 import * as nodeSqlite from "./node-sqlite.js";
 import {
-  removeTempDirectory,
-  removeTempDirectoryAsync,
+  removeTempDirectory as remove,
+  removeTempDirectoryAsync as removeAsync,
 } from "./sqlite-readonly-location-cleanup.js";
-import { defer, deferAsync } from "./sqlite-shard-lifecycle.test-support.js";
+import { defer, deferAsync, useSqliteTempDirs } from "./sqlite-shard-lifecycle.test-support.js";
 import { beginSqliteSnapshotRetirement } from "./sqlite-snapshot-retirement.js";
 import {
-  createSqliteSnapshotStagingDirectory,
-  createSqliteSnapshotStagingDirectorySync,
+  createSqliteSnapshotStagingDirectory as createStaging,
+  createSqliteSnapshotStagingDirectorySync as createStagingSync,
 } from "./sqlite-snapshot-staging.js";
 import { acquireSqliteStagingToken } from "./sqlite-staging-token.js";
 
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-    cleanup();
-  });
-});
+const tempDirs = useSqliteTempDirs(() => vi.restoreAllMocks());
 
 function createFixture() {
   const root = tempDirs.make("sqlite-staging-ownership-");
@@ -30,7 +24,7 @@ function createFixture() {
   fs.mkdirSync(cache);
   using database = new (nodeSqlite.requireNodeSqlite().DatabaseSync)(source);
   database.exec("CREATE TABLE probe(value TEXT); INSERT INTO probe VALUES('preserved');");
-  return { root, cache, source };
+  return { cache, source };
 }
 
 function assertReadable(location: string) {
@@ -40,18 +34,17 @@ function assertReadable(location: string) {
 
 it("preserves a live child during parent cleanup", async () => {
   const { cache, source } = createFixture();
-  const parent = await createSqliteSnapshotStagingDirectory(cache, false, undefined, true);
-  const child = await createSqliteSnapshotStagingDirectory(parent, false, undefined, true);
+  const parent = await createStaging(cache, false, undefined, true);
+  const child = await createStaging(parent, false, undefined, true);
   const location = path.join(child, "database.sqlite");
   fs.copyFileSync(source, location);
   await using _ = deferAsync(async () => {
-    await removeTempDirectoryAsync(child);
-    await removeTempDirectoryAsync(parent);
+    await removeAsync(child);
+    await removeAsync(parent);
   });
-  expect(await removeTempDirectoryAsync(parent)).toBe(false);
+  expect(await removeAsync(parent)).toBe(false);
   assertReadable(location);
-  expect(await removeTempDirectoryAsync(child)).toBe(true);
-  expect(await removeTempDirectoryAsync(parent)).toBe(true);
+  expect([await removeAsync(child), await removeAsync(parent)]).toEqual([true, true]);
 });
 
 const prefix = "openclaw-sqlite-readonly-v2-";
@@ -85,16 +78,9 @@ it.each([
 
 it.each([false, true])("cleans owned legacy staging (async: %s)", async (asynchronous) => {
   const { cache, source } = createFixture();
-  const directory = await createSqliteSnapshotStagingDirectory(
-    cache,
-    true,
-    undefined,
-    asynchronous,
-  );
+  const directory = await createStaging(cache, true, undefined, asynchronous);
   fs.copyFileSync(source, path.join(directory, "database.sqlite"));
-  expect(
-    asynchronous ? await removeTempDirectoryAsync(directory) : removeTempDirectory(directory),
-  ).toBe(true);
+  expect(asynchronous ? await removeAsync(directory) : remove(directory)).toBe(true);
   expect(fs.existsSync(directory)).toBe(false);
 });
 
@@ -104,7 +90,7 @@ it.each([
   ...(process.platform === "win32" ? (["unknown"] as const) : []),
 ] as const)("preserves payload after %s identity drift", (kind) => {
   const { cache, source } = createFixture();
-  const directory = createSqliteSnapshotStagingDirectorySync(cache);
+  const directory = createStagingSync(cache);
   const location = path.join(directory, "database.sqlite");
   fs.copyFileSync(source, location);
   const target = kind === "token" ? path.join(directory, "owner.sqlite") : directory;
@@ -118,8 +104,8 @@ it.each([
   });
   using _ = defer(() => {
     changed.mockRestore();
-    expect(removeTempDirectory(directory)).toBe(true);
+    expect(remove(directory)).toBe(true);
   });
-  expect(removeTempDirectory(directory)).toBe(false);
+  expect(remove(directory)).toBe(false);
   assertReadable(location);
 });

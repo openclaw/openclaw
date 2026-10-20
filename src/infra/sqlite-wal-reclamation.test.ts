@@ -1,41 +1,31 @@
 import fs from "node:fs";
-import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { requireNodeSqlite } from "./node-sqlite.js";
+import { sqliteMaintenanceFixture } from "./sqlite-maintenance-fixture.test-support.js";
 import { configureSqlitePreSchemaPragmas, configureSqliteWalMaintenance } from "./sqlite-wal.js";
 
-const dirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => vi.useRealTimers());
+const resources = sqliteMaintenanceFixture();
 
 function fixture(options: Parameters<typeof configureSqliteWalMaintenance>[1], preSchema = false) {
-  const pathname = path.join(dirs.make("openclaw-wal-reclamation-"), "agent.sqlite");
-  const { DatabaseSync } = requireNodeSqlite();
-  const writer = new DatabaseSync(pathname);
+  const pathname = resources.file();
+  const writer = resources.open(pathname);
   if (preSchema) {
     configureSqlitePreSchemaPragmas(writer);
   }
-  const maintenance = configureSqliteWalMaintenance(writer, {
+  const maintenance = resources.maintain(writer, {
     checkpointIntervalMs: 0,
     ...options,
     databasePath: pathname,
   });
-  return {
-    pathname,
-    writer,
-    maintenance,
-    [Symbol.dispose]() {
-      maintenance.close();
-      writer.close();
-    },
-  };
+  return { pathname, writer, maintenance };
 }
 
 it("keeps checkpoint-only reclamation nonblocking without changing the connection lock policy", () => {
-  using state = fixture({ autoCheckpointPages: 0, busyTimeoutMs: 5_000 });
-  const { writer, maintenance, pathname } = state;
-  using peer = new (requireNodeSqlite().DatabaseSync)(pathname);
+  const { writer, maintenance, pathname } = fixture({
+    autoCheckpointPages: 0,
+    busyTimeoutMs: 5_000,
+  });
+  const peer = resources.open(pathname);
   writer.exec("CREATE TABLE payload (value TEXT); INSERT INTO payload VALUES ('before');");
   peer.exec("BEGIN; SELECT * FROM payload;");
   writer.exec("INSERT INTO payload VALUES ('after');");
@@ -83,7 +73,7 @@ it("keeps checkpoint-only reclamation nonblocking without changing the connectio
 
 it("does not amplify a reader-held WAL on repeated periodic maintenance", async () => {
   vi.useFakeTimers();
-  using state = fixture(
+  const { writer, maintenance, pathname } = fixture(
     {
       autoCheckpointPages: 0,
       busyTimeoutMs: 50,
@@ -91,8 +81,7 @@ it("does not amplify a reader-held WAL on repeated periodic maintenance", async 
     },
     true,
   );
-  const { writer, maintenance, pathname } = state;
-  using reader = new (requireNodeSqlite().DatabaseSync)(pathname, { readOnly: true });
+  const reader = resources.open(pathname, { readOnly: true });
   writer.exec(`CREATE TABLE payload (data BLOB);
       INSERT INTO payload VALUES (zeroblob(4194304));
       DELETE FROM payload;`);
@@ -123,8 +112,10 @@ it("does not amplify a reader-held WAL on repeated periodic maintenance", async 
 
 it("reports bounded page progress and retains the native checkpoint outcome", () => {
   let admitted = true;
-  using state = fixture({ runMaintenance: (operation) => admitted && operation() }, true);
-  const { writer: database, maintenance } = state;
+  const { writer: database, maintenance } = fixture(
+    { runMaintenance: (op) => admitted && op() },
+    true,
+  );
   database.exec(`CREATE TABLE payload (data BLOB);
       INSERT INTO payload VALUES (zeroblob(4194304));
       DELETE FROM payload;`);

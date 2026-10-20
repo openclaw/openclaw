@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { expect, it, vi } from "vitest";
+import { useSqliteTempDirs } from "./sqlite-shard-lifecycle.test-support.js";
 import type { createSqliteSnapshotStagingRuntime } from "./sqlite-snapshot-staging-runtime.js";
 import type { SqliteSnapshotStagingReply } from "./sqlite-snapshot-staging.types.js";
 
@@ -42,18 +42,14 @@ vi.mock("./sqlite-readonly-native-resource.client.js", () => ({
   }),
 }));
 
-const directories = useAutoCleanupTempDirTracker((cleanup) => {
-  afterEach(async () => {
-    try {
-      await fixture.register.mock.calls[0]?.[1].closeResource();
-      cleanup();
-    } finally {
-      fixture.ports.value?.port1.close();
-      fixture.ports.value?.port2.close();
-      vi.restoreAllMocks();
-    }
-  });
-});
+const directories = useSqliteTempDirs(
+  () => fixture.register.mock.calls[0]?.[1].closeResource(),
+  () => {
+    fixture.ports.value?.port1.close();
+    fixture.ports.value?.port2.close();
+    vi.restoreAllMocks();
+  },
+);
 
 it("retries only the removal acknowledgement and preserves a replacement directory", async () => {
   const root = directories.make("staging-removal-ack-");
@@ -68,11 +64,7 @@ it("retries only the removal acknowledgement and preserves a replacement directo
   const remove = vi.spyOn(fs, "rm");
 
   await import("./sqlite-snapshot-staging.worker.js");
-  const registration = fixture.register.mock.calls[0];
-  if (!registration) {
-    throw new Error("Staging worker did not register its task and resource handlers");
-  }
-  const [runTask, resource] = registration;
+  const [runTask, resource] = fixture.register.mock.calls[0]!;
   expect(
     await runTask({
       type: "allocate",

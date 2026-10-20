@@ -9,3 +9,18 @@ export function deferAsync(cleanup: () => Promise<unknown>): AsyncDisposable {
     },
   };
 }
+import { afterEach } from "vitest";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+
+export function useSqliteTempDirs(beforeCleanup?: () => unknown, afterCleanup?: () => unknown) {
+  const dirs = createTempDirTracker();
+  afterEach(async () => {
+    try {
+      await beforeCleanup?.();
+      dirs.cleanup();
+    } finally {
+      await afterCleanup?.();
+    }
+  });
+  return dirs;
+}
