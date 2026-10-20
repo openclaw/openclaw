@@ -23,10 +23,8 @@ import {
   type WorkspaceCatalogRow,
 } from "./chat-session-workspace-catalog.ts";
 import { FolderDisclosure } from "./chat-session-workspace-disclosure.tsx";
-import type {
-  SessionWorkspaceFilter,
-  SessionWorkspaceProps,
-} from "./chat-sidebar-content-types.ts";
+import type { SessionWorkspaceFilter } from "./chat-sidebar-content-types.ts";
+import type { SessionWorkspaceProps } from "./chat-sidebar-view-types.ts";
 import { hasTranscriptAttachments } from "./chat-transcript-attachments.ts";
 import "../../../styles/session-panel-rail.css";
 import "./chat-session-workspace-desktop.css";
