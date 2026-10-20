@@ -11,10 +11,7 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { listSubagents } from "../chat-subagent-wait.ts";
 import {
-  SessionAutomationMobileBody,
   SessionAutomationMobileList,
-  SessionAutomationMobileTranscript,
-  type SessionAutomationMobileBodyProps,
   type SessionAutomationMobileListProps,
 } from "./chat-automation-mobile.tsx";
 import { getContextNoticeViewModel } from "./chat-composer-context.tsx";
@@ -112,10 +109,6 @@ type ChatDetailsMobilePeopleContent = Omit<ChatMobilePeopleBodyProps, "sharingOp
   sharing?: ChatSessionSharingMobileAdapter;
 };
 
-type ChatDetailsMobileAutomationTranscript = Parameters<
-  typeof SessionAutomationMobileTranscript
->[0];
-
 type ChatDetailsMobileMoveRequest = Parameters<SessionPlacementPresentation>[0];
 
 /** Only supplied mobile bodies belong here. Missing peer bodies stay with their owners. */
@@ -131,8 +124,6 @@ export type ChatDetailsMobilePage =
   | { kind: "outputs" }
   | { kind: "context" }
   | { kind: "automations"; content: SessionAutomationMobileListProps }
-  | { kind: "automation"; content: SessionAutomationMobileBodyProps }
-  | { kind: "automation-transcript"; content: ChatDetailsMobileAutomationTranscript }
   | { kind: "sharing"; content: ChatSessionSharingMobileAdapter }
   | { kind: "session-access"; content: ChatSessionSharingMobileAdapter }
   | {
@@ -417,17 +408,6 @@ export function ChatDetailsMobileContent(props: ChatDetailsMobileContentProps) {
       </Match>
       <Match when={props.page.kind === "automations" && props.page}>
         {(page) => <SessionAutomationMobileList {...page().content} />}
-      </Match>
-      <Match when={props.page.kind === "automation" && props.page}>
-        {(page) => (
-          <SessionAutomationMobileBody
-            {...page().content}
-            onScrollPortRef={props.details.onScrollPortRef}
-          />
-        )}
-      </Match>
-      <Match when={props.page.kind === "automation-transcript" && props.page}>
-        {(page) => <SessionAutomationMobileTranscript {...page().content} />}
       </Match>
       <Match when={props.page.kind === "sharing" && props.page}>
         {(page) => <ChatSessionSharingMobile {...page().content.sharing} />}
