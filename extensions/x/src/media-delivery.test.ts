@@ -21,6 +21,7 @@ vi.mock("./client.js", async (importOriginal) => ({
   getXApi: vi.fn(),
 }));
 const roots: string[] = [];
+const videoBytes = Buffer.from("00000018667479706d703432000000006d70343269736f6d", "hex");
 afterEach(async () => {
   clearRuntimeConfigSnapshot();
   vi.restoreAllMocks();
@@ -88,7 +89,16 @@ async function mediaFixture(failProcessing = false) {
     },
   });
   client.getXApi.mockResolvedValue(api);
-  return { root, file, bytes, requests, api };
+  const context = {
+    cfg: config,
+    to: "x:501",
+    text: "Proof.",
+    mediaAccess: { localRoots: [root] },
+  };
+  const sendMedia = (mediaUrl = file, text = context.text) =>
+    xPlugin.outbound!.sendMedia!({ ...context, mediaUrl, text });
+  const posts = () => requests.filter((r) => r.path === "/2/tweets").map((r) => r.body);
+  return { root, file, bytes, requests, api, context, sendMedia, posts };
 }
 
 describe("X native attachment delivery", () => {
@@ -101,12 +111,7 @@ describe("X native attachment delivery", () => {
     "monitor-mediaUrls",
   ] as const)("attaches the uploaded image through the %s entrypoint", async (route) => {
     const test = await mediaFixture();
-    const ctx = {
-      cfg: config,
-      to: "x:501",
-      text: "Proof.",
-      mediaAccess: { localRoots: [test.root] },
-    };
+    const ctx = test.context;
     if (route === "action") {
       await xPlugin.actions!.handleAction!({
         channel: "x",
@@ -149,10 +154,10 @@ describe("X native attachment delivery", () => {
         await monitor.stop();
       }
     } else {
-      const result = await xPlugin.outbound!.sendMedia!({ ...ctx, mediaUrl: test.file });
+      const result = await test.sendMedia();
       expect(result.receipt?.parts[0]?.kind).toBe("media");
     }
-    expect(test.requests.filter((r) => r.path === "/2/tweets").map((r) => r.body)).toEqual([
+    expect(test.posts()).toEqual([
       { text: "Proof.", reply: { in_reply_to_tweet_id: "501" }, media: { media_ids: ["701"] } },
     ]);
   });
@@ -162,7 +167,7 @@ describe("X native attachment delivery", () => {
       channel: "x",
       action: "send",
       cfg: config,
-      mediaAccess: { localRoots: [test.root] },
+      mediaAccess: test.context.mediaAccess,
       params: { to: "x:501", media: test.file },
     });
     expect(test.requests.at(-1)?.body).toEqual({
@@ -174,19 +179,12 @@ describe("X native attachment delivery", () => {
   it("sends an MP4 as a native video reply", async () => {
     const test = await mediaFixture();
     const video = path.join(test.root, "proof.mp4");
-    const bytes = Buffer.from("00000018667479706d703432000000006d70343269736f6d", "hex");
-    await writeFile(video, bytes);
-    await xPlugin.outbound!.sendMedia!({
-      cfg: config,
-      to: "x:501",
-      text: "Video proof.",
-      mediaUrl: video,
-      mediaAccess: { localRoots: [test.root] },
-    });
+    await writeFile(video, videoBytes);
+    await test.sendMedia(video, "Video proof.");
     expect(test.requests.find((r) => r.path.endsWith("/initialize"))?.body).toMatchObject({
       media_type: "video/mp4",
       media_category: "tweet_video",
-      total_bytes: bytes.length,
+      total_bytes: videoBytes.length,
     });
     expect(test.requests.at(-1)?.body).toEqual({
       text: "Video proof.",
@@ -199,14 +197,13 @@ describe("X native attachment delivery", () => {
     const test = await mediaFixture();
     const second = path.join(test.root, "second.png");
     await writeFile(second, test.bytes);
+    const text = "a".repeat(300);
     const result = await xPlugin.outbound!.sendPayload!({
-      cfg: config,
-      to: "x:501",
-      text: "a".repeat(300),
-      mediaAccess: { localRoots: [test.root] },
-      payload: { text: "a".repeat(300), mediaUrl: test.file, mediaUrls: [test.file, second] },
+      ...test.context,
+      text,
+      payload: { text, mediaUrl: test.file, mediaUrls: [test.file, second] },
     });
-    expect(test.requests.filter((r) => r.path === "/2/tweets").map((r) => r.body)).toEqual([
+    expect(test.posts()).toEqual([
       {
         text: "a".repeat(280),
         reply: { in_reply_to_tweet_id: "501" },
@@ -240,10 +237,7 @@ describe("X native attachment delivery", () => {
     }
     if (scenario === "mixed video") {
       const video = path.join(test.root, "proof.mp4");
-      await writeFile(
-        video,
-        Buffer.from("00000018667479706d703432000000006d70343269736f6d", "hex"),
-      );
+      await writeFile(video, videoBytes);
       urls.push(video);
     }
     if (scenario === "oversized image") {
@@ -251,9 +245,7 @@ describe("X native attachment delivery", () => {
     }
     await expect(
       xPlugin.outbound!.sendPayload!({
-        cfg: config,
-        to: "x:501",
-        text: "Proof.",
+        ...test.context,
         mediaAccess: { localRoots: allowed },
         payload: { text: "Proof.", mediaUrls: urls },
       }),
@@ -263,16 +255,8 @@ describe("X native attachment delivery", () => {
 
   it("does not post a caption if media processing fails", async () => {
     const test = await mediaFixture(true);
-    await expect(
-      xPlugin.outbound!.sendMedia!({
-        cfg: config,
-        to: "x:501",
-        text: "Proof.",
-        mediaUrl: test.file,
-        mediaAccess: { localRoots: [test.root] },
-      }),
-    ).rejects.toThrow(/processing failed/i);
+    await expect(test.sendMedia()).rejects.toThrow(/processing failed/i);
     expect(test.requests.some((r) => r.path.endsWith("/finalize"))).toBe(true);
-    expect(test.requests.filter((r) => r.path === "/2/tweets")).toEqual([]);
+    expect(test.posts()).toEqual([]);
   });
 });

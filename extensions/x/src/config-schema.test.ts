@@ -5,6 +5,10 @@ import { resolveXAccount } from "./accounts.js";
 import { XConfigSchema } from "./config-schema.js";
 import { channelSecrets } from "./secret-contract.js";
 
+const xConfig = (x: NonNullable<OpenClawConfig["channels"]>["x"]): OpenClawConfig => ({
+  channels: { x },
+});
+
 describe("X GitHub verification configuration", () => {
   it("is off by default and inherits individual GitHub settings through account overrides", () => {
     expect(resolveXAccount({}).config.verifiedFromGitHub).toBeUndefined();
@@ -43,24 +47,20 @@ describe("X GitHub verification configuration", () => {
 
   it("resolves only active GitHub token owners, including inherited nested settings", () => {
     const token = { source: "env", provider: "default", id: "X_GITHUB_TOKEN" } as const;
-    const config = {
-      channels: {
-        x: {
-          verifiedFromGitHub: { token },
-          accounts: {
-            team: { verifiedFromGitHub: { repo: "openclaw/openclaw" } },
-            own: {
-              verifiedFromGitHub: {
-                repo: "example/repo",
-                token: { ...token, id: "OWN_GITHUB_TOKEN" },
-              },
-            },
-            disabled: { enabled: false, verifiedFromGitHub: { repo: "example/repo", token } },
-            unconfigured: { verifiedFromGitHub: { token } },
+    const config = xConfig({
+      verifiedFromGitHub: { token },
+      accounts: {
+        team: { verifiedFromGitHub: { repo: "openclaw/openclaw" } },
+        own: {
+          verifiedFromGitHub: {
+            repo: "example/repo",
+            token: { ...token, id: "OWN_GITHUB_TOKEN" },
           },
         },
+        disabled: { enabled: false, verifiedFromGitHub: { repo: "example/repo", token } },
+        unconfigured: { verifiedFromGitHub: { token } },
       },
-    };
+    });
     const context = createResolverContext({ sourceConfig: config, env: {} });
     channelSecrets.collectRuntimeConfigAssignments({ config, context });
     expect(context.assignments.map(({ path, ownerId }) => ({ path, ownerId }))).toEqual([
@@ -85,17 +85,13 @@ describe("X cost limit configuration", () => {
       monthlyUsd: 1_000,
       cycleStartDay: 1,
     });
-    const cfg: OpenClawConfig = {
-      channels: {
-        x: {
-          costLimits: { dailyUsd: 30, monthlyUsd: 300, cycleStartDay: 20 },
-          accounts: {
-            team: { costLimits: { dailyUsd: 5 } },
-            paused: { costLimits: { dailyUsd: 0 } },
-          },
-        },
+    const cfg = xConfig({
+      costLimits: { dailyUsd: 30, monthlyUsd: 300, cycleStartDay: 20 },
+      accounts: {
+        team: { costLimits: { dailyUsd: 5 } },
+        paused: { costLimits: { dailyUsd: 0 } },
       },
-    };
+    });
     expect(resolveXAccount(cfg, "team").costLimits).toEqual({
       dailyUsd: 5,
       monthlyUsd: 300,
@@ -121,14 +117,10 @@ describe("X cost limit configuration", () => {
 
 describe("X public work-session configuration", () => {
   it("preserves account opt-outs from the shared publication default", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        x: {
-          autoPublishWorkSessions: true,
-          accounts: { inherited: {}, private: { autoPublishWorkSessions: false } },
-        },
-      },
-    };
+    const cfg = xConfig({
+      autoPublishWorkSessions: true,
+      accounts: { inherited: {}, private: { autoPublishWorkSessions: false } },
+    });
     expect(XConfigSchema.safeParse(cfg.channels?.x).success).toBe(true);
     expect(resolveXAccount(cfg, "inherited").config.autoPublishWorkSessions).toBe(true);
     expect(resolveXAccount(cfg, "private").config.autoPublishWorkSessions).toBe(false);

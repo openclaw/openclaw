@@ -3,20 +3,41 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createXApiClient, type XFetch } from "./api.js";
 import { createXTestSpend } from "./test-support/spend.js";
 
-function client(fetch: XFetch, signal?: AbortSignal) {
+type ClientOptions = Parameters<typeof createXApiClient>[0];
+function rawClient(fetch: XFetch, options: Partial<ClientOptions> = {}) {
   return createXApiClient({
     spend: createXTestSpend(),
     clientId: "client",
     clientSecret: "test-secret",
     refreshToken: "test-refresh",
     saveRefreshToken: async () => {},
-    signal,
-    fetch: (url, init) =>
+    ...options,
+    fetch,
+  });
+}
+function client(fetch: XFetch, options: Partial<ClientOptions> = {}) {
+  return rawClient(
+    (url, init) =>
       url.endsWith("/oauth2/token")
         ? Promise.resolve(Response.json({ access_token: "test-access" }))
         : fetch(url, init),
-  });
+    options,
+  );
 }
+
+const mediaResponse = (data: object = { id: "101" }) => Response.json({ data });
+const uploadPaths = [
+  "/2/media/upload/initialize",
+  "/2/media/upload/101/append",
+  "/2/media/upload/101/finalize",
+];
+const uploadThenReply = (
+  api: ReturnType<typeof client>,
+  media: Parameters<ReturnType<typeof client>["uploadMedia"]>[0] = image,
+) =>
+  api
+    .uploadMedia(media)
+    .then((id) => api.reply({ text: "Never text-only", inReplyToId: "20", mediaIds: [id] }));
 
 const image = {
   buffer: Buffer.from("synthetic-image-bytes"),
@@ -24,31 +45,19 @@ const image = {
   fileName: "image.png",
   mediaCategory: "tweet_image" as const,
 };
+async function readMedia(request: Request) {
+  const form = await request.formData();
+  const file = form.get("media");
+  expect(file).toBeInstanceOf(File);
+  if (!(file instanceof File)) {
+    throw new Error("Expected binary media");
+  }
+  return { file, index: form.get("segment_index") };
+}
 
 afterEach(() => vi.useRealTimers());
 
 describe("X native media request boundary", () => {
-  it("attaches native media IDs without changing reply routing or link-free pricing", async () => {
-    let body: unknown;
-    const api = client(async (_url, init) => {
-      body = await new Response(init?.body).json();
-      return Response.json({ data: { id: "900" } });
-    });
-    await expect(
-      api.reply({
-        text: "Native image",
-        inReplyToId: "20",
-        mediaIds: ["101", "102"],
-      }),
-    ).resolves.toBe("900");
-    expect(body).toEqual({
-      text: "Native image",
-      reply: { in_reply_to_tweet_id: "20" },
-      media: { media_ids: ["101", "102"] },
-    });
-    expect(await api.spend.status()).toMatchObject({ dayUsd: 0.02 });
-  });
-
   it.each([
     image,
     {
@@ -72,27 +81,25 @@ describe("X native media request boundary", () => {
             total_bytes: media.buffer.length,
             media_category: media.mediaCategory,
           });
-          return Response.json({ data: { id: "101" } });
+          return mediaResponse();
         }
         if (path.endsWith("/append")) {
           expect(request.headers.get("content-type")).toContain("multipart/form-data; boundary=");
-          const form = await request.formData();
-          expect(form.get("segment_index")).toBe("0");
-          const file = form.get("media");
-          expect(file).toBeInstanceOf(File);
-          if (!(file instanceof File)) {
-            throw new Error("Expected binary media");
-          }
-          expect(file.name).toBe(media.fileName);
-          expect(file.type).toBe(media.contentType);
+          const { file, index } = await readMedia(request);
+          expect(index).toBe("0");
+          expect(file).toMatchObject({ name: media.fileName, type: media.contentType });
           expect(Buffer.from(await file.arrayBuffer())).toEqual(media.buffer);
-          return Response.json({ data: { expires_at: 86400 } });
+          return mediaResponse({ expires_at: 86400 });
         }
         if (path.endsWith("/finalize")) {
           expect(await request.text()).toBe("");
-          return Response.json({ data: { id: "101" } });
+          return mediaResponse();
         }
-        expect(await request.json()).toMatchObject({ media: { media_ids: ["101"] } });
+        expect(await request.json()).toEqual({
+          text: "Ready",
+          reply: { in_reply_to_tweet_id: "20" },
+          media: { media_ids: ["101"] },
+        });
         return Response.json({ data: { id: "900" } });
       });
       const mediaId = await api.uploadMedia(media);
@@ -105,6 +112,7 @@ describe("X native media request boundary", () => {
         "POST /2/media/upload/101/finalize",
         "POST /2/tweets",
       ]);
+      expect(await api.spend.status()).toMatchObject({ dayUsd: 0.02 });
     },
   );
 
@@ -128,25 +136,18 @@ describe("X native media request boundary", () => {
         return Response.json({ data: { id: "201" } });
       }
       if (parsed.pathname.endsWith("/append")) {
-        const form = await request.formData();
-        const media = form.get("media");
-        if (!(media instanceof File)) {
-          throw new Error("Expected binary media");
-        }
-        const index = form.get("segment_index");
+        const { file, index } = await readMedia(request);
         if (typeof index !== "string") {
           throw new Error("Expected a multipart segment index");
         }
-        chunks.push({
-          index,
-          bytes: Buffer.from(await media.arrayBuffer()),
-        });
+        chunks.push({ index, bytes: Buffer.from(await file.arrayBuffer()) });
         return new Response(null, { status: 204 });
       }
       if (parsed.pathname.endsWith("/finalize")) {
         finalized.resolve();
-        return Response.json({
-          data: { id: "201", processing_info: { state: "pending", check_after_secs: 2 } },
+        return mediaResponse({
+          id: "201",
+          processing_info: { state: "pending", check_after_secs: 2 },
         });
       }
       if (parsed.pathname === "/2/media/upload") {
@@ -154,14 +155,12 @@ describe("X native media request boundary", () => {
         expect(parsed.searchParams.get("command")).toBe("STATUS");
         expect(parsed.searchParams.get("media_id")).toBe("201");
         polls.push(Date.now());
-        return Response.json({
-          data: {
-            id: "201",
-            processing_info:
-              polls.length === 1
-                ? { state: "in_progress", check_after_secs: 3 }
-                : { state: "succeeded" },
-          },
+        return mediaResponse({
+          id: "201",
+          processing_info:
+            polls.length === 1
+              ? { state: "in_progress", check_after_secs: 3 }
+              : { state: "succeeded" },
         });
       }
       post = await request.json();
@@ -200,51 +199,38 @@ describe("X native media request boundary", () => {
   });
 
   it.each([
-    {
-      label: "forbidden",
-      response: () =>
+    [
+      "forbidden",
+      () =>
         Response.json({ detail: "Denied test-access test-refresh test-secret" }, { status: 403 }),
-      retryable: false,
-      message: "media.write",
-    },
-    {
-      label: "rate limited",
-      response: () => new Response(null, { status: 429, headers: { "Retry-After": "60" } }),
-      retryable: true,
-      message: "429",
-    },
-    {
-      label: "server failure",
-      response: () => new Response(null, { status: 503 }),
-      retryable: true,
-      message: "503",
-    },
-    {
-      label: "lost upload response",
-      response: () => {
+      false,
+      "media.write",
+    ],
+    [
+      "rate limited",
+      () => new Response(null, { status: 429, headers: { "Retry-After": "60" } }),
+      true,
+      "429",
+    ],
+    ["server failure", () => new Response(null, { status: 503 }), true, "503"],
+    [
+      "lost upload response",
+      () => {
         throw new Error("socket reset");
       },
-      retryable: true,
-      message: "network request failed",
-    },
-    {
-      label: "missing media ID",
-      response: () => Response.json({ data: {} }),
-      retryable: false,
-      message: "media ID",
-    },
-  ])(
-    "classifies $label as no Post dispatched without retrying the upload",
-    async ({ response, retryable, message }) => {
+      true,
+      "network request failed",
+    ],
+    ["missing media ID", () => mediaResponse({}), false, "media ID"],
+  ] as const)(
+    "classifies %s as no Post dispatched without retrying the upload",
+    async (_label, response, retryable, message) => {
       const calls: string[] = [];
       const api = client(async (url) => {
         calls.push(new URL(url).pathname);
         return response();
       });
-      const error: unknown = await api
-        .uploadMedia(image)
-        .then((id) => api.reply({ text: "Never text-only", inReplyToId: "20", mediaIds: [id] }))
-        .catch((cause: unknown) => cause);
+      const error: unknown = await uploadThenReply(api).catch((cause: unknown) => cause);
       expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
       expect(error).toMatchObject({ retryable, message: expect.stringContaining(message) });
       expect(String(error)).not.toMatch(/test-access|test-refresh|test-secret/);
@@ -254,40 +240,26 @@ describe("X native media request boundary", () => {
   );
 
   it.each([
-    {
-      label: "failed processing",
-      data: { id: "101", processing_info: { state: "failed" } },
-      message: "processing failed",
-    },
-    {
-      label: "unknown processing",
-      data: { id: "101", processing_info: { state: "unknown" } },
-      message: "invalid processing state",
-    },
-    { label: "wrong media ID", data: { id: "102" }, message: "invalid media result" },
-    {
-      label: "unbounded processing delay",
-      data: { id: "101", processing_info: { state: "pending", check_after_secs: 3600 } },
-      message: "timed out",
-    },
-  ])("refuses $label before the caller can post", async ({ data, message }) => {
+    ["failed processing", { id: "101", processing_info: { state: "failed" } }, "processing failed"],
+    [
+      "unknown processing",
+      { id: "101", processing_info: { state: "unknown" } },
+      "invalid processing state",
+    ],
+    ["wrong media ID", { id: "102" }, "invalid media result"],
+    [
+      "unbounded processing delay",
+      { id: "101", processing_info: { state: "pending", check_after_secs: 3600 } },
+      "timed out",
+    ],
+  ] as const)("refuses %s before the caller can post", async (_label, data, message) => {
     const calls: string[] = [];
     const api = client(async (url) => {
       calls.push(new URL(url).pathname);
-      return url.endsWith("/finalize")
-        ? Response.json({ data })
-        : Response.json({ data: { id: "101" } });
+      return mediaResponse(url.endsWith("/finalize") ? data : undefined);
     });
-    await expect(
-      api
-        .uploadMedia(image)
-        .then((id) => api.reply({ text: "Never text-only", inReplyToId: "20", mediaIds: [id] })),
-    ).rejects.toThrow(message);
-    expect(calls).toEqual([
-      "/2/media/upload/initialize",
-      "/2/media/upload/101/append",
-      "/2/media/upload/101/finalize",
-    ]);
+    await expect(uploadThenReply(api)).rejects.toThrow(message);
+    expect(calls).toEqual(uploadPaths);
   });
 
   it("bounds repeated pending processing responses without shortening X polling delays", async () => {
@@ -302,11 +274,12 @@ describe("X native media request boundary", () => {
         } else {
           polls.push(Date.now());
         }
-        return Response.json({
-          data: { id: "101", processing_info: { state: "pending", check_after_secs: 60 } },
+        return mediaResponse({
+          id: "101",
+          processing_info: { state: "pending", check_after_secs: 60 },
         });
       }
-      return Response.json({ data: { id: "101" } });
+      return mediaResponse();
     });
     const started = Date.now();
     const result = api.uploadMedia(image).catch((cause: unknown) => cause);
@@ -338,26 +311,24 @@ describe("X native media request boundary", () => {
           calls.push(path);
           if (path.endsWith("/finalize")) {
             finalized.resolve();
-            return Response.json({
-              data: { id: "101", processing_info: { state: "pending", check_after_secs: 2 } },
+            return mediaResponse({
+              id: "101",
+              processing_info: { state: "pending", check_after_secs: 2 },
             });
           }
-          return Response.json({ data: { id: "101" } });
+          return mediaResponse();
         },
-        failure === "account abort" ? controller.signal : undefined,
+        { signal: failure === "account abort" ? controller.signal : undefined },
       );
-      const result = api
-        .uploadMedia({
-          ...image,
-          signal: failure === "caller abort" ? controller.signal : undefined,
-          assertActive: () => () => {
-            if (!active) {
-              throw rejected;
-            }
-          },
-        })
-        .then((id) => api.reply({ text: "Never text-only", inReplyToId: "20", mediaIds: [id] }))
-        .catch((cause: unknown) => cause);
+      const result = uploadThenReply(api, {
+        ...image,
+        signal: failure === "caller abort" ? controller.signal : undefined,
+        assertActive: () => () => {
+          if (!active) {
+            throw rejected;
+          }
+        },
+      }).catch((cause: unknown) => cause);
       await finalized.promise;
       await vi.advanceTimersByTimeAsync(0);
       if (failure.includes("abort")) {
@@ -373,9 +344,7 @@ describe("X native media request boundary", () => {
         expect(error).toBe(rejected);
       }
       expect(calls).toEqual([
-        "/2/media/upload/initialize",
-        "/2/media/upload/101/append",
-        "/2/media/upload/101/finalize",
+        ...uploadPaths,
         ...(failure === "missing processing status" ? ["/2/media/upload"] : []),
       ]);
     },
@@ -385,15 +354,8 @@ describe("X native media request boundary", () => {
     let refreshes = 0;
     let persisted = "";
     const chunks: { token: string | null; content: string }[] = [];
-    const api = createXApiClient({
-      spend: createXTestSpend(),
-      clientId: "client",
-      clientSecret: "secret",
-      refreshToken: "seed",
-      saveRefreshToken: async (token) => {
-        persisted = token;
-      },
-      fetch: async (url, init) => {
+    const api = rawClient(
+      async (url, init) => {
         if (url.endsWith("/oauth2/token")) {
           refreshes++;
           return Response.json({
@@ -404,19 +366,22 @@ describe("X native media request boundary", () => {
         expect(persisted).toBe("refresh-" + refreshes);
         if (url.endsWith("/append")) {
           const request = new Request(url, init);
-          const form = await request.formData();
-          const file = form.get("media");
-          if (!(file instanceof File)) {
-            throw new Error("Expected media");
-          }
+          const { file } = await readMedia(request);
           chunks.push({ token: request.headers.get("authorization"), content: await file.text() });
           if (chunks.length === 1) {
             return new Response(null, { status: 401 });
           }
         }
-        return Response.json({ data: { id: "101" } });
+        return mediaResponse();
       },
-    });
+      {
+        clientSecret: "secret",
+        refreshToken: "seed",
+        saveRefreshToken: async (token) => {
+          persisted = token;
+        },
+      },
+    );
     await expect(api.uploadMedia(image)).resolves.toBe("101");
     expect(refreshes).toBe(2);
     expect(chunks).toEqual([
@@ -432,13 +397,8 @@ describe("X native media request boundary", () => {
       cause: undefined,
       retryable: false,
     });
-    const api = createXApiClient({
-      spend: createXTestSpend(),
-      clientId: "client",
-      clientSecret: "secret",
-      refreshToken: "seed",
-      saveRefreshToken: async () => {},
-      fetch: async (url) => {
+    const api = rawClient(
+      async (url) => {
         const path = new URL(url).pathname;
         calls.push(path);
         if (path.endsWith("/oauth2/token")) {
@@ -450,9 +410,10 @@ describe("X native media request boundary", () => {
         if (path.endsWith("/append")) {
           active = false;
         }
-        return Response.json({ data: { id: "101" } });
+        return mediaResponse();
       },
-    });
+      { clientSecret: "secret", refreshToken: "seed" },
+    );
     await expect(
       api.uploadMedia({
         ...image,
