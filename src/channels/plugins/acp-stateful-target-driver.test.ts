@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import type { readAcpSessionEntryAsync } from "../../acp/runtime/session-meta.js";
 
 const mocks = vi.hoisted(() => ({
@@ -6,11 +6,9 @@ const mocks = vi.hoisted(() => ({
     ok: true as const,
     key: "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
     entry: { sessionId: "next-session", lifecycleRevision: "next-lifecycle", updatedAt: 1 },
-    agentId: "claude",
     storePath: "/tmp/claude-sessions.json",
   })),
   readAcpSessionEntryAsync: vi.fn<typeof readAcpSessionEntryAsync>(async () => null),
-  resolveConfiguredAcpBindingSpecBySessionKey: vi.fn(() => null),
 }));
 
 // mock-isolation: Keep the ACP control plane's session-state dependencies outside this driver fixture.
@@ -24,7 +22,7 @@ vi.mock("../../acp/runtime/session-meta.js", () => ({
   readAcpSessionEntryAsync: mocks.readAcpSessionEntryAsync,
 }));
 vi.mock("../../acp/persistent-bindings.resolve.js", () => ({
-  resolveConfiguredAcpBindingSpecBySessionKey: mocks.resolveConfiguredAcpBindingSpecBySessionKey,
+  resolveConfiguredAcpBindingSpecBySessionKey: vi.fn(() => null),
 }));
 
 import {
@@ -35,48 +33,42 @@ import {
 const sessionKey = "agent:claude:acp:binding:discord:default:9373ab192b2317f4";
 const bindingTarget = { kind: "stateful" as const, driverId: "acp", sessionKey, agentId: "claude" };
 
-describe("ACP binding targets", () => {
-  beforeEach(() => {
-    mocks.performGatewaySessionReset.mockClear();
-    mocks.readAcpSessionEntryAsync.mockReset().mockResolvedValue(null);
-    mocks.resolveConfiguredAcpBindingSpecBySessionKey.mockClear();
-  });
+beforeEach(() => {
+  mocks.performGatewaySessionReset.mockClear();
+  mocks.readAcpSessionEntryAsync.mockReset().mockResolvedValue(null);
+});
 
-  it("delegates bound resets to the gateway session reset authority", async () => {
-    await expect(
-      resetConfiguredAcpBindingTargetInPlace({
-        cfg: {},
-        sessionKey,
-        reason: "new",
-        commandSource: "discord:native",
-        bindingTarget,
-      }),
-    ).resolves.toEqual({
-      ok: true,
+it("delegates bound resets to the gateway session reset authority", async () => {
+  await expect(
+    resetConfiguredAcpBindingTargetInPlace({
+      cfg: {},
       sessionKey,
-      sessionId: "next-session",
-      lifecycleRevision: "next-lifecycle",
-      storePath: "/tmp/claude-sessions.json",
-    });
-
-    expect(mocks.performGatewaySessionReset).toHaveBeenCalledWith({
-      key: sessionKey,
       reason: "new",
-      agentId: "claude",
       commandSource: "discord:native",
-      armSessionDiffBaselineCapture: true,
-      // Channel-native resets carry host-owned system authority.
-      operatorRoleActor: { kind: "system" },
-    });
+      bindingTarget,
+    }),
+  ).resolves.toEqual({
+    ok: true,
+    sessionKey,
+    sessionId: "next-session",
+    lifecycleRevision: "next-lifecycle",
+    storePath: "/tmp/claude-sessions.json",
   });
 
-  it("keeps ACP reset available when metadata has already been cleared", async () => {
-    expect(await resolveAcpBindingTargetBySessionKey({ cfg: {}, sessionKey })).toEqual(
-      bindingTarget,
-    );
+  expect(mocks.performGatewaySessionReset).toHaveBeenCalledWith({
+    key: sessionKey,
+    reason: "new",
+    agentId: "claude",
+    commandSource: "discord:native",
+    armSessionDiffBaselineCapture: true,
+    // Channel-native resets carry host-owned system authority.
+    operatorRoleActor: { kind: "system" },
   });
 });
 
+it("keeps ACP reset available when metadata has already been cleared", async () => {
+  expect(await resolveAcpBindingTargetBySessionKey({ cfg: {}, sessionKey })).toEqual(bindingTarget);
+});
 it("uses the canonical metadata owner for a bare binding whose harness differs", async () => {
   const cfg = { agents: { ownership: "explicit" as const, entries: { main: {}, work: {} } } };
   const target = { cfg, sessionKey: "global", agentId: "work" };

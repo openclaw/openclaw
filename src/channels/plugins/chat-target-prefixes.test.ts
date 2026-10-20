@@ -65,22 +65,19 @@ describe("isAllowedParsedChatSender", () => {
 });
 
 describe("createAllowedChatSenderMatcher", () => {
-  it("keeps conversation targets disabled unless the matcher opts in", () => {
-    const matcher = createAllowedChatSenderMatcher(parsers);
+  it.each([undefined, true])(
+    "conversation targets require opt-in: %s",
+    (allowConversationTargets) => {
+      const matcher = createAllowedChatSenderMatcher({
+        ...parsers,
+        allowConversationTargets,
+      });
 
-    for (const entry of conversationEntries) {
-      expect(matcher({ ...conversation, allowFrom: [entry] })).toBe(false);
-    }
-  });
-
-  it("matches conversation targets when the matcher explicitly opts in", () => {
-    const matcher = createAllowedChatSenderMatcher({
-      ...parsers,
-      allowConversationTargets: true,
-    });
-
-    for (const entry of conversationEntries) {
-      expect(matcher({ ...conversation, allowFrom: [entry] })).toBe(true);
-    }
-  });
+      for (const entry of conversationEntries) {
+        expect(matcher({ ...conversation, allowFrom: [entry] })).toBe(
+          allowConversationTargets === true,
+        );
+      }
+    },
+  );
 });

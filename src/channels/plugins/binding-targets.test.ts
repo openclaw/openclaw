@@ -57,9 +57,7 @@ function createBindingResolution(driverId: string): ConfiguredBindingResolution 
   };
 }
 
-beforeEach(() => {
-  vi.resetAllMocks();
-});
+beforeEach(() => vi.resetAllMocks());
 
 describe("configured ACP binding targets", () => {
   it("delegates readiness to the ACP owner", async () => {

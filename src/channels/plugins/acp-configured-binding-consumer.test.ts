@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { resolveConfiguredAcpBindingSpecFromRecord } from "../../acp/persistent-bindings.types.js";
+import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { AgentAcpBinding } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -45,10 +46,7 @@ function materializeThinking(cfg: OpenClawConfig): string | undefined {
 }
 
 const model = "ollama-cloud/glm-5.2:cloud";
-function thinkingConfig(
-  defaults: NonNullable<OpenClawConfig["agents"]>["defaults"],
-  thinkingDefault?: "high",
-): OpenClawConfig {
+function thinkingConfig(defaults: AgentDefaultsConfig, thinkingDefault?: "high"): OpenClawConfig {
   return {
     session: { mainKey: "main", scope: "per-sender" },
     agents: {
