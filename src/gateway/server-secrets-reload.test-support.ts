@@ -1,4 +1,3 @@
-// Additional credential-owner lifecycle cases registered in the existing auxiliary-handler suite.
 import { expect, it, vi } from "vitest";
 import {
   listActiveDegradedSecretOwners,
@@ -22,41 +21,42 @@ type CredentialReloadHarness = {
   isManuallyStopped: ReturnType<typeof vi.fn>;
 };
 
-/** Registers focused account recovery cases against the existing RPC owner and shared fixture. */
 export function registerGatewaySecretCredentialReloadCases(
   createHarness: (options?: CredentialReloadHarnessOptions) => CredentialReloadHarness,
 ): void {
-  it("reinspects a previously degraded account without stopping healthy siblings when config is unchanged", async () => {
-    const { reload, respond, startChannel, stopChannel } = createHarness();
-
-    await reload();
-
+  const reload = async (options?: CredentialReloadHarnessOptions) => {
+    const harness = createHarness(options);
+    await harness.reload();
+    return harness;
+  };
+  const expectRecovery = (
+    { startChannel, stopChannel, respond }: CredentialReloadHarness,
+    accountId: string | null = "ops",
+  ) => {
     expect(stopChannel).not.toHaveBeenCalled();
-    expect(startChannel.mock.calls).toEqual([
-      ["slack", "ops", { reason: "secrets-reload", preserveManualStop: true }],
-    ]);
+    expect(startChannel.mock.calls).toEqual(
+      accountId === null
+        ? []
+        : [["slack", accountId, { reason: "secrets-reload", preserveManualStop: true }]],
+    );
     expect(respond).toHaveBeenCalledWith(true, { ok: true, warningCount: 0 });
+  };
+  it("reinspects a previously degraded account without stopping healthy siblings when config is unchanged", async () => {
+    expectRecovery(await reload());
   });
 
   it("accepts only the same trusted credential owner remaining degraded after reinspection", async () => {
-    const { owner, reload, respond, startChannel, stopChannel } = createHarness({
+    const harness = await reload({
       createFailure: (degradedOwner) => new SecretSurfaceUnavailableError(degradedOwner),
     });
-
-    await reload();
-
-    expect(stopChannel).not.toHaveBeenCalled();
-    expect(startChannel.mock.calls).toEqual([
-      ["slack", "ops", { reason: "secrets-reload", preserveManualStop: true }],
-    ]);
-    expect(listActiveDegradedSecretOwners()).toContainEqual(expect.objectContaining(owner));
-    expect(respond).toHaveBeenCalledWith(true, { ok: true, warningCount: 0 });
+    expectRecovery(harness);
+    expect(listActiveDegradedSecretOwners()).toContainEqual(expect.objectContaining(harness.owner));
   });
 
   it.each(["forged", "different-owner"] as const)(
     "rejects a %s unavailable error instead of treating account recovery as degraded success",
     async (failureKind) => {
-      const { owner, reload, respond, stopChannel } = createHarness({
+      const { owner, respond, stopChannel } = await reload({
         createFailure: (degradedOwner) =>
           failureKind === "different-owner"
             ? new SecretSurfaceUnavailableError({ ...degradedOwner, ownerId: "slack:other" })
@@ -70,9 +70,6 @@ export function registerGatewaySecretCredentialReloadCases(
                 SecretSurfaceUnavailableError.prototype,
               ),
       });
-
-      await reload();
-
       expect(respond.mock.calls[0]?.[0]).toBe(false);
       expect(stopChannel.mock.calls).toEqual([["slack", "ops", { manual: false }]]);
       expect(listActiveDegradedSecretOwners()).toContainEqual(expect.objectContaining(owner));
@@ -80,30 +77,19 @@ export function registerGatewaySecretCredentialReloadCases(
   );
 
   it("does not reinspect a degraded account that an operator manually stopped", async () => {
-    const { reload, respond, startChannel, stopChannel } = createHarness({ manualStop: true });
-
-    await reload();
-
-    expect(stopChannel).not.toHaveBeenCalled();
-    expect(startChannel).not.toHaveBeenCalled();
+    const harness = await reload({ manualStop: true });
+    expectRecovery(harness, null);
     expect(listActiveDegradedSecretOwners()).toContainEqual(
       expect.objectContaining({ ownerId: "slack:ops" }),
     );
-    expect(respond).toHaveBeenCalledWith(true, { ok: true, warningCount: 0 });
   });
 
   it("recovers the authoritative raw account identity instead of its normalized owner suffix", async () => {
-    const { reload, startChannel, stopChannel, isManuallyStopped } = createHarness({
+    const harness = await reload({
       ownerAccountId: "ops-team",
       runtimeAccountId: "Ops Team",
     });
-
-    await reload();
-
-    expect(isManuallyStopped).toHaveBeenCalledWith("slack", "Ops Team");
-    expect(stopChannel).not.toHaveBeenCalled();
-    expect(startChannel.mock.calls).toEqual([
-      ["slack", "Ops Team", { reason: "secrets-reload", preserveManualStop: true }],
-    ]);
+    expect(harness.isManuallyStopped).toHaveBeenCalledWith("slack", "Ops Team");
+    expectRecovery(harness, "Ops Team");
   });
 }

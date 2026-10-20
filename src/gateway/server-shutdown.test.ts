@@ -8,6 +8,12 @@ const logInfo = vi.hoisted(() => vi.fn());
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ info: logInfo }),
 }));
+const traceMessages = () => logInfo.mock.calls.map(([message]) => String(message));
+const hasTrace = (text: string) => traceMessages().some((line) => line.includes(text));
+const shutdownFailure = (name: string, cause: Error) => ({
+  message: `shutdown step failed (${name}): ${cause.message}`,
+  cause,
+});
 
 afterEach(() => {
   finishGatewayRestartTrace("test.finish");
@@ -58,30 +64,21 @@ describe("gateway close steps", () => {
       const second = owner.stopRegisteredPostReadySidecars;
       const onError = vi.fn();
       const closing = runGatewayCloseSteps({ owner, close: vi.fn(), onError });
-      const messages = () => logInfo.mock.calls.map(([message]) => String(message));
       try {
         await entered.promise;
         clock.mockReturnValue(1_250);
         expect(second).not.toHaveBeenCalled();
-        expect(
-          messages().some((line) => line.includes("shutdown.gateway-lifetime-sidecars.begin ")),
-        ).toBe(trace);
-        expect(
-          messages().some((line) => line.includes("shutdown.gateway-lifetime-sidecars ")),
-        ).toBe(false);
-        expect(messages().some((line) => line.includes("shutdown.post-ready-sidecars"))).toBe(
-          false,
-        );
+        expect(hasTrace("shutdown.gateway-lifetime-sidecars.begin ")).toBe(trace);
+        expect(hasTrace("shutdown.gateway-lifetime-sidecars ")).toBe(false);
+        expect(hasTrace("shutdown.post-ready-sidecars")).toBe(false);
       } finally {
         released.resolve();
         await closing;
       }
       expect(second).toHaveBeenCalledOnce();
       expect(onError).not.toHaveBeenCalled();
-      expect(messages().some((line) => line.includes("shutdown.gateway-lifetime-sidecars "))).toBe(
-        true,
-      );
-      expect(messages().some((line) => line.includes("shutdown.post-ready-sidecars "))).toBe(trace);
+      expect(hasTrace("shutdown.gateway-lifetime-sidecars ")).toBe(true);
+      expect(hasTrace("shutdown.post-ready-sidecars ")).toBe(trace);
     },
   );
 
@@ -111,19 +108,8 @@ describe("gateway close steps", () => {
         }),
       ).rejects.toMatchObject({
         errors: [
-          {
-            message:
-              "shutdown step failed (gateway lifetime sidecars): optional sidecar stop failed",
-            cause: stopError,
-          },
-          ...(joinFails
-            ? [
-                {
-                  message: "shutdown step failed (late sidecar cleanup): connection cleanup failed",
-                  cause: drainError,
-                },
-              ]
-            : []),
+          shutdownFailure("gateway lifetime sidecars", stopError),
+          ...(joinFails ? [shutdownFailure("late sidecar cleanup", drainError)] : []),
         ],
       });
       expect(drain).toHaveBeenCalledOnce();
@@ -138,9 +124,7 @@ describe("gateway close steps", () => {
     const missingModule = Object.assign(new Error("Cannot find module 'rotated-chunk.js'"), {
       code: "ERR_MODULE_NOT_FOUND",
     });
-    const loadStopModule = vi.fn(async () => {
-      throw missingModule;
-    });
+    const loadStopModule = vi.fn<() => Promise<void>>().mockRejectedValue(missingModule);
     const closeGateway = vi.fn(async () => {});
     const messages: string[] = [];
 
@@ -162,8 +146,7 @@ describe("gateway close steps", () => {
     expect(messages).toEqual([
       "shutdown step failed (gateway lifetime sidecars): Cannot find module 'rotated-chunk.js'",
     ]);
-    expect(messages.join("\n")).not.toContain("shutdown error");
-    const trace = logInfo.mock.calls.map(([message]) => String(message));
+    const trace = traceMessages();
     const failedStep = trace.findIndex((line) =>
       line.includes("shutdown.gateway-lifetime-sidecars "),
     );

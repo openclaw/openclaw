@@ -23,6 +23,16 @@ import {
   sessionRow,
 } from "./server-session-events.test-support.js";
 
+type Update = Parameters<ReturnType<typeof createTranscriptUpdateBroadcastHandler>>[0];
+const target = {
+  agentId: "main",
+  sessionId: "sess-main",
+  sessionKey: "agent:main:main",
+  storePath: "/tmp/recovery.sqlite",
+};
+const update = (overrides: Partial<Update>): Update => ({ target, ...overrides });
+const stored = (message: unknown, seq = 2) => ({ found: true, oversized: false, seq, message });
+
 describe("live failed-attempt presentation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -56,35 +66,16 @@ describe("live failed-attempt presentation", () => {
       .mockImplementationOnce(async () => {
         entered.resolve();
         await release.promise;
-        return { found: true, oversized: false, seq: 1, message: visible };
+        return stored(visible, 1);
       })
-      .mockResolvedValue({ found: true, oversized: false, seq: 2, message: error });
+      .mockResolvedValue(stored(error));
     const { handler, broadcastToConnIds } = createHandler(false);
-    const target = {
-      agentId: "main",
-      sessionId: "sess-main",
-      sessionKey: "agent:main:main",
-      storePath: "/tmp/recovery.sqlite",
-    };
-    const executing = handler({
-      target,
-      lifecycleRevision: "original",
-      messageId: "visible",
-      message: visible,
-    });
+    const emit = (messageId: string, message: Update["message"]) =>
+      handler(update({ lifecycleRevision: "original", messageId, message }));
+    const executing = emit("visible", visible);
     await withinTest(entered.promise, signal);
-    const first = handler({
-      target,
-      lifecycleRevision: "original",
-      messageId: "error-1",
-      message: error,
-    });
-    const second = handler({
-      target,
-      lifecycleRevision: "original",
-      messageId: "error-2",
-      message: error,
-    });
+    const first = emit("error-1", error);
+    const second = emit("error-2", error);
     try {
       expect(first).not.toBe(second);
       release.resolve();
@@ -103,12 +94,13 @@ describe("live failed-attempt presentation", () => {
       if (kind === "missing") {
         readSessionMessageByIdAsyncMock.mockResolvedValueOnce({ found: false, oversized: false });
       } else if (kind === "quoted reply") {
-        readSessionMessageByIdAsyncMock.mockResolvedValueOnce({
-          found: true,
-          oversized: false,
-          seq: 2,
-          message: { role: "user", content: "Quoted reply", __openclaw: { replyToId: "original" } },
-        });
+        readSessionMessageByIdAsyncMock.mockResolvedValueOnce(
+          stored({
+            role: "user",
+            content: "Quoted reply",
+            __openclaw: { replyToId: "original" },
+          }),
+        );
       } else {
         readSessionMessageByIdAsyncMock.mockRejectedValueOnce(
           kind === "overloaded"
@@ -121,16 +113,13 @@ describe("live failed-attempt presentation", () => {
         true,
         () => new Set(["targeted"]),
       );
-      const outcome = await handler({
-        target: {
-          agentId: "main",
-          sessionId: "sess-main",
-          sessionKey: "agent:main:main",
-          storePath: "/tmp/canonical-update.sqlite",
-        },
-        messageId: "removed-id",
-        message: { role: "assistant", content: "stale queued content" },
-      });
+      const outcome = await handler(
+        update({
+          target: { ...target, storePath: "/tmp/canonical-update.sqlite" },
+          messageId: "removed-id",
+          message: { role: "assistant", content: "stale queued content" },
+        }),
+      );
       expect(outcome).toBe(kind === "rebuilding" || kind === "overloaded" ? false : undefined);
       expect(broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
         "sessions.changed",
@@ -148,15 +137,12 @@ describe("live failed-attempt presentation", () => {
       new WorkerTaskError("reader overloaded", "overloaded"),
     );
     const { broadcastToConnIds, handler } = createHandler(false);
-    const outcome = await handler({
-      target: {
-        agentId: "main",
-        sessionId: "sess-main",
-        sessionKey: "agent:main:main",
-        storePath: "/tmp/canonical-update.sqlite",
-      },
-      message: { role: "assistant", content: "Keep this reply visible." },
-    });
+    const outcome = await handler(
+      update({
+        target: { ...target, storePath: "/tmp/canonical-update.sqlite" },
+        message: { role: "assistant", content: "Keep this reply visible." },
+      }),
+    );
     expect(outcome).toBe(false);
     expect(broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
       "sessions.changed",
@@ -188,12 +174,7 @@ describe("live failed-attempt presentation", () => {
               ],
         __openclaw: { runId: "recovering-run" },
       };
-      readSessionMessageByIdAsyncMock.mockResolvedValue({
-        found: true,
-        oversized: false,
-        seq: 2,
-        message,
-      });
+      readSessionMessageByIdAsyncMock.mockResolvedValue(stored(message));
       const broadcastToConnIds = vi.fn();
       const activeRun = createActiveRun(true, true, { storePath: "/tmp/recovery.sqlite" });
       rpcSourceTesting.reset([["recovering-run", activeRun]]);
@@ -202,25 +183,19 @@ describe("live failed-attempt presentation", () => {
         sessionEventSubscribers: { getAll: () => new Set(["broad"]) },
         sessionMessageSubscribers: { get: () => new Set(["selected"]) },
       });
-      const update = {
-        target: {
-          agentId: "main",
-          sessionId: "sess-main",
-          sessionKey: "agent:main:main",
-          storePath: "/tmp/recovery.sqlite",
-        },
+      const failedUpdate = update({
         messageId: "failed-attempt",
         message,
         runId: "recovering-run",
-      };
-      await handler(update);
+      });
+      await handler(failedUpdate);
       // Neither a message nor a broad history invalidation may leak the pending row.
       expect(broadcastToConnIds).not.toHaveBeenCalled();
 
       // Keeping the idempotency entry is not evidence that execution is still active.
       setRpcSourceProjectSessionActive(activeRun, false);
       broadcastToConnIds.mockClear();
-      await handler(update);
+      await handler(failedUpdate);
       expect(broadcastToConnIds).not.toHaveBeenCalled();
       const terminal = {
         role: "custom",
@@ -228,13 +203,8 @@ describe("live failed-attempt presentation", () => {
         content: "Recovery exhausted.",
         details: { runId: "recovering-run" },
       };
-      readSessionMessageByIdAsyncMock.mockResolvedValue({
-        found: true,
-        oversized: false,
-        seq: 3,
-        message: terminal,
-      });
-      await handler({ ...update, messageId: "terminal", message: terminal });
+      readSessionMessageByIdAsyncMock.mockResolvedValue(stored(terminal, 3));
+      await handler({ ...failedUpdate, messageId: "terminal", message: terminal });
       expect(broadcastToConnIds.mock.calls.map(([event]) => event)).toEqual(["session.message"]);
       expect(broadcastToConnIds.mock.calls[0]?.[1]).toMatchObject({
         messageId: "terminal",

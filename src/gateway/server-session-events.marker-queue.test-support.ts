@@ -21,6 +21,12 @@ export function registerTranscriptMarkerQueueTests() {
     "conflicting agent",
     "committed revision",
   ])("joins an unresolved marker to its keyed lane: %s", async (scenario, { signal }) => {
+    const waitForGate = (gate: Promise<void>, task: Promise<unknown>, message: string) =>
+      withinTest(awaitGateBeforeSettlement(gate, task, message), signal);
+    const message = (content: string) => ({
+      message: { role: "assistant", content },
+      messageId: content,
+    });
     const hasEarlierKeyedUpdate = scenario === "keyed first";
     const committedRevision = scenario === "committed revision";
     const keyedAfterResolution = scenario === "keyed after resolution";
@@ -120,45 +126,26 @@ export function registerTranscriptMarkerQueueTests() {
         tasks.push(
           handler({
             target: { agentId: "main", sessionId: "sess-main", sessionKey: "global", storePath },
-            message: { role: "assistant", content: "earlier" },
-            messageId: "earlier",
+            ...message("earlier"),
           }),
         );
-        await withinTest(
-          awaitGateBeforeSettlement(
-            earlierReadEntered.promise,
-            tasks[0]!,
-            "Earlier read did not start",
-          ),
-          signal,
-        );
+        await waitForGate(earlierReadEntered.promise, tasks[0]!, "Earlier read did not start");
       }
       const markerUpdate = handler({
         sessionFile: `sqlite:main:sess-main:${storePath}`,
         ...(markerAgentId ? { agentId: markerAgentId } : {}),
         ...(committedRevision ? { lifecycleRevision: "marker-revision" } : {}),
-        message: { role: "assistant", content: "marker" },
-        messageId: "marker",
+        ...message("marker"),
         ...(keyedAfterResolution ? {} : { messageSeq: 2 }),
       });
       tasks.push(markerUpdate);
-      await withinTest(
-        awaitGateBeforeSettlement(
-          membershipEntered.promise,
-          markerUpdate,
-          "Marker readiness did not start",
-        ),
-        signal,
-      );
+      await waitForGate(membershipEntered.promise, markerUpdate, "Marker readiness did not start");
       if (keyedAfterResolution) {
         releaseMembership.resolve();
-        await withinTest(
-          awaitGateBeforeSettlement(
-            markerPublicationEntered.promise,
-            markerUpdate,
-            "Resolved marker publication did not prepare",
-          ),
-          signal,
+        await waitForGate(
+          markerPublicationEntered.promise,
+          markerUpdate,
+          "Resolved marker publication did not prepare",
         );
       }
       tasks.push(
@@ -174,40 +161,28 @@ export function registerTranscriptMarkerQueueTests() {
                 },
               }
             : {}),
-          message: { role: "assistant", content: "later" },
-          messageId: "later",
+          ...message("later"),
           messageSeq: 3,
         }),
       );
       const independent = handler({
         sessionKey: "agent:main:independent",
-        message: { role: "assistant", content: "independent" },
-        messageId: "independent",
+        ...message("independent"),
         messageSeq: 1,
       });
       tasks.push(independent);
       await withinTest(independent, signal);
       expect(publications()).toEqual([["session.message", "independent"]]);
       releaseMembership.resolve();
-      await withinTest(
-        awaitGateBeforeSettlement(
-          markerResolved.promise,
-          markerUpdate,
-          "Marker key did not resolve",
-        ),
-        signal,
-      );
+      await waitForGate(markerResolved.promise, markerUpdate, "Marker key did not resolve");
       if (hasEarlierKeyedUpdate) {
         expect(publications()).toEqual([["session.message", "independent"]]);
       }
       releaseEarlierRead.resolve();
-      await withinTest(
-        awaitGateBeforeSettlement(
-          markerPublicationEntered.promise,
-          markerUpdate,
-          "Resolved marker publication did not prepare",
-        ),
-        signal,
+      await waitForGate(
+        markerPublicationEntered.promise,
+        markerUpdate,
+        "Resolved marker publication did not prepare",
       );
       expect(publications()).toEqual([
         ["session.message", "independent"],
@@ -235,9 +210,9 @@ export function registerTranscriptMarkerQueueTests() {
           sessionId: "sess-main",
           phase: "message",
         });
-        expect(marker?.[1]).not.toHaveProperty("message");
-        expect(marker?.[1]).not.toHaveProperty("messageId");
-        expect(marker?.[1]).not.toHaveProperty("messageSeq");
+        for (const field of ["message", "messageId", "messageSeq"]) {
+          expect(marker?.[1]).not.toHaveProperty(field);
+        }
       }
       expect(marker?.[3]).toMatchObject({ prepareSessionProjection: expect.any(Function) });
     } finally {

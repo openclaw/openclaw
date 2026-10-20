@@ -12,6 +12,19 @@ import {
 export function registerGatewayCronStartupTests(
   startGatewayCronWithLogging: typeof import("./server-runtime-services.js").startGatewayCronWithLogging,
 ) {
+  const start = (
+    cronReconciliation: ReturnType<typeof createTestCronReconciliation>,
+    overrides: Partial<Parameters<typeof startGatewayCronWithLogging>[0]> = {},
+  ) => {
+    startGatewayCronWithLogging({
+      cronState: createTestCronState(),
+      cronReconciliation,
+      reason: "startup" as const,
+      config: {},
+      logCron: { error: vi.fn() },
+      ...overrides,
+    });
+  };
   it("owns cron startup and completion after the requester closes", async () => {
     const order: string[] = [];
     const callerContext = new AsyncLocalStorage<string>();
@@ -31,18 +44,12 @@ export function registerGatewayCronStartupTests(
       order.push("hook");
     });
     const cronState = createTestCronState(cron);
-    const config = { cron: { enabled: true } } as never;
+    const config = { cron: { enabled: true } };
     const logCron = { error: vi.fn() };
 
     callerWork.run(() =>
       callerContext.run("startup requester", () =>
-        startGatewayCronWithLogging({
-          cronState,
-          cronReconciliation,
-          reason: "startup",
-          config,
-          logCron,
-        }),
+        start(cronReconciliation, { cronState, config, logCron }),
       ),
     );
     await callerWork.drain();
@@ -60,9 +67,7 @@ export function registerGatewayCronStartupTests(
 
   it("does not complete cron reconciliation when scheduler startup rejects", async () => {
     const cron = {
-      start: vi.fn(async () => {
-        throw new Error("store unavailable");
-      }),
+      start: vi.fn<() => Promise<void>>().mockRejectedValue(new Error("store unavailable")),
     };
     const cronReconciliation = createTestCronReconciliation();
     const logCron = { error: vi.fn() };
@@ -70,11 +75,8 @@ export function registerGatewayCronStartupTests(
       expect(getActiveGatewayRootWorkCount()).toBe(1);
     });
 
-    startGatewayCronWithLogging({
+    start(cronReconciliation, {
       cronState: createTestCronState(cron),
-      cronReconciliation,
-      reason: "startup",
-      config: {} as never,
       onStartError,
       logCron,
     });
@@ -88,28 +90,13 @@ export function registerGatewayCronStartupTests(
   });
 
   it("keeps one independent root admitted until the reconciliation hook settles", async () => {
-    let releaseHook: (() => void) | undefined;
-    const cronReconciliation = createTestCronReconciliation(
-      () =>
-        new Promise<void>((resolve) => {
-          releaseHook = resolve;
-        }),
-    );
-
-    startGatewayCronWithLogging({
-      cronState: createTestCronState(),
-      cronReconciliation,
-      reason: "startup",
-      config: {} as never,
-      logCron: { error: vi.fn() },
-    });
+    const hook = createDeferredCore();
+    const cronReconciliation = createTestCronReconciliation(() => hook.promise);
+    start(cronReconciliation);
 
     await waitForFast(() => expect(cronReconciliation.complete).toHaveBeenCalledTimes(1));
     expect(getActiveGatewayRootWorkCount()).toBe(1);
-    if (!releaseHook) {
-      throw new Error("Expected cron reconciliation hook to be pending");
-    }
-    releaseHook();
+    hook.resolve();
     await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   });
 }

@@ -25,6 +25,12 @@ export function registerCommittedTranscriptPublicationTests(
   },
 ) {
   const { createParams, start, transcriptBroadcastMocks, warn } = fixture;
+  const target = {
+    agentId: "main",
+    sessionId: "committed-session",
+    sessionKey: "agent:main:main",
+    storePath: "/tmp/openclaw-committed-transcript.sqlite",
+  };
   it.for([1, 3])(
     "retains %s committing roots through transcript publication and shutdown",
     async (count, { signal }) => {
@@ -50,10 +56,10 @@ export function registerCommittedTranscriptPublicationTests(
       params.broadcastToConnIds = vi.fn(() => published.resolve());
       const projection = createSessionRowProjectionFixture({
         cfg: { agents: { entries: { main: {} } } },
-        storePath: "/tmp/openclaw-committed-transcript.sqlite",
+        storePath: target.storePath,
         store: {
-          "agent:main:main": {
-            sessionId: "committed-session",
+          [target.sessionKey]: {
+            sessionId: target.sessionId,
             lifecycleRevision: "original",
             updatedAt: 1,
           },
@@ -75,12 +81,7 @@ export function registerCommittedTranscriptPublicationTests(
                 messageId: "committed-message-" + index,
                 lifecycleRevision: "original",
                 message: storedMessage,
-                target: {
-                  agentId: "main",
-                  sessionId: "committed-session",
-                  sessionKey: "agent:main:main",
-                  storePath: "/tmp/openclaw-committed-transcript.sqlite",
-                },
+                target,
               }),
             ),
           );
@@ -103,27 +104,22 @@ export function registerCommittedTranscriptPublicationTests(
         releaseRead.resolve();
         await withinTest(publicationBeforeShutdown, signal);
         await shutdown;
-        expect(params.broadcastToConnIds).toHaveBeenNthCalledWith(
-          1,
-          "session.message",
-          expect.objectContaining({
-            sessionKey: "agent:main:main",
-            messageId: "committed-message-0",
-            message: expect.objectContaining({ content: storedMessage.content }),
-          }),
-          new Set(["conn-transcript"]),
-          expect.objectContaining({ sessionEventSubscriptionKeys: ["agent:main:main"] }),
-        );
+        const expectPublication = (nth: number, event: string, payload: object) =>
+          expect(params.broadcastToConnIds).toHaveBeenNthCalledWith(
+            nth,
+            event,
+            expect.objectContaining({ sessionKey: target.sessionKey, ...payload }),
+            new Set(["conn-transcript"]),
+            expect.objectContaining({ sessionEventSubscriptionKeys: [target.sessionKey] }),
+          );
+        expectPublication(1, "session.message", {
+          messageId: "committed-message-0",
+          message: expect.objectContaining({ content: storedMessage.content }),
+        });
         expect(transcriptBroadcastMocks.readMessageById).toHaveBeenCalledOnce();
         expect(params.broadcastToConnIds).toHaveBeenCalledTimes(count === 1 ? 1 : 2);
         if (count > 1) {
-          expect(params.broadcastToConnIds).toHaveBeenNthCalledWith(
-            2,
-            "sessions.changed",
-            expect.objectContaining({ sessionKey: "agent:main:main", phase: "message" }),
-            new Set(["conn-transcript"]),
-            expect.objectContaining({ sessionEventSubscriptionKeys: ["agent:main:main"] }),
-          );
+          expectPublication(2, "sessions.changed", { phase: "message" });
         }
         expect(warn).not.toHaveBeenCalled();
         expect(getActiveGatewayRootWorkCount()).toBe(0);
