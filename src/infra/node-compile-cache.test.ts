@@ -17,8 +17,18 @@ const modulePath = fileURLToPath(helperUrl);
 const evalModule = (script: string, env: NodeJS.ProcessEnv = {}) =>
   run(process.execPath, ["--input-type=module", "--eval", script], { env });
 
-async function cacheFixture(prefix: string) {
-  const root = tempDirs.make(prefix);
+async function fileTree(files: Record<string, string> = {}) {
+  const root = tempDirs.make("openclaw-cache-");
+  for (const [name, contents] of Object.entries(files)) {
+    const file = path.join(root, name);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, contents);
+  }
+  return root;
+}
+
+async function cacheFixture() {
+  const root = await fileTree();
   const cache = path.join(root, "openclaw");
   const directory = path.join(cache, "2026.9.6", "1000-100");
   await fs.mkdir(directory, { recursive: true });
@@ -39,7 +49,15 @@ it("remains synchronously importable from CommonJS bundles", async () => {
 });
 
 it("prewarms the release graph, respecting the disabled cache policy", async () => {
-  const root = tempDirs.make("openclaw-cache-prewarm-");
+  const root = await fileTree({
+    "package.json": '{"type":"module","version":"2026.10.1"}',
+    "dist/build-info.json": '{"buildId":"prewarm-release"}',
+    "dist/gateway-prewarm.js": `
+    import { writeFileSync } from "node:fs";
+    import { getCompileCacheDir } from "node:module";
+    writeFileSync(new URL("../loaded", import.meta.url), getCompileCacheDir());
+  `,
+  });
   const launcher = path.join(root, "gateway-prewarm.mjs");
   for (const name of [
     "gateway-prewarm.mjs",
@@ -50,17 +68,6 @@ it("prewarms the release graph, respecting the disabled cache policy", async () 
   ]) {
     await fs.copyFile(new URL(`../../${name}`, import.meta.url), path.join(root, name));
   }
-  await fs.mkdir(path.join(root, "dist"));
-  await fs.writeFile(path.join(root, "package.json"), '{"type":"module","version":"2026.10.1"}');
-  await fs.writeFile(path.join(root, "dist", "build-info.json"), '{"buildId":"prewarm-release"}');
-  await fs.writeFile(
-    path.join(root, "dist", "gateway-prewarm.js"),
-    `
-    import { writeFileSync } from "node:fs";
-    import { getCompileCacheDir } from "node:module";
-    writeFileSync(new URL("../loaded", import.meta.url), getCompileCacheDir());
-  `,
-  );
   const env: NodeJS.ProcessEnv = { ...process.env, NODE_COMPILE_CACHE: path.join(root, "cache") };
   delete env.NODE_DISABLE_COMPILE_CACHE;
   await run(process.execPath, [launcher], { env: { ...env, NODE_DISABLE_COMPILE_CACHE: "1" } });
@@ -74,14 +81,13 @@ it("prewarms the release graph, respecting the disabled cache policy", async () 
   expect((await fs.readdir(loaded)).length).toBeGreaterThan(0);
 });
 
-it.each([false, true])(
-  "flushes newly loaded native bytecode while running (disabled: %s)",
-  async (disabled) => {
-    const root = tempDirs.make("openclaw-cache-flush-");
-    const cache = path.join(root, "cache");
-    await fs.writeFile(path.join(root, "first.mjs"), "export const value = 1;\n");
-    await fs.writeFile(path.join(root, "later.mjs"), "export const value = 2;\n");
-    const script = `
+it.each([false, true])("flushes native bytecode before exit (disabled: %s)", async (disabled) => {
+  const root = await fileTree({
+    "first.mjs": "export const value = 1;\n",
+    "later.mjs": "export const value = 2;\n",
+  });
+  const cache = path.join(root, "cache");
+  const script = `
       import assert from "node:assert/strict";
       import { readdirSync } from "node:fs";
       import { enableCompileCache, getCompileCacheDir } from "node:module";
@@ -93,35 +99,34 @@ it.each([false, true])(
       const entries = () => directory
         ? readdirSync(directory, { withFileTypes: true }).filter((entry) => entry.isFile()).length
         : 0;
-      assert.equal((await import(pathToFileURL(${JSON.stringify(path.join(root, "first.mjs"))}).href)).value, 1);
-      scheduleOpenClawCompileCacheFlush();
-      await nextTurn();
-      const first = entries();
-      assert.equal((await import(pathToFileURL(${JSON.stringify(path.join(root, "later.mjs"))}).href)).value, 2);
-      scheduleOpenClawCompileCacheFlush();
-      await nextTurn();
-      const later = entries();
+      async function loadAndFlush(name, value) {
+        assert.equal((await import(pathToFileURL(${JSON.stringify(root)} + "/" + name + ".mjs").href)).value, value);
+        scheduleOpenClawCompileCacheFlush();
+        await nextTurn();
+        return entries();
+      }
+      const first = await loadAndFlush("first", 1);
+      const later = await loadAndFlush("later", 2);
       // Capture disk contents before native process teardown could persist them.
       process.stdout.write(JSON.stringify({ enabled: directory !== undefined, first, later }));
     `;
-    const { stdout } = await evalModule(script, {
-      ...process.env,
-      NODE_COMPILE_CACHE: undefined,
-      NODE_COMPILE_CACHE_READONLY: undefined,
-      NODE_DISABLE_COMPILE_CACHE: disabled ? "1" : undefined,
-      NODE_OPTIONS: undefined,
-    });
-    const observed = JSON.parse(stdout);
-    if (disabled) {
-      expect(observed).toEqual({ enabled: false, first: 0, later: 0 });
-      await expect(fs.stat(cache)).rejects.toMatchObject({ code: "ENOENT" });
-    } else {
-      expect(observed.enabled).toBe(true);
-      expect(observed.first).toBeGreaterThan(0);
-      expect(observed.later).toBeGreaterThan(observed.first);
-    }
-  },
-);
+  const { stdout } = await evalModule(script, {
+    ...process.env,
+    NODE_COMPILE_CACHE: undefined,
+    NODE_COMPILE_CACHE_READONLY: undefined,
+    NODE_DISABLE_COMPILE_CACHE: disabled ? "1" : undefined,
+    NODE_OPTIONS: undefined,
+  });
+  const observed = JSON.parse(stdout);
+  if (disabled) {
+    expect(observed).toEqual({ enabled: false, first: 0, later: 0 });
+    await expect(fs.stat(cache)).rejects.toMatchObject({ code: "ENOENT" });
+  } else {
+    expect(observed.enabled).toBe(true);
+    expect(observed.first).toBeGreaterThan(0);
+    expect(observed.later).toBeGreaterThan(observed.first);
+  }
+});
 
 async function maintainCompileCache(directory: string) {
   await run(process.execPath, [modulePath, "--maintain", directory], { env: {} });
@@ -131,11 +136,9 @@ it.each([
   ["another-app", "1000-100"],
   ["openclaw", "unowned"],
 ])("preserves unqualified cache directories: %s/%s", async (owner, marker) => {
-  const root = tempDirs.make("openclaw-cache-unowned-");
+  const root = await fileTree({ [`${owner}/2026.9.6/2000-100/bytecode`]: "keep" });
   const version = path.join(root, owner, "2026.9.6");
   const sibling = path.join(version, "2000-100");
-  await fs.mkdir(sibling, { recursive: true });
-  await fs.writeFile(path.join(sibling, "bytecode"), "keep");
   await maintainCompileCache(path.join(version, marker));
   expect(await fs.readdir(version)).toEqual(["2000-100"]);
   expect(await fs.readFile(path.join(sibling, "bytecode"), "utf8")).toBe("keep");
@@ -147,21 +150,18 @@ async function sparseFile(file: string, bytes: number) {
 }
 
 it("keeps inherited cache namespaces flat and retains recently prepared builds", async () => {
-  const root = tempDirs.make("openclaw-cache-builds-");
+  const root = await fileTree({ "package.json": '{"version":"2026.9.6"}' });
   await fs.mkdir(path.join(root, "dist"));
-  await fs.writeFile(path.join(root, "package.json"), '{"version":"2026.9.6"}');
   const base = path.join(root, "cache");
   let inherited = path.join(base, "openclaw", "2026.9.6", "build-legacy");
   const directories = new Map<string, string>();
   for (let invocation = 0; invocation < 4; invocation++) {
     const buildId = `2026.9.7-release-c074824a27c${invocation % 2}-2026-09-29T23-33-45.013Z`;
     await fs.writeFile(path.join(root, "dist", "build-info.json"), JSON.stringify({ buildId }));
+    const options = { installRoot: root, env: { NODE_COMPILE_CACHE: inherited } };
     const directory = expectDefined(
-      resolveOpenClawCompileCacheDirectory({
-        installRoot: root,
-        env: { NODE_COMPILE_CACHE: inherited },
-      }),
-      "compile cache directory",
+      resolveOpenClawCompileCacheDirectory(options),
+      "cache directory",
     );
     expect(path.dirname(directory)).toBe(path.join(base, "openclaw", "2026.9.6"));
     expect(path.basename(directory)).toMatch(/^[a-f0-9]{16}$/);
@@ -182,7 +182,7 @@ it("keeps inherited cache namespaces flat and retains recently prepared builds",
 });
 
 it("prunes old bytecode and caps 600 MiB across releases without touching neighboring caches", async () => {
-  const { root, cache, directory } = await cacheFixture("openclaw-cache-retention-");
+  const { root, cache, directory } = await cacheFixture();
   const candidate = path.join(cache, "2026.9.7", "2000-100");
   await fs.mkdir(candidate, { recursive: true });
   await fs.writeFile(path.join(root, "another-app"), "keep");
@@ -208,7 +208,7 @@ it("prunes old bytecode and caps 600 MiB across releases without touching neighb
 });
 
 it("leaves failed pruning eligible for the next invocation", async () => {
-  const { cache, directory } = await cacheFixture("openclaw-cache-failed-");
+  const { cache, directory } = await cacheFixture();
   const file = path.join(directory, "oversized");
   await sparseFile(file, 600 * MiB);
   await fs.utimes(cache, new Date(0), new Date(0));
@@ -230,7 +230,7 @@ it("leaves failed pruning eligible for the next invocation", async () => {
 });
 
 it("makes bounded progress through tiny entries without claiming an incomplete pass", async () => {
-  const { cache, directory } = await cacheFixture("openclaw-cache-bounded-");
+  const { cache, directory } = await cacheFixture();
   await fs.utimes(cache, new Date(0), new Date(0));
   const { stdout } = await evalModule(`
     import fs from "node:fs/promises";
@@ -271,20 +271,15 @@ it("makes bounded progress through tiny entries without claiming an incomplete p
   expect(completed.mtimeMs).toBeGreaterThan(0);
 });
 
-it.each(["root", "version", "build"] as const)(
-  "does not traverse a symlinked %s cache directory",
-  async (boundary) => {
-    const root = tempDirs.make("openclaw-cache-symlink-");
-    const outside = path.join(root, "outside");
-    await fs.mkdir(outside);
-    await fs.writeFile(path.join(outside, "keep"), "keep");
-    const cache = path.join(root, "cache", "openclaw");
-    const version = path.join(cache, "2026.9.6");
-    const directory = path.join(version, "1000-100");
-    const target = boundary === "root" ? cache : boundary === "version" ? version : directory;
-    await fs.mkdir(path.dirname(target), { recursive: true });
-    await fs.symlink(outside, target, process.platform === "win32" ? "junction" : "dir");
-    await maintainCompileCache(directory);
-    expect(await fs.readdir(outside)).toEqual(["keep"]);
-  },
-);
+it.each(["root", "version", "build"] as const)("rejects the %s cache symlink", async (boundary) => {
+  const root = await fileTree({ "outside/keep": "keep" });
+  const outside = path.join(root, "outside");
+  const cache = path.join(root, "cache", "openclaw");
+  const version = path.join(cache, "2026.9.6");
+  const directory = path.join(version, "1000-100");
+  const target = boundary === "root" ? cache : boundary === "version" ? version : directory;
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  await fs.symlink(outside, target, process.platform === "win32" ? "junction" : "dir");
+  await maintainCompileCache(directory);
+  expect(await fs.readdir(outside)).toEqual(["keep"]);
+});
