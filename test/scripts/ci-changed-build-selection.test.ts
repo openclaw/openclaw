@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import fs, { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { resolveShardPlans } from "../../scripts/ci-run-node-test-shard.mts";
 import { createChangedNodeTestShards } from "../../scripts/lib/ci-changed-node-test-plan.mts";
 import * as testProjects from "../../scripts/test-projects.test-support.mts";
@@ -10,6 +10,9 @@ import { createNestedGitEnv } from "../helpers/temp-repo.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
+const configPath = (name: string) => `test/vitest/vitest.${name}.config.ts`;
+const boundaryConfig = configPath("boundary");
+const channelConfig = configPath("channels");
 
 function fixture(files: Record<string, string>) {
   const cwd = tempDirs.make("ci-build-selection-");
@@ -32,12 +35,9 @@ it("keeps source boundary proof when a narrow PR has no dist consumer", () => {
     cwd,
     dedicatedBuildArtifacts: false,
   });
-  expect(shards).not.toBeNull();
   expect(shards?.flatMap((shard) => shard.targets ?? [])).toContain("src/example/runtime.test.ts");
   expect(shards?.some((shard) => shard.requiresDist)).toBe(false);
-  expect(shards?.flatMap((shard) => shard.configs ?? [])).toContain(
-    "test/vitest/vitest.boundary.config.ts",
-  );
+  expect(shards?.flatMap((shard) => shard.configs ?? [])).toContain(boundaryConfig);
   const checkoutTestReads = readFile.mock.calls
     .map(([file]) => path.relative(process.cwd(), String(file)).replaceAll("\\", "/"))
     .filter((file) => file.startsWith("src/") && file.endsWith(".test.ts"));
@@ -47,46 +47,40 @@ it("keeps source boundary proof when a narrow PR has no dist consumer", () => {
 
 it("keeps exclusive aggregates out of cold canonical metadata discovery", async () => {
   vi.resetModules();
-  try {
-    const { nodeTestConfigRequiresCanonicalMetadata } =
-      await import("../../scripts/lib/ci-node-test-plan.mts");
-    const { isExclusiveCiTestConfig } = await import("../../scripts/lib/local-check-runtime.mts");
-    const readFile = vi.spyOn(fs, "readFileSync");
-    for (const config of [
-      "vitest.config.ts",
-      "test/vitest/vitest.config.ts",
-      "test/vitest/vitest.full-agentic.config.ts",
-      "test/vitest/vitest.gateway.config.ts",
-    ]) {
-      expect(isExclusiveCiTestConfig(config)).toBe(true);
-      expect(nodeTestConfigRequiresCanonicalMetadata(config)).toBe(false);
-    }
-    expect(readFile).not.toHaveBeenCalled();
-    readFile.mockRestore();
-    for (const config of [
-      "test/vitest/vitest.gateway-server.config.ts",
-      "test/vitest/vitest.gateway-client.config.ts",
-      "test/vitest/vitest.tooling.config.ts",
-      "test/vitest/vitest.tui-pty.config.ts",
-      "test/vitest/vitest.agents-embedded-agent.config.ts",
-    ]) {
-      expect(nodeTestConfigRequiresCanonicalMetadata(config)).toBe(true);
-    }
-  } finally {
-    vi.resetModules();
+  onTestFinished(() => vi.resetModules());
+  const { nodeTestConfigRequiresCanonicalMetadata } =
+    await import("../../scripts/lib/ci-node-test-plan.mts");
+  const { isExclusiveCiTestConfig } = await import("../../scripts/lib/local-check-runtime.mts");
+  const readFile = vi.spyOn(fs, "readFileSync");
+  for (const config of [
+    "vitest.config.ts",
+    "test/vitest/vitest.config.ts",
+    ...["full-agentic", "gateway"].map(configPath),
+  ]) {
+    expect(isExclusiveCiTestConfig(config)).toBe(true);
+    expect(nodeTestConfigRequiresCanonicalMetadata(config)).toBe(false);
+  }
+  expect(readFile).not.toHaveBeenCalled();
+  readFile.mockRestore();
+  for (const config of [
+    "gateway-server",
+    "gateway-client",
+    "tooling",
+    "tui-pty",
+    "agents-embedded-agent",
+  ].map(configPath)) {
+    expect(nodeTestConfigRequiresCanonicalMetadata(config)).toBe(true);
   }
 });
 
 it("keeps source execution when narrow config owners no longer admit an artifact", () => {
-  const tuiConfig = "test/vitest/vitest.tui-pty.config.ts";
-  const boundaryConfig = "test/vitest/vitest.boundary.config.ts";
+  const tuiConfig = configPath("tui-pty");
   const helper = "src/tui/tui-pty-harness-assertion-test-support.test.ts";
   // Isolate canonical execution policy from separately tested graph discovery.
   vi.spyOn(testProjects, "hasImportGraphImpactOnTargets").mockReturnValue(false);
   vi.spyOn(testProjects, "resolveAffectedTestsFromImportGraph").mockReturnValue([]);
   for (const changedPaths of [[tuiConfig], [boundaryConfig], [tuiConfig, helper]]) {
     const shards = createChangedNodeTestShards(changedPaths, { dedicatedBuildArtifacts: false });
-    expect(shards).not.toBeNull();
     expect(shards?.some((shard) => shard.requiresDist)).toBe(false);
     expect(shards?.filter((shard) => shard.configs.includes(boundaryConfig))).toHaveLength(1);
     if (changedPaths.includes(helper)) {
@@ -112,38 +106,33 @@ it("runs selected channel files in one config child while retaining separate con
   expect(defaultChildren?.filter((child) => child.kind === "target")).toHaveLength(14);
 
   const shards = createChangedNodeTestShards(changedPaths, { cwd, dedicatedBuildArtifacts: false });
-  expect(shards).not.toBeNull();
-  const channelShards = shards?.filter((shard) =>
-    shard.configs.includes("test/vitest/vitest.channels.config.ts"),
-  );
+  const channelShards = shards?.filter((shard) => shard.configs.includes(channelConfig));
   expect(channelShards).toHaveLength(1);
   const channelShard = channelShards?.[0];
-  if (!channelShard) {
-    throw new Error("Expected the channel source config owner");
-  }
-  expect(channelShard.requiresDist).toBe(false);
-  expect(channelShard.runner).toBe("blacksmith-8vcpu-ubuntu-2404");
-  expect(channelShard.env).toEqual({
+  expect(channelShard).toMatchObject({
+    requiresDist: false,
+    runner: "blacksmith-8vcpu-ubuntu-2404",
+  });
+  expect(channelShard?.env).toEqual({
     NODE_OPTIONS: "--max-old-space-size=8192",
     OPENCLAW_VITEST_MAX_WORKERS: "1",
   });
   const children = resolveShardPlans({
-    OPENCLAW_NODE_TEST_CONFIGS_JSON: JSON.stringify(channelShard.configs),
-    OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON: JSON.stringify(channelShard.includePatterns),
-    OPENCLAW_NODE_TEST_ENV_JSON: JSON.stringify(channelShard.env),
+    OPENCLAW_NODE_TEST_CONFIGS_JSON: JSON.stringify(channelShard?.configs),
+    OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON: JSON.stringify(channelShard?.includePatterns),
+    OPENCLAW_NODE_TEST_ENV_JSON: JSON.stringify(channelShard?.env),
   });
-  expect(children).toHaveLength(1);
-  expect(children[0]).toMatchObject({
-    kind: "group",
-    plan: {
-      configs: ["test/vitest/vitest.channels.config.ts"],
-      includePatterns: channelTargets,
+  expect(children).toMatchObject([
+    {
+      kind: "group",
+      plan: {
+        configs: [channelConfig],
+        includePatterns: channelTargets,
+      },
     },
-  });
+  ]);
   expect(shards?.flatMap((shard) => shard.targets ?? [])).toEqual([contract]);
-  expect(
-    shards?.filter((shard) => shard.configs.includes("test/vitest/vitest.boundary.config.ts")),
-  ).toHaveLength(1);
+  expect(shards?.filter((shard) => shard.configs.includes(boundaryConfig))).toHaveLength(1);
 });
 
 it("rejects unavailable canonical metadata for an untracked config consumer", () => {
