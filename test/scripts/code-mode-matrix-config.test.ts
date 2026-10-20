@@ -66,29 +66,25 @@ describe.each(["direct", "code"] as const)("Gateway matrix %s config", (mode) =>
     "emits canonical %s config and preserves workload controls",
     (task) => {
       const { config, configPatch, workload } = gatewayConfig(task, mode);
-      expect(config).toMatchObject({
-        agents: {
-          defaults: {
-            model: { primary: MODEL, fallbacks: [] },
-            modelPolicy: { allow: [MODEL] },
-            fastModeDefault: false,
-            thinkingDefault: "low",
-            models: { [MODEL]: modelMetadata },
-          },
-        },
-        tools: {
-          profile: "full",
-          allow: workload.settings.allowedTools,
-          fs: { workspaceOnly: true },
-          exec: { mode: "full" },
-          codeMode: { enabled: mode === "code", executor: "node" },
-        },
-        gateway: {
-          mode: "local",
-          bind: "loopback",
-          port: 18789,
-          auth: { mode: "token", token: "synthetic-matrix-test" },
-        },
+      expect(config.agents.defaults).toMatchObject({
+        model: { primary: MODEL, fallbacks: [] },
+        modelPolicy: { allow: [MODEL] },
+        fastModeDefault: false,
+        thinkingDefault: "low",
+        models: { [MODEL]: modelMetadata },
+      });
+      expect(config.tools).toMatchObject({
+        profile: "full",
+        allow: workload.settings.allowedTools,
+        fs: { workspaceOnly: true },
+        exec: { mode: "full" },
+        codeMode: { enabled: mode === "code", executor: "node" },
+      });
+      expect(config.gateway).toMatchObject({
+        mode: "local",
+        bind: "loopback",
+        port: 18789,
+        auth: { mode: "token", token: "synthetic-matrix-test" },
       });
       if (configPatch) {
         expect(config).toMatchObject(configPatch);

@@ -567,6 +567,7 @@ describe("workflow fixture reads", () => {
 });
 
 describe("PR failure reporting", () => {
+  const verify = ciStep("ci-gate", "Verify selected CI lanes");
   it("keeps critical-path routing and adds default Blacksmith failure reporting", () => {
     const context = {
       runnerProfile: "blacksmith" as const,
@@ -688,12 +689,10 @@ describe("PR failure reporting", () => {
   it.skipIf(process.platform === "win32")(
     "finishes selected compiler and lint groups after every non-cancellation failure",
     () => {
-      const workflow = readCiWorkflow();
-      const central = workflow.jobs["check-shard"].steps.find(
-        (step: WorkflowStep) => step.name === "Run check shard",
-      );
-      const hosted = workflow.jobs["check-test-types-hosted-core-shard"].steps.find(
-        (step: WorkflowStep) => step.name === "Run hosted core test-types stripe",
+      const central = ciStep("check-shard", "Run check shard");
+      const hosted = ciStep(
+        "check-test-types-hosted-core-shard",
+        "Run hosted core test-types stripe",
       );
       const root = checkFixture("ci-type-groups-", ["ci-static-step.sh", "ci-collect-checks.sh"]);
       const calls = path.join(root, "calls");
@@ -725,7 +724,7 @@ describe("PR failure reporting", () => {
         }
       };
       checkGroups(
-        central.run,
+        central.run!,
         "tsgo",
         {
           NARROW_CHECK_PATHS_JSON: '["src/example.ts"]',
@@ -740,7 +739,7 @@ describe("PR failure reporting", () => {
           ["1", "1"],
         ],
       );
-      const run = runCompiler(hosted.run, {
+      const run = runCompiler(hosted.run!, {
         COMPILER_EXIT: "2",
         OPENCLAW_CI_STATIC_EVIDENCE: "1",
         CI_TYPE_GRAPHS_JSON: '["first"]',
@@ -748,10 +747,8 @@ describe("PR failure reporting", () => {
       expect(run.status, run.stderr).toBe(2);
       expect(run.stdout).toContain('[ci-static:tsgo:step] {"version":1,"groups":1}');
 
-      const lint = workflow.jobs["check-lint-hosted-core-shard"].steps.find(
-        (step: WorkflowStep) => step.name === "Run hosted core lint stripe",
-      );
-      const lintScript = lint.run.replace(/\$\{\{[\s\S]*?\}\}/gu, (expression: string) =>
+      const lint = ciStep("check-lint-hosted-core-shard", "Run hosted core lint stripe");
+      const lintScript = lint.run!.replace(/\$\{\{[\s\S]*?\}\}/gu, (expression: string) =>
         String(evaluateWorkflowExpression(expression, { runnerProfile: "github" })),
       );
       checkGroups(
@@ -776,9 +773,6 @@ describe("PR failure reporting", () => {
   it.skipIf(process.platform === "win32")(
     "accepts only the completed report's supported test and static exceptions",
     () => {
-      const verify = readCiWorkflow().jobs["ci-gate"].steps.find(
-        (entry: WorkflowStep) => entry.name === "Verify selected CI lanes",
-      );
       for (const [name, result, receipt, attempt, exit] of [
         ["checks-node-core-test-nondist-shard", "failure", "1", 1, 0],
         ["checks-node-core-test-nondist-shard", "failure", "", 1, 1],
@@ -792,13 +786,13 @@ describe("PR failure reporting", () => {
         ["check-lint-hosted-core-shard", "failure", "", 1, 1],
         ["check-additional-shard", "failure", "1", 1, 1],
       ] as const) {
-        const allowed = evaluateWorkflowExpression(verify.env.ALLOW_KNOWN_MAIN_RED, {
+        const allowed = evaluateWorkflowExpression(verify.env!.ALLOW_KNOWN_MAIN_RED, {
           runAttempt: attempt,
           preflightOutputs: { run_checks_node_core_nondist: "true" },
           failureReportResult: "success",
           failureReportOutputs: { known_main_red_attempt: receipt },
         });
-        const run = runShell(verify.run, {
+        const run = runShell(verify.run!, {
           ALLOW_KNOWN_MAIN_RED: String(allowed),
           JOB_RESULTS: `${name}=${result}|true`,
         });
@@ -810,10 +804,6 @@ describe("PR failure reporting", () => {
   it.skipIf(process.platform === "win32")(
     "keeps retry and non-Node reports informational without extending the known-main-red allowance",
     () => {
-      const workflow = readCiWorkflow();
-      const verify = workflow.jobs["ci-gate"].steps.find(
-        (entry: WorkflowStep) => entry.name === "Verify selected CI lanes",
-      );
       for (const [runAttempt, nodeSelected] of [
         [2, true],
         [1, false],
@@ -825,15 +815,18 @@ describe("PR failure reporting", () => {
             preflightOutputs: { run_checks_node_core_nondist: String(nodeSelected) },
             failureReportOutputs: { known_main_red_attempt: String(runAttempt) },
           };
-          expectWorkflow(workflow.jobs["pr-failure-report"].if, context).toBe(true);
-          expectWorkflow(verify.env.ALLOW_KNOWN_MAIN_RED, context).toBe(false);
-          const reportRow = verify.env.JOB_RESULTS.split("\n")
-            .find((line: string) => line.startsWith("pr-failure-report="))
-            .replace(/\$\{\{[\s\S]*?\}\}/gu, (expression: string) =>
-              String(evaluateWorkflowExpression(expression, context)),
-            );
+          expectWorkflow(ciWorkflow.jobs["pr-failure-report"].if, context).toBe(true);
+          expectWorkflow(verify.env!.ALLOW_KNOWN_MAIN_RED, context).toBe(false);
+          const reportRow = expectDefined(
+            String(verify.env!.JOB_RESULTS)
+              .split("\n")
+              .find((line) => line.startsWith("pr-failure-report=")),
+            "failure-report gate row",
+          ).replace(/\$\{\{[\s\S]*?\}\}/gu, (expression: string) =>
+            String(evaluateWorkflowExpression(expression, context)),
+          );
           expect(reportRow).toBe("pr-failure-report=skipped|false");
-          const run = runShell(verify.run, {
+          const run = runShell(verify.run!, {
             JOB_RESULTS: `preflight=success|true\nsecurity-fast=success|true\n${reportRow}`,
           });
           expect(run.status, run.stdout).toBe(0);
@@ -845,10 +838,7 @@ describe("PR failure reporting", () => {
   it.skipIf(process.platform === "win32")(
     "publishes the classification table and machine-readable failures without changing the gate result",
     () => {
-      const gate = readCiWorkflow().jobs["ci-gate"];
-      const step = gate.steps.find(
-        (entry: WorkflowStep) => entry.name === "Report PR failure classification",
-      );
+      const step = ciStep("ci-gate", "Report PR failure classification");
       const context = { runAttempt: 2 };
       expectWorkflow(`\${{ ${step.if} }}`, context).toBe(false);
       const summary = "| Job | Class |\n| --- | --- |\n| checks-node-example | pre-existing |\n";
@@ -870,7 +860,7 @@ describe("PR failure reporting", () => {
       expectWorkflow(`\${{ ${step.if} }}`, { ...context, failureReportOutputs: outputs }).toBe(
         true,
       );
-      const result = runShell(step.run, {
+      const result = runShell(step.run!, {
         GITHUB_STEP_SUMMARY: summaryPath,
         SUMMARY_JSON: outputs.summary_json,
         FAILURES_JSON: outputs.failures_json,

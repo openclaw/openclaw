@@ -27,27 +27,19 @@ function expectInvocation(
   expect(resolveOpenClawCliInvocation(options)).toEqual(expected);
 }
 
-it("retains the selected entry and interpreter flags for a loose CLI", () => {
+it.each([
+  ["loose", execPath, entryPath],
+  ["explicit", "/synthetic/openclaw-wrapper", null],
+  ["embedded", process.execPath, "/synthetic/runtime/openclaw.mjs"],
+] as const)("preserves arguments and chooses the %s CLI prefix", (mode, command, entry) => {
+  if (mode === "embedded") {
+    vi.stubGlobal("__openclawStandaloneRootUrl", "file:///synthetic/runtime/");
+  }
   const args = ["--profile", "fixture", "doctor", "--non-interactive"];
-  expectInvocation({ execPath, entryPath, execArgv, args }, [...execArgv, entryPath]);
-});
-
-it("does not inherit the caller's entry for an explicit CLI command", () => {
-  expectInvocation({
-    execPath: "/synthetic/openclaw-wrapper",
-    entryPath: null,
-    execArgv: ["--inspect"],
-    args: ["gateway", "restart"],
-  });
-});
-
-it("uses the embedded fact for a self respawn without a script or interpreter flags", () => {
-  vi.stubGlobal("__openclawStandaloneRootUrl", "file:///synthetic/runtime/");
-  expectInvocation({
-    entryPath: "/synthetic/runtime/openclaw.mjs",
-    execArgv: ["--disable-warning=ExperimentalWarning"],
-    args: ["--profile", "fixture", "--version"],
-  });
+  expectInvocation(
+    { execPath: command, entryPath: entry, execArgv, args },
+    mode === "loose" ? [...execArgv, entryPath] : [],
+  );
 });
 
 it("uses a renamed standalone artifact's manifest for service invocation and runtime metadata", () => {
@@ -65,7 +57,6 @@ it("uses a renamed standalone artifact's manifest for service invocation and run
     bun: { version: "1.4.3" },
   };
   writeManifest(manifest);
-  // No executable bytes are needed: packaging owns hashes; planning owns the argv shape.
   expect(readStandaloneRuntimeManifest(executable)).toEqual(manifest);
   expect(readStandaloneRuntimeManifestForRoot(runtime)).toEqual(manifest);
   expect(() => readStandaloneRuntimeManifestForRoot(path.join(root, "unrelated"))).toThrow(
@@ -102,7 +93,7 @@ it("keeps loose parent-bound respawn bytes identical to the former runner prefix
     args: ["doctor", "--fix"],
     env,
   });
-  // Fixed bytes protect the self-removing preload, ordering, and inherited flags.
+  // Keep the self-removing preload's bytes independent of its production constant.
   const source = `
   globalThis[Symbol.for("openclaw.cliRespawnParent")] = { pid: process.ppid };
   process.execArgv = process.execArgv.filter((arg, index, args) =>
