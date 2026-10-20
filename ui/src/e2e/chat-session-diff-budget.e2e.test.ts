@@ -37,9 +37,6 @@ suite.define(() => {
         methodResponses: {
           "sessions.diff": {
             sessionKey: "main",
-            root: "/workspace/example",
-            branch: "feature/large",
-            baseRef: "main",
             additions: 64,
             deletions: 64,
             files: [

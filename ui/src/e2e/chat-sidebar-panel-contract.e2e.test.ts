@@ -93,7 +93,19 @@ const nextPaint = (page: Page) =>
 const requestCount = (gateway: Awaited<ReturnType<typeof installMockGateway>>, method: string) =>
   expect.poll(async () => (await gateway.getRequests(method)).length);
 
-function coldOpenScenario(): ControlUiMockGatewayScenario {
+function coldOpenScenario(populated = false): ControlUiMockGatewayScenario {
+  const root = populated ? "/tmp/checkout" : "/tmp/plain-workspace";
+  const files = populated
+    ? [
+        {
+          kind: "modified",
+          missing: false,
+          name: "README.md",
+          path: "/tmp/checkout/README.md",
+          size: 128,
+        },
+      ]
+    : [];
   return {
     featureMethods: [
       "browser.request",
@@ -109,154 +121,128 @@ function coldOpenScenario(): ControlUiMockGatewayScenario {
       "sessions.files.list",
       "terminal.open",
     ],
+    ...(populated
+      ? {
+          sessions: [
+            { key: "agent:main:main", kind: "direct", label: "Main", updatedAt: 1 },
+            {
+              key: "agent:main:subagent:panel-content",
+              kind: "direct",
+              label: "Check panel content",
+              spawnedBy: "agent:main:main",
+              status: "done",
+              updatedAt: 2,
+            },
+          ],
+        }
+      : {}),
     methodResponses: {
-      "sessions.processes.list": { sessionId: "main-session", processes: [], truncated: false },
-      "browser.request": {
-        cases: [browserTabs(false)],
+      "sessions.processes.list": {
+        sessionId: "main-session",
+        truncated: false,
+        processes: populated
+          ? [
+              {
+                processId: "process-1",
+                instanceId: "incarnation-1",
+                name: "Build application",
+                status: "running",
+                startedAt: 1,
+                tail: "Compiling",
+                truncated: false,
+                canStop: false,
+              },
+            ]
+          : [],
       },
-      "environments.list": { environments: [] },
+      "browser.request": {
+        cases: populated
+          ? [
+              browserTabs(true, [
+                {
+                  targetId: "target-1",
+                  tabId: "tab-1",
+                  title: "OpenClaw",
+                  url: "https://example.test/",
+                },
+              ]),
+              browserScreenshot("target-1", "https://example.test/", "/proof/browser.png"),
+            ]
+          : [browserTabs(false)],
+      },
+      "environments.list": {
+        environments: populated
+          ? [{ id: "worker-desktop-1", type: "worker", status: "available", desktop: true }]
+          : [],
+      },
       "session.discussion.info": {
         state: "open",
+        ...(populated
+          ? {
+              embedUrl: "https://discussion.example/embed/thread/session",
+              openUrl: "https://discussion.example/session",
+            }
+          : {}),
       },
+      ...(populated
+        ? {
+            "sessions.companion.state": {
+              exchanges: [
+                {
+                  question: "What changed?",
+                  answer: "Every offered panel now opens with useful content.",
+                  ts: Date.now() - 1_000,
+                },
+              ],
+            },
+            "sessions.diff": {
+              additions: 1,
+              baseRef: "main",
+              branch: "feature/sidebar-invariant",
+              deletions: 0,
+              files: [
+                {
+                  additions: 1,
+                  deletions: 0,
+                  path: "README.md",
+                  status: "modified",
+                  patch: [
+                    "diff --git a/README.md b/README.md",
+                    "--- a/README.md",
+                    "+++ b/README.md",
+                    "@@ -1 +1,2 @@",
+                    " OpenClaw",
+                    "+Cold-open invariant",
+                    "",
+                  ].join("\n"),
+                },
+              ],
+              root,
+              sessionKey: "main",
+            },
+          }
+        : {}),
       "sessions.files.list": {
-        browser: { entries: [], path: "" },
-        files: [],
-        gitCheckout: false,
-        root: "/tmp/plain-workspace",
+        browser: {
+          entries: populated ? [{ kind: "file", name: "README.md", path: "README.md" }] : [],
+          path: "",
+        },
+        files,
+        gitCheckout: populated,
+        root,
         sessionKey: "main",
       },
       "terminal.open": {
         agentId: "main",
         confined: false,
-        cwd: "/tmp/plain-workspace",
+        cwd: root,
         sessionId: "cold-open-terminal",
         shell: "/bin/zsh",
       },
     },
     terminalEnabled: true,
-    workspace: "/tmp/plain-workspace",
-    workspaceGit: false,
-  };
-}
-
-function populatedColdOpenScenario(): ControlUiMockGatewayScenario {
-  const sparse = coldOpenScenario();
-  return {
-    ...sparse,
-    sessions: [
-      { key: "agent:main:main", kind: "direct", label: "Main", updatedAt: 1 },
-      {
-        key: "agent:main:subagent:panel-content",
-        kind: "direct",
-        label: "Check panel content",
-        spawnedBy: "agent:main:main",
-        status: "done",
-        updatedAt: 2,
-      },
-    ],
-    methodResponses: {
-      ...sparse.methodResponses,
-      "sessions.processes.list": {
-        sessionId: "main-session",
-        truncated: false,
-        processes: [
-          {
-            processId: "process-1",
-            instanceId: "incarnation-1",
-            name: "Build application",
-            status: "running",
-            startedAt: 1,
-            tail: "Compiling",
-            truncated: false,
-            canStop: false,
-          },
-        ],
-      },
-      "browser.request": {
-        cases: [
-          browserTabs(true, [
-            {
-              targetId: "target-1",
-              tabId: "tab-1",
-              title: "OpenClaw",
-              url: "https://example.test/",
-            },
-          ]),
-          browserScreenshot("target-1", "https://example.test/", "/proof/browser.png"),
-        ],
-      },
-      "environments.list": {
-        environments: [
-          { id: "worker-desktop-1", type: "worker", status: "available", desktop: true },
-        ],
-      },
-      "session.discussion.info": {
-        embedUrl: "https://discussion.example/embed/thread/session",
-        openUrl: "https://discussion.example/session",
-        state: "open",
-      },
-      "sessions.companion.state": {
-        exchanges: [
-          {
-            question: "What changed?",
-            answer: "Every offered panel now opens with useful content.",
-            ts: Date.now() - 1_000,
-          },
-        ],
-      },
-      "sessions.diff": {
-        additions: 1,
-        baseRef: "main",
-        branch: "feature/sidebar-invariant",
-        deletions: 0,
-        files: [
-          {
-            additions: 1,
-            deletions: 0,
-            patch: [
-              "diff --git a/README.md b/README.md",
-              "--- a/README.md",
-              "+++ b/README.md",
-              "@@ -1 +1,2 @@",
-              " OpenClaw",
-              "+Cold-open invariant",
-              "",
-            ].join("\n"),
-            path: "README.md",
-            status: "modified",
-          },
-        ],
-        root: "/tmp/checkout",
-        sessionKey: "main",
-      },
-      "sessions.files.list": {
-        browser: {
-          entries: [{ kind: "file", name: "README.md", path: "README.md" }],
-          path: "",
-        },
-        files: [
-          {
-            kind: "modified",
-            missing: false,
-            name: "README.md",
-            path: "/tmp/checkout/README.md",
-            size: 128,
-          },
-        ],
-        gitCheckout: true,
-        root: "/tmp/checkout",
-        sessionKey: "main",
-      },
-      "terminal.open": {
-        agentId: "main",
-        confined: false,
-        cwd: "/tmp/checkout",
-        sessionId: "cold-open-terminal",
-        shell: "/bin/zsh",
-      },
-    },
-    workspace: "/tmp/checkout",
-    workspaceGit: true,
+    workspace: root,
+    workspaceGit: populated,
   };
 }
 
@@ -282,47 +268,26 @@ async function seedSidebar(
   activePanelId: string,
   mainPanelId?: string,
 ) {
-  await page.addInitScript(
-    ({
-      key,
-      sessionKey: selectedSession,
-      panels: slots,
-      activePanelId: activeId,
-      mainPanelId: mainId,
-    }) => {
-      localStorage.setItem(
-        key,
-        JSON.stringify({
-          sessionKey: selectedSession,
-          sidebarSessionLayouts: {
-            [selectedSession]: {
-              columns: [
-                {
-                  id: "side-panel-column",
-                  side: "right",
-                  panels: slots.map((slot) => ({ id: slot, slot })),
-                  activePanelId: activeId,
-                  height: 360,
-                  width: 480,
-                },
-              ],
-              ...(mainId ? { mainPanelId: mainId } : {}),
-              dock: "right",
-              open: true,
-              expanded: false,
-            },
-          },
-        }),
-      );
-    },
-    {
-      key: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
-      sessionKey,
-      panels,
-      activePanelId,
-      mainPanelId,
-    },
-  );
+  const layout = {
+    columns: [
+      {
+        id: "side-panel-column",
+        side: "right",
+        panels: panels.map((slot) => ({ id: slot, slot })),
+        activePanelId,
+        height: 360,
+        width: 480,
+      },
+    ],
+    ...(mainPanelId ? { mainPanelId } : {}),
+    dock: "right",
+    open: true,
+    expanded: false,
+  };
+  await page.addInitScript(({ key, value }) => localStorage.setItem(key, value), {
+    key: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
+    value: JSON.stringify({ sessionKey, sidebarSessionLayouts: { [sessionKey]: layout } }),
+  });
 }
 const seedHiddenBoardSlot = (page: Page) =>
   seedSidebar(page, HIDDEN_BOARD_SESSION_KEY, ["dashboard"], "dashboard");
@@ -346,11 +311,16 @@ async function seedRetainedDesktopSlot(
   });
 }
 
-async function openRetainedDesktop(page: Page) {
+async function openRetainedDesktop(
+  page: Page,
+  activePanel: "workspace" | "conversation" = "workspace",
+) {
+  await seedRetainedDesktopSlot(page, activePanel);
   const gateway = await installMockGateway(page, retainedDesktopScenario(coldOpenScenario()));
   await page.goto(controlUiSessionUrl(suite.server.baseUrl, RETAINED_DESKTOP_SESSION_KEY));
   await waitForControlUiGatewayReady(page);
-  return gateway;
+  const desktop = page.locator("openclaw-desktop-panel");
+  return { gateway, desktop, canvas: desktop.locator("canvas") };
 }
 
 async function clickSidebarTab(page: Page, label: string): Promise<void> {
@@ -542,10 +512,8 @@ suite.define(() => {
 
   it("keeps a retained Desktop dormant until its sidebar tab is active", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
-      await seedRetainedDesktopSlot(page);
-      const gateway = await openRetainedDesktop(page);
+      const { gateway, desktop } = await openRetainedDesktop(page);
 
-      const desktop = page.locator("openclaw-desktop-panel");
       await desktop.waitFor({ state: "attached" });
       await nextPaint(page);
 
@@ -585,17 +553,14 @@ suite.define(() => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const artifactDir = createControlUiE2eArtifactDir("desktop-tab-retention");
       await page.clock.install();
-      await seedRetainedDesktopSlot(page, "conversation");
-      const gateway = await openRetainedDesktop(page);
+      const { gateway, desktop, canvas } = await openRetainedDesktop(page, "conversation");
       const rfb = await installScriptedRfbServer(page);
       await gateway.deferNext("environments.status");
       await clickSidebarTab(page, "Desktop");
-      const desktop = page.locator("openclaw-desktop-panel");
       await gateway.waitForRequest("environments.status");
       await desktop.getByText("Connecting to desktop…", { exact: true }).waitFor();
       await page.screenshot({ path: path.join(artifactDir, "unified-loading.png") });
       await gateway.resolveDeferred("environments.status", retainedDesktopEnvironment);
-      const canvas = desktop.locator("canvas");
       await canvas.waitFor({ state: "visible" });
       await expect.poll(rfb.events).toEqual(["authenticated:1"]);
       await rfb.send([createRfbRawFrame()]);
@@ -665,15 +630,12 @@ suite.define(() => {
       await page.addInitScript(() => {
         Object.defineProperty(navigator, "platform", { configurable: true, value: "MacIntel" });
       });
-      await seedRetainedDesktopSlot(page, "conversation");
-      const gateway = await openRetainedDesktop(page);
+      const { gateway, desktop, canvas } = await openRetainedDesktop(page, "conversation");
       const rfb = await installScriptedRfbServer(page);
       await clickSidebarTab(page, "Desktop");
-      const desktop = page.locator("openclaw-desktop-panel");
       await expect.poll(rfb.events).toEqual(["authenticated:1"]);
       await desktop.getByRole("button", { name: "Take control", exact: true }).click();
       await expect.poll(rfb.events).toEqual(["authenticated:1", "authenticated:2", "closed:1"]);
-      const canvas = desktop.locator("canvas");
       await canvas.click();
       // macOS sends a single state-change keydown when CapsLock is enabled.
       await canvas.dispatchEvent("keydown", { key: "CapsLock", code: "CapsLock" });
@@ -785,13 +747,11 @@ suite.define(() => {
 
   it("tears down unfinished Desktop work on presentation loss", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
-      await seedRetainedDesktopSlot(page);
-      const gateway = await openRetainedDesktop(page);
+      const { gateway, desktop } = await openRetainedDesktop(page);
       const inventoryBeforeOpen = (await gateway.getRequests("environments.status")).length;
       await gateway.deferNext("environments.status");
       await clickSidebarTab(page, "Desktop");
 
-      const desktop = page.locator("openclaw-desktop-panel");
       await gateway.waitForRequest("environments.status", { after: inventoryBeforeOpen });
       await installDesktopClientFake(desktop);
       await gateway.deferNext("desktop.observe");
@@ -841,7 +801,7 @@ suite.define(() => {
   it("preserves the production header-action shapes for Side chat and Discussion", async () => {
     const context = await suite.newBrowserContext({ serviceWorkers: "block" });
     const page = await context.newPage();
-    const choices = await openColdSidebar(page, populatedColdOpenScenario());
+    const choices = await openColdSidebar(page, coldOpenScenario(true));
 
     await choices.filter({ hasText: "Side chat" }).click();
     const contentActions = await openChatLayoutMenu(page);
@@ -874,65 +834,47 @@ suite.define(() => {
           throw new Error("Active side-panel tab must render inside the side panel");
         }
         panel.dir = dir;
-        const leadingGlyph = node.querySelector<HTMLElement>(".tabstrip-tab__icon svg");
-        const label = node.querySelector<HTMLElement>(".tabstrip-tab__label");
-        const labelClipper = node.querySelector<HTMLElement>(".tabstrip-tab__tooltip-trigger");
         const close = node.nextElementSibling;
-        const trailingGlyph = close?.querySelector<HTMLElement>("svg");
-        if (
-          !(close instanceof HTMLElement) ||
-          !leadingGlyph ||
-          !label ||
-          !labelClipper ||
-          !trailingGlyph
-        ) {
-          throw new Error("Active side-panel tab must render its label and both edge glyphs");
+        if (!(close instanceof HTMLElement)) {
+          throw new Error("Active side-panel tab must render its close control");
         }
+        const bounds = (root: Element, selector: string) => {
+          const element = root.querySelector(selector);
+          if (!element) {
+            throw new Error(`Missing tab element: ${selector}`);
+          }
+          return element.getBoundingClientRect();
+        };
         const tabBounds = node.getBoundingClientRect();
         const closeBounds = close.getBoundingClientRect();
-        const leadingBounds = leadingGlyph.getBoundingClientRect();
-        const labelBounds = label.getBoundingClientRect();
-        const labelClipperBounds = labelClipper.getBoundingClientRect();
-        const trailingBounds = trailingGlyph.getBoundingClientRect();
+        const leading = bounds(node, ".tabstrip-tab__icon svg");
+        const label = bounds(node, ".tabstrip-tab__label");
+        const clipper = bounds(node, ".tabstrip-tab__tooltip-trigger");
+        const trailing = bounds(close, "svg");
         const rtl = dir === "rtl";
-        const tabStyle = getComputedStyle(node);
-        const closeStyle = getComputedStyle(close);
+        const radii = (element: Element) => {
+          const style = getComputedStyle(element);
+          const values = [style.borderTopLeftRadius, style.borderTopRightRadius];
+          return (rtl ? values.toReversed() : values).map(Number.parseFloat);
+        };
         return {
-          leading: rtl
-            ? tabBounds.right - leadingBounds.right
-            : leadingBounds.left - tabBounds.left,
-          trailing: rtl
-            ? trailingBounds.left - closeBounds.left
-            : closeBounds.right - trailingBounds.right,
-          labelBlockStartInset: labelBounds.top - labelClipperBounds.top,
-          labelBlockEndInset: labelClipperBounds.bottom - labelBounds.bottom,
-          tabOuterRadius: Number.parseFloat(
-            rtl ? tabStyle.borderTopRightRadius : tabStyle.borderTopLeftRadius,
-          ),
-          tabJoinRadius: Number.parseFloat(
-            rtl ? tabStyle.borderTopLeftRadius : tabStyle.borderTopRightRadius,
-          ),
-          closeJoinRadius: Number.parseFloat(
-            rtl ? closeStyle.borderTopRightRadius : closeStyle.borderTopLeftRadius,
-          ),
-          closeOuterRadius: Number.parseFloat(
-            rtl ? closeStyle.borderTopLeftRadius : closeStyle.borderTopRightRadius,
-          ),
+          leading: rtl ? tabBounds.right - leading.right : leading.left - tabBounds.left,
+          trailing: rtl ? trailing.left - closeBounds.left : closeBounds.right - trailing.right,
+          labelInsets: [label.top - clipper.top, clipper.bottom - label.bottom],
+          tabRadii: radii(node),
+          closeRadii: radii(close),
         };
       }, direction);
       expect(tabPadding.trailing, `${direction} glyph insets`).toBeCloseTo(tabPadding.leading, 0);
-      expect(
-        tabPadding.labelBlockStartInset,
-        `${direction} label block-start containment`,
-      ).toBeGreaterThanOrEqual(0);
-      expect(
-        tabPadding.labelBlockEndInset,
-        `${direction} label block-end containment`,
-      ).toBeGreaterThanOrEqual(0);
-      expect(tabPadding.tabJoinRadius, `${direction} tab join`).toBe(0);
-      expect(tabPadding.closeJoinRadius, `${direction} close join`).toBe(0);
-      expect(tabPadding.tabOuterRadius, `${direction} tab outer`).toBeGreaterThan(0);
-      expect(tabPadding.closeOuterRadius, `${direction} close outer`).toBeGreaterThan(0);
+      for (const inset of tabPadding.labelInsets) {
+        expect(inset, `${direction} label containment`).toBeGreaterThanOrEqual(0);
+      }
+      expect([tabPadding.tabRadii[1], tabPadding.closeRadii[0]], `${direction} joins`).toEqual([
+        0, 0,
+      ]);
+      for (const radius of [tabPadding.tabRadii[0], tabPadding.closeRadii[1]]) {
+        expect(radius, `${direction} outer radius`).toBeGreaterThan(0);
+      }
     }
     await tab.evaluate((node) => {
       const panel = node.closest(".side-panel");
@@ -955,7 +897,7 @@ suite.define(() => {
   it("renders content for every offered slot with backing data", async () => {
     for (const label of offeredSlotLabels) {
       expect(
-        await readSlotColdOpenOutcome(label, populatedColdOpenScenario(), "content"),
+        await readSlotColdOpenOutcome(label, coldOpenScenario(true), "content"),
         `${label} must render content when its backing capability has data`,
       ).toEqual({ outcome: "content", emptyStateOffersAction: false });
     }

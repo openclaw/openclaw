@@ -1,4 +1,3 @@
-// Control UI E2E tests cover composable skill references in the chat composer.
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator } from "playwright";
@@ -9,58 +8,37 @@ import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI skill references" });
-const skill = (name: string, skillDisplayName: string, description: string) => ({
-  acceptsArgs: true,
-  description,
+const command = (name: string, skillDisplayName?: string) => ({
+  acceptsArgs: Boolean(skillDisplayName),
+  description: name,
   name,
-  skillDisplayName,
   scope: "both",
-  source: "skill",
-  skillModelVisible: true,
-  textAliases: [`/${name}`],
+  source: skillDisplayName ? "skill" : "native",
+  ...(skillDisplayName ? { skillDisplayName, skillModelVisible: true } : {}),
 });
 
 suite.define(() => {
   it("references multiple skills inside a normal prompt and sends their raw names", async () => {
-    const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-    const artifactDir = artifactRoot
-      ? createControlUiE2eArtifactDir("chat-skill-references", artifactRoot)
+    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()
+      ? createControlUiE2eArtifactDir("chat-skill-references")
       : undefined;
+    const viewport = { width: 1280, height: 900 };
     await suite.withPage(
       {
-        viewport: { width: 1280, height: 900 },
-        ...(artifactDir
-          ? { recordVideo: { dir: artifactDir, size: { width: 1280, height: 900 } } }
-          : {}),
+        viewport,
+        ...(artifactDir ? { recordVideo: { dir: artifactDir, size: viewport } } : {}),
       },
       async ({ page }) => {
         const commands = [
-          skill("autoreview", "Auto Review", "Pre-commit and ship code review."),
-          skill(
-            "technical_documentation",
-            "Technical Documentation",
-            "Build and review technical documentation.",
-          ),
-          skill("status_report", "Status Report", "Prepare a detailed status report."),
-          {
-            acceptsArgs: false,
-            description: "Show gateway status.",
-            name: "status",
-            scope: "both",
-            source: "native",
-            textAliases: ["/status"],
-          },
+          command("autoreview", "Auto Review"),
+          command("technical_documentation", "Technical Documentation"),
+          command("status_report", "Status Report"),
+          command("status"),
         ];
         const gateway = await installMockGateway(page, {
           deferredMethods: ["chat.send"],
           methodResponses: {
             "chat.startup": {
-              agentsList: {
-                agents: [{ id: "main", name: "OpenClaw" }],
-                defaultId: "main",
-                mainKey: "main",
-                scope: "agent",
-              },
               messages: [],
               metadata: { commands, models: [] },
               sessionId: "skill-reference-session",
@@ -86,10 +64,9 @@ suite.define(() => {
 
         const picker = page.getByRole("listbox", { name: "Skill references" });
         await picker.waitFor({ state: "visible" });
-        await expect.poll(() => picker.getByRole("option").count()).toBe(1);
         await expect
-          .poll(() => picker.getByRole("option").first().textContent())
-          .toContain("Auto Review");
+          .poll(() => picker.getByRole("option").allTextContents())
+          .toEqual([expect.stringContaining("Auto Review")]);
         await screenshot("skill-reference-picker.png", picker);
         await composer.press("Enter");
         await draft("Review this with $autoreview ");
@@ -102,9 +79,9 @@ suite.define(() => {
 
         await page.getByRole("button", { name: "Send message" }).click();
         const request = await gateway.waitForRequest("chat.send");
-        expect((request.params as { message?: unknown }).message).toBe(
-          "Review this with $autoreview and $technical_documentation",
-        );
+        expect(request.params).toMatchObject({
+          message: "Review this with $autoreview and $technical_documentation",
+        });
 
         await composer.fill("Print $HOME");
         await expect.poll(() => picker.count()).toBe(0);
@@ -116,12 +93,10 @@ suite.define(() => {
         await draft("Review this with $autoreview ");
 
         await composer.fill("/");
-        await page.getByRole("listbox", { name: "Slash commands" }).waitFor({ state: "visible" });
+        await slashPicker.waitFor({ state: "visible" });
         await expect.poll(() => page.getByRole("option", { name: /\/status/u }).count()).toBe(2);
 
-        const slashOptions = page
-          .getByRole("listbox", { name: "Slash commands" })
-          .getByRole("option");
+        const slashOptions = slashPicker.getByRole("option");
         await composer.fill("/sta");
         await expect
           .poll(async () => {

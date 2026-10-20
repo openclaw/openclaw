@@ -4,6 +4,7 @@ import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "session companion retry" });
+const unavailable = { code: "UNAVAILABLE", retryable: true };
 
 suite.define(() => {
   it.each(["side-composer", "/btw", "/side"] as const)(
@@ -27,9 +28,8 @@ suite.define(() => {
             },
             "sessions.companion.ask": {
               __mockError: {
-                code: "UNAVAILABLE",
+                ...unavailable,
                 message: "Session history is unavailable.",
-                retryable: true,
                 details: { reason: "context-unavailable" },
               },
             },
@@ -66,9 +66,8 @@ suite.define(() => {
         expect(await questions()).toEqual(["What changed?", question, followup]);
         expect(await side.locator(".chat-session-rail__retry").isDisabled()).toBe(true);
         await gateway.rejectDeferred("sessions.companion.ask", {
-          code: "UNAVAILABLE",
+          ...unavailable,
           message: "Side chat timed out.",
-          retryable: true,
         });
         await expect.poll(async () => failed.count()).toBe(2);
         await gateway.deferNext("sessions.companion.ask");

@@ -1,7 +1,6 @@
 import { writeFile } from "node:fs/promises";
-// Control UI tests cover the session diff panel (sessions.diff RPC).
 import path from "node:path";
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import type { SessionDiffFile } from "../../../packages/gateway-protocol/src/index.js";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
@@ -13,6 +12,7 @@ import {
   controlUiSessionUrl,
   installMockGateway,
   navigateToControlUiSession,
+  type ControlUiMockGatewayScenario,
 } from "../test-helpers/control-ui-e2e.ts";
 import { openDetailsPullRequests } from "./chat-details.test-support.ts";
 import {
@@ -35,28 +35,13 @@ beforeEach(() => {
   }
 });
 
-async function newPage(): Promise<Page> {
-  const context = await suite.newBrowserContext({
-    colorScheme: "light",
-    locale: "en-US",
-    serviceWorkers: "block",
-    viewport: { height: 800, width: 1180 },
-  });
-  return context.newPage();
-}
-
 const APP_PATCH = [
-  "diff --git a/src/app.ts b/src/app.ts",
-  "index 1111111..2222222 100644",
-  "--- a/src/app.ts",
-  "+++ b/src/app.ts",
   "@@ -30,3 +30,4 @@",
   " // context line",
   '-const message = "removed line";',
   '+const message = "replacement line";',
   '+console.log("extra line");',
   " // trailing context",
-  "",
 ].join("\n");
 
 const APP_FILE_TEXT = [
@@ -111,72 +96,79 @@ const emptyWorkspace = (sessionKey = "main") => ({
   files: [],
   browser: { path: "", entries: [] },
 });
-async function mockDiff(
-  page: Page,
-  methodResponses: NonNullable<Parameters<typeof installMockGateway>[1]>["methodResponses"],
-  extraMethods: string[] = [],
+async function openDiff(
+  methodResponses: ControlUiMockGatewayScenario["methodResponses"],
+  options: {
+    sessionKey?: string;
+    layouts?: string[];
+    extraMethods?: string[];
+    viewport?: { width: number; height: number };
+  } = {},
 ) {
-  return installMockGateway(page, {
-    featureMethods: ["chat.metadata", "chat.startup", "sessions.diff", ...extraMethods],
+  const context = await suite.newBrowserContext({
+    colorScheme: "light",
+    locale: "en-US",
+    serviceWorkers: "block",
+    viewport: options.viewport ?? { height: 800, width: 1180 },
+  });
+  const page = await context.newPage();
+  if (options.layouts) {
+    await seedPersistedReviewLayouts(page, options.layouts);
+  }
+  const gateway = await installMockGateway(page, {
+    sessionKey: options.sessionKey,
+    featureMethods: [
+      "chat.metadata",
+      "chat.startup",
+      "sessions.diff",
+      ...(options.extraMethods ?? []),
+    ],
     methodResponses,
   });
+  await page.goto(
+    options.sessionKey
+      ? controlUiSessionUrl(suite.server.baseUrl, options.sessionKey)
+      : `${suite.server.baseUrl}chat`,
+  );
+  return { page, gateway };
 }
 const requestCount = (
   gateway: Awaited<ReturnType<typeof installMockGateway>>,
   method = "sessions.diff",
 ) => expect.poll(async () => (await gateway.getRequests(method)).length);
-const text = (scope: Page | import("playwright").Locator, selector: string) =>
+const text = (scope: Page | Locator, selector: string) =>
   expect.poll(() => scope.locator(selector).textContent());
 
-async function waitForSessionDiff(page: import("playwright").Page): Promise<void> {
+async function waitForSessionDiff(page: Page): Promise<void> {
   await expect.poll(() => page.locator(".session-diff").count()).toBe(1);
   await expect
     .poll(() => page.locator(".session-diff__filename").allTextContents())
     .toEqual(["app.ts", "notes.md"]);
 }
 
-async function seedPersistedReviewLayouts(
-  page: import("playwright").Page,
-  sessionKeys: string[],
-): Promise<void> {
-  await page.addInitScript(
-    ({ key, persistedSessionKeys }) => {
-      const layout = {
-        columns: [
-          {
-            id: "side-panel-column",
-            side: "right",
-            panels: [{ id: "detail", slot: "detail" }],
-            activePanelId: "detail",
-            height: 360,
-            width: 360,
-          },
-        ],
-        open: true,
-        expanded: false,
-      };
-      localStorage.setItem(
-        key,
-        JSON.stringify({
-          sessionKey: persistedSessionKeys[0],
-          lastActiveSessionKey: persistedSessionKeys[0],
-          sidebarSessionLayouts: Object.fromEntries(
-            persistedSessionKeys.map((sessionKey) => [sessionKey, layout]),
-          ),
-        }),
-      );
-    },
-    {
-      key: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
-      persistedSessionKeys: sessionKeys,
-    },
-  );
+async function seedPersistedReviewLayouts(page: Page, sessionKeys: string[]): Promise<void> {
+  const column = {
+    id: "side-panel-column",
+    side: "right",
+    panels: [{ id: "detail", slot: "detail" }],
+    activePanelId: "detail",
+    height: 360,
+    width: 360,
+  };
+  const layout = { columns: [column], open: true, expanded: false };
+  const value = JSON.stringify({
+    sessionKey: sessionKeys[0],
+    lastActiveSessionKey: sessionKeys[0],
+    sidebarSessionLayouts: Object.fromEntries(sessionKeys.map((key) => [key, layout])),
+  });
+  await page.addInitScript(({ key, serialized }) => localStorage.setItem(key, serialized), {
+    key: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
+    serialized: value,
+  });
 }
 
 suite.define(() => {
   it("aligns replacement lines after an insertion and highlights only edited tokens", async () => {
-    const page = await newPage();
-    await page.setViewportSize({ width: 1600, height: 650 });
     const before = [
       "const retries = 2;",
       "const timeout = 3000;",
@@ -198,32 +190,34 @@ suite.define(() => {
       "const repeated = 2;",
       "const repeated = 2;",
     ];
-    await mockDiff(page, {
-      "sessions.diff": {
-        sessionKey: "main",
-        root: "/workspace/example",
-        branch: "feature/retries",
-        baseRef: "main",
-        additions: after.length,
-        deletions: before.length,
-        files: [
-          {
-            path: "src/retry.ts",
-            status: "modified",
-            additions: after.length,
-            deletions: before.length,
-            patch: [
-              `@@ -10,${before.length + 2} +10,${after.length + 2} @@`,
-              " function run(owner: string) {",
-              ...before.map((line) => "-  " + line),
-              ...after.map((line) => "+  " + line),
-              " }",
-            ].join("\n"),
-          },
-        ],
+    const { page } = await openDiff(
+      {
+        "sessions.diff": {
+          sessionKey: "main",
+          root: "/workspace/example",
+          branch: "feature/retries",
+          baseRef: "main",
+          additions: after.length,
+          deletions: before.length,
+          files: [
+            {
+              path: "src/retry.ts",
+              status: "modified",
+              additions: after.length,
+              deletions: before.length,
+              patch: [
+                `@@ -10,${before.length + 2} +10,${after.length + 2} @@`,
+                " function run(owner: string) {",
+                ...before.map((line) => "-  " + line),
+                ...after.map((line) => "+  " + line),
+                " }",
+              ].join("\n"),
+            },
+          ],
+        },
       },
-    });
-    await page.goto(suite.server.baseUrl + "chat");
+      { viewport: { width: 1600, height: 650 } },
+    );
     await activateChatHeaderPanelAction(page, "Show session changes");
     await focusChatSidePanel(page);
     const panel = page.locator(".session-diff");
@@ -241,14 +235,14 @@ suite.define(() => {
     const rows = await split
       .locator(".session-diff-split__row--pair")
       .evaluateAll((elements) =>
-        elements.map((row) => [
-          row
-            .querySelector(".session-diff-split__side--left .session-diff-split__text")
-            ?.textContent?.trim() ?? "",
-          row
-            .querySelector(".session-diff-split__side--right .session-diff-split__text")
-            ?.textContent?.trim() ?? "",
-        ]),
+        elements.map((row) =>
+          ["left", "right"].map(
+            (side) =>
+              row
+                .querySelector(`.session-diff-split__side--${side} .session-diff-split__text`)
+                ?.textContent?.trim() ?? "",
+          ),
+        ),
       );
     expect(rows).toEqual([["", after[0]], ...before.map((line, i) => [line, after[i + 1]])]);
     const changedText = (selector: string) =>
@@ -257,41 +251,24 @@ suite.define(() => {
         .evaluateAll((elements) =>
           elements
             .map((element) =>
-              [...element.querySelectorAll(".chat-diff__change--add, .chat-diff__change--del")]
-                .map((span) => span.textContent)
-                .join(""),
+              Array.from(
+                element.querySelectorAll(".chat-diff__change--add, .chat-diff__change--del"),
+                (span) => span.textContent,
+              ).join(""),
             )
             .filter(Boolean),
         );
-    expect(await changedText(".session-diff-split__side--left")).toEqual([
-      "2",
-      "3000",
-      "Working",
-      "😀",
-      "{ ",
-      "1",
-      "1",
-    ]);
-    expect(await changedText(".session-diff-split__side--right")).toEqual([
-      "3",
-      "5000",
-      "Running",
-      ", auditLabel",
-      "🚀",
-      " {",
-      "2",
-      "2",
-    ]);
+    const leftChanges = ["2", "3000", "Working", "😀", "{ ", "1", "1"];
+    const rightChanges = ["3", "5000", "Running", ", auditLabel", "🚀", " {", "2", "2"];
+    expect(await changedText(".session-diff-split__side--left")).toEqual(leftChanges);
+    expect(await changedText(".session-diff-split__side--right")).toEqual(rightChanges);
     await panel.getByRole("button", { name: "Change view options" }).click();
     await page.getByRole("menuitem", { name: "Switch to Unified Diff" }).click();
-    await expect
-      .poll(() => changedText(".chat-diff__row--add"))
-      .toEqual(["3", "5000", "Running", ", auditLabel", "🚀", " {", "2", "2"]);
+    await expect.poll(() => changedText(".chat-diff__row--add")).toEqual(rightChanges);
   });
 
   it("opens a renamed session diff when Review is added from the panel menu", async () => {
-    const page = await newPage();
-    await mockDiff(page, {
+    const { page } = await openDiff({
       "sessions.files.list": emptyWorkspace(),
       "sessions.diff": {
         ...SESSION_DIFF_RESPONSE,
@@ -309,7 +286,6 @@ suite.define(() => {
         additions: 1,
       },
     });
-    await page.goto(`${suite.server.baseUrl}chat`);
 
     await openChatSidePanelType(page, "Files");
     await openChatSidePanelType(page, "Review");
@@ -320,12 +296,10 @@ suite.define(() => {
   });
 
   it("requests the default session diff once across subsequent pane renders", async () => {
-    const page = await newPage();
-    const gateway = await mockDiff(page, {
+    const { page, gateway } = await openDiff({
       "sessions.files.list": emptyWorkspace(),
       "sessions.diff": SESSION_DIFF_RESPONSE,
     });
-    await page.goto(`${suite.server.baseUrl}chat`);
 
     await openChatSidePanelType(page, "Files");
     await openChatSidePanelType(page, "Review");
@@ -349,12 +323,8 @@ suite.define(() => {
   it("shows each session's diff and retains its local view state when navigating away", async () => {
     const firstSessionKey = "agent:main:first-review";
     const secondSessionKey = "agent:main:second-review";
-    const page = await newPage();
-    await seedPersistedReviewLayouts(page, [firstSessionKey, secondSessionKey]);
-    const gateway = await installMockGateway(page, {
-      sessionKey: firstSessionKey,
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.diff"],
-      methodResponses: {
+    const { page, gateway } = await openDiff(
+      {
         "sessions.list": {
           count: 2,
           defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
@@ -364,12 +334,6 @@ suite.define(() => {
             { key: secondSessionKey, kind: "direct", updatedAt: 1 },
           ],
           ts: Date.now(),
-        },
-        "sessions.files.list": {
-          cases: [firstSessionKey, secondSessionKey].map((sessionKey) => ({
-            match: { sessionKey },
-            response: emptyWorkspace(sessionKey),
-          })),
         },
         "sessions.diff": {
           cases: [
@@ -384,11 +348,8 @@ suite.define(() => {
                 sessionKey: secondSessionKey,
                 files: [
                   {
+                    ...NOTES_FILE,
                     path: "second.md",
-                    status: "added",
-                    additions: 2,
-                    deletions: 0,
-                    untracked: true,
                     patch: NOTES_PATCH.replaceAll("notes.md", "second.md"),
                   },
                 ],
@@ -399,22 +360,19 @@ suite.define(() => {
           ],
         },
       },
-    });
-    await page.goto(controlUiSessionUrl(suite.server.baseUrl, firstSessionKey));
+      { sessionKey: firstSessionKey, layouts: [firstSessionKey, secondSessionKey] },
+    );
     await waitForSessionDiff(page);
+    const presentedFiles = page.locator(
+      'openclaw-chat-pane[aria-hidden="false"] .session-diff__filename',
+    );
     const firstFileToggle = page.locator(".session-diff__file-toggle").first();
     await firstFileToggle.click();
     await expect.poll(() => firstFileToggle.getAttribute("aria-expanded")).toBe("false");
 
     await navigateToControlUiSession(page, secondSessionKey);
 
-    await expect
-      .poll(() =>
-        page
-          .locator('openclaw-chat-pane[aria-hidden="false"] .session-diff__filename')
-          .allTextContents(),
-      )
-      .toEqual(["second.md"]);
+    await expect.poll(() => presentedFiles.allTextContents()).toEqual(["second.md"]);
     await expect
       .poll(async () => (await gateway.getRequests("sessions.diff")).at(-1)?.params)
       .toMatchObject({ sessionKey: secondSessionKey });
@@ -425,33 +383,19 @@ suite.define(() => {
     ).toBe("true");
 
     await navigateToControlUiSession(page, firstSessionKey);
-    await expect
-      .poll(() =>
-        page
-          .locator('openclaw-chat-pane[aria-hidden="false"] .session-diff__filename')
-          .allTextContents(),
-      )
-      .toEqual(["app.ts", "notes.md"]);
+    await expect.poll(() => presentedFiles.allTextContents()).toEqual(["app.ts", "notes.md"]);
     expect(await firstFileToggle.getAttribute("aria-expanded")).toBe("false");
     expect(await gateway.getRequests("sessions.diff")).toHaveLength(2);
   });
 
   it("opens the session diff from All changes in Details", async () => {
-    const page = await newPage();
-    const gateway = await installMockGateway(page, {
-      featureMethods: [
-        "chat.metadata",
-        "chat.startup",
-        "sessions.diff",
-        SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-      ],
-      methodResponses: {
+    const { page, gateway } = await openDiff(
+      {
         [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
-        "sessions.files.list": emptyWorkspace(),
         "sessions.diff": SESSION_DIFF_RESPONSE,
       },
-    });
-    await page.goto(`${suite.server.baseUrl}chat`);
+      { extraMethods: [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD] },
+    );
     let watchedKey = "";
     await expect
       .poll(async () => {
@@ -488,7 +432,6 @@ suite.define(() => {
   });
 
   it("opens the diff sidebar with per-file patches and gap markers", async () => {
-    const page = await newPage();
     const metadata = {
       aheadCount: 2,
       commits: [
@@ -507,8 +450,7 @@ suite.define(() => {
         deletions: files.reduce((sum, file) => sum + file.deletions, 0),
       },
     });
-    const gateway = await mockDiff(
-      page,
+    const { page, gateway } = await openDiff(
       {
         "sessions.files.get": {
           sessionKey: "main",
@@ -542,9 +484,8 @@ suite.define(() => {
           ],
         },
       },
-      ["sessions.files.get"],
+      { extraMethods: ["sessions.files.get"] },
     );
-    await page.goto(`${suite.server.baseUrl}chat`);
 
     await activateChatHeaderPanelAction(page, "Show session changes");
 
@@ -568,15 +509,13 @@ suite.define(() => {
     await expect.poll(() => files.count()).toBe(3);
 
     const modified = files.first();
+    const firstRowText = (selector: string) =>
+      expect.poll(() => modified.locator(selector).first().textContent());
     await text(modified, ".session-diff__filename").toBe("app.ts");
     await text(modified, ".session-diff__directory").toBe("src");
     // Hunk starting at old line 30 renders a leading expandable gap marker.
-    await expect
-      .poll(() => modified.locator(".chat-diff__row--skip").first().textContent())
-      .toContain("29 unmodified lines");
-    await expect
-      .poll(() => modified.locator(".chat-diff__row--add").first().textContent())
-      .toContain("replacement line");
+    await firstRowText(".chat-diff__row--skip").toContain("29 unmodified lines");
+    await firstRowText(".chat-diff__row--add").toContain("replacement line");
     await text(modified, ".chat-diff__row--add .tok-keyword").toBe("const");
     expect(
       await modified
@@ -594,22 +533,15 @@ suite.define(() => {
     await expect
       .poll(async () => (await gateway.getRequests("sessions.files.get"))[0]?.params)
       .toMatchObject({ path: "src/app.ts" });
-    await expect
-      .poll(() => modified.locator(".chat-diff__row").first().textContent())
-      .toContain("unchanged line 1");
-    await expect
-      .poll(() => modified.locator(".chat-diff__row--skip").first().textContent())
-      .toContain("9 unmodified lines");
+    await firstRowText(".chat-diff__row").toContain("unchanged line 1");
+    await firstRowText(".chat-diff__row--skip").toContain("9 unmodified lines");
     await modified.getByRole("button", { name: "Show previous 9 unmodified lines" }).click();
     await expect.poll(() => modified.locator(".chat-diff__row--skip").count()).toBe(0);
     await requestCount(gateway, "sessions.files.get").toBe(1);
     await requestCount(gateway).toBe(3);
 
-    const untracked = files.nth(1);
-    await text(untracked, ".session-diff__badge").toContain("untracked");
-
-    const binary = files.nth(2);
-    await text(binary, ".session-diff__note").toContain("Binary file");
+    await text(files.nth(1), ".session-diff__badge").toContain("untracked");
+    await text(files.nth(2), ".session-diff__note").toContain("Binary file");
 
     await panel.getByRole("button", { name: "Change view options" }).click();
     await page.getByRole("menuitem", { name: "Switch to Split Diff" }).click();
@@ -632,7 +564,6 @@ suite.define(() => {
     // View-only toggles reuse parsed patches after the expansion revalidations.
     await requestCount(gateway).toBe(3);
 
-    // Collapsing a file hides its diff body.
     await modified.locator(".session-diff__file-toggle").click();
     await expect.poll(() => modified.locator(".chat-diff").count()).toBe(0);
     await panel.getByRole("button", { name: "Refresh changes" }).click();
@@ -642,44 +573,46 @@ suite.define(() => {
     await modified.locator(".session-diff__file-toggle").click();
     await expect.poll(() => modified.locator(".chat-diff").count()).toBe(1);
 
-    // The section-title button opens the same scope menu as the footer.
-    await gateway.deferNext("sessions.diff");
-    await panel.locator(".session-diff__section-title").click();
-    await page.locator('openclaw-session-diff-menu button[value="scope:uncommitted"]').click();
-    await expect.poll(() => panel.locator("openclaw-panel-loading-skeleton").count()).toBe(1);
-    expect(await panel.locator(".session-diff__file").count()).toBe(0);
-    await gateway.resolveDeferred("sessions.diff");
-    await text(panel, ".session-diff__section-title span").toBe("Uncommitted");
-    await expect.poll(() => panel.locator(".session-diff__file").count()).toBe(1);
-    await expect
-      .poll(async () => (await gateway.getRequests("sessions.diff")).at(-1)?.params)
-      .toMatchObject({ scope: "uncommitted" });
-
-    await gateway.deferNext("sessions.diff");
-    await panel.locator(".session-diff__footer").click();
-    await page.locator('openclaw-session-diff-menu button[value="scope:commit:abc1234"]').click();
-    await expect.poll(() => panel.locator("openclaw-panel-loading-skeleton").count()).toBe(1);
-    expect(await panel.locator(".session-diff__file").count()).toBe(0);
-    await gateway.resolveDeferred("sessions.diff");
-    await text(panel, ".session-diff__section-title span").toBe("abc1234 First feature change");
-    await expect
-      .poll(async () => (await gateway.getRequests("sessions.diff")).at(-1)?.params)
-      .toMatchObject({ scope: "commit", commit: "abc1234" });
+    for (const { trigger, value, title, params } of [
+      {
+        trigger: ".session-diff__section-title",
+        value: "scope:uncommitted",
+        title: "Uncommitted",
+        params: { scope: "uncommitted" },
+      },
+      {
+        trigger: ".session-diff__footer",
+        value: "scope:commit:abc1234",
+        title: "abc1234 First feature change",
+        params: { scope: "commit", commit: "abc1234" },
+      },
+    ]) {
+      await gateway.deferNext("sessions.diff");
+      await panel.locator(trigger).click();
+      await page.locator(`openclaw-session-diff-menu button[value="${value}"]`).click();
+      await expect.poll(() => panel.locator("openclaw-panel-loading-skeleton").count()).toBe(1);
+      expect(await panel.locator(".session-diff__file").count()).toBe(0);
+      await gateway.resolveDeferred("sessions.diff");
+      await text(panel, ".session-diff__section-title span").toBe(title);
+      if (params.scope === "uncommitted") {
+        await expect.poll(() => panel.locator(".session-diff__file").count()).toBe(1);
+      }
+      await expect
+        .poll(async () => (await gateway.getRequests("sessions.diff")).at(-1)?.params)
+        .toMatchObject(params);
+    }
     await expect.poll(() => panel.locator(".session-diff__gap-controls").count()).toBe(0);
   });
 
   it("follows checkout binding in Review and Files and keeps diffs visible while refreshing", async () => {
     const sessionKey = "agent:main:pending-checkout";
-    const page = await newPage();
-    const gateway = await installMockGateway(page, {
-      sessionKey,
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.diff"],
-      methodResponses: {
+    const { page, gateway } = await openDiff(
+      {
         "sessions.diff": { ...SESSION_DIFF_RESPONSE, sessionKey },
         "sessions.files.list": { sessionKey, files: [] },
       },
-    });
-    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      { sessionKey },
+    );
     await openChatSidePanelType(page, "Review");
     await waitForSessionDiff(page);
     const panel = page.locator(".session-diff");
@@ -740,8 +673,7 @@ suite.define(() => {
   });
 
   it("refreshes an open Review after checkout creation without listing workspace files", async () => {
-    const page = await newPage();
-    const gateway = await mockDiff(page, {
+    const { page, gateway } = await openDiff({
       "sessions.diff": {
         sessionKey: "main",
         files: [],
@@ -750,7 +682,6 @@ suite.define(() => {
         unavailableReason: "not_git",
       },
     });
-    await page.goto(`${suite.server.baseUrl}chat`);
     expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
     expect(await gateway.getRequests("sessions.diff")).toHaveLength(0);
     await activateChatHeaderPanelAction(page, "Show session changes");
