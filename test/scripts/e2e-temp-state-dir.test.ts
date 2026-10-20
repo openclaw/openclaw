@@ -1,12 +1,16 @@
-// E2E Temp State Dir tests cover e2e temp state dir script behavior.
 import { spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { createE2eStateDir } from "../../scripts/e2e/lib/temp-state-dir.ts";
 import { awaitGateBeforeSettlement, withinTest } from "../helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const dirs = useAutoCleanupTempDirTracker(afterEach);
+const createState = (prefix = "openclaw-e2e-temp-state-test-") =>
+  createE2eStateDir(prefix, { OPENCLAW_STATE_DIR: "" });
 
 function waitForExit(child: ReturnType<typeof spawn>) {
   return new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
@@ -17,9 +21,7 @@ function waitForExit(child: ReturnType<typeof spawn>) {
 
 describe("E2E temp state dirs", () => {
   it("cleans generated state dirs", async () => {
-    const state = await createE2eStateDir("openclaw-e2e-temp-state-test-", {
-      OPENCLAW_STATE_DIR: "",
-    });
+    const state = await createState();
 
     expect(state.created).toBe(true);
     expect(existsSync(state.stateDir)).toBe(true);
@@ -28,33 +30,24 @@ describe("E2E temp state dirs", () => {
   });
 
   it("leaves caller-provided state dirs alone", async () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-e2e-temp-state-existing-"));
-    try {
-      const state = await createE2eStateDir("openclaw-e2e-temp-state-test-", {
-        OPENCLAW_STATE_DIR: root,
-      });
+    const root = dirs.make("openclaw-e2e-temp-state-existing-");
+    const state = await createE2eStateDir("openclaw-e2e-temp-state-test-", {
+      OPENCLAW_STATE_DIR: root,
+    });
 
-      expect(state).toMatchObject({ created: false, stateDir: root });
-      state.cleanup();
-      expect(existsSync(root)).toBe(true);
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
+    expect(state).toMatchObject({ created: false, stateDir: root });
+    state.cleanup();
+    expect(existsSync(root)).toBe(true);
   });
 
   it.runIf(process.platform !== "win32")(
     "retries generated state cleanup after a failed removal",
     async () => {
-      const root = mkdtempSync(path.join(tmpdir(), "openclaw-e2e-temp-state-retry-"));
+      const root = dirs.make("openclaw-e2e-temp-state-retry-");
       const lockedParent = path.join(root, "locked");
       mkdirSync(lockedParent);
 
-      const state = await createE2eStateDir(
-        `${path.relative(tmpdir(), lockedParent)}${path.sep}state-`,
-        {
-          OPENCLAW_STATE_DIR: "",
-        },
-      );
+      const state = await createState(`${path.relative(tmpdir(), lockedParent)}${path.sep}state-`);
 
       try {
         chmodSync(lockedParent, 0o500);
@@ -66,19 +59,16 @@ describe("E2E temp state dirs", () => {
 
       state.cleanup();
       expect(existsSync(state.stateDir)).toBe(false);
-
-      rmSync(root, { force: true, recursive: true });
     },
   );
 
   it("cleans generated state dirs on termination signals", async ({ signal }) => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-e2e-temp-state-signal-"));
-    try {
-      const scriptPath = path.join(root, "probe.mjs");
-      const helperUrl = pathToFileURL(path.resolve("scripts/e2e/lib/temp-state-dir.ts")).href;
-      writeFileSync(
-        scriptPath,
-        `import { createE2eStateDir } from ${JSON.stringify(helperUrl)};
+    const root = dirs.make("openclaw-e2e-temp-state-signal-");
+    const scriptPath = path.join(root, "probe.mjs");
+    const helperUrl = pathToFileURL(path.resolve("scripts/e2e/lib/temp-state-dir.ts")).href;
+    writeFileSync(
+      scriptPath,
+      `import { createE2eStateDir } from ${JSON.stringify(helperUrl)};
 
 const state = await createE2eStateDir(${JSON.stringify(`${path.relative(tmpdir(), root)}${path.sep}state-`)}, {
   OPENCLAW_STATE_DIR: "",
@@ -87,44 +77,41 @@ state.registerExitCleanup();
 process.send(state.stateDir);
 setInterval(() => {}, 1000);
 `,
-      );
+    );
 
-      const child = spawn(process.execPath, [scriptPath], {
-        stdio: ["ignore", "ignore", "ignore", "ipc"],
-      });
-      const closed = waitForExit(child);
-      const ready = new Promise<string>((resolve, reject) => {
-        child.once("message", (stateDir: unknown) => {
-          if (typeof stateDir === "string") {
-            resolve(stateDir);
-          } else {
-            reject(new Error("Expected generated state directory readiness"));
-          }
-        });
-      });
-      try {
-        const stateDir = await withinTest(
-          awaitGateBeforeSettlement(
-            ready,
-            closed,
-            `Timed out waiting for ${path.join(root, "state-path")}`,
-          ),
-          signal,
-        );
-        expect(existsSync(stateDir)).toBe(true);
-
-        child.kill("SIGTERM");
-        const exit = await withinTest(closed, signal);
-        expect(exit).toEqual({ code: null, signal: "SIGTERM" });
-        expect(existsSync(stateDir)).toBe(false);
-      } finally {
-        if (child.exitCode === null && child.signalCode === null) {
-          child.kill("SIGTERM");
+    const child = spawn(process.execPath, [scriptPath], {
+      stdio: ["ignore", "ignore", "ignore", "ipc"],
+    });
+    const closed = waitForExit(child);
+    const ready = new Promise<string>((resolve, reject) => {
+      child.once("message", (stateDir: unknown) => {
+        if (typeof stateDir === "string") {
+          resolve(stateDir);
+        } else {
+          reject(new Error("Expected generated state directory readiness"));
         }
-        await closed;
-      }
+      });
+    });
+    try {
+      const stateDir = await withinTest(
+        awaitGateBeforeSettlement(
+          ready,
+          closed,
+          `Timed out waiting for ${path.join(root, "state-path")}`,
+        ),
+        signal,
+      );
+      expect(existsSync(stateDir)).toBe(true);
+
+      child.kill("SIGTERM");
+      const exit = await withinTest(closed, signal);
+      expect(exit).toEqual({ code: null, signal: "SIGTERM" });
+      expect(existsSync(stateDir)).toBe(false);
     } finally {
-      rmSync(root, { force: true, recursive: true });
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGTERM");
+      }
+      await closed;
     }
   });
 });

@@ -14,6 +14,8 @@ vi.mock("../../src/daemon/systemd-peer-native.js", () => ({
 }));
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const shim = path.resolve("scripts/e2e/lib/doctor-install-switch/shims/busctl");
+const runShim = (args: string[], env: NodeJS.ProcessEnv) =>
+  spawnSync(process.execPath, [shim, ...args], { encoding: "utf8", env });
 const versionArgs = [
   "--user",
   "--auto-start=no",
@@ -36,8 +38,7 @@ function scenarioEnvironment() {
   const scenario = fs.readFileSync("scripts/e2e/lib/doctor-install-switch/scenario.sh", "utf8");
   const body = scenario.match(/use_default_service_identity\(\) \{[\s\S]*?\n\}/)?.[0];
   expect(body).toBeDefined();
-  // Only replace the OS-account-home lookup. Cleanup and environment setup execute unchanged,
-  // exclusively inside this test's temporary home; the full install scenario never runs.
+  // Replace only account-home lookup; run the real setup inside a temporary home.
   const result = spawnSync(
     process.platform === "darwin" ? "/bin/bash" : "bash",
     [
@@ -75,16 +76,14 @@ it.runIf(process.platform === "linux").each([true, false])(
     if (!hasAddress) {
       delete env.DBUS_SESSION_BUS_ADDRESS;
     }
-    const invocations: Array<{ command: string; args: string[] }> = [];
     vi.mocked(execFileUtf8).mockImplementation(async (command, args) => {
-      invocations.push({ command, args: [...args] });
       if (!hasAddress && command === "systemctl") {
         expect(args).toEqual(["--system", "is-system-running"]);
         return { code: 0, termination: "exit", stdout: "running\n", stderr: "" };
       }
       expect(command).toBe("busctl");
       // Invoke only the repository shim; never resolve busctl from the host PATH.
-      const result = spawnSync(process.execPath, [shim, ...args], { encoding: "utf8", env });
+      const result = runShim(args, env);
       return {
         code: result.status ?? 1,
         termination: "exit",
@@ -98,20 +97,18 @@ it.runIf(process.platform === "linux").each([true, false])(
         address: env.DBUS_SESSION_BUS_ADDRESS,
         runtimeDir: env.XDG_RUNTIME_DIR,
       });
-      expect(invocations).toEqual([{ command: "busctl", args: versionArgs }]);
+      expect(vi.mocked(execFileUtf8).mock.calls.map(([command, args]) => [command, args])).toEqual([
+        ["busctl", versionArgs],
+      ]);
       expect(env.DBUS_SESSION_BUS_ADDRESS).toBe(`unix:path=${env.XDG_RUNTIME_DIR}/bus`);
-      const runtimeDir = env.XDG_RUNTIME_DIR;
-      if (!runtimeDir) {
-        throw new Error("Doctor fixture must configure its synthetic runtime directory");
-      }
-      expect(runtimeDir.startsWith(env.HOME + path.sep)).toBe(true);
+      expect(env.XDG_RUNTIME_DIR?.startsWith(env.HOME + path.sep)).toBe(true);
     } else {
       await expect(resolveSystemdUserTransport(env)).rejects.toMatchObject({
         reason: "systemd-user-bus-unavailable",
       });
-      expect(invocations).toEqual([
-        { command: "busctl", args: ["--machine", "testuser@", ...versionArgs] },
-        { command: "systemctl", args: ["--system", "is-system-running"] },
+      expect(vi.mocked(execFileUtf8).mock.calls.map(([command, args]) => [command, args])).toEqual([
+        ["busctl", ["--machine", "testuser@", ...versionArgs]],
+        ["systemctl", ["--system", "is-system-running"]],
       ]);
     }
   },
@@ -124,7 +121,7 @@ it("keeps machine scope, auto-start, and foreign-manager probes outside the shim
     versionArgs.filter((arg) => arg !== "--auto-start=no"),
     [...versionArgs.slice(0, -1), "ForeignProperty"],
   ]) {
-    const result = spawnSync(process.execPath, [shim, ...args], { encoding: "utf8", env });
+    const result = runShim(args, env);
     expect(result.status, JSON.stringify(args)).toBe(1);
     expect(result.stderr).toContain("unexpected invocation");
   }
