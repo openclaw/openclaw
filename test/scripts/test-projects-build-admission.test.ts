@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -1198,7 +1199,9 @@ describe("cache lease completion", () => {
         observe: ({ env, pnpmArgs }) => {
           if (focused) {
             expect(pnpmArgs[pnpmArgs.indexOf("--config") + 1]).toBe(databaseConfig);
-            selections.push(JSON.parse(fs.readFileSync(env.OPENCLAW_VITEST_INCLUDE_FILE, "utf8")));
+            const includeFile = env.OPENCLAW_VITEST_INCLUDE_FILE;
+            assert(includeFile, "Expected focused Vitest selection file");
+            selections.push(JSON.parse(fs.readFileSync(includeFile, "utf8")));
           }
         },
       });

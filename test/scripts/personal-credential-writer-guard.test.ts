@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { expect, it } from "vitest";
 import { inspectDatabaseWorkerBoundaries } from "../../scripts/lib/database-worker-compat.mts";
 
@@ -37,11 +38,14 @@ function allowedGraph(sources: Record<string, string>) {
     file: string,
     update: string | ((original: string) => string),
     messages?: string | string[],
-  ) =>
+  ) => {
+    const original = sources[file];
+    assert(original !== undefined, `Missing fixture source: ${file}`);
     expectDenied(
-      { ...sources, [file]: typeof update === "string" ? update : update(sources[file]) },
+      { ...sources, [file]: typeof update === "string" ? update : update(original) },
       messages,
     );
+  };
 }
 
 it("allows the exact credential worker operations and exclusive Doctor entry", () => {

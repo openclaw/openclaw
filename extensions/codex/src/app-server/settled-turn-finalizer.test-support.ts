@@ -40,7 +40,7 @@ export async function createCodexSettledFinalizerTestFixture(
         .filter(isMirroredAgentMessage)
         .map((message) =>
           attachCodexMirrorAttestation(
-            { ...message, idempotencyKey: `${input.idempotencyScope}:assistant` },
+            Object.assign({}, message, { idempotencyKey: `${input.idempotencyScope}:assistant` }),
             fingerprintCodexMirrorSourceMessage(message),
           ),
         )

@@ -117,7 +117,13 @@ function renderReadySession(
 ) {
   return transcript.renderSession(`agent:main:${key}`, (session) => {
     session.setContentReady(true);
-    return session.render(rows, (row) => row.content, null, false, tail);
+    return session.render(
+      rows,
+      (row) => (row.kind === "content" ? row.content : null),
+      null,
+      false,
+      tail,
+    );
   });
 }
 

@@ -44,7 +44,7 @@ function mountTool(
   name: string,
   card: Partial<ToolCard>,
   options?: Parameters<typeof mountCard>[1],
-  container?: HTMLElement,
+  container?: Parameters<typeof mountCard>[2],
 ) {
   return mountCard({ id: name, name, ...card }, options, container);
 }
@@ -251,7 +251,9 @@ it.each([false, true])("reports clipboard failure=%s when copying a patch", asyn
   vi.stubGlobal("navigator", { clipboard: { writeText } });
   const container = document.body.appendChild(document.createElement("div"));
   const onOpenSidebar = vi.fn();
-  onTestFinished(vi.unstubAllGlobals);
+  onTestFinished(() => {
+    vi.unstubAllGlobals();
+  });
   await mountCard(
     patchCard(
       {

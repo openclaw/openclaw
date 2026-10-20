@@ -567,16 +567,9 @@ describe("dispatchReplyFromConfig owner settlement", () => {
             expect(resolverSignal?.aborted).toBe(true);
           }
         }
-        mutation = external.runInAsyncScope(() =>
-          runSessionMutation({
+        mutation = external.runInAsyncScope(() => {
+          const work = {
             ...scope,
-            ...(queued
-              ? ({
-                  kind: "delete",
-                  policy: "preempt",
-                  preempt: { activeRun: "abort", waitingInputs: "cancel" },
-                } as const)
-              : {}),
             prepare: async () => {
               if (queued) {
                 mutationPrepared.resolve();
@@ -588,8 +581,16 @@ describe("dispatchReplyFromConfig owner settlement", () => {
               mutationRan = true;
               mutationObservedSettledResolver = resolverFinished;
             },
-          }),
-        );
+          };
+          return queued
+            ? runSessionMutation({
+                ...work,
+                kind: "delete",
+                policy: "preempt",
+                preempt: { activeRun: "abort", waitingInputs: "cancel" },
+              })
+            : runSessionMutation(work);
+        });
         if (queued) {
           await mutationPrepared.promise;
           await vi.waitFor(() => expect(resolverSignal?.aborted).toBe(true));

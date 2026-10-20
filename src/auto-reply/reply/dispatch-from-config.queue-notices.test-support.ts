@@ -2,6 +2,8 @@ import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { notifyPreparedAgentRunStart } from "../agent-run-start.js";
 import { createCommandTurnContext } from "../command-turn-context.js";
+import type { MsgContext } from "../templating.js";
+import type { GetReplyOptions } from "../types.js";
 import { QUEUE_CAP_REJECTION_TEXT } from "./dispatch-from-config.payloads.js";
 import { diagnosticMocks, mocks } from "./dispatch-from-config.shared.test-harness.js";
 import { dispatchReplyFromConfig, setNoAbort } from "./dispatch-from-config.test-support.js";
@@ -13,30 +15,19 @@ import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { buildTestCtx } from "./test-ctx.js";
 
-function noticeFixture(routed = false) {
-  setNoAbort();
-  const deliveredTexts: string[] = [];
-  const dispatcher = createReplyDispatcher({
-    deliver: async (payload) => {
-      if (!routed) {
-        deliveredTexts.push(payload.text ?? "");
-      }
-    },
-  });
-  const finish = async () => {
-    dispatcher.markComplete();
-    await dispatcher.waitForIdle();
-  };
-  return { deliveredTexts, dispatcher, finish };
-}
-
 export function registerQueuedFollowupNoticeCases(): void {
   it.each(["direct", "routed"] as const)(
     "delivers one explicit followup start notice before the pending %s reply",
     async (route) => {
-      const { deliveredTexts, dispatcher, finish } = noticeFixture();
+      setNoAbort();
       const streamed = createDeferred();
       const releaseReply = createDeferred();
+      const deliveredTexts: string[] = [];
+      const dispatcher = createReplyDispatcher({
+        deliver: async (payload) => {
+          deliveredTexts.push(payload.text ?? "");
+        },
+      });
       mocks.routeReply.mockImplementation(async ({ payload }) => {
         deliveredTexts.push(payload.text ?? "");
         return { ok: true, delivered: true, messageId: "followup-start" };
@@ -86,7 +77,8 @@ export function registerQueuedFollowupNoticeCases(): void {
       } finally {
         releaseReply.resolve();
         await dispatch;
-        await finish();
+        dispatcher.markComplete();
+        await dispatcher.waitForIdle();
       }
       expect(deliveredTexts).toEqual([
         "Your followup has started.",
@@ -96,33 +88,52 @@ export function registerQueuedFollowupNoticeCases(): void {
     },
   );
 
-  it("reports queue-cap without claiming queueing or cancellation", async () => {
-    const { deliveredTexts, dispatcher, finish } = noticeFixture();
-    diagnosticMocks.logMessageDispatchCompleted.mockClear();
-    const sessionKey = "test:queue-cap";
-    const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({ ChatType: "direct", SessionKey: sessionKey, Body: "stop" }),
-      cfg: { diagnostics: { enabled: true } },
-      dispatcher,
-      replyResolver: async (_ctx, opts) => {
-        const state = resolveReplyOperationRunState(opts);
-        if (!state) {
-          throw new Error("expected reply operation state");
-        }
-        state.admission = { status: "skipped", reason: "queue-cap" };
-        return undefined;
-      },
-    });
-    await finish();
-    expect(deliveredTexts).toEqual([QUEUE_CAP_REJECTION_TEXT]);
-    expect([result.noVisibleReplyFallbackDelivered, result.deferredToActiveRun]).toEqual([
-      true,
-      undefined,
-    ]);
-    expect(diagnosticMocks.logMessageDispatchCompleted).toHaveBeenCalledWith(
-      expect.objectContaining({ outcome: "skipped", reason: "queue-cap", sessionKey }),
-    );
-  });
+  it.each([
+    {
+      reason: "collaborative-steering-disabled",
+      notice:
+        "Someone else’s turn is still running, and collaborative steering is disabled. Your message wasn’t queued. Resend it as /followup <message> to run it afterward.\n\nAdmins can enable collaborative steering with messages.queue.allowCollaborativeSteering: true.",
+      fallbackDelivered: undefined,
+    },
+    { reason: "queue-cap", notice: QUEUE_CAP_REJECTION_TEXT, fallbackDelivered: true },
+  ] as const)(
+    "reports $reason without claiming queueing or cancellation",
+    async ({ reason, notice, fallbackDelivered }) => {
+      setNoAbort();
+      diagnosticMocks.logMessageDispatchCompleted.mockClear();
+      const sessionKey = `test:${reason}`;
+      const deliveredTexts: string[] = [];
+      const dispatcher = createReplyDispatcher({
+        deliver: async (payload) => {
+          deliveredTexts.push(payload.text ?? "");
+        },
+      });
+      const result = await dispatchReplyFromConfig({
+        ctx: buildTestCtx({ ChatType: "direct", SessionKey: sessionKey, Body: "stop" }),
+        cfg: { diagnostics: { enabled: true } },
+        dispatcher,
+        replyResolver: async (_ctx, opts) => {
+          const state = resolveReplyOperationRunState(opts);
+          if (!state) {
+            throw new Error("expected reply operation state");
+          }
+          state.admission = { status: "skipped", reason };
+          return undefined;
+        },
+      });
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+      expect(deliveredTexts).toEqual([notice]);
+      expect(result.noVisibleReplyFallbackDelivered).toBe(fallbackDelivered);
+      expect(result.deferredToActiveRun).toBeUndefined();
+      if (reason === "collaborative-steering-disabled") {
+        expect(result.collaborativeSteeringRefused).toBe(true);
+      }
+      expect(diagnosticMocks.logMessageDispatchCompleted).toHaveBeenCalledWith(
+        expect.objectContaining({ outcome: "skipped", reason, sessionKey }),
+      );
+    },
+  );
 
   it.each([
     { phase: "still queued", reason: "explicit-followup" },
@@ -130,7 +141,7 @@ export function registerQueuedFollowupNoticeCases(): void {
     { phase: "evicted before finalization", reason: "explicit-followup" },
     { phase: "evicted during progress flush", reason: "steering-unavailable" },
   ] as const)("reports a truthful $reason queue notice when $phase", async ({ phase, reason }) => {
-    const { deliveredTexts, dispatcher, finish } = noticeFixture(true);
+    setNoAbort();
     const sessionKey = `agent:agent:queue-notice:${reason}:${phase}`;
     const queued = createDeferred();
     const releaseReply = createDeferred();
@@ -138,13 +149,10 @@ export function registerQueuedFollowupNoticeCases(): void {
     const releaseProgress = createDeferred();
     const settings = createQueueSettings({ mode: "followup", cap: 1, dropPolicy: "old" });
     const run = createQueueTestRun({ prompt: "stop the current work", messageId: "bob" });
-    const enqueue = (pending: typeof run) => {
-      expect(
-        enqueueFollowupRun(sessionKey, pending, settings, "message-id", undefined, false),
-      ).toBe(true);
-    };
     const disposition = vi.fn();
     run.onQueueDisposition = disposition;
+    const deliveredTexts: string[] = [];
+    const dispatcher = createReplyDispatcher({ deliver: async () => undefined });
     mocks.routeReply.mockImplementation(async ({ payload }) => {
       if (payload.text === "💬 Preparing the queue notice") {
         progressStarted.resolve();
@@ -153,6 +161,27 @@ export function registerQueuedFollowupNoticeCases(): void {
       deliveredTexts.push(payload.text ?? "");
       return { ok: true, delivered: true, messageId: "queue-notice" };
     });
+    const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      const runState = resolveReplyOperationRunState(opts);
+      if (!runState) {
+        throw new Error("expected reply operation state");
+      }
+      bindReplyOperationQueueDisposition(run, runState);
+      expect(enqueueFollowupRun(sessionKey, run, settings, "message-id", undefined, false)).toBe(
+        true,
+      );
+      runState.admission = { status: "accepted", mode: "followup", reason };
+      if (phase === "evicted during progress flush") {
+        await opts?.onItemEvent?.({
+          itemId: "queue-progress",
+          kind: "preamble",
+          progressText: "Preparing the queue notice",
+        });
+      }
+      queued.resolve();
+      await releaseReply.promise;
+      return undefined;
+    };
     const dispatch = dispatchReplyFromConfig({
       ctx: buildTestCtx({
         SessionKey: sessionKey,
@@ -162,28 +191,19 @@ export function registerQueuedFollowupNoticeCases(): void {
       }),
       cfg: { agents: { defaults: { verboseDefault: "on" } } },
       dispatcher,
-      replyResolver: async (_ctx, opts) => {
-        const runState = resolveReplyOperationRunState(opts);
-        if (!runState) {
-          throw new Error("expected reply operation state");
-        }
-        bindReplyOperationQueueDisposition(run, runState);
-        enqueue(run);
-        runState.admission = { status: "accepted", mode: "followup", reason };
-        if (phase === "evicted during progress flush") {
-          await opts?.onItemEvent?.({
-            itemId: "queue-progress",
-            kind: "preamble",
-            progressText: "Preparing the queue notice",
-          });
-        }
-        queued.resolve();
-        await releaseReply.promise;
-        return undefined;
-      },
+      replyResolver,
     });
     const evict = () => {
-      enqueue(createQueueTestRun({ prompt: "Later input", messageId: "charlie" }));
+      expect(
+        enqueueFollowupRun(
+          sessionKey,
+          createQueueTestRun({ prompt: "Later input", messageId: "charlie" }),
+          settings,
+          "message-id",
+          undefined,
+          false,
+        ),
+      ).toBe(true);
     };
     try {
       await awaitGateBeforeSettlement(
@@ -219,15 +239,15 @@ export function registerQueuedFollowupNoticeCases(): void {
       } else {
         expect(disposition).toHaveBeenCalledExactlyOnceWith("queue-cap-old");
       }
-      expect([result.deferredToActiveRun, result.noVisibleReplyFallbackDelivered]).toEqual([
-        "followup",
-        undefined,
-      ]);
+      // Later eviction must not erase the initial acceptance or emit the never-queued fallback.
+      expect(result.deferredToActiveRun).toBe("followup");
+      expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
     } finally {
       releaseReply.resolve();
       releaseProgress.resolve();
       await dispatch.catch(() => undefined);
-      await finish();
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
       clearFollowupQueue(sessionKey);
     }
   });

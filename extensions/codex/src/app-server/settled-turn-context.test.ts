@@ -316,7 +316,15 @@ it.each<{
   const current = settledTurn();
   const persisted = settledTurn();
   if (drift) {
-    persisted[2] = { ...persisted[2], content: [{ type: "text", text: "different result" }] };
+    persisted[2] = message(
+      {
+        role: "toolResult",
+        toolCallId: "call-2",
+        toolName: "message",
+        content: [{ type: "text", text: "different result" }],
+      },
+      "turn-2:tool:call-2:result",
+    );
   }
   const select = (messages: AgentMessage[], indices = [0, 1, 2]) =>
     indices.map((index) => messages[index]!);

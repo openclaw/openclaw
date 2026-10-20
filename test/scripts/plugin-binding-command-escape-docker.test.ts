@@ -11,14 +11,14 @@ const SCRIPT_PATH = "scripts/e2e/plugin-binding-command-escape-docker.sh";
 const script = fs.readFileSync(SCRIPT_PATH, "utf8");
 const parser = script.match(/if ! node - "\$RUN_LOG" <<'NODE'\n(?<parser>[\s\S]*?)\nNODE\nthen/u)
   ?.groups?.parser;
-assert(parser, `failed to extract embedded log parser from ${SCRIPT_PATH}`);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function runParser(log: string, maxReadBytes = Infinity) {
+  assert(parser, `failed to extract embedded log parser from ${SCRIPT_PATH}`);
   const logPath = join(tempDirs.make("openclaw-plugin-binding-log-proof-"), "vitest.log");
   const errors: string[] = [];
   const readSizes: number[] = [];
-  const exit = { status: 0 };
+  const exit = Object.assign(new Error("simulated process exit"), { status: 0 });
   fs.writeFileSync(logPath, log);
   const fsProxy = {
     ...fs,

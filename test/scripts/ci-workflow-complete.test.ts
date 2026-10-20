@@ -23,14 +23,6 @@ const temporary = useAutoCleanupTempDirTracker(afterEach);
 const ciWorkflow = readCiWorkflow();
 const ciStep = (job: string, name: string): WorkflowStep =>
   requiredWorkflowStep(ciWorkflow.jobs[job].steps, name);
-function runShell(script: string, env: NodeJS.ProcessEnv = {}, cwd?: string, strict = false) {
-  return spawnSync("/bin/bash", [...(strict ? ["-euo", "pipefail"] : []), "-c", script], {
-    cwd,
-    encoding: "utf8",
-    env: { ...process.env, ...env },
-  });
-}
-const readLines = (file: string) => readFileSync(file, "utf8").trim().split("\n");
 function checkFixture(prefix: string, scripts: string[]) {
   const root = temporary.make(prefix);
   for (const script of scripts) {
@@ -40,14 +32,13 @@ function checkFixture(prefix: string, scripts: string[]) {
   }
   return root;
 }
-const failedContext = { runAttempt: 2, failed: true };
+const failedContext = {
+  eventName: "pull_request" as const,
+  repository: "openclaw/openclaw",
+  runAttempt: 2,
+  failed: true,
+};
 type WorkflowContext = Parameters<typeof evaluateWorkflowExpression>[1];
-function expectWorkflow(expression: unknown, context: WorkflowContext) {
-  return expect(evaluateWorkflowExpression(expression, context));
-}
-function expectRunner(job: string, context: WorkflowContext, expected: unknown = "ubuntu-24.04") {
-  expectWorkflow(ciWorkflow.jobs[job]["runs-on"], context).toEqual(expected);
-}
 function expectAdmission(
   expression: unknown,
   admitted: WorkflowContext,
@@ -143,10 +134,12 @@ describe("complete CI failure reporting", () => {
 
   it("publishes a prepared SDK and consumes an uploaded candidate despite unrelated producer failures", () => {
     const publish = ciStep("check-extension-package-boundary", "Publish this run's prepared SDK");
-    expectWorkflow(publish.if, {
-      ...failedContext,
-      steps: { prepare_sdk: { outputs: {}, outcome: "success" } },
-    }).toBe(true);
+    expect(
+      evaluateWorkflowExpression(publish.if, {
+        ...failedContext,
+        steps: { prepare_sdk: { outputs: {}, outcome: "success" } },
+      }),
+    ).toBe(true);
     const candidate = {
       ...failedContext,
       sha: "candidate",
@@ -158,12 +151,15 @@ describe("complete CI failure reporting", () => {
         },
       },
     };
-    const condition = ciWorkflow.jobs["published-driver-update"].if;
-    expectWorkflow(condition, candidate).toBe(true);
-    expectWorkflow(condition, {
-      ...candidate,
-      additionalNeeds: { "build-artifacts": { result: "failure", outputs: {} } },
-    }).toBe(false);
+    expect(
+      evaluateWorkflowExpression(ciWorkflow.jobs["published-driver-update"].if, candidate),
+    ).toBe(true);
+    expect(
+      evaluateWorkflowExpression(ciWorkflow.jobs["published-driver-update"].if, {
+        ...candidate,
+        additionalNeeds: { "build-artifacts": { result: "failure", outputs: {} } },
+      }),
+    ).toBe(false);
   });
 
   it("keeps Docker seed lanes complete and static evidence independent of attempt", () => {
@@ -186,8 +182,11 @@ function runChecks(job: string, name: string, env: Record<string, string> = {}) 
     "source .ci-harness/scripts/ci-collect-checks.sh",
     `source '${path.resolve("scripts/ci-collect-checks.sh")}'`,
   );
-  return runShell(
-    `${String.raw`
+  return spawnSync(
+    "/bin/bash",
+    [
+      "-c",
+      `${String.raw`
     pnpm() {
       printf 'CHECK %s\n' "$*"
       if [ "$1" = "$FAIL_COMMAND" ]; then return 1; fi
@@ -211,16 +210,21 @@ function runChecks(job: string, name: string, env: Record<string, string> = {}) 
     nproc() { printf '8\n'; }
     git() { if [ "$1" = cat-file ]; then return 0; fi; printf 'base\n'; }
   `}\n${script}`,
+    ],
     {
-      FROZEN_TARGET: "false",
-      HISTORICAL_TARGET: "false",
-      NARROW_CHECK_PATHS_JSON: "",
-      CHECKOUT_BASE_SHA: "",
-      CI_CORE_TYPE_GRAPHS_JSON: "",
-      CI_TYPE_GRAPHS_JSON: "",
-      FAIL_COMMAND: "check:max-lines-ratchet",
-      FAIL_SCRIPT: "",
-      ...env,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        FROZEN_TARGET: "false",
+        HISTORICAL_TARGET: "false",
+        NARROW_CHECK_PATHS_JSON: "",
+        CHECKOUT_BASE_SHA: "",
+        CI_CORE_TYPE_GRAPHS_JSON: "",
+        CI_TYPE_GRAPHS_JSON: "",
+        FAIL_COMMAND: "check:max-lines-ratchet",
+        FAIL_SCRIPT: "",
+        ...env,
+      },
     },
   );
 }
@@ -347,18 +351,18 @@ describe("native CI failure collection", () => {
   }
 
   function run(root: string, script: string, env: Record<string, string> = {}, cwd = root) {
-    return runShell(
-      script,
-      {
+    return spawnSync("/bin/bash", ["-euo", "pipefail", "-c", script], {
+      cwd,
+      encoding: "utf8",
+      env: {
+        ...process.env,
         HISTORICAL_TARGET: "false",
         RUNNER_TEMP: root,
         GITHUB_OUTPUT: path.join(root, "outputs"),
         TRACE: path.join(root, "trace"),
         ...env,
       },
-      cwd,
-      true,
-    );
+    });
   }
 
   it("OpenClawKit trait builds share a fresh scratch and clean it after testing", () => {
@@ -381,7 +385,7 @@ ${ciStep("macos-swift", "Clean OpenClawKit build scratch").run}
       { GITHUB_ENV: path.join(root, "environment"), OPENCLAWKIT_TEST_EXECUTION: "serial" },
     );
     expect(result.status, result.stderr).toBe(0);
-    const commands = readLines(path.join(root, "trace"));
+    const commands = readFileSync(path.join(root, "trace"), "utf8").trim().split("\n");
     const scratchPaths = commands.map((command) => command.match(/--scratch-path (\S+)/)?.[1]);
     expect(scratchPaths[0]).toBeTruthy();
     expect(new Set(scratchPaths).size).toBe(1);
@@ -411,7 +415,10 @@ ${ciStep("macos-swift", "Clean OpenClawKit build scratch").run}
       executable(root, "scripts/format-swift.sh", 'echo format >> "$TRACE"');
       const result = run(root, ciStep(job, "Swift lint").run!);
       expect(result.status, result.stderr).not.toBe(0);
-      expect(readLines(path.join(root, "trace"))).toEqual(["lint", "format"]);
+      expect(readFileSync(path.join(root, "trace"), "utf8").trim().split("\n")).toEqual([
+        "lint",
+        "format",
+      ]);
     },
   );
 
@@ -425,7 +432,7 @@ ${ciStep("ios-build", "Run focused iOS lifecycle simulator tests").run!}`,
       { IOS_CI_PHASE: "tests", IOS_MAIN_TIER: "false", IOS_SIMULATOR_ID: "fixture-simulator" },
     );
     expect(result.status, result.stderr).not.toBe(0);
-    const commands = readLines(path.join(root, "trace"));
+    const commands = readFileSync(path.join(root, "trace"), "utf8").trim().split("\n");
     expect(commands).toHaveLength(3);
     expect(commands[0]).toContain("OpenClawLifecycleTests.xcresult");
     expect(commands[1]).toBe("scripts/ios-access-restart-proof.py fixture-simulator");
@@ -455,7 +462,7 @@ ${ciStep("ios-build", "Run focused iOS lifecycle simulator tests").run!}`,
       path.join(root, "apps/android"),
     );
     expect(result.status, result.stderr).not.toBe(0);
-    const commands = readLines(path.join(root, "trace"));
+    const commands = readFileSync(path.join(root, "trace"), "utf8").trim().split("\n");
     expect(commands).toHaveLength(row.count);
     for (const command of commands) {
       expect(command).toContain("--continue");
@@ -503,6 +510,9 @@ ${ciStep("ios-build", "Run focused iOS lifecycle simulator tests").run!}`,
       ].map((id) => [id, { outputs: {}, outcome: "success" as const }]),
     );
     const nativeContext = {
+      eventName: "pull_request" as const,
+      repository: "openclaw/openclaw",
+      runAttempt: 1,
       failed: true,
       matrix: { phase },
       env: { HISTORICAL_TARGET: "false", MACOS_PRIMARY_PHASE: "tests" },
@@ -536,12 +546,14 @@ describe("built artifact proof upload", () => {
       const producerId = expectDefined(producer.id, "producer step identity");
       const condition = expectDefined(publisher.if, "upload condition");
 
-      expectWorkflow(`\${{ ${condition} }}`, {
-        failed: outcome === "failure" || outcome === "skipped",
-        cancelled: outcome === "cancelled",
-        preflightOutputs: { run_discord_component_proof: String(selected) },
-        steps: { [producerId]: { outputs: {}, outcome } },
-      }).toBe(upload);
+      expect(
+        evaluateWorkflowExpression(`\${{ ${condition} }}`, {
+          failed: outcome === "failure" || outcome === "skipped",
+          cancelled: outcome === "cancelled",
+          preflightOutputs: { run_discord_component_proof: String(selected) },
+          steps: { [producerId]: { outputs: {}, outcome } },
+        }),
+      ).toBe(upload);
       expect(publisher.with?.["if-no-files-found"]).toBe("error");
     },
   );
@@ -567,14 +579,19 @@ describe("workflow fixture reads", () => {
 });
 
 describe("PR failure reporting", () => {
-  const verify = ciStep("ci-gate", "Verify selected CI lanes");
   it("keeps critical-path routing and adds default Blacksmith failure reporting", () => {
+    const gate = readCiWorkflow().jobs["ci-gate"];
     const context = {
+      eventName: "pull_request" as const,
+      repository: "openclaw/openclaw",
+      runAttempt: 1,
       runnerProfile: "blacksmith" as const,
       failureReportOutputs: { failure_job_id: "42" },
     };
     for (const runnerBackend of ["", "blacksmith"] as const) {
-      expectRunner("ci-gate", { ...context, runnerBackend }, "blacksmith-4vcpu-ubuntu-2404");
+      expect(evaluateWorkflowExpression(gate["runs-on"], { ...context, runnerBackend })).toBe(
+        "blacksmith-4vcpu-ubuntu-2404",
+      );
     }
     for (const override of [
       { failureReportOutputs: {} },
@@ -585,25 +602,44 @@ describe("PR failure reporting", () => {
       { eventName: "workflow_dispatch" as const },
       { headRepository: "contributor/openclaw" },
     ]) {
-      expectRunner("ci-gate", { ...context, ...override });
+      expect(evaluateWorkflowExpression(gate["runs-on"], { ...context, ...override })).toBe(
+        "ubuntu-24.04",
+      );
     }
     for (const runnerBackend of ["hybrid", "runson"] as const) {
-      const routing = { ...context, runnerBackend, runnerProfile: "hybrid" as const };
-      const runner = runnerBackend === "hybrid" ? "ubuntu-24.04" : "blacksmith-4vcpu-ubuntu-2404";
-      expectRunner("ci-gate", { ...routing, failureReportOutputs: {} }, runner);
-      expectRunner("pr-failure-report", routing, runner);
-      expectRunner("pr-failure-report", {
-        ...context,
-        runnerBackend,
-        headRepository: "contributor/openclaw",
-      });
+      expect(
+        evaluateWorkflowExpression(gate["runs-on"], {
+          ...context,
+          runnerBackend,
+          runnerProfile: "hybrid",
+          failureReportOutputs: {},
+        }),
+      ).toBe(runnerBackend === "hybrid" ? "ubuntu-24.04" : "blacksmith-4vcpu-ubuntu-2404");
+      const report = readCiWorkflow().jobs["pr-failure-report"];
+      expect(
+        evaluateWorkflowExpression(report["runs-on"], {
+          ...context,
+          runnerBackend,
+          runnerProfile: "hybrid",
+        }),
+      ).toBe(runnerBackend === "hybrid" ? "ubuntu-24.04" : "blacksmith-4vcpu-ubuntu-2404");
+      expect(
+        evaluateWorkflowExpression(report["runs-on"], {
+          ...context,
+          runnerBackend,
+          headRepository: "contributor/openclaw",
+        }),
+      ).toBe("ubuntu-24.04");
     }
   });
 
   it("keeps hybrid qualification and release runner reservations intact", () => {
+    const workflow = readCiWorkflow();
     for (const nodeRunnerBackend of ["hybrid", "runson"]) {
       const context = {
         eventName: "workflow_dispatch" as const,
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
         runnerBackend: "hybrid" as const,
         preflightOutputs: {
           ci_qualification: "true",
@@ -611,19 +647,21 @@ describe("PR failure reporting", () => {
           node_runner_backend: nodeRunnerBackend,
         },
       };
-      expectRunner("preflight", context);
-      expectRunner("ci-gate", context, "blacksmith-4vcpu-ubuntu-2404");
+      expect(evaluateWorkflowExpression(workflow.jobs.preflight["runs-on"], context)).toBe(
+        "ubuntu-24.04",
+      );
+      expect(evaluateWorkflowExpression(workflow.jobs["ci-gate"]["runs-on"], context)).toBe(
+        "blacksmith-4vcpu-ubuntu-2404",
+      );
       for (const jobName of ["preflight", "ci-gate"]) {
-        expectRunner(
-          jobName,
-          {
+        expect(
+          evaluateWorkflowExpression(workflow.jobs[jobName]["runs-on"], {
             ...context,
             preflightOutputs: {},
             dispatchId: "full-release-validation-123-1",
             releaseRunnerGroup: "Release reserved",
-          },
-          { group: "Release reserved", labels: "ubuntu-24.04" },
-        );
+          }),
+        ).toEqual({ group: "Release reserved", labels: "ubuntu-24.04" });
       }
     }
   });
@@ -655,20 +693,22 @@ describe("PR failure reporting", () => {
       ["push", "openclaw/openclaw", 1, "success", false],
       ["workflow_dispatch", "openclaw/openclaw", 1, "success", false],
     ] as const) {
-      expectWorkflow(report.if, {
-        eventName,
-        headRepository,
-        runAttempt,
-        preflightResult,
-        preflightOutputs: { run_checks_node_core_nondist: "false" },
-      }).toBe(admitted);
+      expect(
+        evaluateWorkflowExpression(report.if, {
+          eventName,
+          headRepository,
+          runAttempt,
+          preflightResult,
+          preflightOutputs: { run_checks_node_core_nondist: "false" },
+        }),
+      ).toBe(admitted);
     }
     for (const overrides of [
       { cancelled: true },
       { draft: true },
       { repository: "contributor/openclaw" },
     ]) {
-      expectWorkflow(report.if, overrides).toBe(false);
+      expect(evaluateWorkflowExpression(report.if, { ...overrides })).toBe(false);
     }
   });
   it("gates cancelled workflows and drafts", () => {
@@ -683,16 +723,20 @@ describe("PR failure reporting", () => {
         }
       }
     }
-    expectWorkflow(gate.if, { cancelled: true, failureReportResult: "failure" }).toBe(false);
+    expect(
+      evaluateWorkflowExpression(gate.if, { cancelled: true, failureReportResult: "failure" }),
+    ).toBe(false);
   });
 
   it.skipIf(process.platform === "win32")(
     "finishes selected compiler and lint groups after every non-cancellation failure",
     () => {
-      const central = ciStep("check-shard", "Run check shard");
-      const hosted = ciStep(
-        "check-test-types-hosted-core-shard",
-        "Run hosted core test-types stripe",
+      const workflow = readCiWorkflow();
+      const central = workflow.jobs["check-shard"].steps.find(
+        (step: WorkflowStep) => step.name === "Run check shard",
+      );
+      const hosted = workflow.jobs["check-test-types-hosted-core-shard"].steps.find(
+        (step: WorkflowStep) => step.name === "Run hosted core test-types stripe",
       );
       const root = checkFixture("ci-type-groups-", ["ci-static-step.sh", "ci-collect-checks.sh"]);
       const calls = path.join(root, "calls");
@@ -704,7 +748,11 @@ describe("PR failure reporting", () => {
         { mode: 0o755 },
       );
       const runCompiler = (script: string, env: Record<string, string>) =>
-        runShell(script, { PATH: `${root}:${process.env.PATH}`, CALLS_FILE: calls, ...env }, root);
+        spawnSync("/bin/bash", ["-c", script], {
+          cwd: root,
+          encoding: "utf8",
+          env: { ...process.env, PATH: `${root}:${process.env.PATH}`, CALLS_FILE: calls, ...env },
+        });
       const checkGroups = (
         script: string,
         kind: string,
@@ -719,12 +767,12 @@ describe("PR failure reporting", () => {
             OPENCLAW_CI_STATIC_EVIDENCE: evidence,
           });
           expect(run.status, run.stderr).toBe(Number(compilerExit));
-          expect(readLines(calls)).toHaveLength(2);
+          expect(readFileSync(calls, "utf8").trim().split("\n")).toHaveLength(2);
           expect(run.stdout).toContain(`[ci-static:${kind}:step] {"version":1,"groups":2}`);
         }
       };
       checkGroups(
-        central.run!,
+        central.run,
         "tsgo",
         {
           NARROW_CHECK_PATHS_JSON: '["src/example.ts"]',
@@ -739,7 +787,7 @@ describe("PR failure reporting", () => {
           ["1", "1"],
         ],
       );
-      const run = runCompiler(hosted.run!, {
+      const run = runCompiler(hosted.run, {
         COMPILER_EXIT: "2",
         OPENCLAW_CI_STATIC_EVIDENCE: "1",
         CI_TYPE_GRAPHS_JSON: '["first"]',
@@ -747,8 +795,10 @@ describe("PR failure reporting", () => {
       expect(run.status, run.stderr).toBe(2);
       expect(run.stdout).toContain('[ci-static:tsgo:step] {"version":1,"groups":1}');
 
-      const lint = ciStep("check-lint-hosted-core-shard", "Run hosted core lint stripe");
-      const lintScript = lint.run!.replace(/\$\{\{[\s\S]*?\}\}/gu, (expression: string) =>
+      const lint = workflow.jobs["check-lint-hosted-core-shard"].steps.find(
+        (step: WorkflowStep) => step.name === "Run hosted core lint stripe",
+      );
+      const lintScript = lint.run.replace(/\$\{\{[\s\S]*?\}\}/gu, (expression: string) =>
         String(evaluateWorkflowExpression(expression, { runnerProfile: "github" })),
       );
       checkGroups(
@@ -773,6 +823,9 @@ describe("PR failure reporting", () => {
   it.skipIf(process.platform === "win32")(
     "accepts only the completed report's supported test and static exceptions",
     () => {
+      const verify = readCiWorkflow().jobs["ci-gate"].steps.find(
+        (entry: WorkflowStep) => entry.name === "Verify selected CI lanes",
+      );
       for (const [name, result, receipt, attempt, exit] of [
         ["checks-node-core-test-nondist-shard", "failure", "1", 1, 0],
         ["checks-node-core-test-nondist-shard", "failure", "", 1, 1],
@@ -786,15 +839,19 @@ describe("PR failure reporting", () => {
         ["check-lint-hosted-core-shard", "failure", "", 1, 1],
         ["check-additional-shard", "failure", "1", 1, 1],
       ] as const) {
-        const allowed = evaluateWorkflowExpression(verify.env!.ALLOW_KNOWN_MAIN_RED, {
+        const allowed = evaluateWorkflowExpression(verify.env.ALLOW_KNOWN_MAIN_RED, {
           runAttempt: attempt,
           preflightOutputs: { run_checks_node_core_nondist: "true" },
           failureReportResult: "success",
           failureReportOutputs: { known_main_red_attempt: receipt },
         });
-        const run = runShell(verify.run!, {
-          ALLOW_KNOWN_MAIN_RED: String(allowed),
-          JOB_RESULTS: `${name}=${result}|true`,
+        const run = spawnSync("/bin/bash", ["-c", verify.run], {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            ALLOW_KNOWN_MAIN_RED: String(allowed),
+            JOB_RESULTS: `${name}=${result}|true`,
+          },
         });
         expect(run.status, run.stdout).toBe(exit);
       }
@@ -804,6 +861,10 @@ describe("PR failure reporting", () => {
   it.skipIf(process.platform === "win32")(
     "keeps retry and non-Node reports informational without extending the known-main-red allowance",
     () => {
+      const workflow = readCiWorkflow();
+      const verify = workflow.jobs["ci-gate"].steps.find(
+        (entry: WorkflowStep) => entry.name === "Verify selected CI lanes",
+      );
       for (const [runAttempt, nodeSelected] of [
         [2, true],
         [1, false],
@@ -815,19 +876,22 @@ describe("PR failure reporting", () => {
             preflightOutputs: { run_checks_node_core_nondist: String(nodeSelected) },
             failureReportOutputs: { known_main_red_attempt: String(runAttempt) },
           };
-          expectWorkflow(ciWorkflow.jobs["pr-failure-report"].if, context).toBe(true);
-          expectWorkflow(verify.env!.ALLOW_KNOWN_MAIN_RED, context).toBe(false);
-          const reportRow = expectDefined(
-            String(verify.env!.JOB_RESULTS)
-              .split("\n")
-              .find((line) => line.startsWith("pr-failure-report=")),
-            "failure-report gate row",
-          ).replace(/\$\{\{[\s\S]*?\}\}/gu, (expression: string) =>
-            String(evaluateWorkflowExpression(expression, context)),
+          expect(evaluateWorkflowExpression(workflow.jobs["pr-failure-report"].if, context)).toBe(
+            true,
           );
+          expect(evaluateWorkflowExpression(verify.env.ALLOW_KNOWN_MAIN_RED, context)).toBe(false);
+          const reportRow = verify.env.JOB_RESULTS.split("\n")
+            .find((line: string) => line.startsWith("pr-failure-report="))
+            .replace(/\$\{\{[\s\S]*?\}\}/gu, (expression: string) =>
+              String(evaluateWorkflowExpression(expression, context)),
+            );
           expect(reportRow).toBe("pr-failure-report=skipped|false");
-          const run = runShell(verify.run!, {
-            JOB_RESULTS: `preflight=success|true\nsecurity-fast=success|true\n${reportRow}`,
+          const run = spawnSync("/bin/bash", ["-c", verify.run], {
+            encoding: "utf8",
+            env: {
+              ...process.env,
+              JOB_RESULTS: `preflight=success|true\nsecurity-fast=success|true\n${reportRow}`,
+            },
           });
           expect(run.status, run.stdout).toBe(0);
         }
@@ -838,9 +902,16 @@ describe("PR failure reporting", () => {
   it.skipIf(process.platform === "win32")(
     "publishes the classification table and machine-readable failures without changing the gate result",
     () => {
-      const step = ciStep("ci-gate", "Report PR failure classification");
-      const context = { runAttempt: 2 };
-      expectWorkflow(`\${{ ${step.if} }}`, context).toBe(false);
+      const gate = readCiWorkflow().jobs["ci-gate"];
+      const step = gate.steps.find(
+        (entry: WorkflowStep) => entry.name === "Report PR failure classification",
+      );
+      const context: Parameters<typeof evaluateWorkflowExpression>[1] = {
+        eventName: "pull_request",
+        repository: "openclaw/openclaw",
+        runAttempt: 2,
+      };
+      expect(evaluateWorkflowExpression(`\${{ ${step.if} }}`, context)).toBe(false);
       const summary = "| Job | Class |\n| --- | --- |\n| checks-node-example | pre-existing |\n";
       const failures = [
         {
@@ -857,13 +928,20 @@ describe("PR failure reporting", () => {
         summary_json: JSON.stringify(summary),
         failures_json: JSON.stringify(failures),
       };
-      expectWorkflow(`\${{ ${step.if} }}`, { ...context, failureReportOutputs: outputs }).toBe(
-        true,
-      );
-      const result = runShell(step.run!, {
-        GITHUB_STEP_SUMMARY: summaryPath,
-        SUMMARY_JSON: outputs.summary_json,
-        FAILURES_JSON: outputs.failures_json,
+      expect(
+        evaluateWorkflowExpression(`\${{ ${step.if} }}`, {
+          ...context,
+          failureReportOutputs: outputs,
+        }),
+      ).toBe(true);
+      const result = spawnSync("/bin/bash", ["-c", step.run], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          GITHUB_STEP_SUMMARY: summaryPath,
+          SUMMARY_JSON: outputs.summary_json,
+          FAILURES_JSON: outputs.failures_json,
+        },
       });
       expect(result.status, result.stderr).toBe(0);
       expect(readFileSync(summaryPath, "utf8")).toBe(summary);

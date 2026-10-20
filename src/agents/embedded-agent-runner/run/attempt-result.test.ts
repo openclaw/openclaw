@@ -539,7 +539,7 @@ describe("trailing source progress at runtime settlement", () => {
         return { content: [{ type: "text" as const, text: "ok" }], details: {} };
       },
     });
-    const toolSettled = new Map<string, ReturnType<typeof createDeferred>>();
+    const toolSettled = new Map<string, ReturnType<typeof createDeferred<void>>>();
     const settledFor = (toolCallId: string) => {
       const settled = toolSettled.get(toolCallId) ?? createDeferred();
       toolSettled.set(toolCallId, settled);

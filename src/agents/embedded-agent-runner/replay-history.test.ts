@@ -632,7 +632,7 @@ describe("normalizeAssistantReplayContent", () => {
           { type: "toolCall", id: "call_1", name: "read", arguments: { path: "file.txt" } },
         ]
       : [textBlock("intentional repeat")];
-    const usage = tools ? {} : { output: 1, totalTokens: 1 };
+    const usage: Record<string, number> = tools ? {} : { output: 1, totalTokens: 1 };
     const messages = [
       user(tools ? "check" : "repeat"),
       assistant(content, "stop", usage),
@@ -643,7 +643,8 @@ describe("normalizeAssistantReplayContent", () => {
 
   it.each(["stop", "toolUse"] as const)("preserves a real %s sentinel reply (#77287)", (stop) => {
     const content = [textBlock(FALLBACK_TEXT)];
-    const usage = stop === "stop" ? { input: 1, output: 1, totalTokens: 2 } : {};
+    const usage: Record<string, number> =
+      stop === "stop" ? { input: 1, output: 1, totalTokens: 2 } : {};
     const messages = [user("hi"), assistant(content, stop, usage)];
     const out = normalize(messages);
     expect(out).toBe(messages);

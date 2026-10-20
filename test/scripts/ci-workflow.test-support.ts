@@ -66,10 +66,11 @@ export type WorkflowStep = {
 
 export const readCiWorkflow = () => readWorkflow(".github/workflows/ci.yml");
 
-export function requiredWorkflowStep<T extends { name?: string }>(
-  steps: readonly T[],
+export function requiredWorkflowStep<T extends readonly { name?: string }[]>(
+  steps: T,
   name: string,
-): T {
+): T[number];
+export function requiredWorkflowStep(steps: readonly { name?: string }[], name: string) {
   return expectDefined(
     steps.find((step) => step.name === name),
     name,

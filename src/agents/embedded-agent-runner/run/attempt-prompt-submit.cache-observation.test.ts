@@ -45,7 +45,11 @@ it("observes canonical request prefixes before managed cache consumption and ski
     { sessionId: "prompt-submit-cache-observer", streamStrategy: "test" },
     observations,
   );
-  const observeRequest = vi.fn(observer.onModelRequest);
+  const observeRequest = vi.fn(
+    async (...args: Parameters<typeof observer.onModelRequest>): Promise<undefined> => {
+      await observer.onModelRequest(...args);
+    },
+  );
   const provider: StreamFn = (model) =>
     createAssistantResultStream(createAssistant(model, "Done."));
   activeSession.agent.streamFn = (model, context, options) =>
