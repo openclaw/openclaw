@@ -1,7 +1,6 @@
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
-import { createGatewayBridge } from "./realtime-quicksilver-gateway.test-support.js";
-import { fakeQuicksilverMediaSocket } from "./realtime-quicksilver-socket.test-support.js";
+import { createGatewayHarness } from "./realtime-quicksilver-gateway.test-support.js";
 import { emitSideband, FakeSocket } from "./realtime-quicksilver.test-helpers.js";
 
 const OPAQUE_MODEL = "gpt-live-test-canary";
@@ -13,35 +12,13 @@ function createDirectBridge(params?: {
   socketFactory?: () => FakeSocket;
   resolveAuth?: () => Promise<{ type: "api-key"; token: string }>;
 }) {
-  let socket: FakeSocket | undefined;
-  const logger = { debug: vi.fn(), warn: vi.fn() };
-  const onClose = vi.fn();
-  const onError = vi.fn();
-  const bridge = createGatewayBridge({
+  return createGatewayHarness({
     model: OPAQUE_MODEL,
     voice: "marin",
     audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
-    onClose,
-    onError,
-    logger,
+    socketFactory: params?.socketFactory,
     resolveAuth: params?.resolveAuth ?? (async () => ({ type: "api-key", token: "platform-key" })),
-    mediaSocketFactory: fakeQuicksilverMediaSocket(() => {
-      socket = params?.socketFactory?.() ?? new FakeSocket();
-      return socket;
-    }),
   });
-  return {
-    bridge,
-    logger,
-    onClose,
-    onError,
-    readSocket: () => {
-      if (!socket) {
-        throw new Error("expected direct socket");
-      }
-      return socket;
-    },
-  };
 }
 
 function expectNoPrivateDetail(harness: ReturnType<typeof createDirectBridge>): void {
@@ -105,18 +82,18 @@ describe("GPT-Live gateway relay error projection", () => {
     async (terminalEvent) => {
       const harness = createDirectBridge();
       const connection = harness.bridge.connect();
-      await vi.waitFor(() => expect(harness.readSocket().readyState).toBe(1));
+      await vi.waitFor(() => expect(harness.getSocket().readyState).toBe(1));
       await nextEventLoopTurn();
-      emitSideband(harness.readSocket(), {
+      emitSideband(harness.getSocket(), {
         type: "session.started",
         session: { expires_at: Math.floor(Date.now() / 1000) + 60 },
       });
       await connection;
 
       if (terminalEvent === "error") {
-        harness.readSocket().emit("error", new Error(rejection));
+        harness.getSocket().emit("error", new Error(rejection));
       } else {
-        harness.readSocket().emit("close", 1011, Buffer.from(rejection));
+        harness.getSocket().emit("close", 1011, Buffer.from(rejection));
       }
 
       expect(harness.onError).toHaveBeenCalledOnce();

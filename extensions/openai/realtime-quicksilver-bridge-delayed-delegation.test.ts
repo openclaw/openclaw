@@ -1,21 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { createHarness, sentEvents } from "./realtime-quicksilver-bridge.test-support.js";
-
-const subscriptionDelegation = (id: string, text = "Run the same action.") => ({
-  type: "delegation.created",
-  item: { type: "delegation", target: "client", id, content: [{ type: "input_text", text }] },
-});
-const publicDelegation = (id = "pending", offset_ms = 0) => ({
-  type: "session.delegation.created",
-  offset_ms,
-  delegation: { type: "delegation", target: "client", id },
-});
-const transcript = (delta: string) => ({
-  type: "session.input_transcript.delta",
-  delta,
-  start_ms: 0,
-  end_ms: 100,
-});
+import {
+  delegation,
+  publicDelegation,
+  transcript,
+  turn,
+} from "./realtime-quicksilver-events.test-support.js";
 const noCommentary = ({ socket }: ReturnType<typeof createHarness>) =>
   expect(sentEvents(socket).filter((event) => event.type === "session.commentary.append")).toEqual(
     [],
@@ -25,17 +15,14 @@ describe("GPT-Live bridge delegation admission", () => {
   it("claims subscription tasks and controls before callbacks without consuming fresh context", async () => {
     const classify = vi.fn(() => "consult" as const);
     const harness = createHarness({ model: "gpt-live-1-codex", handleDelegationInput: classify });
-    const delegate = (id: string) => harness.socket.serverEvent(subscriptionDelegation(id));
+    const delegate = (id: string) => harness.socket.serverEvent(delegation(id));
     await harness.bridge.connect();
     try {
       harness.onToolCall.mockImplementationOnce(() => delegate("first"));
       delegate("first");
       expect(harness.onToolCall).toHaveBeenCalledOnce();
       harness.bridge.submitToolResult("first", "Done.");
-      harness.socket.serverEvent({
-        type: "turn.done",
-        turn: { role: "user", transcript: "Fresh context." },
-      });
+      harness.socket.serverEvent(turn("user", "Fresh context."));
       delegate("first");
       expect(classify).toHaveBeenCalledOnce();
       delegate("second");
@@ -53,7 +40,7 @@ describe("GPT-Live bridge delegation admission", () => {
     const fresh = createHarness({ model: "gpt-live-1-codex" });
     await fresh.bridge.connect();
     try {
-      fresh.socket.serverEvent(subscriptionDelegation("first"));
+      fresh.socket.serverEvent(delegation("first"));
       expect(fresh.onToolCall).toHaveBeenCalledOnce();
     } finally {
       await fresh.bridge.close();
@@ -64,7 +51,7 @@ describe("GPT-Live bridge delegation admission", () => {
     const classify = vi.fn(() => "control" as const);
     const harness = createHarness({ model: "gpt-live-1-codex", handleDelegationInput: classify });
     await harness.bridge.connect();
-    const event = subscriptionDelegation("cancel-one", "Cancel it.");
+    const event = delegation("cancel-one", "Cancel it.");
     try {
       harness.socket.serverEvent(event);
       harness.socket.serverEvent(event);

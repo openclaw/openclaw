@@ -1,36 +1,21 @@
-import { EventEmitter, once } from "node:events";
+import { once } from "node:events";
 import { MessageChannel } from "node:worker_threads";
 import { describe, expect, it, vi } from "vitest";
 import { OpenAIQuicksilverPendingAudio } from "./realtime-quicksilver-audio-buffer.js";
+import { transcript, turn } from "./realtime-quicksilver-events.test-support.js";
 import { OpenAIQuicksilverSocketRuntime } from "./realtime-quicksilver-socket.runtime.js";
 import type {
   QuicksilverSocketMediaOptions,
   QuicksilverSocketMessage,
 } from "./realtime-quicksilver-socket.shared.js";
-
-class WireSocket extends EventEmitter {
-  readyState = 1;
-  sent: string[] = [];
-  send(payload: string): void {
-    this.sent.push(payload);
-  }
-  close(code = 1000, reason = "closed"): void {
-    if (this.readyState === 3) {
-      return;
-    }
-    this.readyState = 3;
-    this.emit("close", code, Buffer.from(reason));
-  }
-  frame(event: object): void {
-    this.emit("message", Buffer.from(JSON.stringify(event)), false);
-  }
-}
+import { emitSideband, FakeSocket } from "./realtime-quicksilver.test-helpers.js";
 
 function owner(
   media: QuicksilverSocketMediaOptions = { model: "gpt-live-1", paced: true },
   bufferedAmount = () => 0,
 ) {
-  const socket = new WireSocket();
+  const socket = new FakeSocket("manual");
+  socket.readyState = 1;
   const messages: QuicksilverSocketMessage[] = [];
   const dispose = vi.fn();
   const runtime = new OpenAIQuicksilverSocketRuntime(
@@ -66,18 +51,15 @@ describe("GPT-Live socket media owner", () => {
   it("bounds worker-to-parent audio behind one credit and never forwards base64 frames", () => {
     const { socket, runtime, messages } = owner();
     for (let index = 0; index < 1_000; index++) {
-      socket.frame({
+      emitSideband(socket, {
         type: "session.output_audio.delta",
         delta: Buffer.alloc(960, index % 256).toString("base64"),
       });
     }
     expect(messages).toHaveLength(1);
     const emitted: Buffer[] = [];
-    for (let index = 0; index < 260; index++) {
-      const message = messages.shift();
-      if (!message) {
-        break;
-      }
+    for (let index = 0; index < 260 && messages.length; index++) {
+      const message = messages.shift()!;
       expect(message.type).toBe("audio");
       if (message.type === "audio") {
         emitted.push(Buffer.from(message.audio));
@@ -100,15 +82,10 @@ describe("GPT-Live socket media owner", () => {
     });
     runtime.command({ type: "stop-audio" });
     runtime.command({ type: "audio", audio: Buffer.alloc(960, 2) });
-    socket.frame({ type: "session.output_audio.delta", delta: "AAE=" });
+    emitSideband(socket, { type: "session.output_audio.delta", delta: "AAE=" });
     runtime.command({ type: "send", payload: JSON.stringify({ type: "session.close" }) });
-    socket.frame({
-      type: "session.input_transcript.delta",
-      delta: "last words",
-      start_ms: 0,
-      end_ms: 100,
-    });
-    socket.frame({ type: "session.closed", reason: "close_requested" });
+    emitSideband(socket, transcript("last words"));
+    emitSideband(socket, { type: "session.closed", reason: "close_requested" });
     runtime.command({ type: "event-ack" });
     expect(messages.filter((message) => message.type === "audio")).toEqual([]);
     expect(frameTypes(messages)).toEqual(["session.input_transcript.delta", "session.closed"]);
@@ -131,16 +108,16 @@ describe("GPT-Live socket media owner", () => {
       runtime.command({ type: "audio-output", output: { port: port1, state } });
       const pcm = Buffer.alloc(960, 1);
       const audio = once(port2, "message");
-      socket.frame({ type: "output_audio.delta", audio: pcm.toString("base64") });
+      emitSideband(socket, { type: "output_audio.delta", audio: pcm.toString("base64") });
       expect((await audio)[0]).toEqual({ type: "audio", audio: new Uint8Array(pcm) });
       expect(messages).toEqual([]);
       const cleared = once(port2, "message");
-      socket.frame({ type: "output_audio_buffer.cleared" });
+      emitSideband(socket, { type: "output_audio_buffer.cleared" });
       expect((await cleared)[0]).toEqual({ type: "clear" });
       runtime.command({ type: "event-ack" });
       runtime.command({ type: "stop-audio" });
       expect(Atomics.load(new Int32Array(state), 0)).toBe(1);
-      socket.frame({ type: "turn.done", turn: { role: "assistant", transcript: "final words" } });
+      emitSideband(socket, turn("assistant", "final words"));
       expect(frameTypes(messages)).toEqual(["output_audio_buffer.cleared", "turn.done"]);
       expect(messages.some((message) => message.type === "audio")).toBe(false);
     } finally {
@@ -158,12 +135,15 @@ describe("GPT-Live socket media owner", () => {
       );
       if (cause === "control") {
         for (let index = 0; index < 140; index++) {
-          socket.frame({ type: "private-fixture", value: index });
+          emitSideband(socket, { type: "private-fixture", value: index });
         }
       } else if (cause === "socket-write") {
         runtime.command({ type: "start-audio" });
       } else {
-        socket.frame({ type: "session.output_audio.delta", delta: "private-invalid-audio!" });
+        emitSideband(socket, {
+          type: "session.output_audio.delta",
+          delta: "private-invalid-audio!",
+        });
       }
       for (let index = 0; index < 140; index++) {
         runtime.command({ type: "event-ack" });

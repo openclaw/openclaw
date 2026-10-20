@@ -1,32 +1,29 @@
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { createGatewayBridge } from "./realtime-quicksilver-gateway.test-support.js";
-import { fakeQuicksilverMediaSocket } from "./realtime-quicksilver-socket.test-support.js";
+import { delegation, turn } from "./realtime-quicksilver-events.test-support.js";
+import {
+  createAudioPeer,
+  createGatewayHarness,
+  type GatewayConfig,
+} from "./realtime-quicksilver-gateway.test-support.js";
 import {
   createCallResponse,
   emitSideband,
-  FakeSocket,
   parseSent,
 } from "./realtime-quicksilver.test-helpers.js";
 
-function createBridge(params: {
-  runAgentConsult: (request: { prompt: string; signal?: AbortSignal }) => Promise<{ text: string }>;
-  onError?: (error: Error) => void;
-  onTranscript?: (role: "user" | "assistant", text: string, done: boolean) => void;
-  handleDelegationInput?: (text: string) => "control" | "consult";
-}) {
-  let socket: FakeSocket | undefined;
+function createBridge(
+  params: Pick<
+    GatewayConfig,
+    "runAgentConsult" | "onError" | "onTranscript" | "handleDelegationInput"
+  >,
+) {
   const fetchImpl = vi.fn<typeof fetch>(async () =>
     createCallResponse("v=answer\r\n", "rtc_lifecycle"),
   );
-  const createPeer = vi.fn(async () => ({
-    createOffer: vi.fn(async () => "v=offer\r\n"),
-    applyAnswer: vi.fn(async () => undefined),
-    adoptPendingAudio: vi.fn(),
-    sendAudio: vi.fn(),
-    close: vi.fn(),
-  }));
-  const bridge = createGatewayBridge({
+  const createPeer = vi.fn(async () => createAudioPeer());
+  const harness = createGatewayHarness({
     model: "gpt-live-test",
     voice: "marin",
     audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
@@ -34,41 +31,9 @@ function createBridge(params: {
     resolveAuth: async () => ({ type: "api-key", token: "platform-key" }),
     createPeer,
     fetchImpl,
-    mediaSocketFactory: fakeQuicksilverMediaSocket(() => {
-      socket = new FakeSocket();
-      const send = socket.send.bind(socket);
-      socket.send = (payload) => {
-        send(payload);
-        if ((JSON.parse(payload) as { type?: string }).type === "session.update") {
-          queueMicrotask(() =>
-            emitSideband(socket!, {
-              type: "session.started",
-              session: { expires_at: Math.floor(Date.now() / 1000) + 60 },
-            }),
-          );
-        }
-      };
-      return socket;
-    }),
+    startSession: { expires_at: Math.floor(Date.now() / 1000) + 60 },
   });
-  return {
-    bridge,
-    createPeer,
-    fetchImpl,
-    getSocket: () => {
-      if (!socket) {
-        throw new Error("expected sideband socket");
-      }
-      return socket;
-    },
-  };
-}
-
-function emitDelegation(socket: FakeSocket, id: string, text: string): void {
-  emitSideband(socket, {
-    type: "delegation.created",
-    item: { type: "delegation", target: "client", id, content: [{ type: "input_text", text }] },
-  });
+  return { ...harness, createPeer, fetchImpl };
 }
 
 describe("OpenAI Quicksilver gateway bridge lifecycle", () => {
@@ -84,10 +49,7 @@ describe("OpenAI Quicksilver gateway bridge lifecycle", () => {
       await harness.bridge.connect();
       const socket = harness.getSocket();
       emitSideband(socket, { type: "error", error: { message: "temporary voice failure" } });
-      emitSideband(socket, {
-        type: "turn.done",
-        turn: { role: "assistant", transcript: "Recovered" },
-      });
+      emitSideband(socket, turn("assistant", "Recovered"));
 
       expect(onError).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({ message: "OpenAI GPT-Live provider error" }),
@@ -112,7 +74,7 @@ describe("OpenAI Quicksilver gateway bridge lifecycle", () => {
 
     await harness.bridge.connect();
     const socket = harness.getSocket();
-    emitDelegation(socket, "delegation-abort", "Cancel this on close");
+    emitSideband(socket, delegation("delegation-abort", "Cancel this on close"));
     await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledOnce());
 
     await harness.bridge.close();
@@ -127,10 +89,9 @@ describe("OpenAI Quicksilver gateway bridge lifecycle", () => {
     "detaches transport without aborting an accepted delegation (classified=%s)",
     async (classified) => {
       let consultSignal: AbortSignal | undefined;
-      let resolveConsult!: (result: { text: string }) => void;
-      const consultResult = new Promise<{ text: string }>((resolve) => {
-        resolveConsult = resolve;
-      });
+      const { promise: consultResult, resolve: resolveConsult } = createDeferred<{
+        text: string;
+      }>();
       const runAgentConsult = vi.fn(
         async ({ signal }: { prompt: string; signal?: AbortSignal }) => {
           consultSignal = signal;
@@ -151,7 +112,7 @@ describe("OpenAI Quicksilver gateway bridge lifecycle", () => {
         });
         expect(harness.fetchImpl).not.toHaveBeenCalled();
         expect(harness.createPeer).not.toHaveBeenCalled();
-        emitDelegation(socket, "delegation-detach", "Finish after disconnect");
+        emitSideband(socket, delegation("delegation-detach", "Finish after disconnect"));
         await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledOnce());
         expect(
           parseSent(socket).filter((event) => event.type === "session.context.append"),
@@ -159,7 +120,7 @@ describe("OpenAI Quicksilver gateway bridge lifecycle", () => {
 
         await harness.bridge.close({ disposition: "detach" });
         const sentAtClose = socket.sent.length;
-        emitDelegation(socket, "late", "Do not acknowledge after detach");
+        emitSideband(socket, delegation("late", "Do not acknowledge after detach"));
         expect(consultSignal?.aborted).toBe(false);
         resolveConsult({ text: "finished after detach" });
         await nextEventLoopTurn();

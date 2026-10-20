@@ -2,18 +2,26 @@ import { once } from "node:events";
 import { MessageChannel, type MessagePort } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHarness } from "./realtime-quicksilver-bridge.test-support.js";
-import { createGatewayBridge } from "./realtime-quicksilver-gateway.test-support.js";
+import { createGatewayHarness } from "./realtime-quicksilver-gateway.test-support.js";
 import { fakeQuicksilverMediaSocket } from "./realtime-quicksilver-socket.test-support.js";
 import { emitSideband, FakeSocket } from "./realtime-quicksilver.test-helpers.js";
 
 let port1: MessagePort, port2: MessagePort, state: SharedArrayBuffer;
+let bridge:
+  | ReturnType<typeof createGatewayHarness>["bridge"]
+  | ReturnType<typeof createHarness>["bridge"];
 beforeEach(() => {
   ({ port1, port2 } = new MessageChannel());
   state = new SharedArrayBuffer(4);
 });
-afterEach(() => {
-  port1.close();
-  port2.close();
+afterEach(async () => {
+  try {
+    await bridge.close();
+  } finally {
+    port1.close();
+    port2.close();
+    vi.useRealTimers();
+  }
 });
 
 describe("GPT-Live direct output endpoint ownership", () => {
@@ -26,7 +34,7 @@ describe("GPT-Live direct output endpoint ownership", () => {
       sockets.push(socket);
       return socket;
     });
-    const bridge = createGatewayBridge({
+    bridge = createGatewayHarness({
       mediaSocketFactory: (...args) => {
         const socket = create(...args);
         const bind = socket.setAudioOutputPort.bind(socket);
@@ -36,7 +44,7 @@ describe("GPT-Live direct output endpoint ownership", () => {
         };
         return socket;
       },
-    });
+    }).bridge;
     let connecting: Promise<void> | undefined;
     try {
       bridge.setAudioOutputPort({ port: port1, state });
@@ -66,65 +74,46 @@ describe("GPT-Live direct output endpoint ownership", () => {
       emitSideband(sockets[1]!, { type: "session.closed", reason: "close_requested" });
       await closing;
     } finally {
-      try {
-        const closing = bridge.close();
-        for (const socket of sockets) {
-          if (!socket.closed) {
-            emitSideband(socket, { type: "session.closed", reason: "close_requested" });
-          }
+      const closing = bridge.close();
+      for (const socket of sockets) {
+        if (!socket.closed) {
+          emitSideband(socket, { type: "session.closed", reason: "close_requested" });
         }
-        await Promise.allSettled([connecting, closing]);
-      } finally {
-        vi.useRealTimers();
       }
+      await Promise.allSettled([connecting, closing]);
     }
   });
 
-  it.each(["gateway", "legacy"] as const)(
-    "closes an unadopted %s endpoint before connect",
-    async (kind) => {
-      const bridge = kind === "gateway" ? createGatewayBridge() : createHarness().bridge;
-      bridge.setAudioOutputPort({ port: port1, state });
-      const closed = once(port2, "close");
-      await bridge.close();
-      expect(Atomics.load(new Int32Array(state), 0)).toBe(1);
-      await closed;
-    },
-  );
+  it.each(["gateway", "legacy"] as const)("closes the unadopted %s port", async (kind) => {
+    bridge = kind === "gateway" ? createGatewayHarness().bridge : createHarness().bridge;
+    bridge.setAudioOutputPort({ port: port1, state });
+    const closed = once(port2, "close");
+    await bridge.close();
+    expect(Atomics.load(new Int32Array(state), 0)).toBe(1);
+    await closed;
+  });
   it("delivers provider interruption on the media port without a delayed duplicate clear", async () => {
-    const harness = createHarness();
-    try {
-      harness.bridge.setAudioOutputPort({ port: port1, state });
-      await harness.bridge.connect();
-      const cleared = once(port2, "message");
-      harness.socket.serverEvent({ type: "output_audio_buffer.cleared" });
-      expect((await cleared)[0]).toEqual({ type: "clear" });
-      expect(harness.onClearAudio).not.toHaveBeenCalled();
-      expect(harness.onEvent).toHaveBeenCalledWith({
-        direction: "server",
-        type: "output_audio_buffer.cleared",
-      });
-    } finally {
-      await harness.bridge.close();
-    }
+    const { bridge: voice, socket, onClearAudio, onEvent } = createHarness();
+    bridge = voice;
+    voice.setAudioOutputPort({ port: port1, state });
+    await voice.connect();
+    const cleared = once(port2, "message");
+    socket.serverEvent({ type: "output_audio_buffer.cleared" });
+    expect((await cleared)[0]).toEqual({ type: "clear" });
+    expect(onClearAudio).not.toHaveBeenCalled();
+    expect(onEvent).toHaveBeenCalledWith({
+      direction: "server",
+      type: "output_audio_buffer.cleared",
+    });
   });
 
-  it.each(["gateway", "legacy"] as const)(
-    "rejects a non-PCM %s bridge output endpoint",
-    async (kind) => {
-      const bridge =
-        kind === "gateway"
-          ? createGatewayBridge({
-              audioFormat: { encoding: "g711_ulaw", sampleRateHz: 8_000, channels: 1 },
-            })
-          : createHarness({ audioFormat: "g711_ulaw" }).bridge;
-      try {
-        expect(() => bridge.setAudioOutputPort({ port: port1, state })).toThrow(
-          "mono PCM16 at 24 kHz",
-        );
-      } finally {
-        await bridge.close();
-      }
-    },
-  );
+  it.each(["gateway", "legacy"] as const)("rejects a non-PCM %s port", async (kind) => {
+    bridge =
+      kind === "gateway"
+        ? createGatewayHarness({
+            audioFormat: { encoding: "g711_ulaw", sampleRateHz: 8_000, channels: 1 },
+          }).bridge
+        : createHarness({ audioFormat: "g711_ulaw" }).bridge;
+    expect(() => bridge.setAudioOutputPort({ port: port1, state })).toThrow("mono PCM16 at 24 kHz");
+  });
 });
