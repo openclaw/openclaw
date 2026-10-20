@@ -4,10 +4,7 @@ import { resolveFinalDoctorHealthContributions } from "../flows/doctor-health-co
 import * as gatewayCall from "../gateway/call.js";
 import { resolveLeastPrivilegeOperatorScopesForMethod } from "../gateway/method-scopes.js";
 import { createGatewayMethodRegistry } from "../gateway/methods/registry.js";
-import type {
-  GatewayRequestContext,
-  GatewayRequestHandlers,
-} from "../gateway/server-methods/types.js";
+import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { collectDevicePairingHealthFindings } from "./doctor-device-pairing.js";
@@ -26,18 +23,23 @@ vi.mock("./doctor-whatsapp-responsiveness.js", () => ({
 const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
 async function withHosted<T>(
-  handlers: GatewayRequestHandlers,
+  name: string,
+  payload: unknown,
   run: () => Promise<T>,
   methods: string[] = [],
 ) {
-  const registry = createGatewayMethodRegistry(
-    Object.entries(handlers).map(([name, handler]) => ({
+  let requestParams: unknown;
+  const registry = createGatewayMethodRegistry([
+    {
       name,
-      handler,
+      handler: ({ params, respond }) => {
+        requestParams = params;
+        respond(true, payload);
+      },
       owner: { kind: "core" as const, area: "test" },
       scope: resolveLeastPrivilegeOperatorScopesForMethod(name)[0]!,
-    })),
-  );
+    },
+  ]);
   const context = {
     trackExecution: trackAsyncWork,
     deps: {},
@@ -47,7 +49,7 @@ async function withHosted<T>(
   } as unknown as GatewayRequestContext;
   const result = await withPluginRuntimeGatewayContextResolver(() => context, run);
   expect(socketCall.mock.calls.map(([request]) => request.method)).toEqual(methods);
-  return result;
+  return { result, requestParams };
 }
 
 describe("Doctor hosted Gateway reads", () => {
@@ -71,20 +73,18 @@ describe("Doctor hosted Gateway reads", () => {
       }
       throw new Error("unexpected Gateway socket");
     });
-    const result = await withHosted(
+    const { result } = await withHosted(
+      "diagnostics.stability",
       {
-        "diagnostics.stability": ({ respond }) =>
-          respond(true, {
-            events: [
-              {
-                type: "telemetry.exporter",
-                source: "diagnostics-otel",
-                target: "logs",
-                transport: "stdout",
-                outcome: "started",
-              },
-            ],
-          }),
+        events: [
+          {
+            type: "telemetry.exporter",
+            source: "diagnostics-otel",
+            target: "logs",
+            transport: "stdout",
+            outcome: "started",
+          },
+        ],
       },
       () => checkGatewayHealth({ runtime, cfg: {} }),
       ["status", "channels.status"],
@@ -101,33 +101,21 @@ describe("Doctor hosted Gateway reads", () => {
   });
 
   it("reads cached memory readiness without opening a Gateway socket", async () => {
-    const result = await withHosted(
-      {
-        "doctor.memory.status": ({ params, respond }) => {
-          expect(params.probe).toBe(false);
-          respond(true, { embedding: { ok: true } });
-        },
-      },
-      () => probeGatewayMemoryStatus({ cfg: {} }),
+    const observed = await withHosted("doctor.memory.status", { embedding: { ok: true } }, () =>
+      probeGatewayMemoryStatus({ cfg: {} }),
     );
-    expect(result).toMatchObject({ checked: true, ready: true });
+    expect(observed).toMatchObject({
+      result: { checked: true, ready: true },
+      requestParams: { probe: false },
+    });
   });
 
   it("reports hosted pairing inventory without reconnecting or falling back to disk", async () => {
-    const result = await withHosted(
+    const { result } = await withHosted(
+      "device.pair.list",
       {
-        "device.pair.list": ({ respond }) =>
-          respond(true, {
-            pending: [
-              {
-                deviceId: "doctor-device",
-                requestId: "doctor-request",
-                role: "operator",
-                scopes: ["operator.read"],
-              },
-            ],
-            paired: [],
-          }),
+        pending: [{ deviceId: "doctor-device", requestId: "doctor-request" }],
+        paired: [],
       },
       () => collectDevicePairingHealthFindings({ cfg: {}, healthOk: true }),
     );
@@ -150,11 +138,10 @@ describe("Doctor hosted Gateway reads", () => {
     const check = contributions.find((entry) => entry.id === "doctor:whatsapp-responsiveness")
       ?.healthChecks[0];
     expect(check).toBeDefined();
-    await expect(
-      withHosted({ status: ({ respond }) => respond(true, status) }, async () =>
-        check!.detect({ mode: "doctor", runtime, cfg: {} }),
-      ),
-    ).resolves.toEqual([]);
+    const { result } = await withHosted("status", status, async () =>
+      check!.detect({ mode: "doctor", runtime, cfg: {} }),
+    );
+    expect(result).toEqual([]);
     expect(collectWhatsappResponsivenessHealthFindings).toHaveBeenCalledWith({ cfg: {}, status });
   });
 });

@@ -23,11 +23,11 @@ describe("normalizeCompatibilityConfigValues", () => {
     const ref = (id: string) => ({ source: "env", provider: "gateway-env", id });
     expect(res.config.channels?.discord?.token).toEqual(ref("DISCORD_BOT_TOKEN"));
     expect(res.config.channels?.discord?.accounts?.work?.token).toEqual(ref("DISCORD_WORK_TOKEN"));
-    expect(res.changes).toContain(
-      "Moved channels.discord.token secretref-env:DISCORD_BOT_TOKEN marker → structured env SecretRef.",
-    );
-    expect(res.changes).toContain(
-      "Moved channels.discord.accounts.work.token __env__:DISCORD_WORK_TOKEN marker → structured env SecretRef.",
+    expect(res.changes).toEqual(
+      expect.arrayContaining([
+        "Moved channels.discord.token secretref-env:DISCORD_BOT_TOKEN marker → structured env SecretRef.",
+        "Moved channels.discord.accounts.work.token __env__:DISCORD_WORK_TOKEN marker → structured env SecretRef.",
+      ]),
     );
   });
 
@@ -73,9 +73,8 @@ describe("normalizeCompatibilityConfigValues", () => {
       expect(result.changes.join("\n")).not.toContain("synthetic-ref-metadata");
       expect(result.config.plugins?.entries?.opaque).toEqual(original.plugins?.entries?.opaque);
       expect(original).toEqual(before);
-      const repeated = normalizeCompatibilityConfigValues(result.config);
-      expect(repeated.config).toEqual(result.config);
-      expect(repeated.changes).toEqual([]);
+      const { config, changes } = normalizeCompatibilityConfigValues(result.config);
+      expect({ config, changes }).toEqual({ config: result.config, changes: [] });
     },
   );
 });

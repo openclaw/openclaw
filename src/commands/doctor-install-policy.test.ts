@@ -58,14 +58,17 @@ describe("Install policy Doctor output", () => {
     expect(body).toContain("Deep check allowed the synthetic install request");
   });
 
-  it.each(["warn", "block"] as const)(
-    "keeps policy-controlled %s reasons on one terminal line",
+  it.each(["warn", "block", "missing"] as const)(
+    "keeps %s policy diagnostics on one terminal line",
     async (decision) => {
-      const body = await collectPolicyOutput(
-        await policy(decision, "review probe\n- ERROR: forged\u001b[31m"),
-        { deep: true },
-      );
-      expectSanitized(body, "review probe");
+      const prefix = decision === "missing" ? "missing" : "review probe";
+      const text = `${prefix}\n- ERROR: forged\u001b[31m`;
+      const cfg =
+        decision === "missing"
+          ? configWithPolicy(path.join(tempDirs.make("openclaw-doctor-install-policy-"), text))
+          : await policy(decision, text);
+      const body = await collectPolicyOutput(cfg, { deep: decision !== "missing" });
+      expectSanitized(body, prefix);
       if (decision === "warn") {
         expect(body).toContain("Deep check returned a warning: review probe");
         expect(body).toContain("require explicit acknowledgement");
@@ -79,12 +82,5 @@ describe("Install policy Doctor output", () => {
     });
     expect(body).toContain("security.installPolicy.exec is not configured");
     expect(body).toContain("will be blocked");
-  });
-
-  it("keeps static validation errors on one terminal line", async () => {
-    const dir = tempDirs.make("openclaw-doctor-install-policy-");
-    const command = path.join(dir, "missing\n- ERROR: forged\u001b[31m");
-
-    expectSanitized(await collectPolicyOutput(configWithPolicy(command)), "missing");
   });
 });
