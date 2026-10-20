@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../tokens.js";
 import {
@@ -219,7 +219,7 @@ describe("createReplyDispatcher", () => {
 
   it.each(["onIdle", "onSettled"] as const)(
     "releases deferred delivery finalization from %s before sealing",
-    async (settleHook, { signal }) => {
+    async (settleHook) => {
       const { promise: finalization, resolve: finalize } = createDeferred<{
         visibleReplySent: true;
       }>();
@@ -230,7 +230,7 @@ describe("createReplyDispatcher", () => {
 
       dispatcher.sendFinalReply({ text: "final" });
       dispatcher.markComplete();
-      await expect(withinTest(dispatcher.waitForIdle(), signal)).resolves.toMatchObject({
+      await expect(dispatcher.waitForIdle()).resolves.toMatchObject({
         anyVisibleDelivered: true,
         counts: { final: { delivered: 1, deliveredNotVisible: 0 } },
       });
