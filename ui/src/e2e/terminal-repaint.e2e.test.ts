@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
 import type { Locator } from "playwright";
 import { beforeEach, expect, it } from "vitest";
@@ -10,6 +9,7 @@ import {
 } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { nativeAuth, terminalSession } from "./workspace-terminal.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI terminal repaint",
@@ -46,27 +46,12 @@ suite.define(() => {
         viewport: { width: 1232, height: 520 },
       },
       async ({ page }) => {
-        await page.addInitScript(() => {
-          (
-            window as Window & {
-              ["__OPENCLAW_NATIVE_CONTROL_AUTH__"]?: { gatewayUrl: string; token: string };
-            }
-          )["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = {
-            gatewayUrl: "ws://gateway.example.test",
-            token: "test",
-          };
-        });
+        await nativeAuth(page);
         const gateway = await installMockGateway(page, {
           featureMethods: ["terminal.open"],
           methodResponses: {
             "terminal.list": { sessions: [] },
-            "terminal.open": {
-              agentId: "main",
-              confined: false,
-              cwd: "/workspace",
-              sessionId: "terminal-repaint-e2e",
-              shell: "/bin/zsh",
-            },
+            "terminal.open": terminalSession("terminal-repaint-e2e", { shell: "/bin/zsh" }),
           },
           terminalEnabled: true,
         });
@@ -92,7 +77,6 @@ suite.define(() => {
         const renderedCanvasDigest = await terminalCanvasDigest(terminalCanvas);
 
         if (screenshotPath) {
-          await fs.mkdir(path.dirname(screenshotPath), { recursive: true });
           await page.screenshot({ path: screenshotPath });
         }
 

@@ -91,6 +91,7 @@ suite.define(() => {
         await page.goto(suite.server.baseUrl + "chat");
         await page.getByText("Here’s the post for context.", { exact: true }).waitFor();
         const card = page.locator("openclaw-browser-tab-card");
+        const open = card.getByRole("button", { name: "Open post", exact: true });
         await card.locator(".tweet-author").waitFor();
         if (state !== "unavailable") {
           await card.locator(".tweet-text").waitFor();
@@ -108,10 +109,7 @@ suite.define(() => {
         const frame = await takeControlUiScreenshotFrame(
           page,
           card,
-          [
-            card.locator(".tweet-author"),
-            card.getByRole("button", { name: "Open post", exact: true }),
-          ],
+          [card.locator(".tweet-author"), open],
           {
             elements: [card],
             scrollTo: card,
@@ -132,7 +130,6 @@ suite.define(() => {
         expect(
           await card.locator(".actions").evaluate((node) => getComputedStyle(node).opacity),
         ).toBe("1");
-        const open = card.getByRole("button", { name: "Open post", exact: true });
         await open.focus();
         expect(await open.evaluate((node) => node.matches(":focus-visible"))).toBe(true);
         await card.getByRole("button", { name: "More actions", exact: true }).click();

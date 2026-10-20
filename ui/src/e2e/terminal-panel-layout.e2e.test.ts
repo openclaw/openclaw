@@ -7,7 +7,9 @@ import {
   waitForControlUiTerminalReady,
 } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { chatMessage } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { terminalSession } from "./workspace-terminal.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI terminal panel layout",
@@ -54,45 +56,25 @@ suite.define(() => {
         async ({ page }) => {
           const gateway = await installMockGateway(page, {
             historyMessages: [
-              {
-                content: [{ type: "text", text: "Review the release checklist and recent CI." }],
-                role: "user",
+              chatMessage("user", "Review the release checklist and recent CI.", {
                 timestamp: Date.now() - 3_000,
-              },
-              {
-                content: [
-                  {
-                    type: "text",
-                    text: [
-                      "## Release workspace",
-                      "",
-                      "- CI checks are green",
-                      "- Two review notes remain",
-                      "- Terminal is ready for the focused command",
-                    ].join("\n"),
-                  },
-                ],
-                role: "assistant",
-                timestamp: Date.now() - 2_000,
-              },
-              {
-                content: [
-                  { type: "text", text: "Keep the transcript visible while we verify it." },
-                ],
-                role: "user",
+              }),
+              chatMessage(
+                "assistant",
+                "## Release workspace\n\n- CI checks are green\n- Two review notes remain\n- Terminal is ready for the focused command",
+                { timestamp: Date.now() - 2_000 },
+              ),
+              chatMessage("user", "Keep the transcript visible while we verify it.", {
                 timestamp: Date.now() - 1_000,
-              },
+              }),
             ],
             featureMethods: ["terminal.open"],
             methodResponses: {
               "terminal.list": { sessions: [] },
-              "terminal.open": {
-                agentId: "main",
-                confined: false,
+              "terminal.open": terminalSession(`terminal-layout-${theme}`, {
                 cwd: "/workspace/openclaw",
-                sessionId: `terminal-layout-${theme}`,
                 shell: "/bin/zsh",
-              },
+              }),
             },
             terminalEnabled: true,
           });
