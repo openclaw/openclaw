@@ -5,6 +5,17 @@ import {
   androidReleaseNativeFacts,
 } from "../../scripts/lib/android-release-e2e-diagnostics.js";
 
+const phases = ["initial", "relaunch", "phone-restart", "long-reply", "reader"];
+const phaseReady = (ready: boolean) => Object.fromEntries(phases.map((phase) => [phase, ready]));
+const nativeDefaults = {
+  class: "unknown",
+  frames: [],
+  processCrashed: false,
+  instrumentationFailed: false,
+  OKsingle: false,
+  phaseReady: phaseReady(false),
+};
+
 describe("Android release public failure diagnostics", () => {
   it.each([
     [
@@ -57,20 +68,7 @@ describe("Android release public failure diagnostics", () => {
       "private.UnknownException: private-token\n at private.Secret(secret.kt:5)\n" +
         "OPENCLAW_ANDROID_PHASE_READY private-secret\nOPENCLAW_ANDROID_PHASE_READY initial-private-token\n",
     );
-    expect(facts).toMatchObject({
-      class: "unknown",
-      frames: [],
-      processCrashed: false,
-      instrumentationFailed: false,
-      OKsingle: false,
-      phaseReady: {
-        initial: false,
-        relaunch: false,
-        "phone-restart": false,
-        "long-reply": false,
-        reader: false,
-      },
-    });
+    expect(facts).toMatchObject(nativeDefaults);
     expect(JSON.stringify(facts)).not.toMatch(/private|secret|token|UnknownException/u);
   });
 
@@ -97,21 +95,12 @@ describe("Android release public failure diagnostics", () => {
       `${exception}\n at ai.openclaw.wear.AndroidReleaseWearTest.releasePhase(AndroidReleaseWearTest.kt:121)\n at private.Secret(secret.kt:5)\n at ai.openclaw.release.ReleaseValidationUi.read(ReleaseValidationUi.kt:88)`,
     );
     expect(facts).toEqual({
+      ...nativeDefaults,
       class: expectedClass,
       frames: [
         { file: "AndroidReleaseWearTest.kt", line: 121 },
         { file: "ReleaseValidationUi.kt", line: 88 },
       ],
-      processCrashed: false,
-      instrumentationFailed: false,
-      OKsingle: false,
-      phaseReady: {
-        initial: false,
-        relaunch: false,
-        "phone-restart": false,
-        "long-reply": false,
-        reader: false,
-      },
     });
     expect(JSON.stringify(facts)).not.toMatch(/private|token|Secret/u);
   });
@@ -131,24 +120,12 @@ describe("Android release public failure diagnostics", () => {
     ],
   ])("retains native terminal facts for %s without raw results", (text, expected) => {
     const facts = androidReleaseNativeFacts(
-      "OPENCLAW_ANDROID_PHASE_READY initial\n" +
-        "OPENCLAW_ANDROID_PHASE_READY relaunch\n" +
-        "OPENCLAW_ANDROID_PHASE_READY phone-restart\n" +
-        "OPENCLAW_ANDROID_PHASE_READY long-reply\n" +
-        "OPENCLAW_ANDROID_PHASE_READY reader\n" +
-        text,
+      phases.map((phase) => `OPENCLAW_ANDROID_PHASE_READY ${phase}\n`).join("") + text,
     );
     expect(facts).toEqual({
-      class: "unknown",
-      frames: [],
+      ...nativeDefaults,
       ...expected,
-      phaseReady: {
-        initial: true,
-        relaunch: true,
-        "phone-restart": true,
-        "long-reply": true,
-        reader: true,
-      },
+      phaseReady: phaseReady(true),
     });
     expect(JSON.stringify(facts)).not.toMatch(
       /private|token|INSTRUMENTATION_|Process crashed|OK \(1 test\)/u,

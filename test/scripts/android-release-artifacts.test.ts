@@ -24,11 +24,7 @@ function run(args: string[], env: NodeJS.ProcessEnv = {}) {
 
 type ApkSignerFormat = "legacy" | "V1" | "V2" | "V3.0";
 
-function fakeApkSigner(
-  certificateSha256: string,
-  signerCount = 1,
-  format: ApkSignerFormat = "legacy",
-) {
+function verifyApk(certificateSha256: string, signerCount = 1, format: ApkSignerFormat = "legacy") {
   const tempRoot = tempRoots.make("openclaw-apksigner-");
   const buildToolsDir = path.join(tempRoot, "build-tools", "36.0.0");
   fs.mkdirSync(buildToolsDir, { recursive: true });
@@ -47,7 +43,7 @@ function fakeApkSigner(
   fs.chmodSync(apkSignerPath, 0o755);
   const apkPath = path.join(tempRoot, "OpenClaw-Android.apk");
   fs.writeFileSync(apkPath, "fake apk bytes");
-  return { apkPath, sdkRoot: tempRoot };
+  return run(["--verify-apk", apkPath], { ANDROID_HOME: tempRoot, ANDROID_SDK_ROOT: tempRoot });
 }
 
 describe("Android release artifacts", () => {
@@ -69,13 +65,7 @@ describe("Android release artifacts", () => {
   it.each<ApkSignerFormat>(["legacy", "V1", "V2", "V3.0"])(
     "accepts the pinned standalone APK signing certificate in %s output",
     (format) => {
-      const { apkPath, sdkRoot } = fakeApkSigner(APK_CERTIFICATE_SHA256, 1, format);
-
-      const result = run(["--verify-apk", apkPath], {
-        ANDROID_HOME: sdkRoot,
-        ANDROID_SDK_ROOT: sdkRoot,
-      });
-
+      const result = verifyApk(APK_CERTIFICATE_SHA256, 1, format);
       expect(result.status).toBe(0);
       expect(result.stdout).toContain("Verified pinned APK signing certificate");
     },
@@ -84,26 +74,14 @@ describe("Android release artifacts", () => {
   it.each<ApkSignerFormat>(["legacy", "V2"])(
     "rejects another certificate in %s output",
     (format) => {
-      const { apkPath, sdkRoot } = fakeApkSigner("a".repeat(64), 1, format);
-
-      const result = run(["--verify-apk", apkPath], {
-        ANDROID_HOME: sdkRoot,
-        ANDROID_SDK_ROOT: sdkRoot,
-      });
-
+      const result = verifyApk("a".repeat(64), 1, format);
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("APK signing certificate mismatch");
     },
   );
 
   it.each<ApkSignerFormat>(["legacy", "V2"])("rejects multiple signers in %s output", (format) => {
-    const { apkPath, sdkRoot } = fakeApkSigner(APK_CERTIFICATE_SHA256, 2, format);
-
-    const result = run(["--verify-apk", apkPath], {
-      ANDROID_HOME: sdkRoot,
-      ANDROID_SDK_ROOT: sdkRoot,
-    });
-
+    const result = verifyApk(APK_CERTIFICATE_SHA256, 2, format);
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("Expected exactly one SHA-256 signing certificate");
   });

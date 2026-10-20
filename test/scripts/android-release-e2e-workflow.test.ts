@@ -12,7 +12,6 @@ type Workflow = {
     {
       if?: string;
       needs?: string;
-      uses?: string;
       permissions?: Record<string, string>;
       with?: Record<string, string>;
       steps?: Array<{ name: string; uses?: string; with?: Record<string, string> }>;
@@ -23,6 +22,11 @@ type Workflow = {
 function readWorkflow(filename: string): Workflow {
   return parse(readFileSync(`.github/workflows/${filename}`, "utf8")) as Workflow;
 }
+const qualification = readWorkflow("android-release-e2e.yml");
+const qualify = qualification.jobs.qualify;
+ok(qualify, "Android validation must have its qualification job");
+const selectionDir = "${{ env.GATEWAY_SELECTION_DIR }}";
+const runnerTemp = "${{ runner.temp }}";
 
 function evaluateAdmission(condition: string, context: Record<string, unknown>): boolean {
   return Boolean(runInNewContext(condition.replace(/^\$\{\{\s*|\s*\}\}$/gu, ""), context));
@@ -65,10 +69,8 @@ describe("Android release validation admission", () => {
   it.each(["success", "failure", "cancelled", "skipped"])(
     "admits store signing/upload only after qualification success: %s",
     (result) => {
-      const workflow = readWorkflow("android-store-release.yml");
-      const qualify = workflow.jobs.qualify;
-      const release = workflow.jobs.release;
-      ok(qualify, "Android store release must have its qualification job");
+      const { qualify: storeQualify, release } = readWorkflow("android-store-release.yml").jobs;
+      ok(storeQualify, "Android store release must have its qualification job");
       ok(release, "Android store release must have its release job");
       const context = {
         github: {
@@ -81,39 +83,31 @@ describe("Android release validation admission", () => {
         vars: {},
         cancelled: () => false,
       };
-      expect(evaluateAdmission(qualify.if ?? "", context)).toBe(true);
+      expect(evaluateAdmission(storeQualify.if ?? "", context)).toBe(true);
       expect(release.needs).toBe("qualify");
       expect(evaluateAdmission(release.if ?? "", context)).toBe(result === "success");
-      expect(qualify.with).toEqual({ target_sha: "${{ github.sha }}" });
-      expect(qualify.permissions).toEqual({ actions: "read", contents: "read" });
+      expect(storeQualify.with).toEqual({ target_sha: "${{ github.sha }}" });
+      expect(storeQualify.permissions).toEqual({ actions: "read", contents: "read" });
     },
   );
 
   it("keeps qualification credential-free and publishes only its public evidence", () => {
-    const workflow = readWorkflow("android-release-e2e.yml");
-    expect(workflow.permissions).toEqual({ actions: "read", contents: "read" });
-    const qualify = workflow.jobs.qualify;
-    ok(qualify, "Android validation must have its qualification job");
+    expect(qualification.permissions).toEqual({ actions: "read", contents: "read" });
     const uploads = qualify.steps?.filter((step) =>
       step.uses?.startsWith("actions/upload-artifact@"),
     );
     expect(uploads?.map((step) => step.with?.path?.trim().split("\n"))).toEqual([
+      ["selection.json", "package.json", "package-lock.json"].map(
+        (file) => `${selectionDir}/${file}`,
+      ),
       [
-        "${{ env.GATEWAY_SELECTION_DIR }}/selection.json",
-        "${{ env.GATEWAY_SELECTION_DIR }}/package.json",
-        "${{ env.GATEWAY_SELECTION_DIR }}/package-lock.json",
-      ],
-      [
-        "${{ runner.temp }}/android-release-e2e-proof.json",
-        "${{ runner.temp }}/android-release-e2e/screenshots/*.png",
+        `${runnerTemp}/android-release-e2e-proof.json`,
+        `${runnerTemp}/android-release-e2e/screenshots/*.png`,
       ],
     ]);
   });
 
   it("rejects reruns without the same immutable Gateway selection", async () => {
-    const workflow = readWorkflow("android-release-e2e.yml");
-    const qualify = workflow.jobs.qualify;
-    ok(qualify, "Android validation must have its qualification job");
     const script = qualify.steps?.find(
       (step) => step.name === "Find this run's stable Gateway selection",
     )?.with?.script;

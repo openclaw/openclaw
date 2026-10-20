@@ -11,6 +11,47 @@ import { runNodeScript } from "../helpers/run-node-script.js";
 const scriptUrl = resolveRuntimeWorkerUrl(scriptProcessEntrypoints.agentPluginGatewayE2e);
 const fixtures = createFixtureLifetime();
 afterEach(() => fixtures.cleanup());
+function setup(phase: string) {
+  const controls = fixtures.createTempDir("agent-plugin-e2e-");
+  const home = path.join(controls, "home");
+  const tmp = path.join(controls, "tmp");
+  mkdirSync(home);
+  mkdirSync(tmp);
+  return {
+    controls,
+    env: {
+      PATH: process.env.PATH,
+      HOME: home,
+      TMPDIR: tmp,
+      TMP: tmp,
+      TEMP: tmp,
+      AGENT_PLUGIN_E2E_FIXTURE_DIR: controls,
+      AGENT_PLUGIN_E2E_WRITE_PHASE: phase,
+    },
+  };
+}
+const workerArgs: Parameters<typeof runNodeScript>[0] = (workerArgv) => {
+  const args = workerArgv(scriptUrl);
+  return [
+    ...args.slice(0, -1),
+    "--import",
+    new URL("./fixtures/agent-plugin-gateway-cancellation.mjs", import.meta.url).href,
+    ...args.slice(-1),
+  ];
+};
+function expectCleanup(controls: string) {
+  expect(existsSync(readFileSync(path.join(controls, "fixture-root"), "utf8"))).toBe(false);
+}
+function run(env: NodeJS.ProcessEnv, options: Parameters<typeof runNodeScript>[3]) {
+  return fixtures.track(
+    runNodeScript(workerArgs, env, 10_000, {
+      cwd: process.cwd(),
+      requireProcessTreeExit: true,
+      maxBuffer: 128 * 1024,
+      ...options,
+    }),
+  );
+}
 const cases = [
   ...(["fixture", "config"] as const).flatMap((phase) =>
     ([null, "SIGINT", "SIGTERM"] as const).map((signal) => ({
@@ -26,37 +67,15 @@ it.skipIf(process.platform === "win32").for([undefined, "node", "bun"])(
   "selects the %s runtime for the serving Agent Plugin Gateway",
   async (runtime, { signal }) => {
     await fixtures.run(async () => {
-      const controls = fixtures.createTempDir("agent-plugin-runtime-");
-      const home = path.join(controls, "home");
-      const tmp = path.join(controls, "tmp");
-      mkdirSync(home);
-      mkdirSync(tmp);
-      const result = await fixtures.track(
-        runNodeScript(
-          (workerArgv) => {
-            const args = workerArgv(scriptUrl);
-            return [
-              ...args.slice(0, -1),
-              "--import",
-              new URL("./fixtures/agent-plugin-gateway-cancellation.mjs", import.meta.url).href,
-              ...args.slice(-1),
-            ];
-          },
-          {
-            PATH: process.env.PATH,
-            CI: "",
-            HOME: home,
-            TMPDIR: tmp,
-            TMP: tmp,
-            TEMP: tmp,
-            OPENCLAW_VITEST_RUNTIME: runtime,
-            OPENCLAW_BUN_PATH: process.execPath,
-            AGENT_PLUGIN_E2E_FIXTURE_DIR: controls,
-            AGENT_PLUGIN_E2E_WRITE_PHASE: "runtime",
-          },
-          10_000,
-          { cwd: process.cwd(), signal, requireProcessTreeExit: true, maxBuffer: 128 * 1024 },
-        ),
+      const { controls, env } = setup("runtime");
+      const result = await run(
+        {
+          ...env,
+          CI: "",
+          OPENCLAW_VITEST_RUNTIME: runtime,
+          OPENCLAW_BUN_PATH: process.execPath,
+        },
+        { signal },
       );
       expect(result.error, result.stderr).toBeUndefined();
       expect(result.status).toBeGreaterThan(0);
@@ -65,8 +84,7 @@ it.skipIf(process.platform === "win32").for([undefined, "node", "bun"])(
         readFileSync(path.join(controls, "gateway-command"), "utf8"),
       );
       expect(command).toBe(runtime === "node" ? hostExecPath : process.execPath);
-      const fixtureRoot = readFileSync(path.join(controls, "fixture-root"), "utf8");
-      expect(existsSync(fixtureRoot)).toBe(false);
+      expectCleanup(controls);
     });
   },
 );
@@ -76,56 +94,31 @@ it.skipIf(process.platform === "win32").for(cases)(
   { timeout: 30_000 },
   async ({ phase, signal }, context) => {
     await fixtures.run(async () => {
-      const controls = fixtures.createTempDir("agent-plugin-cancellation-");
-      const home = path.join(controls, "home");
-      const tmp = path.join(controls, "tmp");
-      mkdirSync(home);
-      mkdirSync(tmp);
+      const { controls, env } = setup(phase);
       const release = path.join(controls, "release");
       const ready = createDeferred();
       const receivedSignal = createDeferred();
       let child: ChildProcess | undefined;
-      const command = fixtures.track(
-        runNodeScript(
-          (workerArgv) => {
-            const scriptArgs = workerArgv(scriptUrl);
-            return [
-              ...scriptArgs.slice(0, -1),
-              "--import",
-              new URL("./fixtures/agent-plugin-gateway-cancellation.mjs", import.meta.url).href,
-              ...scriptArgs.slice(-1),
-            ];
+      const command = run(
+        {
+          ...env,
+          ...(signal ? { AGENT_PLUGIN_E2E_SIGNAL: signal } : {}),
+        },
+        {
+          signal: context.signal,
+          onReady(owned, output) {
+            child = owned;
+            owned.stdout!.on("data", () => {
+              const text = output().stdout;
+              if (text.includes("fixture-write-ready\n")) {
+                ready.resolve();
+              }
+              if (signal && text.includes(`fixture-signal-${signal}\n`)) {
+                receivedSignal.resolve();
+              }
+            });
           },
-          {
-            PATH: process.env.PATH,
-            HOME: home,
-            TMPDIR: tmp,
-            TMP: tmp,
-            TEMP: tmp,
-            AGENT_PLUGIN_E2E_FIXTURE_DIR: controls,
-            AGENT_PLUGIN_E2E_WRITE_PHASE: phase,
-            ...(signal ? { AGENT_PLUGIN_E2E_SIGNAL: signal } : {}),
-          },
-          10_000,
-          {
-            cwd: process.cwd(),
-            signal: context.signal,
-            requireProcessTreeExit: true,
-            maxBuffer: 128 * 1024,
-            onReady(owned, output) {
-              child = owned;
-              owned.stdout!.on("data", () => {
-                const text = output().stdout;
-                if (text.includes("fixture-write-ready\n")) {
-                  ready.resolve();
-                }
-                if (signal && text.includes(`fixture-signal-${signal}\n`)) {
-                  receivedSignal.resolve();
-                }
-              });
-            },
-          },
-        ),
+        },
       );
       const closedBeforeGate = command.then((result) => {
         throw new Error(`Entry point exited before the fixture gate: ${JSON.stringify(result)}`);
@@ -155,8 +148,7 @@ it.skipIf(process.platform === "win32").for(cases)(
           expect(result.stderr).toContain("agent-plugin-gateway-e2e interrupted");
           expect(result.stderr).toContain("Managed command aborted");
         }
-        const fixtureRoot = readFileSync(path.join(controls, "fixture-root"), "utf8");
-        expect(existsSync(fixtureRoot)).toBe(false);
+        expectCleanup(controls);
       } finally {
         writeFileSync(release, "release");
         await command;

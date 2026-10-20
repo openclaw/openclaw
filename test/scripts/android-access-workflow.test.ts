@@ -11,6 +11,11 @@ const step = job.steps.find(
   (entry: { name?: string }) => entry.name === "Run packaged Access crypto on Android",
 );
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+function containsAll(text: string, fragments: string[]) {
+  for (const fragment of fragments) {
+    expect(text).toContain(fragment);
+  }
+}
 
 function verifyReports(mode: string) {
   const root = tempDirs.make("openclaw-access-reports-");
@@ -18,11 +23,7 @@ function verifyReports(mode: string) {
   if (!verification) {
     throw new Error("Missing native report verification");
   }
-  return spawnSync(
-    "python3",
-    [
-      "-c",
-      String.raw`
+  const fixture = String.raw`
 from pathlib import Path
 import json, sys, zipfile
 mode = sys.argv[1]
@@ -42,11 +43,11 @@ abis = ['armeabi-v7a', 'arm64-v8a', 'x86', 'x86_64']
 if mode == 'missing-abi': abis.pop()
 with zipfile.ZipFile(apk, 'w') as archive:
     for abi in abis: archive.writestr(f'lib/{abi}/libsodium.so', b'test-only')
-` + verification,
-      mode,
-    ],
-    { cwd: root, encoding: "utf8" },
-  );
+`;
+  return spawnSync("python3", ["-c", fixture + verification, mode], {
+    cwd: root,
+    encoding: "utf8",
+  });
 }
 
 describe("Android Access native workflow", () => {
@@ -59,16 +60,16 @@ describe("Android Access native workflow", () => {
       "${{ steps.manifest.outputs.run_android_access_native }}",
     );
     expect(job.if).toBe("needs.preflight.outputs.run_android_access_native == 'true'");
-    expect(step.run).toContain(":app:connectedPlayDebugAndroidTest");
-    expect(step.run).toContain(
+    containsAll(step.run, [
+      ":app:connectedPlayDebugAndroidTest",
       "-Pandroid.testInstrumentationRunnerArguments.class=ai.openclaw.app.gateway.CloudflareAccessNativeTest",
-    );
+      'zipalign" -c -P 16 -v 4 "$apk"',
+    ]);
     const zipalignVersion = step.run.match(/\/build-tools\/([^/]+)\/zipalign"/)?.[1];
     expect(zipalignVersion).toBeDefined();
     expect(readFileSync(".github/actions/setup-android-toolchain/action.yml", "utf8")).toContain(
       `"build-tools;${zipalignVersion}"`,
     );
-    expect(step.run).toContain('zipalign" -c -P 16 -v 4 "$apk"');
     expect(workflow.jobs["ci-gate"].needs).toContain("android-access-native");
     const aggregate = workflow.jobs["ci-gate"].steps.find(
       (entry: { name?: string }) => entry.name === "Verify selected CI lanes",
@@ -97,19 +98,17 @@ describe("Android Access native workflow", () => {
       step.run.indexOf('test "$(adb -s emulator-5554 shell getconf PAGE_SIZE'),
       step.run.indexOf("node --import ./scripts/tsx.mjs"),
     );
-    expect(guard).toContain("setprop bionic.linker.16kb.app_compat.enabled false");
-    expect(guard).toContain("setprop pm.16kb.app_compat.disabled true");
+    containsAll(guard, [
+      "setprop bionic.linker.16kb.app_compat.enabled false",
+      "setprop pm.16kb.app_compat.disabled true",
+    ]);
     for (const [pageSize, linker, packageManager, passes] of [
       [16384, "false", "true", true],
       [4096, "false", "true", false],
       [16384, "true", "true", false],
       [16384, "false", "false", false],
     ] as const) {
-      const result = spawnSync(
-        "bash",
-        [
-          "-c",
-          `set -euo pipefail
+      const fixture = `set -euo pipefail
 EXPECTED_PAGE_SIZE=16384
 adb() {
   case "$*" in
@@ -118,10 +117,8 @@ adb() {
     *"getprop pm.16kb.app_compat.disabled") echo ${packageManager} ;;
   esac
 }
-${guard}`,
-        ],
-        { encoding: "utf8" },
-      );
+${guard}`;
+      const result = spawnSync("bash", ["-c", fixture], { encoding: "utf8" });
       expect(result.status === 0, result.stderr).toBe(passes);
     }
   });
