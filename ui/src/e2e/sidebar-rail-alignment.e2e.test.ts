@@ -2,9 +2,9 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { captureSidebarUiProof } from "./sidebar-customization.test-support.ts";
 import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Sidebar rail alignment" });
@@ -16,20 +16,12 @@ suite.define(() => {
       await suite.withPage(
         { hasTouch, viewport: { width: 1280, height: 800 } },
         async ({ page }) => {
-          const sessions = [
-            {
-              key: "agent:main:current",
-              kind: "direct",
-              label: "Sidebar alignment review",
-              updatedAt: Date.now(),
-            },
-            {
-              key: "agent:main:notes",
-              kind: "direct",
-              label: "Release notes",
-              updatedAt: Date.now(),
-            },
-          ];
+          const sessions = ["Sidebar alignment review", "Release notes"].map((label, index) => ({
+            key: `agent:main:${index === 0 ? "current" : "notes"}`,
+            kind: "direct",
+            label,
+            updatedAt: Date.now(),
+          }));
           await installMockGateway(page, {
             sessionKey: "agent:main:current",
             presenceUsers: [{ id: "riley", name: "Riley", self: true }],
@@ -81,18 +73,8 @@ suite.define(() => {
             const dir = createControlUiE2eArtifactDir(
               hasTouch ? "rail-alignment-touch" : "rail-alignment-desktop",
             );
-            const capture = async (name: string) => {
-              const frame = await takeControlUiScreenshotFrame(
-                page,
-                page.locator(".shell"),
-                [rail, owner],
-                {
-                  animations: "disabled",
-                  elements: [page.locator("openclaw-app-sidebar .sidebar")],
-                },
-              );
-              await writeFile(path.join(dir, name + ".png"), frame.elements[0]!.png);
-            };
+            const capture = (name: string) =>
+              captureSidebarUiProof({ artifactDir: dir }, page, `${name}.png`);
             // Reproduce the two changed declarations, retaining identical app/data/viewport.
             const baseline = await page.addStyleTag({
               content:

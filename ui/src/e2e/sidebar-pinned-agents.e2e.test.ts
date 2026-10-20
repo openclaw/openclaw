@@ -1,3 +1,4 @@
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { AgentsListResult } from "../api/types.ts";
 import {
@@ -23,6 +24,20 @@ const agentsList: AgentsListResult = {
 };
 const assistantReply =
   "The release notes are ready for review. The next step is checking the examples.";
+const style = (locator: Locator, property: string) =>
+  locator.evaluate((element, key) => getComputedStyle(element).getPropertyValue(key), property);
+const expectFocused = async (locator: Locator) =>
+  expect(await locator.evaluate((element) => element === document.activeElement)).toBe(true);
+const expectCount = async (locator: Locator, count: number) =>
+  expect(await locator.count()).toBe(count);
+const useRoster = (
+  page: Page,
+  pins: { pinnedAgentIds?: string[]; railShortcuts?: string[] } = {},
+) =>
+  page.addInitScript(({ key, settings }) => localStorage.setItem(key, JSON.stringify(settings)), {
+    key: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
+    settings: { sidebarAgentsMode: "roster", ...pins },
+  });
 
 suite.define(() => {
   it("loads saved agent and session pins alongside existing session rows", async () => {
@@ -30,22 +45,10 @@ suite.define(() => {
       { locale: "en-US", viewport: { width: 1280, height: 900 } },
       async ({ page }) => {
         const legacyKey = "agent:research:legacy-notes";
-        await page.addInitScript(
-          ({ key, legacySessionKey }) => {
-            localStorage.setItem(
-              key,
-              JSON.stringify({
-                sidebarAgentsMode: "roster",
-                pinnedAgentIds: ["main"],
-                railShortcuts: [`session:${legacySessionKey}`],
-              }),
-            );
-          },
-          {
-            key: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
-            legacySessionKey: legacyKey,
-          },
-        );
+        await useRoster(page, {
+          pinnedAgentIds: ["main"],
+          railShortcuts: [`session:${legacyKey}`],
+        });
         await installMockGateway(page, {
           sessionKey: "agent:main:main",
           sessions: [
@@ -79,10 +82,7 @@ suite.define(() => {
           hasTouch: width === 390,
         },
         async ({ page }) => {
-          await page.addInitScript(
-            (key) => localStorage.setItem(key, JSON.stringify({ sidebarAgentsMode: "roster" })),
-            controlUiBundledSettingsStorageKey(suite.server.baseUrl),
-          );
+          await useRoster(page);
           await installMockGateway(page, {
             sessions: [
               {
@@ -118,11 +118,7 @@ suite.define(() => {
           await page.goto(`${suite.server.baseUrl}chat`);
           await waitForControlUiRoute(page, { routeId: "chat" });
           const drawerToggle = navigationDrawerToggle(page);
-          if (
-            await page
-              .locator(".shell")
-              .evaluate((element) => element.classList.contains("shell--mobile-nav"))
-          ) {
+          if (await page.locator(".shell--mobile-nav").count()) {
             await drawerToggle.press("Enter");
             await waitForMobileSidebarDrawerOpen(page);
           }
@@ -139,28 +135,20 @@ suite.define(() => {
               header.locator(".sidebar-agent-roster__avatar .session-glyph__ring").count(),
             )
             .toBe(1);
-          expect(await sidebar.locator("[data-agent-collapse]").count()).toBe(0);
-          expect(
-            await sidebar
-              .locator(
-                ".sidebar-agent-roster__signals .sidebar-child-session-toggle__count, .sidebar-agent-roster__signals .session-glyph__ring",
-              )
-              .count(),
-          ).toBe(0);
-          expect(await sidebar.locator("[data-agent-group] .sidebar-recent-session").count()).toBe(
+          await expectCount(sidebar.locator("[data-agent-collapse]"), 0);
+          const signals = sidebar.locator(".sidebar-agent-roster__signals");
+          await expectCount(
+            signals.locator(".sidebar-child-session-toggle__count, .session-glyph__ring"),
             0,
           );
+          await expectCount(sidebar.locator("[data-agent-group] .sidebar-recent-session"), 0);
           const longNameRow = sidebar.locator(
             '[data-agent-group="research"] .sidebar-agent-roster__row',
           );
           await page.mouse.move(-1, -1);
-          const restingPadding = await longNameRow.evaluate(
-            (element) => getComputedStyle(element).paddingInlineEnd,
-          );
+          const restingPadding = await style(longNameRow, "padding-inline-end");
           await longNameRow.hover();
-          const hoverPadding = await longNameRow.evaluate(
-            (element) => getComputedStyle(element).paddingInlineEnd,
-          );
+          const hoverPadding = await style(longNameRow, "padding-inline-end");
           expect(restingPadding).toBe(width === 390 ? "32px" : "0px");
           expect(hoverPadding).toBe("32px");
           for (const state of ["hover", "focus"] as const) {
@@ -170,11 +158,9 @@ suite.define(() => {
               await page.mouse.move(-1, -1);
               await menu.focus();
             }
-            expect(
-              await header
-                .locator(".sidebar-agent-roster__actions")
-                .evaluate((element) => getComputedStyle(element).opacity),
-            ).toBe("1");
+            expect(await style(header.locator(".sidebar-agent-roster__actions"), "opacity")).toBe(
+              "1",
+            );
             const rowBounds = (await row.boundingBox())!;
             const bounds = (await menu.boundingBox())!;
             const headerBounds = (await header.boundingBox())!;
@@ -188,9 +174,7 @@ suite.define(() => {
               headerBounds.y + headerBounds.height,
             );
             if (state === "focus") {
-              expect(await menu.evaluate((element) => getComputedStyle(element).outlineStyle)).toBe(
-                "solid",
-              );
+              expect(await style(menu, "outline-style")).toBe("solid");
             }
             await captureSidebarUiProof(suite, page, `row-${width}-${state}.png`);
           }
@@ -198,16 +182,10 @@ suite.define(() => {
           const viewSessions = sidebar.getByRole("menuitem", { name: "Sessions", exact: true });
           const settings = sidebar.getByRole("menuitem", { name: "Settings", exact: true });
           const deleteAgent = sidebar.getByRole("menuitem", { name: "Delete", exact: true });
-          expect(await sidebar.getByRole("menuitem", { name: "Create new session" }).count()).toBe(
-            0,
-          );
-          expect(await viewSessions.locator("svg").count()).toBe(1);
-          expect(await settings.locator("svg").count()).toBe(1);
-          expect(await deleteAgent.locator("svg").count()).toBe(1);
+          await expectCount(sidebar.getByRole("menuitem", { name: "Create new session" }), 0);
           for (const item of [viewSessions, settings, deleteAgent]) {
-            expect(await item.locator("svg").evaluate((icon) => getComputedStyle(icon).width)).toBe(
-              "16px",
-            );
+            await expectCount(item.locator("svg"), 1);
+            expect(await style(item.locator("svg"), "width")).toBe("16px");
           }
           expect(await sidebar.getByRole("menuitem", { name: "Collapse others" }).count()).toBe(0);
           const menuLabels = await sidebar.getByRole("menuitem").allTextContents();
@@ -220,19 +198,18 @@ suite.define(() => {
           const pinned = sidebar.locator('[data-pinned-agent="main"]');
           const link = pinned.getByRole("link", { name: "Harbor", exact: true });
           await link.waitFor({ state: "visible" });
-          expect(await link.evaluate((element) => element === document.activeElement)).toBe(true);
+          await expectFocused(link);
           expect(await sidebar.locator('[data-agent-group="main"]').count()).toBe(0);
           expect(await sidebar.locator('[data-agent-group="research"]').isVisible()).toBe(true);
           expect(await pinned.locator(".sidebar-agent-roster__preview").count()).toBe(0);
-          expect(
-            await pinned.locator(".sidebar-pinned-agent__avatar .session-glyph__ring").count(),
-          ).toBe(1);
+          await expectCount(
+            pinned.locator(".sidebar-pinned-agent__avatar .session-glyph__ring"),
+            1,
+          );
           await link.hover();
           expect(await pinned.getByRole("button").count()).toBe(0);
           expect(
-            await sidebar
-              .locator(".sidebar-pinned-agents")
-              .evaluate((element) => getComputedStyle(element).borderBottomStyle),
+            await style(sidebar.locator(".sidebar-pinned-agents"), "border-bottom-style"),
           ).toBe("none");
           await captureSidebarUiProof(suite, page, `pinned-gallery-${width}-hover.png`);
           const card = pinned.locator(".tooltip-surface[popover]:popover-open");
@@ -242,17 +219,13 @@ suite.define(() => {
             await link.evaluate((element) => element.blur());
             await expect.poll(() => card.count()).toBe(0);
             if (state === "hover") {
-              await page.mouse.move(-1, -1);
               await link.hover();
             } else {
-              await page.mouse.move(-1, -1);
               // Tooltips open for keyboard focus, so reach the link by tabbing.
               await link.focus();
               await page.keyboard.press("Shift+Tab");
               await page.keyboard.press("Tab");
-              expect(await link.evaluate((element) => element === document.activeElement)).toBe(
-                true,
-              );
+              await expectFocused(link);
             }
             await card.waitFor({ state: "visible" });
             await content.waitFor({ state: "visible" });

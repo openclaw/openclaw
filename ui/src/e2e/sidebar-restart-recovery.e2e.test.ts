@@ -55,23 +55,20 @@ suite.define(() => {
           sessionKey: parent.key,
           sessions: [parent, child],
           historyMessages: [
-            {
-              role: "user",
-              content: [
-                { type: "text", text: "Continue the release validation after the restart." },
-              ],
-            },
-            {
-              role: "assistant",
-              content: [
-                {
-                  type: "text",
-                  text: "I am checking retained child work before continuing validation.",
-                },
-              ],
-            },
-          ],
+            ["user", "Continue the release validation after the restart."],
+            ["assistant", "I am checking retained child work before continuing validation."],
+          ].map(([role, text]) => ({ role, content: [{ type: "text", text }] })),
         });
+        const publishChild = async (session: GatewaySessionRow) => {
+          await gateway.setSessionsListResponse(sessionsListResponse([parent, session]));
+          await gateway.emitGatewayEvent("sessions.changed", {
+            sessionKey: child.key,
+            reason: "subagent-status",
+            ts: session.updatedAt,
+            session: { ...session, lastRunError: session.lastRunError ?? null },
+            ancestorSessions: [parent],
+          });
+        };
         await page.goto(`${suite.server.baseUrl}chat`);
         await waitForControlUiRoute(page, { routeId: "chat" });
         const sidebar = page.locator("openclaw-app-sidebar");
@@ -95,14 +92,7 @@ suite.define(() => {
           lastRunError: undefined,
           updatedAt: now + 1,
         };
-        await gateway.setSessionsListResponse(sessionsListResponse([parent, interrupted]));
-        await gateway.emitGatewayEvent("sessions.changed", {
-          sessionKey: child.key,
-          reason: "subagent-status",
-          ts: now + 1,
-          session: { ...interrupted, lastRunError: null },
-          ancestorSessions: [parent],
-        });
+        await publishChild(interrupted);
         const interruption = childRow.getByRole("img", { name: "Interrupted", exact: true });
         await interruption.waitFor({ state: "visible" });
         await toggle.click();
@@ -122,14 +112,7 @@ suite.define(() => {
           updatedAt: now + 2,
           endedAt: now + 2,
         };
-        await gateway.setSessionsListResponse(sessionsListResponse([parent, failed]));
-        await gateway.emitGatewayEvent("sessions.changed", {
-          sessionKey: child.key,
-          reason: "subagent-status",
-          ts: now + 2,
-          session: failed,
-          ancestorSessions: [parent],
-        });
+        await publishChild(failed);
         await childRow.locator('[data-session-attention="error"]').waitFor({ state: "visible" });
         await interruption.waitFor({ state: "detached" });
         await toggle.click();

@@ -1,13 +1,11 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { captureSidebarUiProof } from "./sidebar-customization.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Personal navigation identity resolution" });
 
@@ -55,31 +53,18 @@ suite.define(() => {
         const sidebar = page.locator("openclaw-app-sidebar");
         const rows = sidebar.locator(".sidebar-session-content .sidebar-recent-session");
         const ownerFilter = sidebar.locator("#sidebar-session-owner-title .picker-select__label");
-        await expect
-          .poll(() => ownerFilter.textContent().then((text) => text?.trim()))
-          .toBe("All owners");
-        await expect.poll(() => rows.count()).toBe(2);
+        const expectScope = async (label: string, count: number) => {
+          await expect.poll(async () => (await ownerFilter.textContent())?.trim()).toBe(label);
+          await expect.poll(() => rows.count()).toBe(count);
+        };
+        await expectScope("All owners", 2);
         await gateway.rejectDeferred("users.self", {
           code: "FORBIDDEN",
           message: "No authenticated profile",
         });
-        await expect
-          .poll(() => ownerFilter.textContent().then((text) => text?.trim()))
-          .toBe("All owners");
-        await expect.poll(() => rows.count()).toBe(2);
+        await expectScope("All owners", 2);
         expect(await gateway.getRequests("users.prefs.set")).toEqual([]);
-        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-          const frame = await takeControlUiScreenshotFrame(
-            page,
-            page.locator(".shell"),
-            [sidebar, page.locator(".new-session-page")],
-            { animations: "disabled" },
-          );
-          await writeFile(
-            path.join(suite.artifactDir, "profileless-accessible-sessions.png"),
-            frame.png,
-          );
-        }
+        await captureSidebarUiProof(suite, page, "profileless-accessible-sessions.png");
         const instanceId = await evaluateControlUiContext(
           page,
           (context) => context.gateway.snapshot.client?.instanceId,
@@ -93,10 +78,7 @@ suite.define(() => {
             },
           ],
         });
-        await expect
-          .poll(() => ownerFilter.textContent().then((text) => text?.trim()))
-          .toBe("My sessions");
-        await expect.poll(() => rows.count()).toBe(1);
+        await expectScope("My sessions", 1);
         expect(await rows.first().getAttribute("data-session-key")).toBe(mine);
         expect(await gateway.getRequests("users.prefs.set")).toEqual([]);
       },
