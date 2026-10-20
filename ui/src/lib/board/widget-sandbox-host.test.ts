@@ -29,6 +29,11 @@ async function closeServer(server: Server): Promise<void> {
 }
 
 const SANDBOX_URL = "https://sandbox.example/mcp-app-sandbox";
+type HostOptions = ConstructorParameters<typeof BoardWidgetSandboxHost>[0];
+
+function htmlFetch(html = "<!doctype html><p>weather</p>", init?: ResponseInit) {
+  return vi.fn<typeof fetch>(async () => new Response(html, init));
+}
 
 function widget(): BoardWidget {
   return {
@@ -45,10 +50,7 @@ function widget(): BoardWidget {
   };
 }
 
-function hostOptions(
-  frame: HTMLIFrameElement,
-  overrides: Partial<ConstructorParameters<typeof BoardWidgetSandboxHost>[0]> = {},
-): ConstructorParameters<typeof BoardWidgetSandboxHost>[0] {
+function hostOptions(frame: HTMLIFrameElement, overrides: Partial<HostOptions> = {}): HostOptions {
   return {
     frame,
     widget: widget(),
@@ -68,15 +70,25 @@ function hostOptions(
 }
 
 function createHost(
-  overrides: Partial<ConstructorParameters<typeof BoardWidgetSandboxHost>[0]> = {},
-  fetchMock = vi.fn(async () => new Response("<!doctype html><p>weather</p>")),
+  overrides: Partial<HostOptions> = {},
+  fetchMock: typeof fetch | null = htmlFetch(),
 ) {
   const frame = document.createElement("iframe");
   document.body.append(frame);
-  vi.stubGlobal("fetch", fetchMock);
+  if (fetchMock) {
+    vi.stubGlobal("fetch", fetchMock);
+  }
   const options = hostOptions(frame, overrides);
+  const postMessage = vi.spyOn(frame.contentWindow!, "postMessage");
   const host = new BoardWidgetSandboxHost(options);
-  return { frame, host, options, fetchMock };
+  return { frame, host, options, fetchMock, postMessage };
+}
+
+async function readyHost(...args: Parameters<typeof createHost>) {
+  const fixture = createHost(...args);
+  notifyProxyReady(fixture.host, fixture.frame, fixture.options.sandboxUrl);
+  await vi.waitFor(() => expect(fixture.options.onLoaded).toHaveBeenCalledOnce());
+  return fixture;
 }
 
 function bridgeRequest(
@@ -175,13 +187,12 @@ afterEach(() => {
 
 describe("BoardWidgetSandboxHost", () => {
   it("fetches ticketed HTML while the proxy starts and delivers it only after readiness", async () => {
-    const { frame, host, options, fetchMock } = createHost({
+    const { frame, host, options, fetchMock, postMessage } = createHost({
       client: { request: vi.fn(async () => ({ ok: true })) },
       resolveFrameUrl: () => "/__openclaw__/board/weather?bt=ticket",
       onRendered: vi.fn(),
     });
     const { onLoaded, onRendered } = options;
-    const postMessage = vi.spyOn(frame.contentWindow!, "postMessage");
 
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
     expect(postMessage).not.toHaveBeenCalled();
@@ -230,14 +241,12 @@ describe("BoardWidgetSandboxHost", () => {
 
   it("delivers passive preview HTML without accepting its capability bridge", async () => {
     const client = { request: vi.fn(async () => ({ ok: true })) };
-    const { frame, host, options } = createHost({
+    const { frame, host } = await readyHost({
       client,
       bridgeEnabled: false,
       resolveFrameUrl: () => "/__openclaw__/board/weather?bt=ticket",
     });
 
-    notifyProxyReady(host, frame);
-    await vi.waitFor(() => expect(options.onLoaded).toHaveBeenCalledOnce());
     const channel = new MessageChannel();
     const close = vi.spyOn(channel.port1, "close");
     sendWindowMessage(host, frame, { type: "openclaw:widget-bridge-port-offer" }, [channel.port1]);
@@ -252,7 +261,7 @@ describe("BoardWidgetSandboxHost", () => {
         client: { request: vi.fn(async () => ({ ok: true })) },
         resolveFrameUrl: () => "/__openclaw__/board/weather?bt=ticket",
       },
-      vi.fn(async () => new Response("unavailable", { status: 503 })),
+      htmlFetch("unavailable", { status: 503 }),
     );
 
     notifyProxyReady(host, frame);
@@ -262,12 +271,10 @@ describe("BoardWidgetSandboxHost", () => {
   });
 
   it("injects the active view ticket only after the current document is loaded", async () => {
-    const { frame, host, options } = createHost({
+    const { frame, host } = await readyHost({
       controlUiBaseUrl: "https://control.example/openclaw",
     });
 
-    notifyProxyReady(host, frame);
-    await vi.waitFor(() => expect(options.onLoaded).toHaveBeenCalledOnce());
     const hostMessage = vi.fn();
     await offerBridgePort(host, frame, hostMessage);
 
@@ -287,10 +294,7 @@ describe("BoardWidgetSandboxHost", () => {
   it("drops a bridge response after the widget document is replaced", async () => {
     const pending = Promise.withResolvers<unknown>();
     const client = { request: vi.fn(async () => await pending.promise) };
-    const { frame, host, options } = createHost({ client });
-    const postMessage = vi.spyOn(frame.contentWindow!, "postMessage");
-    notifyProxyReady(host, frame);
-    await vi.waitFor(() => expect(options.onLoaded).toHaveBeenCalledOnce());
+    const { frame, host, options, postMessage } = await readyHost({ client });
     const bridgePort = await offerBridgePort(host, frame);
     const bridgeResponse = vi.fn();
     bridgePort.addEventListener("message", bridgeResponse);
@@ -319,10 +323,7 @@ describe("BoardWidgetSandboxHost", () => {
         method === "board.prompt.authorize" ? { confirmationRequired: false } : { ok: true },
       ),
     };
-    const { frame, host } = createHost(
-      { client },
-      vi.fn(async () => new Response("<!doctype html><button>prompt</button>")),
-    );
+    const { frame, host } = createHost({ client });
     notifyProxyReady(host, frame);
     await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
     const request = promptRequest("prompt-request", "Injected");
@@ -348,18 +349,15 @@ describe("BoardWidgetSandboxHost", () => {
       configurable: true,
     });
     const setup = async (sessionId: string, viewGeneration: string) => {
-      const { frame, host, options } = createHost(
-        {
-          widget: { ...widget(), viewGeneration },
-          client: {
-            request: vi.fn(async (method: string) =>
-              method === "board.prompt.authorize" ? { confirmationRequired: false } : { ok: true },
-            ),
-          },
-          resolveFrameUrl: () => `/__openclaw__/board/${sessionId}/weather/index.html?bt=ticket`,
+      const { frame, host, options } = createHost({
+        widget: { ...widget(), viewGeneration },
+        client: {
+          request: vi.fn(async (method: string) =>
+            method === "board.prompt.authorize" ? { confirmationRequired: false } : { ok: true },
+          ),
         },
-        vi.fn(async () => new Response("<!doctype html><button>prompt</button>")),
-      );
+        resolveFrameUrl: () => `/__openclaw__/board/${sessionId}/weather/index.html?bt=ticket`,
+      });
       frame.checkVisibility = () => true;
       notifyProxyReady(host, frame);
       await vi.waitFor(() => expect(options.onLoaded).toHaveBeenCalledOnce());
@@ -397,12 +395,10 @@ describe("BoardWidgetSandboxHost", () => {
         return { ok: true };
       }),
     };
-    const { frame, host, options } = createHost({
+    const { frame, host, options } = await readyHost({
       client,
       resolveFrameUrl: () => "/widget?bt=ticket",
     });
-    notifyProxyReady(host, frame);
-    await vi.waitFor(() => expect(options.onLoaded).toHaveBeenCalledOnce());
     const bridgePort = await offerBridgePort(host, frame);
     const responses: unknown[] = [];
     let renewalTicket = "";
@@ -449,12 +445,10 @@ describe("BoardWidgetSandboxHost", () => {
       const oldClient = { request: vi.fn(async () => await pending.promise) };
       const newClient =
         change === "reconnected" ? oldClient : { request: vi.fn(async () => ({ ok: true })) };
-      const { frame, host, options } = createHost({
+      const { frame, host, options } = await readyHost({
         client: oldClient,
         resolveFrameUrl: () => "/widget?bt=ticket",
       });
-      notifyProxyReady(host, frame);
-      await vi.waitFor(() => expect(options.onLoaded).toHaveBeenCalledOnce());
       const bridgePort = await offerBridgePort(host, frame);
       const responses: unknown[] = [];
       bridgePort.addEventListener("message", (event) => {
@@ -519,16 +513,10 @@ describe("BoardWidgetSandboxHost", () => {
   );
 
   it("reloads equal-name revisions when their board session identity changes", async () => {
-    const { frame, host, options, fetchMock } = createHost(
-      {
-        client: { request: vi.fn(async () => ({ ok: true })) },
-        resolveFrameUrl: () => "/__openclaw__/board/session-a/weather/index.html?bt=one",
-      },
-      vi.fn(async () => new Response("<!doctype html><p>session</p>")),
-    );
-    const postMessage = vi.spyOn(frame.contentWindow!, "postMessage");
-    notifyProxyReady(host, frame);
-    await vi.waitFor(() => expect(options.onLoaded).toHaveBeenCalledOnce());
+    const { host, options, fetchMock, postMessage } = await readyHost({
+      client: { request: vi.fn(async () => ({ ok: true })) },
+      resolveFrameUrl: () => "/__openclaw__/board/session-a/weather/index.html?bt=one",
+    });
     postMessage.mockClear();
 
     host.update({
@@ -547,18 +535,12 @@ describe("BoardWidgetSandboxHost", () => {
   it("waits for the exact sandbox CSP navigation before delivering replacement HTML", async () => {
     const wideSandboxUrl = `${SANDBOX_URL}?csp=wide`;
     const narrowSandboxUrl = `${SANDBOX_URL}?csp=narrow`;
-    const { frame, host, options, fetchMock } = createHost(
-      {
-        sandboxUrl: wideSandboxUrl,
-        resolveFrameUrl: () => "/__openclaw__/board/session/weather/index.html?bt=ticket",
-      },
-      vi.fn(async () => new Response("<!doctype html><p>policy</p>")),
-    );
-    const postMessage = vi.spyOn(frame.contentWindow!, "postMessage");
+    const { frame, host, options, fetchMock, postMessage } = await readyHost({
+      sandboxUrl: wideSandboxUrl,
+      resolveFrameUrl: () => "/__openclaw__/board/session/weather/index.html?bt=ticket",
+    });
     const ready = (sandboxUrl: string) => notifyProxyReady(host, frame, sandboxUrl);
 
-    ready(wideSandboxUrl);
-    await vi.waitFor(() => expect(options.onLoaded).toHaveBeenCalledOnce());
     postMessage.mockClear();
     host.update({
       ...options,
@@ -588,29 +570,22 @@ describe("BoardWidgetSandboxHost", () => {
   });
 
   it("reloads a deleted and recreated widget without reloading routine ticket renewals", async () => {
-    const frame = document.createElement("iframe");
-    document.body.append(frame);
     const sourceUrl = "https://gateway.example/__openclaw__/board/session/weather/index.html";
     const originalFetch = globalThis.fetch.bind(globalThis);
-    const fetchMock = vi.fn<typeof fetch>(
-      async () => new Response("<!doctype html><p>generation</p>"),
+    const fetchMock = htmlFetch();
+    const { frame, host, options } = createHost(
+      { resolveFrameUrl: () => "/__openclaw__/board/session/weather/index.html?bt=ticket" },
+      (input, init) => {
+        const url = input instanceof Request ? input.url : String(input);
+        // Other resources can load in the shared worker while this widget settles.
+        return url.split(/[?#]/u, 1)[0] === sourceUrl
+          ? fetchMock(input, init)
+          : originalFetch(input, init);
+      },
     );
-    vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = input instanceof Request ? input.url : String(input);
-      // Other resources can load in the shared worker while this widget settles.
-      return url.split(/[?#]/u, 1)[0] === sourceUrl
-        ? fetchMock(input, init)
-        : originalFetch(input, init);
-    });
-    const onLoaded = vi.fn();
-    const options = hostOptions(frame, {
-      resolveFrameUrl: () => "/__openclaw__/board/session/weather/index.html?bt=ticket",
-      onLoaded,
-    });
-    const host = new BoardWidgetSandboxHost(options);
     onTestFinished(() => host.dispose());
     notifyProxyReady(host, frame);
-    await vi.waitFor(() => expect(onLoaded).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(options.onLoaded).toHaveBeenCalledOnce());
 
     host.update({
       ...options,
@@ -618,13 +593,7 @@ describe("BoardWidgetSandboxHost", () => {
       resolveFrameUrl: () => "/__openclaw__/board/session/weather/index.html?bt=renewed-ticket",
     });
     await Promise.resolve();
-    expect(
-      fetchMock,
-      JSON.stringify({
-        requests: fetchMock.mock.calls,
-        frameUrls: vi.mocked(options.onFrameUrl).mock.calls,
-      }),
-    ).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledOnce();
 
     host.update({
       ...options,
@@ -640,10 +609,7 @@ describe("BoardWidgetSandboxHost", () => {
 
   it("records one-shot proxy readiness while inactive", async () => {
     vi.useFakeTimers();
-    const { frame, host, options, fetchMock } = createHost(
-      {},
-      vi.fn(async () => new Response("<!doctype html><p>retained</p>")),
-    );
+    const { frame, host, options, fetchMock } = createHost();
     const { onReadyTimeout, onLoaded } = options;
     const reloadFrame = vi.spyOn(frame, "src", "set");
 
@@ -663,13 +629,8 @@ describe("BoardWidgetSandboxHost", () => {
   it("retains a ready loaded frame and bridge while inactive", async () => {
     vi.useFakeTimers();
     const client = { request: vi.fn(async () => ({ resumed: true })) };
-    const { frame, host, options, fetchMock } = createHost(
-      { client },
-      vi.fn(async () => new Response("<!doctype html><p>retained</p>")),
-    );
-    const { onReadyTimeout, onLoaded } = options;
-    notifyProxyReady(host, frame);
-    await vi.waitFor(() => expect(onLoaded).toHaveBeenCalledOnce());
+    const { frame, host, options, fetchMock } = await readyHost({ client });
+    const { onReadyTimeout } = options;
     const bridgePort = await offerBridgePort(host, frame);
     const retainedFrame = host.frame;
     const reloadFrame = vi.spyOn(frame, "src", "set");
@@ -697,9 +658,7 @@ describe("BoardWidgetSandboxHost", () => {
   });
 
   it("resumes one interrupted document load after reactivation", async () => {
-    let resolveFirstFetch: (response: Response) => void = () => {};
-    const frame = document.createElement("iframe");
-    document.body.append(frame);
+    const pending = Promise.withResolvers<Response>();
     const sourceUrl = "https://gateway.example/widget";
     const originalFetch = globalThis.fetch.bind(globalThis);
     let sourceFetches = 0;
@@ -710,24 +669,17 @@ describe("BoardWidgetSandboxHost", () => {
       }
       sourceFetches += 1;
       if (sourceFetches === 1) {
-        return await new Promise<Response>((resolve) => {
-          resolveFirstFetch = resolve;
-        });
+        return await pending.promise;
       }
       return new Response("<!doctype html><p>resumed</p>");
     });
-    vi.stubGlobal("fetch", fetchMock);
-    const onLoaded = vi.fn();
-    const host = new BoardWidgetSandboxHost(
-      hostOptions(frame, {
-        onLoaded,
-      }),
-    );
+    const { frame, host, options } = createHost({}, fetchMock);
+    const { onLoaded } = options;
     notifyProxyReady(host, frame);
     await vi.waitFor(() => expect(sourceFetches).toBe(1));
 
     host.setActive(false);
-    resolveFirstFetch(new Response("<!doctype html><p>stale</p>"));
+    pending.resolve(new Response("<!doctype html><p>stale</p>"));
     await Promise.resolve();
     expect(onLoaded).not.toHaveBeenCalled();
 
@@ -785,27 +737,15 @@ describe("BoardWidgetSandboxHost", () => {
       response.write("<!doctype html><p>partial</p>");
     });
     const origin = await listenOnLoopback(server);
-    const frame = document.createElement("iframe");
-    document.body.append(frame);
     const rejected = Promise.withResolvers<void>();
     const onError = vi.fn<(error: unknown) => void>(() => rejected.resolve());
-    const onLoadFailed = vi.fn();
-    const onLoaded = vi.fn();
-    const host = new BoardWidgetSandboxHost(
-      hostOptions(frame, {
-        onError,
-        onLoadFailed,
-        onLoaded,
-        sourceOrigin: origin,
-        resolveFrameUrl: () => "/widget",
-      }),
-    );
+    const { frame, host, options } = createHost({ onError, sourceOrigin: origin }, null);
     notifyProxyReady(host, frame);
     try {
       await rejected.promise;
       expect(onError).toHaveBeenCalledOnce();
-      expect(onLoaded).not.toHaveBeenCalled();
-      expect(onLoadFailed).not.toHaveBeenCalled();
+      expect(options.onLoaded).not.toHaveBeenCalled();
+      expect(options.onLoadFailed).not.toHaveBeenCalled();
       expect(onError.mock.calls[0]?.[0]).toMatchObject({
         message: "widget HTML exceeds 10 MiB; regenerate a smaller widget",
       });
