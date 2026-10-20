@@ -5,6 +5,7 @@ import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { createOperatorRecoveryFixture } from "../../../gateway/operator-run-recovery.test-support.js";
 import { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
+import { peekSystemEventEntries } from "../../../infra/system-events.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { getRpcSource } from "../../../sessions/session-controller.rpc-sources.js";
 import { setUserProfileRole } from "../../../state/user-profile-writes.worker.js";
@@ -55,6 +56,7 @@ export function registerRecoverySpawnCases(
         config: bound.cfg,
         sessionKey: "agent:main:recovered-spawn-requester",
         sessionId: "recovered-parent-session",
+        parentSessionKey: null,
         scopes: ["operator.write"],
         sourceIngress: "internal",
       });
@@ -193,6 +195,11 @@ export function registerRecoverySpawnCases(
           ),
         ).resolves.toMatchObject({ status: "ok" });
         expect(getRpcSource(fixture.target.recoveryRunId)).toBeUndefined();
+        expect(
+          peekSystemEventEntries("agent:main:main").filter((event) =>
+            event.contextKey?.startsWith("session-state:"),
+          ),
+        ).toEqual([]);
         const acceptedRunId = expectDefined(childRunId, "accepted child run");
         const acceptedSessionKey = expectDefined(childSessionKey, "accepted child session");
         expect(resolveSubagentSessionStatus(subagentRuns.get(acceptedRunId))).toBe("running");
