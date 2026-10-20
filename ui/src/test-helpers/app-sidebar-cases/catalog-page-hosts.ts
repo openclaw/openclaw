@@ -55,33 +55,32 @@ export function registerCatalogPageHostTests() {
         sidebar.sessionData.sessionCatalogs[0]?.hosts.find(
           (host) => host.hostId === exhaustedHost.hostId,
         );
+      const expectPage = (count: number, ...labels: string[]) => {
+        expect(catalogRows()).toHaveLength(count);
+        for (const label of labels) {
+          expect(sidebar.textContent).toContain(label);
+        }
+        expect(retainedHost()).toEqual(exhaustedHost);
+      };
       expect(request).toHaveBeenNthCalledWith(1, "sessions.catalog.list", listRequest);
       expect(catalogRows()).toHaveLength(2);
       loadMore()?.click();
       await settleCatalog(sidebar);
 
       expect(request).toHaveBeenNthCalledWith(2, "sessions.catalog.list", cursorRequest("page-2"));
-      expect(catalogRows()).toHaveLength(3);
-      expect(sidebar.textContent).toContain("Stale title");
-      expect(sidebar.textContent).toContain("Retained remote session");
-      expect(retainedHost()).toEqual(exhaustedHost);
+      expectPage(3, "Stale title", "Retained remote session");
 
       document.dispatchEvent(new Event("visibilitychange"));
       await settleCatalog(sidebar, 5_000);
       expect(request).toHaveBeenNthCalledWith(3, "sessions.catalog.list", listRequest);
       expect(request).toHaveBeenNthCalledWith(4, "sessions.catalog.list", cursorRequest("page-2"));
-      expect(catalogRows()).toHaveLength(3);
-      expect(sidebar.textContent).toContain("Newest refreshed");
-      expect(sidebar.textContent).toContain("Current title");
+      expectPage(3, "Newest refreshed", "Current title");
       expect(sidebar.textContent).not.toContain("Stale title");
-      expect(retainedHost()).toEqual(exhaustedHost);
 
       loadMore()?.click();
       await settleCatalog(sidebar);
       expect(request).toHaveBeenNthCalledWith(5, "sessions.catalog.list", cursorRequest("page-3"));
-      expect(catalogRows()).toHaveLength(4);
-      expect(sidebar.textContent).toContain("Oldest");
-      expect(retainedHost()).toEqual(exhaustedHost);
+      expectPage(4, "Oldest");
       expect(loadMore()).toBeNull();
     } finally {
       vi.useRealTimers();

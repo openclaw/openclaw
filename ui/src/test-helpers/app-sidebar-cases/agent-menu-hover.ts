@@ -20,10 +20,11 @@ describe("AppSidebar agent menu hover", () => {
     vi.unstubAllGlobals();
   });
   function setFinePointer(matches: boolean) {
-    vi.stubGlobal(
-      "matchMedia",
-      vi.fn(() => ({ matches, addEventListener() {}, removeEventListener() {} })),
-    );
+    vi.stubGlobal("matchMedia", () => ({
+      matches,
+      addEventListener() {},
+      removeEventListener() {},
+    }));
   }
   async function mountHover() {
     const { sidebar } = await mountSidebar(
@@ -50,47 +51,40 @@ describe("AppSidebar agent menu hover", () => {
       input.focus();
       const trigger = sidebar.querySelector<HTMLButtonElement>(
         mode === "chip" ? ".sidebar-agent-card__main" : ".sidebar-workspace-header__main",
-      );
-      if (!trigger) {
-        throw new Error("Expected the sidebar agent card trigger");
-      }
+      )!;
+      expect(trigger).not.toBeNull();
+      const menuElement = () => sidebar.querySelector<HTMLElement>(".sidebar-agent-menu");
+      const expectClosedAfter = async (type: Parameters<typeof pointerEvent>[0], ms: number) => {
+        trigger.dispatchEvent(pointerEvent(type));
+        await advance(ms);
+        expect(menuElement()).toBeNull();
+      };
 
       // Revealing the sidebar beneath a stationary pointer is not hover intent.
-      trigger.dispatchEvent(pointerEvent("pointerenter"));
-      await advance(300);
-      expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
-
-      trigger.dispatchEvent(pointerEvent("pointermove"));
-      await advance(299);
-      expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
-      trigger.dispatchEvent(pointerEvent("pointerleave"));
-      await advance(1);
-      expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
+      await expectClosedAfter("pointerenter", 300);
+      await expectClosedAfter("pointermove", 299);
+      await expectClosedAfter("pointerleave", 1);
 
       trigger.dispatchEvent(pointerEvent("pointerenter"));
       trigger.dispatchEvent(pointerEvent("pointermove"));
       await vi.advanceTimersByTimeAsync(299);
       trigger.dispatchEvent(pointerEvent("pointermove"));
       await advance(1);
-      const menu = sidebar.querySelector<HTMLElement>(".sidebar-agent-menu");
-      if (!menu) {
-        throw new Error("Expected the agent menu after hover intent");
-      }
+      const menu = menuElement()!;
+      expect(menu).not.toBeNull();
       await vi.waitFor(() => expect(document.activeElement).toBe(input));
 
       trigger.dispatchEvent(pointerEvent("pointerleave"));
       await vi.advanceTimersByTimeAsync(199);
       menu.dispatchEvent(pointerEvent("pointerenter"));
       await vi.advanceTimersByTimeAsync(1);
-      expect(sidebar.querySelector(".sidebar-agent-menu")).toBe(menu);
+      expect(menuElement()).toBe(menu);
       menu.dispatchEvent(pointerEvent("pointerleave"));
       await vi.advanceTimersByTimeAsync(199);
       trigger.dispatchEvent(pointerEvent("pointermove"));
       await vi.advanceTimersByTimeAsync(1);
-      expect(sidebar.querySelector(".sidebar-agent-menu")).toBe(menu);
-      trigger.dispatchEvent(pointerEvent("pointerleave"));
-      await advance(200);
-      expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
+      expect(menuElement()).toBe(menu);
+      await expectClosedAfter("pointerleave", 200);
 
       trigger.dispatchEvent(pointerEvent("pointermove"));
       await advance(300);
@@ -98,10 +92,10 @@ describe("AppSidebar agent menu hover", () => {
       await sidebar.updateComplete;
       trigger.dispatchEvent(pointerEvent("pointerleave"));
       await advance(200);
-      expect(sidebar.querySelector(".sidebar-agent-menu")).not.toBeNull();
+      expect(menuElement()).not.toBeNull();
       trigger.click();
       await sidebar.updateComplete;
-      expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
+      expect(menuElement()).toBeNull();
     },
   );
 

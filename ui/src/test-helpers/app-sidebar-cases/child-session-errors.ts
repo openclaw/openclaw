@@ -1,103 +1,86 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createGateway, createSessionsHarness, mountSidebar } from "../app-sidebar.ts";
 import { settleLitElement } from "../lit-settle.ts";
 import { waitForFast } from "../wait-for.ts";
-import { sessionList as sessionResult } from "./compact.test-support.ts";
+import { sessionList } from "./compact.test-support.ts";
 import "../../components/app-sidebar.tsx";
 
-function parentSession(key: string, childKey: string) {
-  return { key, kind: "direct" as const, updatedAt: 1, childSessions: [childKey] };
-}
-
-function recoveredChild(key: string, parentKey: string, label: string) {
-  return { key, spawnedBy: parentKey, kind: "direct" as const, label, updatedAt: 2 };
-}
-
-async function mountRecovery(parentKey: string, childKey: string, failure: string, label: string) {
-  const harness = createSessionsHarness("main", [parentKey]);
-  harness.list
-    .mockRejectedValueOnce(new Error(failure))
-    .mockResolvedValueOnce(sessionResult([recoveredChild(childKey, parentKey, label)]));
-  const { sidebar } = await mountSidebar(
-    createGateway({} as GatewayBrowserClient),
-    harness.sessions,
-  );
-  harness.publishList({ result: sessionResult([parentSession(parentKey, childKey)]) });
-  return { sidebar, harness };
-}
-
-describe("AppSidebar child-session load errors", () => {
-  it("redacts secrets in load errors with an accessible retry action", async () => {
-    const failure = "OPENAI_API_KEY=sk-1234567890abcdef";
-    const visibleError = "OPENAI_API_KEY=sk-123...cdef";
-    const parentKey = "agent:main:parent";
-    const childKey = "agent:worker:child";
-    const { sidebar, harness } = await mountRecovery(
-      parentKey,
-      childKey,
-      failure,
-      "Recovered child",
+it.each([
+  {
+    parentKey: "agent:main:parent",
+    childKey: "agent:worker:child",
+    failure: "OPENAI_API_KEY=sk-1234567890abcdef",
+    visible: "OPENAI_API_KEY=sk-123...cdef",
+    label: "Recovered child",
+  },
+  {
+    parentKey: "main",
+    childKey: "agent:main:dashboard:recovered",
+    failure: "main session children temporarily unavailable",
+    visible: "main session children temporarily unavailable",
+    label: "Recovered main-session child",
+  },
+])(
+  "recovers $parentKey with an accessible, redacted retry action",
+  async ({ parentKey, childKey, failure, visible, label }) => {
+    const harness = createSessionsHarness("main", [parentKey]);
+    const parent = {
+      key: parentKey,
+      kind: "direct" as const,
+      updatedAt: 1,
+      childSessions: [childKey],
+    };
+    harness.list
+      .mockRejectedValueOnce(new Error(failure))
+      .mockResolvedValueOnce(
+        sessionList([{ key: childKey, spawnedBy: parentKey, kind: "direct", label, updatedAt: 2 }]),
+      );
+    const { sidebar } = await mountSidebar(
+      createGateway({} as GatewayBrowserClient),
+      harness.sessions,
     );
-    await settleLitElement(sidebar);
-    expect(
-      sidebar.querySelector("[data-child-session-toggle]")?.getAttribute("aria-expanded"),
-    ).toBe("true");
-
-    await waitForFast(() => {
-      const alert = sidebar.querySelector(`[data-child-session-error="${parentKey}"]`);
-      expect(alert?.getAttribute("role")).toBe("alert");
-      expect(alert?.textContent).toContain(visibleError);
-    });
-    const mountedAlert = sidebar.querySelector(`[data-child-session-error="${parentKey}"]`);
-    harness.publishList({
-      result: sessionResult([{ ...parentSession(parentKey, childKey), updatedAt: 2 }]),
-    });
-    await settleLitElement(sidebar);
-    expect(harness.list).toHaveBeenCalledOnce();
-    expect(sidebar.querySelector(`[data-child-session-error="${parentKey}"]`)).toBe(mountedAlert);
-    expect(sidebar.textContent).not.toContain(failure);
-
-    const retry = sidebar.querySelector<HTMLButtonElement>(
-      `[data-retry-child-sessions="${parentKey}"]`,
+    const find = sidebar.querySelector.bind(sidebar);
+    const error = () => find(`[data-child-session-error="${parentKey}"]`);
+    harness.publishList({ result: sessionList([parent]) });
+    if (parentKey !== "main") {
+      await settleLitElement(sidebar);
+      expect(find("[data-child-session-toggle]")?.getAttribute("aria-expanded")).toBe("true");
+    } else {
+      await waitForFast(() => expect(harness.list).toHaveBeenCalledOnce());
+      expect(
+        sidebar.querySelectorAll(".sidebar-rail__bottom .sidebar-footer-bar__home"),
+      ).toHaveLength(1);
+      expect(find(`[data-session-key="${parentKey}"]`)).toBeNull();
+    }
+    await waitForFast(() =>
+      expect({
+        role: error()?.getAttribute("role"),
+        textContent: error()?.textContent,
+      }).toMatchObject({
+        role: "alert",
+        textContent: expect.stringContaining(visible),
+      }),
     );
+    if (failure !== visible) {
+      const mountedAlert = error();
+      harness.publishList({ result: sessionList([{ ...parent, updatedAt: 2 }]) });
+      await settleLitElement(sidebar);
+      expect(harness.list).toHaveBeenCalledOnce();
+      expect(error()).toBe(mountedAlert);
+      expect(sidebar.textContent).not.toContain(failure);
+    }
+    const retry = find<HTMLButtonElement>(`[data-retry-child-sessions="${parentKey}"]`);
     expect(retry?.textContent).toContain("Retry");
     retry?.click();
-
-    await waitForFast(() => expect(sidebar.textContent).toContain("Recovered child"));
-    expect(harness.list).toHaveBeenCalledTimes(2);
-    expect(sidebar.querySelector("[data-child-session-error]")).toBeNull();
-  });
-
-  it("keeps Home unique while recovering conversations spawned by main", async () => {
-    const parentKey = "main";
-    const childKey = "agent:main:dashboard:recovered";
-    const { sidebar, harness } = await mountRecovery(
-      parentKey,
-      childKey,
-      "main session children temporarily unavailable",
-      "Recovered main-session child",
-    );
-
-    await waitForFast(() => expect(harness.list).toHaveBeenCalledOnce());
-    expect(
-      sidebar.querySelectorAll(".sidebar-rail__bottom .sidebar-footer-bar__home"),
-    ).toHaveLength(1);
-    expect(sidebar.querySelector(`[data-session-key="${parentKey}"]`)).toBeNull();
     await waitForFast(() => {
-      const alert = sidebar.querySelector(`[data-child-session-error="${parentKey}"]`);
-      expect(alert?.getAttribute("role")).toBe("alert");
-      expect(alert?.textContent).toContain("main session children temporarily unavailable");
+      expect(harness.list).toHaveBeenCalledTimes(2);
+      expect(find("[data-child-session-error]")).toBeNull();
+      expect(sidebar.textContent).toContain(label);
+      expect(find(`[data-session-key="${childKey}"]`)).not.toBeNull();
     });
-
-    sidebar.querySelector<HTMLButtonElement>(`[data-retry-child-sessions="${parentKey}"]`)?.click();
-
-    await waitForFast(() => expect(harness.list).toHaveBeenCalledTimes(2));
-    await waitForFast(() => expect(sidebar.querySelector("[data-child-session-error]")).toBeNull());
-    await waitForFast(() =>
-      expect(sidebar.querySelector(`[data-session-key="${childKey}"]`)).not.toBeNull(),
-    );
-    expect(sidebar.querySelector(`[data-session-key="${parentKey}"]`)).toBeNull();
-    expect(sidebar.querySelector("[data-child-session-error]")).toBeNull();
-  });
-});
+    if (parentKey === "main") {
+      expect(find(`[data-session-key="${parentKey}"]`)).toBeNull();
+    }
+  },
+);
