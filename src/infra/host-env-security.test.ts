@@ -340,7 +340,7 @@ it("keeps the fixed reported dangerous env baseline fully covered by inherited +
   ];
   const inputs = (source: string) =>
     Object.fromEntries(reportedKeys.map((key) => [key, `${key.toLowerCase()}-from-${source}`]));
-  const inheritedInput = { PATH: "/usr/bin:/bin", ...inputs("inherited") };
+  const inheritedInput: NodeJS.ProcessEnv = { PATH: "/usr/bin:/bin", ...inputs("inherited") };
   const inheritedSanitized = sanitizeHostExecEnv({ baseEnv: inheritedInput });
 
   for (const key of baseline.reportedDangerousEverywhereKeys) {

@@ -182,7 +182,12 @@ export function createSqliteWorkerBackend(input, context) {
         input: undefined,
       });
     }
-    await Promise.all(clients.map((store) => store?.close()));
+    await Promise.all(
+      clients.map((store) => {
+        assert.ok(store);
+        return store.close();
+      }),
+    );
   } finally {
     await broker.close();
   }

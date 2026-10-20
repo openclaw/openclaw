@@ -112,7 +112,9 @@ it.each([
   for (const routed of [false, true]) {
     await expectReply(handle, request, result, routed, success);
   }
-  expect(mocks.acquire).toHaveBeenCalledWith(expect.objectContaining({ cfg, accountId: "ops" }));
+  expect(mocks.acquire).toHaveBeenCalledWith(
+    expect.objectContaining({ cfg, accountId: success ? "ops" : undefined }),
+  );
   expect(mocks.release).toHaveBeenCalledTimes(2);
 });
 

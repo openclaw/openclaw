@@ -16,7 +16,7 @@ function resolveUnconfiguredModel(modelId: string) {
 const platformRoute = { api: "openai-completions", authRequirement: "api-key" };
 const subscriptionRoute = { api: "openai-chatgpt-responses", authRequirement: "subscription" };
 const dualApis = ["openai-responses", "openai-chatgpt-responses"];
-const completions = { api: "openai-completions" };
+const completions = { api: "openai-completions" } as const;
 function resolveBilling(overrides: Partial<Parameters<typeof resolveModelRoutes>[0]>) {
   return resolveModelRoutes({
     provider: "openai",

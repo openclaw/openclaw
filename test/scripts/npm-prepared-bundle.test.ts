@@ -221,10 +221,8 @@ function githubFixture(
     }
     throw new Error(`Unexpected GitHub request: ${endpoint}`);
   };
-  const fetchImpl: typeof fetch = async (url) => {
-    if (typeof url !== "string") {
-      throw new Error("Expected a URL string");
-    }
+  const fetchImpl: typeof fetch = async (input) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     const match = url.match(/\/artifacts\/(\d+)(\/zip)?$/);
     const artifact = archives.get(match?.[1] ?? "");
     if (!artifact) {
@@ -728,6 +726,9 @@ it.each([
         runAttempt: "2",
       },
     });
+    if (!("package" in descriptor)) {
+      throw new Error("Expected an unqualified package bundle descriptor");
+    }
     validateDescriptor(descriptor, fixture.releaseRef);
     const proof = await qualificationFixture(descriptor);
     for (const entry of [proof.sdkProof, proof.dependencyProof, proof.contentsProof]) {

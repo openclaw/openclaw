@@ -55,8 +55,6 @@ afterEach(() => {
   disposeSessionViews();
   container.remove();
 });
-const query = <T extends Element = Element>(selector: string) =>
-  container.querySelector<T>(selector);
 const queryAll = <T extends Element = Element>(selector: string) =>
   container.querySelectorAll<T>(selector);
 
@@ -102,11 +100,11 @@ describe("sessions view", () => {
           : SESSION_TABLE_HEADERS,
       );
       expect(queryAll(".session-data-row .session-agent-col")).toHaveLength(1);
-      expect(query(".session-details-row td")?.getAttribute("colspan")).toBe(
+      expect(container.querySelector(".session-details-row td")?.getAttribute("colspan")).toBe(
         String(allHeaders.length),
       );
       if (categoryGrouping) {
-        expect(query(".session-group-row td")?.getAttribute("colspan")).toBe(
+        expect(container.querySelector(".session-group-row td")?.getAttribute("colspan")).toBe(
           String(allHeaders.length),
         );
       }
@@ -121,11 +119,11 @@ describe("sessions view", () => {
       expect(
         queryAll(".session-data-row .session-agent-col, .session-data-row .agent-row-chip"),
       ).toHaveLength(0);
-      expect(query(".session-details-row td")?.getAttribute("colspan")).toBe(
+      expect(container.querySelector(".session-details-row td")?.getAttribute("colspan")).toBe(
         String(scopedHeaders.length),
       );
       if (categoryGrouping) {
-        expect(query(".session-group-row td")?.getAttribute("colspan")).toBe(
+        expect(container.querySelector(".session-group-row td")?.getAttribute("colspan")).toBe(
           String(scopedHeaders.length),
         );
       }
@@ -138,7 +136,7 @@ describe("sessions view", () => {
       });
       expect(queryAll(".session-skeleton-row:first-child td")).toHaveLength(scopedHeaders.length);
       renderView([], { ...sharedProps, allAgentsScope: false });
-      expect(query(".data-table-empty-cell")?.getAttribute("colspan")).toBe(
+      expect(container.querySelector(".data-table-empty-cell")?.getAttribute("colspan")).toBe(
         String(scopedHeaders.length),
       );
     },
@@ -236,7 +234,7 @@ describe("sessions view", () => {
       }),
     );
 
-    expect(query<HTMLAnchorElement>(".session-link")?.getAttribute("href")).toBe(
+    expect(container.querySelector<HTMLAnchorElement>(".session-link")?.getAttribute("href")).toBe(
       "/dashboard/main/1234567890abcdef1234567890abcdef",
     );
   });
@@ -253,7 +251,9 @@ describe("sessions view", () => {
     expect(texts(".session-group-row__label")).toEqual(["discord"]);
     expect(texts(".session-group-row__count")).toEqual(["2 sessions"]);
     expect(queryAll(".session-data-row")).toHaveLength(2);
-    expect(query(".data-table-pagination")?.textContent).toContain("1-2 of 3 rows");
+    expect(container.querySelector(".data-table-pagination")?.textContent).toContain(
+      "1-2 of 3 rows",
+    );
 
     const next = Array.from(queryAll(".data-table-pagination button")).find(
       (button) => button.textContent?.trim() === "Next",
@@ -308,7 +308,9 @@ describe("sessions view", () => {
     } as const;
     await renderSettled(session, { onOpenSessionMenu });
 
-    const button = query<HTMLButtonElement>('button[aria-label="Open session menu"]');
+    const button = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Open session menu"]',
+    );
     if (!button) {
       throw new Error("Expected session menu button");
     }
@@ -322,7 +324,7 @@ describe("sessions view", () => {
       );
     button.click();
     expectMenuCall(1, expect.any(Number), expect.any(Number), button);
-    const row = query(".session-data-row");
+    const row = container.querySelector(".session-data-row");
     if (!row) {
       throw new Error("Expected session row");
     }
@@ -370,7 +372,7 @@ describe("sessions view", () => {
       onSearchChange,
     });
 
-    const actions = query(".settings-section__actions");
+    const actions = container.querySelector(".settings-section__actions");
     const trigger = actions?.querySelector<HTMLButtonElement>(".sessions-filter-popover__trigger");
     const popover = actions?.querySelector(".sessions-filter-popover");
     const panel = popover?.querySelector(".sessions-filter-popover__panel");
@@ -417,9 +419,9 @@ describe("sessions view", () => {
     expect(escape.defaultPrevented).toBe(true);
     expect(trigger?.getAttribute("aria-expanded")).toBe("false");
     expect(document.activeElement).toBe(trigger);
-    expect(query<HTMLInputElement>(".sessions-filter-popover__search input")?.value).toBe(
-      "keep me",
-    );
+    expect(
+      container.querySelector<HTMLInputElement>(".sessions-filter-popover__search input")?.value,
+    ).toBe("keep me");
     expect(onSearchChange).not.toHaveBeenCalled();
   });
 
@@ -443,7 +445,7 @@ describe("sessions view", () => {
         ),
         { expandedSessionKey: "agent:main:main", onPatch },
       );
-      const thinking = query<HTMLSelectElement>("tbody select");
+      const thinking = container.querySelector<HTMLSelectElement>("tbody select");
       const value = binary ? "low" : "max";
       expect(thinking?.value).toBe(binary ? "low" : "adaptive");
       if (!binary) {
@@ -475,7 +477,7 @@ describe("sessions view", () => {
       },
     );
 
-    const keyCell = query(".session-key-cell");
+    const keyCell = container.querySelector(".session-key-cell");
     expect(text(".session-key-cell__primary", keyCell)).toBe("📊 Data Expert (dingtalk)");
     expect((keyCell?.parentElement as (HTMLElement & { content: string }) | null)?.content).toBe(
       "📊 Data Expert (dingtalk)",
@@ -500,7 +502,9 @@ describe("sessions view", () => {
     expect(sessionTableHeaders()).toEqual(SESSION_TABLE_HEADERS);
     expect(queryAll(".session-data-row .settings-status")).toHaveLength(0);
     expect(queryAll(".settings-count, .sessions-heading-fact")).toHaveLength(0);
-    expect(query(".session-details-panel__badges")?.textContent).toContain("Queued");
+    expect(container.querySelector(".session-details-panel__badges")?.textContent).toContain(
+      "Queued",
+    );
   });
 
   it("opens session details from row activation", async () => {
@@ -509,7 +513,7 @@ describe("sessions view", () => {
       onToggleDetails,
     });
 
-    const row = query<HTMLTableRowElement>("tbody tr.session-data-row");
+    const row = container.querySelector<HTMLTableRowElement>("tbody tr.session-data-row");
     expect(row).toBeInstanceOf(HTMLTableRowElement);
     row!
       .querySelector<HTMLInputElement>("input[type=checkbox]")!
@@ -518,7 +522,7 @@ describe("sessions view", () => {
     row!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(onToggleDetails).toHaveBeenCalledWith("agent:main:main");
-    expect(query(".session-token-cell")).toBeNull();
+    expect(container.querySelector(".session-token-cell")).toBeNull();
   });
 
   it("renders expanded session details without checkpoint actions", async () => {
@@ -550,8 +554,8 @@ describe("sessions view", () => {
       },
     );
 
-    expect(query(".session-token-cell")).toBeNull();
-    const details = query(".session-details-panel");
+    expect(container.querySelector(".session-token-cell")).toBeNull();
+    const details = container.querySelector(".session-details-panel");
     expect(text(".session-details-panel__eyebrow", details)).toBe("Session details");
     expect(text(".session-details-panel__title", details)).toBe("agent:main:main");
     expect(
@@ -635,7 +639,7 @@ describe("sessions view", () => {
       },
     );
 
-    const headerCheckbox = query<HTMLInputElement>("thead input[type=checkbox]");
+    const headerCheckbox = container.querySelector<HTMLInputElement>("thead input[type=checkbox]");
     expect(headerCheckbox).toBeInstanceOf(HTMLInputElement);
     headerCheckbox!.dispatchEvent(new Event("change", { bubbles: true }));
 
@@ -654,7 +658,7 @@ describe("sessions view", () => {
     );
 
     expect(text(".session-kind--cron")).toBe("cron");
-    expect(query(".session-data-row .session-avatar")).toBeNull();
+    expect(container.querySelector(".session-data-row .session-avatar")).toBeNull();
   });
 });
 
@@ -687,7 +691,7 @@ describe("session category controls", () => {
     expect(onRequestNewCategory).toHaveBeenCalledWith("agent:main:discord:channel:1");
     expect(select.value).toBe("");
 
-    const headerRow = query(".session-group-row");
+    const headerRow = container.querySelector(".session-group-row");
     if (!headerRow) {
       throw new Error("Expected group header row");
     }
@@ -719,14 +723,16 @@ describe("session category controls", () => {
       onAssignCategory,
     });
 
-    const select = query<HTMLSelectElement>('select[aria-label="Move session to a group"]');
+    const select = container.querySelector<HTMLSelectElement>(
+      'select[aria-label="Move session to a group"]',
+    );
     expect(select).toMatchObject({ disabled: true, title: reason });
     if (select) {
       select.value = "";
       select.dispatchEvent(new Event("change", { bubbles: true }));
     }
 
-    const headerRow = query(".session-group-row");
+    const headerRow = container.querySelector(".session-group-row");
     const drop = new Event("drop", { bubbles: true, cancelable: true });
     Object.defineProperty(drop, "dataTransfer", {
       value: {

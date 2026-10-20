@@ -47,28 +47,28 @@ describe("Solid shell chrome", () => {
         prop:onOpenPalette={palette}
       />
     ));
-    const query = <T extends Element = HTMLElement>(selector: string) =>
-      view.container.querySelector<T>(selector);
-    const topbar = query<SolidBridgeElement<object>>("openclaw-app-topbar")!;
+    const topbar = view.container.querySelector<SolidBridgeElement<object>>("openclaw-app-topbar")!;
     const update = async (write: () => void) => {
       write();
       flush();
       await topbar.updateComplete;
     };
     await topbar.updateComplete;
-    const drawer = query(".topbar-nav-toggle")!;
+    const drawer = view.container.querySelector<HTMLElement>(".topbar-nav-toggle")!;
     expect(topbar.style.display).toBe("contents");
-    expect(query(".control-ui-environment-pill")).toBeNull();
-    expect(query("img")?.getAttribute("src")).toBe("/control/apple-touch-icon.png");
+    expect(view.container.querySelector<HTMLElement>(".control-ui-environment-pill")).toBeNull();
+    expect(view.container.querySelector<HTMLElement>("img")?.getAttribute("src")).toBe(
+      "/control/apple-touch-icon.png",
+    );
     expect(drawer.getAttribute("aria-expanded")).toBe("false");
     drawer.click();
     expect(toggle).toHaveBeenCalledWith(drawer);
-    const search = query(".topbar-search")!;
+    const search = view.container.querySelector<HTMLElement>(".topbar-search")!;
     search.click();
     expect(palette).toHaveBeenCalledOnce();
 
     await update(() => setGatewayStatus({ kind: "offline", queuedCount: 2, onRetry: retry }));
-    const statusLine = query(".mobile-connection-status")!;
+    const statusLine = view.container.querySelector<HTMLElement>(".mobile-connection-status")!;
     expect(statusLine.textContent).toBe("Disconnected · 2 queued");
     expect(statusLine.querySelector('[role="status"]')).toBeNull();
     expect(drawer.dataset.connectionStatus).toBe("offline");
@@ -89,32 +89,38 @@ describe("Solid shell chrome", () => {
     ).toBe("Unavailable?[redacted-credential]");
 
     await update(() => setGatewayStatus({ kind: "connected" }));
-    expect(query(".mobile-connection-status")).toBeNull();
+    expect(view.container.querySelector<HTMLElement>(".mobile-connection-status")).toBeNull();
     expect(drawer.dataset.connectionStatus).toBe("connected");
 
     await update(() => setShowNewSessionAction(true));
-    const newSession = query(".topnav-shell__actions .header-new-session")!;
+    const newSession = view.container.querySelector<HTMLElement>(
+      ".topnav-shell__actions .header-new-session",
+    )!;
     expect(newSession.getAttribute("href")).toBe("/control/new?agent=writer");
     newSession.click();
     expect(openSession).toHaveBeenCalledWith("writer", undefined);
     newSession.focus();
     await update(() => setEnvironment({ label: "edge", color: "amber" }));
-    expect(query(".header-new-session")).toBe(newSession);
+    expect(view.container.querySelector<HTMLElement>(".header-new-session")).toBe(newSession);
     expect(document.activeElement).toBe(newSession);
 
     await update(() => setShowNewSessionAction(false));
-    expect(query(".header-new-session")).toBeNull();
-    expect(query(".topbar-search")).toBe(search);
+    expect(view.container.querySelector<HTMLElement>(".header-new-session")).toBeNull();
+    expect(view.container.querySelector<HTMLElement>(".topbar-search")).toBe(search);
 
     setEnvironment({ label: "edge", color: "amber" });
     await update(() => setOpen(true));
-    expect(query(".control-ui-environment-pill")?.textContent).toBe("edge");
-    expect(query(".topbar-nav-toggle")).toBe(drawer);
+    expect(
+      view.container.querySelector<HTMLElement>(".control-ui-environment-pill")?.textContent,
+    ).toBe("edge");
+    expect(view.container.querySelector<HTMLElement>(".topbar-nav-toggle")).toBe(drawer);
     expect(drawer.getAttribute("aria-expanded")).toBe("true");
-    expect(query('[slot="content"] kbd')?.textContent).toBe("⌘K");
+    expect(view.container.querySelector<HTMLElement>('[slot="content"] kbd')?.textContent).toBe(
+      "⌘K",
+    );
 
     await update(() => setEnvironment(null));
-    expect(query(".control-ui-environment-pill")).toBeNull();
+    expect(view.container.querySelector<HTMLElement>(".control-ui-environment-pill")).toBeNull();
   });
 
   it("releases topbar toggle registrations on repeated mount and unmount", async () => {
@@ -179,7 +185,11 @@ describe("Solid shell chrome", () => {
     setHistoryOnly(true);
     flush();
     expect(view.container.querySelectorAll("button")).toHaveLength(2);
-    expect(view.container.querySelector(".macos-titlebar-controls__back")).toBe(backButton);
-    expect(view.container.querySelector(".macos-titlebar-controls__forward")).not.toBeNull();
+    expect(view.container.querySelector<HTMLElement>(".macos-titlebar-controls__back")).toBe(
+      backButton,
+    );
+    expect(
+      view.container.querySelector<HTMLElement>(".macos-titlebar-controls__forward"),
+    ).not.toBeNull();
   });
 });

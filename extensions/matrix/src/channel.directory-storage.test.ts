@@ -10,6 +10,7 @@ import type { MatrixConfig } from "./types.js";
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     state.resetPluginStateStoreForTests();
     cleanup();
   }),

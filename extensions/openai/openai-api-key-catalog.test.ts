@@ -2,6 +2,7 @@ import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-cata
 import { beforeEach, expect, it, vi } from "vitest";
 import { buildOpenAIProvider } from "./openai-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
+import { resolveModelRoutes } from "./provider-policy-api.js";
 
 type CatalogOptions = { apiKey?: string; baseUrl?: string; profileId?: string };
 async function runCatalog(response: Response | undefined, options: CatalogOptions = {}) {
@@ -127,4 +128,15 @@ it("skips OpenAI live discovery for custom OpenAI-compatible base URLs", async (
   });
   const apiModel = provider.models.find((model) => model.api !== "openai-chatgpt-responses");
   expect(apiModel?.baseUrl).toBe(customBaseUrl);
+  expect(
+    resolveModelRoutes({
+      provider: "openai",
+      modelId: apiModel?.id,
+      configuredProvider: { api: provider.api, baseUrl: customBaseUrl },
+      observedRoutes: apiModel ? [{ api: apiModel.api, baseUrl: apiModel.baseUrl }] : [],
+    }),
+  ).toMatchObject({
+    kind: "routes",
+    routes: [{ api: provider.api, baseUrl: customBaseUrl }],
+  });
 });

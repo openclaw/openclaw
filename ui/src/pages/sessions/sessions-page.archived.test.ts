@@ -53,7 +53,13 @@ describe("sessions page archived deletion", () => {
       "sessions.list": () => sessionsResult([target]),
       "sessions.subscribe": () => ({ subscribed: true }),
     };
-    const request = vi.fn(async (method: string) => replies[method]?.() ?? {});
+    const request = vi.fn(async (method: string) => {
+      const reply = replies[method];
+      if (!reply) {
+        throw new Error(`Unexpected Gateway method: ${method}`);
+      }
+      return reply();
+    });
     const { gateway } = createGateway({ request } as unknown as GatewayBrowserClient);
     const sessions = createTestSessionCapability(gateway);
     const page = await createRenderedPage(
@@ -82,6 +88,8 @@ describe("sessions page archived deletion", () => {
     expect(page.error).toContain("cloud cleanup failed");
     await page.updateComplete;
     expect(checkbox()?.checked).toBe(true);
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("sessions.patch");
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("sessions.patchMany");
   });
 
   it("does not let a write-scoped operator delete an active session", async () => {

@@ -74,7 +74,7 @@ function jsonOutput(index = -1) {
   return JSON.parse(String(mockCallArg(mocks.stdout, index)));
 }
 
-function holdResult(mock: ReturnType<typeof vi.fn>, result: unknown) {
+function holdResult(mock: ReturnType<typeof vi.fn<() => Promise<unknown>>>, result: unknown) {
   const entered = createDeferred<void>(),
     retired = createDeferred<void>();
   mock.mockImplementationOnce(async () => {
@@ -992,4 +992,3 @@ describe("matrix CLI verification commands", () => {
     );
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

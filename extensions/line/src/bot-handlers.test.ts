@@ -439,7 +439,7 @@ describe("handleLineWebhookEvents", () => {
     upsertPairingRequestMock.mockResolvedValue({ code: "CODE", created: false });
 
     const event = createTestMessageEvent({
-      message: { id: "m6", type: "text", text: "hi" },
+      message: { id: "m6", type: "text", text: "hi", quoteToken: "m6-quote" },
       source: { type: "user", userId: "cross-account-user" },
       webhookEventId: "evt-6",
     });

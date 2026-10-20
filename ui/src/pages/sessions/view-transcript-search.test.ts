@@ -18,15 +18,15 @@ afterEach(() => {
   disposeSessionViews();
   container.remove();
 });
-const query = <T extends Element = Element>(selector: string) =>
-  container.querySelector<T>(selector);
 const render = (props: Partial<ReturnType<typeof buildProps>>) =>
   renderSessionsView({ ...buildProps(buildMultiResult([])), ...props }, container);
 
 const unavailable = "Connect to the Gateway to search transcripts.";
-const connectionStatus = () => query('.settings-section__desc [role="status"]');
-const transcriptTrigger = () => query<HTMLButtonElement>(".sessions-transcript-search__trigger");
-const filterInput = () => query<HTMLInputElement>(".sessions-filter-popover__search input")!;
+const connectionStatus = () => container.querySelector('.settings-section__desc [role="status"]');
+const transcriptTrigger = () =>
+  container.querySelector<HTMLButtonElement>(".sessions-transcript-search__trigger");
+const filterInput = () =>
+  container.querySelector<HTMLInputElement>(".sessions-filter-popover__search input")!;
 const escapeKey = (options: KeyboardEventInit = {}) =>
   new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true, ...options });
 
@@ -45,7 +45,7 @@ describe("sessions transcript search view", () => {
       });
       await Promise.resolve();
 
-      const rosterFilter = query<HTMLInputElement>(
+      const rosterFilter = container.querySelector<HTMLInputElement>(
         '.sessions-filter-popover__search input[type="text"]',
       );
       const trigger = transcriptTrigger();
@@ -55,12 +55,12 @@ describe("sessions transcript search view", () => {
         available ? "Search transcripts" : unavailable,
       );
       expect(trigger?.disabled).toBe(!available);
-      expect(query(".sessions-transcript-search__input input")).toBeNull();
+      expect(container.querySelector(".sessions-transcript-search__input input")).toBeNull();
       expect(connectionStatus()?.textContent).toBe(available ? undefined : unavailable);
       if (available) {
         trigger!.click();
         await Promise.resolve();
-        const transcriptInput = query<HTMLInputElement>(
+        const transcriptInput = container.querySelector<HTMLInputElement>(
           '.sessions-transcript-search__input input[type="search"]',
         );
         expect(transcriptInput?.value).toBe("  exact phrase  ");
@@ -68,9 +68,9 @@ describe("sessions transcript search view", () => {
         transcriptInput!.dispatchEvent(new Event("input", { bubbles: true }));
         expect(onTranscriptSearchChange).toHaveBeenCalledWith("different words");
         expect(onTranscriptSearch).not.toHaveBeenCalled();
-        query(".sessions-transcript-search__form")?.dispatchEvent(
-          new Event("submit", { bubbles: true, cancelable: true }),
-        );
+        container
+          .querySelector(".sessions-transcript-search__form")
+          ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
       } else {
         expect(trigger?.closest("openclaw-tooltip")).toBeNull();
         render({ transcriptSearchAvailable: true });
@@ -111,7 +111,9 @@ describe("sessions transcript search view", () => {
     });
     await Promise.resolve();
 
-    const result = query<HTMLButtonElement>(".sessions-transcript-search__result");
+    const result = container.querySelector<HTMLButtonElement>(
+      ".sessions-transcript-search__result",
+    );
     expect(result?.textContent).toContain("Launch planning");
     expect(result?.textContent).toContain("Assistant");
     expect(result?.textContent).toContain("The <launch code> is ready.");
@@ -148,9 +150,11 @@ describe("Sessions query clearing", () => {
       });
 
       render({ ...props, onSearchChange });
-      query<HTMLButtonElement>(".sessions-filter-popover__trigger")!.click();
+      container.querySelector<HTMLButtonElement>(".sessions-filter-popover__trigger")!.click();
       const input = filterInput();
-      const clear = query<HTMLButtonElement>('button[aria-label="Clear search"]')!;
+      const clear = container.querySelector<HTMLButtonElement>(
+        'button[aria-label="Clear search"]',
+      )!;
       expect(clear).toMatchObject({ hidden: false, disabled: false });
       if (action === "click") {
         clear.focus();
@@ -167,14 +171,20 @@ describe("Sessions query clearing", () => {
       expect(clear).toMatchObject({ hidden: true, disabled: true });
       expect(onFilterChange).not.toHaveBeenCalled();
       expect(onClearFilters).not.toHaveBeenCalled();
-      expect(query<HTMLInputElement>(".session-filter-input--limit")?.value).toBe("25");
-      expect(query<HTMLSelectElement>(".session-groupby__select")?.value).toBe("category");
+      expect(container.querySelector<HTMLInputElement>(".session-filter-input--limit")?.value).toBe(
+        "25",
+      );
+      expect(container.querySelector<HTMLSelectElement>(".session-groupby__select")?.value).toBe(
+        "category",
+      );
       const emptyEscape = escapeKey();
       input.dispatchEvent(emptyEscape);
       expect(emptyEscape.defaultPrevented).toBe(true);
-      expect(query(".sessions-filter-popover")?.matches(":popover-open")).toBe(false);
+      expect(container.querySelector(".sessions-filter-popover")?.matches(":popover-open")).toBe(
+        false,
+      );
       expect(onSearchChange).toHaveBeenCalledTimes(1);
-      query<HTMLButtonElement>(".data-table-empty-state button")!.click();
+      container.querySelector<HTMLButtonElement>(".data-table-empty-state button")!.click();
       expect(onClearFilters).toHaveBeenCalledOnce();
     },
   );
@@ -203,7 +213,7 @@ describe("Sessions query clearing", () => {
         props.sessionMenu = { key: "agent:main:main" };
       }
       render(props);
-      query<HTMLButtonElement>(".sessions-filter-popover__trigger")!.click();
+      container.querySelector<HTMLButtonElement>(".sessions-filter-popover__trigger")!.click();
       const input = filterInput();
       if (owner !== "unfocused") {
         input.focus();

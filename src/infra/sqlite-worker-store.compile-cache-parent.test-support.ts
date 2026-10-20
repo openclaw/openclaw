@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import { enableOpenClawCompileCache } from "../entry.compile-cache.js";
 import { resolveNodeCompileCacheEnv } from "./node-compile-cache-env.js";
-import { openSqliteWorkerStore } from "./sqlite-worker-store.js";
+import { openSqliteWorkerStore, type SqliteWorkerStore } from "./sqlite-worker-store.js";
 
 type CacheState = {
   directory: string | null;
@@ -108,7 +108,7 @@ if (cache !== undefined && cache !== "" && disable === undefined) {
 }
 const directories = [];
 for (let generation = 1; generation <= 2; generation++) {
-  const store = await openSqliteWorkerStore<CacheOperations>({
+  const store: SqliteWorkerStore<CacheOperations> = await openSqliteWorkerStore<CacheOperations>({
     moduleUrl: pathToFileURL(path.join(root, "backend.mjs")),
     databasePath: path.join(root, "store.sqlite"),
     input: undefined,

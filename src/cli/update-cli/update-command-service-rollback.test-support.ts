@@ -358,7 +358,8 @@ export function registerPackageRootRollbackTests(
     }
     if (!refused) {
       expect(mocks.running).toBe(
-        succeeded || (backupScenario && scenario !== "backup restore failed"),
+        succeeded ||
+          (backupScenario && scenario !== "backup restore failed" && !changesAfterRestore),
       );
     }
     if (succeeded || scenario === "backup restore failed") {
