@@ -243,6 +243,38 @@ afterEach(() => {
 });
 
 describe("discoverOpenClawPlugins", () => {
+  it.each(["home", "other"] as const)(
+    "preserves global install provenance when discovering from %s",
+    (workspace) => {
+      const stateDir = path.join(testRoot, ".openclaw");
+      const pluginDir = path.join(stateDir, "extensions", "diffs");
+      createPlugin(pluginDir, "@openclaw/diffs", "diffs", "index.js");
+      const env = discoveryEnv(stateDir, { HOME: testRoot });
+      const workspaceDir = workspace === "home" ? testRoot : path.join(testRoot, "other");
+      const installRecords: Record<string, PluginInstallRecord> = {
+        diffs: {
+          source: "clawhub",
+          spec: "clawhub:@openclaw/diffs",
+          clawhubPackage: "@openclaw/diffs",
+          clawhubUrl: "https://clawhub.ai",
+          clawhubChannel: "official",
+          installPath: pluginDir,
+        },
+      };
+      const discovery = discoverOpenClawPlugins({ env, workspaceDir, installRecords });
+      expect(discovery.candidates).toHaveLength(1);
+      expectFields(discovery.candidates[0], { origin: "global", installOwner: "diffs" });
+      const registry = loadPluginManifestRegistryCore({
+        discovery,
+        env,
+        workspaceDir,
+        installRecords,
+      });
+      expect(registry.plugins).toHaveLength(1);
+      expect(registry.plugins[0]).toMatchObject({ id: "diffs", trustedOfficialInstall: true });
+    },
+  );
+
   it("scans configured scripts while excluding automatic helper files and non-entry scripts", () => {
     const workspaceDir = path.join(testRoot, "workspace");
     const globalRoot = path.join(testRoot, "extensions");
