@@ -184,6 +184,8 @@ export type OperatorApprovalReceiptPage = {
 export type OperatorApprovalExecutionLinkState = "exact" | "missing" | "malformed" | "mismatch";
 
 export type ListTerminalOperatorApprovalsInput = {
+  /** Stable session/run attribution survives Doctor routing repairs; it grants no authority. */
+  source?: { sessionId: string; runId: string };
   cursor?: string;
   limit?: number;
   kind?: OperatorApprovalKind;

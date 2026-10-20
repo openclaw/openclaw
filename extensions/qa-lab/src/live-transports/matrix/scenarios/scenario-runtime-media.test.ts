@@ -90,8 +90,8 @@ describe("Matrix generated image delivery", () => {
 
     expect(sendTextMessage).toHaveBeenCalledTimes(1);
     expect(waitForOptionalRoomEvent).toHaveBeenCalledTimes(1);
-    expect(result.artifacts?.driverEventId).toBe("$driver-trigger");
-    expect(result.artifacts?.attachmentEventId).toBe("$generated-image");
+    expect(result.details).toContain("driver event: $driver-trigger");
+    expect(result.details).toContain("generated image event: $generated-image");
   });
 
   it("bounds timeout diagnostics to the last eight room events", async () => {

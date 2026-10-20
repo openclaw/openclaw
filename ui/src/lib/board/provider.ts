@@ -87,6 +87,7 @@ export function boardProviderForSession(session: BoardGetParams, available = tru
 
 export type BoardProviderLease = {
   provider: BoardProvider;
+  restoreSnapshot: (snapshot: unknown, receivedAtMs: number) => void;
   update: (
     client: BoardGatewayClient,
     connected: boolean,
@@ -104,6 +105,7 @@ export function acquireBoardProviderForSession(
   canMutate = true,
   canGrant = true,
   presentationScope?: object,
+  cacheSnapshot?: (snapshot: BoardSnapshot | null, receivedAtMs: number) => void,
 ): BoardProviderLease {
   const key = boardProviderCacheKey(session);
   let entry = gatewayProviders.get(key);
@@ -143,7 +145,13 @@ export function acquireBoardProviderForSession(
       throw new Error(`Session dashboard ${action} unavailable`);
     }
   };
+  const stopCache = cacheSnapshot ? transport.subscribeCacheSnapshot(cacheSnapshot) : undefined;
   return {
+    restoreSnapshot: (snapshot, receivedAtMs) => {
+      if (isCurrent()) {
+        transport.restoreSnapshot(snapshot, receivedAtMs);
+      }
+    },
     // Transport snapshots are shared; mutation authority belongs to this live lease.
     provider: {
       loadError$: transport.loadError$,
@@ -204,6 +212,7 @@ export function acquireBoardProviderForSession(
         return;
       }
       released = true;
+      stopCache?.();
       entry.consumers -= 1;
       if (entry.consumers > 0) {
         return;

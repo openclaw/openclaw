@@ -5,6 +5,7 @@ import type {
 import { Errored, Show, createMemo, createSignal, onCleanup, onSettled } from "solid-js";
 import type { ApplicationContext } from "../../../app/context.ts";
 import { resolveSandboxHostUrl } from "../../../components/sandbox-host.ts";
+import { registerBoardEnglish } from "../../../i18n/locales/en-board.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import { getCanvasWidgetFrameConnectionGeneration } from "../../../lib/chat/canvas-widget-frame-generation.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
@@ -20,6 +21,7 @@ import { prepareHtmlPreviewLinks } from "./chat-html-preview-links.ts";
 import type { SessionFileSource } from "./chat-sidebar-content-types.ts";
 
 registerEnglishCatalog(registerFilePreviewEnglish);
+registerEnglishCatalog(registerBoardEnglish);
 
 type HtmlPreviewProps = {
   html: string;

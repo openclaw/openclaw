@@ -28,6 +28,7 @@ export type ColdLoadProbeInput = {
   ownerProbes?: boolean;
   latencyMs: number;
   methodLatencyMs?: Record<string, number>;
+  connectNotBeforeMs?: number;
   frameGapMs: number;
   events: Array<{ event: string; payload: unknown }>;
   liveEvents?: Array<{

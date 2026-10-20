@@ -1,9 +1,5 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
 import { createEmptyCostUsageTotals } from "../../../src/infra/session-cost-usage-totals.js";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -14,7 +10,6 @@ const suite = createControlUiE2eSuite({
 
 suite.define(() => {
   it("keeps all-session totals while paging and requests filters before rendering their results", async () => {
-    const artifacts = createControlUiE2eArtifactDir("usage-overview");
     await suite.withPage(
       {
         locale: "en-US",
@@ -124,20 +119,6 @@ suite.define(() => {
         await expect
           .poll(() => page.locator(".session-bar-meta").first().textContent())
           .toContain("dur:1m");
-        const fullHeight = await page
-          .locator(".usage-page")
-          .evaluate((element) => Math.ceil(element.scrollHeight) + 400);
-        const fullFrame = await takeControlUiScreenshotFrame(
-          page,
-          page.locator(".usage-page"),
-          [page.locator(".usage-header"), rows.first(), page.locator(".data-table-pagination")],
-          {
-            animations: "disabled",
-            viewport: { width: 1440, height: fullHeight },
-          },
-        );
-        await writeFile(path.join(artifacts, "overview-and-sessions.png"), fullFrame.png);
-        await page.setViewportSize({ width: 1440, height: 1100 });
         await expect
           .poll(() => page.locator(".usage-metric-badge").allTextContents())
           .toEqual(["125.0K Tokens", "$125.00 Cost", "1250 sessions"]);
@@ -145,16 +126,6 @@ suite.define(() => {
           projection: "overview",
           limit: 50,
         });
-        const capture = async (name: string, card = rows.first()) => {
-          const frame = await takeControlUiScreenshotFrame(page, card, [card], {
-            animations: "disabled",
-            scrollTo: card,
-          });
-          await writeFile(path.join(artifacts, `${name}.png`), frame.png);
-        };
-        await capture("summary", page.locator(".usage-header"));
-        await capture("first-page");
-        await capture("pagination", page.locator(".data-table-pagination"));
         await page.getByRole("button", { name: "Next", exact: true }).click();
         await expect.poll(() => rows.first().textContent()).toBe("Session 51");
         expect((await gateway.getRequests("sessions.usage")).at(-1)?.params).toMatchObject({
@@ -164,7 +135,7 @@ suite.define(() => {
         await expect
           .poll(() => page.locator(".usage-metric-badge").allTextContents())
           .toEqual(["125.0K Tokens", "$125.00 Cost", "1250 sessions"]);
-        await capture("second-page");
+
         await page.locator(".usage-query-input").fill("label:Needle");
         await page.locator(".usage-query-input").press("Enter");
         await expect
@@ -176,11 +147,6 @@ suite.define(() => {
         await expect
           .poll(() => page.locator(".usage-metric-badge").allTextContents())
           .toEqual(["100 Tokens", "$0.10 Cost", "1 session"]);
-        await capture("filtered-beyond-thousand");
-        await writeFile(
-          path.join(artifacts, "requests.json"),
-          JSON.stringify(await gateway.getRequests("sessions.usage"), null, 2),
-        );
       },
     );
   });

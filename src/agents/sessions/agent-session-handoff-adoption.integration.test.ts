@@ -38,7 +38,7 @@ import {
 } from "./agent-session-loop-correctness.test-support.js";
 import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
 import type { AgentSession } from "./agent-session.js";
-import type { ToolDefinition } from "./extensions/types.js";
+import type { ExtensionFactory, ToolDefinition } from "./extensions/types.js";
 
 registerAgentSessionLoopTestLifecycle();
 
@@ -65,9 +65,9 @@ it("cancels a pending-acceptance steer before one follow-up reuses the session",
   replyRunTesting.resetSessionControllerForTest();
   resetRecentQueuedMessageIdDedupe();
   const steerEnqueued = createDeferred();
-  const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
-    ["agent_settled", [async () => settled()]],
-  ]);
+  const handlers: ExtensionFactory = (api) => {
+    api.on("agent_settled", async () => settled());
+  };
   const yieldTool: ToolDefinition = {
     name: "yield_turn",
     label: "Yield turn",
@@ -103,7 +103,7 @@ it("cancels a pending-acceptance steer before one follow-up reuses the session",
   });
   const { session } = await createTestSession({
     customTools: [yieldTool],
-    resourceLoader: createResourceLoader(handlers),
+    resourceLoader: await createResourceLoader(handlers),
   });
   const lifecycleEvents: string[] = [];
   session.subscribe((event) => {

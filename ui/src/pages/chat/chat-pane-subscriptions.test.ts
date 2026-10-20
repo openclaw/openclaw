@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -22,6 +21,7 @@ import {
   createRenderTestChatPane,
   createTestChatPane,
   getPaneTestRuntime,
+  type TestChatPane,
 } from "./chat-pane.test-support.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
@@ -143,36 +143,55 @@ describe("chat pane approval replay subscriptions", () => {
   );
 });
 
+function observeRender<T>(pane: TestChatPane, read: () => T) {
+  const rendered: T[] = [];
+  const render = vi.fn(() => {
+    rendered.push(read());
+    return { layout: null, capabilityDialogs: undefined, providerReviewSource: undefined };
+  });
+  pane.render = render;
+  const settle = async () => {
+    await Promise.resolve();
+    flush();
+  };
+  return {
+    rendered,
+    render,
+    expectUpdate: async (change: () => void, expected: T, parked = false) => {
+      if (parked) {
+        pane.presented = false;
+        await settle();
+        render.mockClear();
+      }
+      change();
+      expect(read()).toBe(expected);
+      if (parked) {
+        await settle();
+        expect(render).not.toHaveBeenCalled();
+        pane.presented = true;
+        await pane.updateComplete;
+        expect(rendered.at(-1)).toBe(expected);
+      } else {
+        await waitForSolid(() => expect(rendered.at(-1)).toBe(expected));
+      }
+    },
+  };
+}
+
 it("projects composer capability changes and catches up a parked pane on reveal", async () => {
   const fixture = createMountedPanes([{ key: "main", kind: "direct", updatedAt: 1 }]);
   const { pane } = fixture;
   const capabilities = getPaneTestRuntime(pane).composerCapabilities;
   const view = () => capabilities.dialogView(pane.context, pane.state, undefined);
-  const rendered: boolean[] = [];
-  const render = vi.fn(() => {
-    rendered.push(view().open);
-    return { layout: null, capabilityDialogs: undefined, providerReviewSource: undefined };
-  });
-  pane.render = render;
-  onTestFinished(() => pane.disconnectedCallback());
+  const { render, expectUpdate } = observeRender(pane, () => view().open);
   fixture.mount("main");
   await pane.updateComplete;
 
-  capabilities.props(pane.context, pane.state, undefined, "main").onAddServer?.();
-  expect(view().open).toBe(true);
-  await waitForSolid(() => expect(rendered.at(-1)).toBe(true));
-
-  pane.presented = false;
-  await Promise.resolve();
-  flush();
-  render.mockClear();
-  view().onCancel();
-  expect(view().open).toBe(false);
-  flush();
-  expect(render).not.toHaveBeenCalled();
-  pane.presented = true;
-  await pane.updateComplete;
-  expect(rendered.at(-1)).toBe(false);
+  await expectUpdate(
+    () => capabilities.props(pane.context, pane.state, undefined, "main").onAddServer?.(),
+    true,
+  );
+  await expectUpdate(() => view().onCancel(), false, true);
 
   const state = pane.state;
   const reopen = capabilities.props(pane.context, state, undefined, "main").onAddServer;
@@ -193,24 +212,14 @@ vi.mock("../../app/native-gateways.runtime.ts", async (importOriginal) => ({
 it("updates native locality synchronously and catches up parked panes on reveal", async () => {
   let snapshot: NativeGatewaysSnapshot = {
     currentId: "local",
-    gateways: [
-      {
-        id: "local",
-        name: "Local",
-        kind: "local",
-        isPrimary: true,
-        canPromote: false,
-        health: "ok",
-      },
-      {
-        id: "remote",
-        name: "Remote",
-        kind: "remote",
-        isPrimary: false,
-        canPromote: true,
-        health: "ok",
-      },
-    ],
+    gateways: (["local", "remote"] as const).map((kind) => ({
+      id: kind,
+      name: kind === "local" ? "Local" : "Remote",
+      kind,
+      isPrimary: kind === "local",
+      canPromote: kind === "remote",
+      health: "ok" as const,
+    })),
   };
   const listeners = new Set<(next: NativeGatewaysSnapshot) => void>();
   native.capability = {
@@ -219,9 +228,7 @@ it("updates native locality synchronously and catches up parked panes on reveal"
     },
     subscribe: (listener) => {
       listeners.add(listener);
-      return () => {
-        listeners.delete(listener);
-      };
+      return () => listeners.delete(listener);
     },
     select: vi.fn(),
     setPrimary: vi.fn(),
@@ -231,16 +238,9 @@ it("updates native locality synchronously and catches up parked panes on reveal"
     snapshot = { ...snapshot, currentId };
     listeners.forEach((listener) => listener(snapshot));
   };
-  const { pane } = createTestChatPane({
-    client: createGatewayBrowserClientFixture(),
-  });
+  const { pane } = createTestChatPane({ client: createGatewayBrowserClientFixture() });
   const file = { path: "file.ts", root: "/workspace" };
-  const rendered: Array<string | null> = [];
-  const render = vi.fn(() => {
-    rendered.push(localEditorFilePath(file));
-    return { layout: null, capabilityDialogs: undefined, providerReviewSource: undefined };
-  });
-  pane.render = render;
+  const { rendered, expectUpdate } = observeRender(pane, () => localEditorFilePath(file));
   onTestFinished(() => {
     pane.disconnectedCallback();
     native.capability = null;
@@ -249,21 +249,8 @@ it("updates native locality synchronously and catches up parked panes on reveal"
   await pane.updateComplete;
   expect(rendered.at(-1)).toBe("/workspace/file.ts");
 
-  publish("remote");
-  expect(localEditorFilePath(file)).toBeNull();
-  await waitForSolid(() => expect(rendered.at(-1)).toBeNull());
-
-  pane.presented = false;
-  await Promise.resolve();
-  flush();
-  render.mockClear();
-  publish("local");
-  expect(localEditorFilePath(file)).toBe("/workspace/file.ts");
-  flush();
-  expect(render).not.toHaveBeenCalled();
-  pane.presented = true;
-  await pane.updateComplete;
-  expect(rendered.at(-1)).toBe("/workspace/file.ts");
+  await expectUpdate(() => publish("remote"), null);
+  await expectUpdate(() => publish("local"), "/workspace/file.ts", true);
 
   pane.disconnectedCallback();
   expect(listeners.size).toBe(0);
@@ -274,9 +261,7 @@ it("updates native locality synchronously and catches up parked panes on reveal"
 });
 
 it("parks and remounts presentation subscriptions using the runtime's context without a provider", async () => {
-  const { pane } = createTestChatPane({
-    client: createGatewayBrowserClientFixture(),
-  });
+  const { pane } = createTestChatPane({ client: createGatewayBrowserClientFixture() });
   const navigation = pane.context.navigation;
   const subscribe = navigation.subscribe.bind(navigation);
   const released = vi.fn();
@@ -288,12 +273,10 @@ it("parks and remounts presentation subscriptions using the runtime's context wi
     };
   });
   const pluginSubscriptions = vi.spyOn(pane.context.plugins, "subscribe");
-  const rendered: boolean[] = [];
-  const render = vi.fn(() => {
-    rendered.push(navigation.snapshot.navCollapsed);
-    return { layout: null, capabilityDialogs: undefined, providerReviewSource: undefined };
-  });
-  pane.render = render;
+  const { rendered, render, expectUpdate } = observeRender(
+    pane,
+    () => navigation.snapshot.navCollapsed,
+  );
   onTestFinished(() => {
     pane.disconnectedCallback();
     vi.restoreAllMocks();
@@ -303,19 +286,8 @@ it("parks and remounts presentation subscriptions using the runtime's context wi
   expect(subscriptions).toHaveBeenCalledOnce();
   expect(pluginSubscriptions).toHaveBeenCalledOnce();
 
-  navigation.update({ navCollapsed: true });
-  await waitForSolid(() => expect(rendered.at(-1)).toBe(true));
-  pane.presented = false;
-  await Promise.resolve();
-  flush();
-  render.mockClear();
-  navigation.update({ navCollapsed: false });
-  await Promise.resolve();
-  flush();
-  expect(render).not.toHaveBeenCalled();
-  pane.presented = true;
-  await pane.updateComplete;
-  expect(rendered.at(-1)).toBe(false);
+  await expectUpdate(() => navigation.update({ navCollapsed: true }), true);
+  await expectUpdate(() => navigation.update({ navCollapsed: false }), false, true);
 
   pane.disconnectedCallback();
   expect(released).toHaveBeenCalledTimes(subscriptions.mock.calls.length);
@@ -345,10 +317,9 @@ it("retires auth presentation once per event and releases the Gateway listener o
   const pane = fixture.mount(key);
   const ready = async () => {
     await pane.updateComplete;
-    await waitForSolid(() => {
-      expect(pane.state.connected).toBe(true);
-      expect(pane.state.chatLoading).toBe(false);
-    });
+    await waitForSolid(() =>
+      expect(pane.state).toMatchObject({ connected: true, chatLoading: false }),
+    );
   };
   await ready();
 
@@ -365,7 +336,7 @@ it("retires auth presentation once per event and releases the Gateway listener o
     expect(state.modelAuthStatusResult).toBeNull();
     expect(state.modelAuthStatusRequestVersion).toBe(version + 1);
     await waitForSolid(() => expect(state.modelAuthStatusResult).toEqual(authStatus));
-    const settled = expectDefined(state.modelAuthStatusResult, "settled auth presentation");
+    const settled = state.modelAuthStatusResult;
     const settledVersion = state.modelAuthStatusRequestVersion;
     pane.disconnectedCallback();
     fixture.emitGatewayEvent("chat.metadata.changed", { authChanged: true });

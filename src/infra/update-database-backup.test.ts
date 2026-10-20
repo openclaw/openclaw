@@ -772,7 +772,7 @@ it.each([
     );
   }
   const capture = f.captureOriginal(`${change}-${phase}`);
-  if (change === "content") {
+  if (change === "content" && phase === "during") {
     await expect(capture).rejects.toMatchObject({
       cause: expect.objectContaining({
         message: expect.stringMatching(/Original update (file|resource) changed/),

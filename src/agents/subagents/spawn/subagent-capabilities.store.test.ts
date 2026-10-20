@@ -360,8 +360,7 @@ describe("persisted subagent capability lookups", () => {
       expect(await withPreparedRead(cappedRead)).toMatchObject({
         depth: 2,
         role: "leaf",
-        canSpawn: false,
-        canControlChildren: false,
+        controlScope: "none",
       });
       expect(listing).not.toHaveBeenCalled();
     },

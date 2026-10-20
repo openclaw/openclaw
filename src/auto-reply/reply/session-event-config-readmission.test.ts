@@ -8,6 +8,7 @@ import {
   readAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
+import { completionConfig } from "../../agents/bash-tools.lifecycle.test-support.js";
 import {
   applyEmbeddedAttemptToolsAllow,
   resolveEmbeddedAttemptToolConstructionPlan,
@@ -20,7 +21,6 @@ import { resolveAttemptWorkspaceSandbox } from "../../agents/workspace-sandbox.j
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-writable.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { peekSystemEventEntries, resetSystemEventsForTest } from "../../infra/system-events.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
@@ -43,22 +43,27 @@ await Promise.all([
   ),
 ]);
 
-/** Attempts the real managed write tool, as the model would, and reports the final effect. */
+async function startRun(params: RunEmbeddedAgentParams) {
+  const admitted = expectDefined(
+    await params.preparedRunAdmission?.admit("gateway", params.runId),
+    "reply admission",
+  );
+  params.onExecutionPhase?.({ phase: "model_call_started" });
+  await params.onExecutionStarted?.();
+  await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
+  return admitted;
+}
+
+/** Uses the real managed write tool; the model decision alone is mocked. */
 async function attemptRealWrite(
   params: RunEmbeddedAgentParams,
   filePath: string,
   operatorAuthority?: AdmittedRunOperatorAuthority,
 ) {
-  const admittedRunContext = expectDefined(
-    await params.preparedRunAdmission?.admit("gateway", params.runId),
-    "ordinary reply admission",
-  );
+  const admittedRunContext = await startRun(params);
   if (operatorAuthority) {
     expect(readAdmittedRunOperatorAuthority(admittedRunContext)?.profileId).toBe("original-guest");
   }
-  params.onExecutionPhase?.({ phase: "model_call_started" });
-  await params.onExecutionStarted?.();
-  await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
   const workspace = await resolveAttemptWorkspaceSandbox({ ...params, admittedRunContext });
   const host = createAgentHarnessHostCapabilities({
     attempt: {
@@ -128,30 +133,18 @@ async function attemptRealWrite(
 }
 
 it.for([
-  { scenario: "published-deny" },
-  { scenario: "retained-ceiling" },
-  { scenario: "allow-control" },
-  { scenario: "revoked-producer" },
-  { scenario: "publication-storm" },
+  "published-deny",
+  "retained-ceiling",
+  "allow-control",
+  "revoked-producer",
+  "publication-storm",
 ] as const)(
-  "re-admits an accepted deferred exec completion after a config publication: $scenario",
-  async ({ scenario }, { signal }) => {
+  "re-admits an accepted deferred exec completion after a config publication: %s",
+  async (scenario, { signal }) => {
     await withOpenClawTestState(
       { label: "session-event-config-readmission", env: { OPENCLAW_TEST_FAST: "0" } },
       async (state) => {
-        const config: OpenClawConfig = {
-          agents: {
-            entries: { main: { workspace: state.workspaceDir } },
-            defaults: {
-              workspace: state.workspaceDir,
-              skipBootstrap: true,
-              model: { primary: "mock-openai/gpt-5.6-luna" },
-              models: { "mock-openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } } },
-            },
-          },
-          plugins: { enabled: false },
-          skills: { load: { watch: false } },
-        };
+        const config = completionConfig(state.workspaceDir);
         setRuntimeConfigSnapshot(config);
         await state.writeConfig(config);
         openOpenClawStateDatabase();
@@ -195,11 +188,7 @@ it.for([
           .mockImplementation(async (params: RunEmbeddedAgentParams) => {
             prompts.push(params.prompt);
             if (prompts.length === 1) {
-              const admission = expectDefined(params.preparedRunAdmission, "reply admission");
-              await admission.admit("gateway", params.runId);
-              params.onExecutionPhase?.({ phase: "model_call_started" });
-              await params.onExecutionStarted?.();
-              await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
+              await startRun(params);
               firstStarted.resolve();
               await releaseFirst.promise;
             } else {
@@ -259,18 +248,13 @@ it.for([
           revoked = scenario === "revoked-producer";
           releaseFirst.resolve();
           await expect(first.settled).resolves.toMatchObject({ status: "completed" });
-          if (scenario === "publication-storm" || scenario === "revoked-producer") {
-            await expect(completion.settled).resolves.toMatchObject({
-              status: "failed",
-              executionStarted: false,
-            });
-            expect(prompts).toHaveLength(1);
-          } else {
-            await expect(completion.settled).resolves.toMatchObject({
-              status: "completed",
-              executionStarted: true,
-            });
-            expect(prompts).toHaveLength(2);
+          const executes = scenario !== "publication-storm" && scenario !== "revoked-producer";
+          await expect(completion.settled).resolves.toMatchObject({
+            status: executes ? "completed" : "failed",
+            executionStarted: executes,
+          });
+          expect(prompts).toHaveLength(executes ? 2 : 1);
+          if (executes) {
             expect(prompts[1]).toContain("Background exec completed");
           }
           // Final effect: only the unrestricted control reaches the filesystem.

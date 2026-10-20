@@ -296,11 +296,8 @@ export class SystemAgentChatEngine {
     if (this.agentSession.verifiedInference !== binding) {
       return this.throwInferenceUnavailable();
     }
-    return await requireSystemAgentInferenceRoute(
-      binding,
-      this.options.deps,
-      "conversation",
-      (failures) => this.throwInferenceUnavailable(failures),
+    return await requireSystemAgentInferenceRoute(binding, "conversation", (failures) =>
+      this.throwInferenceUnavailable(failures),
     );
   }
 

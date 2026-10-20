@@ -1,5 +1,6 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { createMemo, lazy, Loading, Show } from "solid-js";
+import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSnapshot, GatewaySessionRow, ToolsEffectiveResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -67,7 +68,7 @@ function activeConfigFingerprint(
 }
 
 export class ChatComposerCapabilityHost {
-  private readonly listeners = new Set<() => void>();
+  private readonly listeners = createChangeListeners();
   private readonly skillCatalog = new ComposerSkillCatalog(() => this.publish());
   private readonly library = new ComposerLibrarySession(() => this.publish());
   private readonly patchTokens = new Map<string, symbol>();
@@ -81,16 +82,8 @@ export class ChatComposerCapabilityHost {
   private addBusy = false;
   private addError: string | null = null;
 
-  subscribe(listener: () => void): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
-
-  private publish(): void {
-    for (const listener of this.listeners) {
-      listener();
-    }
-  }
+  readonly subscribe = this.listeners.subscribe;
+  private readonly publish = this.listeners.publish;
 
   private effectiveToolsKeys(
     context: ApplicationContext,

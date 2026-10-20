@@ -79,7 +79,6 @@ export async function notifySessionsSendSession(params: {
   };
   const event = selection.operatorAuthority
     ? await runWithInProcessGatewaySessionMutation(
-        "sessions.send",
         { sessionKey: params.sessionKey, agentId: params.targetAgentId },
         (assertCurrent) => {
           assertCurrent();

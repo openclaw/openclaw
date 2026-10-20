@@ -1,4 +1,4 @@
-import { notifyListeners, registerListener } from "../../../../src/shared/listeners.js";
+import { createChangeListeners, notifyListeners } from "../../../../src/shared/listeners.js";
 import type { ChatAttachment, ChatGoalDraftMode, HumanMention } from "./chat-types.ts";
 
 type ComposerDraftSnapshot = {
@@ -16,15 +16,11 @@ export type ComposerDraftSource = {
 
 /** Publishes completed owner mutations without keeping a second draft. */
 export function createComposerDraftSource(read: ComposerDraftSource["read"]) {
-  const listeners = new Set<() => void>();
+  const listeners = createChangeListeners();
   return {
     read,
-    subscribe: (listener: () => void) => registerListener(listeners, listener),
-    publish: () => {
-      for (const listener of listeners) {
-        listener();
-      }
-    },
+    subscribe: listeners.subscribe,
+    publish: listeners.publish,
   };
 }
 

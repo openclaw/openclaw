@@ -311,6 +311,7 @@ function* assembleOpenClawCodingTools(
       sandboxed: Boolean(sandbox),
       runId: options?.runId,
       cronSelfRemoveOnlyJobId,
+      automationReadOnly: options?.forceRestartSafeTools === true,
     });
   const pluginToolAllowlist = appendRuntimePluginToolGrant(
     capabilityProfile.policy.explicitToolAllowlist,
@@ -418,6 +419,7 @@ function* assembleOpenClawCodingTools(
           ringZeroTools,
           yield {
             ...pluginToolOptions,
+            forceRestartSafeTools: options?.forceRestartSafeTools,
             cronSandboxContext: sandbox,
             sessionPortalTarget,
             sandboxSessionRenameOnly: capabilityProfile.policy.sandboxSessionRenameOnly,

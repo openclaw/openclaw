@@ -105,6 +105,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -140,6 +141,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -158,6 +160,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
@@ -1164,12 +1168,12 @@ private fun NotificationPackageAppRow(
       Modifier
         .fillMaxWidth()
         .heightIn(min = ClawTheme.spacing.row)
-        .clickable { onSelectedChange(!selected) }
+        .toggleable(value = selected, role = Role.Switch, onValueChange = onSelectedChange)
         .padding(vertical = 6.dp),
     verticalAlignment = Alignment.CenterVertically,
     horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs),
   ) {
-    ClawTextBadge(text = notificationAppBadge(app.label))
+    ClawTextBadge(text = notificationAppBadge(app.label), modifier = Modifier.clearAndSetSemantics {})
     Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
       Text(
         text = app.label,
@@ -1186,7 +1190,7 @@ private fun NotificationPackageAppRow(
         overflow = TextOverflow.Ellipsis,
       )
     }
-    Switch(checked = selected, onCheckedChange = onSelectedChange)
+    Switch(checked = selected, onCheckedChange = null, modifier = Modifier.minimumInteractiveComponentSize())
   }
 }
 
@@ -3173,7 +3177,7 @@ private fun SettingsToggleListRow(row: SettingsToggleRow) {
       Modifier
         .fillMaxWidth()
         .heightIn(min = 56.dp)
-        .clickable(enabled = row.enabled) { row.onCheckedChange(!row.checked) }
+        .toggleable(value = row.checked, enabled = row.enabled, role = Role.Switch, onValueChange = row.onCheckedChange)
         .padding(horizontal = 10.dp, vertical = 6.dp),
     verticalAlignment = Alignment.CenterVertically,
     horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs),
@@ -3183,7 +3187,7 @@ private fun SettingsToggleListRow(row: SettingsToggleRow) {
       Text(text = row.title, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1)
       Text(text = row.subtitle, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
     }
-    Switch(checked = row.checked, onCheckedChange = row.onCheckedChange, enabled = row.enabled)
+    Switch(checked = row.checked, onCheckedChange = null, modifier = Modifier.minimumInteractiveComponentSize(), enabled = row.enabled)
   }
 }
 

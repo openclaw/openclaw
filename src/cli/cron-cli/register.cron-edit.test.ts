@@ -94,6 +94,10 @@ it.each([
   ],
   [["--failure-alert-cooldown", "0"], { failureAlert: { cooldownMs: 0 } }],
   [["--failure-alert-cooldown", "1h30m"], { failureAlert: { cooldownMs: 5_400_000 } }],
+  [
+    ["--failure-alert-channel", "", "--failure-alert-to", " ", "--failure-alert-account-id", ""],
+    { failureAlert: { channel: null, to: null, accountId: null } },
+  ],
 ] as const)("patches %j without loading the old job", async (args, patch) => {
   await edit(args, patch);
   expect(methods()).toEqual(["cron.update", "cron.status"]);

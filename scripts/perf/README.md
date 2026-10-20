@@ -773,6 +773,44 @@ Post-GC Gateway heap samples follow every completed cohort, and the optional
 final `settled.heapsnapshot` permits retainer inspection. Session resets exclude
 intentionally retained live histories from the trend.
 
+For loaded-session retention after real turns settle, use:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/transcript-broadcast-measure.ts \
+  --state-dir /path/to/team-shape --scenario session-idle-retention \
+  --sessions 100 --runs 10 --chunks 1 --chunk-interval-ms 0 --prompt-kib 128 \
+  --duration-ms 360000 --memory-interval-ms 30000 --diagnostics --trace-gc
+```
+
+This warms the runtime with one parent turn, captures a post-GC baseline, and
+touches 100 distinct sessions in cohorts of at most ten concurrent turns. Each
+turn includes a synthetic prompt, one real `read` tool, and the reasoning-signature
+replay check. The driver keeps one roster-only client and no exact-message
+subscriptions. It then idles for `--duration-ms` without model work or polling,
+captures post-idle resources, and reopens every measured session once. `--rounds`
+is ignored. The final partial cohort has its own barrier size.
+
+The report includes post-GC resources after initial work and after reopening,
+periodic natural-GC idle samples, idle GC diagnostics/promotion, and each cohort's
+first-turn or reopened-turn latency. Reopened timings include the real agent
+turn and tool round trip, so they are end-to-end reload cost rather than a
+storage-only timer. History digests must remain unchanged across the idle window;
+reopening must append a second exact synthetic answer without rewriting history.
+Add `--entry src/entry.ts --session-census` to count live `SessionManager`,
+`AgentSession`, and runtime `Agent` instances at the four forced-GC checkpoints
+without writing snapshots. The source-only census imports the same constructors
+as the Gateway and uses V8's count-only object query; it retains no instance
+references. Bundled entries are rejected because their constructor identity
+differs. Counts cover the main isolate only, and the queries force additional
+collections, so omit the census from latency/GC acceptance runs.
+Add `--heap-snapshot` in a separate diagnostic pass for `initial.heapsnapshot`,
+`post-work.heapsnapshot`, `post-idle.heapsnapshot`, and `post-reopen.heapsnapshot`
+to count retained managers, sessions, agents, and their transcript retainers.
+Snapshot capture and forced GC can affect eviction timing; use the recorded
+timestamps and unprofiled paired runs for acceptance comparisons. Set the idle
+duration beyond the lifecycle's eviction window. Fixtures and all output stay
+inside the supplied synthetic state directory.
+
 For a steady memory soak with real tool execution and attached viewers, use:
 
 ```sh
@@ -1262,6 +1300,23 @@ of supplying the repository root. Compare full diffs under `--churn-ms 1000`
 with and without this option; require identical response hashes, immediate edit
 visibility, and the same cache eligibility as the root-directory case. The
 267,000-file fixture remains a detached linked worktree with a separate Git dir.
+
+At seed time, add `--nested-repository` to replace one untracked text file with a
+small committed `agent-clone/` checkout (`--untracked` must be at least five).
+RPC warmup requires that checkout to remain one opaque untracked entry, with no
+nested file contents. Add `--excludes-file` to configure `core.excludesFile`
+pointing outside the checkout and ignore a synthetic file through it. The
+config contains 1,000 synthetic branch sections (more than 64 KiB),
+matching a repository shared by many agent worktrees. After the
+measured RPC window, the driver clears that ignore file, verifies the newly
+visible file reaches every tab immediately, and restores the ignore rule.
+Measure these scenarios separately with full diffs, for example `--tracked 5000
+--untracked 10` at seed time and `--tabs 3 --background 0 --maintenance 0 --agents 0
+--poll-ms 250 --duration-ms 30000` at run time. All unchanged RPC responses must
+match warmup; compare their hashes between revisions, require the external-ignore
+control to pass, and compare cache hit rate plus paired p50/p99. Use at least two
+concurrent pairs per scenario with swapped CPU halves. These small fixtures
+reproduce cache eligibility rather than the full fleet's filesystem working set.
 
 For a second scenario with independent revision checks, add
 `--poll-state-dir <other seeded fixture>` on each side. Both isolated Gateways

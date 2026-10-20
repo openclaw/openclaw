@@ -15,6 +15,13 @@ export function resolvePnpmCandidateEnv(
   // Set every spelling: inherited lower-case keys can win over upper-case overrides.
   return {
     ...env,
+    // pnpm 12 selects the global graph independently of virtualStoreDir. Its
+    // hoisted/global materializer can also emit unpatched registry bytes while
+    // recording the patch hash. Candidates need the project materializer.
+    PNPM_CONFIG_VIRTUAL_STORE_TYPE: "project",
+    pnpm_config_virtual_store_type: "project",
+    NPM_CONFIG_VIRTUAL_STORE_TYPE: "project",
+    npm_config_virtual_store_type: "project",
     PNPM_CONFIG_VIRTUAL_STORE_DIR: virtualStoreDir,
     pnpm_config_virtual_store_dir: virtualStoreDir,
     NPM_CONFIG_VIRTUAL_STORE_DIR: virtualStoreDir,

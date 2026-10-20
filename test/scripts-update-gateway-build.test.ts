@@ -6,6 +6,7 @@ import { resolveDistArtifactLockPath } from "../scripts/lib/dist-artifact-owners
 import { listTsdownOutputRoots } from "../scripts/tsdown-build.mts";
 import { runUpdateGatewayBuild } from "../scripts/update-gateway-build.mts";
 import * as gatewayBindings from "../src/daemon/managed-gateway-bindings.js";
+import { resolveManagedUpdateLeaseDatabasePath } from "../src/infra/update-managed-service-handoff-lease.js";
 import { CommandProcessCleanupError } from "../src/process/exec-result.js";
 import { retainCommandProcessCleanup } from "../src/process/exec-spawn.js";
 import * as nativeExec from "../src/process/exec.js";
@@ -60,12 +61,18 @@ const commandSuccess = (stdout = "") => ({
 beforeEach(() => {
   scratch = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-update-build-"));
   workdir = path.join(scratch, "checkout");
+  vi.stubEnv("TMPDIR", scratch);
+  const database = resolveManagedUpdateLeaseDatabasePath();
+  if (!fs.realpathSync(path.dirname(database)).startsWith(fs.realpathSync(scratch) + path.sep)) {
+    throw new Error("Non-private handoff database");
+  }
   shimDir = path.join(scratch, "bin");
   fs.mkdirSync(shimDir);
   vi.spyOn(process, "cwd").mockReturnValue(workdir);
 });
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   fs.rmSync(scratch, { recursive: true, force: true });
 });
 
@@ -76,7 +83,11 @@ describe("source update build output transaction", () => {
   const readOutput = (output: string) => read(`${output}/marker`);
   const backups = () =>
     fs.readdirSync(workdir).filter((name) => name.startsWith(".update-build-backup."));
-  beforeEach(() => fs.mkdirSync(workdir));
+  beforeEach(() => {
+    fs.mkdirSync(workdir);
+    // TMPDIR can itself be inside the invoking checkout. Keep synthetic custody local.
+    fs.mkdirSync(path.join(workdir, ".git"));
+  });
 
   it("refuses publication when a shared consumer starts during candidate import", async () => {
     const command = nativeExec.runCommandWithTimeout;

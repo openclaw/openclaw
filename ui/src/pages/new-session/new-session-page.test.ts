@@ -190,6 +190,7 @@ describe("new session draft route ownership", () => {
         );
       }
       const page = await mount(routeData("research"));
+      await enterMessage(page, "Review the attachment");
       const original = "# Original pasted content\n  preserve indentation 漢字 😀\n".repeat(50);
       const fetchMock = vi
         .fn<typeof fetch>()

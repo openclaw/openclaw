@@ -129,6 +129,11 @@ export async function resolveGatewayScopedTools(
     nodeExecAvailable?: (node?: string) => boolean;
     pairedNodeComputerUse?: import("../agents/computer-use-node-capabilities.js").PreparedPairedComputerUse;
     skillWorkshop?: SkillWorkshopRunOptions;
+    /**
+     * Run-owned configured MCP tools for an exclusive CLI grant. They enter the
+     * same policy pipeline as Gateway tools; core names always win collisions.
+     */
+    bundledTools?: readonly AnyAgentTool[];
   },
   assertPreparationCurrent?: () => void,
 ) {
@@ -608,7 +613,17 @@ export async function resolveGatewayScopedTools(
       ]
     : toolsWithMediatedCoding;
 
-  const toolsForMessageProvider = filterToolsByMessageProvider(allTools, params.messageProvider);
+  const coreToolNames = new Set(allTools.map((tool) => normalizeToolPolicyName(tool.name)));
+  const bundledTools =
+    surface === "loopback"
+      ? (params.bundledTools ?? []).filter(
+          (tool) => !coreToolNames.has(normalizeToolPolicyName(tool.name)),
+        )
+      : [];
+  const toolsForMessageProvider = filterToolsByMessageProvider(
+    bundledTools.length > 0 ? [...allTools, ...bundledTools] : allTools,
+    params.messageProvider,
+  );
   let nativeCreatorTools = (params.nativeCronCreatorToolAllowlist ?? []).map((name) => ({ name }));
   const declaredToolAllowlist = buildDeclaredToolAllowlistContext({
     config: params.cfg,

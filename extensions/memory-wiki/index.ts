@@ -6,7 +6,6 @@ import {
   configureMemoryWikiCompiledCacheStore,
   createMemoryWikiCompiledCacheStore,
   deactivateMemoryWikiCompiledCacheOwnersExcept,
-  reconcileMemoryWikiCompiledCacheOwner,
   resolveMemoryWikiCompiledCacheOwnerId,
 } from "./src/compiled-cache.js";
 import { memoryWikiConfigSchema } from "./src/config-schema.js";
@@ -148,9 +147,6 @@ export default definePluginEntry({
               activeConfig,
               identity.vaultGeneration,
               identity.compiledCachePublicationId,
-            );
-            await reconcileMemoryWikiCompiledCacheOwner(activeConfig, () =>
-              loadMemoryWikiValidatedVaultIdentity(activeConfig.vault.path),
             );
             activeOwnerIds.add(resolveMemoryWikiCompiledCacheOwnerId(activeConfig));
           }

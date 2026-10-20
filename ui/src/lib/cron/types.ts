@@ -139,7 +139,6 @@ export type CronState<Row = CronJob> = CronJobsState<Row> & {
   cronRunsRunId?: string | null;
   cronRunsLoadingMore: boolean;
   cronRuns: CronRunLogEntry[];
-  cronRunsTotal: number;
   cronRunsHasMore: boolean;
   cronRunsNextOffset: number | null;
   cronRunsLimit: number;

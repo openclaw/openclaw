@@ -97,7 +97,6 @@ export function createInitialCronState<Row = CronJob>(
     cronRunsJobId: null,
     cronRunsLoadingMore: false,
     cronRuns: [],
-    cronRunsTotal: 0,
     cronRunsHasMore: false,
     cronRunsNextOffset: null,
     cronRunsLimit: 50,

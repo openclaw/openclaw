@@ -108,11 +108,7 @@ async function runConfiguredSystemAgentText(params: {
   timeoutMs?: number;
   responseFormat?: Record<string, unknown>;
 }): Promise<{ text: string; modelLabel: string } | null> {
-  const route = await requireSystemAgentInferenceRoute(
-    params.verifiedInference,
-    undefined,
-    "planner",
-  );
+  const route = await requireSystemAgentInferenceRoute(params.verifiedInference, "planner");
   let expectedAgentHarnessRuntimeArtifact: ReturnType<
     typeof resolveSystemAgentExpectedAgentHarnessRuntimeArtifact
   >;
@@ -213,6 +209,6 @@ async function runConfiguredSystemAgentText(params: {
   }
   // Cleanup is the final suspension before callers can display model text, so
   // authority must still match after cleanup completes.
-  await requireSystemAgentInferenceRoute(params.verifiedInference, undefined, "planner");
+  await requireSystemAgentInferenceRoute(params.verifiedInference, "planner");
   return { text, modelLabel: route.modelLabel };
 }

@@ -408,6 +408,39 @@ describe("chat pane session menu boundary", () => {
     expect(menu?.session.label).toBe("Reviewed ledger");
   });
 
+  it("keeps the current observed title while the roster projection is absent", async () => {
+    const row: GatewaySessionRow = {
+      key: "agent:main:observed-title",
+      agentId: "main",
+      sessionId: "observed-title-session",
+      kind: "direct",
+      label: "Observed conversation",
+    };
+    const { context, mount } = createMountedPanes([row]);
+    const pane = mount(row.key);
+    await refreshPane(pane);
+    // The current row observation can arrive before the retained roster catches up.
+    vi.spyOn(context.sessions, "presentation", "get").mockReturnValue({
+      result: sessionsResult([], 1),
+      agentId: "main",
+    });
+    const container = document.createElement("div");
+    renderPaneHeaderInto(
+      pane.renderPaneHeader(
+        createPaneHeaderWorkspaceFixture(pane.state),
+        undefined,
+        false,
+        undefined,
+        false,
+        null,
+      ),
+      container,
+    );
+    expect(container.querySelector(".chat-pane__session-title-text")?.textContent?.trim()).toBe(
+      row.label,
+    );
+  });
+
   it("resolves cached titles for Home aliases using the current hello defaults", () => {
     const { pane, state } = createTestChatPane({
       client: createGatewayBrowserClientFixture(),

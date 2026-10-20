@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { queryObjects } from "node:v8";
+import OpenAI from "openai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { supportsNativeOpenAIResponsesEndpoint } from "./openai-responses-endpoint.js";
 
@@ -253,17 +254,31 @@ describe("native OpenAI Responses WebSocket transport", () => {
     const host = createAiTransportHost({ runInDetachedAsyncContext: runDetached });
     const callers = new AsyncLocalStorage<object>();
     const references: WeakRef<object>[] = [];
+    const httpCalls: number[] = [];
     queueCompletions(...(failed ? [] : ["resp_1", "resp_2"]));
     const turn = () => {
       const caller = { turn: 1 };
       const body = { model: "gpt-5.6-luna", input: [firstUser] };
       const restoreRequest = () => body;
+      const requestClient = new OpenAI({
+        apiKey: "test-key",
+        fetch: async () => {
+          httpCalls.push(caller.turn);
+          return Response.json({ object: "list", data: [] });
+        },
+      });
       const tracked = failed ? [caller, body, restoreRequest] : [caller];
       references.push(...tracked.map((value) => new WeakRef(value)));
-      const consume = () =>
-        consumeResponse(
-          createStream(body, failed ? { restoreRequest, degradeCooldownMs: 60_000 } : {}),
+      const consume = async () => {
+        await consumeResponse(
+          createStream(body, {
+            client: requestClient,
+            ...(failed ? { restoreRequest, degradeCooldownMs: 60_000 } : {}),
+          }),
         );
+        // The original client still owns HTTP fallback hooks after socket admission.
+        await requestClient.models.list();
+      };
       return runWithAiTransportHost(host, () => callers.run(caller, consume));
     };
     try {
@@ -271,6 +286,7 @@ describe("native OpenAI Responses WebSocket transport", () => {
       await runTurnOutsideCollector(() =>
         failed ? assert.rejects(turn(), /failed after request dispatch/) : turn(),
       );
+      expect(httpCalls).toEqual(failed ? [] : [1]);
       const control = new WeakRef({ unowned: true });
       // Keep real cache timers and ALS alive while collecting the completed turn.
       await nextTurn();

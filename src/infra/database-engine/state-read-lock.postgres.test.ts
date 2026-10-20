@@ -1,8 +1,9 @@
+import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { getEnvironmentData } from "node:worker_threads";
 import pg from "pg";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
@@ -23,8 +24,9 @@ const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.
 const connection = typeof configured === "string" ? configured : undefined;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-describe.skipIf(!connection)("PostgreSQL state read snapshots", () => {
-  it("reads backgrounds while a writer holds the store lock and joins enclosing snapshots", async () => {
+it.skipIf(!connection)(
+  "reads backgrounds while a writer holds the store lock and joins enclosing snapshots",
+  async () => {
     const directory = tempDirs.make("state-read-lock-");
     const pathname = path.join(directory, "state.sqlite");
     const options = { path: pathname, env: { ...process.env, OPENCLAW_STATE_DIR: directory } };
@@ -41,9 +43,7 @@ describe.skipIf(!connection)("PostgreSQL state read snapshots", () => {
         const secondProfile = ensureProfileForEmail("second@example.test", options);
         const opened = openOpenClawStateDatabase(options);
         const physical = getPostgresPhysicalFacts(opened.db);
-        if (!physical) {
-          throw new Error("Expected PostgreSQL state admission");
-        }
+        assert(physical, "Expected PostgreSQL state admission");
         opened.db.exec("SET lock_timeout = '100ms'");
         return { database: opened, first: firstProfile, second: secondProfile, facts: physical };
       });
@@ -53,9 +53,7 @@ describe.skipIf(!connection)("PostgreSQL state read snapshots", () => {
           type: "userBackground.snapshot",
           profileId: first.id,
         });
-        if (reply.type !== "userBackground.snapshot") {
-          throw new Error("Expected background snapshot");
-        }
+        assert(reply.type === "userBackground.snapshot", "Expected background snapshot");
         return reply;
       };
       await blocker.query("BEGIN");
@@ -106,5 +104,5 @@ describe.skipIf(!connection)("PostgreSQL state read snapshots", () => {
         await blocker.end();
       }
     }
-  });
-});
+  },
+);

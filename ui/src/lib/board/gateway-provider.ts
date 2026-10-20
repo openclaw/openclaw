@@ -11,6 +11,7 @@ import type {
 import { sleepWithAbort } from "@openclaw/retry";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { formatUiError } from "../format-error.ts";
+import { isBoardSnapshot } from "../protocol-validators.generated/board.js";
 import {
   normalizeSessionKeyForUiComparison,
   parseAgentSessionKey,
@@ -30,9 +31,11 @@ import { canvasWidgetNameForDocument, mcpAppWidgetNameForViewId } from "./widget
 import {
   copyBoardWidgetTicketReceipt,
   recordBoardWidgetTicketReceipt,
+  remainingBoardWidgetTicketTtlMs,
 } from "./widget-ticket-lifetime.ts";
 
 type BoardGatewayClient = Pick<GatewayBrowserClient, "request" | "addEventListener">;
+type CacheSnapshot = (snapshot: BoardSnapshot | null, receivedAtMs: number) => void;
 
 export class GatewayBoardProvider implements BoardProvider {
   readonly canPinWidgets = true;
@@ -57,6 +60,9 @@ export class GatewayBoardProvider implements BoardProvider {
   private readonly appViews = new BoardMcpAppViewCache();
   private disposed = false;
   private snapshotLoaded = false;
+  private snapshotRevalidated = false;
+  private cacheReceipt: { snapshot: BoardSnapshot | null; receivedAtMs: number } | undefined;
+  private readonly cacheListeners = new Set<CacheSnapshot>();
 
   constructor(
     private readonly session: BoardGetParams,
@@ -108,6 +114,8 @@ export class GatewayBoardProvider implements BoardProvider {
     this.changedWidgets.clear();
     this.appViews.clear();
     this.snapshotLoaded = false;
+    this.snapshotRevalidated = false;
+    this.cacheReceipt = undefined;
     this.setLoadError(null);
     this.snapshotSignal.set(emptyBoardSnapshot(this.sessionKey));
     this.attachGatewayEvents(client);
@@ -122,6 +130,50 @@ export class GatewayBoardProvider implements BoardProvider {
 
   get hasLoadedSnapshot(): boolean {
     return this.snapshotLoaded;
+  }
+
+  subscribeCacheSnapshot(listener: CacheSnapshot): () => void {
+    if (this.disposed) {
+      return () => {};
+    }
+    const notify: CacheSnapshot = (snapshot, receivedAtMs) => listener(snapshot, receivedAtMs);
+    this.cacheListeners.add(notify);
+    if (this.cacheReceipt) {
+      listener(this.cacheReceipt.snapshot, this.cacheReceipt.receivedAtMs);
+    }
+    return () => this.cacheListeners.delete(notify);
+  }
+
+  restoreSnapshot(snapshot: unknown, receivedAtMs: number): void {
+    if (
+      this.disposed ||
+      this.snapshotLoaded ||
+      this.snapshotRevalidated ||
+      !isBoardSnapshot(snapshot) ||
+      !this.matchesSession(snapshot.sessionKey)
+    ) {
+      return;
+    }
+    const now = Date.now();
+    const widgets = snapshot.widgets
+      .filter(
+        (widget) =>
+          widget.contentKind !== "mcp-app" ||
+          (widget.grantState !== "pending" && widget.grantState !== "rejected"),
+      )
+      .map((widget) => {
+        const restored = Object.assign(
+          {},
+          widget,
+          widget.viewTicketTtlMs !== undefined
+            ? { viewTicketTtlMs: Math.max(0, widget.viewTicketTtlMs - (now - receivedAtMs)) }
+            : {},
+        );
+        recordBoardWidgetTicketReceipt(restored, now);
+        return restored;
+      });
+    this.snapshotLoaded = true;
+    this.snapshotSignal.set({ ...snapshot, widgets });
   }
 
   get appViewGeneration(): number {
@@ -142,6 +194,8 @@ export class GatewayBoardProvider implements BoardProvider {
     this.userRefreshRequested = false;
     this.changedWidgets.clear();
     this.appViews.clear();
+    this.cacheListeners.clear();
+    this.cacheReceipt = undefined;
     this.wakeRetryDelay?.();
   }
 
@@ -408,6 +462,12 @@ export class GatewayBoardProvider implements BoardProvider {
           (error.gatewayCode === "FORBIDDEN" ||
             (error.gatewayCode === "UNAVAILABLE" && !error.retryable))
         ) {
+          if (!this.snapshotRevalidated || error.gatewayCode === "FORBIDDEN") {
+            this.snapshotLoaded = false;
+            this.snapshotSignal.set(emptyBoardSnapshot(this.sessionKey));
+          }
+          this.snapshotRevalidated = true;
+          this.cacheSnapshot(null, Date.now());
           // A definitive rejection consumes this refresh. Only a newer event,
           // connection generation, or explicit refresh can request another one.
           this.refreshRequested =
@@ -507,8 +567,29 @@ export class GatewayBoardProvider implements BoardProvider {
     });
     this.appViews.prune(widgets);
     this.snapshotLoaded = true;
-    this.snapshotSignal.set({ ...snapshot, widgets });
+    this.snapshotRevalidated = true;
+    const next = { ...snapshot, widgets };
+    this.snapshotSignal.set(next);
+    this.cacheSnapshot(next, receivedAtMs);
     this.setLoadError(null);
+  }
+
+  private cacheSnapshot(snapshot: BoardSnapshot | null, receivedAtMs: number): void {
+    let expired = false;
+    // Mutation snapshots retain older ticket receipts; cache TTLs start at this publication.
+    const cached = snapshot && {
+      ...snapshot,
+      widgets: snapshot.widgets.map((widget) => {
+        const ttl = remainingBoardWidgetTicketTtlMs(widget);
+        expired ||= ttl === 0;
+        return ttl === undefined || ttl === 0 ? widget : { ...widget, viewTicketTtlMs: ttl };
+      }),
+    };
+    const persisted = expired ? null : cached;
+    this.cacheReceipt = { snapshot: persisted, receivedAtMs };
+    for (const listener of this.cacheListeners) {
+      listener(persisted, receivedAtMs);
+    }
   }
 
   private setLoadError(error: string | null): void {

@@ -35,11 +35,22 @@ describe("cron model schema regressions", () => {
       { management: "only" as const },
       { management: "also" as const },
       { selfRemoveOnly: true },
+      { readOnly: true },
     ]) {
       const changed = createCronToolSchema(options);
       expect(changed).not.toBe(unscoped);
       expect(changed).not.toEqual(unscoped);
       expect(createCronToolSchema({ ...options })).toBe(changed);
+    }
+    const recovery = createCronToolSchema({ readOnly: true });
+    expect(Value.Check(unscoped, { action: "remove", jobId: "saved-job" })).toBe(true);
+    for (const [action, accepted] of [
+      ["list", true],
+      ["get", true],
+      ["status", false],
+      ["remove", false],
+    ] as const) {
+      expect(Value.Check(recovery, { action, jobId: "saved-job" })).toBe(accepted);
     }
   });
 

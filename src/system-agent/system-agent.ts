@@ -60,7 +60,7 @@ async function runOneShot(
   }
   // The planner may take long enough for the verified route to change. Never
   // apply its result under a different inference owner.
-  await requireSystemAgentInferenceRoute(opts.verifiedInference, opts.deps, "conversation");
+  await requireSystemAgentInferenceRoute(opts.verifiedInference, "conversation");
   const approved = opts.yes === true || !isPersistentSystemAgentOperation(operation);
   if (approved && isPersistentSystemAgentOperation(operation)) {
     await requireSystemAgentPersistentApplyInference(
@@ -108,11 +108,9 @@ export async function runSystemAgent(
   const { withPluginRuntimeRegistryScope } =
     await import("../plugins/runtime/gateway-request-scope.js");
   await using cache = createPluginCache();
-  const readSnapshot =
-    boundOpts.deps?.readConfigFileSnapshot ??
-    (await import("../config/config.js")).readConfigFileSnapshot;
+  const { readConfigFileSnapshot } = await import("../config/config.js");
   const registry = await withPluginLifecycleLease({}, async (lease) => {
-    const snapshot = await readSnapshot();
+    const snapshot = await readConfigFileSnapshot();
     const currentArtifacts = await hasCurrentSystemAgentOwnerPluginArtifacts(binding, snapshot);
     if (!currentArtifacts) {
       throw new SystemAgentInferenceUnavailableError("conversation", [], "route-changed");
@@ -147,11 +145,7 @@ async function runBoundSystemAgent(
   boundOpts: RunSystemAgentOptions,
   runtime: RuntimeEnv,
 ): Promise<void> {
-  await requireSystemAgentInferenceRoute(
-    boundOpts.verifiedInference,
-    boundOpts.deps,
-    "conversation",
-  );
+  await requireSystemAgentInferenceRoute(boundOpts.verifiedInference, "conversation");
   if (boundOpts.json) {
     const overview = await (boundOpts.loadOverview ?? loadSystemAgentOverview)();
     writeRuntimeJson(runtime, overview);
