@@ -2,16 +2,17 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import {
-  readDeviceAuthTokenForTest,
-  seedDeviceAuthToken,
-} from "./device-auth-store.test-support.js";
+import { writeClientCredentialReceipt } from "./client-credential-readiness.js";
+import { emptyClientCredentialReceipt } from "./client-credential-receipt.js";
+import type { ClientCredentialDatabase } from "./client-credential-schema.js";
+import { runClientCredentialOperation } from "./client-credential-store.js";
+import { withClientCredentialStore } from "./client-credential-store.test-support.js";
+import { readDeviceAuthTokenForTest } from "./device-auth-store.test-support.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { detectLegacyDeviceAuth, migrateLegacyDeviceAuth } from "./state-migrations.device-auth.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(() => {
-    closeOpenClawStateDatabaseForTest();
     cleanup();
   });
 });
@@ -49,7 +50,7 @@ const migrate = () =>
   });
 
 describe("legacy device-auth Doctor migration", () => {
-  it("imports the last normalized role only with Doctor authority before deleting JSON", async () => {
+  it("imports the last normalized role only with Doctor authority while retaining JSON", async () => {
     expect(detectLegacyDeviceAuth({ stateDir })).toMatchObject({
       sourcePresent: true,
       hasLegacy: false,
@@ -66,21 +67,49 @@ describe("legacy device-auth Doctor migration", () => {
       scopes: ["operator.read", "operator.write"],
       updatedAtMs: 10,
     });
-    expect(fs.existsSync(sourcePath)).toBe(false);
+    expect(fs.existsSync(sourcePath)).toBe(true);
+    expect(fs.existsSync(path.join(stateDir, "state", "openclaw.sqlite"))).toBe(false);
   });
 
   it("preserves canonical SQLite rows instead of replaying stale JSON", async () => {
-    seedDeviceAuthToken({ deviceId: "device-1", role: "operator", token: "canonical-token", env });
+    withClientCredentialStore(env, true, (db) => {
+      writeClientCredentialReceipt(db, emptyClientCredentialReceipt(), "complete");
+      executeSqliteQuerySync(
+        db,
+        getNodeSqliteKysely<ClientCredentialDatabase>(db).insertInto("device_auth_tokens").values({
+          device_id: "device-1",
+          role: "operator",
+          token: "canonical-token",
+          scopes_json: "[]",
+          updated_at_ms: 20,
+        }),
+      );
+    });
     const result = await migrate();
     expect(result.warnings).toEqual([]);
     expect(result.notices).toContain("Preserved 1 canonical SQLite device-auth token.");
     expect(readToken()?.token).toBe("canonical-token");
-    expect(fs.existsSync(sourcePath)).toBe(false);
+    expect(fs.existsSync(sourcePath)).toBe(true);
   });
 
   it("keeps invalid legacy state for operator repair", async () => {
     fs.writeFileSync(sourcePath, '{"version":2}');
     expect((await migrate()).warnings.join("\n")).toContain("invalid or unsupported");
+    expect(fs.existsSync(sourcePath)).toBe(true);
+  });
+  it("does not reimport a revoked token even when retained JSON is edited", async () => {
+    const original = fs.readFileSync(sourcePath);
+    expect((await migrate()).warnings).toEqual([]);
+    expect(
+      runClientCredentialOperation(env, {
+        kind: "token.remove",
+        key: { device_id: "device-1", role: "operator" },
+        observedToken: "legacy-token",
+      }),
+    ).toEqual({ kind: "changed", changed: true });
+    fs.writeFileSync(sourcePath, Buffer.concat([original, Buffer.from("edited-invalid-json")]));
+    expect((await migrate()).warnings).toEqual([]);
+    expect(readToken()).toBeNull();
     expect(fs.existsSync(sourcePath)).toBe(true);
   });
 });

@@ -129,6 +129,10 @@ main-session turns continue through normal restart recovery with the original
 operator restrictions. If the original authority is unavailable, the task stays
 owed instead of running with broader permissions.
 
+Completion replay uses the same captured requester identity as the original
+input. Optional fields absent from that identity stay absent after reload, so
+an already committed completion is reconciled without appending another notice.
+
 An already-admitted completion turn for a yielded nested requester is different
 from an orphaned child launch. Its frozen child-result batch retains the exact
 saved continuation across restart. Registry recovery waits for that owner instead
@@ -182,6 +186,10 @@ The parent can inspect a retained child transcript and use `sessions_send` to
 continue that session, or spawn a replacement after confirming the old execution
 has stopped. Reusing a child restores its conversation context; it does not replay
 an interrupted command. Existing cleanup and retention settings still apply.
+An accepted follow-up keeps its restored operator authority when the earlier
+completion settles; it does not depend on that completed run remaining active.
+Requester resets, Gateway shutdown, and operator access revocation still stop
+the retained authority.
 
 When a detached cleanup attempt logs `subagent cleanup finalize failed`, its
 retries use bounded backoff in the current Gateway process. If those retries are

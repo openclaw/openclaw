@@ -101,6 +101,7 @@ describe("node worker launch wire", () => {
       let resolveWaveFinalizationStarted: ((startedAt: number) => void) | undefined;
       let workerAuditBeforeRestart: string | undefined;
       let cleanupStartedAfterMs: number | undefined;
+      const baselineStatusObserved = createDeferred();
       const pendingCleanupOwners = new Set<string>();
       const loadTerminals = new Map<string, (payload: Record<string, unknown>) => void>();
       let phase = "provider startup";
@@ -147,7 +148,14 @@ describe("node worker launch wire", () => {
         context,
         async ({ signal, createTempDir }) => {
           const root = createTempDir("openclaw-node-worker-launch-wire-");
-          provider = await startMidturnProvider();
+          provider = await startMidturnProvider({
+            beforeBaselineReply: async () => {
+              if (launchId) {
+                // Keep the launched turn running through reconnect until status crosses the wire.
+                await baselineStatusObserved.promise;
+              }
+            },
+          });
           markPhase("workspace publication");
           const published = (publishedResource = await createPublishedWireWorkspace(root));
           const settlement = createWireWorkspaceSettlementWaiter();
@@ -188,6 +196,9 @@ describe("node worker launch wire", () => {
             capacity: FINALIZATION_LOAD_CONCURRENCY,
             bundlePrewarm: true,
             onInvoke: (frame) => {
+              if (frame.command === NODE_WORKER_SUPERVISOR_STATUS_COMMAND) {
+                baselineStatusObserved.resolve();
+              }
               if (frame.command === NODE_WORKER_WORKSPACE_EXEC_COMMAND && frame.paramsJSON) {
                 const workspaceCommand = JSON.parse(frame.paramsJSON) as {
                   transfer?: { direction?: unknown };
@@ -483,6 +494,7 @@ describe("node worker launch wire", () => {
               }
             },
           });
+          expect(legacyWorkerNode.identity.deviceId).not.toBe(workerNode.identity.deviceId);
           markPhase("legacy workspace dispatch");
           const legacySessionKey = `${SESSION_KEY}-legacy-node`;
           await operator.request("sessions.create", {
@@ -719,6 +731,7 @@ describe("node worker launch wire", () => {
           markPhase("fixture cleanup");
         },
         async () => {
+          baselineStatusObserved.resolve();
           cleanupStartedAfterMs = Math.round(performance.now() - testStartedAt);
           markPhase("fixture cleanup start");
           const cleanups = {

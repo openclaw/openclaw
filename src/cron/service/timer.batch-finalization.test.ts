@@ -195,7 +195,7 @@ describe("cron batch outcome finalization", () => {
     }
   });
 
-  it("records an interrupted run without replay when terminal accounting fails after the execution clock advances", async () => {
+  it("records the interrupted attempt and schedules a retry when terminal accounting fails after the execution clock advances", async () => {
     const job = dueJob("recover-advanced-clock");
     job.state.lastError = "previous failure";
     const startedAt = DUE_AT + 7;
@@ -251,10 +251,13 @@ describe("cron batch outcome finalization", () => {
           error: "cron: job interrupted by gateway restart",
         }),
       ]);
-      expect((await loadCronStore(storePath)).jobs[0]).toMatchObject({
-        enabled: false,
+      const recovered = (await loadCronStore(storePath)).jobs[0];
+      expect(recovered).toMatchObject({
+        enabled: true,
         state: { lastRunAtMs: startedAt, lastRunStatus: "error", lastStatus: "error" },
       });
+      expect(recovered?.state.nextRunAtMs).toBeGreaterThan(startedAt);
+      expect(recovered?.state.startupCatchupAtMs).toBe(recovered?.state.nextRunAtMs);
       expect(events.filter((event) => event.action === "finished")).toHaveLength(1);
     } finally {
       allowWrites();

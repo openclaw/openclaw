@@ -69,25 +69,8 @@ import { emitSessionsChanged } from "./session-change-event.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
-type CanvasDocumentReader = typeof readCanvasDocumentHtmlSource;
-type McpAppDependencies = {
-  resolveActiveView: typeof resolveMcpAppActiveView;
-  resolveAllowedToolNames: typeof resolveMcpAppAllowedToolNames;
-  mintFromTranscript: typeof mintMcpAppViewFromTranscript;
-};
-type BoardHandlerDependencies = Partial<McpAppDependencies>;
-
-export function createBoardHandlers(
-  store: BoardStore,
-  readCanvasDocument: CanvasDocumentReader = readCanvasDocumentHtmlSource,
-  dependencies: BoardHandlerDependencies = {},
-): GatewayRequestHandlers {
+export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
   const resolveBoardWidgetApproval = createBoardWidgetApprovalResolver();
-  const mcpApp: McpAppDependencies = {
-    resolveActiveView: dependencies.resolveActiveView ?? resolveMcpAppActiveView,
-    resolveAllowedToolNames: dependencies.resolveAllowedToolNames ?? resolveMcpAppAllowedToolNames,
-    mintFromTranscript: dependencies.mintFromTranscript ?? mintMcpAppViewFromTranscript,
-  };
   return {
     "board.get": defineBoardMethod("board.get", validateBoardGetParams, async (invocation) => {
       const { params: boardParams, respond, context, client } = invocation;
@@ -244,7 +227,7 @@ export function createBoardHandlers(
           let declared = requestDeclared;
           let resolveMcpAppInteraction: (() => Promise<boolean>) | undefined;
           if (requestParams.content.kind === "canvas-doc") {
-            const document = await readCanvasDocument(requestParams.content.docId);
+            const document = await readCanvasDocumentHtmlSource(requestParams.content.docId);
             authority.assertActive();
             if (document.cspSandbox !== "scripts") {
               throw new BoardValidationError(
@@ -254,7 +237,7 @@ export function createBoardHandlers(
             }
             content = { kind: "html", html: document.html };
           } else if (requestParams.content.kind === "mcp-app") {
-            const active = await mcpApp.resolveActiveView({
+            const active = await resolveMcpAppActiveView({
               ...boardSession,
               viewId: requestParams.content.viewId,
               cfg: context.getRuntimeConfig(),
@@ -278,7 +261,7 @@ export function createBoardHandlers(
             };
             let interactive = await resolveMcpAppInteraction();
             authority.assertActive();
-            const allowedTools = interactive ? await mcpApp.resolveAllowedToolNames(active) : [];
+            const allowedTools = interactive ? await resolveMcpAppAllowedToolNames(active) : [];
             authority.assertActive();
             if (interactive) {
               interactive = await resolveMcpAppInteraction();
@@ -560,7 +543,7 @@ export function createBoardHandlers(
               );
             }
           : undefined;
-        const minted = await mcpApp.mintFromTranscript({
+        const minted = await mintMcpAppViewFromTranscript({
           cfg: context.getRuntimeConfig(),
           ...boardSession,
           descriptor: document.descriptor,

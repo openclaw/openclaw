@@ -121,6 +121,11 @@ model, and auth-profile fallback rules still apply. Explicit session or
 configured runtime choices remain strict: an incompatible runtime reports a
 placement error and requires a compatible destination before retrying.
 
+When a failed cloud-worker candidate has already committed output, its fallback
+continues from that output, including completed tool results. The worker starts
+from the matching transcript leaf. Unrelated transcript changes still retain the
+admission fence and can reject the worker's commit rather than overwrite history.
+
 When configured fallback stops because the agent run reaches a final timeout or
 the idle-timeout cost-runaway breaker returns a terminal error, the
 `model-fallback/decision` logger records `model_fallback_chain_stopped` with

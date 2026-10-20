@@ -28,6 +28,13 @@ describePosix("native baseline signing handoff", () => {
       return result.stdout;
     };
     f.pass("prepare-baseline-refresh", f.manifest(f.advanceMain("initial upstream")));
+    const credit = "Co-authored-by: Ada Example <ada@example.invalid>";
+    f.prepGit(
+      "commit",
+      "--allow-empty",
+      "-qm",
+      `fix: complete the reviewed correction\n\n${credit}`,
+    );
     f.approve();
     const source = f.publish();
     const baseline = f.advanceMain("next upstream", [f.product[0]!]);
@@ -166,6 +173,14 @@ if (process.argv[1]?.endsWith('/baseline-refresh.mjs') && process.argv[2] === 'c
     const unsigned = Buffer.from(request.unsignedCommit, "base64");
     const split = unsigned.indexOf("\n\n");
     const headers = unsigned.subarray(0, split).toString();
+    const bindingOid = gitBytes(f.worktree, ["hash-object", "--no-filters", "--stdin"], {
+      input: Buffer.from(request.binding, "base64"),
+    })
+      .toString()
+      .trim();
+    expect(unsigned.subarray(split + 2).toString()).toBe(
+      `fix: refresh the reviewed correction baseline\n\nBaseline-Refresh: ${bindingOid}\n${credit}\n`,
+    );
     const tree = /^tree ([a-f0-9]{40})$/mu.exec(headers)![1]!;
     const parents = [...headers.matchAll(/^parent ([a-f0-9]{40})$/gmu)].map((m) => m[1]!);
     const pack = gitBytes(f.worktree, ["pack-objects", "--stdout", "--revs"], {
@@ -207,6 +222,7 @@ if (process.argv[1]?.endsWith('/baseline-refresh.mjs') && process.argv[2] === 'c
     for (const [from, to] of [
       [source, baseline],
       ["fix: refresh", "fix: changed"],
+      [credit, "Co-authored-by: Changed Example <changed@example.invalid>"],
       [identity.GIT_AUTHOR_EMAIL!, "changed@example.invalid"],
     ]) {
       writeFileSync(response, signed.bytes.toString().replace(from!, to!));

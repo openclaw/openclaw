@@ -3,8 +3,8 @@ import type {
   SessionUsageCreator,
   SessionsUsageAggregates,
 } from "../../../../src/shared/usage-types.js";
+import { SessionOwnerChip } from "../../components/solid/session-owner-chip.tsx";
 import { SettingsSection } from "../../components/solid/settings-ui.tsx";
-import "../../components/solid/session-owner-chip.tsx";
 import { presenceViewerLabel } from "../../lib/presence-users.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { formatUsageCost, formatUsageTokens } from "./metrics.ts";
@@ -105,7 +105,7 @@ export function UsageCreators(props: UsageCreatorsProps) {
                   <span class="usage-creator-name">
                     <span aria-hidden="true">
                       {group.actor?.id ? (
-                        <openclaw-session-owner-chip prop:owner={group.actor} size="row" />
+                        <SessionOwnerChip owner={group.actor} size="row" />
                       ) : undefined}
                     </span>
                     <span>{creatorLabel(group)}</span>

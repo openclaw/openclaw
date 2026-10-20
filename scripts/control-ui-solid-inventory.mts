@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { loadRatchetSources } from "./lib/shrink-ratchet.mts";
 
@@ -429,7 +429,7 @@ export function countMigrationSources(root: string, sources: ReadonlyMap<string,
 }
 
 export function isTest(file: string) {
-  return /(?:\.(?:test|spec|fixture|test-support)\.|-test-(?:support|harness)\.)|(?:^|\/)(?:__tests__|test-helpers|fixtures|e2e)\//u.test(
+  return /(?:\.(?:test|spec|fixture|test-support|test-helpers|test-harness)\.|-test-(?:support|harness)\.)|(?:^|\/)(?:__tests__|test-helpers|fixtures|e2e)\//u.test(
     file,
   );
 }

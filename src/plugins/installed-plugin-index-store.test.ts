@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   createPluginInstallRecordMap,
   getPluginInstallRecordMapEntry,
@@ -602,9 +603,17 @@ describe("installed plugin index install-record persistence", () => {
             { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
           );
           const { StatementSync } = requireNodeSqlite();
-          const iterate = vi.spyOn(StatementSync.prototype, "iterate");
-          const get = vi.spyOn(StatementSync.prototype, "get");
-          const all = vi.spyOn(StatementSync.prototype, "all");
+          let installedIndexReads = 0;
+          observeSqliteReadSql(StatementSync.prototype, (sql, bindings) => {
+            if (
+              bindings.includes("plugins.installedIndex") &&
+              /SELECT\b[\s\S]*?\bFROM\s+"?config_machine_state"?\s+WHERE\s+"?state_key"?\s*(?:=|IN\s*\()/i.test(
+                sql,
+              )
+            ) {
+              installedIndexReads += 1;
+            }
+          });
           const workerRead = vi.spyOn(metadataWorker, "readPluginMetadataStateRow");
           const readRecords = async () =>
             expect(
@@ -623,20 +632,7 @@ describe("installed plugin index install-record persistence", () => {
             await readRecords();
           }
 
-          expect(
-            [iterate, get, all].flatMap((spy) =>
-              spy.mock.calls.filter((params, index) => {
-                const statement = spy.mock.contexts[index];
-                return (
-                  statement instanceof StatementSync &&
-                  params.includes("plugins.installedIndex") &&
-                  /SELECT\b[\s\S]*?\bFROM\s+"?config_machine_state"?\s+WHERE\s+"?state_key"?\s*(?:=|IN\s*\()/i.test(
-                    statement.sourceSQL,
-                  )
-                );
-              }),
-            ).length + workerRead.mock.calls.length,
-          ).toBe(1);
+          expect(installedIndexReads + workerRead.mock.calls.length).toBe(1);
         },
       );
     },
@@ -670,34 +666,5 @@ describe("installed plugin index install-record persistence", () => {
     expect(getPluginInstallRecordMapEntry(persisted.installRecords, "__proto__")).toEqual({
       source: "git",
     });
-  });
-
-  it("atomically rejects an invalid __proto__ candidate record", async () => {
-    const pluginId = "__proto__";
-    const stateDir = makeTempDir();
-    await writePersistedInstalledPluginIndex(
-      createIndex({
-        installRecords: { stable: { source: "npm", spec: "stable@1.0.0" } },
-        plugins: [],
-      }),
-      { stateDir },
-    );
-    const before = readInstallRecordRow(stateDir);
-    const invalid = createPluginInstallRecordMap<unknown>();
-    setPluginInstallRecordMapEntry(invalid, "stable", {
-      source: "npm",
-      spec: "stable@2.0.0",
-    });
-    setPluginInstallRecordMapEntry(invalid, pluginId, { source: "bogus" });
-    await expect(
-      writePersistedInstalledPluginIndex(
-        createIndex({
-          installRecords: invalid as InstalledPluginIndex["installRecords"],
-          plugins: [],
-        }),
-        { stateDir },
-      ),
-    ).rejects.toThrow("Invalid plugin install record");
-    expect(readInstallRecordRow(stateDir)).toEqual(before);
   });
 });

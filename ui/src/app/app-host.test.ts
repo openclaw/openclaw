@@ -18,7 +18,6 @@ import {
 import { i18n } from "../i18n/index.ts";
 import { SESSION_FACE_PREFERENCE_PARAM } from "../lib/sessions/route-navigation.ts";
 import { createSessionCapabilityHarness } from "../lib/sessions/session-capability.test-support.ts";
-import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import { showToast } from "../lib/toast.ts";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
@@ -86,10 +85,7 @@ type ShellInitializationState = {
     snapshot: ApplicationGatewaySnapshot,
     agents: ApplicationContext["agents"],
   ) => void;
-  ensureRuntimeConfig: (
-    snapshot: ApplicationGatewaySnapshot,
-    runtimeConfig: ApplicationContext["runtimeConfig"],
-  ) => void;
+  shellGateway: ShellGatewayOwner;
 };
 
 type I18nRecoveryWiring = {
@@ -274,33 +270,6 @@ describe("OpenClaw shell context lifecycle", () => {
     }
   });
 
-  it("registers and retires shell hosts outside the route outlet", () => {
-    vi.stubGlobal("requestIdleCallback", vi.fn());
-    const runtime = bootstrapApplication();
-    const Bridge = defineSolidBridge("openclaw-shell-ref-test", () => null, { properties: {} });
-    let owner: ShellOwner | undefined;
-    const view = render(() =>
-      createComponent(OpenClawShell, {
-        runtime,
-        onShell(shell) {
-          owner = shell instanceof ShellOwner ? shell : undefined;
-        },
-      }),
-    );
-    try {
-      flush();
-      expect(owner).toBeDefined();
-      const host = new Bridge.Element();
-      owner?.element.append(host);
-      expect(owner?.queryRenderedElement("openclaw-shell-ref-test")).toBe(host);
-      host.remove();
-      expect(owner?.queryRenderedElement("openclaw-shell-ref-test")).toBeNull();
-    } finally {
-      view.unmount();
-      runtime.stop();
-    }
-  });
-
   it("preserves reload intent on disconnect but clears it on context replacement", async () => {
     vi.stubGlobal("sessionStorage", createStorageMock());
     vi.stubGlobal("requestIdleCallback", vi.fn());
@@ -454,9 +423,9 @@ describe("OpenClaw shell source initialization", () => {
     shell.ensureAgentsList(snapshot, firstAgents);
     shell.ensureAgentsList(snapshot, firstAgents);
     shell.ensureAgentsList(snapshot, secondAgents);
-    shell.ensureRuntimeConfig(snapshot, firstRuntimeConfig);
-    shell.ensureRuntimeConfig(snapshot, firstRuntimeConfig);
-    shell.ensureRuntimeConfig(snapshot, secondRuntimeConfig);
+    void shell.shellGateway.ensureRuntimeConfig(snapshot, firstRuntimeConfig);
+    void shell.shellGateway.ensureRuntimeConfig(snapshot, firstRuntimeConfig);
+    void shell.shellGateway.ensureRuntimeConfig(snapshot, secondRuntimeConfig);
 
     expect(firstAgents.ensureList).toHaveBeenCalledOnce();
     expect(secondAgents.ensureList).toHaveBeenCalledOnce();
@@ -465,7 +434,7 @@ describe("OpenClaw shell source initialization", () => {
 
     shell.disconnect();
     shell.ensureAgentsList(snapshot, secondAgents);
-    shell.ensureRuntimeConfig(snapshot, secondRuntimeConfig);
+    void shell.shellGateway.ensureRuntimeConfig(snapshot, secondRuntimeConfig);
 
     expect(secondAgents.ensureList).toHaveBeenCalledTimes(2);
     expect(secondRuntimeConfig.ensureLoaded).toHaveBeenCalledTimes(2);
@@ -785,42 +754,50 @@ describe("OpenClaw shell keyboard shortcuts", () => {
 
   it("closes an open navigation drawer before moving its sidebar into desktop layout", async () => {
     await import("../components/app-sidebar.tsx");
-    vi.stubGlobal("matchMedia", () => ({ matches: false }));
-    const shell = createShellOwner() as ShellNavDrawerCloseState;
-    const updateNavigation = vi.fn();
-    shell.runtime = {
-      context: {
-        navigation: {
-          snapshot: { navCollapsed: true },
-          update: updateNavigation,
-        },
-      } as unknown as ApplicationContext,
-    };
-    const sidebar = document.createElement("openclaw-app-sidebar") as HTMLElement & {
-      dismissTransientMenus: () => boolean;
-    };
-    const dismissTransientMenus = vi.spyOn(sidebar, "dismissTransientMenus").mockReturnValue(true);
+    vi.stubGlobal("matchMedia", () => Object.assign(new EventTarget(), { matches: false }));
+    const runtime = bootstrapApplication();
+    const shell = createShellOwner();
+    shell.runtime = runtime;
+    runtime.context.navigation.update({ navCollapsed: true });
+    const updateNavigation = vi.spyOn(runtime.context.navigation, "update");
+    const sidebar = shell.navigationSidebar;
+    const dismissTransientMenus = vi.fn(() => true);
+    sidebar.dismissTransientMenus = dismissTransientMenus;
     shell.element.append(sidebar);
+    document.body.append(shell.element);
     const trigger = document.body.appendChild(document.createElement("button"));
     const restoreTriggerFocus = vi.spyOn(trigger, "focus");
     const closeNavDrawer = vi.spyOn(shell, "closeNavDrawer");
     shell.navDrawerOpen = true;
     shell.navDrawerTrigger = trigger;
 
-    connectShellEvents(shell);
-    window.dispatchEvent(new Event("resize"));
+    try {
+      connectShellEvents(shell);
+      window.dispatchEvent(new Event("resize"));
 
-    expect(closeNavDrawer).toHaveBeenCalledExactlyOnceWith({ restoreFocus: false });
-    expect(dismissTransientMenus).toHaveBeenCalledOnce();
-    expect(restoreTriggerFocus).not.toHaveBeenCalled();
-    expect(shell.navDrawerOpen).toBe(false);
-    expect(shell.navDrawerTrigger).toBeNull();
-    expect(updateNavigation).not.toHaveBeenCalled();
-    expect(shell.desktopNavigationExpanded).toBe(true);
-    shell.toggleNavigationSurface();
-    expect(updateNavigation).toHaveBeenCalledExactlyOnceWith({ navCollapsed: true });
-    expect(shell.desktopNavigationExpanded).toBe(false);
-    trigger.remove();
+      expect(closeNavDrawer).toHaveBeenCalledExactlyOnceWith({ restoreFocus: false });
+      expect(dismissTransientMenus).toHaveBeenCalledOnce();
+      expect(restoreTriggerFocus).not.toHaveBeenCalled();
+      expect(shell.navDrawerOpen).toBe(false);
+      expect(shell.navDrawerTrigger).toBeNull();
+      expect(updateNavigation).not.toHaveBeenCalled();
+      expect(shell.desktopNavigationExpanded).toBe(true);
+      shell.toggleNavigationSurface();
+      expect(updateNavigation).toHaveBeenCalledExactlyOnceWith({ navCollapsed: true });
+      expect(shell.desktopNavigationExpanded).toBe(false);
+
+      document.body.append(sidebar);
+      shell.navDrawerOpen = true;
+      shell.closeNavDrawer();
+      expect(dismissTransientMenus).toHaveBeenCalledTimes(2);
+      expect(shell.navDrawerOpen).toBe(false);
+    } finally {
+      shell.disconnect();
+      shell.element.remove();
+      sidebar.remove();
+      trigger.remove();
+      runtime.stop();
+    }
   });
 
   it("handles merged header drawer and palette requests", () => {

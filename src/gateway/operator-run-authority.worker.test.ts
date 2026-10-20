@@ -1,6 +1,11 @@
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
+import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../packages/gateway-protocol/src/client-info.js";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -124,6 +129,33 @@ function toolAuthority() {
     "operator tool authority",
   );
 }
+
+it.each(["unprofiled backend", "synthetic owner"] as const)(
+  "does not mint durable operator authority for an authenticated %s",
+  async (source) => {
+    const client = createOperatorClient({
+      profileId: GATEWAY_OWNER_PROFILE_ID,
+      scopes: ["operator.admin"],
+    });
+    client.authenticatedUserId = undefined;
+    client.internal = {
+      authenticatedOperator: true,
+      operatorRoleActor: { kind: "system" },
+      ...(source === "synthetic owner" ? { syntheticClient: true } : {}),
+    };
+    if (source === "unprofiled backend") {
+      client.authenticatedUserProfile = undefined;
+      client.connect.client.id = GATEWAY_CLIENT_IDS.GATEWAY_CLIENT;
+      client.connect.client.mode = GATEWAY_CLIENT_MODES.BACKEND;
+    }
+    await expect(
+      captureGatewayOperatorRunAuthority({
+        client,
+        context: { getRuntimeConfig: () => ({}) },
+      }),
+    ).resolves.toBeUndefined();
+  },
+);
 
 it("prepares a warm skill library without DDL after the tool caller's initiating request closes", () =>
   withOperator(

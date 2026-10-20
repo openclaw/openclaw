@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 // @vitest-environment node
 // Control UI tests cover localized update and recovery status copy.
 import type { GatewayHelloOk } from "../api/gateway.ts";
 import { i18n } from "../i18n/index.ts";
+import { client } from "./overlays-access.test-support.ts";
 import {
+  createUpdateStatusRefresher,
   projectUpdateSentinel,
   projectUpdateStatusResponse,
   resolveUpdateStatusBanner,
@@ -13,6 +16,54 @@ import {
   formatUpdateCampaignLabel,
   projectConnectedUpdateSnapshot,
 } from "./update-schedule-projection.ts";
+
+it("awaits status projection and retires a refresh whose authority changes while projecting", async () => {
+  const entered = createDeferred();
+  const pending = createDeferred();
+  let current = true;
+  let published = false;
+  const gatewayClient = client(async () => ({}));
+  const refresh = createUpdateStatusRefresher({
+    getClient: () => gatewayClient,
+    getEpoch: () => 1,
+    getAuthorization: () => undefined,
+    canRefresh: () => current,
+    isCurrent: () => current,
+    onRefreshing: () => {},
+    onStatus: async (_response, isCurrent) => {
+      entered.resolve();
+      await pending.promise;
+      published = isCurrent();
+    },
+    onError: () => {},
+  });
+  const result = refresh("background");
+  await entered.promise;
+  current = false;
+  pending.resolve();
+  await expect(result).resolves.toBe(false);
+  expect(published).toBe(false);
+});
+
+it("reports a failed status projection without completing the refresh", async () => {
+  const error = new Error("Update report could not load");
+  const onError = vi.fn();
+  const gatewayClient = client(async () => ({}));
+  const refresh = createUpdateStatusRefresher({
+    getClient: () => gatewayClient,
+    getEpoch: () => 1,
+    getAuthorization: () => undefined,
+    canRefresh: () => true,
+    isCurrent: () => true,
+    onRefreshing: () => {},
+    onStatus: async () => {
+      throw error;
+    },
+    onError,
+  });
+  await expect(refresh("completion")).resolves.toBe(false);
+  expect(onError).toHaveBeenLastCalledWith(error, "completion");
+});
 
 afterEach(() => {
   vi.restoreAllMocks();

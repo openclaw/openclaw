@@ -280,7 +280,12 @@ describe("dispatch input custody after a question response", () => {
   it("reports an incomplete multi-question answer and keeps the question open", async () => {
     const fixture = createQuestionDispatch("incomplete-answer");
     const dispatcher = createDispatcher();
-    const broker = new EmbeddedQuestionBroker(createTestGatewayScheduler());
+    const onResolved = vi.fn();
+    const broker = new EmbeddedQuestionBroker(createTestGatewayScheduler(), (event) => {
+      if (event.event === "question.resolved") {
+        onResolved(event.payload);
+      }
+    });
     const questionId = "ask_incomplete_answer";
     const questions = [
       { id: "destination", header: "Where", question: "Where to?" },
@@ -294,12 +299,6 @@ describe("dispatch input custody after a question response", () => {
         questionId: id,
         options: [],
       })),
-    });
-    const onResolved = vi.fn();
-    broker.subscribe((event) => {
-      if (event.event === "question.resolved") {
-        onResolved(event.payload);
-      }
     });
     const onResumed = vi.fn();
     const answer = broker.waitAnswer({ id: questionId, includeResolutionId: true });

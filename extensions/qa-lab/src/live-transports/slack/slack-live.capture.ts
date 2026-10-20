@@ -179,9 +179,6 @@ async function parseSlackQaMessageWrite(params: {
     text: truncateSlackQaText(request.text) ?? "",
     ts,
     ...(blockText.length > 0 ? { blockText } : {}),
-    ...(typeof request.thread_ts === "string"
-      ? { threadTs: request.thread_ts.slice(0, SLACK_QA_MESSAGE_TEXT_MAX_CHARS) }
-      : {}),
   };
 }
 

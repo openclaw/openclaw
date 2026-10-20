@@ -41,7 +41,7 @@ import {
   resolveTtsRuntimeConfig,
   type ResolvedTtsConfig,
 } from "./tts-settings.js";
-import type { VoiceModelRef, VoiceProviderCandidate } from "./voice-models.js";
+import type { VoiceProviderCandidate } from "./voice-models.js";
 
 // The transport names its abort "TimeoutError" (fetch-timeout.ts) and provider
 // deadlines throw plain Errors ending in "timed out"; AbortError alone misses both.
@@ -94,81 +94,6 @@ type TtsProviderReadyResolution =
       message: string;
       personaBinding?: "missing";
     };
-
-async function resolveReadySpeechProvider(params: {
-  provider: TtsProvider;
-  cfg: OpenClawConfig;
-  config: ResolvedTtsConfig;
-  persona?: ResolvedTtsPersona;
-  voiceModel?: VoiceModelRef;
-  target: SpeechSynthesisTarget;
-  providerRegistry: TtsProviderRegistry;
-}): Promise<TtsProviderReadyResolution> {
-  const resolvedProvider = params.providerRegistry.getSpeechProvider(params.provider, params.cfg);
-  if (!resolvedProvider) {
-    return {
-      kind: "skip",
-      reasonCode: "no_provider_registered",
-      message: `${params.provider}: no provider registered`,
-    };
-  }
-  const providerConfig = getResolvedSpeechProviderConfigForVoiceModel({
-    config: params.config,
-    providerId: resolvedProvider.id,
-    cfg: params.cfg,
-    voiceModel: params.voiceModel,
-    registry: params.providerRegistry,
-  });
-  const merged = mergeProviderConfigWithPersona({
-    providerConfig,
-    persona: params.persona,
-    providerId: resolvedProvider.id,
-  });
-  if (params.persona?.fallbackPolicy === "fail" && merged.personaBinding === "missing") {
-    return {
-      kind: "skip",
-      reasonCode: "not_configured",
-      message: `${params.provider}: persona ${params.persona.id} has no provider binding`,
-      personaBinding: "missing",
-    };
-  }
-  const context = {
-    cfg: params.cfg,
-    providerConfig: merged.providerConfig,
-    timeoutMs: resolveSpeechProviderTimeoutMs({
-      config: params.config,
-      provider: resolvedProvider,
-    }),
-  };
-  const configured = await (resolvedProvider.isConfiguredAsync
-    ? resolvedProvider.isConfiguredAsync(context)
-    : resolvedProvider.isConfigured(context));
-  if (!configured) {
-    return {
-      kind: "skip",
-      reasonCode: "not_configured",
-      message: `${params.provider}: not configured`,
-    };
-  }
-  if (params.target === "telephony" && !resolvedProvider.synthesizeTelephony) {
-    return {
-      kind: "skip",
-      reasonCode: "unsupported_for_telephony",
-      message: `${params.provider}: unsupported for telephony`,
-    };
-  }
-  return {
-    kind: "ready",
-    provider: resolvedProvider,
-    providerConfig: merged.providerConfig,
-    personaProviderConfig: merged.personaProviderConfig,
-    synthesisPersona:
-      params.persona?.fallbackPolicy === "provider-defaults" && merged.personaBinding === "missing"
-        ? undefined
-        : params.persona,
-    personaBinding: merged.personaBinding,
-  };
-}
 
 type TtsRequestSetupParams = {
   text: string;
@@ -400,15 +325,71 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
     const providerStart = Date.now();
     try {
       const providerRegistry = await params.prepareProviderRegistry();
-      const resolvedProvider = await resolveReadySpeechProvider({
-        provider,
-        cfg,
-        config,
-        persona,
-        voiceModel,
-        target: params.target,
-        providerRegistry,
-      });
+      const target = params.target;
+      const resolveReadyProvider = async (): Promise<TtsProviderReadyResolution> => {
+        const candidateProvider = providerRegistry.getSpeechProvider(provider, cfg);
+        if (!candidateProvider) {
+          return {
+            kind: "skip",
+            reasonCode: "no_provider_registered",
+            message: `${provider}: no provider registered`,
+          };
+        }
+        const providerConfig = getResolvedSpeechProviderConfigForVoiceModel({
+          config,
+          providerId: candidateProvider.id,
+          cfg,
+          voiceModel,
+          registry: providerRegistry,
+        });
+        const merged = mergeProviderConfigWithPersona({
+          providerConfig,
+          persona,
+          providerId: candidateProvider.id,
+        });
+        if (persona?.fallbackPolicy === "fail" && merged.personaBinding === "missing") {
+          return {
+            kind: "skip",
+            reasonCode: "not_configured",
+            message: `${provider}: persona ${persona.id} has no provider binding`,
+            personaBinding: "missing",
+          };
+        }
+        const context = {
+          cfg,
+          providerConfig: merged.providerConfig,
+          timeoutMs: resolveSpeechProviderTimeoutMs({ config, provider: candidateProvider }),
+        };
+        const configured = await (candidateProvider.isConfiguredAsync
+          ? candidateProvider.isConfiguredAsync(context)
+          : candidateProvider.isConfigured(context));
+        if (!configured) {
+          return {
+            kind: "skip",
+            reasonCode: "not_configured",
+            message: `${provider}: not configured`,
+          };
+        }
+        if (target === "telephony" && !candidateProvider.synthesizeTelephony) {
+          return {
+            kind: "skip",
+            reasonCode: "unsupported_for_telephony",
+            message: `${provider}: unsupported for telephony`,
+          };
+        }
+        return {
+          kind: "ready",
+          provider: candidateProvider,
+          providerConfig: merged.providerConfig,
+          personaProviderConfig: merged.personaProviderConfig,
+          synthesisPersona:
+            persona?.fallbackPolicy === "provider-defaults" && merged.personaBinding === "missing"
+              ? undefined
+              : persona,
+          personaBinding: merged.personaBinding,
+        };
+      };
+      const resolvedProvider = await resolveReadyProvider();
       if (resolvedProvider.kind === "skip") {
         recordSkipped(
           provider,

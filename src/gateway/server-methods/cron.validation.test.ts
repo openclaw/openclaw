@@ -466,6 +466,52 @@ describe("cron method validation", () => {
     },
   );
 
+  it.each(["cron.add", "cron.update", "wake"] as const)(
+    "refuses pending %s before the client deadline without retaining a write",
+    async (method) => {
+      vi.useFakeTimers();
+      const preparation = createDeferred();
+      const refusal = {
+        agentId: "cleaner",
+        paths: ["/synthetic/cleaner/openclaw-agent.sqlite"],
+        code: "agent-database-inspection-pending" as const,
+        reason: "Agent cleaner is still preparing.",
+        repairHint: "Retry after preparation finishes.",
+      };
+      recordAgentDatabaseAdmissions([refusal]);
+      const context = Object.assign(createCronContext(createCronJob()), {
+        agentDatabaseStartup: { waitForAgentPreparation: () => preparation.promise },
+      });
+      const respond = vi.fn();
+      const params =
+        method === "wake"
+          ? { mode: "now", text: "hello", agentId: "cleaner" }
+          : method === "cron.update"
+            ? { id: "cron-1", patch: { agentId: "cleaner" } }
+            : agentTurnCronParams({ agentId: "cleaner" });
+      const request = invokeCron(method, params, { context, respond });
+      try {
+        await vi.advanceTimersByTimeAsync(30_000);
+        expect(respond).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({ code: "UNAVAILABLE", retryable: true, details: refusal }),
+        );
+        recordAgentDatabaseAdmissions([]);
+        preparation.resolve();
+        await request;
+        expect(context.cron.add).not.toHaveBeenCalled();
+        expect(context.cron.update).not.toHaveBeenCalled();
+        expect(context.cron.wake).not.toHaveBeenCalled();
+      } finally {
+        recordAgentDatabaseAdmissions([]);
+        preparation.resolve();
+        await request;
+        vi.useRealTimers();
+      }
+    },
+  );
+
   describe.each(["get", "update", "remove", "run", "runs"] as const)(
     "cron.%s caller scope",
     (method) => {
@@ -2687,6 +2733,18 @@ describe("cron method validation", () => {
           entries: { main: {}, ops: {}, "agent-123": {}, "agent-456": {} },
         },
       });
+    });
+
+    it("keeps untargeted role-free wakes independent of default-agent resolution", async () => {
+      setRuntimeConfig({ agents: { ownership: "explicit", entries: { ops: {}, dev: {} } } });
+      const context = createCronContext();
+      context.cron.getDefaultAgentId.mockImplementation(() => {
+        throw new Error("No default agent");
+      });
+      const { respond } = await invokeCron("wake", { mode: "now", text: "ping" }, { context });
+      expect(context.cron.wake).toHaveBeenCalledOnce();
+      expect(context.cron.getDefaultAgentId).not.toHaveBeenCalled();
+      expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
     });
 
     it.each([

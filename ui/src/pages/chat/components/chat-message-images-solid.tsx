@@ -202,7 +202,7 @@ function createMessageImagePresentation(props: MessageImageProps) {
       !retainedImage &&
       typeof IntersectionObserver === "function"
     ) {
-      return present(renderImagePlaceholder(image));
+      return renderImagePlaceholder(image);
     }
     admitted = true;
     // A pane owns cancellation; this image alone owns its presentation updates.
@@ -258,23 +258,21 @@ function createMessageImagePresentation(props: MessageImageProps) {
           refreshImage();
         }
       };
-      return present(
-        renderImagePlaceholder(image, reason, {
-          path: isLocalAssistantAttachmentSource(source) ? source : undefined,
-          onAllow:
-            !decodeFailed && availability.status === "unavailable" && availability.canAllow
-              ? () => retryAvailability(true)
-              : undefined,
-          onRetry: decodeFailed
-            ? () => {
-                releaseRetainedImage();
-                refreshImage();
-              }
-            : availability.status === "unavailable" && availability.recoverable
-              ? () => retryAvailability()
-              : undefined,
-        }),
-      );
+      return renderImagePlaceholder(image, reason, {
+        path: isLocalAssistantAttachmentSource(source) ? source : undefined,
+        onAllow:
+          !decodeFailed && availability.status === "unavailable" && availability.canAllow
+            ? () => retryAvailability(true)
+            : undefined,
+        onRetry: decodeFailed
+          ? () => {
+              releaseRetainedImage();
+              refreshImage();
+            }
+          : availability.status === "unavailable" && availability.recoverable
+            ? () => retryAvailability()
+            : undefined,
+      });
     }
     if (!managed) {
       const retained = retainedImage;
@@ -287,21 +285,19 @@ function createMessageImagePresentation(props: MessageImageProps) {
         // native load/error boundary replaces the detached decode preloader.
         retained.timeout = setTimeout(() => failImage(), CANONICAL_IMAGE_HANDOFF_TIMEOUT_MS);
       }
-      return present(
-        renderImageElement(
-          image,
-          availability.status === "available"
-            ? buildAssistantAttachmentUrl(
-                source,
-                options?.resourceBasePath,
-                availability.mediaTicket,
-                options,
-                image.fileName,
-                "thumbnail",
-                previewWidth,
-              )
-            : displayUrl,
-        ),
+      return renderImageElement(
+        image,
+        availability.status === "available"
+          ? buildAssistantAttachmentUrl(
+              source,
+              options?.resourceBasePath,
+              availability.mediaTicket,
+              options,
+              image.fileName,
+              "thumbnail",
+              previewWidth,
+            )
+          : displayUrl,
       );
     }
     return renderManagedImage(image, subscriptionOptions, displayUrl);
@@ -325,14 +321,12 @@ function createMessageImagePresentation(props: MessageImageProps) {
     if (!subscriptionOptions?.onMediaChange && pending) {
       observeStandalonePreview(pending);
     }
-    return present(
-      resource.value
-        ? renderImageElement(image, resource.value)
-        : renderImagePlaceholder(
-            image,
-            resource.value === null ? t("chat.imageLightbox.loadFailed") : undefined,
-          ),
-    );
+    return resource.value
+      ? renderImageElement(image, resource.value)
+      : renderImagePlaceholder(
+          image,
+          resource.value === null ? t("chat.imageLightbox.loadFailed") : undefined,
+        );
   }
 
   function observeStandalonePreview(pending: Promise<unknown>) {
@@ -349,7 +343,7 @@ function createMessageImagePresentation(props: MessageImageProps) {
   }
 
   function renderImageElement(image: ImageBlock, previewUrl: string): ImagePresentation {
-    return { image, previewUrl, managed };
+    return { image, previewUrl, managed, key: imageKey };
   }
 
   function renderPreviewElement(image: ImageBlock, url: string, title: string) {
@@ -420,6 +414,7 @@ function createMessageImagePresentation(props: MessageImageProps) {
     return {
       image,
       managed,
+      key: active ? imageKey : undefined,
       state: reason === undefined ? "loading" : "unavailable",
       reason,
       actions: {
@@ -466,10 +461,6 @@ function createMessageImagePresentation(props: MessageImageProps) {
       retainedImage = { status: "unavailable" };
     }
     refreshImage();
-  }
-
-  function present(value: ImagePresentation): ImagePresentation {
-    return { ...value, key: imageKey };
   }
 
   const retireHandoff = () => {

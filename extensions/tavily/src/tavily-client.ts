@@ -1,10 +1,12 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import {
   parseDateStringTimestampMs,
   resolveIntegerOption,
 } from "openclaw/plugin-sdk/number-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import {
+  externalContentStamp,
   DEFAULT_CACHE_TTL_MINUTES,
   normalizeCacheKey,
   postTrustedWebToolsJson,
@@ -157,6 +159,7 @@ export async function runTavilySearch(
   const cacheKey = normalizeCacheKey(
     JSON.stringify({
       type: "tavily-search",
+      credential: sha256Hex(apiKey),
       q: params.query,
       count,
       baseUrl,
@@ -234,12 +237,7 @@ export async function runTavilySearch(
     provider: "tavily",
     count: results.length,
     tookMs: Date.now() - start,
-    externalContent: {
-      untrusted: true,
-      source: "web_search",
-      provider: "tavily",
-      wrapped: true,
-    },
+    externalContent: externalContentStamp("tavily"),
     results,
   };
   if (typeof payload.answer === "string" && payload.answer) {
@@ -270,6 +268,7 @@ export async function runTavilyExtract(
   const cacheKey = normalizeCacheKey(
     JSON.stringify({
       type: "tavily-extract",
+      credential: sha256Hex(apiKey),
       urls: params.urls,
       baseUrl,
       query: params.query,

@@ -63,13 +63,7 @@ export async function readTuiLastSessionKey(params: {
     type: "tui.lastSession.read",
     stateKey: `${TUI_LAST_SESSION_STATE_KEY_PREFIX}${params.scopeKey}`,
   });
-  if (result === undefined) {
-    return null;
-  }
-  if (!result.ok || result.type !== "tui.lastSession.read") {
-    throw new Error("Unexpected remembered TUI session read result");
-  }
-  if (!result.row) {
+  if (!result?.row) {
     return null;
   }
   const stored: unknown = JSON.parse(result.row.value_json);

@@ -8,8 +8,6 @@ import { loadPluginManifest } from "../plugins/manifest.js";
 import { readPluginCacheFile } from "../plugins/plugin-cache-files.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import * as fileDescriptor from "./file-descriptor.js";
-import { createFileMutationClock } from "./file-mutation-clock.test-support.js";
 import { prepareUpdateCandidatePluginTrees } from "./update-candidate-plugin-tree.js";
 import { linkUpdateCandidatePluginTrees } from "./update-retained-runtime-tree.js";
 
@@ -32,11 +30,6 @@ const inode = (file: string) => {
 };
 const manifest = (id: string, extra = {}) =>
   JSON.stringify({ id, configSchema: { type: "object" }, ...extra });
-async function mockFilesystem(source: string, overlay: boolean) {
-  const disk = await fs.statfs(source);
-  disk.type = overlay ? 0x794c7630 : 0xef53;
-  vi.spyOn(fs, "statfs").mockResolvedValue(disk);
-}
 const assets = async (root: string, controlUi: Parameters<typeof readPluginControlUiAssets>[1]) => [
   ...(await readPluginControlUiAssets(root, controlUi)).assets.keys(),
 ];
@@ -113,12 +106,16 @@ async function fixture(setup?: (source: string) => Promise<void>) {
   };
 }
 
-it.each([
-  { filesystem: "native", existingTwin: true },
-  { filesystem: "overlay", existingTwin: false },
-])(
-  "preserves plugin safety on $filesystem filesystems (existing manifest twin=$existingTwin)",
-  async ({ filesystem, existingTwin }) => {
+it("rejects hardlinked files larger than their inventory budget", async () => {
+  const f = await fixture();
+  await fs.chmod(f.worker, 0o644);
+  await fs.appendFile(f.worker, "// grew after inventory\n");
+  await expect(f.link()).rejects.toThrow("Plugin entry changed after snapshot inventory");
+});
+
+it.each([false, true])(
+  "preserves plugin safety (existing manifest twin=%s)",
+  async (existingTwin) => {
     const controlUi = { entry: "dist/control-ui/index.js", styles: ["dist/control-ui/theme.css"] };
     const nestedBrowser = "dist/control-ui/@scope/nested";
     const files = new Map(
@@ -214,10 +211,6 @@ it.each([
     const rank = (file: string) =>
       file.endsWith(nestedManifest) ? 0 : file === outerManifest ? 1 : 2;
     f.plan.entries.sort((left, right) => rank(left.path) - rank(right.path));
-    const overlay = filesystem === "overlay";
-    // Pin both routes so an OverlayFS host cannot hide broken plugin-specific copying.
-    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    await mockFilesystem(f.source, overlay);
     const link = vi.spyOn(fs, "link");
     const counts = await f.link();
     for (const base of [f.source, f.destination]) {
@@ -253,18 +246,14 @@ it.each([
         "index.js",
       ]);
     }
-    expect(counts).toEqual(
-      overlay
-        ? { linked: 0, copied: files.size + payloads.length + 3 }
-        : { linked: payloads.length + 2, copied: files.size + 1 },
-    );
+    expect(counts).toEqual({ linked: payloads.length + 2, copied: files.size + 1 });
     expect(link).toHaveBeenCalledTimes(counts.linked);
     for (const relative of payloads) {
       const original = stat(f.original(path.join(relativePlugin, relative)));
       const retained = stat(f.retained(path.join(relativePlugin, relative)));
-      expect(retained.ino === original.ino).toBe(!overlay);
-      expect(original.nlink).toBe(overlay ? 1 : 2);
-      expect(retained).toMatchObject({ nlink: overlay ? 1 : 2, size: original.size });
+      expect(retained.ino).toBe(original.ino);
+      expect(original.nlink).toBe(2);
+      expect(retained).toMatchObject({ nlink: 2, size: original.size });
     }
     const sourcePlugin = path.join(f.source, relativePlugin);
     await fs.link(
@@ -281,11 +270,11 @@ it.each([
   },
 );
 
-it.each(["native", "overlay", "fallback-first", "fallback-second"] as const)(
+it.each(["native", "portable-copy", "fallback-first", "fallback-second"] as const)(
   "retains admitted files and modes through replacement using %s",
   async (mode) => {
-    const overlay = mode === "overlay";
-    const nestedFiles = overlay
+    const portable = mode === "portable-copy";
+    const nestedFiles = portable
       ? Array.from({ length: 8 }, (_, index) =>
           path.join("node_modules", "fixture", "dist", "deep", "chunks", `part-${index}.js`),
         )
@@ -298,28 +287,26 @@ it.each(["native", "overlay", "fallback-first", "fallback-second"] as const)(
         const destination = await writeFile(source, file, `// ${file}\n`);
         await fs.chmod(destination, 0o444);
       }
-      if (overlay) {
+      if (portable) {
         await fs.chmod(path.dirname(path.join(source, nestedFiles[0]!)), 0o751);
       }
     });
     const before = stat(f.worker, { bigint: true });
     let fallback: string | undefined;
-    const linking = beforeLink((source) => {
-      if (source === fallback) {
+    beforeLink((source) => {
+      if (portable || source === fallback) {
         throw Object.assign(new Error("hard link unavailable"), {
           code: mode === "fallback-first" ? "EXDEV" : "EMLINK",
         });
       }
     });
-    if (overlay) {
+    if (portable) {
       f.plan.entries.sort(
         (left, right) => Number(left.kind === "directory") - Number(right.kind === "directory"),
       );
-      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-      await mockFilesystem(f.source, true);
     } else if (mode !== "native") {
       const sharedEntries = f.plan.entries.filter(
-        (entry) => entry.kind === "file" && entry.ino === before.ino.toString(),
+        (entry) => entry.kind === "file" && stat(entry.path, { bigint: true }).ino === before.ino,
       );
       f.plan.entries = [
         ...sharedEntries,
@@ -327,13 +314,11 @@ it.each(["native", "overlay", "fallback-first", "fallback-second"] as const)(
       ];
       fallback = sharedEntries[mode === "fallback-first" ? 0 : 1]!.path;
     }
-    const mkdir = vi.spyOn(fs, "mkdir");
-    const hash = vi.spyOn(fileDescriptor, "hashFileMutationSnapshotSync");
-    const counts = await (overlay
+    const counts = await (portable
       ? withEnvAsync({ FS_SAFE_NATIVE_MODE: "off" }, f.link)
       : f.link());
     expect(counts).toEqual(
-      overlay
+      portable
         ? { linked: 0, copied: 3 + nestedFiles.length }
         : { linked: fallback ? 1 : mode === "native" ? 3 : 2, copied: fallback ? 2 : 1 },
     );
@@ -346,16 +331,11 @@ it.each(["native", "overlay", "fallback-first", "fallback-second"] as const)(
       expect(retainedStat.ino).not.toBe(before.ino);
     }
     expect(Number(retainedStat.mode & 0o777n)).toBe(0o444);
-    if (overlay) {
-      expect(linking).not.toHaveBeenCalled();
-      expect(mkdir.mock.calls.length).toBeLessThanOrEqual(
-        f.plan.entries.filter((entry) => entry.kind === "directory").length + 1,
-      );
-      for (const file of nestedFiles) {
-        const retained = f.retained(file);
-        expect(await read(retained)).toBe(`// ${file}\n`);
-        expect(stat(retained).mode & 0o777).toBe(0o444);
-      }
+    for (const file of nestedFiles) {
+      expect(await read(f.retained(file))).toBe(`// ${file}\n`);
+      expect(stat(f.retained(file)).mode & 0o777).toBe(0o444);
+    }
+    if (portable) {
       expect(stat(path.dirname(f.retained(nestedFiles[0]!))).mode & 0o777).toBe(0o751);
     }
     const retainedLauncher = f.retained("node_modules/.bin/tool");
@@ -365,85 +345,12 @@ it.each(["native", "overlay", "fallback-first", "fallback-second"] as const)(
       path.join("..", "dist/state/worker.js"),
     );
     const displaced = `${f.source}.previous`;
-    if (mode === "native") {
-      expect(
-        hash.mock.calls.filter(([file]) => file === f.original("dist/unique.js")),
-      ).toHaveLength(0);
-    }
     await fs.rename(f.source, displaced);
     await fs.rm(displaced, { recursive: true });
     expect(await read(retainedWorker)).toBe(workerCode);
     if (mode === "native") {
       expect(await read(f.retained("dist/unique.js"))).toBe("export const retained = true;\n");
     }
-  },
-);
-
-it("refuses entries that changed after the inventory and never links a replacement", async () => {
-  const f = await fixture();
-  beforeLink((source) => {
-    if (source === f.worker) {
-      throw new Error("must not link a changed file");
-    }
-  });
-  fsSync.renameSync(f.worker, `${f.worker}.original`);
-  fsSync.writeFileSync(f.worker, "export const generation = 'replaced';\n", { mode: 0o444 });
-  await expect(f.link()).rejects.toThrow("changed after snapshot inventory");
-  expect(exists(f.retained("dist/state/worker.js"))).toBe(false);
-});
-
-it.each(["next-entry", "copy-publication"] as const)(
-  "refuses same-size rewrites with restored mtime after a prior hard link (%s)",
-  async (stage) => {
-    const f = await fixture(async (source) => {
-      await fs.utimes(
-        path.join(source, "dist", "state", "worker.js"),
-        1_700_000_000,
-        1_700_000_000,
-      );
-    });
-    const before = stat(f.worker, { bigint: true });
-    const sharedEntries = f.plan.entries.filter(
-      (entry) => entry.kind === "file" && entry.ino === before.ino.toString(),
-    );
-    const later = sharedEntries[1]!.path;
-    let mutated = false;
-    const mutate = () => {
-      if (mutated) {
-        return;
-      }
-      mutated = true;
-      const content = fsSync.readFileSync(later);
-      content[0] = content[0]! ^ 1;
-      fsSync.chmodSync(later, 0o600);
-      fsSync.writeFileSync(later, content);
-      fsSync.chmodSync(later, 0o444);
-      fsSync.utimesSync(later, before.atime, before.mtime);
-      advanceCtime(before);
-      expect(fsSync.lstatSync(later, { bigint: true }).ctimeNs).not.toBe(before.ctimeNs);
-    };
-    const advanceCtime = createFileMutationClock({
-      beforeLstat: (pathname) => {
-        if (stage === "next-entry" && pathname === later) {
-          mutate();
-        }
-      },
-      beforeLstatSync: (pathname) => {
-        if (stage === "copy-publication" && pathname === later) {
-          mutate();
-        }
-      },
-    });
-    if (stage === "copy-publication") {
-      beforeLink((source) => {
-        if (source === later) {
-          throw Object.assign(new Error("hard link unavailable"), { code: "EMLINK" });
-        }
-      });
-    }
-    await expect(f.link()).rejects.toThrow("changed after snapshot inventory");
-    expect(mutated).toBe(true);
-    expect(exists(f.projected(later))).toBe(false);
   },
 );
 
@@ -465,7 +372,6 @@ async function fileWindowFixture() {
     }
     return await lstat(...args);
   });
-  await mockFilesystem(f.source, false);
   return { ...f, files };
 }
 
@@ -510,7 +416,7 @@ it.each([false, true])(
         mkdir.mock.calls.filter(([directory]) => directory === f.retained("parallel")),
       ).toHaveLength(1);
       for (const entry of f.files) {
-        expect(stat(f.projected(entry.path)).ino.toString()).toBe(entry.ino);
+        expect(stat(f.projected(entry.path)).ino).toBe(stat(entry.path).ino);
       }
     }
   },

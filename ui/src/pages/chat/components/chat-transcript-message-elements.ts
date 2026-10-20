@@ -7,35 +7,41 @@ export function createTranscriptMessageElements(
   entryRefFor: (key: string) => MessageElementRef | undefined,
 ) {
   const mounted = new Map<string, HTMLElement>();
-  const listeners = new Set<() => void>();
+  let changed: (() => void) | undefined;
   return {
     get elements(): ReadonlyMap<string, HTMLElement> {
       return mounted;
     },
-    forKey:
-      (key: string): MessageElementRef =>
-      (element) => {
-        entryRefFor(key)?.(element);
+    forKey(key: string): MessageElementRef {
+      let registered: HTMLElement | undefined;
+      return (element) => {
         const previous = mounted.get(key);
         const current = element instanceof HTMLElement ? element : undefined;
+        // A replacement branch can mount before the previous branch cleans up.
+        if (!current && previous !== registered) {
+          return;
+        }
+        registered = current;
+        entryRefFor(key)?.(element);
         if (current) {
           mounted.set(key, current);
         } else {
           mounted.delete(key);
         }
         if (previous !== current) {
-          for (const listener of listeners) {
-            listener();
-          }
+          changed?.();
         }
-      },
+      };
+    },
     subscribe(listener: () => void): () => void {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
+      changed = listener;
+      return () => {
+        changed = undefined;
+      };
     },
     dispose(): void {
       mounted.clear();
-      listeners.clear();
+      changed = undefined;
     },
   };
 }

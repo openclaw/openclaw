@@ -33,16 +33,12 @@ import {
   type AdmittedRunContext,
   type OperationalRunInstanceRef,
 } from "../admitted-run-context.js";
-import { copyAgentToolMetadata } from "../agent-tool-metadata.js";
+import { wrapAgentToolExecutionContext } from "../agent-tool-metadata.js";
 import {
   captureActiveEmbeddedRunPersonalToolParticipants,
   type EmbeddedRunToolAuthorityBinding,
 } from "../embedded-agent-runner/run-state.js";
 import { captureRequesterOrigin, type RequesterOrigin } from "../requester-origin.js";
-import {
-  attachInternalToolExecutionPreparer,
-  getInternalToolExecutionPreparer,
-} from "../runtime/internal-hooks.js";
 import { readToolStringParam, type AnyAgentTool } from "./common.js";
 import type { GatewayToolCallerReceiptAdmission } from "./gateway-caller-receipt.types.js";
 
@@ -673,27 +669,12 @@ export function wrapToolWithGatewayCallerIdentity(
   if (!identity?.agentId?.trim() || !identity.sessionKey?.trim() || !tool.execute) {
     return tool;
   }
-  const wrapped: AnyAgentTool = {
-    ...tool,
-    execute: (...args) => withGatewayToolCallerIdentity(identity, () => tool.execute?.(...args)),
-  };
-  copyAgentToolMetadata(tool, wrapped, (source) =>
-    wrapToolWithGatewayCallerIdentity(source, identity),
+  return wrapAgentToolExecutionContext(
+    tool,
+    (...args) => withGatewayToolCallerIdentity(identity, () => tool.execute?.(...args)),
+    (operation) => withGatewayToolCallerIdentity(identity, operation),
+    (source) => wrapToolWithGatewayCallerIdentity(source, identity),
   );
-  const sourcePreparer = getInternalToolExecutionPreparer(tool);
-  if (sourcePreparer) {
-    attachInternalToolExecutionPreparer(wrapped, async (params) => {
-      const prepared = await withGatewayToolCallerIdentity(identity, () => sourcePreparer(params));
-      return prepared.kind === "ready"
-        ? {
-            ...prepared,
-            execute: (start) =>
-              withGatewayToolCallerIdentity(identity, () => prepared.execute(start)),
-          }
-        : prepared;
-    });
-  }
-  return wrapped;
 }
 
 export function createGatewayToolCallerWrapper(

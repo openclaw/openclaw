@@ -52,7 +52,7 @@ function CardActivity(props: { view: ReturnType<typeof cardPresentation>; compos
     presented();
     return t(props.view().activityKey, { time: formatRelativeTimestamp(timestamp()) });
   });
-  const count = createMemo(() => {
+  const count = () => {
     const { counts, currentPosition } = props.view();
     return counts
       ? props.composer
@@ -62,7 +62,7 @@ function CardActivity(props: { view: ReturnType<typeof cardPresentation>; compos
           })} · `
         : ` · ${counts.completed}/${counts.total}`
       : "";
-  });
+  };
   return (
     <span>
       {props.composer && count()}

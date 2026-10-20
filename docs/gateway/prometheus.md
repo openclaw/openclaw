@@ -102,6 +102,7 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_gateway_http_cancelled_total`                   | counter   | `source` (`client` or `shutdown`)                                                         |
 | `openclaw_gc_duration_seconds`                            | histogram | `kind`, `thread`                                                                          |
 | `openclaw_gateway_rpc_requests_total`                     | counter   | `method`                                                                                  |
+| `openclaw_gateway_rpc_client_requests_total`              | counter   | `method`, `client_kind`                                                                   |
 | `openclaw_models_list_requests_total`                     | counter   | `client_kind`, `source`, `view`, `scope`, `refresh`, `prepared_only`                      |
 | `openclaw_sessions_list_requests_total`                   | counter   | `client_kind`, `source`, `caller_source`, `row_mode`, `filter`                            |
 | `openclaw_sessions_list_response_bytes_total`             | counter   | `client_kind`, `source`, `caller_source`, `row_mode`, `filter`, `rows_outcome`            |
@@ -127,6 +128,8 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_gateway_rpc_admission_seconds`                  | histogram | `method`                                                                                  |
 | `openclaw_gateway_rpc_queue_wait_seconds`                 | histogram | `method`                                                                                  |
 | `openclaw_chat_send_phase_seconds`                        | histogram | `phase`, `stage` (`request`, `startup`, `steer`, or `queued`)                             |
+| `openclaw_diff_stage_seconds`                             | histogram | `method`, `stage`, `outcome`                                                              |
+| `openclaw_diff_cache_misses_total`                        | counter   | `method`, `reason`                                                                        |
 | `openclaw_gateway_rpc_stage_seconds`                      | histogram | `method`, `phase`                                                                         |
 | `openclaw_gateway_rpc_stage_thread_cpu_seconds`           | histogram | `method`, `phase`                                                                         |
 | `openclaw_worktree_preparation_seconds`                   | histogram | `kind`, `template`, `outcome`, `phase`                                                    |
@@ -335,6 +338,32 @@ for unregistered requests, or `unknown` for unrecognized dedicated worker RPCs.
 Catalog membership is checked at request receipt, so plugin registry replacement
 affects subsequent requests without a separate label cache.
 
+`openclaw_gateway_rpc_client_requests_total` attributes all RPC methods using a
+coarse handshake `client_kind`: `control-ui` (Control UI, WebChat UI, browser
+copilot), `macos`, `ios` (including watchOS), `android`, `cli` (including TUI),
+`node` (node hosts and workers), or `other`. The eighth bucket, `plugin`, is
+reserved: generic `gateway-client` connections cannot reliably identify plugins,
+and in-process plugin dispatch inherits its authenticated caller's identity.
+Pre-authentication `connect` requests and other missing identities use `other`. This is diagnostic self-identification, never authorization.
+
+The counter includes server-dispatched requests on behalf of a connection, such
+as its initial model snapshot; use the dedicated list counters' `source` label
+below to separate those from wire requests. No device IDs, display names,
+platform strings, or request values become labels. There is no generic request
+reason in the current protocol, so no `trigger` label is emitted; `cron.list`'s
+`trigger` parameter filters job types and does not identify why a client fetched.
+
+The budget is at most **8 additional samples and scrape series per method**,
+created only for observed kinds and subject to the shared 2,048-sample cap.
+Existing method-only counters and timing histograms keep their labels and bucket
+counts. To attribute polling, use:
+
+```promql
+sum by (method, client_kind) (
+  rate(openclaw_gateway_rpc_client_requests_total{method=~"cron.list|models.list"}[5m])
+)
+```
+
 `openclaw_models_list_requests_total` separately attributes catalog reads to the
 handshake's canonical client kind, such as `openclaw-control-ui`, `openclaw-macos`,
 or `gateway-client`. `source="wire"` identifies client request frames;
@@ -480,6 +509,56 @@ or `threw`. `phase=total` is the complete elapsed time. Other fixed phases are
 `containerStart`. Only entered phases are recorded. Nested phases are inclusive
 and must not be summed. No paths, session identifiers, or template keys become
 metric labels.
+
+### Session diff stages
+
+`openclaw_diff_stage_seconds` records local `sessions.diff` and `checkout.diff`
+reads below the one-second slow-log threshold. Labels are limited to `method`
+(those two names), `outcome` (`cache-hit` or `cache-miss`), and six fixed stages:
+
+| Stage              | Observation                                                                 |
+| ------------------ | --------------------------------------------------------------------------- |
+| `admission`        | RPC receipt through handler admission and retained session-read preparation |
+| `checkout-resolve` | Session, repository and managed base resolution before the local diff read  |
+| `cache-validate`   | Revision validation, including waiting for a shared revision check          |
+| `worker-queue`     | Worker admission wait for revision validation and any new diff collection   |
+| `git-wall`         | Summed elapsed Git subprocess time during those worker operations           |
+| `encode`           | Synchronous response preparation, encoding and transport handoff            |
+
+`checkout.diff` records the cache and worker stages; `sessions.diff` adds request
+admission, checkout resolution and response delivery. Durations are seconds.
+Cache validation includes its worker queue and Git time, and concurrent Git
+commands can overlap: do not add the stage values to estimate request latency.
+A settled cached result is a hit; callers joining pending diff collection are
+misses. Shared work contributes to each waiting caller, while later cache hits
+never replay the cached result's old Git timings. No Git subprocesses means zero
+Git wall time, even when filesystem revision validation is expensive.
+
+`openclaw_diff_cache_misses_total` explains misses with a fixed `reason` label:
+`cold`, `evicted`, `pending`, `no-revision`, `oversized`, or
+`revision-changed-head`, `revision-changed-index`, `revision-changed-untracked-set`,
+`revision-changed-worktree-mtime`, and `revision-changed-metadata`. When several
+components change, the first in that order is reported. `pending` means the
+caller joined an existing load. Only the most recent cache-capacity count of
+evictions is remembered; older evicted keys report `cold`. Different request
+shapes have separate entries, so there is no key-mismatch reason.
+
+Diff revisions use Git's changed-file inventory and relevant file metadata.
+Ignored build output and index stat refreshes do not invalidate a result.
+Unchanged large checkouts still run one read-only Git status check per shared
+validation, but reuse diff collection. Unsupported layouts and inventories that
+exceed the bounded revision budget keep fresh diff reads.
+Small idle checkouts reuse the semantic revision while their complete filesystem
+fingerprint is unchanged, avoiding a Git subprocess on each poll. This worker-local
+memo is bounded to 64 entries and retains the existing 10,000-observation metadata
+budget; any filesystem change requires Git validation again.
+
+Only completed local cache reads have these outcomes. Remote repository reads,
+unknown sessions and failures before cache selection retain the normal RPC
+metrics. No paths, checkout IDs, session IDs or request data become labels.
+These observations use the existing bounded diagnostic queue when diagnostics
+and an interested trusted consumer are enabled. Compare each stage's count;
+this metric is attribution for waiting callers, not total host work.
 
 ### Catalog list stages
 

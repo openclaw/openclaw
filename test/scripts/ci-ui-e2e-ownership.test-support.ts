@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { globSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { expect } from "vitest";
 import {
   createUiRealGatewayTestShards,
@@ -65,6 +65,7 @@ export function assertControlUiE2eOwnership(
           inSuiteServer &&
           (callName === "createOpenClawTestInstance" ||
             callName === "createBackgroundWorkInstance" ||
+            callName === "createDesktopResizeProxy" ||
             callName === "createWaitClockInstance" ||
             callName === "startBuiltControlUiE2eServer" ||
             callName === "startProductionControlUiE2eServer" ||

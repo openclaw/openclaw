@@ -2,7 +2,6 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { readLiveQaChannelAccounts } from "../../shared/live-channel-status.js";
@@ -135,10 +134,6 @@ function createMatrixQaConfigPatch(
   };
 }
 
-function isStaleConfigPatchError(error: unknown) {
-  return formatErrorMessage(error).toLowerCase().includes("config changed since last load");
-}
-
 async function patchGatewayConfig(params: {
   deadlineMs: number;
   gateway: FlowPreparationInput["gateway"];
@@ -146,40 +141,30 @@ async function patchGatewayConfig(params: {
   replacePaths?: string[];
   restartDelayMs?: number;
 }) {
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const snapshot = (await params.gateway.call(
-      "config.get",
-      {},
-      {
-        deadlineMs: params.deadlineMs,
-        timeoutMs: 60_000,
-      },
-    )) as {
-      hash?: string;
-    };
-    if (!snapshot.hash) {
-      throw new Error("Matrix QA config patch requires config.get hash");
-    }
-    try {
-      const result = (await params.gateway.call(
-        "config.patch",
-        {
-          raw: JSON.stringify(params.patch, null, 2),
-          baseHash: snapshot.hash,
-          ...(params.replacePaths?.length ? { replacePaths: params.replacePaths } : {}),
-          restartDelayMs: params.restartDelayMs ?? 0,
-        },
-        { deadlineMs: params.deadlineMs, timeoutMs: 60_000 },
-      )) as MatrixQaConfigPatchResult;
-      return result.noop === true ? { ...result, hash: snapshot.hash } : result;
-    } catch (error) {
-      if (attempt === 0 && isStaleConfigPatchError(error)) {
-        continue;
-      }
-      throw error;
-    }
+  const snapshot = (await params.gateway.call(
+    "config.get",
+    {},
+    {
+      deadlineMs: params.deadlineMs,
+      timeoutMs: 60_000,
+    },
+  )) as {
+    hash?: string;
+  };
+  if (!snapshot.hash) {
+    throw new Error("Matrix QA config patch requires config.get hash");
   }
-  throw new Error("Matrix QA config patch exhausted retries");
+  const result = (await params.gateway.call(
+    "config.patch",
+    {
+      raw: JSON.stringify(params.patch, null, 2),
+      baseHash: snapshot.hash,
+      ...(params.replacePaths?.length ? { replacePaths: params.replacePaths } : {}),
+      restartDelayMs: params.restartDelayMs ?? 0,
+    },
+    { deadlineMs: params.deadlineMs, timeoutMs: 60_000 },
+  )) as MatrixQaConfigPatchResult;
+  return result.noop === true ? { ...result, hash: snapshot.hash } : result;
 }
 
 export async function waitForMatrixAccountReady(params: {

@@ -82,6 +82,11 @@ it("retains the focused capability row and management link through catalog refre
     },
   });
   const view = mountSolid(() => <ChatComposerPlusMenu menu={menu()} />);
+  await waitForSolid(() =>
+    expect(
+      view.getByRole("menuitemcheckbox", { name: "Focused skill", hidden: true }),
+    ).toBeTruthy(),
+  );
   for (const name of ["Broken deps missing", "Private not available for this agent"]) {
     expect(
       view.getByRole("menuitemcheckbox", { name, hidden: true }).hasAttribute("disabled"),
@@ -252,7 +257,10 @@ it("retains attachment choices while the native menu closes and reopens", async 
     ".agent-chat__input-btn--attach",
   )!;
   trigger.click();
-  await waitForSolid(() => expect(open()).toBe(true));
+  await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
+  await waitForSolid(() =>
+    expect(view.getByRole("menuitemcheckbox", { name: "Test toggle", hidden: true })).toBeTruthy(),
+  );
   const choice = view.getByRole("menuitemcheckbox", { name: "Test toggle", hidden: true });
   expect(choice.querySelector("svg")).not.toBeNull();
   setOpen(false);
@@ -318,6 +326,9 @@ it.each(["item", "external", "closed"] as const)(
         />
       </>
     ));
+    await waitForSolid(() =>
+      expect(view.getByRole("menuitem", { name: "Back", hidden: true })).toBeTruthy(),
+    );
     const back = view.getByRole("menuitem", { name: "Back", hidden: true });
     await waitForSolid(() =>
       expect(back.closest("[data-menu-content]")?.getAttribute("data-phase")).toBe("open"),

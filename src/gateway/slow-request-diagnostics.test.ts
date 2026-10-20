@@ -1,3 +1,4 @@
+import { channel } from "node:diagnostics_channel";
 import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import {
@@ -67,4 +68,35 @@ test("failed requests sum repeated waits and keep their trace even when the sink
     elapsedMs: 1_200,
     phaseDurationsMs: { accessFacts: 1_000, projectionReadiness: 200 },
   });
+});
+
+test("subscribers can measure fast stages without enabling logs or exposing request details", () => {
+  setDiagnosticsEnabledForProcess(false);
+  let clock = 0;
+  vi.spyOn(performance, "now").mockImplementation(() => clock);
+  const events: unknown[] = [];
+  const listener = (event: unknown) => events.push(event);
+  const stages = channel("openclaw.gateway.request.stages");
+  const details = vi.fn(() => ({ sessionKey: "private" }));
+  const log = { isEnabled: () => false, warn: vi.fn() };
+  stages.subscribe(listener);
+  try {
+    using timing = startSlowRequestDiagnostics<"resolve" | "git">(
+      log,
+      "slow diff",
+      "sessions.diff",
+      "resolve",
+      details,
+    );
+    clock = 2;
+    timing?.mark("git");
+    clock = 7;
+  } finally {
+    stages.unsubscribe(listener);
+  }
+  expect(events).toEqual([
+    { operation: "sessions.diff", elapsedMs: 7, phaseDurationsMs: { resolve: 2, git: 5 } },
+  ]);
+  expect(details).not.toHaveBeenCalled();
+  expect(log.warn).not.toHaveBeenCalled();
 });

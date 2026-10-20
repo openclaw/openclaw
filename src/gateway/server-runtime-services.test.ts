@@ -113,6 +113,40 @@ describe("server-runtime-services", () => {
 
   registerGatewayCronStartupTests(startGatewayCronWithLogging);
 
+  it.each(["restore", "shutdown"] as const)(
+    "holds restart session deliveries until subagent sources settle: %s",
+    async (outcome) => {
+      vi.useFakeTimers();
+      const restored = createDeferredCore();
+      const { services } = activateScheduledServicesForTest({
+        sessionRecoveryReady: restored.promise,
+      });
+      try {
+        await vi.advanceTimersByTimeAsync(1_250);
+        await vi.dynamicImportSettled();
+        expect(hoisted.startSessionDeliveryRuntime).not.toHaveBeenCalled();
+        expect(hoisted.recoverPendingRestartContinuationDeliveries).not.toHaveBeenCalled();
+        if (outcome === "restore") {
+          restored.resolve();
+          await vi.advanceTimersByTimeAsync(0);
+          await vi.dynamicImportSettled();
+          expect(hoisted.startSessionDeliveryRuntime).toHaveBeenCalledOnce();
+          expect(hoisted.recoverPendingRestartContinuationDeliveries).toHaveBeenCalledOnce();
+        }
+        await services.stopDeliveryRecovery();
+        if (outcome === "shutdown") {
+          restored.resolve();
+          await vi.advanceTimersByTimeAsync(0);
+          expect(hoisted.startSessionDeliveryRuntime).not.toHaveBeenCalled();
+        }
+      } finally {
+        restored.resolve();
+        services.heartbeatRunner.stop();
+        await services.stopDeliveryRecovery();
+      }
+    },
+  );
+
   it.each(["heartbeat", "session recovery", "session retry"] as const)(
     "gives standalone scheduled %s its owning Gateway context and broker",
     async (kind) => {

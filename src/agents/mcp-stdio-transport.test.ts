@@ -4,7 +4,7 @@ import { once } from "node:events";
 import fs from "node:fs/promises";
 import type { PassThrough } from "node:stream";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { Client } from "@modelcontextprotocol/client";
+import { Client, SdkError, SdkErrorCode } from "@modelcontextprotocol/client";
 import { EmptyResultSchema, JSONRPCRequestSchema } from "@modelcontextprotocol/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -21,6 +21,7 @@ import {
   waitForStdioCleanup,
   writeRpc,
 } from "./mcp-stdio.test-support.js";
+import { observeNativeMcpProbe } from "./native-mcp-connect.js";
 import { createAgentCleanupScope } from "./run-cleanup-timeout.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
@@ -85,6 +86,40 @@ afterEach(async () => {
 });
 
 describe("OpenClawStdioClientTransport", () => {
+  it.each(["exit", "error", "send", "close", "detached"] as const)(
+    "keeps legacy probe eligibility and SDK callbacks through %s",
+    async (mode) => {
+      const fixture = await startedFixture();
+      const { transport, onerror, onexit } = fixture;
+      const probe = observeNativeMcpProbe(transport);
+      const failure = new Error("probe I/O failed");
+      const negotiationError = new SdkError(SdkErrorCode.EraNegotiationFailed, "probe failed");
+      if (mode === "detached") {
+        probe.detach();
+      } else if (mode === "error") {
+        fixture.emitError(failure);
+        expect(onerror).toHaveBeenCalledExactlyOnceWith(failure);
+      } else if (mode === "send") {
+        rejectStdioWrites(fixture.stdin, failure, "callback");
+        await expect(transport.send({ jsonrpc: "2.0", id: 1, method: "ping" })).rejects.toBe(
+          failure,
+        );
+      } else if (mode === "close") {
+        void transport.close();
+      }
+      fixture.root.resolve({ code: 23, signal: null });
+      await Promise.resolve();
+      expect(onexit).toHaveBeenCalledExactlyOnceWith({ code: 23, signal: null });
+      expect(probe.canRestartLegacy(negotiationError)).toBe(mode === "exit");
+      probe.detach();
+      fixture.emitError(failure);
+      expect(onerror).toHaveBeenLastCalledWith(failure);
+      expect(probe.canRestartLegacy(negotiationError)).toBe(mode === "exit");
+      fixture.extinction.resolve();
+      await transport.close();
+    },
+  );
+
   it("binds an exact environment without importing MCP default variables", async () => {
     await startedFixture({
       exactEnv: true,

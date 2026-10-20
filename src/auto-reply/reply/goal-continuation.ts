@@ -16,14 +16,13 @@ import {
   type SessionControllerInput,
 } from "../../sessions/session-controller.mailbox.js";
 import { captureSessionTarget } from "../../sessions/session-controller.target.js";
-import { formatSystemTurnPrompt } from "../../sessions/system-turn-prompt.js";
-import { SkillLibraryError } from "../../skills/skill-library-error.js";
 import { createGoalContinuationReturnScope } from "./goal-continuation-return.js";
 import type { GoalContinuation } from "./goal-continuation.types.js";
 import { refreshActiveGoalContext } from "./inbound-meta.js";
 import { scheduleFollowupDrain } from "./queue/drain.js";
 import { enqueueFollowupRun, getFollowupQueueDepth } from "./queue/enqueue.js";
 import { isFollowupRunAborted, type FollowupRun, type QueueSettings } from "./queue/types.js";
+import { buildTranscriptFollowupRun } from "./transcript-followup-run.js";
 
 export type { GoalContinuation } from "./goal-continuation.types.js";
 
@@ -168,53 +167,22 @@ export async function enqueueGoalContinuation(params: GoalContinuationParams): P
   const base = params.base;
   const cancellation = new AbortController();
   const nudge: FollowupRun = {
-    ...base,
+    ...buildTranscriptFollowupRun(base, {
+      prompt:
+        "Advance the active goal; keep it active until fully achieved. Use the current goal context, and verify the entire objective before marking it complete.",
+      sourceTool: "session_goal_continue",
+      expiredSkillAuthoringMessage:
+        "Skill authoring requires a fresh user request after the previous turn settled.",
+    }),
     goalContinuation: continuation,
-    prompt: formatSystemTurnPrompt(
-      "Advance the active goal; keep it active until fully achieved. Use the current goal context, and verify the entire objective before marking it complete.",
-    ),
     summaryLine: "goal-continuation",
     messageId: ["goal", continuation.sessionId, continuation.goalId, params.sourceRunId].join(":"),
     abortSignal: base.abortSignal
       ? AbortSignal.any([base.abortSignal, cancellation.signal])
       : cancellation.signal,
-    enqueuedAt: Date.now(),
-    disableCollectBatching: true,
-    transcriptPrompt: undefined,
-    userTurnTranscriptRecorder: undefined,
-    sourceTurnId: undefined,
-    currentInboundContext: undefined,
-    images: undefined,
-    imageOrder: undefined,
-    media: undefined,
-    turnAdoptionLifecycle: undefined,
-    replyOperationRunStates: undefined,
-    onQueueDisposition: undefined,
     controllerInput: params.controllerInput,
-    controllerClaim: undefined,
     strandedReplyRetry: undefined,
     stalledTurnRecovery: undefined,
-    queuedFollowupReplyDisposition:
-      source?.kind === "deliver"
-        ? { kind: "deliver", deliver: source.deliver.createSourceRetry?.() ?? source.deliver }
-        : source,
-    run: {
-      ...base.run,
-      inputProvenance: { kind: "internal_system", sourceTool: "session_goal_continue" },
-      suppressNextUserMessagePersistence: true,
-      skillLibraryAuthoring: base.run.skillLibraryAuthoring && {
-        target: "personal",
-        defaultTarget: "personal",
-        multipleProfiles: base.run.skillLibraryAuthoring.multipleProfiles,
-        bind: () => {},
-        invoke: async () => {
-          throw new SkillLibraryError(
-            "AUTHORITY_EXPIRED",
-            "Skill authoring requires a fresh user request after the previous turn settled.",
-          );
-        },
-      },
-    },
   };
   if (params.controllerInput) {
     bindSessionControllerSource(params.controllerInput, nudge);

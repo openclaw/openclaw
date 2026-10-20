@@ -37,10 +37,15 @@ serveOwnedWorkerTasks(
         input.command.type === "gatewayOwnerLease.read"
           ? await import("../infra/gateway-owner-lease.worker.js")
           : undefined;
+      const registryReader =
+        input.command.type === "agentDatabaseRegistry.read"
+          ? await import("./openclaw-agent-db-registry.read.js")
+          : undefined;
       const dedicatedRead =
         input.command.type === "admit" ||
         input.command.type === "plugins.metadata.read" ||
-        input.command.type === "gatewayOwnerLease.read";
+        input.command.type === "gatewayOwnerLease.read" ||
+        input.command.type === "agentDatabaseRegistry.read";
       const prepared = dedicatedRead ? undefined : stateReadRegistry.prepare(input.command.type);
       if (prepared) {
         return prepared.then(() => read(input, channel, control));
@@ -139,21 +144,14 @@ serveOwnedWorkerTasks(
           );
           return { ok: true, sourceAdmitted: true, ...result };
         }
-        if (!handlers) {
-          throw new Error("State read command handlers are unavailable");
-        }
-        if (command.type === "subagents.restore" || command.type === "meetingTranscripts.export") {
-          return await control.runNativeSection(() =>
-            handlers.readStateStream(input, command, channel, () => {
-              sourceAdmitted = true;
-            }),
-          );
-        }
         if (command.type === "agentDatabaseRegistry.read") {
+          if (!registryReader) {
+            throw new Error("Agent database registry reader is unavailable");
+          }
           const result = readOpenClawStateReadOnlyLocation(
             ({ db }) => {
               sourceAdmitted = true;
-              return handlers.readRegisteredAgentDatabaseRows(db, input.databasePath, false);
+              return registryReader.readRegisteredAgentDatabaseRows(db, input.databasePath, false);
             },
             ...locationArgs,
           );
@@ -166,6 +164,16 @@ serveOwnedWorkerTasks(
                 ? { status: "available", entries: result.value }
                 : { status: "unavailable" },
           };
+        }
+        if (!handlers) {
+          throw new Error("State read command handlers are unavailable");
+        }
+        if (command.type === "subagents.restore" || command.type === "meetingTranscripts.export") {
+          return await control.runNativeSection(() =>
+            handlers.readStateStream(input, command, channel, () => {
+              sourceAdmitted = true;
+            }),
+          );
         }
         if (command.type === "subagents.sessionList") {
           const result = readOpenClawStateReadOnlyLocation(

@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createContext, createEffect, onCleanup, untrack, useContext } from "solid-js";
+import { createContext, createEffect, onCleanup, useContext } from "solid-js";
 import { ShellLayoutOwner, type ShellLayoutTraits } from "./shell-layout-owner.ts";
 
 /** The scope anchors page reporters to the shell content owner. */
@@ -21,9 +21,7 @@ export function ShellLayoutBoundary(props: { traits: ShellLayoutTraits; children
   const scope = useContext(ShellLayoutProvider);
   if (scope) {
     const token = {};
-    // Descendants can measure during setup; later changes commit before their effects.
-    const initialTraits = untrack(() => props.traits);
-    scope.owner.record(token, scope.host, initialTraits);
+    // Publish before descendants' settled setup and measurement effects.
     createEffect(
       () => props.traits,
       (traits) => scope.owner.record(token, scope.host, traits),

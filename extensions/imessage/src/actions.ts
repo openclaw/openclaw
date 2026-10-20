@@ -504,7 +504,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
       }
       const partIndex = readNonNegativeIntegerParam(params, "partIndex");
       const reference = await messageReference();
-      const reactionsToSend = remove && !reaction ? [...TAPBACK_KINDS] : reaction ? [reaction] : [];
+      const reactionsToSend = remove && !reaction ? TAPBACK_KINDS : reaction ? [reaction] : [];
       for (const kind of reactionsToSend) {
         await runtime.sendReaction({
           chatGuid: reference.chatGuid,

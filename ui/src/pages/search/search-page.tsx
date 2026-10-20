@@ -302,9 +302,7 @@ export function SearchPage() {
   const providers = createMemo(() =>
     (result()?.providers ?? []).toSorted((a, b) => a.label.localeCompare(b.label)),
   );
-  const providerOptions = createMemo(() =>
-    providers().map(({ id, label }) => ({ value: id, label })),
-  );
+  const providerOptions = () => providers().map(({ id, label }) => ({ value: id, label }));
   const configuredProvider = () => {
     const value = search()?.provider;
     return config() ? (typeof value === "string" ? value : "") : (result()?.provider ?? "");

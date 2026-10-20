@@ -6,11 +6,9 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 const CLOUD_WORKSPACE_CONFLICT_TRANSCRIPT_TYPE = "cloud-workspace-conflict";
 const WORKSPACE_CONFLICT_VISIBLE_PATH_LIMIT = 5;
 
-export type WorkspaceResultConflict = {
-  paths: string[];
-  stagedResultRef: string;
-  totalCount?: number;
-};
+export type WorkspaceResultConflict = NonNullable<
+  ReturnType<typeof normalizeWorkspaceResultConflict>
+>;
 
 function isWorkspaceConflictPath(entryPath: string): boolean {
   return (
@@ -31,7 +29,7 @@ export function workspaceConflictPathForDisplay(entryPath: string): string {
   }).join("");
 }
 
-function normalizeWorkspaceResultConflict(value: unknown): WorkspaceResultConflict | undefined {
+function normalizeWorkspaceResultConflict(value: unknown) {
   const record = asNullableRecord(value);
   if (!record || !Array.isArray(record.paths) || record.paths.length === 0) {
     return undefined;

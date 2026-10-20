@@ -113,7 +113,6 @@ function captureHashes(includeMemo = true) {
         pruneWorkspaceHashMemo(context.memo);
         if (context.metrics) {
           context.metrics.contentHashCount += result.metrics.contentHashCount;
-          context.metrics.contentHashDurationMs += result.metrics.contentHashDurationMs;
           context.metrics.memoHitCount += result.metrics.memoHitCount;
         }
       }
@@ -129,7 +128,7 @@ function captureWorkspace<Type extends WorkspaceCaptureCommand>(
   params: WorkspaceCaptureArguments,
 ): Promise<WorkspaceManifestComputationOperations[Type]["output"]["value"]>;
 async function captureWorkspace(type: WorkspaceCaptureCommand, params: WorkspaceCaptureArguments) {
-  const { root, baseCommit, preserveDirectories, includePaths, signal } = params;
+  const { root, baseCommit, preserveDirectories, includePaths, buildCacheInputs, signal } = params;
   if (hasGitWorkerContext()) {
     const { readActualWorkspaceManifestImpl } = await import("./workspace-actual-manifest.js");
     const snapshot = await readActualWorkspaceManifestImpl(params);
@@ -146,6 +145,7 @@ async function captureWorkspace(type: WorkspaceCaptureCommand, params: Workspace
         root,
         baseCommit,
         includePaths: includePaths === undefined ? undefined : [...includePaths],
+        buildCacheInputs: buildCacheInputs === undefined ? undefined : [...buildCacheInputs],
         preserveDirectories:
           preserveDirectories === undefined ? undefined : [...preserveDirectories],
         hashes: hashes.hashes,
@@ -266,9 +266,14 @@ export async function parseWorkspaceManifestPair(
   );
 }
 
-export async function loadStagedWorkspaceManifest(root: string, ref: string, signal?: AbortSignal) {
+export async function loadStagedWorkspaceManifest(
+  root: string,
+  ref: string,
+  signal?: AbortSignal,
+  buildCacheInputs?: string[],
+) {
   return await computeWorkspaceManifest(
-    { type: "workspace.manifest.staged", input: { root, ref } },
+    { type: "workspace.manifest.staged", input: { root, ref, buildCacheInputs } },
     signal,
   );
 }
@@ -328,6 +333,7 @@ export async function prepareWorkspaceStageInput(
         inputPath: input.inputPath,
         stagingRoot: input.stagingRoot,
         stagedResultRef: input.stagedResultRef,
+        buildCacheInputs: input.buildCacheInputs,
         ...("publication" in input
           ? {
               publication: {

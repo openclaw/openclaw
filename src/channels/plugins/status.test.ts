@@ -1,8 +1,56 @@
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
 import { buildChannelAccountSnapshotFromAccount, resolveChannelAccountSnapshot } from "./status.js";
 import type { ChannelPlugin } from "./types.plugin.js";
+import type { ChannelAccountSnapshot } from "./types.public.js";
+
+function snapshotAccount<T>(
+  account: T,
+  config: Partial<ChannelPlugin<T>["config"]>,
+  buildAccountSnapshot?: NonNullable<ChannelPlugin<T>["status"]>["buildAccountSnapshot"],
+) {
+  return buildChannelAccountSnapshotFromAccount({
+    cfg: {},
+    accountId: "default",
+    plugin: { config, status: { buildAccountSnapshot } } as unknown as ChannelPlugin<T>,
+    account,
+  });
+}
+
+function runtimeOnly() {
+  return vi.fn(() => {
+    throw new Error("runtime hook received an inspection summary");
+  });
+}
+
+async function inspectSnapshot(
+  inspected: object,
+  runtime: ChannelAccountSnapshot,
+  accountId = runtime.accountId,
+  probe?: unknown,
+) {
+  const runtimeHook = runtimeOnly();
+  const plugin = {
+    id: "inspection-fixture",
+    config: {
+      inspectAccount: () => inspected,
+      resolveAccount: runtimeHook,
+      isEnabled: runtimeHook,
+      isConfigured: runtimeHook,
+      describeAccount: runtimeHook,
+    },
+    status: { buildAccountSnapshot: runtimeHook },
+  } as unknown as ChannelPlugin;
+  const result = await resolveChannelAccountSnapshot({
+    plugin,
+    cfg: {},
+    accountId,
+    runtime,
+    probe,
+  });
+  expect(runtimeHook).not.toHaveBeenCalled();
+  return result;
+}
 
 describe("buildChannelAccountSnapshotFromAccount", () => {
   it.each(["snapshot", "configured"])(
@@ -49,74 +97,40 @@ describe("buildChannelAccountSnapshotFromAccount", () => {
     },
   );
 
-  it.each([{ inspected: {}, enabled: false, configured: true, stateReason: "disabled" }])(
-    "preserves runtime facts unless the inspector supplies them: $stateReason",
-    async (entry) => {
-      const runtimeOnly = vi.fn(() => {
-        throw new Error("runtime account unavailable");
-      });
-      const plugin = {
-        id: "external-inspector",
-        config: {
-          inspectAccount: () => ({ name: "External account", ...entry.inspected }),
-          resolveAccount: runtimeOnly,
-          isConfigured: runtimeOnly,
-        },
-      } as unknown as ChannelPlugin;
-
-      await expect(
-        resolveChannelAccountSnapshot({
-          plugin,
-          cfg: {},
+  it("preserves runtime facts unless the inspector supplies them: disabled", async () => {
+    await expect(
+      inspectSnapshot(
+        { name: "External account" },
+        {
           accountId: "default",
-          runtime: {
-            accountId: "default",
-            enabled: false,
-            configured: true,
-            running: false,
-            lastError: "recorded failure",
-          },
-        }),
-      ).resolves.toMatchObject({
-        enabled: entry.enabled,
-        configured: entry.configured,
-        running: false,
-        stateReason: entry.stateReason,
-        lastError: "recorded failure",
-      });
-      expect(runtimeOnly).not.toHaveBeenCalled();
-    },
-  );
+          enabled: false,
+          configured: true,
+          running: false,
+          lastError: "recorded failure",
+        },
+      ),
+    ).resolves.toMatchObject({
+      enabled: false,
+      configured: true,
+      running: false,
+      stateReason: "disabled",
+      lastError: "recorded failure",
+    });
+  });
 
   it("projects summary-only inspection without invoking runtime account hooks", async () => {
-    const runtimeOnly = vi.fn(() => {
-      throw new Error("runtime hook received an inspection summary");
-    });
-    const plugin = {
-      id: "inspection-fixture",
-      config: {
-        inspectAccount: () => ({
+    await expect(
+      inspectSnapshot(
+        {
           accountId: "primary",
           enabled: true,
           configured: true,
           tokenStatus: "available",
           name: "Configured account",
-        }),
-        resolveAccount: runtimeOnly,
-        isEnabled: runtimeOnly,
-        isConfigured: runtimeOnly,
-        describeAccount: runtimeOnly,
-      },
-      status: { buildAccountSnapshot: runtimeOnly },
-    } as unknown as ChannelPlugin;
-
-    await expect(
-      resolveChannelAccountSnapshot({
-        plugin,
-        cfg: {},
-        accountId: "requested-alias",
-        runtime: { accountId: "primary", running: true, lifecycle: "ready" },
-      }),
+        },
+        { accountId: "primary", running: true, lifecycle: "ready" },
+        "requested-alias",
+      ),
     ).resolves.toMatchObject({
       accountId: "primary",
       name: "Configured account",
@@ -126,29 +140,18 @@ describe("buildChannelAccountSnapshotFromAccount", () => {
       running: true,
       lifecycle: "ready",
     });
-    expect(runtimeOnly).not.toHaveBeenCalled();
   });
 
   it.each([true, undefined])(
     "preserves prepared runtime metadata while filtering raw inspection with configured=%s",
     async (configured) => {
-      const runtimeOnly = vi.fn(() => {
-        throw new Error("runtime hook received inspection metadata");
-      });
-      const plugin = {
-        id: "inspection-fixture",
-        config: {
-          inspectAccount: () => ({
-            enabled: true,
-            configured,
-            botToken: "raw-inspection-token",
-            publicKey: "raw-inspection-key",
-            application: { privateCredential: "raw-inspection-value" },
-          }),
-          resolveAccount: runtimeOnly,
-        },
-        status: { buildAccountSnapshot: runtimeOnly },
-      } as unknown as ChannelPlugin;
+      const inspected = {
+        enabled: true,
+        configured,
+        botToken: "raw-inspection-token",
+        publicKey: "raw-inspection-key",
+        application: { privateCredential: "raw-inspection-value" },
+      };
       const cachedProbe = { ok: true, source: "recorded" };
       const freshProbe = configured ? { ok: false, source: "requested" } : undefined;
       const runtime = Object.freeze({
@@ -161,13 +164,7 @@ describe("buildChannelAccountSnapshotFromAccount", () => {
         baseUrl: ["https://", "user", ":", "pass", "@chat.example.test/?token=", "secret"].join(""),
       });
 
-      const snapshot = await resolveChannelAccountSnapshot({
-        plugin,
-        cfg: {},
-        accountId: "primary",
-        runtime,
-        probe: freshProbe,
-      });
+      const snapshot = await inspectSnapshot(inspected, runtime, "primary", freshProbe);
 
       expect(snapshot).toMatchObject({
         configured,
@@ -183,71 +180,32 @@ describe("buildChannelAccountSnapshotFromAccount", () => {
       expect(JSON.stringify(snapshot)).not.toContain("raw-inspection");
       expect(runtime.baseUrl).toContain("user:pass@");
       expect(runtime.probe).toBe(cachedProbe);
-      expect(runtimeOnly).not.toHaveBeenCalled();
     },
   );
 
   it("redacts a custom status snapshot baseUrl without mutating the resolved account", async () => {
-    const rawBaseUrl = [
-      "https://",
-      "user",
-      ":",
-      "pass",
-      "@",
-      "chat.example.test/?token=",
-      "secret",
-    ].join("");
-    const account = Object.freeze({
-      baseUrl: rawBaseUrl,
-    });
+    const rawBaseUrl = ["https://", "user:pass", "@chat.example.test/?token=", "secret"].join("");
+    const account = Object.freeze({ baseUrl: rawBaseUrl });
     let receivedAccount: unknown;
-    const plugin = {
-      config: {},
-      status: {
-        buildAccountSnapshot: ({ account: hookAccount }: { account: unknown }) => {
-          receivedAccount = hookAccount;
-          return {
-            accountId: "custom",
-            baseUrl: (hookAccount as { baseUrl: string }).baseUrl,
-          };
-        },
-      },
-    } as unknown as ChannelPlugin<typeof account>;
-
-    const snapshot = await buildChannelAccountSnapshotFromAccount({
-      plugin,
-      cfg: {} as OpenClawConfig,
-      accountId: "default",
-      account,
+    const result = await snapshotAccount(account, {}, ({ account: hookAccount }) => {
+      receivedAccount = hookAccount;
+      return { accountId: "custom", baseUrl: hookAccount.baseUrl };
     });
 
     expect(receivedAccount).toBe(account);
-    expect(snapshot.baseUrl).toBe("https://chat.example.test/?token=***");
+    expect(result.baseUrl).toBe("https://chat.example.test/?token=***");
     expect(account.baseUrl).toBe(rawBaseUrl);
   });
 
   it("preserves lifecycle fields computed by a custom status adapter", async () => {
-    const account = { enabled: true, configured: true };
-    const plugin = {
-      config: {},
-      status: {
-        buildAccountSnapshot: () => ({
-          accountId: "default",
-          linked: true,
-          running: false,
-          connected: false,
-          lastError: "probe failed",
-        }),
-      },
-    } as unknown as ChannelPlugin<typeof account>;
-
     await expect(
-      buildChannelAccountSnapshotFromAccount({
-        plugin,
-        cfg: {} as OpenClawConfig,
+      snapshotAccount({ enabled: true, configured: true }, {}, () => ({
         accountId: "default",
-        account,
-      }),
+        linked: true,
+        running: false,
+        connected: false,
+        lastError: "probe failed",
+      })),
     ).resolves.toMatchObject({
       configured: true,
       linked: true,
@@ -258,20 +216,13 @@ describe("buildChannelAccountSnapshotFromAccount", () => {
   });
 
   it("uses descriptor linkage when no live link resolver exists", async () => {
-    const account = { enabled: true, configured: true };
-    const plugin = {
-      config: {
-        describeAccount: () => ({ accountId: "default", configured: true, linked: false }),
-      },
-    } as unknown as ChannelPlugin<typeof account>;
-
     await expect(
-      buildChannelAccountSnapshotFromAccount({
-        plugin,
-        cfg: {} as OpenClawConfig,
-        accountId: "default",
-        account,
-      }),
+      snapshotAccount(
+        { enabled: true, configured: true },
+        {
+          describeAccount: () => ({ accountId: "default", configured: true, linked: false }),
+        },
+      ),
     ).resolves.toMatchObject({
       configured: true,
       linked: false,
@@ -285,18 +236,14 @@ describe("buildChannelAccountSnapshotFromAccount", () => {
     const isLinked = vi.fn(() => {
       throw new Error("linkage unavailable");
     });
-    const account = { enabled: true, configured: false };
-    const plugin = {
-      config: { isConfigured: () => false, isLinked },
-    } as unknown as ChannelPlugin<typeof account>;
-
     await expect(
-      buildChannelAccountSnapshotFromAccount({
-        plugin,
-        cfg: {} as OpenClawConfig,
-        accountId: "default",
-        account,
-      }),
+      snapshotAccount(
+        { enabled: true, configured: false },
+        {
+          isConfigured: () => false,
+          isLinked,
+        },
+      ),
     ).resolves.toMatchObject({
       configured: false,
       stateReason: "not configured",

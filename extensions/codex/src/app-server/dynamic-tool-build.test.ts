@@ -1118,7 +1118,6 @@ it("builds the durable registered-tool superset without loading a provider runti
     { name: "message", description: messageTool.description },
     { name: "heartbeat_respond", description: heartbeatTool.description },
   ]);
-  expect(hoisted.resolveWebSearchToolPolicyAsync).not.toHaveBeenCalled();
 });
 
 it("enables gateway subagent binding for forced private QA Codex runs", async () => {

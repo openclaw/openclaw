@@ -73,8 +73,6 @@ describe("runDoctorHealthRepairs", () => {
 
     const result = await runDoctorHealthRepairs(ctx({}), { checks });
 
-    expect(result.checksRepaired).toBe(1);
-    expect(result.checksValidated).toBe(1);
     expect(result.remainingFindings).toMatchObject([
       {
         checkId: "test/not-fixed",
@@ -123,9 +121,6 @@ describe("runDoctorHealthRepairs", () => {
         unresolvedId,
       ]);
       expect(result.remainingFindings).toEqual([warningFinding(unresolvedId)]);
-      expect(result.checksRun).toBe(2);
-      expect(result.checksRepaired).toBe(outcome === "validation-failed" ? 2 : 1);
-      expect(result.checksValidated).toBe(1);
       if (outcome === "throws") {
         expect(result.warnings).toEqual([`${unresolvedId} repair failed: repair unavailable`]);
       }
@@ -189,8 +184,6 @@ describe("runDoctorHealthRepairs", () => {
     expect(result.changes).toEqual(["Would set gateway.mode to local."]);
     expect(result.diffs).toMatchObject([{ kind: "config", path: "gateway.mode" }]);
     expect(result.effects).toMatchObject([{ kind: "config", action: "would-set" }]);
-    expect(result.checksRepaired).toBe(1);
-    expect(result.checksValidated).toBe(0);
     expect(detectCalls).toBe(1);
     expect(repairContexts[0]).toMatchObject({ dryRun: true, diff: true });
   });

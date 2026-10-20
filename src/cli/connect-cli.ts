@@ -2,6 +2,7 @@
 import { isUtf8 } from "node:buffer";
 import fs from "node:fs/promises";
 import { readRegularFile } from "@openclaw/fs-safe/advanced";
+import { normalizeMimeType } from "@openclaw/media-core/mime";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import {
@@ -106,7 +107,10 @@ async function fetchJoinPayload(
     });
     release = guarded.release;
     const response = guarded.response;
-    if (!response.ok || !response.headers.get("content-type")?.startsWith("application/json")) {
+    if (
+      !response.ok ||
+      normalizeMimeType(response.headers.get("content-type")) !== "application/json"
+    ) {
       await cancelUnreadResponseBody(response);
       throw new Error("Gateway join code was not found or has expired.");
     }

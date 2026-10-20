@@ -357,6 +357,12 @@ async function runCronIsolatedAgentTurnInTrace(
               if (finalized.status === "error") {
                 outcome = "error";
                 outcomeError = finalized.error;
+                finalized.interruptedByRestart =
+                  resolveAgentRunErrorLifecycleFields(undefined, abortSignal).stopReason ===
+                  "restart";
+                if (finalized.interruptedByRestart) {
+                  finalized.errorClassification = { kind: "aborted" };
+                }
               }
               const delayMs = consumeCronNextCheckProposal(runId, params.job.id);
               return finalized.status !== "ok" || delayMs === undefined
@@ -364,6 +370,8 @@ async function runCronIsolatedAgentTurnInTrace(
                 : { ...finalized, nextCheck: { delayMs } };
             } catch (err) {
               lifecycle.emit("error", err);
+              const interruptedByRestart =
+                resolveAgentRunErrorLifecycleFields(err, abortSignal).stopReason === "restart";
               await promptAdmission?.finish();
               consumeCronNextCheckProposal(runId, params.job.id);
               const isCronLaneTimeout =
@@ -396,9 +404,12 @@ async function runCronIsolatedAgentTurnInTrace(
               return prepared.context.withRunSession({
                 status: "error",
                 error,
-                errorClassification: errorReason
-                  ? { kind: "reason", reason: errorReason }
-                  : undefined,
+                interruptedByRestart,
+                errorClassification: interruptedByRestart
+                  ? { kind: "aborted" }
+                  : errorReason
+                    ? { kind: "reason", reason: errorReason }
+                    : undefined,
                 executionStarted,
                 usage,
                 ...(admissionDisposition ? { admissionDisposition } : {}),

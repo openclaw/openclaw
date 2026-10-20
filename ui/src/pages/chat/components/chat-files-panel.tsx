@@ -1,5 +1,5 @@
 import { dynamic, type JSX } from "@solidjs/web";
-import { For, Show, createMemo, onCleanup, onSettled, refresh } from "solid-js";
+import { For, Show, createMemo, onCleanup, onSettled, refresh, untrack } from "solid-js";
 import { createMcpAppUnmountGate } from "../../../components/mcp-app-unmount.ts";
 import {
   notifyPanelHostedTabsChanged,
@@ -12,6 +12,7 @@ import { i18n } from "../../../i18n/index.ts";
 import { projectI18n, t } from "../../../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { nativeListener } from "../../../lib/solid-native-listener.ts";
+import { createTabFocus } from "../../../lib/tabs.ts";
 import { AttachmentFileIcon } from "./chat-attachment-file-icon-solid.tsx";
 import type { SessionWorkspacePreview } from "./chat-session-workspace-types.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
@@ -39,6 +40,7 @@ defineSolidBridge<Props, Methods>(
   "openclaw-chat-files-panel",
   (props, host) => {
     const contentId = `chat-files-content-${++filesPanelSequence}`;
+    const tabFocus = createTabFocus();
     const pages = new Map<string, HTMLElement>();
     const appUnmount = createMcpAppUnmountGate<Props>(() => void refresh(rendered));
     const rendered = createMemo(() => {
@@ -166,6 +168,7 @@ defineSolidBridge<Props, Methods>(
             <div class="side-panel__header-tabs">
               <openclaw-panel-tab-strip style={{ display: "contents" }}>
                 <PanelTabStrip
+                  focusOwner={tabFocus}
                   tabs={tabStripTabs()}
                   activeId={activeHostedTabId()}
                   ariaControls={contentId}
@@ -185,7 +188,9 @@ defineSolidBridge<Props, Methods>(
           </div>
           <For each={rendered().previews} keyed={(preview) => preview.id}>
             {(preview) => {
-              onCleanup(() => pages.delete(preview().id));
+              // Registration and cleanup follow the keyed row's lifetime, not its current data.
+              const initialPreviewId = untrack(() => preview().id);
+              onCleanup(() => pages.delete(initialPreviewId));
               const entry = () => {
                 rendered();
                 return preview();
@@ -198,7 +203,7 @@ defineSolidBridge<Props, Methods>(
               };
               return (
                 <div
-                  ref={(element) => pages.set(preview().id, element)}
+                  ref={(element) => pages.set(initialPreviewId, element)}
                   class="chat-files-panel__page"
                   data-app-tab-id={entry().content.kind === "mcp-app" ? entry().id : undefined}
                   hidden={rendered().activeId !== entry().id}

@@ -17,7 +17,6 @@ import { getMSTeamsIngressMockState } from "./monitor-ingress-mock.test-support.
 import {
   createConfig,
   createRuntime,
-  createStores,
   updateMSTeamsConfig,
 } from "./monitor-lifecycle.test-helpers.js";
 import { createSigninEvent } from "./monitor-sso.test-helpers.js";
@@ -210,7 +209,6 @@ it("authenticates SSO webhooks before real sender authorization, token I/O, and 
       cfg,
       runtime: createRuntime(),
       abortSignal: abort.signal,
-      ...createStores(),
       statusSink: (patch) => {
         if (patch.connected) {
           ready.resolve();

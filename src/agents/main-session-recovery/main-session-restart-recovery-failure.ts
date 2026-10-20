@@ -72,6 +72,7 @@ async function settleInterruptedRestartRecovery(params: {
   storePath: string;
   assertCurrent: () => void;
   reason: string;
+  cronOwned?: boolean;
 }): Promise<{ outcome: "settled" | "changed" | "failed" }> {
   const { entry, reason } = params;
   // Legacy interrupted inputs can lack both run IDs. The recovery cycle still
@@ -98,8 +99,10 @@ async function settleInterruptedRestartRecovery(params: {
     assertCurrent: params.assertCurrent,
     idempotencyKey: `main-session-restart-recovery:${entry.restartRecoveryDeliverySourceRunId ?? terminalRunId}:interrupted`,
     text:
-      `This interrupted turn could not resume after the Gateway restarted: ${reason}. ` +
-      "Your session and transcript are preserved. Send a new authenticated message to continue." +
+      (params.cronOwned
+        ? "The scheduled turn was interrupted by a Gateway restart. Cron owns its continuation; check the job history for its retry or interruption outcome. Your session and transcript are preserved."
+        : `This interrupted turn could not resume after the Gateway restarted: ${reason}. ` +
+          "Your session and transcript are preserved. Send a new authenticated message to continue.") +
       (capturedReply ? `\n\nSaved reply (delivery unconfirmed):\n${capturedReply}` : ""),
     sessionLifecyclePatch: {
       ...buildMainSessionRecoverySettlementPatch({
@@ -133,18 +136,25 @@ async function settleInterruptedRestartRecovery(params: {
 export async function finishDelegatedRestartRecovery(
   params: Parameters<typeof tombstoneMainRestartRecoveryWithNotice>[0] & {
     assertCurrent: () => void;
+    cronOwned?: boolean;
   },
 ): Promise<"notice_failed" | "skipped" | "tombstoned" | "settled"> {
   const { entry } = params;
+  const unfinishedRuns = (entry.restartRecoveryRuns ?? []).filter(
+    (run) => !hasRestartRecoveryTerminalRun(entry, run.runId),
+  );
+  // Cron can leave an older delivery-source claim beside its single interrupted
+  // turn. Retire that residue so the scheduler can re-admit the conversation.
+  // Multiple unfinished turns or pending delivery still retain their custody.
   if (
     entry.pendingFinalDelivery ||
     entry.restartRecoveryHarnessCompletion ||
-    (entry.restartRecoveryRuns ?? []).some(
-      (run) =>
-        run.runId !== entry.restartRecoveryDeliveryRunId &&
-        run.runId !== entry.restartRecoveryDeliverySourceRunId &&
-        !hasRestartRecoveryTerminalRun(entry, run.runId),
-    )
+    (!(params.cronOwned && unfinishedRuns.length <= 1) &&
+      unfinishedRuns.some(
+        (run) =>
+          run.runId !== entry.restartRecoveryDeliveryRunId &&
+          run.runId !== entry.restartRecoveryDeliverySourceRunId,
+      ))
   ) {
     return await tombstoneMainRestartRecoveryWithNotice(params);
   }

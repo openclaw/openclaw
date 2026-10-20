@@ -150,7 +150,7 @@ function attach(directory: Directory) {
               if (
                 entry.path === candidate ||
                 !changedPath ||
-                filename === path.basename(candidate) ||
+                (event === "rename" && filename === path.basename(candidate)) ||
                 isPathInside(entry.path, changedPath) ||
                 isPathInside(changedPath, entry.path)
               ) {

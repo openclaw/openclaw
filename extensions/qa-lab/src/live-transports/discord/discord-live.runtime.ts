@@ -113,7 +113,6 @@ type DiscordStatusReactionTimeline = {
   scenarioTitle: string;
   seenSequence: string[];
   snapshots: DiscordReactionSnapshot[];
-  triggerMessageId: string;
 };
 
 type DiscordThreadReplyAttachmentEvidence = {
@@ -748,7 +747,6 @@ export async function observeStatusReactionTimeline(params: {
     scenarioTitle: params.scenarioTitle,
     seenSequence,
     snapshots,
-    triggerMessageId: params.messageId,
   } satisfies DiscordStatusReactionTimeline;
 }
 
@@ -764,11 +762,6 @@ export async function pollChannelMessages(params: {
   afterSnowflake: string;
   timeoutMs: number;
   predicate: (message: DiscordObservedMessage) => boolean;
-  observedMessages: DiscordObservedMessage[];
-  observationScenarioId: string;
-  observationScenarioTitle: string;
-  triggerMessageId?: string;
-  triggerTimestamp?: string;
 }) {
   const startedAt = Date.now();
   let afterSnowflake = params.afterSnowflake;
@@ -787,18 +780,8 @@ export async function pollChannelMessages(params: {
       if (!normalized) {
         continue;
       }
-      const matchedScenario = params.predicate(normalized);
-      const observedMessage: DiscordObservedMessage = {
-        ...normalized,
-        scenarioId: params.observationScenarioId,
-        scenarioTitle: params.observationScenarioTitle,
-        matchedScenario,
-        triggerMessageId: params.triggerMessageId,
-        triggerTimestamp: params.triggerTimestamp,
-      };
-      params.observedMessages.push(observedMessage);
-      if (matchedScenario) {
-        return { message: observedMessage, afterSnowflake };
+      if (params.predicate(normalized)) {
+        return { message: normalized, afterSnowflake };
       }
     }
     await sleep(1_000);

@@ -23,7 +23,7 @@ import {
   type McpAppMessageEventDetail,
 } from "./mcp-app-security.ts";
 import { mountView } from "./mcp-app-view.test-support.ts";
-import { McpAppPanel, type McpAppPanelElement } from "./solid/mcp-app-panel.tsx";
+import { McpAppPanel } from "./solid/mcp-app-panel.tsx";
 const bridgeMocks = vi.hoisted(() => ({
   instances: [] as Array<Record<string, unknown>>,
   transports: [] as Array<Record<string, unknown>>,
@@ -401,7 +401,7 @@ describe("mcp-app-view localization", () => {
     const mounted = mountSolid(() => createComponent(McpAppPanel, { launch }), {
       wrapper: provider.wrapper,
     });
-    const panel = mounted.container.querySelector<McpAppPanelElement>("openclaw-mcp-app-panel")!;
+    const panel = mounted.container.querySelector("openclaw-mcp-app-panel")!;
     const expired = deferred();
     panel.addEventListener(MCP_APP_VIEW_EXPIRED_EVENT, () => expired.resolve(), { once: true });
     await expired.promise;

@@ -319,7 +319,7 @@ describe("ManagedWorktreeService", () => {
     await git(repo, "remote", "set-url", "origin", path.join(root, "missing.git"));
     await git(repo, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD").catch(() => undefined);
     await expect(service.create({ repoRoot: repo, name: "offline" })).rejects.toThrow(
-      "Remote default branch is unavailable",
+      "Remote default branch is unavailable. Repair origin or choose an explicit worktree base ref.",
     );
     expect(await git(repo, "branch", "--list", "openclaw/offline")).toBe("");
   });

@@ -51,7 +51,7 @@ export function buildSessionChoices(sessions: readonly TuiSessionEntry[]): Sessi
       ? formatRelativeTimestamp(session.updatedAt, { dateFallback: true, fallback: "" })
       : "";
     const preview = session.lastMessagePreview?.replace(/\s+/g, " ").trim();
-    const description = timePart && preview ? `${timePart} · ${preview}` : (preview ?? timePart);
+    const description = timePart && preview ? `${timePart} · ${preview}` : preview || timePart;
     const searchableNames = [
       session.derivedTitle,
       session.displayName,

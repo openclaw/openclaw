@@ -27,11 +27,16 @@ async function runWorker(input: Record<string, unknown>): Promise<unknown> {
   return JSON.parse(result.stdout.toString("utf8"));
 }
 
-it.each(["legacy", "local-aware"] as const)(
+it.each(["legacy", "local-aware", "legacy-alias", "local-aware-alias"] as const)(
   "%s worker replies preserve local capture independently of schema visibility",
   async (caller) => {
     const root = await fs.realpath(dirs.make("update-local-schemas-"));
     const stateDir = path.join(root, "source");
+    if (caller.endsWith("-alias")) {
+      const physical = path.join(root, "physical");
+      await fs.mkdir(physical);
+      await fs.symlink(physical, stateDir, "junction");
+    }
     const targetStateDir = path.join(root, "snapshot");
     const shared = path.join(stateDir, "state", "openclaw.sqlite");
     const agent = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
@@ -76,7 +81,7 @@ it.each(["legacy", "local-aware"] as const)(
       candidateRoot: root,
       config: {},
       env,
-      ...(caller === "local-aware" ? { includeLocalStoreVersions: true } : {}),
+      ...(caller.startsWith("local-aware") ? { includeLocalStoreVersions: true } : {}),
     };
     const admitted = await inventoryUpdateCandidateStateWorker(input);
     expect(admitted.databaseInventory).toContain(local);
@@ -89,8 +94,8 @@ it.each(["legacy", "local-aware"] as const)(
     );
     const expected = [
       { path: agent, userVersion: 3 },
-      ...(caller === "local-aware" ? [{ path: client, userVersion: 1 }] : []),
-      ...(caller === "local-aware" ? [{ path: local, userVersion: 1 }] : []),
+      ...(caller.startsWith("local-aware") ? [{ path: client, userVersion: 1 }] : []),
+      ...(caller.startsWith("local-aware") ? [{ path: local, userVersion: 1 }] : []),
       { path: shared, userVersion: 7, contentVersion: 7 },
     ];
     expect(versions).toEqual(expected);

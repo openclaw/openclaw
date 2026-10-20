@@ -16,9 +16,9 @@ import {
   callAgentToolGatewayRequest,
   type AgentToolGatewayRequestCaller as GatewayCaller,
 } from "./in-process-gateway.js";
+import { readSessionCommunicationEndpoint } from "./sessions-send-communication-endpoint.js";
 import {
   prepareSessionsSendCommunication,
-  readSessionCommunicationEndpoint,
   type SessionSendReplyAdmission,
 } from "./sessions-send-communication.js";
 

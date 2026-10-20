@@ -29,7 +29,14 @@ const identity: QaEvidenceIdentity = {
 
 function fixture(
   retryAcceptance: QaProofRequirements[number]["retryAcceptance"] = "selected-attempt",
+  coverageIds: readonly [string, string, string] = [
+    "channels.dm",
+    "channels.secondary",
+    "channels.unmapped",
+  ],
+  launch: QaEvidenceIdentity = identity,
 ) {
+  const [primary, secondary] = coverageIds;
   const taxonomy = readQaMaturityTaxonomySource(
     path.resolve(import.meta.dirname, "../../../taxonomy.yaml"),
   );
@@ -40,7 +47,7 @@ function fixture(
       categories: [
         {
           ...surface.categories[0]!,
-          features: ["channels.dm", "channels.secondary", "channels.unmapped"].map((id) => ({
+          features: coverageIds.map((id) => ({
             name: id,
             coverageIds: [id],
           })),
@@ -51,7 +58,7 @@ function fixture(
   const requirements: QaProofRequirements = [
     {
       id: "declared-proof",
-      coverageId: "channels.dm",
+      coverageId: primary,
       obligation: "required",
       owner: "fixture-owner",
       acceptedRef: "qa/fixture",
@@ -64,11 +71,11 @@ function fixture(
   ];
   const scenario: QaSeedScenarioWithSource = {
     ...readQaScenarioById("thread-isolation"),
-    coverage: { primary: ["channels.dm"], secondary: ["channels.secondary"] },
+    coverage: { primary: [primary], secondary: [secondary] },
     assertions: ["first", "second"].map((id) => ({
       id,
       meaning: `Fixture ${id}`,
-      coverage: [{ id: "channels.dm", role: "primary" }],
+      coverage: [{ id: primary, role: "primary" }],
     })),
   };
   const plan = () =>
@@ -89,7 +96,7 @@ function fixture(
   const owner = createQaEvidenceInvocation({
     scenarios: [scenario],
     channel: null,
-    launch: identity,
+    launch,
   });
   function complete(
     statuses: Partial<Record<"first" | "second", QaEvidenceStatus>>,
@@ -100,7 +107,7 @@ function fixture(
       status: terminalStatus,
       entries: Object.entries(statuses).map(([assertionId, status]) => ({
         test: { id: scenario.id, title: "Fixture", kind: "flow" },
-        coverage: [{ id: "channels.dm", role: "primary" }],
+        coverage: [{ id: primary, role: "primary" }],
         binding: { occurrenceId: id, assertionId, receiptId: "receipt" },
         effective: true,
         result: { status },
@@ -109,7 +116,7 @@ function fixture(
         {
           id: "receipt",
           phase: "runtime",
-          identity,
+          identity: launch,
           artifact: {
             kind: "fixture",
             path: "fixture.json",
@@ -136,6 +143,94 @@ function fixture(
 }
 
 describe("scorecard gap report", () => {
+  it.each(["full", "slim"] as const)(
+    "keeps regional declarations UNMAPPED and UNKNOWN without owner evidence in %s mode",
+    (evidenceMode) => {
+      const taxonomy = readQaMaturityTaxonomySource(
+        path.resolve(import.meta.dirname, "../../../taxonomy.yaml"),
+      );
+      taxonomy.surfaces = taxonomy.surfaces.filter((surface) => surface.id === "regional-channels");
+      const owner = createQaEvidenceInvocation({ scenarios: [], channel: null, launch: identity });
+      const evidence = owner.snapshot({
+        generatedAt: "2026-10-01T00:00:00Z",
+        profile: "all",
+        evidenceMode,
+      });
+      const report = buildQaScorecardGapReport({ taxonomy, scenarios: [], evidence });
+      expect(report.coverage).toHaveLength(32);
+      for (const row of report.coverage) {
+        expect(row).toMatchObject({
+          catalogStatus: "unmapped",
+          catalog: [],
+          observed: [],
+          qualification: "unknown",
+          requirementIds: [],
+        });
+      }
+      expect(report.declarations).toEqual([]);
+      expect(renderQaScorecardGapMarkdownReport(report)).toContain(
+        "| regional-channels.dingtalk-enterprise-stream-candidate | unmapped | 0 | UNKNOWN |",
+      );
+    },
+  );
+
+  it.each(["full", "slim"] as const)(
+    "does not transfer regional proof between claims, protocols, or accounts in %s mode",
+    (mode) => {
+      const primary = "regional-channels.wecom-ai-bot-websocket";
+      const secondary = "regional-channels.wecom-ai-bot-json-webhook";
+      const unrelated = "regional-channels.wecom-enterprise-app-xml-webhook";
+      const f = fixture("selected-attempt", [primary, secondary, unrelated], {
+        ...identity,
+        protocol: "fixture-wecom-bot-websocket",
+        accountRef: "fixture-bot-account",
+      });
+      const current = readQaMaturityTaxonomySource(
+        path.resolve(import.meta.dirname, "../../../taxonomy.yaml"),
+      );
+      f.taxonomy.surfaces = current.surfaces.filter(
+        (surface) => surface.id === "regional-channels",
+      );
+      // Synthetic owner declarations exercise existing identity rules, not regional acceptance.
+      const requirement = f.taxonomy.profiles[0]!.proofRequirements![0]!;
+      requirement.alternatives[0] = {
+        ...requirement.alternatives[0],
+        protocol: "fixture-wecom-bot-websocket",
+        accountRef: "fixture-bot-account",
+      };
+      f.complete({ first: "pass", second: "pass" });
+      const matched = f.report(mode);
+      expect(matched.coverage.find((row) => row.coverageId === primary)).toMatchObject({
+        catalogStatus: "primary",
+        qualification: "qualified",
+      });
+      expect(matched.coverage.find((row) => row.coverageId === secondary)).toMatchObject({
+        catalogStatus: "secondary-only",
+        qualification: "unknown",
+        observed: [],
+      });
+      expect(matched.coverage.find((row) => row.coverageId === unrelated)).toMatchObject({
+        catalogStatus: "unmapped",
+        qualification: "unknown",
+        observed: [],
+      });
+      for (const alternative of [
+        { protocol: "fixture-wecom-bot-json-webhook", accountRef: "fixture-bot-account" },
+        { protocol: "fixture-wecom-bot-websocket", accountRef: "fixture-other-account" },
+      ]) {
+        requirement.alternatives[0] = { ...requirement.alternatives[0], ...alternative };
+        const mismatched = f.report(mode);
+        expect(mismatched.coverage.find((row) => row.coverageId === primary)?.qualification).toBe(
+          "gap",
+        );
+        expect(mismatched.declarations[0]?.checks).toEqual([
+          expect.objectContaining({ assertionId: "first", status: "stale" }),
+          expect.objectContaining({ assertionId: "second", status: "stale" }),
+        ]);
+      }
+    },
+  );
+
   it.each(["full", "slim"] as const)(
     "requires one complete terminal passing attempt in %s evidence",
     (mode) => {

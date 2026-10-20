@@ -11,14 +11,9 @@ vi.mock("./plugin-registry-contributions.js", () => ({
 }));
 
 let resolveManifestActivationPluginIds: typeof import("./activation-planner.js").resolveManifestActivationPluginIds;
-let resolveManifestActivationPlan: typeof import("./activation-planner.js").resolveManifestActivationPlan;
-
-type PlanParams = Parameters<typeof resolveManifestActivationPlan>[0];
+type PlanParams = Parameters<typeof resolveManifestActivationPluginIds>[0];
 function ids(trigger: PlanParams["trigger"], options: Omit<PlanParams, "trigger"> = {}) {
   return resolveManifestActivationPluginIds({ trigger, ...options });
-}
-function entries(trigger: PlanParams["trigger"]) {
-  return resolveManifestActivationPlan({ trigger }).entries;
 }
 
 function mockRegistry(plugins: Record<string, unknown>[]) {
@@ -35,8 +30,7 @@ function mockRegistry(plugins: Record<string, unknown>[]) {
 
 describe("activation planner", () => {
   beforeAll(async () => {
-    ({ resolveManifestActivationPlan, resolveManifestActivationPluginIds } =
-      await import("./activation-planner.js"));
+    ({ resolveManifestActivationPluginIds } = await import("./activation-planner.js"));
   });
 
   beforeEach(() => {
@@ -161,60 +155,17 @@ describe("activation planner", () => {
     expect(ids({ kind: "capability", capability: "hook" })).toEqual(["demo-channel"]);
   });
 
-  it("returns a richer activation plan with planner-hint reasons", () => {
-    expect(
-      resolveManifestActivationPlan({
-        trigger: { kind: "command", command: "demo-tools" },
-      }),
-    ).toEqual({
-      trigger: { kind: "command", command: "demo-tools" },
-      pluginIds: ["demo-channel"],
-      entries: [
-        {
-          pluginId: "demo-channel",
-          origin: "workspace",
-          reasons: ["activation-command-hint"],
-        },
-      ],
-      diagnostics: [],
-    });
-
-    expect(entries({ kind: "agentHarness", runtime: "codex" })).toEqual([
-      {
-        pluginId: "openai",
-        origin: "bundled",
-        reasons: ["activation-agent-harness-hint"],
-      },
-    ]);
-
-    expect(entries({ kind: "route", route: "webhook" })).toEqual([
-      {
-        pluginId: "demo-channel",
-        origin: "workspace",
-        reasons: ["activation-route-hint"],
-      },
-    ]);
+  it("selects harness and route owners from activation hints", () => {
+    expect(ids({ kind: "agentHarness", runtime: "codex" })).toEqual(["openai"]);
+    expect(ids({ kind: "route", route: "webhook" })).toEqual(["demo-channel"]);
   });
 
-  it("returns manifest-owner reasons when activation hints are absent", () => {
-    expect(entries({ kind: "provider", provider: "openai" })).toEqual([
-      {
-        pluginId: "openai",
-        origin: "bundled",
-        reasons: ["manifest-provider-owner", "manifest-setup-provider-owner"],
-      },
-    ]);
-
-    expect(entries({ kind: "channel", channel: "telegram" })).toEqual([
-      {
-        pluginId: "demo-channel",
-        origin: "workspace",
-        reasons: ["manifest-channel-owner"],
-      },
-    ]);
+  it("selects manifest owners when activation hints are absent", () => {
+    expect(ids({ kind: "provider", provider: "openai" })).toEqual(["openai"]);
+    expect(ids({ kind: "channel", channel: "telegram" })).toEqual(["demo-channel"]);
   });
 
-  it("returns capability reasons from explicit hints and manifest ownership", () => {
+  it("selects capabilities from explicit hints and manifest ownership", () => {
     mockRegistry([
       {
         id: "explicit-provider",
@@ -233,25 +184,11 @@ describe("activation planner", () => {
       },
     ]);
 
-    expect(entries({ kind: "capability", capability: "provider" })).toEqual([
-      {
-        pluginId: "explicit-provider",
-        origin: "workspace",
-        reasons: ["activation-capability-hint", "activation-provider-hint"],
-      },
-    ]);
-
-    expect(entries({ kind: "capability", capability: "tool" })).toEqual([
-      {
-        pluginId: "owned-tool",
-        origin: "workspace",
-        reasons: ["manifest-tool-contract"],
-      },
-    ]);
+    expect(ids({ kind: "capability", capability: "provider" })).toEqual(["explicit-provider"]);
+    expect(ids({ kind: "capability", capability: "tool" })).toEqual(["owned-tool"]);
   });
 
-  it("keeps unique sorted ids and stable same-id explanation entries", () => {
-    const diagnostics = [{ level: "warn", message: "synthetic discovery warning" }];
+  it("keeps unique sorted ids", () => {
     mocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
       plugins: [
         { id: "z-owner", origin: "bundled", activation: { onProviders: [" OPENAI "] } },
@@ -264,25 +201,14 @@ describe("activation planner", () => {
         { id: "a-owner", origin: "bundled", providers: ["OPENAI"] },
         { id: "duplicate", origin: "config", activation: { onProviders: ["openai"] } },
       ],
-      diagnostics,
+      diagnostics: [],
     });
     const trigger = { kind: "provider" as const, provider: " OpenAI " };
-    const plan = resolveManifestActivationPlan({ trigger });
-    const expectedIds = ["a-owner", "duplicate", "z-owner"];
-    expect(resolveManifestActivationPluginIds({ trigger })).toEqual(expectedIds);
-    expect(plan.pluginIds).toEqual(expectedIds);
-    expect(plan.entries).toEqual([
-      { pluginId: "a-owner", origin: "bundled", reasons: ["manifest-provider-owner"] },
-      {
-        pluginId: "duplicate",
-        origin: "workspace",
-        reasons: ["manifest-provider-owner", "manifest-setup-provider-owner"],
-      },
-      { pluginId: "duplicate", origin: "config", reasons: ["activation-provider-hint"] },
-      { pluginId: "z-owner", origin: "bundled", reasons: ["activation-provider-hint"] },
+    expect(resolveManifestActivationPluginIds({ trigger })).toEqual([
+      "a-owner",
+      "duplicate",
+      "z-owner",
     ]);
-    expect(plan.trigger).toBe(trigger);
-    expect(plan.diagnostics).toBe(diagnostics);
   });
 
   it("treats explicit empty plugin scopes as scoped-empty", () => {

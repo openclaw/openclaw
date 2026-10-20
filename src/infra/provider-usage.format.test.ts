@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatUsageReportLines, formatUsageWindowSummary } from "./provider-usage.format.js";
 import type { ProviderUsageSnapshot } from "./provider-usage.types.js";
 
@@ -10,27 +10,32 @@ const snapshot = (windows: ProviderUsageSnapshot["windows"]): ProviderUsageSnaps
 });
 
 describe("provider usage formatting", () => {
+  beforeEach(() => vi.spyOn(Date, "now").mockReturnValue(now));
+  afterEach(() => vi.restoreAllMocks());
+
   it("formats reset buckets and clamps remaining percentages", () => {
-    const result = formatUsageWindowSummary(
-      snapshot([
-        { label: "Now", usedPercent: 120, resetAt: now - 1 },
-        { label: "Minute", usedPercent: -10, resetAt: now + 30 * 60_000 },
-        { label: "Hour", usedPercent: 30, resetAt: now + 135 * 60_000 },
-        { label: "Day", usedPercent: 40, resetAt: now + 51 * 60 * 60_000 },
-        { label: "Date", usedPercent: 50, resetAt: Date.UTC(2026, 0, 20, 12) },
-        { label: "Unknown", usedPercent: 25 },
-      ]),
-      { now, maxWindows: 0, includeResets: true },
-    );
-    expect(result).toContain("Now 0% left ⏱now");
-    expect(result).toContain("Minute 100% left ⏱30m");
-    expect(result).toContain("Hour 70% left ⏱2h 15m");
-    expect(result).toContain("Day 60% left ⏱2d 3h");
-    expect(result).toMatch(/Date 50% left ⏱[A-Z][a-z]{2} \d{1,2}/);
-    expect(result).toContain("Unknown 75% left");
+    const result = formatUsageReportLines({
+      updatedAt: now,
+      providers: [
+        snapshot([
+          { label: "Now", usedPercent: 120, resetAt: now - 1 },
+          { label: "Minute", usedPercent: -10, resetAt: now + 30 * 60_000 },
+          { label: "Hour", usedPercent: 30, resetAt: now + 135 * 60_000 },
+          { label: "Day", usedPercent: 40, resetAt: now + 51 * 60 * 60_000 },
+          { label: "Date", usedPercent: 50, resetAt: Date.UTC(2026, 0, 20, 12) },
+          { label: "Unknown", usedPercent: 25 },
+        ]),
+      ],
+    }).join("\n");
+    expect(result).toContain("Now: 0% left · resets now");
+    expect(result).toContain("Minute: 100% left · resets 30m");
+    expect(result).toContain("Hour: 70% left · resets 2h 15m");
+    expect(result).toContain("Day: 60% left · resets 2d 3h");
+    expect(result).toMatch(/Date: 50% left · resets [A-Z][a-z]{2} \d{1,2}/);
+    expect(result).toContain("Unknown: 75% left");
   });
 
-  it("limits compact windows and suppresses resets", () => {
+  it("limits compact windows and includes available resets", () => {
     expect(
       formatUsageWindowSummary(
         snapshot([
@@ -38,9 +43,8 @@ describe("provider usage formatting", () => {
           { label: "B", usedPercent: 20 },
           { label: "C", usedPercent: 30 },
         ]),
-        { now, maxWindows: 2 },
       ),
-    ).toBe("A 90% left · B 80% left");
+    ).toBe("A 90% left ⏱1m · B 80% left");
   });
 
   it("renders signed balances and budgets on compact and detailed surfaces", () => {
@@ -73,21 +77,18 @@ describe("provider usage formatting", () => {
     };
     expect(formatUsageWindowSummary(balance)).toBe("Balance ¥0.00");
     expect(
-      formatUsageReportLines(
-        {
-          updatedAt: now,
-          providers: [
-            { ...snapshot([]), error: "Token expired", plan: "Pro" },
-            { ...snapshot([]), displayName: "Xiaomi" },
-            balance,
-            {
-              ...snapshot([{ label: "Daily", usedPercent: 25, resetAt: now + 120 * 60_000 }]),
-              plan: "Pro",
-            },
-          ],
-        },
-        { now },
-      ),
+      formatUsageReportLines({
+        updatedAt: now,
+        providers: [
+          { ...snapshot([]), error: "Token expired", plan: "Pro" },
+          { ...snapshot([]), displayName: "Xiaomi" },
+          balance,
+          {
+            ...snapshot([{ label: "Daily", usedPercent: 25, resetAt: now + 120 * 60_000 }]),
+            plan: "Pro",
+          },
+        ],
+      }),
     ).toEqual([
       "Usage:",
       "  Claude (Pro): Token expired",

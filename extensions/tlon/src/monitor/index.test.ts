@@ -791,11 +791,6 @@ describe("monitorTlonProvider shutdown", () => {
         res.write(": connected\n\n");
         return;
       }
-      if (req.method === "DELETE" && pathname.startsWith("/~/channel/")) {
-        res.writeHead(204);
-        res.end();
-        return;
-      }
       res.writeHead(404);
       res.end();
     });
@@ -844,7 +839,8 @@ describe("monitorTlonProvider shutdown", () => {
     expect(requests).toContain("POST /~/login");
     expect(requests.some((request) => request.startsWith("GET /~/scry/"))).toBe(true);
     expect(requests.some((request) => request.startsWith("GET /~/channel/"))).toBe(true);
-    expect(requests.some((request) => request.startsWith("DELETE /~/channel/"))).toBe(true);
+    expect(requests.some((request) => request.startsWith("DELETE /~/channel/"))).toBe(false);
+    expect(subscriptions).toContainEqual([{ action: "delete" }]);
     expect(subscriptions.flat()).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ action: "subscribe", app: "channels" }),

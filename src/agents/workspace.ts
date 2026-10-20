@@ -63,7 +63,6 @@ import {
   mergeWorkspaceSetupState,
   replaceWorkspaceAttestation,
   type WorkspaceAttestation,
-  type WorkspaceStateSnapshot,
   type WorkspaceSetupState,
 } from "./workspace-state-store.js";
 import type { WorkspaceStateGuard } from "./workspace-state-store.worker-contract.js";
@@ -458,24 +457,11 @@ async function workspaceAttestationHasSurvivalEvidence(params: {
 async function workspaceSetupStateHasSurvivalEvidence(params: {
   dir: string;
   bootstrapPath: string;
-  initialState: WorkspaceStateSnapshot;
-  guard?: WorkspaceStateGuard;
 }): Promise<boolean> {
   if (await pathExists(params.bootstrapPath)) {
     return true;
   }
   if (await workspaceProfileLooksConfigured({ dir: params.dir })) {
-    return true;
-  }
-  const currentState = await readCanonicalWorkspaceStateSnapshot(
-    params.dir,
-    undefined,
-    params.guard,
-  );
-  if (
-    currentState.setup.bootstrapSeededAt !== params.initialState.setup.bootstrapSeededAt ||
-    currentState.setup.setupCompletedAt !== params.initialState.setup.setupCompletedAt
-  ) {
     return true;
   }
   const generatedHashes = await collectGeneratedBootstrapHashes(params.dir);
@@ -702,8 +688,6 @@ async function ensureAgentWorkspaceOwned(
       !(await workspaceSetupStateHasSurvivalEvidence({
         dir,
         bootstrapPath,
-        initialState,
-        guard,
       }))
     ) {
       if (recentSetupState) {
@@ -773,8 +757,6 @@ async function ensureAgentWorkspaceOwned(
     !(await workspaceSetupStateHasSurvivalEvidence({
       dir,
       bootstrapPath,
-      initialState,
-      guard,
     }))
   ) {
     // Setup can outlive a best-effort attestation write or arrive alone from

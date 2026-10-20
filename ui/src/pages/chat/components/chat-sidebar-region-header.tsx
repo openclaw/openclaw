@@ -17,6 +17,7 @@ import { Menu, type MenuItem } from "../../../components/solid/menu.tsx";
 import "../../../components/tooltip.ts";
 import type { AgentIdentity } from "../../../lib/identity-avatar-view.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import type { TabFocus } from "../../../lib/tabs.ts";
 import { readLinkFavicon } from "../link-favicon-cache.ts";
 import {
   sidebarActivePanel,
@@ -34,8 +35,8 @@ type SidebarRegionHeaderProps = RegionProps & {
   host: RegionElement;
   hostedRevision: () => number;
   refreshHostedTabs: () => void;
-  onFocusActiveReady: (focus: ((options?: FocusOptions) => void) | null) => void;
   headerRef: (element: HTMLElement | null) => void;
+  tabFocus: TabFocus;
 };
 
 type RegionTab = SolidPanelTabStripTab & {
@@ -57,24 +58,16 @@ export function sidebarPanelType(definitions: SidebarPanelDefinition[], slot: Si
   return definition;
 }
 
-export function PanelTypeOption(props: { type: SidebarPanelDefinition; slotted?: boolean }) {
+export function PanelTypeOption(props: { type: SidebarPanelDefinition }) {
   return (
     <>
-      <span
-        slot={props.slotted ? "icon" : undefined}
-        class="side-panel-type-option__icon"
-        aria-hidden="true"
-      >
+      <span class="side-panel-type-option__icon" aria-hidden="true">
         <Icon name={props.type.icon} />
       </span>
       <span class="side-panel-type-option__label">{props.type.label}</span>{" "}
       <Show when={props.type.shortcut}>
         {(shortcut) => (
-          <KeyboardShortcut
-            combo={shortcut()}
-            slot={props.slotted ? "details" : undefined}
-            class="side-panel-type-option__shortcut"
-          />
+          <KeyboardShortcut combo={shortcut()} class="side-panel-type-option__shortcut" />
         )}
       </Show>
     </>
@@ -123,7 +116,6 @@ function TypeMenu(props: SidebarRegionHeaderProps) {
       ),
     { lazy: true },
   );
-  const items = createMemo(() => entries()(), { lazy: true });
   return (
     <Menu
       lazy="while-open"
@@ -135,7 +127,7 @@ function TypeMenu(props: SidebarRegionHeaderProps) {
       placement="bottom-start"
       label={t("chat.sidePanel.addTab")}
       trigger={<Icon name="plus" />}
-      items={items()}
+      items={entries()()}
       onSelect={(item) => {
         const slot = props.panelDefinitions.find(
           (type) => type.available && type.slot === item.id,
@@ -278,7 +270,7 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
     >
       <div class="side-panel__header-tabs">
         <PanelTabStrip
-          onFocusActiveReady={props.onFocusActiveReady}
+          focusOwner={props.tabFocus}
           renderIcon={(tab) => (
             <Show
               when={tab().hostedTab}

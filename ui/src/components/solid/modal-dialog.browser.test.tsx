@@ -19,16 +19,23 @@ afterEach(cleanup);
 
 function mountModal(variant = "", container?: HTMLElement) {
   let handle!: OpenClawModalDialog;
+  let nameInput!: HTMLInputElement;
   const view = render(
     () => (
       <ModalDialog
         class={variant}
         label="Edit details"
+        initialFocus={() => nameInput}
         ref={(value) => {
           handle = value;
         }}
       >
-        <input aria-label="Name" autofocus value="Original name" />
+        <input
+          aria-label="Name"
+          autofocus
+          value="Original name"
+          ref={(element) => (nameInput = element)}
+        />
         <textarea aria-label="Notes" />
       </ModalDialog>
     ),

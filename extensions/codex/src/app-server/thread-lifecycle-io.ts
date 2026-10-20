@@ -390,6 +390,7 @@ export async function resumeExistingCodexThread(
           modelProvider: resumePatch.modelProvider ?? null,
           preserveNativeModel: resumeBinding.preserveNativeModel,
         },
+        params,
       ),
       lifecycle: {
         action: "resumed",
@@ -726,6 +727,7 @@ export async function startFreshCodexThread(
             params.params.authProfileId,
             dynamicToolsFingerprint,
             { model: response.model, modelProvider: bindingModelProvider ?? null },
+            params,
           ),
         }
       : {}),

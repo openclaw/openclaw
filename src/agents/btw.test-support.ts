@@ -161,7 +161,9 @@ function mockCliOutput(output: { text: string; rawText?: string }) {
 }
 
 function registerCodexSideQuestionHarness(
-  overrides: Partial<Pick<AgentHarness, "authBootstrap" | "supports">> = {},
+  overrides: Partial<
+    Pick<AgentHarness, "authBootstrap" | "supports" | "resolveSessionRuntimeOwnershipAsync">
+  > = {},
 ) {
   const runHarnessSideQuestion = vi.fn().mockResolvedValue({ text: "Codex side answer." });
   registerAgentHarness({

@@ -91,6 +91,20 @@ describe("legacy managed outgoing image migration", () => {
     await fsp.rm(stateDir, { recursive: true, force: true });
   });
 
+  it("reports an invalid records directory instead of silently skipping migration", async () => {
+    const recordsDir = resolveLegacyManagedOutgoingImageRecordsDir();
+    await fsp.mkdir(path.dirname(recordsDir), { recursive: true });
+    await fsp.writeFile(recordsDir, "preserve these bytes");
+
+    const result = migrate();
+
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([
+      "Failed reading legacy managed outgoing image state: Error: legacy managed image records owner is not a regular directory",
+    ]);
+    expect(await fsp.readFile(recordsDir, "utf8")).toBe("preserve these bytes");
+  });
+
   it("recovers claims and imports typed metadata before removing JSON", async () => {
     const legacy = await writeLegacyRecord();
     const claimPath = `${legacy.sourcePath}.doctor-importing-4242-22222222-2222-4222-8222-222222222222`;

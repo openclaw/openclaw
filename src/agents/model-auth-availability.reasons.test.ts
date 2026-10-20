@@ -16,6 +16,7 @@ import {
   dualRoutes,
   evaluate,
   routeResolverFactory,
+  mockRouteResolverFactory,
 } from "./model-auth-availability.test-support.js";
 import { providerConfig as configuredProvider } from "./model-auth.fixtures.test-support.js";
 import { prepareAgentRuntimeAuth } from "./runtime-plan/prepare-auth.js";
@@ -119,11 +120,11 @@ it.each(["openai", "anthropic"])(
       ["ready", createApiKeyCredential(provider, "test-key"), undefined],
     ];
     for (const [label, profile, reason] of cases) {
+      mockRouteResolverFactory(routeResolverFactory(dualRoutes));
       const result = createModelAuthAvailabilityResolver({
         cfg: {},
         authStore: authStore(profile ? { test: profile } : {}),
         env: {},
-        routeResolverFactory: routeResolverFactory(dualRoutes),
       }).evaluateModelAuth(provider);
       expect.soft(result.unavailableReason, label).toBe(reason);
       expect.soft(result.unavailableUntil, label).toBeUndefined();

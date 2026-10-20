@@ -1,6 +1,11 @@
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  observeHostDataSql,
+  observeSqliteReadSql,
+} from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -15,6 +20,7 @@ import {
   syncGitHubIdentity,
 } from "./user-profile-writes.worker.js";
 import { mergeOwnerIntoPerson, profileState } from "./user-profiles-owner.test-support.js";
+import { ensureUserProfilesSchema } from "./user-profiles-schema.js";
 import {
   ensureGatewayOwnerProfile,
   ensureProfileForEmail,
@@ -63,6 +69,31 @@ function expectUnchanged(
 }
 
 describe("gateway owner profiles", () => {
+  it.each([false, true])("reads each owner snapshot once (existing: %s)", (existing) => {
+    const options = stateOptions();
+    ensureUserProfilesSchema(options);
+    if (existing) {
+      const owner = ensureGatewayOwnerProfile("Local Owner", options);
+      setDisplayName(owner.id, "Saved Owner", options);
+    }
+    const { db } = openOpenClawStateDatabase(options);
+    const reads = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+    const exec = vi.spyOn(db, "exec");
+    const ownerReads = () => reads.queries.filter((query) => /from "user_profiles"/i.test(query));
+    const transactions = () => exec.mock.calls.filter(([query]) => /^BEGIN\b/i.test(query));
+    try {
+      expect(ensureGatewayOwnerProfile("Host Renamed", options)).toMatchObject({
+        id: "gateway-owner",
+        displayName: existing ? "Saved Owner" : "Host Renamed",
+      });
+      expect.soft(ownerReads()).toHaveLength(existing ? 1 : 2);
+      expect.soft(transactions()).toHaveLength(existing ? 0 : 1);
+    } finally {
+      exec.mockRestore();
+      reads.restore();
+    }
+  });
+
   it.each(["merged owner", "tombstone"] as const)("rejects linking to the %s", (kind) => {
     const state = fixture();
     const target = ownerReference(kind, state);
@@ -226,9 +257,20 @@ describe("gateway owner profiles", () => {
     const owner = ensureGatewayOwnerProfile(null, options);
     expect(owner.displayName).toBeNull();
     expect(ensureGatewayOwnerProfile(" \t ", options)).toEqual(owner);
-    expect(ensureGatewayOwnerProfile(`${"a".repeat(255)}🤖`, options)).toMatchObject({
-      id: owner.id,
-      displayName: "a".repeat(255),
-    });
+    const observed = observeHostDataSql();
+    try {
+      expect(ensureGatewayOwnerProfile(`${"a".repeat(255)}🤖`, options)).toMatchObject({
+        id: owner.id,
+        displayName: "a".repeat(255),
+      });
+      expect(
+        observed.queries.filter((sql) => /insert into "user_profile_identities"/iu.test(sql)),
+      ).toEqual([]);
+    } finally {
+      observed.restore();
+    }
+    expect(readUserProfileSnapshotSync(options).profiles).toEqual([
+      expect.objectContaining({ id: owner.id, displayName: "a".repeat(255) }),
+    ]);
   });
 });

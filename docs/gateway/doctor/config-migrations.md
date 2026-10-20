@@ -659,8 +659,11 @@ versions can still open their historical default port.
 
 Startup leaves config bytes unchanged. When the completion marker is the sole
 required change, startup records it in stored SQLite machine state, including
-when no config file exists yet. If endpoints or other channel settings need
-repair, startup refuses with `openclaw doctor --fix` guidance. For a read-only
+when no config file exists yet. Later starts read
+that stored completion before loading migration contracts, including when the
+inspection found no listeners to pin. A failure to save completion warns and
+retries on the next boot without blocking startup. If endpoints or other channel
+settings need repair, startup refuses with `openclaw doctor --fix` guidance. For a read-only
 external config source, update that source and its completion marker as directed
 by the startup error. Startup refuses to drop an unmigrated endpoint. A fresh
 installation needs no pins or a new config file that would interfere with

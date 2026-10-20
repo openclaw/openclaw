@@ -230,10 +230,7 @@ describe("tui session actions", () => {
       context: { agentNames },
     });
 
-    await expect(refreshAgents()).resolves.toEqual({
-      ok: false,
-      error: "gateway unavailable",
-    });
+    await expect(refreshAgents()).resolves.toBe(false);
     expect(state.agents).toBe(cachedAgents);
     expect(state).toMatchObject({
       agentDefaultId: "cached",
@@ -342,7 +339,7 @@ describe("tui session actions", () => {
       }),
     });
 
-    await expect(refreshAgents()).resolves.toEqual({ ok: true, value: undefined });
+    await expect(refreshAgents()).resolves.toBe(true);
     expect(state).toMatchObject({
       agentDefaultId: "team-lead",
       sessionMainKey: "primary",
@@ -452,7 +449,7 @@ describe("tui session actions", () => {
       });
       sendPendingUser(state, "pending-run", "stale prompt");
 
-      await expect(refreshAgents()).resolves.toEqual({ ok: true, value: undefined });
+      await expect(refreshAgents()).resolves.toBe(true);
 
       expect(state).toMatchObject({
         currentAgentId: "ops",
@@ -506,7 +503,7 @@ describe("tui session actions", () => {
     sendPendingUser(state, "pending-run", "current prompt");
     const previousProjection = state.sessionProjection;
 
-    await expect(refreshAgents()).resolves.toEqual({ ok: true, value: undefined });
+    await expect(refreshAgents()).resolves.toBe(true);
 
     expect(state).toMatchObject({
       currentAgentId: "research",

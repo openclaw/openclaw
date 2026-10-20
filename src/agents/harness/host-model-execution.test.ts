@@ -147,7 +147,7 @@ it.each([true, false])("prepares web search for a known native model (%s)", asyn
           modelRef: { provider: "native", model: "bound" },
           requesterFacts: [],
         }
-      : undefined,
+      : { allowed: false, persistentAllowed: false },
   );
 });
 

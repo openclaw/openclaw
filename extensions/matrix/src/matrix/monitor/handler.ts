@@ -3,6 +3,7 @@ import {
   hasFinalInboundReplyDispatch,
   resolveInboundReplyDispatchCounts,
 } from "openclaw/plugin-sdk/channel-inbound";
+import type { ChannelIngressMonitorLifecycle } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createReplyPrefixOptions,
   createTypingCallbacks,
@@ -65,9 +66,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     previewToolProgressEnabled,
     blockStreamingEnabled,
     historyLimit,
-    startupMs,
-    dropPreStartupMessages,
-    inboundDeduper,
     directTracker,
     getMemberDisplayName,
   } = params;
@@ -100,16 +98,17 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
   const roomIngressQueue = new KeyedAsyncQueue();
   const sharedDmContextNoticeRooms = new Set<string>();
 
-  return async (roomId: string, event: MatrixRawEvent) => {
+  return async (
+    roomId: string,
+    event: MatrixRawEvent,
+    lifecycle: ChannelIngressMonitorLifecycle,
+  ) => {
     const eventId = typeof event.event_id === "string" ? event.event_id.trim() : "";
-    let inboundReplayClaim:
-      | import("openclaw/plugin-sdk/persistent-dedupe").ChannelReplayClaimHandle
-      | undefined;
     let draftControllerRef: Awaited<ReturnType<typeof createMatrixDraftController>> | undefined;
     try {
       const eventType = event.type;
       if (eventType === EventType.RoomMessageEncrypted) {
-        // Encrypted payloads are emitted separately after decryption.
+        // Encrypted payloads are decrypted by durable ingress before delivery.
         return;
       }
 
@@ -138,31 +137,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         return;
       }
       const eventTs = event.origin_server_ts;
-      const eventAge = event.unsigned?.age;
-      const commitInboundEventIfClaimed = async () => {
-        const claim = inboundReplayClaim;
-        if (!claim) {
-          return;
-        }
-        await claim.commit();
-        if (inboundReplayClaim === claim) {
-          inboundReplayClaim = undefined;
-        }
-      };
       const readIngressPrefix = async () => {
         const selfUserId = await client.getUserId();
         if (senderId === selfUserId) {
           return undefined;
         }
-        if (dropPreStartupMessages) {
-          if (typeof eventTs === "number" && eventTs < startupMs) {
-            return undefined;
-          }
-          if (typeof eventTs !== "number" && typeof eventAge === "number" && eventAge > 0) {
-            return undefined;
-          }
-        }
-
         const content = locationContent;
 
         if (
@@ -188,17 +167,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         if (hasBundledMatrixReplacementRelation(event)) {
           return undefined;
         }
-        if (eventId && inboundDeduper) {
-          const claim = await inboundDeduper.claim({ roomId, eventId });
-          // Missing identifiers fail open; committed and in-flight events do not.
-          if (claim.kind === "claimed") {
-            inboundReplayClaim = claim.handle;
-          } else if (claim.kind !== "invalid") {
-            logVerboseMessage(`matrix: skip duplicate inbound event room=${roomId} id=${eventId}`);
-            return undefined;
-          }
-        }
-
         const directMessage = await directTracker.isDirectMessage({
           roomId,
           senderId,
@@ -213,7 +181,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         eventTs: eventTs ?? undefined,
         senderId,
         roomHistoryTracker,
-        commitInboundEventIfClaimed,
       };
       const continueIngress = async (paramsLocal: MatrixIngressAccessParams) => {
         const access = await resolveMatrixIngressAccess({
@@ -393,39 +360,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         route: _route,
         sessionKey: _route.sessionKey,
       });
-      const replayClaimAtDispatch = inboundReplayClaim;
-      // Active-run deferral outlives this handler. Transfer the exact replay claim to the
-      // reply lane so adoption commits it and abandonment reopens it for Matrix replay.
-      const turnAdoptionLifecycle = replayClaimAtDispatch
-        ? {
-            admission: "exclusive" as const,
-            onDeferred: () => {
-              if (inboundReplayClaim !== replayClaimAtDispatch) {
-                return false;
-              }
-              inboundReplayClaim = undefined;
-              return undefined;
-            },
-            onAdopted: async () => {
-              if (inboundReplayClaim === replayClaimAtDispatch) {
-                inboundReplayClaim = undefined;
-              }
-              await replayClaimAtDispatch.commit();
-            },
-            onAbandoned: () => {
-              if (inboundReplayClaim === replayClaimAtDispatch) {
-                inboundReplayClaim = undefined;
-              }
-              replayClaimAtDispatch.release();
-            },
-          }
-        : undefined;
-
       const turnResultPromise = core.channel.inbound.run({
         channel: "matrix",
         accountId: _route.accountId,
         raw: event,
-        ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),
+        turnAdoptionLifecycle: lifecycle,
         adapter: {
           ingest: () => ({
             id: messageId,
@@ -563,21 +502,15 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             deliveryPartCount: 1,
             extraContent: { msgtype: "m.notice" },
           });
-          await commitInboundEventIfClaimed();
         } catch (noticeError) {
           runtime.error?.(
             `matrix: failed completing restart-recovery tombstone notice room=${roomId} id=${eventId || "unknown"}: ${String(noticeError)}`,
           );
+          throw noticeError;
         }
         return;
       }
       if (!turnResult.dispatched) {
-        if (
-          turnResult.admission.kind === "drop" &&
-          turnResult.admission.reason === "bot-loop-protection"
-        ) {
-          await commitInboundEventIfClaimed();
-        }
         return;
       }
       const { dispatchResult } = turnResult;
@@ -589,9 +522,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           : undefined;
       if (failedDeliveryKind) {
         logVerboseMessage(
-          `matrix: ${failedDeliveryKind} reply delivery failed room=${roomId} id=${messageId}; keeping replay committed`,
+          `matrix: ${failedDeliveryKind} reply delivery failed room=${roomId} id=${messageId}; turn already adopted`,
         );
-        await commitInboundEventIfClaimed();
         return;
       }
       // Advance the per-agent watermark now that the reply succeeded (or no reply was needed).
@@ -607,14 +539,12 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         );
       }
       if (!hasFinalInboundReplyDispatch(dispatchResult)) {
-        await commitInboundEventIfClaimed();
         return;
       }
       const finalCount = resolveInboundReplyDispatchCounts(dispatchResult).final;
       logVerboseMessage(
         `matrix: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${replyTarget}`,
       );
-      await commitInboundEventIfClaimed();
     } catch (err) {
       const draftController = draftControllerRef;
       if (draftController?.draftStream?.eventId()) {
@@ -622,6 +552,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         draftController.previewLifecycle.retainPreview();
       }
       runtime.error?.(`matrix handler failed: ${String(err)}`);
+      throw err;
     } finally {
       // Stop the draft stream timer so partial drafts don't leak if the
       // model run throws or times out mid-stream.
@@ -631,7 +562,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         await draftControllerRef?.previewLifecycle.cleanup();
         await draftStream.cleanupPending();
       }
-      inboundReplayClaim?.release();
     }
   };
 }

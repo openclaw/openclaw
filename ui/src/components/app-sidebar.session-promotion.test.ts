@@ -62,6 +62,12 @@ async function mountFamily(archived = false) {
     if (method === "sessions.describe") {
       return { session: query?.key === parent.key ? parent : child };
     }
+    if (method === "sessions.groups.list" || method === "sessions.groups.put") {
+      return { groups: archived ? [{ name: "Projects", position: 0 }] : [], sectionOrder: [] };
+    }
+    if (method === "sessions.groups.defaults") {
+      return { defaults: [] };
+    }
     if (method === "sessions.patch" || (archived && method === "sessions.patchMany")) {
       const patch = method === "sessions.patch" ? query : isRecord(query.patch) ? query.patch : {};
       patches.push(patch);
@@ -91,6 +97,7 @@ async function mountFamily(archived = false) {
   gateway.publish({ sessionKey });
   const sessions = createTestSessionCapability(gateway.gateway);
   await sessions.refresh({ agentId: "main", force: true });
+  await sessions.groupsLoad();
   const { sidebar } = await mountSidebar(gateway.gateway, sessions);
   sidebar.connected = true;
   sidebar.activeRouteId = "chat";

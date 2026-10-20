@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import type { SessionSnapshotStore } from "../pages/chat/session-snapshot-store.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { newChatPage } from "./chat-flow.test-support.ts";
 import { expectHistoryBoundaryState } from "./chat-history-boundary.test-support.ts";
@@ -17,7 +18,7 @@ function historyPage(messages: unknown[], hasMore: boolean, nextOffset?: number)
     messages,
     hasMore,
     nextOffset,
-    totalMessages: 30,
+    totalMessages: 22,
     sessionId: "native-underfill-pagination",
     thinkingLevel: null,
   };
@@ -118,9 +119,16 @@ suite.define(() => {
       await page.getByText("Recent answer", { exact: true }).waitFor();
       if (temperature === "warm") {
         await gateway.waitForRequest("chat.history");
-        await gateway.resolveDeferred("chat.history");
-        await expectHistoryBoundaryState(pane, false);
-        await expectTranscriptLayoutCommitted(thread);
+        // Persist only the startup tail; accepting the first page would warm a deeper cursor.
+        await pane.evaluate(async (element) => {
+          const snapshotPane = element as HTMLElement & {
+            sessionSnapshotStore?: SessionSnapshotStore;
+          };
+          if (!snapshotPane.sessionSnapshotStore) {
+            throw new Error("Missing transcript snapshot owner");
+          }
+          await snapshotPane.sessionSnapshotStore.flush();
+        });
         await page.reload();
         await page.getByText("Recent answer", { exact: true }).waitFor();
       }
@@ -158,7 +166,7 @@ suite.define(() => {
         .toBe(2);
       expect(await offsets()).toEqual([2, 6]);
       for (const request of await gateway.getRequests("chat.history")) {
-        expect(request.params).toMatchObject({ limit: 1000, maxBytes: 2 * 1024 * 1024 });
+        expect(request.params).toMatchObject({ limit: 1000, maxBytes: 3 * 1024 * 1024 });
       }
     },
   );

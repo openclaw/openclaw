@@ -669,9 +669,6 @@ function repairResult(overrides: Record<string, unknown>) {
     warnings: [],
     diffs: [],
     effects: [],
-    checksRun: 0,
-    checksRepaired: 0,
-    checksValidated: 0,
     ...overrides,
   };
 }
@@ -789,7 +786,7 @@ describe("doctor health contributions", () => {
     mocks.callGateway.mockResolvedValue({});
     mocks.maybeRepairGatewayServiceConfig.mockImplementation(async (cfg: unknown) => cfg);
     mocks.runDoctorHealthRepairs.mockImplementation(async (input: { cfg?: unknown }) =>
-      repairResult({ config: input.cfg ?? {}, checksValidated: 0 }),
+      repairResult({ config: input.cfg ?? {} }),
     );
     mocks.noteChromeMcpBrowserReadiness.mockResolvedValue(undefined);
     mocks.detectLegacyStateMigrations.mockResolvedValue({ preview: [], warnings: [], notices: [] });
@@ -1133,7 +1130,7 @@ describe("doctor health contributions", () => {
       expect(mocks.probeGatewayMemoryStatus).not.toHaveBeenCalled();
       expect(ctx.gatewayMemoryProbe).toEqual({ checked: false, ready: false, skipped: true });
       if (scenario === "reachability") {
-        expect(ctx).toMatchObject({ healthOk: true, gatewayHealthAuthenticated: false });
+        expect(ctx.healthOk).toBe(true);
       } else {
         expect(mocks.checkGatewayHealth).not.toHaveBeenCalled();
         expect(ctx.gatewayHealthSkipped).toBe(true);
@@ -2015,8 +2012,6 @@ describe("doctor health contributions", () => {
         config: { updated: true },
         changes: ["changed from structured health"],
         warnings: ["structured warning"],
-        checksRun: 1,
-        checksRepaired: 1,
       }),
     );
     const contribution = structuredContribution("test-structured-run");

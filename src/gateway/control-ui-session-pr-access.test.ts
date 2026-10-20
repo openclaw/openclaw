@@ -14,7 +14,6 @@ import { sessionChanges } from "../sessions/session-row-changes.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db.js";
-import { startAwaitedReadMock } from "../state/openclaw-state-read-mock.test-support.js";
 import * as stateReadWorker from "../state/openclaw-state-read-worker.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -35,6 +34,7 @@ import {
   snapshot,
   type Load,
 } from "./control-ui-session-pr-access.test-support.js";
+import * as checkDetails from "./control-ui-session-pr-check-details.js";
 import {
   createControlUiSessionPrRead,
   prepareControlUiSessionPrServiceTarget,
@@ -47,7 +47,7 @@ import {
 import { githubJson, pullListItem, requestUrl } from "./control-ui-session-prs.test-support.js";
 import type { OperatorScope } from "./operator-scopes.js";
 import { handleGatewayRequest } from "./server-methods.js";
-import { createControlUiHandlers } from "./server-methods/control-ui.js";
+import { controlUiHandlers } from "./server-methods/control-ui.js";
 import { createGatewayWsTestSocket } from "./server/ws-connection.test-helpers.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils-store.js";
@@ -353,13 +353,11 @@ it.each(["unchanged", "revoked"] as const)(
               held = true;
               return {
                 ...owned,
-                startRead(...args) {
-                  return startAwaitedReadMock(async () => {
-                    const result = await owned.startRead(...args).result;
-                    entered.resolve();
-                    await release.promise;
-                    return result;
-                  });
+                async startRead(...args) {
+                  const result = await owned.startRead(...args);
+                  entered.resolve();
+                  await release.promise;
+                  return result;
                 },
               };
             },
@@ -643,6 +641,9 @@ it.each([
       };
       const held = holdLoad<ControlUiSessionPullRequestCheckDetails>();
       const load = held.load;
+      const loadChecks = vi
+        .spyOn(checkDetails, "loadControlUiSessionPullRequestChecks")
+        .mockImplementation(load);
       const respond = vi.fn();
       const request = handleGatewayRequest({
         req: {
@@ -653,7 +654,7 @@ it.each([
         },
         client: f.client,
         context: f.context,
-        extraHandlers: createControlUiHandlers(undefined, load),
+        extraHandlers: controlUiHandlers,
         isWebchatConnect: () => false,
         respond,
       });
@@ -696,6 +697,7 @@ it.each([
       } finally {
         held.resolve(result);
         await request;
+        loadChecks.mockRestore();
       }
     },
     change === "store closure",

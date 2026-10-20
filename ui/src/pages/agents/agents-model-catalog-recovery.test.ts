@@ -25,15 +25,16 @@ describe("agent model catalog recovery", () => {
     const { container } = mountSolid(
       Agents,
       createProps({
-        overview: {
-          ...createProps().overview,
-          modelCatalogStatus: {
+        overview: { ...createProps().overview },
+        readData: () => ({
+          ...createProps().readData(),
+          chatModelCatalogStatus: {
             error: "model catalog unavailable",
             hasLoaded: true,
             stale: true,
             awaitingGateway: false,
           },
-        },
+        }),
       }),
     );
 
@@ -85,7 +86,7 @@ describe("agent model catalog recovery", () => {
       if (!lateFailure) {
         pending.reject(error);
         await waitForFast(() =>
-          expect(page.read().overview.modelCatalogStatus).toMatchObject({
+          expect(page.read().readData().chatModelCatalogStatus).toMatchObject({
             awaitingGateway: lifecycle,
             error: lifecycle ? null : "Model catalog unavailable",
             stale: true,
@@ -102,7 +103,7 @@ describe("agent model catalog recovery", () => {
         pending.reject(error);
       }
       await waitForFast(() => expect(page.read().overview.modelCatalog).toEqual(nextModels));
-      expect(page.read().overview.modelCatalogStatus).toMatchObject({
+      expect(page.read().readData().chatModelCatalogStatus).toMatchObject({
         error: null,
         awaitingGateway: false,
       });

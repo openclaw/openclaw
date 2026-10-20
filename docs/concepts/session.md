@@ -311,6 +311,12 @@ Older interrupted turns without a recorded authorization source remain restricte
 send a fresh authenticated message to continue privileged work. Session ownership
 or a saved display name never grants recovery permissions.
 
+The reserved device-less backend helper connection is a local control-plane path,
+not a durable operator identity. Use an identified operator client, such as the
+TUI or Control UI, for user-owned work that must resume automatically. Paired
+clients must retain the original device-token generation: reissuing that token
+under a different authentication path can prevent recovery even for the same user.
+
 This also covers parent turns started by subagent completion or pause notices.
 An interrupted parent continues independently of later child completions, and a
 retry of the same notice joins that recovery instead of starting the turn again.

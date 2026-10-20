@@ -1,7 +1,10 @@
 import { AsyncResource } from "node:async_hooks";
+import type { AgentMessage } from "@openclaw/agent-core";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { collectTextContentBlocks } from "../../agents/content-blocks.js";
+import { FailoverError } from "../../agents/failover-error.js";
+import { runWithModelFallback } from "../../agents/model-fallback-runner.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import {
@@ -13,16 +16,22 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import * as contextWorker from "../../config/sessions/session-transcript-read-worker-runtime.js";
+import { attachSessionTranscriptRunId } from "../../sessions/transcript-events.js";
 import {
   buildPersistedUserTurnMessage,
   createUserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { toWorkerTranscriptMessage } from "../../worker/transcript-message.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
 import { createCoordinatorTestService } from "./placement-dispatch-coordinator.test-support.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
-import { WorkerRunnerUnavailableError } from "./tunnel-contract.js";
+import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
+import { createWorkerTranscriptCommitStore } from "./transcript-commit-ledger.js";
+import { createWorkerTranscriptCommitter } from "./transcript-commit.js";
+import { createTranscriptCommitIdentity } from "./transcript-commit.test-support.js";
+import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
 import { releaseClaimIfOwned } from "./worker-turn-admission.js";
 import {
   SESSION_ID,
@@ -91,6 +100,9 @@ async function launchProbe(
   overrides: Partial<SessionPlacementTurnParams> = {},
   assertRunCurrent?: () => void,
   waitForInitialPlacement?: WorkerTurnLauncherOptions["waitForInitialPlacement"],
+  onLaunch?: (
+    request: Parameters<NonNullable<WorkerTurnTunnelHandle["launchTurn"]>>[0],
+  ) => Promise<void>,
 ) {
   const input = {
     ...turn(runId),
@@ -101,7 +113,7 @@ async function launchProbe(
   if (!waitForInitialPlacement && (await placements.getAsync(SESSION_ID))?.state !== "active") {
     await seedActivePlacement();
   }
-  const deliberateStop = new WorkerRunnerUnavailableError();
+  const deliberateStop = new Error("synthetic worker launch complete");
   let credentialCalls = 0;
   let tunnelCalls = 0;
   let launch: { baseLeafId: string | null; history: ReturnType<typeof visible> } | undefined;
@@ -113,11 +125,13 @@ async function launchProbe(
     syncWorkspace: unexpected,
     quiesceWorkspace: unexpected,
     reconcileWorkspace: unexpected,
-    launchTurn: async ({ plan }) => {
+    launchTurn: async (request) => {
+      const { plan } = request;
       launch = {
         baseLeafId: plan.assignment.transcript.baseLeafId,
         history: visible(plan.assignment.initialMessages),
       };
+      await onLaunch?.(request);
       // Never call onDispatchReady: no remote turn or credential delivery occurs.
       throw deliberateStop;
     },
@@ -166,7 +180,7 @@ async function launchProbe(
   }
   expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
   expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(0);
-  if (launch) {
+  if (launch && !onLaunch) {
     expect(outcome.kind === "rejected" && outcome.error).toBe(deliberateStop);
   }
   return { launch, credentialCalls, tunnelCalls, outcome };
@@ -231,6 +245,193 @@ describe("worker detached model-context branch parity", () => {
     if (!hasUnjoinedOwner) {
       await closeStateDatabaseForTest();
     }
+  });
+
+  it.each([
+    [false, undefined],
+    [true, undefined],
+    [false, "openclaw.runtime-context"],
+    [true, "openclaw.system-update"],
+  ] as const)(
+    "commits a fallback after the failed candidate's own output (tool activity: %s; context: %s)",
+    async (withToolActivity, customType) => {
+      const runId = "worker-model-fallback";
+      const inputRecorder = recorder();
+      const committer = createWorkerTranscriptCommitter({
+        getConfig: () => ({ session: { store: sessionTarget.storePath } }),
+        store: createWorkerTranscriptCommitStore({ database }),
+      });
+      const identity = { ...createTranscriptCommitIdentity(SESSION_ID, 3), runId };
+      const commit = async (baseLeafId: string | null, seq: number, messages: AgentMessage[]) => {
+        const workerMessages = messages.map((message) => {
+          const projected = toWorkerTranscriptMessage(message, "transcript");
+          if (projected?.kind !== "complete") {
+            throw new Error("expected a complete worker transcript message");
+          }
+          return projected.message;
+        });
+        const result = await committer.commit({
+          identity,
+          sessionTarget,
+          assertCurrent: () => undefined,
+          request: { runEpoch: 3, baseLeafId, seq, messages: workerMessages },
+        });
+        if (!result.ok) {
+          throw new Error(`Worker transcript commit rejected: ${result.reason}`);
+        }
+        return result.result.newLeafId;
+      };
+      let failedLeaf: string | null = null;
+      let candidate = 0;
+      let workerLaunches = 0;
+      const commitComplete = new Error("synthetic worker commit complete");
+      const result = await runWithModelFallback({
+        cfg: undefined,
+        provider: "fixture-provider",
+        model: "primary",
+        manifestPlugins: [],
+        fallbacksOverride: ["fixture-next/fallback"],
+        run: async () => {
+          candidate++;
+          const launched = await launchProbe(
+            runId,
+            { userTurnTranscriptRecorder: inputRecorder },
+            undefined,
+            undefined,
+            async ({ plan, turnClaim }) => {
+              workerLaunches++;
+              const { baseLeafId, nextSeq } = plan.assignment.transcript;
+              if (candidate === 1) {
+                const messages: AgentMessage[] = [];
+                if (customType) {
+                  messages.push({
+                    role: "custom",
+                    customType,
+                    content: "runtime context",
+                    display: false,
+                    details:
+                      customType === "openclaw.system-update"
+                        ? { kind: "runtime-context", turnScoped: true }
+                        : { source: "openclaw-runtime-context", runtimeContextCarrier: true },
+                    timestamp: 1,
+                  });
+                }
+                if (withToolActivity) {
+                  messages.push(
+                    makeAgentAssistantMessage({
+                      content: [
+                        {
+                          type: "toolCall",
+                          id: "effect",
+                          name: "exec",
+                          arguments: { command: "effect-once" },
+                        },
+                      ],
+                      stopReason: "toolUse",
+                    }),
+                    {
+                      role: "toolResult",
+                      toolCallId: "effect",
+                      toolName: "exec",
+                      content: [{ type: "text", text: "effect completed" }],
+                      isError: false,
+                      timestamp: 2,
+                    },
+                  );
+                }
+                messages.push(
+                  makeAgentAssistantMessage({
+                    content: [],
+                    stopReason: "error",
+                    errorMessage: "rate limit",
+                  }),
+                );
+                await commit(baseLeafId, nextSeq, messages);
+              } else {
+                await commit(baseLeafId, nextSeq, [assistant("fallback answer")]);
+              }
+              await createWorkerSessionPlacementGate(placements).updateAckCursors({
+                claim: turnClaim,
+                transcriptSeq: nextSeq,
+              });
+              if (candidate === 1) {
+                throw new FailoverError("rate limit", { reason: "rate_limit" });
+              }
+              // Stop this probe without asking the launcher to retry an offline transport.
+              throw commitComplete;
+            },
+          );
+          if (candidate === 1) {
+            if (launched.outcome.kind !== "rejected") {
+              throw new Error("expected primary failure");
+            }
+            failedLeaf = (await SessionManager.openAsync(sessionTarget)).getLeafId();
+            throw launched.outcome.error;
+          }
+          if (launched.outcome.kind === "rejected" && launched.outcome.error !== commitComplete) {
+            throw launched.outcome.error;
+          }
+          expect(launched.outcome).toEqual({ kind: "rejected", error: commitComplete });
+          expect(launched.launch?.baseLeafId).toBe(failedLeaf);
+          if (withToolActivity) {
+            expect(launched.launch?.history).toContainEqual({
+              role: "toolResult",
+              text: "effect completed",
+            });
+          }
+          return "fallback completed";
+        },
+      });
+      expect(result.result).toBe("fallback completed");
+      expect(candidate).toBe(2);
+      expect(workerLaunches).toBe(2);
+      expect((await SessionManager.openAsync(sessionTarget)).getLeafEntry()).toMatchObject({
+        type: "message",
+        message: { role: "assistant", content: [{ type: "text", text: "fallback answer" }] },
+      });
+    },
+  );
+
+  it.each([
+    "context-only",
+    "foreign-output",
+    "foreign-context",
+    "user",
+    "other-custom",
+    "other-entry",
+  ])("keeps the admission fence for a %s suffix", async (suffix) => {
+    const runId = "worker-context-fence";
+    const inputRecorder = recorder();
+    await inputRecorder.persistApproved();
+    const admittedLeaf = inputRecorder.getAdmissionReceipt()?.entryId;
+    expect(admittedLeaf).toEqual(expect.any(String));
+    const writer = await SessionManager.openAsync(sessionTarget);
+    const context: AgentMessage = {
+      role: "custom",
+      customType: "openclaw.runtime-context",
+      content: "runtime context",
+      display: false,
+      details: { source: "openclaw-runtime-context", runtimeContextCarrier: true },
+      timestamp: 1,
+    };
+    await writer.appendMessageAsync(context);
+    if (suffix !== "context-only") {
+      await writer.appendMessageAsync(attachSessionTranscriptRunId(assistant("own output"), runId));
+    }
+    if (suffix === "foreign-output") {
+      await writer.appendMessageAsync(attachSessionTranscriptRunId(assistant("foreign"), "other"));
+    } else if (suffix === "foreign-context") {
+      const foreignContext = { ...context, __openclaw: { runId: "other" } };
+      await writer.appendMessageAsync(foreignContext);
+    } else if (suffix === "user") {
+      await writer.appendMessageAsync(user("later input"));
+    } else if (suffix === "other-custom") {
+      await writer.appendMessageAsync({ ...context, customType: "unrelated" });
+    } else if (suffix === "other-entry") {
+      await writer.appendCustomEntryAsync("unrelated", {});
+    }
+    const result = await launchProbe(runId, { userTurnTranscriptRecorder: inputRecorder });
+    expect(result.launch).toEqual({ baseLeafId: admittedLeaf, history: [] });
   });
 
   it("launches a continuation from the committed interruption writes instead of the original admission", async () => {
@@ -324,10 +525,15 @@ describe("worker detached model-context branch parity", () => {
       const inputRecorder = recorder();
       expect(inputRecorder.hasPersisted()).toBe(false);
       const pending = state === "in-flight" ? inputRecorder.persistApproved() : undefined;
-      const result = await launchProbe("recorder-admission", {
-        userTurnTranscriptRecorder: inputRecorder,
-      });
+      const { result, calls } = await withAsyncReadHook(
+        async () => {},
+        () =>
+          launchProbe("recorder-admission", {
+            userTurnTranscriptRecorder: inputRecorder,
+          }),
+      );
       await pending;
+      expect(calls).toBe(1);
       expect(inputRecorder.getAdmissionReceipt()).toBeDefined();
       expect(result.launch).toEqual({
         baseLeafId: inputRecorder.getAdmissionReceipt()?.entryId,

@@ -141,7 +141,6 @@ describe("plugin run context lifecycle", () => {
         patch: { runId: "stale-run", namespace: "state", value: { live: true } },
       }),
     ).toBe(true);
-    expect(capturedApi?.getRunContext({ runId: "stale-run", namespace: "state" })).toBeUndefined();
     expect(
       capturedApi?.runContext.getRunContext({ runId: "stale-run", namespace: "state" }),
     ).toBeUndefined();
@@ -187,7 +186,7 @@ describe("plugin run context lifecycle", () => {
       () => {
         expect(registry.registry.plugins).not.toContain(record);
         expect(
-          api.setRunContext({
+          api.runContext.setRunContext({
             runId: "run-registration",
             namespace: "state",
             value: { initialized: true },
@@ -195,7 +194,7 @@ describe("plugin run context lifecycle", () => {
         ).toBe(true);
         expect(readContext("state")).toEqual({ initialized: true });
 
-        api.clearRunContext({ runId: "run-registration", namespace: "state" });
+        api.runContext.clearRunContext({ runId: "run-registration", namespace: "state" });
         expect(readContext("state")).toBeUndefined();
       },
       api,

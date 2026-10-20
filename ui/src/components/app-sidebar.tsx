@@ -190,8 +190,15 @@ function AppSidebarContent(
       return projection.revision();
     },
     () => props.navigationVisible,
-    // Shell inputs finish preparing a hidden first mount; owner traffic stays parked.
-    () => Object.values(props),
+    // Connection and selection prepare a hidden view; cosmetic shell writes keep it parked.
+    () => [
+      props.connected,
+      props.router,
+      props.activeRouteId,
+      props.sessionKey,
+      props.navigationView,
+      props.sidebarAgentsMode,
+    ],
   );
   const observed = new WeakMap<object, object>();
   const observe = <T extends object>(target: T): T => {
@@ -293,7 +300,7 @@ function AppSidebarContent(
       owner.sessionData.connect();
     }
     let frame = requestAnimationFrame(() => {
-      frame = requestAnimationFrame(() => owner.classList.add("sidebar-r"));
+      frame = requestAnimationFrame(() => host.classList.add("sidebar-r"));
     });
     return () => {
       cancelAnimationFrame(frame);
@@ -305,6 +312,7 @@ function AppSidebarContent(
 }
 
 export type AppSidebarMethods = {
+  activeNavigationViewElement(): HTMLElement | undefined;
   dismissTransientMenus(): boolean;
   expandedAgentId(): string;
   findSidebarHovercardRowByKey(
@@ -322,6 +330,7 @@ export const AppSidebar = defineSolidBridge<AppSidebarProps, AppSidebarMethods>(
     connected: (host) => sidebarOwners.get(host)?.attach(),
     disconnected: (host) => sidebarOwners.get(host)?.detach(),
     methods: {
+      activeNavigationViewElement: (host) => sidebarOwners.get(host)?.activeNavigationViewElement(),
       dismissTransientMenus: dismissSidebarTransientMenus,
       expandedAgentId: (host) => sidebarOwners.get(host)?.expandedAgentId() ?? "",
       findSidebarHovercardRowByKey: (host, key) =>

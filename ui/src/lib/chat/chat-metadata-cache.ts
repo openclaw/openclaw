@@ -125,7 +125,6 @@ export function invalidateChatMetadataForSessionEvent(
   const agentId = typeof agent === "string" ? agent : undefined;
   const scope = changed ? { agentId, sessionKey: changed.key } : undefined;
   const sessionModelRevision =
-    source?.catalogChanged !== true &&
     source?.phase !== "reset" &&
     source?.reason !== "reset" &&
     source?.reason !== "delete" &&

@@ -55,6 +55,7 @@ export function CompactAttachmentFile(props: {
   metadata?: JSX.Element;
   onOpen?: () => void;
 }) {
+  let openButton: HTMLButtonElement | undefined;
   const icon = createMemo(() =>
     resolveAttachmentFileIcon(props.attachment.fileName ?? "attachment", props.attachment.mimeType),
   );
@@ -80,6 +81,7 @@ export function CompactAttachmentFile(props: {
       <span class="chat-attachment-file__body">
         {props.onOpen ? (
           <button
+            ref={(element) => (openButton = element)}
             class="chat-attachment-file__name chat-attachment-file__open"
             type="button"
             title={name()}
@@ -97,7 +99,14 @@ export function CompactAttachmentFile(props: {
   return (
     <Show
       when={props.label !== undefined}
-      fallback={<openclaw-tooltip prop:content={name()}>{content()}</openclaw-tooltip>}
+      fallback={
+        <openclaw-tooltip
+          prop:content={name()}
+          prop:descriptionTarget={props.onOpen ? () => openButton ?? null : undefined}
+        >
+          {content()}
+        </openclaw-tooltip>
+      }
     >
       {content()}
     </Show>

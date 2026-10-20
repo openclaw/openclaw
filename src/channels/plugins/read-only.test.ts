@@ -1,11 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import {
-  buildProviderStatusIndex,
-  buildProviderSummaryMetadataIndex,
-  listProvidersForAgent,
-} from "../../commands/agents.providers.js";
+import { agentsListCommand } from "../../commands/agents.commands.list.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   EMPTY_PLUGIN_SCHEMA,
@@ -19,6 +16,7 @@ import {
   restorePluginMetadataSnapshot,
 } from "../../plugins/plugin-metadata-snapshot.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { defaultRuntime } from "../../runtime.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -90,21 +88,33 @@ function providerFixture(accounts: Record<string, { name?: string }>, accountIds
       agentId: "main",
       match: { channel: channelId, accountId },
     })),
-  } satisfies Parameters<typeof buildProviderStatusIndex>[0];
+  } satisfies OpenClawConfig;
   return { ...fixture, cfg };
 }
 
-function providerLines(
-  cfg: ReturnType<typeof providerFixture>["cfg"],
-  providerStatus: Awaited<ReturnType<typeof buildProviderStatusIndex>>,
-) {
-  return listProvidersForAgent({
-    summaryIsDefault: true,
-    cfg,
-    bindings: cfg.bindings,
-    providerStatus,
-    providerMetadata: buildProviderSummaryMetadataIndex(cfg),
-  });
+let providerConfig: OpenClawConfig;
+// mock-isolation: Only the public provider projection receives fixture-owned config, without operator reads.
+vi.mock("../../commands/config-validation.js", () => ({
+  requireValidConfig: async () => providerConfig,
+}));
+// mock-isolation: Synthetic roster is already admitted; no state database is needed for account display.
+vi.mock("../../state/agent-database-admission.js", () => ({
+  hasAgentDatabaseAdmissions: () => true,
+  evaluateAgentDatabaseAdmissions: async () => [],
+  recordAgentDatabaseAdmissions: () => undefined,
+  readAgentDatabaseAdmissionRefusal: () => undefined,
+}));
+// mock-isolation: Synthetic roster has no durable provenance; real plugin discovery stays unmocked.
+vi.mock("../../state/agent-provenance.js", () => ({
+  listAgentProvenance: async () => [],
+  readAgentProvenanceForDisplay: async () => [],
+}));
+
+async function providerLines(cfg: ReturnType<typeof providerFixture>["cfg"]) {
+  providerConfig = cfg;
+  const json = vi.spyOn(defaultRuntime, "writeJson").mockReturnValue(undefined).mockClear();
+  await agentsListCommand({ bindings: true, json: true });
+  return json.mock.calls[0]?.[0];
 }
 
 function manifestFixture(
@@ -238,6 +248,7 @@ function expectExternalChatSetupOnlyPluginLoaded(params: {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
   resetPluginLoaderTestStateForTest();
   resetPluginRuntimeStateForTest();
@@ -258,14 +269,23 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       );
       const originalConfig = JSON.stringify(cfg);
 
-      const providerStatus = await buildProviderStatusIndex(cfg);
-      const lines = providerLines(cfg, providerStatus);
+      const output = await providerLines(cfg);
 
-      expect(lines).toEqual([
-        `Bundled Chat ${expected}: configured`,
-        "Bundled Chat plain: configured",
+      expect(output).toMatchObject([
+        { providers: [`Bundled Chat ${expected}: configured`, "Bundled Chat plain: configured"] },
       ]);
-      expect(providerStatus.has(`${channelId}:unbound`)).toBe(true);
+      expect(
+        await providerLines({
+          ...cfg,
+          bindings: [
+            { type: "route", agentId: "main", match: { channel: channelId, accountId: "*" } },
+          ],
+        }),
+      ).toMatchObject([
+        {
+          providers: expect.arrayContaining(["Bundled Chat unbound (Unbound account): configured"]),
+        },
+      ]);
       const adapter = findPlugin(listReadOnlyChannelPluginsForConfig(cfg), channelId);
       const account = expectRecordFields(adapter?.config.resolveAccount(cfg, "ops"), {
         accountId: "ops",
@@ -300,9 +320,8 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
     });
     setActivePluginRegistry(createTestRegistry([{ pluginId, plugin, source: "test" }]));
 
-    const providerStatus = await buildProviderStatusIndex(cfg);
-    expect(providerLines(cfg, providerStatus)).toEqual([
-      "Loaded Chat ops (Inspector name): configured",
+    expect(await providerLines(cfg)).toMatchObject([
+      { providers: ["Loaded Chat ops (Inspector name): configured"] },
     ]);
     expect(resolveAccount).not.toHaveBeenCalled();
     expectMarkers(setupMarker, fullMarker);

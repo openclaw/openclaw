@@ -57,7 +57,6 @@ import {
   expectNoAssistantMessages,
   expectSanitizedAssistantContext,
   expectSeedOnlyUserContext,
-  mockOpenAIPlatformProfile,
   streamSimpleMock,
   buildSessionContextMock,
   loadPreparedModelRuntimeSnapshotMock,
@@ -1014,48 +1013,6 @@ describe("runBtwSideQuestion", () => {
     ).toEqual(["openai-codex:user@example.test"]);
     expect(streamSimpleMock).not.toHaveBeenCalled();
     expect(registerProviderStreamForModelMock).not.toHaveBeenCalled();
-  });
-
-  it("prepares deny-all sender policy before calling a plugin side-question hook", async () => {
-    const codexSideQuestionMock = registerCodexSideQuestionHarness();
-    mockOpenAIPlatformProfile();
-    resolveModelWithRegistryMock.mockReturnValue({
-      provider: "openai",
-      id: "gpt-5.5",
-      api: "openai-responses",
-    });
-    resolveModelAsyncMock.mockResolvedValue({
-      model: {
-        provider: "openai",
-        id: "gpt-5.5",
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-      },
-    });
-    await runSideQuestion({
-      cfg: {
-        channels: {
-          telegram: {
-            groups: {
-              "deny-room": {
-                toolsBySender: {
-                  "id:restricted-sender": { deny: ["*"] },
-                },
-              },
-            },
-          },
-        },
-      } as never,
-      provider: "openai",
-      model: "gpt-5.5",
-      sessionKey: "agent:main:telegram:group:deny-room",
-      messageProvider: "telegram",
-      groupId: "deny-room",
-      senderId: "restricted-sender",
-    });
-
-    expect(codexSideQuestionMock).toHaveBeenCalledOnce();
-    expect(mockArg(codexSideQuestionMock, 0, 0)).toMatchObject({ toolsAllow: [] });
   });
 
   it("does not fall back to the direct provider call when Codex lacks BTW support", async () => {

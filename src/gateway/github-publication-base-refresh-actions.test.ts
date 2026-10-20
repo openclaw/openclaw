@@ -43,6 +43,10 @@ describe("base refresh through the registered session action", () => {
     }));
     const f = await createRequesterPublicationFixture(checkpoint, "local");
     const local = f.local!;
+    const unchangedInput = ".artifacts/build-cache-inputs/retained.json";
+    await fs.mkdir(path.dirname(path.join(local.cwd, unchangedInput)), { recursive: true });
+    await fs.writeFile(path.join(local.cwd, unchangedInput), "retained original input\n");
+    await local.git("add", "--force", "--", unchangedInput);
     await fs.writeFile(path.join(local.cwd, ".gitignore"), ".env.local\n.guest-cache\n");
     const first = await f.coordinator.requestForSessionV2(f.request("first-draft", f.guest));
     expect(first.status).toBe("published");
@@ -90,9 +94,25 @@ describe("base refresh through the registered session action", () => {
     await local.git("-C", upstream, "checkout", "main");
     await local.git("-C", upstream, "merge", "--no-edit", "-s", "ours", first.headCommit);
     await fs.writeFile(path.join(upstream, "upstream.txt"), "unrelated upstream file\n");
-    await local.git("-C", upstream, "add", "upstream.txt");
+    // The synthetic ours merges otherwise record this feature input as a base-side deletion.
+    await fs.mkdir(path.dirname(path.join(upstream, unchangedInput)), { recursive: true });
+    await fs.writeFile(path.join(upstream, unchangedInput), "retained original input\n");
+    const upstreamInputs = [
+      ".artifacts/build-all-cache/source.txt",
+      ".artifacts/build-cache-inputs/source.json",
+    ];
+    for (const entryPath of upstreamInputs) {
+      await fs.mkdir(path.dirname(path.join(upstream, entryPath)), { recursive: true });
+      await fs.writeFile(path.join(upstream, entryPath), "upstream original input\n");
+    }
+    await local.git("-C", upstream, "add", "upstream.txt", unchangedInput, ...upstreamInputs);
     await local.git("-C", upstream, "commit", "-m", "Advance selected contents");
     baseCommit = await local.git("-C", upstream, "rev-parse", "HEAD");
+    for (const commit of [first.headCommit, baseCommit]) {
+      expect(await local.git("-C", upstream, "show", `${commit}:${unchangedInput}`)).toBe(
+        "retained original input",
+      );
+    }
     const partialBase = baseCommit;
     const missingBlob = await local.git("-C", upstream, "rev-parse", "HEAD:upstream.txt");
     const upstreamUrl = pathToFileURL(upstream).href;
@@ -172,6 +192,12 @@ describe("base refresh through the registered session action", () => {
       throw new Error("Fixture managed workspace unavailable");
     }
     const projection = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
+    expect(await fs.readFile(path.join(projection, unchangedInput), "utf8")).toBe(
+      "retained original input\n",
+    );
+    const disposableCache = ".artifacts/build-all-cache/guest-generated.js";
+    await fs.mkdir(path.dirname(path.join(projection, disposableCache)), { recursive: true });
+    await fs.writeFile(path.join(projection, disposableCache), "disposable guest cache\n");
     await fs.writeFile(path.join(projection, "artifact.txt"), "guest saved change\n");
     await fs.writeFile(path.join(projection, "guest.txt"), "saved independent work\n");
     await fs.writeFile(path.join(projection, ".guest-cache"), "saved ignored guest work\n");
@@ -430,6 +456,17 @@ describe("base refresh through the registered session action", () => {
     expect(await fs.readFile(path.join(projection, "upstream.txt"), "utf8")).toBe(
       "unrelated upstream file\n",
     );
+    expect(await fs.readFile(path.join(projection, unchangedInput), "utf8")).toBe(
+      "retained original input\n",
+    );
+    await expect(fs.stat(path.join(local.cwd, disposableCache))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    for (const entryPath of upstreamInputs) {
+      expect(await fs.readFile(path.join(projection, entryPath), "utf8")).toBe(
+        "upstream original input\n",
+      );
+    }
     expect(await fs.readFile(path.join(projection, "guest.txt"), "utf8")).toBe(
       "saved independent work\n",
     );
@@ -493,6 +530,9 @@ describe("base refresh through the registered session action", () => {
     expect(f.publishedTitles).toEqual(["first-draft"]);
     await local.git("merge-base", "--is-ancestor", baseCommit, "HEAD");
     expect(await local.git("show", "HEAD:upstream.txt")).toBe("unrelated upstream file");
+    for (const entryPath of upstreamInputs) {
+      expect(await local.git("show", `HEAD:${entryPath}`)).toBe("upstream original input");
+    }
     expect(await local.git("show", "HEAD:artifact.txt")).toBe(
       "upstream change\nguest saved change after native preparation",
     );

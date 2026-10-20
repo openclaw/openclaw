@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import { hasNodeErrorCode, isNotFoundPathError } from "@openclaw/fs-safe/path";
-import { isMissingPathError } from "./errno.js";
+import { ignoreMissingPath, isMissingPathError } from "./errno.js";
 
 /** Only definite absence, including a non-directory ancestor, permits an absent verdict. */
 export function pathMayExistSync(filePath: string): boolean {
@@ -42,6 +42,11 @@ export async function lstatIfExists(
     }
     throw error;
   }
+}
+
+/** Follow links; only ENOENT means absent, while all other filesystem failures propagate. */
+export async function statIfExists(filePath: string): Promise<fs.Stats | undefined> {
+  return fsPromises.stat(filePath).catch(ignoreMissingPath);
 }
 
 /** Best-effort discovery probe; inaccessible candidates are not usable. */

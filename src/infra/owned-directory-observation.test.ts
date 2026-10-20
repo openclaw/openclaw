@@ -215,6 +215,9 @@ describe("process-owned directory observation", () => {
     subscriptions.push(observeOwnedDirectory(directory, listener));
     watch.mock.calls[0]![2]("rename", "profiles");
     expect(listener).toHaveBeenCalledWith("profiles");
+    listener.mockClear();
+    watch.mock.calls[0]![2]("change", path.basename(directory));
+    expect(listener).toHaveBeenCalledWith(path.basename(directory));
     expect(watch).toHaveBeenCalledTimes(1);
   });
 
@@ -237,7 +240,7 @@ describe("process-owned directory observation", () => {
     expect(listener).toHaveBeenCalledWith("auth.json");
   });
 
-  it("keeps an absent directory's ancestor watch across unrelated child renames", () => {
+  it("ignores ancestor activity while observing missing subtree creation and replacement", () => {
     const root = tempDirs.make("owned-directory-ancestor-");
     const agents = path.join(root, "agents");
     const watch = vi.spyOn(nativeWatchFs, "watch");
@@ -262,13 +265,20 @@ describe("process-owned directory observation", () => {
     const close = vi.spyOn(ancestor!.watcher, "close");
     // SQLite sidecars beside a state database appear and vanish on every write.
     ancestor!.onChange("rename", "state.sqlite-journal");
+    // macOS also reports the parent's own metadata change for sibling writes.
+    ancestor!.onChange("change", path.basename(root));
     expect(changed).not.toHaveBeenCalled();
     expect(close).not.toHaveBeenCalled();
     expect(opened()).toHaveLength(1);
     fs.mkdirSync(agents);
     ancestor!.onChange("rename", "agents");
+    expect(changed).toHaveBeenCalledOnce();
     expect(close).toHaveBeenCalledOnce();
     expect(opened().map((entry) => entry.path)).toEqual([root, agents]);
+    changed.mockClear();
+    opened()[1]!.onChange("rename", "agents");
+    expect(changed).toHaveBeenCalledOnce();
+    expect(opened().map((entry) => entry.path)).toEqual([root, agents, agents]);
   });
 
   it("re-admits an absent directory and invalidates after missed notifications", () => {
