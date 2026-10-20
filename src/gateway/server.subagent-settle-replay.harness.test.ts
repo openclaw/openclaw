@@ -307,16 +307,15 @@ describe("public yielded settle replay with real Gateway admission", () => {
         expect(await reconciliation.result).toBe(outcome === "success");
         expect(agentCommandMock).toHaveBeenCalledOnce();
         const persisted = loadSubagentRegistryFromSqlite().get(child.runId);
+        expect(reconciliation.completeBatch).toHaveBeenCalledOnce();
+        expect(persisted?.requesterSettleWake).toBeUndefined();
         if (outcome === "success") {
-          expect(reconciliation.completeBatch).toHaveBeenCalledOnce();
           expect(reconciliation.completeBatch.mock.calls[0]?.[2]).toMatchObject({
             delivered: true,
             requesterVisibleFinalDelivered: true,
           });
-          expect(persisted?.requesterSettleWake).toBeUndefined();
         } else {
           // Record the failed accepted execution once; retrying it could repeat effects.
-          expect(reconciliation.completeBatch).toHaveBeenCalledOnce();
           expect(reconciliation.completeBatch.mock.calls[0]?.[2]).toMatchObject({
             delivered: false,
             path: "direct",
@@ -325,7 +324,6 @@ describe("public yielded settle replay with real Gateway admission", () => {
           expect(
             reconciliation.completeBatch.mock.calls[0]?.[2]?.requesterVisibleFinalDelivered,
           ).toBeUndefined();
-          expect(persisted?.requesterSettleWake).toBeUndefined();
           expect(persisted?.delivery).toEqual({ status: "delivered" });
         }
         expect(await readUserTurnCompletionForTest(requesterScope, runId)).toMatchObject({

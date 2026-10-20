@@ -56,6 +56,17 @@ installGatewayTestHooks({
   cleanup: async () => harness?.close(),
 });
 
+function decodeFrame(decoder: GatewayChatEvents, frame: EventFrame): EventFrame {
+  let decoded: EventFrame | undefined;
+  decoder.dispatch(frame, (event) => {
+    decoded = event;
+  });
+  if (!decoded) {
+    throw new Error("Decoder discarded a valid stream");
+  }
+  return decoded;
+}
+
 function expectFullSessionRowFrame(
   frame: EventFrame | undefined,
   legacy: EventFrame | undefined,
@@ -65,32 +76,20 @@ function expectFullSessionRowFrame(
     throw new Error("Expected paired recovery frames");
   }
   expect(frame.payload).toHaveProperty("session.full");
-  let decoded: EventFrame | undefined;
-  decoder.dispatch(frame, (event) => {
-    decoded = event;
-  });
-  expect(decoded?.payload).toEqual(legacy.payload);
+  expect(decodeFrame(decoder, frame).payload).toEqual(legacy.payload);
 }
 
 test("capable and legacy sockets produce identical session payloads and consumer state", async () => {
   const readRetention = observeSessionEventRowRetention();
-  const capable = await harness.openClient({
-    caps: [
-      "session-scoped-events",
-      "session-row-deltas",
-      "session-event-field-refs",
-      "roster-message-bodies-optional",
-    ],
-  });
+  const deltaCaps = [
+    "session-scoped-events",
+    "session-row-deltas",
+    "session-event-field-refs",
+    "roster-message-bodies-optional",
+  ];
+  const capable = await harness.openClient({ caps: deltaCaps });
   const legacy = await harness.openClient({ caps: ["session-scoped-events"] });
-  const roster = await harness.openClient({
-    caps: [
-      "session-scoped-events",
-      "session-row-deltas",
-      "session-event-field-refs",
-      "roster-message-bodies-optional",
-    ],
-  });
+  const roster = await harness.openClient({ caps: deltaCaps });
   const keys = Array.from({ length: 5 }, (_, depth) => `agent:main:row-delta-depth-${depth}`);
   const key = keys.at(-1);
   if (!key) {
@@ -146,13 +145,8 @@ test("capable and legacy sockets produce identical session payloads and consumer
   if (!initial.payload) {
     throw new Error("Expected roster");
   }
-  const legacyWire: string[] = [];
-  const streams = [
-    collectSessionRowFrames(capable.ws),
-    collectSessionRowFrames(legacy.ws, legacyWire),
-  ];
-  const rosterWire: string[] = [];
-  const rosterFrames = collectSessionRowFrames(roster.ws, rosterWire);
+  const streams = [collectSessionRowFrames(capable.ws), collectSessionRowFrames(legacy.ws)];
+  const rosterFrames = collectSessionRowFrames(roster.ws);
   let fullBodiesFrom = Number.POSITIVE_INFINITY;
   let finishSubagents = () => {};
   onTestFinished(() => finishSubagents());
@@ -389,8 +383,7 @@ test("capable and legacy sockets produce identical session payloads and consumer
   const reconnect = vi.fn();
   const decoder = new GatewayChatEvents(reconnect);
   const rosterDecoder = new GatewayChatEvents(reconnect);
-  const bodyMeasurements: { before: number; after: number; wireAfter: number; role: unknown }[] =
-    [];
+  let omittedRosterMessages = 0;
   let completeRosterMessages = 0;
   expect(rosterFrames).toHaveLength(baseline.length);
   // Retain Node's typed-array realm for SQLite RPC while UI owners register their elements.
@@ -444,22 +437,13 @@ test("capable and legacy sockets produce identical session payloads and consumer
       throw new Error("Missing corresponding legacy frame");
     }
     patches += JSON.stringify(frame.payload).includes('"base":') ? 1 : 0;
-    let decoded: EventFrame | undefined;
-    decoder.dispatch(frame, (event) => {
-      decoded = event;
-    });
-    expect(decoded?.payload, `frame ${index} ${frame.event}`).toEqual(original.payload);
-    if (!decoded) {
-      throw new Error("Decoder discarded a valid stream");
-    }
+    const decoded = decodeFrame(decoder, frame);
+    expect(decoded.payload, `frame ${index} ${frame.event}`).toEqual(original.payload);
     const rosterFrame = rosterFrames[index];
     if (!rosterFrame) {
       throw new Error("Missing corresponding roster frame");
     }
-    let rosterDecoded: EventFrame | undefined;
-    rosterDecoder.dispatch(rosterFrame, (event) => {
-      rosterDecoded = event;
-    });
+    const rosterDecoded = decodeFrame(rosterDecoder, rosterFrame);
     const expectedPayload = { ...(decoded.payload as Record<string, unknown>) };
     if (frame.event === "session.message") {
       expect(original.payload).toHaveProperty("message");
@@ -467,19 +451,11 @@ test("capable and legacy sockets produce identical session payloads and consumer
       if (index < fullBodiesFrom) {
         delete expectedPayload.message;
         expect(rosterFrame.payload).not.toHaveProperty("message");
-        const withoutBody = { ...(original.payload as Record<string, unknown>) };
-        const message = withoutBody.message as { role?: unknown };
-        delete withoutBody.message;
-        bodyMeasurements.push({
-          before: Buffer.byteLength(legacyWire[index] ?? ""),
-          after: Buffer.byteLength(JSON.stringify({ ...original, payload: withoutBody })),
-          wireAfter: Buffer.byteLength(rosterWire[index] ?? ""),
-          role: message.role,
-        });
+        omittedRosterMessages++;
       } else {
         completeRosterMessages += 1;
       }
-      if (bodyMeasurements.length === 1) {
+      if (omittedRosterMessages === 1) {
         // Decoding preserves the full envelope, independent of object property order.
         expect({ ...decoded, seq: original.seq }).toEqual(original);
       }
@@ -491,46 +467,32 @@ test("capable and legacy sockets produce identical session payloads and consumer
       consumers[1]?.snapshot(),
     );
   }
-  expect(bodyMeasurements.length).toBeGreaterThan(0);
+  expect(omittedRosterMessages).toBeGreaterThan(0);
   expect(completeRosterMessages).toBeGreaterThan(0);
-  console.log("ROSTER_MESSAGE_REAL_SOCKET_BYTES", JSON.stringify(bodyMeasurements));
   expect(patches).toBeGreaterThan(10);
   expect(reconnect).not.toHaveBeenCalled();
   expect(consumers[0]?.snapshot().chat.messages.length).toBeGreaterThan(0);
-  const categories = [
-    [
-      "recap",
-      (event: EventFrame) => (event.payload as { reason?: string }).reason === "activity-summary",
-    ],
-    [
-      "nested-tool",
-      (event: EventFrame) =>
-        event.event === "session.message" &&
-        (event.payload as { message?: { role?: string } }).message?.role === "custom",
-    ],
-    [
-      "changed",
-      (event: EventFrame) =>
-        event.event === "sessions.changed" &&
-        (event.payload as { reason?: string }).reason !== "activity-summary",
-    ],
-  ] as const;
-  const measurements = Object.fromEntries(
-    categories.map(([name, matches]) => {
-      const index = baseline.findLastIndex(matches);
-      if (index < 0) {
-        throw new Error(`Expected measured ${name} frame`);
-      }
-      return [
-        name,
-        {
-          before: Buffer.byteLength(JSON.stringify(baseline[index])),
-          after: Buffer.byteLength(JSON.stringify(encoded[index])),
-        },
-      ];
-    }),
-  );
-  console.log("SESSION_ROW_DELTA_REAL_SOCKET_BYTES", JSON.stringify(measurements));
+  expect(
+    baseline.some(
+      (frame) => isRecord(frame.payload) && frame.payload.reason === "activity-summary",
+    ),
+  ).toBe(true);
+  expect(
+    baseline.some(
+      (frame) =>
+        frame.event === "session.message" &&
+        isRecord(frame.payload) &&
+        isRecord(frame.payload.message) &&
+        frame.payload.message.role === "custom",
+    ),
+  ).toBe(true);
+  expect(
+    baseline.some(
+      (frame) =>
+        frame.event === "sessions.changed" &&
+        (!isRecord(frame.payload) || frame.payload.reason !== "activity-summary"),
+    ),
+  ).toBe(true);
   const retainedBeforeUnsubscribe = await readRetention();
   expect(retainedBeforeUnsubscribe.entries).toBeGreaterThan(0);
   await decoder.request(
@@ -562,11 +524,7 @@ test("capable and legacy sockets produce identical session payloads and consumer
     throw new Error("Expected warm recap after unsubscribe");
   }
   expect(afterUnsubscribe.payload).toHaveProperty("session.base");
-  let decodedAfterUnsubscribe: EventFrame | undefined;
-  decoder.dispatch(afterUnsubscribe, (event) => {
-    decodedAfterUnsubscribe = event;
-  });
-  expect(decodedAfterUnsubscribe?.payload).toEqual(baseline.at(-1)?.payload);
+  expect(decodeFrame(decoder, afterUnsubscribe).payload).toEqual(baseline.at(-1)?.payload);
   await closeSessionRowSocket(roster.ws);
   await closeSessionRowSocket(capable.ws);
   const reopened = await harness.openClient({
@@ -585,11 +543,9 @@ test("capable and legacy sockets produce identical session payloads and consumer
     throw new Error("Expected warm frame with legacy recipient first");
   }
   expect(reverseOrderWarmFrame.payload).toHaveProperty("session.base");
-  let reverseOrderDecoded: EventFrame | undefined;
-  reopenedDecoder.dispatch(reverseOrderWarmFrame, (event) => {
-    reverseOrderDecoded = event;
-  });
-  expect(reverseOrderDecoded?.payload).toEqual(baseline.at(-1)?.payload);
+  expect(decodeFrame(reopenedDecoder, reverseOrderWarmFrame).payload).toEqual(
+    baseline.at(-1)?.payload,
+  );
   expect(reconnect).not.toHaveBeenCalled();
   await Promise.all([closeSessionRowSocket(reopened.ws), closeSessionRowSocket(legacy.ws)]);
   await vi.waitFor(async () =>

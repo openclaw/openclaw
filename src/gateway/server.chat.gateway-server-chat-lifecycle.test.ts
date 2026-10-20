@@ -60,24 +60,44 @@ const {
   withMainSessionStore,
 } = gatewaySuite;
 
+async function openBrowser(
+  id: (typeof GATEWAY_CLIENT_NAMES)[keyof typeof GATEWAY_CLIENT_NAMES] = GATEWAY_CLIENT_NAMES.CONTROL_UI,
+) {
+  const browser = new WebSocket(`ws://127.0.0.1:${port}`, {
+    headers: { origin: `http://127.0.0.1:${port}` },
+  });
+  trackConnectChallengeNonce(browser);
+  await new Promise<void>((resolve) => {
+    browser.once("open", resolve);
+  });
+  await connectOk(browser, {
+    client: {
+      id,
+      version: id === GATEWAY_CLIENT_NAMES.WEBCHAT ? "1.0.0" : "test",
+      platform: id === GATEWAY_CLIENT_NAMES.WEBCHAT ? "test" : "web",
+      mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+    },
+  });
+  return browser;
+}
+
+function terminalEvent(browser: WebSocket, runId: string) {
+  const terminal = onceMessage(
+    browser,
+    (frame) =>
+      frame.type === "event" &&
+      frame.event === "chat" &&
+      frame.payload?.runId === runId &&
+      ["aborted", "error", "final"].includes(String(frame.payload?.state)),
+  );
+  void terminal.catch(() => undefined);
+  return terminal;
+}
+
 describe("gateway server chat lifecycle", () => {
   test("sessions.abort terminalizes a restart-safe chat before agent adoption", async () => {
     await withMainSessionStore(async (dir) => {
-      const browser = new WebSocket(`ws://127.0.0.1:${port}`, {
-        headers: { origin: `http://127.0.0.1:${port}` },
-      });
-      trackConnectChallengeNonce(browser);
-      await new Promise<void>((resolve) => {
-        browser.once("open", resolve);
-      });
-      await connectOk(browser, {
-        client: {
-          id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
-          version: "test",
-          platform: "web",
-          mode: GATEWAY_CLIENT_MODES.WEBCHAT,
-        },
-      });
+      const browser = await openBrowser();
       expect(await rpcReq(browser, "sessions.subscribe", {})).toMatchObject({
         ok: true,
         payload: { subscribed: true },
@@ -121,15 +141,7 @@ describe("gateway server chat lifecycle", () => {
         return await getReplyFromConfig(...args);
       });
 
-      const stoppedTerminal = onceMessage(
-        browser,
-        (frame) =>
-          frame.type === "event" &&
-          frame.event === "chat" &&
-          frame.payload?.runId === stoppedRunId &&
-          ["aborted", "error", "final"].includes(String(frame.payload?.state)),
-      );
-      void stoppedTerminal.catch(() => undefined);
+      const stoppedTerminal = terminalEvent(browser, stoppedRunId);
       try {
         const accepted = await rpcReq(browser, "chat.send", {
           sessionKey: "main",
@@ -165,15 +177,7 @@ describe("gateway server chat lifecycle", () => {
           readConsistency: "latest",
         });
 
-        const successorTerminal = onceMessage(
-          browser,
-          (frame) =>
-            frame.type === "event" &&
-            frame.event === "chat" &&
-            frame.payload?.runId === successorRunId &&
-            ["aborted", "error", "final"].includes(String(frame.payload?.state)),
-        );
-        void successorTerminal.catch(() => undefined);
+        const successorTerminal = terminalEvent(browser, successorRunId);
         const successor = await rpcReq(browser, "chat.send", {
           sessionKey: "main",
           message: "run after the stopped pre-adoption turn",
@@ -209,21 +213,7 @@ describe("gateway server chat lifecycle", () => {
 
   test("chat.send replays cancellation when admission fails after its source is stopped", async () => {
     await withMainSessionStore(async () => {
-      const browser = new WebSocket(`ws://127.0.0.1:${port}`, {
-        headers: { origin: `http://127.0.0.1:${port}` },
-      });
-      trackConnectChallengeNonce(browser);
-      await new Promise<void>((resolve) => {
-        browser.once("open", resolve);
-      });
-      await connectOk(browser, {
-        client: {
-          id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
-          version: "test",
-          platform: "web",
-          mode: GATEWAY_CLIENT_MODES.WEBCHAT,
-        },
-      });
+      const browser = await openBrowser();
       const runId = "idem-stopped-admission-read-failure";
       const reading = createDeferred();
       const aborted = createDeferred();
@@ -471,30 +461,25 @@ describe("gateway server chat lifecycle", () => {
     testState.sessionStorePath = path.join(dir, "sessions.json");
     await writeSessionStore({
       entries: {
-        main: {
-          sessionId: "sess-main",
-          updatedAt: Date.now(),
-          verboseLevel: "off",
-        },
+        main: { sessionId: "sess-main", updatedAt: Date.now(), verboseLevel: "off" },
       },
     });
-
-    const webchatWs = new WebSocket(`ws://127.0.0.1:${port}`, {
-      headers: { origin: `http://127.0.0.1:${port}` },
-    });
-    trackConnectChallengeNonce(webchatWs);
-    await new Promise<void>((resolve) => {
-      webchatWs.once("open", resolve);
-    });
-    await connectOk(webchatWs, {
-      client: {
-        id: GATEWAY_CLIENT_NAMES.WEBCHAT,
-        version: "1.0.0",
-        platform: "test",
-        mode: GATEWAY_CLIENT_MODES.WEBCHAT,
-      },
-    });
-
+    const webchatWs = await openBrowser(GATEWAY_CLIENT_NAMES.WEBCHAT);
+    const lifecycle = (runId: string, data: Record<string, unknown>) =>
+      emitAgentEvent({ runId, stream: "lifecycle", data });
+    const waitForLifecycle = (
+      runId: string,
+      data: Record<string, unknown>,
+      timeoutMs = 200,
+      start?: Record<string, unknown>,
+    ) => {
+      const waiting = rpcReq(webchatWs, "agent.wait", { runId, timeoutMs });
+      if (start) {
+        lifecycle(runId, start);
+      }
+      queueMicrotask(() => lifecycle(runId, data));
+      return waiting;
+    };
     try {
       registerAgentRunContext("run-tool-1", {
         sessionKey: "main",
@@ -516,42 +501,26 @@ describe("gateway server chat lifecycle", () => {
 
         const evt = await agentEvtP;
         const payload = evt.payload && typeof evt.payload === "object" ? evt.payload : {};
-        expect(payload.sessionKey).toBe("main");
-        expect(payload.stream).toBe("assistant");
+        expect(payload).toMatchObject({ sessionKey: "main", stream: "assistant" });
       }
 
-      {
-        const waitP = rpcReq(webchatWs, "agent.wait", {
-          runId: "run-wait-1",
-          timeoutMs: 200,
-        });
-
-        queueMicrotask(() => {
-          emitAgentEvent({
-            runId: "run-wait-1",
-            stream: "lifecycle",
-            data: { phase: "end", startedAt: 200, endedAt: 210 },
-          });
-        });
-
-        const res = await waitP;
-        expectAgentWaitStartedAt(res, 200);
-      }
+      expectAgentWaitStartedAt(
+        await waitForLifecycle("run-wait-1", {
+          phase: "end",
+          startedAt: 200,
+          endedAt: 210,
+        }),
+        200,
+      );
 
       {
-        emitAgentEvent({
-          runId: "run-wait-early",
-          stream: "lifecycle",
-          data: { phase: "end", startedAt: 50, endedAt: 55 },
-        });
+        lifecycle("run-wait-early", { phase: "end", startedAt: 50, endedAt: 55 });
 
         const res = await rpcReq(webchatWs, "agent.wait", {
           runId: "run-wait-early",
           timeoutMs: 200,
         });
-        expect(res.ok).toBe(true);
-        expect(res.payload?.status).toBe("ok");
-        expect(res.payload?.startedAt).toBe(50);
+        expect(res).toMatchObject({ ok: true, payload: { status: "ok", startedAt: 50 } });
       }
 
       {
@@ -562,45 +531,23 @@ describe("gateway server chat lifecycle", () => {
         expectAgentWaitTimeout(res);
       }
 
-      {
-        const waitP = rpcReq(webchatWs, "agent.wait", {
-          runId: "run-wait-err",
-          timeoutMs: 50,
-        });
-
-        queueMicrotask(() => {
-          emitAgentEvent({
-            runId: "run-wait-err",
-            stream: "lifecycle",
-            data: { phase: "error", error: "boom" },
-          });
-        });
-
-        const res = await waitP;
-        expectAgentWaitTimeout(res, "boom");
-      }
+      expectAgentWaitTimeout(
+        await waitForLifecycle(
+          "run-wait-err",
+          {
+            phase: "error",
+            error: "boom",
+          },
+          50,
+        ),
+        "boom",
+      );
 
       {
-        const waitP = rpcReq(webchatWs, "agent.wait", {
-          runId: "run-wait-start",
-          timeoutMs: 200,
+        const res = await waitForLifecycle("run-wait-start", { phase: "end", endedAt: 456 }, 200, {
+          phase: "start",
+          startedAt: 123,
         });
-
-        emitAgentEvent({
-          runId: "run-wait-start",
-          stream: "lifecycle",
-          data: { phase: "start", startedAt: 123 },
-        });
-
-        queueMicrotask(() => {
-          emitAgentEvent({
-            runId: "run-wait-start",
-            stream: "lifecycle",
-            data: { phase: "end", endedAt: 456 },
-          });
-        });
-
-        const res = await waitP;
         expectAgentWaitStartedAt(res, 123);
         expect(res.payload?.endedAt).toBe(456);
       }
