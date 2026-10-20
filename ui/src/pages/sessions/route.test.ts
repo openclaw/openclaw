@@ -10,7 +10,7 @@ import { page, type SessionsRouteData } from "./route.ts";
 async function loadSessionsRoute(options: {
   search: string;
   scopeId: string | null;
-  expectedQuery: SessionListOptions;
+  expectedQuery: Partial<SessionListOptions>;
 }) {
   const list = vi.fn();
   const listSnapshot = vi.fn();
@@ -51,69 +51,34 @@ async function loadSessionsRoute(options: {
     source: "sessions-page",
     rowMode: "compact",
     excludeDock: !data.expandedSessionKey,
+    limit: 50,
+    includeGlobal: true,
+    includeUnknown: false,
+    includeDerivedTitles: false,
+    includeLastMessage: false,
     ...options.expectedQuery,
   });
 }
 
 describe("sessions route", () => {
   it.each([
-    {
-      name: "default selected-agent roster",
-      search: "",
-      scopeId: "writer",
-      expectedQuery: {
-        limit: 50,
-        includeGlobal: true,
-        includeUnknown: false,
-        includeDerivedTitles: false,
-        includeLastMessage: false,
-        archivedFilter: "active" as const,
-        agentId: "writer",
-      },
-    },
-    {
-      name: "archived all-agent roster",
-      search: "?status=archived",
-      scopeId: null,
-      expectedQuery: {
-        limit: 50,
-        includeGlobal: true,
-        includeUnknown: false,
-        includeDerivedTitles: false,
-        includeLastMessage: false,
-        archivedFilter: "archived" as const,
-      },
-    },
-    {
-      name: "all-status selected-agent roster",
-      search: "?status=all",
-      scopeId: "main",
-      expectedQuery: {
-        limit: 50,
-        includeGlobal: true,
-        includeUnknown: false,
-        includeDerivedTitles: false,
-        includeLastMessage: false,
-        archivedFilter: "all" as const,
-        agentId: "main",
-      },
-    },
-    {
-      name: "deep link owned by a different agent",
-      search: "?session=agent%3Aresearch%3Alinked",
-      scopeId: "main",
-      expectedQuery: {
-        limit: 50,
+    ["", "writer", { archivedFilter: "active", agentId: "writer" }],
+    ["?status=archived", null, { archivedFilter: "archived" }],
+    ["?status=all", "main", { archivedFilter: "all", agentId: "main" }],
+    [
+      "?session=agent%3Aresearch%3Alinked",
+      "main",
+      {
         search: "agent:research:linked",
-        includeGlobal: true,
         includeUnknown: true,
-        includeDerivedTitles: false,
-        includeLastMessage: false,
-        archivedFilter: "active" as const,
+        archivedFilter: "active",
         agentId: "research",
       },
+    ],
+  ] as const)(
+    "prepares %s in scope %s without issuing outside the page owner",
+    async (search, scopeId, expectedQuery) => {
+      await loadSessionsRoute({ search, scopeId, expectedQuery });
     },
-  ])("prepares the $name without issuing outside the page owner", async (testCase) => {
-    await loadSessionsRoute(testCase);
-  });
+  );
 });
