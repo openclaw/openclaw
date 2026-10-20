@@ -19,32 +19,31 @@ vi.mock("../../config/sessions.js", () => ({
 
 vi.mock("./message.js", () => ({ sendMessage: mocks.sendMessage }));
 
-type OutboundSendServiceModule = typeof import("./outbound-send-service.js");
-type ExecuteSendContext = Parameters<OutboundSendServiceModule["executeSendAction"]>[0]["ctx"];
-
 const plugin = createChannelTestPluginBase({ id: "demo-outbound" });
-
-function createContext(overrides: Partial<ExecuteSendContext>): ExecuteSendContext {
-  const cfg = overrides.cfg ?? {};
-  const params = overrides.params ?? { to: "channel:123", message: "delivered" };
-  return {
-    channelPlugin: plugin,
-    channel: plugin.id,
-    dryRun: false,
-    ...overrides,
-    cfg,
-    params,
-    input: { cfg, action: "send", params, ...overrides.input },
-  };
+const onSendAccepted = vi.fn(async () => {});
+function send() {
+  const cfg = {};
+  const params = { to: "channel:123", message: "delivered" };
+  return executeSendAction({
+    ctx: {
+      channelPlugin: plugin,
+      channel: plugin.id,
+      dryRun: false,
+      cfg,
+      params,
+      input: { cfg, action: "send", params },
+      onSendAccepted,
+      mirror: { sessionKey: "agent:main:demo-outbound:channel:123" },
+    },
+    to: "channel:123",
+    message: "accepted then unsent",
+  });
 }
 
 describe("accepted plugin delivery outcomes", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
+  beforeEach(() => vi.clearAllMocks());
 
   it("commits an accepted partial plugin send without mirroring unproven content", async () => {
-    const onSendAccepted = vi.fn(async () => {});
     mocks.dispatchChannelMessageAction.mockRejectedValueOnce(
       createChannelPartialDeliveryError(new Error("second part failed"), {
         messageIds: ["msg-plugin"],
@@ -52,16 +51,7 @@ describe("accepted plugin delivery outcomes", () => {
       }),
     );
 
-    await expect(
-      executeSendAction({
-        ctx: createContext({
-          onSendAccepted,
-          mirror: { sessionKey: "agent:main:demo-outbound:channel:123" },
-        }),
-        to: "channel:123",
-        message: "accepted then unsent",
-      }),
-    ).rejects.toThrow("second part failed");
+    await expect(send()).rejects.toThrow("second part failed");
 
     expect(onSendAccepted).toHaveBeenCalledOnce();
     expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
@@ -69,7 +59,6 @@ describe("accepted plugin delivery outcomes", () => {
   });
 
   it("commits a returned partial plugin send without mirroring unproven content", async () => {
-    const onSendAccepted = vi.fn(async () => {});
     mocks.dispatchChannelMessageAction.mockResolvedValueOnce({
       content: [],
       details: {
@@ -80,16 +69,7 @@ describe("accepted plugin delivery outcomes", () => {
       },
     });
 
-    const result = await executeSendAction({
-      ctx: createContext({
-        onSendAccepted,
-        mirror: { sessionKey: "agent:main:demo-outbound:channel:123" },
-      }),
-      to: "channel:123",
-      message: "accepted then unsent",
-    });
-
-    expect(result).toMatchObject({
+    await expect(send()).resolves.toMatchObject({
       handledBy: "plugin",
       payload: { deliveryStatus: "partial_failed", sentBeforeError: true },
     });

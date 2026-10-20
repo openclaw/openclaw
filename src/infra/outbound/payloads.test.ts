@@ -1,5 +1,3 @@
-// Covers outbound payload normalization across text, media, presentation,
-// interactive blocks, mirror text, and literal message-tool text.
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -21,7 +19,12 @@ import {
   summarizeOutboundPayloadForTransport,
 } from "./payloads.js";
 
-describe("normalizeReplyPayloadsForDelivery", () => {
+const mirror = (payload: ReplyPayload) =>
+  projectOutboundPayloadPlanForMirror(createOutboundPayloadPlan([payload]));
+const presentation = (block: NonNullable<ReplyPayload["presentation"]>["blocks"][number]) =>
+  mirror({ presentation: { blocks: [block] } });
+
+describe("outbound payloads", () => {
   it("deduplicates a file URL directive with its explicit local path: café 100% image.png", () => {
     const fileName = "café 100% image.png";
 
@@ -36,22 +39,16 @@ describe("normalizeReplyPayloadsForDelivery", () => {
     expect(payload?.attachments).toEqual(attachments);
   });
 
-  it.each([
-    {
-      name: "multiline Markdown images",
-      text: "Caption ![one](\nhttps://x.test/one.png\n) ![two](\nhttps://x.test/two.png\n)",
-      extractMarkdownImages: true,
-    },
-  ])("merges every explicit attachment and extracted $name in source order", (testCase) => {
+  it("merges explicit attachments and multiline Markdown images in source order", () => {
     const plan = createOutboundPayloadPlan(
       [
         {
-          text: testCase.text,
+          text: "Caption ![one](\nhttps://x.test/one.png\n) ![two](\nhttps://x.test/two.png\n)",
           mediaUrl: "https://x.test/primary.png",
           mediaUrls: ["https://x.test/explicit.png", "https://x.test/one.png"],
         },
       ],
-      { extractMarkdownImages: testCase.extractMarkdownImages },
+      { extractMarkdownImages: true },
     );
     const mediaUrls = [
       "https://x.test/explicit.png",
@@ -85,35 +82,20 @@ describe("normalizeReplyPayloadsForDelivery", () => {
       mediaUrl: undefined,
       mediaUrls: ["https://x.test/one.png", "https://x.test/two.png", "https://x.test/primary.png"],
     });
-    expect(payload?.attachments).toEqual([
-      {},
-      {},
-      { name: "Explicit photo.png", mimeType: "image/png" },
-    ]);
+    expect(payload?.attachments).toEqual([{}, {}, ...originalSource.attachments!]);
     expect(source).toEqual(originalSource);
   });
 
   it("strips leading echoed inbound metadata before parsing reply directives", () => {
-    const text = [
-      markInboundContextLabel("Location:"),
-      "```json",
-      '{"latitude":51.5072,"longitude":-0.1276}',
-      "```",
-      "",
-      markInboundContextLabel("Plugin context:"),
-      "```json",
-      '{"source":"example","payload":{"mode":"test"}}',
-      "```",
-      "",
-      "[[reply_to: 123]] Visible reply",
-    ].join("\n");
+    const context = (label: string, json: string) =>
+      `${markInboundContextLabel(label)}\n\`\`\`json\n${json}\n\`\`\`\n\n`;
+    const text =
+      context("Location:", '{"latitude":51.5072,"longitude":-0.1276}') +
+      context("Plugin context:", '{"source":"example","payload":{"mode":"test"}}') +
+      "[[reply_to: 123]] Visible reply";
 
     expect(normalizeReplyPayloadsForDelivery([{ text }])).toMatchObject([
-      {
-        text: "Visible reply",
-        replyToId: "123",
-        replyToTag: true,
-      },
+      { text: "Visible reply", replyToId: "123", replyToTag: true },
     ]);
   });
 
@@ -123,12 +105,9 @@ describe("normalizeReplyPayloadsForDelivery", () => {
       const payloads: ReplyPayload[] = [{ text: `${text} citeturn2view0` }];
 
       expect(normalizeReplyPayloadsForDelivery(payloads)).toMatchObject([{ text }]);
-      expect(projectOutboundPayloadPlanForMirror(createOutboundPayloadPlan(payloads)).text).toBe(
-        text,
-      );
-      expect(projectOutboundPayloadPlanForJson(createOutboundPayloadPlan(payloads))).toMatchObject([
-        { text },
-      ]);
+      const plan = createOutboundPayloadPlan(payloads);
+      expect(projectOutboundPayloadPlanForMirror(plan).text).toBe(text);
+      expect(projectOutboundPayloadPlanForJson(plan)).toMatchObject([{ text }]);
     },
   );
 
@@ -144,46 +123,30 @@ describe("normalizeReplyPayloadsForDelivery", () => {
   ])("preserves literal outbound text: %s", (text) => {
     expect(normalizeReplyPayloadsForDelivery([{ text }])).toMatchObject([{ text }]);
   });
-});
-
-describe("JSON payload projection", () => {
   it("text + media variants", () => {
-    const { input, expected } = {
-      input: [
-        { text: "hi" },
-        { text: "photo", mediaUrl: "https://x.test/a.jpg", audioAsVoice: true },
-        { text: "multi", mediaUrls: ["https://x.test/1.png"] },
-      ],
-      expected: [
-        {
-          text: "hi",
-          mediaUrl: null,
-          mediaUrls: undefined,
-          audioAsVoice: undefined,
-          channelData: undefined,
-        },
-        {
-          text: "photo",
-          mediaUrl: "https://x.test/a.jpg",
-          mediaUrls: ["https://x.test/a.jpg"],
-          audioAsVoice: true,
-          channelData: undefined,
-        },
-        {
-          text: "multi",
-          mediaUrl: null,
-          mediaUrls: ["https://x.test/1.png"],
-          audioAsVoice: undefined,
-          channelData: undefined,
-        },
-      ],
+    const input = [
+      { text: "hi" },
+      { text: "photo", mediaUrl: "https://x.test/a.jpg", audioAsVoice: true },
+      { text: "multi", mediaUrls: ["https://x.test/1.png"] },
+    ];
+    const defaults = {
+      mediaUrl: null,
+      mediaUrls: undefined,
+      audioAsVoice: undefined,
+      channelData: undefined,
     };
-
-    expect(projectOutboundPayloadPlanForJson(createOutboundPayloadPlan(input))).toEqual(expected);
+    expect(projectOutboundPayloadPlanForJson(createOutboundPayloadPlan(input))).toEqual([
+      { ...defaults, text: "hi" },
+      {
+        ...defaults,
+        text: "photo",
+        mediaUrl: "https://x.test/a.jpg",
+        mediaUrls: ["https://x.test/a.jpg"],
+        audioAsVoice: true,
+      },
+      { ...defaults, text: "multi", mediaUrls: ["https://x.test/1.png"] },
+    ]);
   });
-});
-
-describe("OutboundPayloadPlan projections", () => {
   const matrix: ReplyPayload[] = [
     { text: "hello" },
     { text: "NO_REPLY", audioAsVoice: true },
@@ -199,10 +162,7 @@ describe("OutboundPayloadPlan projections", () => {
 
     const [normalized] = normalizeReplyPayloadsForDelivery([{ text }]);
 
-    expect(normalized).toMatchObject({
-      text: "Visible reply",
-      replyToTag: false,
-    });
+    expect(normalized).toMatchObject({ text: "Visible reply", replyToTag: false });
     expect(normalized?.replyToId).toBeUndefined();
     expect(normalized?.replyToCurrent).toBeUndefined();
   });
@@ -238,11 +198,8 @@ describe("OutboundPayloadPlan projections", () => {
       spokenText: "hidden transcript",
       isStatusNotice: true,
     });
+    expect(summary).toMatchObject({ text: "✅ Session reset.", isStatusNotice: true });
     expect(summary.hookContent).toBeUndefined();
-    expect(summary).toMatchObject({
-      text: "✅ Session reset.",
-      isStatusNotice: true,
-    });
   });
 
   it("mirrors location-only replies without exposing untrusted place labels", () => {
@@ -264,104 +221,63 @@ describe("OutboundPayloadPlan projections", () => {
   });
 
   it("mirrors chart titles and values when no plain reply text exists", () => {
-    const plan = createOutboundPayloadPlan([
-      {
-        presentation: {
-          blocks: [
-            {
-              type: "chart",
-              chartType: "pie",
-              title: "Revenue mix",
-              segments: [
-                { label: "Product", value: 60 },
-                { label: "Services", value: 40 },
-              ],
-            },
-          ],
-        },
-      },
-    ]);
-
-    expect(projectOutboundPayloadPlanForMirror(plan)).toEqual({
+    expect(
+      presentation({
+        type: "chart",
+        chartType: "pie",
+        title: "Revenue mix",
+        segments: [
+          { label: "Product", value: 60 },
+          { label: "Services", value: 40 },
+        ],
+      }),
+    ).toEqual({
       text: "Revenue mix (pie chart)\n- Product: 60\n- Services: 40",
       mediaUrls: [],
     });
   });
 
   it("mirrors table captions and cells when no plain reply text exists", () => {
-    const plan = createOutboundPayloadPlan([
-      {
-        presentation: {
-          blocks: [
-            {
-              type: "table",
-              caption: "Pipeline report",
-              headers: ["Account", "Stage", "ARR"],
-              rows: [
-                ["Acme", "Won", 125000],
-                ["Globex", "Review", 82000],
-              ],
-              rowHeaderColumnIndex: 0,
-            },
-          ],
-        },
-      },
-    ]);
-
-    expect(projectOutboundPayloadPlanForMirror(plan)).toEqual({
+    expect(
+      presentation({
+        type: "table",
+        caption: "Pipeline report",
+        headers: ["Account", "Stage", "ARR"],
+        rows: [
+          ["Acme", "Won", 125000],
+          ["Globex", "Review", 82000],
+        ],
+        rowHeaderColumnIndex: 0,
+      }),
+    ).toEqual({
       text: "Pipeline report (table)\n- Account: Acme; Stage: Won; ARR: 125000\n- Account: Globex; Stage: Review; ARR: 82000",
       mediaUrls: [],
     });
   });
 
   it("preserves formatted reply text when extracting an extracted Markdown image", () => {
-    const testCase = {
-      name: "an extracted Markdown image",
-      attachment: "![chart](https://example.com/config.png)",
-      extractMarkdownImages: true,
-    };
-
     const attachments = [
       { name: "Quarterly chart.png", mimeType: "image/png", width: 640, height: 480 },
     ];
-    const visibleText = [
-      "Here is the config.",
-      "",
-      "```yaml",
-      "server:",
-      "  host: 0.0.0.0",
-      "  ports:",
-      "    - 80",
-      "```",
-      "",
-      "The service is ready.",
-    ].join("\n");
+    const visibleText =
+      "Here is the config.\n\n```yaml\nserver:\n  host: 0.0.0.0\n  ports:\n    - 80\n```\n\nThe service is ready.";
     const [planned] = createOutboundPayloadPlan(
-      [{ text: `${visibleText}\n\n${testCase.attachment}`, attachments }],
-      { extractMarkdownImages: testCase.extractMarkdownImages },
+      [{ text: `${visibleText}\n\n![chart](https://example.com/config.png)`, attachments }],
+      { extractMarkdownImages: true },
     );
 
     expect(planned?.payload.text).toBe(visibleText);
     expect(planned?.payload.mediaUrls).toEqual(["https://example.com/config.png"]);
     expect(planned?.payload.attachments).toEqual(attachments);
   });
-});
-
-describe("formatOutboundPayloadLog", () => {
   it("text with attachment lines", () => {
-    const { input, expected } = {
-      input: {
+    expect(
+      formatOutboundPayloadLog({
         text: "hello  ",
         mediaUrls: ["https://x.test/a.png", "https://x.test/b.png"],
-      },
-      expected: "hello\nAttachment: https://x.test/a.png\nAttachment: https://x.test/b.png",
-    };
-
-    expect(formatOutboundPayloadLog(input)).toBe(expected);
+      }),
+    ).toBe("hello\nAttachment: https://x.test/a.png\nAttachment: https://x.test/b.png");
   });
-});
-
-describe("summarizeOutboundPayloadForTransport", () => {
   it("surfaces spokenText only as hook content for audio-only payloads", () => {
     const summary = summarizeOutboundPayloadForTransport({
       mediaUrl: "/tmp/reply.opus",
@@ -369,14 +285,13 @@ describe("summarizeOutboundPayloadForTransport", () => {
       spokenText: "Hi Ivy, good morning. citeturn2view0",
     });
 
-    expect(summary.text).toBe("");
-    expect(summary.hookContent).toBe("Hi Ivy, good morning.");
-    expect(summary.mediaUrls).toEqual(["/tmp/reply.opus"]);
-    expect(summary.audioAsVoice).toBe(true);
+    expect(summary).toMatchObject({
+      text: "",
+      hookContent: "Hi Ivy, good morning.",
+      mediaUrls: ["/tmp/reply.opus"],
+      audioAsVoice: true,
+    });
   });
-});
-
-describe("outbound mirror text", () => {
   it("preserves normalized control order and plain-text precedence", () => {
     const payload: ReplyPayload = {
       presentation: {
@@ -412,20 +327,13 @@ describe("outbound mirror text", () => {
     };
     const before = structuredClone(payload);
 
-    expect(projectOutboundPayloadPlanForMirror(createOutboundPayloadPlan([payload]))).toEqual({
+    expect(mirror(payload)).toEqual({
       text: "Card\ncontext\nbody\nSame\nSame\nSelect\nChoice\nLegacy\nAccept\nOld\nOne",
       mediaUrls: [],
     });
-    expect(
-      projectOutboundPayloadPlanForMirror(
-        createOutboundPayloadPlan([{ ...payload, text: "Caption" }]),
-      ),
-    ).toEqual({ text: "Caption", mediaUrls: [] });
+    expect(mirror({ ...payload, text: "Caption" })).toEqual({ text: "Caption", mediaUrls: [] });
     expect(payload).toEqual(before);
   });
-});
-
-describe("createStructuredOutboundPayloadPlan", () => {
   it("preserves structured fields, metadata, attachment order, and source indexes", () => {
     const primaryPath = path.resolve("media", "primary.png");
     const secondaryPath = path.resolve("media", "secondary.png");
