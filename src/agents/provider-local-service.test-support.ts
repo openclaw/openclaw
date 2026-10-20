@@ -1,5 +1,5 @@
 import type { ChildProcess } from "node:child_process";
-import { once } from "node:events";
+import { on, once } from "node:events";
 import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
 import { probeTestPort } from "../test-utils/ports.js";
 import { stopManagedProviderLocalServices } from "./provider-local-service.js";
@@ -13,66 +13,51 @@ export async function waitForReadyOneShotHostExit(
   child: ChildProcess,
   readStderr: () => string,
 ): Promise<HostExit> {
-  await new Promise<void>((resolve, reject) => {
-    const finish = (error?: Error) => {
-      clearTimeout(timeout);
-      child.off("message", onMessage);
-      child.off("error", onError);
-      child.off("exit", onExit);
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve();
-    };
-    const onMessage = (message: unknown) => {
+  const readinessSignal = AbortSignal.timeout(ONE_SHOT_HOST_READY_TIMEOUT_MS);
+  let ready = false;
+  try {
+    for await (const args of on(child, "message", { signal: readinessSignal, close: ["exit"] })) {
+      const message: unknown = args[0];
       if (
         message &&
         typeof message === "object" &&
         (message as { kind?: unknown }).kind === ONE_SHOT_HOST_READY_KIND
       ) {
-        finish();
+        ready = true;
+        break;
       }
-    };
-    const onError = (error: Error) => finish(error);
-    const onExit = (code: number | null, signal: NodeJS.Signals | null) =>
-      finish(
-        new Error(
-          `one-shot host exited before readiness (code=${String(code)} signal=${String(signal)})${readStderr()}`,
-        ),
-      );
-    const timeout = setTimeout(
-      () => finish(new Error(`one-shot host did not become ready${readStderr()}`)),
-      ONE_SHOT_HOST_READY_TIMEOUT_MS,
+    }
+  } catch (error) {
+    if (readinessSignal.aborted) {
+      throw new Error(`one-shot host did not become ready${readStderr()}`, { cause: error });
+    }
+    throw error;
+  }
+  if (!ready) {
+    throw new Error(
+      `one-shot host exited before readiness (code=${String(child.exitCode)} signal=${String(child.signalCode)})${readStderr()}`,
     );
+  }
 
-    child.on("message", onMessage);
-    child.on("error", onError);
-    child.on("exit", onExit);
-  });
-
-  const exitPromise = waitForOneShotHostExit(child, readStderr);
+  const exitPromise = (async (): Promise<HostExit> => {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      return { code: child.exitCode, signal: child.signalCode };
+    }
+    try {
+      const [code, signal] = (await once(child, "exit", {
+        signal: AbortSignal.timeout(ONE_SHOT_HOST_EXIT_TIMEOUT_MS),
+      })) as [number | null, NodeJS.Signals | null];
+      return { code, signal };
+    } catch (error) {
+      throw new Error(`one-shot host did not exit after readiness${readStderr()}`, {
+        cause: error,
+      });
+    }
+  })();
   // The fixture-owned IPC channel gates the exit deadline. Once removed,
   // only the managed service's diagnostic pipes can keep this host alive.
   child.disconnect();
   return await exitPromise;
-}
-
-async function waitForOneShotHostExit(
-  child: ChildProcess,
-  readStderr: () => string,
-): Promise<HostExit> {
-  if (child.exitCode !== null || child.signalCode !== null) {
-    return { code: child.exitCode, signal: child.signalCode };
-  }
-  try {
-    const [code, signal] = (await once(child, "exit", {
-      signal: AbortSignal.timeout(ONE_SHOT_HOST_EXIT_TIMEOUT_MS),
-    })) as [number | null, NodeJS.Signals | null];
-    return { code, signal };
-  } catch (error) {
-    throw new Error(`one-shot host did not exit after readiness${readStderr()}`, { cause: error });
-  }
 }
 
 export function createProviderLocalServiceTestFixture() {

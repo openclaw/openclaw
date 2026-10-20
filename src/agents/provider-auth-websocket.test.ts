@@ -38,15 +38,10 @@ it.each(
     credentials.push(request.headers.authorization);
     request.resume();
     request.on("end", () => {
-      const event = {
-        type: "response.completed",
-        response: {
-          id: "resp_authorized",
-          status: "completed",
-        },
-      };
       response.writeHead(200, { "content-type": "text/event-stream" });
-      response.end(`data: ${JSON.stringify(event)}\n\n`);
+      response.end(
+        'data: {"type":"response.completed","response":{"id":"resp_authorized","status":"completed"}}\n\n',
+      );
     });
   });
   const origin = await listenLoopback(server);
