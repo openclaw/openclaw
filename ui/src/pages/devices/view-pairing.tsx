@@ -1,4 +1,4 @@
-import { createMemo, For, Show } from "solid-js";
+import { For, Show } from "solid-js";
 import { handleCopyButton } from "../../components/copy-button-state.ts";
 import "../../components/modal-dialog.ts";
 import { CopyButton } from "../../components/solid/copy-button.tsx";
@@ -83,18 +83,16 @@ function PairingOutcome(props: { lifecycle: PairingOutcomeLifecycle; description
 }
 
 export function DevicePairSetup(props: DevicePairSetupProps) {
-  const setup = createMemo(() =>
-    props.lifecycle.phase === "waiting" ? props.lifecycle.setup : undefined,
-  );
-  const outcome = createMemo(() => {
+  const setup = () => (props.lifecycle.phase === "waiting" ? props.lifecycle.setup : undefined);
+  const outcome = () => {
     const lifecycle = props.lifecycle;
     return lifecycle.phase === "success" ||
       lifecycle.phase === "delivery-uncertain" ||
       lifecycle.phase === "expired"
       ? lifecycle
       : undefined;
-  });
-  const error = createMemo(() => (props.lifecycle.phase === "error" ? props.lifecycle : undefined));
+  };
+  const error = () => (props.lifecycle.phase === "error" ? props.lifecycle : undefined);
   // Terminal states reuse their headline so the dialog description follows the visible state.
   const description = () =>
     t(
@@ -335,15 +333,23 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
                 <>
                   <Show when={!isNodeSetup()}>
                     <For each={[current().setupCode]}>
-                      {(code) => (
-                        <button
-                          class="btn primary"
-                          type="button"
-                          onClick={(event) => void handleCopyButton(event, code, copyLabel())}
-                        >
-                          <Icon name="copy" /> <span data-copy-label>{copyLabel()}</span>
-                        </button>
-                      )}
+                      {(code) => {
+                        let label!: HTMLSpanElement;
+                        return (
+                          <button
+                            class="btn primary"
+                            type="button"
+                            onClick={(event) =>
+                              void handleCopyButton(event, code, copyLabel(), { label })
+                            }
+                          >
+                            <Icon name="copy" />{" "}
+                            <span ref={(element) => (label = element)} data-copy-label>
+                              {copyLabel()}
+                            </span>
+                          </button>
+                        );
+                      }}
                     </For>
                   </Show>
                   <button class="btn" type="button" onClick={() => props.onRefresh()}>

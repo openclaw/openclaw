@@ -7,11 +7,12 @@ import {
   type OpenClawConfig,
   type ResolvedMemorySearchConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import type {
-  MemoryProviderStatus,
-  MemorySearchManager,
-  MemorySyncParams,
-  MemoryWorkspaceFiles,
+import {
+  warnPluginSdkDeprecation,
+  type MemoryProviderStatus,
+  type MemorySearchManager,
+  type MemorySyncParams,
+  type MemoryWorkspaceFiles,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
@@ -19,6 +20,7 @@ import type { openOpenClawAgentSqliteWorkerStoreV2 } from "openclaw/plugin-sdk/s
 import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
 import { getMemoryManagerLifecycle, markMemoryIndexingLive } from "./lifecycle.js";
 import { runMemoryStatus } from "./manager-cpu-worker-runtime.js";
+import { captureMemoryDatabaseWriteOptions } from "./manager-database-admission.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import {
@@ -133,7 +135,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
             purpose,
             acquireLocalService: params.acquireLocalService,
           });
-          const databaseOptions = MemoryIndexDatabase.captureWriteOptions(
+          const databaseOptions = captureMemoryDatabaseWriteOptions(
             agentId,
             settings.store.databasePath,
             source?.publishedDatabase,
@@ -275,7 +277,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     };
     this.vector.enabled = effectiveSettings.store.vector.enabled;
     this.vector.extensionPath = effectiveSettings.store.vector.extensionPath;
-    const meta = this.readMeta();
+    const meta = this.database.facts.meta;
     if (meta?.vectorDims) {
       this.vector.dims = meta.vectorDims;
     }
@@ -306,7 +308,6 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       this.runInBackgroundContext(() => {
         this.ensureWatcher();
         this.ensureSessionListener();
-        this.ensureIntervalSync();
         void this.runInBackgroundContext(() => this.ensureSessionStartupCatchup()).catch(
           (err: unknown) => {
             log.warn("memory session startup catch-up failed: " + String(err));
@@ -525,8 +526,13 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     return this.syncing;
   }
 
-  /** @deprecated Compatibility for released synchronous callers; use statusAsync. */
+  /** @deprecated Use statusAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   status(): MemoryProviderStatus {
+    warnPluginSdkDeprecation({
+      family: "memory-status",
+      method: "MemorySearchManager.status",
+      replacement: "MemorySearchManager.statusAsync",
+    });
     if (this.closing || this.closed) {
       throw new Error("Memory index manager is closed");
     }
@@ -549,14 +555,11 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       if (options?.includeCounts === false) {
         return this.publishedStatus();
       }
-      const target = this.publishedDatabase.writeOptions;
-      if (!target?.agentId || !target.path) {
+      const { agentId, path: databasePath } = this.publishedDatabase.writeOptions ?? {};
+      if (!agentId || !databasePath) {
         throw new Error("Memory status requires its captured database target");
       }
-      const snapshot = await runMemoryStatus(
-        { agentId: target.agentId, databasePath: target.path },
-        this.statusQuery(),
-      );
+      const snapshot = await runMemoryStatus({ agentId, databasePath }, this.statusQuery());
       return this.publishedStatus(snapshot);
     });
   }

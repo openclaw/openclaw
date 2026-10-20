@@ -52,7 +52,6 @@ let relayConnectionsSuspended = false;
 let nativeBootstrap = null;
 // Start blocked: no runtime path may outrun the retired-state storage read.
 let retiredCopilotCustodyBlocked = true;
-/** Debounce handle for tab-list refreshes. */
 let tabsSyncTimer = null;
 const runAccessMutation = createSerialQueue();
 const pairingConfigStore = createPairingConfigStore(chrome.storage.local);
@@ -293,10 +292,8 @@ function send(message, socket = relayWs) {
 
 function clearRelayOpeningDeadline() {
   relayOpeningDeadlineAt = 0;
-  if (relayOpeningDeadlineTimer) {
-    clearTimeout(relayOpeningDeadlineTimer);
-    relayOpeningDeadlineTimer = null;
-  }
+  clearTimeout(relayOpeningDeadlineTimer);
+  relayOpeningDeadlineTimer = null;
   void chrome.alarms.clear(RELAY_OPENING_DEADLINE_ALARM);
 }
 

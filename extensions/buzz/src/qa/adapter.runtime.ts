@@ -2,6 +2,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { QaBusConversationKind } from "openclaw/plugin-sdk/qa-channel-protocol";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
+import { readNonBlankString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { BuzzInboundMessage } from "../message-event.js";
 import { buildBuzzTarget } from "../target.js";
 import { parseBuzzQaCredentialPayload, readBuzzQaCredentialFile } from "./credentials.js";
@@ -52,7 +53,7 @@ export async function createBuzzQaTransportAdapter(
   context: FactoryContext,
 ): Promise<AdapterDefinition> {
   const options = context.adapterOptions ?? {};
-  const credentialFile = options.credentialFile?.trim();
+  const credentialFile = readNonBlankString(options.credentialFile);
   const requestedCredentialSource =
     options.credentialSource?.trim().toLowerCase() || (credentialFile ? "file" : undefined);
   if (

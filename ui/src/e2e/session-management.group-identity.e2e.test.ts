@@ -181,9 +181,9 @@ suite.define(() => {
             )
             .count(),
         ).toBe(0);
-        if (surface !== "header") {
-          await page.getByRole("button", { name: "Cancel", exact: true }).click();
-        }
+        expect(await input.inputValue()).toBe(group);
+        expect(await input.isEnabled()).toBe(true);
+        await page.getByRole("button", { name: "Cancel", exact: true }).click();
         await input.waitFor({ state: "detached" });
         await capture("unchanged", page.locator(".shell"), [row]);
       } finally {

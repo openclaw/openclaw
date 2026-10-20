@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { createServer } from "node:https";
+import { buffer } from "node:stream/consumers";
 import { getCACertificates, setDefaultCACertificates } from "node:tls";
+import { promisify } from "node:util";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -14,25 +16,25 @@ import { createPluginRuntimeStore, type PluginRuntime } from "openclaw/plugin-sd
 import { PROXY_FIXTURE_CERTIFICATE, PROXY_FIXTURE_KEY } from "openclaw/plugin-sdk/test-env";
 import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, expect, it, vi } from "vitest";
 import type { FeishuReplyDeliveryResultWithFinalization } from "./reply-delivery-result.js";
 
 type WireRequest = { method: string; path: string; search: string; body: Record<string, unknown> };
 type CreateDispatcher = typeof import("./reply-dispatcher.js").createFeishuReplyDispatcher;
 let createFeishuReplyDispatcher: CreateDispatcher;
+const first = "The first accepted preview sentence.";
+const final = `${first} The complete final answer replaces pending previews.`;
 
 beforeAll(async () => {
-  // Other Feishu suites replace these modules. Load this native transport fixture
-  // after collection so it never inherits their session, SDK, or fetch doubles.
+  // Load after collection to avoid other suites' session, SDK, and fetch doubles.
   vi.resetModules();
   ({ createFeishuReplyDispatcher } = await import("./reply-dispatcher.js"));
 });
 
 async function runStreamingTurn(queuedPreviews: string[], signal: AbortSignal) {
-  const first = "The first accepted preview sentence.";
-  const final = `${first} The complete final answer replaces pending previews.`;
+  const finalText = queuedPreviews.length ? final : first;
   const requests: WireRequest[] = [];
-  const serverErrors: unknown[] = [];
+  const errors: unknown[] = [];
   const firstWriteStarted = createDeferred<void>();
   const releaseFirstWrite = createDeferred<void>();
   const accountId = `backlog-${randomUUID()}`;
@@ -41,11 +43,7 @@ async function runStreamingTurn(queuedPreviews: string[], signal: AbortSignal) {
     { cert: PROXY_FIXTURE_CERTIFICATE, key: PROXY_FIXTURE_KEY },
     (request, response) => {
       void (async () => {
-        const chunks: Buffer[] = [];
-        for await (const chunk of request) {
-          chunks.push(Buffer.from(chunk));
-        }
-        const body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}") as Record<
+        const body = JSON.parse((await buffer(request)).toString("utf8") || "{}") as Record<
           string,
           unknown
         >;
@@ -80,7 +78,7 @@ async function runStreamingTurn(queuedPreviews: string[], signal: AbortSignal) {
         response.writeHead(200, { "content-type": "application/json" });
         response.end(JSON.stringify(result));
       })().catch((error: unknown) => {
-        serverErrors.push(error);
+        errors.push(error);
         firstWriteStarted.reject(error);
         response.writeHead(500, { "content-type": "application/json" });
         response.end(JSON.stringify({ code: 1, msg: "owned fixture rejected request" }));
@@ -109,37 +107,31 @@ async function runStreamingTurn(queuedPreviews: string[], signal: AbortSignal) {
     convertMarkdownTables,
     resolveMarkdownTableMode,
   });
-  // Trust only the repository's public loopback fixture CA; retain normal TLS
-  // certificate/hostname checks and restore the worker's trust store in finally.
+  // Trust the fixture CA without disabling TLS/hostname checks; restore it in finally.
   const previousCertificates = getCACertificates("default");
-  const errors: string[] = [];
   let idle: Promise<void> | undefined;
   let cleanup: (() => void) | undefined;
   try {
     runtimeStore.setRuntime(runtime);
     setDefaultCACertificates([...previousCertificates, PROXY_FIXTURE_CERTIFICATE]);
+    const feishu = {
+      enabled: true,
+      appId: accountId,
+      appSecret: "owned-fixture-secret",
+      domain: `https://127.0.0.1:${address.port}`,
+      httpTimeoutMs: 5000,
+      typingIndicator: false,
+      streaming: { mode: "partial" as const },
+    };
     const dispatcher = createFeishuReplyDispatcher({
-      cfg: {
-        channels: {
-          feishu: {
-            enabled: true,
-            appId: accountId,
-            appSecret: "owned-fixture-secret",
-            domain: `https://127.0.0.1:${address.port}`,
-            httpTimeoutMs: 5000,
-            typingIndicator: false,
-            streaming: { mode: "partial" },
-          },
-        },
-      },
+      cfg: { channels: { feishu } },
       agentId: "main",
       chatId: "oc_owned_chat",
       sendTarget: "oc_owned_chat",
       accountId,
       runtime: {
         log: (message) => {
-          // A startup/update transport rejection must fail the awaited barrier,
-          // rather than leaving this fixture waiting for a request that cannot arrive.
+          // Fail the barrier if transport rejects before its first write.
           if (!heldFirstWrite && String(message).includes("Update failed:")) {
             firstWriteStarted.reject(new Error(String(message)));
           }
@@ -157,37 +149,35 @@ async function runStreamingTurn(queuedPreviews: string[], signal: AbortSignal) {
     expect(dispatcher.replyOptions.onPartialReply).toBeTypeOf("function");
     dispatcher.replyOptions.onPartialReply?.({ text: first });
     await withinTest(firstWriteStarted.promise, signal);
-    // The first real CardKit HTTP response is still pending. Later snapshots
-    // and the committed final enter the same callbacks used by inbound replies.
+    // Hold the first real write while queued snapshots and the final arrive.
     for (const text of queuedPreviews) {
       dispatcher.replyOptions.onPartialReply?.({ text });
     }
     const delivered = (await withinTest(
-      dispatcher.delivery.deliver(
-        { text: queuedPreviews.length ? final : first },
-        { kind: "final" },
-      ),
+      dispatcher.delivery.deliver({ text: finalText }, { kind: "final" }),
       signal,
     )) as FeishuReplyDeliveryResultWithFinalization;
     idle = Promise.resolve(dispatcher.dispatcherOptions.onIdle?.());
     const settled = Promise.all([idle, delivered.finalization]);
     releaseFirstWrite.resolve();
     const [, accepted] = await withinTest(settled, signal);
-    expect(serverErrors).toEqual([]);
     expect(errors).toEqual([]);
     expect(accepted).toMatchObject({
       visibleReplySent: true,
-      content: queuedPreviews.length ? final : first,
+      content: finalText,
       receipt: { primaryPlatformMessageId: "om_owned_stream" },
     });
     const messageSends = requests.filter((request) => request.path === "/open-apis/im/v1/messages");
-    expect(messageSends).toHaveLength(1);
-    expect(messageSends[0]?.search).toBe("?receive_id_type=chat_id");
-    expect(messageSends[0]?.body).toMatchObject({
-      receive_id: "oc_owned_chat",
-      msg_type: "interactive",
-      content: JSON.stringify({ type: "card", data: { card_id: "owned-card" } }),
-    });
+    expect(messageSends).toMatchObject([
+      {
+        search: "?receive_id_type=chat_id",
+        body: {
+          receive_id: "oc_owned_chat",
+          msg_type: "interactive",
+          content: JSON.stringify({ type: "card", data: { card_id: "owned-card" } }),
+        },
+      },
+    ]);
     const contentWrites = requests.filter(
       (request) => request.method === "PUT" && request.path.includes("/elements/content"),
     );
@@ -197,19 +187,17 @@ async function runStreamingTurn(queuedPreviews: string[], signal: AbortSignal) {
         : (JSON.parse(String(request.body.element)) as { content: string }).content,
     );
     const close = requests.find((request) => request.path.endsWith("/settings"));
-    expect(close).toBeDefined();
+    const summary = queuedPreviews.length
+      ? "The first accepted preview sentence. The comple..."
+      : first;
     expect(JSON.parse(String(close?.body.settings))).toMatchObject({
       config: {
         streaming_mode: false,
-        summary: {
-          content: queuedPreviews.length
-            ? "The first accepted preview sentence. The comple..."
-            : first,
-        },
+        summary: { content: summary },
       },
     });
     expect(requests.at(-1)).toBe(close);
-    return { contents, first, final };
+    return contents;
   } finally {
     releaseFirstWrite.resolve();
     await idle?.catch(() => {});
@@ -221,28 +209,20 @@ async function runStreamingTurn(queuedPreviews: string[], signal: AbortSignal) {
     }
     setDefaultCACertificates(previousCertificates);
     server.closeAllConnections();
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
+    await promisify(server.close.bind(server))();
   }
 }
 
-describe("Feishu streaming dispatcher with delayed native CardKit writes", () => {
-  it("does not replay obsolete previews after the final reply is requested", async ({ signal }) => {
-    const { contents, first, final } = await runStreamingTurn(
-      [
-        "The first accepted preview sentence. An obsolete intermediate continuation.",
-        "The first accepted preview sentence. An obsolete intermediate continuation. Another obsolete continuation.",
-      ],
-      signal,
-    );
-    expect(contents).toEqual([first, final]);
-  });
-
-  it("preserves the accepted single-preview card and its final delivery receipt", async ({
-    signal,
-  }) => {
-    const { contents, first } = await runStreamingTurn([], signal);
-    expect(contents).toEqual([first]);
-  });
+it.for([
+  {
+    name: "replaces obsolete previews with the final reply",
+    previews: [
+      `${first} An obsolete intermediate continuation.`,
+      `${first} An obsolete intermediate continuation. Another obsolete continuation.`,
+    ],
+    expected: [first, final],
+  },
+  { name: "preserves the single-preview card and receipt", previews: [], expected: [first] },
+])("Feishu delayed native CardKit delivery $name", async ({ previews, expected }, { signal }) => {
+  expect(await runStreamingTurn(previews, signal)).toEqual(expected);
 });

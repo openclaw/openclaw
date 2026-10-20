@@ -555,7 +555,7 @@ describe("channels controller DM pairing", () => {
     channels.dispose();
   });
 
-  it("clears sender metadata on disconnect and pairing-scope changes", () => {
+  it("retains sender metadata on disconnect and clears it on pairing-scope changes", () => {
     const client = { request: vi.fn() };
     let snapshot = {
       client,
@@ -566,15 +566,20 @@ describe("channels controller DM pairing", () => {
     const channels = createChannelCapability(gateway as never);
     channels.state.pairingSnapshot = pendingPairing;
 
+    snapshot = { ...snapshot, phase: "reconnecting" };
+    publish();
+    expect(channels.state.pairingSnapshot).toBe(pendingPairing);
+
     snapshot = {
       ...snapshot,
+      phase: "connected",
       hello: { auth: { role: "operator", scopes: ["operator.read"] } },
     };
     publish();
     expect(channels.state.pairingSnapshot).toBeNull();
 
     channels.state.pairingSnapshot = pendingPairing;
-    snapshot = { ...snapshot, phase: "reconnecting" };
+    snapshot = { ...snapshot, client: { request: vi.fn() } };
     publish();
     expect(channels.state.pairingSnapshot).toBeNull();
     channels.dispose();

@@ -41,15 +41,19 @@ import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 type JournalDatabase = Pick<OpenClawStateDatabase, "db" | "path">;
 
 function readRecoverySource(database: JournalDatabase) {
-  if (isPostgresSqlConnection(database.db)) {
-    requireNativeDatabaseFile("postgres", "repair");
-  }
   // Recovery must inspect the damaged catalog instead of the runtime's admitted shape.
-  invalidateSqliteSchemaFacts(database.db);
+  const db = database.db;
+  const postgres = isPostgresSqlConnection(db);
+  if (!postgres) {
+    invalidateSqliteSchemaFacts(db);
+  }
   const held = tableExists(database.db, "migration_sources")
     ? readAgentDeletionRecoveryHolds(database)
     : [];
   if (!tableExists(database.db, "agent_deletion_journal")) {
+    if (postgres) {
+      requireNativeDatabaseFile("postgres", "repair");
+    }
     return { missing: true, rows: [], invalid: [], held };
   }
   const rows = executeSqliteQuerySync(
@@ -74,6 +78,9 @@ function readRecoverySource(database: JournalDatabase) {
       return true;
     }
   });
+  if (postgres && invalid.length > 0) {
+    requireNativeDatabaseFile("postgres", "repair");
+  }
   return { missing: false, rows, invalid, held };
 }
 
@@ -272,6 +279,11 @@ export async function quarantineAgentDeletionJournal(params: {
         invalidateAgentDeletionJournalStatus(database.db, row.agent_id);
       }
       return recordAgentDeletionRecoveryHolds(database, held, {
+        excludeMissingJournal: held.filter((target) =>
+          source.invalid.some(
+            (row) => normalizeAgentId(row.agent_id) === normalizeAgentId(target.agentId),
+          ),
+        ),
         description:
           warnings.length === 0
             ? "Quarantined unusable agent deletion records; stores remain held for explicit recovery."

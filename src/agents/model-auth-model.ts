@@ -46,7 +46,10 @@ function resolvePluginOwnedAuthMode(
   provider: string,
   cfg?: OpenClawConfig,
   workspaceDir?: string,
-): ModelAuthMode {
+): ModelAuthMode | null {
+  if (resolveProviderAuthScope({ provider, config: cfg, workspaceDir }) !== "plugin") {
+    return null;
+  }
   try {
     return resolvePluginOwnedProviderAuth({ provider, config: cfg, workspaceDir }).mode;
   } catch {
@@ -54,7 +57,7 @@ function resolvePluginOwnedAuthMode(
   }
 }
 
-/** @deprecated Use resolveModelAuthModeAsync. Supported through 2026-12-31. */
+/** @deprecated Use resolveModelAuthModeAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
 export function resolveModelAuthMode(
   provider?: string,
   cfg?: OpenClawConfig,
@@ -65,14 +68,9 @@ export function resolveModelAuthMode(
   if (!resolved) {
     return undefined;
   }
-  if (
-    resolveProviderAuthScope({
-      provider: resolved,
-      config: cfg,
-      workspaceDir: options?.workspaceDir,
-    }) === "plugin"
-  ) {
-    return resolvePluginOwnedAuthMode(resolved, cfg, options?.workspaceDir);
+  const pluginAuthMode = resolvePluginOwnedAuthMode(resolved, cfg, options?.workspaceDir);
+  if (pluginAuthMode !== null) {
+    return pluginAuthMode;
   }
 
   const authOverride = authConfig.resolveProviderAuthOverride(cfg, resolved);
@@ -106,14 +104,9 @@ export async function resolveModelAuthModeAsync(
   if (!resolved) {
     return undefined;
   }
-  if (
-    resolveProviderAuthScope({
-      provider: resolved,
-      config: cfg,
-      workspaceDir: options?.workspaceDir,
-    }) === "plugin"
-  ) {
-    return resolvePluginOwnedAuthMode(resolved, cfg, options?.workspaceDir);
+  const pluginAuthMode = resolvePluginOwnedAuthMode(resolved, cfg, options?.workspaceDir);
+  if (pluginAuthMode !== null) {
+    return pluginAuthMode;
   }
   if (authConfig.resolveProviderAuthOverride(cfg, resolved) === "aws-sdk") {
     return "aws-sdk";

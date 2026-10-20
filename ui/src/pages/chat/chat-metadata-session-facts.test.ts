@@ -84,7 +84,6 @@ it.each(["agent:work:current", "global"])(
       connected: true,
       connectionEpoch: 1,
       chatModelSwitchPromises: {},
-      requestUpdate: vi.fn(),
     } as unknown as ChatPageHost;
     const observation = sessions.observeList(query, () => {});
     try {

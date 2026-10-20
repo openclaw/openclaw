@@ -1,10 +1,11 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { ProviderHttpError } from "openclaw/plugin-sdk/provider-http";
 import {
+  externalContentStamp,
   DEFAULT_CACHE_TTL_MINUTES,
   DEFAULT_SEARCH_COUNT,
   normalizeCacheKey,
-  readCache,
+  readCachedSearchPayload,
   readResponseText,
   resolveCacheTtlMs,
   resolveSearchCount,
@@ -13,7 +14,7 @@ import {
   withSelfHostedWebSearchEndpoint,
   withTrustedWebSearchEndpoint,
   wrapWebContent,
-  writeCache,
+  writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
 import {
   assertHttpUrlTargetsPrivateNetwork,
@@ -31,11 +32,6 @@ import {
 const DEFAULT_TIMEOUT_SECONDS = 20;
 const MAX_RESPONSE_BYTES = 1_000_000;
 type SearxngEndpointMode = "selfHosted" | "strict";
-
-const SEARXNG_SEARCH_CACHE = new Map<
-  string,
-  { value: Record<string, unknown>; insertedAt: number; expiresAt: number }
->();
 
 type SearxngResult = {
   url: string;
@@ -156,57 +152,6 @@ function parseSearxngResponseText(text: string, count: number): SearxngResult[] 
   return results;
 }
 
-async function fetchSearxngResults(params: {
-  baseUrl: string;
-  query: string;
-  categories?: string;
-  language?: string;
-  timeoutSeconds: number;
-  count: number;
-  endpointMode: SearxngEndpointMode;
-  signal?: AbortSignal;
-}): Promise<SearxngResult[]> {
-  const url = buildSearxngSearchUrl({
-    baseUrl: params.baseUrl,
-    query: params.query,
-    categories: params.categories,
-    language: params.language,
-  });
-
-  const withEndpoint =
-    params.endpointMode === "selfHosted"
-      ? withSelfHostedWebSearchEndpoint
-      : withTrustedWebSearchEndpoint;
-  return await withEndpoint(
-    {
-      url,
-      timeoutSeconds: params.timeoutSeconds,
-      signal: params.signal,
-      init: {
-        method: "GET",
-        headers: {
-          Accept: "application/json",
-        },
-      },
-    },
-    async (response) => {
-      if (!response.ok) {
-        const detail = (await readResponseText(response, { maxBytes: 64_000 })).text;
-        throw new ProviderHttpError(
-          `SearXNG search error (${response.status}): ${detail || response.statusText}`,
-          { status: response.status },
-        );
-      }
-
-      const body = await readResponseText(response, { maxBytes: MAX_RESPONSE_BYTES });
-      if (body.truncated) {
-        throw new Error(`SearXNG response incomplete after ${body.bytesRead} bytes.`);
-      }
-      return parseSearxngResponseText(body.text, params.count);
-    },
-  );
-}
-
 export async function runSearxngSearch(params: {
   config?: OpenClawConfig;
   query: string;
@@ -247,29 +192,61 @@ export async function runSearxngSearch(params: {
       baseUrl,
     }),
   );
-  const cached = readCache(SEARXNG_SEARCH_CACHE, cacheKey, cacheTtlMs);
+  const cached = readCachedSearchPayload(cacheKey, cacheTtlMs);
   if (cached) {
-    return { ...cached.value, cached: true };
+    return cached;
   }
 
   const startedAt = Date.now();
-  const request = {
-    baseUrl,
-    query: params.query,
-    categories,
-    language,
-    timeoutSeconds,
-    count,
-    endpointMode,
-    signal: params.signal,
+  const query = params.query;
+  const signal = params.signal;
+  const fetchSearxngResults = async (
+    searchCategories: string | undefined,
+  ): Promise<SearxngResult[]> => {
+    const url = buildSearxngSearchUrl({
+      baseUrl,
+      query,
+      categories: searchCategories,
+      language,
+    });
+
+    const withEndpoint =
+      endpointMode === "selfHosted"
+        ? withSelfHostedWebSearchEndpoint
+        : withTrustedWebSearchEndpoint;
+    return await withEndpoint(
+      {
+        url,
+        timeoutSeconds,
+        signal,
+        init: {
+          method: "GET",
+          headers: {
+            Accept: "application/json",
+          },
+        },
+      },
+      async (response) => {
+        if (!response.ok) {
+          const detail = (await readResponseText(response, { maxBytes: 64_000 })).text;
+          throw new ProviderHttpError(
+            `SearXNG search error (${response.status}): ${detail || response.statusText}`,
+            { status: response.status },
+          );
+        }
+
+        const body = await readResponseText(response, { maxBytes: MAX_RESPONSE_BYTES });
+        if (body.truncated) {
+          throw new Error(`SearXNG response incomplete after ${body.bytesRead} bytes.`);
+        }
+        return parseSearxngResponseText(body.text, count);
+      },
+    );
   };
-  let results = await fetchSearxngResults(request);
+  let results = await fetchSearxngResults(categories);
   params.signal?.throwIfAborted();
   if (results.length === 0 && shouldRetryEmptyCategorySearchWithGeneral(categories)) {
-    results = await fetchSearxngResults({
-      ...request,
-      categories: "general",
-    });
+    results = await fetchSearxngResults("general");
     params.signal?.throwIfAborted();
   }
 
@@ -278,12 +255,7 @@ export async function runSearxngSearch(params: {
     provider: "searxng",
     count: results.length,
     tookMs: Date.now() - startedAt,
-    externalContent: {
-      untrusted: true,
-      source: "web_search",
-      provider: "searxng",
-      wrapped: true,
-    },
+    externalContent: externalContentStamp("searxng"),
     results: results.map((result) => ({
       title: wrapWebContent(result.title, "web_search"),
       url: result.url,
@@ -293,10 +265,6 @@ export async function runSearxngSearch(params: {
     })),
   } satisfies Record<string, unknown>;
 
-  writeCache(SEARXNG_SEARCH_CACHE, cacheKey, payload, cacheTtlMs);
+  writeCachedSearchPayload(cacheKey, payload, cacheTtlMs);
   return payload;
 }
-
-export const testing = {
-  SEARXNG_SEARCH_CACHE,
-};

@@ -1,7 +1,9 @@
 // The real guard admits DNS answers before this Mac topology fixture maps the
 // transport onto loopback. This proves HTTP behavior, not native Podman routing.
 import type { LookupAddress } from "node:dns";
+import { once } from "node:events";
 import { createServer } from "node:http";
+import { text } from "node:stream/consumers";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createOllamaEmbeddingProvider } from "../extensions/ollama/runtime-api.js";
 import { readResponseWithLimit } from "../src/infra/http-response-body.js";
@@ -47,11 +49,7 @@ const baseUrl = "http://host.containers.internal:11434";
 const embedUrl = `${baseUrl}/api/embed`;
 const server = createServer((request, response) => {
   void (async () => {
-    const chunks: Buffer[] = [];
-    for await (const chunk of request) {
-      chunks.push(Buffer.from(chunk));
-    }
-    const body = Buffer.concat(chunks).toString("utf8");
+    const body = await text(request);
     fixture.requests.push({ method: request.method, path: request.url, body });
     if (fixture.response === "redirect" && fixture.requests.length === 1) {
       response.writeHead(302, { location: fixture.redirectLocation });
@@ -80,13 +78,7 @@ async function createProvider(
   model = "test-embedding",
 ) {
   return await createOllamaEmbeddingProvider({
-    config: {
-      models: {
-        providers: {
-          ollama: { baseUrl: providerBase, models: [] },
-        },
-      },
-    },
+    config: { models: { providers: { ollama: { baseUrl: providerBase, models: [] } } } },
     model,
     ...(remoteBase ? { remote: { baseUrl: remoteBase } } : {}),
   });
@@ -98,13 +90,8 @@ describe("Ollama Podman host through the real SSRF and HTTP boundary", () => {
   beforeAll(async () => {
     const claim = await acquireTestPortBlock({ offsets: [0] });
     releasePort = claim.release;
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(claim.port, "127.0.0.1", () => {
-        server.off("error", reject);
-        resolve();
-      });
-    });
+    server.listen(claim.port, "127.0.0.1");
+    await once(server, "listening");
     fixture.transportBase = `http://127.0.0.1:${claim.port}`;
   });
 
@@ -143,43 +130,28 @@ describe("Ollama Podman host through the real SSRF and HTTP boundary", () => {
     },
   );
 
-  it.each([
-    ["instance metadata", "169.254.169.254", 4],
-    ["container credentials", "169.254.170.2", 4],
-    ["container identity", "169.254.170.23", 4],
-    ["platform metadata", "169.254.0.23", 4],
-    ["Scaleway metadata", "169.254.42.42", 4],
-    ["non-link-local metadata", "100.100.100.200", 4],
-    ["IPv6 metadata", "fd00:ec2::254", 6],
-    ["IPv4-mapped link-local", "::ffff:169.254.1.2", 6],
-    ["NAT64 link-local", "64:ff9b::169.254.1.2", 6],
-  ] as const)("rejects %s DNS before any HTTP attempt", async (_name, address, family) => {
-    fixture.lookup = async () => [{ address, family }];
-    const { provider } = await createProvider();
-    await expect(provider.embed("hello")).rejects.toThrow("Blocked");
-    expect(fixture.attempts).toEqual([]);
-    expect(fixture.requests).toEqual([]);
-  });
-
-  it("rejects mixed Podman and metadata DNS answers before any HTTP attempt", async () => {
-    fixture.lookup = async () => [
-      { address: "169.254.1.2", family: 4 },
-      { address: "169.254.169.254", family: 4 },
-    ];
-    const { provider } = await createProvider();
-    await expect(provider.embed("hello")).rejects.toThrow("Blocked");
-    expect(fixture.attempts).toEqual([]);
-    expect(fixture.requests).toEqual([]);
-  });
-
-  it.each([
-    ["another configured provider hostname", "http://other.internal:11434", undefined],
-    ["a separate Podman remote override", "http://other.internal:11434", baseUrl],
-  ] as const)("does not extend link-local trust to %s", async (_name, providerBase, remoteBase) => {
+  it.each<[string, string[], string?, string?]>([
+    ["instance metadata", ["169.254.169.254"]],
+    ["container credentials", ["169.254.170.2"]],
+    ["container identity", ["169.254.170.23"]],
+    ["platform metadata", ["169.254.0.23"]],
+    ["Scaleway metadata", ["169.254.42.42"]],
+    ["non-link-local metadata", ["100.100.100.200"]],
+    ["IPv6 metadata", ["fd00:ec2::254"]],
+    ["IPv4-mapped link-local", ["::ffff:169.254.1.2"]],
+    ["NAT64 link-local", ["64:ff9b::169.254.1.2"]],
+    ["mixed Podman and metadata DNS", ["169.254.1.2", "169.254.169.254"]],
+    ["another provider hostname", ["169.254.1.2"], "http://other.internal:11434"],
+    ["a separate remote override", ["169.254.1.2"], "http://other.internal:11434", baseUrl],
+  ])("rejects %s before any HTTP attempt", async (_name, addresses, providerBase, remoteBase) => {
+    fixture.lookup = async () =>
+      addresses.map((address) => ({
+        address,
+        family: address.includes(":") ? 6 : 4,
+      }));
     const { provider } = await createProvider(providerBase, remoteBase);
     await expect(provider.embed("hello")).rejects.toThrow("Blocked");
-    expect(fixture.attempts).toEqual([]);
-    expect(fixture.requests).toEqual([]);
+    expect(fixture).toMatchObject({ attempts: [], requests: [] });
   });
 
   it.each([
@@ -219,8 +191,7 @@ describe("Ollama Podman host through the real SSRF and HTTP boundary", () => {
     );
     resolved.resolve([{ address: "169.254.1.2", family: 4 }]);
     await expect(pending).rejects.toThrow("no longer active");
-    expect(fixture.attempts).toEqual([]);
-    expect(fixture.requests).toEqual([]);
+    expect(fixture).toMatchObject({ attempts: [], requests: [] });
   });
 
   it.skipIf(process.env.LIVE_OLLAMA_PODMAN_PROOF !== "1")(

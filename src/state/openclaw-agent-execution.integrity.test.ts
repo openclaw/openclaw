@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Worker } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, assert, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
@@ -15,7 +16,12 @@ import {
   readSqliteDatabaseIntegrityVerification,
   readSqliteDatabaseCleanClose,
 } from "../infra/sqlite-database-admission.js";
-import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+import {
+  createSqliteWorkerOperationAdmission,
+  type SqliteWorkerAdmissionRequest,
+} from "../infra/sqlite-worker-operation-admission.js";
+import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import * as sqliteWorkerStore from "../infra/sqlite-worker-store.js";
 import { assertAgentDatabaseAdmitted } from "./agent-database-admission.js";
 import { stateNativeProcessEntrypoints } from "./native-process-runtime.test-support.js";
 import {
@@ -42,6 +48,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawAgentDatabaseByPath,
   openOpenClawAgentDatabase,
+  type OpenClawAgentDatabase,
 } from "./openclaw-agent-db.js";
 import { removeAgentIntegrityMetadataForTest } from "./openclaw-agent-db.test-support.js";
 import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
@@ -130,15 +137,14 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 
 // Direct native fixtures hold their generation until their explicit close.
 function createNativeGeneration(
-  agentId: string,
-  pathname: string,
+  database: Pick<OpenClawAgentDatabase, "agentId" | "path">,
   context: ReturnType<typeof captureOpenClawStateWorkerContext>,
   assertCurrent: () => void,
   assertCleanup = assertCurrent,
 ) {
   return createAgentDatabaseNativeGeneration(
-    agentId,
-    pathname,
+    database.agentId,
+    database.path,
     context,
     new AgentDatabaseExecutionLifetime().state,
     assertCurrent,
@@ -149,7 +155,10 @@ function createNativeGeneration(
   );
 }
 
-function createNativeSource(assertCurrent: () => void): AgentDatabaseRequestExecutionSource {
+function createNativeSource(
+  assertCurrent: () => void,
+  beforeGrant?: (request: SqliteWorkerAdmissionRequest) => void,
+): AgentDatabaseRequestExecutionSource {
   return {
     assertCurrent,
     createAdmission: (binding) => () => ({
@@ -157,6 +166,7 @@ function createNativeSource(assertCurrent: () => void): AgentDatabaseRequestExec
       admission: createSqliteWorkerOperationAdmission((request, grant) => {
         binding.authorize(request);
         assertCurrent();
+        beforeGrant?.(request);
         if (!grant()) {
           throw new Error("Native integrity fixture lost its retained admission");
         }
@@ -164,6 +174,51 @@ function createNativeSource(assertCurrent: () => void): AgentDatabaseRequestExec
     }),
   };
 }
+
+it("keeps retained borrowers after a caller is refused before native promotion", async () => {
+  const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-pre-promotion-")) };
+  const options = { agentId: "main", env };
+  const database = openOpenClawAgentDatabase(options);
+  closeOpenClawAgentDatabaseByPath(database.path);
+  const initiator = captureOpenClawAgentDatabaseExecution(options);
+  const retained = captureOpenClawAgentDatabaseExecution(options);
+  const refusal = new Error("Caller revoked before native promotion");
+  let current = true;
+  const source = createNativeSource(() => {
+    if (!current) {
+      throw refusal;
+    }
+  });
+  const runOperation = sqliteWorkerStore.runSqliteWorkerStoreOperation;
+  const preparation = vi
+    .spyOn(sqliteWorkerStore, "runSqliteWorkerStoreOperation")
+    .mockImplementationOnce((...args) => {
+      // The lazy native owner exists, but its first write promotion has not entered.
+      current = false;
+      preparation.mockRestore();
+      return runOperation(...args);
+    });
+  const operation = vi.fn(async () => "not admitted");
+  try {
+    await expect(initiator.runExisting(source, operation)).rejects.toBe(refusal);
+    expect(current).toBe(false);
+    expect(operation).not.toHaveBeenCalled();
+    expect(() => retained.assertCurrent()).not.toThrow();
+    await expect(
+      retained.runExisting(
+        createNativeSource(() => {}),
+        (scope) =>
+          scope.execute({
+            type: "session.transcript.initialize",
+            input: { sessionKey: "agent:main:retained", sessionId: "retained" },
+          }),
+      ),
+    ).resolves.toMatchObject({ kind: "session-transcript-initialized" });
+  } finally {
+    preparation.mockRestore();
+    await Promise.all([initiator.release(), retained.release()]);
+  }
+});
 
 it.for(["revoked", "aborted"] as const)(
   "keeps shared integrity preparation alive after its initiating caller is %s",
@@ -281,8 +336,7 @@ it.for(["revoked", "aborted"] as const)(
       { session_key: "agent:main:peer-1", current_session_id: "peer-1" },
     ]);
     const reopened = createNativeGeneration(
-      database.agentId,
-      database.path,
+      database,
       captureOpenClawStateWorkerContext({ env }),
       () => {},
     );
@@ -304,18 +358,8 @@ it.for(["warm", "cold"] as const)(
     const context = captureOpenClawStateWorkerContext({ env });
     const assertCurrent = () => context.admission.assertCurrent();
     const source = createNativeSource(assertCurrent);
-    const readyGeneration = createNativeGeneration(
-      ready.agentId,
-      ready.path,
-      context,
-      assertCurrent,
-    );
-    const preparingGeneration = createNativeGeneration(
-      preparing.agentId,
-      preparing.path,
-      context,
-      assertCurrent,
-    );
+    const readyGeneration = createNativeGeneration(ready, context, assertCurrent);
+    const preparingGeneration = createNativeGeneration(preparing, context, assertCurrent);
     const queue = createChannelIngressQueue<{ text: string }>({
       channelId: "synthetic",
       stateDir: env.OPENCLAW_STATE_DIR,
@@ -352,6 +396,54 @@ it.for(["warm", "cold"] as const)(
   },
 );
 
+it("prepares another agent on the free carrier while integrity holds its peer", async ({
+  signal,
+}) => {
+  const env = {
+    OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-preparation-isolation-")),
+  };
+  const databases = ["slow", "ready", "next"].map((agentId) =>
+    openOpenClawAgentDatabase({ agentId, env }),
+  );
+  const slow = databases[0]!;
+  const gate = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2));
+  Atomics.store(gate, 0, 1);
+  counter.path = slow.path;
+  counter.gate = gate.buffer;
+  invalidateOpenClawAgentDatabaseValidation(slow.path);
+  const executions = databases.map((database) =>
+    captureOpenClawAgentDatabaseExecution({ agentId: database.agentId, path: database.path, env }),
+  );
+  const source = createNativeSource(() => {});
+  const pending: Promise<void>[] = [];
+  let slowPrepared = false;
+  try {
+    const preparing = executions[0]!.prepare(source).then(() => {
+      slowPrepared = true;
+    });
+    pending.push(preparing);
+    void preparing.catch(() => {});
+    await withinTest(Promise.resolve(Atomics.waitAsync(gate, 1, 0).value), signal);
+
+    const ready = executions[1]!.prepare(source);
+    pending.push(ready);
+    await withinTest(ready, signal);
+    const next = executions[2]!.prepare(source);
+    pending.push(next);
+    await withinTest(next, signal);
+
+    expect(Atomics.load(gate, 0)).toBe(1);
+    expect(slowPrepared).toBe(false);
+  } finally {
+    Atomics.store(gate, 0, 0);
+    Atomics.notify(gate, 0);
+    counter.gate = undefined;
+    await Promise.allSettled(pending);
+    await Promise.all(executions.map((execution) => execution.release()));
+  }
+  expect(slowPrepared).toBe(true);
+}, 30_000);
+
 it.each(["confirmed close", "native exit"] as const)(
   "uses native close evidence before recovering an agent lease (%s)",
   async (outcome) => {
@@ -367,12 +459,7 @@ it.each(["confirmed close", "native exit"] as const)(
     const context = captureOpenClawStateWorkerContext({ env });
     const assertCurrent = () => context.admission.assertCurrent();
     const source = createNativeSource(assertCurrent);
-    const generation = createNativeGeneration(
-      database.agentId,
-      database.path,
-      context,
-      assertCurrent,
-    );
+    const generation = createNativeGeneration(database, context, assertCurrent);
     const workers: Worker[] = [];
     const observeWorker = (worker: Worker) => workers.push(worker);
     const cleanup = vi.spyOn(stateWorkerStore, "openOpenClawStateWorkerCleanupStore");
@@ -415,36 +502,33 @@ it("retires every borrower when native open refusal retains admission cleanup fa
   closeOpenClawAgentDatabaseByPath(database.path);
   const rejected = captureOpenClawAgentDatabaseExecution(options);
   const retained = captureOpenClawAgentDatabaseExecution(options);
-  const refusal = new Error("Original caller revoked before native agent open");
-  const cleanupError = new Error("Original caller cleanup failed after granting open");
-  let sourceCurrent = true;
+  const refusal = new Error("Physical owner refused native agent open");
+  const cleanupError = new Error("Physical owner cleanup failed after granting open");
+  let nativeCurrent = true;
   let domainOpenRequests = 0;
-  const source: AgentDatabaseRequestExecutionSource = {
-    assertCurrent() {
-      if (!sourceCurrent) {
-        throw refusal;
+  const source = createNativeSource(() => {});
+  const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+  const fault = vi
+    .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
+    .mockImplementation((admit, attachment) => {
+      if (!isRecord(attachment) || attachment.kind !== "agent-execution") {
+        return createAdmission(admit, attachment);
       }
-    },
-    createAdmission(binding) {
-      return () => ({
-        nativeLocations: binding.nativeLocations,
-        admission: createSqliteWorkerOperationAdmission((request, grant) => {
-          if (request.stage === "open") {
-            domainOpenRequests += 1;
-          }
-          binding.authorize(request);
-          if (!grant()) {
-            throw new Error("Cleanup refusal fixture lost its admission");
-          }
-          if (request.stage === "open" && domainOpenRequests === 1) {
-            // The broker granted factory entry; the factory must still admit its native open.
-            sourceCurrent = false;
-            throw cleanupError;
-          }
-        }, binding.attachment),
-      });
-    },
-  };
+      return createAdmission((request, grant) => {
+        if (!nativeCurrent) {
+          throw refusal;
+        }
+        if (request.stage === "open") {
+          domainOpenRequests += 1;
+        }
+        admit(request, grant);
+        if (request.stage === "open" && domainOpenRequests === 1) {
+          // The broker granted factory entry; the factory must still admit its native open.
+          nativeCurrent = false;
+          throw cleanupError;
+        }
+      }, attachment);
+    });
   try {
     const opening = rejected.runExisting(source, async () => "not admitted");
     await expect(opening).rejects.toBeInstanceOf(AggregateError);
@@ -452,15 +536,16 @@ it("retires every borrower when native open refusal retains admission cleanup fa
       cause: refusal,
       errors: [refusal, { errors: [cleanupError] }],
     });
-    // The broker refuses the factory open before re-entering the domain callback.
+    // Physical-owner refusal precedes the second domain admission.
     expect(domainOpenRequests).toBe(1);
-    sourceCurrent = true;
+    nativeCurrent = true;
     expect(() => retained.assertCurrent()).toThrow("Agent database execution admission is closed");
     await expect(retained.runExisting(source, async () => "not admitted")).rejects.toThrow(
       "Agent database execution admission is closed",
     );
   } finally {
-    sourceCurrent = true;
+    fault.mockRestore();
+    nativeCurrent = true;
     const released = await Promise.allSettled([rejected.release(), retained.release()]);
     await closeOpenClawAgentDatabasesAsync();
     expect(released).toEqual([
@@ -477,25 +562,21 @@ it("retires every borrower when native opening reports a protocol failure", asyn
   closeOpenClawAgentDatabaseByPath(database.path);
   const rejected = captureOpenClawAgentDatabaseExecution(options);
   const retained = captureOpenClawAgentDatabaseExecution(options);
-  const source: AgentDatabaseRequestExecutionSource = {
-    assertCurrent: () => {},
-    createAdmission(binding) {
-      return () => {
-        const admission = createSqliteWorkerOperationAdmission((request, grant) => {
-          binding.authorize(request);
-          if (!grant()) {
-            throw new Error("Protocol failure fixture lost admission");
-          }
-        }, binding.attachment);
+  const source = createNativeSource(() => {});
+  const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+  const fault = vi
+    .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
+    .mockImplementation((admit, attachment) => {
+      const admission = createAdmission(admit, attachment);
+      if (isRecord(attachment) && attachment.kind === "agent-execution") {
         admission.port.postMessage(
           { kind: "native-settlement", settlement: { kind: "invalid" } },
           [],
         );
         admission.service();
-        return { nativeLocations: binding.nativeLocations, admission };
-      };
-    },
-  };
+      }
+      return admission;
+    });
   const operation = vi.fn(async () => "not admitted");
   try {
     await expect(rejected.runExisting(source, operation)).rejects.toThrow(
@@ -508,6 +589,7 @@ it("retires every borrower when native opening reports a protocol failure", asyn
     );
     expect(operation).not.toHaveBeenCalled();
   } finally {
+    fault.mockRestore();
     const released = await Promise.allSettled([rejected.release(), retained.release()]);
     expect(released).toEqual([
       { status: "fulfilled", value: undefined },
@@ -553,7 +635,7 @@ it("opens an unconfigured external store without reconstructing unknown deletion
   const context = captureOpenClawStateWorkerContext({ env });
   const assertCurrent = () => context.admission.assertCurrent();
   const source = createNativeSource(assertCurrent);
-  const generation = createNativeGeneration("main", pathname, context, assertCurrent);
+  const generation = createNativeGeneration(retained, context, assertCurrent);
   const opening = await Promise.allSettled([generation.run(source, async () => "opened")]);
   const closing = await Promise.allSettled([generation.close()]);
   expect(opening).toEqual([{ status: "fulfilled", value: "opened" }]);
@@ -654,50 +736,29 @@ it.each([
   };
   let revokedBeforeGrant = false;
   let revokedAfterVerificationAdmission = false;
-  const source: AgentDatabaseRequestExecutionSource = {
-    assertCurrent,
-    createAdmission(binding) {
-      return () => ({
-        nativeLocations: binding.nativeLocations,
-        admission: createSqliteWorkerOperationAdmission((request, grant) => {
-          binding.authorize(request);
-          assertCurrent();
-          if (
-            proof === "revoked-before-grant" &&
-            request.stage === "prepare" &&
-            typeof request.facts === "object" &&
-            request.facts !== null &&
-            "kind" in request.facts &&
-            request.facts.kind === "shared-owner"
-          ) {
-            // Revoke the already-sent proof while the native opener still awaits its grant.
-            invalidateOpenClawAgentDatabaseValidation(database.path);
-            revokedBeforeGrant = true;
-          }
-          if (
-            proof === "revoked-after-verification-admission" &&
-            request.stage === "prepare" &&
-            typeof request.facts === "object" &&
-            request.facts !== null &&
-            "kind" in request.facts &&
-            request.facts.kind === "agent-validation-start"
-          ) {
-            invalidateOpenClawAgentDatabaseValidation(database.path);
-            revokedAfterVerificationAdmission = true;
-          }
-          if (!grant()) {
-            throw new Error("Native integrity fixture lost its retained admission");
-          }
-        }, binding.attachment),
-      });
-    },
-  };
-  const generation = createNativeGeneration(
-    database.agentId,
-    database.path,
-    context,
-    assertCurrent,
-  );
+  const source = createNativeSource(assertCurrent, (request) => {
+    if (
+      request.stage !== "prepare" ||
+      typeof request.facts !== "object" ||
+      request.facts === null ||
+      !("kind" in request.facts)
+    ) {
+      return;
+    }
+    if (proof === "revoked-before-grant" && request.facts.kind === "shared-owner") {
+      // Revoke the already-sent proof while the native opener still awaits its grant.
+      invalidateOpenClawAgentDatabaseValidation(database.path);
+      revokedBeforeGrant = true;
+    }
+    if (
+      proof === "revoked-after-verification-admission" &&
+      request.facts.kind === "agent-validation-start"
+    ) {
+      invalidateOpenClawAgentDatabaseValidation(database.path);
+      revokedAfterVerificationAdmission = true;
+    }
+  });
+  const generation = createNativeGeneration(database, context, assertCurrent);
   if (
     proof === "invalidated" ||
     proof === "closed-host-revoked" ||
@@ -862,7 +923,7 @@ it.runIf(process.platform === "linux")(
         assertAgentDatabaseAdmitted(agentId, { env });
       };
       const source = createNativeSource(assertCurrent);
-      const generation = createNativeGeneration(agentId, pathname, context, assertCurrent, () =>
+      const generation = createNativeGeneration(fixture, context, assertCurrent, () =>
         context.admission.assertCurrent(),
       );
       try {

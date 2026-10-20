@@ -1,27 +1,21 @@
-import { createMemo } from "solid-js";
+import { createMemo, onSettled } from "solid-js";
+import type { AgentSelectElement } from "../../components/agent-select.ts";
+import type { PopoverHandle } from "../../components/solid/popover.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { normalizeAgentTargetLabel } from "../../lib/agents/display.ts";
-import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { liveValue } from "../../lib/reactive/live-value.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import * as catalog from "./catalog-target.ts";
-import type { CheckoutChipOptions } from "./checkout-chip.ts";
 import { resolveCheckoutChip } from "./checkout-chip.ts";
 import { CheckoutChip } from "./checkout-chip.tsx";
-import { findBrowsableDeviceFolderHost } from "./device-placement.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
-import {
-  environmentPlacementRuntime,
-  environmentCloudDisabledReason,
-} from "./hosted-environments.ts";
 import "../../components/agent-select-registration.ts";
-import type { ProjectChipOptions } from "./project-chip.ts";
 import { resolveProjectChip } from "./project-chip.ts";
 import { ProjectChip } from "./project-chip.tsx";
 import type { AgentSelectOptions, NewSessionPlaceControlsOptions } from "./target-controls.ts";
 import { NewSessionTerminalHost } from "./terminal-start-view.tsx";
-import { draftWhereChipParams, resolveWhereChip, type WhereChipOptions } from "./where-chip.ts";
+import { draftWhereChipParams, resolveWhereChip } from "./where-chip.ts";
 import { WhereChip } from "./where-chip.tsx";
 
 registerNewSessionSetupEnglish();
@@ -29,10 +23,14 @@ registerNewSessionSetupEnglish();
 export function AgentSelect(props: {
   params: AgentSelectOptions;
   ref?: (node: HTMLSpanElement) => void;
+  focusTargetsRef?: AgentSelectElement["focusTargetsRef"];
 }) {
   return (
     <span class="new-session-page__select new-session-page__select--agent" ref={props.ref}>
       <openclaw-agent-select
+        ref={(element) => {
+          element.focusTargetsRef = props.focusTargetsRef;
+        }}
         prop:variant={props.params.variant ?? "compact"}
         prop:options={props.params.agents.map((agent) => ({
           value: normalizeAgentId(agent.id),
@@ -57,11 +55,20 @@ export function AgentSelect(props: {
   );
 }
 
-export function RequiredSessionPlacement(props: { gateway: DraftGatewayState }) {
+export function RequiredSessionPlacement(props: {
+  gateway: DraftGatewayState;
+  retryRef?: (button: HTMLButtonElement) => void;
+  ref?: (element: HTMLSpanElement) => void;
+}) {
   const profile = () =>
     props.gateway.cloudProfiles.find((candidate) => candidate.id === props.gateway.requiredProfile);
   return (
-    <span class="new-session-page__select" role="status" data-required-placement>
+    <span
+      class="new-session-page__select"
+      role="status"
+      data-required-placement
+      ref={(element) => props.ref?.(element)}
+    >
       {!props.gateway.placementPolicyReady
         ? t("newSession.placementNotReady")
         : !profile()
@@ -76,6 +83,7 @@ export function RequiredSessionPlacement(props: { gateway: DraftGatewayState }) 
         <button
           type="button"
           class="btn btn--sm"
+          ref={props.retryRef}
           onClick={() => void props.gateway.retryRequiredPlacement()}
         >
           {t("common.retry")}
@@ -85,13 +93,32 @@ export function RequiredSessionPlacement(props: { gateway: DraftGatewayState }) 
   );
 }
 
-export function NewSessionPlaceControls(props: { params: NewSessionPlaceControlsOptions }) {
+export function NewSessionPlaceControls(props: {
+  params: NewSessionPlaceControlsOptions;
+  ref?: (elements: () => readonly HTMLElement[]) => void;
+}) {
+  let required: HTMLSpanElement | undefined;
+  let terminal: HTMLElement | undefined;
+  let where: PopoverHandle | undefined;
+  let workspace: HTMLDivElement | undefined;
+  let deviceFolder: HTMLLabelElement | undefined;
+  onSettled(() => {
+    props.ref?.(() =>
+      [
+        required,
+        terminal,
+        where?.overlay.trigger?.parentElement ?? undefined,
+        where?.overlay.surface,
+        workspace,
+        deviceFolder,
+      ].filter((element): element is HTMLElement => element?.isConnected === true),
+    );
+  });
   const folderValue = liveValue(() => props.params.place.folder);
   const deviceFolderValue = liveValue(() => props.params.place.deviceFolder?.path ?? "");
   const view = createMemo(() => {
-    const { context, data, gateway, place, submitting, pendingPlacement, onChange } = props.params;
+    const { context, data, gateway, place } = props.params;
     const browser = place.browser;
-    const { machineClass, os } = place.cloudSelection;
     const nativeTerminal = catalog.isTarget(data);
     const cloudProfiles = nativeTerminal || !place.isAdmin() ? [] : gateway.cloudProfiles;
     const branches = place.repository.kind === "git" ? place.repository : null;
@@ -123,194 +150,31 @@ export function NewSessionPlaceControls(props: { params: NewSessionPlaceControls
       baseRef: place.baseRef,
       repository: Boolean(place.remoteRepository),
     });
-    const gatewayLabel = gateway.gatewayName
-      ? t("newSession.gatewayNamed", { name: gateway.gatewayName })
-      : t("newSession.gateway");
-    // Node directory listing is admin-only at the Gateway; writers type the device path.
-    const deviceBrowse =
-      place.deviceFolderAvailable && place.isAdmin()
-        ? findBrowsableDeviceFolderHost(place.deviceId, place.devices())
-        : undefined;
-    const browserNodeId = browser.browserNodeId;
-    // Changing the device closes the browser, so an open device listing is this device's.
-    const browserLabel = browserNodeId ? (deviceBrowse?.label ?? browserNodeId) : gatewayLabel;
-    const selectCloudOption = (kind: "os" | "machine", id: string) =>
-      place.cloudMachines[kind === "os" ? "selectOs" : "select"](
-        place.cloudProfileId,
-        id,
-        cloudProfiles,
-        submitting || pendingPlacement,
-        onChange,
-      );
 
     return {
       nativeTerminal,
       browser,
-      machineClass,
-      os,
       whereState,
       projectState,
       checkoutState,
-      projects,
-      branches,
-      browserLabel,
-      browserNodeId,
-      deviceBrowse,
-      gatewayName: gateway.gatewayName,
-      selectCloudOption,
     };
   });
-  // Child prop reads must reuse this projection instead of rebuilding placement facts.
-  const whereParams = createMemo((): WhereChipOptions => ({
-    hostedEnvironments: props.params.place.modelControl.hostedEnvironments(),
-    hostedLoading: props.params.place.modelControl.hostedEnvironmentsLoading(),
-    onSelectHostedEnvironment: (id) => props.params.place.selectHostedEnvironment(id),
-    hostDisabledReason: props.params.place.modelControl.hostEnvironmentDisabledReason(),
-    state: view().whereState,
-    environmentQuery: view().browser.environmentQuery,
-    onEnvironmentQueryInput: (query) => view().browser.changeEnvironmentQuery(query),
-    gatewayName: view().gatewayName,
-    cloudProfileId: props.params.place.cloudProfileId,
-    machineClass: view().machineClass,
-    os: view().os,
-    deviceId: props.params.place.deviceId,
-    autoDevice: props.params.place.autoDevice,
-    autoPlacementMode: props.params.place.modelControl.autoPlacementSelectionMode(
-      environmentPlacementRuntime(props.params.place.modelControl),
-    ),
-    cloudDisabledReason: environmentCloudDisabledReason(props.params.place.modelControl),
-    cloudProfileDisabledReason: (profile) =>
-      environmentCloudDisabledReason(props.params.place.modelControl, profile),
-    submitting: props.params.submitting || props.params.place.suggestedCloudProfile.pending,
-    suggestedProfile: props.params.gateway.suggestedProfile,
-    onAdoptSuggestedProfile: () => void props.params.place.suggestedCloudProfile.adopt(),
-    pendingPlacement: props.params.pendingPlacement,
-    catalogLoading: props.params.place.canWrite() && props.params.gateway.cloudProfilesPending,
-    isAdmin: props.params.place.isAdmin(),
-    ...view().browser.popoverCallbacks("where"),
-    onSelectDevice: (deviceId) => props.params.place.selectDevice(deviceId),
-    onSelectAutoDevice: () => props.params.place.selectDevice("", true),
-    onSelectCloudProfile: (profileId, useDefaults) => {
-      if (useDefaults) {
-        props.params.place.cloudMachines.applyPending(profileId);
-      }
-      props.params.place.selectCloudProfile(profileId);
-    },
-    onSelectCloudOs: (osId) => view().selectCloudOption("os", osId),
-    onSelectCloudMachine: (machineId) => view().selectCloudOption("machine", machineId),
-    onConnectMachine: props.params.onConnectMachine,
-    onManageCloudWorkers: () => {
-      view().browser.close();
-      props.params.onNavigate("cloud-workers");
-    },
-  }));
-  const projectParams = createMemo((): ProjectChipOptions => ({
-    state: props.params.place.deviceFolder
-      ? { ...view().projectState, label: t("newSession.deviceFolder") }
-      : view().projectState,
-    browseAvailable: props.params.place.browseAvailable(),
-    isAdmin: props.params.place.isAdmin(),
-    canWrite: props.params.place.canWrite(),
-    folder: props.params.place.folder,
-    workspace: props.params.place.workspacePath(),
-    projects: view().projects,
-    projectQuery: view().browser.projectQuery,
-    projectSearchAvailable:
-      !view().nativeTerminal &&
-      canCallGatewayMethod(
-        props.params.context?.gateway.snapshot,
-        "projects.searchRemote",
-        "operator.read",
-      ),
-    projectAddAvailable:
-      !view().nativeTerminal &&
-      canCallGatewayMethod(
-        props.params.context?.gateway.snapshot,
-        props.params.place.remotePlacement ? "sessions.create" : "projects.add",
-        "operator.write",
-      ),
-    remoteProjects: view().browser.projectSearchResult?.projects ?? [],
-    selectedRemoteProject: view().browser.remoteProject,
-    projectSearchCredentialMissing: view().browser.projectSearchResult?.credential === "missing",
-    projectSearchLoading: view().browser.projectSearchLoading,
-    projectSearchError: view().browser.projectSearchError,
-    projectId: view().browser.projectId,
-    freshWorkspace: props.params.place.freshWorkspace,
-    onNewWorkspace: props.params.place.remotePlacement
-      ? () => props.params.place.selectNewWorkspace()
-      : undefined,
-    deviceFolder: Boolean(props.params.place.deviceFolder),
-    deviceFolderDisabledReason: props.params.place.deviceFolderRuntimeUnsupportedReason,
-    onDeviceFolder: props.params.place.deviceFolderOffered
-      ? () => props.params.place.selectDeviceFolder()
-      : undefined,
-    deviceBrowseLabel: view().deviceBrowse?.label,
-    onBrowseDevice: view().deviceBrowse
-      ? () =>
-          view().browser.selectDeviceBrowser(
-            props.params.place.deviceId,
-            props.params.place.deviceFolder?.path.trim() || undefined,
-          )
-      : undefined,
-    browserLabel: view().browserLabel,
-    submitting: props.params.submitting,
-    pendingPlacement: props.params.pendingPlacement,
-    ...view().browser.popoverCallbacks("project"),
-    browserOpen: view().browser.browserOpen,
-    browser: view().browser.browser,
-    registerProjectPath: view().browser.browserProjectPath,
-    registeringProject: view().browser.browserRegistering,
-    onSelectProject: (projectId) => props.params.place.selectProjectId(projectId),
-    onProjectQueryInput: (query) => view().browser.changeProjectQuery(query),
-    onSelectRemoteProject: (project) => props.params.place.selectRemoteProject(project),
-    onApplyFolder: (folder) => {
-      if (!view().browserNodeId) {
-        props.params.place.applyFolder(folder);
-        return;
-      }
-      // An emptied draft names no device folder; keep the current device path.
-      if (folder) {
-        props.params.place.selectDeviceFolder();
-        props.params.place.setDeviceFolderPath(folder);
-      }
-    },
-    onBrowse: () =>
-      view().browser.selectGatewayBrowser(
-        props.params.place.folder.trim() || props.params.place.workspacePath(),
-      ),
-    onBrowserBack: () => view().browser.showRoot(),
-    onRegisterProject: (path) => void view().browser.registerBrowserProject(path),
-    onClose: () => view().browser.close(),
-  }));
-  const checkoutParams = createMemo((): CheckoutChipOptions => ({
-    state: view().checkoutState,
-    remotePlacement: props.params.place.remotePlacement,
-    repository: Boolean(props.params.place.remoteRepository),
-    folderLabel: view().projectState.label,
-    worktree: props.params.place.worktree,
-    worktreeAvailable: props.params.place.worktreeAvailable(),
-    currentCheckoutUnavailableReason: props.params.place.currentCheckoutUnavailableReason,
-    repositoryUnavailable: props.params.place.repository.kind === "unavailable",
-    branches: view().branches,
-    branchesLoading: props.params.place.repository.kind === "checking",
-    baseRef: props.params.place.baseRef,
-    worktreeName: props.params.place.worktreeName,
-    submitting: props.params.submitting,
-    pendingPlacement: props.params.pendingPlacement,
-    ...view().browser.popoverCallbacks("checkout"),
-    onSelectWorktree: (value) => props.params.place.selectWorktree(value),
-    onBaseRefInput: (baseRef) => props.params.place.setBaseRef(baseRef),
-    onWorktreeNameInput: (worktreeName) => props.params.place.setWorktreeName(worktreeName),
-    onConfirm: props.params.onFocusComposer,
-  }));
   return (
     <>
       {props.params.place.requiredPlacement ? (
-        <RequiredSessionPlacement gateway={props.params.gateway} />
+        <RequiredSessionPlacement
+          gateway={props.params.gateway}
+          ref={(element) => {
+            required = element;
+          }}
+        />
       ) : (
         <>
           {view().nativeTerminal ? (
             <NewSessionTerminalHost
+              ref={(element) => {
+                terminal = element;
+              }}
               params={{
                 hosts: props.params.data?.terminalHosts,
                 hostId: props.params.place.terminalHostId,
@@ -319,30 +183,68 @@ export function NewSessionPlaceControls(props: { params: NewSessionPlaceControls
               }}
             />
           ) : (
-            <WhereChip params={whereParams()} />
+            <WhereChip
+              params={props.params}
+              state={view().whereState}
+              ref={(handle) => {
+                where = handle;
+              }}
+            />
           )}
-          {props.params.place.hostedEnvironment ? (
-            <span
-              class="new-session-page__select new-session-page__hosted-workspace"
-              title={t("newSession.hostedHint")}
-            >
-              {t("newSession.hostedWorkspace")}
-            </span>
-          ) : view().nativeTerminal && props.params.place.terminalOnNode ? (
-            <label class="new-session-page__select new-session-page__menu-field">
-              <span>{t("newSession.terminalNodeFolder")}</span>
-              <input
-                aria-label={t("newSession.terminalNodeFolder")}
-                ref={folderValue}
-                disabled={props.params.submitting}
-                onInput={(event) => props.params.place.applyFolder(event.currentTarget.value)}
+          <div
+            ref={(element) => {
+              workspace = element;
+            }}
+            class={[
+              "new-session-page__workspace",
+              {
+                "new-session-page__workspace--checkout":
+                  props.params.place.checkoutVisible &&
+                  !(view().nativeTerminal && props.params.place.terminalOnNode),
+              },
+            ]}
+          >
+            {props.params.place.hostedEnvironment ? (
+              <span
+                class="new-session-page__select new-session-page__hosted-workspace"
+                title={t("newSession.hostedHint")}
+              >
+                {t("newSession.hostedWorkspace")}
+              </span>
+            ) : view().nativeTerminal && props.params.place.terminalOnNode ? (
+              <label class="new-session-page__select new-session-page__menu-field">
+                <span>{t("newSession.terminalNodeFolder")}</span>
+                <input
+                  aria-label={t("newSession.terminalNodeFolder")}
+                  ref={folderValue}
+                  disabled={props.params.submitting}
+                  onInput={(event) => props.params.place.applyFolder(event.currentTarget.value)}
+                />
+              </label>
+            ) : (
+              <ProjectChip
+                params={props.params}
+                state={view().projectState}
+                nativeTerminal={view().nativeTerminal}
+                focus={view().browser.projectFocus}
               />
-            </label>
-          ) : (
-            <ProjectChip params={projectParams()} focus={view().browser.projectFocus} />
-          )}
+            )}
+            {props.params.place.checkoutVisible &&
+            !(view().nativeTerminal && props.params.place.terminalOnNode) ? (
+              <CheckoutChip
+                params={props.params}
+                state={view().checkoutState}
+                folderLabel={view().projectState.label}
+              />
+            ) : undefined}
+          </div>
           {props.params.place.deviceFolder ? (
-            <label class="new-session-page__select new-session-page__menu-field new-session-page__device-folder">
+            <label
+              class="new-session-page__select new-session-page__menu-field new-session-page__device-folder"
+              ref={(element) => {
+                deviceFolder = element;
+              }}
+            >
               <span>{t("newSession.deviceFolderPath")}</span>
               <input
                 aria-label={t("newSession.deviceFolderPath")}
@@ -358,10 +260,6 @@ export function NewSessionPlaceControls(props: { params: NewSessionPlaceControls
                   t("newSession.deviceFolderDescription")}
               </span>
             </label>
-          ) : undefined}
-          {props.params.place.checkoutVisible &&
-          !(view().nativeTerminal && props.params.place.terminalOnNode) ? (
-            <CheckoutChip params={checkoutParams()} />
           ) : undefined}
         </>
       )}{" "}

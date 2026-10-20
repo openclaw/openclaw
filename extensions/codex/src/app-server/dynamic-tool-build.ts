@@ -1,4 +1,5 @@
 import {
+  AgentHarnessPreflightError,
   applyEmbeddedAttemptToolsAllow,
   buildAgentHookContextChannelFields,
   buildEmbeddedAttemptToolRunContext,
@@ -342,7 +343,9 @@ export async function buildDynamicTools(
       nativeImageInspectionEnabled: input.nativeToolSurfaceEnabled === true,
     });
     toolBuildStages.mark("vision-filtering");
-    const webSearchPresent = visionFilteredTools.some((tool) => tool.name === "web_search");
+    const webSearchPresent =
+      !webSearchPlan.suppressManagedWebSearch &&
+      visionFilteredTools.some((tool) => tool.name === "web_search");
     const persistentCodexWebSearchSurface =
       params.config?.tools?.web?.search?.enabled !== false &&
       !isCodexDynamicToolExcluded(input.pluginConfig, ["web_search"]);
@@ -353,6 +356,7 @@ export async function buildDynamicTools(
         config: params.config,
         nativeProviderWebSearchSupport: input.nativeProviderWebSearchSupport,
       }).kind === "native-hosted";
+    const webSearchPolicy = params.preparedWebSearchPolicy;
     let nativeWebSearchAllowed = false;
     let persistentWebSearchAllowed = webSearchPresent;
     if (
@@ -360,35 +364,18 @@ export async function buildDynamicTools(
         (webSearchPlan.kind === "native-hosted" &&
           (input.onWebSearchPolicyResolved || webSearchPlan.webFetchHostnameAllowlist))) &&
       !webSearchPresent &&
-      persistentCodexWebSearchSurface
+      persistentCodexWebSearchSurface &&
+      webSearchPolicy
     ) {
-      const webSearchPolicy = (
-        await import("openclaw/plugin-sdk/agent-harness")
-      ).resolveWebSearchToolPolicy({
-        config: params.config,
-        modelProvider: params.model.provider,
-        modelId: params.modelId,
-        agentId: input.policyAgentId,
-        sessionKey: input.sandboxSessionKey,
-        sessionId: params.sessionId,
-        ...(persistentHostedWebSearchEligible
-          ? { runtimeToolAllowlist: toolRunContext.runtimeToolAllowlist }
-          : {}),
-        sandboxToolPolicy: input.sandbox?.tools,
-        messageProvider: messageToolProvider,
-        agentAccountId: params.agentAccountId,
-        groupId: params.groupId,
-        groupChannel: params.groupChannel,
-        groupSpace: params.groupSpace,
-        spawnedBy: params.spawnedBy,
-        senderId: params.senderId,
-        senderName: params.senderName,
-        senderUsername: params.senderUsername,
-        senderE164: params.senderE164,
-        inputProvenance: params.inputProvenance,
-        trustedInternalHandoff: params.trustedInternalHandoff,
-        scheduledToolPolicy: params.scheduledToolPolicy,
-      });
+      if (
+        webSearchPolicy.modelRef &&
+        (webSearchPolicy.modelRef.provider !== params.model.provider ||
+          webSearchPolicy.modelRef.model !== params.modelId)
+      ) {
+        throw new AgentHarnessPreflightError(
+          "Native model changed after web search policy preparation. Retry the turn to prepare policy for the current model.",
+        );
+      }
       persistentWebSearchAllowed =
         webSearchPolicy.persistentAllowed &&
         (persistentHostedWebSearchEligible ||
@@ -397,6 +384,10 @@ export async function buildDynamicTools(
       nativeWebSearchAllowed =
         webSearchPlan.kind === "native-hosted" &&
         webSearchPolicy.allowed &&
+        applyEmbeddedAttemptToolsAllow(
+          [{ name: "web_search" }],
+          toolRunContext.runtimeToolAllowlist,
+        ).length > 0 &&
         !isCodexMemoryFlushRun(params);
     }
     input.onPersistentWebSearchPolicyResolved?.(persistentWebSearchAllowed);
@@ -439,7 +430,9 @@ export async function buildDynamicTools(
     // Resolve policy before hiding the managed tool. Hosted search follows the
     // same effective policy, while only one search implementation is exposed.
     const webSearchAllowed =
-      nativeWebSearchAllowed || normalizedTools.some((tool) => tool.name === "web_search");
+      nativeWebSearchAllowed ||
+      (!webSearchPlan.suppressManagedWebSearch &&
+        normalizedTools.some((tool) => tool.name === "web_search"));
     webFetchHostnameAllowlistRef.value = webSearchAllowed
       ? webSearchPlan.webFetchHostnameAllowlist
       : undefined;

@@ -563,6 +563,7 @@ describe("session accessor readonly listing", () => {
     const invalidDatabase = openOpenClawAgentDatabase({ agentId: migrationInvalidAgentId, env });
     invalidDatabase.db.exec("PRAGMA user_version = 999;");
     const invalidStorePath = invalidDatabase.path;
+    await closeOpenClawAgentDatabaseByPathAsync(invalidStorePath);
     const missingAgentId = "missing";
     const missingStorePath = resolveOpenClawAgentSqlitePath({ agentId: missingAgentId, env });
     const unreadableAgentId = "unreadable";

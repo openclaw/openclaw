@@ -321,6 +321,9 @@ export async function waitForGatewayHealthyRestart(
       if (snapshot.buildIdMismatch) {
         return withWaitContext(snapshot, "build-id-mismatch", elapsedMs);
       }
+      if (snapshot.authenticationError) {
+        return withWaitContext(snapshot, "auth-rejected", elapsedMs);
+      }
       if (snapshot.staleGatewayPids.length > 0 && snapshot.runtime.status !== "running") {
         return withWaitContext(snapshot, "stale-pids", elapsedMs);
       }

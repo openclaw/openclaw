@@ -68,21 +68,14 @@ describe("finalized tool-authored source replies", () => {
             }),
           },
         ],
-        resourceLoader: createResourceLoader(
-          new Map([
-            [
-              "message_end",
-              [
-                async (event: unknown) => {
-                  const { message } = event as MessageEndEvent;
-                  return message.role === "toolResult"
-                    ? { message: { ...message, details: final } }
-                    : undefined;
-                },
-              ],
-            ],
-          ]),
-        ),
+        resourceLoader: await createResourceLoader((api) => {
+          api.on("message_end", async (event: unknown) => {
+            const { message } = event as MessageEndEvent;
+            return message.role === "toolResult"
+              ? { message: { ...message, details: final } }
+              : undefined;
+          });
+        }),
       });
       const subscription = subscribeEmbeddedAgentSession({
         session,

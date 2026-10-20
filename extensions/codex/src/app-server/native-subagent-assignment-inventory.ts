@@ -195,6 +195,7 @@ export class CodexNativeSubagentAssignmentInventory {
     }
     const custody = owner.completionCustody.retain();
     try {
+      await this.drain(state);
       const assignments = await store.read();
       if (!this.dependencies.isCurrent(state) || !custody.isCurrent()) {
         return;
@@ -224,6 +225,8 @@ export class CodexNativeSubagentAssignmentInventory {
         );
         if (surviving) {
           await this.dependencies.restore(state, surviving, recovery, custody);
+          // Restoring one child can queue binding writes needed by the next read's authority.
+          await this.drain(state);
         }
       }
     } catch (error) {

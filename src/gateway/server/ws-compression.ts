@@ -1,4 +1,5 @@
 import { kMaxLength } from "node:buffer";
+import type { Socket } from "node:net";
 import {
   constants as zlibConstants,
   createDeflateRaw,
@@ -7,6 +8,7 @@ import {
   inflateRawSync,
 } from "node:zlib";
 import type { WebSocket } from "ws";
+import { getOrCreateWeakOwnerMap } from "../../shared/weak-owner-map.js";
 import { gatewayFrameSegments } from "../serialized-json.js";
 import { gatewayReceiver } from "./ws-receiver.js";
 
@@ -19,7 +21,7 @@ import { gatewayReceiver } from "./ws-receiver.js";
 export const GATEWAY_PER_MESSAGE_DEFLATE = {
   serverNoContextTakeover: true,
   clientNoContextTakeover: true,
-  threshold: 4 * 1024,
+  threshold: 1024,
 };
 
 type ZlibCallback = (error: Error | null, result?: Buffer) => void;
@@ -119,11 +121,7 @@ export function registerDeflatedSegment(bytes: Uint8Array, deflated: Uint8Array)
   if (bytes.byteLength < GATEWAY_PER_MESSAGE_DEFLATE.threshold) {
     return;
   }
-  let windows = deflatedSegments.get(bytes);
-  if (!windows) {
-    windows = new Map();
-    deflatedSegments.set(bytes, windows);
-  }
+  const windows = getOrCreateWeakOwnerMap(deflatedSegments, bytes);
   windows.set(15, Buffer.from(deflated.buffer, deflated.byteOffset, deflated.byteLength));
 }
 
@@ -152,13 +150,22 @@ function isPerMessageDeflateCodec(value: unknown): value is PerMessageDeflateCod
  */
 export function installGatewayDeflateCodec(
   socket: WebSocket,
-): { acceptsDeflatedSegments: boolean } | undefined {
+  stream: Socket,
+):
+  | {
+      acceptsDeflatedSegments: boolean;
+      observeFrameBytes: (frame: Buffer, record: (bytes: number) => void) => void;
+    }
+  | undefined {
   // SAFETY: ws owns the negotiated extension; validate its shape before replacing methods.
   const codec = (socket as WebSocket & { _extensions?: Record<string, unknown> })["_extensions"]?.[
     "permessage-deflate"
   ];
   if (codec === undefined) {
-    return { acceptsDeflatedSegments: false };
+    return {
+      acceptsDeflatedSegments: false,
+      observeFrameBytes: (frame, record) => record(frame.byteLength),
+    };
   }
   const receiver = gatewayReceiver(socket);
   if (
@@ -171,6 +178,30 @@ export function installGatewayDeflateCodec(
   }
   const streamDecompress = codec.decompress.bind(codec);
   const streamCompress = codec.compress.bind(codec);
+  // send() registers before compression completes on the next tick. Keep queued
+  // observers per codec because a shared frame can use different peer windows.
+  const frameBytes = new WeakMap<Buffer, ((bytes: number) => void)[]>();
+  const observeFrameBytes = (frame: Buffer, record: (bytes: number) => void) => {
+    if (frame.byteLength < GATEWAY_PER_MESSAGE_DEFLATE.threshold) {
+      record(frame.byteLength);
+      return;
+    }
+    const observed = frameBytes.get(frame);
+    if (observed) {
+      observed.push(record);
+    } else {
+      frameBytes.set(frame, [record]);
+    }
+  };
+  const recordCompressedBytes = (frame: Buffer, bytes: number) => {
+    const observers = frameBytes.get(frame);
+    frameBytes.delete(frame);
+    if (observers) {
+      for (const record of observers) {
+        record(bytes);
+      }
+    }
+  };
   // Never call back synchronously: ws would re-enter its frame loop. Admitted
   // operators parse a whole burst in one turn; other receivers yield one turn
   // per message, matching uncompressed delivery.
@@ -249,15 +280,17 @@ export function installGatewayDeflateCodec(
           continue;
         }
         flushSmall();
-        let windows = deflatedSegments.get(bytes);
-        if (!windows) {
-          windows = new Map();
-          deflatedSegments.set(bytes, windows);
-        }
+        const windows = getOrCreateWeakOwnerMap(deflatedSegments, bytes);
         let piece = windows.get(windowBits);
         if (!piece) {
-          // Copy out of the shared deflater's output chunk so the memo retains only its bytes.
-          piece = Buffer.from(compressPiece(bytes));
+          // Avoid retaining pooled slabs for small copies; keep Node's native large-copy path.
+          const compressed = compressPiece(bytes);
+          if (compressed.length < Buffer.poolSize >>> 1) {
+            piece = Buffer.allocUnsafeSlow(compressed.length);
+            compressed.copy(piece);
+          } else {
+            piece = Buffer.from(compressed);
+          }
           windows.set(windowBits, piece);
         }
         pieces.push(piece);
@@ -269,7 +302,18 @@ export function installGatewayDeflateCodec(
       output = compressPiece(input);
     }
     // Z_SYNC_FLUSH ends with the empty block that permessage-deflate strips.
-    process.nextTick(callback, null, output.subarray(0, -TRAILER.length));
+    const payload = output.subarray(0, -TRAILER.length);
+    process.nextTick(() => {
+      // ws still drains accepted frames while closing, unless the stream is destroyed.
+      const handedToSocket = !stream.destroyed;
+      callback(null, payload);
+      if (handedToSocket) {
+        recordCompressedBytes(input, payload.byteLength);
+      }
+    });
   };
-  return { acceptsDeflatedSegments: windowBits === zlibConstants.Z_DEFAULT_WINDOWBITS };
+  return {
+    acceptsDeflatedSegments: windowBits === zlibConstants.Z_DEFAULT_WINDOWBITS,
+    observeFrameBytes,
+  };
 }

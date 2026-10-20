@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { finished } from "node:stream/promises";
 import { setImmediate as checkpoint } from "node:timers/promises";
-import { Worker } from "node:worker_threads";
+import type { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   afterAll,
@@ -68,7 +68,11 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => {
   };
 });
 
-const { makeTempDir, observeCatalogEntry: observeEntry } = usePreparedCatalogWorkerFixtures({
+const {
+  makeTempDir,
+  observeCatalogEntry: observeEntry,
+  observeWorkers,
+} = usePreparedCatalogWorkerFixtures({
   observeCatalogWork: true,
 });
 
@@ -86,29 +90,6 @@ function observeCatalogEntry(marker: string, agentDir: string) {
   return observeEntry(receipts, { marker, agentDir });
 }
 
-function observeWorkers(onWorker?: (worker: Worker) => void) {
-  const spawned: Worker[] = [];
-  let peakWorkers = 0;
-  const workerChannel = channel("worker_threads");
-  const recordWorker = (message: unknown) => {
-    if (isRecord(message) && message.worker instanceof Worker) {
-      spawned.push(message.worker);
-      onWorker?.(message.worker);
-      peakWorkers = Math.max(
-        peakWorkers,
-        spawned.filter((worker) => worker.threadId !== -1).length,
-      );
-    }
-  };
-  return {
-    spawned,
-    get peakWorkers() {
-      return peakWorkers;
-    },
-    subscribe: () => workerChannel.subscribe(recordWorker),
-    close: () => workerChannel.unsubscribe(recordWorker),
-  };
-}
 const workerFailureWarnings = () =>
   runtimeWarnings.filter((message) => message.startsWith("model catalog worker failed"));
 
@@ -196,7 +177,7 @@ describe("Gateway catalog worker pool", () => {
         failedTasks.push({ activeTasks: message.activeTasks, pendingTasks: message.pendingTasks });
       }
     };
-    const catalogFailures: Array<{ error: Error; modelFactsChanged?: boolean }> = [];
+    const catalogFailures: Array<{ phase: "catalog-failed"; modelFactsChanged?: boolean }> = [];
     const unregister = registerPreparedModelRuntimePublicationListener((event) => {
       if (event.phase === "catalog-failed") {
         catalogFailures.push(event);
@@ -263,7 +244,6 @@ describe("Gateway catalog worker pool", () => {
       await expect(queuedCatalog).rejects.toThrow("superseded");
       vi.useRealTimers();
       const originalError = await renewal.catch((error: unknown) => error);
-      expect(originalError).toBe(catalogFailures[0]!.error);
       expect(catalogFailures[0]).toMatchObject({ modelFactsChanged: false });
       expect(originalError).toBe(await queuedAuth.catch((error: unknown) => error));
       expect(originalError).toMatchObject({ message: "worker exited with code 1" });
@@ -331,10 +311,10 @@ describe("Gateway catalog worker pool", () => {
       const release = createDeferredCore();
       const resume = () => release.resolve();
       signal.addEventListener("abort", resume, { once: true });
-      const failures: Error[] = [];
+      const failures: string[] = [];
       const unregister = registerPreparedModelRuntimePublicationListener((event) => {
         if (event.phase === "catalog-failed") {
-          failures.push(event.error);
+          failures.push(event.phase);
         }
       });
       let renewal: ReturnType<typeof loadCompletedFullCatalog> | undefined;
@@ -521,10 +501,10 @@ describe("Gateway catalog worker pool", () => {
     async (reason, { signal }) => {
       const fixture = await createFleetFixture(undefined, true);
       await Promise.all(fixture.snapshots.map((snapshot) => loadCompletedFullCatalog(snapshot)));
-      const failures: Error[] = [];
+      const failures: string[] = [];
       const unregister = registerPreparedModelRuntimePublicationListener((event) => {
         if (event.phase === "catalog-failed") {
-          failures.push(event.error);
+          failures.push(event.phase);
         }
       });
       const entered = observeCatalogEntry(fixture.marker, fixture.snapshots[0]!.agentDir);

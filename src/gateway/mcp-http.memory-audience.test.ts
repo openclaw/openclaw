@@ -54,8 +54,9 @@ it("carries a memory audience only from a run-bound CLI grant", async () => {
   const sessionKey = "agent:main:telegram:direct:owner";
   const sessionId = "session-memory";
   const memoryAudience: MemoryAudience = Object.freeze({ kind: "owner-private", agentId: "main" });
+  const config = { session: { mainKey: "main" } };
   const admission = prepareAgentRunAdmission({
-    cfg: {},
+    cfg: config,
     facts: {
       runId: "run-memory-audience",
       agentId: "main",
@@ -66,6 +67,7 @@ it("carries a memory audience only from a run-bound CLI grant", async () => {
   try {
     const grant = mintMcpLoopbackClientGrant({
       context: { sessionKey, sessionId, senderIsOwner: true },
+      toolPolicyConfig: config,
       runtimeOwnerToken: runtime.ownerToken,
       admittedRunContext: await admission.admit("gateway", "gateway-run-memory-audience"),
       memoryAudience,

@@ -18,13 +18,14 @@ import { isSessionRunVisuallyActive } from "../../../lib/session-run-state.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { insertComposerDictation, type ComposerDictationOwner } from "../composer-dictation.ts";
 import { normalizeChatComposerDraft } from "../composer-draft.ts";
-import type { ComposerMicrophoneOwner } from "../composer-microphone-picker.ts";
-import type { ChatRunControlsProps, MicrophonePickerProps } from "./chat-composer-controls.tsx";
+import type {
+  ComposerMicrophoneOwner,
+  MicrophonePickerProps,
+} from "../composer-microphone-picker.ts";
 import {
   adjustTextareaHeight,
   disconnectTextareaOverflowObserver,
   observeTextareaOverflow,
-  preserveComposerFocusOnPrimaryAction,
   replaceComposerPopoverAnchor,
   scheduleTextareaHeightAdjustment,
 } from "./chat-composer-dom.ts";
@@ -120,7 +121,7 @@ export function createChatComposerContext(
     }
     state.composerTextarea = nextTextarea;
     if (nextTextarea) {
-      observeTextareaOverflow(nextTextarea);
+      observeTextareaOverflow(nextTextarea, () => props.getTranscriptElement?.() ?? null);
       scheduleTextareaHeightAdjustment(nextTextarea);
       if (state.restoreComposerFocus) {
         state.restoreComposerFocus = false;
@@ -143,9 +144,13 @@ export function createChatComposerContext(
         : sendingForCurrentSession || submittedProgress
           ? t("chat.composer.sendingMessage")
           : t("chat.composer.working", { name: assistantName });
-  // Keep run phases accessible alongside the transcript and working indicator.
+  const cancellationCaveat =
+    composerRunStatus?.phase === "interrupted" && composerRunStatus.localModelMayStillBeFinishing
+      ? t("chat.composer.localCancellationCaveat")
+      : null;
+  // The visible caveat owns its announcement; keep other run phases accessible.
   const runStatusAnnouncement =
-    composerRunStatus == null
+    composerRunStatus == null || cancellationCaveat
       ? ""
       : composerRunStatus.phase === "in-progress"
         ? inProgressLabel
@@ -525,7 +530,7 @@ export function createChatComposerContext(
       }
     }
   };
-  const runControlsProps: ChatRunControlsProps = {
+  const runControlsProps = {
     canAbort: showAbortableUi,
     canSend: canSubmitDraft(visibleDraft),
     submitDisabledReason: props.submitDisabledReason,
@@ -549,15 +554,18 @@ export function createChatComposerContext(
     voiceVideoEnabled: Boolean(props.realtimeTalkVideoStream),
     voiceVideoPending: props.realtimeTalkVideoPending,
     onAbort: props.onAbort,
-    onSend: (event) => submitDraft(state.composerTextarea?.value ?? props.draft, event),
+    onSend: (event?: Event) => submitDraft(state.composerTextarea?.value ?? props.draft, event),
     onToggleVoice: props.onToggleRealtimeTalk ? handleVoicePrimaryAction : undefined,
     onToggleCamera: props.onToggleRealtimeCamera,
     microphonePicker,
     readDictation: dictation ? () => dictation : undefined,
     onDictationPointerDown: handleDictationStart,
     onDirectDictationStart: handleDictationStart,
-    onPrimaryActionPointerDown: (event) =>
-      preserveComposerFocusOnPrimaryAction(event, state.composerTextarea),
+    onPrimaryActionPointerDown: (event: PointerEvent) => {
+      if (state.composerTextarea?.matches(":focus")) {
+        event.preventDefault();
+      }
+    },
   };
   const clearSlashMenu =
     props.modelSwitching && state.slashMenu.state.slashMenuCommand?.key === "think";
@@ -594,6 +602,7 @@ export function createChatComposerContext(
     acceptPrediction,
     dismissPrediction: () => prediction?.dismiss(),
     runStatusAnnouncement,
+    cancellationCaveat,
     sendShortcut,
     questionPanelProps,
     showComposer,

@@ -1,3 +1,4 @@
+import fsSync, { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -5,7 +6,13 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import * as lifecycleWriteCustody from "../infra/lifecycle-write-custody.js";
 import { readLifecycleWriteCustody } from "../infra/lifecycle-write-custody.js";
 import { CommandProcessCleanupError } from "../process/exec-result.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return { ...actual, existsSync: vi.fn(actual.existsSync) };
+});
 
 const mocks = vi.hoisted(() => ({
   createGitBackup: vi.fn(),
@@ -38,8 +45,9 @@ vi.mock("../snapshot/git-backup.js", () => ({
 }));
 
 // mock-isolation: Git backup settlement uses a controlled outcome; routing has real-ledger coverage.
-vi.mock("./backup-outcome.js", () => ({
-  recordBackupRunOutcomeWithOwner: mocks.recordBackupRunOutcome,
+vi.mock("../cli/local-state-owner.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../cli/local-state-owner.js")>()),
+  runWithLocalStateOwner: mocks.recordBackupRunOutcome,
 }));
 
 import {
@@ -47,6 +55,27 @@ import {
   backupGitRestoreCommand,
   backupGitVerifyCommand,
 } from "./backup-git.js";
+
+function create(
+  options: Parameters<typeof backupGitCreateCommand>[1],
+  runtime = createTestRuntime(),
+) {
+  return backupGitCreateCommand(runtime, { repository: "/tmp/repository", ...options });
+}
+
+function restore(
+  options: Parameters<typeof backupGitRestoreCommand>[1],
+  runtime = createTestRuntime(),
+) {
+  return backupGitRestoreCommand(runtime, { repository: "/tmp/repository", ...options });
+}
+
+function verify(
+  options: Parameters<typeof backupGitVerifyCommand>[1],
+  runtime = createTestRuntime(),
+) {
+  return backupGitVerifyCommand(runtime, { repository: "/tmp/repository", ...options });
+}
 
 describe("Git backup command agent selection", () => {
   beforeEach(() => {
@@ -61,6 +90,10 @@ describe("Git backup command agent selection", () => {
       agents: { entries: { main: {}, "ops-team": {} } },
     });
     mocks.recordBackupRunOutcome.mockReset();
+    const databasePath = resolveOpenClawStateSqlitePath();
+    vi.mocked(existsSync)
+      .mockReset()
+      .mockImplementation((value) => value === databasePath || fsSync.existsSync(value));
     mocks.restoreGitBackupRef.mockReset().mockResolvedValue({
       commit: "backup-commit",
       excludedTables: [],
@@ -159,10 +192,7 @@ describe("Git backup command agent selection", () => {
       mocks.recordBackupRunOutcome.mockImplementation(async () => {
         expect(readLifecycleWriteCustody()).toEqual([{ phase: "backup", count: 1 }]);
       });
-      const running = backupGitCreateCommand(createTestRuntime(), {
-        repository: "/tmp/repository",
-        global: true,
-      }).catch((error: unknown) => error);
+      const running = create({ global: true }).catch((error: unknown) => error);
       await entered.promise;
       try {
         expect(readLifecycleWriteCustody()).toEqual([{ phase: "backup", count: 1 }]);
@@ -192,12 +222,7 @@ describe("Git backup command agent selection", () => {
     ],
     ["whitespace-only", "   ", "--agent must not be blank"],
   ])("rejects an %s Git create agent", async (_label, agent, message) => {
-    await expect(
-      backupGitCreateCommand(createTestRuntime(), {
-        repository: "/tmp/repository",
-        agents: [agent],
-      }),
-    ).rejects.toThrow(message);
+    await expect(create({ agents: [agent] })).rejects.toThrow(message);
 
     expect(mocks.createGitBackup).not.toHaveBeenCalled();
   });
@@ -214,10 +239,7 @@ describe("Git backup command agent selection", () => {
       },
     });
 
-    await backupGitCreateCommand(createTestRuntime(), {
-      repository: "/tmp/repository",
-      all: true,
-    });
+    await create({ all: true });
 
     expect(mocks.getRuntimeConfig).toHaveBeenCalledOnce();
     expect(mocks.createGitBackup).toHaveBeenCalledWith(
@@ -238,28 +260,17 @@ describe("Git backup command agent selection", () => {
   });
 
   it("keeps the --all plus explicit-scope conflict ahead of agent validation", async () => {
-    await expect(
-      backupGitCreateCommand(createTestRuntime(), {
-        repository: "/tmp/repository",
-        all: true,
-        agents: ["nope-agent"],
-      }),
-    ).rejects.toThrow("Use --all by itself, or select --global and --agent scopes explicitly.");
+    await expect(create({ all: true, agents: ["nope-agent"] })).rejects.toThrow(
+      "Use --all by itself, or select --global and --agent scopes explicitly.",
+    );
 
     expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
     expect(mocks.createGitBackup).not.toHaveBeenCalled();
   });
 
   it("keeps artifact verify and restore available for an unconfigured agent", async () => {
-    await backupGitVerifyCommand(createTestRuntime(), {
-      repository: "/tmp/repository",
-      agent: "retired-agent",
-    });
-    await backupGitRestoreCommand(createTestRuntime(), {
-      repository: "/tmp/repository",
-      agent: "retired-agent",
-      target: "/tmp/restored.sqlite",
-    });
+    await verify({ agent: "retired-agent" });
+    await restore({ agent: "retired-agent", target: "/tmp/restored.sqlite" });
 
     expect(mocks.verifyGitBackupRef).toHaveBeenCalledWith(
       expect.objectContaining({ identity: { role: "agent", agentId: "retired-agent" } }),

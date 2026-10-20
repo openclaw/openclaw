@@ -14,20 +14,7 @@ import type { attachGatewayWsConnectionHandler } from "./ws-connection.js";
 
 type AttachGatewayWsConnectionParams = Parameters<typeof attachGatewayWsConnectionHandler>[0];
 
-export type GatewayWsTestSocket = EventEmitter & {
-  _socket: {
-    remoteAddress: string;
-    remotePort: number;
-    localAddress: string;
-    localPort: number;
-  };
-  readyState: number;
-  bufferedAmount: number;
-  send: ReturnType<typeof vi.fn>;
-  ping?: ReturnType<typeof vi.fn>;
-  close: ReturnType<typeof vi.fn>;
-  terminate: ReturnType<typeof vi.fn>;
-};
+export type GatewayWsTestSocket = ReturnType<typeof createGatewayWsTestSocket>;
 
 export function createGatewayWsTestLogger() {
   return {
@@ -67,7 +54,7 @@ export function createGatewayWsTestSocket(
     onSend?: (data: string) => void;
     ping?: boolean;
   } = {},
-): GatewayWsTestSocket {
+) {
   const socket = Object.assign(new EventEmitter(), {
     _receiver: { _maxPayload: MAX_PREAUTH_PAYLOAD_BYTES, _allowSynchronousEvents: false },
     _socket: {
@@ -123,6 +110,7 @@ export function attachGatewayWsForTest(params: {
     socket:
       params.requestSocket ??
       Object.assign(transportEvents, {
+        write: vi.fn(() => true),
         cork: vi.fn(),
         uncork: vi.fn(),
         remoteAddress: socket["_socket"].remoteAddress,

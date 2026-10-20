@@ -18,6 +18,7 @@ const OP_READ_CONCURRENCY = 4;
 const OP_READ_TIMEOUT_MS = 7_000;
 const MAX_SECRET_REFS_PER_REQUEST = 32;
 const MAX_SECRET_VALUE_BYTES = 64 * 1024;
+const MAX_ERROR_DETAIL_CHARS = 512;
 
 function writeResponse(response) {
   process.stdout.write(`${JSON.stringify(response)}\n`);
@@ -173,9 +174,8 @@ async function runOpRead(opCommand, token, secretReference) {
     [opCommand, "read", "--cache=false", "--no-newline", secretReference],
     {
       baseEnv: {},
-      discardOutput: { stderr: true },
       env: opEnvironment(token),
-      maxOutputBytes: { stdout: MAX_SECRET_VALUE_BYTES },
+      maxOutputBytes: MAX_SECRET_VALUE_BYTES,
       timeoutMs: OP_READ_TIMEOUT_MS,
     },
   );
@@ -186,13 +186,23 @@ async function runOpRead(opCommand, token, secretReference) {
     throw new Error(`op read timed out after ${OP_READ_TIMEOUT_MS}ms.`);
   }
   if (result.termination === "output-limit") {
-    throw new Error("op read output exceeded the secret value limit.");
+    throw new Error("op read output exceeded the limit.");
   }
   if (result.termination === "error") {
     throw new Error("op read could not be started.");
   }
   if (result.code !== 0) {
-    throw new Error(`op read failed with exit code ${String(result.code)}.`);
+    const { redactSensitiveText } = await import("openclaw/plugin-sdk/security-runtime");
+    let detail = result.stderr.toString("utf8").replaceAll(token, "***");
+    const secret = result.stdout.toString("utf8");
+    if (secret) {
+      detail = detail.replaceAll(secret, "***");
+    }
+    // Redact before truncation so a cut cannot hide the prefix identifying a credential.
+    detail = redactSensitiveText(detail, { mode: "tools" }).trim().slice(-MAX_ERROR_DETAIL_CHARS);
+    throw new Error(
+      `op read failed with exit code ${String(result.code)}.${detail ? ` ${detail}` : ""}`,
+    );
   }
   return result.stdout.toString("utf8");
 }

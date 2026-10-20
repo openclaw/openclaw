@@ -18,7 +18,7 @@ import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-trans
 import { createDeferredCore } from "../../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
-import { waitForDeferredTurnMaintenanceForSession } from "../embedded-agent-runner/context-engine-maintenance.js";
+import { waitForSessionMaintenance } from "../session-maintenance/coordinator.js";
 import { createContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
 import {
   drainPendingContextEngineTurnsBeforeRun,
@@ -53,7 +53,7 @@ async function withAcceptedTurn(
       await run(fixture);
     } finally {
       fixture.releaseMaintenance.resolve();
-      await waitForDeferredTurnMaintenanceForSession(fixture.facts.sessionKey);
+      await waitForSessionMaintenance(fixture.facts.sessionKey);
       await fixture.lease.dispose();
       await fixture.source.release();
       await fixture.sourceDisposed.promise;
@@ -330,7 +330,7 @@ describe("durable accepted-turn maintenance handoff", () => {
         // No second user turn or explicit scheduler invocation starts the work.
         const maintenanceResult = await Promise.race([
           fixture.maintenanceStarted.promise.then(() => "started"),
-          waitForDeferredTurnMaintenanceForSession(fixture.facts.sessionKey).then(() => "settled"),
+          waitForSessionMaintenance(fixture.facts.sessionKey).then(() => "settled"),
         ]);
         expect(maintenanceResult).toBe("started");
         expect(fixture.maintain).toHaveBeenCalledOnce();
@@ -348,7 +348,7 @@ describe("durable accepted-turn maintenance handoff", () => {
         expect(fixture.events).toEqual(["commit", "maintenance-started"]);
 
         fixture.releaseMaintenance.resolve();
-        await waitForDeferredTurnMaintenanceForSession(fixture.facts.sessionKey);
+        await waitForSessionMaintenance(fixture.facts.sessionKey);
         await fixture.sourceDisposed.promise;
         expect(fixture.events).toEqual([
           "commit",
@@ -375,7 +375,7 @@ describe("durable accepted-turn maintenance handoff", () => {
             failure === "commit-failed" ? fixture.facts : { ...fixture.facts, [failure]: true };
           await finalizeAcceptedContextEngineTurn({ ...fixture, facts, warn: () => {} });
           await fixture.lease.dispose();
-          await waitForDeferredTurnMaintenanceForSession(fixture.facts.sessionKey);
+          await waitForSessionMaintenance(fixture.facts.sessionKey);
           expect(fixture.maintain).not.toHaveBeenCalled();
           expect(fixture.dispose).toHaveBeenCalledOnce();
           expect(fixture.commitTurn).toHaveBeenCalledTimes(failure === "commit-failed" ? 1 : 0);

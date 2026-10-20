@@ -20,10 +20,13 @@ export function createAgentHarnessAttemptCancellation(params: {
       }
       return;
     }
+    // A controller can call the native cancel hook before this signal's listener.
+    // Keep the upstream cause, especially a hard timeout, in either callback order.
+    const abortReason = params.upstreamSignal?.aborted ? params.upstreamSignal.reason : reason;
     notifyAttemptAbort();
     params.state.explicitCancellationObserved = true;
-    params.state.explicitCancellationReason ??= reason;
-    controller.abort(reason);
+    params.state.explicitCancellationReason ??= abortReason;
+    controller.abort(abortReason);
   };
   const abortFromUpstream = () => {
     abortExplicitly(params.upstreamSignal?.reason ?? "upstream_abort");

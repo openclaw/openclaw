@@ -11,6 +11,7 @@ import {
 } from "kysely";
 import { isNodeVersionAtLeast, parseNodeReleaseVersion } from "../../node-version.mjs";
 import {
+  disposeSqliteStatement,
   executeWithCachedStatement,
   installStatementInvalidation,
   kyselyByDatabase,
@@ -313,10 +314,11 @@ export function iterateSqliteQuerySync<Row>(
   const owner = captureSqliteReaderOwner();
   return (function* () {
     const compiledQuery = query.compile();
+    let statement: ReturnType<DatabaseSync["prepare"]> | undefined;
     try {
       // Iterators keep statement state across yields. A private statement prevents
       // nested iteration of identical SQL from resetting an earlier iterator.
-      const statement = db.prepare(compiledQuery.sql);
+      statement = db.prepare(compiledQuery.sql);
       if (!SelectQueryNode.is(compiledQuery.query) && statement.columns().length === 0) {
         return;
       }
@@ -338,6 +340,10 @@ export function iterateSqliteQuerySync<Row>(
     } catch (error) {
       reportNodeSqliteKyselyQueryError(db, error);
       throw error;
+    } finally {
+      if (statement) {
+        disposeSqliteStatement(statement);
+      }
     }
   })();
 }

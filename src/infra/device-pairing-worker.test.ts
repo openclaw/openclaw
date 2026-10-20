@@ -6,6 +6,7 @@ import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-d
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
+import { issueDeviceBootstrapToken, verifyDeviceBootstrapToken } from "./device-bootstrap.js";
 import { approveBootstrapDevicePairing, approveDevicePairing } from "./device-pairing-approval.js";
 import {
   isPairedDeviceTokenIdentityCurrent,
@@ -13,6 +14,12 @@ import {
   resolveNodePairingGeneration,
 } from "./device-pairing-identity.js";
 import { withDevicePairingLock } from "./device-pairing-lock.js";
+import { updatePairedNodeBins, updatePairedNodeSessionHost } from "./device-pairing-node-facts.js";
+import {
+  recordPairedNodeConnection,
+  recordPairedNodeDisconnection,
+  recordPairedNodeHostStats,
+} from "./device-pairing-node.js";
 import { getPublishedPairedDeviceBinding } from "./device-pairing-publication.js";
 import { loadPairedDevicePairingStoreRecordReadOnly } from "./device-pairing-store-readonly.js";
 import {
@@ -236,12 +243,25 @@ test("bulk clear commits repairs, bootstrap revocation, and APNS removal togethe
 });
 
 test("clear without pending preserves unrelated requests and cascades paired repairs", async () => {
+  const bindBootstrap = async (deviceId: string, publicKey: string) => {
+    const { token } = await issueDeviceBootstrapToken({ baseDir });
+    const credential = { token, deviceId, publicKey, role: "node", scopes: [], baseDir };
+    expect(await verifyDeviceBootstrapToken(credential)).toEqual({ ok: true });
+    return credential;
+  };
+  const repair = await bindBootstrap("paired-rich", "synthetic-replacement-key");
+  const unrelated = await bindBootstrap("refreshed-device", "synthetic-refreshed");
   const result = await clearDevicePairing({ pending: false }, baseDir);
   expect(result.removedDevices.toSorted()).toEqual(["paired-minimal", "paired-rich"]);
   expect(result.rejectedRequests).toEqual([]);
   const remaining = await listDevicePairing(baseDir);
   expect(remaining.paired).toEqual([]);
   expect(remaining.pending.map((request) => request.requestId)).toEqual(["refreshed"]);
+  expect(await verifyDeviceBootstrapToken(repair)).toEqual({
+    ok: false,
+    reason: "bootstrap_token_invalid",
+  });
+  expect(await verifyDeviceBootstrapToken(unrelated)).toEqual({ ok: true });
 });
 
 test("bulk clear preserves other devices and rolls back if current removal policy refuses", async () => {
@@ -285,35 +305,38 @@ test("bulk clear rolls back when caller authority expires after transaction admi
   expect(JSON.stringify(readDevicePairingStoreStateFromDatabase(database.db))).toBe(before);
 });
 
-test("a mid-clear SQLite failure rolls back paired, pending, and bootstrap deletions", async () => {
-  const now = Date.now();
-  persistDeviceBootstrapTokenRecords(
-    {
-      synthetic: {
-        token: "synthetic",
-        deviceId: "paired-rich",
-        publicKey: "synthetic-replacement-key",
-        ts: now,
-        issuedAtMs: now,
+test.each([true, false])(
+  "a mid-clear SQLite failure rolls back all deletions (pending=%s)",
+  async (pending) => {
+    const now = Date.now();
+    persistDeviceBootstrapTokenRecords(
+      {
+        synthetic: {
+          token: "synthetic",
+          deviceId: "paired-rich",
+          publicKey: "synthetic-replacement-key",
+          ts: now,
+          issuedAtMs: now,
+        },
       },
-    },
-    baseDir,
-  );
-  const before = JSON.stringify(readDevicePairingStoreStateFromDatabase(database.db));
-  const bootstrapBefore = JSON.stringify(loadDeviceBootstrapTokenRecords(baseDir));
-  database.db.exec(`CREATE TRIGGER fail_bulk_clear BEFORE DELETE ON device_pairing_paired
-    BEGIN SELECT RAISE(ABORT, 'synthetic clear failure'); END;`);
-  try {
-    await expect(clearDevicePairing({ pending: true }, baseDir)).rejects.toThrow(
-      "synthetic clear failure",
+      baseDir,
     );
-    expect(JSON.stringify(readDevicePairingStoreStateFromDatabase(database.db))).toBe(before);
-    expect(JSON.stringify(loadDeviceBootstrapTokenRecords(baseDir))).toBe(bootstrapBefore);
-  } finally {
-    database.db.exec("DROP TRIGGER fail_bulk_clear");
-  }
-  expect((await clearDevicePairing({ pending: true }, baseDir)).removedDevices).toHaveLength(2);
-});
+    const before = JSON.stringify(readDevicePairingStoreStateFromDatabase(database.db));
+    const bootstrapBefore = JSON.stringify(loadDeviceBootstrapTokenRecords(baseDir));
+    database.db.exec(`CREATE TRIGGER fail_bulk_clear BEFORE DELETE ON device_pairing_paired
+    BEGIN SELECT RAISE(ABORT, 'synthetic clear failure'); END;`);
+    try {
+      await expect(clearDevicePairing({ pending }, baseDir)).rejects.toThrow(
+        "synthetic clear failure",
+      );
+      expect(JSON.stringify(readDevicePairingStoreStateFromDatabase(database.db))).toBe(before);
+      expect(JSON.stringify(loadDeviceBootstrapTokenRecords(baseDir))).toBe(bootstrapBefore);
+    } finally {
+      database.db.exec("DROP TRIGGER fail_bulk_clear");
+    }
+    expect((await clearDevicePairing({ pending }, baseDir)).removedDevices).toHaveLength(2);
+  },
+);
 
 test("rolls back owner approval when live policy is revoked before worker commit", async () => {
   const before = JSON.stringify(readDevicePairingStoreStateFromDatabase(database.db));
@@ -527,6 +550,85 @@ test.each(["metadata", "presence"] as const)(
     }
   },
 );
+
+test("persists token use and node connection facts without reading unrelated devices", async () => {
+  await listDevicePairing(baseDir);
+  const device = await getPairedDevice("paired-rich", baseDir);
+  const generation = resolveNodePairingGeneration(device);
+  if (!generation) {
+    throw new Error("expected fixture node generation");
+  }
+  const originalBinding = getPublishedPairedDeviceBinding("paired-rich", baseDir);
+  database.db
+    .prepare("UPDATE device_pairing_paired SET tokens_json = ? WHERE device_id = ?")
+    .run("synthetic-unreadable-json", "paired-minimal");
+  try {
+    await expect(
+      verifyDeviceToken({
+        deviceId: "paired-rich",
+        role: "operator",
+        token: "synthetic-operator-token",
+        scopes: ["operator.read"],
+        baseDir,
+      }),
+    ).resolves.toEqual({ ok: true });
+    await withDevicePairingLock(async () => {});
+    expect(
+      (await getPairedDevice("paired-rich", baseDir))?.tokens?.operator?.lastUsedAtMs,
+    ).toBeGreaterThan(3);
+    await expect(
+      recordPairedNodeConnection("paired-rich", 100, baseDir, generation),
+    ).resolves.toEqual({ recorded: true, firstConnection: true });
+    await expect(
+      recordPairedNodeDisconnection({
+        nodeId: "paired-rich",
+        connectedAtMs: 100,
+        disconnectedAtMs: 200,
+        expectedPairingGeneration: generation,
+        baseDir,
+      }),
+    ).resolves.toEqual({ recorded: true });
+    await expect(updatePairedNodeBins("paired-rich", ["git"], generation, baseDir)).resolves.toBe(
+      true,
+    );
+    const hostStats = {
+      cpuCount: 8,
+      memoryTotalBytes: 1024,
+      memoryFreeBytes: 512,
+      updatedAtMs: 300,
+    };
+    await expect(
+      recordPairedNodeHostStats({
+        nodeId: "paired-rich",
+        hostStats,
+        expectedPairingGeneration: generation,
+        baseDir,
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      updatePairedNodeSessionHost({
+        nodeId: "paired-rich",
+        sessionHost: true,
+        expectedPairingGeneration: generation,
+        isConnectionCurrent: () => true,
+        baseDir,
+      }),
+    ).resolves.toBe(true);
+    expect((await getPairedDevice("paired-rich", baseDir))?.nodeSurface).toMatchObject({
+      lastConnectedAtMs: 100,
+      lastDisconnectedAtMs: 200,
+      bins: ["git"],
+      sessionHost: true,
+      lastHostStats: hostStats,
+    });
+    expect(getPublishedPairedDeviceBinding("paired-rich", baseDir)).toEqual(originalBinding);
+  } finally {
+    await withDevicePairingLock(async () => {});
+    database.db
+      .prepare("UPDATE device_pairing_paired SET tokens_json = NULL WHERE device_id = ?")
+      .run("paired-minimal");
+  }
+});
 
 test("serves reconnect lookups from committed rows while the read worker is unavailable", async () => {
   const device = await getPairedDevice("paired-rich", baseDir);

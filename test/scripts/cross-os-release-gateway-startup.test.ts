@@ -1,17 +1,23 @@
-import { ChildProcess, spawn } from "node:child_process";
+import { ChildProcess, spawn, spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, expect, it, vi } from "vitest";
 import type { GatewayHandle, LaneState } from "../../scripts/lib/cross-os-release-checks/config.ts";
-import { startGateway, waitForGateway } from "../../scripts/lib/cross-os-release-checks/runtime.ts";
+import {
+  exerciseManagedGatewayLifecycle,
+  startGateway,
+  waitForGateway,
+} from "../../scripts/lib/cross-os-release-checks/runtime.ts";
 import { reserveTestPortListener } from "../../src/test-utils/port-claims.js";
+import { mockProcessPlatform } from "../../src/test-utils/vitest-spies.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
   spawn: vi.fn(),
+  spawnSync: vi.fn(),
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -176,3 +182,129 @@ it.each([
     vi.mocked(spawn).mockReset();
   }
 });
+
+it.each([0, 1, null])(
+  "observes Windows managed start through the lifecycle command allowance (exit %s)",
+  async (startExit) => {
+    const rootDir = tempDirs.make("cross-os-managed-start-");
+    const lane: LaneState = {
+      name: "installer-fresh",
+      rootDir,
+      prefixDir: rootDir,
+      homeDir: rootDir,
+      stateDir: rootDir,
+      appDataDir: rootDir,
+      gatewayPort: 18789,
+      phaseTimings: [],
+    };
+    const platform = mockProcessPlatform("win32");
+    vi.useFakeTimers({
+      toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+    });
+    let notifyStart!: () => void;
+    const started = new Promise<void>((resolve) => {
+      notifyStart = resolve;
+    });
+    let finishStart: (() => void) | undefined;
+    let startedAt = 0;
+    let killedAt = 0;
+    let statusChecks = 0;
+    // Model only the external CLI/taskkill boundary. The lifecycle driver,
+    // invocation adapter, process deadline, logs, and RPC status gates stay real.
+    vi.mocked(spawn).mockImplementation((_command, args) => {
+      const argv = Array.isArray(args) ? args : [];
+      const child = new ChildProcess();
+      Object.defineProperty(child, "pid", { value: 4242 });
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+      let exited = false;
+      const finish = (code: number, stderr = "") => {
+        if (exited) {
+          return;
+        }
+        exited = true;
+        child.stderr?.emit("data", Buffer.from(stderr));
+        child.emit("close", code, null);
+      };
+      if (argv[1] === "start") {
+        startedAt = Date.now();
+        finishStart = () => finish(1);
+        if (startExit !== null) {
+          setTimeout(
+            () => finish(startExit, startExit === 1 ? "fixture startup refused" : ""),
+            180_000,
+          );
+        }
+        queueMicrotask(() => {
+          child.stdout?.emit("data", Buffer.from("Started Scheduled Task: OpenClaw Gateway\n"));
+          notifyStart();
+        });
+      } else {
+        queueMicrotask(() => {
+          if (argv.includes("--help")) {
+            child.stdout?.emit("data", Buffer.from("--require-rpc --force"));
+          } else if (argv[1] === "status") {
+            expect(argv).toContain("--require-rpc");
+            statusChecks += 1;
+          }
+          finish(0);
+        });
+      }
+      return child;
+    });
+    vi.mocked(spawnSync).mockImplementation(() => {
+      killedAt = Date.now();
+      queueMicrotask(() => finishStart?.());
+      return { pid: 4243, output: [], stdout: "", stderr: "", status: 0, signal: null };
+    });
+    const logPrefix = join(rootDir, "gateway");
+    try {
+      const result = exerciseManagedGatewayLifecycle({
+        lane,
+        cliPath: "C:\\fixture\\openclaw.exe",
+        env: {},
+        logPrefix,
+      }).then(
+        () => "ready",
+        (error: unknown) => error,
+      );
+      await Promise.race([
+        started,
+        result.then(() => {
+          throw new Error("Lifecycle settled before the start fixture");
+        }),
+      ]);
+      await vi.advanceTimersByTimeAsync(startExit === null ? 360_000 : 180_000);
+      const outcome = await result;
+      if (startExit === 0) {
+        expect(outcome).toBe("ready");
+        expect(statusChecks).toBe(3);
+        expect(spawnSync).not.toHaveBeenCalled();
+      } else {
+        expect(outcome).toBeInstanceOf(Error);
+        expect(String(outcome)).toContain(
+          startExit === null ? "Command timed out:" : "fixture startup refused",
+        );
+        expect(statusChecks).toBe(2);
+        if (startExit === null) {
+          expect(killedAt - startedAt).toBe(360_000);
+          expect(spawnSync).toHaveBeenCalledExactlyOnceWith(
+            expect.stringMatching(/taskkill\.exe$/u),
+            ["/PID", "4242", "/T", "/F"],
+            expect.objectContaining({ timeout: 10_000 }),
+          );
+          expect(readFileSync(logPrefix + "-start.log", "utf8")).toContain(
+            "process-tree=terminated pid=4242",
+          );
+        } else {
+          expect(spawnSync).not.toHaveBeenCalled();
+        }
+      }
+    } finally {
+      vi.mocked(spawn).mockReset();
+      vi.mocked(spawnSync).mockReset();
+      vi.useRealTimers();
+      platform.mockRestore();
+    }
+  },
+);

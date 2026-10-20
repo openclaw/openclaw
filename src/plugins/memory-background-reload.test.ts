@@ -84,7 +84,7 @@ const { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } = loadNativeHost(
 ) as typeof import("../config/runtime-snapshot.js");
 
 type RegistryHost = ReturnType<typeof createPluginRegistry>;
-type SyncReason = "watch" | "interval" | "session-delta" | "session-startup-catchup";
+type SyncReason = "watch" | "session-delta" | "session-startup-catchup";
 type MemorySearchSettings = NonNullable<NonNullable<OpenClawConfig["memory"]>["search"]>;
 
 function memoryConfig(
@@ -121,16 +121,6 @@ async function openManager(
   const manager = opened.manager;
   const raw = getPluginOriginalValue(manager, memory.instance) ?? manager;
   return { manager, raw, prototype: Object.getPrototypeOf(raw) as RegisteredMemorySearchManager };
-}
-
-function enableInterval(manager: object) {
-  // Exercise the dormant interval owner without inventing a public config option.
-  const scheduled = manager as {
-    settings: { sync: { intervalMinutes: number } };
-    ensureIntervalSync(): void;
-  };
-  scheduled.settings.sync.intervalMinutes = 1;
-  scheduled.ensureIntervalSync();
 }
 
 function registryHost() {
@@ -506,11 +496,11 @@ it.for([false, true])(
       awaitingStage = "initial manager acquisition";
       const boot = await inTurn(() => openManager(memory, config("bootstrap"), "bootstrap", "cli"));
       managers.add(boot.manager);
-      const { raw, prototype } = boot;
+      const { prototype } = boot;
       const sync = prototype.sync;
       assert(sync);
       const completions = new Map<string, ReturnType<typeof createDeferredCore<Promise<void>>>>();
-      const syncObserver = vi.spyOn(prototype, "sync").mockImplementation(function (
+      vi.spyOn(prototype, "sync").mockImplementation(function (
         this: RegisteredMemorySearchManager,
         params,
       ) {
@@ -533,19 +523,9 @@ it.for([false, true])(
         startupCompletions.set(this, work);
         return work;
       });
-      vi.useFakeTimers({
-        toFake: ["setInterval", "clearInterval"],
-        shouldClearNativeTimers: true,
-      });
-      const oldInterval = vi.spyOn(globalThis, "setInterval");
-      memory.instance.run(() => enableInterval(raw));
-      const retiredInterval = oldInterval.mock.calls.at(-1)?.[0];
-      assert(retiredInterval, "Initial manager must install its interval callback");
       awaitingStage = "initial manager close";
       await boot.manager.close?.();
       managers.delete(boot.manager);
-      oldInterval.mockRestore();
-      vi.useRealTimers();
 
       const successor = registryHost();
       addProvider(successor, 2);
@@ -577,22 +557,13 @@ it.for([false, true])(
         prepared?.resume();
       }
       expect(current.instance === memory.instance).toBe(!replaceMemory);
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       // Fake timers do not carry Node's async-resource context on their own.
       const timeout = globalThis.setTimeout;
-      const interval = globalThis.setInterval;
       vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, delay, ...args) =>
         timeout(AsyncLocalStorage.bind(callback), delay, ...args),
       );
-      vi.spyOn(globalThis, "setInterval").mockImplementation((callback, delay, ...args) =>
-        interval(AsyncLocalStorage.bind(callback), delay, ...args),
-      );
-      for (const reason of [
-        "session-startup-catchup",
-        "session-delta",
-        "watch",
-        "interval",
-      ] as const) {
+      for (const reason of ["session-startup-catchup", "session-delta", "watch"] as const) {
         awaitingStage = `${reason}: prepare sources`;
         const agentId = reason;
         const cfg = config(agentId, reason);
@@ -604,7 +575,7 @@ it.for([false, true])(
           `Remember the violet ${reason} fact.`,
         );
         let watchedWorkspace: ReturnType<typeof registerMemoryWorkspaceWatch> | undefined;
-        if (reason === "watch" || reason === "interval") {
+        if (reason === "watch") {
           watchedWorkspace = registerMemoryWorkspaceWatch(workspace);
           releases.push(watchedWorkspace.release);
         }
@@ -634,9 +605,6 @@ it.for([false, true])(
           const subscription = watchedWorkspace?.subscriptions.at(-1);
           assert(subscription, "Memory manager must subscribe to its workspace host");
           inTurn(subscription.notify);
-        } else if (reason === "interval") {
-          inTurn(() => enableInterval(opened.raw));
-          await vi.advanceTimersByTimeAsync(60_000);
         }
         awaitingStage = `${reason}: sync completion`;
         await withinTest(completed.promise, signal);
@@ -653,13 +621,6 @@ it.for([false, true])(
         managers.delete(opened.manager);
       }
       if (replaceMemory) {
-        awaitingStage = "retired manager interval callback";
-        // Even a queued, cancelled callback must ask its original owner for admission.
-        const callsBefore = current.instance.ordinaryCallCount;
-        const syncsBefore = syncObserver.mock.calls.length;
-        current.instance.run(() => retiredInterval());
-        expect(current.instance.ordinaryCallCount).toBe(callsBefore);
-        expect(syncObserver).toHaveBeenCalledTimes(syncsBefore);
         await expect(async () =>
           memory.runtime.getMemorySearchManager({ cfg: config("retired"), agentId: "retired" }),
         ).rejects.toThrow("Plugin memory-core was reloaded or disabled");

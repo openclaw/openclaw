@@ -1,3 +1,4 @@
+import { createChangeListeners } from "../../../src/shared/listeners.js";
 import { t } from "../i18n/index.ts";
 import {
   isStaleChunkImportError,
@@ -74,8 +75,8 @@ export function createLazyCustomElementRequests(
   let activeElement: OptionalCustomElement | undefined;
   let activeDismissed = false;
   let staleRetry: LazyCustomElementRequest | undefined;
-  const listeners = new Set<() => void>();
-  const notify = () => listeners.forEach((listener) => listener());
+  const listeners = createChangeListeners();
+  const notify = listeners.publish;
 
   function preload(element: OptionalCustomElement, options?: { reportError?: boolean }): void {
     if (isOptionalElementDefined(element) || preloads.has(element.tagName)) {
@@ -226,10 +227,7 @@ export function createLazyCustomElementRequests(
     get visibleState(): LazyCustomElementRequestState | undefined {
       return current;
     },
-    subscribe(listener: () => void) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe: listeners.subscribe,
     preload,
     request: requestElement,
     requestWhileActive,
@@ -314,7 +312,7 @@ export const LINK_READER_PANEL_ELEMENT = {
   get label() {
     return t("linkReader.title");
   },
-  loadModule: () => import("../components/link-reader-panel.ts"),
+  loadModule: () => import("../components/link-reader-panel.tsx"),
 } satisfies OptionalCustomElement;
 
 export const DASHBOARD_DOCUMENT_ELEMENT = {
@@ -346,7 +344,7 @@ export const EXEC_APPROVAL_ELEMENT = {
   get label() {
     return t("tabs.approvals");
   },
-  loadModule: () => import("../components/exec-approval.ts"),
+  loadModule: () => import("../components/exec-approval-solid.tsx"),
 } satisfies OptionalCustomElement;
 
 export function isOptionalElementDefined(element: OptionalCustomElement): boolean {

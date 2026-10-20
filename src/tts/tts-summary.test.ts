@@ -214,4 +214,20 @@ describe("TTS summary visible text", () => {
       }
     },
   );
+
+  it("fits auto speech under tts.maxTextLength when it is below the preference limit", async () => {
+    cfg = { ...cfg, tts: { ...cfg.tts, maxTextLength: 1000 } };
+    const text = "x".repeat(1200);
+    completion.complete.mockResolvedValue(
+      assistant([{ type: "text", text: "<think>Private only</think>" }]),
+    );
+    const result = await maybeApplyTtsToPayloadCore(
+      { payload: { text }, cfg, channel: "telegram", kind: "final" },
+      persistAudio,
+    );
+    expect(synthesizeMock).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ text: `${text.slice(0, 997)}...` }),
+    );
+    expect(result).toMatchObject({ text, mediaUrl: "/tmp/synthetic-summary.ogg" });
+  });
 });

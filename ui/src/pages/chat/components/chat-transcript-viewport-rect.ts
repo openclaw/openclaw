@@ -14,7 +14,7 @@ type ViewportRectOwner = {
   measureConnectedRows(): boolean;
   queueRowMeasure(): void;
   onViewportResize(): void;
-  requestUpdate(): void;
+  invalidate(): void;
 };
 
 function sameDimension(previous: number | null | undefined, next: number): boolean {
@@ -92,7 +92,7 @@ export class TranscriptViewportRect {
       this.owner.positionRail.sync(railGeometry);
       if (widthChanged || heightChanged) {
         this.owner.onViewportResize();
-        this.owner.requestUpdate();
+        this.owner.invalidate();
       }
     };
     const syncRect = () => {

@@ -3,6 +3,7 @@ import type { AgentsListResult, SessionsListResult } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import type { AgentSelectionCapability } from "./agent-selection.ts";
 import type { ApplicationGateway } from "./gateway.ts";
+import type { RouteElements } from "./route-elements.ts";
 
 type ReadinessNavigationOptions = Partial<Pick<RouteLocation, "pathname" | "search" | "hash">>;
 
@@ -51,6 +52,8 @@ export type ControlUiCommittedPresentation = {
 export interface ControlUiReadinessOutlet extends HTMLElement {
   readonly presentationSettled: boolean;
   settlePresentation(): Promise<boolean>;
+  renderedElement?: RouteElements["renderedElement"];
+  renderedElements?: RouteElements["renderedElements"];
 }
 
 /**

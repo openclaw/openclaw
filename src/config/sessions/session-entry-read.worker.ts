@@ -8,7 +8,7 @@ import {
 } from "../../infra/kysely-sync.js";
 import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import {
   assertOpenClawAgentDatabaseIdentity,
   isOpenClawAgentDatabasePathCurrent,
@@ -34,6 +34,8 @@ import {
   readExactSessionEntryRow,
   readSessionChildEntriesInDatabase,
   readSessionEntryByIdInDatabase,
+  readSessionEntrySelectionInDatabase,
+  readSessionKeyBySessionIdInDatabase,
 } from "./session-accessor.sqlite-entry-read.js";
 import { participantRecordsBySessionKey } from "./session-accessor.sqlite-participant-projection.js";
 import { readSessionEntryReplacementState } from "./session-accessor.sqlite-replacement-read.js";
@@ -111,48 +113,80 @@ export function readSessionStoreProjection(
   return { kind: "session-store-projection", ...(result.found ? result.value : { entries: [] }) };
 }
 
-/** Private entry and transcript-target reads share the same admitted reader and error codec. */
-export async function readSessionEntryWorkerRequest(
-  request: SessionEntryReadWorkerInput | SessionRuntimeTargetWorkerInput,
-): Promise<SessionEntryReadWorkerResult | SessionRuntimeTargetWorkerResult> {
-  if (request.kind === "session-runtime-target") {
-    const { readSessionTranscriptRuntimeTarget } =
-      await import("./session-accessor.transcript-target.js");
-    const read = withOpenClawAgentDatabaseReadOnly(
-      (database) => ({
-        target: readSessionTranscriptRuntimeTarget(
-          request.scope,
-          {
-            keyFormat: request.keyFormat,
-            databaseAgentId: request.database.agentId,
-            continuation: request.continuation,
-          },
-          database,
-        ),
+/** Runtime targets consume the existing reader without importing the caller's memory/write adapters. */
+export function readSessionRuntimeTargetWorkerRequest(
+  request: SessionRuntimeTargetWorkerInput,
+): SessionRuntimeTargetWorkerResult {
+  const read = withOpenClawAgentDatabaseReadOnly(
+    (database) => {
+      const { agentId, sessionId, storePath } = request.scope;
+      const persistedSessionKey = readSessionKeyBySessionIdInDatabase(database, sessionId);
+      const selected =
+        persistedSessionKey && !request.keyFormat
+          ? undefined
+          : readWithCanonicalSessionReaderContinuation(database, request.continuation, () => {
+              const resolved = resolveSqliteScope({
+                ...request.scope,
+                sessionKey: persistedSessionKey ?? request.scope.sessionKey,
+                storePath: undefined,
+              });
+              const row = readSessionEntrySelectionInDatabase(
+                database,
+                resolved.agentId,
+                resolved.sessionKey,
+                { keyFormat: request.keyFormat, allowCanonicalMove: !persistedSessionKey },
+              );
+              return {
+                existing: row?.entry ?? undefined,
+                normalizedKey: row?.row.session_key ?? resolved.sessionKey,
+              };
+            });
+      return {
+        target: {
+          agentId,
+          sessionId,
+          sessionKey: persistedSessionKey ?? selected?.normalizedKey ?? request.scope.sessionKey,
+          storePath,
+          ...(request.keyFormat
+            ? {
+                selectedSessionId: selected?.existing?.sessionId ?? null,
+                selectedLifecycleRevision: selected?.existing?.lifecycleRevision ?? null,
+              }
+            : {}),
+        },
         source: captureSessionEntryReadSource(
           database,
           undefined,
           "Session runtime target requires its current durable owner",
         ),
-      }),
-      { ...request.database, env: request.scope.env },
-    );
-    return {
-      kind: "session-runtime-target",
-      ...(read.found
-        ? read.value
-        : {
-            target: {
-              agentId: request.scope.agentId,
-              sessionId: request.scope.sessionId,
-              sessionKey: resolveSqliteSessionKey(request.scope.sessionKey, request.scope.agentId),
-              storePath: request.scope.storePath,
-              ...(request.keyFormat
-                ? { selectedSessionId: null, selectedLifecycleRevision: null }
-                : {}),
-            },
-          }),
-    };
+      };
+    },
+    { ...request.database, env: request.scope.env },
+  );
+  return {
+    kind: "session-runtime-target",
+    ...(read.found
+      ? read.value
+      : {
+          target: {
+            agentId: request.scope.agentId,
+            sessionId: request.scope.sessionId,
+            sessionKey: resolveSqliteSessionKey(request.scope.sessionKey, request.scope.agentId),
+            storePath: request.scope.storePath,
+            ...(request.keyFormat
+              ? { selectedSessionId: null, selectedLifecycleRevision: null }
+              : {}),
+          },
+        }),
+  };
+}
+
+/** Private entry and transcript-target reads share the same admitted reader and error codec. */
+export async function readSessionEntryWorkerRequest(
+  request: SessionEntryReadWorkerInput | SessionRuntimeTargetWorkerInput,
+): Promise<SessionEntryReadWorkerResult | SessionRuntimeTargetWorkerResult> {
+  if (request.kind === "session-runtime-target") {
+    return readSessionRuntimeTargetWorkerRequest(request);
   }
   // Keep the exact-read owner off the lazy reader import graph.
   const { readSessionEntryResult } = await import("./session-entry-read-result.worker.js");
@@ -598,7 +632,7 @@ export function readSessionRowDatabaseFacts(
               const { entry } = selected;
               const storedTranscript =
                 selected.row.row_transcript_window_id === null
-                  ? { lastMessagePreview: null, terminalModel: null }
+                  ? { lastMessagePreview: null, lastAssistantMessage: null, terminalModel: null }
                   : readStoredSessionRowTranscriptProjection({
                       json: selected.row.row_transcript_json,
                       updatedAt: selected.row.row_transcript_updated_at,
@@ -611,6 +645,9 @@ export function readSessionRowDatabaseFacts(
                 hasBoard:
                   selected.row.session_key === sessionKey && selected.row.board_present === 1,
                 transcriptPreview: storedTranscript?.lastMessagePreview,
+                transcriptAssistantMessage: storedTranscript
+                  ? storedTranscript.lastAssistantMessage
+                  : "unknown",
                 transcriptTerminalModel: storedTranscript?.terminalModel,
               };
               if (readSessionActivitySummary(entry)) {
@@ -624,7 +661,7 @@ export function readSessionRowDatabaseFacts(
           };
         };
         return withSqlitePostCommitPublications(sqlPublicationAnchor(database.db), () =>
-          database.db.isTransaction ? read() : runSqliteDeferredTransactionSync(database.db, read),
+          database.db.isTransaction ? read() : runSqliteReadSnapshotSync(database.db, read),
         );
       }),
     { ...request.database, env: request.env },

@@ -1,14 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { parentPort, workerData } from "node:worker_threads";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  readBackupEngine,
-  readBackupEngineImage,
-  type BackupEngine,
-} from "../../snapshot/database-backup.js";
 import { hasErrnoCode } from "../errno.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { prepareSqliteReadOnlyLocationSync } from "../sqlite-snapshot-source.js";
@@ -16,6 +12,7 @@ import { createSqliteWalCheckpoint } from "../sqlite-wal-checkpoint.js";
 import { WorkerTaskError } from "../worker-task-pool.js";
 import { resolveDatabaseEngineInput } from "./config.js";
 import { getScopedDatabaseEngineSelection } from "./context.js";
+import { readBackupEngine, readBackupEngineImage, type BackupEngine } from "./physical-store.js";
 import {
   assertDatabasePortNamespaceOwner,
   databasePortProviders,
@@ -40,6 +37,7 @@ type Identity = { storeId: string; namespace: string };
 export type DatabasePortTask =
   | ({ operation: "inspect"; to: "sqlite" | "postgres" } & Common)
   | { operation: "preflight"; config: OpenClawConfig; probe: boolean; namespace?: string }
+  // Migration and staging consume an exclusively owned private SQLite image.
   | { operation: "migrate"; sourcePath: string; config?: OpenClawConfig }
   | ({
       operation: "stage";
@@ -89,14 +87,22 @@ async function inspectSqliteImage(
   descriptor: PortDescriptor,
   allowMigration = false,
 ) {
-  const { version, migrationRequired, pendingColumns } = descriptor.inspectSqliteSource?.(db) ?? {
+  const {
+    version,
+    migrationRequired: schemaMigrationRequired,
+    pendingColumns,
+  } = descriptor.inspectSqliteSource?.(db) ?? {
     version: (await import("../sqlite-user-version.js")).readSqliteUserVersion(db),
     migrationRequired: false,
     pendingColumns: {},
   };
+  // Port preparation also fills first-use columns that the live store may omit.
+  const migrationRequired =
+    schemaMigrationRequired || Object.values(pendingColumns).some((columns) => columns.length > 0);
   if (allowMigration && migrationRequired) {
-    // The family owner validates its historical shape before the private migration.
-    if (!descriptor.migrateSqliteSource) {
+    // Historical repairs use family admission; current first-use repairs still
+    // need the port's complete layout before preparing a private copy.
+    if (!schemaMigrationRequired || !descriptor.migrateSqliteSource) {
       inspectSqlitePortSchema(db, descriptor, pendingColumns);
     }
     return { version, migrationRequired };
@@ -258,6 +264,11 @@ async function stage(
       sourcePath: task.sourcePath,
       targetPath: task.targetPath,
       preserveRowIds: true,
+      sourceAcquisition: {
+        mode: "isolated-process",
+        stagingRoot: path.dirname(task.targetPath),
+        preserveSourceArtifacts: true,
+      },
     });
   }
   assertCurrent();
@@ -269,7 +280,8 @@ async function stage(
       : undefined,
   );
   if (task.to === "sqlite") {
-    compare((await inspectSqlite(task.targetPath, descriptor)).verification!, verification);
+    using image = openNodeSqliteDatabase(task.targetPath, { readOnly: true });
+    compare((await inspectSqliteImage(image, descriptor)).verification!, verification);
   }
   return verification;
 }
@@ -310,9 +322,14 @@ async function execute(task: DatabasePortTask, assertCurrent: () => void): Promi
   }
   const { loadDatabasePortDescriptor } = await import("./port-provider-descriptor.js");
   const source = await (async () => {
-    const prepared = prepareSqliteReadOnlyLocationSync(task.sourcePath);
+    // Published sources still need process isolation; private phase inputs already have it.
+    const prepared =
+      task.operation === "migrate" || task.operation === "stage"
+        ? undefined
+        : prepareSqliteReadOnlyLocationSync(task.sourcePath);
+    const imagePath = prepared?.location ?? task.sourcePath;
     try {
-      const engine = readBackupEngineImage(prepared.location, task.sourcePath);
+      const engine = readBackupEngineImage(imagePath, task.sourcePath);
       if (engine.engine === "postgres") {
         if (task.operation === "migrate" || task.operation === "stage") {
           refuse("private migration and staging require a SQLite image");
@@ -324,7 +341,7 @@ async function execute(task: DatabasePortTask, assertCurrent: () => void): Promi
         );
         return { engine, descriptor, facts: undefined };
       }
-      using db = openNodeSqliteDatabase(prepared.location, { readOnly: true });
+      using db = openNodeSqliteDatabase(imagePath, { readOnly: true });
       const descriptor = await loadDatabasePortDescriptor(
         sqliteDatabasePortProvider(db).id,
         "config" in task ? task.config : undefined,
@@ -336,7 +353,7 @@ async function execute(task: DatabasePortTask, assertCurrent: () => void): Promi
       );
       return { engine, descriptor, facts };
     } finally {
-      prepared.cleanup();
+      prepared?.cleanup();
     }
   })();
   const { engine, descriptor } = source;

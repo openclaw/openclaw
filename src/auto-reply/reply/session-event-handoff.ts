@@ -18,24 +18,27 @@ import {
 import {
   claimSystemEventTurn,
   enqueueRequiredSystemEventEntry,
-  type SystemEvent,
 } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { channelRouteTargetsMatchExact } from "../../plugin-sdk/channel-route.js";
 import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { runWithSessionControllerCleanup } from "../../sessions/session-controller.cleanup-context.js";
+import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
+import { isCurrentSessionControllerOperation } from "../../sessions/session-controller.identity.js";
+import { isCronRunSessionKey } from "../../sessions/session-key-utils.js";
+import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { ReplyPayload } from "../../shared/reply-payload.types.js";
-import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import { readAgentDeletionJournalStatusInWorker } from "../../state/agent-deletion-journal.read.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import type { MsgContext } from "../templating.js";
 import type { NormalizeReplySkipReason } from "./normalize-reply-skip-reason.js";
-import type { ReplyOperation } from "./reply-run-registry.contracts.js";
 import type {
+  SessionEventOptions,
   SessionEventOutcome,
   SessionEventReceipt,
-  SessionEventSource,
-  SessionEventTarget,
 } from "./session-event-contract.js";
 import { narrowSessionEventSettings } from "./session-event-policy.js";
 import {
@@ -45,6 +48,7 @@ import {
   getSessionEventRuntimeConfig,
   prepareSessionEventTargetForHost,
   readSessionEventTargetEnvironment,
+  readSessionEventTargetOperatorAuthority,
   resolveSessionEventKey,
 } from "./session-event-target.js";
 import { setChannelSourceTurnId } from "./source-turn-id.js";
@@ -54,11 +58,7 @@ export {
   captureSessionEventTargetForHost,
   combineSessionEventTargetsForHost,
 } from "./session-event-target.js";
-export type {
-  SessionEventReceipt,
-  SessionEventSource,
-  SessionEventTarget,
-} from "./session-event-contract.js";
+export type { SessionEventReceipt, SessionEventTarget } from "./session-event-contract.js";
 
 const log = createSubsystemLogger("session-events");
 
@@ -68,41 +68,16 @@ const MAX_CONFIG_READMISSION_ATTEMPTS = 2;
 /** Producer-owned occurrence; passive notices continue to use enqueueSystemEvent. */
 export function enqueueSessionEventForHost(
   text: string,
-  {
-    assertAcceptanceCurrent,
-    ...options
-  }: {
-    agentId: string;
-    sessionKey: string;
-    source: SessionEventSource;
-    contextKey?: string;
-    /** Stable identity for durable host producers across restart handoffs. */
-    sourceTurnId?: string;
-    deliveryContext?: DeliveryContext;
-    abortSignal?: AbortSignal;
-    expectedTarget?: SessionEventTarget;
-    /** Authorized fresh work may create an absent session; captured completions may not. */
-    createIfMissing?: true;
-    /** Submitting invocation custody lasts through acceptance only. */
-    assertAcceptanceCurrent?: () => void;
-    /** Durable producer commits its attempt only after normal turn adoption. */
-    onAdopted?: () => void | Promise<void>;
-    /** Transfer exact queued occurrences into one ordinary turn without duplicating them. */
-    occurrences?: readonly SystemEvent[];
-    /** Failed promotion retains an existing passive occurrence until ordinary adoption begins. */
-    preserveOccurrenceOnRejection?: true;
-    /** Internal: policy-change re-admission depth, bounded to stop publication storms. */
-    readmissionAttempt?: number;
-    /** An explicitly silent source records its result without transport delivery. */
-    deliver?: boolean;
-    /** Host producer remains live through admission, execution and delivery. */
-    assertCurrent?: () => void;
-  },
+  { assertAcceptanceCurrent, ...options }: SessionEventOptions,
 ): SessionEventReceipt {
   let acceptanceAssertion = assertAcceptanceCurrent;
   acceptanceAssertion?.();
   options.assertCurrent?.();
   options.expectedTarget?.assertCurrent?.();
+  const operatorAuthority = options.expectedTarget
+    ? readSessionEventTargetOperatorAuthority(options.expectedTarget)
+    : undefined;
+  operatorAuthority?.assertCurrent();
   const cfg = getSessionEventRuntimeConfig();
   const configPublication = getRuntimeConfigSnapshotMetadata();
   const agentId = normalizeAgentId(options.agentId);
@@ -118,6 +93,9 @@ export function enqueueSessionEventForHost(
   const storePath =
     options.expectedTarget?.storePath ??
     resolveSessionStorePathCore(cfg.session?.store, { agentId, env });
+  const cleanupContext = isCronRunSessionKey(sessionKey)
+    ? captureOpenClawStateWorkerContext({ env })
+    : undefined;
   let target = options.expectedTarget;
   let generationLease: Awaited<ReturnType<typeof prepareSessionEventTargetForHost>> | undefined;
   let preparedBinding: { sessionId: string; lifecycleRevision?: string } | undefined;
@@ -143,9 +121,11 @@ export function enqueueSessionEventForHost(
       ]
     : readExecRequestOwners(options);
   const requestSignal = execRequestAbortSignal(execRequestOwners, options.abortSignal);
-  const signal = requestSignal
-    ? AbortSignal.any([requestSignal, controller.signal])
-    : controller.signal;
+  const signal = AbortSignal.any(
+    [requestSignal, controller.signal, operatorAuthority?.signal].filter(
+      (value): value is AbortSignal => Boolean(value),
+    ),
+  );
   signal.throwIfAborted();
   if (options.preserveOccurrenceOnRejection && !options.occurrences?.length) {
     throw new Error("Preserving a rejected event requires its original queued occurrence");
@@ -183,6 +163,7 @@ export function enqueueSessionEventForHost(
     throw new Error("Session event was not enqueued: an identical occurrence is already pending");
   }
   const eventText = occurrences.map((event) => event.text).join("\n");
+  const occurrenceId = occurrence.id;
   const ownership = claimSystemEventTurn(
     resolveSystemEventQueueKey(sessionKey, agentId),
     occurrences,
@@ -191,6 +172,14 @@ export function enqueueSessionEventForHost(
   );
   if (!ownership) {
     throw new Error("Session event occurrence no longer available for admission");
+  }
+  let releaseOperatorAuthority: (() => void) | undefined;
+  try {
+    // Transfer custody before the completed process releases its original source.
+    releaseOperatorAuthority = operatorAuthority?.retain?.();
+  } catch (error) {
+    ownership.cancel();
+    throw error;
   }
   const { promise: settled, resolve } = createDeferredCore<SessionEventOutcome>();
   const acceptance = createDeferredCore<Awaited<SessionEventReceipt["accepted"]>>();
@@ -207,7 +196,7 @@ export function enqueueSessionEventForHost(
   // The live re-admission attempt; receipt.cancel forwards to it once it exists.
   let readmittedReceipt: SessionEventReceipt | undefined;
   let operation: ReplyOperation | undefined;
-  let replyRunRegistry: (typeof import("./reply-run-registry.js"))["replyRunRegistry"];
+  let inputRecorder: UserTurnTranscriptRecorder | undefined;
   let delivered = false;
   let deliveryAttempted = false;
   let deliveryAmbiguous = false;
@@ -223,6 +212,7 @@ export function enqueueSessionEventForHost(
       throw new Error("Session event occurrence is settled");
     }
     signal.throwIfAborted();
+    operatorAuthority?.assertCurrent();
     if (!accepted) {
       acceptanceAssertion?.();
     }
@@ -230,12 +220,12 @@ export function enqueueSessionEventForHost(
     options.expectedTarget?.assertCurrent?.();
     const currentConfig = getSessionEventRuntimeConfig();
     resolveConfiguredAgentId(currentConfig, agentId);
-    if (isAgentDeletionBlocked(agentId)) {
+    if (isAgentDeletionBlocked(agentId, { env })) {
       throw new Error("Session event agent is being deleted");
     }
     if (
       operation &&
-      (operation.abortSignal.aborted || replyRunRegistry.get(sessionKey) !== operation)
+      (operation.abortSignal.aborted || !isCurrentSessionControllerOperation(operation))
     ) {
       throw new Error("Session event admission no longer owns its destination");
     }
@@ -299,7 +289,13 @@ export function enqueueSessionEventForHost(
       return;
     }
     settlement = "settling";
-    const complete = () => {
+    const complete = async () => {
+      try {
+        inputRecorder?.finishPendingInput?.(signal.aborted ? "cancelled" : "interrupted");
+        await inputRecorder?.waitForPendingInputSettlement?.();
+      } catch (error) {
+        failure ??= error instanceof Error ? error : String(error);
+      }
       settlement = "finished";
       // Submitting custody ends at the first acceptance; a pre-acceptance re-admission
       // carries the still-live assertion so revoked ingress rejects the retry.
@@ -377,6 +373,8 @@ export function enqueueSessionEventForHost(
       } else {
         ownership.cancel();
       }
+      releaseOperatorAuthority?.();
+      releaseOperatorAuthority = undefined;
       if (!accepted) {
         acceptance.resolve(
           readmittedReceipt?.accepted ?? {
@@ -404,11 +402,30 @@ export function enqueueSessionEventForHost(
         ...(failure ? { error: String(failure) } : {}),
         ...(failure instanceof SessionWorkStartError ? { retryable: failure.retryable } : {}),
       });
+      if (cleanupContext) {
+        // Cleanup must outlive the completed event's async work scope.
+        void runWithGatewayDetachedWorkContinuation(
+          () =>
+            runWithSessionControllerCleanup(async () => {
+              const { removeCronRunContinuationSessionIfIdle } =
+                await import("../../cron/run-continuation-cleanup.js");
+              await removeCronRunContinuationSessionIfIdle(
+                sessionKey,
+                undefined,
+                cleanupContext,
+                storePath,
+              );
+            }),
+          "session:event-cleanup",
+        ).catch((error: unknown) => {
+          log.warn("Could not remove settled cron continuation", { error: String(error) });
+        });
+      }
     };
     if (operation?.ownerSettlement) {
       void operation.ownerSettlement.then(complete, complete);
     } else {
-      complete();
+      void complete();
     }
   };
   const onAbort = () => {
@@ -467,8 +484,8 @@ export function enqueueSessionEventForHost(
   void runWithoutOwnedSessionTranscriptWrites(() =>
     runWithGatewayDetachedWorkContinuation(async () => {
       admissionStarted = true;
+      await readAgentDeletionJournalStatusInWorker(agentId, { env }, signal);
       assertOwnerCurrent();
-      ({ replyRunRegistry } = await import("./reply-run-registry.js"));
       const { dispatchInboundMessageWithRoutedChannelDispatcher } = await import("../dispatch.js");
       const { prepareSessionGenerationFacts } =
         await import("../../config/sessions/session-delivery-generation.js");
@@ -532,6 +549,7 @@ export function enqueueSessionEventForHost(
           },
         },
         replyOptions: {
+          operatorAuthority,
           admittedSessionSettings: settings,
           toolsAllow,
           onDeliberateSilentTerminalReply: () => {
@@ -545,13 +563,22 @@ export function enqueueSessionEventForHost(
               preparedBinding = binding;
             }
           },
-          onReplyOperationOwned: (owned) => {
-            operation = owned;
-          },
           queueModeOverride: "followup",
           suppressTyping: true,
           typingPolicy: "system_event",
+          onReplyOperationAdmitted: (owned) => {
+            operation = owned;
+          },
           internalEventExecution: {
+            prepareInput: async (recorder) => {
+              inputRecorder = recorder;
+              if (
+                !recorder.stageApproved ||
+                !(await recorder.stageApproved({ runId: occurrenceId, assertCurrent }))
+              ) {
+                throw new Error("Session event input was not durably admitted");
+              }
+            },
             execRequestOwners,
             deliver: options.deliver === false || target.deliver === false ? false : undefined,
             assertCurrent: assertEffectCurrent,
@@ -618,7 +645,6 @@ export function enqueueSessionEventForHost(
             },
             onAdopted: async () => {
               adopted = true;
-              operation = replyRunRegistry.get(sessionKey);
               if (!operation) {
                 throw new Error("Session event has no admitted reply owner");
               }

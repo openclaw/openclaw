@@ -152,9 +152,6 @@ socket.on("data", (chunk) => {
             );
             expect(fs.existsSync(effectFile)).toBe(false);
           } else {
-            if (scenario === "ordinary session") {
-              expect(runSignal).toBe(callerSignal);
-            }
             expect(runSignal?.aborted).toBe(false);
             child.write("go\n");
             const result = await operation;

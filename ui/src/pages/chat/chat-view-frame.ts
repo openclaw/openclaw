@@ -12,7 +12,6 @@ import type {
   ChatQueueItem,
   ChatSelectionSource,
 } from "../../lib/chat/chat-types.ts";
-import type { PresentationValue } from "../../lib/presentation.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { isSessionRunVisuallyActive } from "../../lib/session-run-state.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
@@ -35,7 +34,7 @@ import { getChatComposerState, isChatRunWorking } from "./components/chat-compos
 import type { ChatComposerProps } from "./components/chat-composer-types.ts";
 import type { ChatDetailsProps } from "./components/chat-details-types.ts";
 import { createChatSelectionAttachment } from "./components/chat-selection-attachment.ts";
-import { showChatAnnotationEditor } from "./components/chat-selection-popup.ts";
+import { showChatAnnotationEditor } from "./components/chat-selection-popup.tsx";
 import type { ChatSwarmProgressProps } from "./components/chat-swarm-progress.solid.tsx";
 import type { ChatTaskSuggestionTrayProps } from "./components/chat-task-suggestions.tsx";
 import { getTranscriptState, type ChatThreadProps } from "./components/chat-thread-interactions.ts";
@@ -70,6 +69,8 @@ export type ChatProps = Omit<
   ChatDetailsProps &
   ChatTaskSuggestionTrayProps &
   ChatPlacementStartupNoticeProps & {
+    onConversationFrameRef?: (element: HTMLElement) => void | (() => void);
+    onFooterElementRef?: (element: HTMLElement) => void | (() => void);
     onCompanionStageAttachment?: (attachment: ChatAttachment, sourceSessionKey: string) => boolean;
     transcript: ChatTranscript;
     asyncQuestionStorage?:
@@ -80,7 +81,7 @@ export type ChatProps = Omit<
       itemId?: string,
       sourceMessageId?: string,
     ) => Promise<boolean>;
-    presented?: PresentationValue;
+    getQueue?: () => readonly ChatQueueItem[];
     historyState?: ChatState;
     awaitingActivity?: boolean;
     environmentStartStatus?: import("../../../../packages/gateway-protocol/src/schema/environments.js").WorkerEnvironmentStartStatus;
@@ -133,7 +134,10 @@ const placementQueues = new WeakMap<
   { initialTurn: ChatQueueItem; queue: ChatQueueItem[] }
 >();
 
-export function createChatViewFrame(props: ChatProps) {
+export function createChatViewFrame(
+  props: ChatProps,
+  focusComposer: (replacement?: boolean) => void,
+) {
   // The request session hosts the card; only sourceSessionKey names the requester.
   const approvalSourceSessionKey = props.inlineApproval?.sourceSessionKey;
   const approvalSourceSession = approvalSourceSessionKey
@@ -145,13 +149,9 @@ export function createChatViewFrame(props: ChatProps) {
   const displayedPendingInputs = pendingInputs
     ? [...pendingInputs.page.items.filter((input) => !input.queued), ...pendingInputs.queuedInputs]
     : undefined;
-  const requestUpdate = props.onRequestUpdate ?? (() => {});
-  // Focus crosses the transcript boundary into either the native or plugin-owned composer.
-  const focusComposer = (selector = ".agent-chat__composer-combobox > textarea") =>
-    props.transcript.scrollElement
-      ?.closest(".chat")
-      ?.querySelector<HTMLElement>(selector)
-      ?.focus({ preventScroll: true });
+  const resolveCommentSource = (selection: ChatSelectionSource) =>
+    resolveChatCommentAnchor(props.transcript.messageElements?.elements.values() ?? [], selection)
+      ?.range;
   const openSelectionComment = (
     selection: ChatSelectionSource,
     anchorRect: DOMRect,
@@ -162,9 +162,7 @@ export function createChatViewFrame(props: ChatProps) {
     showChatAnnotationEditor({
       paneId: props.paneId,
       anchorRect,
-      sourceRange: props.transcript.scrollElement
-        ? resolveChatCommentAnchor(props.transcript.scrollElement, selection)?.range
-        : undefined,
+      sourceRange: resolveCommentSource(selection),
       comment: "",
       readSignal: props.readSignal,
       onCancel,
@@ -196,6 +194,8 @@ export function createChatViewFrame(props: ChatProps) {
   const questionState = getTranscriptState(props.paneId);
   const asyncQuestions = createAsyncQuestionPresentation(questionState, {
     ...props,
+    // Question publications can precede the pane's next queue props frame.
+    queue: props.getQueue?.() ?? props.queue,
     onReopen: (itemId, scope) => {
       const composer = getChatComposerState(props.paneId);
       composer.restoreComposerFocus ||= composer.questionTakeoverActive;
@@ -255,7 +255,6 @@ export function createChatViewFrame(props: ChatProps) {
     questionPrompts: props.gatewayQuestionPrompts,
     agents: props.agentsList?.agents,
     onOpenImage: openImage,
-    onRequestUpdate: requestUpdate,
     queuedMessageAction: props.placementStartup?.initialTurn
       ? {
           id: props.placementStartup.initialTurn.id,
@@ -296,7 +295,6 @@ export function createChatViewFrame(props: ChatProps) {
                   ...(props.getAttachments?.() ?? props.attachments ?? []),
                   attachment,
                 ]);
-                requestUpdate();
                 focusComposer();
                 return true;
               },
@@ -305,10 +303,7 @@ export function createChatViewFrame(props: ChatProps) {
         : undefined,
     onOpenSession: props.onSessionSelect,
     // Portaled menus can outlive a render; resolve focus from the current session owner.
-    onFocusComposer: () =>
-      focusComposer(
-        "openclaw-plugin-view[data-plugin-composer], .agent-chat__composer-combobox > textarea",
-      ),
+    onFocusComposer: () => focusComposer(true),
   };
   questionState.transcriptRenderContext.onAsyncQuestionSubmit = props.onAsyncQuestionSubmit;
   questionState.transcriptRenderContext.onAsyncQuestionDiscard = asyncQuestions.discard;
@@ -338,10 +333,10 @@ export function createChatViewFrame(props: ChatProps) {
   return {
     approvalSourceSession,
     pendingInputs,
-    requestUpdate,
     asyncQuestions,
     openImmediateImage,
     attachmentDropHandlers,
+    resolveCommentSource,
     threadProps,
     displayQueue,
     historyLoadState,

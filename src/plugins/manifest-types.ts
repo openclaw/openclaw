@@ -1,5 +1,6 @@
 import type { ModelPricingProvider } from "@openclaw/model-catalog-core/model-catalog-pricing";
 import type { ModelCatalog } from "@openclaw/model-catalog-core/model-catalog-types";
+import type { ManifestModelIdNormalizationProvider } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import type { PluginUiCapability } from "../../packages/gateway-protocol/src/plugin-ui-capabilities.js";
 import type { PluginCategorySlug } from "../../packages/plugin-package-contract/src/index.js";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
@@ -8,7 +9,10 @@ import type { ConfigUiHint, ConfigUiGroup } from "../shared/config-ui-hints-type
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import type { DoctorSessionRouteStateOwner } from "./doctor-session-route-state-owner-types.js";
 import type { PluginManifestCommandAlias } from "./manifest-command-aliases.js";
-import type { PLUGIN_MANIFEST_CONTRACT_KEYS } from "./manifest-contract-keys.js";
+import type {
+  PLUGIN_MANIFEST_CONTRACT_KEYS,
+  TRANSCRIPT_SOURCE_LOCATOR_FIELDS,
+} from "./manifest-contract-keys.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 
 /** UI hint metadata for plugin config schema fields. */
@@ -53,6 +57,7 @@ export type PluginDiagnosticCode =
   | "configured-plugin-path-unavailable"
   | "dashboard-declaration-invalid"
   | "explicit-config-plugin-selection"
+  | "plugin-state-migration"
   | "plugin-verification"
   | "sdk-incompatible"
   | "workspace-scope-omitted";
@@ -109,17 +114,11 @@ export type PluginManifestModelPricing = {
   providers?: Record<string, ModelPricingProvider>;
 };
 
-export type PluginManifestModelIdPrefixRule = {
-  modelPrefix: string;
-  prefix: string;
-};
+export type PluginManifestModelIdPrefixRule = NonNullable<
+  PluginManifestModelIdNormalizationProvider["prefixWhenBareAfterAliasStartsWith"]
+>[number];
 
-export type PluginManifestModelIdNormalizationProvider = {
-  aliases?: Record<string, string>;
-  stripPrefixes?: string[];
-  prefixWhenBare?: string;
-  prefixWhenBareAfterAliasStartsWith?: PluginManifestModelIdPrefixRule[];
-};
+export type PluginManifestModelIdNormalizationProvider = ManifestModelIdNormalizationProvider;
 
 export type PluginManifestModelIdNormalization = {
   providers?: Record<string, PluginManifestModelIdNormalizationProvider>;
@@ -391,11 +390,10 @@ export type PluginManifestCatalog = {
   order?: number;
 };
 
-/** Static transcript setup metadata; runtime registration does not gate configuration. */
 export type PluginManifestTranscriptSource = {
   name?: string;
   autoStart?: Partial<
-    Record<"accountId" | "guildId" | "channelId" | "meetingUrl", "optional" | "required">
+    Record<(typeof TRANSCRIPT_SOURCE_LOCATOR_FIELDS)[number], "optional" | "required">
   >;
 };
 

@@ -42,10 +42,16 @@ function prepareTimestamp(timestamp: number) {
         timeZoneName: "short",
       })
     : label;
+  return { dateTime: valid ? date.toISOString() : "", label, title };
+}
+
+function relativeTimestampLabel(timestamp: number, label: string) {
+  const date = new Date(timestamp);
+  const valid = Number.isFinite(date.getTime());
   const nowMs = Date.now();
   const ageMs = nowMs - date.getTime();
   // Slightly-future messages clamp to "Just now"; older or distant-future ones use a date.
-  const relativeLabel = !valid
+  return !valid
     ? label
     : ageMs >= -CHAT_RELATIVE_TIMESTAMP_FUTURE_SKEW_MS && ageMs < CHAT_RELATIVE_TIMESTAMP_MAX_AGE_MS
       ? capitalizeStandaloneLabel(formatTimeAgo(Math.max(0, ageMs)))
@@ -54,21 +60,26 @@ function prepareTimestamp(timestamp: number) {
           day: "numeric",
           ...(date.getFullYear() === new Date(nowMs).getFullYear() ? {} : { year: "numeric" }),
         });
-  return { dateTime: valid ? date.toISOString() : "", label, title, relativeLabel };
 }
 
-function TimestampTime(props: { view: ReturnType<typeof prepareTimestamp> }) {
+function TimestampTime(props: { view: { dateTime: string; relativeLabel: string } }) {
+  // Usage-only refreshes must leave the native timestamp attributes untouched.
   const dateTime = createMemo(() => props.view.dateTime);
-  const label = createMemo(() => props.view.relativeLabel);
   return (
     <time class="chat-group-timestamp" datetime={dateTime()} aria-live="off">
-      {label()}
+      {props.view.relativeLabel}
     </time>
   );
 }
 
 export function ChatTimestamp(props: { timestamp: number; metadata?: JSX.Element[] }) {
-  const view = createMemo(() => prepareTimestamp(props.timestamp));
+  const timestamp = createMemo(() => props.timestamp);
+  const calendar = createMemo(() => prepareTimestamp(timestamp()));
+  const view = createMemo(() => ({
+    ...calendar(),
+    // Parent clock refreshes still advance relative copy without reformatting calendar labels.
+    relativeLabel: relativeTimestampLabel(props.timestamp, calendar().label),
+  }));
   const contextLabel = createMemo(() => t("chat.messages.contextFor", { timestamp: view().title }));
   const hasMetadata = () => Boolean(props.metadata?.length);
   return (

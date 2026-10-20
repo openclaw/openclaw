@@ -1,9 +1,16 @@
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { evaluateAttemptDecisionToolPrefilter } from "../agents/embedded-agent-runner/run/attempt-decision-prefilter.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import {
   setRuntimeConfigSnapshot,
   clearRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
+import {
+  onTrustedInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  type DiagnosticEventPayload,
+} from "../infra/diagnostic-events.js";
+import { markTrustedOtelDiagnosticListener } from "../infra/diagnostic-otel-listener-provenance.js";
 import { runPluginRegisterSyncInRegistry } from "../plugins/loader-module-runtime.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
@@ -45,6 +52,7 @@ vi.mock("../agents/decision-inference.js", () => ({
 
 const richer = decisionBatchV1ToV2(batch)!;
 afterEach(() => {
+  resetDiagnosticEventsForTest();
   resetPluginRuntimeStateForTest();
   clearRuntimeConfigSnapshot();
 });
@@ -81,6 +89,77 @@ function native(evaluate: DecisionProviderV2["evaluate"]) {
   });
   return { ...builder, record, api };
 }
+
+it.each([1, 2] as const)(
+  "prefilters through a registered V%d provider without narrowing native result facts",
+  async (version) => {
+    const selected = {
+      agents: {
+        defaults: {
+          decisionModel: "fixture/fixture-v1",
+          experimental: { decisionAssistance: true },
+        },
+      },
+    };
+    const evaluate = vi.fn(async () => ({
+      status: "ok" as const,
+      result: {
+        model: "fixture-v1",
+        answers: {
+          missing_request_context: { type: "boolean" as const, probabilityTrue: 0.1 },
+          next_response_needs_tools: { type: "boolean" as const, probabilityTrue: 0.1 },
+        },
+        ...(version === 2 ? { metadata: { requestId: "synthetic" } } : {}),
+        usage: {
+          inputTokens: 4,
+          outputTokens: 2,
+          ...(version === 2
+            ? {
+                costUsd: 0,
+                units: { unit: "decision-units" as const, amount: 2 },
+                raw: { billed: false },
+              }
+            : {}),
+        },
+      },
+    }));
+    const host = version === 1 ? registered(evaluate) : native(evaluate);
+    const events: DiagnosticEventPayload[] = [];
+    const stop = onTrustedInternalDiagnosticEvent(
+      markTrustedOtelDiagnosticListener((event) => {
+        if (event.type === "model.usage") {
+          events.push(event);
+        }
+      }),
+    );
+    onTestFinished(stop);
+    setRuntimeConfigSnapshot(selected);
+    const result = await evaluateAttemptDecisionToolPrefilter({
+      config: selected,
+      agentId: "main",
+      supportsTurnScopedToolRestrictions: true,
+      assertActive: () => {},
+      userMessage: "Hello",
+      signal: new AbortController().signal,
+    });
+    expect(evaluate).toHaveBeenCalledOnce();
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: "model.usage",
+        provider: "fixture",
+        model: "fixture-v1",
+        agentId: "main",
+        usage: { input: 4, output: 2 },
+        ...(version === 2 ? { costUsd: 0 } : {}),
+      }),
+    ]);
+    expect(result).toMatchObject({
+      shouldPruneTools: true,
+      status: "proposed",
+    });
+    expect(host.registry.decisionProviders[0]!.host.inspect(selected).activeRequests).toBe(0);
+  },
+);
 
 it.each([1, 2] as const)(
   "shares V1/V2 priority admission and physical settlement on a V%d provider",

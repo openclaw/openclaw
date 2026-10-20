@@ -338,9 +338,9 @@ export class ModelSetupWizardRunner {
     }
   }
 
-  async cancel(options: { settleActiveRequest?: boolean } = {}): Promise<void> {
+  async cancel(): Promise<void> {
     const session = this.session;
-    this.clearSession(!options.settleActiveRequest);
+    this.clearSession();
     if (session) {
       await this.cancelSession(session);
     }
@@ -421,14 +421,12 @@ export class ModelSetupWizardRunner {
     this.clearSession();
   }
 
-  private clearSession(abortRequest = true): void {
+  private clearSession(): void {
     this.pendingSignIn?.window?.close();
     this.pendingSignIn = undefined;
     this.session?.reservedWindow?.close();
     clearTimeout(this.session?.externalInputTimer);
-    if (abortRequest) {
-      this.session?.abortController.abort();
-    }
+    this.session?.abortController.abort();
     this.session = null;
     this.authLabel = undefined;
     this.setState({ phase: "idle" });

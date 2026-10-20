@@ -99,19 +99,9 @@ function widgetThemeState(root: HTMLElement): WidgetThemeState {
   const state: WidgetThemeState = { frames: new Map() };
   widgetThemes.set(root, state);
   const publish = () => {
-    // Unregistered board/preview frames are sibling DOM islands, discovered across the document.
-    for (const frame of root.ownerDocument.querySelectorAll<HTMLIFrameElement>(
-      ".chat-tool-card__preview-frame, .board-widget__frame",
-    )) {
-      if (!state.frames.has(frame)) {
-        postWidgetTheme(frame);
-      }
-    }
     for (const [frame, origin] of state.frames) {
       if (frame.isConnected) {
         postWidgetTheme(frame, origin);
-      } else {
-        state.frames.delete(frame);
       }
     }
   };

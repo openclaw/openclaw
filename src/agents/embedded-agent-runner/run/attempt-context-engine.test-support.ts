@@ -46,7 +46,7 @@ export function requireRecords(value: unknown, label: string): Array<Record<stri
   return value as Array<Record<string, unknown>>;
 }
 
-export function findRecord(
+function findRecord(
   records: Array<Record<string, unknown>>,
   predicate: (record: Record<string, unknown>) => boolean,
   label: string,
@@ -68,12 +68,6 @@ export function runtimeContextMessage(messages: unknown) {
 
 export function mockParams(source: MockCallSource) {
   return requireRecord(source.mock.calls[0]?.[0], "mock params");
-}
-
-export function expectFields(actual: Record<string, unknown>, expected: Record<string, unknown>) {
-  for (const [key, value] of Object.entries(expected)) {
-    expect(actual[key], key).toEqual(value);
-  }
 }
 
 export function completedStream(message: unknown) {

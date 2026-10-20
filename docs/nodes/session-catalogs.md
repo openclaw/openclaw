@@ -24,6 +24,10 @@ host is pending. Providers own their
 host snapshot freshness and invalidation. Other providers remain usable. Late results refresh the page for the next list;
 existing host progress updates remain supported.
 
+If a late progress update fails while its subscriber is active, the Gateway logs
+`Session catalog progress update failed; refresh the catalog to retry.` Refresh
+the catalog to request the current rows again. Disconnecting intentionally ends updates.
+
 These fallback pages are bounded in memory and invalidated by configuration or
 provider registration changes and catalog archive operations. Every delivery
 rechecks current visibility and local session identity. The one-second budget

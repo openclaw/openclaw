@@ -62,6 +62,25 @@ Use `jsxImportSource: "@solidjs/web"` and its JSX types, not Solid 1's `solid-js
 - Class strings built with template literals or `.filter(Boolean).join(" ")` lose composable reactivity: use `class={["base", { active: active() }]}`.
 - `createRenderEffect` is for render-phase runtime bindings, and `flush()` in production code usually hides a write-then-read: feature code uses `createEffect` and derivations.
 
+## Enforced wave-zero guard
+
+`pnpm check:control-ui-controllers` runs in lint and the changed-file checks.
+For production `ui/src`, it rejects `createRenderEffect` outside `lib/reactive/`,
+all direct `addEventListener` calls in TSX, DOM queries outside the explicit
+foreign-DOM owner list, and option-free memos whose callback only returns a
+literal. Property/equality, async, and option-bearing memos retain their contracts.
+Tests and test helpers are excluded. The native AST scan counts generic and
+optional calls; `flush`, `getOwner`, and `runWithOwner` resolve actual Solid imports,
+including aliases and namespaces, without counting owner methods or shadowed locals.
+
+`createEffect`, `untrack`, `addEventListener`, `querySelector(All)`, `flush`,
+`getOwner`, and `runWithOwner` also have
+per-file shrink-only baselines in `config/control-ui-*-baseline.txt`. Deleting
+calls requires `pnpm check:control-ui-controllers --prune`; moving an allowance
+requires a verified Git rename. Never raise a baseline to admit new debt. See
+the [refactor checklist](references/refactor-checklist.md) for replacements and
+the permitted survivors.
+
 More, each with its root cause: [lessons learned](references/lessons.md).
 
 ## Testing

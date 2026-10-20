@@ -13,10 +13,7 @@ import {
 } from "../../process/command-queue.js";
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import {
-  createSessionMaintenanceOwner,
-  waitForSessionMaintenance,
-} from "../session-maintenance/coordinator.js";
+import { createSessionMaintenanceOwner } from "../session-maintenance/coordinator.js";
 import { executeContextEngineMaintenance } from "./context-engine-maintenance-execution.js";
 import {
   disposeDeferredMaintenanceContextEngine,
@@ -104,10 +101,6 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
   ] = {
     resetDeferredTurnMaintenanceStateForTest,
   };
-}
-
-export async function waitForDeferredTurnMaintenanceForSession(sessionKey?: string): Promise<void> {
-  await waitForSessionMaintenance(sessionKey);
 }
 
 function scheduleDeferredTurnMaintenance(

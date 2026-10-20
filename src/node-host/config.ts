@@ -62,9 +62,6 @@ export async function loadNodeHostConfig(
   if (!reply) {
     return null;
   }
-  if (!reply.ok || reply.type !== NODE_HOST_CONFIG_KEY) {
-    throw new Error("Unexpected node-host configuration read result");
-  }
   const stored = reply.row;
   if (!stored) {
     return null;

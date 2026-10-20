@@ -285,8 +285,8 @@ describe("worker placement session evidence", () => {
     }));
 
   it("warns instead of silently swallowing resolver pipeline failures", () =>
-    withEvidenceState(async () => {
-      setRuntimeConfigSnapshot({});
+    withEvidenceState(async (stateDir) => {
+      configureStore(path.join(stateDir, "fixed", "shared.json"));
       const prepareRegistry = registryListing.prepareOpenClawAgentDatabaseRegistrySnapshotRead;
       const registry = vi
         .spyOn(registryListing, "prepareOpenClawAgentDatabaseRegistrySnapshotRead")

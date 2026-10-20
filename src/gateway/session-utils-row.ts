@@ -105,7 +105,10 @@ export function readSessionRowInputs(params: {
   preparedRepositoryWorkspace?: Readonly<SessionRepositoryWorkspaceRecord> | null;
   modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
   now?: number;
-  preparedTitle?: Pick<GatewaySessionRow, "derivedTitle" | "lastMessagePreview">;
+  preparedTitle?: Pick<
+    GatewaySessionRow,
+    "derivedTitle" | "lastMessagePreview" | "lastAssistantMessage"
+  >;
   childLinks?: SessionChildLink[];
   excludedChildKeys?: ReadonlySet<string>;
   rowContext?: SessionListRowContext;
@@ -202,6 +205,7 @@ export function readSessionRowInputs(params: {
       key,
       entry,
       lightweight,
+      preparedRuntimeOwnership: params.preparedRuntimeOwnership,
       swarm: buildSessionSwarmSummary(
         params.rowContext?.subagentRuns.swarmRunsByRequesterSessionKey.get(key) ?? [],
         key,
@@ -228,6 +232,7 @@ export function readSessionRowInputs(params: {
       displayName,
       derivedTitle: params.preparedTitle?.derivedTitle,
       lastMessagePreview: params.preparedTitle?.lastMessagePreview,
+      lastAssistantMessage: params.preparedTitle?.lastAssistantMessage,
       thinkingProjection,
       agentRuntime: projectWorkerPlacementAgentRuntime(thinkingProjection.agentRuntime),
       contextWindowProfile,
@@ -420,7 +425,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
 
   const row: GatewaySessionRow = {
     key,
-    sessionModelRevision: sessionModelRevision(entry),
+    sessionModelRevision: sessionModelRevision(entry, undefined, input.preparedRuntimeOwnership),
     // Only explicitly requested summaries may clear swarm state in event merges.
     ...(input.includeSwarmSummary ? { swarm: input.swarm } : {}),
     visibility: entry ? (entry.visibility ?? "shared") : undefined,
@@ -470,6 +475,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     displayName: input.displayName,
     derivedTitle: input.derivedTitle,
     lastMessagePreview: input.lastMessagePreview,
+    lastAssistantMessage: input.lastAssistantMessage,
     channel,
     subject: entry?.subject,
     groupChannel: entry?.groupChannel,
@@ -601,6 +607,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
       estimatedCostUsd: input.estimatedCostUsd,
       subagentRunInputs: input.subagentRunInputs,
       lastMessagePreview: input.lastMessagePreview,
+      lastAssistantMessage: input.lastAssistantMessage,
       childLinks: projectSessionRowChildLinks(input.childLinks),
     },
   };

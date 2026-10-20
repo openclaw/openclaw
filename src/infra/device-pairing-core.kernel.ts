@@ -244,16 +244,19 @@ export function clearDevicePairingInWorker(
   const paired = Object.values(state.pairedByDeviceId).filter(
     (device) => input.deviceId === undefined || device.deviceId === input.deviceId,
   );
-  const pending = input.pending
-    ? Object.values(state.pendingById).filter(
-        (request) => input.deviceId === undefined || request.deviceId === input.deviceId,
-      )
-    : [];
+  const removedDeviceIds = new Set(paired.map((device) => device.deviceId));
+  const pending = Object.values(state.pendingById).filter(
+    (request) =>
+      removedDeviceIds.has(request.deviceId) ||
+      (input.pending && (input.deviceId === undefined || request.deviceId === input.deviceId)),
+  );
   requestDevicePairingMutationAdmission({ kind: "pairing-clear", paired });
-  // Capture repairs before paired removal cascades to their pending records.
+  // Revoke cascaded repairs even when --pending does not report pending removals.
   const result: ClearDevicePairingResult = {
-    removedDevices: paired.map((device) => device.deviceId),
-    rejectedRequests: pending.map(({ requestId, deviceId }) => ({ requestId, deviceId })),
+    removedDevices: [...removedDeviceIds],
+    rejectedRequests: input.pending
+      ? pending.map(({ requestId, deviceId }) => ({ requestId, deviceId }))
+      : [],
   };
   for (const device of paired) {
     removePairedDeviceRecord(state, device.deviceId);

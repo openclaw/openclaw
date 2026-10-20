@@ -33,6 +33,7 @@ describe("session PR mention isolation", () => {
   afterEach(async () => {
     vi.unstubAllEnvs();
     await state.cleanup();
+    vi.unstubAllGlobals();
   });
 
   it.each(["feature", "main", null])(
@@ -60,11 +61,11 @@ describe("session PR mention isolation", () => {
           }),
         );
       });
+      vi.stubGlobal("fetch", fetchImpl);
       const load = () =>
         loadTestSessionPullRequests(
           { sessionKey, refresh: true },
           {
-            fetchImpl,
             resolveGitContext: async () => ({
               owner: "openclaw",
               repo: "openclaw",

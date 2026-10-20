@@ -20,6 +20,7 @@ import {
   hasConfigDocInput,
   isConfigDocSchemaSourcePath,
   hasDeadcodeScannedSource,
+  hasLineCapRatchetInput,
   hasProtocolEventCoverageInput,
   listChangedPathsFromGit,
   listStagedChangedPaths,
@@ -141,7 +142,7 @@ const EXTENSION_TEST_CORE_IMPORT_PATH_RE =
 const CONTROL_UI_I18N_VERIFY_PATH_RE =
   /^(?:package\.json$|ui\/(?:src\/|config\/control-ui-locales\.ts$)|scripts\/(?:control-ui-i18n(?:-(?:report|verify))?\.ts|lib\/(?:control-ui-i18n-[^/]+\.ts|control-ui-i18n-config\.json))$|test\/scripts\/control-ui-i18n[^/]*\.test\.ts$)/u;
 const CONTROL_UI_CONTROLLERS_PATH_RE =
-  /^(?:package\.json$|ui\/src\/|scripts\/(?:check-control-ui-controllers|control-ui-solid-inventory)\.mts$|scripts\/lib\/shrink-ratchet\.mts$|test\/scripts\/check-control-ui-controllers\.test\.ts$)/u;
+  /^(?:package\.json$|ui\/src\/|config\/control-ui-\w+-baseline\.txt$|scripts\/(?:check-control-ui-controllers|control-ui-solid-inventory)\.mts$|scripts\/lib\/shrink-ratchet\.mts$|test\/scripts\/check-control-ui-controllers\.test\.ts$)/u;
 const SHRINK_RATCHET_OWNER_PATH = "scripts/lib/shrink-ratchet.mts";
 const CORE_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.core.json";
 const EXTENSIONS_OXLINT_TS_CONFIG = "extensions/tsconfig.json";
@@ -495,13 +496,11 @@ export function createChangedCheckPlan(
   const controllerGuardArgs = [
     "check:control-ui-controllers",
     ...(options.staged ? ["--staged"] : []),
-    "--base",
-    options.base ?? (options.staged ? "HEAD" : baseEnv.CHECKOUT_BASE_SHA || "origin/main"),
-    // CI materializes this exact comparison commit without its ancestry.
-    // Explicit and staged bases retain their normal Git scope.
-    ...(options.base === undefined && !options.staged && baseEnv.CHECKOUT_BASE_SHA
-      ? ["--no-merge-base"]
-      : []),
+    ...(!options.staged && baseEnv.CHECKOUT_BASE_SHA
+      ? ["--base", baseEnv.CHECKOUT_BASE_SHA, "--no-merge-base"]
+      : options.base
+        ? ["--base", options.base]
+        : []),
   ];
   delete baseEnv.OPENCLAW_OXLINT_CHANGED_PATHS;
   const cwd = process.cwd();
@@ -724,9 +723,7 @@ export function createChangedCheckPlan(
     );
   }
   add("conflict markers", ["check:no-conflict-markers"]);
-  if (
-    result.paths.some((file) => /\.(?:ts|tsx|mts|mjs)$/u.test(file) || file === ".oxlintrc.json")
-  ) {
+  if (hasLineCapRatchetInput(result.paths)) {
     add("line-cap growth ratchet", [
       "check:line-cap-ratchet",
       ...(options.staged ? ["--staged"] : []),

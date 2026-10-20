@@ -4,6 +4,13 @@ import { patchSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/sessi
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, expect, it, vi } from "vitest";
+import {
+  createNativeSubagentAssignmentStore,
+  createNativeSubagentSubmissionStore,
+} from "./native-subagent-assignment-store.js";
+import { codexNativeSubagentRunId } from "./native-subagent-assignment.js";
+import { createCodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
+import { scopeCodexRunBindingStore } from "./session-binding-scope.js";
 import { createLazyCodexAppServerBindingStore } from "./session-binding-store.js";
 import {
   bindingStoreKey,
@@ -153,6 +160,150 @@ it("rechecks physical ownership after a worker comparison loses to a same-thread
   expect(await collect(peer.readMany([identity]))).toEqual([successor]);
   await expect(peer.mutate(identity, clearOwner(successor))).resolves.toBe(true);
   expect(await collect(peer.readMany([identity]))).toEqual([undefined]);
+});
+
+it.each([
+  ["eager", createBindingStore],
+  ["lazy", createLazyCodexAppServerBindingStore],
+] as const)("%s prepared binding observes native and worker commits", async (_, createStore) => {
+  const fixture = await createStateFixture("codex-prepared-binding-");
+  const state = createSqliteState({
+    namespace: "prepared-binding",
+    maxEntries: 10,
+    env: { ...process.env, OPENCLAW_STATE_DIR: fixture.stateDir },
+  });
+  const store = createStore(state);
+  const identity = { kind: "session" as const, agentId: "main", sessionId: "current" };
+  const key = bindingStoreKey(identity);
+  const original = { threadId: "original", cwd: "/repo" };
+  const replacement = { threadId: "replacement", cwd: "/repo" };
+  state.register(key, activeRow(original));
+  const current = await store.prepareRead(identity);
+  expect(current).toBeDefined();
+  const logicalIdentity = { ...identity, sessionId: "logical-session" };
+  const scoped = scopeCodexRunBindingStore({
+    bindingStore: store,
+    logicalIdentity,
+    physicalIdentity: identity,
+  });
+  const scopedCurrent = await scoped.prepareRead(logicalIdentity);
+  expect(scopedCurrent).toBeDefined();
+  const lookup = vi.spyOn(state, "lookup");
+  try {
+    expect(current?.read()).toEqual(original);
+    expect(scopedCurrent?.read()).toEqual(original);
+    state.register(key, activeRow(replacement));
+    expect(current?.read()).toEqual(replacement);
+    expect(scopedCurrent?.read()).toEqual(replacement);
+    state.delete(key);
+    expect(current?.read()).toBeUndefined();
+    await store.mutate(identity, { kind: "set", binding: original });
+    expect(current?.read()).toEqual(original);
+    await store.mutate(identity, { kind: "set", binding: replacement });
+    expect(current?.read()).toEqual(replacement);
+    await store.mutate(identity, { kind: "clear" });
+    expect(current?.read()).toBeUndefined();
+    expect(lookup).not.toHaveBeenCalled();
+  } finally {
+    current?.release();
+    scopedCurrent?.release();
+  }
+});
+
+it("keeps native monitor guards current through worker-published binding reads", async () => {
+  const fixture = await createStateFixture("codex-prepared-native-read-");
+  const options = {
+    namespace: "prepared-native-read",
+    maxEntries: 10,
+    env: { ...process.env, OPENCLAW_STATE_DIR: fixture.stateDir },
+  };
+  const state = createSqliteState(options);
+  const store = createLazyCodexAppServerBindingStore(state);
+  const identity = { kind: "session" as const, agentId: "main", sessionId: "prepared-native" };
+  const binding = {
+    threadId: "parent-thread",
+    cwd: "/repo",
+    appServerRuntimeFingerprint: "runtime-one",
+  };
+  await store.mutate(identity, { kind: "set", binding });
+  vi.spyOn(state, "lookup").mockImplementation(() => {
+    throw new Error("Native guards must not open a synchronous database");
+  });
+  const reader = await store.prepareRead(identity);
+  if (!reader) {
+    throw new Error("Expected a prepared native binding reader");
+  }
+  const owner = createCodexNativeSubagentHistoryOwner({
+    parentThreadId: binding.threadId,
+    sessionId: identity.sessionId,
+    binding,
+  });
+  expect(owner).toBeDefined();
+  if (!owner) {
+    throw new Error("Expected a native history owner");
+  }
+  const common = { bindingStore: store, readBinding: reader.read, identity, owner };
+  const submissions = createNativeSubagentSubmissionStore({
+    ...common,
+    assertLifecycleCurrentAsync: async () => {},
+  });
+  const assignments = createNativeSubagentAssignmentStore(common);
+  try {
+    expect(reader.read()).toEqual(binding);
+    await submissions.assertCurrentAsync();
+    await assignments.assertCurrentAsync();
+    const assignment = {
+      runId: codexNativeSubagentRunId("child-thread"),
+      childThreadId: "child-thread",
+      nativeParentThreadId: binding.threadId,
+      owner,
+    };
+    let sourceCurrent = true;
+    const assertSourceCurrent = () => {
+      if (!sourceCurrent) {
+        throw new Error("Native source custody was revoked");
+      }
+    };
+    await expect(assignments.record(assignment, assertSourceCurrent)).resolves.toBe(true);
+    expect(await assignments.read()).toEqual([assignment]);
+    const receipt = {
+      parentTurnId: "parent-turn",
+      callId: "child-call",
+      childThreadId: "child-thread",
+      submissionId: "child-turn",
+      predecessorRunId: assignment.runId,
+      predecessorNativeTurnId: "previous-child-turn",
+    };
+    await expect(submissions.record(receipt, assertSourceCurrent)).resolves.toBe(true);
+    expect(await submissions.read()).toEqual([receipt]);
+    await expect(submissions.consume(receipt, assertSourceCurrent)).resolves.toBe(true);
+    await expect(assignments.consume(assignment, assertSourceCurrent)).resolves.toBe(true);
+    expect(await assignments.read()).toEqual([]);
+    sourceCurrent = false;
+    await expect(assignments.record(assignment, assertSourceCurrent)).rejects.toThrow(
+      "Native source custody was revoked",
+    );
+    const peer = createBindingStore(createSqliteState(options));
+    await peer.mutate(identity, { kind: "set", binding: { ...binding, threadId: "replacement" } });
+    expect(() => submissions.assertCurrent()).toThrow(
+      "Native submission binding is no longer current",
+    );
+    expect(() => assignments.assertCurrent()).toThrow(
+      "Native assignment binding is no longer current",
+    );
+    await peer.mutate(identity, { kind: "set", binding });
+    submissions.assertCurrent();
+    assignments.assertCurrent();
+  } finally {
+    reader.release();
+  }
+  expect(reader.read()).toBeUndefined();
+  expect(() => submissions.assertCurrent()).toThrow(
+    "Native submission binding is no longer current",
+  );
+  expect(() => assignments.assertCurrent()).toThrow(
+    "Native assignment binding is no longer current",
+  );
 });
 
 it("keeps ordered failures without synchronous reads or retrying failed bulk acquisition", async () => {

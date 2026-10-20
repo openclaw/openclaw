@@ -6,6 +6,7 @@ import type {
 } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import { prepareGitCoauthorAttribution } from "../agents/git-coauthor-attribution.js";
 import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
+import { redactToolDetail } from "../logging/redact.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import {
@@ -15,6 +16,7 @@ import {
   prepareCurrentGitHubPublicationIdentity,
   prepareGitHubPublicationSession,
 } from "./github-publication-availability.js";
+import { uploadGitHubPublicationEvidence } from "./github-publication-evidence.js";
 import {
   githubPublicationApiArgs,
   runPublicationCommand,
@@ -158,6 +160,9 @@ export async function performSessionGitHubAction(options: Options): Promise<void
     throw new Error("GitHub action session does not match the current conversation.");
   }
   const edit = params.action === "edit" ? params : undefined;
+  const evidenceUpload = params.action === "upload_evidence" ? params : undefined;
+  const requestReview = params.action === "request_review";
+  const ownPublicationAction = Boolean(edit || requestReview || evidenceUpload);
   const editsMetadata = edit && (edit.title !== undefined || edit.body !== undefined);
   if (
     edit &&
@@ -204,7 +209,8 @@ export async function performSessionGitHubAction(options: Options): Promise<void
     target.assertCurrent();
     admitted.requester.assertCurrent();
     if (
-      !edit &&
+      !ownPublicationAction &&
+      !(params.action === "ready" && params.publishingSessionKey === undefined) &&
       !roleScopesAllow({
         role: "operator",
         requestedScopes: ["operator.write"],
@@ -215,7 +221,7 @@ export async function performSessionGitHubAction(options: Options): Promise<void
     }
   };
   assertRequester();
-  const receipt = edit
+  const receipt = ownPublicationAction
     ? await service.latestPublishedShared(session, () => target.selected.readCurrent())
     : await service.latestShared(session, undefined, undefined, () =>
         target.selected.readCurrent(),
@@ -284,13 +290,17 @@ export async function performSessionGitHubAction(options: Options): Promise<void
     }
     return pullRequestState(JSON.parse(result.stdout.toString("utf8")), publication);
   };
-  const present = (state: ReturnType<typeof pullRequestState>): void => {
+  const present = (
+    state: ReturnType<typeof pullRequestState>,
+    extra?: Pick<SessionGitHubActionResult, "reviewRequest" | "evidence">,
+  ): void => {
     const { nodeId: _, title, body, ...facts } = state;
     const result: SessionGitHubActionResult = {
       publication,
       publishingSessionKey: session.sessionKey,
       ...facts,
       ...(edit ? { title, body } : {}),
+      ...extra,
     };
     assertCurrent();
     options.respond(true, result);
@@ -299,14 +309,51 @@ export async function performSessionGitHubAction(options: Options): Promise<void
   if (params.action === "inspect" || (edit && !editsMetadata)) {
     return present(before);
   }
-  const assertHead = (state: ReturnType<typeof pullRequestState>) => {
+  const assertHead = (state: ReturnType<typeof pullRequestState>, detail = "") => {
     if (state.headCommit !== params.expectedHeadCommit) {
       throw new Error(
-        "The GitHub PR head changed; inspect and review the new publication before retrying. A previous action may already have completed.",
+        `The GitHub PR head changed; inspect and review the new publication before retrying. A previous action may already have completed.${detail}`,
       );
     }
   };
   assertHead(before);
+  if (evidenceUpload) {
+    const assertOpen = (state: ReturnType<typeof pullRequestState>) => {
+      assertHead(state);
+      if (state.state === "closed" || state.state === "merged") {
+        throw new Error("Evidence can be uploaded only for this session's open PR.");
+      }
+    };
+    assertOpen(before);
+    const evidence = await uploadGitHubPublicationEvidence({
+      evidence: evidenceUpload.evidence,
+      sandbox: caller?.workspaceEvidenceSandbox,
+      sessionKey: session.sessionKey,
+      repository: publication.repository,
+      identity,
+      signal: admitted.requester.signal,
+      assertCurrent,
+      prepareEffect: async () => {
+        const current = await service.latestPublishedShared(session, () =>
+          target.selected.readCurrent(),
+        );
+        assertCurrent();
+        if (
+          current?.result.status !== "published" ||
+          current.result.requestId !== publication.requestId ||
+          current.result.headCommit !== publication.headCommit ||
+          current.result.url !== publication.url
+        ) {
+          throw new Error(
+            "The publication changed; read the current PR before uploading evidence.",
+          );
+        }
+        assertOpen(await read());
+        assertCurrent();
+      },
+    });
+    return present(before, { evidence });
+  }
   const metadataMatches = (state: ReturnType<typeof pullRequestState>) =>
     edit &&
     (edit.title === undefined || state.title === edit.title) &&
@@ -331,6 +378,9 @@ export async function performSessionGitHubAction(options: Options): Promise<void
     if (before.state === "merged" || before.state === "closed") {
       throw new Error("The published PR is closed; its metadata and saved work are unchanged.");
     }
+  }
+  if (requestReview && (before.state === "merged" || before.state === "closed")) {
+    throw new Error("The published PR is closed; no re-review request was posted.");
   }
   if (
     before.state === "merged" ||
@@ -371,56 +421,119 @@ export async function performSessionGitHubAction(options: Options): Promise<void
       );
     }
   };
-  // The transport makes no write retry. Re-read the original target even after a lost response.
+  // The transport never retries writes. Lifecycle state can be reread; a lost comment response stays uncertain.
+  let commandResult: string;
+  let reviewCommentUrl: string | undefined;
+  const reviewCommand = "@clawsweeper re-review";
   try {
-    await runPublicationCommand(
+    const result = await runPublicationCommand(
       githubPublicationApiArgs(
-        params.action === "ready"
-          ? "graphql"
+        requestReview
+          ? `repos/${publication.repository}/issues/${number}/comments`
+          : params.action === "ready"
+            ? "graphql"
+            : params.action === "close" || edit
+              ? endpoint
+              : `${endpoint}/merge`,
+        requestReview || params.action === "ready"
+          ? "POST"
           : params.action === "close" || edit
-            ? endpoint
-            : `${endpoint}/merge`,
-        params.action === "ready" ? "POST" : params.action === "close" || edit ? "PATCH" : "PUT",
+            ? "PATCH"
+            : "PUT",
         host,
       ),
       {
         env: identity.env,
         beforeRun: assertEffect,
         input: JSON.stringify(
-          params.action === "ready"
-            ? {
-                query:
-                  "mutation($id: ID!) { markPullRequestReadyForReview(input: {pullRequestId: $id}) { pullRequest { id } } }",
-                variables: { id: before.nodeId },
-              }
-            : edit
+          requestReview
+            ? { body: reviewCommand }
+            : params.action === "ready"
               ? {
-                  ...(edit.title !== undefined ? { title: edit.title } : {}),
-                  ...(edit.body !== undefined ? { body: edit.body } : {}),
+                  query:
+                    "mutation($id: ID!) { markPullRequestReadyForReview(input: {pullRequestId: $id}) { pullRequest { id } } }",
+                  variables: { id: before.nodeId },
                 }
-              : params.action === "close"
-                ? { state: "closed" }
-                : {
-                    sha: params.expectedHeadCommit,
-                    merge_method: params.action === "merge" ? params.mergeMethod : undefined,
-                    ...(attribution?.attribution?.trailers.length
-                      ? { commit_message: attribution.attribution.trailers.join("\n") }
-                      : {}),
-                  },
+              : edit
+                ? {
+                    ...(edit.title !== undefined ? { title: edit.title } : {}),
+                    ...(edit.body !== undefined ? { body: edit.body } : {}),
+                  }
+                : params.action === "close"
+                  ? { state: "closed" }
+                  : {
+                      sha: params.expectedHeadCommit,
+                      merge_method: params.action === "merge" ? params.mergeMethod : undefined,
+                      ...(params.action === "merge" && params.mergeMethod === "squash"
+                        ? { commit_title: before.title }
+                        : {}),
+                      ...(attribution?.attribution?.trailers.length
+                        ? { commit_message: attribution.attribution.trailers.join("\n") }
+                        : {}),
+                    },
         ),
       },
     );
-  } catch {
+    if (requestReview && result.code === 0) {
+      const comment: unknown = JSON.parse(result.stdout.toString("utf8"));
+      if (
+        isRecord(comment) &&
+        typeof comment.id === "number" &&
+        Number.isSafeInteger(comment.id) &&
+        comment.id > 0 &&
+        comment.body === reviewCommand &&
+        isRecord(comment.user) &&
+        comment.user.id === identity.account.accountId &&
+        comment.html_url === `${publication.url}#issuecomment-${comment.id}`
+      ) {
+        reviewCommentUrl = comment.html_url;
+      }
+    }
+    commandResult = [
+      `gh api ${result.code === null ? result.termination : `exit ${result.code}`}`,
+      result.stderr.toString("utf8").trim(),
+      result.stdout.toString("utf8").trim(),
+      result.error?.message,
+    ]
+      .filter(Boolean)
+      .join(": ");
+  } catch (error) {
     assertEffect();
+    commandResult = error instanceof Error ? error.message : String(error);
   }
-  const after = await read();
-  assertHead(after);
+  // Redact the complete diagnostic before truncating, so a cut cannot expose part of a secret.
+  const failureDetail = commandResult
+    ? ` Command result: ${redactToolDetail(commandResult).slice(0, 2000)}`
+    : "";
+  if (requestReview) {
+    if (reviewCommentUrl) {
+      return present(before, {
+        reviewRequest: {
+          status: "posted",
+          url: reviewCommentUrl,
+          message:
+            "ClawSweeper re-review request posted; review acceptance and completion are not confirmed.",
+        },
+      });
+    }
+    throw new Error(
+      `GitHub has not confirmed the re-review comment; it may already have been posted. Read the PR comments before another request; do not retry blindly.${failureDetail}`,
+    );
+  }
+  const after = await read().catch((error: unknown) => {
+    assertCurrent();
+    if (failureDetail && error instanceof Error) {
+      throw new Error(`${error.message}${failureDetail}`);
+    }
+    throw error;
+  });
+  assertHead(after, failureDetail);
   if (edit) {
     if (metadataMatches(after)) {
       return present(after);
     }
     throw new Error(
-      "GitHub has not confirmed the metadata edit; read the PR with edit before retrying. Saved work is unchanged.",
+      `GitHub has not confirmed the metadata edit; read the PR with edit before retrying. Saved work is unchanged.${failureDetail}`,
     );
   }
   if (
@@ -432,10 +545,10 @@ export async function performSessionGitHubAction(options: Options): Promise<void
   }
   if (params.action === "close") {
     throw new Error(
-      "GitHub has not confirmed close; inspect the PR state and repository permissions before retrying. Saved work is unchanged.",
+      `GitHub has not confirmed close; inspect the PR state and repository permissions before retrying. Saved work is unchanged.${failureDetail}`,
     );
   }
   throw new Error(
-    `GitHub has not confirmed ${params.action}; inspect the PR's required reviews, checks, conflicts and repository permissions before retrying. Saved work is unchanged.`,
+    `GitHub has not confirmed ${params.action}; inspect the PR's required reviews, checks, conflicts and repository permissions before retrying. Saved work is unchanged.${failureDetail}`,
   );
 }

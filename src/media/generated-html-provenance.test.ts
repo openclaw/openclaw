@@ -4,7 +4,7 @@ import { deserialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  awaitGateBeforeSettlement,
+  awaitGateBeforeSettlement as awaitGate,
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
@@ -15,7 +15,7 @@ import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-import { StateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-state-db-async-lifecycle.js";
+import { StateDatabaseReadAdmissionInvalidatedError as ReadRevoked } from "../state/openclaw-state-db-async-lifecycle.js";
 import * as stateRead from "../state/openclaw-state-db-readonly.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
@@ -24,8 +24,8 @@ import { HostReadMediaTypeError } from "./local-media-access.js";
 import { cleanOldMedia, pruneOutboundMedia, saveMediaBuffer } from "./store.js";
 import {
   loadWebMedia,
-  markTrustedGeneratedHtmlPath,
-  pruneStaleTrustedGeneratedHtmlMarkers,
+  markTrustedGeneratedHtmlPath as markHtml,
+  pruneStaleTrustedGeneratedHtmlMarkers as pruneMarkers,
 } from "./web-media.js";
 
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -35,6 +35,30 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 
 const html = Buffer.from("<!doctype html><title>Report</title><h1>Original</h1>");
 const replacement = Buffer.from("<!doctype html><title>Report</title><h1>Replaced</h1>");
+async function whilePaused(
+  signal: AbortSignal,
+  install: (pause: () => Promise<void>) => { mockRestore(): void },
+  start: () => Promise<unknown>,
+  change: () => Promise<void>,
+) {
+  const entered = createDeferred();
+  const release = createDeferred();
+  const intercept = install(async () => {
+    entered.resolve();
+    await release.promise;
+  });
+  const operation = start();
+  try {
+    await withinTest(awaitGate(entered.promise, operation, "Skipped filesystem admission"), signal);
+    await change();
+    release.resolve();
+    await operation;
+  } finally {
+    release.resolve();
+    await Promise.allSettled([operation]);
+    intercept.mockRestore();
+  }
+}
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     vi.restoreAllMocks();
@@ -63,7 +87,7 @@ describe("generated HTML provenance worker boundary", () => {
       hostReadCapability: true,
     });
 
-  async function stageHtml() {
+  async function stageHtml(operation?: "upsert" | "prune") {
     const source = path.join(workspace, "report.html");
     await fs.writeFile(source, html);
     const access = { localRoots: [workspace], readFile: (file: string) => fs.readFile(file) };
@@ -77,8 +101,14 @@ describe("generated HTML provenance worker boundary", () => {
     });
     expect(result.mediaUrl).toBeDefined();
     expect(result.mediaUrl).not.toBe(source);
+    if (operation === "prune") {
+      await fs.rm(result.mediaUrl!);
+    }
     return result.mediaUrl!;
   }
+
+  const writeMarker = (operation: "upsert" | "prune", staged: string) =>
+    operation === "upsert" ? markHtml(staged, replacement) : pruneMarkers();
 
   it("stages, reloads, and prunes through both media entry points without caller SQL", async () => {
     const sql = observeMainThreadSql();
@@ -109,7 +139,7 @@ describe("generated HTML provenance worker boundary", () => {
 
   it("fails closed when worker lookup is refused", async () => {
     const staged = await stageHtml();
-    const refusal = new StateDatabaseReadAdmissionInvalidatedError("Reader authority revoked");
+    const refusal = new ReadRevoked("Reader authority revoked");
     const read = vi
       .spyOn(stateRead, "executeExistingOpenClawStateRead")
       .mockRejectedValueOnce(refusal);
@@ -127,11 +157,8 @@ describe("generated HTML provenance worker boundary", () => {
   ] as const)(
     "rolls back $operation at $stage and retains the refusal identity",
     async ({ operation, stage }) => {
-      const staged = await stageHtml();
-      if (operation === "prune") {
-        await fs.rm(staged);
-      }
-      const refusal = new StateDatabaseReadAdmissionInvalidatedError("Writer authority revoked");
+      const staged = await stageHtml(operation);
+      const refusal = new ReadRevoked("Writer authority revoked");
       const requests: string[] = [];
       const interception = probe.admission(workerAdmission, (request, grant, admit) => {
         requests.push(request.stage);
@@ -140,12 +167,8 @@ describe("generated HTML provenance worker boundary", () => {
         }
         admit(request, grant);
       });
-      const writing =
-        operation === "upsert"
-          ? markTrustedGeneratedHtmlPath(staged, replacement)
-          : pruneStaleTrustedGeneratedHtmlMarkers();
+      const writing = writeMarker(operation, staged);
       await expect(writing).rejects.toBe(refusal);
-      await expect(writing).rejects.toBeInstanceOf(StateDatabaseReadAdmissionInvalidatedError);
       expect(requests).toContain(stage);
       interception.mockRestore();
       if (operation === "prune") {
@@ -185,7 +208,7 @@ describe("generated HTML provenance worker boundary", () => {
     const staged = await stageHtml();
     expect((await readHtml(staged)).buffer).toEqual(html);
     await fs.rm(staged);
-    await pruneStaleTrustedGeneratedHtmlMarkers();
+    await pruneMarkers();
     await fs.writeFile(staged, html);
     await expect(readHtml(staged)).rejects.toBeInstanceOf(HostReadMediaTypeError);
     expect(corrupted).toEqual(["generatedHtmlProvenance.upsert", "generatedHtmlProvenance.prune"]);
@@ -194,18 +217,12 @@ describe("generated HTML provenance worker boundary", () => {
   it.each(["upsert", "prune"] as const)(
     "does not replay an unknown %s outcome",
     async (operation) => {
-      const staged = await stageHtml();
-      if (operation === "prune") {
-        await fs.rm(staged);
-      }
+      const staged = await stageHtml(operation);
       const failure = new SqliteWorkerError("Native outcome is unknown", "outcome-unknown");
       const run = vi
         .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
         .mockRejectedValueOnce(failure);
-      const writing =
-        operation === "upsert"
-          ? markTrustedGeneratedHtmlPath(staged, replacement)
-          : pruneStaleTrustedGeneratedHtmlMarkers();
+      const writing = writeMarker(operation, staged);
       await expect(writing).rejects.toBe(failure);
       expect(run).toHaveBeenCalledTimes(1);
     },
@@ -213,102 +230,66 @@ describe("generated HTML provenance worker boundary", () => {
 
   it("pins the marker store and bytes before filesystem work yields", async (test) => {
     const saved = await saveMediaBuffer(html, "text/html", "outbound", 1024, "report.html");
-    const entered = createDeferred();
-    const release = createDeferred();
     const realpath = fs.realpath;
-    const intercept = vi.mocked(mediaRealpath).mockImplementationOnce(async (...args) => {
-      entered.resolve();
-      await release.promise;
-      return realpath(...args);
-    });
     const contents = Buffer.from(html);
-    const marking = markTrustedGeneratedHtmlPath(saved.path, contents);
-    try {
-      await withinTest(
-        awaitGateBeforeSettlement(entered.promise, marking, "Marker skipped filesystem admission"),
-        test.signal,
-      );
-      vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("html-provenance-other-"));
-      replacement.copy(contents);
-      release.resolve();
-      await marking;
-      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-      expect((await readHtml(saved.path)).buffer).toEqual(html);
-    } finally {
-      release.resolve();
-      await Promise.allSettled([marking]);
-      intercept.mockRestore();
-    }
+    await whilePaused(
+      test.signal,
+      (pause) =>
+        vi.mocked(mediaRealpath).mockImplementationOnce(async (...args) => {
+          await pause();
+          return realpath(...args);
+        }),
+      () => markHtml(saved.path, contents),
+      async () => {
+        vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("html-provenance-other-"));
+        replacement.copy(contents);
+      },
+    );
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    expect((await readHtml(saved.path)).buffer).toEqual(html);
   });
 
-  it("does not prune a newer marker committed while stale file inspection waits", async (test) => {
-    const staged = await stageHtml();
-    await fs.rm(staged);
-    const entered = createDeferred();
-    const release = createDeferred();
-    const lstat = fs.lstat;
-    const intercept = vi.mocked(mediaLstat).mockImplementation(async (...args) => {
-      if (String(args[0]) === staged) {
-        intercept.mockRestore();
-        entered.resolve();
-        await release.promise;
-        throw Object.assign(new Error("Stale file was absent"), { code: "ENOENT" });
-      }
-      return lstat(...args);
-    });
-    const pruning = pruneStaleTrustedGeneratedHtmlMarkers();
-    try {
-      await withinTest(
-        awaitGateBeforeSettlement(entered.promise, pruning, "Cleanup skipped file inspection"),
+  it.for(["newer marker", "state routing"] as const)(
+    "pins prune identity while %s changes during file inspection",
+    async (change, test) => {
+      const staged = await stageHtml("prune");
+      const otherStateDir = tempDirs.make("html-provenance-cleanup-other-");
+      const lstat = fs.lstat;
+      await whilePaused(
         test.signal,
+        (pause) => {
+          const intercept = vi.mocked(mediaLstat).mockImplementation(async (...args) => {
+            if (String(args[0]) === staged) {
+              intercept.mockRestore();
+              await pause();
+              if (change === "newer marker") {
+                throw Object.assign(new Error("Stale file was absent"), { code: "ENOENT" });
+              }
+            }
+            return lstat(...args);
+          });
+          return intercept;
+        },
+        pruneMarkers,
+        async () => {
+          if (change === "newer marker") {
+            await fs.writeFile(staged, replacement);
+            await markHtml(staged, replacement);
+          } else {
+            vi.stubEnv("OPENCLAW_STATE_DIR", otherStateDir);
+          }
+        },
       );
-      await fs.writeFile(staged, replacement);
-      await markTrustedGeneratedHtmlPath(staged, replacement);
-      release.resolve();
-      await pruning;
-      expect((await readHtml(staged)).buffer).toEqual(replacement);
-    } finally {
-      release.resolve();
-      await Promise.allSettled([pruning]);
-      intercept.mockRestore();
-    }
-  });
-
-  it("prunes the original store when state routing changes during file inspection", async (test) => {
-    const staged = await stageHtml();
-    await fs.rm(staged);
-    const otherStateDir = tempDirs.make("html-provenance-cleanup-other-");
-    const entered = createDeferred();
-    const release = createDeferred();
-    const intercept = vi.mocked(mediaLstat).mockImplementation(async (...args) => {
-      if (String(args[0]) === staged) {
-        intercept.mockRestore();
-        entered.resolve();
-        await release.promise;
+      if (change === "newer marker") {
+        expect((await readHtml(staged)).buffer).toEqual(replacement);
+      } else {
+        vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+        await fs.writeFile(staged, html);
+        await expect(readHtml(staged)).rejects.toBeInstanceOf(HostReadMediaTypeError);
+        await expect(
+          fs.stat(path.join(otherStateDir, "state", "openclaw.sqlite")),
+        ).rejects.toMatchObject({ code: "ENOENT" });
       }
-      return fs.lstat(...args);
-    });
-    const pruning = pruneStaleTrustedGeneratedHtmlMarkers();
-    try {
-      await withinTest(
-        awaitGateBeforeSettlement(entered.promise, pruning, "Cleanup skipped file inspection"),
-        test.signal,
-      );
-      vi.stubEnv("OPENCLAW_STATE_DIR", otherStateDir);
-      release.resolve();
-      await pruning;
-      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-      await fs.writeFile(staged, html);
-      await expect(readHtml(staged)).rejects.toBeInstanceOf(HostReadMediaTypeError);
-      await expect(
-        fs.stat(path.join(otherStateDir, "state", "openclaw.sqlite")),
-      ).rejects.toMatchObject({
-        code: "ENOENT",
-      });
-    } finally {
-      release.resolve();
-      await Promise.allSettled([pruning]);
-      intercept.mockRestore();
-    }
-  });
+    },
+  );
 });

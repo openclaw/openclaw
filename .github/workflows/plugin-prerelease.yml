@@ -33,7 +33,7 @@ on:
         default: false
         type: boolean
       test_runtime_policy:
-        description: Extension batch runtime trial (bun-all or dual-all); empty preserves current behavior
+        description: Extension batch runtime override (node, bun-all, or dual-all); empty uses Bun, or both runtimes for full release validation
         required: false
         default: ""
         type: string
@@ -281,8 +281,8 @@ jobs:
           const hourly = process.env.GITHUB_EVENT_NAME === "schedule";
           const phase = process.env.PHASE ?? "all";
           const runtimePolicy = process.env.OPENCLAW_CI_TEST_RUNTIME_POLICY?.trim();
-          if (runtimePolicy && runtimePolicy !== "bun-all" && runtimePolicy !== "dual-all") {
-            throw new Error("test_runtime_policy must be bun-all or dual-all");
+          if (runtimePolicy && !["node", "bun-all", "dual-all"].includes(runtimePolicy)) {
+            throw new Error("test_runtime_policy must be node, bun-all, or dual-all");
           }
 
           let pluginPrereleasePlan = { staticChecks: [], dockerLanes: [] };
@@ -388,7 +388,7 @@ jobs:
                 fullReleaseValidation,
                 vitestArgs: extensionVitestArgs,
               });
-              if (runtimePolicy && (runtime.test_runtime_policy !== runtimePolicy || runtime.requires_bun !== true)) {
+              if (runtimePolicy && (runtime.test_runtime_policy !== runtimePolicy || runtime.requires_bun !== (runtimePolicy !== "node"))) {
                 throw new Error(`Target ref does not support requested test_runtime_policy: ${runtimePolicy}`);
               }
               return {

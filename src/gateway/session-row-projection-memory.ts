@@ -128,6 +128,7 @@ export async function withMemorySessionRows<T>(
           sessionKey: query.key,
           entry,
           hasBoard: snapshot.hasBoard,
+          transcriptAssistantMessage: "unknown",
           activitySummaryWatermark: readSessionActivitySummary(entry)
             ? snapshot.transcript.watermark
             : undefined,

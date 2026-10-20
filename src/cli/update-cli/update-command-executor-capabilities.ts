@@ -8,6 +8,7 @@ import {
   preflightReleases,
   slotReservations,
   childOwners,
+  terminalPreparations,
   type ManagedUpdateLeaseAuthority,
 } from "./update-command-executor-state.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
@@ -17,6 +18,21 @@ function requireCapability<T>(capability: T | undefined, message: string): T {
     throw new UpdateCommandRecoveryPendingError(message);
   }
   return capability;
+}
+
+/** Keep terminal effects with the original executor, never a replacement admission. */
+export function registerUpdateCommandTerminalPreparation(
+  fence: UpdateRecoveryFence,
+  runId: string,
+  prepare: (failure?: unknown) => Promise<void>,
+): void {
+  captureUpdateCommandExecutorAuthority(fence, runId);
+  if (terminalPreparations.has(fence)) {
+    throw new UpdateCommandRecoveryPendingError(
+      "Update terminal preparation already has an owner.",
+    );
+  }
+  terminalPreparations.set(fence, prepare);
 }
 
 export function requireUpdateCommandAcquisition(

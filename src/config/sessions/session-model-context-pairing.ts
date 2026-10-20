@@ -9,8 +9,7 @@ import {
 
 type Assistant = Extract<AgentMessage, { role: "assistant" }>;
 type ToolResult = Extract<AgentMessage, { role: "toolResult" }>;
-type Classification = ReturnType<typeof classifyToolUseResultPairing>;
-type Frame = Classification["frames"][number];
+type Frame = ReturnType<typeof classifyToolUseResultPairing>[number];
 
 export const PREFIX_TOOL_OWNER = Symbol("model-context-prefix-tool-owner");
 type Owner = Assistant | typeof PREFIX_TOOL_OWNER;
@@ -22,10 +21,7 @@ type CompactFrame = {
   results: Array<{ message: ToolResult; source: ToolResult | undefined }>;
 };
 
-export type ModelContextPairingFacts = {
-  owners: ReadonlyMap<AgentMessage, Owner>;
-  spans: ReadonlyArray<{ assistant: Owner; result: AgentMessage }>;
-};
+export type ModelContextPairingFacts = ReadonlyMap<AgentMessage, Owner>;
 
 type ModelContextPairing = {
   /** False means this append needs the canonical history before the cache can be reused. */
@@ -110,11 +106,11 @@ export function createModelContextPairing(
   let snapshot: ReturnType<ModelContextPairing["read"]> | undefined;
 
   function install(
-    classified: Classification,
+    classified: Frame[],
     identities: ReadonlyMap<Assistant, OwnedResult>,
     resolveSource: (source: ToolResult) => ToolResult | undefined,
   ) {
-    frames = classified.frames.map((frame, index) => {
+    frames = classified.map((frame, index) => {
       const identity = identities.get(frame.assistant) ?? {
         owner: frame.assistant,
         order: nextOrder++,
@@ -125,7 +121,7 @@ export function createModelContextPairing(
           owned.set(source, identity);
         }
       }
-      return compactFrame(frame, identity, resolveSource, index === classified.frames.length - 1);
+      return compactFrame(frame, identity, resolveSource, index === classified.length - 1);
     });
     unavailableLastFrame = false;
     boundPrefixFrames();
@@ -226,7 +222,7 @@ export function createModelContextPairing(
       const classified = classifyToolUseResultPairing(input, { preserveUnframedToolResults: true });
       if (
         unknownPrefix &&
-        classified.frames.some(
+        classified.some(
           (frame) =>
             frame.remainder.some(
               (message) =>
@@ -257,10 +253,7 @@ export function createModelContextPairing(
     read() {
       if (!snapshot) {
         const ordered = [...owned].toSorted((a, b) => a[1].order - b[1].order);
-        snapshot = {
-          owners: new Map(ordered.map(([result, { owner }]) => [result, owner])),
-          spans: ordered.map(([result, { owner }]) => ({ assistant: owner, result })),
-        };
+        snapshot = new Map(ordered.map(([result, { owner }]) => [result, owner]));
       }
       return snapshot;
     },

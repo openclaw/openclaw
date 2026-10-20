@@ -193,4 +193,79 @@ describe("restart health", () => {
     expect(inspectPortUsage).toHaveBeenCalledTimes(3);
     expect(sleep).toHaveBeenCalledTimes(3);
   });
+
+  it("checks replacement ownership after the final bounded delay", async () => {
+    const previous = mockGatewayLockReplacement();
+    readActiveGatewayLockIdentity.mockReset();
+    const replacement = { ...previous, pid: 4300, ownerId: "replacement" };
+    readActiveGatewayLockIdentity.mockResolvedValueOnce(previous).mockResolvedValue(replacement);
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ pid: 4300, commandLine: "openclaw-gateway" }],
+      hints: [],
+    });
+    callGateway.mockImplementation(gatewayHealthResponse());
+    const { waitForGatewayHealthyListener } = await import("./restart-health.js");
+    const snapshot = await waitForGatewayHealthyListener({
+      port: 18789,
+      previousLockIdentity: previous,
+      attempts: 1,
+      delayMs: 500,
+    });
+    expect(snapshot.healthy).toBe(true);
+    expect(readActiveGatewayLockIdentity).toHaveBeenCalledTimes(2);
+    expect(inspectPortUsage).toHaveBeenCalledTimes(1);
+    expect(sleep).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds a missing replacement after an indefinite previous-owner wait", async () => {
+    const previous = mockGatewayLockReplacement();
+    readActiveGatewayLockIdentity.mockReset();
+    readActiveGatewayLockIdentity.mockResolvedValueOnce(previous).mockResolvedValue(undefined);
+    const { waitForGatewayHealthyListener } = await import("./restart-health.js");
+    const snapshot = await waitForGatewayHealthyListener({
+      port: 18789,
+      previousLockIdentity: previous,
+      attempts: 2,
+      delayMs: 500,
+      waitIndefinitelyForPreviousOwner: true,
+    });
+    expect(snapshot.healthy).toBe(false);
+    expect(snapshot.portUsage.errors).toEqual([
+      `Previous gateway lock owner ${previous.ownerId ?? previous.pid} is still active.`,
+    ]);
+    expect(readActiveGatewayLockIdentity).toHaveBeenCalledTimes(4);
+    expect(inspectPortUsage).not.toHaveBeenCalled();
+    expect(sleep).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not treat a failed lock inspection as release before checking replacement health", async () => {
+    const previous = mockGatewayLockReplacement();
+    readActiveGatewayLockIdentity.mockReset();
+    const replacement = { ...previous, pid: 4300, ownerId: "replacement" };
+    readActiveGatewayLockIdentity
+      .mockRejectedValueOnce(new Error("transient lock read failure"))
+      .mockResolvedValueOnce(previous)
+      .mockResolvedValue(replacement);
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ pid: 4300, commandLine: "openclaw-gateway" }],
+      hints: [],
+    });
+    callGateway.mockImplementation(gatewayHealthResponse());
+    const { waitForGatewayHealthyListener } = await import("./restart-health.js");
+    const snapshot = await waitForGatewayHealthyListener({
+      port: 18789,
+      previousLockIdentity: previous,
+      attempts: 1,
+      delayMs: 500,
+      waitIndefinitelyForPreviousOwner: true,
+    });
+    expect(snapshot.healthy).toBe(true);
+    expect(readActiveGatewayLockIdentity).toHaveBeenCalledTimes(3);
+    expect(inspectPortUsage).toHaveBeenCalledTimes(1);
+    expect(sleep).toHaveBeenCalledTimes(2);
+  });
 });

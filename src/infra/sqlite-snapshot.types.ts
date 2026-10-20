@@ -1,3 +1,4 @@
+import type { BigIntStats } from "node:fs";
 import type { BackupProgressInfo, DatabaseSync } from "node:sqlite";
 import type { FileIdentityStat } from "@openclaw/fs-safe/advanced";
 import type { SqliteIntegrityCheckOptions } from "./sqlite-integrity.js";
@@ -29,7 +30,11 @@ export type CreateVerifiedSqliteSnapshotOptions = {
 
 export type PublishedSqliteFileGuard = {
   assertTargetMatchesExpectedContent: (finalCheck?: () => void) => void;
-  assertTargetUnchanged: (finalCheck?: () => void) => void;
+  /** Ephemeral hash binding; consumers must still match the complete fingerprint and link count. */
+  assertTargetUnchanged: (finalCheck?: () => void) => {
+    stat: BigIntStats;
+    content: SqliteFileContent;
+  };
 };
 
 export type PublishVerifiedSqliteFileOptions = {

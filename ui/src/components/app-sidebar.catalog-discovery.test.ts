@@ -124,7 +124,7 @@ describe("AppSidebar hidden catalog discovery", () => {
         if (scope === "agent") {
           context.agentSelection.state.selectedId = "research";
           context.agentSelection.state.scopeId = "research";
-          sidebar.requestUpdate();
+          sidebar.invalidate();
         } else {
           const gateway = discoveryGateway(currentRequest);
           provider.setContext(createContext(gateway.gateway, context.sessions, TWO_AGENTS));
@@ -486,7 +486,7 @@ describe("AppSidebar expanded catalog refresh visibility", () => {
       expect(scrollBody).not.toBeNull();
       expect(observed.has(scrollBody!)).toBe(true);
 
-      sidebar.requestUpdate();
+      sidebar.invalidate();
       provider.remove();
       const timersAfterDetach = vi.getTimerCount();
       const observationsAfterDetach = observe.mock.calls.length;

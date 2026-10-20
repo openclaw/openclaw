@@ -358,7 +358,11 @@ describe("memory source index native kernel", () => {
       };
     });
     let inserts = 0;
+    const savepoints: string[] = [];
     const statements = observeHostDataSql((sql, preparingDatabase) => {
+      if (/^SAVEPOINT\b/i.test(sql)) {
+        savepoints.push(sql);
+      }
       if (
         !preparingDatabase &&
         /^insert into ["`]?memory_index_(?:chunks|chunk_recall_metadata|chunk_provenance)["`]?\s/i.test(
@@ -374,6 +378,7 @@ describe("memory source index native kernel", () => {
       statements.restore();
     }
     expect(inserts).toBe(3);
+    expect(savepoints).toEqual([]);
     expect(
       conn
         .prepare(
@@ -589,6 +594,32 @@ describe("memory source index native kernel", () => {
       expect(select(table, "path").all()).toEqual([{ path: "memory/sibling.md" }]);
     }
     expectCounts(derivedTables, 1);
+  });
+
+  it("aborts source removal when reading vector cleanup targets fails", () => {
+    const pathname = "memory/current.md";
+    write(replacement(pathname));
+    const before = snapshot();
+    let refused = false;
+    conn.setAuthorizer((action, table, column) => {
+      if (
+        !refused &&
+        action === constants.SQLITE_READ &&
+        table === "memory_index_chunks" &&
+        column === "id"
+      ) {
+        refused = true;
+        return constants.SQLITE_DENY;
+      }
+      return constants.SQLITE_OK;
+    });
+    try {
+      expect(() => remove(pathname, "original")).toThrow();
+    } finally {
+      conn.setAuthorizer(null);
+    }
+    expect(refused).toBe(true);
+    expect(snapshot()).toEqual(before);
   });
 });
 

@@ -1,6 +1,11 @@
 import { createMemo, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { Menu, type MenuEntry, type MenuHandle } from "../../../components/solid/menu.tsx";
+import {
+  createMenuControls,
+  Menu,
+  type MenuEntry,
+  type MenuHandle,
+} from "../../../components/solid/menu.tsx";
 import type { KeyboardShortcutCombo } from "../../../lib/keyboard-shortcut-contract.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { ClearCompanion, ExternalPanelLink } from "../chat-pane-embedded-view.tsx";
@@ -151,8 +156,6 @@ function layoutModel(props: ChatPaneLayoutMenuProps) {
     actions,
     panelActions,
     allActions,
-    mainHeaderAction: mainDefinition?.headerAction,
-    sideHeaderAction: sideDefinition?.headerAction,
     mainHeaderActionView: mainDefinition?.headerActionView,
     sideHeaderActionView: sideDefinition?.headerActionView,
     mainHeaderLink: mainDefinition?.headerLink,
@@ -163,17 +166,24 @@ let nextLayoutId = 0;
 
 export function ChatPaneLayoutMenu(props: ChatPaneLayoutMenuProps) {
   const id = `chat-pane-layout-${++nextLayoutId}`;
+  const controls = createMenuControls();
   let menu: MenuHandle | undefined;
   const model = createMemo(() => layoutModel(props));
   const headerActions = createMemo(
     () => (
       <>
-        {model().mainHeaderAction}
-        <Show when={model().mainHeaderActionView}>{(view) => <ClearCompanion {...view()} />}</Show>
-        <Show when={model().mainHeaderLink}>{(link) => <ExternalPanelLink {...link()} />}</Show>
-        {model().sideHeaderAction}
-        <Show when={model().sideHeaderActionView}>{(view) => <ClearCompanion {...view()} />}</Show>
-        <Show when={model().sideHeaderLink}>{(link) => <ExternalPanelLink {...link()} />}</Show>
+        <Show when={model().mainHeaderActionView}>
+          {(view) => <ClearCompanion {...view()} actionRef={controls.ref()} />}
+        </Show>
+        <Show when={model().mainHeaderLink}>
+          {(link) => <ExternalPanelLink {...link()} actionRef={controls.ref()} />}
+        </Show>
+        <Show when={model().sideHeaderActionView}>
+          {(view) => <ClearCompanion {...view()} actionRef={controls.ref()} />}
+        </Show>
+        <Show when={model().sideHeaderLink}>
+          {(link) => <ExternalPanelLink {...link()} actionRef={controls.ref()} />}
+        </Show>
       </>
     ),
     { lazy: true },
@@ -211,14 +221,10 @@ export function ChatPaneLayoutMenu(props: ChatPaneLayoutMenuProps) {
   );
   return (
     <Show
-      when={
-        model().allActions.length > 0 ||
-        model().mainHeaderAction ||
-        model().mainHeaderActionView ||
-        model().mainHeaderLink
-      }
+      when={model().allActions.length > 0 || model().mainHeaderActionView || model().mainHeaderLink}
     >
       <Menu
+        controls={controls}
         lazy
         id={id}
         class={[

@@ -67,6 +67,7 @@ import {
   withAgentQuestionAnswerAuthority,
 } from "./host-private-capabilities.js";
 import { buildHarnessHostRequester } from "./host-requester.js";
+import { bindBoundedSeed } from "./host-seed.js";
 import { bindHostSkillCatalog, prepareHostSkillLibraryResources } from "./host-skills.js";
 import { cloneHostSnapshot as cloneSnapshot } from "./host-snapshot.js";
 import {
@@ -132,7 +133,6 @@ export function createAgentHarnessHostCapabilities(params: {
   const { lifecycleGeneration } = delegatedAuthority;
   const { runId } = delegatedAuthority.operationalRunInstance;
   const coreTtsToolResults = new WeakSet<object>();
-  let active = true;
   // Lexical closure must also fence work already past its entry guard. The
   // result guards below cover exact authority loss that does not use close().
   const capabilityAbortController = new AbortController();
@@ -162,7 +162,7 @@ export function createAgentHarnessHostCapabilities(params: {
     attempt,
     delegatedAuthority,
     sourceCaller,
-    isActive: () => active,
+    isActive: () => !capabilityAbortController.signal.aborted,
     isGatewayCurrent: () =>
       !boundGatewayContext || callerIdentity?.gatewayContextResolver?.() !== undefined,
     inactiveError,
@@ -366,12 +366,12 @@ export function createAgentHarnessHostCapabilities(params: {
       }
       recovery.assertActive();
     };
-    return Object.freeze({
+    return {
       assertActive: assertRecoveryActive,
       release: recovery.release,
       runBeforeToolCall: async (request) =>
         await runBeforeToolCallWithAssertion(assertRecoveryActive, request),
-    });
+    };
   });
 
   const scheduledToolSources = new WeakMap<
@@ -491,6 +491,7 @@ export function createAgentHarnessHostCapabilities(params: {
     },
     ...(annotateCurrentUserTurn ? { annotateCurrentUserTurn } : {}),
     ...media.capabilities,
+    ...bindBoundedSeed(attempt, assertActive, withCaller, capabilityAbortController.signal, media),
     ...bindHarnessTrajectory(attempt, assertActive, assertActive.assertScopeCurrent),
     preparedEnvironment: () => {
       assertActive();
@@ -501,7 +502,7 @@ export function createAgentHarnessHostCapabilities(params: {
       return buildActiveNodeContextText(requesterProfileId);
     },
     bindToolSurface,
-    /** @deprecated Await createToolSurfaceAsync for worker-backed tool construction. Supported through 2026-12-31. */
+    /** @deprecated Await createToolSurfaceAsync for worker-backed tool construction. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
     createToolSurface: (options, bindingOptions) => {
       warnPluginSdkDeprecation({
         family: "agent-harness-host",
@@ -712,10 +713,6 @@ export function createAgentHarnessHostCapabilities(params: {
       }
     },
     close: () => {
-      if (!active) {
-        return;
-      }
-      active = false;
       capabilityAbortController.abort();
     },
   };

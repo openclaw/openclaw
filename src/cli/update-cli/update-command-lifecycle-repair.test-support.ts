@@ -33,7 +33,7 @@ import {
 import { updateRepairCommand } from "./update-repair-command.js";
 
 /** Keep physical cleanup pending while inspecting the command's publication boundary. */
-export function createRetainedCleanupFixture() {
+function createRetainedCleanupFixture() {
   const physical = createDeferredCore<"forced" | "uncertain">();
   const joining = createDeferredCore();
   return {

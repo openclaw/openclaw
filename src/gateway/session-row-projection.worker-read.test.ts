@@ -25,7 +25,6 @@ import {
   addSessionMember,
   removeSessionMember,
 } from "../config/sessions/session-sharing-store.native.js";
-import * as history from "../config/sessions/session-transcript-worker-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { registerAgentRunCapacityWait } from "../infra/agent-run-capacity-wait.js";
 import {
@@ -59,6 +58,7 @@ import { withReadySessionRows } from "./session-row-prepared-read.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import * as records from "./session-row-projection-record.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
+import { watchRowFacts as observeRowFacts } from "./session-row-projection.read-fixture.test-support.js";
 import { resolveSessionStoreKey } from "./session-store-key.js";
 import { listProjectedSessions } from "./session-utils-list.js";
 import * as rowInputs from "./session-utils-row.js";
@@ -69,29 +69,6 @@ afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
-
-function observeRowFacts(
-  wrap: (
-    owner: history.SessionHistoryWorkerDatabase,
-  ) => history.SessionHistoryWorkerDatabase["readRowFacts"],
-  once = false,
-) {
-  const readDatabases = history.withSessionHistoryWorkerDatabases;
-  const observe: typeof readDatabases = (databases, consume, lane) =>
-    readDatabases(
-      databases,
-      (owners) =>
-        consume(
-          owners.map((owner) => ({
-            ...owner,
-            readRowFacts: wrap(owner),
-          })),
-        ),
-      lane,
-    );
-  const spy = vi.spyOn(history, "withSessionHistoryWorkerDatabases");
-  return once ? spy.mockImplementationOnce(observe) : spy.mockImplementation(observe);
-}
 
 it.each([{ workMs: 20, rowCount: 65 }])(
   "accepts $rowCount rows once with $workMs ms of materialization work",
@@ -117,6 +94,9 @@ it.each([{ workMs: 20, rowCount: 65 }])(
         try {
           await projection.ensureMaterialized();
           expect(projection.dirtyRowCount).toBe(0);
+          for (const key of keys) {
+            projection.describe({ agentId: "main", key });
+          }
           const before = projection.materializedCount;
           const reads: Array<{ sessionKeys: string[]; rows: SessionRowDatabaseFacts[] }> = [];
           const databases = observeRowFacts((owner) => async (input) => {

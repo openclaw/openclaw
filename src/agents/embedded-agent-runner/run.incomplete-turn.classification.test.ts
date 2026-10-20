@@ -7,8 +7,7 @@ import {
 import { hasOutboundDeliveryEvidence } from "./delivery-evidence.js";
 import { buildAttemptReplayMetadata } from "./run/attempt-terminal-evidence.js";
 import {
-  resolveEmptyResponseRetryInstruction,
-  resolveReasoningOnlyRetryInstruction,
+  resolveNonVisibleTurnRetryInstructions,
   shouldRetrySilentErrorAssistantTurn,
 } from "./run/incomplete-turn-recovery.js";
 import {
@@ -39,6 +38,7 @@ function retryState(attempt: Attempt = {}) {
     modelId: "gpt-5.4",
     replyDeliveryState: "missing" as const,
     payloadCount: 0,
+    settledToolPayloadCount: 0,
     aborted: false,
     timedOut: false,
     attempt: makeEmbeddedRunnerAttempt({ lastAssistant: assistant(), ...attempt }),
@@ -72,11 +72,11 @@ function retryError(overrides: Partial<Assistant> = {}, attempt: Attempt = {}) {
 describe("incomplete-turn retry classification", () => {
   it("continues reasoning-only output for Gemini", () => {
     expect(
-      resolveReasoningOnlyRetryInstruction({
+      resolveNonVisibleTurnRetryInstructions({
         ...retryState({ lastAssistant: assistant({ content: thinking("signed") }) }),
         provider: "google",
         modelId: "gemini-2.5-pro",
-      }),
+      })[0],
     ).toBe(REASONING_RETRY);
   });
 
@@ -92,10 +92,10 @@ describe("incomplete-turn retry classification", () => {
     },
   ])("handles empty $provider output with $output tokens", ({ expected, output, ...route }) => {
     expect(
-      resolveEmptyResponseRetryInstruction({
+      resolveNonVisibleTurnRetryInstructions({
         ...retryState({ lastAssistant: assistant({ usage: createMockUsage(100, output) }) }),
         ...route,
-      }),
+      })[1],
     ).toBe(expected);
   });
 

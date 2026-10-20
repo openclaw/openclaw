@@ -64,8 +64,9 @@ async function showDashboard(page: Page): Promise<void> {
 }
 
 suite.define(() => {
-  it("preserves the compact horizontal grid at desktop and mobile widths", async () => {
+  it("keeps paged cards visible in the compact grid at desktop and mobile widths", async () => {
     await suite.withPage({ viewport: { height: 900, width: 1280 } }, async ({ page }) => {
+      const cursor = { position: cards[1]!.position, createdAt: 1, id: cards[1]!.id };
       await installMockGateway(page, {
         ...workboardUi,
         sessionKey,
@@ -75,7 +76,22 @@ suite.define(() => {
         featureMethods: ["board.get", "chat.metadata", "chat.startup", "workboard.cards.list"],
         methodResponses: {
           "board.get": boardSnapshot,
-          "workboard.cards.list": { cards, statuses: ["ready", "running", "done"] },
+          "workboard.cards.list": {
+            cases: [
+              { match: { sessionKey }, response: { cards: [] } },
+              {
+                match: { after: cursor },
+                response: { cards: cards.slice(2), statuses: ["ready", "running", "done"] },
+              },
+              {
+                response: {
+                  cards: cards.slice(0, 2),
+                  statuses: ["ready", "running", "done"],
+                  nextCursor: cursor,
+                },
+              },
+            ],
+          },
         },
       });
       await showDashboard(page);
@@ -83,15 +99,22 @@ suite.define(() => {
 
       const board = page.locator('[data-test-id="workboard-board-widget"] .workboard-board');
       await board.waitFor();
+      const loadMore = page.getByRole("button", { name: "Load more cards", exact: true });
+      await loadMore.waitFor();
       const desktop = await board.evaluate((element) => ({
         display: getComputedStyle(element).display,
         flow: getComputedStyle(element).gridAutoFlow,
+        firstCardBottom: element.querySelector(".workboard-card__title")?.getBoundingClientRect()
+          .bottom,
+        widgetBottom: element.closest(".workboard-widget-board")!.getBoundingClientRect().bottom,
         widths: [...element.querySelectorAll<HTMLElement>(".workboard-column")].map(
           (column) => column.getBoundingClientRect().width,
         ),
       }));
       expect(desktop.display).toBe("grid");
       expect(desktop.flow).toBe("column");
+      expect(desktop.firstCardBottom).toBeGreaterThan(0);
+      expect(desktop.firstCardBottom).toBeLessThanOrEqual(desktop.widgetBottom);
       expect(desktop.widths.every((width) => width >= 239 && width <= 241)).toBe(true);
 
       await page.setViewportSize({ height: 900, width: 700 });
@@ -100,6 +123,9 @@ suite.define(() => {
         return {
           display: getComputedStyle(element).display,
           firstTop: first?.getBoundingClientRect().top,
+          firstCardBottom: element.querySelector(".workboard-card__title")?.getBoundingClientRect()
+            .bottom,
+          widgetBottom: element.closest(".workboard-widget-board")!.getBoundingClientRect().bottom,
           secondLeft: second?.getBoundingClientRect().left,
           secondTop: second?.getBoundingClientRect().top,
         };
@@ -107,6 +133,11 @@ suite.define(() => {
       expect(mobile.display).toBe("grid");
       expect(mobile.secondTop).toBe(mobile.firstTop);
       expect(mobile.secondLeft).toBeGreaterThan(0);
+      expect(mobile.firstCardBottom).toBeGreaterThan(0);
+      expect(mobile.firstCardBottom).toBeLessThanOrEqual(mobile.widgetBottom);
+      await loadMore.click();
+      await expect.poll(() => board.locator(".workboard-card").count()).toBe(3);
+      expect(await loadMore.count()).toBe(0);
     });
   });
 });

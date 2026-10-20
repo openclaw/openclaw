@@ -9,7 +9,7 @@ import {
 } from "./validation.js";
 
 /** Malformed input throws; unsupported size or unrepresentable data returns undefined. */
-export function decisionBatchV1ToV2(batch: DecisionBatch): DecisionBatchV2 | undefined {
+export function decisionBatchV1ToV2(batch: unknown): DecisionBatchV2 | undefined {
   // Reject executable/proxy input before the legacy validator or any property access.
   if (finiteJson(batch, { rejectProxies: true }) === "invalid") {
     throw new DecisionContractError();
@@ -35,7 +35,11 @@ export function decisionBatchV2ToV1(batch: DecisionBatchV2): DecisionBatch | und
   if (batch.state.type !== "text" && batch.state.type !== "json") {
     return undefined;
   }
-  if (Object.values(batch.questions).some((q) => q.type === "sort" || q.type === "tags")) {
+  if (
+    Object.values(batch.questions).some(
+      (q) => q.type === "sort" || q.type === "tags" || q.type === "box",
+    )
+  ) {
     return undefined;
   }
   const state = batch.state.type === "text" ? batch.state.text : batch.state.value;
@@ -82,6 +86,7 @@ export function decisionResultV2ToV1(
       answer.type === "error" ||
       answer.type === "sort" ||
       answer.type === "tags" ||
+      answer.type === "box" ||
       answer.metadata !== undefined
     ) {
       return undefined;

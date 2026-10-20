@@ -1,8 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { createEffect, createMemo, createRoot, flush } from "@solidjs/signals";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionBranch } from "../../api/types.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { projectChatFields } from "./chat-field-projection.ts";
 import {
+  displayedChatSessionBranches,
   invalidateChatBranches,
   loadChatBranches,
   retireChatBranchRequests,
@@ -96,7 +99,6 @@ describe("chat branch freshness", () => {
       sessionId: "selected-session",
       thinkingLevel: null,
     });
-    const requestUpdate = overrides.requestUpdate ?? vi.fn();
     const host = makeChatHost({
       client: createTestGatewayClient(request),
       connectionEpoch: 1,
@@ -109,53 +111,77 @@ describe("chat branch freshness", () => {
     }
     const state = {
       ...host,
+      chatBranches: [],
+      chatBranchesSessionKey: null,
+      chatBranchesConnectionEpoch: null,
       currentSessionId: "selected-session",
       chatMessagesBySession: new Map(),
-      chatThinkingLevel: null,
       chatVerboseLevel: null,
       chatStreamStartedAt: null,
-      renderLifecycle: { invalidate: requestUpdate },
-      requestUpdate,
       ...overrides,
     } as unknown as ChatPageHost;
     return { request, state };
   }
 
+  function observeBranchMenu(state: ChatPageHost) {
+    const published: SessionBranch[][] = [];
+    const dispose = createRoot((stop) => {
+      projectChatFields(state, [
+        "chatBranches",
+        "chatBranchesSessionKey",
+        "chatBranchesConnectionEpoch",
+      ]);
+      const branches = createMemo(() => displayedChatSessionBranches(state));
+      createEffect(branches, (rows) => {
+        published.push(rows);
+      });
+      return stop;
+    });
+    onTestFinished(dispose);
+    flush();
+    return published;
+  }
+
   it("keeps unchanged empty branch reads idle while recording their freshness", async () => {
-    const requestUpdate = vi.fn();
-    const { state } = createSessionEventState({ requestUpdate });
+    const { state } = createSessionEventState();
+    const published = observeBranchMenu(state);
+    const emptyBranches = state.chatBranches;
     await loadChatBranches(state);
+    flush();
     expect(state.chatBranches).toEqual([]);
     expect(state.chatBranchesSessionKey).toBe(state.sessionKey);
     expect(state.chatBranchesConnectionEpoch).toBe(state.connectionEpoch);
-    expect(requestUpdate).not.toHaveBeenCalled();
+    expect(published.at(-1)).toEqual([]);
+    expect(state.chatBranches).toBe(emptyBranches);
   });
 
   it("keeps unchanged and failed branch reads idle, then publishes recovered branch changes", async () => {
     const original = branch("original-reply", true);
-    const requestUpdate = vi.fn();
     const { state } = createSessionEventState({
       ...withBranches([original]),
-      requestUpdate,
     });
+    const published = observeBranchMenu(state);
     const listBranches = vi
       .mocked(state.sessions.listBranches)
       .mockResolvedValueOnce([{ ...original }])
       .mockRejectedValueOnce(new Error("Branch read failed"));
     await loadChatBranches(state);
-    expect(requestUpdate).not.toHaveBeenCalled();
+    flush();
+    expect(published).toEqual([[original]]);
     invalidateChatBranches(state);
     await loadChatBranches(state);
+    flush();
     expect(state.chatBranches).toEqual([original]);
     expect(state.chatBranchesConnectionEpoch).toBeNull();
-    expect(requestUpdate).not.toHaveBeenCalled();
+    expect(published).toEqual([[original]]);
 
     const recovered = { ...original, headline: "Recovered reply", messageCount: 3 };
     listBranches.mockResolvedValueOnce([recovered]);
     await loadChatBranches(state);
+    flush();
     expect(state.chatBranches).toEqual([recovered]);
     expect(state.chatBranchesConnectionEpoch).toBe(1);
-    expect(requestUpdate).toHaveBeenCalledOnce();
+    expect(published).toEqual([[original], [recovered]]);
   });
 
   it.each([

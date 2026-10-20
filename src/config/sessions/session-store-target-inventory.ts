@@ -1,3 +1,4 @@
+import { statSync } from "node:fs";
 import path from "node:path";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { resolveAgentSessionDirsFromAgentsDirSync } from "../../agents/session-dirs.js";
@@ -6,6 +7,10 @@ import {
   assertExistingDatabaseIdentity,
 } from "../../infra/sqlite-worker-identity.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import {
+  listAgentDatabaseAdmissionRefusals,
+  readAgentDatabaseAdmissionRefusal,
+} from "../../state/agent-database-admission.js";
 import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
   type OpenClawRegisteredAgentDatabase,
@@ -196,6 +201,7 @@ export type SessionStoreTargetInventoryRequest = {
   env: NodeJS.ProcessEnv;
   paths: CapturedSessionStorePaths;
   candidates: SessionStoreReadCandidate[];
+  recoveryExclusions?: { agentIds: string[]; storePaths: string[] };
   registryDiscovery?: {
     agentIds: string[];
     roots: Array<{ path: string; physicalPath: string }>;
@@ -366,6 +372,19 @@ export function prepareSessionStoreTargetInventory(
   selection?: SessionStoreTargetInventoryRequest["selection"],
 ): Omit<SessionStoreTargetInventoryRequest, "registeredDatabases"> {
   const { config, env, stateDir, serialized } = captureSessionStoreEnvironment(cfg, inputEnv);
+  // Recovery skips unavailable stores before discovery can join their native opening.
+  // The preparing owner can still discover its own borrowed admission.
+  const refusals =
+    selection === "recovery"
+      ? listAgentDatabaseAdmissionRefusals({ env }).filter((refusal) =>
+          readAgentDatabaseAdmissionRefusal(refusal.agentId, { env }),
+        )
+      : [];
+  const excludedAgentIds = new Set(refusals.map((refusal) => refusal.agentId));
+  const excludedDatabasePaths = new Set(
+    refusals.flatMap((refusal) => refusal.paths.map((pathname) => path.resolve(pathname))),
+  );
+  const excludedStorePaths: string[] = [];
   const agentIds = [...new Set(inputAgentIds.map(normalizeAgentId))];
   const configured = listConfiguredSessionStoreAgentIds(config);
   const paths = new Map(
@@ -380,10 +399,12 @@ export function prepareSessionStoreTargetInventory(
   const perAgent = isPerAgentSessionStoreConfig(config.session?.store);
   const retired = new Set(agentIds.filter((agentId) => !configured.includes(agentId)));
   const logicalPaths = new Set(
-    agentIds.flatMap((agentId) => {
-      const captured = paths.get(agentId)!;
-      return perAgent ? [captured.configured, captured.default] : [captured.configured];
-    }),
+    agentIds
+      .filter((agentId) => !excludedAgentIds.has(agentId))
+      .flatMap((agentId) => {
+        const captured = paths.get(agentId)!;
+        return perAgent ? [captured.configured, captured.default] : [captured.configured];
+      }),
   );
   if (perAgent && retired.size > 0) {
     for (const agentId of configured) {
@@ -402,7 +423,9 @@ export function prepareSessionStoreTargetInventory(
       try {
         for (const sessionsDir of resolveAgentSessionDirsFromAgentsDirSync(
           root,
-          (name) => selection === "recovery" || retired.has(normalizeAgentId(name)),
+          (name) =>
+            !excludedAgentIds.has(normalizeAgentId(name)) &&
+            (selection === "recovery" || retired.has(normalizeAgentId(name))),
         )) {
           logicalPaths.add(path.join(sessionsDir, "sessions.json"));
         }
@@ -423,7 +446,22 @@ export function prepareSessionStoreTargetInventory(
     ) {
       throw new Error("Incognito session discovery requires its process-held owner");
     }
-    for (const candidate of captureSessionStoreReadCandidates(storePath)) {
+    const storeCandidates = captureSessionStoreReadCandidates(storePath);
+    const availableCandidates = storeCandidates.filter(
+      (candidate) =>
+        !excludedDatabasePaths.has(candidate.path) &&
+        !excludedDatabasePaths.has(candidate.physicalPath),
+    );
+    const hasExcludedCandidate = availableCandidates.length !== storeCandidates.length;
+    if (hasExcludedCandidate && (target.agentId || target.shared)) {
+      excludedStorePaths.push(storePath);
+      continue;
+    }
+    for (const candidate of availableCandidates) {
+      // Family custody would still join the refused sibling's native admission.
+      if (hasExcludedCandidate && candidate.scope === "sibling-family") {
+        continue;
+      }
       candidates.set(JSON.stringify(candidate), candidate);
     }
   }
@@ -434,6 +472,14 @@ export function prepareSessionStoreTargetInventory(
     env: serialized,
     paths,
     candidates: [...candidates.values()],
+    ...(refusals.length > 0
+      ? {
+          recoveryExclusions: {
+            agentIds: [...excludedAgentIds],
+            storePaths: excludedStorePaths,
+          },
+        }
+      : {}),
     ...(perAgent && retired.size > 0
       ? {
           registryDiscovery: {
@@ -505,7 +551,18 @@ export function readSessionStoreTargetInventory(
         registeredDatabases: request.registeredDatabases,
         readCandidates: request.candidates,
         readPaths: request.paths,
+        excludeTarget: (target: SessionStoreTarget) =>
+          request.recoveryExclusions?.agentIds.includes(target.agentId) === true ||
+          request.recoveryExclusions?.storePaths.includes(target.storePath) === true,
         onResolvedTarget(target: SessionStoreTarget, physical: SessionStoreTarget) {
+          // Partial recovery has no rows to recover from uncreated stores.
+          if (
+            request.selection === "recovery" &&
+            request.recoveryExclusions &&
+            !statSync(physical.storePath, { throwIfNoEntry: false })
+          ) {
+            return;
+          }
           const databasePath = assertSessionStoreReadCandidate(
             physical.storePath,
             request.candidates,

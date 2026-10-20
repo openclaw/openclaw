@@ -60,7 +60,11 @@ New jobs that can run tools always store an explicit tool policy. A job created 
 `--tools` (or with `*`) stores `*`: each run uses the owner session's current tool policy,
 including its group, agent, sandbox, and runtime restrictions. An agent that requests a
 finite list is capped to the tools available to its creating turn and cannot widen the
-stored list. `automations edit --clear-tools` restores `*`. Existing jobs that predate an
+stored list. If a requested name, group, or pattern matches no captured tool, agent-created
+jobs and agent tool-cap edits fail with that entry in the error instead of saving a partial
+list. This includes Codex app tools that the creator runtime cannot carry. Use a supported
+tool name and runtime, or explicitly remove the unavailable entry.
+`automations edit --clear-tools` restores `*`. Existing jobs that predate an
 explicit tool policy retain their current behavior until their tool policy is explicitly
 edited or the job is recreated. Agent-created script payloads, condition triggers, and jobs
 whose creator captured Codex app authority store the creating turn's tools instead: scripts
@@ -99,6 +103,29 @@ Scheduled agent turns can inspect their own job and remove it when finished,
 even without an interactive sender. This self-scoped `automations` tool does not
 grant administrator access or control over other jobs, and explicit tool-policy
 denials still apply.
+
+An authenticated operator turn can schedule an `agentTurn` back into its exact
+existing conversation with `sessionTarget: "session:<same session key>"`. New
+jobs retain the original authenticated source privately, so the continuation can
+finish authorized work, such as inspecting and merging that conversation's PR,
+without another message from the operator. Each occurrence revalidates the
+original operator scopes, role, device, access grant, model restrictions, and exact
+session identity under current policy. This preserves the original operator
+scope ceiling; it is not a new PR-only permission or a blanket grant to automations.
+The stored tool cap, sandbox, and current tool denials still apply. Scheduled
+automation management remains self-scoped.
+
+This source is not inferred for existing jobs, guests, isolated/current targets,
+scripts, or another conversation. Executable edits discard it unless an
+authenticated creator schedules a fresh continuation; display-only edits retain
+it. Disabling, removing, or replacing the job or session retires the active
+occurrence. Re-enabling the job does not revive a revoked occurrence.
+
+While an `at` agent-turn continuation in an explicitly named conversation waits
+for a result, it can call `automations` with `action: "next_check"` and `in: "3m"`
+to rearm that same job. It does not create a new job or change its task, target,
+or permissions. Without a next-check proposal, ordinary one-shot completion and
+`deleteAfterRun` behavior are unchanged.
 
 Manual runs use the same scheduled execution context as timer-fired runs after
 the request passes admission. Ending the chat turn or tool call that started a
@@ -378,6 +405,8 @@ With `announce`, agent, command, and script results belong to the chat or topic 
 
   </Accordion>
   <Accordion title="Subagent and Discord delivery">
+    Child completion does not resume an isolated automation turn. If the orchestrator must act on child results (for example, integrate or verify their work), it must spawn with `collect: true` and collect the results with `agents_wait` before ending its turn; fire-and-forget delegation is valid when the child output itself is the deliverable.
+
     When isolated automation runs orchestrate subagents, delivery prefers the final descendant output over stale parent interim text. If descendant tasks are still running or settling, OpenClaw suppresses that partial parent update instead of announcing it. This includes a yielded orchestrator waiting for its successor to start and completed descendants whose result delivery is still pending. The wait shares the existing run deadline and stops on cancellation. A `delivery.mode: "none"` run whose turn only handed work to a child waits for the child under the same deadline and records the child's final reply as the run output without sending it. Subagents must return a meaningful result or a concrete blocker, even when delivery is `none`. A child that returns only `NO_REPLY` enters [missing-answer recovery](/tools/subagents/announce#announce); if it still produces no result or times out, the automation fails.
 
     For text-only Discord announce targets, OpenClaw sends the final assistant text once instead of replaying both streamed/intermediate text and the final answer. Media and structured Discord payloads are still delivered separately so attachments and components are not dropped.

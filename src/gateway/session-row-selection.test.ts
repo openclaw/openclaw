@@ -26,19 +26,20 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
-import { registerChatAbortController } from "./chat-abort.js";
+import { registerRpcSourceForTest } from "./server-methods/rpc-source-fixtures.test-support.js";
 import { requestContext } from "./server-methods/sessions-read-cache.test-support.js";
-import * as sessionOrder from "./session-list-order.js";
 import { listSessionFixture } from "./session-list.test-support.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
+import { indexSessionRow } from "./session-row-projection-identities.js";
 import {
   create as createSessionRow,
   identity,
-  selectionRow,
+  type Query,
+  type Row,
 } from "./session-row-projection-record.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
-import { createSessionRowSelection } from "./session-row-selection.js";
+import { createSessionRowEntrySelector, selectMatchingSessionRows } from "./session-row-scope.js";
 import * as childOwners from "./session-utils-core.js";
 import {
   filterAndSortSessionEntries,
@@ -46,6 +47,7 @@ import {
   prepareProjectedSessionList,
   prepareSessionRowSelection,
 } from "./session-utils-list.js";
+import { claimRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 beforeEach(() => {
   setActivePluginRegistry(createSessionConversationTestRegistry());
@@ -55,77 +57,106 @@ afterEach(() => {
   resetPluginRuntimeStateForTest();
 });
 
-it("coalesces row updates until a list reads the latest order and metadata", () => {
-  const projection = createSessionRowProjectionFixture({ cfg: {}, store: {} });
-  const selection = createSessionRowSelection(
-    {},
-    {
-      paths: new Map([["store", 0]]),
-      path: "store",
-      ownerAgentIds: new Set(["main"]),
-      agentId: undefined,
-      configuredAgentIds: undefined,
-    },
-    false,
-    () => projection.state.rowContext,
-  );
-  const row = (key: string, updatedAt: number) => {
-    const entry = { sessionId: key, updatedAt, label: `revision ${updatedAt}` };
-    return selectionRow({
-      ...createSessionRow(
-        { key, agentId: "main", storeTarget: { agentId: "main", storePath: "store" } },
-        entry,
-      ),
-      entry,
-    })!;
+it("preserves scoped key and ID selection against a scan over randomized federated rows", () => {
+  let seed = 1467;
+  const random = (bound: number) => {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    return seed % bound;
   };
-  const first = row("agent:main:first", 1);
-  const second = row("agent:main:second", 2);
-  selection.add(first);
-  selection.add(second);
-  for (let index = 0; index < 128; index++) {
-    selection.add(row(`agent:main:idle-${index}`, 0));
-  }
-  const read = selection.read("updatedAt");
-  expect(
-    read
-      .entries(false)
-      .slice(0, 2)
-      .map(([key]) => key),
-  ).toEqual([second.key, first.key]);
-  const compare = vi.spyOn(sessionOrder, "compareSessionEntryPairs");
-  try {
-    for (let revision = 3; revision <= 12; revision++) {
-      const changed = row(first.key, revision);
-      selection.change({ kind: "row", id: identity(changed), ...changed, row: changed });
+  const cfg = { agents: { entries: { main: {}, work: {}, other: {} } } };
+  const agents = Object.keys(cfg.agents.entries);
+  const paths = ["/synthetic/a", "/synthetic/b", "/synthetic/c"];
+  const scope = {
+    physicalPaths: (locator: string, agentId?: string) =>
+      locator === "/synthetic/shared"
+        ? agentId
+          ? [paths[agents.indexOf(agentId)]!]
+          : paths
+        : [locator],
+  };
+  for (let fixture = 0; fixture < 20; fixture++) {
+    const rows = new Map<string, Row>();
+    for (let index = 0; index < 80; index++) {
+      const agentId = agents[random(agents.length)]!;
+      const key = ["global", "unknown", `agent:${agentId}:key-${random(12)}`][random(3)]!;
+      const entry = { sessionId: `id-${random(12)}`, updatedAt: random(10) };
+      const row = {
+        ...createSessionRow({
+          key,
+          agentId,
+          storeTarget: {
+            agentId: agents[random(agents.length)]!,
+            storePath: paths[random(paths.length)]!,
+          },
+        }),
+        entry,
+      };
+      rows.set(identity(row), row);
     }
-    expect(compare).not.toHaveBeenCalled();
-    expect(read.partitions?.flatMap((partition) => [...partition.entries.values()])).toContainEqual(
-      [first.key, expect.objectContaining({ label: "revision 12" })],
-    );
-    expect(
-      read
-        .entries(false)
-        .slice(0, 2)
-        .map(([key]) => key),
-    ).toEqual([first.key, second.key]);
-    expect(read.get(first.key)?.entry.label).toBe("revision 12");
-    const comparisons = compare.mock.calls.length;
-    expect(comparisons).toBeGreaterThan(0);
-    expect(comparisons).toBeLessThan(20);
-    const stable = read.entries(false);
-    expect(selection.read("updatedAt").entries(false)).toBe(stable);
-    expect(compare).toHaveBeenCalledTimes(comparisons);
-
-    selection.change({ kind: "row", id: identity(first), ...first, row: undefined });
-    const recreated = row(first.key, 13);
-    selection.change({ kind: "row", id: identity(recreated), ...recreated, row: recreated });
-    const residentOrder = selection.read().entries(false);
-    expect(residentOrder[0]?.[0]).toBe(second.key);
-    expect(residentOrder.at(-1)?.[0]).toBe(first.key);
-  } finally {
-    compare.mockRestore();
-    projection.dispose();
+    const indexes = {
+      byKey: new Map<string, Set<string>>(),
+      byAgent: new Map<string, Set<string>>(),
+      byStore: new Map<string, Set<string>>(),
+      byParent: new Map<string, Set<string>>(),
+    };
+    for (const row of rows.values()) {
+      indexSessionRow(row, indexes);
+    }
+    const matching = (query: Query, kind?: string) =>
+      selectMatchingSessionRows({ rows, indexes, scope }, query, kind);
+    const select = createSessionRowEntrySelector({
+      isActive: () => true,
+      runAsOwner: (read) => read(),
+      prepare: () => true,
+      state: () => ({
+        cfg,
+        scope,
+        ...indexes,
+        rows,
+        dirty: new Set<string>(),
+        hasUnresolvedCategories: false,
+        matching,
+        acquire: (row) => row,
+        referenced: () => undefined,
+      }),
+    });
+    // The reference scans rows, independent of the production candidate indexes.
+    const scan = (query: Query, kind = "key") => {
+      const selectedPaths = query.storePath
+        ? scope.physicalPaths(query.storePath, query.agentId)
+        : undefined;
+      const candidates =
+        !query.key && selectedPaths
+          ? selectedPaths.flatMap((pathname) =>
+              [...rows.values()].filter((row) => row.storeTarget.storePath === pathname),
+            )
+          : [...rows.values()];
+      return candidates.filter(
+        (row) =>
+          (!query.key || (kind === "id" ? row.entry?.sessionId : row.key) === query.key) &&
+          (!query.agentId ||
+            row.agentId === query.agentId ||
+            ((query.key || selectedPaths) && row.storeTarget.agentId === query.agentId)) &&
+          (!selectedPaths || selectedPaths.includes(row.storeTarget.storePath)),
+      );
+    };
+    for (let sample = 0; sample < 40; sample++) {
+      const query: Query = {
+        agentId: [...agents, undefined][random(4)],
+        storePath: [...paths, "/synthetic/shared", undefined][random(5)],
+        sortBy: null,
+        ...(random(2)
+          ? { sessionIdOrKey: random(2) ? `id-${random(12)}` : "global" }
+          : { key: random(2) ? `agent:main:key-${random(12)}` : undefined }),
+      };
+      expect(matching(query).map(identity)).toEqual(scan(query).map(identity));
+      const indexed = { ...query, key: query.sessionIdOrKey };
+      const keys = new Set([...scan(indexed, "id"), ...scan(indexed)].map((row) => row.key));
+      const expected = (
+        query.sessionIdOrKey ? [...keys].flatMap((key) => scan({ ...query, key })) : scan(query)
+      ).filter((row) => !query.agentId || row.agentId === query.agentId);
+      expect(select(query).map(identity)).toEqual(expected.map(identity));
+    }
   }
 });
 
@@ -580,18 +611,21 @@ it.each([false, true])(
         expect(children.map(([, entry]) => entry.sessionId)).toEqual(["ordinary"]);
         if (activeOnly) {
           const context = requestContext(cfg);
-          const registrations = [
-            ["main", "shadow-global"],
-            ["ops", "ops-global"],
-            ["main", "unknown-shadow"],
-          ].map(([agentId, sessionId]) =>
-            registerChatAbortController({
-              chatAbortControllers: context.chatAbortControllers,
-              runId: sessionId!,
-              agentId,
-              sessionId: sessionId!,
-              sessionKey: `agent:${agentId}:run-alias`,
-              timeoutMs: 60_000,
+          const registrations = await Promise.all(
+            [
+              ["main", "shadow-global"],
+              ["ops", "ops-global"],
+              ["main", "unknown-shadow"],
+            ].map(async ([agentId, sessionId]) => {
+              const registration = registerRpcSourceForTest({
+                storeScope: samples.find(([sampleId]) => sampleId === sessionId)![3],
+                runId: sessionId!,
+                agentId,
+                sessionId: sessionId!,
+                sessionKey: `agent:${agentId}:run-alias:${sessionId}`,
+              });
+              const release = await claimRpcSourceForTest(registration.entry!);
+              return Object.assign({}, registration, { release });
             }),
           );
           try {
@@ -609,6 +643,7 @@ it.each([false, true])(
             ).toEqual(["ops-global", "unknown-shadow"]);
           } finally {
             for (const registration of registrations) {
+              registration.release();
               registration.cleanup();
             }
           }

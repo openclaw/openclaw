@@ -1,4 +1,3 @@
-// Control UI helpers derive native constraints and safe initial values from config schemas.
 import {
   isJsonSchemaValueValid as isSupportedConfigValueValid,
   jsonSchemaValuesEqual as configValuesEqual,
@@ -292,19 +291,11 @@ export function objectPropertySchema(schema: JsonSchema, key: string): JsonSchem
   );
 }
 
-export function arrayConstraintCandidates(
-  schema: JsonSchema,
-  seen = new Set<JsonSchema>(),
-): unknown[][] {
-  if (seen.has(schema)) {
-    return [];
-  }
-  seen.add(schema);
+export function arrayConstraintCandidates(schema: JsonSchema): unknown[][] {
   const candidates: unknown[][] = [schema.const, ...(schema.enum ?? [])].filter(Array.isArray);
   for (const entry of [...(schema.allOf ?? []), ...(schema.anyOf ?? []), ...(schema.oneOf ?? [])]) {
-    candidates.push(...arrayConstraintCandidates(entry, seen));
+    candidates.push(...arrayConstraintCandidates(entry));
   }
-  seen.delete(schema);
   return candidates;
 }
 
@@ -319,12 +310,8 @@ function arrayCandidateDistance(value: readonly unknown[], candidate: readonly u
   return distance;
 }
 
-function arrayRepairIssueCount(
-  schema: JsonSchema,
-  value: readonly unknown[],
-  uniqueItems: boolean,
-): number {
-  const { minItems, maxItems } = arrayInputConstraints(schema);
+function arrayRepairIssueCount(schema: JsonSchema, value: readonly unknown[]): number {
+  const { minItems, maxItems, uniqueItems } = arrayInputConstraints(schema);
   let issues = Math.max(0, minItems - value.length);
   const constrainedDistances = arrayConstraintCandidates(schema)
     .filter((candidate) => isSupportedConfigValueValid(schema, candidate))
@@ -354,7 +341,6 @@ export function canApplyArrayCandidate(
   schema: JsonSchema,
   current: readonly unknown[],
   candidate: readonly unknown[],
-  uniqueItems: boolean,
   allowEqualRepair: boolean,
 ): boolean {
   if (isSupportedConfigValueValid(schema, candidate)) {
@@ -363,8 +349,8 @@ export function canApplyArrayCandidate(
   if (isSupportedConfigValueValid(schema, current)) {
     return false;
   }
-  const currentIssues = arrayRepairIssueCount(schema, current, uniqueItems);
-  const candidateIssues = arrayRepairIssueCount(schema, candidate, uniqueItems);
+  const currentIssues = arrayRepairIssueCount(schema, current);
+  const candidateIssues = arrayRepairIssueCount(schema, candidate);
   return allowEqualRepair ? candidateIssues <= currentIssues : candidateIssues < currentIssues;
 }
 

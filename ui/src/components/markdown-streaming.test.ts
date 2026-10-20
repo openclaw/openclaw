@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import * as markdownDetails from "./markdown-details.ts";
 import { splitStableStreamingMarkdown } from "./markdown-streaming.ts";
 import * as markdownText from "./markdown-text.ts";
@@ -28,18 +29,31 @@ vi.mock(import("dompurify"), async (importOriginal) => {
   return { ...actual, default: Object.assign(createDOMPurify, actual.default) };
 });
 
+beforeAll(async () => {
+  await waitForSolid(() =>
+    expect(toSanitizedMarkdownHtml("```ts\nconst ready = true;\n```")).toContain("hljs-keyword"),
+  );
+});
+
 describe("toStreamingMarkdownParts", () => {
   it("renders completed paragraphs with linear sanitizer input", () => {
     sanitizedInputLengths.length = 0;
     let source = "";
     try {
       for (let index = 0; index < 40; index++) {
-        source += `Stable paragraph ${index} has **formatted** text.\n\n`;
+        const paragraph = `Stable paragraph ${index} has **formatted** text.\n\n`;
+        source += paragraph;
+        const previousCalls = sanitizedInputLengths.length;
         const fragment = htmlFragment(
           toStreamingMarkdownParts(source, {}, "stable-render-budget").join(""),
         );
         expect(fragment.querySelectorAll("p")).toHaveLength(index + 1);
         expect(fragment.querySelectorAll("strong")).toHaveLength(index + 1);
+        const deltaChars = sanitizedInputLengths
+          .slice(previousCalls)
+          .reduce((total, length) => total + length, 0);
+        expect(deltaChars).toBeGreaterThan(0);
+        expect(deltaChars).toBeLessThan(paragraph.length * 2);
       }
       expect(sanitizedInputLengths.length).toBeGreaterThan(0);
       const sanitizedChars = sanitizedInputLengths.reduce((total, length) => total + length, 0);

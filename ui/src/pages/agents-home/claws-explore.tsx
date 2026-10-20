@@ -6,21 +6,81 @@ import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { searchOfficialClaws, type ClawCatalogEntry } from "./claws-catalog-client.ts";
+import { searchClaws, type ClawCatalogEntry } from "./claws-catalog-client.ts";
 import "../../styles/agents-home.css";
 
 registerEnglishCatalog(registerAgentsHomeEnglish);
+
+// ClawHub's current Claw taxonomy. The "other" bucket is assigned by ClawHub.
+const clawCategories = [
+  ["", "clawsCatalog.categoryAll"],
+  ["personal", "clawsCatalog.categoryPersonal"],
+  ["health", "clawsCatalog.categoryHealth"],
+  ["travel", "clawsCatalog.categoryTravel"],
+  ["productivity", "clawsCatalog.categoryProductivity"],
+  ["research", "clawsCatalog.categoryResearch"],
+  ["engineering", "clawsCatalog.categoryEngineering"],
+  ["governance", "clawsCatalog.categoryGovernance"],
+  ["operations", "clawsCatalog.categoryOperations"],
+  ["finance", "clawsCatalog.categoryFinance"],
+  ["sales", "clawsCatalog.categorySales"],
+  ["product", "clawsCatalog.categoryProduct"],
+  ["people", "clawsCatalog.categoryPeople"],
+  ["other", "clawsCatalog.categoryOther"],
+] as const;
+
+function ClawCard(props: {
+  entry: ClawCatalogEntry;
+  onSelect?: (entry: ClawCatalogEntry) => void;
+}) {
+  return (
+    <article class="agents-home__claw-card oc-card" data-claws-entry>
+      <button
+        type="button"
+        class="agents-home__claw-card-link"
+        aria-label={`${t("clawsCatalog.review")} ${props.entry.displayName}`}
+        disabled={!props.entry.latestVersion}
+        onClick={() => props.onSelect?.(props.entry)}
+      />
+      <div class="agents-home__claw-head">
+        <span class="agents-home__claw-art" aria-hidden="true">
+          <Icon name="box" />
+        </span>
+        <div class="agents-home__claw-identity">
+          <h3>{props.entry.displayName}</h3>
+          <span>{`@${props.entry.ownerHandle}`}</span>
+        </div>
+        <button
+          type="button"
+          class="btn btn--sm agents-home__claw-add oc-action oc-action-secondary"
+          aria-label={t("clawsCatalog.addNamed", { name: props.entry.displayName })}
+          disabled={!props.entry.latestVersion}
+          onClick={() => props.onSelect?.(props.entry)}
+        >
+          {t("clawsCatalog.add")}
+        </button>
+      </div>
+      <Show when={props.entry.summary}>
+        <p class="agents-home__claw-summary">{props.entry.summary}</p>
+      </Show>
+    </article>
+  );
+}
 
 export function ClawsExplore(props: { onSelect?: (entry: ClawCatalogEntry) => void }) {
   const context = useApplication();
   const [view, setView] = createStore<{
     entries: ClawCatalogEntry[];
+    featured: ClawCatalogEntry[];
     query: string;
+    category: string;
     loading: boolean;
     error: string | null;
   }>({
     entries: [],
+    featured: [],
     query: "",
+    category: "",
     loading: false,
     error: null,
   });
@@ -42,12 +102,12 @@ export function ClawsExplore(props: { onSelect?: (entry: ClawCatalogEntry) => vo
     canCallGatewayMethod(gateway.snapshot, "claws.catalog.search", "operator.read");
   const gateway = useGatewayPage({
     getGateway: () => context.gateway,
-    onIdentityChange: () => updateView({ query: "" }),
+    onIdentityChange: () => updateView({ query: "", category: "" }),
     invalidateRequests: () => {
       searchRevision += 1;
       clearSearchTimer();
       loadedForConnection = false;
-      updateView({ entries: [], loading: false, error: null });
+      updateView({ entries: [], featured: [], loading: false, error: null });
     },
     onSnapshot: () => {
       if (gateway.connected && canSearch() && !loadedForConnection) {
@@ -57,18 +117,23 @@ export function ClawsExplore(props: { onSelect?: (entry: ClawCatalogEntry) => vo
   });
   onCleanup(clearSearchTimer);
 
-  async function loadCatalog() {
+  async function loadCatalog(category = view.category, query = view.query) {
     const scope = gateway.capture();
     if (!scope || !canSearch()) {
       return;
     }
     const revision = ++searchRevision;
     loadedForConnection = true;
-    updateView({ entries: [], loading: true, error: null });
+    updateView({ entries: [], featured: [], loading: true, error: null });
     try {
-      const entries = await searchOfficialClaws(scope.client, view.query);
+      const [entries, featured] = await Promise.all([
+        searchClaws(scope.client, query, undefined, { category: category || undefined }),
+        !query.trim() && !category
+          ? searchClaws(scope.client, "", undefined, { featured: true })
+          : Promise.resolve([]),
+      ]);
       if (gateway.isCurrent(scope) && revision === searchRevision) {
-        updateView({ entries });
+        updateView({ entries, featured });
       }
     } catch (error) {
       if (gateway.isCurrent(scope) && revision === searchRevision) {
@@ -84,14 +149,28 @@ export function ClawsExplore(props: { onSelect?: (entry: ClawCatalogEntry) => vo
   function search(query: string) {
     searchRevision += 1;
     clearSearchTimer();
-    updateView({ query, entries: [], loading: true, error: null });
+    updateView({ query, entries: [], featured: [], loading: true, error: null });
     searchTimer = setTimeout(() => {
       searchTimer = null;
-      void loadCatalog();
+      void loadCatalog(view.category, query);
     }, 150);
   }
 
+  function selectCategory(category: string) {
+    if (category === view.category) {
+      return;
+    }
+    searchRevision += 1;
+    clearSearchTimer();
+    updateView({ category, entries: [], featured: [], loading: true, error: null });
+    void loadCatalog(category);
+  }
+
   const unavailable = () => gateway.connected && !canSearch();
+  const browseEntries = () => {
+    const featuredNames = new Set(view.featured.map((entry) => entry.packageName));
+    return view.entries.filter((entry) => !featuredNames.has(entry.packageName));
+  };
   return (
     <openclaw-claws-explore>
       <section
@@ -101,7 +180,7 @@ export function ClawsExplore(props: { onSelect?: (entry: ClawCatalogEntry) => vo
       >
         <div class="agents-home__explore-toolbar">
           <div class="agents-home__explore-heading">
-            <h2>{t("clawsCatalog.explore")}</h2>
+            <h2>{t("tabs.claws")}</h2>
             <p>{t("clawsCatalog.exploreDescription")}</p>
           </div>
           <label class="agents-home__claw-search">
@@ -120,6 +199,20 @@ export function ClawsExplore(props: { onSelect?: (entry: ClawCatalogEntry) => vo
             />
           </label>
         </div>
+        <nav class="agents-home__claw-categories" aria-label={t("clawsCatalog.categories")}>
+          <For each={clawCategories}>
+            {([slug, label]) => (
+              <button
+                type="button"
+                class={`btn btn--sm${view.category === slug ? " agents-home__claw-category--active" : ""}`}
+                aria-pressed={view.category === slug ? "true" : "false"}
+                onClick={() => selectCategory(slug)}
+              >
+                {t(label)}
+              </button>
+            )}
+          </For>
+        </nav>
         <Show when={unavailable()}>
           <div class="callout warn" role="status">
             {t("clawsCatalog.unavailable")}
@@ -151,41 +244,29 @@ export function ClawsExplore(props: { onSelect?: (entry: ClawCatalogEntry) => vo
         >
           <p class="agents-home__claw-empty">{t("clawsCatalog.empty")}</p>
         </Show>
-        <div class="agents-home__claw-grid">
-          <For each={view.entries} keyed={(entry) => entry.packageName}>
-            {(entry) => (
-              <article class="agents-home__claw-card oc-card" data-claws-entry>
-                <button
-                  type="button"
-                  class="agents-home__claw-card-link"
-                  aria-label={`${t("clawsCatalog.review")} ${entry().displayName}`}
-                  disabled={!entry().latestVersion}
-                  onClick={() => props.onSelect?.(entry())}
-                />
-                <div class="agents-home__claw-head">
-                  <span class="agents-home__claw-art" aria-hidden="true">
-                    <Icon name="box" />
-                  </span>
-                  <div class="agents-home__claw-identity">
-                    <h3>{entry().displayName}</h3>
-                    <span>{t("clawsCatalog.publisher")}</span>
-                  </div>
-                  <button
-                    type="button"
-                    class="btn btn--sm agents-home__claw-add oc-action oc-action-secondary"
-                    disabled={!entry().latestVersion}
-                    onClick={() => props.onSelect?.(entry())}
-                  >
-                    {t("clawsCatalog.add")}
-                  </button>
-                </div>
-                <Show when={entry().summary}>
-                  <p class="agents-home__claw-summary">{entry().summary}</p>
-                </Show>
-              </article>
-            )}
-          </For>
-        </div>
+        <Show when={view.featured.length > 0}>
+          <h3 class="agents-home__claw-section-title">{t("clawsCatalog.featured")}</h3>
+          <div class="agents-home__claw-grid" data-claws-featured>
+            <For each={view.featured} keyed={(entry) => entry.packageName}>
+              {(entry) => <ClawCard entry={entry()} onSelect={props.onSelect} />}
+            </For>
+          </div>
+        </Show>
+        <Show when={browseEntries().length > 0}>
+          <h3 class="agents-home__claw-section-title">
+            {view.category
+              ? t(
+                  clawCategories.find(([slug]) => slug === view.category)?.[1] ??
+                    "clawsCatalog.categoryOther",
+                )
+              : t("clawsCatalog.browseAll")}
+          </h3>
+          <div class="agents-home__claw-grid" data-claws-results>
+            <For each={browseEntries()} keyed={(entry) => entry.packageName}>
+              {(entry) => <ClawCard entry={entry()} onSelect={props.onSelect} />}
+            </For>
+          </div>
+        </Show>
       </section>
     </openclaw-claws-explore>
   );

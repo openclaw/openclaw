@@ -21,6 +21,18 @@ export type ModelContextPrefix = {
   pairing: ModelContextPairingFacts;
 };
 
+function readToolResultOwners(messages: readonly AgentMessage[]): ModelContextPairingFacts {
+  const owners = new Map<AgentMessage, Extract<AgentMessage, { role: "assistant" }>>();
+  for (const frame of classifyToolUseResultPairing(messages)) {
+    for (const occurrence of frame.occurrences) {
+      if (occurrence.sourceResult) {
+        owners.set(occurrence.sourceResult, frame.assistant);
+      }
+    }
+  }
+  return owners;
+}
+
 /** Select an owned suffix before SQLite payloads can enter JavaScript or cross a worker. */
 export function selectBoundedModelRequests(
   requests: ModelContextRequest[],
@@ -128,27 +140,15 @@ export function selectBoundedModelRequests(
   }
   const pairing =
     prefix?.pairing ??
-    (() => {
-      const messages = candidates.flatMap(({ entry }) => {
+    readToolResultOwners(
+      candidates.flatMap(({ entry }) => {
         const message =
           entry.type === "message" ? entry.message : projectSessionEntryMessage(entry);
         return message ? [message] : [];
-      });
-      const original = classifyToolUseResultPairing(messages);
-      const owners = new Map<AgentMessage, AgentMessage>();
-      const spans: Array<{ assistant: AgentMessage; result: AgentMessage }> = [];
-      for (const frame of original.frames) {
-        for (const occurrence of frame.occurrences) {
-          if (occurrence.sourceResult) {
-            owners.set(occurrence.sourceResult, frame.assistant);
-            spans.push({ assistant: frame.assistant, result: occurrence.sourceResult });
-          }
-        }
-      }
-      return { owners, spans };
-    })();
-  // Cached spans preserve canonical assistant order, including owners in the discarded prefix.
-  for (const { assistant, result } of pairing.spans) {
+      }),
+    );
+  // Map order preserves canonical assistant order, including owners in the discarded prefix.
+  for (const [result, assistant] of pairing) {
     const start = assistant === PREFIX_TOOL_OWNER ? -1 : positions.get(assistant)!;
     const end = positions.get(result)!;
     if (start < cut && cut <= end) {
@@ -189,19 +189,9 @@ export function selectBoundedModelRequests(
     entry.type === "message" ? [entry.message] : [],
   );
   // Removing an older repeated ID must not turn an ambiguous result into a different call's result.
-  const selectedOwners = new Map<AgentMessage, AgentMessage>();
-  for (const frame of classifyToolUseResultPairing(selectedMessages).frames) {
-    for (const occurrence of frame.occurrences) {
-      if (occurrence.sourceResult) {
-        selectedOwners.set(occurrence.sourceResult, frame.assistant);
-      }
-    }
-  }
+  const selectedOwners = readToolResultOwners(selectedMessages);
   for (const message of selectedMessages) {
-    if (
-      message.role === "toolResult" &&
-      pairing.owners.get(message) !== selectedOwners.get(message)
-    ) {
+    if (message.role === "toolResult" && pairing.get(message) !== selectedOwners.get(message)) {
       throw new RangeError("Session context limit would change tool-result ownership");
     }
   }

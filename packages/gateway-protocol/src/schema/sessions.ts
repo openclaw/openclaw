@@ -1,6 +1,7 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { SESSION_COMPANION_SELECTION_CONTEXT_MAX_CHARS } from "../session-companion-contract.js";
+import { SESSIONS_FILES_ASSETS_MAX_REFS } from "../session-limits.js";
 import { closedObject } from "./closed-object.js";
 import { ErrorShapeSchema } from "./error-shape.js";
 import { HumanMentionsSchema } from "./human-mentions.js";
@@ -25,6 +26,7 @@ export * from "./sessions-goal.js";
 export * from "./sessions-provider-review.js";
 export {
   SessionsListParamsSchema,
+  SessionsSubscribeParamsSchema,
   SessionOwnerSessionCountSchema,
   type SessionsListParams,
   type SessionOwnerSessionCount,
@@ -138,6 +140,14 @@ export const SessionsCompanionAskParamsSchema = closedObject({
     Type.String({ minLength: 1, maxLength: SESSION_COMPANION_SELECTION_CONTEXT_MAX_CHARS }),
   ),
   attachments: Type.Optional(ChatAttachmentsSchema),
+  /** Side chat model for this question; omitted uses the agent's utility model. */
+  model: Type.Optional(NonEmptyString),
+  /** Reasoning level for this question; omitted uses the model default. */
+  thinkingLevel: Type.Optional(NonEmptyString),
+  /** Speed for this question; omitted uses the model default. */
+  fastMode: Type.Optional(
+    Type.Union([Type.Boolean(), Type.Literal("auto"), Type.Literal("ultrafast")]),
+  ),
 });
 
 /** Companion answer returned only to the requesting operator. */
@@ -154,6 +164,8 @@ export const SessionsCompanionStateParamsSchema = closedObject({
 
 export const SessionsCompanionStateResultSchema = closedObject({
   exchanges: Type.Array(SessionCompanionExchangeSchema, { maxItems: 24 }),
+  /** Model Side chat answers with when a question names none; absent when unavailable. */
+  defaultModel: Type.Optional(NonEmptyString),
 });
 
 /** Selects the in-memory companion thread to clear. */
@@ -268,7 +280,7 @@ export const SessionsFilesDownloadResultSchema = closedObject({
   expiresAt: NonEmptyString,
 });
 
-export const SESSIONS_FILES_ASSETS_MAX_REFS = 64;
+export { SESSIONS_FILES_ASSETS_MAX_REFS } from "../session-limits.js";
 export const SESSIONS_FILES_ASSET_MAX_BYTES = 1024 * 1024;
 export const SESSIONS_FILES_ASSETS_MAX_TOTAL_BYTES = 4 * 1024 * 1024;
 
@@ -357,6 +369,8 @@ export const SessionsDiffParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   scope: Type.Optional(SessionDiffScopeSchema),
   commit: Type.Optional(NonEmptyString),
+  /** File metadata and line counts only; skip patches and branch history. */
+  summaryOnly: Type.Optional(Type.Boolean()),
 });
 
 /** Branch + working-tree diff for one session checkout. */

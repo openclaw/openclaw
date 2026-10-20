@@ -12,6 +12,7 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -30,7 +31,7 @@ import { createBoardHandlers } from "./server-methods/board.js";
 import { createProgressCardHandlers } from "./server-methods/progress-card.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
 import type { GatewayRequestContext, RespondFn } from "./server-methods/types.js";
-import { createLifecycleEventBroadcastHandler } from "./server-session-events.js";
+import { createLifecycleEventBroadcastHandler } from "./server-session-lifecycle-events.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { createSessionObserverAudience } from "./session-observer-audience.js";
@@ -48,6 +49,7 @@ import {
 } from "./session-sharing.test-utils.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
 import { resolveSessionSubscriptionKeys } from "./session-subscription-keys.js";
+import { claimRpcSourceForTest, createRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 type Peer = ReturnType<typeof makeClient>;
 const readPeer = (name: string) => makeClient(name, "operator", ["operator.read"]);
@@ -111,6 +113,7 @@ describe("board event scope guards", () => {
     const { broadcast } = createGatewayBroadcaster({ clients });
 
     broadcast("board.changed", { sessionKey: "agent:main:main", revision: 1 });
+    broadcast("sessions.processes.changed", { sessionKey: "agent:main:main", agentId: "main" });
     broadcast("board.command", {
       sessionKey: "agent:main:main",
       command: { kind: "focus_tab", tabId: "main" },
@@ -118,15 +121,17 @@ describe("board event scope guards", () => {
 
     expect(pairing.socket.events).toEqual([]);
     expect(node.socket.events).toEqual([]);
-    expect(read.socket.events).toEqual(["board.changed", "board.command"]);
-    expect(write.socket.events).toEqual(["board.changed", "board.command"]);
-    expect(admin.socket.events).toEqual(["board.changed", "board.command"]);
+    const events = ["board.changed", "sessions.processes.changed", "board.command"];
+    expect(read.socket.events).toEqual(events);
+    expect(write.socket.events).toEqual(events);
+    expect(admin.socket.events).toEqual(events);
   });
 });
 
 describe("board and progress event session ownership", () => {
   it.each([
     { scope: "global", feature: "progress" },
+    { scope: "global", feature: "process" },
     { scope: "per-sender", feature: "board" },
   ] as const)(
     "delivers $feature events only to the canonical draft owner in $scope mode",
@@ -175,7 +180,6 @@ describe("board and progress event session ownership", () => {
           broadcastToConnIds,
           getRuntimeConfig: () => cfg,
           getSessionEventSubscriberConnIds: () => new Set(peers.map(({ client }) => client.connId)),
-          chatAbortControllers: new Map(),
           resolveGatewayContext: (): GatewayRequestContext => context,
         } as unknown as GatewayRequestContext;
         bindSessionRowProjection(context, connection.getSessionRowProjection);
@@ -200,6 +204,19 @@ describe("board and progress event session ownership", () => {
           });
         };
         try {
+          if (feature === "process") {
+            const target = { sessionKey: "global", agentId: "work" };
+            broadcast("sessions.processes.changed", target, {
+              sessionKeys: [target.sessionKey],
+              agentId: target.agentId,
+            });
+            expect(peers.map(frames)).toEqual([
+              [expect.objectContaining({ event: "sessions.processes.changed", payload: target })],
+              [],
+              [],
+            ]);
+            return;
+          }
           if (feature === "progress") {
             const rawWrite = await invoke("progressCard.put", {
               sessionKey: "global",
@@ -723,27 +740,25 @@ it("delivers committed collector updates to a parent-only cross-agent viewer", a
     peers.forEach(({ client }) => connection.clients.add(client));
     const { broadcastToConnIds } = connection;
     const publications: Promise<void>[] = [];
+    const parentSource = createRpcSourceForTest(
+      { projectSessionActive: true },
+      {
+        runId: "parent-run",
+        sessionId: "parent-viewer",
+        sessionKey: parent.sessionKey,
+        agentId: parent.agentId,
+        storeScope: rowProjection.capture({ key: parent.sessionKey, agentId: parent.agentId })!
+          .storeTarget.storePath,
+      },
+    );
+    const releaseParentRun = await claimRpcSourceForTest(parentSource);
+    rpcSourceTesting.reset([["parent-run", parentSource]]);
     const publish = createLifecycleEventBroadcastHandler({
       getSessionRowProjection: () => rowProjection,
       broadcastToConnIds,
       sessionEventSubscribers: {
         getAll: () => new Set(peers.map(({ client }) => client.connId)),
       },
-      chatAbortControllers: new Map([
-        [
-          "parent-run",
-          {
-            controller: new AbortController(),
-            sessionId: "parent-viewer",
-            sessionKey: parent.sessionKey,
-            agentId: parent.agentId,
-            startedAtMs: 1,
-            expiresAtMs: Date.now() + 60_000,
-            projectSessionActive: true,
-            executionStarted: true,
-          },
-        ],
-      ]),
     });
     const unsubscribe = onSessionLifecycleEvent((event) => {
       publications.push(publish(event));
@@ -808,6 +823,7 @@ it("delivers committed collector updates to a parent-only cross-agent viewer", a
     } finally {
       unsubscribe();
       await Promise.allSettled(publications);
+      releaseParentRun();
       detach();
       rowProjection.dispose();
       await connection.mentionInbox.dispose();

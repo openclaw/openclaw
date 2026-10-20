@@ -15,6 +15,7 @@ import {
 describe("GitHub preview decoration cache", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it("shares anonymous avatars across distinct previews while keeping metadata credential-scoped", async () => {
@@ -159,8 +160,10 @@ describe("GitHub preview decoration cache", () => {
   });
 
   it.each(["issue", "pull"] as const)(
-    "reuses unchanged %s decoration without extending its five-minute age",
+    "refreshes expired %s decoration without blocking readers or extending its age",
     async (kind) => {
+      vi.useFakeTimers();
+      const refreshed = createDeferred<void>();
       let now = Date.now();
       vi.spyOn(Date, "now").mockImplementation(() => now);
       let avatarReads = 0;
@@ -170,6 +173,9 @@ describe("GitHub preview decoration cache", () => {
         const url = requestUrl(input);
         if (url.includes("avatars.githubusercontent.com")) {
           avatarReads += 1;
+          if (avatarVersion === 2) {
+            await refreshed.promise;
+          }
           return new Response(new Uint8Array([avatarVersion]), {
             headers: { "Content-Type": "image/png" },
           });
@@ -217,6 +223,17 @@ describe("GitHub preview decoration cache", () => {
       }
       now += 1;
       avatarVersion = 2;
+      const delivered = vi.fn();
+      const readers = Promise.all([load(), load()]).then(delivered);
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        expect(delivered).toHaveBeenCalledExactlyOnceWith([first, first]);
+        expect(avatarReads).toBe(2 * coldReads);
+      } finally {
+        refreshed.resolve();
+        await vi.advanceTimersByTimeAsync(0);
+        await readers;
+      }
       expect(await load()).toEqual({
         ...first,
         avatarDataUrl: "data:image/png;base64,Ag==",
@@ -230,7 +247,7 @@ describe("GitHub preview decoration cache", () => {
           : {}),
       });
       expect(avatarReads).toBe(2 * coldReads);
-      expect(metadataReads).toBe(kind === "pull" ? 10 : 5);
+      expect(metadataReads).toBe(kind === "pull" ? 14 : 7);
     },
   );
 

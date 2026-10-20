@@ -31,7 +31,13 @@ import {
   rejectSessionGitHubRedirect,
   type SessionGitHubReadIdentity,
 } from "./session-reader.js";
-import { githubTargetUrl, parseGitHubTarget, type GitHubTarget } from "./targets.js";
+import {
+  githubTargetUrl,
+  parseGitHubTarget,
+  type GitHubTarget,
+  type GitHubReadTarget,
+  type GitHubJobTarget,
+} from "./targets.js";
 import { githubPreviewView, githubChangeMetadata } from "./view-model.js";
 type GitHubComment = NonNullable<ControlUiLinkReaderDocument["comments"]>[number];
 type GitHubFile = NonNullable<ControlUiLinkReaderDocument["files"]>[number];
@@ -84,14 +90,14 @@ function redirectedRepositoryUrl(url: URL, suffix: string): string {
 async function readPublicRepository(
   url: string,
   fetchImpl: typeof fetch,
-  identity: ControlUiGitHubPreviewIdentity,
+  identity: ControlUiGitHubPreviewIdentity | undefined,
   expectedId?: number,
 ): Promise<number> {
   const repository = await readGitHubJsonResponse(
     await fetchGitHubApi(
       url,
       fetchImpl,
-      identity.token,
+      identity?.token,
       async (redirect) => {
         redirectedRepositoryUrl(redirect, "");
       },
@@ -592,19 +598,41 @@ export function loadGitHubDetail(
   refresh?: boolean,
 ): Promise<GitHubDocument>;
 export function loadGitHubDetail(
-  target: GitHubTarget,
+  target: GitHubJobTarget,
+  identity?: ControlUiGitHubPreviewIdentity,
+  fetchImpl?: typeof fetch,
+  refresh?: boolean,
+): Promise<ControlUiLinkReaderDocument>;
+export function loadGitHubDetail(
+  target: GitHubReadTarget,
   identity: ControlUiGitHubPreviewIdentity | undefined,
   fetchImpl: typeof fetch | undefined,
   refresh: boolean | undefined,
   section: GitHubDetailSection | undefined,
 ): Promise<ControlUiLinkReaderDocument>;
 export function loadGitHubDetail(
-  target: GitHubTarget,
+  target: GitHubReadTarget,
   identity?: ControlUiGitHubPreviewIdentity,
   fetchImpl: typeof fetch = fetch,
   refresh = false,
   section?: GitHubDetailSection,
 ): Promise<ControlUiLinkReaderDocument> {
+  if (target.kind === "job") {
+    const load = async (selected: ControlUiGitHubPreviewIdentity | undefined) => {
+      const { loadGitHubJobLog } = await import("./job-logs.js");
+      return loadGitHubJobLog(target, selected, fetchImpl, async (expectedId) =>
+        readPublicRepository(
+          `${GITHUB_API_ORIGIN}/repos/${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repo)}`,
+          fetchImpl,
+          selected,
+          expectedId,
+        ),
+      );
+    };
+    return identity?.optionalAuth
+      ? withOptionalGitHubAuth(identity.token, (token) => load({ ...identity, token }))
+      : load(identity);
+  }
   return identity?.optionalAuth
     ? withOptionalGitHubAuth(identity.token, (token) =>
         loadGitHubDetailWithIdentity(

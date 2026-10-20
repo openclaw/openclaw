@@ -12,6 +12,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { runClientCredentialOperation } from "./client-credential-store.js";
 import { resolveExecApprovalsPath } from "./exec-approvals-config.js";
 import { ExecApprovalsMigrationRequiredError } from "./exec-approvals-migration-gate.js";
 import {
@@ -117,12 +118,17 @@ it("imports nullable and absent usage metadata and releases the runtime gate", a
   const result = await migrate();
   expect(result).toMatchObject({
     warnings: [],
-    changes: ["Imported legacy exec approvals into shared SQLite state."],
+    changes: ["Imported legacy exec approvals policy and local socket credentials."],
     notices: ["Removed retired exec approvals JSON after recording its migration decision."],
   });
   const imported = loadExecApprovals();
   expect(imported.defaults).toMatchObject(expected.defaults);
-  expect(imported.socket).toEqual(expected.socket);
+  expect(imported.socket?.token).toBeUndefined();
+  expect(runClientCredentialOperation(env, { kind: "socket.read" })).toMatchObject({
+    kind: "socket",
+    socket: { socket_path: expected.socket.path, socket_token: expected.socket.token },
+  });
+  expect(readExecApprovalsConfigRow(database())?.raw_json).not.toContain(expected.socket.token);
   expect(imported.agents?.main?.allowlist).toEqual([
     { id: expect.any(String), pattern: "/usr/bin/rg" },
   ]);
@@ -172,7 +178,13 @@ it.each([
     token: socket?.token?.trim() || undefined,
   };
   if (canonical === "missing" && (expectedSocket.path || expectedSocket.token)) {
-    expect(loadExecApprovals().socket).toEqual(expectedSocket);
+    expect(runClientCredentialOperation(env, { kind: "socket.read" })).toMatchObject({
+      kind: "socket",
+      socket: {
+        socket_path: expectedSocket.path ?? null,
+        socket_token: expectedSocket.token ?? null,
+      },
+    });
   } else {
     expect(readExecApprovalsConfigRow(database())).toEqual(originalRow);
   }

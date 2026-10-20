@@ -1572,7 +1572,86 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(app.staticTexts[
             "Authentication failed. Review the provider credential or sign-in, then retry.",
         ].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["chat-model-sign-in"].exists)
         self.attachScreenshot(named: "chat-composer-model-auth-failed")
+    }
+
+    func testModelSignInMovesToModelMenuWhileSelectedModelCanSend() throws {
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: ["--openclaw-model-sign-in-fixture", "ordinary"])
+        let app = try XCTUnwrap(self.app)
+        let modelMenu = app.buttons["chat-composer-inline-model"]
+        XCTAssertTrue(modelMenu.waitForExistence(timeout: 8))
+        XCTAssertFalse(app.buttons["chat-model-sign-in"].exists)
+        self.attachScreenshot(named: "chat-composer-no-sign-in-row")
+        modelMenu.tap()
+        XCTAssertTrue(app.buttons["chat-model-sign-in"].waitForExistence(timeout: 3))
+        self.attachScreenshot(named: "chat-composer-model-menu-sign-in")
+        self.assertModelSignInSheetOpens(in: app)
+    }
+
+    func testModelSignInRemainsReachableDuringActiveResponse() throws {
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: [
+                "--openclaw-model-sign-in-fixture", "ordinary",
+                "--openclaw-hold-initial-chat-run", "--openclaw-startup-status-fixture",
+            ])
+        let app = try XCTUnwrap(self.app)
+        let input = self.chatMessageInput(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        input.tap()
+        input.typeText("Check the project.")
+        app.buttons["chat-send-message"].tap()
+        XCTAssertTrue(app.buttons["Stop response"].waitForExistence(timeout: 8))
+        self.openSignInMenuWithModelChangesDisabled(in: app)
+        self.attachScreenshot(named: "chat-model-sign-in-active-response")
+        self.assertModelSignInSheetOpens(in: app)
+        XCTAssertTrue(app.buttons["Stop response"].exists)
+        app.buttons["Stop response"].tap()
+    }
+
+    func testModelSignInRemainsReachableWithoutModelChoices() throws {
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: ["--openclaw-model-sign-in-fixture", "empty"])
+        let app = try XCTUnwrap(self.app)
+        let modelMenu = app.buttons["chat-composer-inline-model"]
+        XCTAssertTrue(modelMenu.waitForExistence(timeout: 8))
+        XCTAssertTrue(modelMenu.isEnabled, "Empty catalog must not disable sign-in")
+        modelMenu.tap()
+        self.assertModelSignInSheetOpens(in: app)
+    }
+
+    func testModelSignInRemainsReachableWithoutModelMutationPermission() throws {
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: ["--openclaw-model-sign-in-fixture", "read-only"])
+        let app = try XCTUnwrap(self.app)
+        self.openSignInMenuWithModelChangesDisabled(in: app)
+        self.assertModelSignInSheetOpens(in: app)
+    }
+
+    private func openSignInMenuWithModelChangesDisabled(in app: XCUIApplication) {
+        let modelMenu = app.buttons["chat-composer-inline-model"]
+        XCTAssertTrue(modelMenu.waitForExistence(timeout: 8))
+        XCTAssertTrue(modelMenu.isEnabled, "Model mutation restrictions must not disable sign-in")
+        modelMenu.tap()
+        let choice = app.buttons["anthropic/claude-opus-4-1"]
+        XCTAssertTrue(choice.waitForExistence(timeout: 3))
+        XCTAssertFalse(choice.isEnabled, "Opening sign-in must not enable restricted model changes")
+    }
+
+    private func assertModelSignInSheetOpens(in app: XCUIApplication) {
+        let signIn = app.buttons["chat-model-sign-in"]
+        XCTAssertTrue(signIn.waitForExistence(timeout: 3))
+        XCTAssertTrue(signIn.isEnabled)
+        signIn.tap()
+        XCTAssertTrue(app.staticTexts[
+            "No native sign-in options are available. Open Models in the Dashboard, or update the Gateway.",
+        ].waitForExistence(timeout: 5))
+        app.buttons["Close"].tap()
     }
 
     func testModelSelectionTargetVariantsPersistAcrossBothPickers() throws {

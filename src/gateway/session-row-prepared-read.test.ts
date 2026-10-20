@@ -61,13 +61,27 @@ function describeFixture() {
     context,
     methodRegistry: createRequestGatewayMethodRegistry(),
   };
-  return { projection, context, client, request };
+  const dispatch = (
+    req: Parameters<typeof handleGatewayRequest>[0]["req"],
+    respond: Parameters<typeof handleGatewayRequest>[0]["respond"],
+    extraHandlers = sessionByKeyReadHandlers,
+  ) =>
+    handleGatewayRequest({
+      req,
+      context,
+      client,
+      respond,
+      isWebchatConnect: () => false,
+      extraHandlers,
+    });
+  return { projection, context, client, request, dispatch };
 }
 
 async function withPendingStartupInspection(
   run: (
     fixture: ReturnType<typeof describeFixture> & {
       complete: () => void;
+      fail: (error: Error) => void;
       databasePath: string;
       admission: Parameters<Parameters<typeof withAgentDatabaseStartupAdmission>[0]>[0];
     },
@@ -108,7 +122,13 @@ async function withPendingStartupInspection(
     try {
       await runInDetachedAsyncContext(() => {
         expect(getAgentDatabaseStartupAdmission()).toBeUndefined();
-        return run({ ...fixture, complete, admission, databasePath: pathname });
+        return run({
+          ...fixture,
+          complete,
+          fail: inspection.reject,
+          admission,
+          databasePath: pathname,
+        });
       });
     } finally {
       complete();
@@ -120,6 +140,126 @@ async function withPendingStartupInspection(
   });
 }
 
+it("refuses a new session's initial message without retaining a startup write", async () => {
+  await withPendingStartupInspection(async ({ context, client, complete, admission }) => {
+    const handler = vi.fn<GatewayRequestHandler>(({ respond }) => {
+      assertAgentDatabaseAdmitted("main");
+      respond(true, { message: "accepted" });
+    });
+    const respond = vi.fn();
+    const request = handleGatewayRequest({
+      req: {
+        type: "req",
+        id: "startup-write",
+        method: "sessions.create",
+        params: { agentId: "main", message: "hello" },
+      },
+      context,
+      client,
+      respond,
+      isWebchatConnect: () => false,
+      extraHandlers: { "sessions.create": handler },
+    });
+    await request;
+    expect(handler).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledExactlyOnceWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "UNAVAILABLE",
+        retryable: true,
+        details: { reason: "startup-sidecars", method: "sessions.create" },
+      }),
+    );
+    complete();
+    await admission.pendingPreparation;
+    expect(handler).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledOnce();
+  });
+});
+
+it.each(["before", "after refusal"] as const)(
+  "preserves terminal inspection failure %s write authorization",
+  async (when) => {
+    await withPendingStartupInspection(async ({ request, fail, admission }) => {
+      const authorize = () =>
+        authorizeGatewayRequestPreDispatch({
+          ...request,
+          method: "sessions.send",
+          requestParams: { key: "agent:main:startup", message: "hello" },
+        });
+      if (when === "after refusal") {
+        await expect(authorize()).resolves.toMatchObject({
+          error: { code: "UNAVAILABLE", retryable: true },
+        });
+      }
+      fail(new Error("synthetic failed inspection"));
+      await admission.pendingPreparation;
+      await expect(authorize()).resolves.toMatchObject({
+        error: {
+          code: "UNAVAILABLE",
+          message: expect.stringContaining("synthetic failed inspection"),
+          retryable: false,
+        },
+      });
+    });
+  },
+);
+
+it("admits an unrelated agent's write while startup preparation continues", async () => {
+  await withPendingStartupInspection(async ({ request, context }) => {
+    context.getRuntimeConfig = () => ({ agents: { entries: { main: {}, ready: {} } } });
+    await expect(
+      authorizeGatewayRequestPreDispatch({
+        ...request,
+        method: "sessions.create",
+        requestParams: { agentId: "ready", message: "hello" },
+      }),
+    ).resolves.toMatchObject({ error: null });
+    expect(readAgentDatabaseAdmissionRefusal("main")?.code).toBe(
+      "agent-database-inspection-pending",
+    );
+  });
+});
+
+it("refuses a write while its logical agent's physical shared-store owner is pending", async () => {
+  await withPendingStartupInspection(
+    async ({ request, context, databasePath, complete, admission }) => {
+      const sharedConfig: OpenClawConfig = {
+        agents: {
+          ownership: "explicit",
+          entries: { main: {}, ops: {} },
+          defaults: { sessionStore: { agentId: "ops" } },
+        },
+        session: { scope: "global", store: databasePath },
+      };
+      context.getRuntimeConfig = () => sharedConfig;
+      vi.spyOn(sqliteTarget, "prepareSqliteTargetFromSessionStorePath").mockResolvedValue({
+        agentId: "main",
+        path: databasePath,
+        shared: true,
+      });
+      const authorize = () =>
+        authorizeGatewayRequestPreDispatch({
+          ...request,
+          method: "sessions.create",
+          requestParams: { agentId: "ops", message: "hello" },
+        });
+      await expect(authorize()).resolves.toMatchObject({
+        error: {
+          code: "UNAVAILABLE",
+          retryable: true,
+          details: { reason: "startup-sidecars", method: "sessions.create" },
+        },
+      });
+      expect(() => assertAgentDatabaseAdmitted("ops")).not.toThrow();
+      complete();
+      await admission.pendingPreparation;
+      await expect(authorize()).resolves.toMatchObject({ error: null });
+    },
+  );
+});
+
 it.each([
   ["sessions.list", { agentId: "main" }],
   ["sessions.resolve", { key: "agent:main:startup" }],
@@ -130,19 +270,14 @@ it.each([
 ] as const)(
   "holds %s reads until their startup inspection publishes (%j)",
   async (method, params) => {
-    await withPendingStartupInspection(async ({ context, client, complete }) => {
+    await withPendingStartupInspection(async ({ dispatch, complete }) => {
       const handler = vi.fn<GatewayRequestHandler>(({ respond }) => {
         assertAgentDatabaseAdmitted("main");
         respond(true, { read: "committed" });
       });
       const respond = vi.fn();
-      const request = handleGatewayRequest({
-        req: { type: "req", id: "startup-read", method, params },
-        context,
-        client,
-        respond,
-        isWebchatConnect: () => false,
-        extraHandlers: { [method]: handler },
+      const request = dispatch({ type: "req", id: "startup-read", method, params }, respond, {
+        [method]: handler,
       });
       await vi.advanceTimersByTimeAsync(0);
       expect(handler).not.toHaveBeenCalled();
@@ -157,17 +292,14 @@ it.each([
 );
 
 it("dispatches broad lists while an agent remains in startup preparation", async () => {
-  await withPendingStartupInspection(async ({ context, client }) => {
+  await withPendingStartupInspection(async ({ dispatch }) => {
     const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { sessions: [] }));
     const respond = vi.fn();
-    const request = handleGatewayRequest({
-      req: { type: "req", id: "broad-startup-list", method: "sessions.list", params: {} },
-      context,
-      client,
+    const request = dispatch(
+      { type: "req", id: "broad-startup-list", method: "sessions.list", params: {} },
       respond,
-      isWebchatConnect: () => false,
-      extraHandlers: { "sessions.list": handler },
-    });
+      { "sessions.list": handler },
+    );
     await vi.advanceTimersByTimeAsync(0);
     expect(handler).toHaveBeenCalledOnce();
     expect(respond).toHaveBeenCalledExactlyOnceWith(true, { sessions: [] });
@@ -371,7 +503,7 @@ it("preserves the admin dispatch shortcut without preparing private rows", async
 it.each(["dispatch scopes", "private access"] as const)(
   "rechecks %s after row preparation",
   async (boundary) => {
-    const { projection, context, client } = describeFixture();
+    const { projection, context, client, dispatch } = describeFixture();
     const prepare = projection.withPreparedExactRows.bind(projection);
     const describe = vi.spyOn(projection, "describe");
     if (boundary === "dispatch scopes") {
@@ -392,19 +524,15 @@ it.each(["dispatch scopes", "private access"] as const)(
     });
     if (boundary === "dispatch scopes") {
       const respond = vi.fn();
-      await handleGatewayRequest({
-        req: {
+      await dispatch(
+        {
           type: "req",
           id: "revoked-description",
           method: "sessions.describe",
           params: { key: query.key },
         },
-        context,
-        client,
         respond,
-        isWebchatConnect: () => false,
-        extraHandlers: sessionByKeyReadHandlers,
-      });
+      );
       expect(respond).toHaveBeenCalledExactlyOnceWith(
         false,
         undefined,
@@ -432,7 +560,7 @@ it.each(["dispatch scopes", "private access"] as const)(
 it.each(["operator.admin", "operator.read"])(
   "ends describe preparation after its %s connection closes",
   async (scope) => {
-    const { projection, context, client } = describeFixture();
+    const { projection, client, dispatch } = describeFixture();
     const connection = new AbortController();
     client.connect.scopes = [scope];
     client.connectionSignal = connection.signal;
@@ -446,19 +574,15 @@ it.each(["operator.admin", "operator.read"])(
       });
     const respond = vi.fn();
     try {
-      await handleGatewayRequest({
-        req: {
+      await dispatch(
+        {
           type: "req",
           id: "cancelled-description",
           method: "sessions.describe",
           params: { key: "agent:main:cancelled-read" },
         },
-        context,
-        client,
         respond,
-        isWebchatConnect: () => false,
-        extraHandlers: sessionByKeyReadHandlers,
-      });
+      );
       expect(prepare).toHaveBeenCalledOnce();
       expect(respond).not.toHaveBeenCalled();
     } finally {

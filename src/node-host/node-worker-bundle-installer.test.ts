@@ -705,6 +705,108 @@ describe("node worker bundle installer", () => {
     ).resolves.toContain(fixture.input.build.bundleHash);
   });
 
+  it("shares an in-flight prewarmed bundle check without sharing cancellation or later trust", async () => {
+    const fixture = await bundleFixture({ bundlePrewarm: 1 });
+    const served = await serve(fixture.archive, fixture.input.archive.token);
+    const installer = new NodeWorkerBundleInstaller({ root });
+    const install = { input: fixture.input, gatewayUrl: served.gatewayUrl };
+    await installer.ensure(install);
+    const bundleDir = path.join(
+      root,
+      fixture.input.gatewayNamespace,
+      "bundles",
+      fixture.input.build.bundleHash,
+    );
+    const controller = new AbortController();
+    const readdir = fs.readdir.bind(fs);
+    let scans = 0;
+    vi.spyOn(fs, "readdir").mockImplementation(async (...args) => {
+      if (args[0] === bundleDir) {
+        scans++;
+        controller.abort(new Error("one workspace cancelled"));
+      }
+      return await readdir(...args);
+    });
+
+    const results = await Promise.allSettled(
+      Array.from({ length: 12 }, (_, index) =>
+        installer.ensure({ ...install, ...(index === 0 ? { signal: controller.signal } : {}) }),
+      ),
+    );
+    expect(results[0]).toMatchObject({
+      status: "rejected",
+      reason: expect.objectContaining({
+        message: expect.stringContaining("one workspace cancelled"),
+      }),
+    });
+    expect(results.slice(1)).toEqual(
+      Array.from({ length: 11 }, () => ({ status: "fulfilled", value: fixture.input.build })),
+    );
+    expect(scans).toBe(1);
+    await expect(
+      installer.retain({
+        gatewayNamespace: fixture.input.gatewayNamespace,
+        bundleHashes: [fixture.input.build.bundleHash],
+      }),
+    ).resolves.toMatchObject({ generation: 12 });
+
+    // A later request must hash the files again, including same-length edits.
+    await fs.writeFile(path.join(bundleDir, "worker.mjs"), "export {};!");
+    await installer.ensure(install);
+    expect(served.requests).toHaveBeenCalledTimes(2);
+    await expect(fs.readFile(path.join(bundleDir, "worker.mjs"), "utf8")).resolves.toBe(
+      "export {};\n",
+    );
+  });
+
+  it("validates again when retention separates overlapping install requests", async ({
+    signal,
+  }) => {
+    const fixture = await bundleFixture({ bundlePrewarm: 1 });
+    const served = await serve(fixture.archive, fixture.input.archive.token);
+    const installer = new NodeWorkerBundleInstaller({ root });
+    const install = { input: fixture.input, gatewayUrl: served.gatewayUrl };
+    await installer.ensure(install);
+    const bundleDir = path.join(
+      root,
+      fixture.input.gatewayNamespace,
+      "bundles",
+      fixture.input.build.bundleHash,
+    );
+    const scanning = createDeferredCore();
+    const release = createDeferredCore();
+    const readdir = fs.readdir.bind(fs);
+    let blocked = false;
+    vi.spyOn(fs, "readdir").mockImplementation(async (...args) => {
+      if (args[0] === bundleDir && !blocked) {
+        blocked = true;
+        scanning.resolve();
+        await release.promise;
+      }
+      return await readdir(...args);
+    });
+    const first = installer.ensure(install);
+    try {
+      await withinTest(scanning.promise, signal);
+      const retained = installer.retain({
+        gatewayNamespace: fixture.input.gatewayNamespace,
+        bundleHashes: [],
+      });
+      const second = installer.ensure(install);
+      release.resolve();
+      await expect(first).resolves.toEqual(fixture.input.build);
+      await expect(retained).resolves.toMatchObject({ deleted: 1 });
+      await expect(second).resolves.toEqual(fixture.input.build);
+      expect(served.requests).toHaveBeenCalledTimes(2);
+      await expect(fs.readFile(path.join(bundleDir, "worker.mjs"), "utf8")).resolves.toBe(
+        "export {};\n",
+      );
+    } finally {
+      release.resolve();
+      await first;
+    }
+  });
+
   it("prewarms bundles with managed cache behind a host compile-cache fence", async () => {
     const prewarmMarker = path.join(root, "worker-prewarmed-with-managed-cache");
     const fixture = await bundleFixture({

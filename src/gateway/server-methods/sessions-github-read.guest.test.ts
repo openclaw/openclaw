@@ -1,36 +1,18 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 import { setCanonicalUserProfileRole } from "../../state/user-profile-writes.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
-import * as publicationAvailability from "../github-publication-availability.js";
 import {
-  publisher,
+  mockPublicationIdentity,
   receipt,
   sessionKey,
+  withHeldReceipt,
   withReadFixture,
 } from "./sessions-github-read.test-support.js";
 
-beforeEach(() => {
-  vi.spyOn(
-    publicationAvailability,
-    "prepareCurrentGitHubPublicationOptionsIdentity",
-  ).mockResolvedValue({
-    source: publisher.source,
-    account: { accountId: publisher.accountId, login: publisher.login, avatarUrl: null },
-  });
-});
+beforeEach(mockPublicationIdentity);
 afterEach(() => vi.restoreAllMocks());
-
-const methods = ["sessions.github.options", "sessions.github.status"] as const;
-function params(method: (typeof methods)[number]) {
-  return {
-    sessionKey,
-    ...(method === "sessions.github.status" ? { requestId: receipt.result.requestId } : {}),
-  };
-}
 
 function expectNoPersonalReads(fixture: Parameters<Parameters<typeof withReadFixture>[0]>[0]) {
   expect(fixture.personalConnectionStatus).not.toHaveBeenCalled();
@@ -40,31 +22,22 @@ function expectNoPersonalReads(fixture: Parameters<Parameters<typeof withReadFix
   expect(fixture.requestForSession).not.toHaveBeenCalled();
 }
 
-describe.each(methods)("registered guest %s", (method) => {
+describe.each(["options", "status"] as const)("registered guest sessions.github.%s", (method) => {
   it.each([
-    { scope: "operator.sessions.read", foreign: false, others: "view", missing: false },
-    { scope: "operator.sessions.write", foreign: false, others: "view", missing: false },
-    { scope: "operator.sessions.write", foreign: true, others: "view", missing: false },
-    { scope: "operator.sessions.write", foreign: true, others: "none", missing: false },
-    ...(method === "sessions.github.status"
-      ? [
-          {
-            scope: "operator.sessions.write",
-            foreign: false,
-            others: "view",
-            missing: true,
-          } as const,
-        ]
-      : []),
+    ["read", false, "view", false],
+    ["write", false, "view", false],
+    ["write", true, "view", false],
+    ["write", true, "none", false],
+    ...(method === "status" ? [["write", false, "view", true] as const] : []),
   ] as const)(
-    "keeps $scope foreign=$foreign others=$others missing=$missing visibility and personal boundaries",
-    async ({ scope, foreign, others, missing }) => {
+    "keeps %s foreign=%s others=%s missing=%s visibility and personal boundaries",
+    async (scope, foreign, others, missing) => {
       await withReadFixture(
         async (fixture) => {
           if (missing) {
             fixture.sharedStatus.mockResolvedValue(undefined);
           }
-          const respond = await fixture.invoke(method, params(method));
+          const respond = await fixture[method]();
           if (foreign && others === "none") {
             expect(respond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
             expect(fixture.latestShared).not.toHaveBeenCalled();
@@ -79,7 +52,7 @@ describe.each(methods)("registered guest %s", (method) => {
           } else {
             expect(respond).toHaveBeenCalledWith(
               true,
-              method === "sessions.github.options"
+              method === "options"
                 ? {
                     personal: null,
                     shared: null,
@@ -92,7 +65,7 @@ describe.each(methods)("registered guest %s", (method) => {
           }
           expectNoPersonalReads(fixture);
         },
-        { personal: true, scopes: [scope], others, foreign },
+        { personal: true, scopes: [`operator.sessions.${scope}`], others, foreign },
       );
     },
   );
@@ -109,57 +82,40 @@ describe.each(methods)("registered guest %s", (method) => {
               assertCurrent: () => granted.signal.throwIfAborted(),
             },
           };
-          const entered = createDeferredCore();
-          const pending = createDeferredCore<typeof receipt>();
-          const sharedRead =
-            method === "sessions.github.options" ? fixture.latestShared : fixture.sharedStatus;
-          sharedRead.mockImplementationOnce(() => {
-            entered.resolve();
-            return pending.promise;
-          });
-          const respond = vi.fn();
-          const request = fixture.invoke(method, params(method), respond);
-          try {
-            await awaitGateBeforeSettlement(entered.promise, request, "Receipt read did not start");
-            expect(respond).not.toHaveBeenCalled();
-            if (change === "scope") {
-              fixture.client.connect.scopes = [];
-            } else if (change === "role") {
-              await setCanonicalUserProfileRole(
-                expectDefined(fixture.client.authenticatedUserProfile, "guest profile").profileId,
-                "blocked",
+          await withHeldReceipt(
+            fixture,
+            method === "options" ? "shared" : "status",
+            async (respond, release) => {
+              const profile = expectDefined(
+                fixture.client.authenticatedUserProfile,
+                "guest profile",
               );
-            } else if (change === "profile") {
-              expectDefined(fixture.client.authenticatedUserProfile, "guest profile").profileId =
-                ensureProfileForEmail("replacement-publication-reader@example.test").id;
-            } else if (change === "grant") {
-              granted.abort();
-            } else if (change === "connection") {
-              fixture.disconnect();
-            } else if (change === "visibility") {
-              await upsertSessionEntryCore(
-                { agentId: "main", sessionKey },
-                { visibility: "draft" },
+              const updateSession = (patch: Parameters<typeof upsertSessionEntryCore>[1]) =>
+                upsertSessionEntryCore({ agentId: "main", sessionKey }, patch);
+              await {
+                scope: () => {
+                  fixture.client.connect.scopes = [];
+                },
+                role: () => setCanonicalUserProfileRole(profile.profileId, "blocked"),
+                profile: () => {
+                  profile.profileId = ensureProfileForEmail(
+                    "replacement-publication-reader@example.test",
+                  ).id;
+                },
+                grant: () => granted.abort(),
+                connection: fixture.disconnect,
+                visibility: () => updateSession({ visibility: "draft" }),
+                lifecycle: () => updateSession({ lifecycleRevision: "replaced-publication" }),
+              }[change]();
+              await release(receipt);
+              expect(respond).toHaveBeenCalledExactlyOnceWith(
+                false,
+                undefined,
+                expect.objectContaining({ code: "FORBIDDEN" }),
               );
-            } else {
-              await upsertSessionEntryCore(
-                { agentId: "main", sessionKey },
-                { lifecycleRevision: "replaced-publication" },
-              );
-            }
-            pending.resolve(receipt);
-            await request;
-            expect(sharedRead).toHaveBeenCalledOnce();
-            expect(respond).toHaveBeenCalledExactlyOnceWith(
-              false,
-              undefined,
-              expect.objectContaining({ code: "FORBIDDEN" }),
-            );
-            expectNoPersonalReads(fixture);
-          } finally {
-            pending.resolve(receipt);
-            await request;
-          }
+              expectNoPersonalReads(fixture);
+            },
+          );
         },
         {
           personal: true,

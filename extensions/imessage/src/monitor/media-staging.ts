@@ -4,6 +4,7 @@ import type { ChannelInboundMediaInput } from "openclaw/plugin-sdk/channel-inbou
 import { readFileHandleBounded } from "openclaw/plugin-sdk/file-access-runtime";
 import { isInboundPathAllowed, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { FsSafeError, openLocalFileSafely } from "openclaw/plugin-sdk/security-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
@@ -12,10 +13,6 @@ import type { IMessageAttachment } from "./types.js";
 type StagedIMessageAttachments = {
   attachments: ChannelInboundMediaInput[];
   unavailableCount: number;
-};
-
-type StageIMessageAttachmentsDeps = {
-  logVerbose?: (message: string) => void;
 };
 
 function createTypeOnlyIMessageAttachment(
@@ -39,7 +36,6 @@ async function readAttachmentBuffer(params: {
   mimeType?: string | null;
   maxBytes: number;
   allowedRoots?: readonly string[];
-  deps: StageIMessageAttachmentsDeps;
 }): Promise<{ buffer: Buffer; contentType?: string; originalFilename?: string }> {
   await using opened = await openLocalFileSafely({
     filePath: params.attachmentPath,
@@ -93,7 +89,7 @@ async function readAttachmentBuffer(params: {
         originalFilename: `${path.parse(params.attachmentPath).name || "imessage-attachment"}.jpg`,
       };
     } catch (err) {
-      params.deps.logVerbose?.(
+      logVerbose(
         `imessage: HEIC attachment conversion failed; staging original instead: ${String(err)}`,
       );
     }
@@ -111,10 +107,8 @@ export async function stageIMessageAttachments(
   params: {
     maxBytes: number;
     allowedRoots?: readonly string[];
-    deps?: StageIMessageAttachmentsDeps;
   },
 ): Promise<StagedIMessageAttachments> {
-  const deps = params.deps ?? {};
   const staged: ChannelInboundMediaInput[] = [];
   let unavailableCount = 0;
 
@@ -132,7 +126,6 @@ export async function stageIMessageAttachments(
         mimeType: attachment.mime_type,
         maxBytes: params.maxBytes,
         allowedRoots: params.allowedRoots,
-        deps,
       });
       const saved = await saveMediaBuffer(
         media.buffer,
@@ -150,7 +143,7 @@ export async function stageIMessageAttachments(
     } catch (err) {
       unavailableCount += 1;
       staged.push(createTypeOnlyIMessageAttachment(attachment));
-      deps.logVerbose?.(`imessage: failed to stage inbound attachment: ${String(err)}`);
+      logVerbose(`imessage: failed to stage inbound attachment: ${String(err)}`);
     }
   }
 

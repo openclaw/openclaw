@@ -73,12 +73,8 @@ function isDashboardSessionKey(sessionKey: string): boolean {
 }
 
 function isSameAgentSessionStore(leftSessionKey: string, rightSessionKey: string): boolean {
-  const leftAgentId = normalizeOptionalLowercaseString(
-    parseAgentSessionKey(leftSessionKey)?.agentId,
-  );
-  const rightAgentId = normalizeOptionalLowercaseString(
-    parseAgentSessionKey(rightSessionKey)?.agentId,
-  );
+  const leftAgentId = parseAgentSessionKey(leftSessionKey)?.agentId;
+  const rightAgentId = parseAgentSessionKey(rightSessionKey)?.agentId;
   return Boolean(leftAgentId) && leftAgentId === rightAgentId;
 }
 
@@ -161,8 +157,6 @@ export function resolveSubagentCapabilities(params: { depth: number; maxSpawnDep
     depth,
     role,
     controlScope,
-    canSpawn: role === "main" || role === "orchestrator",
-    canControlChildren: controlScope === "children",
   };
 }
 

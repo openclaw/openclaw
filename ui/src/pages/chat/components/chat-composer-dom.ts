@@ -1,19 +1,9 @@
+import { listen } from "../../../lib/reactive/listener.ts";
 import { captureChatSessionScrollPosition } from "../scroll.ts";
 import { publishTranscriptScroll } from "./chat-transcript-scroll-events.ts";
 
-const COMPOSER_CHROME_INTERACTIVE_SELECTOR = [
-  "a[href]",
-  "button",
-  "input",
-  "select",
-  "textarea",
-  "summary",
-  "[contenteditable='true']",
-  "[role='button']",
-  "[role='menu']",
-  "[role='listbox']",
-  "[role='option']",
-].join(",");
+const COMPOSER_CHROME_INTERACTIVE_SELECTOR =
+  "a[href],button,input,select,textarea,summary,[contenteditable='true'],[role='button'],[role='menu'],[role='listbox'],[role='option']";
 
 type ComposerTextareaResizeObserverState = {
   observer: ResizeObserver | null;
@@ -23,13 +13,13 @@ type ComposerTextareaResizeObserverState = {
   nativeInputPending: boolean;
   hasScrollbarGutter: boolean;
   editing: boolean;
-  events: AbortController;
+  getTranscriptElement: () => HTMLElement | null;
 };
 
 type ComposerPopoverAnchorObserverState = {
   resizeObserver: ResizeObserver | null;
   toggleObserver: MutationObserver | null;
-  viewport: VisualViewport | null;
+  stopViewportListeners: () => void;
   updateFrame: number | null;
   scheduleUpdate: () => void;
 };
@@ -71,7 +61,7 @@ function observeComposerPopoverAnchor(el: HTMLElement) {
   const state: ComposerPopoverAnchorObserverState = {
     resizeObserver: null,
     toggleObserver: null,
-    viewport,
+    stopViewportListeners: () => {},
     updateFrame: null,
     scheduleUpdate: () => {
       if (state.updateFrame !== null) {
@@ -97,9 +87,14 @@ function observeComposerPopoverAnchor(el: HTMLElement) {
       subtree: true,
     });
   }
-  window.addEventListener("resize", state.scheduleUpdate);
-  viewport?.addEventListener("resize", state.scheduleUpdate);
-  viewport?.addEventListener("scroll", state.scheduleUpdate);
+  const stopResize = listen(window, "resize", state.scheduleUpdate);
+  const stopViewportResize = viewport && listen(viewport, "resize", state.scheduleUpdate);
+  const stopViewportScroll = viewport && listen(viewport, "scroll", state.scheduleUpdate);
+  state.stopViewportListeners = () => {
+    stopResize();
+    stopViewportResize?.();
+    stopViewportScroll?.();
+  };
   composerPopoverAnchorObservers.set(el, state);
   updateComposerPopoverAnchor(el);
 }
@@ -112,9 +107,7 @@ export function disconnectComposerPopoverAnchorObserver(el: HTMLElement) {
   }
   state.resizeObserver?.disconnect();
   state.toggleObserver?.disconnect();
-  window.removeEventListener("resize", state.scheduleUpdate);
-  state.viewport?.removeEventListener("resize", state.scheduleUpdate);
-  state.viewport?.removeEventListener("scroll", state.scheduleUpdate);
+  state.stopViewportListeners();
   if (state.updateFrame !== null) {
     cancelAnimationFrame(state.updateFrame);
   }
@@ -139,7 +132,7 @@ function invalidateNativeTextareaLayout(
   state: ComposerTextareaResizeObserverState,
 ) {
   state.nativeInputPending = true;
-  const thread = el.closest(".chat")?.querySelector<HTMLElement>(".chat-thread");
+  const thread = state.getTranscriptElement();
   if (thread) {
     publishTranscriptScroll(thread, { type: "composer-input" });
   }
@@ -208,7 +201,7 @@ function updateTextareaOverflow(
     state.height = clientHeight;
     if (state.nativeInputPending) {
       state.nativeInputPending = false;
-      const thread = el.closest(".chat")?.querySelector<HTMLElement>(".chat-thread");
+      const thread = state.getTranscriptElement();
       if (thread) {
         publishTranscriptScroll(thread, { type: "composer-layout", changed });
       }
@@ -218,7 +211,7 @@ function updateTextareaOverflow(
 
 export function adjustTextareaHeight(
   el: HTMLTextAreaElement,
-  options: { nativeInput?: boolean } = {},
+  options: { nativeInput?: boolean; getTranscriptElement?: () => HTMLElement | null } = {},
 ) {
   // A surface that declares the compact shape is a fixed CSS box: it holds one
   // line whatever the draft is, so an inline height left by an earlier measured
@@ -234,8 +227,8 @@ export function adjustTextareaHeight(
   // Modern engines can size the textarea from its content in the normal layout
   // pass. Do not force repeated transcript and textarea layout reads on every
   // keystroke when that native path is available.
-  const thread = el.closest(".chat")?.querySelector<HTMLElement>(".chat-thread") ?? null;
   const state = composerTextareaResizeObservers.get(el);
+  const thread = options.getTranscriptElement?.() ?? state?.getTranscriptElement() ?? null;
   if (options.nativeInput && state && hasNativeTextareaContentSizing(el)) {
     invalidateNativeTextareaLayout(el, state);
     if (el.style.height !== "") {
@@ -325,7 +318,10 @@ export function adjustTextareaHeight(
   }
 }
 
-export function observeTextareaOverflow(el: HTMLTextAreaElement) {
+export function observeTextareaOverflow(
+  el: HTMLTextAreaElement,
+  getTranscriptElement: () => HTMLElement | null = () => null,
+) {
   if (composerTextareaResizeObservers.has(el)) {
     return;
   }
@@ -337,10 +333,9 @@ export function observeTextareaOverflow(el: HTMLTextAreaElement) {
     nativeInputPending: false,
     hasScrollbarGutter: false,
     editing: false,
-    events: new AbortController(),
+    getTranscriptElement,
   };
   let width = el.getBoundingClientRect().width;
-  const onScroll = () => updateTextareaOverflow(el, false);
   state.observer =
     typeof ResizeObserver === "function"
       ? new ResizeObserver(() => {
@@ -363,41 +358,39 @@ export function observeTextareaOverflow(el: HTMLTextAreaElement) {
           updateTextareaOverflow(el, false);
         })
       : null;
-  // Native caret scrolling can leave the active line inside the fade. Typing
-  // and keyboard selection both need that line unfaded; only pointer browsing
-  // or blur restores fades, not moving the caret within an already visible line.
-  const onInteraction = (event: Event) => {
-    if (
-      event instanceof KeyboardEvent &&
-      (event.isComposing ||
-        !/^(ArrowUp|ArrowDown|ArrowLeft|ArrowRight|PageUp|PageDown|Home|End)$/u.test(event.key))
-    ) {
-      return;
-    }
-    state.editing = ["beforeinput", "input", "compositionstart", "keydown"].includes(event.type);
-    if (event.type === "beforeinput" && hasNativeTextareaContentSizing(el)) {
-      // Retain the transcript owner's committed end intent before native caret
-      // scrolling can move an ancestor. This signal performs no layout reads.
-      invalidateNativeTextareaLayout(el, state);
-    }
-    updateTextareaOverflow(el);
-  };
-  const eventOptions = { passive: true, signal: state.events.signal };
-  for (const type of [
-    "beforeinput",
-    "input",
-    "compositionstart",
-    "wheel",
-    "pointerdown",
-    "keydown",
-    "blur",
-  ]) {
-    el.addEventListener(type, onInteraction, eventOptions);
-  }
-  el.addEventListener("scroll", onScroll, eventOptions);
   composerTextareaResizeObservers.set(el, state);
   state.observer?.observe(el);
   updateTextareaOverflow(el);
+}
+
+// Native caret edits stay unfaded until pointer browsing or blur restores the fades.
+type TextareaEvent = Event & { currentTarget: HTMLTextAreaElement };
+
+export function handleTextareaOverflowInteraction(event: TextareaEvent) {
+  const el = event.currentTarget;
+  const state = composerTextareaResizeObservers.get(el);
+  if (!state) {
+    return;
+  }
+
+  if (
+    event instanceof KeyboardEvent &&
+    (event.isComposing ||
+      !/^(ArrowUp|ArrowDown|ArrowLeft|ArrowRight|PageUp|PageDown|Home|End)$/u.test(event.key))
+  ) {
+    return;
+  }
+  state.editing = ["beforeinput", "input", "compositionstart", "keydown"].includes(event.type);
+  if (event.type === "beforeinput" && hasNativeTextareaContentSizing(el)) {
+    // Retain the transcript owner's committed end intent before native caret
+    // scrolling can move an ancestor. This signal performs no layout reads.
+    invalidateNativeTextareaLayout(el, state);
+  }
+  updateTextareaOverflow(el);
+}
+
+export function handleTextareaOverflowScroll(event: TextareaEvent) {
+  updateTextareaOverflow(event.currentTarget, false);
 }
 
 export function disconnectTextareaOverflowObserver(el: HTMLTextAreaElement) {
@@ -407,7 +400,6 @@ export function disconnectTextareaOverflowObserver(el: HTMLTextAreaElement) {
     return;
   }
   state.observer?.disconnect();
-  state.events.abort();
   for (const frame of [state.adjustmentFrame, state.overflowFrame]) {
     if (frame !== null) {
       cancelAnimationFrame(frame);
@@ -416,8 +408,8 @@ export function disconnectTextareaOverflowObserver(el: HTMLTextAreaElement) {
 }
 
 export function scheduleTextareaHeightAdjustment(el: HTMLTextAreaElement) {
-  // Lit invokes ref callbacks before the textarea is connected and before its
-  // controlled value is committed, so measure once the render has settled.
+  // Refs run before connection and before the controlled value commits.
+  // Measure once the render has settled.
   queueMicrotask(() => {
     if (el.isConnected) {
       adjustTextareaHeight(el, { nativeInput: true });
@@ -425,7 +417,11 @@ export function scheduleTextareaHeightAdjustment(el: HTMLTextAreaElement) {
   });
 }
 
-export function focusComposerFromChrome(event: MouseEvent | PointerEvent, connected: boolean) {
+export function focusComposerFromChrome(
+  event: MouseEvent | PointerEvent,
+  connected: boolean,
+  textarea: HTMLTextAreaElement | null = null,
+) {
   if (event.defaultPrevented) {
     return;
   }
@@ -452,23 +448,7 @@ export function focusComposerFromChrome(event: MouseEvent | PointerEvent, connec
   ) {
     return;
   }
-  const currentTarget = event.currentTarget;
-  if (!(currentTarget instanceof HTMLElement)) {
-    return;
-  }
-  currentTarget
-    .querySelector<HTMLTextAreaElement>(".agent-chat__composer-combobox > textarea")
-    ?.focus({ preventScroll: true });
-}
-
-export function preserveComposerFocusOnPrimaryAction(
-  event: PointerEvent,
-  textarea: HTMLTextAreaElement | null,
-): void {
-  const composerShell = textarea?.closest<HTMLElement>(".agent-chat__composer-shell");
-  if (document.activeElement === textarea && composerShell) {
-    event.preventDefault();
-  }
+  textarea?.focus({ preventScroll: true });
 }
 
 export function restoreHistoryCaret(target: HTMLTextAreaElement, direction: "up" | "down") {

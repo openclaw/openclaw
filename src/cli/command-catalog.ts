@@ -2,7 +2,6 @@
 import { hasFlag } from "./argv.js";
 import { PASSIVE_STARTUP_POLICY } from "./command-catalog-policies.js";
 import type { CliCommandCatalogEntry } from "./command-catalog-types.js";
-import { updateCommandCatalog } from "./command-catalog-update.js";
 
 function hasCliOption(argv: readonly string[], name: string): boolean {
   for (const arg of argv.slice(2)) {
@@ -34,7 +33,12 @@ const serviceInstallStartupPolicy: CliCommandCatalogEntry["policy"] = {
 export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["setup"],
-    policy: { configGuard: "skip", loadPlugins: "never", ensureCliPath: false },
+    policy: {
+      configGuard: ({ argv, options }) =>
+        options?.reset === true || hasFlag(argv, "--reset") ? "defer" : "skip",
+      loadPlugins: "never",
+      ensureCliPath: false,
+    },
   },
   {
     commandPath: ["qa"],
@@ -187,6 +191,12 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
       networkProxy: "bypass",
     },
     route: { id: "gateway-status" },
+  },
+  {
+    commandPath: ["gateway", "recover-lock"],
+    exact: true,
+    // Recovery must reach the lock before config preflight can request state ownership.
+    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
   },
   {
     commandPath: ["gateway", "call"],
@@ -493,7 +503,31 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: { networkProxy: ({ argv }) => (hasFlag(argv, "--local") ? "default" : "bypass") },
   },
   { commandPath: ["uninstall"], policy: { networkProxy: "bypass" } },
-  ...updateCommandCatalog,
+  // Update commands retain their own config, state, and protocol admission boundaries.
+  ...["migrate", "restore", "finish"].map((action): CliCommandCatalogEntry => ({
+    commandPath: ["update", action],
+    exact: true,
+    policy: { ...PASSIVE_STARTUP_POLICY, hideBanner: true, ownsProtocolStdout: true },
+  })),
+  {
+    commandPath: ["update", "adopt-immutable"],
+    exact: true,
+    policy: { ...PASSIVE_STARTUP_POLICY, hideBanner: true },
+  },
+  {
+    commandPath: ["update", "cleanup"],
+    exact: true,
+    policy: { ...PASSIVE_STARTUP_POLICY, hideBanner: true },
+  },
+  {
+    commandPath: ["update"],
+    policy: { configGuard: "skip", hideBanner: true },
+  },
+  {
+    commandPath: ["update", "admit"],
+    // Malformed internal argv must keep protocol stdout and read-only startup policy too.
+    policy: { ...PASSIVE_STARTUP_POLICY, hideBanner: true, ownsProtocolStdout: true },
+  },
   {
     commandPath: ["config", "validate"],
     exact: true,
@@ -526,7 +560,11 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["onboard"],
     exact: true,
-    policy: { loadPlugins: "never" },
+    policy: {
+      loadPlugins: "never",
+      configGuard: ({ argv, options }) =>
+        options?.reset === true || hasFlag(argv, "--reset") ? "defer" : "run",
+    },
   },
   ...[["recommendations"], ["recommendations", "acknowledge"], ["recommendations", "refresh"]].map(
     (path): CliCommandCatalogEntry => ({
@@ -544,7 +582,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["channels", "logs"],
     exact: true,
-    policy: { loadPlugins: "never", networkProxy: "bypass" },
+    policy: { configGuard: "validate", loadPlugins: "never", networkProxy: "bypass" },
   },
   ...["remove", "resolve"].map((subcommand): CliCommandCatalogEntry => ({
     commandPath: ["channels", subcommand],
@@ -585,7 +623,8 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   },
   {
     commandPath: ["memory"],
-    policy: { loadPlugins: "always", pluginRegistry: { scope: "memory" } },
+    // The action owns state admission; pre-action validation must not observe config health.
+    policy: { configGuard: "validate", loadPlugins: "always", pluginRegistry: { scope: "memory" } },
   },
   {
     commandPath: ["memory", "search"],
@@ -597,7 +636,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     exact: true,
     policy: {
       configGuard: ({ argv }) =>
-        hasFlag(argv, "--index") || hasFlag(argv, "--fix") ? "run" : "skip",
+        hasFlag(argv, "--index") || hasFlag(argv, "--fix") ? "validate" : "skip",
     },
   },
   { commandPath: ["skills", "update"], exact: true },

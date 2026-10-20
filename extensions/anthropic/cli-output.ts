@@ -8,6 +8,16 @@ import { findCodeRegions, type CodeRegion } from "openclaw/plugin-sdk/text-chunk
 const CLAUDE_RAW_TOOL_OUTPUT_ERROR =
   "Claude CLI returned malformed tool output (invalid request format): raw tool protocol appeared as assistant text. OpenClaw refused to persist or deliver it.";
 
+export function classifyClaudeCliErrorCode(message: string): string | undefined {
+  // Claude Code reports refresh-lock contention as server_error, distinct from
+  // authentication_failed for a dead refresh token. Keep that recovery fact.
+  return /Failed to refresh OAuth token: another Claude Code process is refreshing it or exited mid-refresh\b/i.test(
+    message,
+  )
+    ? "refresh_contention"
+    : undefined;
+}
+
 const RAW_INVOKE_TAG_RE = /<invoke(?=[ \t>])[^<>\r\n]*>/gu;
 const RAW_PARAMETER_TAG_RE = /<parameter(?=[ \t>])[^<>\r\n]*>/gu;
 const RAW_INVOKE_CLOSE_TAG_RE = /<\/invoke[ \t]*>/gu;

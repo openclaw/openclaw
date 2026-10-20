@@ -23,6 +23,7 @@ import {
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { createGatewayMemoryCloseRegistryFactory } from "./server-close.memory.test-support.js";
@@ -53,7 +54,11 @@ const beforeSettlement = (
 
 async function createFixture(label: string) {
   const original = captureActivePluginRegistrySnapshot();
-  const state = await createOpenClawTestState({ label, layout: "home", env: KERNEL_TEST_ENV });
+  const state = await createOpenClawTestState({
+    label,
+    layout: "home",
+    env: { ...KERNEL_TEST_ENV, OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
+  });
   state.applyEnv();
   const config: OpenClawConfig = {
     plugins: { enabled: true },
@@ -265,6 +270,18 @@ it("drains memory before stalled connection cleanup while preserving terminal cl
 });
 
 it("closes one managed memory runtime exactly once across repeated owner close calls", async () => {
+  const discoveryEnv = captureEnv([
+    "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
+    "OPENCLAW_BUNDLED_PLUGINS_DIR",
+  ]);
+  using _ = {
+    [Symbol.dispose]: () => discoveryEnv.restore(),
+  };
+  setTestEnvValue("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "0");
+  const originalDiscoveryEnv = {
+    disabled: process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS,
+    directory: process.env.OPENCLAW_BUNDLED_PLUGINS_DIR,
+  };
   const fixture = await createFixture("gateway-shared-memory-close");
   const close = vi.fn(async () => {});
   const memory = fixture.registry(close);
@@ -284,4 +301,10 @@ it("closes one managed memory runtime exactly once across repeated owner close c
     await Promise.allSettled([owner.close()]);
     await fixture.cleanup();
   }
+  // Vitest cleanup must not resurrect the inner fixture's disabled selector.
+  vi.unstubAllEnvs();
+  expect({
+    disabled: process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS,
+    directory: process.env.OPENCLAW_BUNDLED_PLUGINS_DIR,
+  }).toEqual(originalDiscoveryEnv);
 });

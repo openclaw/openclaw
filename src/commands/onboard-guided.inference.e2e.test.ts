@@ -4,9 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { writeOpenAiResponsesSse } from "../../test/helpers/openai-responses-sse.js";
+import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
-import { listKnownProviderEnvApiKeyNames } from "../agents/model-auth-env-vars.js";
+import { listKnownProviderAuthEnvVarNamesCore } from "../secrets/provider-env-vars.js";
 import { captureFullEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import type { GuidedOrchestrationFixture as GuidedOnboardingDeps } from "./onboard-guided-runtime.test-support.js";
 
@@ -50,7 +50,7 @@ describe("guided onboarding inference composition", () => {
         await fs.rm(root, { recursive: true, force: true });
       });
 
-      for (const key of listKnownProviderEnvApiKeyNames()) {
+      for (const key of listKnownProviderAuthEnvVarNamesCore()) {
         deleteTestEnvValue(key);
       }
       setTestEnvValue("HOME", root);
@@ -137,6 +137,16 @@ describe("guided onboarding inference composition", () => {
       configModule.clearConfigCache();
       const setupInference = await import("../system-agent/setup-inference.js");
       const onboardInference = await import("./onboard-inference.js");
+      const detectBackends = onboardInference.detectInferenceBackends;
+      const providerChoices = await import("../plugins/provider-auth-choices.js");
+      const probes = await import("../system-agent/probes.js");
+      const cliCredentials = await import("../agents/cli-credentials.js");
+      vi.spyOn(probes, "probeLocalCommand").mockImplementation(async (command) => ({
+        command,
+        found: false,
+        error: "not found",
+      }));
+      vi.spyOn(cliCredentials, "hasCodexCliAuthFile").mockReturnValue(false);
       const { runGuidedOnboardingWithFixtures: runGuidedOnboarding } =
         await import("./onboard-guided-runtime.test-support.js");
       const { applySystemAgentSetup } = await import("../system-agent/setup-apply.js");
@@ -145,26 +155,22 @@ describe("guided onboarding inference composition", () => {
       const deps: GuidedOnboardingDeps = {
         createPrompter: () => activePrompter,
         detect: async () => {
-          const probeLocalCommand = async (command: string) => ({
-            command,
-            found: false,
-            error: "not found",
-          });
-          const result = await setupInference.detectSetupInference({
-            detectInferenceBackends: async (options) =>
-              await onboardInference.detectInferenceBackends({
+          const choices = vi
+            .spyOn(providerChoices, "resolveManifestProviderAuthChoices")
+            .mockReturnValue([]);
+          const backends = vi
+            .spyOn(onboardInference, "detectInferenceBackends")
+            .mockImplementation(async (options) =>
+              detectBackends({
                 config: options?.config,
-                env: process.env,
-                platform: "linux",
-                deps: {
-                  probeLocalCommand,
-                  hasCodexCliAuthFile: () => false,
-                  readGeminiCliCredentials: () => null,
-                },
               }),
-            resolveManifestProviderAuthChoices: () => [],
-          });
-          return result;
+            );
+          try {
+            return await setupInference.detectSetupInference();
+          } finally {
+            backends.mockRestore();
+            choices.mockRestore();
+          }
         },
         activate: async (params) => {
           const result = await setupInference.activateSetupInference(params);
@@ -345,48 +351,9 @@ async function handleMockOpenAiRequest(
     body += String(chunk);
   }
   requestBodies.push(body);
-  writeMockOpenAiResponse(response);
-}
-
-function writeMockOpenAiResponse(response: ServerResponse): void {
-  const text = "OK";
-  const message = {
-    type: "message",
-    id: "guided-inference-message",
-    role: "assistant",
-    status: "completed",
-    content: [{ type: "output_text", text, annotations: [] }],
-  };
-  const events = [
-    {
-      type: "response.output_item.added",
-      output_index: 0,
-      item: { ...message, status: "in_progress", content: [] },
-    },
-    {
-      type: "response.output_text.delta",
-      item_id: message.id,
-      output_index: 0,
-      content_index: 0,
-      delta: text,
-    },
-    {
-      type: "response.output_text.done",
-      item_id: message.id,
-      output_index: 0,
-      content_index: 0,
-      text,
-    },
-    { type: "response.output_item.done", output_index: 0, item: message },
-    {
-      type: "response.completed",
-      response: {
-        id: "guided-inference-response",
-        status: "completed",
-        output: [message],
-        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-      },
-    },
-  ];
-  writeOpenAiResponsesSse(response, events);
+  writeOpenAiResponsesText(response, {
+    text: "OK",
+    messageId: "guided-inference-message",
+    responseId: "guided-inference-response",
+  });
 }

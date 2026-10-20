@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/facetime",
-  "version": "2026.10.4",
+  "version": "2026.10.5",
   "description": "Experimental FaceTime realtime voice carrier for OpenClaw agents",
   "license": "MIT",
   "author": "OpenClaw contributors",
@@ -68,7 +68,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.10.4"
+    "openclaw": ">=2026.10.5"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -87,11 +87,11 @@
       "allowInvalidConfigRecovery": true
     },
     "compat": {
-      "pluginApi": ">=2026.10.4"
+      "pluginApi": ">=2026.10.5"
     },
     "build": {
       "bundledDist": false,
-      "openclawVersion": "2026.10.4"
+      "openclawVersion": "2026.10.5"
     },
     "release": {
       "publishToClawHub": true,

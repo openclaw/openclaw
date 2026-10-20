@@ -1,4 +1,4 @@
-import { Show, createEffect, createMemo, createSignal, runWithOwner } from "solid-js";
+import { Show, createMemo, createSignal, onSettled } from "solid-js";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { CompactAttachmentCard } from "./chat-attachment-card-solid.tsx";
@@ -32,38 +32,30 @@ type ChatSvgAttachmentElement = SolidBridgeElement<SvgAttachmentProps>;
 export const ChatSvgAttachment = defineSolidBridge<SvgAttachmentProps>(
   "openclaw-chat-svg-attachment",
   (props, host) => {
-    const [renderSource, setRenderSource] = createSignal<SvgRenderSource>();
-    const [failed, setFailed] = createSignal(false);
-    let source: SvgRenderSource | undefined;
-    let abortController: AbortController | undefined;
-
-    const retireSource = () => {
-      if (source) {
-        source.retired = true;
-        if (source.retainCount === 0) {
-          URL.revokeObjectURL(source.url);
-        }
-        source = undefined;
-        setRenderSource(undefined);
-      }
-    };
-    const releaseSource = () =>
-      runWithOwner(null, () => {
-        abortController?.abort();
-        abortController = undefined;
-        retireSource();
-      });
-    const showFallback = () => {
-      setFailed(true);
-      host.onMediaLoaded?.();
-    };
-
     const loadKey = createMemo(() => [props.src, props.sourceIdentity, props.sizeBytes] as const, {
       equals: (previous, next) => previous.every((value, index) => Object.is(value, next[index])),
     });
-    createEffect(loadKey, ([src, identity, sizeBytes]) =>
-      runWithOwner(null, () => {
-        setFailed(false);
+    const renderAttachment = ([src, identity, sizeBytes]: ReturnType<typeof loadKey>) => {
+      const [renderSource, setRenderSource] = createSignal<SvgRenderSource>();
+      const [failed, setFailed] = createSignal(false);
+      let source: SvgRenderSource | undefined;
+      let abortController: AbortController | undefined;
+
+      const retireSource = () => {
+        if (source) {
+          source.retired = true;
+          if (source.retainCount === 0) {
+            URL.revokeObjectURL(source.url);
+          }
+          source = undefined;
+        }
+      };
+      const showFallback = () => {
+        setFailed(true);
+        host.onMediaLoaded?.();
+      };
+
+      onSettled(() => {
         let active = true;
         const current = () =>
           host.isConnected &&
@@ -138,68 +130,76 @@ export const ChatSvgAttachment = defineSolidBridge<SvgAttachmentProps>(
         return () => {
           active = false;
           stopObserving?.();
-          releaseSource();
+          abortController?.abort();
+          abortController = undefined;
+          retireSource();
         };
-      }),
-    );
+      });
 
-    const handleOpen = () => {
-      if (!source || !host.onOpen) {
-        return;
-      }
-      const opened = source;
-      opened.retainCount += 1;
-      let released = false;
-      const release = () => {
-        if (released) {
+      const handleOpen = () => {
+        if (!source || !host.onOpen) {
           return;
         }
-        released = true;
-        opened.retainCount -= 1;
-        if (opened.retired && opened.retainCount === 0) {
-          URL.revokeObjectURL(opened.url);
-        }
+        const opened = source;
+        opened.retainCount += 1;
+        let released = false;
+        const release = () => {
+          if (released) {
+            return;
+          }
+          released = true;
+          opened.retainCount -= 1;
+          if (opened.retired && opened.retainCount === 0) {
+            URL.revokeObjectURL(opened.url);
+          }
+        };
+        host.onOpen(opened.url, release);
       };
-      host.onOpen(opened.url, release);
-    };
 
-    return (
-      <Show
-        when={!failed()}
-        fallback={
-          <CompactAttachmentCard
-            kind="document"
-            label={props.label}
-            mimeType={props.mimeType}
-            sizeBytes={props.sizeBytes}
-            downloadHref={props.downloadHref}
-            onExpand={props.onExpand}
-          />
-        }
-      >
-        <Show when={renderSource()} keyed>
-          {(image) => (
-            <button
-              type="button"
-              class="chat-message-image-button"
-              aria-label={t("chat.imageLightbox.open", { title: props.label })}
-              onClick={handleOpen}
-            >
-              <img
-                src={image.url}
-                alt={props.label}
-                class="chat-message-image"
-                onLoad={() => props.onMediaLoaded?.()}
-                onError={() => {
-                  if (source === image) {
-                    retireSource();
-                    showFallback();
-                  }
-                }}
-              />
-            </button>
-          )}
+      return (
+        <Show
+          when={!failed()}
+          fallback={
+            <CompactAttachmentCard
+              kind="document"
+              label={props.label}
+              mimeType={props.mimeType}
+              sizeBytes={props.sizeBytes}
+              downloadHref={props.downloadHref}
+              onExpand={props.onExpand}
+            />
+          }
+        >
+          <Show when={renderSource()} keyed>
+            {(image) => (
+              <button
+                type="button"
+                class="chat-message-image-button"
+                aria-label={t("chat.imageLightbox.open", { title: props.label })}
+                onClick={handleOpen}
+              >
+                <img
+                  src={image.url}
+                  alt={props.label}
+                  class="chat-message-image"
+                  onLoad={() => props.onMediaLoaded?.()}
+                  onError={() => {
+                    if (source === image) {
+                      retireSource();
+                      setRenderSource(undefined);
+                      showFallback();
+                    }
+                  }}
+                />
+              </button>
+            )}
+          </Show>
         </Show>
+      );
+    };
+    return (
+      <Show when={loadKey()} keyed>
+        {renderAttachment}
       </Show>
     );
   },

@@ -5,24 +5,33 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { runStartupConfigPreflight } from "../commands/startup-config-preflight.js";
 import { resetConfigRuntimeState } from "../config/runtime-snapshot.js";
 import { resetDatabaseEngineSelectionForTest } from "../infra/database-engine/context.test-support.js";
+import { migrateLegacyDesktopStreamOptOuts } from "../infra/device-pairing-node-desktop-migration.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { resetLogger } from "../logging/logger.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
+import { withSecureTestNodeCommand } from "../secrets/test-node-command.test-support.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { executeOpenClawStateWorker } from "../state/openclaw-state-worker-store.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
+import { createDesktopSessionRegistry } from "./desktop/session-registry.js";
 import { installGatewayDatabaseEngine } from "./server-database-engine.js";
 import { prepareGatewayServerBootstrap } from "./server-startup-bootstrap.js";
+import {
+  createGatewayWorkerEnvironmentRuntime,
+  loadGatewayWorkerEnvironmentStartupState,
+} from "./server-worker-environment-startup.js";
 
 const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.connection");
 const connection = typeof configured === "string" ? configured : undefined;
@@ -97,8 +106,8 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
   async function queryRows<T extends pg.QueryResultRow>(sql: string, values: unknown[]) {
     return (await client.query<T>(sql, values)).rows;
   }
-  async function bootstrapped() {
-    const current = await fixture();
+  async function bootstrapped(execCommand?: string) {
+    const current = await fixture(connection, execCommand);
     const snapshot = await bootstrap();
     await closeStateDatabaseForTest();
     const anchor = await readAnchor(current);
@@ -124,7 +133,7 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
     }
   });
 
-  async function fixture(dsn = connection ?? ""): Promise<OpenClawTestState> {
+  async function fixture(dsn = connection ?? "", execCommand?: string): Promise<OpenClawTestState> {
     state = await createOpenClawTestState({
       label: "gateway-postgres-bootstrap",
       env: {
@@ -145,10 +154,31 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
       database: {
         engine: "postgres",
         postgres: {
-          connection: { source: "env", provider: "default", id: DSN_ENV },
+          connection: execCommand
+            ? { source: "exec", provider: "database", id: "connection" }
+            : { source: "env", provider: "default", id: DSN_ENV },
           schemaPrefix: PREFIX,
         },
       },
+      ...(execCommand
+        ? {
+            secrets: {
+              providers: {
+                database: {
+                  source: "exec",
+                  command: execCommand,
+                  args: [
+                    "-e",
+                    "process.stdin.resume(); require('node:fs').appendFileSync(process.env.OPENCLAW_PGPREP_EXEC_CALLS, 'resolved\\n'); process.stdout.write(process.env.OPENCLAW_PGPREP_BOOTSTRAP_DSN)",
+                  ],
+                  passEnv: [DSN_ENV],
+                  env: { OPENCLAW_PGPREP_EXEC_CALLS: state.path("exec-calls.log") },
+                  jsonOnly: false,
+                },
+              },
+            },
+          }
+        : {}),
       gateway: {
         mode: "local",
         auth: { mode: "token", token: "postgres-bootstrap-synthetic-token" },
@@ -156,48 +186,94 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
       },
       plugins: { enabled: false },
       skills: { load: { watch: false } },
-      meta: { migrations: { webhookListeners: true } },
     });
     return state;
   }
 
-  it("opens PostgreSQL through preflight and bootstrap, captures workers' input, and reuses the anchor on restart", async () => {
-    const { current, snapshot, anchor } = await bootstrapped();
-    expect(anchor.namespace).toMatch(/^pgprep_boot_state_[a-f0-9]{16}$/u);
-    const metadata = await queryRows(
-      `SELECT store_id FROM ${quoteIdentifier(anchor.namespace)}.openclaw_schema_meta WHERE store = $1`,
-      ["state"],
-    );
-    expect(metadata).toEqual([{ store_id: anchor.storeId }]);
-
-    await installGatewayDatabaseEngine(snapshot);
-    const context = captureOpenClawStateWorkerContext({ env: current.env });
-    // A captured lifetime must not re-resolve its SecretRef when a worker opens later.
-    await withEnvAsync({ [DSN_ENV]: "postgresql://127.0.0.1:1/unreachable" }, async () => {
-      await executeOpenClawStateWorker(context, {
-        type: "machineState.write",
-        input: { key: "tts.prefsPath", value: PREFS_PATH },
-      });
-      const read = await executeExistingOpenClawStateRead(
-        { env: current.env },
-        { type: "tts.prefsPath" },
-        { context },
+  it("resolves an exec DSN during bootstrap, captures workers' input, and reuses the anchor on restart", () =>
+    withSecureTestNodeCommand(async (command) => {
+      const { current, snapshot, anchor } = await bootstrapped(command);
+      const callsPath = current.path("exec-calls.log");
+      const initialResolutions = await fs.readFile(callsPath, "utf8");
+      expect(initialResolutions).toContain("resolved\n");
+      expect(await fs.readFile(current.configPath, "utf8")).not.toContain(connection);
+      expect(anchor.namespace).toMatch(/^pgprep_boot_state_[a-f0-9]{16}$/u);
+      const metadata = await queryRows(
+        `SELECT store_id FROM ${quoteIdentifier(anchor.namespace)}.openclaw_schema_meta WHERE store = $1`,
+        ["state"],
       );
-      expect(read?.row?.value_json).toBe(JSON.stringify(PREFS_PATH));
-    });
-    await closeStateDatabaseForTest();
-    clearSecretsRuntimeSnapshot();
-    resetConfigRuntimeState();
+      expect(metadata).toEqual([{ store_id: anchor.storeId }]);
+      const completion = await queryRows(
+        `SELECT value_json FROM ${quoteIdentifier(anchor.namespace)}.config_machine_state WHERE state_key = $1`,
+        [`webhookListeners:${current.configPath}`],
+      );
+      expect(completion).toEqual([{ value_json: "true" }]);
 
-    await bootstrap();
-    await closeStateDatabaseForTest();
-    expect(await readAnchor(current)).toEqual(anchor);
-    const persisted = await queryRows(
-      `SELECT value_json FROM ${quoteIdentifier(anchor.namespace)}.config_machine_state WHERE state_key = $1`,
-      ["tts.prefsPath"],
-    );
-    expect(persisted).toEqual([{ value_json: JSON.stringify(PREFS_PATH) }]);
-  });
+      await installGatewayDatabaseEngine(snapshot);
+      expect(await migrateLegacyDesktopStreamOptOuts({}, current.stateDir)).toBe(0);
+      expect(
+        await queryRows(
+          `SELECT status, report_json FROM ${quoteIdentifier(anchor.namespace)}.migration_runs WHERE id = $1`,
+          ["node-desktop-stream-pairing-defaults-v1"],
+        ),
+      ).toEqual([
+        { status: "completed", report_json: JSON.stringify({ retiredDesktopApprovals: 0 }) },
+      ]);
+      expect(await migrateLegacyDesktopStreamOptOuts({}, current.stateDir)).toBe(0);
+      const workers = await loadGatewayWorkerEnvironmentStartupState();
+      try {
+        expect(workers.store.list()).toEqual([]);
+        expect(await workers.placementStore.listAsync()).toEqual([]);
+        const registry = createEmptyPluginRegistry();
+        const runtime = await createGatewayWorkerEnvironmentRuntime({
+          scheduler: createTestGatewayScheduler(),
+          getPluginRegistry: () => registry,
+          getPortalRuntime: () => undefined,
+          resolveGatewayContext: () => undefined,
+          desktopSessionRegistry: createDesktopSessionRegistry(),
+          startup: workers,
+          log: { child: () => ({ info: () => {}, warn: () => {} }) },
+        });
+        try {
+          expect(runtime.workerEnvironmentService).toBeDefined();
+        } finally {
+          await runtime.workerEnvironmentService?.stop();
+        }
+      } finally {
+        await workers.store.close();
+      }
+      const context = captureOpenClawStateWorkerContext({ env: current.env });
+      // A captured lifetime must not re-resolve its SecretRef when a worker opens later.
+      await withEnvAsync({ [DSN_ENV]: "postgresql://127.0.0.1:1/unreachable" }, async () => {
+        await executeOpenClawStateWorker(context, {
+          type: "machineState.write",
+          input: { key: "tts.prefsPath", value: PREFS_PATH },
+        });
+        const read = await executeExistingOpenClawStateRead(
+          { env: current.env },
+          { type: "tts.prefsPath" },
+          { context },
+        );
+        expect(read?.row?.value_json).toBe(JSON.stringify(PREFS_PATH));
+        expect(await fs.readFile(callsPath, "utf8")).toBe(initialResolutions);
+      });
+      await closeStateDatabaseForTest();
+      clearSecretsRuntimeSnapshot();
+      resetConfigRuntimeState();
+      resetDatabaseEngineSelectionForTest();
+
+      await bootstrap();
+      await closeStateDatabaseForTest();
+      expect((await fs.readFile(callsPath, "utf8")).length).toBeGreaterThan(
+        initialResolutions.length,
+      );
+      expect(await readAnchor(current)).toEqual(anchor);
+      const persisted = await queryRows(
+        `SELECT value_json FROM ${quoteIdentifier(anchor.namespace)}.config_machine_state WHERE state_key = $1`,
+        ["tts.prefsPath"],
+      );
+      expect(persisted).toEqual([{ value_json: JSON.stringify(PREFS_PATH) }]);
+    }));
 
   it("refuses existing SQLite data and directs the operator to the port command", async () => {
     const current = await fixture();

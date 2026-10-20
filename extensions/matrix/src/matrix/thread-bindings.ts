@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { resolveOptionalIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { hasSqliteWorkerOutcomeUnknown } from "openclaw/plugin-sdk/sqlite-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -58,13 +58,9 @@ function buildThreadBindingStoreKey(record: {
   conversationId: string;
   parentConversationId?: string;
 }): string {
-  const digest = createHash("sha256")
-    .update(record.accountId)
-    .update("\0")
-    .update(record.parentConversationId ?? "")
-    .update("\0")
-    .update(record.conversationId)
-    .digest("hex");
+  const digest = sha256Hex(
+    `${record.accountId}\0${record.parentConversationId ?? ""}\0${record.conversationId}`,
+  );
   return `${record.accountId}:${digest}`;
 }
 

@@ -83,12 +83,12 @@ const STREAMING_START_FAILURE_BACKOFF_MS = 60_000;
 const NO_VISIBLE_REPLY_FALLBACK_TEXT =
   "⚠️ This reply completed without visible content. The turn may have been interrupted; please retry or ask me to recover from recent context.";
 
-function isStreamingStartBackedOff(accountId: string, now = Date.now()): boolean {
+function isStreamingStartBackedOff(accountId: string): boolean {
   const backoffUntil = streamingStartBackoffUntilByAccount.get(accountId);
   if (backoffUntil === undefined) {
     return false;
   }
-  if (backoffUntil <= now) {
+  if (backoffUntil <= Date.now()) {
     streamingStartBackoffUntilByAccount.delete(accountId);
     return false;
   }
@@ -176,7 +176,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       accountId,
       typing: {
         start: async () => {
-          if (!(account.config.typingIndicator ?? true)) {
+          if (!account.config.typingIndicator) {
             return;
           }
           if (!typingTargetMessageId) {

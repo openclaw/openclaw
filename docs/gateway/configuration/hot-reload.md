@@ -79,12 +79,14 @@ Reload failures remain visible in the Gateway log.
 If an automatic plugin reload cannot drain active work, the Gateway records the
 failure and keeps the last-good runtime. When the drain timed out on that
 plugin's admitted work, the Gateway retries the replacement automatically once
-the work finishes; no additional config edit is needed. Other drain failures
-wait for `openclaw plugins reload <id> --wait` or a revert of the pending plugin
-settings. Until then, later edits do not repeat the drain, and edits that still
-include the unapplied plugin settings stay pending; they cannot publish those
-settings through an unrelated hot update, and they apply together with the
-retry or recovery. While edits are pending, `config.get` reports an
+the work finishes; no additional config edit is needed. A later config edit also
+retries the full unapplied plugin change through the normal reload transaction.
+If that attempt fails, the previous runtime keeps serving and the failure is
+logged again. A new attempt replaces any earlier idle retry; if it fails for
+another reason, make a new edit or use the manual reload command below after
+fixing the error. Unapplied plugin settings cannot publish through an unrelated
+hot update; all pending changes apply together only after the transaction succeeds.
+While edits are pending, `config.get` reports an
 `appliedConfigHash` that differs from the saved revision, which the Control UI
 shows as unapplied config. `openclaw plugins reload <id> --wait` also lets you
 watch a timed-out replacement finish. A Gateway restart applies the saved config
@@ -95,6 +97,8 @@ for editor temp-write/rename churn to settle, reads the final file, and rejects
 invalid external edits without rewriting `openclaw.json`. OpenClaw-owned config
 writes use the same schema gate before writing (see [Strict validation](/gateway/configuration#strict-validation)
 for the clobber/rollback rules that apply to every write).
+Diagnostics for rejected edits reuse the running Gateway's plugin metadata
+without rebuilding the plugin inventory.
 
 The adapter also watches included files and follows editor rename-replace writes.
 Native file events trigger the usual reload debounce. A background reconciliation
@@ -342,8 +346,16 @@ trusted-proxy policies apply live. Transport policy changes can require a new
 handshake without cancelling accepted runs. Proxy headers, OIDC mapping, device
 auto-approval, and proxy-address changes fence connections but preserve accepted
 work when the owner's grant is unchanged. This includes a requested initial turn
-after `sessions.create` commits its new session. Editing another login's identity scopes
-or reordering the same scopes keeps the connection and its accepted runs active.
+after `sessions.create` commits its new session. Editing another login's identity scopes,
+reordering the same scopes, or removing scopes already implied by another grant
+keeps the connection and its accepted runs active. For example, `operator.admin`
+already includes `operator.read`, so removing that redundant read scope does not reconnect clients.
+Role scope edits recheck each connection and accepted run against its own granted
+scopes. Editing another role, reordering equivalent scopes, or widening a role
+keeps existing connections and runs active without granting them additional scopes.
+A narrowing disconnects and stops only affected sources; restoring the role does
+not revive revoked work. Session, agent, sandbox, and access-plugin restrictions
+continue to apply through the role authority.
 Changing the owner's identity-scope grant, removing that identity from the proxy
 allowlist, or disabling its authentication method revokes retained and delegated
 work, even if the grant is restored afterward. Shared-secret rotation also revokes

@@ -4,8 +4,7 @@ import {
   errorShape,
   validateSessionsCompactParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveEmbeddedSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
-import { hasPendingFollowupQueueWork } from "../../auto-reply/reply/queue/state.js";
+import type { PreparedCompactionSession } from "../../agents/embedded-agent-runner/run/compaction-accounting-bridge.js";
 import {
   resolveSessionWorkStartError,
   isSessionWorkStartInvalidatedError,
@@ -15,15 +14,15 @@ import {
   preflightSessionTranscriptForManualCompact,
   trimSessionTranscriptForManualCompact,
 } from "../../config/sessions/session-accessor.js";
+import { persistCompactionBoundaryWithSessionEntryAsync } from "../../config/sessions/session-accessor.sqlite-compaction-runtime.js";
 import { applySessionEntryOperation } from "../../config/sessions/session-accessor.sqlite-entry.js";
-import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { getCommandLaneSnapshot } from "../../process/command-queue.js";
 import {
-  isCompetingSessionWorkAdmissionActive,
-  runExclusiveSessionLifecycleMutation,
-} from "../../sessions/session-lifecycle-admission.js";
+  captureSessionTarget,
+  runSessionMutation,
+  SessionMutationPreemptTimeoutError,
+} from "../../sessions/session-controller.lifecycle.js";
 import { recordSessionCompacted } from "../../sessions/session-state-events.js";
 import { hasPreparedGatewayDeviceAuthority } from "../device-revocation.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
@@ -38,7 +37,7 @@ import { emitSessionsChanged } from "./session-change-event.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import { waitForTerminalSessionRunSettlement } from "./session-run-settlement.js";
 import {
-  preflightGatewaySessionCompaction,
+  prepareGatewaySessionCompaction,
   runGatewaySessionCompaction,
 } from "./sessions-compaction-runner.js";
 import { emitSessionOperation, requireSessionKey } from "./sessions-shared.js";
@@ -137,24 +136,12 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
       }
 
       const lifecycleRevision = entry.lifecycleRevision;
-      const readCurrentEntry = async () => {
-        const latest = await readSessionEntryReadOnlyInWorker(
-          { ...transcriptScope, readConsistency: "latest" },
-          assertRequestCurrent,
-        );
-        assertRequestCurrent();
-        return latest &&
-          latest.sessionId === sessionId &&
-          latest.lifecycleRevision === lifecycleRevision &&
-          !resolveSessionWorkStartError(target.canonicalKey, latest)
-          ? latest
-          : undefined;
-      };
       const queueIdentities = [key, target.canonicalKey, compactPrimaryKey, sessionId];
       const lifecycleIdentities = [...queueIdentities, lifecycleRevision];
       let admissionError: ReturnType<typeof errorShape> | undefined;
       let compactionNoopReason: string | undefined;
       let preparedEntry: InternalSessionEntry | undefined;
+      let preparedSession: PreparedCompactionSession | undefined;
       const terminalSettled = await waitForTerminalSessionRunSettlement({
         context,
         storePath,
@@ -164,67 +151,89 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
         agentId: requestedAgentId,
         defaultAgentId: compatibilityDefaultAgentId,
         signal: abortSignal,
+        liveRuns: "preempt",
       });
-      await runExclusiveSessionLifecycleMutation("compact", {
-        scope: storePath,
-        identities: lifecycleIdentities,
+      await runSessionMutation({
+        diagnosticLabel: "compact",
+        target: captureSessionTarget({
+          storeScope: storePath,
+          sessionKey: target.canonicalKey,
+          aliases: lifecycleIdentities,
+          incarnation: sessionId,
+          agentId: target.agentId,
+        }),
         kind: "compaction",
+        policy: "preempt",
+        preempt: {
+          activeRun: "abort-if-abortable",
+          waitingInputs: "keep",
+          shouldPreempt: () => admissionError === undefined && compactionNoopReason === undefined,
+        },
+        assertCurrent: assertRequestCurrent,
         signal: abortSignal,
         prepare: async () => {
           assertRequestCurrent();
           if (maxLines === undefined) {
-            preparedEntry = await readCurrentEntry();
-            if (!preparedEntry) {
+            const prepared = await prepareGatewaySessionCompaction({
+              cfg,
+              entry,
+              abortSignal,
+              agentId: target.agentId,
+              sessionId,
+              sessionKey: target.canonicalKey,
+              sessionStoreKey: compactPrimaryKey,
+              storePath,
+            });
+            preparedEntry = prepared.entry;
+            if (
+              !preparedEntry ||
+              preparedEntry.sessionId !== sessionId ||
+              preparedEntry.lifecycleRevision !== lifecycleRevision ||
+              resolveSessionWorkStartError(target.canonicalKey, preparedEntry)
+            ) {
               admissionError = sessionChangedError();
               return;
             }
-            compactionNoopReason = (
-              await preflightGatewaySessionCompaction({
-                cfg,
-                entry: preparedEntry,
-                agentId: target.agentId,
-                sessionId,
-                sessionKey: target.canonicalKey,
-                sessionStoreKey: compactPrimaryKey,
-                storePath,
-              })
-            )?.reason;
+            preparedSession = prepared.preparedSession;
+            compactionNoopReason = prepared.reason;
             if (compactionNoopReason) {
               return;
             }
           }
           const blockedByActiveRun =
             !terminalSettled ||
-            isCompetingSessionWorkAdmissionActive(storePath, lifecycleIdentities) ||
             (getWorkerInferenceSessionControl(context.workerEnvironmentService)?.hasSession(
               sessionId,
             ) ??
-              false) ||
-            resolveVisibleActiveSessionRunState({
-              context,
-              requestedKey: key,
-              canonicalKey: target.canonicalKey,
-              sessionId,
-              agentId: requestedAgentId,
-              defaultAgentId: compatibilityDefaultAgentId,
-            }).active;
-          // Accepted work can live only in its command lane; waiting behind it
-          // while holding the lifecycle fence would deadlock or drop that turn.
-          const blockedByQueuedWork =
-            hasPendingFollowupQueueWork(queueIdentities) ||
-            queueIdentities.some(
-              (identity) =>
-                getCommandLaneSnapshot(resolveEmbeddedSessionLane(identity)).queuedCount > 0,
-            );
-          if (blockedByQueuedWork || blockedByActiveRun) {
+              false);
+          if (blockedByActiveRun) {
             admissionError = errorShape(
               ErrorCodes.INVALID_REQUEST,
-              `Session ${key} has ${blockedByQueuedWork ? "queued work" : "an active run"}; retry after it finishes.`,
+              `Session ${key} has an active run; retry after it finishes.`,
             );
           }
         },
         run: async () => {
           assertRequestCurrent();
+          // The controller has settled its captured competitors; remote projections still block.
+          if (
+            !admissionError &&
+            !compactionNoopReason &&
+            resolveVisibleActiveSessionRunState({
+              storePath,
+              resolveGatewayContext: context.resolveGatewayContext,
+              requestedKey: key,
+              canonicalKey: target.canonicalKey,
+              sessionId,
+              agentId: requestedAgentId,
+              defaultAgentId: compatibilityDefaultAgentId,
+            }).active
+          ) {
+            admissionError = errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              `Session ${key} has an active run; retry after it finishes.`,
+            );
+          }
           if (admissionError) {
             respond(false, undefined, admissionError);
             return;
@@ -312,6 +321,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
             });
           let result: Awaited<ReturnType<typeof runGatewaySessionCompaction>>;
           let persisted = false;
+          let boundaryTokensAfter: number | undefined;
           let expectedEntry: InternalSessionEntry = latestEntry;
           const assertActive = () => {
             assertRequestCurrent();
@@ -332,13 +342,37 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
               },
               {
                 assertActive,
+                preparedSession,
+                // Aliases can share a transcript but own different accounting rows.
+                withCompactionPersistenceAsync:
+                  preparedSession?.sessionTarget.sessionKey === compactPrimaryKey
+                    ? async (prepared) => {
+                        const committed = await persistCompactionBoundaryWithSessionEntryAsync(
+                          prepared.scope,
+                          {
+                            prepared,
+                            tokensAfter: prepared.event.tokensAfter,
+                            transcriptByteCompactionLatch: null,
+                          },
+                          assertActive,
+                        );
+                        expectedEntry = committed.entry;
+                        persisted = true;
+                        boundaryTokensAfter = prepared.event.tokensAfter;
+                        return committed;
+                      }
+                    : undefined,
                 sourceAuthority: { assertActive, operatorAuthority: capturedOperator?.authority },
                 onCommitted: (accepted) => {
                   expectedEntry = accepted.entry;
                 },
               },
             );
-            if (result.ok && result.compacted) {
+            if (
+              result.ok &&
+              result.compacted &&
+              (!persisted || boundaryTokensAfter !== result.result?.tokensAfter)
+            ) {
               const persistedEntry = await applySessionEntryOperation(
                 transcriptScope,
                 {
@@ -350,7 +384,8 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
                   },
                   accounting: {
                     compactionKind: result.compactionKind,
-                    tokensAfter: result.result?.tokensAfter,
+                    amount: persisted ? 0 : undefined,
+                    tokensAfter: result.result?.tokensAfter ?? (persisted ? null : undefined),
                     transcriptByteCompactionLatch:
                       result.compactionKind === "native-harness" ? undefined : null,
                   },
@@ -406,6 +441,17 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
         },
       });
     } catch (err) {
+      if (err instanceof SessionMutationPreemptTimeoutError) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `Session ${key} has an active run; retry after it finishes.`,
+          ),
+        );
+        return;
+      }
       respond(
         false,
         undefined,

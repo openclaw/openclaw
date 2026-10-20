@@ -1,8 +1,5 @@
-import {
-  readDatabasePathIdentitySync,
-  type DatabasePathIdentity,
-} from "../infra/sqlite-worker-identity.js";
-import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+import { createSessionWorkerExecutionSource } from "../config/sessions/session-worker-execution-source.js";
+import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { assertAgentSessionWriteAdmission } from "../sessions/session-agent-work-admission.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -25,7 +22,6 @@ import {
 import {
   assertAgentDatabaseExecutionCreationIdentity,
   assertAgentDatabaseExecutionSharedState,
-  borrowExistingAgentDatabaseExecution,
   type AgentDatabaseExecutionCaptureConstraints,
   supportsOpenClawAgentDatabaseExecution,
 } from "./openclaw-agent-execution-scope.js";
@@ -90,21 +86,10 @@ export async function prepareOpenClawAgentDatabaseExecution(
       options,
       () =>
         execution.prepare(
-          {
+          createSessionWorkerExecutionSource(
             assertCurrent,
-            createAdmission: (binding) => () => ({
-              nativeLocations: binding.nativeLocations,
-              admission: createSqliteWorkerOperationAdmission((request, grant) => {
-                binding.authorize(request);
-                assertCurrent();
-                if (!grant()) {
-                  throw new Error(
-                    `Agent ${options.agentId} database preparation admission expired`,
-                  );
-                }
-              }, binding.attachment),
-            }),
-          },
+            `Agent ${options.agentId} database preparation admission expired`,
+          ),
           signal,
         ),
       undefined,
@@ -113,20 +98,6 @@ export async function prepareOpenClawAgentDatabaseExecution(
   } finally {
     await execution.release();
   }
-}
-
-/** Borrow an existing physical owner without opening or preparing a writer. */
-export function captureExistingOpenClawAgentDatabaseExecution(
-  options: { path: string; env?: NodeJS.ProcessEnv },
-  constraints?: { expectedCreationIdentity: DatabasePathIdentity },
-): OpenClawAgentDatabaseExecution | undefined {
-  return borrowExistingAgentDatabaseExecution(
-    executions,
-    options,
-    constraints
-      ? (target) => captureOpenClawAgentDatabaseExecution(target, constraints)
-      : undefined,
-  );
 }
 
 /** Borrow before callers yield; native opening stays lazy and release joins owned work. */

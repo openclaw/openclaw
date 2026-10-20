@@ -375,6 +375,13 @@ it("initializes over a retained transcript and preserves prepared snapshots, rel
           message: { role: "user", content: "retained" },
         },
       ]);
+      db.db
+        .prepare(`UPDATE transcript_events
+        SET navigation_type = NULL, navigation_custom_type = NULL,
+            navigation_display = 0, message_role = NULL, navigation_last_type = NULL,
+            navigation_last_custom_type = NULL, navigation_valid = 1
+        WHERE session_id = ?`)
+        .run(scope.sessionId);
       deleteSessionEntryRows(db, scope.sessionKey);
     }, options);
     expect(f.events()).toHaveLength(2);

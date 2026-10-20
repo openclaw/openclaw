@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { CLIENT_CREDENTIAL_SOURCE_TABLES } from "../infra/client-credential-schema.js";
 import { requireNativeDatabaseFile } from "../infra/database-engine/physical-facts.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
@@ -19,6 +20,7 @@ import {
   type SqliteTransactionOptions,
 } from "../infra/sqlite-transaction.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
+import { runUpdateSqliteMigration } from "../infra/update-doctor-migration-attribution.js";
 import { VERSION } from "../version.js";
 import {
   getStateRuntimeSchemaAdmission,
@@ -26,6 +28,7 @@ import {
   publishStateSchemaVersionAdmission,
 } from "./openclaw-state-db-admission.js";
 import {
+  CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION,
   LAZY_ADDITIVE_STATE_TABLES,
   DOCTOR_OWNED_STATE_TABLES,
   OPENCLAW_STATE_SCHEMA_VERSION,
@@ -56,6 +59,11 @@ import {
   withLegacyStateHeadLayout,
 } from "./openclaw-state-db-schema-v26-layout.js";
 import {
+  migrateStateWriteIndexesV27,
+  withLegacyStateWriteIndexes,
+} from "./openclaw-state-db-schema-v27-indexes.js";
+import { statePublicationDraftMigration } from "./openclaw-state-db-schema-v28-publication.js";
+import {
   assertSupportedStateSchemaVersion,
   readStateSchemaContentVersion,
   type StateSchemaVersionFacts,
@@ -73,19 +81,26 @@ import {
 } from "./openclaw-state-schema-publication.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import { UpdateSchemaRefusalError } from "./openclaw-update-schema-refusal.js";
-import { resolveSchemaMigrationBackupTables } from "./schema-migration-backup-scope.js";
+import {
+  resolveSchemaMigrationIntegrityTables,
+  SCHEMA_MIGRATION_HISTORICAL_REPAIR_TABLES,
+} from "./schema-migration-integrity-tables.js";
 
 export function assertMigratedStateTableIntegrity(
   db: DatabaseSync,
   pathname: string,
   previousVersion: number,
+  historicalRepair = false,
 ): void {
-  const tables = resolveSchemaMigrationBackupTables({
+  const tables = resolveSchemaMigrationIntegrityTables({
     kind: "state",
     foundVersion: previousVersion,
     supportedVersion: OPENCLAW_STATE_SCHEMA_VERSION,
   });
-  for (const table of tables ?? []) {
+  const affected = historicalRepair
+    ? new Set([...tables, ...SCHEMA_MIGRATION_HISTORICAL_REPAIR_TABLES.state])
+    : tables;
+  for (const table of affected) {
     if (tableExists(db, table)) {
       assertSqliteTableIntegrity(db, pathname, table);
     }
@@ -158,8 +173,6 @@ export function prepareStateDatabaseSchemaRepair(
 }
 
 const STATE_V6_ADDITIVE_TABLES = [
-  // v6-v12 databases may predate this former same-version lazy table.
-  "gateway_origin_device_tokens",
   ...LAZY_ADDITIVE_STATE_TABLES,
   "worker_session_tool_operations",
   "worker_turn_tool_authorities",
@@ -184,7 +197,7 @@ const STATE_V5_ADDITIVE_TABLES = [
   ...STATE_V6_ADDITIVE_TABLES,
 ] as const;
 const STATE_MIGRATION_VERSIONS = [
-  5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+  5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28,
 ] as const;
 type OpenClawStateMigrationVersion = (typeof STATE_MIGRATION_VERSIONS)[number];
 
@@ -491,6 +504,22 @@ const stateHeadLayoutMigration = {
   migrate: migrateSessionStateHeadLayoutV26,
   applied: "Stored session state heads in their composite primary-key tree (v26)",
 };
+const stateWriteIndexMigration = {
+  version: 27,
+  tables: ["acp_replay_events", "skill_usage", "state_leases"],
+  columns: [],
+  migrate: migrateStateWriteIndexesV27,
+  applied: "Removed redundant replay and skill indexes and narrowed the lease-owner index (v27)",
+};
+
+const stateClientCredentialMigration = {
+  version: CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION,
+  tables: CLIENT_CREDENTIAL_SOURCE_TABLES,
+  columns: [],
+  // The credential owner copies, verifies, and retires these before schema publication.
+  migrate: () => false,
+  applied: "Moved client credentials and native socket material to the local owner (v29)",
+};
 
 /** Version-gated column and row migrations, oldest first; each runs inside the caller's schema transaction. */
 export const versionedStateMigrations: ReadonlyArray<{
@@ -522,6 +551,8 @@ export const versionedStateMigrations: ReadonlyArray<{
   },
   stateTaskIndexMigration,
   stateHeadLayoutMigration,
+  stateWriteIndexMigration,
+  statePublicationDraftMigration,
 ];
 
 /** Recent version migrations own only their tables; Doctor owns unrelated historical repair. */
@@ -537,6 +568,9 @@ export function migrateBoundedStateSchema(
     stateTaskIndexMigration,
     stateSubagentOperatorRecoveryMigration,
     stateHeadLayoutMigration,
+    stateWriteIndexMigration,
+    statePublicationDraftMigration,
+    stateClientCredentialMigration,
   ];
   const pending = migrations.filter(({ version }) => version > previousVersion);
   // An undeclared destination keeps the legacy full runner and full-backup requirement.
@@ -550,11 +584,17 @@ export function migrateBoundedStateSchema(
   const indexes = getCanonicalSqliteNamedIndexContracts(OPENCLAW_STATE_SCHEMA_SQL).filter((index) =>
     tables.has(index.tableName),
   );
+  const indexSourceSchema =
+    previousVersion < 27
+      ? withLegacyStateWriteIndexes(OPENCLAW_STATE_SCHEMA_SQL)
+      : OPENCLAW_STATE_SCHEMA_SQL;
+  const sourceSchema =
+    previousVersion < 26 ? withLegacyStateHeadLayout(indexSourceSchema) : indexSourceSchema;
   // Older binaries can leave same-version repairs pending alongside a version change.
   if (
     !options.versionMigrationOnly &&
     (tableExists(db, "cron_run_logs") ||
-      collectSqliteSchemaIssues(db, withLegacyStateHeadLayout(OPENCLAW_STATE_SCHEMA_SQL), {
+      collectSqliteSchemaIssues(db, sourceSchema, {
         ...STATE_RUNTIME_SCHEMA_COMPATIBILITY,
         allowedMissingColumns: [
           ...(STATE_RUNTIME_SCHEMA_COMPATIBILITY.allowedMissingColumns ?? []),
@@ -563,6 +603,8 @@ export function migrateBoundedStateSchema(
         allowedMissingIndexes: [
           ...(STATE_RUNTIME_SCHEMA_COMPATIBILITY.allowedMissingIndexes ?? []),
           ...indexes.map((index) => index.name),
+          "idx_acp_replay_events_session_seq",
+          "idx_skill_usage_key",
         ],
         excludedIndexes: [
           ...(STATE_RUNTIME_SCHEMA_COMPATIBILITY.excludedIndexes ?? []),
@@ -595,57 +637,59 @@ export function runStateSchemaMigrationTransaction<T>(
   transactionOptions: SqliteTransactionOptions,
   prepareSchema?: () => void,
 ): T {
-  const foreignKeysWereEnabled =
-    Number(db.prepare("PRAGMA foreign_keys").get()?.foreign_keys) === 1;
-  // Referenced-table rebuilds require this before BEGIN, including runtime convergence.
-  if (foreignKeysWereEnabled) {
-    db.exec("PRAGMA foreign_keys = OFF;");
-  }
-  try {
-    return runSqliteImmediateTransactionSync(
-      db,
-      () => {
-        // Doctor restores catalog readability before the publication prelude reads it.
-        prepareSchema?.();
-        const publishedVersion = readSqliteUserVersion(db);
-        const blocker =
-          publishedVersion < OPENCLAW_STATE_SCHEMA_VERSION
-            ? readStateSchemaPublicationBlocker(db)
-            : undefined;
-        if (!blocker) {
-          return migrate();
-        }
-        try {
-          // Check before canonical DDL could recreate the missing publication owner.
-          if (!tableExists(db, "config_machine_state")) {
-            throw new Error("Shared state schema publication requires config_machine_state.");
-          }
-          return migrate();
-        } catch (cause) {
-          if (cause instanceof OpenClawStateOwnershipError) {
-            throw cause;
-          }
-          throw new UpdateSchemaRefusalError(
-            [
-              {
-                kind: "state",
-                path: pathname,
-                foundVersion: publishedVersion,
-                supportedVersion: OPENCLAW_STATE_SCHEMA_VERSION,
-              },
-            ],
-            blocker.updaterVersion,
-            { targetVersion: VERSION, cause },
-          );
-        }
-      },
-      transactionOptions,
-    );
-  } finally {
-    if (foreignKeysWereEnabled && db.isOpen) {
-      db.exec("PRAGMA foreign_keys = ON;");
+  return runUpdateSqliteMigration(db, pathname, () => {
+    const foreignKeysWereEnabled =
+      Number(db.prepare("PRAGMA foreign_keys").get()?.foreign_keys) === 1;
+    // Referenced-table rebuilds require this before BEGIN, including runtime convergence.
+    if (foreignKeysWereEnabled) {
+      db.exec("PRAGMA foreign_keys = OFF;");
     }
-  }
+    try {
+      return runSqliteImmediateTransactionSync(
+        db,
+        () => {
+          // Doctor restores catalog readability before the publication prelude reads it.
+          prepareSchema?.();
+          const publishedVersion = readSqliteUserVersion(db);
+          const blocker =
+            publishedVersion < OPENCLAW_STATE_SCHEMA_VERSION
+              ? readStateSchemaPublicationBlocker(db)
+              : undefined;
+          if (!blocker) {
+            return migrate();
+          }
+          try {
+            // Check before canonical DDL could recreate the missing publication owner.
+            if (!tableExists(db, "config_machine_state")) {
+              throw new Error("Shared state schema publication requires config_machine_state.");
+            }
+            return migrate();
+          } catch (cause) {
+            if (cause instanceof OpenClawStateOwnershipError) {
+              throw cause;
+            }
+            throw new UpdateSchemaRefusalError(
+              [
+                {
+                  kind: "state",
+                  path: pathname,
+                  foundVersion: publishedVersion,
+                  supportedVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+                },
+              ],
+              blocker.updaterVersion,
+              { targetVersion: VERSION, cause },
+            );
+          }
+        },
+        transactionOptions,
+      );
+    } finally {
+      if (foreignKeysWereEnabled && db.isOpen) {
+        db.exec("PRAGMA foreign_keys = ON;");
+      }
+    }
+  });
 }
 
 export function writeCurrentStateSchemaMetadata(db: DatabaseSync, now: number): void {

@@ -108,7 +108,7 @@ it("labels tool activity and exposes existing cards without hiding the answer", 
     ],
   };
   const draw = () => {
-    render(renderChatThread({ ...props, onRequestUpdate: draw }, transcript), container);
+    render(renderChatThread(props, transcript), container);
     if (!connected) {
       transcript.start();
       connected = true;

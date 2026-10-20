@@ -3,6 +3,7 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getRegisteredAgentHarness } from "../agents/harness/registry.js";
+import * as configModule from "../config/config.js";
 import { createConfigFileSnapshot } from "../config/io.snapshot-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -111,9 +112,8 @@ describe("runConversationalOnboarding", () => {
     };
     metadata = createSystemAgentPluginMetadataTestSnapshot(config);
     const fixture = await metadata.run(() => createSystemAgentVerifiedInferenceTestFixture(config));
-    // Keep the handoff's actual registry lookup and artifact validation; the binding
-    // factory's validator override is only for constructing synthetic probe evidence.
-    const { validateAgentHarnessRuntimeArtifact: _fixtureValidator, ...ownerDeps } = fixture.deps;
+    // The handoff must use the actual registered harness and artifact validator.
+    fixture.harnessMock.mockRestore();
     mocks.readConfigFileSnapshot.mockImplementation(async () =>
       createConfigFileSnapshot({
         path: path.join(home.home, "openclaw.json"),
@@ -128,12 +128,10 @@ describe("runConversationalOnboarding", () => {
         legacyIssues: [],
       }),
     );
-    const fingerprintPluginRuntimeArtifact = vi.fn(ownerDeps.fingerprintPluginRuntimeArtifact);
-    const deps = {
-      ...ownerDeps,
-      fingerprintPluginRuntimeArtifact,
-      readConfigFileSnapshot: mocks.readConfigFileSnapshot,
-    };
+    const fingerprintPluginRuntimeArtifact = fixture.fingerprintPluginRuntimeArtifact;
+    vi.spyOn(configModule, "readConfigFileSnapshot").mockImplementation(
+      mocks.readConfigFileSnapshot,
+    );
     let artifactCurrent = true;
     const registry = createEmptyPluginRegistry();
     registry.agentHarnesses.push({
@@ -167,7 +165,7 @@ describe("runConversationalOnboarding", () => {
     >("../system-agent/system-agent.js");
     mocks.runSystemAgent.mockImplementation((opts, runtime) =>
       runSystemAgent(
-        { ...opts, deps, input: terminal, output: terminal, runInteractiveTui: launchConversation },
+        { ...opts, input: terminal, output: terminal, runInteractiveTui: launchConversation },
         runtime,
       ),
     );
@@ -176,7 +174,7 @@ describe("runConversationalOnboarding", () => {
       registry,
       launchConversation,
       currentConfig: () => config,
-      resolveCurrentRoute: () => resolveSystemAgentVerifiedInferenceRoute(fixture.binding, deps),
+      resolveCurrentRoute: () => resolveSystemAgentVerifiedInferenceRoute(fixture.binding),
       invalidate: (
         kind:
           | "configured route"
@@ -296,6 +294,9 @@ function makeRuntime(): RuntimeEnv {
 
 describe("runInteractiveSetup", () => {
   afterEach(() => {
+    expect(mocks.restoreTerminalState).toHaveBeenCalledWith("setup finish", {
+      resumeStdinIfPaused: false,
+    });
     vi.clearAllMocks();
   });
 
@@ -305,28 +306,19 @@ describe("runInteractiveSetup", () => {
     await runInteractiveSetup({} as never, runtime);
 
     expect(mocks.runSetupWizard).toHaveBeenCalledOnce();
-    expect(mocks.restoreTerminalState).toHaveBeenCalledWith("setup finish", {
-      resumeStdinIfPaused: false,
-    });
   });
 
   it("restores terminal state without resuming stdin on cancel", async () => {
     const exitError = new Error("exit");
-    const runtime: RuntimeEnv = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(() => {
-        throw exitError;
-      }) as unknown as RuntimeEnv["exit"],
-    };
+    const runtime = makeRuntime();
+    vi.mocked(runtime.exit).mockImplementation(() => {
+      throw exitError;
+    });
     mocks.runSetupWizard.mockRejectedValueOnce(new WizardCancelledError("cancelled"));
 
     await expect(runInteractiveSetup({} as never, runtime)).rejects.toBe(exitError);
 
     expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(mocks.restoreTerminalState).toHaveBeenCalledWith("setup finish", {
-      resumeStdinIfPaused: false,
-    });
     const restoreOrder =
       mocks.restoreTerminalState.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER;
     const exitOrder =
@@ -343,8 +335,5 @@ describe("runInteractiveSetup", () => {
     await expect(runInteractiveSetup({} as never, runtime)).rejects.toThrow("boom");
 
     expect(runtime.exit).not.toHaveBeenCalled();
-    expect(mocks.restoreTerminalState).toHaveBeenCalledWith("setup finish", {
-      resumeStdinIfPaused: false,
-    });
   });
 });

@@ -6,7 +6,7 @@ import {
   withServiceInspectionBudget,
 } from "./service-inspection-budget.js";
 import {
-  findServiceOwnershipRefusal,
+  assertServiceInspectionFallbackAllowed,
   ServiceOwnershipRefusalError,
 } from "./service-inspection-error.js";
 import type { GatewayServiceEnv, SystemdServiceReadBinding } from "./service-types.js";
@@ -214,10 +214,7 @@ export async function admitSystemdServiceReadBinding(
         };
       } catch (error) {
         await peer?.close();
-        const refusal = findServiceOwnershipRefusal(error);
-        if (refusal) {
-          throw refusal;
-        }
+        assertServiceInspectionFallbackAllowed(error);
         // Failure to establish an optional peer leaves existing broker inspection
         // intact. Once admitted, retained queries fail closed; they never re-admit.
         return undefined;

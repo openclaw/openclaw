@@ -20,7 +20,10 @@ import {
 } from "../subagents/registry/subagent-control.js";
 import type { ResolvedSubagentController } from "../subagents/registry/subagent-control.types.js";
 import { createSubagentControllerRead } from "../subagents/registry/subagent-controller-read.js";
-import { observeSubagentExecution } from "../subagents/registry/subagent-execution-observation.js";
+import {
+  observeSubagentExecution,
+  resolveYieldedLeafPausedForMs,
+} from "../subagents/registry/subagent-execution-observation.js";
 import {
   buildSubagentList,
   readSubagentListSessionEntries,
@@ -65,7 +68,17 @@ type SubagentsToolOptions = {
   agentId?: string;
   config?: OpenClawConfig;
 };
-function mapRun(run: SubagentRunRecord) {
+function mapRun(
+  run: SubagentRunRecord,
+  now: number,
+  snapshot: ReadonlyMap<string, SubagentRunRecord>,
+) {
+  // Observe announced children from the snapshot, as the list does; a parent waiting on them is not a leaf.
+  const pausedForMs = resolveYieldedLeafPausedForMs(
+    run,
+    observeSubagentExecution(run, run.pauseReason === "sessions_yield" ? snapshot.values() : []),
+    now,
+  );
   return {
     runId: run.runId,
     sessionKey: run.childSessionKey,
@@ -84,6 +97,7 @@ function mapRun(run: SubagentRunRecord) {
     deliveryStatus: run.delivery?.status,
     startedAt: run.execution.startedAt,
     endedAt: run.execution.endedAt,
+    ...(pausedForMs === undefined ? {} : { pausedForMs }),
   };
 }
 function waitForSelectedRuns(params: {
@@ -100,8 +114,10 @@ function waitForSelectedRuns(params: {
       const task = visible.get(runId);
       return task ? [task] : [];
     });
+    const now = Date.now();
     const unavailable = params.runIds.filter((runId) => !visible.has(runId));
     const attention = tasks.filter((task) => {
+      // Observes without children, so a parent waiting on announced children stays in attention.
       const wait = observeSubagentExecution(task, []).wait;
       return task.delivery?.status === "suspended" || wait?.kind === "external";
     });
@@ -116,7 +132,7 @@ function waitForSelectedRuns(params: {
           : completed.length
             ? "completed"
             : undefined,
-      runs: tasks.map(mapRun),
+      runs: tasks.map((task) => mapRun(task, now, snapshot)),
       completed: completed.map((task) => task.runId),
       attention: attention.map((task) => task.runId),
       ...(unavailable.length ? { unavailable } : {}),
@@ -149,11 +165,11 @@ function waitForSelectedRuns(params: {
           if (!compactReady || !prepared) {
             preparation = !compactReady
               ? prepareSubagentSessionListReadCache()
-              : prepareSubagentRunsSnapshotForRunIds(subagentRuns, params.runIds).then(
-                  (snapshot) => {
-                    prepared = snapshot;
-                  },
-                );
+              : prepareSubagentRunsSnapshotForRunIds(subagentRuns, params.runIds, {
+                  yieldedChildren: true,
+                }).then((snapshot) => {
+                  prepared = snapshot;
+                });
             void preparation.then(
               () => {
                 preparation = undefined;
@@ -220,7 +236,10 @@ function waitForSelectedRuns(params: {
 }
 
 export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTool {
-  const readScope = (readController: ReturnType<typeof createSubagentControllerRead>["read"]) => {
+  const readScope = (
+    readController: ReturnType<typeof createSubagentControllerRead>["read"],
+    selectedRunId?: string,
+  ) => {
     const cfg = opts.config ?? getRuntimeConfig();
     const controller = readController();
     if (!controller.controllerAgentId) {
@@ -243,6 +262,7 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
         current.controllerSessionKey,
         current.controllerAgentId,
         cfg,
+        selectedRunId,
       );
       for (const entry of entries) {
         readable.set(entry.runId, entry);
@@ -281,7 +301,6 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
             entry: SubagentRunRecord;
             generation: SubagentRunRecord["generation"];
             createdAt: number;
-            ownership: ReturnType<typeof subagentRuns.captureRegistrationOwnership>;
           }
         | undefined;
       const assertSelection = () => {
@@ -297,15 +316,9 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
             entry,
             generation: entry.generation,
             createdAt: entry.createdAt,
-            ownership: subagentRuns.captureRegistrationOwnership(
-              entry.childSessionKey,
-              entry,
-              entry.childAgentId,
-            ),
           };
         }
         if (selection) {
-          selection.ownership.assertCurrent();
           if (
             !entry ||
             !isSameSubagentRunOwner(entry, selection.entry) ||
@@ -322,7 +335,7 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
         agentId: opts.agentId,
         assertCurrent: assertSelection,
       });
-      const readCurrentScope = () => readScope(controllerRead.read);
+      const readCurrentScope = () => readScope(controllerRead.read, requestedRunId);
       const prepareRead = () => {
         assertSelection();
         if (!getSubagentSessionListReadSnapshotIdentity()) {
@@ -429,7 +442,6 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
         throw new ToolInputError("Unsupported subagents action");
       } finally {
         controllerRead.release();
-        selection?.ownership.release();
       }
     },
   };

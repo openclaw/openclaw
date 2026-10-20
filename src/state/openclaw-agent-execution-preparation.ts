@@ -1,18 +1,66 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  createSqliteWorkerOperationAdmission,
+  takeSqliteWorkerOperationAdmissionAttachment,
+} from "../infra/sqlite-worker-operation-admission.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { AgentDatabaseExecutionAdmissionClosedError } from "./agent-database-admission-error.js";
+import type { AgentDeletionWorkerGuard } from "./agent-deletion-worker-contract.js";
 import type { AgentDatabaseRegistryChange } from "./openclaw-agent-db-contract.js";
 import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
 
+export function readAgentDatabaseRequestPreparation(): {
+  startupJournal: boolean;
+  deletion?: AgentDeletionWorkerGuard;
+} {
+  const attachment = takeSqliteWorkerOperationAdmissionAttachment();
+  if (
+    !isRecord(attachment) ||
+    attachment.kind !== "agent-execution" ||
+    typeof attachment.startupJournal !== "boolean"
+  ) {
+    throw new Error("Agent execution requires its request-local preparation facts");
+  }
+  return {
+    startupJournal: attachment.startupJournal,
+    // SAFETY: The host sends this typed guard; its live owner compares it before SQL.
+    deletion: attachment.deletion as AgentDeletionWorkerGuard | undefined,
+  };
+}
+
 /** Physical preparation outlives individual waits; registry notifications retain caller context. */
 export function createSharedAgentDatabasePreparation(assertCurrent: () => void) {
-  const observers = new Set<(change: AgentDatabaseRegistryChange) => void>();
+  const pending = new Set<Promise<void>>();
+  let pendingNativeOpen: Promise<void> | undefined;
+  const observers = new Set<{
+    assertCurrent: () => void;
+    notify: (change: AgentDatabaseRegistryChange) => void;
+  }>();
   const changes: AgentDatabaseRegistryChange[] = [];
   const source: AgentDatabaseRequestExecutionSource = {
-    assertCurrent,
+    assertCurrent() {
+      assertCurrent();
+      let refused: { error: unknown } | undefined;
+      for (const observer of observers) {
+        try {
+          observer.assertCurrent();
+          return;
+        } catch (error) {
+          refused ??= { error };
+        }
+      }
+      if (refused) {
+        throw refused.error;
+      }
+      throw new AgentDatabaseExecutionAdmissionClosedError(
+        "Agent database preparation has no current caller",
+      );
+    },
     onRegistryChange(change) {
       changes.push(change);
-      for (const notify of observers) {
-        notify(change);
+      for (const observer of observers) {
+        observer.notify(change);
       }
     },
     createAdmission: (binding) => () => ({
@@ -27,7 +75,34 @@ export function createSharedAgentDatabasePreparation(assertCurrent: () => void) 
   };
   return {
     source,
-    follow(caller: AgentDatabaseRequestExecutionSource) {
+    retain() {
+      const preparation = createDeferredCore();
+      pending.add(preparation.promise);
+      return () => {
+        pending.delete(preparation.promise);
+        preparation.resolve();
+      };
+    },
+    beginNativeOpen() {
+      const opening = createDeferredCore();
+      pendingNativeOpen = opening.promise;
+      return () => {
+        pendingNativeOpen = undefined;
+        opening.resolve();
+      };
+    },
+    getPendingNativeOpen: () => pendingNativeOpen,
+    getPendingPreparation: () => {
+      if (pending.size === 0) {
+        return undefined;
+      }
+      return (async () => {
+        while (pending.size > 0) {
+          await Promise.all(pending);
+        }
+      })();
+    },
+    follow(caller: AgentDatabaseRequestExecutionSource, assertCallerCurrent: () => void) {
       const inCaller = AsyncLocalStorage.snapshot();
       let failure: { error: unknown } | undefined;
       const notify = (change: AgentDatabaseRegistryChange) => {
@@ -40,7 +115,8 @@ export function createSharedAgentDatabasePreparation(assertCurrent: () => void) 
       for (const change of changes) {
         notify(change);
       }
-      observers.add(notify);
+      const observer = { notify, assertCurrent: () => inCaller(assertCallerCurrent) };
+      observers.add(observer);
       return {
         assertPublished() {
           if (failure) {
@@ -48,7 +124,7 @@ export function createSharedAgentDatabasePreparation(assertCurrent: () => void) 
           }
         },
         release() {
-          observers.delete(notify);
+          observers.delete(observer);
         },
       };
     },

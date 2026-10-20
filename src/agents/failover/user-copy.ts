@@ -37,6 +37,8 @@ const RATE_LIMIT_ERROR_USER_MESSAGE =
   "⚠️ The AI service needs a short break. Please try again in a few minutes.";
 export const AUTH_INVALID_TOKEN_USER_TEXT =
   "Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.";
+export const OAUTH_REFRESH_CONTENTION_USER_TEXT =
+  "Another sign-in is still in progress. Wait a moment, then try again.";
 const SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT =
   "This saved login isn't available. Choose another login under Models in the Control UI or run `openclaw configure`.";
 export const renderFailoverCodeUserCopy = (code: unknown): string | undefined =>
@@ -44,7 +46,9 @@ export const renderFailoverCodeUserCopy = (code: unknown): string | undefined =>
     ? SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT
     : code === AUTH_PROFILE_COOLDOWN_ERROR_CODE
       ? RATE_LIMIT_ERROR_USER_MESSAGE
-      : undefined;
+      : code === "refresh_contention"
+        ? OAUTH_REFRESH_CONTENTION_USER_TEXT
+        : undefined;
 const MODEL_CAPACITY_ERROR_USER_MESSAGE =
   "⚠️ Selected model is at capacity. Try a different model, or wait and retry.";
 const OVERLOADED_ERROR_USER_MESSAGE =

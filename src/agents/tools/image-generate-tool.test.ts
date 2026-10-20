@@ -1,3 +1,4 @@
+import { findMediaGenerationOperation } from "../media-generation-activity.js";
 import { resetGeneratedMediaTaskActivityForTests } from "../media-generation-activity.test-support.js";
 vi.mock("../media-generation-activity.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../media-generation-activity.js")>();
@@ -1345,14 +1346,8 @@ describe("createImageGenerateTool", () => {
     const createdTask = mockCallArg(taskRuntimeMocks.createOperation, 0, "createOperation");
     mediaActivityMocks.listOperations.mockReturnValue([
       {
-        taskId: "task-recent-image",
-        runId: createdTask.runId,
-        taskKind: "image_generation",
-        sourceId: "image_generate:openai",
-        requesterSessionKey: "agent:main:discord:direct:123",
-        task: "Already generated proof image",
+        ...findMediaGenerationOperation(String(createdTask.runId)),
         status: "succeeded",
-        createdAt: now - 20_000,
         endedAt: now - 10_000,
         progressSummary: "Generated 1 image",
       },
@@ -1407,14 +1402,8 @@ describe("createImageGenerateTool", () => {
     const firstTask = mockCallArg(taskRuntimeMocks.createOperation, 0, "createOperation");
     mediaActivityMocks.listOperations.mockReturnValue([
       {
-        taskId: "task-first-google-image",
-        runId: firstTask.runId,
-        taskKind: "image_generation",
-        sourceId: "image_generate:google",
-        requesterSessionKey: "agent:main:discord:direct:123",
-        task: "Already generated proof image",
+        ...findMediaGenerationOperation(String(firstTask.runId)),
         status: "succeeded",
-        createdAt: now - 20_000,
         endedAt: now - 10_000,
         progressSummary: "Generated 1 image",
       },

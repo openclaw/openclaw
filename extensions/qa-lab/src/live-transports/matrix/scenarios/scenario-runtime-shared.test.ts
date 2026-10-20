@@ -1,7 +1,8 @@
 // QA Lab Matrix tests cover scenario runtime shared plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { mockMatrixQaHttp } from "../substrate/http.test-support.js";
 import {
-  buildMatrixReplyArtifact,
+  createMatrixQaScenarioClient,
   resolveMatrixQaNoReplyWindowMs,
   runNoReplyExpectedScenario,
   truncateMatrixQaPreview,
@@ -9,6 +10,7 @@ import {
 
 describe("matrix scenario runtime shared", () => {
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllEnvs();
   });
 
@@ -23,6 +25,67 @@ describe("matrix scenario runtime shared", () => {
       vi.stubEnv("OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS", value);
       expect(resolveMatrixQaNoReplyWindowMs(30_000)).toBe(8_000);
     }
+  });
+
+  it("reuses buffered actor observations across clients without joining another actor or environment", async () => {
+    const requests: string[] = [];
+    mockMatrixQaHttp(async (input, init) => {
+      const url = new URL(input instanceof Request ? input.url : input);
+      const token = new Headers(init?.headers).get("authorization") ?? "";
+      requests.push(`${token}:${url.searchParams.get("since") ?? "prime"}`);
+      return Response.json({
+        next_batch: "next",
+        rooms: url.searchParams.has("since")
+          ? {
+              join: {
+                "!room:test": {
+                  timeline: {
+                    events: ["first", "second"].map((id) => ({
+                      event_id: `$${id}`,
+                      sender: "@sut:test",
+                      type: "m.room.message",
+                      content: { body: `${token}:${id}` },
+                    })),
+                  },
+                },
+              },
+            }
+          : {},
+      });
+    });
+    const firstEnvironment = {};
+    for (const [actorId, accessToken, syncStreams] of [
+      ["driver", "driver-a", firstEnvironment],
+      ["observer", "observer-a", firstEnvironment],
+      ["driver", "driver-b", {}],
+    ] as const) {
+      const params = {
+        accessToken,
+        actorId,
+        baseUrl: "http://127.0.0.1:28008/",
+        observedEvents: [],
+        syncStreams,
+      };
+      for (const id of ["first", "second"]) {
+        const client = createMatrixQaScenarioClient(params);
+        await client.primeRoom();
+        const result = await client.waitForRoomEvent({
+          observedEvents: params.observedEvents,
+          predicate: (event) => event.eventId === `$${id}`,
+          roomId: "!room:test",
+          timeoutMs: 1_000,
+        });
+        expect(result.event.body).toBe(`Bearer ${accessToken}:${id}`);
+      }
+    }
+    expect(requests).toEqual([
+      "Bearer driver-a:prime",
+      "Bearer driver-a:next",
+      "Bearer observer-a:prime",
+      "Bearer observer-a:next",
+      "Bearer driver-b:prime",
+      "Bearer driver-b:next",
+    ]);
   });
 
   it.each([
@@ -69,7 +132,7 @@ describe("matrix scenario runtime shared", () => {
           },
         });
       };
-      vi.stubGlobal("fetch", fetchImpl);
+      mockMatrixQaHttp(fetchImpl);
       let settled = false;
       const pending = runNoReplyExpectedScenario({
         accessToken: "token",
@@ -79,7 +142,7 @@ describe("matrix scenario runtime shared", () => {
         body: "marker",
         observedEvents: [],
         roomId: "!room:matrix-qa.test",
-        syncState: {},
+        syncStreams: {},
         sutUserId: "@sut:matrix-qa.test",
         timeoutMs: 8_000,
         token: "marker",
@@ -101,13 +164,15 @@ describe("matrix scenario runtime shared", () => {
           });
         } else {
           expect(result).toMatchObject({
-            value: { artifacts: { driverEventId: "$trigger", expectedNoReplyWindowMs: 8_000 } },
+            value: {
+              details:
+                "trigger event: $trigger\ntrigger sender: @observer:matrix-qa.test\nwaited 8000ms with no SUT reply",
+            },
           });
         }
       } finally {
         await vi.runAllTimersAsync();
         await pending;
-        vi.unstubAllGlobals();
         vi.useRealTimers();
       }
     },
@@ -115,17 +180,6 @@ describe("matrix scenario runtime shared", () => {
 
   it("keeps every shared Matrix preview UTF-16 safe", () => {
     const prefix = "a".repeat(199);
-    const event = {
-      kind: "message" as const,
-      roomId: "!room:matrix-qa.test",
-      eventId: "$event",
-      sender: "@sut:matrix-qa.test",
-      type: "m.room.message",
-    };
     expect(truncateMatrixQaPreview(`${prefix}😀tail`)).toBe(prefix);
-    expect(buildMatrixReplyArtifact({ ...event, body: `${prefix}😀tail` }).bodyPreview).toBe(
-      prefix,
-    );
-    expect(buildMatrixReplyArtifact({ ...event, body: " " }).bodyPreview).toBe("");
   });
 });

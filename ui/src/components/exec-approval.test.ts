@@ -35,6 +35,7 @@ async function renderApproval(
   requestOrQueue: ExecApprovalRequest | ExecApprovalRequest[],
   overrides: Partial<{
     busy: boolean;
+    connected: boolean;
     canGrant: boolean;
     errors: ReadonlyMap<string, string>;
     onDecision: Mock<ExecApprovalProps["onDecision"]>;
@@ -45,6 +46,7 @@ async function renderApproval(
   const props = {
     queue,
     busy: overrides.busy ?? false,
+    connected: overrides.connected ?? true,
     canGrant: overrides.canGrant ?? true,
     errors: overrides.errors ?? new Map(),
     onDecision,
@@ -226,24 +228,34 @@ describe("openclaw-exec-approval", () => {
     ]);
   });
 
-  it("keeps review-only decisions disabled and ignores their shortcuts", async () => {
-    const { onDecision } = await renderOpenedApproval(createExecRequest(), { canGrant: false });
-    const { modal } = await getRenderedModalDialog(container);
-    const buttons = Array.from(
-      container.querySelectorAll<HTMLButtonElement>(".exec-approval-actions button"),
-    );
+  it.each([true, false])(
+    "disables decisions with approval access unavailable, connected=%s",
+    async (connected) => {
+      const { onDecision } = await renderOpenedApproval(createExecRequest(), {
+        canGrant: false,
+        connected,
+      });
+      const { modal } = await getRenderedModalDialog(container);
+      const buttons = Array.from(
+        container.querySelectorAll<HTMLButtonElement>(".exec-approval-actions button"),
+      );
 
-    expect(container.querySelector(".exec-approval-warning")?.textContent?.trim()).toBe(
-      "Review only. Sign in with approval access to record a decision.",
-    );
-    expect(buttons.every((button) => button.disabled)).toBe(true);
+      if (connected) {
+        expect(container.querySelector(".exec-approval-warning")?.textContent?.trim()).toBe(
+          "Review only. Sign in with approval access to record a decision.",
+        );
+      } else {
+        expect(container.textContent).not.toContain("Sign in");
+      }
+      expect(buttons.every((button) => button.disabled)).toBe(true);
 
-    buttons[0]?.click();
-    modal.dispatchEvent(chord("Enter"));
-    modal.dispatchEvent(chord("d"));
+      buttons[0]?.click();
+      modal.dispatchEvent(chord("Enter"));
+      modal.dispatchEvent(chord("d"));
 
-    expect(onDecision).not.toHaveBeenCalled();
-  });
+      expect(onDecision).not.toHaveBeenCalled();
+    },
+  );
 
   it("ignores bare keys so stray typing cannot authorize a command", async () => {
     const { onDecision } = await renderOpenedApproval(createExecRequest());
@@ -338,19 +350,31 @@ describe("openclaw-exec-approval", () => {
   // report an open dialog now that approvals surface passively.
   it("records dialogOpen only while the dialog is explicitly open", async () => {
     const { approval, onDecision } = await renderApproval(createExecRequest());
-    const element = approval as ExecApprovalElement & { show(): void; dialogOpen: boolean };
-    expect(element.dialogOpen).toBe(false);
+    const opener = document.createElement("button");
+    container.append(opener);
+    opener.focus();
+    expect(approval.dialogOpen).toBe(false);
+    expect(container.querySelector("openclaw-modal-dialog")).toBeNull();
 
-    element.show();
+    approval.show();
     await approval.updateComplete;
-    expect(element.dialogOpen).toBe(true);
+    expect(approval.dialogOpen).toBe(true);
 
-    const { modal } = await getRenderedModalDialog(container);
-    modal.dispatchEvent(
-      new CustomEvent("modal-cancel", { bubbles: true, composed: true, cancelable: true }),
-    );
+    const { dialog } = await getRenderedModalDialog(container);
+    expect(dialog.open).toBe(true);
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    dialog.dispatchEvent(new Event("cancel", { cancelable: true }));
     await approval.updateComplete;
-    expect(element.dialogOpen).toBe(false);
+    expect(approval.dialogOpen).toBe(false);
+    expect(container.querySelector("openclaw-modal-dialog")).toBeNull();
+    expect(document.activeElement).toBe(opener);
+    expect(onDecision).not.toHaveBeenCalled();
+
+    approval.show();
+    await approval.updateComplete;
+    const reopened = await getRenderedModalDialog(container);
+    expect(reopened.dialog.open).toBe(true);
+    expect(approval.dialogOpen).toBe(true);
     expect(onDecision).not.toHaveBeenCalled();
   });
 

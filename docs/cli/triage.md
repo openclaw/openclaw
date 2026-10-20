@@ -45,6 +45,8 @@ The diagnostics archive excludes secrets, tokens, raw chat payloads, and raw log
 
 The archive's config summary counts agent, plugin, and channel entries declared in the saved file. Shared channel settings and `$include` directives are excluded from those counts. Diagnostics do not expand included files.
 
+In sanitized config and snapshots, map keys recognized as private identifiers (such as phone numbers, email addresses, user/chat IDs, and tokens) become opaque numbered placeholders. Known private config maps, including per-DM overrides (`dms`), also hide identifiers without a recognizable text pattern. Repeated identifier keys share a placeholder within the archive; ordinary field names remain intact. Placeholders contain no hash or recoverable portion of the identifier.
+
 ## Failed update recovery
 
 Interactive update recovery uses this same handoff after the updater releases its maintenance state. It starts from the captured update failure. It defers fresh Doctor checks and archive collection to the repair agent, so checks against the broken installation do not delay the handoff. The agent starts in the operator's captured working directory, or their OS home if that directory was removed or became inaccessible. Absolute installation selectors still identify the state, config, and default workspace to repair, even when the state directory cannot be accessed or created.

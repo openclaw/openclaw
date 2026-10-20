@@ -1,12 +1,55 @@
+import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+import { updateConfigMachineStateInDatabase } from "../state/config-machine-state-write.js";
 import type {
   WorkerOperationContext,
   WorkerOperationHandlers,
   WorkerWriteOperationContext,
 } from "../state/worker-operation-registry.js";
-import { configureNodeHostInWorker } from "./config.worker.js";
+import {
+  normalizeStoredNodeHostConfig,
+  type NodeHostConfig,
+  type PreparedNodeHostConfig,
+} from "./config-shared.js";
 import { NodeWorkerLaunchKernel } from "./node-worker-launch-store.kernel.js";
 import { NodeWorkerPreparedWorkspaceKernel } from "./node-worker-prepared-workspace-store.kernel.js";
 import { NodeWorkerTurnKernel } from "./node-worker-turn-store.kernel.js";
+
+function configureNodeHostInWorker(
+  [input]: [PreparedNodeHostConfig],
+  { write }: WorkerWriteOperationContext,
+): { config: NodeHostConfig; clearedCommands: boolean } {
+  return write(
+    ({ db }) => {
+      requestSqliteWorkerOperationAdmission({
+        stage: "transaction",
+        facts: { kind: "node-worker-journal" },
+      });
+      let clearedCommands = false;
+      const config = updateConfigMachineStateInDatabase<NodeHostConfig>(
+        db,
+        "nodeHost.config",
+        (stored) => {
+          const existing = stored === undefined ? undefined : normalizeStoredNodeHostConfig(stored);
+          clearedCommands = input.allCommands === true && existing?.commands !== undefined;
+          const commands = input.allCommands ? undefined : (input.commands ?? existing?.commands);
+          return {
+            version: 1,
+            nodeId: input.explicitNodeId ?? existing?.nodeId ?? input.candidateNodeId,
+            displayName:
+              input.explicitDisplayName ?? existing?.displayName ?? input.fallbackDisplayName,
+            gateway: input.gateway,
+            installedAppsSharing:
+              input.installedAppsSharing ?? existing?.installedAppsSharing ?? false,
+            ...(commands !== undefined ? { commands } : {}),
+          };
+        },
+        input.updatedAtMs,
+      );
+      return { config, clearedCommands };
+    },
+    { operationLabel: "node-host.configure" },
+  );
+}
 
 function journalKernel<Kernel>(create: (context: WorkerOperationContext) => Kernel) {
   return <Input extends unknown[], Output>(

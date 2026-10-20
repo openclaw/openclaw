@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import { resolveStateDir } from "../../config/paths.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
 import { runGitWorkerOperation, type GitWorkerOperationOptions } from "../../infra/git-worker.js";
 import { getFileLockProcessStartTime } from "../../shared/pid-alive.js";
 import { releaseOpenClawStateLeaseBestEffort } from "../../state/openclaw-state-lease-storage.js";
@@ -87,6 +88,7 @@ export function createWorktreeDiskAdmission(params: {
     pid: process.pid,
     host: hostname(),
     startedAt: getFileLockProcessStartTime(process.pid),
+    processNamespace: readGatewayLockProcessNamespace(),
   };
   let reserved = false;
   let closed = false;

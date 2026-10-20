@@ -47,12 +47,15 @@ export const workflowOperator = {
   latestVersion: "1.2.0",
   channel: "official",
   official: true,
+  ownerHandle: "openclaw",
   downloads: 12,
+  installs: 12,
   updatedAtMs: 1_000,
 } as const;
 
 type PageOptions = {
   clawsEnabled?: boolean;
+  workspaceFileNames?: string[];
   applyResult?: {
     agentId: string;
     status: string;
@@ -173,28 +176,32 @@ export function createPage(options: PageOptions = {}) {
       };
     }
     if (method === "claws.catalog.detail") {
+      const instructions = (options.workspaceFileNames ?? ["AGENTS.md", "SOUL.md", "USER.md"]).map(
+        (name) => ({ name, source: `workspace/${name}` }),
+      );
       return {
         detail: {
           ...workflowOperator,
           version: "1.2.0",
           agentName: "Workflow Operator",
-          workspaceFiles: 3,
+          workspaceFiles: instructions.length,
           skills: 1,
           plugins: 1,
           mcpServers: 0,
           scheduledJobs: 0,
           contents: {
-            instructions: [
-              { name: "AGENTS.md", source: "workspace/AGENTS.md" },
-              { name: "SOUL.md", source: "workspace/SOUL.md" },
-              { name: "USER.md", source: "workspace/USER.md" },
-            ],
+            instructions,
             skills: [{ name: "@openclaw/research", version: "1.2.0" }],
             integrations: [{ name: "@openclaw/workflow-tools", kind: "plugin", version: "1.2.0" }],
             automations: [],
           },
         },
       };
+    }
+    if (method === "claws.catalog.preview") {
+      const name =
+        params && typeof params === "object" && "name" in params ? String(params.name) : "";
+      return { preview: { kind: "instruction", name, content: `# ${name}` } };
     }
     if (method === "plugins.list") {
       return { plugins: options.installedPlugins ?? [], diagnostics: [], mutationAllowed: true };

@@ -1,4 +1,3 @@
-/** Doctor advisory for ACP-runtime agents whose configured primary model is harness-owned. */
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { listAgentEntriesWithSource } from "../agents/agent-roster.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";

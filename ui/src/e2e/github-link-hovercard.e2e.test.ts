@@ -5,6 +5,7 @@ import { expect, it } from "vitest";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
 import type { ControlUiLinkReaderPreview } from "../../../src/shared/control-ui-link-reader.js";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
+import { installControlUiE2eRendererStallProbe } from "../test-helpers/control-ui-e2e-renderer-stall.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -79,7 +80,14 @@ function referencePreview(url: string, subtitle: string, title: string) {
 async function openPullPreviewPage(
   deferPreview = false,
   previewResponse: ControlUiLinkReaderPreview = pullPreviewResponse,
-) {
+  detailResponse?: ControlUiLinkReaderPreview & { body: string },
+): Promise<{
+  card: Locator;
+  commentLink: Locator;
+  gateway: Awaited<ReturnType<typeof installMockGateway>>;
+  page: Page;
+  pullLink: Locator;
+}> {
   const context = await newBrowserContext();
   await context.route("https://github.com/**", (route) =>
     route.fulfill({
@@ -91,10 +99,12 @@ async function openPullPreviewPage(
   );
 
   const page = await context.newPage();
+  await installControlUiE2eRendererStallProbe(page);
   await page.clock.install();
   const gateway = await installPreview(page, {
     deferredMethods: deferPreview ? ["forge.preview"] : [],
     methodResponses: {
+      ...(detailResponse ? { "forge.detail": detailResponse } : {}),
       "forge.preview": {
         cases: [
           {
@@ -154,6 +164,41 @@ async function openPullPreviewPage(
 }
 
 suite.define(() => {
+  it.each([false, true])(
+    "reconciles status and compact metrics (reader first: %s)",
+    async (readerFirst) => {
+      const { card, page, pullLink, gateway } = await openPullPreviewPage(
+        readerFirst,
+        {
+          ...pullPreviewResponse,
+          badge: { label: "Open", tone: "positive" },
+        },
+        {
+          ...pullPreviewResponse,
+          body: "The pull request is merged. This is the current source status.",
+        },
+      );
+      if (!readerFirst) {
+        await pullLink.focus();
+        await expectText(card.locator(".link-reader-hovercard__state"), "Open");
+        await page.keyboard.press("Escape");
+      }
+      await pullLink.click();
+      const panel = page.locator("openclaw-link-reader-panel");
+      await expectText(panel.locator(".lr-state"), "Merged");
+      await page.mouse.move(1, 1);
+      await page.clock.runFor(150);
+      await pullLink.hover();
+      await page.clock.runFor(300);
+      if (readerFirst) {
+        await gateway.resolveDeferred("forge.preview");
+      }
+      await expectText(card.locator(".link-reader-hovercard__state"), "Merged");
+      await expectText(card.locator(".link-reader-hovercard__metadata"), "+101−12");
+      expect((await gateway.getRequests("forge.preview")).length).toBeGreaterThan(0);
+    },
+  );
+
   it("keeps all preview metadata readable with long authors on narrow screens", async () => {
     const metadata: NonNullable<ControlUiLinkReaderPreview["metadata"]> = [
       { label: "", value: "+1077", tone: "positive" },

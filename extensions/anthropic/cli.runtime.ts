@@ -64,6 +64,7 @@ type ClaudeCliTurn = {
   /** Hook reruns carry no input UUID and may rewrite text; retain their native input owner. */
   promptInputUuid: string;
   sawTerminalResult: boolean;
+  interrupted: boolean;
   foregroundTaskIds: Set<string>;
   foregroundBashToolUseIds: Set<string>;
   pendingBackgroundTaskIds: Set<string>;
@@ -99,7 +100,12 @@ const sessions = new WeakMap<CliBackendLiveSessionHandle, ClaudeCliSession>();
 
 function activeTurn(session: ClaudeCliSession): ClaudeCliTurn | undefined {
   const turn = session.currentTurn;
-  if (!turn || turn.controller.signal.aborted || turn.context.abortSignal?.aborted) {
+  if (
+    !turn ||
+    turn.interrupted ||
+    turn.controller.signal.aborted ||
+    turn.context.abortSignal?.aborted
+  ) {
     return undefined;
   }
   // A warm child can emit prior-input callbacks while the next admitted input is queued.
@@ -350,6 +356,31 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
   if (!turn) {
     return;
   }
+  if (turn.interrupted) {
+    if (message.type === "result") {
+      // Native interrupt can report an empty error result instead of a success.
+      // Only its known abort terminals belong to this requested turn interruption.
+      const aborted =
+        message.terminal_reason === "aborted_tools" ||
+        message.terminal_reason === "aborted_streaming";
+      turn.sawTerminalResult = true;
+      const result = aborted
+        ? {
+            ...message,
+            subtype: "success",
+            is_error: false,
+            result: "",
+            errors: undefined,
+            terminal_reason: undefined,
+          }
+        : { ...message, result: "" };
+      if (!turn.events.write(result)) {
+        await once(turn.events, "drain", { signal: turn.controller.signal });
+      }
+      completeTurn(session, turn);
+    }
+    return;
+  }
   if (message.type === "command_lifecycle") {
     if (message.state === "started" && message.command_uuid === turn.inputUuid) {
       turn.inputStarted = true;
@@ -575,6 +606,7 @@ export async function* executeClaudeCli(
     promptSubmitted: false,
     promptInputUuid: inputUuid,
     sawTerminalResult: false,
+    interrupted: false,
     foregroundTaskIds: new Set(),
     foregroundBashToolUseIds: new Set(),
     pendingBackgroundTaskIds: new Set(),
@@ -656,6 +688,19 @@ export async function* executeClaudeCli(
       if (session.closed || session.currentTurn !== turn) {
         throw turn.error ?? new Error("Claude CLI closed before its prompt was accepted.");
       }
+      context.registerTurnInterrupt?.({
+        async interrupt() {
+          context.assertCurrent?.();
+          if (session.currentTurn !== turn && turn.sawTerminalResult) {
+            return;
+          }
+          if (session.closed || session.currentTurn !== turn || turn.controller.signal.aborted) {
+            throw new Error("The Claude CLI turn is no longer active.");
+          }
+          turn.interrupted = true;
+          await transport.interrupt();
+        },
+      });
       await transport.send(createUserInput(context, context.prompt, turn.inputUuid));
       context.registerMessageInjection?.({
         isAvailable: () =>

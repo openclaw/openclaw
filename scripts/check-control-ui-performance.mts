@@ -34,7 +34,7 @@ const CONTROL_UI_CSS_GZIP_GROWTH_BYTES = 1.5 * KIB;
 const MERMAID_RENDERER_ASSET = /^assets\/mermaid\.min-[\w-]+\.js$/u;
 const MERMAID_RENDERER_GZIP_BYTES = 960 * KIB;
 // Locale catalogs are named Vite chunks loaded only after a language selection.
-// Base and config-hint chunks share one budget because they activate atomically.
+// Keep one combined cap for base and on-demand config hints in every locale.
 const CONTROL_UI_LOCALE_ASSET_PATTERNS = CONTROL_UI_LOCALE_ENTRIES.flatMap(({ locale }) => [
   {
     locale,
@@ -52,15 +52,16 @@ const CONTROL_UI_LOCALE_GZIP_BYTES = 300 * KIB;
 // Small, explicit headroom over the optimized baseline. Budget changes should
 // accompany an intentional loading or chunking decision.
 const controlUiPerformanceBudgets = {
-  // Combined deferrals use 7/27/22 requests; retain two per path.
+  // Schema runtime deferrals use 7/25/20 requests; retain two per path.
   startupJsRequests: 9,
-  chatBootJsRequests: 29,
-  newBootJsRequests: 24,
-  // Measured 1,566,022 / 1,119,513 B; retain under 1% headroom.
-  chatBootJsGzipBytes: 1_580_000,
-  newBootJsGzipBytes: 1_130_000,
+  chatBootJsRequests: 27,
+  newBootJsRequests: 22,
+  // Page-owned English copy measures 1,435,673 B for Chat and 1,000,561 B
+  // for New Session. Retain at least 32 KiB of headroom for each route.
+  chatBootJsGzipBytes: 1_470_000,
+  newBootJsGzipBytes: 1_035_000,
   startupCssRequests: 1,
-  startupJsGzipBytes: 339_000,
+  startupJsGzipBytes: 325_000,
   // Keep 45 KiB advisory: tiny integrated changes must not exhaust the budget.
   // The fixed 50 KiB ceiling bounds accumulation of small changes.
   startupCssGzipBytes: 50 * KIB,
@@ -510,6 +511,16 @@ export function formatControlUiPerformanceReport(
     lines.push(
       `  locale catalog JS: ${formatAssetSummary(summarizeAssets(metrics.localeCatalogs))} (largest pair: ${largestLocalePair.locale}, ${formatControlUiPerformanceBytes(largestLocalePairSummary.gzipBytes)} gzip; limits: 1 base + 1 config-hint asset per locale, ${formatControlUiPerformanceBytes(CONTROL_UI_LOCALE_GZIP_BYTES)} combined; forbidden at startup)`,
     );
+    for (const group of localeGroups.toSorted((left, right) =>
+      left.locale.localeCompare(right.locale),
+    )) {
+      const baseBytes = summarizeAssets(group.base).gzipBytes;
+      const configHintBytes = summarizeAssets(group.configHints).gzipBytes;
+      const pairBytes = baseBytes + configHintBytes;
+      lines.push(
+        `    ${group.locale}: ${pairBytes} B gzip (base ${baseBytes} B + config hints ${configHintBytes} B; cap ${CONTROL_UI_LOCALE_GZIP_BYTES} B; headroom ${CONTROL_UI_LOCALE_GZIP_BYTES - pairBytes} B)`,
+      );
+    }
   }
   if (
     startupBudgetBaseline &&
@@ -728,6 +739,7 @@ function main(argv: string[] = process.argv.slice(2)): void {
       "startup Mermaid JS assets",
       "locale catalog base JS assets per locale",
       "locale config-hint JS assets per locale",
+      "largest locale catalog pair JS gzip",
       "startup locale catalog JS assets",
     ]);
     const metricFiles: Record<string, string> = {

@@ -34,10 +34,8 @@ import {
   requestContext,
   sessionReadHandlers,
 } from "./server-methods/sessions-read-cache.test-support.js";
-import {
-  createLifecycleEventBroadcastHandler,
-  createTranscriptUpdateBroadcastHandler,
-} from "./server-session-events.js";
+import { createTranscriptUpdateBroadcastHandler } from "./server-session-events.js";
+import { createLifecycleEventBroadcastHandler } from "./server-session-lifecycle-events.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { ready } from "./session-row-projection-record.js";
@@ -242,7 +240,6 @@ it("publishes an initially unseen retired-agent event from its default store", a
       await createLifecycleEventBroadcastHandler({
         broadcastToConnIds,
         sessionEventSubscribers: { getAll: () => new Set(["subscriber"]) },
-        chatAbortControllers: new Map(),
         getSessionRowProjection: () => projection,
       })({ agentId: query.agentId, sessionKey: query.key, reason: "reactivated" });
       expect(projection.selectEntries(query).map((row) => row.entry.sessionId)).toEqual([
@@ -297,7 +294,6 @@ it("admits a committed update without host SQL while a marker awaits prepared me
       broadcastToConnIds,
       sessionEventSubscribers: { getAll: () => new Set(["subscriber"]) },
       sessionMessageSubscribers: { get: () => new Set<string>() },
-      chatAbortControllers: new Map(),
       getSessionRowProjection: () => projection,
     });
     const marker = handler({
@@ -410,7 +406,6 @@ it.for([
         broadcastToConnIds,
         sessionEventSubscribers: { getAll: () => new Set(["subscriber"]) },
         sessionMessageSubscribers: { get: () => new Set<string>() },
-        chatAbortControllers: new Map(),
         getSessionRowProjection: () => projection,
       };
       const pending =
@@ -663,12 +658,13 @@ it("retains physical sentinels and stable store precedence after a primary updat
     const projection = await createSessionRowProjection({ cfg });
     await projection.ensureMaterialized();
     try {
-      expect(projection.selectEntries().filter(ready).length).toBe(2);
+      projection.describe({ agentId: "main", key: "global", storePath: primary });
       expect(
         projection.snapshot({ agentId: "main", key: "global", storePath: secondary }).row
           ?.sessionId,
       ).toBe("secondary");
       const selected = projection.describe({ agentId: "main", key: "global" })!;
+      expect(projection.selectEntries().filter(ready).length).toBe(2);
       expect(
         projection
           .findBySessionId({

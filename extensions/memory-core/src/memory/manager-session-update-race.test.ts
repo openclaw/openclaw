@@ -27,6 +27,7 @@ import { forgetMemoryEntries } from "../memory-forget.js";
 import { seedMemoryForgetTombstones } from "../test-helpers.js";
 import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
 import * as memoryCpuWorkerRuntime from "./manager-cpu-worker-runtime.js";
+import { MemoryIndexDatabase } from "./manager-database-context.js";
 import {
   createManagerIndexFixture,
   memoryIndexFixtureWriter,
@@ -661,7 +662,34 @@ describe("memory session update sync", () => {
     expectPrivateDerivativesRemoved(db, privateHashes);
   });
 
-  it("excludes system-only archived transcripts", async () => {
+  it("skips unchanged session metadata and observes later committed appends", async () => {
+    const sessionId = "unchanged-session-metadata";
+    const sessionKey = `agent:main:chat:${sessionId}`;
+    const sessionPath = `sessions/main/${sessionId}.jsonl`;
+    await seed(sessionId, sessionKey, "Original violet preference.");
+    const manager = await getFreshManager(sessionConfig(false), "cli");
+    await manager.sync({ reason: "baseline", force: true });
+    using observer = openObserver();
+    const before = readPublishedSessionIndex(observer, sessionPath, "violet");
+    const refresh = vi.spyOn(MemoryIndexDatabase.prototype, "refreshSourceState");
+    try {
+      await manager.sync({ reason: "duplicate-update", sessions: [{ sessionId, sessionKey }] });
+      expect(refresh).not.toHaveBeenCalled();
+      expect(readPublishedSessionIndex(observer, sessionPath, "violet")).toEqual(before);
+
+      await seed(sessionId, sessionKey, "New violet preference.", "assistant", 2);
+      await manager.sync({ reason: "committed-update", sessions: [{ sessionId, sessionKey }] });
+      const after = readPublishedSessionIndex(observer, sessionPath, "violet");
+      expect(after.source).not.toEqual(before.source);
+      expect(
+        after.chunks.some((chunk) => String(chunk.text).includes("New violet preference.")),
+      ).toBe(true);
+    } finally {
+      refresh.mockRestore();
+    }
+  });
+
+  it("excludes system-only archives without deleting from a fresh rebuild", async () => {
     const archiveName = "internal-turn.jsonl.deleted.2026-08-26T11-00-00.000Z";
     const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
     await fs.mkdir(sessionsDir, { recursive: true });
@@ -673,13 +701,27 @@ describe("memory session update sync", () => {
         provenance: { kind: "internal_system", sourceTool: "internal-maintenance" },
       },
     };
-    await fs.writeFile(path.join(sessionsDir, archiveName), JSON.stringify(record) + "\n");
+    const archivePath = path.join(sessionsDir, archiveName);
+    await fs.writeFile(archivePath, JSON.stringify(record) + "\n");
     const manager = await getFreshManager(sessionConfig(), "cli");
-    await manager.sync({ reason: "forced-reindex", force: true });
+    const deletion = vi.spyOn(MemoryIndexDatabase.prototype, "deleteSource");
+    try {
+      await manager.sync({ reason: "forced-reindex", force: true });
+      expect(deletion).not.toHaveBeenCalled();
+    } finally {
+      deletion.mockRestore();
+    }
     const db = Reflect.get(manager, "db") as DatabaseSync;
     expect(selectIndex(db, "chunks", "DISTINCT path", "WHERE source = 'sessions'").all()).toEqual(
       [],
     );
+    const sessionPath = `sessions/main/${archiveName}`;
+    const writer = memoryIndexFixtureWriter(manager);
+    seedIndexedSession(writer, sessionPath, "Stale violet internal fragment.");
+    // Forget can leave chunks without a source row; published cleanup still owns them.
+    writer.prepare("DELETE FROM memory_index_sources WHERE path = ?").run(sessionPath);
+    await manager.sync({ reason: "archive-cleanup", archiveFiles: [archivePath] });
+    expectSessionIndexRemoved(db, sessionPath);
   });
 
   it.each([

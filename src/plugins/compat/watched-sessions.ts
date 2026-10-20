@@ -4,7 +4,6 @@ export const WATCHED_SESSIONS_COMPAT_RECORD = {
   code: "watched-sessions-sync-harness-context",
   status: "deprecated",
   owner: "sdk",
-  introduced: "2026-07-29",
   deprecated: "2026-10-03",
   warningStarts: "2026-10-03",
   removeAfter: "2026-12-31",
@@ -15,11 +14,4 @@ export const WATCHED_SESSIONS_COMPAT_RECORD = {
   diagnostics: [
     "TypeScript @deprecated annotation and migration documentation; bounded capability-family warnings on legacy preparation",
   ],
-  tests: [
-    "src/plugins/compat/registry.test.ts",
-    "test/type-contracts/agent-harness-runtime-watched-sessions.ts",
-    "src/agents/watched-sessions-prompt.test.ts",
-  ],
-  releaseNote:
-    "Harness plugins can await watched-session prompt preparation from worker reads. Bundled harnesses use the awaited helper; the synchronous SDK result remains supported for third-party plugins. Prompt bytes, stored data, and update behavior are unchanged.",
 } as const satisfies PluginCompatRecord;

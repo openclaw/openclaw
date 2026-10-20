@@ -713,12 +713,8 @@ async function collectUpdateFailureTriage() {
   let outcome = params.triageTransition ? "triage" : undefined;
   let wake;
   wakeTermination = () => wake?.();
-  let deadlineExpired = false;
-  const parentExitDeadline = setTimeout(() => {
-    deadlineExpired = true;
-    if (outcome !== "update" && outcome !== "triage") outcome = "restore";
-    wake?.();
-  }, params.parentExitTimeoutMs);
+  let controlDeadlinePending = true;
+  const controlDeadlineAt = performance.now() + params.parentExitTimeoutMs;
   try {
     if (params.action === "update" && params.runId) {
       // Admission and stop recording use the serving runtime. Terminal writes after
@@ -793,9 +789,10 @@ async function collectUpdateFailureTriage() {
         await new Promise((resolve) => setImmediate(resolve));
         if (!commands.length) break;
       }
-      if (deadlineExpired) {
+      if (controlDeadlinePending && performance.now() >= controlDeadlineAt) {
+        controlDeadlinePending = false;
+        if (outcome !== "update" && outcome !== "triage") outcome = "restore";
         if (params.action === "triage") throw new Error("automatic triage admission expired");
-        deadlineExpired = false;
         if (!parked) {
           await recordManagedUpdateOutcome("managed-service-handoff-cancelled");
           return;
@@ -864,7 +861,6 @@ async function collectUpdateFailureTriage() {
         }),
       ]);
     }
-    clearTimeout(parentExitDeadline);
     if (outcome !== "update" && outcome !== "triage") {
       if (restorationArmed) await restoreGatewayService("managed-service-handoff-cancelled");
       else if (params.action === "update")
@@ -994,7 +990,6 @@ async function collectUpdateFailureTriage() {
     }
     finalExitCode = 1;
   } finally {
-    clearTimeout(parentExitDeadline);
     try { await finishManagedUpdateRun(); }
     catch (error) {
       appendLog("failed to finalize update run: " + String(error));

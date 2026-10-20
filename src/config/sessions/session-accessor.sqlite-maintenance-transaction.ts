@@ -1,6 +1,6 @@
 import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { runWithSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { retainOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   openOpenClawAgentDatabase,
@@ -69,7 +69,7 @@ export function prepareSessionMaintenanceInWorker(
   try {
     claim.assertCurrent();
     prepareWorkerAgeFact(database, plan);
-    const prepared = runSqliteDeferredTransactionSync(
+    const prepared = runSqliteReadSnapshotSync(
       database.db,
       () =>
         prepareSessionEntryMaintenanceInDatabase(

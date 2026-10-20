@@ -295,6 +295,27 @@ describe("resolveEffectivePluginActivationState", () => {
       expected: activation(true, false, "default", "bundled default enablement"),
     },
     {
+      name: "keeps bundled default activation when auto-enable adds an effective entry",
+      params: { id: "acpx", origin: "bundled", enabledByDefault: true },
+      rawConfig: { acp: { enabled: true } },
+      effectiveConfig: {
+        acp: { enabled: true },
+        plugins: { entries: { acpx: { enabled: true } } },
+      },
+      expected: activation(true, false, "default", "bundled default enablement"),
+    },
+    {
+      name: "keeps bundled default activation when auto-enable supplies a reason",
+      params: {
+        id: "acpx",
+        origin: "bundled",
+        enabledByDefault: true,
+        autoEnabledReason: "ACP runtime configured",
+      },
+      rawConfig: {},
+      expected: activation(true, false, "default", "bundled default enablement"),
+    },
+    {
       name: "keeps allowlists authoritative over explicit bundled plugin enablement",
       params: { id: "telegram", origin: "bundled" },
       rawConfig: { plugins: { allow: ["browser"], entries: { telegram: { enabled: true } } } },

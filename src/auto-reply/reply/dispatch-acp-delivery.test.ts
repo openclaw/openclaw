@@ -445,7 +445,6 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
       ok: true,
       delivered: false,
       suppressed: true,
-      reason: "cancelled_by_reply_payload_sending_hook",
     });
     const coordinator = createCoordinator({
       shouldRouteToOriginating: true,

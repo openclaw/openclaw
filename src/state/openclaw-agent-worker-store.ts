@@ -153,7 +153,7 @@ type AgentWorkerPublicationOptions = {
   onAdmitted?: (request: SqliteWorkerAdmissionRequest) => void;
 };
 
-/** @deprecated Use openOpenClawAgentSqliteWorkerStoreV2 without a native handle; final compatibility day: 2026-12-31. */
+/** @deprecated Use openOpenClawAgentSqliteWorkerStoreV2 without a native handle; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function openOpenClawAgentSqliteWorkerStore<Operations extends SqliteWorkerOperations>(
   inputOptions: OpenClawAgentDatabaseOptions,
   publicationSource: EngineConnection,
@@ -374,15 +374,14 @@ async function createOpenClawAgentSqliteWorkerStore<Operations extends SqliteWor
       close,
     });
     unregisterState = registerOpenClawStateDatabaseAsyncResource({
-      close: async (closedIdentity) => {
-        if (!closedIdentity || closedIdentity.key === state.identity.key) {
-          reportTerminal(
-            new AgentDatabaseExecutionAdmissionClosedError(
-              "Agent database Worker state admission closed",
-            ),
-          );
-          await close();
-        }
+      admission: state,
+      close: async () => {
+        reportTerminal(
+          new AgentDatabaseExecutionAdmissionClosedError(
+            "Agent database Worker state admission closed",
+          ),
+        );
+        await close();
       },
     });
     if (expectedDatabase) {

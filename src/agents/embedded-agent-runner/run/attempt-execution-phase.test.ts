@@ -3,6 +3,8 @@ import path from "node:path";
 import { createAssistantMessageEventStream, type Message } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { claimResponsesCompactRequest } from "../../../../packages/ai/src/transports/openai-responses-compact-request.js";
+import { summarizeOpenAITransportError } from "../../../../packages/ai/src/transports/openai-responses-debug.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import {
@@ -12,7 +14,7 @@ import {
 import { fetchWithSsrFGuard } from "../../../infra/net/fetch-guard.js";
 import { captureGuardedFetchRequestAuthority } from "../../../infra/net/fetch-request-authority.js";
 import { createDiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
-import { runAgentLoop } from "../../../plugin-sdk/agent-core.js";
+import { convertToLlm, runAgentLoop } from "../../../plugin-sdk/agent-core.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import {
@@ -31,7 +33,9 @@ import {
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
 import type { AgentSessionEvent } from "../../sessions/agent-session-types.js";
+import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
 import { SessionManager } from "../../sessions/session-manager.js";
+import { SettingsManager } from "../../sessions/settings-manager.js";
 import { makeZeroUsageSnapshot } from "../../usage.js";
 import { log } from "../logger.js";
 import { resolveEmbeddedAgentStream } from "../stream-resolution.js";
@@ -43,7 +47,10 @@ const { createFixture, mocks } = await vi.hoisted(
 
 import { runEmbeddedAttemptExecutionPhase } from "./attempt-execution-phase.js";
 import { prepareEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle-prepare.js";
+import { createChatGPTV2CompactionBoundary } from "./chatgpt-v2-compaction.js";
 import type { EmbeddedContextAccountingEvent } from "./internal-params.js";
+import { streamWithIdleTimeout } from "./llm-idle-timeout.js";
+import { MidTurnPrecheckSignal } from "./midturn-precheck.js";
 import { claimAgentSessionWriter } from "./session-bootstrap.js";
 
 registerAgentSessionLoopTestLifecycle();
@@ -152,13 +159,18 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
           prompt: "reply",
           timeoutMs: 30_000,
         });
-        fixture.input.attempt.sessionTarget = { ...target, ...writer };
+        const selected = {
+          ...target,
+          expectedLifecycleRevision: writer?.expectedLifecycleRevision,
+          expectedWriterRunId: writer?.expectedWriterRunId,
+        };
+        fixture.input.attempt.sessionTarget = selected;
         const transcript = await prepareEmbeddedAttemptTranscriptLifecycle({
           attempt: fixture.input.attempt,
           externalAbortController: { arm: () => {}, throwIfFiredAfterPrepCleanup: async () => {} },
         });
         fixture.input.sessionLock = transcript;
-        const manager = SessionManager.open({ ...target, ...writer });
+        const manager = SessionManager.open(selected);
         const fetchImpl = vi.fn(async () => new Response("ok"));
         fixture.activeSession.prompt.mockImplementation(async () => {
           const requestAuthority = captureGuardedFetchRequestAuthority();
@@ -242,7 +254,11 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
         prompt: "reply",
         timeoutMs: 30_000,
       });
-      const selected = { ...target, ...writer };
+      const selected = {
+        ...target,
+        expectedLifecycleRevision: writer?.expectedLifecycleRevision,
+        expectedWriterRunId: writer?.expectedWriterRunId,
+      };
       fixture.input.attempt.sessionTarget = selected;
       const transcript = await prepareEmbeddedAttemptTranscriptLifecycle({
         attempt: fixture.input.attempt,
@@ -798,21 +814,123 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
     }
   });
 
-  it("attributes an idle timeout during authoritative compaction to compaction", async () => {
+  it("preserves session watchdog attribution through model-call recovery", async () => {
     const fixture = await createFixture({ exerciseTerminalMerges: false });
-    fixture.activeSession.isCompacting = true;
+    mocks.installStreamGuards.mockImplementationOnce(() => ({
+      onModelRequest: vi.fn(),
+      onModelUsage: vi.fn(),
+      getPromptCacheObservation: vi.fn(),
+      isModelCallActive: () => true,
+    }));
+    fixture.runAbort.mockImplementation((_timeout, reason) =>
+      fixture.input.runAbortController.abort(reason),
+    );
     await runEmbeddedAttemptExecutionPhase(fixture.input);
-    const idleError = new Error("idle timeout");
-    const guardCallbacks = mocks.installStreamGuards.mock.calls[0]?.[1];
 
-    guardCallbacks.onIdleTimeout(idleError);
+    const streamInput = mocks.prepareStream.mock.calls[0]?.[0];
+    expect(streamInput.recoverStalledModelCall()).toBe(true);
+    expect(
+      summarizeOpenAITransportError(
+        new Error("stream aborted"),
+        fixture.input.runAbortController.signal,
+      ),
+    ).toContain("abortReason=session_watchdog");
+    expect(fixture.state.terminal).toMatchObject({ kind: "timeout", source: "idle" });
+  });
 
-    expect(fixture.state.terminal).toEqual({
-      kind: "timeout",
-      phase: "compaction",
-      source: "idle",
+  it("lets the compaction owner fall back after a request-local idle timeout", async () => {
+    const fixture = await createFixture({ exerciseTerminalMerges: false });
+    const model = {
+      ...testModel,
+      api: "openai-chatgpt-responses" as const,
+      provider: "openai",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      contextWindow: 32_000,
+    };
+    const manager = SessionManager.inMemory();
+    manager.appendMessage({
+      role: "user",
+      content: "synthetic history ".repeat(2_000),
+      timestamp: 1,
     });
-    expect(fixture.runAbort).toHaveBeenCalledWith(true, idleError);
+    const { session } = await createTestSession({
+      model,
+      sessionManager: manager,
+      settingsManager: SettingsManager.inMemory({
+        compaction: { enabled: true, reserveTokens: 2_000 },
+      }),
+    });
+    Object.defineProperty(fixture.activeSession, "isCompacting", {
+      get: () => session.isCompacting,
+    });
+    fixture.runAbort.mockImplementation((_timeout, error) =>
+      fixture.input.runAbortController.abort(error),
+    );
+    await runEmbeddedAttemptExecutionPhase(fixture.input);
+    const onIdleTimeout = mocks.installStreamGuards.mock.calls[0]?.[1].onIdleTimeout;
+    const started = createDeferred();
+    let requestSignal: AbortSignal | undefined;
+    const streamFn = streamWithIdleTimeout(
+      (_model, _context, options) => {
+        const stream = createAssistantMessageEventStream();
+        const request = claimResponsesCompactRequest(options);
+        if (!request || !options?.signal) {
+          throw new Error("expected a prepared compaction request");
+        }
+        requestSignal = options.signal;
+        options.signal.addEventListener(
+          "abort",
+          () => {
+            request.reject(options.signal?.reason);
+            const message = createAssistant(model, [], "aborted");
+            stream.push({ type: "error", reason: "aborted", error: message });
+            stream.end();
+          },
+          { once: true },
+        );
+        started.resolve();
+        return stream;
+      },
+      25,
+      onIdleTimeout,
+    );
+    const onFallback = vi.fn();
+    const boundary = createChatGPTV2CompactionBoundary({
+      session,
+      contextTokenBudget: 8_000,
+      reserveTokens: 2_000,
+      timeoutMs: 1_000,
+      assertActive: () => fixture.input.runAbortController.signal.throwIfAborted(),
+      withTranscriptWrite: (write) => withSessionManagerWrite(manager, write),
+      onFallback,
+    });
+    vi.useFakeTimers();
+    try {
+      const result = boundary(
+        streamFn,
+        model,
+        { messages: convertToLlm(session.messages) },
+        {
+          signal: fixture.input.runAbortController.signal,
+        },
+      );
+      const failure = result.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      await started.promise;
+      await vi.advanceTimersByTimeAsync(25);
+      expect(await failure).toBeInstanceOf(MidTurnPrecheckSignal);
+      expect(requestSignal?.aborted).toBe(true);
+      expect(fixture.input.runAbortController.signal.aborted).toBe(false);
+      expect(fixture.runAbort).not.toHaveBeenCalled();
+      expect(fixture.state.terminal).toEqual({ kind: "ok" });
+      expect(onFallback).toHaveBeenCalledOnce();
+      expect(session.isCompacting).toBe(false);
+      expect(manager.getBranch().some((entry) => entry.type === "compaction")).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it.each(["flushed", "rejected"] as const)(

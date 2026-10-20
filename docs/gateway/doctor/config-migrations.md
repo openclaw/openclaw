@@ -9,6 +9,16 @@ read_when:
 Checks 0-2 cover config normalization and the legacy config key migrations,
 plus how doctor publishes shared-state schema during an update.
 
+Doctor applies known migrations before removing unrecognized config keys, including
+during updates. Repairs use the normal config backup and write flow. Inputs retained
+for a deferred plugin migration remain untouched until their owner can migrate them.
+
+Legacy `memorySearch` moves to `memory.search`, audio model lists move to
+capability-tagged `tools.media.models`, and node command restrictions move to
+`gateway.nodes.commands`. Doctor also makes legacy multi-agent ownership explicit
+and removes obsolete `meta.lastTouchedAt`, `commands.ownerDisplay`, and
+`gateway.tailscale.resetOnExit` settings.
+
 Plugin config repairs run in order on private config copies. If a repair throws,
 Doctor keeps the config from before that hook, reports the failure, and continues
 with the remaining repairs. Warning-only results stay visible without changing
@@ -26,6 +36,33 @@ channel and account scope, and accounts keep inherited explicit channel lists.
 The migration also leaves lists absent when the effective account, channel, or
 global-default `groupPolicy` disables groups. Explicit policy overrides still
 apply. Update-time Doctor repair follows the same rules.
+
+## Collaborative steering default
+
+Doctor writes `messages.queue.allowCollaborativeSteering: false` when the setting is
+absent, creating missing parent objects. New configuration files contain the same
+explicit default. Existing `true` and `false` values, including values supplied
+through config includes, stay unchanged.
+
+The repair uses Doctor's existing backed-up, include-aware config writer. A
+supported, singly owned nested include receives the repair in
+that file. Ambiguous, shared, external, or root-level include layouts retain the
+writer's existing refusal behavior; Doctor reports the affected boundary so the
+operator can edit its owning file explicitly. Repeated repair is idempotent.
+
+Persisting this default can also update database-backed config bookkeeping.
+The existing [update rollback checks](/cli/update/how-updates-run) still apply:
+unattributed database writes prevent automatic restoration, including writes
+made during Doctor. The updater retains recovery artifacts for manual recovery.
+
+Managed package updates and source updates invoke candidate Doctor and use this
+repair. Older update drivers that request a read-only Doctor phase cannot persist
+it in that phase. Direct package-manager upgrades, manual package replacement, and
+container-image replacement can bypass Doctor entirely. These installations use
+the runtime default immediately; run `openclaw doctor --fix` to persist it.
+Ordinary configuration reads and Gateway startup do not write this setting.
+
+See [Queue steering](/concepts/queue-steering) for the opt-in authority tradeoff.
 
 ## Cloud setup secret migration
 
@@ -526,6 +563,32 @@ owners remain independent: choosing a different system agent does not change
 which agent owns existing legacy data. Keep the original markers until Doctor
 has completed both the config and state repairs.
 
+An already converged explicit roster can leave the system agent
+(`agents.defaults.systemAgent.agentId`) without `workspace`, so its persona,
+bootstrap, and memory files resolve to its own directory while older releases
+kept them in the launch workspace. `openclaw doctor --fix` copies the agent's
+files into one of the two and records it as `agents.entries.<agentId>.workspace`:
+
+- With `agents.defaults.workspace` set, Doctor pins `<root>/<agentId>`, never
+  the shared root, which also holds the other agents' workspaces. The pin keeps
+  the root as you wrote it (`${WORKSPACE_ROOT}/<agentId>`, `~/x/<agentId>`), so
+  changing that variable moves defaults and pin together, including when
+  `agents.defaults` comes from an `$include` file.
+- Without it, Doctor pins the launch workspace, so the agent's working
+  directory does not change.
+
+Doctor copies a customized `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, or `USER.md`,
+`MEMORY.md`, and the files under `memory/` and `skills/` (a symbolic link there
+is recreated pointing at the same target). A seeded template in the pinned
+directory is replaced; a customized file there is kept, and Doctor names each
+file it kept whose other copy differs. Nothing is moved or deleted. Doctor
+skips copying from a root another agent already resolves to, and only warns
+when the roster lives in an included file.
+
+`openclaw doctor` without `--fix` only describes the copies. If you accept its
+"Apply recommended config repairs now?" prompt, Doctor makes them before the
+pin is written; if you decline, nothing is copied and no pin is written.
+
 Doctor follows the existing [include write constraints](/gateway/config-secrets-env).
 A root-level `$include`, or a repair spanning an included roster and root-owned
 roles, can require manual preparation; repeating `doctor --fix` alone does not
@@ -596,8 +659,11 @@ versions can still open their historical default port.
 
 Startup leaves config bytes unchanged. When the completion marker is the sole
 required change, startup records it in stored SQLite machine state, including
-when no config file exists yet. If endpoints or other channel settings need
-repair, startup refuses with `openclaw doctor --fix` guidance. For a read-only
+when no config file exists yet. Later starts read
+that stored completion before loading migration contracts, including when the
+inspection found no listeners to pin. A failure to save completion warns and
+retries on the next boot without blocking startup. If endpoints or other channel
+settings need repair, startup refuses with `openclaw doctor --fix` guidance. For a read-only
 external config source, update that source and its completion marker as directed
 by the startup error. Startup refuses to drop an unmigrated endpoint. A fresh
 installation needs no pins or a new config file that would interfere with

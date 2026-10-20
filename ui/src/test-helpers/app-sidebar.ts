@@ -10,6 +10,7 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import { createApplicationNavigationPreferences } from "../app/bootstrap-navigation-preferences.ts";
+import { createChatSubmissions } from "../app/chat-submissions.ts";
 import { createApplicationConfigCapability } from "../app/config.ts";
 import type {
   ApplicationContext,
@@ -21,7 +22,7 @@ import type { ApplicationOverlays } from "../app/overlays-types.ts";
 import type { AppSidebarElement, AppSidebarOwner } from "../components/app-sidebar.tsx";
 import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
 import { createInitialConfigState } from "../lib/config/config-state-model.ts";
-import { isSessionRunActive } from "../lib/session-run-state.ts";
+import { isSessionRunStateActive } from "../lib/session-run-state.ts";
 import {
   createSessionCapability,
   type SessionCapability,
@@ -313,7 +314,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     subscribeCreated: () => () => undefined,
     isPreparedWorkSession: () => false,
     isRunVisuallyActive: (row: GatewaySessionRow) =>
-      scopedSessions?.isRunVisuallyActive(row) ?? isSessionRunActive(row),
+      scopedSessions?.isRunVisuallyActive(row) ?? isSessionRunStateActive(row),
     pullRequestSummary: (key: string) => pullRequestSummaries.get(key),
     setPullRequestSummary(key: string, summary: SessionCatalogPullRequestSummary | undefined) {
       if (summary) {
@@ -518,7 +519,9 @@ export function createContext(
     config: createApplicationConfigCapability({ resourceBasePath: "" }),
     gateway,
     ...lifecycle,
+    chatSubmissions: createChatSubmissions(),
     navigation: createApplicationNavigationPreferences(lifecycle.theme),
+    navigate: vi.fn(),
     sessions,
     plugins: {
       registrations: () => [],
@@ -584,7 +587,7 @@ export async function createSidebarElement(): Promise<SidebarLifecycleState> {
         return false;
       }
       const written = Reflect.set(owner, key, value);
-      owner.requestUpdate();
+      owner.invalidate();
       return written;
     },
   }) as SidebarLifecycleState;
@@ -625,7 +628,7 @@ export async function mountSidebarContext(
   const owner = getAppSidebarOwner(element)!;
   await Promise.all([
     import("../components/app-sidebar-session-narration.ts"),
-    owner.preloadCatalogRenderer(),
+    owner.catalogRendererImport.load(),
     owner.sidebarMenus.preloadMenuRenderer(),
   ]);
   await sidebar.updateComplete;

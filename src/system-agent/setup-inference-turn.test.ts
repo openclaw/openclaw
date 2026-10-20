@@ -3,17 +3,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as embeddedAgent from "../agents/embedded-agent.js";
 import { FailoverError } from "../agents/failover-error.js";
-import {
-  createPluginMetadataSnapshot,
-  makeRegistry,
-} from "../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  createAgentEventHandler,
-  createChatRunState,
-  createSessionEventSubscriberRegistry,
-  createSessionMessageSubscriberRegistry,
-} from "../gateway/server-chat.js";
+import { createAgentEventTestHarness } from "../gateway/server-chat.agent-events.test-harness.js";
 import {
   emitAgentEvent,
   onAgentEventForRun,
@@ -22,6 +13,7 @@ import {
 import { clearAgentRunContext, getAgentRunContext } from "../infra/agent-run-registry.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
+import { createEmptyPluginMetadataSnapshot } from "../plugins/plugin-metadata-empty.test-support.js";
 import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -41,6 +33,7 @@ import {
   runSetupInferenceTurn,
 } from "./setup-inference-turn.js";
 import { createSystemAgentVerifiedInferenceTestFixture } from "./system-agent.test-helpers.js";
+import * as verifiedInference from "./verified-inference.js";
 
 // mock-isolation: Setup probes replace model I/O without loading the embedded runtime.
 vi.mock("../agents/embedded-agent.js", () => ({ runEmbeddedAgent: vi.fn() }));
@@ -52,28 +45,63 @@ vi.mock("../agents/runtime-plugins.js", () => ({
 
 afterEach(() => vi.restoreAllMocks());
 
-function embeddedRoute(runtime: "codex" | "openclaw" = "codex"): SystemAgentConfiguredRoute {
+function embeddedRoute(
+  runtime: "codex" | "openclaw" = "codex",
+  provider = "openai",
+  model = "gpt-5.6-sol",
+): SystemAgentConfiguredRoute {
+  const modelLabel = `${provider}/${model}`;
   const config: OpenClawConfig = {
     agents: {
       entries: { main: { agentDir: "/tmp/openclaw-agent" } },
       defaults: {
-        model: "openai/gpt-5.6-sol",
-        models: { "openai/gpt-5.6-sol": { agentRuntime: { id: runtime } } },
+        model: modelLabel,
+        models: { [modelLabel]: { agentRuntime: { id: runtime } } },
         workspace: "/tmp/openclaw-workspace",
       },
     },
   };
   return {
     runner: "embedded",
-    provider: "openai",
-    model: "gpt-5.6-sol",
-    modelLabel: "openai/gpt-5.6-sol",
+    provider,
+    model,
+    modelLabel,
     agentId: "main",
     agentDir: "/tmp/openclaw-agent",
     agentHarnessRuntimeOverride: runtime,
     sourceConfig: config,
     runConfig: config,
   };
+}
+
+const runProbe = (route: SystemAgentConfiguredRoute) =>
+  runSetupInferenceTurn({ route, requireExecutionOwner: false });
+
+function probeReply(route: SystemAgentConfiguredRoute, text?: string) {
+  return {
+    ...(text ? {} : { payloads: [{ text: "OK" }] }),
+    meta: {
+      durationMs: 1,
+      ...(text ? { finalAssistantVisibleText: text } : {}),
+      executionTrace: { winnerProvider: route.provider, winnerModel: route.model },
+    },
+  };
+}
+
+function revalidateOwner(
+  binding: Awaited<ReturnType<typeof createSystemAgentVerifiedInferenceTestFixture>>["binding"],
+  createBinding = vi.fn(async () => binding),
+  route: Parameters<typeof revalidateStableSetupInferenceOwner>[0]["route"] = binding.execution,
+  auth: Parameters<typeof revalidateStableSetupInferenceOwner>[0]["auth"] = binding.auth,
+) {
+  vi.spyOn(verifiedInference, "createSystemAgentVerifiedInferenceBinding").mockImplementation(
+    createBinding,
+  );
+  return revalidateStableSetupInferenceOwner({
+    route,
+    auth,
+    stagedOwnerPluginArtifacts: binding,
+  });
 }
 
 describe("setup inference plugin ownership", () => {
@@ -98,11 +126,7 @@ describe("setup inference plugin ownership", () => {
         retryConnectionErrors = params.retryConnectionErrors;
         throw new FailoverError("Connection error.", { reason: "timeout", code });
       });
-      const result = await runSetupInferenceTurn({
-        route,
-        requireExecutionOwner: false,
-        deps: {},
-      });
+      const result = await runProbe(route);
       expect(result).toMatchObject({
         ok: false,
         status: "unavailable",
@@ -122,31 +146,16 @@ describe("setup inference plugin ownership", () => {
     const cleanupStarted = createDeferred();
     const releaseCleanup = createDeferred();
     const removeTempDir = vi.spyOn(fs, "rm");
-    const runEmbeddedAgent = vi.fn(async () => {
+    vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(async () => {
       const trackOwner = captureAsyncWorkTracker();
       void trackOwner(async () => {
         cleanupStarted.resolve();
         await releaseCleanup.promise;
       });
-      return {
-        payloads: [{ text: "OK" }],
-        meta: {
-          durationMs: 1,
-          executionTrace: {
-            winnerProvider: route.provider,
-            winnerModel: route.model,
-          },
-        },
-      };
+      return probeReply(route);
     });
-
-    vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(runEmbeddedAgent);
     let settled = false;
-    const turn = runSetupInferenceTurn({
-      route,
-      deps: {},
-      requireExecutionOwner: false,
-    }).finally(() => {
+    const turn = runProbe(route).finally(() => {
       settled = true;
     });
 
@@ -214,99 +223,76 @@ describe("setup inference plugin ownership", () => {
     );
   });
 
-  it.each([true])(
-    "retains the probing registry artifact preference (%s)",
-    async (preferBuiltPluginArtifacts) => {
-      const order: string[] = [];
-      const pluginRegistry = createEmptyPluginRegistry();
-      const route = embeddedRoute();
-      const { binding } = await createSystemAgentVerifiedInferenceTestFixture(route.sourceConfig);
-      const metadataSnapshot = createPluginMetadataSnapshot({
-        config: route.runConfig,
-        manifestRegistry: makeRegistry([]),
-        workspaceDir: "/tmp/openclaw-workspace",
-      });
-      const probingRegistry = createEmptyPluginRegistry();
-      setPluginRuntimeLoadContext(
-        probingRegistry,
-        resolvePluginRuntimeLoadContext({
-          config: route.runConfig,
-          metadataSnapshot,
-          preferBuiltPluginArtifacts,
-        }),
-      );
-      const previousMetadata = getCurrentPluginMetadataSnapshot();
-      const resolveMetadataSnapshot = vi
-        .spyOn(pluginMetadata, "resolvePluginMetadataSnapshotAsync")
-        .mockImplementation(async () => {
-          order.push("metadata");
-          return metadataSnapshot;
-        });
-      mocks.loadAgentRuntimePluginRegistryHandle.mockImplementationOnce(() => {
-        order.push("load");
-        expect(getCurrentPluginMetadataSnapshot()).toBe(metadataSnapshot);
-        return pluginRegistry;
-      });
-      const createSystemAgentVerifiedInferenceBinding = vi.fn(async () => {
-        order.push("validate");
-        expect(getCurrentPluginMetadataSnapshot()).toBe(metadataSnapshot);
-        expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(pluginRegistry);
-        return binding;
-      });
-
-      await withPluginRuntimeRegistryScope(probingRegistry, async () => {
-        await expect(
-          revalidateStableSetupInferenceOwner({
-            route,
-            auth: {
-              agentHarnessId: "codex",
-              runtimeOwnerKind: "plugin-harness",
-            },
-            stagedOwnerPluginArtifacts: binding,
-            deps: {
-              createSystemAgentVerifiedInferenceBinding,
-            },
-          }),
-        ).resolves.toBe(binding);
-      });
-
-      expect(order).toEqual(["metadata", "load", "validate"]);
-      expect(getCurrentPluginMetadataSnapshot()).toBe(previousMetadata);
-      expect(resolveMetadataSnapshot).toHaveBeenCalledWith({
-        config: route.runConfig,
-        env: process.env,
-        workspaceDir: "/tmp/openclaw-workspace",
-        allowCurrent: false,
-      });
-      expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledWith({
+  it("retains the probing registry artifact preference", async () => {
+    const order: string[] = [];
+    const pluginRegistry = createEmptyPluginRegistry();
+    const route = embeddedRoute();
+    const { binding } = await createSystemAgentVerifiedInferenceTestFixture(route.sourceConfig);
+    const metadataSnapshot = createEmptyPluginMetadataSnapshot("/tmp/openclaw-workspace");
+    const probingRegistry = createEmptyPluginRegistry();
+    setPluginRuntimeLoadContext(
+      probingRegistry,
+      resolvePluginRuntimeLoadContext({
         config: route.runConfig,
         metadataSnapshot,
-        preferBuiltPluginArtifacts,
-        workspaceDir: "/tmp/openclaw-workspace",
-        selections: [
-          { provider: "openai", modelId: "gpt-5.6-sol", runtime: "codex", agentId: "main" },
-        ],
+        preferBuiltPluginArtifacts: true,
+      }),
+    );
+    const previousMetadata = getCurrentPluginMetadataSnapshot();
+    const resolveMetadataSnapshot = vi
+      .spyOn(pluginMetadata, "resolvePluginMetadataSnapshotAsync")
+      .mockImplementation(async () => {
+        order.push("metadata");
+        return metadataSnapshot;
       });
-    },
-  );
+    mocks.loadAgentRuntimePluginRegistryHandle.mockImplementationOnce(() => {
+      order.push("load");
+      expect(getCurrentPluginMetadataSnapshot()).toBe(metadataSnapshot);
+      return pluginRegistry;
+    });
+    const createSystemAgentVerifiedInferenceBinding = vi.fn(async () => {
+      order.push("validate");
+      expect(getCurrentPluginMetadataSnapshot()).toBe(metadataSnapshot);
+      expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(pluginRegistry);
+      return binding;
+    });
+
+    await withPluginRuntimeRegistryScope(probingRegistry, async () => {
+      await expect(
+        revalidateOwner(binding, createSystemAgentVerifiedInferenceBinding, route, {
+          agentHarnessId: "codex",
+          runtimeOwnerKind: "plugin-harness",
+        }),
+      ).resolves.toBe(binding);
+    });
+
+    expect(order).toEqual(["metadata", "load", "validate"]);
+    expect(getCurrentPluginMetadataSnapshot()).toBe(previousMetadata);
+    expect(resolveMetadataSnapshot).toHaveBeenCalledWith({
+      config: route.runConfig,
+      env: process.env,
+      workspaceDir: "/tmp/openclaw-workspace",
+      allowCurrent: false,
+    });
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledWith({
+      config: route.runConfig,
+      metadataSnapshot,
+      preferBuiltPluginArtifacts: true,
+      workspaceDir: "/tmp/openclaw-workspace",
+      selections: [
+        { provider: "openai", modelId: "gpt-5.6-sol", runtime: "codex", agentId: "main" },
+      ],
+    });
+  });
 
   it("does not load plugins for a direct custom provider using the built-in OpenClaw harness", async () => {
-    const config: OpenClawConfig = {
-      agents: {
-        entries: { main: { agentDir: "/tmp/openclaw-agent" } },
-        defaults: {
-          model: "fixture/direct-model",
-          models: { "fixture/direct-model": { agentRuntime: { id: "openclaw" } } },
-          workspace: "/tmp/openclaw-workspace",
-        },
-      },
-      models: {
-        providers: {
-          fixture: {
-            api: "openai-completions",
-            baseUrl: "https://provider.example/v1",
-            models: [],
-          },
+    const config = embeddedRoute("openclaw", "fixture", "direct-model").runConfig;
+    config.models = {
+      providers: {
+        fixture: {
+          api: "openai-completions",
+          baseUrl: "https://provider.example/v1",
+          models: [],
         },
       },
     };
@@ -314,16 +300,7 @@ describe("setup inference plugin ownership", () => {
     expect(binding.ownerPluginIds).toEqual([]);
     mocks.loadAgentRuntimePluginRegistryHandle.mockClear();
 
-    await expect(
-      revalidateStableSetupInferenceOwner({
-        route: binding.execution,
-        auth: binding.auth,
-        stagedOwnerPluginArtifacts: binding,
-        deps: {
-          createSystemAgentVerifiedInferenceBinding: vi.fn(async () => binding),
-        },
-      }),
-    ).resolves.toBe(binding);
+    await expect(revalidateOwner(binding)).resolves.toBe(binding);
 
     expect(mocks.loadAgentRuntimePluginRegistryHandle).not.toHaveBeenCalled();
   });
@@ -335,34 +312,20 @@ describe("setup probe projection", () => {
     async (phase) => {
       const route = embeddedRoute("openclaw");
       const events: AgentEventRuntimePayload[] = [];
-      const broadcast = vi.fn();
-      const broadcastToConnIds = vi.fn();
-      const nodeSendToSession = vi.fn();
       const persistLifecycle = vi.fn(async () => undefined);
-      const chatRunState = createChatRunState();
-      const sessionMessageSubscribers = createSessionMessageSubscriberRegistry();
-      const handler = createAgentEventHandler({
-        broadcast,
-        broadcastToConnIds,
-        nodeSendToSession,
-        nodeHasSessionSubscribers: () => false,
-        agentRunSeq: new Map(),
-        chatRunState,
-        resolveSessionKeyForRun: () => undefined,
-        clearAgentRunContext,
-        toolEventRecipients: chatRunState.toolEventRecipients,
-        sessionEventSubscribers: createSessionEventSubscriberRegistry(),
-        sessionMessageSubscribers,
+      const gateway = createAgentEventTestHarness({
         persistGatewaySessionLifecycleEventForEvent: persistLifecycle,
         lifecycleErrorRetryGraceMs: 0,
       });
+      gateway.nodeHasSessionSubscribers.mockReturnValue(false);
+      gateway.clearAgentRunContext.mockImplementation(clearAgentRunContext);
       let runId: string | undefined;
       let unsubscribe = () => {};
       try {
         vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(async (params) => {
           runId = params.runId;
           unsubscribe = onAgentEventForRun(params.runId, (event) => events.push(event));
-          sessionMessageSubscribers.subscribe("probe-viewer", params.sessionKey!);
+          gateway.sessionMessageSubscribers.subscribe("probe-viewer", params.sessionKey!);
           emitAgentEvent({
             runId: params.runId,
             sessionKey: params.sessionKey,
@@ -382,19 +345,9 @@ describe("setup probe projection", () => {
           if (phase === "error") {
             throw new Error("provider refused probe");
           }
-          return {
-            meta: {
-              durationMs: 1,
-              finalAssistantVisibleText: "Internal setup response",
-              executionTrace: { winnerProvider: route.provider, winnerModel: route.model },
-            },
-          };
+          return probeReply(route, "Internal setup response");
         });
-        const result = await runSetupInferenceTurn({
-          route,
-          requireExecutionOwner: false,
-          deps: {},
-        });
+        const result = await runProbe(route);
         expect(result).toMatchObject(
           phase === "end"
             ? { ok: true, text: "Internal setup response" }
@@ -405,16 +358,18 @@ describe("setup probe projection", () => {
 
         // Gateway delivery can consume retained events after the producer has cleaned up.
         for (const event of events) {
-          await handler(event);
+          await gateway.handler(event);
         }
-        expect(broadcast).not.toHaveBeenCalled();
-        expect(broadcastToConnIds).not.toHaveBeenCalled();
-        expect(nodeSendToSession).not.toHaveBeenCalled();
-        expect(persistLifecycle).not.toHaveBeenCalled();
+        [
+          gateway.broadcast,
+          gateway.broadcastToConnIds,
+          gateway.nodeSendToSession,
+          persistLifecycle,
+        ].forEach((delivery) => expect(delivery).not.toHaveBeenCalled());
       } finally {
         unsubscribe();
-        await handler.dispose();
-        chatRunState.clear();
+        await gateway.handler.dispose();
+        gateway.chatRunState.clear();
         if (runId) {
           clearAgentRunContext(runId);
         }

@@ -1,3 +1,5 @@
+// Temporary #174343 upgrade dead-end repair; remove after 2026-11-29 with
+// Doctor compat record doctor-pre-july-retired-state.
 import { resolveStateDir } from "../config/paths.js";
 import { withLegacyMigrationStateLock } from "../infra/state-migrations.lock.js";
 import { archiveRetiredStateFiles } from "../infra/state-migrations.retired-archive.js";

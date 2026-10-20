@@ -27,6 +27,11 @@ const observer = await vi.hoisted(async () => {
   const { createMemoryObservationHarness } = await import("./memory/watcher-test-support.js");
   return createMemoryObservationHarness();
 });
+// Keep controlled invalidations in-process; native worker transport has separate coverage.
+vi.mock("./memory/local-file-watcher.js", async (original) => ({
+  ...(await original<typeof import("./memory/local-file-watcher.js")>()),
+  LocalMemoryFileWatcher: (await import("./memory/file-watcher.js")).MemoryFileWatcher,
+}));
 // File contents and indexing are real; the fixture delivers invalidations without OS timing.
 vi.mock("openclaw/plugin-sdk/file-access-runtime", async (original) => ({
   ...(await original<typeof import("openclaw/plugin-sdk/file-access-runtime")>()),
@@ -157,15 +162,22 @@ describe.skipIf(!connection)("PostgreSQL memory_search product flows", () => {
   async function write(agentId: string, name: string, text: string) {
     const file = path.join(workspaces.get(agentId)!, "memory", name);
     await fs.writeFile(file, text);
-    invalidate(file);
+    invalidate(agentId, file);
   }
 
-  function invalidate(file: string) {
+  function invalidate(agentId: string, file: string) {
+    let observed = false;
     for (const entry of observer.observations) {
       const relative = path.relative(entry.root.rootDir, file);
       if (!relative.startsWith("..")) {
+        observed = true;
         entry.dirty([{ path: relative, type: "structural" }]);
       }
+    }
+    if (managers.has(agentId)) {
+      expect(observed, "Expected the active memory watcher to receive fixture invalidation").toBe(
+        true,
+      );
     }
   }
 
@@ -256,7 +268,7 @@ describe.skipIf(!connection)("PostgreSQL memory_search product flows", () => {
       "memory/rhododendron-map.md",
     ]);
     await fs.unlink(path.join(workspaces.get("main")!, "memory", "rhododendron-map.md"));
-    invalidate(path.join(workspaces.get("main")!, "memory", "rhododendron-map.md"));
+    invalidate("main", path.join(workspaces.get("main")!, "memory", "rhododendron-map.md"));
     await sync();
     expect((await search("saffron")).results).toEqual([]);
     expect((await search("rhododendron-map")).results).toEqual([]);
@@ -317,7 +329,7 @@ describe.skipIf(!connection)("PostgreSQL memory_search product flows", () => {
     ).toMatchObject(updated);
     const target = path.join(workspaces.get("semantic")!, "memory", "target.md");
     await fs.unlink(target);
-    invalidate(target);
+    invalidate("semantic", target);
     await sync("semantic");
     expect(
       (await search("semantic-only", { agentId: "semantic", maxResults: 1 })).results,

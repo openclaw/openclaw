@@ -2,11 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { clearDevicePairing } from "../../infra/device-pairing.js";
 import { registerGatewayPolicyResponse } from "../server/ws-policy-close.js";
 import { bindDeviceWorkerReconciliation } from "../worker-environments/device-provider.js";
-import {
-  clearDevicePairingMock,
-  createOptions,
-  resetDeviceHandlerTestState,
-} from "./devices.test-support.js";
+import { mocks, createOptions, resetDeviceHandlerTestState } from "./devices.test-support.js";
 
 const { deviceHandlers } = await import("./devices.js");
 const clear = deviceHandlers["device.pair.clear"]!;
@@ -18,13 +14,13 @@ const committed = {
 describe("device pairing clear", () => {
   beforeEach(() => {
     resetDeviceHandlerTestState();
-    clearDevicePairingMock.mockReset().mockResolvedValue(committed);
+    mocks.pairing.clearDevicePairing.mockReset().mockResolvedValue(committed);
   });
 
   it("rejects malformed parameters before mutation", async () => {
     const options = createOptions("device.pair.clear", { pending: "yes" });
     await clear(options);
-    expect(clearDevicePairingMock).not.toHaveBeenCalled();
+    expect(mocks.pairing.clearDevicePairing).not.toHaveBeenCalled();
     expect(options.respond).toHaveBeenCalledWith(false, undefined, expect.anything());
   });
 
@@ -45,7 +41,7 @@ describe("device pairing clear", () => {
       invalidateClientsForDevice: vi.fn((deviceId) => order.push(`invalidate:${deviceId}`)),
       disconnectClientsForDevice: vi.fn((deviceId) => order.push(`disconnect:${deviceId}`)),
     });
-    clearDevicePairingMock.mockImplementationOnce(
+    mocks.pairing.clearDevicePairing.mockImplementationOnce(
       async (input: Parameters<typeof clearDevicePairing>[0]) => {
         input.assertCurrent?.();
         expect(response?.pending).toBe(true);

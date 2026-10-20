@@ -1,4 +1,3 @@
-// Setup-flow operation tests cover parsing and deterministic one-shot guidance.
 import { describe, expect, it, vi } from "vitest";
 import { listChannelSetupPlugins } from "../channels/plugins/setup-registry.js";
 import { resolveChannelSetupEntries } from "../commands/channel-setup/discovery.js";
@@ -21,22 +20,22 @@ vi.mock("../config/channel-configured-shared.js", async (importOriginal) => ({
   isStaticallyChannelConfigured: vi.fn(),
 }));
 
+function expectOperation(input: string, operation: ReturnType<typeof parseSystemAgentOperation>) {
+  expect(parseSystemAgentOperation(input)).toEqual(operation);
+}
+function expectLines(lines: string[], expected: string[]) {
+  for (const text of expected) {
+    expect(lines.join("\n")).toContain(text);
+  }
+}
+
 describe("system agent setup-flow operations", () => {
   it("parses channel listing and connect requests", () => {
-    expect(parseSystemAgentOperation("channels")).toEqual({ kind: "channel-list" });
-    expect(parseSystemAgentOperation("list channels")).toEqual({ kind: "channel-list" });
-    expect(parseSystemAgentOperation("connect telegram")).toEqual({
-      kind: "channel-setup",
-      channel: "telegram",
-    });
-    expect(parseSystemAgentOperation("connect to WhatsApp")).toEqual({
-      kind: "channel-setup",
-      channel: "whatsapp",
-    });
-    expect(parseSystemAgentOperation("link discord channel")).toEqual({
-      kind: "channel-setup",
-      channel: "discord",
-    });
+    expectOperation("channels", { kind: "channel-list" });
+    expectOperation("list channels", { kind: "channel-list" });
+    expectOperation("connect telegram", { kind: "channel-setup", channel: "telegram" });
+    expectOperation("connect to WhatsApp", { kind: "channel-setup", channel: "whatsapp" });
+    expectOperation("link discord channel", { kind: "channel-setup", channel: "discord" });
     // Starting the wizard is not a write; the wizard collects explicit answers.
     expect(isPersistentSystemAgentOperation({ kind: "channel-setup", channel: "telegram" })).toBe(
       false,
@@ -89,28 +88,19 @@ describe("system agent setup-flow operations", () => {
       "use the setup wizard",
       "use the wizard",
     ]) {
-      expect(parseSystemAgentOperation(input)).toEqual({ kind: "open-setup", target: "guided" });
+      expectOperation(input, { kind: "open-setup", target: "guided" });
     }
     for (const input of ["open classic wizard", "open classic setup wizard", "classic setup"]) {
-      expect(parseSystemAgentOperation(input)).toEqual({ kind: "open-setup", target: "classic" });
+      expectOperation(input, { kind: "open-setup", target: "classic" });
     }
-    expect(parseSystemAgentOperation("open channel wizard")).toEqual({
-      kind: "open-setup",
-      target: "channels",
-    });
-    expect(parseSystemAgentOperation("open channel wizard for Slack")).toEqual({
+    expectOperation("open channel wizard", { kind: "open-setup", target: "channels" });
+    expectOperation("open channel wizard for Slack", {
       kind: "open-setup",
       target: "channels",
       channel: "slack",
     });
-    expect(parseSystemAgentOperation("channel info Slack")).toEqual({
-      kind: "channel-info",
-      channel: "slack",
-    });
-    expect(parseSystemAgentOperation("about Telegram channel")).toEqual({
-      kind: "channel-info",
-      channel: "telegram",
-    });
+    expectOperation("channel info Slack", { kind: "channel-info", channel: "slack" });
+    expectOperation("about Telegram channel", { kind: "channel-info", channel: "telegram" });
     expect(parseSystemAgentOperation("please open the setup wizard soon").kind).toBe("none");
     expect(parseSystemAgentOperation("channel info slack please").kind).toBe("none");
   });
@@ -129,13 +119,14 @@ describe("system agent setup-flow operations", () => {
       expect(result.applied).toBe(false);
     }
 
-    const output = lines.join("\n");
-    expect(output).toContain("openclaw onboard`");
-    expect(output).toContain("openclaw onboard --classic");
-    expect(output).toContain("openclaw channels add --channel slack");
-    expect(output).toContain("openclaw configure --section web");
-    expect(output).toContain("openclaw configure --section gateway");
-    expect(output).toContain("on the machine running OpenClaw");
+    expectLines(lines, [
+      "openclaw onboard`",
+      "openclaw onboard --classic",
+      "openclaw channels add --channel slack",
+      "openclaw configure --section web",
+      "openclaw configure --section gateway",
+      "on the machine running OpenClaw",
+    ]);
   });
 
   it("prints one-shot pointers for hosted skills, search, and Gateway setup", async () => {
@@ -145,9 +136,11 @@ describe("system agent setup-flow operations", () => {
     await executeSystemAgentOperation({ kind: "search-setup" }, runtime);
     await executeSystemAgentOperation({ kind: "gateway-config-setup" }, runtime);
 
-    expect(lines.join("\n")).toContain("openclaw configure --section skills");
-    expect(lines.join("\n")).toContain("openclaw configure --section web");
-    expect(lines.join("\n")).toContain("openclaw configure --section gateway");
+    expectLines(lines, [
+      "openclaw configure --section skills",
+      "openclaw configure --section web",
+      "openclaw configure --section gateway",
+    ]);
   });
 
   it("points one-shot memory import at interactive owners", async () => {
@@ -165,36 +158,31 @@ describe("system agent setup-flow operations", () => {
     const result = await executeSystemAgentOperation({ kind: "model-setup" }, runtime);
 
     expect(result.applied).toBe(false);
-    expect(lines.join("\n")).toContain("Settings → Models → Connect provider");
-    expect(lines.join("\n")).toContain("selected System or agent scope");
-    expect(lines.join("\n")).toContain("replacing credentials for a provider already in use");
+    expectLines(lines, [
+      "Settings → Models → Connect provider",
+      "selected System or agent scope",
+      "replacing credentials for a provider already in use",
+    ]);
     expect(lines.join("\n")).not.toContain("openclaw onboard");
   });
 
   it("prints discovered channel metadata and sorted unknown-channel choices", async () => {
     const { runtime, lines } = createSystemAgentTestRuntime();
-    const entries: ReturnType<typeof resolveChannelSetupEntries>["entries"] = [
-      {
-        id: "telegram",
-        meta: {
-          id: "telegram",
-          label: "Telegram",
-          selectionLabel: "Telegram",
-          blurb: "Telegram bot messaging.",
-          docsPath: "/channels/telegram",
-        },
+    const entries: ReturnType<typeof resolveChannelSetupEntries>["entries"] = (
+      [
+        ["telegram", "Telegram", "bot"],
+        ["slack", "Slack", "app"],
+      ] as const
+    ).map(([id, label, kind]) => ({
+      id,
+      meta: {
+        id,
+        label,
+        selectionLabel: label,
+        blurb: `${label} ${kind} messaging.`,
+        docsPath: `/channels/${id}`,
       },
-      {
-        id: "slack",
-        meta: {
-          id: "slack",
-          label: "Slack",
-          selectionLabel: "Slack",
-          blurb: "Slack app messaging.",
-          docsPath: "/channels/slack",
-        },
-      },
-    ];
+    }));
     vi.mocked(listChannelSetupPlugins).mockReturnValue([
       {
         id: "slack",
@@ -215,13 +203,14 @@ describe("system agent setup-flow operations", () => {
     );
 
     await executeSystemAgentOperation({ kind: "channel-info", channel: "slack" }, runtime);
-    const knownOutput = lines.join("\n");
-    expect(knownOutput).toContain("Slack (slack)");
-    expect(knownOutput).toContain("Slack app messaging.");
-    expect(knownOutput).toContain("Configured: yes");
-    expect(knownOutput).toContain("Installed: yes");
-    expect(knownOutput).toContain("https://docs.openclaw.ai/channels/slack");
-    expect(knownOutput).toContain("open channel wizard for slack");
+    expectLines(lines, [
+      "Slack (slack)",
+      "Slack app messaging.",
+      "Configured: yes",
+      "Installed: yes",
+      "https://docs.openclaw.ai/channels/slack",
+      "open channel wizard for slack",
+    ]);
 
     lines.length = 0;
     await executeSystemAgentOperation({ kind: "channel-info", channel: "matrix" }, runtime);

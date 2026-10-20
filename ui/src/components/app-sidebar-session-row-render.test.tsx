@@ -68,12 +68,12 @@ function createHost(mode: "chip" | "roster" = "roster", snapshot?: Partial<Sideb
   const container = document.createElement("div");
   const props = document.createElement("openclaw-app-sidebar") as AppSidebarElement;
   props.sidebarAgentsMode = mode;
-  const host = new AppSidebarOwner(
-    { dashboards: null, loadMoreDashboards() {} },
-    props,
-    context,
-    props,
-  );
+  const host = new AppSidebarOwner({ dashboards: null, loadMoreDashboards() {} }, context, props);
+  // The full sidebar mounts this owner; row-only fixtures keep the supplied catalog summary.
+  host.sessionPullRequests = {
+    summary: (_sessionKey, _worktreeId, initial) => initial,
+    count: () => undefined,
+  };
   host.sessionOwnershipVisibility = { filters: true, avatars: true };
   document.body.append(container);
   if (snapshot) {
@@ -158,7 +158,7 @@ it("hides archived pages in the restored sidebar before live data arrives", asyn
       }),
     ]),
   });
-  host.requestUpdate();
+  host.invalidate();
   await host.updateComplete;
   expect(
     dom.present(
@@ -179,7 +179,7 @@ it("paints the restored roster and workspace in the first sidebar update", async
     mode: "roster",
     cards: [{ id: "main", name: "Harbor", mainKey: "agent:main:main", textAvatar: "⚓" }],
   });
-  host.requestUpdate();
+  host.invalidate();
   await host.updateComplete;
   expect(
     dom.present('aside[data-snapshot-state="cached"]', "openclaw-sidebar-agent-roster"),
@@ -188,7 +188,7 @@ it("paints the restored roster and workspace in the first sidebar update", async
   expect(dom.query('[data-avatar="⚓"]')).not.toBeNull();
 });
 
-it("keeps cached session rows while the live roster settles", async () => {
+it("keeps cached agent rows while the live roster settles", async () => {
   const key = "agent:main:dashboard:cedar";
   const list = createDeferred<SessionsListResult>();
   const requested = createDeferred();
@@ -202,7 +202,7 @@ it("keeps cached session rows while the live roster settles", async () => {
         return { ts: 1, path: "", count: 0, defaults: {}, sessions: [] };
       }
       if (method === "sessions.groups.list") {
-        return { names: [], sectionOrder: [] };
+        return { groups: [], sectionOrder: [] };
       }
       if (method === "sessions.subscribe") {
         return { subscribed: true };
@@ -242,15 +242,16 @@ it("keeps cached session rows while the live roster settles", async () => {
     ],
     cards: [{ id: "main", name: "Harbor", mainKey: "agent:main:main", textAvatar: "⚓" }],
   });
-  host.requestUpdate();
+  host.invalidate();
   await host.updateComplete;
-  const rowIds = () =>
-    [...host.querySelectorAll(".sidebar-session-content [data-session-key]")].map((row) =>
-      row.getAttribute("data-session-key"),
+  const agentIds = () =>
+    [...host.querySelectorAll(".sidebar-agent-roster__row[data-agent-id]")].map((row) =>
+      row.getAttribute("data-agent-id"),
     );
-  await waitForSolid(() => expect(rowIds()).toEqual([key]));
+  await waitForSolid(() => expect(agentIds()).toEqual(["main"]));
+  expect(host.querySelector(`[data-session-key="${key}"]`)).toBeNull();
   const samples: Array<Array<string | null>> = [];
-  const sample = () => samples.push(rowIds());
+  const sample = () => samples.push(agentIds());
   const observer = new MutationObserver(sample);
   observer.observe(host.hostElement, { childList: true, subtree: true });
   onTestFinished(() => observer.disconnect());
@@ -269,9 +270,10 @@ it("keeps cached session rows while the live roster settles", async () => {
   observer.disconnect();
   sample();
   expect(host.querySelector('aside[data-snapshot-state="live"]')).not.toBeNull();
-  for (const rows of samples) {
-    expect(rows).toEqual([key]);
+  for (const agents of samples) {
+    expect(agents).toEqual(["main"]);
   }
+  expect(host.querySelector(`[data-session-key="${key}"]`)).toBeNull();
 });
 
 it("keeps the unread badge on an idle child with an icon", () => {
@@ -319,7 +321,7 @@ it.each([false, null, undefined])(
 
 it.each(["owner", "icon"] as const)(
   "retains %s artwork and actions when live rows republish unchanged presentation",
-  async (kind) => {
+  (kind) => {
     const { dom, session, current, setCurrent } = mountRow({
       label: "Research",
       color: "blue",
@@ -328,7 +330,7 @@ it.each(["owner", "icon"] as const)(
       owner: { actor: { type: "human", id: "ada", label: "Ada" } },
     });
     const chip = dom.query("openclaw-session-owner-chip");
-    await chip?.updateComplete;
+    flush();
     const content = dom.query(".session-glyph__content")!;
     const artwork = content.firstElementChild;
     const graphic = content.querySelector("svg");
@@ -360,7 +362,6 @@ it.each(["owner", "icon"] as const)(
       owner: { actor: { type: "human", id: "ada", label: "Ada renamed" } },
     });
     flush();
-    await chip?.updateComplete;
     expect(archive.getAttribute("aria-label")).toBe("Restore session: Research");
     expect(archive.querySelector("svg")).toBe(archiveIcon);
     expect(content.firstElementChild).toBe(artwork);

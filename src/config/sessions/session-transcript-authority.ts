@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isSessionRowAssistantMessage } from "../../gateway/session-row-transcript-preview.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import {
   createSqliteCommitReceipt,
@@ -125,9 +126,26 @@ export function publishSessionTranscriptAuthority(
   database: OpenClawAgentDatabase,
   context: SessionTranscriptAuthority,
 ): void {
+  let preparedContext = context;
+  if (context.lastAssistantMessage === "unchanged") {
+    const previous = staged
+      .get(database.db)
+      ?.get(context.sessionKey)
+      ?.facts.get(context.sessionKey);
+    // A turn can append several messages before its one committed receipt is published.
+    if (previous?.kind === "postimage" && previous.value.sessionId === context.sessionId) {
+      preparedContext = {
+        ...context,
+        lastAssistantMessage:
+          previous.value.lastAssistantMessage === undefined
+            ? "unknown"
+            : previous.value.lastAssistantMessage,
+      };
+    }
+  }
   publishTranscriptFact(database, context.sessionKey, {
     kind: "postimage",
-    value: Object.freeze(prepareSessionActorTranscriptAuthority(database, context)),
+    value: Object.freeze(prepareSessionActorTranscriptAuthority(database, preparedContext)),
   });
 }
 
@@ -245,6 +263,11 @@ function isTranscriptReceipt(value: unknown): value is SessionTranscriptAuthorit
       (row.lastMessagePreview !== undefined &&
         row.lastMessagePreview !== null &&
         typeof row.lastMessagePreview !== "string") ||
+      (row.lastAssistantMessage !== undefined &&
+        row.lastAssistantMessage !== null &&
+        row.lastAssistantMessage !== "unknown" &&
+        row.lastAssistantMessage !== "unchanged" &&
+        !isSessionRowAssistantMessage(row.lastAssistantMessage)) ||
       (row.terminalModel !== undefined &&
         row.terminalModel !== null &&
         !isSessionTranscriptTerminalModel(row.terminalModel))

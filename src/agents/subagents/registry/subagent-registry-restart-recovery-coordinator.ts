@@ -37,6 +37,7 @@ export function createInterruptedRecoveryCoordinator(params: {
     retained?: Extract<RestartRecoveryResult, { status: "handled" }>["retained"];
   };
   const attempts = new Map<string, Attempt>();
+  const recovering = new Set<object>();
   let warnedRetainedOwners = new WeakSet<object>();
   let stopObservingRunOwners: (() => void) | undefined;
   const retryRetainedOwner = (runId: string, attempt: Attempt) => {
@@ -144,102 +145,112 @@ export function createInterruptedRecoveryCoordinator(params: {
         // Superseded rows still belong to the sweeper's ordinary orphan cleanup.
         return false;
       }
-      const preparation = gatewayRuntime?.prepareRestartRecovery();
-      if (preparation) {
-        const pausedUntilMs = await preparation;
+      const owner = getSubagentRunRuntimeKey(entry);
+      if (recovering.has(owner)) {
+        return true;
+      }
+      recovering.add(owner);
+      try {
+        const preparation = gatewayRuntime?.prepareRestartRecovery();
+        if (preparation) {
+          const pausedUntilMs = await preparation;
+          if (!isCurrent(runId, entry)) {
+            return true;
+          }
+          if (pausedUntilMs !== undefined) {
+            params.schedule(Math.max(1, pausedUntilMs - Date.now()));
+            return true;
+          }
+        }
+        const previous = attempts.get(entry.runId);
+        if (previous?.retained?.isCurrent()) {
+          return true;
+        }
+        if (previous?.retryAt !== undefined && previous.retryAt > Date.now()) {
+          params.schedule(previous.retryAt - Date.now());
+          return true;
+        }
+        const result = await params.recoverRow({
+          runId,
+          entry,
+          gatewayRuntime,
+          isCurrent,
+          isGatewayCurrent,
+          warn: params.warn,
+        });
+        if (!isGatewayCurrent() || !isSameSubagentRunOwner(params.runs.get(runId), entry)) {
+          return true;
+        }
+        attempts.delete(entry.runId);
+        if (result.status === "ignored" || result.status === "handled") {
+          if (result.status === "handled" && result.retained) {
+            const attempt = { delayMs: 0, retained: result.retained };
+            attempts.set(entry.runId, attempt);
+            // Admission can release before the run context finishes its cleanup.
+            observeRetainedRunOwners();
+            if (!result.retained.isCurrent()) {
+              retryRetainedOwner(entry.runId, attempt);
+            }
+            void result.retained.released?.then(() => {
+              retryRetainedOwner(entry.runId, attempt);
+            });
+          }
+          return result.status === "handled";
+        }
+        if (result.status === "deferred") {
+          const delayMs = Math.min(60_000, Math.max(1_000, (previous?.delayMs ?? 0) * 2));
+          attempts.set(entry.runId, {
+            delayMs,
+            retryAt: Date.now() + delayMs,
+          });
+          params.schedule(delayMs);
+          return true;
+        }
         if (!isCurrent(runId, entry)) {
           return true;
         }
-        if (pausedUntilMs !== undefined) {
-          params.schedule(Math.max(1, pausedUntilMs - Date.now()));
+        let expectedObservation = entry;
+        const finalized = await params.finalizeRun({
+          runId,
+          expectedEntry: entry,
+          recoveryCurrent: {
+            isHostCurrent: () =>
+              isCurrent(runId, expectedObservation) &&
+              result.recoveryCurrent?.isHostCurrent() !== false,
+            prepare: async () =>
+              isCurrent(runId, expectedObservation) &&
+              (await result.recoveryCurrent?.prepare()) !== false &&
+              isCurrent(runId, expectedObservation) &&
+              result.recoveryCurrent?.isHostCurrent() !== false,
+            onPublished: (published) => {
+              if (
+                !isSameSubagentRunOwner(published, entry) ||
+                published.execution.status !== "terminal"
+              ) {
+                throw new SubagentRegistryMutationRejectedError(
+                  "Subagent recovery publication changed its execution owner",
+                );
+              }
+              result.recoveryCurrent?.onPublished?.(published);
+              expectedObservation = published;
+            },
+          },
+          sessionEffects: result.sessionEffects,
+          error: result.error,
+          endedAt: result.endedAt,
+          suppressSessionEffects: result.suppressSessionEffects,
+        });
+        if (!isCurrent(runId, expectedObservation)) {
           return true;
         }
-      }
-      const previous = attempts.get(entry.runId);
-      if (previous?.retained?.isCurrent()) {
-        return true;
-      }
-      if (previous?.retryAt !== undefined && previous.retryAt > Date.now()) {
-        params.schedule(previous.retryAt - Date.now());
-        return true;
-      }
-      const result = await params.recoverRow({
-        runId,
-        entry,
-        gatewayRuntime,
-        isCurrent,
-        isGatewayCurrent,
-        warn: params.warn,
-      });
-      if (!isGatewayCurrent() || !isSameSubagentRunOwner(params.runs.get(runId), entry)) {
-        return true;
-      }
-      attempts.delete(entry.runId);
-      if (result.status === "ignored" || result.status === "handled") {
-        if (result.status === "handled" && result.retained) {
-          const attempt = { delayMs: 0, retained: result.retained };
-          attempts.set(entry.runId, attempt);
-          // Admission can release before the run context finishes its cleanup.
-          observeRetainedRunOwners();
-          if (!result.retained.isCurrent()) {
-            retryRetainedOwner(entry.runId, attempt);
-          }
-          void result.retained.released?.then(() => {
-            retryRetainedOwner(entry.runId, attempt);
-          });
+        if (!finalized) {
+          params.schedule(1_000);
         }
-        return result.status === "handled";
-      }
-      if (result.status === "deferred") {
-        const delayMs = Math.min(60_000, Math.max(1_000, (previous?.delayMs ?? 0) * 2));
-        attempts.set(entry.runId, {
-          delayMs,
-          retryAt: Date.now() + delayMs,
-        });
-        params.schedule(delayMs);
         return true;
+      } finally {
+        // Reset retires observations, but accepted recovery keeps its exclusion until settled.
+        recovering.delete(owner);
       }
-      if (!isCurrent(runId, entry)) {
-        return true;
-      }
-      let expectedObservation = entry;
-      const finalized = await params.finalizeRun({
-        runId,
-        expectedEntry: entry,
-        recoveryCurrent: {
-          isHostCurrent: () =>
-            isCurrent(runId, expectedObservation) &&
-            result.recoveryCurrent?.isHostCurrent() !== false,
-          prepare: async () =>
-            isCurrent(runId, expectedObservation) &&
-            (await result.recoveryCurrent?.prepare()) !== false &&
-            isCurrent(runId, expectedObservation) &&
-            result.recoveryCurrent?.isHostCurrent() !== false,
-          onPublished: (published) => {
-            if (
-              !isSameSubagentRunOwner(published, entry) ||
-              published.execution.status !== "terminal"
-            ) {
-              throw new SubagentRegistryMutationRejectedError(
-                "Subagent recovery publication changed its execution owner",
-              );
-            }
-            result.recoveryCurrent?.onPublished?.(published);
-            expectedObservation = published;
-          },
-        },
-        sessionEffects: result.sessionEffects,
-        error: result.error,
-        endedAt: result.endedAt,
-        suppressSessionEffects: result.suppressSessionEffects,
-      });
-      if (!isCurrent(runId, expectedObservation)) {
-        return true;
-      }
-      if (!finalized) {
-        params.schedule(1_000);
-      }
-      return true;
     },
   };
 }

@@ -19,10 +19,7 @@ import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transactio
 import { SqliteWorkerBroker } from "../../infra/sqlite-worker-broker.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../state/openclaw-agent-schema.js";
 import { drainTranscriptIndexStatus } from "./session-transcript-index-maintenance.js";
-import {
-  isSessionTranscriptIndexStatusClean,
-  maintainSessionTranscriptIndexStatus,
-} from "./session-transcript-index-status.worker.js";
+import { maintainSessionTranscriptIndexStatus } from "./session-transcript-index-status.worker.js";
 import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index.js";
 import {
   bindSqliteWorkerBackend,
@@ -75,9 +72,6 @@ function seedCleanSession(db: DatabaseSync, sessionId: string) {
 }
 
 function maintain(db: DatabaseSync) {
-  if (isSessionTranscriptIndexStatusClean(db)) {
-    return { sessionIds: [], hasMore: false, traversalComplete: true };
-  }
   return withoutTraversal(transaction(db, () => maintainSessionTranscriptIndexStatus(db)));
 }
 
@@ -99,6 +93,30 @@ function settle(db: DatabaseSync) {
   }
   throw new Error("Bounded projection maintenance did not finish");
 }
+
+it("uses the queue it just rebuilt on admission and still observes subsequent writes", () => {
+  const db = createDatabase();
+  seedCleanSession(db, "dirty-z");
+  seedCleanSession(db, "dirty-a");
+  db.exec("UPDATE session_transcript_index_state SET needs_rebuild = 1");
+  const reads = trackSqliteStatementExecutions(db, ["queue"], (sql) =>
+    /^select "session_id" from "temp"\."openclaw_transcript_index_pending"/iu.test(sql)
+      ? "queue"
+      : null,
+  );
+  try {
+    expect(maintain(db)).toEqual({
+      sessionIds: ["dirty-a", "dirty-z"],
+      hasMore: false,
+      traversalComplete: true,
+    });
+    expect(reads.counts.queue).toBe(0);
+  } finally {
+    reads.restore();
+  }
+  db.exec("UPDATE session_transcript_index_state SET needs_rebuild = 0");
+  expect(maintain(db)).toEqual({ sessionIds: [], hasMore: false, traversalComplete: true });
+});
 
 it.each(["preflight", "sweep"] as const)(
   "%s leaves the writer lock free during both host grants and reads subsequent writes",

@@ -135,14 +135,11 @@ export type DiffArtifactBlobMetadata =
 
 export type DiffArtifactMeta = {
   id: string;
-  token: string;
-  createdAt: string;
   expiresAt: string;
   title: string;
   inputKind: DiffInput["kind"];
   fileCount: number;
   viewerPath: string;
-  context?: DiffArtifactContext;
 };
 
 export const DIFF_ARTIFACT_ID_PATTERN = /^[0-9a-f]{20}$/;

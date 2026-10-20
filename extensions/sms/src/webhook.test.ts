@@ -1,8 +1,8 @@
-// Sms tests cover webhook plugin behavior.
 import { createHmac } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { Readable } from "node:stream";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SmsDeliveryRecorder } from "./delivery-observations.js";
 import type { ResolvedSmsAccount } from "./types.js";
@@ -29,22 +29,14 @@ function createHandler(overrides: Partial<SmsWebhookHandlerParams> = {}) {
   });
 }
 
-function parseTestTwilioForm(body: string): Record<string, string> {
-  return Object.fromEntries(new URLSearchParams(body));
+function deliveryHarness(overrides: Partial<SmsWebhookHandlerParams> = {}) {
+  const account = overrides.account ?? createSmsTestAccount();
+  const delivery = createSmsTestDeliveryRecorder();
+  return { account, delivery, handler: createHandler({ ...overrides, account, delivery }) };
 }
 
-function computeTestTwilioSignature(params: {
-  url: string;
-  authToken: string;
-  form: Record<string, string>;
-}): string {
-  const data =
-    params.url +
-    Object.keys(params.form)
-      .toSorted()
-      .map((key) => `${key}${params.form[key] ?? ""}`)
-      .join("");
-  return createHmac("sha1", params.authToken).update(data).digest("base64");
+function parseTestTwilioForm(body: string): Record<string, string> {
+  return Object.fromEntries(new URLSearchParams(body));
 }
 
 function createSignedBody(params?: {
@@ -56,14 +48,21 @@ function createSignedBody(params?: {
   const body =
     params?.body ??
     `AccountSid=${encodeURIComponent(account.accountSid)}&From=%2B15551234567&To=%2B15557654321&Body=hello&MessageSid=${encodeURIComponent(params?.messageSid ?? "SM123")}`;
+  const form = parseTestTwilioForm(body);
+  const signed =
+    account.publicWebhookUrl +
+    Object.keys(form)
+      .toSorted()
+      .map((key) => `${key}${form[key] ?? ""}`)
+      .join("");
   return {
     body,
-    signature: computeTestTwilioSignature({
-      url: account.publicWebhookUrl,
-      authToken: account.authToken,
-      form: parseTestTwilioForm(body),
-    }),
+    signature: createHmac("sha1", account.authToken).update(signed).digest("base64"),
   };
+}
+
+function signForm(form: Record<string, string>, account = createSmsTestAccount()) {
+  return createSignedBody({ account, body: new URLSearchParams(form).toString() });
 }
 
 function createLoopbackSocket(remoteAddress = "127.0.0.1"): Socket {
@@ -114,17 +113,13 @@ function createPendingRequest(): IncomingMessage {
 }
 
 type TestResponse = ServerResponse & {
-  body?: string;
   setHeaderMock: ReturnType<typeof vi.fn>;
   endMock: ReturnType<typeof vi.fn>;
 };
 
 function createResponse(): TestResponse {
   const setHeaderMock = vi.fn();
-  const endMock = vi.fn(function (this: ServerResponse & { body?: string }, body?: string) {
-    this.body = body;
-    return this;
-  });
+  const endMock = vi.fn();
   return {
     statusCode: 200,
     setHeader: setHeaderMock,
@@ -134,51 +129,71 @@ function createResponse(): TestResponse {
   } as unknown as TestResponse;
 }
 
+async function dispatch(
+  handler: ReturnType<typeof createHandler>,
+  payload: { body: string; signature: string },
+  options?: Parameters<typeof createRequest>[2],
+) {
+  const res = createResponse();
+  await handler(createRequest(payload.body, payload.signature, options), res);
+  return res;
+}
+
+async function expectStatus(
+  handler: ReturnType<typeof createHandler>,
+  payload: { body: string; signature: string },
+  statusCode = 200,
+  options?: Parameters<typeof createRequest>[2],
+) {
+  const res = await dispatch(handler, payload, options);
+  expect(res.statusCode).toBe(statusCode);
+  return res;
+}
+
+function expectDurable(res: TestResponse) {
+  expect(res.statusCode).toBe(200);
+  expect(res.setHeaderMock).toHaveBeenCalledWith("x-openclaw-delivery-accepted", "durable");
+}
+
+function proxyPost(
+  handler: ReturnType<typeof createHandler>,
+  body: string,
+  status: number,
+  address: string,
+  signature = "unused-signature",
+) {
+  return expectStatus(handler, { body, signature }, status, {
+    headers: { "x-forwarded-for": address },
+  });
+}
+
 function createSignedSmsPayload(
   messageSid: string,
   overrides: { from?: string; to?: string } = {},
 ): { body: string; signature: string } {
-  const body = new URLSearchParams({
+  return signForm({
     AccountSid: "AC123",
     From: overrides.from ?? "+15551234567",
     To: overrides.to ?? "+15557654321",
     Body: "hello",
     MessageSid: messageSid,
-  }).toString();
-  return {
-    body,
-    signature: computeTestTwilioSignature({
-      url: "https://gateway.example.com/webhooks/sms",
-      authToken: "secret",
-      form: parseTestTwilioForm(body),
-    }),
-  };
+  });
 }
 
-function createSignedDeliveryPayload(params: {
-  messageSid: string;
-  status: string;
-  account?: ResolvedSmsAccount;
-  accountSid?: string;
-}): { body: string; signature: string; form: Record<string, string> } {
+function createSignedDeliveryPayload(
+  messageSid: string,
+  status: string,
+  params: { account?: ResolvedSmsAccount; accountSid?: string } = {},
+) {
   const account = params.account ?? createSmsTestAccount();
   const form = {
     AccountSid: params.accountSid ?? account.accountSid,
     From: account.fromNumber,
     To: "+15551234567",
-    MessageSid: params.messageSid,
-    MessageStatus: params.status,
+    MessageSid: messageSid,
+    MessageStatus: status,
   };
-  const body = new URLSearchParams(form).toString();
-  return {
-    body,
-    form,
-    signature: computeTestTwilioSignature({
-      url: account.publicWebhookUrl,
-      authToken: account.authToken,
-      form,
-    }),
-  };
+  return { ...signForm(form, account), form };
 }
 
 function createMessageSid(index: number): string {
@@ -225,11 +240,9 @@ describe("createSmsWebhookHandler", () => {
       }),
     });
 
-    const res = createResponse();
-    await handler(createRequest(body, signature), res);
+    const res = await dispatch(handler, { body, signature });
 
-    expect(res.statusCode).toBe(200);
-    expect(res.setHeaderMock).toHaveBeenCalledWith("x-openclaw-delivery-accepted", "durable");
+    expectDurable(res);
     expect(enqueueSmsIngress).toHaveBeenCalledWith(parseTestTwilioForm(body));
   });
 
@@ -245,7 +258,7 @@ describe("createSmsWebhookHandler", () => {
   });
 
   it("keeps legacy inbound SmsStatus=receiving on the durable ingress path", async () => {
-    const account = createSmsTestAccount();
+    const { account, delivery, handler } = deliveryHarness();
     const form = {
       AccountSid: account.accountSid,
       From: "+15551234567",
@@ -254,28 +267,13 @@ describe("createSmsWebhookHandler", () => {
       SmsSid: createMessageSid(24),
       SmsStatus: "receiving",
     };
-    const body = new URLSearchParams(form).toString();
-    const signature = computeTestTwilioSignature({
-      url: account.publicWebhookUrl,
-      authToken: account.authToken,
-      form,
-    });
-    const delivery = createSmsTestDeliveryRecorder();
-    const handler = createHandler({ account, delivery });
-    const res = createResponse();
-
-    await handler(createRequest(body, signature), res);
-
-    expect(res.statusCode).toBe(200);
+    await expectStatus(handler, signForm(form, account));
     expect(delivery.record).not.toHaveBeenCalled();
     expect(enqueueSmsIngress).toHaveBeenCalledWith(form);
   });
 
   it("does not acknowledge a delivery callback until durable persistence succeeds", async () => {
-    const payload = createSignedDeliveryPayload({
-      messageSid: createMessageSid(21),
-      status: "sent",
-    });
+    const payload = createSignedDeliveryPayload(createMessageSid(21), "sent");
     const delivery = createSmsTestDeliveryRecorder(
       vi.fn<SmsDeliveryRecorder["record"]>(async () => {
         throw new Error("sqlite unavailable");
@@ -294,29 +292,13 @@ describe("createSmsWebhookHandler", () => {
 
   it("waits for the durable delivery commit before returning HTTP 200", async () => {
     const account = createSmsTestAccount();
-    const payload = createSignedDeliveryPayload({
-      account,
-      messageSid: createMessageSid(22),
-      status: "sent",
-    });
-    let releaseCommit: (() => void) | undefined;
+    const payload = createSignedDeliveryPayload(createMessageSid(22), "sent", { account });
+    const commit = createDeferred<void>();
+    const recorder = createSmsTestDeliveryRecorder();
     const delivery = createSmsTestDeliveryRecorder(
-      vi.fn<SmsDeliveryRecorder["record"]>(async ({ form }) => {
-        await new Promise<void>((resolve) => {
-          releaseCommit = resolve;
-        });
-        return {
-          duplicate: false,
-          record: {
-            accountId: account.accountId,
-            accountSidHash: "account-sid-hash",
-            messageSid: form.MessageSid ?? "",
-            status: form.MessageStatus ?? "",
-            firstObservedAt: 1,
-            lastObservedAt: 1,
-            observations: [],
-          },
-        };
+      vi.fn<SmsDeliveryRecorder["record"]>(async (params) => {
+        await commit.promise;
+        return recorder.record(params);
       }),
     );
     const handler = createHandler({ account, delivery });
@@ -327,32 +309,21 @@ describe("createSmsWebhookHandler", () => {
     expect(res.endMock).not.toHaveBeenCalled();
     expect(res.setHeaderMock).not.toHaveBeenCalledWith("x-openclaw-delivery-accepted", "durable");
 
-    if (!releaseCommit) {
-      throw new Error("expected pending SMS delivery commit");
-    }
-    releaseCommit();
+    commit.resolve();
     await pending;
 
-    expect(res.statusCode).toBe(200);
-    expect(res.setHeaderMock).toHaveBeenCalledWith("x-openclaw-delivery-accepted", "durable");
+    expectDurable(res);
     expect(res.endMock).toHaveBeenCalledOnce();
     expect(delivery.record).toHaveBeenCalledWith({ account, form: payload.form });
     expect(enqueueSmsIngress).not.toHaveBeenCalled();
   });
 
   it("acknowledges but does not store a signed delivery callback for another account", async () => {
-    const payload = createSignedDeliveryPayload({
-      messageSid: createMessageSid(22),
-      status: "failed",
+    const payload = createSignedDeliveryPayload(createMessageSid(22), "failed", {
       accountSid: "AC-other",
     });
-    const delivery = createSmsTestDeliveryRecorder();
-    const handler = createHandler({ delivery });
-    const res = createResponse();
-
-    await handler(createRequest(payload.body, payload.signature), res);
-
-    expect(res.statusCode).toBe(200);
+    const { delivery, handler } = deliveryHarness();
+    const res = await expectStatus(handler, payload, 200);
     expect(delivery.record).not.toHaveBeenCalled();
     expect(enqueueSmsIngress).not.toHaveBeenCalled();
     expect(res.setHeaderMock).not.toHaveBeenCalledWith("x-openclaw-delivery-accepted", "durable");
@@ -374,27 +345,18 @@ describe("createSmsWebhookHandler", () => {
 
   it("acknowledges only after the durable enqueue resolves", async () => {
     const { body, signature } = createSignedSmsPayload(createMessageSid(3));
-    let releaseAdmission: (() => void) | undefined;
-    enqueueSmsIngress.mockImplementationOnce(
-      async () =>
-        await new Promise<{ kind: "accepted"; duplicate: boolean }>((resolve) => {
-          releaseAdmission = () => resolve({ kind: "accepted", duplicate: false });
-        }),
-    );
+    const admission = createDeferred<{ kind: "accepted"; duplicate: boolean }>();
+    enqueueSmsIngress.mockImplementationOnce(() => admission.promise);
     const handler = createHandler();
     const res = createResponse();
 
     const handling = handler(createRequest(body, signature), res);
     await vi.waitFor(() => expect(enqueueSmsIngress).toHaveBeenCalledTimes(1));
     expect(res.endMock).not.toHaveBeenCalled();
-    if (!releaseAdmission) {
-      throw new Error("expected pending SMS durable admission");
-    }
-    releaseAdmission();
+    admission.resolve({ kind: "accepted", duplicate: false });
     await handling;
 
-    expect(res.statusCode).toBe(200);
-    expect(res.setHeaderMock).toHaveBeenCalledWith("x-openclaw-delivery-accepted", "durable");
+    expectDurable(res);
     expect(res.endMock).toHaveBeenCalledTimes(1);
   });
 
@@ -402,44 +364,25 @@ describe("createSmsWebhookHandler", () => {
     const { body, signature } = createSignedSmsPayload(createMessageSid(4));
     enqueueSmsIngress.mockResolvedValueOnce({ kind: "accepted", duplicate: true });
     const handler = createHandler();
-    const res = createResponse();
+    const res = await expectStatus(handler, { body, signature });
 
-    await handler(createRequest(body, signature), res);
-
-    expect(res.statusCode).toBe(200);
-    expect(res.setHeaderMock).toHaveBeenCalledWith("x-openclaw-delivery-accepted", "durable");
+    expectDurable(res);
   });
 
   it("rejects a signed webhook without a stable MessageSid", async () => {
     const body = "AccountSid=AC123&From=%2B15551234567&To=%2B15557654321&Body=hello";
-    const signature = computeTestTwilioSignature({
-      url: "https://gateway.example.com/webhooks/sms",
-      authToken: "secret",
-      form: parseTestTwilioForm(body),
-    });
+    const payload = createSignedBody({ body });
     const handler = createHandler();
-    const res = createResponse();
-
-    await handler(createRequest(body, signature), res);
-
-    expect(res.statusCode).toBe(400);
+    await expectStatus(handler, payload, 400);
     expect(enqueueSmsIngress).not.toHaveBeenCalled();
   });
 
   it("accepts the legacy SmsMessageSid event id alias", async () => {
     const body =
       "AccountSid=AC123&From=%2B15551234567&To=%2B15557654321&Body=hello&SmsMessageSid=SM-alias";
-    const signature = computeTestTwilioSignature({
-      url: "https://gateway.example.com/webhooks/sms",
-      authToken: "secret",
-      form: parseTestTwilioForm(body),
-    });
+    const payload = createSignedBody({ body });
     const handler = createHandler();
-    const res = createResponse();
-
-    await handler(createRequest(body, signature), res);
-
-    expect(res.statusCode).toBe(200);
+    await expectStatus(handler, payload, 200);
     expect(enqueueSmsIngress).toHaveBeenCalledWith(
       expect.objectContaining({ SmsMessageSid: "SM-alias" }),
     );
@@ -447,63 +390,32 @@ describe("createSmsWebhookHandler", () => {
 
   it("durably accepts a signed account mismatch for non-retryable drain classification", async () => {
     const body = `AccountSid=AC-other&From=%2B15551234567&To=%2B15557654321&Body=hello&MessageSid=${createMessageSid(8)}`;
-    const signature = computeTestTwilioSignature({
-      url: "https://gateway.example.com/webhooks/sms",
-      authToken: "secret",
-      form: parseTestTwilioForm(body),
-    });
+    const payload = createSignedBody({ body });
     const handler = createHandler();
 
-    const res = createResponse();
-    await handler(createRequest(body, signature), res);
-
-    expect(res.statusCode).toBe(200);
+    await expectStatus(handler, payload, 200);
     expect(enqueueSmsIngress).toHaveBeenCalledWith(
       expect.objectContaining({ AccountSid: "AC-other" }),
     );
   });
 
   it("does not let unsigned proxy traffic consume the same client's signed webhook rate limit", async () => {
-    const account = createSmsTestAccount();
-    const delivery = createSmsTestDeliveryRecorder();
-    const handler = createHandler({
+    const { account, delivery, handler } = deliveryHarness({
       cfg: { gateway: { trustedProxies: ["127.0.0.1"] } },
-      account,
-      delivery,
     });
     const unsignedBody =
       "AccountSid=AC123&From=%2B15550000000&To=%2B15557654321&MessageStatus=delivered&MessageSid=SM-bad";
     for (let i = 0; i < 300; i += 1) {
-      const rejected = createResponse();
-      await handler(
-        createRequest(unsignedBody, "not-a-valid-signature", {
-          headers: { "x-forwarded-for": "203.0.113.10" },
-        }),
-        rejected,
-      );
-      expect(rejected.statusCode).toBe(403);
+      await proxyPost(handler, unsignedBody, 403, "203.0.113.10", "not-a-valid-signature");
     }
-    const throttled = createResponse();
-    await handler(
-      createRequest(unsignedBody, "not-a-valid-signature", {
-        headers: { "x-forwarded-for": "203.0.113.10" },
-      }),
-      throttled,
-    );
-    expect(throttled.statusCode).toBe(429);
+    await proxyPost(handler, unsignedBody, 429, "203.0.113.10", "not-a-valid-signature");
     expect(delivery.record).not.toHaveBeenCalled();
     expect(enqueueSmsIngress).not.toHaveBeenCalled();
 
     const valid = createSignedBody({ account, messageSid: "SM-valid-after-invalid-burst" });
-    const accepted = createResponse();
-    await handler(
-      createRequest(valid.body, valid.signature, {
-        headers: { "x-forwarded-for": "203.0.113.10" },
-      }),
-      accepted,
-    );
-
-    expect(accepted.statusCode).toBe(200);
+    await expectStatus(handler, valid, 200, {
+      headers: { "x-forwarded-for": "203.0.113.10" },
+    });
     expect(enqueueSmsIngress).toHaveBeenCalledTimes(1);
   });
 
@@ -515,136 +427,83 @@ describe("createSmsWebhookHandler", () => {
       publicWebhookUrl: "https://gateway.example.com/webhooks/sms/support",
     });
     const defaultAccount = createSmsTestAccount();
-    const supportHandler = createHandler({
-      account: supportAccount,
-    });
-    const defaultHandler = createHandler({
-      account: defaultAccount,
-    });
+    const supportHandler = createHandler({ account: supportAccount });
+    const defaultHandler = createHandler({ account: defaultAccount });
 
     for (let i = 0; i < 30; i += 1) {
       const valid = createSignedBody({
         account: supportAccount,
         messageSid: `SM-support-${i}`,
       });
-      const res = createResponse();
-      await supportHandler(createRequest(valid.body, valid.signature), res);
-      expect(res.statusCode).toBe(200);
+      await expectStatus(supportHandler, valid, 200);
     }
     const rateLimited = createSignedBody({
       account: supportAccount,
       messageSid: "SM-support-rate-limited",
     });
-    const rateLimitedRes = createResponse();
-    await supportHandler(createRequest(rateLimited.body, rateLimited.signature), rateLimitedRes);
-    expect(rateLimitedRes.statusCode).toBe(429);
+    await expectStatus(supportHandler, rateLimited, 429);
 
     const defaultValid = createSignedBody({
       account: defaultAccount,
       messageSid: "SM-default-after-support-limit",
     });
-    const defaultRes = createResponse();
-    await defaultHandler(createRequest(defaultValid.body, defaultValid.signature), defaultRes);
-
-    expect(defaultRes.statusCode).toBe(200);
+    await expectStatus(defaultHandler, defaultValid, 200);
   });
 
   it("meters inbound dispatch per sender without throttling signed delivery callbacks", async () => {
     const warn = vi.fn();
-    const account = createSmsTestAccount();
-    const delivery = createSmsTestDeliveryRecorder();
-    const handler = createHandler({
-      account,
-      delivery,
-      log: { warn },
-    });
+    const { account, delivery, handler } = deliveryHarness({ log: { warn } });
 
     for (let i = 0; i < 30; i += 1) {
       const { body, signature } = createSignedSmsPayload(createMessageSid(500 + i));
-      const res = createResponse();
-      await handler(createRequest(body, signature, { remoteAddress: "203.0.113.30" }), res);
-      expect(res.statusCode).toBe(200);
+      await expectStatus(handler, { body, signature }, 200, {
+        remoteAddress: "203.0.113.30",
+      });
     }
     // Equivalent Twilio RCS address syntax canonicalizes into the same sender bucket.
     const overQuota = createSignedSmsPayload(createMessageSid(530), {
       from: "RCS:+1 (555) 123-4567",
     });
-    const overQuotaRes = createResponse();
-    await handler(
-      createRequest(overQuota.body, overQuota.signature, { remoteAddress: "203.0.113.30" }),
-      overQuotaRes,
-    );
-    expect(overQuotaRes.statusCode).toBe(429);
+    await expectStatus(handler, overQuota, 429, { remoteAddress: "203.0.113.30" });
     expect(enqueueSmsIngress).toHaveBeenCalledTimes(30);
     expect(warn).toHaveBeenCalledWith("SMS webhook callback rate limit exceeded");
     expect(warn).not.toHaveBeenCalledWith(expect.stringContaining("+15551234567"));
 
     // Same Twilio egress address, different validated sender: must still dispatch.
     const otherSender = createSignedSmsPayload(createMessageSid(531), { from: "+15559998888" });
-    const otherSenderRes = createResponse();
-    await handler(
-      createRequest(otherSender.body, otherSender.signature, { remoteAddress: "203.0.113.30" }),
-      otherSenderRes,
-    );
-    expect(otherSenderRes.statusCode).toBe(200);
+    await expectStatus(handler, otherSender, 200, { remoteAddress: "203.0.113.30" });
     expect(enqueueSmsIngress).toHaveBeenCalledTimes(31);
 
     // Changing Twilio egress addresses cannot widen the sender-scoped budget.
     const stillLimited = createSignedSmsPayload(createMessageSid(532));
-    const stillLimitedRes = createResponse();
-    await handler(
-      createRequest(stillLimited.body, stillLimited.signature, { remoteAddress: "203.0.113.31" }),
-      stillLimitedRes,
-    );
-    expect(stillLimitedRes.statusCode).toBe(429);
+    await expectStatus(handler, stillLimited, 429, { remoteAddress: "203.0.113.31" });
     expect(enqueueSmsIngress).toHaveBeenCalledTimes(31);
 
-    const status = createSignedDeliveryPayload({
-      account,
-      messageSid: createMessageSid(533),
-      status: "delivered",
-    });
-    const statusRes = createResponse();
-    await handler(createRequest(status.body, status.signature), statusRes);
-
-    expect(statusRes.statusCode).toBe(200);
+    const status = createSignedDeliveryPayload(createMessageSid(533), "delivered", { account });
+    await expectStatus(handler, status, 200);
     expect(delivery.record).toHaveBeenCalledOnce();
     expect(enqueueSmsIngress).toHaveBeenCalledTimes(31);
   });
 
   it("bounds aggregate inbound fan-out without throttling signed delivery callbacks", async () => {
-    const account = createSmsTestAccount();
-    const delivery = createSmsTestDeliveryRecorder();
-    const handler = createHandler({ account, delivery });
+    const { account, delivery, handler } = deliveryHarness();
 
     for (let i = 0; i < 300; i += 1) {
       const distinctSender = `+1555${i.toString().padStart(7, "0")}`;
       const { body, signature } = createSignedSmsPayload(createMessageSid(900 + i), {
         from: distinctSender,
       });
-      const res = createResponse();
-      await handler(createRequest(body, signature), res);
-      expect(res.statusCode).toBe(200);
+      await expectStatus(handler, { body, signature }, 200);
     }
 
     const overAggregate = createSignedSmsPayload(createMessageSid(1_200), {
       from: "+15559999999",
     });
-    const overAggregateRes = createResponse();
-    await handler(createRequest(overAggregate.body, overAggregate.signature), overAggregateRes);
-
-    expect(overAggregateRes.statusCode).toBe(429);
+    await expectStatus(handler, overAggregate, 429);
     expect(enqueueSmsIngress).toHaveBeenCalledTimes(300);
 
-    const status = createSignedDeliveryPayload({
-      account,
-      messageSid: createMessageSid(1_201),
-      status: "delivered",
-    });
-    const statusRes = createResponse();
-    await handler(createRequest(status.body, status.signature), statusRes);
-
-    expect(statusRes.statusCode).toBe(200);
+    const status = createSignedDeliveryPayload(createMessageSid(1_201), "delivered", { account });
+    await expectStatus(handler, status, 200);
     expect(delivery.record).toHaveBeenCalledOnce();
     expect(enqueueSmsIngress).toHaveBeenCalledTimes(300);
   });
@@ -656,25 +515,16 @@ describe("createSmsWebhookHandler", () => {
       const invalidSender = createSignedSmsPayload(createMessageSid(800 + i), {
         from: "not-a-phone",
       });
-      const res = createResponse();
-      await handler(createRequest(invalidSender.body, invalidSender.signature), res);
-      expect(res.statusCode).toBe(200);
+      await expectStatus(handler, invalidSender, 200);
     }
 
     const invalidOverQuota = createSignedSmsPayload(createMessageSid(830), {
       from: "still-not-a-phone",
     });
-    const invalidOverQuotaRes = createResponse();
-    await handler(
-      createRequest(invalidOverQuota.body, invalidOverQuota.signature),
-      invalidOverQuotaRes,
-    );
-    expect(invalidOverQuotaRes.statusCode).toBe(429);
+    await expectStatus(handler, invalidOverQuota, 429);
 
     const validSender = createSignedSmsPayload(createMessageSid(831));
-    const validSenderRes = createResponse();
-    await handler(createRequest(validSender.body, validSender.signature), validSenderRes);
-    expect(validSenderRes.statusCode).toBe(200);
+    await expectStatus(handler, validSender, 200);
     expect(enqueueSmsIngress).toHaveBeenCalledTimes(31);
   });
 
@@ -691,82 +541,36 @@ describe("createSmsWebhookHandler", () => {
       const { body } = createSignedSmsPayload(createMessageSid(700 + i), {
         from: `+1555000${1000 + i}`,
       });
-      const res = createResponse();
-      await handler(
-        createRequest(body, "unused-signature", {
-          headers: { "x-forwarded-for": "203.0.113.20" },
-        }),
-        res,
-      );
-      expect(res.statusCode).toBe(200);
+      await proxyPost(handler, body, 200, "203.0.113.20");
     }
 
     const overBudget = createSignedSmsPayload(createMessageSid(760), { from: "+15550009999" });
-    const overBudgetRes = createResponse();
-    await handler(
-      createRequest(overBudget.body, "unused-signature", {
-        headers: { "x-forwarded-for": "203.0.113.20" },
-      }),
-      overBudgetRes,
-    );
-
-    expect(overBudgetRes.statusCode).toBe(429);
+    await proxyPost(handler, overBudget.body, 429, "203.0.113.20");
     expect(enqueueSmsIngress).toHaveBeenCalledTimes(30);
   });
 
   it("rate limits unsigned delivery callbacks by client address before persistence", async () => {
     const account = createSmsTestAccount({ dangerouslyDisableSignatureValidation: true });
-    const delivery = createSmsTestDeliveryRecorder();
-    const handler = createHandler({
+    const { delivery, handler } = deliveryHarness({
       cfg: { gateway: { trustedProxies: ["127.0.0.1"] } },
       account,
-      delivery,
     });
 
     for (let i = 0; i < 30; i += 1) {
-      const payload = createSignedDeliveryPayload({
-        account,
-        messageSid: createMessageSid(1_300 + i),
-        status: "sent",
-      });
-      const res = createResponse();
-      await handler(
-        createRequest(payload.body, "unused-signature", {
-          headers: { "x-forwarded-for": "203.0.113.40" },
-        }),
-        res,
-      );
-      expect(res.statusCode).toBe(200);
+      const payload = createSignedDeliveryPayload(createMessageSid(1_300 + i), "sent", { account });
+      await proxyPost(handler, payload.body, 200, "203.0.113.40");
     }
 
-    const overBudget = createSignedDeliveryPayload({
+    const overBudget = createSignedDeliveryPayload(createMessageSid(1_330), "delivered", {
       account,
-      messageSid: createMessageSid(1_330),
-      status: "delivered",
     });
-    const overBudgetRes = createResponse();
-    await handler(
-      createRequest(overBudget.body, "unused-signature", {
-        headers: { "x-forwarded-for": "203.0.113.40" },
-      }),
-      overBudgetRes,
-    );
-    expect(overBudgetRes.statusCode).toBe(429);
+    await proxyPost(handler, overBudget.body, 429, "203.0.113.40");
     expect(delivery.record).toHaveBeenCalledTimes(30);
 
-    const otherAddress = createSignedDeliveryPayload({
+    const otherAddress = createSignedDeliveryPayload(createMessageSid(1_331), "delivered", {
       account,
-      messageSid: createMessageSid(1_331),
-      status: "delivered",
     });
-    const otherAddressRes = createResponse();
-    await handler(
-      createRequest(otherAddress.body, "unused-signature", {
-        headers: { "x-forwarded-for": "203.0.113.41" },
-      }),
-      otherAddressRes,
-    );
-    expect(otherAddressRes.statusCode).toBe(200);
+    await proxyPost(handler, otherAddress.body, 200, "203.0.113.41");
     expect(delivery.record).toHaveBeenCalledTimes(31);
   });
 });

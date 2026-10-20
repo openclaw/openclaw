@@ -1,5 +1,3 @@
-import { mkdir } from "node:fs/promises";
-import { createServer } from "node:http";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
@@ -22,6 +20,12 @@ import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { runQaGatewayTestFixture } from "../../../helpers/qa-gateway-test-lifetime.js";
 import { MODEL_REF, PROOF_TIMEOUT_MS } from "./cloud-worker-midturn-loss-fixture.js";
 import {
+  createNativeProvider,
+  listenNativeProvider,
+  nativeModel,
+  writeNativeCompletion,
+} from "./native-provider-proof-fixture.js";
+import {
   closeWireServer,
   connectWireClient,
   createPairedNodeWorkerHost,
@@ -40,13 +44,8 @@ async function providerFixture() {
   const releases = { A: createDeferred(), B: createDeferred() };
   const requests: string[] = [];
   const errors: unknown[] = [];
-  const server = createServer((request, response) => {
-    void (async () => {
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) {
-        chunks.push(Buffer.from(chunk));
-      }
-      const body = Buffer.concat(chunks).toString();
+  const server = createNativeProvider(
+    async (request, response, body) => {
       const marker = [...body.matchAll(/NATIVE-SLOT-([AB])/gu)].at(-1)?.[1];
       if (request.url !== "/v1/chat/completions" || (marker !== "A" && marker !== "B")) {
         response.writeHead(400).end("unexpected native request");
@@ -55,44 +54,20 @@ async function providerFixture() {
       requests.push(marker);
       entered[marker].resolve();
       await releases[marker].promise;
-      response.writeHead(200, { "content-type": "text/event-stream" });
-      for (const [delta, finish_reason] of [
-        [{ role: "assistant", content: "NATIVE-SLOT-" + marker }, null],
-        [{}, "stop"],
-      ]) {
-        response.write(
-          "data: " +
-            JSON.stringify({
-              id: "native-slot-" + marker,
-              object: "chat.completion.chunk",
-              created: 1,
-              model: modelId,
-              choices: [{ index: 0, delta, finish_reason }],
-            }) +
-            "\n\n",
-        );
-      }
-      response.end("data: [DONE]\n\n");
-    })().catch((error: unknown) => {
+      writeNativeCompletion(response, "native-slot-" + marker, modelId!, "NATIVE-SLOT-" + marker);
+    },
+    (error, response) => {
       errors.push(error);
       response.destroy();
-    });
-  });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("missing provider address");
-  }
+    },
+  );
   return {
     server,
     entered,
     releases,
     requests,
     errors,
-    baseUrl: "http://127.0.0.1:" + address.port + "/v1",
+    baseUrl: await listenNativeProvider(server),
   };
 }
 
@@ -127,7 +102,6 @@ function readPlacement(gateway: WireGateway, key: string) {
 it.skipIf(process.platform === "win32")(
   "settles native A, deletes it, then runs B on the same one-slot node",
   async (context) => {
-    process.stderr.write("[native-slot] starting one-slot proof\n");
     const gatewayOwner = createQaGatewayChild();
     const settlement = createWireWorkspaceSettlementWaiter();
     let providerResource: Awaited<ReturnType<typeof providerFixture>> | undefined;
@@ -141,10 +115,8 @@ it.skipIf(process.platform === "win32")(
         const provider = (providerResource = await providerFixture());
         const published = (publishedResource = await createPublishedWireWorkspace(root));
         const identity = loadOrCreateDeviceIdentity({
-          path: path.join(root, "node-identity.sqlite"),
+          env: { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "node-state") },
         });
-        const nodeHostRoot = path.join(root, "node-state", "node-host");
-        await mkdir(nodeHostRoot, { recursive: true });
         const config: OpenClawConfig = {
           models: {
             providers: {
@@ -153,16 +125,11 @@ it.skipIf(process.platform === "win32")(
                 api: "openai-completions",
                 baseUrl: provider.baseUrl,
                 models: [
-                  {
-                    id: modelId!,
-                    name: modelId!,
-                    contextWindow: 32768,
+                  nativeModel(modelId!, {
                     maxTokens: 128,
                     reasoning: true,
                     thinkingLevelMap: { medium: "medium" },
-                    input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  },
+                  }),
                 ],
               },
             },
@@ -235,13 +202,23 @@ it.skipIf(process.platform === "win32")(
             { runId, timeoutMs: PROOF_TIMEOUT_MS },
             { timeoutMs: PROOF_TIMEOUT_MS + 5000 },
           );
+        const finish = async (suffix: "A" | "B", placement: Record<string, unknown> = {}) => {
+          provider.releases[suffix].resolve();
+          expect(await wait("native-slot-" + suffix.toLowerCase())).toMatchObject({ status: "ok" });
+          await settlement.wait(operator!, keys[suffix], signal);
+          expect(readPlacement(gateway, keys[suffix])).toMatchObject({
+            placement: { state: "active", turn_claim_id: null, ...placement },
+            pending: undefined,
+          });
+          await node!.waitForWorkersIdle();
+          expect(await node!.supervisor.hasActiveWork()).toBe(false);
+        };
         await start(keys.A, "NATIVE-SLOT-A", "native-slot-a");
         await withinTest(provider.entered.A.promise, signal);
         expect(readPlacement(gateway, keys.A).placement?.turn_claim_id).toBeTruthy();
         expect(await node.supervisor.hasActiveWork()).toBe(true);
         await start(keys.Busy, "NATIVE-SLOT-B", "native-slot-b-at-capacity");
-        const full = await wait("native-slot-b-at-capacity");
-        expect(full.status).toBe("error");
+        expect(await wait("native-slot-b-at-capacity")).toMatchObject({ status: "error" });
         // agent.wait intentionally scrubs the internal refusal. The live claim and lack of a
         // second provider request prove that the occupied physical slot rejected this turn.
         expect(readPlacement(gateway, keys.Busy)).toMatchObject({
@@ -250,24 +227,11 @@ it.skipIf(process.platform === "win32")(
         });
         expect(provider.requests).toEqual(["A"]);
         expect(readPlacement(gateway, keys.A).placement?.turn_claim_id).toBeTruthy();
-        provider.releases.A.resolve();
-        expect(await wait("native-slot-a")).toMatchObject({ status: "ok" });
-        await settlement.wait(operator, keys.A, signal);
-        const settled = readPlacement(gateway, keys.A);
-        expect(settled.placement).toMatchObject({
-          state: "active",
-          turn_claim_id: null,
-          workspace_base_manifest_ref: expect.stringMatching(/^sha256:/u),
-        });
-        expect(settled.pending).toBeUndefined();
-        await node.waitForWorkersIdle();
-        expect(await node.supervisor.hasActiveWork()).toBe(false);
+        await finish("A", { workspace_base_manifest_ref: expect.stringMatching(/^sha256:/u) });
         const history = await operator.request<{ messages: unknown[] }>("chat.history", {
           sessionKey: keys.A,
         });
-        expect(
-          history.messages.some((message) => wireMessageText(message) === "NATIVE-SLOT-A"),
-        ).toBe(true);
+        expect(history.messages.map(wireMessageText)).toContain("NATIVE-SLOT-A");
         await operator.request("sessions.delete", { key: keys.A });
         expect(readPlacement(gateway, keys.A).placement).toBeUndefined();
         await node.disconnect();
@@ -294,32 +258,10 @@ it.skipIf(process.platform === "win32")(
           }),
         ).toBeUndefined();
         expect(await node.supervisor.status(activeB.launchId)).toMatchObject({ state: "running" });
-        provider.releases.B.resolve();
-        expect(await wait("native-slot-b")).toMatchObject({ status: "ok" });
-        await settlement.wait(operator, keys.B, signal);
-        expect(readPlacement(gateway, keys.B)).toMatchObject({
-          placement: { state: "active", turn_claim_id: null },
-          pending: undefined,
-        });
-        await node.waitForWorkersIdle();
-        expect(await node.supervisor.hasActiveWork()).toBe(false);
+        await finish("B");
         expect(provider.requests).toEqual(["A", "B"]);
         expect(provider.errors).toEqual([]);
         expect(node.invokeErrors).toEqual([]);
-        console.info(
-          "native-one-slot-proof",
-          JSON.stringify({
-            nativeRequests: provider.requests,
-            liveWorkRejected: true,
-            settledClaim: settled.placement?.turn_claim_id,
-            pendingResult: settled.pending ?? null,
-            deletedA: true,
-            sameNode: node.identity.deviceId === identity.deviceId,
-            reconnected: true,
-            staleEpochRejected: true,
-            physicalSlotReleased: true,
-          }),
-        );
       },
       async () => {
         providerResource?.releases.A.resolve();

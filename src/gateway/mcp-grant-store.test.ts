@@ -5,6 +5,10 @@ import {
   type AdmittedRunContext,
   type PreparedAgentRunAdmission,
 } from "../agents/admitted-run-context.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { SkillLibraryAuthoringCapability } from "../skills/library/authoring.js";
 import {
   activateMcpLoopbackClientGrantCapture as activateCapture,
@@ -58,12 +62,16 @@ async function admitted(runId: string): Promise<AdmittedRunContext> {
 }
 
 describe("mcp-grant-store", () => {
-  beforeEach(() => ["runtime-one", "runtime-two"].forEach(revokeRuntime));
+  beforeEach(() => {
+    setRuntimeConfigSnapshot({});
+    ["runtime-one", "runtime-two"].forEach(revokeRuntime);
+  });
 
   afterEach(() => {
     for (const admission of admissions.splice(0)) {
       admission.close();
     }
+    clearRuntimeConfigSnapshot();
   });
 
   it("requires a non-empty sessionKey", () => {

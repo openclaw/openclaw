@@ -1,14 +1,9 @@
-// Media-understanding entry execution handles provider/CLI attempts, auth
-// rotation, output extraction, and decision summaries.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { ok, type Result } from "@openclaw/normalization-core/result";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { MediaUnderstandingSkipError } from "../../packages/media-understanding-common/src/errors.js";
-import { extractGeminiResponse } from "../../packages/media-understanding-common/src/output-extract.js";
 import { normalizeMediaExecutionProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
 import {
   estimateBase64Size,
@@ -22,13 +17,11 @@ import type {
   MediaUnderstandingConfig,
   MediaUnderstandingModelConfig,
 } from "../config/types.tools.js";
-import { hasErrnoCode } from "../infra/errors.js";
-import { writeExternalFileWithinRoot } from "../infra/fs-safe.js";
 import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import { resolveProxyFetchFromEnv } from "../infra/net/proxy-fetch.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { logWarn } from "../logger.js";
 import { ImageOptimizationLimitError } from "../media/image-optimization-error.js";
-import { runFfmpeg } from "../media/media-services.js";
 import {
   getOfficialExternalPluginCatalogManifest,
   listOfficialExternalProviderCatalogEntries,
@@ -38,6 +31,7 @@ import { runExec } from "../process/exec.js";
 import { assertSecretOwnerAvailable } from "../secrets/runtime-degraded-state.js";
 import { assertRuntimeMediaRequestSecretOwnerAvailable } from "../secrets/runtime-media-secret-owner.js";
 import { MediaAttachmentCache } from "./attachments.js";
+import { resolveCliOutput } from "./cli-output.js";
 import { CLI_OUTPUT_MAX_BUFFER, MIN_AUDIO_FILE_BYTES } from "./defaults.constants.js";
 import {
   normalizeImageDescriptionInput,
@@ -57,6 +51,7 @@ import {
 } from "./provider-execution.js";
 import { getMediaUnderstandingProvider, normalizeMediaProviderId } from "./provider-registry.js";
 import { resolveCliModelEntry, resolveEntryRunOptions } from "./resolve.js";
+import { resolveCliMediaPath } from "./runner.cli-media.js";
 import { isTranscriptArtifactText } from "./transcription-text.js";
 import type {
   AudioTranscriptionResult,
@@ -79,196 +74,7 @@ function trimOutput(text: string, maxChars?: number): string {
   return truncateUtf16Safe(trimmed, maxChars).trim();
 }
 
-function extractSherpaOnnxText(raw: string): string | undefined {
-  const tryParse = (value: string): string | undefined => {
-    const trimmed = value.trim();
-    const head = trimmed[0];
-    if (head !== "{" && head !== '"') {
-      return undefined;
-    }
-    try {
-      const parsed = JSON.parse(trimmed) as unknown;
-      if (typeof parsed === "string") {
-        return tryParse(parsed);
-      }
-      if (parsed && typeof parsed === "object") {
-        const text = (parsed as { text?: unknown }).text;
-        if (typeof text === "string") {
-          return text.trim();
-        }
-      }
-    } catch {}
-    return undefined;
-  };
-
-  const direct = tryParse(raw);
-  if (direct !== undefined) {
-    return direct;
-  }
-
-  const lines = normalizeStringEntries(raw.split("\n"));
-  for (let i = lines.length - 1; i >= 0; i -= 1) {
-    const parsed = tryParse(lines[i] ?? "");
-    if (parsed !== undefined) {
-      return parsed;
-    }
-  }
-  return undefined;
-}
-
-function findArgValue(args: string[], keys: string[]): string | undefined {
-  for (const [index, arg] of args.entries()) {
-    if (keys.includes(arg)) {
-      const value = args[index + 1];
-      if (value) {
-        return value;
-      }
-    }
-    for (const key of keys) {
-      const prefix = `${key}=`;
-      if (arg.startsWith(prefix)) {
-        const value = arg.slice(prefix.length);
-        if (value) {
-          return value;
-        }
-      }
-    }
-  }
-  return undefined;
-}
-
-function resolveWhisperOutputPath(args: string[], mediaPath: string): string | null {
-  const outputDir = findArgValue(args, ["--output_dir", "-o"]);
-  if (!outputDir) {
-    return null;
-  }
-  const outputFormat = findArgValue(args, ["--output_format", "-f"]) ?? "all";
-  if (outputFormat !== "txt" && outputFormat !== "all") {
-    return null;
-  }
-  return path.join(outputDir, `${path.parse(mediaPath).name}.txt`);
-}
-
-function resolveWhisperCppOutputPath(args: string[]): string | null {
-  if (!args.some((arg) => arg === "-otxt" || arg === "--output-txt")) {
-    return null;
-  }
-  const outputBase = findArgValue(args, ["-of", "--output-file"]);
-  if (!outputBase) {
-    return null;
-  }
-  return `${outputBase}.txt`;
-}
-
-function resolveParakeetOutputPath(args: string[], mediaPath: string): string | null {
-  const outputDir = findArgValue(args, ["--output-dir"]);
-  const outputFormat =
-    findArgValue(args, ["--output-format"]) ?? (process.env.PARAKEET_OUTPUT_FORMAT || "srt");
-  const outputTemplate =
-    findArgValue(args, ["--output-template"]) ??
-    (process.env.PARAKEET_OUTPUT_TEMPLATE || "{filename}");
-  if (
-    !outputDir ||
-    (outputFormat !== "txt" && outputFormat !== "all") ||
-    outputTemplate !== "{filename}"
-  ) {
-    return null;
-  }
-  return path.join(outputDir, `${path.parse(mediaPath).name}.txt`);
-}
-
-async function readCliTranscriptFile(filePath: string): Promise<string> {
-  try {
-    return (await fs.readFile(filePath, "utf8")).trim();
-  } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return "";
-    }
-    throw error;
-  }
-}
-
-async function resolveCliOutput(params: {
-  command: string;
-  args: string[];
-  stdout: string;
-  mediaPath: string;
-}): Promise<string> {
-  const commandId = path.parse(params.command).name;
-  const fileOutput =
-    commandId === "whisper-cli"
-      ? resolveWhisperCppOutputPath(params.args)
-      : commandId === "whisper"
-        ? resolveWhisperOutputPath(params.args, params.mediaPath)
-        : commandId === "parakeet-mlx"
-          ? resolveParakeetOutputPath(params.args, params.mediaPath)
-          : null;
-  if (fileOutput) {
-    // A known file-output contract is authoritative: falling back would expose
-    // progress/status stdout as user speech when transcription is empty or missing.
-    return await readCliTranscriptFile(fileOutput);
-  }
-
-  if (commandId === "gemini") {
-    const response = extractGeminiResponse(params.stdout);
-    if (response) {
-      return response;
-    }
-  }
-
-  if (commandId === "sherpa-onnx-offline") {
-    const response = extractSherpaOnnxText(params.stdout);
-    if (response !== undefined) {
-      return response;
-    }
-  }
-
-  return params.stdout.trim();
-}
-
-async function resolveCliMediaPath(params: {
-  capability: MediaUnderstandingCapability;
-  command: string;
-  mediaPath: string;
-  outputDir: string;
-  execution?: MediaExecutionContext;
-}): Promise<string> {
-  const commandId = path.parse(params.command).name;
-  if (params.capability !== "audio" || commandId !== "whisper-cli") {
-    return params.mediaPath;
-  }
-
-  const ext = normalizeLowercaseStringOrEmpty(path.extname(params.mediaPath));
-  if (ext === ".wav") {
-    return params.mediaPath;
-  }
-
-  const wavPath = path.join(params.outputDir, `${path.parse(params.mediaPath).name}.wav`);
-  await writeExternalFileWithinRoot({
-    rootDir: params.outputDir,
-    path: path.basename(wavPath),
-    write: async (outputPath) => {
-      assertMediaExecutionCurrent(params.execution);
-      await runFfmpeg([
-        "-y",
-        "-i",
-        params.mediaPath,
-        "-ac",
-        "1",
-        "-ar",
-        "16000",
-        "-c:a",
-        "pcm_s16le",
-        "-f",
-        "wav",
-        outputPath,
-      ]);
-    },
-  });
-  return wavPath;
-}
-
-type ProviderQuery = Record<string, string | number | boolean>;
+type ProviderQuery = Record<string, string | number | boolean | string[]>;
 
 function resolveProviderQuery(
   params: Pick<Parameters<typeof runProviderEntry>[0], "config" | "entry"> & {
@@ -443,6 +249,7 @@ export async function runProviderEntry(params: {
   agentDir?: string;
   workspaceDir?: string;
   providerRegistry: ProviderRegistry;
+  assertCurrent?: () => void;
   config?: MediaUnderstandingConfig;
   secretOwnerId?: string;
   request?: MediaRequestOverrides;
@@ -590,15 +397,21 @@ export async function runProviderEntry(params: {
     };
     let result: AudioTranscriptionResult;
     if (provider.transcribeAudioWithContext) {
-      assertMediaExecutionCurrent(params.execution);
-      const attempt = await provider.transcribeAudioWithContext({
-        ...input,
-        cfg,
-        agentDir: params.agentDir,
-        workspaceDir: params.workspaceDir,
-        profile: entry.profile,
-        preferredProfile: entry.preferredProfile,
-      });
+      const attempt = await withGuardedFetchRequestAuthority(
+        () => {
+          params.assertCurrent?.();
+          assertMediaExecutionCurrent(params.execution);
+        },
+        () =>
+          provider.transcribeAudioWithContext!({
+            ...input,
+            cfg,
+            agentDir: params.agentDir,
+            workspaceDir: params.workspaceDir,
+            profile: entry.profile,
+            preferredProfile: entry.preferredProfile,
+          }),
+      );
       if (!attempt.ok) {
         return attempt;
       }
@@ -613,11 +426,18 @@ export async function runProviderEntry(params: {
         providerId,
         provider,
       });
-      result = await executeProviderRequest(
-        providerId,
-        auth,
-        (requestAuth) => transcribeAudio({ ...input, ...requestAuth }),
-        params.execution,
+      result = await withGuardedFetchRequestAuthority(
+        () => {
+          params.assertCurrent?.();
+          assertMediaExecutionCurrent(params.execution);
+        },
+        () =>
+          executeProviderRequest(
+            providerId,
+            auth,
+            (requestAuth) => transcribeAudio({ ...input, ...requestAuth }),
+            params.execution,
+          ),
       );
     }
     if (isTranscriptArtifactText(result.text)) {
@@ -700,7 +520,7 @@ export async function runProviderEntry(params: {
 export async function runCliEntry(
   params: Pick<
     Parameters<typeof runProviderEntry>[0],
-    "capability" | "entry" | "cfg" | "cache" | "config" | "request" | "execution"
+    "capability" | "entry" | "cfg" | "cache" | "config" | "request" | "assertCurrent" | "execution"
   > & { ctx: MsgContext; attachment: MediaAttachment },
 ): Promise<MediaUnderstandingOutput | null> {
   assertMediaExecutionCurrent(params.execution);
@@ -722,6 +542,7 @@ export async function runCliEntry(
     const stat = await fs.stat(attachmentPath);
     assertMinAudioSize({ size: stat.size, attachmentIndex });
   }
+  params.assertCurrent?.();
   const outputDir = await fs.mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-media-cli-"),
   );
@@ -731,6 +552,7 @@ export async function runCliEntry(
       command,
       mediaPath: attachmentPath,
       outputDir,
+      assertCurrent: params.assertCurrent,
       execution: params.execution,
     });
     const outputBase = path.join(outputDir, path.parse(mediaPath).name);
@@ -763,6 +585,7 @@ export async function runCliEntry(
       delete templCtx[key];
     }
     const argv = args.map((part) => applyTemplate(part, templCtx));
+    params.assertCurrent?.();
     assertMediaExecutionCurrent(params.execution);
     const { stdout, stderr } = await runExec(command, argv, {
       timeoutMs,
@@ -807,7 +630,10 @@ export async function runCliEntry(
       ...(observedBackend ? { observedBackend } : {}),
     };
   } finally {
-    await fs.rm(outputDir, { recursive: true, force: true }).catch(() => {});
+    await fs.rm(outputDir, { recursive: true, force: true }).catch((error: unknown) => {
+      logWarn(
+        `media-understanding: failed to remove CLI temporary directory ${outputDir}: ${String(error)}; remove it manually.`,
+      );
+    });
   }
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

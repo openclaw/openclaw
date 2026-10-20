@@ -215,7 +215,12 @@ describe.skipIf(!connection)("PostgreSQL memory publication worker", () => {
 
   it("publishes inline and streamed sources, then re-admits their projections after restart", () =>
     admitted(() => {
-      expect(publishInline(replacement("violet"))).toMatchObject({ ok: true, value: true });
+      const revision = readMemoryDatabaseFacts(database).revision;
+      expect(publishInline(replacement("violet"))).toMatchObject({
+        ok: true,
+        value: true,
+        facts: { revision: revision + 1 },
+      });
       const large = replacement("orchid", `orchid ${"x".repeat(280_000)}`);
       const batches = [...memoryPublicationBatches(large)];
       expect(batches.length).toBeGreaterThan(1);
@@ -226,6 +231,7 @@ describe.skipIf(!connection)("PostgreSQL memory publication worker", () => {
       expect(backend.execute({ type: "source.replace", input: { state } })).toMatchObject({
         ok: true,
         value: true,
+        facts: { revision: revision + 2 },
       });
       expect(rows()).toEqual([
         { path: "memory/orchid.md", text: large.chunks[0]!.text, vector: "[1,0,0]" },
@@ -239,6 +245,88 @@ describe.skipIf(!connection)("PostgreSQL memory publication worker", () => {
       admit();
       expect(rows()).toHaveLength(2);
       expect(keyword("orchid")).toEqual([{ path: "memory/orchid.md" }]);
+      expect(readMemoryDatabaseFacts(database).revision).toBe(revision + 2);
+    }));
+
+  it("advances once per grouped replacement, refresh, and deletion, including rollback", () =>
+    admitted(() => {
+      const revision = readMemoryDatabaseFacts(database).revision;
+      const sources = ["first", "second"].map((name) =>
+        memoryPublicationInline(replacement(name))!,
+      );
+      const group = { type: "source.replace.group", input: { sources, state } } as const;
+      expect(backend.execute(group)).toMatchObject({
+        ok: true,
+        facts: { revision: revision + 1 },
+      });
+      expect(rows()).toHaveLength(2);
+      denyCommit = true;
+      expect(backend.execute(group)).toMatchObject({ ok: false, committed: false });
+      expect(readMemoryDatabaseFacts(database).revision).toBe(revision + 1);
+      denyCommit = false;
+      expect(
+        backend.execute({
+          type: "source.delete",
+          input: { path: "memory/first.md", source: "memory", expectedHash: "first", state },
+        }),
+      ).toMatchObject({ ok: true, value: true, facts: { revision: revision + 2 } });
+      expect(keyword("first")).toEqual([]);
+      expect(keyword("second")).toEqual([{ path: "memory/second.md" }]);
+
+      const session: MemorySourceIndexReplacement = {
+        ...replacement("session"),
+        source: "sessions",
+        agentId: "main",
+        sessionId: "session",
+      };
+      expect(publishInline(session)).toMatchObject({ ok: true, facts: { revision: revision + 3 } });
+      expect(
+        backend.execute({
+          type: "source.refresh",
+          input: {
+            path: session.entry.path,
+            expectedHash: "session",
+            hash: "updated",
+            mtime: 2,
+            size: 2,
+          },
+        }),
+      ).toMatchObject({ ok: true, value: true, facts: { revision: revision + 4 } });
+      expect(
+        backend.execute({
+          type: "source.refresh",
+          input: {
+            path: session.entry.path,
+            expectedHash: "session",
+            hash: "stale",
+            mtime: 3,
+            size: 3,
+          },
+        }),
+      ).toMatchObject({ ok: true, value: false, facts: { revision: revision + 4 } });
+    }));
+
+  it("preserves fragment order across the PostgreSQL bind-parameter limit", () =>
+    admitted(() => {
+      const next = replacement("fragmented", `fragmented ${"x".repeat(22_000)}`);
+      const json = [...memoryPublicationBatches(next)]
+        .flat()
+        .map((fragment) => fragment.json)
+        .join("");
+      const fragments = Array.from(json, (part, index) => ({
+        json: part,
+        last: index === json.length - 1,
+      }));
+      expect(fragments.length).toBeGreaterThan(65_535 / 3);
+      backend.execute({ type: "stage.start", input: { header: memoryPublicationHeader(next) } });
+      backend.execute({ type: "stage.append", input: { fragments } });
+      expect(backend.execute({ type: "source.replace", input: { state } })).toMatchObject({
+        ok: true,
+        value: true,
+      });
+      expect(rows()).toEqual([
+        { path: "memory/fragmented.md", text: next.chunks[0]!.text, vector: "[1,0,0]" },
+      ]);
     }));
 
   it("routes PostgreSQL indexing reads through the publication owner", async () => {
@@ -270,6 +358,30 @@ describe.skipIf(!connection)("PostgreSQL memory publication worker", () => {
       dispatch.mockRestore();
     }
   });
+
+  it("reports a committed publication when its subsequent facts read fails", () =>
+    admitted(() => {
+      const query = pg().query.bind(pg());
+      const queried = vi.spyOn(pg(), "query").mockImplementation((sql, parameters) => {
+        if (sql.includes('as "hasIndexedChunks"')) {
+          throw new Error("facts read failed");
+        }
+        return query(sql, parameters);
+      });
+      try {
+        expect(publishInline(replacement("committed"))).toMatchObject({
+          ok: false,
+          entered: true,
+          committed: true,
+          error: { message: "facts read failed" },
+        });
+        expect(rows()).toEqual([
+          { path: "memory/committed.md", text: "committed searchable", vector: "[1,0,0]" },
+        ]);
+      } finally {
+        queried.mockRestore();
+      }
+    }));
 
   it("atomically resets derived rows while retaining admitted search schema and revision", () =>
     admitted(() => {
@@ -317,7 +429,7 @@ describe.skipIf(!connection)("PostgreSQL memory publication worker", () => {
       );
       expect(pg().prepare("SELECT chunk_id FROM memory_index_chunk_provenance").all()).toEqual([]);
       const after = readMemoryDatabaseFacts(database);
-      expect(after.revision).toBeGreaterThan(before.revision);
+      expect(after.revision).toBe(before.revision + 1);
       expect(backend.execute({ type: "database.reset", input: undefined })).toMatchObject({
         ok: true,
         value: false,
@@ -438,6 +550,7 @@ describe.skipIf(!connection)("PostgreSQL memory publication worker", () => {
       });
       expect(rows()).toEqual(before);
       expect(keyword("old")).toEqual([{ path: "memory/old.md" }]);
+      expect(readMemoryDatabaseFacts(database).revision).toBe(revision);
       denyCommit = false;
       rebind();
       expect(
@@ -454,6 +567,7 @@ describe.skipIf(!connection)("PostgreSQL memory publication worker", () => {
       expect(backend.execute({ type: "index.facts", input: undefined })).toMatchObject({
         meta: { chunkTokens: 200 },
         vectorState: { state: "complete" },
+        revision: revision + 1,
       });
       backend.execute({ type: "database.stage.discard", input: { stageId } });
       expect(() =>
@@ -471,7 +585,6 @@ describe.skipIf(!connection)("PostgreSQL memory publication worker", () => {
       expect(backend.execute({ type: "index.writeMetadata", input: metadata })).toMatchObject({
         ok: true,
       });
-      const before = rows();
       const revision = Number(
         pg().prepare("SELECT revision FROM memory_index_state WHERE id = 1").get()!.revision,
       );
@@ -487,9 +600,10 @@ describe.skipIf(!connection)("PostgreSQL memory publication worker", () => {
       });
       backend.close();
       backend = bind();
-      pg().runTransaction(() =>
-        pg().exec("UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1"),
-      );
+      expect(publishInline(replacement("current", "newer canonical content"))).toMatchObject({
+        ok: true,
+      });
+      const before = rows();
       expect(
         backend.execute({
           type: "database.stage.publish",
@@ -506,6 +620,230 @@ describe.skipIf(!connection)("PostgreSQL memory publication worker", () => {
       backend.close();
       backend = bind();
       backend.execute({ type: "database.stage.discard", input: { stageId } });
+    }));
+
+  it("retains cache sizing without refreshing index facts across bindings, rollback, and other writers", () =>
+    admitted(() => {
+      const statements: string[] = [];
+      const observations = channel("openclaw.database.statement");
+      const listener = (message: unknown) => {
+        const event = message as { engine: string; sql: string };
+        if (event.engine === "postgres") {
+          statements.push(event.sql);
+        }
+      };
+      observations.subscribe(listener);
+      const header = {
+        agentId: "publication-fixture",
+        provider: { id: "fixture", model: "fixture" },
+        providerKey: "fixture",
+        maxEntries: 5,
+      };
+      const write = (hashes: string[], options = header) =>
+        backend.execute({
+          type: "cache.write.inline",
+          input: { header: options, entries: hashes.map((hash) => ({ hash, embedding: [1] })) },
+        });
+      const hashes = () =>
+        pg().prepare("SELECT hash FROM memory_embedding_cache ORDER BY hash").all();
+      const counts = () =>
+        statements.filter((sql) => /select count\(\*\).*from "memory_embedding_cache"/iu.test(sql))
+          .length;
+      const factReads = () => statements.filter((sql) => sql.includes('as "hasIndexedChunks"'));
+      const rebind = () => {
+        backend.close();
+        backend = bind();
+      };
+      try {
+        expect(write(["a", "b", "a"])).toMatchObject({ ok: true });
+        backend.execute({
+          type: "stage.start",
+          input: { header: memoryPublicationHeader(replacement("spool")) },
+        });
+        backend.execute({
+          type: "stage.append",
+          input: { fragments: [...memoryPublicationBatches(replacement("spool"))].flat() },
+        });
+        rebind();
+        expect(write(["b", "c"])).toMatchObject({ ok: true });
+        expect(hashes()).toEqual([{ hash: "a" }, { hash: "b" }, { hash: "c" }]);
+        expect(backend.execute({ type: "cache.prune", input: { maxEntries: 5 } })).toMatchObject({
+          ok: true,
+          value: false,
+        });
+        expect(counts()).toBe(1);
+        expect(factReads()).toHaveLength(0);
+
+        denyCommit = true;
+        expect(write(["d"], { ...header, maxEntries: 1 })).toMatchObject({
+          ok: false,
+          committed: false,
+        });
+        denyCommit = false;
+        rebind();
+        expect(write(["d"], { ...header, maxEntries: 3 })).toMatchObject({ ok: true });
+        expect(hashes()).toEqual([{ hash: "b" }, { hash: "c" }, { hash: "d" }]);
+        expect(backend.execute({ type: "cache.prune", input: { maxEntries: 1 } })).toMatchObject({
+          ok: true,
+          value: true,
+        });
+        expect(hashes()).toHaveLength(1);
+        expect(
+          backend.execute({
+            type: "cache.clear",
+            input: {
+              identities: [{ provider: "fixture", model: "fixture", providerKey: "fixture" }],
+            },
+          }),
+        ).toMatchObject({ ok: true });
+        expect(write(["e", "f", "g"])).toMatchObject({ ok: true });
+        expect(hashes()).toHaveLength(3);
+
+        // Session forget and other admitted owners can clear the cache on the same connection.
+        pg().runTransaction(() => pg().exec("DELETE FROM memory_embedding_cache"));
+        expect(write(["h", "i"])).toMatchObject({ ok: true });
+        expect(hashes()).toEqual([{ hash: "h" }, { hash: "i" }]);
+        expect(write(["h"], { ...header, maxEntries: 0 })).toMatchObject({ ok: true });
+        expect(write(["j"])).toMatchObject({ ok: true });
+        expect(hashes()).toEqual([{ hash: "h" }, { hash: "i" }, { hash: "j" }]);
+        expect(factReads()).toHaveLength(0);
+        expect(backend.execute({ type: "database.reset", input: undefined })).toMatchObject({
+          ok: true,
+        });
+        expect(write(["k", "l", "m"])).toMatchObject({ ok: true });
+        expect(hashes()).toHaveLength(3);
+        const legacyMeta = { ...metadata, providerKey: "fixture" };
+        expect(backend.execute({ type: "index.writeMetadata", input: legacyMeta })).toMatchObject({
+          ok: true,
+        });
+        expect(write(["m"], { ...header, providerKey: "canonical", maxEntries: 3 })).toMatchObject({
+          ok: true,
+        });
+        expect(
+          backend.execute({
+            type: "index.upgradeProviderKey",
+            input: { meta: legacyMeta, providerKey: "canonical" },
+          }),
+        ).toMatchObject({ ok: true, value: true });
+        expect(write(["n"], { ...header, providerKey: "canonical" })).toMatchObject({ ok: true });
+        expect(hashes()).toEqual([{ hash: "l" }, { hash: "m" }, { hash: "n" }]);
+      } finally {
+        denyCommit = false;
+        observations.unsubscribe(listener);
+      }
+    }));
+
+  it("evicts superseded cache rows first through both PostgreSQL cache paths", () =>
+    admitted(() => {
+      const identity = { provider: "fixture", model: "fixture", providerKey: "fixture" };
+      const unreferencedFirst = { identities: [identity] };
+      const seed = (hash: string, updatedAt: number) =>
+        pg().runTransaction(() =>
+          pg()
+            .prepare(
+              "INSERT INTO memory_embedding_cache (provider, model, provider_key, hash, embedding, dims, updated_at) VALUES ('fixture', 'fixture', 'fixture', ?, ?, 1, ?)",
+            )
+            .run(hash, encodeMemoryEmbedding([1]), updatedAt),
+        );
+      const hashes = () =>
+        pg()
+          .prepare("SELECT hash FROM memory_embedding_cache ORDER BY hash")
+          .all()
+          .map((row) => row.hash);
+      seed("live", 1);
+      seed("orphan", 5);
+      pg().runTransaction(() =>
+        pg()
+          .prepare(
+            "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES ('c', 'a.md', 'memory', 1, 1, 'live', 'fixture', 't', ?, 10)",
+          )
+          .run(encodeMemoryEmbedding([1, 0, 0])),
+      );
+      const header = {
+        agentId: "publication-fixture",
+        provider: { id: "fixture", model: "fixture" },
+        providerKey: "fixture",
+        maxEntries: 2,
+        unreferencedFirst,
+      };
+      expect(
+        backend.execute({
+          type: "cache.write.inline",
+          input: { header, entries: [{ hash: "new", embedding: [1] }] },
+        }),
+      ).toMatchObject({ ok: true });
+      expect(hashes()).toEqual(["live", "new"]);
+      seed("orphan-2", 6);
+      expect(
+        backend.execute({ type: "cache.prune", input: { maxEntries: 2, unreferencedFirst } }),
+      ).toMatchObject({ ok: true, value: true });
+      expect(hashes()).toEqual(["live", "new"]);
+    }));
+
+  it("keeps the cache bounded when another owner commits before its transaction starts", () =>
+    admitted(() => {
+      const header = {
+        agentId: "publication-fixture",
+        provider: { id: "fixture", model: "fixture" },
+        providerKey: "fixture",
+        maxEntries: 3,
+      };
+      const command = (hashes: string[]) => ({
+        type: "cache.write.inline" as const,
+        input: { header, entries: hashes.map((hash) => ({ hash, embedding: [1] })) },
+      });
+      expect(backend.execute(command(["a", "b"]))).toMatchObject({ ok: true });
+      const other = bind();
+      const runTransaction = pg().runTransaction.bind(pg());
+      const transaction = vi
+        .spyOn(pg(), "runTransaction")
+        .mockImplementationOnce((run, options) => {
+          expect(other.execute(command(["c"]))).toMatchObject({ ok: true });
+          return runTransaction(run, options);
+        });
+      try {
+        expect(backend.execute(command(["d"]))).toMatchObject({ ok: true });
+        expect(pg().prepare("SELECT hash FROM memory_embedding_cache").all()).toHaveLength(3);
+      } finally {
+        transaction.mockRestore();
+        other.close();
+      }
+    }));
+
+  it("invalidates cache sizing when another owner commits during post-commit facts", () =>
+    admitted(() => {
+      const header = {
+        agentId: "publication-fixture",
+        provider: { id: "fixture", model: "fixture" },
+        providerKey: "fixture",
+        maxEntries: 3,
+      };
+      const command = (hashes: string[]) => ({
+        type: "cache.write.inline" as const,
+        input: { header, entries: hashes.map((hash) => ({ hash, embedding: [1] })) },
+      });
+      expect(backend.execute(command(["a", "b"]))).toMatchObject({ ok: true });
+      const other = bind();
+      const query = pg().query.bind(pg());
+      let interleaved = false;
+      const queried = vi.spyOn(pg(), "query").mockImplementation((sql, parameters) => {
+        if (!interleaved && sql.includes('as "hasIndexedChunks"')) {
+          interleaved = true;
+          expect(other.execute(command(["c"]))).toMatchObject({ ok: true });
+        }
+        return query(sql, parameters);
+      });
+      try {
+        expect(backend.execute({ type: "index.writeMetadata", input: metadata })).toMatchObject({
+          ok: true,
+        });
+        expect(interleaved).toBe(true);
+        expect(backend.execute(command(["d"]))).toMatchObject({ ok: true });
+        expect(pg().prepare("SELECT hash FROM memory_embedding_cache").all()).toHaveLength(3);
+      } finally {
+        queried.mockRestore();
+        other.close();
+      }
     }));
 
   it("replays a multi-request cache through bounded connection-local staging", () =>

@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { acquireDistArtifactOwnership } from "../../../scripts/lib/dist-artifact-lock.mts";
 import { installPrivateUpdateHandoffStore } from "../../../test/helpers/private-update-handoff-store.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   createPluginInstallRecordMap,
   getPluginInstallRecordMapEntry,
@@ -25,7 +25,7 @@ import {
   writePostCoreUpdateFailureFile,
 } from "./update-command-post-core.js";
 
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const pluginUpdate: PostCorePluginUpdateResult = {
   status: "ok",
   changed: true,
@@ -40,26 +40,14 @@ const pluginUpdate: PostCorePluginUpdateResult = {
   integrityDrifts: [],
 };
 
-afterEach(async () => {
-  vi.restoreAllMocks();
-  await Promise.all(
-    tempDirs.splice(0).map(async (dir) => {
-      await fs.rm(dir, { recursive: true, force: true });
-    }),
-  );
-});
-
-async function withTempDir(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-post-core-records-"));
-  tempDirs.push(dir);
-  return dir;
-}
+afterEach(() => vi.restoreAllMocks());
+const withTempDir = () => tempDirs.make("openclaw-post-core-records-");
 
 describe("continuePostCoreUpdateInFreshProcess", () => {
   it.each([false, true])(
     "releases artifact ownership only for a target without the prepared-fact consumer (modern=%s)",
     async (modern) => {
-      const root = await withTempDir();
+      const root = withTempDir();
       const control = path.join(root, "control");
       await fs.mkdir(control, { mode: 0o700 });
       installPrivateUpdateHandoffStore(control);
@@ -126,7 +114,7 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
   it.runIf(process.platform !== "win32").each([true, false])(
     "waits for a committed child's shutdown before returning its result (cooperative=%s)",
     async (cooperative) => {
-      const root = await withTempDir();
+      const root = withTempDir();
       const settledPath = path.join(root, "settled");
       const pidPath = path.join(root, "writer.pid");
       const argvPath = path.join(root, "argv.json");
@@ -231,7 +219,7 @@ describe("post-core result publication", () => {
   it.runIf(process.platform !== "win32").each(["success", "failure"] as const)(
     "keeps the handoff private after publishing %s",
     async (outcome) => {
-      const dir = await withTempDir();
+      const dir = withTempDir();
       await fs.chmod(dir, 0o700);
       const siblingPath = path.join(dir, "source-config.json");
       const sibling = '{"sourceConfig":{"gateway":{"port":18789}}}\n';
@@ -268,7 +256,7 @@ describe("readPostCorePluginInstallRecordsFile", () => {
       reason: "Malformed JSON in plugin install records file",
     },
   ])("distinguishes $kind handoffs from valid install records", async ({ kind, raw, reason }) => {
-    const dir = await withTempDir();
+    const dir = withTempDir();
     if (!raw) {
       await expect(
         readPostCorePluginInstallRecordsFile(
@@ -289,7 +277,7 @@ describe("readPostCorePluginInstallRecordsFile", () => {
   });
 
   it("writes UTF-8 byte order and preserves special ids and passthrough fields", async () => {
-    const dir = await withTempDir();
+    const dir = withTempDir();
     const filePath = path.join(dir, "plugin-install-records.json");
     const records = createPluginInstallRecordMap<PluginInstallRecord>();
     setPluginInstallRecordMapEntry(records, "\u{10000}", { source: "git" });
@@ -413,38 +401,26 @@ describe("post-core operator deadline provenance", () => {
     missing?: boolean;
     malformed?: boolean;
   }[] = [
-    {
-      name: "omitted operator deadline",
-      value: { version: 1, serialized: "2700", operator: null },
-      expected: undefined,
-    },
-    {
-      name: "explicit operator deadline",
-      value: { version: 1, serialized: "2700", operator: "2700" },
-      expected: "2700",
-    },
-    { name: "legacy metadata", value: undefined, expected: "2700" },
-    {
-      name: "missing operator provenance",
-      value: { version: 1, serialized: "2700" },
-      expected: "2700",
-    },
-    {
-      name: "mismatched command",
-      value: { version: 1, serialized: "1800", operator: null },
-      expected: "2700",
-    },
-    {
-      name: "unknown version",
-      value: { version: 2, serialized: "2700", operator: null },
-      expected: "2700",
-    },
-    {
-      name: "malformed operator",
-      value: { version: 1, serialized: "2700", operator: false },
-      expected: "2700",
-    },
-    { name: "malformed metadata", value: "default", expected: "2700" },
+    ...(
+      [
+        [
+          "omitted operator deadline",
+          { version: 1, serialized: "2700", operator: null },
+          undefined,
+        ],
+        [
+          "explicit operator deadline",
+          { version: 1, serialized: "2700", operator: "2700" },
+          "2700",
+        ],
+        ["legacy metadata", undefined, "2700"],
+        ["missing operator provenance", { version: 1, serialized: "2700" }, "2700"],
+        ["mismatched command", { version: 1, serialized: "1800", operator: null }, "2700"],
+        ["unknown version", { version: 2, serialized: "2700", operator: null }, "2700"],
+        ["malformed operator", { version: 1, serialized: "2700", operator: false }, "2700"],
+        ["malformed metadata", "default", "2700"],
+      ] as const
+    ).map(([name, value, expected]) => ({ name, value, expected })),
     { name: "missing handoff", timeout: "3", expected: "3", missing: true },
     {
       name: "child-owned completion",
@@ -456,7 +432,7 @@ describe("post-core operator deadline provenance", () => {
     { name: "malformed handoff", timeout: "3", malformed: true },
   ];
   it.each(cases)("preserves intent for $name", async (entry) => {
-    const root = await withTempDir();
+    const root = withTempDir();
     const resultPath = path.join(root, "plugins.json");
     if (!entry.missing) {
       await fs.writeFile(

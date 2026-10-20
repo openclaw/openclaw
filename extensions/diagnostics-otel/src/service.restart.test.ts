@@ -1,19 +1,23 @@
 import { setTimeout as sleep } from "node:timers/promises";
-import { context, diag, DiagLogLevel, metrics, propagation, trace } from "@opentelemetry/api";
-import { logs } from "@opentelemetry/api-logs";
-import {
-  resetDiagnosticEventsForTest,
-  type DiagnosticTraceContext,
-  waitForDiagnosticEventsDrained,
-} from "openclaw/plugin-sdk/diagnostic-runtime";
-import { afterEach, expect, test } from "vitest";
+import { diag, DiagLogLevel } from "@opentelemetry/api";
+import type { DiagnosticTraceContext } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { expect, test } from "vitest";
 import {
   type CapturedLogRecord,
   type CapturedSpan,
   startLocalOtlpReceiver,
 } from "../../../test/e2e/qa-lab/runtime/otel-test-support.js";
 import { createDiagnosticsOtelService } from "./service.js";
-import { createOtelContext, emitRealSdkSignals } from "./service.test-helpers.js";
+import { installRealOtelSdkTestHarness } from "./service.real-sdk.test-support.js";
+import {
+  clearOtelGlobals,
+  createOtelContext,
+  emitRealSdkSignals,
+  registeredOtelGlobals,
+  registeredOtelLogs,
+} from "./service.test-helpers.js";
+
+installRealOtelSdkTestHarness();
 
 const PRELOAD_ENV = "OPENCLAW_OTEL_PRELOADED";
 const OWNERSHIP_ENV_KEYS = [
@@ -25,41 +29,8 @@ const OWNERSHIP_ENV_KEYS = [
   "OTEL_EXPORTER_OTLP_LOGS_PROTOCOL",
   "OTEL_LOG_LEVEL",
 ] as const;
-const OTEL_GLOBAL_API_KEY = Symbol.for("opentelemetry.js.api.1");
-const OTEL_GLOBAL_LOGS_KEY = Symbol.for("io.opentelemetry.js.api.logs");
-
-type OtelGlobalRegistrations = {
-  context?: Parameters<typeof context.setGlobalContextManager>[0];
-  diag?: Parameters<typeof diag.setLogger>[0];
-  metrics?: Parameters<typeof metrics.setGlobalMeterProvider>[0];
-  propagation?: Parameters<typeof propagation.setGlobalPropagator>[0];
-  trace?: Parameters<typeof trace.setGlobalTracerProvider>[0];
-};
-
-function registeredOtelGlobals(): OtelGlobalRegistrations | undefined {
-  return (globalThis as unknown as Record<symbol, OtelGlobalRegistrations | undefined>)[
-    OTEL_GLOBAL_API_KEY
-  ];
-}
-
-function registeredOtelLogs(): unknown {
-  return (globalThis as unknown as Record<symbol, unknown>)[OTEL_GLOBAL_LOGS_KEY];
-}
-
-const ORIGINAL_ENV = Object.fromEntries(
-  OWNERSHIP_ENV_KEYS.map((key) => [key, process.env[key]]),
-) as Record<(typeof OWNERSHIP_ENV_KEYS)[number], string | undefined>;
-const ORIGINAL_GLOBALS = { ...registeredOtelGlobals() };
-const ORIGINAL_LOGS_PROVIDER = Object.hasOwn(globalThis, OTEL_GLOBAL_LOGS_KEY)
-  ? logs.getLoggerProvider()
-  : undefined;
-
 function releaseOtelGlobals() {
-  context.disable();
-  metrics.disable();
-  propagation.disable();
-  trace.disable();
-  logs.disable();
+  clearOtelGlobals();
   for (const key of OWNERSHIP_ENV_KEYS) {
     delete process.env[key];
   }
@@ -81,41 +52,6 @@ function assertCorrelatedGeneration(
   expect(model?.parentSpanId).toBe(run?.spanId);
   expect(correlatedLog).toBeDefined();
 }
-
-afterEach(() => {
-  releaseOtelGlobals();
-  if (ORIGINAL_GLOBALS.context) {
-    context.setGlobalContextManager(ORIGINAL_GLOBALS.context);
-  }
-  if (ORIGINAL_GLOBALS.propagation) {
-    propagation.setGlobalPropagator(ORIGINAL_GLOBALS.propagation);
-  }
-  if (ORIGINAL_GLOBALS.metrics) {
-    metrics.setGlobalMeterProvider(ORIGINAL_GLOBALS.metrics);
-  }
-  if (ORIGINAL_GLOBALS.trace) {
-    trace.setGlobalTracerProvider(ORIGINAL_GLOBALS.trace);
-  }
-  if (ORIGINAL_LOGS_PROVIDER) {
-    logs.setGlobalLoggerProvider(ORIGINAL_LOGS_PROVIDER);
-  }
-  diag.disable();
-  if (ORIGINAL_GLOBALS.diag) {
-    diag.setLogger(ORIGINAL_GLOBALS.diag, {
-      logLevel: DiagLogLevel.ALL,
-      suppressOverrideMessage: true,
-    });
-  }
-  for (const key of OWNERSHIP_ENV_KEYS) {
-    const value = ORIGINAL_ENV[key];
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
-  resetDiagnosticEventsForTest();
-});
 
 function captureOtelDiagnostics(): string[] {
   const messages: string[] = [];
@@ -149,19 +85,21 @@ test("flushes each private generation on restart and leaves global providers unt
     metrics: registeredOtelGlobals()?.metrics,
     trace: registeredOtelGlobals()?.trace,
   };
+  function assertGeneration(receiver: typeof receiverA, logTrace: DiagnosticTraceContext) {
+    expect(new Set(receiver.capturedRequests.map((request) => request.signal))).toEqual(
+      new Set(["traces", "metrics", "logs"]),
+    );
+    expect(receiver.capturedMetrics.length).toBeGreaterThan(0);
+    assertCorrelatedGeneration(receiver.capturedSpans, receiver.capturedLogRecords, logTrace);
+    expect(registeredOtelGlobals()?.trace).toBe(globalProviders.trace);
+    expect(registeredOtelGlobals()?.metrics).toBe(globalProviders.metrics);
+    expect(registeredOtelLogs()).toBe(globalProviders.logs);
+    expect(registeredOtelGlobals()?.diag).toBe(hostDiagOwner);
+  }
   const service = createDiagnosticsOtelService();
-  const ctxA = createOtelContext(`http://127.0.0.1:${portA}`, {
-    traces: true,
-    metrics: true,
-    logs: true,
-  });
-  const ctxB = createOtelContext(`http://127.0.0.1:${portB}`, {
-    traces: true,
-    metrics: true,
-    logs: true,
-  });
-  ctxA.config.diagnostics!.otel!.flushIntervalMs = 60_000;
-  ctxB.config.diagnostics!.otel!.flushIntervalMs = 60_000;
+  const flags = { traces: true, metrics: true, logs: true, flushIntervalMs: 60_000 };
+  const ctxA = createOtelContext(`http://127.0.0.1:${portA}`, flags);
+  const ctxB = createOtelContext(`http://127.0.0.1:${portB}`, flags);
 
   try {
     await service.start(ctxA);
@@ -169,18 +107,9 @@ test("flushes each private generation on restart and leaves global providers unt
     await service.stop?.(ctxA);
     const aRequestsAfterStop = receiverA.capturedRequests.length;
 
-    expect(new Set(receiverA.capturedRequests.map((request) => request.signal))).toEqual(
-      new Set(["traces", "metrics", "logs"]),
-    );
-    expect(receiverA.capturedMetrics.length).toBeGreaterThan(0);
-    assertCorrelatedGeneration(receiverA.capturedSpans, receiverA.capturedLogRecords, traceA);
-    expect(registeredOtelGlobals()?.trace).toBe(globalProviders.trace);
-    expect(registeredOtelGlobals()?.metrics).toBe(globalProviders.metrics);
-    expect(registeredOtelLogs()).toBe(globalProviders.logs);
-    expect(registeredOtelGlobals()?.diag).toBe(hostDiagOwner);
+    assertGeneration(receiverA, traceA);
 
     await emitRealSdkSignals("after-a-stop");
-    await waitForDiagnosticEventsDrained();
     await sleep(50);
     expect(receiverA.capturedRequests).toHaveLength(aRequestsAfterStop);
 
@@ -190,18 +119,9 @@ test("flushes each private generation on restart and leaves global providers unt
     const bRequestsAfterStop = receiverB.capturedRequests.length;
 
     expect(receiverA.capturedRequests).toHaveLength(aRequestsAfterStop);
-    expect(new Set(receiverB.capturedRequests.map((request) => request.signal))).toEqual(
-      new Set(["traces", "metrics", "logs"]),
-    );
-    expect(receiverB.capturedMetrics.length).toBeGreaterThan(0);
-    assertCorrelatedGeneration(receiverB.capturedSpans, receiverB.capturedLogRecords, traceB);
-    expect(registeredOtelGlobals()?.trace).toBe(globalProviders.trace);
-    expect(registeredOtelGlobals()?.metrics).toBe(globalProviders.metrics);
-    expect(registeredOtelLogs()).toBe(globalProviders.logs);
-    expect(registeredOtelGlobals()?.diag).toBe(hostDiagOwner);
+    assertGeneration(receiverB, traceB);
 
     await emitRealSdkSignals("after-b-stop");
-    await waitForDiagnosticEventsDrained();
     await sleep(50);
     expect(receiverB.capturedRequests).toHaveLength(bRequestsAfterStop);
     diag.warn("host diagnostic logger remains active");

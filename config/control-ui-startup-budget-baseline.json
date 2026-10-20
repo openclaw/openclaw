@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 337669,
-  "reason": "Combined protocol, Cron, and New Session deferrals measured 337669 B startup; retain the reduced baseline.",
-  "updatedAt": "2026-10-17"
+  "startupJsGzipBytes": 324590,
+  "reason": "Page-owned English catalogs, with shared secret-request labels kept eager, measure 324590 B at startup; preserve one CSS request and cap startup at 325000 B.",
+  "updatedAt": "2026-10-20"
 }

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { root } from "openclaw/plugin-sdk/file-access-runtime";
+import { lstatIfExists } from "openclaw/plugin-sdk/path-existence-runtime";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { runCrabboxProcess } from "./crabbox-process.js";
@@ -183,13 +184,7 @@ async function probeInstallation(
   runCommand: CrabboxCommandRunner,
   signal: AbortSignal | undefined,
 ): Promise<CrabboxBinary | undefined> {
-  const stat = await fs.lstat(binary).catch(async (error: unknown) => {
-    const { extractErrorCode } = await import("openclaw/plugin-sdk/error-runtime");
-    if (extractErrorCode(error) === "ENOENT") {
-      return undefined;
-    }
-    throw error;
-  });
+  const stat = await lstatIfExists(binary, "ENOENT");
   if (!stat?.isFile()) {
     return undefined;
   }
@@ -215,15 +210,9 @@ export async function findManagedCrabboxBinary(
 }
 
 async function inspectInstallationDirectory(destination: string) {
-  let stat;
-  try {
-    stat = await fs.lstat(destination);
-  } catch (error) {
-    const { extractErrorCode } = await import("openclaw/plugin-sdk/error-runtime");
-    if (extractErrorCode(error) === "ENOENT") {
-      return undefined;
-    }
-    throw error;
+  const stat = await lstatIfExists(destination, "ENOENT");
+  if (!stat) {
+    return undefined;
   }
   if (!stat.isDirectory() || stat.isSymbolicLink()) {
     throw new Error(`Managed Crabbox destination must be a regular directory: ${destination}`);
@@ -257,9 +246,8 @@ async function publishInstallation(params: {
         return installed;
       }
       signal.throwIfAborted();
-      let recovery: string | undefined;
-      if (existing) {
-        recovery = `${destination}.recovery-${randomUUID()}`;
+      const recovery = existing ? `${destination}.recovery-${randomUUID()}` : undefined;
+      if (recovery) {
         // Preserve damaged installations, including files we did not create, outside staging cleanup.
         await fs.rename(destination, recovery);
       }
@@ -269,27 +257,6 @@ async function publishInstallation(params: {
         await fs.rename(payload, destination);
         return { binary, version: params.version };
       } catch (error) {
-        // Cooperating installers hold the same lock. Retain ambiguous externally changed state.
-        if (recovery) {
-          try {
-            if (!(await inspectInstallationDirectory(destination))) {
-              await fs.rename(recovery, destination);
-              recovery = undefined;
-            }
-          } catch (restoreError) {
-            throw new AggregateError(
-              [error, restoreError],
-              `Crabbox publication failed; previous installation is preserved at ${recovery}`,
-              { cause: restoreError },
-            );
-          }
-        }
-        if (!signal.aborted && (await inspectInstallationDirectory(destination))) {
-          const winner = await probeInstallation(binary, runCommand, signal);
-          if (winner) {
-            return winner;
-          }
-        }
         if (recovery) {
           throw new Error(
             `Crabbox publication failed; previous installation is preserved at ${recovery}`,
@@ -309,10 +276,6 @@ async function installManagedBinary(
 ): Promise<CrabboxBinary> {
   const destination = path.dirname(binary);
   await inspectInstallationDirectory(destination);
-  const installed = await probeInstallation(binary, runCommand, signal);
-  if (installed) {
-    return installed;
-  }
   const parent = path.dirname(destination);
   await fs.mkdir(parent, { recursive: true, mode: 0o700 });
   const staging = await fs.mkdtemp(path.join(parent, ".install-"));

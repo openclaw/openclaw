@@ -35,10 +35,24 @@ export function rethrowTelegramSendError(err: unknown): never {
     throw new PlatformMessageNotDispatchedError("Telegram request not started", { cause: err });
   }
   const migrationRejection = describeTelegramSupergroupMigration(err);
-  if (migrationRejection === undefined) {
-    throw err;
+  if (migrationRejection !== undefined) {
+    throw new PlatformMessageNotDispatchedError(migrationRejection, {
+      cause: err,
+      retryable: false,
+    });
   }
-  throw new PlatformMessageNotDispatchedError(migrationRejection, { cause: err, retryable: false });
+  // These exact Bot API errors reject chat/topic validation before sending, even
+  // for albums. Other 400s can follow partial album acceptance; nested failures
+  // cannot prove that every physical request was rejected.
+  if (
+    isRecord(err) &&
+    err.error_code === 400 &&
+    (err.description === "Bad Request: chat not found" ||
+      err.description === "Bad Request: message thread not found")
+  ) {
+    throw new PlatformMessageNotDispatchedError(formatErrorMessage(err), { cause: err });
+  }
+  throw err;
 }
 
 const TELEGRAM_ADDITIONAL_TRANSIENT_ERROR_CODES = new Set([

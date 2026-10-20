@@ -1183,7 +1183,7 @@ export class RealtimeCallHandler {
     };
     const closeSession = session.close.bind(session);
     let sessionClosePromise: Promise<void> | undefined;
-    session.close = (): Promise<void> => {
+    const closeBridgeSession = (): Promise<void> => {
       if (sessionClosed) {
         return sessionClosePromise ?? Promise.resolve();
       }
@@ -1204,6 +1204,7 @@ export class RealtimeCallHandler {
       });
       return sessionClosePromise;
     };
+    session.close = closeBridgeSession;
 
     let bindingClosed = false;
     let bindingClosePromise: Promise<void> | undefined;
@@ -1214,7 +1215,7 @@ export class RealtimeCallHandler {
       bindingClosed = true;
       activity.close();
       const ownsCall = this.activeTelephonyBindingsByCallId.get(callId) === telephonyBinding;
-      const finishClose = () => {
+      const finishClose = async () => {
         const stillOwnsCall = this.activeTelephonyBindingsByCallId.get(callId) === telephonyBinding;
         if (stillOwnsCall) {
           this.activeTelephonyBindingsByCallId.delete(callId);
@@ -1227,19 +1228,8 @@ export class RealtimeCallHandler {
         if (ownsCall && stillOwnsCall && cause && cause !== "disconnect") {
           return emitCallEnd(cause);
         }
-        return Promise.resolve();
       };
-      let pending: Promise<void>;
-      try {
-        pending = Promise.resolve(session.close());
-      } catch (error) {
-        pending = Promise.reject(
-          error instanceof Error
-            ? error
-            : new Error("Realtime provider close failed", { cause: error }),
-        );
-      }
-      bindingClosePromise = pending.then(finishClose, async (error: unknown) => {
+      bindingClosePromise = closeBridgeSession().then(finishClose, async (error: unknown) => {
         console.warn(
           `[voice-call] Failed to close realtime bridge ${callSid}: ${formatErrorMessage(error)}`,
         );

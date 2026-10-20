@@ -7,19 +7,20 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
-import { digestGitHubPublicationRequest } from "./github-publication-receipt.js";
-import { readSharedGitHubPublicationRequestInDatabase } from "./github-publication-shared-read.kernel.js";
+import { digestGitHubPublicationRequest as requestDigest } from "./github-publication-receipt.js";
+import { readSharedGitHubPublicationRequestInDatabase as readShared } from "./github-publication-shared-read.kernel.js";
 import {
-  claimGitHubPublicationExecutionFixture,
-  claimRepositoryGitHubPublicationFixture,
-  deferGitHubPublicationRequestsFixture,
-  insertRepositoryGitHubPublicationFixture,
-  readRepositoryGitHubPublicationFixture,
+  claimGitHubPublicationExecutionFixture as claimExecution,
+  claimRepositoryGitHubPublicationFixture as claimRepository,
+  deferGitHubPublicationRequestsFixture as deferRequests,
+  insertRepositoryGitHubPublicationFixture as insertRepository,
+  readRepositoryGitHubPublicationFixture as readRepository,
 } from "./github-publication-store.test-support.js";
 import { readGitHubPublicationRequest } from "./github-publication-store.worker.js";
 import {
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
+  BRANCH,
 } from "./github-publication.test-support.js";
 import {
   insertSharedWorktreeReceipt,
@@ -31,87 +32,72 @@ import {
 installGitHubPublicationTestHarness();
 afterEach(() => vi.restoreAllMocks());
 
-describe("publication SQLite materialization", () => {
-  it("returns fresh shared publication facts without rereading them, preserving current replay", () => {
-    const db = requireNativeSqliteDatabase(openOpenClawStateDatabase().db);
-    const counter = trackSqliteStatementExecutions(db, ["rereads"], (sql) =>
-      /^select\b/i.test(sql) &&
-      /\bfrom "github_publication_(?:requests|session_lifecycles)"/.test(sql)
-        ? "rereads"
-        : null,
-    );
-    let inserted: ReturnType<typeof insertSharedWorktreeReceipt>;
-    try {
-      inserted = insertSharedWorktreeReceipt("inserted", { idempotencyKey: "same-request" });
-      expect(counter.counts.rereads).toBe(0);
-    } finally {
-      counter.restore();
-    }
-    expect(inserted).toMatchObject({ request_id: "inserted", status: "requested" });
-    expect(readGitHubPublicationRequest(db, { requestId: "inserted" })).toEqual(inserted);
-    claimGitHubPublicationExecutionFixture(inserted.request_id, "publisher");
-    expect(
-      insertSharedWorktreeReceipt("replayed", { idempotencyKey: "same-request" }),
-    ).toMatchObject({
-      request_id: "inserted",
-      status: "publishing",
-      gateway_instance_id: "publisher",
-    });
-    expect(() =>
-      insertSharedWorktreeReceipt("mismatched", {
-        idempotencyKey: "same-request",
-        branch: "different-branch",
-      }),
-    ).toThrow("idempotency key was reused");
-    expect(readGitHubPublicationRequest(db, { requestId: "inserted" })).toMatchObject({
-      request_id: "inserted",
-      status: "publishing",
-      branch: inserted.branch,
-    });
-  });
+async function replayFixture(kind: "shared" | "repository") {
+  const db = requireNativeSqliteDatabase(openOpenClawStateDatabase().db);
+  const workspace = kind === "repository" ? await sharedRepositoryWorkspace() : undefined;
+  const row = workspace && repositoryReceipt(workspace);
+  const id = row?.request_id ?? "inserted";
+  return {
+    db,
+    id,
+    initial: row ?? expect.objectContaining({ request_id: id, status: "requested" }),
+    retained: row ? { title: null } : { branch: BRANCH },
+    table: row
+      ? /\bfrom "github_repository_publication_requests"/
+      : /\bfrom "github_publication_(?:requests|session_lifecycles)"/,
+    insert: (requestId: string, mismatch = false) =>
+      workspace
+        ? insertRepository(
+            repositoryReceipt(workspace, {
+              request_id: requestId,
+              ...(mismatch ? { title: "Different request" } : {}),
+            }),
+            () => {},
+          )
+        : insertSharedWorktreeReceipt(requestId, {
+            idempotencyKey: "same-request",
+            ...(mismatch ? { branch: "different-branch" } : {}),
+          }),
+    read: () => (row ? readRepository(id) : readGitHubPublicationRequest(db, { requestId: id })),
+    claim: () =>
+      row
+        ? claimRepository(row, "publisher", { assertCurrent() {}, assertCustody() {} })
+        : claimExecution(id, "publisher"),
+  };
+}
 
-  it("returns fresh repository publication facts without rereading them, preserving current replay", async () => {
-    const workspace = await sharedRepositoryWorkspace();
-    const row = repositoryReceipt(workspace);
-    const db = requireNativeSqliteDatabase(openOpenClawStateDatabase().db);
-    const counter = trackSqliteStatementExecutions(db, ["rereads"], (sql) =>
-      /^select\b/i.test(sql) && /\bfrom "github_repository_publication_requests"/.test(sql)
-        ? "rereads"
-        : null,
-    );
-    try {
-      expect(insertRepositoryGitHubPublicationFixture(row, () => {})).toEqual(row);
-      expect(counter.counts.rereads).toBe(0);
-    } finally {
-      counter.restore();
-    }
-    expect(readRepositoryGitHubPublicationFixture(row.request_id)).toEqual(row);
-    claimRepositoryGitHubPublicationFixture(row, "publisher", {
-      assertCurrent() {},
-      assertCustody() {},
-    });
-    expect(
-      insertRepositoryGitHubPublicationFixture(
-        repositoryReceipt(workspace, { request_id: "replayed" }),
-        () => {},
-      ),
-    ).toMatchObject({
-      request_id: row.request_id,
-      status: "publishing",
-      gateway_instance_id: "publisher",
-    });
-    expect(() =>
-      insertRepositoryGitHubPublicationFixture(
-        repositoryReceipt(workspace, { request_id: "mismatched", title: "Different request" }),
-        () => {},
-      ),
-    ).toThrow("idempotency key was reused");
-    expect(readRepositoryGitHubPublicationFixture(row.request_id)).toMatchObject({
-      request_id: row.request_id,
-      status: "publishing",
-      title: null,
-    });
-  });
+describe("publication SQLite materialization", () => {
+  it.each(["shared", "repository"] as const)(
+    "materializes %s without rereads and preserves replay",
+    async (kind) => {
+      const f = await replayFixture(kind);
+      const { db } = f;
+      const counter = trackSqliteStatementExecutions(db, ["rereads"], (sql) =>
+        /^select\b/i.test(sql) && f.table.test(sql) ? "rereads" : null,
+      );
+      let inserted: ReturnType<typeof f.insert>;
+      try {
+        inserted = f.insert(f.id);
+        expect(inserted).toEqual(f.initial);
+        expect(counter.counts.rereads).toBe(0);
+      } finally {
+        counter.restore();
+      }
+      expect(f.read()).toEqual(inserted);
+      f.claim();
+      expect(f.insert("replayed")).toMatchObject({
+        request_id: f.id,
+        status: "publishing",
+        gateway_instance_id: "publisher",
+      });
+      expect(() => f.insert("mismatched", true)).toThrow("idempotency key was reused");
+      expect(f.read()).toMatchObject({
+        request_id: f.id,
+        status: "publishing",
+        ...f.retained,
+      });
+    },
+  );
 
   it("discovers the latest current receipt without materializing its older history", () => {
     runOpenClawStateWriteTransaction(() => {
@@ -136,7 +122,7 @@ describe("publication SQLite materialization", () => {
     );
     try {
       expect(
-        readSharedGitHubPublicationRequestInDatabase(
+        readShared(
           db,
           session,
           {},
@@ -157,7 +143,7 @@ describe("publication SQLite materialization", () => {
     insertSharedWorktreeReceipt("latest");
     await updateRegistryWorktree(process.env, "worktree-1", { removedAt: 2 });
     expect(
-      readSharedGitHubPublicationRequestInDatabase(
+      readShared(
         openOpenClawStateDatabase().db,
         session,
         {},
@@ -178,10 +164,11 @@ describe("publication SQLite materialization", () => {
         "UPDATE github_publication_requests SET body = ?, request_digest = ? WHERE request_id = ?",
       ).run(
         body,
-        digestGitHubPublicationRequest({
+        requestDigest({
           sessionId: row.session_id,
           idempotencyKey: row.idempotency_key,
           body,
+          draft: row.draft === 1,
         }),
         row.request_id,
       );
@@ -196,9 +183,9 @@ describe("publication SQLite materialization", () => {
         "CREATE TRIGGER fail_second_defer BEFORE UPDATE ON github_publication_requests WHEN NEW.request_id = 'second' BEGIN SELECT RAISE(ABORT, 'late defer failure'); END",
       );
       try {
-        expect(() =>
-          deferGitHubPublicationRequestsFixture(["first", "second", "first", "absent"]),
-        ).toThrow("late defer failure");
+        expect(() => deferRequests(["first", "second", "first", "absent"])).toThrow(
+          "late defer failure",
+        );
         expect(readRows()).toEqual(before);
         expect(observer).not.toHaveBeenCalled();
       } finally {
@@ -210,7 +197,7 @@ describe("publication SQLite materialization", () => {
         sql.startsWith('update "github_publication_requests"') ? "defer" : null,
       );
       try {
-        deferGitHubPublicationRequestsFixture(["first", "second", "first", "absent"]);
+        deferRequests(["first", "second", "first", "absent"]);
         expect(readRows()).toEqual(
           before.map((row) =>
             Object.assign({}, row, {

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveNodeHostExecutable } from "openclaw/plugin-sdk/node-host";
+import { readDirectoryEntriesSync } from "openclaw/plugin-sdk/path-existence-runtime";
 import { resolveClaudeCatalogHomeDir } from "./session-catalog-home.js";
 
 const BROKEN_NPM_SHIM_MARKER = "Error: claude native binary not installed.";
@@ -87,12 +88,7 @@ function resolveClaudeDesktopExecutable(
     "Claude",
     "claude-code",
   );
-  let versions: fs.Dirent[];
-  try {
-    versions = fs.readdirSync(versionsRoot, { withFileTypes: true });
-  } catch {
-    return undefined;
-  }
+  const versions = readDirectoryEntriesSync(versionsRoot);
   versions.sort((left, right) =>
     right.name.localeCompare(left.name, undefined, { numeric: true, sensitivity: "base" }),
   );

@@ -10,6 +10,7 @@ afterEach(() => {
   vi.resetModules();
   vi.doUnmock("./discovery.js");
   vi.doUnmock("./installed-plugin-index-record-reader.js");
+  vi.doUnmock("../logging/subsystem.js");
 });
 
 const ENV: NodeJS.ProcessEnv = { HOME: "/tmp/openclaw-test-home" };
@@ -37,8 +38,10 @@ async function loadWithMocks(params: {
   module: typeof import("./channel-catalog-registry.js");
   discoverSpy: ReturnType<typeof vi.fn>;
   loadRecordsSpy: ReturnType<typeof vi.fn>;
+  warnSpy: ReturnType<typeof vi.fn>;
 }> {
   const discoverSpy = vi.fn(() => emptyDiscoveryResult());
+  const warnSpy = vi.fn();
   const loadRecordsSpy = vi.fn((opts: { env?: NodeJS.ProcessEnv } = {}) => {
     return params.loadRecords ? params.loadRecords(opts.env) : RECORDS;
   });
@@ -47,12 +50,22 @@ async function loadWithMocks(params: {
   vi.doMock("./installed-plugin-index-record-reader.js", () => ({
     loadInstalledPluginIndexInstallRecordsSync: loadRecordsSpy,
   }));
+  vi.doMock("../logging/subsystem.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
+    return {
+      ...actual,
+      createSubsystemLogger: (subsystem: string) => {
+        const logger = actual.createSubsystemLogger(subsystem);
+        return subsystem === "plugins/channel-catalog" ? { ...logger, warn: warnSpy } : logger;
+      },
+    };
+  });
 
   const module = await importFreshModule<typeof import("./channel-catalog-registry.js")>(
     import.meta.url,
     `./channel-catalog-registry.js?case=${++loadCase}`,
   );
-  return { module, discoverSpy, loadRecordsSpy };
+  return { module, discoverSpy, loadRecordsSpy, warnSpy };
 }
 
 function firstDiscoverOptions(discoverSpy: ReturnType<typeof vi.fn>): Record<string, unknown> {
@@ -93,7 +106,7 @@ function createChannelCandidate(params: {
 
 describe("listChannelCatalogEntries", () => {
   it("forwards lazily loaded install records to discovery when origin is unspecified", async () => {
-    const { module, discoverSpy, loadRecordsSpy } = await loadWithMocks({});
+    const { module, discoverSpy, loadRecordsSpy, warnSpy } = await loadWithMocks({});
 
     module.listChannelCatalogEntries({ env: ENV });
 
@@ -106,6 +119,7 @@ describe("listChannelCatalogEntries", () => {
       installRecords: RECORDS,
       workspaceDir: undefined,
     });
+    expect(warnSpy).not.toHaveBeenCalled();
   });
 
   it("skips ledger lookup when origin is 'bundled' and omits installRecords", async () => {
@@ -140,7 +154,7 @@ describe("listChannelCatalogEntries", () => {
   });
 
   it("omits installRecords from discovery when the ledger is empty", async () => {
-    const { module, discoverSpy, loadRecordsSpy } = await loadWithMocks({
+    const { module, discoverSpy, loadRecordsSpy, warnSpy } = await loadWithMocks({
       loadRecords: () => ({}),
     });
 
@@ -148,12 +162,14 @@ describe("listChannelCatalogEntries", () => {
 
     expect(loadRecordsSpy).toHaveBeenCalledTimes(1);
     expect(firstDiscoverOptions(discoverSpy)).not.toHaveProperty("installRecords");
+    expect(warnSpy).not.toHaveBeenCalled();
   });
 
-  it("treats ledger read errors as a soft fallback (no installRecords propagated)", async () => {
-    const { module, discoverSpy, loadRecordsSpy } = await loadWithMocks({
+  it("warns when ledger read errors require a soft fallback", async () => {
+    const error = new Error("simulated reader failure");
+    const { module, discoverSpy, loadRecordsSpy, warnSpy } = await loadWithMocks({
       loadRecords: () => {
-        throw new Error("simulated reader failure");
+        throw error;
       },
     });
 
@@ -162,6 +178,10 @@ describe("listChannelCatalogEntries", () => {
     expect(loadRecordsSpy).toHaveBeenCalledTimes(1);
     expect(discoverSpy).toHaveBeenCalledTimes(1);
     expect(firstDiscoverOptions(discoverSpy)).not.toHaveProperty("installRecords");
+    expect(warnSpy).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("installed channels may be missing. Run openclaw doctor"),
+      { error },
+    );
   });
 
   it("uses discovered package metadata for channel plugin ids", async () => {

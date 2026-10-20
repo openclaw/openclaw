@@ -1,10 +1,42 @@
 import { once } from "node:events";
 import { MessageChannel, type MessagePort, Worker } from "node:worker_threads";
 import { expect, it } from "vitest";
+import { renderAssistantRequestFailureCopy } from "../agents/failover/assistant-request-failure-copy.js";
+import { classifyGatewayStorageFailure } from "./sqlite-error-diagnostics.js";
 import {
+  exchangeSqliteDatabaseAdmissions,
   readSqliteDatabaseAdmissionDeadline,
   withSqliteDatabaseAdmissionWait,
 } from "./sqlite-worker-database-admission-relay.js";
+
+it("retains storage failure guidance when the caller cancels admission", () => {
+  const channel = new MessageChannel();
+  const cause = Object.assign(new Error("database or disk is full"), { code: "SQLITE_FULL" });
+  try {
+    let failure: unknown;
+    try {
+      withSqliteDatabaseAdmissionWait(
+        {
+          assertActive: () => {
+            throw cause;
+          },
+        },
+        () => exchangeSqliteDatabaseAdmissions(channel.port1, []),
+      );
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toMatchObject({ code: "unavailable", cause });
+    expect(
+      renderAssistantRequestFailureCopy({
+        storageFailure: classifyGatewayStorageFailure(failure),
+      }),
+    ).toContain("disk is full. Free up space");
+  } finally {
+    channel.port1.close();
+    channel.port2.close();
+  }
+});
 
 it("retains the caller deadline until asynchronous work settles", async () => {
   const resume = Promise.withResolvers<void>();
@@ -134,14 +166,17 @@ it.each([
   );
   try {
     const result = await new Promise((resolve, reject) => {
+      let reply: unknown;
       worker.on("error", reject);
+      // Exit can drain the result message and fire before an await continuation.
+      worker.once("exit", () => resolve(reply));
       worker.on("message", (message) => {
         if ("waiting" in message) {
           waitedPastThirtySeconds = true;
           expect(message.waiting).toBeGreaterThan(480_000);
           expect(message.waiting).toBeLessThanOrEqual(488_000);
         } else if (!("ready" in message)) {
-          resolve(message);
+          reply = message;
         }
       });
     });
@@ -150,7 +185,6 @@ it.each([
       message: "SQLite admission facts exchange timed out; the host did not reply",
       code: "unavailable",
     });
-    await once(worker, "exit");
   } finally {
     channel.port1.close();
     channel.port2.close();

@@ -101,6 +101,8 @@ export function installPreCommitFixture(dir: string): string {
       path.join(dir, "scripts/pre-commit", name),
     );
   }
+  // Freshness checks import repository planners; hook behavior tests isolate formatting and guards.
+  writeFileSync(path.join(dir, "scripts/pre-commit/check-staged-freshness.mts"), "");
   const privateRules = path.resolve(
     dir,
     run(dir, "git", ["rev-parse", "--git-path", "private rules.txt"]),

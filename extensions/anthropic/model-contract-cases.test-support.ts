@@ -70,6 +70,26 @@ export const claude5ContractCases: Claude5ContractCase[] = [
 
 const requireRecord = createRequireRecord("object", "expected-label");
 
+type AnthropicTestModel = ProviderRuntimeModel & { api: "anthropic-messages" };
+export function makeModel(
+  id: string,
+  overrides: Partial<AnthropicTestModel> = {},
+): AnthropicTestModel {
+  return {
+    id,
+    name: id,
+    provider: "anthropic",
+    api: "anthropic-messages",
+    baseUrl: "https://api.anthropic.com",
+    reasoning: true,
+    input: ["text", "image"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 200_000,
+    maxTokens: 64_000,
+    ...overrides,
+  };
+}
+
 export function createModelRegistry(models: ProviderRuntimeModel[]) {
   return {
     find(providerId: string, modelId: string) {

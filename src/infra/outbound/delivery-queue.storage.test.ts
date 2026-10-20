@@ -290,6 +290,45 @@ describe("delivery-queue storage", () => {
     expect(pending).toMatchObject({ id, producerClaimId: attemptId });
     expect(readStatus(id)).toBe("pending");
   });
+
+  it("claimless ack reads the current retention policy only once", async () => {
+    const stateDir = tmpDir();
+    const id = "cron-direct-delivery:v1:claimless-current-retention";
+    await enqueueDeliveryOnce(
+      textDelivery({ payloads: [{ text: "retained receipt" }], completionRetention: "permanent" }),
+      id,
+      stateDir,
+    );
+    const database = openDb();
+    updateDeliveryQueueEntryInDatabase(database, OUTBOUND_DELIVERY_QUEUE_NAME, id, (entry) => ({
+      ...entry,
+      completionRetention,
+    }));
+    const reads = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["queue"],
+      (sql) =>
+        /^\s*select\b/i.test(sql) && /\bfrom\s+"?delivery_queue_entries"?\b/i.test(sql)
+          ? "queue"
+          : null,
+    );
+    try {
+      runOpenClawStateWriteTransaction((db) => ackDeliveryInDatabase(db, id, stateDir), {
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+        database,
+      });
+      // One pending payload and the two compact custody/receipt reads.
+      expect(reads.counts.queue).toBeLessThanOrEqual(3);
+    } finally {
+      reads.restore();
+    }
+    expect(readStatus(id)).toBe("completed");
+    expect(readQueuedEntry(stateDir, id)).toMatchObject({
+      completionRetention,
+      recoveryState: "completed_bounded",
+    });
+  });
+
   it("preserves and renews the exact explicit owner after an ambiguous platform outcome", async () => {
     const stateDir = tmpDir();
     const id = "cron-direct-delivery:v1:unknown-owner-lease";
