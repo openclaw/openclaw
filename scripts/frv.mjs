@@ -1185,7 +1185,11 @@ async function reconcileAttemptStarts(
   mutationResults,
   operationDeadline,
   onStarted,
+  retryServerError,
 ) {
+  if (minimumAttempts.size !== mutationResults.length) {
+    throw new Error("rerun mutation results do not match admitted run identities");
+  }
   const reconcileDeadline = Math.min(
     operationDeadline,
     Date.now() +
@@ -1231,8 +1235,45 @@ async function reconcileAttemptStarts(
       );
     }
   }
+  const runIds = [...minimumAttempts.keys()];
+  const retryable =
+    retryServerError === undefined
+      ? []
+      : [...pending].filter((runId) => {
+          const result = mutationResults[runIds.indexOf(runId)];
+          return result?.status === "rejected" && isReleaseGhServerError(result.reason);
+        });
+  if (retryable.length > 0) {
+    const retryPriorRuns = new Map();
+    await Promise.all(
+      retryable.map(async (runId) => {
+        const priorRun = priorRuns.get(runId);
+        const current = await client.getRun(runId, { operationDeadline });
+        if (
+          JSON.stringify(exactTerminalRunState(current, runId)) !==
+          JSON.stringify(exactTerminalRunState(priorRun, runId))
+        ) {
+          throw new Error(`rerun source ${runId} changed before mutation retry`);
+        }
+        retryPriorRuns.set(runId, current);
+      }),
+    );
+    const retryResults = await Promise.allSettled(
+      retryable.map((runId) => retryServerError(runId)),
+    );
+    await reconcileAttemptStarts(
+      new Map(retryable.map((runId) => [runId, minimumAttempts.get(runId)])),
+      retryPriorRuns,
+      client,
+      retryResults,
+      operationDeadline,
+      onStarted,
+    );
+    for (const runId of retryable) {
+      pending.delete(runId);
+    }
+  }
   if (pending.size > 0) {
-    const runIds = [...minimumAttempts.keys()];
     const failures = [...pending].flatMap((runId) => {
       const result = mutationResults[runIds.indexOf(runId)];
       if (result?.status !== "rejected") {
@@ -1810,6 +1851,7 @@ export async function continueFailed(plan, rootRunId, reader, options = {}) {
         }),
       );
       if (sentRunIds.size > 0) {
+        const requestsByRunId = new Map(requests.map((request) => [request.child.runId, request]));
         await reconcileAttemptStarts(
           new Map([...minimumAttempts].filter(([runId]) => sentRunIds.has(runId))),
           priorRuns,
@@ -1817,6 +1859,24 @@ export async function continueFailed(plan, rootRunId, reader, options = {}) {
           mutationResults.filter((_result, index) => sentRunIds.has(requests[index].child.runId)),
           operationDeadline,
           (run) => report(run, true),
+          async (runId) => {
+            const source = exactTerminalRunState(priorRuns.get(runId), runId);
+            assertRootRunIdentity(
+              await client.getRun(rootRunId, { operationDeadline }),
+              parentBinding,
+              true,
+            );
+            const current = exactTerminalRunState(
+              await client.getRun(runId, { operationDeadline }),
+              runId,
+            );
+            if (JSON.stringify(current) !== JSON.stringify(source)) {
+              throw new Error(`child ${runId} changed before mutation retry`);
+            }
+            const { child, job } = requestsByRunId.get(runId);
+            remainingOperationTime(operationDeadline);
+            await (job ? client.rerunJob(job.id) : client.rerunFailed(child.runId));
+          },
         );
       }
       const admissionFailure = mutationResults.find(
@@ -1946,6 +2006,17 @@ export async function continueFailed(plan, rootRunId, reader, options = {}) {
       mutationResults,
       operationDeadline,
       (run) => report(run, true),
+      async () => {
+        const retryParent = exactTerminalRunState(
+          await client.getRun(rootRunId, { operationDeadline }),
+          rootRunId,
+        );
+        if (JSON.stringify(retryParent) !== JSON.stringify(terminalParent)) {
+          throw new Error(`verification parent run changed before mutation retry: ${rootRunId}`);
+        }
+        remainingOperationTime(operationDeadline);
+        await client.rerunParent(rootRunId);
+      },
     );
     ownedAttempts.set(rootRunId, minimumAttempts.get(rootRunId));
     await waitForTerminal([rootRunId], client, operationDeadline, minimumAttempts);
