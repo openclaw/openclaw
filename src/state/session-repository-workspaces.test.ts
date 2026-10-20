@@ -261,7 +261,7 @@ it("skips empty workspace snapshots and reads owners after first-use creation", 
     return readOpenClawStateDatabaseCommand(
       database.db,
       {
-        context: { environment: {} },
+        context: { environment: { OPENCLAW_STATE_DIR: path.dirname(database.path) } },
         databasePath: database.path,
         location: database.path,
         checkFreshAdmission: false,
