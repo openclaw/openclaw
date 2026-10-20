@@ -112,14 +112,12 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
       areUiSessionKeysEquivalent(state.sessionKey, sessionKey) &&
       resolveChatSnapshotKey(state, target) === cacheKey;
     const restoreBoard = (storedBoard: ChatSessionSnapshot["board"]) => {
-      if (!isCurrent()) {
-        return;
-      }
-      const cachedBoard = readChatSessionSnapshot(cache, state, target)?.board;
-      const board = cachedBoard === undefined ? storedBoard : cachedBoard;
-      if (board) {
-        this.resolveBoardProvider();
-        this.boardProviderLease?.restoreSnapshot(board.snapshot, board.receivedAtMs);
+      if (isCurrent()) {
+        const { board = storedBoard } = readChatSessionSnapshot(cache, state, target) ?? {};
+        if (board) {
+          this.resolveBoardProvider();
+          this.boardProviderLease?.restoreSnapshot(board.snapshot, board.receivedAtMs);
+        }
       }
     };
     const reading = this.sessionSnapshotStore.read(cacheKey, restoreBoard);
