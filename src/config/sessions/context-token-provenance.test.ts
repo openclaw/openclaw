@@ -6,22 +6,14 @@ import {
   resolveTrustedSessionContextTokens,
 } from "./context-token-provenance.js";
 
-const currentSelection = { provider: "openai", model: "gpt-5.6-sol", agentHarnessId: "codex" };
-const matchingRuntimeEntry = {
-  modelProvider: "openai",
-  model: "gpt-5.6-sol",
-  agentHarnessId: "codex",
+const selection = { provider: "openai", model: "gpt-5.6-sol", agentHarnessId: "codex" };
+const runtime = {
+  modelProvider: selection.provider,
+  model: selection.model,
+  agentHarnessId: selection.agentHarnessId,
   contextTokens: 272_000,
   contextTokensSource: "runtime" as const,
 };
-type Projection = Parameters<typeof resolveProjectedSessionContextTokens>[0];
-const project = (entry: Projection["entry"], options: Partial<Projection> = {}) =>
-  resolveProjectedSessionContextTokens({
-    ...currentSelection,
-    entry,
-    resolvedContextTokens: undefined,
-    ...options,
-  });
 
 it("rejects a locked window owned by a different model", () => {
   expect(
@@ -32,55 +24,54 @@ it("rejects a locked window owned by a different model", () => {
         modelSelectionLocked: true,
         contextTokens: 272_000,
       },
-      ...currentSelection,
+      ...selection,
     }),
   ).toBeUndefined();
 });
 
-it("falls back to current resolution when producer provenance differs", () => {
-  expect(
-    project(
-      { ...matchingRuntimeEntry, agentHarnessId: "openclaw" },
-      { resolvedContextTokens: 1_000_000 },
-    ),
-  ).toBe(1_000_000);
-});
-
-it("falls back to the matching persisted resolution while current resolution is unavailable", () => {
-  expect(project({ ...matchingRuntimeEntry, contextTokensSource: "resolved-v1" })).toBe(272_000);
-});
-
-it("rejects a legacy resolved row because its producer may have reused a fallback", () => {
-  expect(project({ ...matchingRuntimeEntry, contextTokensSource: "resolved" })).toBeUndefined();
-});
-
-it("rejects a persisted resolution owned by a different harness", () => {
-  expect(
-    project({
-      ...matchingRuntimeEntry,
-      contextTokensSource: "resolved-v1",
-      agentHarnessId: "openclaw",
-    }),
-  ).toBeUndefined();
+it.each([
+  [
+    "current resolution for a different producer",
+    { agentHarnessId: "openclaw" },
+    1_000_000,
+    1_000_000,
+  ],
+  ["matching persisted resolution", { contextTokensSource: "resolved-v1" }, undefined, 272_000],
+  ["rejected legacy resolution", { contextTokensSource: "resolved" }, undefined, undefined],
+  [
+    "rejected resolution from another harness",
+    { contextTokensSource: "resolved-v1", agentHarnessId: "openclaw" },
+    undefined,
+    undefined,
+  ],
+] as const)("projects %s", (_name, patch, resolvedContextTokens, expected) => {
+  const result = resolveProjectedSessionContextTokens({
+    ...selection,
+    entry: { ...runtime, ...patch },
+    resolvedContextTokens,
+  });
+  expect(result).toBe(expected);
 });
 
 it("preserves a locked native window ahead of current configuration", () => {
   expect(
-    project(
-      { modelSelectionLocked: true, contextTokens: 1_000_000 },
-      { resolvedContextTokens: 272_000, authoredContextTokens: 272_000 },
-    ),
+    resolveProjectedSessionContextTokens({
+      ...selection,
+      entry: { modelSelectionLocked: true, contextTokens: 1_000_000 },
+      resolvedContextTokens: 272_000,
+      authoredContextTokens: 272_000,
+    }),
   ).toBe(1_000_000);
 });
 
 const entry = { sessionId: "session-1", contextBudgetStatus: contextBudgetStatusFixture() };
-const selection = { provider: "ollama", model: "qwen3:8b", contextTokens: 200_000 };
+const budgetSelection = { provider: "ollama", model: "qwen3:8b", contextTokens: 200_000 };
 
 it("rejects a budget after the lower cap changes", () => {
   expect(
     resolveProjectedSessionContextBudgetStatus({
       entry,
-      ...selection,
+      ...budgetSelection,
       contextTokens: 100_000,
     }),
   ).toBeUndefined();
@@ -89,15 +80,15 @@ it("rejects a budget after the lower cap changes", () => {
 it("keeps a narrower budget owned by the serving runtime", () => {
   const runtimeEntry = {
     ...entry,
-    modelProvider: "ollama",
-    model: "qwen3:8b",
+    modelProvider: budgetSelection.provider,
+    model: budgetSelection.model,
     agentHarnessId: "openclaw",
     contextTokens: 200_000,
     contextTokensSource: "runtime" as const,
   };
   const contextTokens = resolveProjectedSessionContextTokens({
     entry: runtimeEntry,
-    ...selection,
+    ...budgetSelection,
     agentHarnessId: "openclaw",
     resolvedContextTokens: 262_144,
   });
@@ -105,7 +96,7 @@ it("keeps a narrower budget owned by the serving runtime", () => {
   expect(
     resolveProjectedSessionContextBudgetStatus({
       entry: runtimeEntry,
-      ...selection,
+      ...budgetSelection,
       contextTokens,
     }),
   ).toEqual(entry.contextBudgetStatus);

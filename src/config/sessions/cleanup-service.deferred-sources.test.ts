@@ -38,17 +38,20 @@ it("preserves receipt and manifest sources without canonical entries during enfo
       { sessionId: "current", updatedAt: Date.now() },
     );
     fs.writeFileSync(storePath, "{}");
-    const sourcePath = sessionPath("retained.jsonl");
-    const pointerPath = sessionPath("retained.trajectory-path.json");
-    const orphanPath = sessionPath("orphan.jsonl");
-    const sourceBytes = '{"type":"message","message":{"role":"user","content":"retained"}}\n';
-    fs.writeFileSync(sourcePath, sourceBytes);
-    fs.writeFileSync(pointerPath, '{"runtimeFile":"archived.trajectory.jsonl"}');
-    fs.writeFileSync(orphanPath, "unreferenced");
     const old = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
-    for (const file of [sourcePath, pointerPath, orphanPath]) {
+    const writeOld = (name: string, data: string) => {
+      const file = sessionPath(name);
+      fs.writeFileSync(file, data);
       fs.utimesSync(file, old, old);
-    }
+      return file;
+    };
+    const sourceBytes = '{"type":"message","message":{"role":"user","content":"retained"}}\n';
+    const sourcePath = writeOld("retained.jsonl", sourceBytes);
+    const pointerPath = writeOld(
+      "retained.trajectory-path.json",
+      '{"runtimeFile":"archived.trajectory.jsonl"}',
+    );
+    const orphanPath = writeOld("orphan.jsonl", "unreferenced");
     const target = { agentId: "main", storePath };
     const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path;
     recordDeferredPluginSessionImport({
@@ -65,13 +68,9 @@ it("preserves receipt and manifest sources without canonical entries during enfo
     });
     const migrationTarget = { ...target, sqlitePath };
     const run = createSessionSqliteMigrationRun(state.env, [migrationTarget]);
-    const pendingPath = sessionPath("pending.jsonl");
-    const dependencyPath = sessionPath("pending.trajectory-path.json");
-    const disposedPath = sessionPath("disposed.jsonl");
-    for (const file of [pendingPath, dependencyPath, disposedPath]) {
-      fs.writeFileSync(file, "manifest source");
-      fs.utimesSync(file, old, old);
-    }
+    const pendingPath = writeOld("pending.jsonl", "manifest source");
+    const dependencyPath = writeOld("pending.trajectory-path.json", "manifest source");
+    const disposedPath = writeOld("disposed.jsonl", "manifest source");
     recordPlannedMigrationMoves(
       run,
       migrationTarget,
@@ -96,17 +95,15 @@ it("preserves receipt and manifest sources without canonical entries during enfo
       }),
     );
 
-    const preview = await runSessionsCleanup({
-      cfg: {},
-      opts: { dryRun: true, enforce: true },
-      targets: [target],
-    });
+    const cleanup = (dryRun = false) =>
+      runSessionsCleanup({
+        cfg: {},
+        opts: { dryRun, enforce: true },
+        targets: [target],
+      });
+    const preview = await cleanup(true);
     expect(preview.previewResults[0]?.summary.unreferencedArtifacts.removedFiles).toBe(2);
-    const applied = await runSessionsCleanup({
-      cfg: {},
-      opts: { enforce: true },
-      targets: [target],
-    });
+    const applied = await cleanup();
     expect(applied.appliedSummaries[0]?.unreferencedArtifacts.removedFiles).toBe(2);
     expect(fs.readFileSync(sourcePath, "utf8")).toBe(sourceBytes);
     expect(

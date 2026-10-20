@@ -38,43 +38,47 @@ async function seedFallback(state: OpenClawTestState) {
   };
 }
 
-it("recovers a same-agent route past an empty absent primary", async () => {
-  await withOpenClawTestState({ label: "delivery-missing-primary" }, async (state) => {
-    const { cfg, primaryPath } = await seedFallback(state);
-
-    await expectDelivery(cfg, expected);
-    expect(fs.existsSync(primaryPath)).toBe(false);
-  });
-});
-
-it.each(["uninitialized", "corrupt"] as const)(
-  "does not recover another store's route past a present %s primary",
+it.each(["absent", "uninitialized", "corrupt"] as const)(
+  "recovers only past an absent primary, not a present %s primary",
   async (kind) => {
     await withOpenClawTestState({ label: `delivery-${kind}-primary` }, async (state) => {
       const { cfg, primaryPath } = await seedFallback(state);
-      fs.mkdirSync(state.statePath("custom"), { recursive: true });
-      if (kind === "uninitialized") {
-        new DatabaseSync(primaryPath).close();
-      } else {
-        fs.writeFileSync(primaryPath, "not a SQLite database");
+      if (kind !== "absent") {
+        fs.mkdirSync(state.statePath("custom"), { recursive: true });
+        if (kind === "uninitialized") {
+          new DatabaseSync(primaryPath).close();
+        } else {
+          fs.writeFileSync(primaryPath, "not a SQLite database");
+        }
       }
-      const before = fs.readFileSync(primaryPath);
-      await expectDelivery(cfg, missing);
-      expect(fs.readFileSync(primaryPath)).toEqual(before);
+      const before = kind === "absent" ? undefined : fs.readFileSync(primaryPath);
+      await expectDelivery(cfg, kind === "absent" ? expected : missing);
+      if (before) {
+        expect(fs.readFileSync(primaryPath)).toEqual(before);
+      } else {
+        expect(fs.existsSync(primaryPath)).toBe(false);
+      }
     });
   },
 );
 
 it("keeps explicit delivery ownership through alias lookup and rejects conflicting keys", async () => {
   await withOpenClawTestState({ label: "delivery-explicit-owner" }, async (state) => {
-    const cfg = {
+    const makeConfig = (fixed = false): OpenClawConfig => ({
       agents: {
         ownership: "explicit",
-        defaults: { systemAgent: { agentId: "main" } },
+        defaults: {
+          systemAgent: { agentId: "main" },
+          ...(fixed ? { sessionStore: { agentId: "main" } } : {}),
+        },
         entries: { main: {}, ops: {} },
       },
-      session: { scope: "global" },
-    } satisfies OpenClawConfig;
+      session: {
+        scope: "global",
+        ...(fixed ? { store: state.statePath("agents", "main", "sessions", "sessions.json") } : {}),
+      },
+    });
+    const cfg = makeConfig();
     setRuntimeConfigSnapshot(cfg);
     const routes = {
       main: { channel: "telegram", to: "telegram:main", accountId: "main" },
@@ -106,18 +110,7 @@ it("keeps explicit delivery ownership through alias lookup and rejects conflicti
         { cfg },
       ),
     ).toEqual([selected, missing, missing]);
-    const fixedStoreConfig = {
-      ...cfg,
-      agents: {
-        ...cfg.agents,
-        defaults: { ...cfg.agents.defaults, sessionStore: { agentId: "main" } },
-      },
-      session: {
-        ...cfg.session,
-        store: state.statePath("agents", "main", "sessions", "sessions.json"),
-      },
-    } satisfies OpenClawConfig;
-    expect(await extractDeliveryInfo("global", { cfg: fixedStoreConfig, agentId: "ops" })).toEqual(
+    expect(await extractDeliveryInfo("global", { cfg: makeConfig(true), agentId: "ops" })).toEqual(
       missing,
     );
   });
