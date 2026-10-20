@@ -4,11 +4,13 @@ import path from "node:path";
 import { runInNewContext } from "node:vm";
 import { build } from "tsdown";
 import { expect } from "vitest";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createCommandTest, type CommandFixture } from "../helpers/command-fixture.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
 
 const it = createCommandTest();
 const repoRoot = process.cwd();
+const nodeExecutable = resolveTestNodeExecPath();
 const tsxImport = new URL("../../scripts/tsx.mjs", import.meta.url).href;
 const candidateMain =
   'import "./style.css"; import { message } from "../packages/styles/main.js"; document.body.textContent = message;';
@@ -70,7 +72,7 @@ async function createComparisonRepo(
   const diagnostics = command.enableDiagnostics("control-ui-performance-base");
   diagnostics.stage("fixture");
   const temporaryRoot = fs.realpathSync(command.createTempDir("ui-budget-proof-"));
-  const root = path.join(temporaryRoot, "repo");
+  const root = path.join(temporaryRoot, "repo # space");
   const scratch = path.join(temporaryRoot, "scratch");
   const identityCapture = path.join(temporaryRoot, "build-identities.jsonl");
   const env = createNestedGitEnv();
@@ -248,11 +250,16 @@ async function createComparisonRepo(
     );
   }
 
+  const nodeVersionResult = await command.run(nodeExecutable, ["--version"], { cwd: root, env });
+  expect(nodeVersionResult.error, nodeVersionResult.stderr).toBeUndefined();
+  expect(nodeVersionResult.status, nodeVersionResult.stderr).toBe(0);
+  const nodeVersion = nodeVersionResult.stdout.trim();
+
   const runComparison = async (baseRef: string) => {
     diagnostics.stage("compare");
     fs.rmSync(identityCapture, { force: true });
     const result = await command.run(
-      process.execPath,
+      nodeExecutable,
       [
         "--import",
         tsxImport,
@@ -297,6 +304,7 @@ async function createComparisonRepo(
     commit,
     runComparison,
     readIdentities,
+    nodeVersion,
   };
 }
 
@@ -318,7 +326,7 @@ it("builds the archived base with the candidate toolchain and keeps candidate ar
     const result = await repo.runComparison(repo.base);
     const output = `${result.stdout}${result.stderr}`;
     expect(result.status, output).toBe(1);
-    expect(output).toContain(`head ${head}; base ${repo.base}; Node ${process.version}; Vite `);
+    expect(output).toContain(`head ${head}; base ${repo.base}; Node ${repo.nodeVersion}; Vite `);
     expect(output).toContain("Pako ");
     expect(output).toMatch(/startup CSS gzip vs base: \d+ B -> \d+ B \(\+\d+ B/u);
     expect(output).toContain("startup CSS gzip growth:");
@@ -373,7 +381,7 @@ export default { plugins: [{ name: "signal", buildStart() { process.kill(process
     const signaledBaseOutput = `${signaledBaseResult.stdout}${signaledBaseResult.stderr}`;
     expect(fs.readFileSync(signalMarker, "utf8")).toBe("loaded");
     expect(signaledBaseResult.status, signaledBaseOutput).toBe(1);
-    expect(signaledBaseOutput).toContain(`${path.basename(process.execPath)} failed (SIGTERM)`);
+    expect(signaledBaseOutput).toContain(`${path.basename(nodeExecutable)} failed (SIGTERM)`);
     expect(signaledBaseOutput).not.toContain(
       "Base Control UI source does not build with the candidate toolchain",
     );
