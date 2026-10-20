@@ -25,6 +25,8 @@ function git(cwd: string, args: string[]) {
 describe("check-test-timeout-race-ratchet", () => {
   it("counts references and imported aliases without counting import specifiers or text", () => {
     using parser = createNativeTypeScriptParser();
+    const count = (source: string, file = "fixture.ts") =>
+      countTestTimeoutRaceReferences(file, parser.parseSourceFile(file, source), parser);
     const cases: [string, number][] = [
       ["withTestTimeout(work, 100); raceWithTimeoutResult(work, 100, null);", 2],
       ["withTestTimeout<string>(work, 100);", 1],
@@ -38,41 +40,25 @@ describe("check-test-timeout-race-ratchet", () => {
       ['import { withTestTimeout, raceWithTimeoutResult as race } from "./promise.js";', 0],
     ];
     for (const [source, expected] of cases) {
-      expect(
-        countTestTimeoutRaceReferences(
-          "fixture.ts",
-          parser.parseSourceFile("fixture.ts", source),
-          parser,
-        ),
-        source,
-      ).toBe(expected);
+      expect(count(source), source).toBe(expected);
     }
-    expect(() =>
-      countTestTimeoutRaceReferences(
-        "broken.ts",
-        parser.parseSourceFile("broken.ts", "withTestTimeout("),
-        parser,
-      ),
-    ).toThrow(/^broken.ts:1: /u);
+    expect(() => count("withTestTimeout(", "broken.ts")).toThrow(/^broken.ts:1: /u);
   });
 
   it("blocks added sites, reads the index, ignores the owner, and demands shrinking removed sites", () => {
     const root = tempDirs.make("openclaw-test-timeout-race-");
-    fs.mkdirSync(path.join(root, "config"), { recursive: true });
-    fs.mkdirSync(path.join(root, "test/helpers"), { recursive: true });
+    const write = (file: string, content: string) => {
+      const target = path.join(root, file);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, content);
+    };
     const baselinePath = path.join(root, "config/test-timeout-race-baseline.txt");
     const sourcePath = path.join(root, "test/example.test.ts");
     const original = "withTestTimeout(work, 100);\n";
-    fs.writeFileSync(baselinePath, "test/example.test.ts\t1\n");
-    fs.writeFileSync(sourcePath, original);
-    fs.writeFileSync(
-      path.join(root, "test/helpers/promise.ts"),
-      "export function withTestTimeout() {}\n",
-    );
-    fs.writeFileSync(
-      path.join(root, "test/example.d.ts"),
-      "declare function withTestTimeout(): void;\n",
-    );
+    write("config/test-timeout-race-baseline.txt", "test/example.test.ts\t1\n");
+    write("test/example.test.ts", original);
+    write("test/helpers/promise.ts", "export function withTestTimeout() {}\n");
+    write("test/example.d.ts", "declare function withTestTimeout(): void;\n");
     for (const args of [["init"], ["add", "."], ["commit", "-m", "base"]]) {
       git(root, args);
     }

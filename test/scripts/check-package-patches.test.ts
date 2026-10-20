@@ -1,13 +1,28 @@
-// Check Package Patches tests cover check package patches script behavior.
 import { execFileSync } from "node:child_process";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { collectPackagePatchViolations } from "../../scripts/check-package-patches.mts";
-import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "../helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createNestedGitEnv, writeJsonFile } from "../helpers/temp-repo.js";
 
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function write(root: string, file: string, content: string) {
+  const target = path.join(root, file);
+  mkdirSync(path.dirname(target), { recursive: true });
+  writeFileSync(target, content, "utf8");
+}
+
+function writePatches(root: string, file: string, patches: readonly (readonly [string, string])[]) {
+  const header = file === "pnpm-workspace.yaml" ? "packages:\n  - ." : "lockfileVersion: '9.0'";
+  const rows = patches.map(([key, value]) => `  "${key}": "${value}"`);
+  write(root, file, `${header}\npatchedDependencies:\n${rows.join("\n")}\n`);
+}
+
+function violation(file: string, kind: string, detail: string) {
+  return { file, kind, detail };
+}
 
 function git(cwd: string, args: string[]) {
   execFileSync("git", args, {
@@ -18,7 +33,7 @@ function git(cwd: string, args: string[]) {
 }
 
 function makeRepo() {
-  const dir = makeTempRepoRoot(tempDirs, "openclaw-package-patches-");
+  const dir = tempDirs.make("openclaw-package-patches-");
   git(dir, ["init", "-q", "--initial-branch=main"]);
   writeJsonFile(path.join(dir, "package.json"), { name: "fixture" });
   writeFileSync(path.join(dir, "pnpm-workspace.yaml"), "packages:\n  - .\n", "utf8");
@@ -26,10 +41,6 @@ function makeRepo() {
   git(dir, ["add", "package.json", "pnpm-workspace.yaml", "pnpm-lock.yaml"]);
   return dir;
 }
-
-afterEach(() => {
-  cleanupTempDirs(tempDirs);
-});
 
 describe("check-package-patches", () => {
   it("allows approved pnpm patches together", () => {
@@ -41,26 +52,12 @@ describe("check-package-patches", () => {
       ["matrix-js-sdk@43.0.0", "patches/matrix-js-sdk@43.0.0.patch"],
     ] as const;
     const dir = makeRepo();
-    mkdirSync(path.join(dir, "patches"), { recursive: true });
-    writeFileSync(
-      path.join(dir, "pnpm-workspace.yaml"),
-      `packages:
-  - .
-patchedDependencies:
-${approvedPatches.map(([specifier, patchPath]) => `  "${specifier}": "${patchPath}"`).join("\n")}
-`,
-      "utf8",
-    );
-    writeFileSync(
-      path.join(dir, "pnpm-lock.yaml"),
-      `lockfileVersion: '9.0'
-patchedDependencies:
-${approvedPatches.map(([specifier]) => `  "${specifier}": a9aea1790d2c65b1ae543c77faca4119bbfb91ee3b6ca6c38d1cad4f5702ada2`).join("\n")}
-`,
-      "utf8",
-    );
+    const hash = "a9aea1790d2c65b1ae543c77faca4119bbfb91ee3b6ca6c38d1cad4f5702ada2";
+    writePatches(dir, "pnpm-workspace.yaml", approvedPatches);
+    const hashes = approvedPatches.map(([specifier]) => [specifier, hash] as const);
+    writePatches(dir, "pnpm-lock.yaml", hashes);
     for (const [, patchPath] of approvedPatches) {
-      writeFileSync(path.join(dir, patchPath), "diff\n", "utf8");
+      write(dir, patchPath, "diff\n");
     }
     git(dir, ["add", "pnpm-workspace.yaml", "pnpm-lock.yaml", "patches"]);
 
@@ -73,48 +70,21 @@ ${approvedPatches.map(([specifier]) => `  "${specifier}": a9aea1790d2c65b1ae543c
     ["matrix-js-sdk@43.0.0", "patches/matrix-js-sdk@43.0.0-other.patch"],
   ])("rejects unapproved workspace patch %s -> %s", (specifier, patchPath) => {
     const dir = makeRepo();
-    mkdirSync(path.join(dir, "patches"), { recursive: true });
-    mkdirSync(path.join(dir, "fixtures"), { recursive: true });
-    writeFileSync(
-      path.join(dir, "pnpm-workspace.yaml"),
-      `packages:
-  - .
-patchedDependencies:
-  "${specifier}": "${patchPath}"
-`,
-      "utf8",
-    );
-    writeFileSync(path.join(dir, patchPath), "diff\n", "utf8");
-    writeFileSync(path.join(dir, "fixtures", "fixture.patch"), "diff\n", "utf8");
+    writePatches(dir, "pnpm-workspace.yaml", [[specifier, patchPath]]);
+    write(dir, patchPath, "diff\n");
+    write(dir, "fixtures/fixture.patch", "diff\n");
     git(dir, ["add", "pnpm-workspace.yaml", "patches", "fixtures"]);
 
     expect(collectPackagePatchViolations(dir)).toEqual([
-      {
-        file: "pnpm-workspace.yaml",
-        kind: "patchedDependency",
-        detail: `${specifier} -> ${patchPath}`,
-      },
-      {
-        file: "fixtures/fixture.patch",
-        kind: "patchFile",
-        detail: "new package patch file",
-      },
-      {
-        file: patchPath,
-        kind: "patchFile",
-        detail: "new package patch file",
-      },
+      violation("pnpm-workspace.yaml", "patchedDependency", `${specifier} -> ${patchPath}`),
+      violation("fixtures/fixture.patch", "patchFile", "new package patch file"),
+      violation(patchPath, "patchFile", "new package patch file"),
     ]);
   });
 
   it("allows deleted legacy patch files during the commit that removes them", () => {
     const dir = makeRepo();
-    mkdirSync(path.join(dir, "patches"), { recursive: true });
-    writeFileSync(
-      path.join(dir, "patches", "@agentclientprotocol__claude-agent-acp@0.33.1.patch"),
-      "diff\n",
-      "utf8",
-    );
+    write(dir, "patches/@agentclientprotocol__claude-agent-acp@0.33.1.patch", "diff\n");
     git(dir, ["add", "patches"]);
     rmSync(path.join(dir, "patches", "@agentclientprotocol__claude-agent-acp@0.33.1.patch"));
 
@@ -126,57 +96,36 @@ patchedDependencies:
     (withToolchain) => {
       const dir = makeRepo();
       writeJsonFile(path.join(dir, "package.json"), {
-        name: "fixture",
-        pnpm: {
-          patchedDependencies: {
-            "nested@1.0.0": "patches/nested.patch",
-          },
-        },
+        pnpm: { patchedDependencies: { "nested@1.0.0": "patches/nested.patch" } },
       });
-      writeFileSync(
-        path.join(dir, "pnpm-lock.yaml"),
+      write(
+        dir,
+        "pnpm-lock.yaml",
         `${withToolchain ? "---\nlockfileVersion: '9.0'\npatchedDependencies:\n  toolchain@1.0.0: toolhash\n---\n" : ""}lockfileVersion: '9.0'
 patchedDependencies:
   hidden@1.0.0: abc123
 `,
-        "utf8",
       );
       git(dir, ["add", "package.json", "pnpm-lock.yaml"]);
 
       expect(collectPackagePatchViolations(dir)).toEqual([
         ...(withToolchain
-          ? [
-              {
-                file: "pnpm-lock.yaml",
-                kind: "patchedDependency",
-                detail: "toolchain@1.0.0 -> toolhash",
-              },
-            ]
+          ? [violation("pnpm-lock.yaml", "patchedDependency", "toolchain@1.0.0 -> toolhash")]
           : []),
-        {
-          file: "pnpm-lock.yaml",
-          kind: "patchedDependency",
-          detail: "hidden@1.0.0 -> abc123",
-        },
-        {
-          file: "package.json",
-          kind: "packageJsonPatchedDependency",
-          detail: "nested@1.0.0 -> patches/nested.patch",
-        },
+        violation("pnpm-lock.yaml", "patchedDependency", "hidden@1.0.0 -> abc123"),
+        violation(
+          "package.json",
+          "packageJsonPatchedDependency",
+          "nested@1.0.0 -> patches/nested.patch",
+        ),
       ]);
     },
   );
 
   it("skips tracked package manifests deleted in the worktree", () => {
     const dir = makeRepo();
-    mkdirSync(path.join(dir, "packages", "deleted"), { recursive: true });
     writeJsonFile(path.join(dir, "packages", "deleted", "package.json"), {
-      name: "deleted",
-      pnpm: {
-        patchedDependencies: {
-          "deleted-only@1.0.0": "patches/deleted-only.patch",
-        },
-      },
+      pnpm: { patchedDependencies: { "deleted-only@1.0.0": "patches/deleted-only.patch" } },
     });
     git(dir, ["add", "packages/deleted/package.json"]);
     rmSync(path.join(dir, "packages", "deleted", "package.json"));

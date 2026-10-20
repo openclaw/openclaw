@@ -1,4 +1,3 @@
-// Check Runtime Sidecar Loaders tests cover check runtime sidecar loaders script behavior.
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 import * as ts from "typescript/ast";
@@ -12,31 +11,36 @@ import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescrip
 const parser = createNativeTypeScriptParser();
 afterAll(() => parser.close());
 
+function check(source: string, entries: string[] = []) {
+  const file = "src/example/example-registry.ts";
+  return expect(
+    findRuntimeSidecarLoaderViolations(
+      source,
+      file,
+      new Set(entries),
+      parser.parseSourceFile(file, source),
+    ),
+  );
+}
+
 function listRuntimeStaticSpecifiers(sourcePath: string): string[] {
   const source = readFileSync(sourcePath, "utf8");
   const sourceFile = parser.parseSourceFile(sourcePath, source);
   return sourceFile.statements.flatMap((statement) => {
-    if (
-      ts.isImportDeclaration(statement) &&
-      ts.isStringLiteral(statement.moduleSpecifier) &&
-      statement.importClause?.phaseModifier !== ts.SyntaxKind.TypeKeyword
-    ) {
-      return [statement.moduleSpecifier.text];
+    if (!ts.isImportDeclaration(statement) && !ts.isExportDeclaration(statement)) {
+      return [];
     }
-    if (
-      ts.isExportDeclaration(statement) &&
-      statement.moduleSpecifier &&
-      ts.isStringLiteral(statement.moduleSpecifier) &&
-      !statement.isTypeOnly &&
-      !(
-        statement.exportClause &&
-        ts.isNamedExports(statement.exportClause) &&
-        statement.exportClause.elements.every((element) => element.isTypeOnly)
-      )
-    ) {
-      return [statement.moduleSpecifier.text];
+    const specifier = statement.moduleSpecifier;
+    if (!specifier || !ts.isStringLiteral(specifier)) {
+      return [];
     }
-    return [];
+    const typeOnly = ts.isImportDeclaration(statement)
+      ? statement.importClause?.phaseModifier === ts.SyntaxKind.TypeKeyword
+      : statement.isTypeOnly ||
+        (statement.exportClause &&
+          ts.isNamedExports(statement.exportClause) &&
+          statement.exportClause.elements.every((element) => element.isTypeOnly));
+    return typeOnly ? [] : [specifier.text];
   });
 }
 
@@ -84,26 +88,20 @@ describe("check-runtime-sidecar-loaders", () => {
   });
 
   it("allows hidden createRequire runtime sidecars when the source is an explicit build entry", () => {
-    const source = `
+    check(
+      `
       import { createRequire } from "node:module";
       const require = createRequire(import.meta.url);
       export function loadRuntime() {
         return require("./example-control.runtime.js");
       }
-    `;
-
-    expect(
-      findRuntimeSidecarLoaderViolations(
-        source,
-        "src/example/example-registry.ts",
-        new Set(["src/example/example-control.runtime.ts"]),
-        parser.parseSourceFile("src/example/example-registry.ts", source),
-      ),
+    `,
+      ["src/example/example-control.runtime.ts"],
     ).toStrictEqual([]);
   });
 
   it("resolves candidate arrays used by source/build fallback loops", () => {
-    const source = `
+    check(`
       import { createRequire } from "node:module";
       const require = createRequire(import.meta.url);
       const CANDIDATES = ["./control.runtime.js", "./control.runtime.ts"] as const;
@@ -112,16 +110,7 @@ describe("check-runtime-sidecar-loaders", () => {
           return require(candidate);
         }
       }
-    `;
-
-    expect(
-      findRuntimeSidecarLoaderViolations(
-        source,
-        "src/example/example-registry.ts",
-        new Set(),
-        parser.parseSourceFile("src/example/example-registry.ts", source),
-      ),
-    ).toEqual([
+    `).toEqual([
       {
         line: 7,
         specifier: "./control.runtime.js",
@@ -133,22 +122,13 @@ describe("check-runtime-sidecar-loaders", () => {
   });
 
   it("ignores bundler-visible dynamic imports", () => {
-    const source = `
+    check(`
       let runtimePromise: Promise<typeof import("./control.runtime.js")> | undefined;
       export function loadRuntime() {
         runtimePromise ??= import("./control.runtime.js");
         return runtimePromise;
       }
-    `;
-
-    expect(
-      findRuntimeSidecarLoaderViolations(
-        source,
-        "src/example/example-registry.ts",
-        new Set(),
-        parser.parseSourceFile("src/example/example-registry.ts", source),
-      ),
-    ).toStrictEqual([]);
+    `).toStrictEqual([]);
   });
 
   it("collects explicit tsdown entry sources", () => {
