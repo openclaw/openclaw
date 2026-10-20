@@ -45,7 +45,9 @@ afterEach(() => {
 });
 
 function runDeviceFlowAfterFirstPoll(
-  io: Parameters<typeof runGitHubCopilotDeviceFlow>[0] = { showCode: vi.fn(async () => {}) },
+  io: Parameters<typeof runGitHubCopilotDeviceFlow>[0] = {
+    showCode: vi.fn(async () => {}),
+  },
   domain?: string,
 ) {
   vi.useFakeTimers();
@@ -77,9 +79,15 @@ describe("runGitHubCopilotDeviceFlow", () => {
     });
 
     const showCode = vi.fn(async () => {});
-    const result = await runDeviceFlowAfterFirstPoll({ showCode, signal: controller.signal });
+    const result = await runDeviceFlowAfterFirstPoll({
+      showCode,
+      signal: controller.signal,
+    });
 
-    expect(result).toEqual({ status: "authorized", accessToken: "ghu_tok_xyz" });
+    expect(result).toEqual({
+      status: "authorized",
+      accessToken: "ghu_tok_xyz",
+    });
     expect(showCode).toHaveBeenCalledWith({
       verificationUrl: "https://github.com/login/device",
       userCode: "ABCD-1234",
@@ -224,7 +232,10 @@ describe("runGitHubCopilotDeviceFlow", () => {
     const GHE_DOMAIN = "acme.ghe.com";
     mocks.fetchWithSsrFGuard.mockImplementation(async () =>
       guardResponse(
-        { ...VALID_DEVICE_CODE_BODY, verification_uri: "https://github.com/login/device" },
+        {
+          ...VALID_DEVICE_CODE_BODY,
+          verification_uri: "https://github.com/login/device",
+        },
         200,
         `https://${GHE_DOMAIN}/login/device/code`,
       ),
@@ -282,7 +293,9 @@ describe("runGitHubCopilotDeviceFlow", () => {
       return guardResponse(pollResponses.shift(), 200, ACCESS_TOKEN_URL);
     });
 
-    const result = runGitHubCopilotDeviceFlow({ showCode: vi.fn(async () => {}) });
+    const result = runGitHubCopilotDeviceFlow({
+      showCode: vi.fn(async () => {}),
+    });
 
     for (const { delay, times } of steps) {
       await vi.advanceTimersByTimeAsync(delay);
@@ -294,4 +307,72 @@ describe("runGitHubCopilotDeviceFlow", () => {
       accessToken: "test-access-token",
     });
   });
+
+  it.each([{ clockStepMs: -20 * 60_000 }, { clockStepMs: 20 * 60_000 }])(
+    "keeps the full authorization window across a $clockStepMs ms wall-clock step",
+    async ({ clockStepMs }) => {
+      // advanceTimersByTimeAsync drives the faked monotonic clock and timers;
+      // setSystemTime moves Date.now() independently of them. The token
+      // endpoint never authorizes, so the flow must end on the monotonic
+      // 15-minute budget exactly, regardless of wall-clock steps.
+      vi.useFakeTimers();
+      vi.setSystemTime(0);
+      let polls = 0;
+
+      mocks.fetchWithSsrFGuard.mockImplementation(async (params) => {
+        if (params.url === DEVICE_CODE_URL) {
+          return guardResponse(VALID_DEVICE_CODE_BODY);
+        }
+        polls += 1;
+        return guardResponse({ error: "authorization_pending" }, 200, ACCESS_TOKEN_URL);
+      });
+
+      let settled = false;
+      const observing = runGitHubCopilotDeviceFlow({
+        showCode: vi.fn(async () => {}),
+      }).then(
+        (value) => {
+          settled = true;
+          return { value };
+        },
+        (error: unknown) => {
+          settled = true;
+          return { error };
+        },
+      );
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        expect(polls).toBe(0);
+
+        // The first poll lands after the initial 5-second interval.
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(polls).toBe(1);
+        expect(settled).toBe(false);
+
+        // Step the wall clock mid-flow; the monotonic deadline must not move.
+        vi.setSystemTime(clockStepMs);
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(polls).toBe(2);
+        expect(settled).toBe(false);
+
+        // The window must survive to the full monotonic budget.
+        await vi.advanceTimersByTimeAsync(15 * 60_000 - 10_000 - 1);
+        expect(settled).toBe(false);
+
+        await vi.advanceTimersByTimeAsync(1);
+        expect(settled).toBe(true);
+        await expect(observing).resolves.toEqual({
+          value: { status: "expired" },
+        });
+
+        const completedRequests = polls;
+        await vi.advanceTimersByTimeAsync(30_000);
+        expect(polls).toBe(completedRequests);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        await observing.catch(() => {});
+        vi.useRealTimers();
+      }
+    },
+  );
 });

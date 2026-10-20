@@ -71,27 +71,6 @@ const ScreenSizeSchema = z.object({
   scale_factor: z.number().positive(),
 });
 
-type ImageProcessor = {
-  encode(
-    input: Buffer,
-    options: {
-      format: "jpeg" | "png";
-      quality?: number;
-      resize?: { maxSide: number; enlarge: false };
-    },
-  ): Promise<{ data: Buffer; width: number; height: number }>;
-};
-
-type CuaComputerProviderOptions = {
-  platform?: NodeJS.Platform;
-  env?: NodeJS.ProcessEnv;
-  driver?: CuaDriverSession;
-  createDriver?: () => CuaDriverSession;
-  imageProcessor?: ImageProcessor;
-  setInterval?: typeof setInterval;
-  clearInterval?: typeof clearInterval;
-};
-
 function resolveMacOsMcpEndpoint(
   env: NodeJS.ProcessEnv,
 ): { socketPath: string; binaryPath: string } | undefined {
@@ -202,7 +181,7 @@ function resolveImageCommand(command: string, env: NodeJS.ProcessEnv): string | 
   return null;
 }
 
-function createImageProcessor(env: NodeJS.ProcessEnv): ImageProcessor {
+function createImageProcessor(env: NodeJS.ProcessEnv) {
   return createRastermill({
     execution: "auto",
     limits: { inputPixels: MAX_IMAGE_PIXELS, outputPixels: MAX_IMAGE_PIXELS },
@@ -384,24 +363,22 @@ async function handleDesktopAct(
   );
 }
 
-export function createCuaComputerProvider(
-  options: CuaComputerProviderOptions = {},
-): ComputerUseProvider {
-  const platform = options.platform ?? process.platform;
-  const env = options.env ?? process.env;
+export function createCuaComputerProvider(): ComputerUseProvider {
+  const platform = process.platform;
+  const env = process.env;
   const macOsEndpoint = platform === "darwin" ? resolveMacOsMcpEndpoint(env) : undefined;
   const generation = `cua-computer-v2:${randomUUID()}`;
   let ownedAvailabilityDriver: CuaDriverSession | undefined;
   let availabilityDisposal: Promise<void> | undefined;
   let stopped = false;
-  const createDriver =
-    options.createDriver ??
-    (macOsEndpoint ? () => createCuaMcpDriver({ ...macOsEndpoint, env }) : createCuaDriver);
+  const createDriver = macOsEndpoint
+    ? () => createCuaMcpDriver({ ...macOsEndpoint, env })
+    : createCuaDriver;
   const availabilityDriver = () => {
     if (stopped) {
       throw new Error("COMPUTER_DRIVER_UNAVAILABLE: cua-computer is stopping");
     }
-    return options.driver ?? (ownedAvailabilityDriver ??= createDriver());
+    return (ownedAvailabilityDriver ??= createDriver());
   };
   const disposeAvailabilityDriver = () => {
     stopped = true;
@@ -412,9 +389,7 @@ export function createCuaComputerProvider(
       await current?.dispose();
     }));
   };
-  const imageProcessor = options.imageProcessor ?? createImageProcessor(env);
-  const interval = options.setInterval ?? setInterval;
-  const clear = options.clearInterval ?? clearInterval;
+  const imageProcessor = createImageProcessor(env);
   const isSupportedPlatform =
     platform === "linux" || platform === "win32" || macOsEndpoint !== undefined;
   // The app injects the endpoint only after the host-owned daemon socket is
@@ -448,7 +423,7 @@ export function createCuaComputerProvider(
     },
     watchAvailability: (_context, onChange) => {
       let knownAvailable = isAvailable();
-      const timer = interval(() => {
+      const timer = setInterval(() => {
         availabilityDriver().resetAvailabilityCache();
         const available = isAvailable();
         if (available !== knownAvailable) {
@@ -458,7 +433,7 @@ export function createCuaComputerProvider(
       }, AVAILABILITY_POLL_MS);
       timer.unref?.();
       return () => {
-        clear(timer);
+        clearInterval(timer);
         return disposeAvailabilityDriver();
       };
     },
@@ -466,7 +441,7 @@ export function createCuaComputerProvider(
       if (stopped) {
         throw new Error("COMPUTER_DRIVER_UNAVAILABLE: cua-computer is stopping");
       }
-      const executionDriver = options.driver ?? createDriver();
+      const executionDriver = createDriver();
       const resources = createLazyCuaExecutionResources();
       const executionState: CuaExecutionState = { resources, recording: {} };
       const queue = new KeyedAsyncQueue();

@@ -214,6 +214,9 @@ describe("native overlay presentation", () => {
     if (action === "selection") {
       await userEvent.click(apply);
     } else {
+      if (action === "Tab") {
+        await expect.element(apply).toHaveFocus();
+      }
       await userEvent.keyboard(`{${action}}`);
     }
     await phase(surface("modal-menu"), "hidden");

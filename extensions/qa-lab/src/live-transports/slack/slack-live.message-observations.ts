@@ -24,7 +24,6 @@ type SlackScenarioObservationContext = {
   matchText: string;
   observedMessages: SlackObservedMessage[];
   observationScenarioId: string;
-  observationScenarioTitle: string;
   sentTs: string;
   sutIdentity: SlackAuthIdentity;
 };
@@ -48,10 +47,7 @@ function recordSlackScenarioMessage(
     observedKeys?.add(observedKey);
     recordSlackObservedMessage({
       ...params,
-      matchedScenario,
       message,
-      scenarioId: params.observationScenarioId,
-      scenarioTitle: params.observationScenarioTitle,
     });
   }
   return matchedScenario ? message : undefined;

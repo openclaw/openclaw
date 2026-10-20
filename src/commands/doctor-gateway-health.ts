@@ -1,5 +1,6 @@
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { GatewayProtocolRequestTimeoutError } from "../../packages/gateway-client/src/protocol-request.js";
+import { readMissingScopeError } from "../../packages/gateway-protocol/src/gateway-error-details.js";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -208,7 +209,11 @@ function resolveGatewayDiagnosticsTimeouts(timeoutMs: number, statusElapsedMs: n
 }
 
 function isGatewayHealthAuthUnavailableError(error: unknown): boolean {
-  return isGatewayCredentialsRequiredError(error) || isGatewaySecretRefUnavailableError(error);
+  return (
+    isGatewayCredentialsRequiredError(error) ||
+    isGatewaySecretRefUnavailableError(error) ||
+    readMissingScopeError(error) !== null
+  );
 }
 
 function noteCliGatewayVersionSkew(status: StatusSummary | undefined): void {
@@ -243,7 +248,7 @@ function noteGatewayStateDirectory(
   });
   if (comparison.kind === "warn") {
     note(
-      `${comparison.message}\nRun plugin inspection and doctor --fix with the Gateway's OPENCLAW_STATE_DIR and OPENCLAW_CONFIG_PATH. To change the managed service, run \`openclaw gateway install --force\` from the intended profile and review operator-owned service overrides.`,
+      `${comparison.message}\nAfter moving or renaming the state directory, the running Gateway still uses the paths it started with. A full restart is required: \`openclaw gateway restart\` (not a reload). Then rerun \`openclaw doctor\`.\nRun plugin inspection and doctor --fix with the Gateway's OPENCLAW_STATE_DIR and OPENCLAW_CONFIG_PATH. To change the managed service, run \`openclaw gateway install --force\` from the intended profile and review operator-owned service overrides.`,
       "Gateway state directory mismatch",
     );
   }
@@ -311,6 +316,7 @@ export async function checkGatewayHealth(params: {
       method: "status",
       params: { includeChannelSummary: false },
       timeoutMs: remainingMs,
+      sharedStateMode: "read-only",
       config: params.cfg,
       onHelloOk: ({ snapshot }: GatewayHello) => {
         gatewaySnapshot = snapshot;
@@ -367,12 +373,14 @@ export async function checkGatewayHealth(params: {
         method: "channels.status",
         params: { probe: true, timeoutMs: channelProbeTimeoutMs },
         timeoutMs: diagnosticsTimeoutMs,
+        sharedStateMode: "read-only",
         config: params.cfg,
       }),
       requestGateway({
         method: "diagnostics.stability",
         params: { type: "telemetry.exporter", limit: 1000 },
         timeoutMs: diagnosticsTimeoutMs,
+        sharedStateMode: "read-only",
         config: params.cfg,
       }),
     ]);
@@ -487,6 +495,7 @@ export async function probeGatewayMemoryStatus(params: {
       method: "doctor.memory.status",
       params: { probe: false },
       timeoutMs,
+      sharedStateMode: "read-only",
       config: params.cfg,
     });
     if (payload.health) {

@@ -1,3 +1,4 @@
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import {
   externalContentStamp,
@@ -90,6 +91,7 @@ function normalizeParallelSearchRequest(
 export async function executeParallelSearchRequest(params: {
   provider: "parallel" | "parallel-free";
   endpoint: string;
+  apiKey?: string;
   args: Record<string, unknown>;
   searchConfig: SearchConfigRecord | undefined;
   search: (
@@ -108,7 +110,8 @@ export async function executeParallelSearchRequest(params: {
     return request.error;
   }
   const cacheKey = buildSearchCacheKey([
-    "parallel",
+    params.provider,
+    params.apiKey ? sha256Hex(params.apiKey) : undefined,
     JSON.stringify({ endpoint: params.endpoint, ...request }),
   ]);
   const cacheTtlMs = resolveSearchCacheTtlMs(params.searchConfig);

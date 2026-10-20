@@ -113,7 +113,6 @@ describe("registered decision consumer admission", () => {
       expect(await prefilter()).toMatchObject({
         shouldPruneTools: false,
         status: "unavailable",
-        reason: "overloaded",
       });
       expect(calls).toBe(3);
       // Purpose is diagnostic text, not the source of admission priority.
@@ -126,7 +125,7 @@ describe("registered decision consumer admission", () => {
       const rejected = expect(pending[0]!).rejects.toBe(reason);
       cancelled.abort(reason);
       expect(providerHost.inspect(selected).activeRequests).toBe(3);
-      expect(await prefilter()).toMatchObject({ reason: "overloaded", shouldPruneTools: false });
+      expect(await prefilter()).toMatchObject({ status: "unavailable", shouldPruneTools: false });
       expect(calls).toBe(4);
       release[0]!.resolve();
       await rejected;

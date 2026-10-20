@@ -37,19 +37,18 @@ describe("chat audio waveform", () => {
 
   it("normalizes bucket peaks across every channel", () => {
     const channels = [
-      new Float32Array([0.1, -0.5, 0.2, 0.4, -0.25, 0.75, 0, -1]),
-      new Float32Array([0, 0, 1, 0, 0, 0, 0, 2]),
-    ];
-    const peaks = computeChatAudioWaveformPeaks(
-      {
-        length: channels[0]!.length,
-        numberOfChannels: channels.length,
-        getChannelData: (channel) => channels[channel]!,
-      },
-      4,
-    );
+      [0.1, -0.5, 0.2, 0.4, -0.25, 0.75, 0, -1],
+      [0, 0, 1, 0, 0, 0, 0, 2],
+    ].map((samples) => Float32Array.from({ length: 192 }, (_, index) => samples[index % 8]!));
+    const peaks = computeChatAudioWaveformPeaks({
+      length: channels[0]!.length,
+      numberOfChannels: channels.length,
+      getChannelData: (channel) => channels[channel]!,
+    });
 
-    expect(peaks).toEqual([0.25, 0.5, 0.375, 1]);
+    expect(peaks).toEqual(
+      Array.from({ length: 96 }, (_, index) => [0.25, 0.5, 0.375, 1][index % 4]),
+    );
   });
 
   it("enforces the entry cap until the last lease releases an evictable Blob", () => {

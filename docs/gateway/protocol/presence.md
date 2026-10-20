@@ -25,8 +25,9 @@ How the Gateway reports which nodes are connected, and which server-pushed event
 ### Opt-in presence deltas
 
 Operator clients can advertise `presence-deltas` in connect `caps`. The Control
-UI does so; native clients retain the existing `presence` event payload
-`{ presence: [...] }` and the ordinary `system-presence` array response.
+UI and current macOS, iOS, and Android operator connections do so. Older app
+versions and clients without the capability retain the existing `presence` event
+payload `{ presence: [...] }`. Ordinary `system-presence` calls still return an array.
 
 For opted-in readers, the same `presence` event carries one of two payloads:
 
@@ -35,7 +36,7 @@ For opted-in readers, the same `presence` event carries one of two payloads:
   "reset": true,
   "version": 12,
   "presence": [{ "connectionId": "connection-a", "ts": 1000 }],
-  "keys": ["entry:connection-a"]
+  "keys": ["1"]
 }
 ```
 
@@ -43,14 +44,16 @@ For opted-in readers, the same `presence` event carries one of two payloads:
 {
   "base": 12,
   "version": 13,
-  "upsert": [{ "key": "entry:connection-a", "set": { "ts": 2000 }, "unset": ["watchedSessions"] }],
+  "upsert": [{ "key": "1", "set": { "ts": 2000 }, "unset": ["watchedSessions"] }],
   "remove": [],
-  "order": ["entry:connection-a"]
+  "order": ["1"]
 }
 ```
 
 Keys are opaque, stable identities assigned by the presence owner, independent
 of display names and recipient visibility. A reset replaces the complete roster;
+keys are compact identifiers, not connection or device IDs, and are never reused
+within a Gateway process after a row expires or is removed. Do not persist or parse them.
 `keys` parallels `presence`. For an existing row, an upsert's `set` contains only
 changed top-level fields and `unset` names removed fields. Nested objects and arrays
 are replaced as fields, not merged. A new row uses `{ key, presence }` with its
@@ -68,6 +71,12 @@ the last accepted version. On mismatch, request `system-presence` with
 `{ "snapshot": true }`; an opted-in client receives the reset shape above.
 Ordinary calls still return the existing array. The Control UI reconciles these
 updates in its Gateway store so downstream consumers receive full rosters.
+The shared macOS/iOS channel reconstructs rosters before bounded subscriber
+queues, and reconnects to resynchronize if a version or transport sequence gap
+occurs. It also accepts full snapshots from older Gateways. Android currently
+ignores roster events, so its operator sockets opt in without maintaining a roster.
+Node-only connections do not receive presence events. Native changes take effect
+with app updates; a Gateway restart does not upgrade connected app code.
 
 The hello snapshot remains `snapshot.presence` with `snapshot.stateVersion.presence`.
 This implementation sends a reset on the first post-hello presence event instead

@@ -21,7 +21,7 @@ type ResourceProps = {
   agentId?: string;
   selected: ReadonlySet<string>;
   disabled: boolean;
-  "onResource-selection"?: (event: CustomEvent<{ values: string[] }>) => void;
+  onSelection?: (values: string[]) => void;
 };
 
 type OperationScope = { live: boolean; abort: AbortController | undefined };
@@ -198,20 +198,12 @@ export function ChatQuestionResource(props: ResourceProps) {
     });
   }
 
-  const dispatchSelection = (values: string[]) =>
-    host.dispatchEvent(
-      new CustomEvent("resource-selection", {
-        detail: { values },
-        bubbles: true,
-        composed: true,
-      }),
-    );
+  const dispatchSelection = (values: string[]) => props.onSelection?.(values);
   return (
     <openclaw-chat-question-resource
       ref={(element) => {
         host = element;
       }}
-      onResource-selection={(event) => props["onResource-selection"]?.(event)}
     >
       {/* Request scope owns uploads; disabled transitions retire only operation state. */}
       <For each={[identity()]}>
@@ -328,8 +320,7 @@ export function ChatQuestionResource(props: ResourceProps) {
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
-      "openclaw-chat-question-resource": HTMLAttributes<HTMLElement> &
-        Pick<ResourceProps, "onResource-selection">;
+      "openclaw-chat-question-resource": HTMLAttributes<HTMLElement>;
     }
   }
 }

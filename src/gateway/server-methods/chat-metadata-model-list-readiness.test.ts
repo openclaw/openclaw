@@ -7,6 +7,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleChatMetadataRequest } from "./chat-metadata-handler.js";
 import {
+  chatMetadataCommandFields,
   createChatMetadataHarness,
   createChatMetadataOwner,
 } from "./chat-metadata-runtime.test-support.js";
@@ -49,7 +50,7 @@ it("serves commands independently of another agent's remembered model list", asy
         isWebchatConnect: () => false,
       });
       expect(respond).toHaveBeenCalledWith(true, {
-        commands: [{ name: "command-1-1" }],
+        commands: [{ ...chatMetadataCommandFields, name: "command-1-1" }],
         swarmEnabled: true,
         revision: expect.any(String),
       });

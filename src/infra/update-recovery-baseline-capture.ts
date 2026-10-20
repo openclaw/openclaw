@@ -29,7 +29,8 @@ import {
   sha256File,
   syncDirectory,
 } from "./directory-durability.js";
-import { hasErrnoCode } from "./errno.js";
+import { formatDiskSpaceBytes, tryReadDiskSpace } from "./disk-space.js";
+import { hasErrnoCode, ignoreMissingPath } from "./errno.js";
 import {
   copyFileHandle,
   hashFileMutationSnapshotSync,
@@ -84,14 +85,7 @@ function within(candidate: string, root: string): boolean {
 }
 
 async function statOrMissing(value: string): Promise<BigIntStats | undefined> {
-  try {
-    return await fs.lstat(value, { bigint: true });
-  } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
-  }
+  return fs.lstat(value, { bigint: true }).catch(ignoreMissingPath);
 }
 
 async function markPrivateCapture(directory: string): Promise<void> {
@@ -239,6 +233,24 @@ export function captureUpdateRecoveryBaseline(params: {
     const observed = new Map<string, CapturedPath>();
     const entries = new Map<string, Entry>();
     const files = new Map<string, BigIntStats>();
+    const capacityWarnings = new Set<string>();
+    const checkPayloadCapacity = () => {
+      const requiredBytes = [...files.values()].reduce(
+        (total, stat) => total + Number(stat.size),
+        64 * 1024 * 1024,
+      );
+      const space = tryReadDiskSpace(store);
+      if (space && space.availableBytes < requiredBytes) {
+        throw new Error(
+          `Original update capture needs ${formatDiskSpaceBytes(requiredBytes)} near ${store}, but only ${formatDiskSpaceBytes(space.availableBytes)} is available. Free space on this volume, then retry; original state has not been changed.`,
+        );
+      }
+      if (!space) {
+        capacityWarnings.add(
+          `Available disk space could not be measured near ${store}; original update capture will be attempted.`,
+        );
+      }
+    };
     const roots = new Set(resources.keys());
     const forcedSqlite = new Set<string>();
     const visit = async (pathname: string, declaredKind?: ResourceKind): Promise<void> => {
@@ -276,9 +288,7 @@ export function captureUpdateRecoveryBaseline(params: {
         entries.set(pathname, entry);
         if (kind) {
           const contentPath = await fs.realpath(pathname).catch((error: unknown) => {
-            if (!hasErrnoCode(error, "ENOENT")) {
-              throw error;
-            }
+            ignoreMissingPath(error);
             return canonicalEntryPath(path.resolve(path.dirname(pathname), target));
           });
           if (contentPath === pathname) {
@@ -323,6 +333,8 @@ export function captureUpdateRecoveryBaseline(params: {
       await visit(pathname, kind);
     }
     assertCurrent();
+    // Plugin resource trees can exceed the database budget; refuse before the first capture write.
+    checkPayloadCapacity();
     await ensurePrivateSnapshotRepositoryRoot(store);
     await markPrivateCapture(store);
     assertCurrent();
@@ -411,14 +423,18 @@ export function captureUpdateRecoveryBaseline(params: {
           mode: Number(stat.mode & 0o777n),
         });
       }
-      for (const [pathname, before] of files) {
+      for (const pathname of files.keys()) {
         if (
           databaseSpellings.has(pathname) ||
           sidecars.has(pathname) ||
           rehearsal?.excludes(pathname)
         ) {
-          continue;
+          files.delete(pathname);
         }
+      }
+      // Database acquisition used this volume first; reserve remaining payload and metadata now.
+      checkPayloadCapacity();
+      for (const [pathname, before] of files) {
         assertCurrent();
         await pin.assertCurrent();
         assertCurrent();
@@ -599,7 +615,7 @@ export function captureUpdateRecoveryBaseline(params: {
           manifestSha256: sha256Hex(raw),
         } satisfies UpdateRecoveryBaselineRef,
         warnings: boundedWarnings,
-        diagnostics: { databaseWarnings: databases.warnings },
+        diagnostics: { databaseWarnings: [...capacityWarnings, ...databases.warnings] },
       };
     } catch (cause) {
       throw new Error(`Original update capture failed; evidence retained at ${directory}`, {

@@ -52,19 +52,33 @@ export async function runUpdateLeaseChild(): Promise<void> {
         })
       : undefined;
   try {
+    if (process.argv[2] !== "doctor" || process.argv[3] === "--lint") {
+      await runUpdateLeaseChildWithCleanup();
+      return;
+    }
+    const [{ retainUpdateDoctorProcesses }, { withCommandProcessScope }] = await Promise.all([
+      import("../../infra/update-doctor-process-custody.js"),
+      import("../../process/exec-spawn.js"),
+    ]);
+    // Match Doctor's custody lifetime, including its final worker joins.
+    using custody = await retainUpdateDoctorProcesses();
+    await withCommandProcessScope(runUpdateLeaseChildWithCleanup, undefined, custody);
+  } finally {
+    observationHook?.deregister();
+  }
+}
+
+async function runUpdateLeaseChildWithCleanup(): Promise<void> {
+  try {
     await runUpdateLeaseScenario();
   } finally {
-    try {
-      // Fixture children bypass CLI cleanup and must join their database workers.
-      const { closeOpenClawStateDatabaseAsync } =
-        await import("../../state/openclaw-state-db-cache.js");
-      await closeOpenClawStateDatabaseAsync();
-      const { closeDefaultRetainedNativeWorkerSource } =
-        await import("../../infra/worker-native-lifecycle.js");
-      await closeDefaultRetainedNativeWorkerSource();
-    } finally {
-      observationHook?.deregister();
-    }
+    // Fixture children bypass CLI cleanup and must join their database workers.
+    const { closeOpenClawStateDatabaseAsync } =
+      await import("../../state/openclaw-state-db-cache.js");
+    await closeOpenClawStateDatabaseAsync();
+    const { closeDefaultRetainedNativeWorkerSource } =
+      await import("../../infra/worker-native-lifecycle.js");
+    await closeDefaultRetainedNativeWorkerSource();
   }
 }
 
@@ -253,27 +267,39 @@ async function runUpdateLeaseScenario(): Promise<void> {
       const { runInitialConfigWriteHealth } =
         await import("../../flows/doctor-health-contribution-runners.config.js");
       const { defaultRuntime: runtime } = await import("../../runtime.js");
+      const { beginDoctorMaintenance } = await import("../../commands/doctor-maintenance.js");
       const options = { repair: true, nonInteractive: true, workspaceSuggestions: false };
       const prompter = createDoctorPrompter({ runtime, options });
-      await using configResult = await loadAndMaybeMigrateDoctorConfig({
-        options,
-        prompter,
-        runtime,
-        confirm: (params) => prompter.confirm(params),
-      });
-      await runInitialConfigWriteHealth({
-        runtime,
-        options,
-        prompter,
-        configResult,
-        cfg: configResult.cfg,
-        cfgForPersistence: structuredClone(configResult.cfg),
-        sourceConfigValid: configResult.sourceConfigValid ?? true,
-        configPath,
-        stateDirExistedAtStart: true,
-        runWithPluginMetadataSnapshot: configResult.runWithPluginMetadataSnapshot,
-        invalidatePluginMetadataSnapshot: configResult.invalidatePluginMetadataSnapshot,
-      });
+      // One real maintenance owner serves every migration in this Doctor invocation.
+      const maintenance = await beginDoctorMaintenance({ root: null, options, runtime });
+      assert.ok(maintenance);
+      try {
+        const config = await maintenance.run(async () => {
+          await using configResult = await loadAndMaybeMigrateDoctorConfig({
+            options,
+            prompter,
+            runtime,
+            confirm: (params) => prompter.confirm(params),
+          });
+          await runInitialConfigWriteHealth({
+            runtime,
+            options,
+            prompter,
+            configResult,
+            cfg: configResult.cfg,
+            cfgForPersistence: structuredClone(configResult.cfg),
+            sourceConfigValid: configResult.sourceConfigValid ?? true,
+            configPath,
+            stateDirExistedAtStart: true,
+            runWithPluginMetadataSnapshot: configResult.runWithPluginMetadataSnapshot,
+            invalidatePluginMetadataSnapshot: configResult.invalidatePluginMetadataSnapshot,
+          });
+          return configResult.cfg;
+        });
+        await maintenance.finish(config);
+      } finally {
+        await maintenance.release();
+      }
     }
     if (scenario.doctorWarningsByInvocation) {
       const attempts = (await fs.readFile(path.join(stateDir, "events.jsonl"), "utf8"))

@@ -194,7 +194,6 @@ describe("agent event routing after cancellation", () => {
         lifecycleGeneration: () => generation,
         startedAt: 1,
         state: {
-          currentTurnUserMessagePersisted: true,
           lifecycleFinishing: false,
           lifecycleEnded: false,
         },

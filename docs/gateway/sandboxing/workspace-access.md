@@ -23,6 +23,22 @@ mount. This prevents guests from sharing the writable agent workspace; `none`
 and `ro` remain unchanged. Sessions without a role-required sandbox retain their
 configured workspace access.
 
+The session Files browser follows this workspace boundary. With local Docker or
+Podman and `workspaceAccess: "none"`, listings, searches, previews, and downloads
+use the session's private sandbox workspace, including files created during
+ordinary noncoding chats. An unavailable private workspace never falls back to
+the shared agent workspace. Explicit `ro` access and managed project workspaces
+retain their existing admitted source access. Viewing a shared session uses that
+session's workspace; it does not switch to the viewer's own sandbox. Session
+visibility alone does not let a sandbox-required reader browse an unsandboxed
+shared host workspace. Ordinary nonsandbox-required read-only readers keep
+their existing in-root access.
+
+The Changes view requires an admitted project checkout. An unmanaged private
+sandbox remains available in Files, but Changes returns the existing `not_git`
+notice instead of running host Git against private sandbox metadata. Managed
+project and admitted host checkouts retain their existing diff behavior.
+
 ## Managed project workspaces
 
 A sandboxed session with a session-owned managed worktree uses a private Git

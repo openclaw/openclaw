@@ -5,7 +5,10 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { acquireFileLockSync } from "../../infra/file-lock-manager.js";
-import { parseGatewayLockPayload } from "../../infra/gateway-lock-payload.js";
+import {
+  parseGatewayLockPayload,
+  readGatewayLockProcessNamespace,
+} from "../../infra/gateway-lock-payload.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import {
   StateSchemaMutationConflictError,
@@ -70,6 +73,7 @@ function previousVersionState(ledger: boolean, legacyMetadata = false) {
     retry: { retries: 0 },
     payload: () => ({
       pid: process.pid,
+      processNamespace: readGatewayLockProcessNamespace(),
       ownerId: randomUUID(),
       createdAt: new Date().toISOString(),
       configPath: path.join(root, "openclaw.json"),

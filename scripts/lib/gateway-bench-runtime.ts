@@ -367,6 +367,7 @@ export function writeGatewayBenchConfig(
   },
 ): string {
   const agents = config.agents as { defaults?: Record<string, unknown> } | undefined;
+  const plugins = config.plugins as OpenClawConfig["plugins"];
   const merged = {
     ...config,
     ...(options.agentList
@@ -387,11 +388,14 @@ export function writeGatewayBenchConfig(
         }
       : {}),
     plugins: {
-      ...(config.plugins as Record<string, unknown> | undefined),
+      ...plugins,
       ...(options.pluginFixtures
         ? {
-            allow: options.pluginFixtures.pluginIds,
-            load: { paths: [options.pluginFixtures.pluginsDir] },
+            allow: [...(plugins?.allow ?? []), ...options.pluginFixtures.pluginIds],
+            load: {
+              ...plugins?.load,
+              paths: [...(plugins?.load?.paths ?? []), options.pluginFixtures.pluginsDir],
+            },
           }
         : {}),
     },
@@ -405,6 +409,7 @@ export function buildGatewayBenchChildArgs(
   entry: string,
   port: number,
   nodeOptions: string[] = [],
+  authMode: "none" | "token" = "none",
 ): string[] {
   return [
     ...nodeOptions,
@@ -416,7 +421,7 @@ export function buildGatewayBenchChildArgs(
     "--bind",
     "loopback",
     "--auth",
-    "none",
+    authMode,
     "--tailscale",
     "off",
     "--allow-unconfigured",

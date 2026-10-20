@@ -358,7 +358,7 @@ describe("worker inference SQLite store", async () => {
           },
         );
         await Promise.race([dispatched.promise, endedBeforeDispatch]);
-        drain = manager.reserveSessionDrain(REQUEST.sessionId).accept();
+        drain = manager.reserveSessionDrain(REQUEST.sessionId);
         const drained = Promise.allSettled([drain.drained]);
         const [native] = await Promise.allSettled([promise]);
         assert(native.status === "rejected", "native begin unexpectedly succeeded");
@@ -544,7 +544,7 @@ describe("worker inference SQLite store", async () => {
           expect(begin).toHaveBeenCalledOnce();
           expect(complete).toHaveBeenCalledOnce();
         }
-        const acceptedDrain = manager.reserveSessionDrain(REQUEST.sessionId).accept();
+        const acceptedDrain = manager.reserveSessionDrain(REQUEST.sessionId);
         drain = acceptedDrain;
         let drainSettled = false;
         void drain.drained.then(
@@ -649,7 +649,7 @@ describe("worker inference SQLite store", async () => {
           expect(replayed.result.status).toBe("replayed");
           replayed.launch();
           expect(await replaySink.terminal).toEqual(PROVIDER_ERROR);
-          const successorDrain = manager.reserveSessionDrain(REQUEST.sessionId).accept();
+          const successorDrain = manager.reserveSessionDrain(REQUEST.sessionId);
           successorDrain.start();
           await expect(successorDrain.drained).resolves.toBeUndefined();
           successorDrain.release();

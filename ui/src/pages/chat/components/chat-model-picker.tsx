@@ -16,6 +16,8 @@ import {
   type ChatModelPickerTargetGroup,
 } from "./chat-model-picker-options.ts";
 import {
+  ChatModelSearchContext,
+  createChatModelSearch,
   handleModelPickerKeydown,
   resetModelSearch,
   syncChatModelSearch,
@@ -99,6 +101,7 @@ function prepareChatModelPicker(params: ChatModelPickerParams) {
 }
 
 export function ChatModelPicker(params: ChatModelPickerParams) {
+  const search = createChatModelSearch();
   let summary: HTMLElement;
   let searchInput: HTMLInputElement | undefined;
   let details: HTMLDetailsElement | undefined;
@@ -145,7 +148,7 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
       summary.focus({ preventScroll: true });
     }
   };
-  // Keep the imperative search/filter DOM island synchronized with catalog updates.
+  // Reapply the current search after catalog bindings settle.
   createEffect(
     () => [
       choicesMounted(),
@@ -164,118 +167,121 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
     },
   );
   return (
-    <details
-      ref={(element) => {
-        details = element;
-        pickerOverlay.details(element);
-      }}
-      onClick={pickerOverlay.onClick}
-      onToggle={pickerOverlay.onToggle}
-      class="chat-controls__inline-select chat-controls__model-picker"
-      data-chat-autotype-shortcuts
-      prop:open={params.open === true}
-      onKeyDown={handleModelPickerKeydown}
-    >
-      <summary
-        ref={[(element) => (summary = element), pickerOverlay.trigger]}
-        class={[
-          "chat-controls__inline-select-trigger chat-controls__model-trigger",
-          {
-            "chat-controls__model-trigger--loading": params.triggerLoading,
-            "chat-controls__inline-select-trigger--disabled": params.disabled,
-          },
-        ]}
-        data-chat-model-select="true"
-        data-chat-model-locked={params.modelSelectionLocked ? "true" : "false"}
-        data-chat-select-value={params.selectedModelValue}
-        data-chat-model-tools={state().modelToolsUnavailable ? "unavailable" : "available"}
-        aria-label={`${t("chat.selectors.model")}: ${state().triggerTitle}${params.selectionScopeDescription ? `. ${params.selectionScopeDescription}` : ""}`}
-        aria-busy={params.triggerLoading ? "true" : "false"}
-        aria-disabled={params.disabled ? "true" : "false"}
-        title={params.disabledReason?.trim() || undefined}
-      >
-        {state().modelToolsUnavailable ? (
-          <openclaw-tooltip prop:content={t("chat.modelControls.chatOnlyHelp")}>
-            <span class="chat-controls__model-capability-badge" aria-hidden="true">
-              <Icon name="alertTriangle" />
-              <span>{t("chat.modelControls.chatOnly")}</span>
-            </span>
-          </openclaw-tooltip>
-        ) : undefined}
-        {!params.triggerLoading &&
-        !params.triggerStatusLabel &&
-        state().triggerModelOption &&
-        hasProviderBrandIcon(state().triggerModelOption!.provider) ? (
-          <ProviderBrandIcon
-            provider={state().triggerModelOption!.provider}
-            class="chat-controls__trigger-provider-icon"
-          />
-        ) : undefined}
-        <span class="chat-controls__inline-select-label">
-          {params.triggerLoading ? (
-            <span class="skeleton chat-controls__model-trigger-skeleton" aria-hidden="true" />
-          ) : (
-            (params.triggerStatusLabel ?? params.triggerModelLabel)
-          )}
-        </span>
-        {state().showContextWindowBadge ? (
-          <span
-            class="chat-controls__locked-model-badge chat-controls__model-context-badge"
-            data-chat-model-context-badge
-          >
-            {state().selectedContextWindowOption?.label}
-          </span>
-        ) : undefined}
-        <span class="chat-controls__inline-select-chevron" aria-hidden="true">
-          <Icon name="chevronUp" />
-        </span>
-      </summary>
-      <div
-        ref={pickerOverlay.surface}
-        class="oc-overlay chat-picker-overlay"
-        data-anchored-overlay
-        popover="manual"
-        onOverlay-show={() => {
-          if (searchInput?.isConnected) {
-            updateModelSearch(searchInput, true);
-          }
+    <ChatModelSearchContext value={search}>
+      <details
+        ref={(element) => {
+          details = element;
+          search.detailsRef(element);
+          pickerOverlay.details(element);
         }}
+        onClick={pickerOverlay.onClick}
+        onToggle={pickerOverlay.onToggle}
+        class="chat-controls__inline-select chat-controls__model-picker"
+        data-chat-autotype-shortcuts
+        prop:open={params.open === true}
+        onKeyDown={handleModelPickerKeydown}
       >
-        <Show when={choicesMounted()}>
-          <Errored
-            fallback={(_error, reset) => (
-              <div class="chat-controls__model-catalog-state" role="alert">
-                {t("chat.modelControls.modelsUnavailable")}
-                <button class="btn btn--sm" type="button" onClick={reset}>
-                  {t("common.retry")}
-                </button>
-              </div>
+        <summary
+          ref={[(element) => (summary = element), search.summaryRef, pickerOverlay.trigger]}
+          class={[
+            "chat-controls__inline-select-trigger chat-controls__model-trigger",
+            {
+              "chat-controls__model-trigger--loading": params.triggerLoading,
+              "chat-controls__inline-select-trigger--disabled": params.disabled,
+            },
+          ]}
+          data-chat-model-select="true"
+          data-chat-model-locked={params.modelSelectionLocked ? "true" : "false"}
+          data-chat-select-value={params.selectedModelValue}
+          data-chat-model-tools={state().modelToolsUnavailable ? "unavailable" : "available"}
+          aria-label={`${t("chat.selectors.model")}: ${state().triggerTitle}${params.selectionScopeDescription ? `. ${params.selectionScopeDescription}` : ""}`}
+          aria-busy={params.triggerLoading ? "true" : "false"}
+          aria-disabled={params.disabled ? "true" : "false"}
+          title={params.disabledReason?.trim() || undefined}
+        >
+          {state().modelToolsUnavailable ? (
+            <openclaw-tooltip prop:content={t("chat.modelControls.chatOnlyHelp")}>
+              <span class="chat-controls__model-capability-badge" aria-hidden="true">
+                <Icon name="alertTriangle" />
+                <span>{t("chat.modelControls.chatOnly")}</span>
+              </span>
+            </openclaw-tooltip>
+          ) : undefined}
+          {!params.triggerLoading &&
+          !params.triggerStatusLabel &&
+          state().triggerModelOption &&
+          hasProviderBrandIcon(state().triggerModelOption!.provider) ? (
+            <ProviderBrandIcon
+              provider={state().triggerModelOption!.provider}
+              class="chat-controls__trigger-provider-icon"
+            />
+          ) : undefined}
+          <span class="chat-controls__inline-select-label">
+            {params.triggerLoading ? (
+              <span class="skeleton chat-controls__model-trigger-skeleton" aria-hidden="true" />
+            ) : (
+              (params.triggerStatusLabel ?? params.triggerModelLabel)
             )}
-          >
-            <Loading
-              fallback={
-                <div class="chat-controls__model-catalog-state" role="status">
-                  {t("chat.modelControls.loadingModels")}
-                </div>
-              }
+          </span>
+          {state().showContextWindowBadge ? (
+            <span
+              class="chat-controls__locked-model-badge chat-controls__model-context-badge"
+              data-chat-model-context-badge
             >
-              <ChatModelPickerPanel
-                params={params}
-                onSelectionClose={closeModelPickerAfterSelection}
-                searchRef={(element) => {
-                  searchInput = element;
-                  queueMicrotask(() => {
-                    if (details) {
-                      syncChatModelSearch(details);
-                      focusSearch();
-                    }
-                  });
-                }}
-              />
-            </Loading>
-          </Errored>
-        </Show>
-      </div>
-    </details>
+              {state().selectedContextWindowOption?.label}
+            </span>
+          ) : undefined}
+          <span class="chat-controls__inline-select-chevron" aria-hidden="true">
+            <Icon name="chevronUp" />
+          </span>
+        </summary>
+        <div
+          ref={pickerOverlay.surface}
+          class="oc-overlay chat-picker-overlay"
+          data-anchored-overlay
+          popover="manual"
+          onOverlay-show={() => {
+            if (searchInput?.isConnected) {
+              updateModelSearch(searchInput, true);
+            }
+          }}
+        >
+          <Show when={choicesMounted()}>
+            <Errored
+              fallback={(_error, reset) => (
+                <div class="chat-controls__model-catalog-state" role="alert">
+                  {t("chat.modelControls.modelsUnavailable")}
+                  <button class="btn btn--sm" type="button" onClick={reset}>
+                    {t("common.retry")}
+                  </button>
+                </div>
+              )}
+            >
+              <Loading
+                fallback={
+                  <div class="chat-controls__model-catalog-state" role="status">
+                    {t("chat.modelControls.loadingModels")}
+                  </div>
+                }
+              >
+                <ChatModelPickerPanel
+                  params={params}
+                  onSelectionClose={closeModelPickerAfterSelection}
+                  searchRef={(element) => {
+                    searchInput = element;
+                    queueMicrotask(() => {
+                      if (details) {
+                        syncChatModelSearch(details);
+                        focusSearch();
+                      }
+                    });
+                  }}
+                />
+              </Loading>
+            </Errored>
+          </Show>
+        </div>
+      </details>
+    </ChatModelSearchContext>
   );
 }

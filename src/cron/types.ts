@@ -22,6 +22,7 @@ import type {
   CronToolsAllowExecTarget,
   CronToolsAllowExecTargetRequirement,
 } from "./scheduled-tool-policy.js";
+import type { CronStreamSandboxTarget } from "./stream-sandbox-target.js";
 import type { CronJobBase, CronPacing } from "./types-shared.js";
 
 export type { CronPacing } from "./types-shared.js";
@@ -371,6 +372,8 @@ export type CronJob = CronJobBase<
 > & {
   declarationKey?: string;
   displayName?: string;
+  /** Read-only execution placement derived from the stored stream target. */
+  streamExecutionHost?: "gateway" | "sandbox";
   owner?: {
     agentId?: string;
     sessionKey?: string;
@@ -408,7 +411,7 @@ export type CronToolsAllowProvenance =
     ));
 
 /** Persisted row shape; public Gateway and wire contracts use CronJob. */
-export type CronStoredJob = CronJob & {
+export type CronStoredJob = Omit<CronJob, "streamExecutionHost"> & {
   /** Original authenticated source for a same-conversation continuation, never a public grant. */
   operatorSource?: {
     source: import("../gateway/operator-run-recovery-source.codec.js").RestartRecoveryOperatorSource;
@@ -422,6 +425,8 @@ export type CronStoredJob = CronJob & {
     sessionId: string;
     lifecycleRevision?: string;
   };
+  /** Trusted logical sandbox and original access basis, never public create/patch input. */
+  streamSandbox?: CronStreamSandboxTarget;
   /** Immutable revisions inherited from the authorized creator session, never human mutation authority. */
   skillLibrarySelections?: SessionEntry["skillLibrarySelections"];
   /** Immutable creator provenance stamped by the trusted cron creation seam. */
@@ -457,7 +462,7 @@ type CronJobStateInput = Partial<
 /** Create input accepted by cron APIs before id/timestamps/state are assigned. */
 export type CronJobCreate = Omit<
   CronJob,
-  "id" | "createdAtMs" | "updatedAtMs" | "state" | "scheduledToolPolicy"
+  "id" | "createdAtMs" | "updatedAtMs" | "state" | "scheduledToolPolicy" | "streamExecutionHost"
 > & {
   /** Internal callers can reserve a durable id before creation; public cron.add omits this. */
   id?: string;
@@ -478,6 +483,7 @@ export type CronJobPatch = Partial<
     | "displayName"
     | "owner"
     | "scheduledToolPolicy"
+    | "streamExecutionHost"
     | "pacing"
     | "trigger"
   >

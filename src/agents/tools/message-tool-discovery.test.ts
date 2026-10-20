@@ -36,6 +36,7 @@ import {
 import {
   buildMessageToolDescription,
   buildMessageToolSchema,
+  hasMessageToolSourceConversation,
   resolveMessageToolActionSchemaActions,
   resolveEffectiveCurrentChannelContextForRequest,
   resolveMessageToolDiscoveryAsync,
@@ -49,6 +50,33 @@ const options = {
   agentSessionKey: `agent:main:googlechat:group:${foldedSpace}`,
 };
 const request = { config: {}, action: "send" as const, params: {} };
+
+it.each([
+  { context: undefined, expected: false },
+  { context: { currentChannelProvider: "telegram" }, expected: false },
+  { context: { currentChannelId: "123" }, expected: false },
+  {
+    context: { currentChannelProvider: "telegram", currentChannelId: "heartbeat" },
+    expected: false,
+  },
+  {
+    context: { currentChannelProvider: "telegram", currentChannelId: "channel:agent:main:main" },
+    expected: false,
+  },
+  {
+    context: { currentChannelProvider: "telegram", currentMessagingTarget: "123" },
+    expected: true,
+  },
+  {
+    context: {
+      currentChannelProvider: "webchat",
+      agentSessionKey: "agent:main:telegram:direct:123",
+    },
+    expected: true,
+  },
+])("reports source routing for $context", ({ context, expected }) => {
+  expect(hasMessageToolSourceConversation(context)).toBe(expected);
+});
 
 describe("session-derived message destinations", () => {
   beforeEach(() => {

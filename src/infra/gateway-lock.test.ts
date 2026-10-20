@@ -16,6 +16,7 @@ import {
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { readGatewayLockProcessNamespace } from "./gateway-lock-payload.js";
 import {
   acquireGatewayLock,
   GatewayLockError,
@@ -101,6 +102,7 @@ function createLockPayload(params: {
     ...(params.port ? { port: params.port } : {}),
     ...(params.role ? { role: params.role } : {}),
     startTime: params.startTime,
+    processNamespace: readGatewayLockProcessNamespace(),
   };
 }
 
@@ -141,7 +143,7 @@ async function holdLifecycleCoordinator(signal: AbortSignal) {
        const pathname = process.argv[1];
        const lock = acquireFileLockSync(pathname, {
          lockPath: pathname, retry: { retries: 0 },
-         payload: () => ({ pid: process.pid, createdAt: new Date().toISOString(), configPath: "synthetic", role: "gateway" }),
+         payload: () => ({ pid: process.pid, createdAt: new Date().toISOString(), configPath: "synthetic", role: "gateway", processNamespace: ${JSON.stringify(readGatewayLockProcessNamespace())} }),
        });
        process.on("message", () => {
          lock.release(); process.disconnect();
@@ -545,22 +547,24 @@ describe("gateway lock", () => {
     await expect(fs.readFile(lockPath, "utf8")).resolves.toBe(original);
   });
 
-  it("reclaims a lock when its live pid belongs to a non-gateway process", async () => {
+  it("preserves a live PID when only its command line differs", async () => {
     vi.useRealTimers();
     const env = await makeEnv();
     const script = path.join(env.OPENCLAW_STATE_DIR, "worker.js");
     await fs.writeFile(script, "");
     await writeRecentLockFile(env);
 
-    const lock = await acquireForTest(env, {
-      timeoutMs: 80,
-      pollIntervalMs: 5,
-      staleMs: 10_000,
-      platform: "darwin",
-      port: 18789,
-      readProcessCmdline: () => ["node", script],
-    });
-    await expectGatewayLock(lock).release();
+    await expect(
+      acquireForTest(env, {
+        timeoutMs: 80,
+        pollIntervalMs: 5,
+        staleMs: 10_000,
+        platform: "darwin",
+        port: 18789,
+        readProcessCmdline: () => ["node", script],
+        readProcessStartTime: () => null,
+      }),
+    ).rejects.toBeInstanceOf(GatewayLockError);
   });
 
   it("bounds oversized lock polling intervals by the acquire timeout", async () => {
@@ -643,21 +647,22 @@ describe("gateway lock", () => {
     openSpy.mockRestore();
   });
 
-  it("clears stale lock on win32 when process cmdline is not a gateway", async () => {
+  it("preserves a Windows owner when only its command line differs", async () => {
     vi.useRealTimers();
     const env = await makeEnv();
     await writeRecentLockFile(env);
 
-    const lock = await acquireForTest(env, {
-      timeoutMs: 80,
-      pollIntervalMs: 5,
-      staleMs: 10_000,
-      platform: "win32",
-      port: 18789,
-      readProcessCmdline: () => ["chrome.exe", "--no-sandbox"],
-      readProcessStartTime: () => null,
-    });
-    await expectGatewayLock(lock).release();
+    await expect(
+      acquireForTest(env, {
+        timeoutMs: 80,
+        pollIntervalMs: 5,
+        staleMs: 10_000,
+        platform: "win32",
+        port: 18789,
+        readProcessCmdline: () => ["chrome.exe", "--no-sandbox"],
+        readProcessStartTime: () => null,
+      }),
+    ).rejects.toBeInstanceOf(GatewayLockError);
   });
 
   it("falls back to unknown on win32 when cmdline reader returns null", async () => {

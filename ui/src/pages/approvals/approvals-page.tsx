@@ -27,11 +27,14 @@ import {
   LearnMoreLink,
 } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
+import { registerApprovalsEnglish } from "../../i18n/locales/en-approvals.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { formatDateTimeMs } from "../../lib/reactive/format.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+
+registerEnglishCatalog(registerApprovalsEnglish);
 
 const APPROVAL_HISTORY_PAGE_SIZE = 50;
 
@@ -49,9 +52,6 @@ function grantStateLabel(grant: ExecApprovalStandingGrant, nowMs: number): strin
   return t("standingGrants.stateUntilRevoked");
 }
 
-function grantIsActive(grant: ExecApprovalStandingGrant, nowMs: number): boolean {
-  return grant.revokedAtMs === null && (grant.expiresAtMs === null || grant.expiresAtMs > nowMs);
-}
 const APPROVAL_HISTORY_REQUIRED_SCOPE = "operator.approvals";
 const APPROVALS_DOCS_URL = "https://docs.openclaw.ai/tools/exec-approvals";
 
@@ -413,7 +413,8 @@ export function ApprovalsPage() {
           {grantStateLabel(props.grant, Date.now())}
         </td>
         <td>
-          {grantIsActive(props.grant, Date.now()) ? (
+          {props.grant.revokedAtMs === null &&
+          (props.grant.expiresAtMs === null || props.grant.expiresAtMs > Date.now()) ? (
             <button
               class="btn btn--sm"
               aria-label={`${revokeLabel()}: ${props.grant.cronJobName ?? props.grant.cronJobId} — ${props.grant.command}`}

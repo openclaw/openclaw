@@ -37,8 +37,8 @@ import {
   startRuntime,
 } from "./server-worker-placement.test-support.js";
 import * as workspaceRetention from "./worker-environments/node-workspace-retain-coordinator.js";
-import type { WorkerPlacementRecoveryBarrier } from "./worker-environments/placement-dispatch-startup.js";
 import type { WorkerPlacementDispatchService } from "./worker-environments/placement-dispatch.js";
+import type { WorkerPlacementRecoveryBarrier } from "./worker-environments/placement-recovery-contract.js";
 
 const createRuntime = createRuntimeFactory(createGatewayWorkerPlacementRuntime, getRuntimeConfig);
 function mockDispatch(overrides: Partial<WorkerPlacementDispatchService> = {}) {

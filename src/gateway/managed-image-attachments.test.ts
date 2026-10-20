@@ -1349,7 +1349,7 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     });
 
     const checkedSessionKeys: string[] = [];
-    const result = await cleanupManagedOutgoingImageRecords({
+    await cleanupManagedOutgoingImageRecords({
       stateDir,
       hasActiveSessionRun: (sessionKey) => {
         checkedSessionKeys.push(sessionKey);
@@ -1357,7 +1357,6 @@ describe("cleanupManagedOutgoingImageRecords", () => {
       },
     });
 
-    expect(result).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
     expect(checkedSessionKeys).toEqual([fixture.sessionKey]);
     await fs.access(fixture.originalPath);
     expect(
@@ -1402,14 +1401,19 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     );
     const afterTtl = Date.parse(record.createdAt) + 16 * 60 * 1000;
 
-    await expect(
-      cleanupManagedOutgoingImageRecords({ stateDir, nowMs: afterTtl }),
-    ).resolves.toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
+    const originalPath = path.join(
+      record.original.mediaRoot,
+      record.original.mediaSubdir,
+      record.original.mediaId,
+    );
+    await cleanupManagedOutgoingImageRecords({ stateDir, nowMs: afterTtl });
+    expect(await readManagedImageRecord(attachmentId, stateDir)).not.toBeNull();
+    await fs.access(originalPath);
 
     await completeSessionDelivery(queueId, queueContext);
-    await expect(
-      cleanupManagedOutgoingImageRecords({ stateDir, nowMs: afterTtl }),
-    ).resolves.toEqual({ deletedRecordCount: 1, deletedFileCount: 1, retainedCount: 0 });
+    await cleanupManagedOutgoingImageRecords({ stateDir, nowMs: afterTtl });
+    expect(await readManagedImageRecord(attachmentId, stateDir)).toBeNull();
+    await expectPathMissing(originalPath);
   });
 
   it("retries a durably claimed file deletion after a filesystem failure", async () => {
@@ -1421,20 +1425,17 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     readSessionMessagesMock.mockReturnValue([]);
     const rmSpy = vi.spyOn(fs, "rm").mockRejectedValueOnce(new Error("synthetic rm failure"));
 
-    let failed: Awaited<ReturnType<typeof cleanupManagedOutgoingImageRecords>>;
     try {
-      failed = await cleanupManagedOutgoingImageRecords({ stateDir });
+      await cleanupManagedOutgoingImageRecords({ stateDir });
     } finally {
       rmSpy.mockRestore();
     }
 
-    expect(failed).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
     expect(await readManagedImageRecord(fixture.attachmentId, stateDir)).toBeNull();
     await fs.access(fixture.originalPath);
 
-    const retried = await cleanupManagedOutgoingImageRecords({ stateDir });
+    await cleanupManagedOutgoingImageRecords({ stateDir });
 
-    expect(retried).toEqual({ deletedRecordCount: 1, deletedFileCount: 1, retainedCount: 0 });
     await expectPathMissing(fixture.originalPath);
   });
 
@@ -1462,17 +1463,12 @@ describe("cleanupManagedOutgoingImageRecords", () => {
       }
       await fs.utimes(orphanPath, new Date(0), new Date(0));
 
-      const result = await cleanupManagedOutgoingImageRecords({
+      await cleanupManagedOutgoingImageRecords({
         stateDir,
         nowMs: 1_000_000,
         transientMaxAgeMs: 1_000,
       });
 
-      expect(result).toEqual({
-        deletedRecordCount: 0,
-        deletedFileCount: legacy ? 0 : 1,
-        retainedCount: 0,
-      });
       if (legacy) {
         await fs.access(orphanPath);
       } else {
@@ -1495,11 +1491,10 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     getRuntimeConfigMock.mockReturnValue({ session: { store: databasePath } });
     mockSessionEntry(databasePath, "fallback-session", "/tmp/fallback.jsonl");
 
-    const result = await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, () =>
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, () =>
       cleanupManagedOutgoingImageRecords({ stateDir }),
     );
 
-    expect(result).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
     expect(await readManagedImageRecord(fixture.attachmentId, stateDir)).not.toBeNull();
     await fs.access(fixture.originalPath);
     expect(readSessionMessagesMock).not.toHaveBeenCalled();
@@ -1534,9 +1529,7 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     });
     loadSessionEntryMock.mockReturnValue({ storePath, entry: undefined });
 
-    const result = await cleanupManagedOutgoingImageRecords({ stateDir });
-
-    expect(result).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
+    await cleanupManagedOutgoingImageRecords({ stateDir });
     expect(await readManagedImageRecord(fixture.attachmentId, stateDir)).not.toBeNull();
     expect(await fs.readFile(fixture.originalPath, "utf8")).toBe("original-image");
     expect(readSessionMessagesMock).not.toHaveBeenCalled();
@@ -1562,11 +1555,10 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     getRuntimeConfigMock.mockReturnValue({ session: { store: storeTemplate } });
     loadSessionEntryMock.mockReturnValue({ storePath: configuredStorePath, entry: undefined });
 
-    const result = await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, () =>
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, () =>
       cleanupManagedOutgoingImageRecords({ stateDir }),
     );
 
-    expect(result).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
     expect(await readManagedImageRecord(fixture.attachmentId, stateDir)).not.toBeNull();
     await fs.access(fixture.originalPath);
     expect(loadSessionEntryMock).not.toHaveBeenCalled();
@@ -1604,11 +1596,10 @@ describe("cleanupManagedOutgoingImageRecords", () => {
       },
     ]);
 
-    const result = await cleanupManagedOutgoingImageRecords({ stateDir });
+    await cleanupManagedOutgoingImageRecords({ stateDir });
 
-    expect(result.deletedRecordCount).toBe(0);
-    expect(result.deletedFileCount).toBe(0);
-    expect(result.retainedCount).toBe(2);
+    expect(await readManagedImageRecord(firstFixture.attachmentId, stateDir)).not.toBeNull();
+    expect(await readManagedImageRecord(secondFixture.attachmentId, stateDir)).not.toBeNull();
     await fs.access(firstFixture.originalPath);
     await fs.access(secondFixture.originalPath);
     expect(readSessionMessagesMock).toHaveBeenCalledTimes(1);
@@ -1633,14 +1624,15 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     }));
     readSessionMessagesMock.mockReturnValue([]);
 
-    const result = await cleanupManagedOutgoingImageRecords({
+    await cleanupManagedOutgoingImageRecords({
       stateDir,
       sessionKey: deletedFixture.sessionKey,
       forceDeleteSessionRecords: true,
     });
 
-    expect(result.deletedRecordCount).toBe(1);
-    expect(result.retainedCount).toBe(1);
+    expect(await readManagedImageRecord(deletedFixture.attachmentId, stateDir)).toBeNull();
+    await expectPathMissing(deletedFixture.originalPath);
+    expect(await readManagedImageRecord(retainedFixture.attachmentId, stateDir)).not.toBeNull();
     await fs.access(retainedFixture.originalPath);
   });
 
@@ -1675,14 +1667,14 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     });
     readSessionMessagesMock.mockReturnValue([]);
 
-    const result = await cleanupManagedOutgoingImageRecords({
+    await cleanupManagedOutgoingImageRecords({
       stateDir,
       sessionKey: "global",
       agentId: "main",
     });
 
-    expect(result.deletedRecordCount).toBe(1);
-    expect(result.retainedCount).toBe(1);
+    expect(await readManagedImageRecord(deletedFixture.attachmentId, stateDir)).toBeNull();
+    expect(await readManagedImageRecord(retainedFixture.attachmentId, stateDir)).not.toBeNull();
     await fs.access(retainedFixture.originalPath);
     await expectPathMissing(deletedFixture.originalPath);
   });
@@ -1723,10 +1715,10 @@ describe("cleanupManagedOutgoingImageRecords", () => {
       },
     ]);
 
-    const result = await cleanupManagedOutgoingImageRecords({ stateDir });
+    await cleanupManagedOutgoingImageRecords({ stateDir });
 
     expect(readSessionMessagesMock).toHaveBeenCalled();
-    expect(result).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
+    expect(await readManagedImageRecord(fixture.attachmentId, stateDir)).not.toBeNull();
     await fs.access(fixture.originalPath);
   });
 
@@ -1774,15 +1766,15 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     });
     readSessionMessagesMock.mockReturnValue([]);
 
-    const result = await cleanupManagedOutgoingImageRecords({
+    await cleanupManagedOutgoingImageRecords({
       stateDir,
       sessionKey: "global",
       agentId: "work",
     });
 
     expect(readSessionMessagesMock).toHaveBeenCalled();
-    expect(result.deletedRecordCount).toBe(1);
-    expect(result.retainedCount).toBe(1);
+    expect(await readManagedImageRecord(deletedFixture.attachmentId, stateDir)).toBeNull();
+    expect(await readManagedImageRecord(retainedFixture.attachmentId, stateDir)).not.toBeNull();
     await expectPathMissing(deletedFixture.originalPath);
     await fs.access(retainedFixture.originalPath);
   });
@@ -1796,12 +1788,11 @@ describe("cleanupManagedOutgoingImageRecords", () => {
       attachmentId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
     });
 
-    const result = await cleanupManagedOutgoingImageRecords({
+    await cleanupManagedOutgoingImageRecords({
       stateDir,
       sessionKey: "global",
     });
 
-    expect(result).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
     expect(await readManagedImageRecord(fixture.attachmentId, stateDir)).not.toBeNull();
     await fs.access(fixture.originalPath);
     expect(loadSessionEntryMock).not.toHaveBeenCalled();

@@ -196,29 +196,25 @@ describe("managed attachment SQLite visibility", () => {
         { include: ["worker.request"] },
       ),
     );
-    const cleanup = async (deletedFileCount: number, expectedReads: number) => {
+    const cleanup = async (expectedReads: number) => {
       reads.length = 0;
-      expect(await cleanupManagedOutgoingMediaRecords({ stateDir, nowMs })).toEqual({
-        deletedRecordCount: 0,
-        deletedFileCount,
-        retainedCount: 1,
-      });
+      await cleanupManagedOutgoingMediaRecords({ stateDir, nowMs });
       await waitForDiagnosticEventsDrained();
       expect(reads).toHaveLength(expectedReads);
     };
 
-    await cleanup(0, 1);
+    await cleanup(1);
     await fsAsync.mkdir(originals, { recursive: true });
-    await cleanup(0, 1);
+    await cleanup(1);
     await fsAsync.writeFile(kept, "kept");
     await fsAsync.utimes(kept, new Date(nowMs), new Date(nowMs));
-    await cleanup(0, 1);
+    await cleanup(1);
 
     const orphan = path.join(originals, "orphan.png");
     await fsAsync.writeFile(orphan, "orphan");
     await fsAsync.utimes(orphan, new Date(0), new Date(0));
     await fsAsync.utimes(kept, new Date(0), new Date(0));
-    await cleanup(1, 2);
+    await cleanup(2);
     expect(await fsAsync.readFile(kept, "utf8")).toBe("kept");
     await expect(fsAsync.stat(orphan)).rejects.toMatchObject({ code: "ENOENT" });
   });
@@ -249,9 +245,8 @@ describe("managed attachment SQLite visibility", () => {
         });
       }
       expect(await f.download()).toBeNull();
-      expect(
-        await cleanupManagedOutgoingMediaRecords({ stateDir, sessionKey: f.scope.sessionKey }),
-      ).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
+      await cleanupManagedOutgoingMediaRecords({ stateDir, sessionKey: f.scope.sessionKey });
+      expect(await readManagedImageRecord(f.attachmentId, stateDir)).not.toBeNull();
       expect(fs.existsSync(f.originalPath)).toBe(true);
     },
   );
@@ -279,11 +274,7 @@ describe("managed attachment SQLite visibility", () => {
       );
       await seed(orphan, [message("different", null, "no attachment")]);
 
-      expect(await cleanupManagedOutgoingMediaRecords({ stateDir })).toEqual({
-        deletedRecordCount: 1,
-        deletedFileCount: 1,
-        retainedCount: 2,
-      });
+      await cleanupManagedOutgoingMediaRecords({ stateDir });
       expect(await readManagedImageRecord(oversized.attachmentId, stateDir)).not.toBeNull();
       expect(fs.existsSync(oversized.originalPath)).toBe(true);
       expect(await readManagedImageRecord(orphan.attachmentId, stateDir)).toBeNull();
@@ -447,9 +438,7 @@ describe("managed attachment SQLite visibility", () => {
     expect(await f.download()).toBeNull();
     const hostSql = observeHostDataSql();
     try {
-      expect(
-        await cleanupManagedOutgoingMediaRecords({ stateDir, sessionKey: f.scope.sessionKey }),
-      ).toEqual({ deletedRecordCount: 1, deletedFileCount: 1, retainedCount: 0 });
+      await cleanupManagedOutgoingMediaRecords({ stateDir, sessionKey: f.scope.sessionKey });
       expect(hostSql.queries.filter(isSessionEntryDataSql)).toEqual([]);
     } finally {
       hostSql.restore();
@@ -471,9 +460,11 @@ describe("managed attachment SQLite visibility", () => {
       )`)
       .run("\u0000trailing", corrupt.scope.sessionId, corrupt.scope.sessionId);
     expect(await f.download()).not.toBeNull();
-    expect(
-      await cleanupManagedOutgoingMediaRecords({ stateDir, sessionKey: f.scope.sessionKey }),
-    ).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 2 });
+    await cleanupManagedOutgoingMediaRecords({ stateDir, sessionKey: f.scope.sessionKey });
+    expect(await readManagedImageRecord(f.attachmentId, stateDir)).not.toBeNull();
+    expect(await readManagedImageRecord(corrupt.attachmentId, stateDir)).not.toBeNull();
+    expect(fs.existsSync(f.originalPath)).toBe(true);
+    expect(fs.existsSync(corrupt.originalPath)).toBe(true);
   });
 });
 

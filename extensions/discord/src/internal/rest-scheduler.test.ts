@@ -20,7 +20,6 @@ describe("RestScheduler", () => {
     );
 
     expect(executor).toHaveBeenCalledTimes(4);
-    expect(scheduler.queueSize).toBe(1000);
     expect(() =>
       scheduler.enqueue({ method: "GET", path: "/guilds/overflow/roles", priority: "background" }),
     ).toThrow("Discord request queue is full");
@@ -28,7 +27,12 @@ describe("RestScheduler", () => {
     release.resolve();
     await Promise.all(requests);
     expect(executor).toHaveBeenCalledTimes(1000);
-    expect(scheduler.queueSize).toBe(0);
+    await scheduler.enqueue({
+      method: "GET",
+      path: "/guilds/after-drain/roles",
+      priority: "background",
+    });
+    expect(executor).toHaveBeenCalledTimes(1001);
   });
 
   it("limits a rate-limited request to three retries", async () => {
@@ -48,7 +52,6 @@ describe("RestScheduler", () => {
     ).rejects.toBeInstanceOf(RateLimitError);
 
     expect(executor).toHaveBeenCalledTimes(4);
-    expect(scheduler.queueSize).toBe(0);
   });
 
   it.each([

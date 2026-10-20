@@ -47,6 +47,7 @@ const SESSION_READ_METHODS: ReadonlySet<string> = new Set([
   "session.members.listEvidence",
   "themes.get",
   "themes.list",
+  "users.mentionable",
   "users.prefs.get",
   "users.prefs.set",
   "users.self",

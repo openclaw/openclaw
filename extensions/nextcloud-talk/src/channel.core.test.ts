@@ -1,8 +1,9 @@
-// Nextcloud Talk tests cover channel.core plugin behavior.
 import { describe, expect, it } from "vitest";
 import { nextcloudTalkPlugin } from "./channel.js";
 import { NextcloudTalkChannelConfigSchema } from "./config-schema.js";
 import type { CoreConfig } from "./types.js";
+
+const secretRef = (id: string) => ({ source: "env", provider: "default", id });
 
 function safeParseNextcloudTalkConfig(value: unknown) {
   const runtime = NextcloudTalkChannelConfigSchema.runtime;
@@ -14,61 +15,36 @@ function safeParseNextcloudTalkConfig(value: unknown) {
 
 describe("nextcloud talk channel core", () => {
   it.each([
-    {
-      label: "omitted media allowlist",
-      input: {},
-      expected: {},
-      expectOmitted: true,
-    },
-    {
-      label: "explicit sender",
-      input: { mediaAllowFrom: ["users/alice"] },
-      expected: { mediaAllowFrom: ["users/alice"] },
-    },
-    {
-      label: "wildcard",
-      input: { mediaAllowFrom: ["*"] },
-      expected: { mediaAllowFrom: ["*"] },
-    },
-    {
-      label: "named account with size override",
-      input: {
+    ["omitted media allowlist", {}, true],
+    ["explicit sender", { mediaAllowFrom: ["users/alice"] }, false],
+    ["wildcard", { mediaAllowFrom: ["*"] }, false],
+    [
+      "named account with size override",
+      {
         mediaAllowFrom: ["users/alice"],
         mediaMaxMb: 20,
-        accounts: {
-          work: { mediaAllowFrom: ["*"], mediaMaxMb: 5 },
-        },
+        accounts: { work: { mediaAllowFrom: ["*"], mediaMaxMb: 5 } },
       },
-      expected: {
-        mediaAllowFrom: ["users/alice"],
-        mediaMaxMb: 20,
-        accounts: {
-          work: { mediaAllowFrom: ["*"], mediaMaxMb: 5 },
-        },
-      },
-    },
-  ])(
-    "accepts representative inbound media config: $label",
-    ({ input, expected, expectOmitted }) => {
-      const result = safeParseNextcloudTalkConfig(input);
-      expect(result.success).toBe(true);
-      if (!result.success) {
-        throw new Error(JSON.stringify(result.issues));
-      }
-      expect(result.data).toMatchObject(expected);
-      if (expectOmitted) {
-        expect(result.data).not.toHaveProperty("mediaAllowFrom");
-        expect(result.data).not.toHaveProperty("mediaMaxMb");
-      }
-    },
-  );
+      false,
+    ],
+  ] as const)("accepts representative inbound media config: %s", (_label, input, expectOmitted) => {
+    const result = safeParseNextcloudTalkConfig(input);
+    if (!result.success) {
+      throw new Error(JSON.stringify(result.issues));
+    }
+    expect(result.data).toMatchObject(input);
+    if (expectOmitted) {
+      expect(result.data).not.toHaveProperty("mediaAllowFrom");
+      expect(result.data).not.toHaveProperty("mediaMaxMb");
+    }
+  });
 
   it("accepts SecretRef botSecret and apiPassword at top-level", () => {
     const result = safeParseNextcloudTalkConfig({
       baseUrl: "https://cloud.example.com",
-      botSecret: { source: "env", provider: "default", id: "NEXTCLOUD_TALK_BOT_SECRET" },
+      botSecret: secretRef("NEXTCLOUD_TALK_BOT_SECRET"),
       apiUser: "bot",
-      apiPassword: { source: "env", provider: "default", id: "NEXTCLOUD_TALK_API_PASSWORD" },
+      apiPassword: secretRef("NEXTCLOUD_TALK_API_PASSWORD"),
     });
     expect(result.success).toBe(true);
   });
@@ -78,17 +54,9 @@ describe("nextcloud talk channel core", () => {
       accounts: {
         main: {
           baseUrl: "https://cloud.example.com",
-          botSecret: {
-            source: "env",
-            provider: "default",
-            id: "NEXTCLOUD_TALK_MAIN_BOT_SECRET",
-          },
+          botSecret: secretRef("NEXTCLOUD_TALK_MAIN_BOT_SECRET"),
           apiUser: "bot",
-          apiPassword: {
-            source: "env",
-            provider: "default",
-            id: "NEXTCLOUD_TALK_MAIN_API_PASSWORD",
-          },
+          apiPassword: secretRef("NEXTCLOUD_TALK_MAIN_API_PASSWORD"),
         },
       },
     });

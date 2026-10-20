@@ -325,6 +325,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
         assertInvocationCurrent: assertActive,
         agentId: params.setup.sessionAgentId,
         ...buildConversationContext(),
+        forceRestartSafeTools: attempt.forceRestartSafeTools,
         exec: {
           ...attempt.execOverrides,
           ...(sessionPermissionPolicy

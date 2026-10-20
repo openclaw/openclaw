@@ -149,6 +149,70 @@ describe("requester settle dispatch deadline", () => {
 
   beforeEach(() => setRuntimeConfigSnapshot({}));
 
+  it("retains an expired completion until unrelated interrupted requester work recovers", async () => {
+    const context = createContext();
+    const child = settledChild();
+    child.completionTarget = "parent";
+    child.completionRequesterSessionId = "requester-session";
+    child.delivery = { status: "suspended", suspendedAt: 4_000, suspendedReason: "expiry" };
+    child.requesterSettleWake = { status: "pending", attemptCount: 0, batchRunIds: [child.runId] };
+    const retained = structuredClone(child);
+    const requester = useDirectDelivery(
+      {},
+      {
+        sessionId: "requester-session",
+        updatedAt: 1,
+        status: "interrupted",
+        abortedLastRun: true,
+        mainRestartRecovery: { cycleId: "interrupted-cycle", revision: 1, chargedAttempts: 0 },
+        restartRecoveryDeliveryRunId: "interrupted-requester-turn",
+        restartRecoveryDeliverySourceRunId: "unrelated-completion-wave",
+      },
+    );
+    loadRequester.mockResolvedValue(requester);
+    registryRead.listSubagentRunsForRequester.mockReturnValue([child]);
+    subagentRuns.set(child.runId, child);
+    onTestFinished(() => {
+      subagentRuns.delete(child.runId);
+    });
+    const completeBatch = vi.fn(() => {
+      child.requesterSettleWake = undefined;
+    });
+    const params = wakeParams(child, completeBatch);
+    const run = () => withGateway(context, () => maybeWakeRequesterAfterAllChildrenSettled(params));
+    startTurn.mockImplementation(async ({ controllerInput, preflight, io }) => {
+      acceptTurn({ controllerInput, preflight, io });
+      await withSessionTurn({ ...REQUESTER_TURN, controllerInput }, async () => {
+        io.emitExecutionStarted?.();
+      });
+      io.emitFinal([
+        true,
+        {
+          status: "ok",
+          inputProcessingCompleted: true,
+          result: { payloads: [{ text: "Completion received." }] },
+        },
+        undefined,
+      ]);
+    });
+
+    expect(await reserveRestoredSubagentControllerSources([child])).toEqual([]);
+    await expect(run()).resolves.toBe(false);
+    expect(startTurn).not.toHaveBeenCalled();
+    expect(completeBatch).not.toHaveBeenCalled();
+    expect(child).toEqual(retained);
+    expect(
+      getExistingSessionControllerMailbox(REQUESTER_KEY, REQUESTER_TARGET)?.entries ?? [],
+    ).toEqual([]);
+
+    requester.entry = { sessionId: "requester-session", updatedAt: 2, status: "done" };
+    await expect(run()).resolves.toBe(true);
+    await expect(run()).resolves.toBe(false);
+    expect(startTurn).toHaveBeenCalledOnce();
+    expect(completeBatch).toHaveBeenCalledOnce();
+    expect(child.completion?.resultText).toBe("child result");
+  });
+
   it.each(["requester wake", "ordinary delivery"] as const)(
     "keeps foreground admission available until restored %s is due",
     async (kind) => {
@@ -216,6 +280,7 @@ describe("requester settle dispatch deadline", () => {
       sessionId: "requester-session",
       updatedAt: 1,
       lifecycleRunId: settled ? "recovered-retry" : "recovering-wake",
+      ...(scenario === "retry settled claim" ? { abortedLastRun: true } : {}),
       restartRecoveryTerminalRunIds: settled ? [historicalRunId, retryRunId] : [historicalRunId],
       restartRecoveryTerminalDeliveryEvidence: [
         recoveryEvidence(historicalRunId, "historical-attempt", obsoleteOriginalPending),
@@ -489,11 +554,14 @@ describe("requester settle dispatch deadline", () => {
       vi.setSystemTime(10_000);
       const context = createContext();
       const child = settledChild();
+      child.completionRequesterSessionId = "requester-session";
       registryRead.listSubagentRunsForRequester.mockReturnValue([child]);
       const cfg = {
         agents: { defaults: { timeoutSeconds: 1, subagents: { announceTimeoutMs: 20 } } },
       };
       setRuntimeConfigSnapshot(cfg);
+      const preparationStarted = createDeferredCore();
+      const finishPreparation = createDeferredCore();
       const executionStarted = createDeferredCore();
       const workDone = createDeferredCore();
       const stop = new AbortController();
@@ -506,11 +574,14 @@ describe("requester settle dispatch deadline", () => {
         const request = preflight.request as { idempotencyKey: string; sessionKey: string };
         const registration = registerRequesterTurn({ controllerInput, preflight, io }, timeoutMs);
         acceptedSignal = registration.controller.signal;
-        acceptTurn({ controllerInput, preflight, io });
         try {
           if (!registration.registered) {
             throw new Error("expected requester RPC source");
           }
+          io.emitStartOwner?.(request.idempotencyKey, registration.entry);
+          preparationStarted.resolve();
+          await finishPreparation.promise;
+          acceptTurn({ controllerInput, preflight, io });
           await withSessionTurn(
             {
               ...REQUESTER_TURN,
@@ -568,8 +639,19 @@ describe("requester settle dispatch deadline", () => {
           signal: stop.signal,
         }),
       );
+      let settled = false;
+      void wake.then(() => {
+        settled = true;
+      });
       try {
-        await executionStarted.promise;
+        await preparationStarted.promise;
+        await vi.advanceTimersByTimeAsync(21);
+        expect(settled).toBe(false);
+        expect(acceptedSignal?.aborted).toBe(false);
+        finishPreparation.resolve();
+        expect(
+          await Promise.race([executionStarted.promise.then(() => true), wake.then(() => false)]),
+        ).toBe(true);
         await vi.advanceTimersByTimeAsync(21);
         expect(acceptedSignal?.aborted).toBe(false);
         expect(finalReceipts).toEqual([]);
@@ -619,6 +701,7 @@ describe("requester settle dispatch deadline", () => {
         expect(child.execution.outcome).toEqual({ status: "ok" });
         expect(child.completion?.resultText).toBe("child result");
       } finally {
+        finishPreparation.resolve();
         workDone.resolve();
         stop.abort();
         await wake;

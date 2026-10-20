@@ -1,11 +1,12 @@
+import { createMemo as createActivityMemo } from "@solidjs/signals";
 import { dynamic } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import { sessionActivityTimestamp } from "../../../../src/shared/session-activity-timestamp.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { AgentRowChip } from "../../components/agent-row-chip.tsx";
+import { IpLocation } from "../../components/ip-location.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsStatus, SettingsSegmented } from "../../components/solid/settings-ui.tsx";
-import "../../components/ip-location.tsx";
 import "../../components/viewer-facepile.ts";
 import { formatRelativeTimestamp, formatTimeAgo } from "../../lib/format.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
@@ -40,7 +41,6 @@ import { ActivitySessionGit } from "./session-activity-git.tsx";
 import { ActivitySessionMedia } from "./session-activity-media.tsx";
 import { PeopleControl } from "./session-activity-people.tsx";
 import { renderSessionActivityPulse as SessionActivityPulse } from "./session-activity-pulse.tsx";
-import { renderSessionActivitySummary as SessionActivitySummary } from "./session-activity-summary.tsx";
 import {
   ACTIVITY_TIME_FILTERS,
   TIME_LABELS,
@@ -103,7 +103,7 @@ function SessionLinkView(props: {
     agentsList: context.agents.state.agentsList,
     hello: context.gateway.snapshot.hello,
   }));
-  const face = createMemo(() => resolveSessionPreferredFace(props.row));
+  const face = () => resolveSessionPreferredFace(props.row);
   const addressable = createMemo(() =>
     isSessionKeyAddressable(props.row.key, isUiGlobalScopeConfigured(sessionHost())),
   );
@@ -131,10 +131,10 @@ function SessionLinkView(props: {
   const owner = createMemo(() =>
     sessionActivityOwner(props.row, agents.read().agentsList, agentIdentity.read()),
   );
-  const ownerName = createMemo(() => {
+  const ownerName = () => {
     getLocale();
     return presenceViewerLabel(owner());
-  });
+  };
   const activityAt = () => sessionActivityTimestamp(props.row);
   const relativeTime = createMemo(() => {
     void props.presentationRevision;
@@ -147,14 +147,33 @@ function SessionLinkView(props: {
       ? runId
       : undefined;
   });
-  const headline = createMemo(() =>
-    activeObserverRunId() ? props.row.observerDigest?.headline.trim() : "",
-  );
-  const scope = createMemo(() =>
-    props.row.channel ? t("activityFeed.channelLabel", { value: props.row.channel }) : null,
-  );
+  const headline = () => (activeObserverRunId() ? props.row.observerDigest?.headline.trim() : "");
+  const scope = () =>
+    props.row.channel ? t("activityFeed.channelLabel", { value: props.row.channel }) : null;
   const showAgent = () => props.row.kind !== "global" || Boolean(props.row.agentId);
   const source = () => (props.row.createdVia === "cron" ? t("activityFeed.automation") : null);
+  const summary = () => props.row.activitySummary;
+  const state = () =>
+    summary()?.state === "current" && !summary()?.text
+      ? "missing"
+      : (summary()?.state ?? "missing");
+  const updating = () => state() === "updating";
+  const feedback = () =>
+    state() === "stale"
+      ? t(summary()?.text ? "activityFeed.recapStale" : "activityFeed.recapMissing")
+      : state() === "unavailable"
+        ? t(summary()?.text ? "activityFeed.recapRefreshFailed" : "activityFeed.recapUnavailable")
+        : state() === "missing"
+          ? t("activityFeed.recapMissing")
+          : "";
+  const title = createActivityMemo(() => {
+    const updatedAt = summary()?.updatedAt;
+    return updatedAt
+      ? t("activityFeed.recapUpdated", {
+          time: formatRelativeTimestamp(updatedAt, { fallback: "" }),
+        })
+      : undefined;
+  });
   return (
     <div
       class={[
@@ -219,7 +238,44 @@ function SessionLinkView(props: {
           {activityAt() > 0 ? <span>{relativeTime()}</span> : undefined}
         </span>
       </SessionLink>
-      <SessionActivitySummary row={props.row} onRetry={props.onSummaryRetry} />
+      <div
+        class="activity-feed__recap"
+        data-activity-recap={props.row.key}
+        data-state={state()}
+        role="group"
+        aria-busy={updating() ? "true" : "false"}
+        aria-label={t("activityFeed.recap")}
+        title={title()}
+      >
+        {summary()?.text ? (
+          <p class="activity-feed__recap-text">{summary()?.text}</p>
+        ) : updating() ? (
+          <div class="activity-feed__recap-skeleton" aria-hidden="true">
+            <div class="skeleton skeleton-line skeleton-line--long" />
+            <div class="skeleton skeleton-line skeleton-line--medium" />
+          </div>
+        ) : undefined}
+        {updating() ? (
+          <span class="sr-only" role="status">
+            {t("activityFeed.recapUpdating")}
+          </span>
+        ) : undefined}
+        {feedback() ? (
+          <div class="activity-feed__note">
+            <span>{feedback()}</span>
+            {props.onSummaryRetry &&
+            summary()?.canEnsure === true &&
+            (state() === "unavailable" || state() === "stale") ? (
+              <button
+                class="activity-feed__note-action"
+                onClick={() => props.onSummaryRetry?.(props.row)}
+              >
+                {t("activityFeed.recapRetry")}
+              </button>
+            ) : undefined}
+          </div>
+        ) : undefined}
+      </div>
       <ActivitySessionGit
         context={context}
         sessionKey={scopedSessionArtifactKey(props.row.key, agentId())}
@@ -400,9 +456,7 @@ function IdentityHeader(props: {
                       .filter(Boolean)
                       .join(" · ")}
                   </span>
-                  {group().entry.ip ? (
-                    <openclaw-ip-location prop:ip={group().entry.ip} />
-                  ) : undefined}
+                  {group().entry.ip ? <IpLocation ip={group().entry.ip} /> : undefined}
                   {group().entry.lastInputSeconds !== undefined ? (
                     <span>
                       {t("activityFeed.lastInput", {

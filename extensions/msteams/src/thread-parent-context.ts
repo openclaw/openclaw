@@ -1,4 +1,5 @@
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { fetchChannelMessage, stripHtmlFromTeamsMessage } from "./graph-thread.js";
 import type { GraphThreadMessage } from "./graph-thread.js";
@@ -24,10 +25,6 @@ function touchLru<K, V>(map: Map<K, V>, key: K, value: V, max: number): void {
   pruneMapToMaxSize(map, max);
 }
 
-function buildParentCacheKey(groupId: string, channelId: string, parentId: string): string {
-  return `${groupId}\u0000${channelId}\u0000${parentId}`;
-}
-
 export async function fetchParentMessageCached(
   token: string,
   groupId: string,
@@ -35,7 +32,7 @@ export async function fetchParentMessageCached(
   parentId: string,
   deadline?: MSTeamsRequestDeadline,
 ): Promise<GraphThreadMessage | undefined> {
-  const key = buildParentCacheKey(groupId, channelId, parentId);
+  const key = JSON.stringify([sha256Hex(token), groupId, channelId, parentId]);
   const cached = parentCache.get(key);
   if (cached && cached.expiresAt > Date.now()) {
     parentCache.delete(key);

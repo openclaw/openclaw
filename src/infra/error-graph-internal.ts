@@ -13,6 +13,19 @@ export function throwIfSettledRejected(
   throwCollectedErrors(failures, message);
 }
 
+/** Keep an aggregate envelope even when only one joined operation failed. */
+export function throwSettledAggregate(
+  results: readonly PromiseSettledResult<unknown>[],
+  message: string,
+): void {
+  const failures = results.flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : [],
+  );
+  if (failures.length) {
+    throw new AggregateError(failures, message);
+  }
+}
+
 /** Preserve a sole failure; aggregate independent failures in their original order. */
 export function throwCollectedErrors(errors: readonly unknown[], message: string): void {
   if (errors.length === 1) {

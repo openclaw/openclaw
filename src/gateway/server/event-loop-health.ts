@@ -96,14 +96,7 @@ function cpuUsageDelta(
 function readHostCpuTimes(): CpuInfo["times"][] | undefined {
   try {
     const times = cpus().map((cpu) => cpu.times);
-    return times.length &&
-      times.every((cpu) =>
-        [cpu.user, cpu.nice, cpu.sys, cpu.idle, cpu.irq].every(
-          (value) => Number.isFinite(value) && value >= 0,
-        ),
-      )
-      ? times
-      : undefined;
+    return times.length ? times : undefined;
   } catch {
     return undefined;
   }
@@ -253,13 +246,7 @@ export function createGatewayEventLoopHealthMonitor(
     cancelWorkerCpuSample = () => {
       active = false;
     };
-    const readings = workers.map(async (worker) => {
-      try {
-        return await worker.cpuUsage();
-      } catch {
-        return undefined;
-      }
-    });
+    const readings = workers.map((worker) => worker.cpuUsage());
     void Promise.all(readings).then((usage) => {
       if (!active || nowMs() - at > WORKER_CPU_SAMPLE_BUDGET_MS) {
         return;

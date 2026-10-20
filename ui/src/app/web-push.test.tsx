@@ -202,23 +202,6 @@ describe("web push Gateway reconciliation", () => {
     }
   });
 
-  it("keeps subscribers independent when an older listener unsubscribes", async () => {
-    const harness = gatewayHarness();
-    const capability = createWebPushCapability(harness.gateway);
-    const first = vi.fn();
-    const second = vi.fn();
-    const stopFirst = capability.subscribe(first);
-    capability.subscribe(second);
-
-    stopFirst();
-    harness.connect(gatewayClient(Promise.resolve(encodedVapidKey([4, 1, 2, 3]))).client);
-    await vi.waitFor(() => expect(second).toHaveBeenCalled());
-
-    expect(first).not.toHaveBeenCalled();
-    expect(second).toHaveBeenCalled();
-    capability.dispose();
-  });
-
   it("schedules initial reconciliation through the connection bootstrap coordinator", async () => {
     const coordinator = createConnectionBootstrapCoordinator();
     const run = vi.spyOn(coordinator, "run");

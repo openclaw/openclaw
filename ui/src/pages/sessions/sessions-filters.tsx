@@ -84,16 +84,14 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
       includeUnknown: props.includeUnknown,
       [key]: value,
     });
-  const active = createMemo(
-    () =>
-      props.activeMinutes.trim() !== "" ||
-      props.limit.trim() !== String(SESSIONS_PAGE_DEFAULT_LIMIT) ||
-      !props.includeGlobal ||
-      props.includeUnknown ||
-      props.searchQuery.trim() !== "" ||
-      props.statusFilter !== "active" ||
-      props.groupBy !== "none",
-  );
+  const active = () =>
+    props.activeMinutes.trim() !== "" ||
+    props.limit.trim() !== String(SESSIONS_PAGE_DEFAULT_LIMIT) ||
+    !props.includeGlobal ||
+    props.includeUnknown ||
+    props.searchQuery.trim() !== "" ||
+    props.statusFilter !== "active" ||
+    props.groupBy !== "none";
   return (
     <>
       <button

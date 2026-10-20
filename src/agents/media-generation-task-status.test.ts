@@ -3,8 +3,6 @@ import type {
   listMediaGenerationOperations,
   MediaGenerationOperation,
 } from "./media-generation-activity.js";
-import { recordRecentMediaGenerationTaskStartForSession } from "./media-generation-task-status-shared.js";
-import { resetRecentMediaGenerationDuplicateGuardsForTests } from "./media-generation-task-status-shared.test-support.js";
 import {
   buildMediaTaskRuntimeContext,
   buildImageGenerationTaskStatusDetails,
@@ -33,31 +31,12 @@ function makeTask(overrides: Partial<MediaGenerationOperation>): MediaGeneration
     requesterSessionKey: "agent:main",
     task: "running task",
     status: "running",
-    createdAt: Date.now(),
     ...overrides,
   };
 }
 
-type RecentStart = Parameters<typeof recordRecentMediaGenerationTaskStartForSession>[0];
-
-function recordRecentImageStart(name: string, params: Partial<RecentStart> = {}) {
-  recordRecentMediaGenerationTaskStartForSession({
-    sessionKey: "agent:main",
-    taskKind: IMAGE_GENERATION_TASK_KIND,
-    sourcePrefix: "image_generate",
-    providerId: "xai",
-    progressSummary: "Generating image",
-    taskId: `task-${name}`,
-    runId: `run-${name}`,
-    taskLabel: `${name} prompt`,
-    requestKey: `image-request:${name}`,
-    ...params,
-  });
-}
-
 beforeEach(() => {
   mediaActivityMocks.listOperations.mockReset().mockReturnValue([]);
-  resetRecentMediaGenerationDuplicateGuardsForTests();
 });
 
 afterEach(() => vi.restoreAllMocks());
@@ -67,14 +46,14 @@ function expectActiveTask(task: MediaGenerationOperation | undefined) {
   return task!;
 }
 
-function completedImage(name: string, createdAt: number, endedAt: number) {
+function completedImage(name: string, endedAt: number) {
   return makeTask({
     taskId: `task-${name}`,
     runId: `run-${name}`,
     sourceId: "image_generate:xai",
     task: `${name} prompt`,
+    requestKey: `image-request:${name}`,
     status: "succeeded",
-    createdAt,
     endedAt,
     progressSummary: `Generated ${name} image`,
   });
@@ -136,17 +115,9 @@ it.each([
 describe("image generation task status", () => {
   it("preserves earlier recent request keys when another image request starts", async () => {
     const now = Date.now();
-    recordRecentImageStart("first", {
-      progressSummary: "Generating first image",
-      nowMs: now - 30_000,
-    });
-    recordRecentImageStart("second", {
-      progressSummary: "Generating second image",
-      nowMs: now - 20_000,
-    });
     mediaActivityMocks.listOperations.mockReturnValue([
-      completedImage("first", now - 30_000, now - 15_000),
-      completedImage("second", now - 20_000, now - 10_000),
+      completedImage("first", now - 15_000),
+      completedImage("second", now - 10_000),
     ]);
 
     expect(await findImageRequest("image-request:other")).toBeUndefined();
@@ -163,33 +134,10 @@ describe("image generation task status", () => {
         task: "new image",
       }),
     ]);
-    recordRecentImageStart("newly-started", { taskLabel: "new image", requestKey: undefined });
     expect(await findImagePrompt("new image")).toMatchObject({
       taskId: "task-newly-started",
       status: "running",
     });
-  });
-
-  it("does not use a completion older than two minutes as a duplicate guard", async () => {
-    const now = Date.now();
-    vi.spyOn(Date, "now").mockReturnValue(now);
-    const completed = makeTask({
-      taskId: "task-completed",
-      runId: "run-completed",
-      task: "completed prompt",
-      status: "succeeded",
-      createdAt: now - 3 * 60_000,
-      endedAt: now - 120_001,
-    });
-    mediaActivityMocks.listOperations.mockReturnValue([completed]);
-    recordRecentImageStart("completed", { nowMs: now - 3 * 60_000 });
-
-    expect(
-      await findDuplicateGuardImageGenerationTaskForSession("agent:main", {
-        prompt: "completed prompt",
-        requestKey: "image-request:completed",
-      }),
-    ).toEqual(undefined);
   });
 
   it("does not block a distinct prompt from a retained operation's recent start", async () => {
@@ -200,9 +148,6 @@ describe("image generation task status", () => {
         task: "first prompt",
       }),
     ]);
-    recordRecentImageStart("first", {
-      progressSummary: "Generating first image",
-    });
 
     expect(await findImagePrompt("first prompt")).toMatchObject({
       taskId: "task-first",
@@ -211,17 +156,13 @@ describe("image generation task status", () => {
     expect(await findImagePrompt("second prompt")).toBeUndefined();
   });
 
-  it("uses a recent persisted completion instead of pruning a stale recent-start cache", async () => {
+  it("uses a retained completion", async () => {
     const now = Date.now();
-    recordRecentImageStart("completed", {
-      taskLabel: "recent prompt",
-      requestKey: "image-request:stale",
-      nowMs: now - 3 * 60_000,
-    });
     mediaActivityMocks.listOperations.mockReturnValue([
       {
-        ...completedImage("completed", now - 3 * 60_000, now - 1_000),
+        ...completedImage("completed", now - 1_000),
         task: "recent prompt",
+        requestKey: "image-request:stale",
         progressSummary: "Generated 1 image",
       },
     ]);
@@ -232,6 +173,19 @@ describe("image generation task status", () => {
     expect(buildImageGenerationTaskStatusText(task!, { duplicateGuard: true })).toContain(
       "Image generation task task-completed recently succeeded with xai.",
     );
+  });
+  it("does not reuse an older success after a newer matching request failed", async () => {
+    const now = Date.now();
+    mediaActivityMocks.listOperations.mockReturnValue([
+      completedImage("same", now - 20_000),
+      {
+        ...completedImage("same", now - 1_000),
+        taskId: "task-retry",
+        runId: "run-retry",
+        status: "failed",
+      },
+    ]);
+    expect(await findImageRequest("image-request:same")).toBeUndefined();
   });
 });
 

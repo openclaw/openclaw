@@ -36,7 +36,7 @@ const definitions = {
 } as const satisfies Record<string, BrowserToolActionMetadata>;
 
 export type BrowserToolAction = keyof typeof definitions;
-export type BrowserLifecycleAction = {
+type BrowserLifecycleAction = {
   [K in BrowserToolAction]: (typeof definitions)[K] extends { lifecycle: true } ? K : never;
 }[BrowserToolAction];
 

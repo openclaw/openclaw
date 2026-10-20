@@ -1,6 +1,5 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { materializeErrorStack } from "../infra/error-graph-internal.js";
 import { AsyncWorkScope, runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -24,18 +23,6 @@ import {
 import type { PluginInstanceResource } from "./plugin-instance.types.js";
 
 export type { PluginCache } from "./plugin-cache.types.js";
-
-const PLUGIN_CACHE_FACT_INVALIDATED = "PLUGIN_CACHE_FACT_INVALIDATED";
-
-/** Read-scope invalidation cancels its preparation. */
-export class PluginCacheFactInvalidatedError extends Error {
-  readonly code = PLUGIN_CACHE_FACT_INVALIDATED;
-}
-
-export function isPluginCacheFactInvalidatedError(error: unknown): boolean {
-  // Shared fact promises can originate in another source/require module graph.
-  return extractErrorCode(error) === PLUGIN_CACHE_FACT_INVALIDATED;
-}
 
 const state = resolveGlobalSingleton<{
   current?: PluginCache;
@@ -151,7 +138,6 @@ function createPluginMetadataCache(): PluginCache["metadata"] {
       agentWorkspaceFingerprint: undefined,
       envFingerprint: undefined,
       defaultDiscoveryCompatible: false,
-      compatiblePolicyHashes: undefined,
       compatibleConfigFingerprints: undefined,
       revision: Symbol("plugin-metadata-snapshot"),
       configIdentities: new WeakSet(),

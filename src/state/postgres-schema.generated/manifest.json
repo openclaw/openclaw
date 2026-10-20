@@ -56,6 +56,20 @@
       "file": "fragment-worker_environment_session_attachments.postgres.sql"
     },
     {
+      "id": "sandbox_persistent_execs",
+      "tables": [
+        "sandbox_persistent_execs"
+      ],
+      "indexes": [
+        "idx_sandbox_persistent_execs_container",
+        "idx_sandbox_persistent_execs_container_name",
+        "idx_sandbox_persistent_execs_source"
+      ],
+      "dependencies": [],
+      "activation": "first-use",
+      "file": "fragment-sandbox_persistent_execs.postgres.sql"
+    },
+    {
       "id": "user_background_images",
       "tables": [
         "user_background_images"

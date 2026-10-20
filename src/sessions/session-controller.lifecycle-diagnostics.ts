@@ -36,6 +36,7 @@ export type SessionLifecycleDiagnosticLabel =
   | "placement-failed-reclaim"
   | "placement-reclaim"
   | "plugin-create"
+  | "read-marker"
   | "recover"
   | "recovery-drain"
   | "recovery-mark"

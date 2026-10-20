@@ -159,7 +159,6 @@ export function publishRuntimeConfigWrite(params: {
           revision: publishedMetadata?.revision ?? 0,
           fingerprint: hashRuntimeConfigValue(runtimeConfig),
           sourceFingerprint: hashRuntimeConfigValue(params.sourceConfig),
-          updatedAtMs: Date.now(),
         };
   notifyRuntimeConfigWriteListeners(
     copyRuntimeConfigWriteApplication(params.writeOptions, {

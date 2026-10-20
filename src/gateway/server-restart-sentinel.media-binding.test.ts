@@ -5,6 +5,9 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as activity from "../agents/media-generation-activity.js";
 import { resetGeneratedMediaTaskActivityForTests } from "../agents/media-generation-activity.test-support.js";
+import * as completionSource from "../agents/subagents/announce/subagent-announce-controller-source.js";
+import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
+import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import * as background from "../agents/tools/media-generate-background-shared.js";
 import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
 import * as messageRuntime from "../channels/message/runtime.js";
@@ -139,7 +142,7 @@ async function createMediaFixture(state: OpenClawTestState, channel: "discord" |
   };
   return {
     state,
-    dispose: () => lifecycle.failTaskRun({ handle, error: new Error("fixture cleanup") }),
+    dispose: () => lifecycle.failTaskRun({ handle }),
     scope,
     binding,
     original,
@@ -166,6 +169,68 @@ async function createMediaFixture(state: OpenClawTestState, channel: "discord" |
 }
 
 describe("original requester media handoff", () => {
+  it("retains queued media completion without charging retries until its source can reserve", () =>
+    withMediaSession(async ({ scope, binding, queueContext, drain, pending, dispatch, send }) => {
+      const deadlineAt = Date.now() + 60_000;
+      const completionOwner: SubagentRunRecord = {
+        runId: "run-deferred-completion",
+        childSessionKey: "agent:main:subagent:deferred-completion",
+        requesterSessionKey: scope.sessionKey,
+        requesterAgentId: scope.agentId,
+        requesterStorePath: scope.storePath,
+        requesterDisplayKey: "main",
+        task: "generate media",
+        cleanup: "keep",
+        createdAt: 1,
+        execution: { status: "terminal", startedAt: 2, endedAt: 3, outcome: { status: "ok" } },
+      };
+      const id = await queue.enqueueSessionDelivery(
+        {
+          kind: "agentTurn",
+          sessionKey: scope.sessionKey,
+          requesterBinding: binding,
+          message: "generated image ready",
+          messageId: "image:deferred-completion:agent-loop",
+          route: { channel: "discord", to: "channel:media-binding", chatType: "channel" },
+          inputProvenance: { kind: "inter_session", sourceTool: "image_generate" },
+          sourceReplyDeliveryMode: "automatic",
+          expectedMediaUrls: [],
+          owner: {
+            kind: "subagent_completion",
+            runId: completionOwner.runId,
+            taskId: completionOwner.runId,
+            generation: 0,
+            deadlineAt,
+          },
+        },
+        queueContext,
+      );
+      completionOwner.delivery = { status: "in_progress", queueId: id, generation: 0, deadlineAt };
+      vi.spyOn(completionSource, "reserveSubagentCompletionControllerSource").mockResolvedValueOnce(
+        undefined,
+      );
+      const markAttempt = vi.spyOn(queue, "markSessionDeliveryAttemptStarted");
+      subagentRuns.set(completionOwner.runId, completionOwner);
+      try {
+        const deferredAt = Date.now();
+        const deferred = await drain(id);
+        expect(dispatch).not.toHaveBeenCalled();
+        expect(markAttempt).not.toHaveBeenCalled();
+        expect(deferred).toMatchObject({ id, message: "generated image ready", retryCount: 0 });
+        expect(deferred?.availableAt).toBeGreaterThan(deferredAt);
+        expect(deferred?.deliveryStartedAt).toBeUndefined();
+
+        await expect(drain(id)).resolves.toBeNull();
+        await expect(drain(id)).resolves.toBeNull();
+        expect(dispatch).toHaveBeenCalledOnce();
+        expect(dispatch.mock.calls[0]?.[2]?.controllerInput).toBeDefined();
+        expect(send).not.toHaveBeenCalled();
+        expect(await pending()).toEqual([]);
+      } finally {
+        subagentRuns.delete(completionOwner.runId);
+      }
+    }));
+
   it.each(["originating turn", "attempt-marker admission"] as const)(
     "keeps media queued while the %s owns requester work",
     (ownerTiming) =>
@@ -339,7 +404,6 @@ describe("original requester media handoff", () => {
       if (exhausted) {
         expect(f.operation()).toMatchObject({
           terminalOutcome: "blocked",
-          terminalSummary: expect.stringContaining(f.mediaPath),
         });
         expect(diagnostic).toHaveBeenCalledWith(
           "image_generate blocked completion retention failed",

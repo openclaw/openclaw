@@ -171,7 +171,7 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     fixture.input.capabilityToolNames.add("process");
     const idle = await prepareEmbeddedAttemptPromptContext(fixture.input);
     expect(idle.runtimeContextMessageForCurrentTurn?.content ?? "").not.toContain(
-      "Active exec sessions:",
+      "Active exec sessions at turn start (snapshot):",
     );
     for (const id of ["exec-z", "exec-a"]) {
       const session = createProcessSessionFixture({ id, backgrounded: true });
@@ -182,15 +182,27 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     const active = await prepareEmbeddedAttemptPromptContext(fixture.input);
     expect(active.systemPromptForHook).toBe(idle.systemPromptForHook);
     const content = active.runtimeContextMessageForCurrentTurn?.content;
-    expect(content).toContain("Active exec sessions:");
+    expect(content).toContain("Active exec sessions at turn start (snapshot):");
     expect(content).toContain("exec-a running");
     expect(content!.indexOf("exec-a")).toBeLessThan(content!.indexOf("exec-z"));
     expect(content).not.toMatch(/private output tail|runtimeMs|startedAt/);
     expect(active.runtimeContextMessageForCurrentTurn?.details.fragments).toContainEqual({
       kind: "conversation-data",
-      text: expect.stringContaining("Active exec sessions:"),
+      text: expect.stringContaining("Active exec sessions at turn start (snapshot):"),
     });
     expect(active.promptForSession).toBe("Visible request");
+    deleteSession("exec-a");
+    const nextTurn = await prepareEmbeddedAttemptPromptContext({
+      ...fixture.input,
+      appendOnlyRuntimeContext: true,
+      messages: [...messages, active.runtimeContextMessageForCurrentTurn!],
+    });
+    expect(nextTurn.runtimeContextMessageForCurrentTurn?.content).not.toContain("exec-a running");
+    expect(nextTurn.hookMessagesForCurrentPrompt).toContainEqual(
+      expect.objectContaining({ role: "custom", content }),
+    );
+    expect(nextTurn.systemPromptForHook).toBe(active.systemPromptForHook);
+    expect(fixture.replaceSessionMessages).not.toHaveBeenCalled();
   });
 
   it("carries changed subagent status without rewriting the system prompt", async () => {
@@ -229,6 +241,9 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     const process = createProcessSessionFixture({ id: "exec-a", backgrounded: true });
     process.scopeKey = fixture.input.attempt.sessionKey;
     addSession(process);
+    const otherProcess = createProcessSessionFixture({ id: "exec-z", backgrounded: true });
+    otherProcess.scopeKey = "agent:main:another-session";
+    addSession(otherProcess);
     vi.mocked(mediaTaskStatus.buildMediaTaskRuntimeContext).mockResolvedValue(
       "## Media Generation Tasks\n- tool=image_generate; task=image-1; status=running",
     );
@@ -244,7 +259,11 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     });
     expect(empty.systemPromptForHook).toBe(active.systemPromptForHook);
     expect(empty.runtimeContextMessageForCurrentTurn?.content).toContain(
-      "Active exec sessions:\nnone",
+      "No active exec-tool sessions in this scope at turn start.",
+    );
+    expect(empty.runtimeContextMessageForCurrentTurn?.content).not.toContain("exec-z");
+    expect(empty.runtimeContextMessageForCurrentTurn?.content).toContain(
+      "persistent automations and other background work are not included.",
     );
     expect(empty.runtimeContextMessageForCurrentTurn?.content).toContain(
       "## Active Subagents\nnone",
@@ -355,7 +374,7 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
       expect(result.promptForModel).toBe(result.promptForSession);
       expect(result.systemPromptForHook).not.toContain("Room conversation data");
       expect(result.runtimeContextMessageForCurrentTurn?.content ?? "").not.toContain(
-        "Active exec sessions:",
+        "Active exec sessions at turn start (snapshot):",
       );
       expect(result.runtimeContextMessageForCurrentTurn?.content).toContain("Runtime room event");
       expect(result.runtimeContextMessageForCurrentTurn?.content).toContain(

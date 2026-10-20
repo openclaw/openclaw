@@ -222,7 +222,6 @@ describe("windowInitialMessages", () => {
       details: {
         reason: "provider-replay-message-limit",
         messageCount: MAX_MESSAGES - 1,
-        limitMessages: MAX_MESSAGES - 2,
       },
     });
   });

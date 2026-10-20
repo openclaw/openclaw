@@ -2,9 +2,10 @@ import {
   definePluginEntry,
   type OpenClawPluginServiceContextV2,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { asOptionalRecord as record } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveMcpEventsConfig } from "./src/config.js";
 import { createCallbackHandler } from "./src/http.js";
-import { CALLBACK_PREFIX, MCP_EVENTS_PROFILE, record } from "./src/protocol.js";
+import { CALLBACK_PREFIX, MCP_EVENTS_PROFILE } from "./src/protocol.js";
 import { McpEventsService } from "./src/service.js";
 import type { EventCron } from "./src/types.js";
 

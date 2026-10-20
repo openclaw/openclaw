@@ -251,9 +251,11 @@ export async function prepareGatewayLifecycle(params: {
     markSidecarsReady: () => {
       startupState.sidecarsReady = true;
     },
-    unlockStartupMethods: () => {
+    unlockStartupMethods: (options?: { keepChatSendUnavailable?: boolean }) => {
       for (const method of STARTUP_UNAVAILABLE_GATEWAY_METHODS) {
-        unavailableGatewayMethods.delete(method);
+        if (method !== "chat.send" || !options?.keepChatSendUnavailable) {
+          unavailableGatewayMethods.delete(method);
+        }
       }
     },
     publishMethodSurface: (methods: readonly string[]) => {
@@ -577,7 +579,6 @@ export async function prepareGatewayLifecycle(params: {
               maintenance: runtimeState.maintenance,
               stopMediaCleanup: stopMediaCleanupForClose,
               agentUnsub: runtimeState.agentUnsub,
-              heartbeatUnsub: runtimeState.heartbeatUnsub,
               transcriptUnsub: runtimeState.transcriptUnsub,
               lifecycleUnsub: runtimeState.lifecycleUnsub,
               chatRunState,

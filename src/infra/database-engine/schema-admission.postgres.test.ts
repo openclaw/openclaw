@@ -28,7 +28,7 @@ const schema: StoreSchema = { id: "fixture", version: 1, sqlite: "", postgres: d
 
 function fixture(
   test: (input: {
-    open: (schema?: StoreSchema) => PostgresSyncConnection;
+    open: (schema?: StoreSchema, existingVersion?: boolean) => PostgresSyncConnection;
     db: PostgresSyncConnection;
     invalidate: () => void;
   }) => void,
@@ -36,10 +36,11 @@ function fixture(
   withEngineStoreAdmission(() => {
     const anchor = openNodeSqliteDatabase(path.join(dirs.make("pg-schema-"), "anchor.sqlite"));
     const connections: PostgresSyncConnection[] = [];
-    const open = (selected = schema) => {
+    const open = (selected = schema, existingVersion = false) => {
       const db = openEngineStore({
         anchor,
         schema: selected,
+        existingVersion,
         input: { connection: connection!, schemaPrefix: "r2" },
         openSqlite: () => {
           throw new Error("Unexpected SQLite bootstrap");
@@ -217,6 +218,54 @@ describe.skipIf(!connection)("PostgreSQL schema admission", () => {
       expect(
         reopened.prepare("SELECT ddl_hash FROM openclaw_schema_meta").get()?.ddl_hash,
       ).not.toBe(previous);
+    });
+  });
+
+  it("inspects reconstructed predecessor DDL without changing its seal before migration", () => {
+    fixture(({ db, open, invalidate }) => {
+      db.runTransaction(() => db.exec("INSERT INTO items VALUES (1, 5)"));
+      const original = db.prepare("SELECT * FROM openclaw_schema_meta").get();
+      const nextDdl = `${ddl}\nALTER TABLE items ADD COLUMN label TEXT;`;
+      const target: StoreSchema = {
+        ...schema,
+        version: 2,
+        postgres: nextDdl,
+        postgresMigrations: [
+          {
+            version: 2,
+            fromSchema: { postgres: `-- Reconstructed predecessor\n${ddl}` },
+            schema: { postgres: nextDdl },
+            sql: "ALTER TABLE items ADD COLUMN label TEXT; UPDATE items SET label = 'migrated'",
+          },
+        ],
+      };
+      invalidate();
+      expect(() =>
+        open(
+          {
+            ...target,
+            postgresMigrations: [
+              {
+                ...target.postgresMigrations![0]!,
+                fromSchema: { postgres: ddl.replace("DEFAULT 0", "DEFAULT 9") },
+              },
+            ],
+          },
+          true,
+        ),
+      ).toThrow("schema drift detected against generated DDL");
+      const inspected = open(target, true);
+      expect(inspected.prepare("SELECT * FROM openclaw_schema_meta").get()).toEqual(original);
+      expect(getPostgresPhysicalFacts(inspected)?.version).toBe(1);
+      invalidate();
+      const migrated = open(target);
+      expect(migrated.prepare("SELECT * FROM items").all()).toEqual([
+        { id: 1, value: 6, label: "migrated" },
+      ]);
+      expect(getPostgresPhysicalFacts(migrated)?.version).toBe(2);
+      expect(
+        migrated.prepare("SELECT ddl_hash FROM openclaw_schema_meta").get()?.ddl_hash,
+      ).not.toBe(original?.ddl_hash);
     });
   });
 

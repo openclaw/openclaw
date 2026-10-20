@@ -539,7 +539,12 @@ export function bindPostgresMemoryPublication(
         if (size <= command.input.maxEntries) {
           return false;
         }
-        cacheSize = pruneMemoryEmbeddingCache(db, size, command.input.maxEntries);
+        cacheSize = pruneMemoryEmbeddingCache(
+          db,
+          size,
+          command.input.maxEntries,
+          command.input.unreferencedFirst,
+        );
         return true;
       });
     }

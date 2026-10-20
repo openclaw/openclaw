@@ -121,6 +121,11 @@ model, and auth-profile fallback rules still apply. Explicit session or
 configured runtime choices remain strict: an incompatible runtime reports a
 placement error and requires a compatible destination before retrying.
 
+When a failed cloud-worker candidate has already committed output, its fallback
+continues from that output, including completed tool results. The worker starts
+from the matching transcript leaf. Unrelated transcript changes still retain the
+admission fence and can reject the worker's commit rather than overwrite history.
+
 When configured fallback stops because the agent run reaches a final timeout or
 the idle-timeout cost-runaway breaker returns a terminal error, the
 `model-fallback/decision` logger records `model_fallback_chain_stopped` with
@@ -299,6 +304,8 @@ Use a user-pinned profile to make one account/key the durable first preference f
 ## Cooldowns
 
 When a profile fails due to auth or rate-limit errors, OpenClaw marks it in cooldown and moves to the next profile. A timeout that looks like rate limiting counts as such a failure.
+
+Same-model rate-limit retries also record the failed profile before waiting. A positive, finite `Retry-After` sets the new cooldown, capped at 24 hours; without one, the existing rate-limit backoff applies. An active cooldown keeps its original expiry. An available quota probe cannot shorten the provider's retry deadline. Later runs see that cooldown through normal profile selection and status. The waiting run keeps its existing same-model retry schedule, and model-scoped cooldowns still allow other models on the same profile.
 
 After bounded recovery, a model-silent or request timeout records profile cooldown only when an authorized replacement profile is selected or a model fallback is configured; otherwise the profile stays available for the next turn.
 

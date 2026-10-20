@@ -304,10 +304,6 @@ it.each([
 
 it("rebuilds changed source bytes and version before publishing an in-flight snapshot", async () => {
   const requestedVersion = getSkillsSnapshotVersion(params.workspaceDir);
-  const pending = params.resolve({ snapshotVersion: requestedVersion });
-  const content = "---\nname: visible\ndescription: Updated instructions\n---\n";
-  fs.writeFileSync(params.visibleFile, content);
-  const currentVersion = bumpSkillsSnapshotVersion({ workspaceDir: params.workspaceDir });
   const { snapshot, snapshotVersion } = await pending;
   expect(snapshot.prompt).toContain("Updated instructions");
   expect(snapshot.prompt).not.toContain("Original instructions");

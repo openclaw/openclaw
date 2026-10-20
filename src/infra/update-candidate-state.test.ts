@@ -13,6 +13,11 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import {
+  generateStoredDeviceIdentity,
+  insertStoredDeviceIdentityIfAbsent,
+  readStoredDeviceIdentityReadOnly,
+} from "./device-identity-store.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { hasNodeErrorCode } from "./path-guards.js";
 import {
@@ -67,9 +72,13 @@ it.each(["DELETE"])(
     const shared = path.join(source, "state", "openclaw.sqlite");
     const canonical = path.join(source, "agents", "main", "agent", "openclaw-agent.sqlite");
     const external = path.join(root, "external", "openclaw-agent.sqlite");
+    const credentialPath = path.join(source, "client", "credentials.sqlite");
     await createDatabase(canonical);
     await createDatabase(external);
     const registry = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: source } }).db;
+    const identity = insertStoredDeviceIdentityIfAbsent(generateStoredDeviceIdentity(17), {
+      env: { OPENCLAW_STATE_DIR: source },
+    });
     const insert = registry.prepare(
       "INSERT INTO agent_databases (agent_id, path, schema_version, last_seen_at) VALUES (?, ?, 3, 0)",
     );
@@ -102,7 +111,7 @@ it.each(["DELETE"])(
         now,
       );
     await closeOpenClawStateDatabaseByPathAsync(shared);
-    const sources = [shared, canonical, external];
+    const sources = [shared, canonical, external, credentialPath];
     for (const file of sources) {
       const database = openNodeSqliteDatabase(file);
       database.exec(`PRAGMA journal_mode = ${journalMode};`);
@@ -133,6 +142,9 @@ it.each(["DELETE"])(
       config: {},
     });
     expect(versions).toEqual(inspected);
+    expect(readStoredDeviceIdentityReadOnly({ env: { OPENCLAW_STATE_DIR: target } })).toEqual(
+      identity,
+    );
     await expect(
       withAgentDatabaseMaintenanceLease(
         {

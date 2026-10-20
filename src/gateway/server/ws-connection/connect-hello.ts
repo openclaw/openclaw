@@ -38,6 +38,7 @@ import {
   type SetupHandoff,
 } from "../../device-pair-setup-completion.js";
 import { canReadDetailedUpdateMetadata } from "../../events.js";
+import { projectHealthSummary } from "../../health/presentation.js";
 import { getRemoteControlUiIngressContext } from "../../ingress-attribution.js";
 import { ADMIN_SCOPE } from "../../method-scopes.js";
 import { scheduleNodeConnectionNotification } from "../../node-connection-notifications.js";
@@ -135,7 +136,9 @@ export async function sendGatewayHello(
   });
   const cachedHealth = getHealthCache();
   if (cachedHealth && !connectParams.caps?.includes(GATEWAY_CLIENT_CAPS.HELLO_HEALTH_ON_DEMAND)) {
-    snapshot.health = cachedHealth;
+    snapshot.health = connectParams.caps?.includes(GATEWAY_CLIENT_CAPS.HEALTH_SUMMARY)
+      ? projectHealthSummary(cachedHealth)
+      : cachedHealth;
     snapshot.stateVersion.health = getHealthVersion();
   }
   context.recordAttachTiming?.("snapshotMs", snapshotStartedAt);
@@ -199,6 +202,7 @@ export async function sendGatewayHello(
         GATEWAY_SERVER_CAPS.CHANNELS_PAIRING_APPROVE_OWNER,
         GATEWAY_SERVER_CAPS.EXEC_APPROVALS_GET_OWNER,
         GATEWAY_SERVER_CAPS.EXEC_APPROVALS_SET_OWNER,
+        GATEWAY_SERVER_CAPS.EXEC_APPROVALS_NATIVE_COMMIT,
         GATEWAY_SERVER_CAPS.WORKTREES_REMOVE_OWNER,
         GATEWAY_SERVER_CAPS.WORKTREES_RESTORE_OWNER,
         GATEWAY_SERVER_CAPS.WORKTREES_GC_OWNER,

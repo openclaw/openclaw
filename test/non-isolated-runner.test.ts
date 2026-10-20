@@ -302,7 +302,7 @@ it("seeds process-global run contexts", async () => {
   expect(tryBeginGatewayRootWorkAdmission()).not.toBeNull();
   expect(getActiveGatewayRootWorkCount()).toBe(1);
   markGatewayRestartDraining();
-  noteActiveSessionForShutdown({ cfg: {}, sessionKey: "session-a", sessionId: "session-a", storePath: "/tmp/fixture.sqlite", agentId: "main" });
+  noteActiveSessionForShutdown({ sessionKey: "session-a", sessionId: "session-a", storePath: "/tmp/fixture.sqlite", agentId: "main" });
   expect(listActiveSessionsForShutdown()).toHaveLength(1);
   registerAgentRunContext("unrelated-run-a", { sessionKey: "session-a" });
   registerAgentRunContext("unrelated-run-b", { sessionKey: "session-b" });

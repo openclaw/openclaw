@@ -3,11 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   failSqliteWorkerSlot,
+  receiveSqliteWorkerReply,
   settleSqliteWorkerJob,
   withSqliteWorkerCleanupFailure,
 } from "./sqlite-worker-broker-reply.js";
 import type { Job } from "./sqlite-worker-broker.types.js";
-import { SqliteWorkerError } from "./sqlite-worker-contract.js";
+import { hasSqliteWorkerOutcomeUnknown, SqliteWorkerError } from "./sqlite-worker-contract.js";
 import type { SqliteWorkerOperationSettlement } from "./sqlite-worker-operation-settlement.js";
 import { SqliteWorkerSlotCustody } from "./sqlite-worker-request-custody.js";
 
@@ -177,6 +178,23 @@ afterEach(() => {
 });
 
 describe("SQLite worker settlement cleanup lineage", { concurrent: false }, () => {
+  it("does not canonicalize an ordinary backend error with a public outcome code", () => {
+    const { job } = jobWithCleanup();
+    const finish = vi.fn();
+    receiveSqliteWorkerReply(
+      { current: job, actors: new Set(), worker: { postMessage: effects.forbidden } },
+      {
+        id: job.request.id,
+        ok: false,
+        error: { name: "Error", message: "Backend refused", code: "outcome-unknown" },
+      },
+      { fail: effects.forbidden, finish, dispatch: vi.fn() },
+    );
+    const failure: unknown = finish.mock.calls[0]?.[1];
+    expect(failure).toMatchObject({ name: "Error", code: "outcome-unknown" });
+    expect(hasSqliteWorkerOutcomeUnknown(failure)).toBe(false);
+  });
+
   it.each([true, false])("keeps a lost outcome unknown after retirement: %s", async (retired) => {
     const current = jobWithCleanup();
     const error = new Error("Worker result was lost");

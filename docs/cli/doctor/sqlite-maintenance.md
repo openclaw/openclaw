@@ -260,7 +260,11 @@ an import for that verified history.
 
 Doctor also discovers primary conversation transcripts omitted from the legacy
 registry, including timestamp-prefixed filenames. It verifies the session header,
-file identity, and logical owner before importing. Known historical generations
+file identity, and logical owner before importing. A renamed or copied file keeps
+its header's session identity; Doctor records a filename mismatch warning and
+preserves the original bytes. If multiple files claim that identity, Doctor keeps
+them separate in the protected archive and reports the conflict without merging
+their histories. Known historical generations
 remain attached to their existing session without changing its current generation
 or settings. History with no registry owner is recovered as an archived session
 only when its agent owner is unambiguous.
@@ -282,6 +286,10 @@ latest failed run moved no files. Copies with different bytes stay protected and
 are named in the warning; retained historical conflicts do not block update's
 post-session plugin repair. Preserve the originals and migration manifests while
 resolving those conflicts, then rerun `openclaw doctor --fix`.
+
+Duplicate settlement indexes retained artifact paths and manifest moves once per
+inventory instead of rescanning the full history for each duplicate. File-identity
+and source-byte checks still run before originals are retired.
 
 Normal Doctor output and `openclaw update status` show at most five
 `historical_transcript_deferred` examples per session store. Larger groups include

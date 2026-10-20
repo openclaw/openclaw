@@ -11,7 +11,8 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
   getImageMetadata: async () => imageSize,
 }));
-const { screenshotWithLabelsViaPlaywright } = await import("./pw-tools-core.interactions.js");
+const { screenshotWithLabelsViaPlaywright } =
+  await import("./pw-tools-core.interactions.content.js");
 const target = { cdpUrl: "http://127.0.0.1:18792", targetId: "T1" };
 const screenshot = vi.fn(async () => Buffer.from("PNG"));
 const boundingBox =

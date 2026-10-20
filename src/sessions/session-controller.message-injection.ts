@@ -312,10 +312,22 @@ async function beginPreparedReplyMessageInjectionTarget(
       assertCurrent: assertSourceCurrent,
       accepted: false,
     });
-    if (!failure) {
-      throw error;
+    if (failure) {
+      return failure;
     }
-    return failure;
+    assertSourceCurrent?.();
+    const current = owner.resolve({});
+    if (
+      !("injection" in current) &&
+      (current.reason === "no_active_run" ||
+        current.reason === "not_running" ||
+        current.reason === "stale_run")
+    ) {
+      // Projection can reject after the captured target retires. Only a still-current
+      // source may fall back, and only before this target has accepted any input.
+      return { status: "rejected", reason: current.reason };
+    }
+    throw error;
   };
   let preparedText: string;
   try {
@@ -382,32 +394,45 @@ async function beginPreparedReplyMessageInjectionTarget(
   }
   let selectedOverlay = incomingOverlay;
   let allowPendingUserInputAnswer = requestedPendingUserInputAnswer;
-  let projectedToolAuthorityFingerprint = requesterToolAuthority
-    ? await owner.projectRequesterToolAuthorityFingerprintAsync(requesterToolAuthority)
-    : selectedOverlay
-      ? await owner.projectToolAuthorityFingerprintAsync(selectedOverlay)
-      : backendOptions.toolAuthorityFingerprint;
-  if (
-    !requesterToolAuthority &&
-    allowCollaborativeSteering &&
-    backendOptions.isInboundUserMessage &&
-    incomingOverlay &&
-    incomingRequester &&
-    owner.requesterPrincipalKey &&
-    incomingRequester !== owner.requesterPrincipalKey &&
-    (!projectedToolAuthorityFingerprint ||
-      projectedToolAuthorityFingerprint !== owner.toolAuthorityFingerprint)
-  ) {
-    const collaborativeOverlay = { ...incomingOverlay, allowCollaborativeSteering: true as const };
-    const incumbentFingerprint =
-      await owner.projectToolAuthorityFingerprintAsync(collaborativeOverlay);
-    if (incumbentFingerprint && incumbentFingerprint !== projectedToolAuthorityFingerprint) {
-      selectedOverlay = collaborativeOverlay;
-      projectedToolAuthorityFingerprint = incumbentFingerprint;
-      // Collaboration permits ordinary input, not answering or canceling another
-      // requester's pending question. Compatible input keeps its strict preparation.
-      allowPendingUserInputAnswer = false;
+  let projectedToolAuthorityFingerprint: string | undefined;
+  try {
+    projectedToolAuthorityFingerprint = requesterToolAuthority
+      ? await owner.projectRequesterToolAuthorityFingerprintAsync(requesterToolAuthority)
+      : selectedOverlay
+        ? await owner.projectToolAuthorityFingerprintAsync(selectedOverlay)
+        : backendOptions.toolAuthorityFingerprint;
+    if (
+      !requesterToolAuthority &&
+      allowCollaborativeSteering &&
+      backendOptions.isInboundUserMessage &&
+      incomingOverlay &&
+      incomingRequester &&
+      owner.requesterPrincipalKey &&
+      incomingRequester !== owner.requesterPrincipalKey &&
+      (!projectedToolAuthorityFingerprint ||
+        projectedToolAuthorityFingerprint !== owner.toolAuthorityFingerprint)
+    ) {
+      const collaborativeOverlay = {
+        ...incomingOverlay,
+        allowCollaborativeSteering: true as const,
+      };
+      const incumbentFingerprint =
+        await owner.projectToolAuthorityFingerprintAsync(collaborativeOverlay);
+      if (incumbentFingerprint && incumbentFingerprint !== projectedToolAuthorityFingerprint) {
+        selectedOverlay = collaborativeOverlay;
+        projectedToolAuthorityFingerprint = incumbentFingerprint;
+        // Collaboration permits ordinary input, not answering or canceling another
+        // requester's pending question. Compatible input keeps its strict preparation.
+        allowPendingUserInputAnswer = false;
+      }
     }
+  } catch (error) {
+    const failure = resolvePreAcceptanceFailure(error);
+    return {
+      targetRunId: target.runId,
+      acceptance: Promise.resolve(false),
+      outcome: Promise.resolve(failure),
+    };
   }
   const toolAuthorityOverlay = selectedOverlay;
   const currentToolAuthorityOverlay = () => {

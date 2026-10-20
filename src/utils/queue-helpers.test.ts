@@ -79,7 +79,7 @@ describe("queue summary helpers", () => {
 
   it("renders pending summary state without mutating it", () => {
     const state = { droppedCount: 2, summaryLines: ["first", "second"] };
-    const prompt = previewQueueSummaryPrompt({ state, noun: "message" });
+    const prompt = previewQueueSummaryPrompt(state);
 
     expect(prompt).toContain("[Queue overflow] Dropped 2 messages due to cap.");
     expect(prompt).toContain("first");
@@ -96,6 +96,53 @@ describe("queue summary helpers", () => {
 });
 
 describe("waitForQueueDebounce", () => {
+  it("resolves and removes the pending timer when cancelled", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "0");
+    vi.useFakeTimers();
+    try {
+      const controller = new AbortController();
+      const wait = waitForQueueDebounce(
+        { debounceMs: 1_000, lastEnqueuedAt: Date.now() },
+        controller.signal,
+      );
+      expect(vi.getTimerCount()).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(250);
+      controller.abort(new Error("turn cancelled"));
+
+      await expect(wait).resolves.toBeUndefined();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("waits for a full quiet window after another item is enqueued", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "0");
+    vi.useFakeTimers();
+    try {
+      const queue = { debounceMs: 1_000, lastEnqueuedAt: Date.now() };
+      let settled = false;
+      const wait = waitForQueueDebounce(queue).then(() => {
+        settled = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(500);
+      queue.lastEnqueuedAt = Date.now();
+      await vi.advanceTimersByTimeAsync(999);
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await wait;
+      expect(settled).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("settles one debounce window after the system clock moves backward", async () => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "0");
     vi.useFakeTimers();

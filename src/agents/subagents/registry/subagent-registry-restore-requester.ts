@@ -14,98 +14,6 @@ import { SubagentRegistryMutationRejectedError } from "./subagent-registry-persi
 import { selectRequesterTurnChildren } from "./subagent-registry-requester-yield.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-/** Reconstruct requester claims without owning retries or altering failed cohort custody. */
-async function settleRestoredRequesterTurns({
-  cfg,
-  runs,
-  entries,
-  stateContext,
-  assertCurrent,
-  settleRequesterTurn,
-  retireSupersededRun,
-}: {
-  cfg: OpenClawConfig;
-  runs: ReadonlyMap<string, SubagentRunRecord>;
-  entries: readonly SubagentRunRecord[];
-  stateContext: OpenClawStateWorkerContext;
-  assertCurrent: () => void;
-  settleRequesterTurn: SubagentLifecycleController["settleRequesterTurnAfterSessionSpawns"];
-  retireSupersededRun: SubagentLifecycleOptions["retireSupersededRun"];
-}): Promise<unknown[]> {
-  const requesterTurns = new Map<string, SubagentRunRecord>();
-  const resolveRequesterAgentId = (entry: SubagentRunRecord) =>
-    resolveSubagentRequesterAgentId(cfg, entry);
-  for (const entry of entries) {
-    const requesterTurnRunId = entry.requesterTurnRunId?.trim();
-    if (!requesterTurnRunId || entry.expectsCompletionMessage !== true) {
-      continue;
-    }
-    const identity = JSON.stringify([
-      resolveRequesterAgentId(entry),
-      entry.requesterSessionKey,
-      requesterTurnRunId,
-    ]);
-    requesterTurns.set(identity, requesterTurns.get(identity) ?? entry);
-  }
-  const transferFailures: unknown[] = [];
-  for (const firstEntry of requesterTurns.values()) {
-    assertCurrent();
-    const requesterAgentId = resolveRequesterAgentId(firstEntry);
-    const requesterTurnRunId = firstEntry.requesterTurnRunId!;
-    try {
-      const superseded: SubagentRunRecord[] = [];
-      const selectEntries = (onSuperseded: (entry: SubagentRunRecord) => void) =>
-        selectRequesterTurnChildren(
-          runs,
-          firstEntry.requesterSessionKey,
-          requesterAgentId,
-          requesterTurnRunId,
-          onSuperseded,
-        );
-      let children = selectEntries((entry) => superseded.push(entry));
-      for (const entry of superseded) {
-        await retireSupersededRun(entry.runId, entry, assertCurrent);
-        assertCurrent();
-        if (runs.has(entry.runId)) {
-          throw new SubagentRegistryMutationRejectedError(
-            "Superseded requester claim changed during retirement",
-          );
-        }
-      }
-      if (superseded.length > 0) {
-        // Retirement can yield to another claim; select its surviving members afresh.
-        children = selectEntries(() => {
-          throw new SubagentRegistryMutationRejectedError("Restored cohort changed");
-        });
-      }
-      if (children.length === 0) {
-        continue;
-      }
-      await settleRequesterTurn(
-        {
-          requesterSessionKey: firstEntry.requesterSessionKey,
-          stateContext,
-          assertCurrent,
-          requesterAgentId,
-          requesterTurnRunId,
-          requesterYielded: children.every((entry) => entry.requesterTurnYielded === true),
-          acceptedSessionSpawns: children.map((entry) => ({
-            runId: entry.taskRunId ?? entry.runId,
-            childSessionKey: entry.childSessionKey,
-          })),
-        },
-        "restore",
-      );
-    } catch (error) {
-      // Failed or uncertain custody stays with its transfer owner, not with
-      // unrelated cohorts or ordinary restored run activation.
-      transferFailures.push(error);
-    }
-    assertCurrent();
-  }
-  return transferFailures;
-}
-
 /** Isolate requester sessions while keeping each session's cohort and mailbox order intact. */
 export function createRestoredRequesterActivator(config: {
   runs: Map<string, SubagentRunRecord>;
@@ -193,16 +101,89 @@ export function createRestoredRequesterActivator(config: {
         if (alreadyActivated) {
           return;
         }
-        const failures = await measureStartup(startupTrace, "sidecars.subagent-requesters", () =>
-          settleRestoredRequesterTurns({
-            cfg,
-            runs: config.runs,
-            entries: currentEntries(),
-            stateContext,
-            assertCurrent,
-            settleRequesterTurn: config.settleRequesterTurn,
-            retireSupersededRun: config.retireSupersededRun,
-          }),
+        const failures = await measureStartup(
+          startupTrace,
+          "sidecars.subagent-requesters",
+          async (): Promise<unknown[]> => {
+            const runs = config.runs;
+            const entries = currentEntries();
+            const { settleRequesterTurn, retireSupersededRun } = config;
+            // Reconstruct requester claims without owning retries or altering failed cohort custody.
+            const requesterTurns = new Map<string, SubagentRunRecord>();
+            const resolveRequesterAgentId = (entry: SubagentRunRecord) =>
+              resolveSubagentRequesterAgentId(cfg, entry);
+            for (const entry of entries) {
+              const requesterTurnRunId = entry.requesterTurnRunId?.trim();
+              if (!requesterTurnRunId || entry.expectsCompletionMessage !== true) {
+                continue;
+              }
+              const identity = JSON.stringify([
+                resolveRequesterAgentId(entry),
+                entry.requesterSessionKey,
+                requesterTurnRunId,
+              ]);
+              requesterTurns.set(identity, requesterTurns.get(identity) ?? entry);
+            }
+            const transferFailures: unknown[] = [];
+            for (const firstEntry of requesterTurns.values()) {
+              assertCurrent();
+              const requesterAgentId = resolveRequesterAgentId(firstEntry);
+              const requesterTurnRunId = firstEntry.requesterTurnRunId!;
+              try {
+                const superseded: SubagentRunRecord[] = [];
+                const selectEntries = (onSuperseded: (entry: SubagentRunRecord) => void) =>
+                  selectRequesterTurnChildren(
+                    runs,
+                    firstEntry.requesterSessionKey,
+                    requesterAgentId,
+                    requesterTurnRunId,
+                    onSuperseded,
+                  );
+                let children = selectEntries((entry) => superseded.push(entry));
+                for (const entry of superseded) {
+                  await retireSupersededRun(entry.runId, entry, assertCurrent);
+                  assertCurrent();
+                  if (runs.has(entry.runId)) {
+                    throw new SubagentRegistryMutationRejectedError(
+                      "Superseded requester claim changed during retirement",
+                    );
+                  }
+                }
+                if (superseded.length > 0) {
+                  // Retirement can yield to another claim; select its surviving members afresh.
+                  children = selectEntries(() => {
+                    throw new SubagentRegistryMutationRejectedError("Restored cohort changed");
+                  });
+                }
+                if (children.length === 0) {
+                  continue;
+                }
+                await settleRequesterTurn(
+                  {
+                    requesterSessionKey: firstEntry.requesterSessionKey,
+                    stateContext,
+                    assertCurrent,
+                    requesterAgentId,
+                    requesterTurnRunId,
+                    requesterYielded: children.every(
+                      (entry) => entry.requesterTurnYielded === true,
+                    ),
+                    acceptedSessionSpawns: children.map((entry) => ({
+                      runId: entry.taskRunId ?? entry.runId,
+                      childSessionKey: entry.childSessionKey,
+                    })),
+                  },
+                  "restore",
+                );
+              } catch (error) {
+                // Failed or uncertain custody stays with its transfer owner, not with
+                // unrelated cohorts or ordinary restored run activation.
+                transferFailures.push(error);
+              }
+              assertCurrent();
+            }
+            return transferFailures;
+          },
         );
         assertCurrent();
         if (!group.resumed) {

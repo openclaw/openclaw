@@ -10,6 +10,7 @@ import { mountSolid as render } from "../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import { SidebarDropdown, renderSidebarNavLink } from "./app-sidebar-nav-menus.tsx";
 import { getAppSidebarOwner } from "./app-sidebar.tsx";
+import { SessionOrganizer } from "./session-organizer.ts";
 import {
   renderSidebarRailPinMenuForMenus,
   renderSidebarSessionMenuForMenus,
@@ -86,7 +87,13 @@ it("keeps personal pinning and navigation usable in an offline session menu", as
     selectedVisibleSessions: () => [],
     readSessionMutationAccess: () => ({ allowed: false, reason: "Reconnect" }),
     knownSessionGroups: () => [],
-    sessionOrganizer: { isPersonalSessionPin: () => false, setPersonalSessionPin: pin },
+    sessionOrganizer: {
+      isPersonalSessionPin: () => false,
+      setPersonalSessionPin: pin,
+      runSessionAction(...args: Parameters<SessionOrganizer["runSessionAction"]>) {
+        return SessionOrganizer.prototype.runSessionAction.call(this, ...args);
+      },
+    },
   } as unknown as Parameters<typeof renderSidebarSessionMenuForMenus>[1];
   const view = render(() => renderSidebarSessionMenuForMenus(menus, host, menus.sessionMenu!));
   flush();

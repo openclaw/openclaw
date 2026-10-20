@@ -45,6 +45,35 @@ function successResult(text = "done") {
   };
 }
 
+async function writeSeed(
+  body: string | OpenClawConfig,
+  root = tempDirs.make("openclaw-agent-exec-"),
+) {
+  const config = path.join(root, "openclaw.json");
+  await fs.writeFile(config, typeof body === "string" ? body : JSON.stringify(body));
+  return config;
+}
+
+function runExec(
+  opts: Parameters<typeof runAgentExecWithMock>[1],
+  runAgent: Parameters<typeof runAgentExecWithMock>[3] = async () => successResult(),
+  runtime = createTestRuntime(),
+) {
+  return runAgentExecWithMock("inspect", opts, runtime, runAgent);
+}
+
+async function runSuccessfulExec(
+  opts: Parameters<typeof runExec>[0],
+  observe: (invocation: Record<string, unknown>) => void | Promise<void>,
+) {
+  const result = await runExec(opts, async (invocation) => {
+    await observe(invocation);
+    return successResult();
+  });
+  expect(result.exitCode).toBe(0);
+  return result;
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   clearRuntimeConfigSnapshot();
@@ -53,21 +82,15 @@ afterEach(() => {
 
 describe("agent exec strict result classification", () => {
   it.each([
-    {
-      payload: { isError: true },
-      meta: { durationMs: 10 },
-      status: "error",
-      kind: "error_payload",
-      message: "Agent run failed",
-    },
-    {
-      payload: { text: "timed out", isError: true },
-      meta: { durationMs: 600_000, aborted: true, stopReason: "timeout" },
-      status: "timeout",
-      kind: "timeout",
-      message: "timed out",
-    },
-  ])("classifies $message", ({ payload, meta, status, kind, message }) => {
+    [{ isError: true }, { durationMs: 10 }, "error", "error_payload", "Agent run failed"],
+    [
+      { text: "timed out", isError: true },
+      { durationMs: 600_000, aborted: true, stopReason: "timeout" },
+      "timeout",
+      "timeout",
+      "timed out",
+    ],
+  ] as const)("classifies %j", (payload, meta, status, kind, message) => {
     expect(classifyAgentExecResult({ payloads: [payload], meta })).toMatchObject({
       ok: false,
       status,
@@ -93,17 +116,14 @@ describe("agent exec strict result classification", () => {
     expect(envelope.toolSummary).toEqual(toolSummary);
   });
   it("classifies projected production error payloads as failure", () => {
-    const envelope = classifyAgentExecResult(
-      successResult("projected error text"),
-      false,
-      "projected error text",
-    );
+    const message = "projected error text";
+    const envelope = classifyAgentExecResult(successResult(message), false, message);
     expect(envelope).toMatchObject({
       ok: false,
       status: "error",
       final: "",
-      payloads: [{ text: "projected error text", isError: true }],
-      error: { kind: "error_payload", message: "projected error text" },
+      payloads: [{ text: message, isError: true }],
+      error: { kind: "error_payload", message },
     });
   });
 });
@@ -113,28 +133,23 @@ describe("agent exec command composition", () => {
     "overlays the %s config for one run without replacing inherited settings",
     async (mode) => {
       const root = tempDirs.make("openclaw-agent-exec-override-");
-      const configPath = path.join(root, "openclaw.json");
+      const alpha = { model: "custom/model-a", workspace: "/original", skills: ["one"] };
+      const custom = { baseUrl: "https://example.invalid", apiKey: "test-key", models: [] };
+      const codeMode = { enabled: false, maxOutputBytes: 4096 };
       const base = {
         agents: {
           defaults: { systemAgent: { agentId: "alpha" }, thinkingDefault: "low" },
-          entries: {
-            alpha: { model: "custom/model-a", workspace: "/original", skills: ["one"] },
-          },
+          entries: { alpha },
         },
-        models: {
-          providers: {
-            custom: { baseUrl: "https://example.invalid", apiKey: "test-key", models: [] },
-          },
-        },
-        tools: { deny: ["browser"], codeMode: { enabled: false, maxOutputBytes: 4096 } },
+        models: { providers: { custom } },
+        tools: { deny: ["browser"], codeMode },
       } satisfies OpenClawConfig;
       const original = JSON.stringify(base);
-      await fs.writeFile(configPath, original);
+      const configPath = await writeSeed(original, root);
       if (mode === "ambient") {
         setRuntimeConfigSnapshot(base);
       }
-      const result = await runAgentExecWithMock(
-        "inspect",
+      const result = await runSuccessfulExec(
         {
           ...(mode === "pinned" ? { config: configPath } : {}),
           cwd: root,
@@ -161,7 +176,6 @@ describe("agent exec command composition", () => {
             '{"tools":{"deny":[]}}',
           ],
         },
-        createTestRuntime(),
         async (invocation) => {
           expect(invocation).toMatchObject({
             agentId: "alpha",
@@ -176,20 +190,18 @@ describe("agent exec command composition", () => {
                 workspace: root,
                 experimental: { localModelLean: true },
               },
-              entries: { alpha: { model: "custom/model-a", workspace: root, skills: [] } },
+              entries: { alpha: { ...alpha, workspace: root, skills: [] } },
             },
             models: base.models,
             tools: {
               deny: [],
-              codeMode: { enabled: true, maxOutputBytes: 4096 },
+              codeMode: { ...codeMode, enabled: true },
               exec: { pathPrepend: [path.join(os.homedir(), ".local", "bin")] },
             },
           });
-          return successResult();
         },
       );
       expect(result.envelope.error).toBeUndefined();
-      expect(result.exitCode).toBe(0);
       expect(await fs.readFile(configPath, "utf8")).toBe(original);
       expect(JSON.stringify(base)).toBe(original);
       expect(getRuntimeConfigSnapshot()).toEqual(mode === "ambient" ? base : null);
@@ -197,17 +209,12 @@ describe("agent exec command composition", () => {
   );
 
   it("restores base-config environment imports when an override fails validation", async () => {
-    const root = tempDirs.make("openclaw-agent-exec-invalid-override-");
-    const config = path.join(root, "openclaw.json");
-    await fs.writeFile(
-      config,
-      JSON.stringify({ env: { vars: { OPENCLAW_EXEC_OVERRIDE_PROBE: "from-config" } } }),
-    );
+    const config = await writeSeed({
+      env: { vars: { OPENCLAW_EXEC_OVERRIDE_PROBE: "from-config" } },
+    });
     const runAgent = vi.fn(async () => successResult());
-    const result = await runAgentExecWithMock(
-      "inspect",
+    const result = await runExec(
       { config, configOverride: ['{"tools":{"profile":"invalid"}}'] },
-      createTestRuntime(),
       runAgent,
     );
     expect(result.envelope.error?.message).toContain("Invalid --config-override");
@@ -215,73 +222,42 @@ describe("agent exec command composition", () => {
     expect(process.env.OPENCLAW_EXEC_OVERRIDE_PROBE).toBeUndefined();
   });
 
-  it("treats invalid timeout syntax as an ordinary usage error", async () => {
-    const runtime = createTestRuntime();
-
-    const result = await runAgentExecWithMock(
-      "inspect",
-      { timeout: "nope", json: true },
-      runtime,
-      vi.fn(async () => successResult()),
-    );
-
+  it.each([
+    [{ timeout: "nope", json: true }, undefined],
+    [{ codeMode: "invalid" as never }, "--code-mode must be one of direct, auto, code."],
+  ] as const)("rejects invalid programmatic options %j", async (options, message) => {
+    const result = await runExec(options);
     expect(result).toMatchObject({
       exitCode: 1,
       envelope: { status: "error", error: { kind: "exception" } },
     });
+    if (message) {
+      expect(result.envelope.error?.message).toBe(message);
+    }
   });
 
   it("maps embedded terminal-outcome timeouts to exit code 2", async () => {
-    const runtime = createTestRuntime();
-    const timeout = new AgentRunTerminalOutcomeError(
-      new Error("attempt aborted before prompt submission"),
-      {
-        reason: "hard_timeout",
-        status: "timeout",
-        timeoutPhase: "provider",
-        providerStarted: true,
-      },
-    );
+    const message = "attempt aborted before prompt submission";
+    const timeout = new AgentRunTerminalOutcomeError(new Error(message), {
+      reason: "hard_timeout",
+      status: "timeout",
+      timeoutPhase: "provider",
+      providerStarted: true,
+    });
 
-    const result = await runAgentExecWithMock(
-      "inspect",
-      { json: true },
-      runtime,
-      vi.fn(async () => {
-        throw timeout;
-      }),
-    );
+    const result = await runExec({ json: true }, async () => {
+      throw timeout;
+    });
 
     expect(result).toMatchObject({
       exitCode: 2,
       envelope: {
         status: "timeout",
-        error: {
-          kind: "timeout",
-          message: "attempt aborted before prompt submission",
-        },
+        error: { kind: "timeout", message },
       },
     });
   });
 
-  it("rejects invalid programmatic Code Mode values", async () => {
-    const runtime = createTestRuntime();
-
-    const result = await runAgentExecWithMock(
-      "inspect",
-      { codeMode: "invalid" as never },
-      runtime,
-      vi.fn(async () => successResult()),
-    );
-
-    expect(result).toMatchObject({
-      exitCode: 1,
-      envelope: {
-        status: "error",
-        error: { kind: "exception", message: "--code-mode must be one of direct, auto, code." },
-      },
-    });
-  });
   it("writes plain final text to stdout when diagnostics are routed to stderr", async () => {
     const source = `
       import { registerHooks } from "node:module";
@@ -323,66 +299,47 @@ describe("agent exec command composition", () => {
   it("flushes opted-in identity evidence through its owned direct-local writer", async () => {
     const root = tempDirs.make("openclaw-agent-exec-audit-");
     setRuntimeConfigSnapshot({ logging: { audit: { executionIdentity: true } } });
-    const result = await runAgentExecWithMock(
-      "inspect",
-      { stateDir: root },
-      createTestRuntime(),
-      async () => {
-        expect(
-          enqueueExecutionIdentityContextAtAdmission(
-            {
-              runId: "run",
-              agentId: "main",
-              ingress: { kind: "local-cli", boundary: "agent-command.local", state: "present" },
-              runtime: { kind: "embedded" },
-            },
-            {
-              enabled: true,
-              contextId: "context",
-              executionId: "execution",
-              now: Date.now(),
-              runtimeInstanceId: "runtime",
-            },
-          ),
-        ).toMatchObject({ accepted: true });
-        return successResult();
-      },
-    );
-    expect(result.exitCode).toBe(0);
-    const database = new DatabaseSync(path.join(root, "state", "openclaw.sqlite"), {
+    await runSuccessfulExec({ stateDir: root }, async () => {
+      const admission = enqueueExecutionIdentityContextAtAdmission(
+        {
+          runId: "run",
+          agentId: "main",
+          ingress: { kind: "local-cli", boundary: "agent-command.local", state: "present" },
+          runtime: { kind: "embedded" },
+        },
+        {
+          enabled: true,
+          contextId: "context",
+          executionId: "execution",
+          now: Date.now(),
+          runtimeInstanceId: "runtime",
+        },
+      );
+      expect(admission).toMatchObject({ accepted: true });
+    });
+    using database = new DatabaseSync(path.join(root, "state", "openclaw.sqlite"), {
       readOnly: true,
     });
-    try {
-      const row = database
-        .prepare("SELECT context_json FROM execution_identity_contexts WHERE execution_id = ?")
-        .get("execution") as { context_json: string };
-      expect(JSON.parse(row.context_json)).toMatchObject({
-        contextId: "context",
-        executionId: "execution",
-        runId: "run",
-        ingress: { kind: "local-cli", state: "present" },
-      });
-    } finally {
-      database.close();
-    }
+    const row = database
+      .prepare("SELECT context_json FROM execution_identity_contexts WHERE execution_id = ?")
+      .get("execution") as { context_json: string };
+    expect(JSON.parse(row.context_json)).toMatchObject({
+      contextId: "context",
+      executionId: "execution",
+      runId: "run",
+      ingress: { kind: "local-cli", state: "present" },
+    });
   });
 
   it("keeps operator-installed plugins hidden under --isolated", async () => {
     const operatorStateDir = tempDirs.make("openclaw-agent-exec-plugin-isolated-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: operatorStateDir }, async () => {
-      const result = await runAgentExecWithMock(
-        "inspect",
-        { isolated: true },
-        createTestRuntime(),
-        async () => {
-          const { resolveDefaultPluginExtensionsDir } = await import("../plugins/install-paths.js");
-          const extensionsDir = resolveDefaultPluginExtensionsDir();
-          expect(extensionsDir).not.toBe(path.join(operatorStateDir, "extensions"));
-          expect(path.basename(path.dirname(extensionsDir))).toMatch(/^openclaw-agent-exec-/u);
-          return successResult();
-        },
-      );
-      expect(result.exitCode).toBe(0);
+      await runSuccessfulExec({ isolated: true }, async () => {
+        const { resolveDefaultPluginExtensionsDir } = await import("../plugins/install-paths.js");
+        const extensionsDir = resolveDefaultPluginExtensionsDir();
+        expect(extensionsDir).not.toBe(path.join(operatorStateDir, "extensions"));
+        expect(path.basename(path.dirname(extensionsDir))).toMatch(/^openclaw-agent-exec-/u);
+      });
     });
   });
 
@@ -393,74 +350,61 @@ describe("agent exec command composition", () => {
   ] as const)(
     "honors --code-mode $mode over model settings ($capability)",
     async ({ mode, configured, capability, enabled }) => {
-      const runtime = createTestRuntime();
       const codeMode = { enabled: configured, maxOutputBytes: 4096 };
+      const modelSettings = { models: { "test/model-a": { codeMode: configured } } };
       setRuntimeConfigSnapshot({
         agents: {
-          defaults: {
-            systemAgent: { agentId: "main" },
-            models: { "test/model-a": { codeMode: configured } },
-          },
-          entries: {
-            main: { models: { "test/model-a": { codeMode: configured } } },
-          },
+          defaults: { systemAgent: { agentId: "main" }, ...modelSettings },
+          entries: { main: modelSettings },
         },
         tools: { codeMode, toolSearch: false },
       });
-      let visibleTools: string[] | undefined;
-      try {
-        const result = await runAgentExecWithMock(
-          "inspect",
-          { codeMode: mode, model: "test/model-a", localModelLean: true },
-          runtime,
-          vi.fn(async (invocation) => {
-            const config = expectDefined(getRuntimeConfigSnapshot(), "isolated run config");
-            expect(config.tools?.codeMode).toEqual(codeMode);
-            expect(config.agents?.defaults?.experimental?.localModelLean).toBe(true);
-            const surface = createAgentHarnessToolSurfaceRuntimeCore({
-              config,
-              agentId: "main",
-              modelProvider: "test",
-              modelId: "model-a",
-              model: { compat: { codeMode: capability } },
-              codeModeOverride: invocation.codeModeOverride as boolean | "auto" | undefined,
-              modelToolsEnabled: true,
-              executeTool: async () => ({ content: [], details: {} }),
-            });
-            try {
-              visibleTools = surface
-                .compactTools([createStubTool("read")])
-                .tools.map((tool) => tool.name);
-            } finally {
-              surface.cleanup();
-            }
-            return successResult();
-          }),
-        );
-        expect(result.exitCode).toBe(0);
-        expect(visibleTools).toEqual(enabled ? ["exec", "wait"] : ["read"]);
-      } finally {
-        clearRuntimeConfigSnapshot();
-      }
+      await runSuccessfulExec(
+        { codeMode: mode, model: "test/model-a", localModelLean: true },
+        async (invocation) => {
+          const config = expectDefined(getRuntimeConfigSnapshot(), "isolated run config");
+          expect(config.tools?.codeMode).toEqual(codeMode);
+          expect(config.agents?.defaults?.experimental?.localModelLean).toBe(true);
+          const surface = createAgentHarnessToolSurfaceRuntimeCore({
+            config,
+            agentId: "main",
+            modelProvider: "test",
+            modelId: "model-a",
+            model: { compat: { codeMode: capability } },
+            codeModeOverride: invocation.codeModeOverride as boolean | "auto" | undefined,
+            modelToolsEnabled: true,
+            executeTool: async () => ({ content: [], details: {} }),
+          });
+          try {
+            expect(
+              surface.compactTools([createStubTool("read")]).tools.map((tool) => tool.name),
+            ).toEqual(enabled ? ["exec", "wait"] : ["read"]);
+          } finally {
+            surface.cleanup();
+          }
+        },
+      );
     },
   );
 
   it("preserves context overflow when temporary-state cleanup also fails", async () => {
     const runtime = createTestRuntime();
     const { log, error } = runtime;
+    const runError = { kind: "context_overflow", message: "original run failure" } as const;
     let observedStateDir = "";
     vi.spyOn(fs, "rm").mockRejectedValueOnce(new Error("cleanup denied"));
 
-    const result = await runAgentExecWithMock("inspect", { json: true }, runtime, async () => {
-      observedStateDir = process.env.OPENCLAW_STATE_DIR ?? "";
-      return {
-        ...successResult("partial answer"),
-        meta: {
-          durationMs: 25,
-          error: { kind: "context_overflow", message: "original run failure" },
-        },
-      };
-    });
+    const result = await runExec(
+      { json: true },
+      async () => {
+        observedStateDir = process.env.OPENCLAW_STATE_DIR ?? "";
+        return {
+          ...successResult("partial answer"),
+          meta: { durationMs: 25, error: runError },
+        };
+      },
+      runtime,
+    );
     externalTempDirs.push(observedStateDir);
 
     expect(result).toMatchObject({
@@ -469,41 +413,31 @@ describe("agent exec command composition", () => {
         status: "error",
         final: "partial answer",
         payloads: [{ text: "partial answer" }],
-        error: { kind: "context_overflow", message: "original run failure" },
+        error: runError,
       },
     });
     expect(log).toHaveBeenCalledTimes(1);
     expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toEqual(result.envelope);
-    expect(error).toHaveBeenCalledWith("original run failure");
+    expect(error).toHaveBeenCalledWith(runError.message);
     expect(error).toHaveBeenCalledWith("Agent exec cleanup failed: cleanup denied");
   });
 
   it("reports exhaustion of the ordered explicit fallback chain", async () => {
-    const runtime = createTestRuntime();
-    const runAgent = vi.fn(async (opts: Record<string, unknown>) => {
-      if (typeof opts.onModelFallbackExhausted !== "function") {
-        throw new Error("Missing fallback outcome callback");
-      }
-      opts.onModelFallbackExhausted();
-      return successResult();
-    });
-
-    const result = await runAgentExecWithMock(
-      "inspect",
-      {
-        model: "openai/gpt-5.6-sol",
-        fallback: ["anthropic/claude-sonnet-4-6", "google/gemini-3.1-pro-preview"],
+    const fallback = ["anthropic/claude-sonnet-4-6", "google/gemini-3.1-pro-preview"];
+    const result = await runExec(
+      { model: "openai/gpt-5.6-sol", fallback },
+      async (opts, runtime) => {
+        expect(runtime).toEqual(expect.any(Object));
+        expect(opts).toMatchObject({
+          model: "openai/gpt-5.6-sol",
+          modelFallbacksOverride: fallback,
+        });
+        if (typeof opts.onModelFallbackExhausted !== "function") {
+          throw new Error("Missing fallback outcome callback");
+        }
+        opts.onModelFallbackExhausted();
+        return successResult();
       },
-      runtime,
-      runAgent,
-    );
-
-    expect(runAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        model: "openai/gpt-5.6-sol",
-        modelFallbacksOverride: ["anthropic/claude-sonnet-4-6", "google/gemini-3.1-pro-preview"],
-      }),
-      expect.any(Object),
     );
     expect(result).toMatchObject({
       exitCode: 1,
@@ -512,32 +446,17 @@ describe("agent exec command composition", () => {
   });
 
   it("applies config environment overrides for the run and restores the original environment", async () => {
-    const seedDir = tempDirs.make("openclaw-agent-exec-envseed-");
-    const seedPath = path.join(seedDir, "openclaw.json");
-    await fs.writeFile(
-      seedPath,
-      JSON.stringify({ env: { vars: { OPENCLAW_EXEC_ENV_PROBE: "from-config" } } }),
-      "utf8",
-    );
-    const runtime = createTestRuntime();
-    let observedDuringRun: string | undefined;
-
-    await runAgentExecWithMock(
-      "inspect",
+    const seedPath = await writeSeed({ env: { vars: { OPENCLAW_EXEC_ENV_PROBE: "from-config" } } });
+    await runSuccessfulExec(
       {
         config: seedPath,
         configOverride: ['{"env":{"vars":{"OPENCLAW_EXEC_ENV_PROBE":"from-override"}}}'],
       },
-      runtime,
-      vi.fn(async () => {
-        observedDuringRun = process.env.OPENCLAW_EXEC_ENV_PROBE;
-        return successResult();
-      }),
+      () => {
+        expect(process.env.OPENCLAW_EXEC_ENV_PROBE).toBe("from-override");
+      },
     );
 
-    expect(observedDuringRun).toBe("from-override");
-    // Config-applied values must not outlive the command, or a later isolated
-    // run in the same process would inherit them.
     expect(process.env.OPENCLAW_EXEC_ENV_PROBE).toBeUndefined();
   });
 });
@@ -579,37 +498,21 @@ describe("agent exec base config resolution", () => {
     await expect(resolveExecBaseConfig({ config: broken })).rejects.toThrow();
   });
 
-  async function writeSeed(body: string): Promise<string> {
-    const dir = tempDirs.make("openclaw-agent-exec-seed-");
-    const seedPath = path.join(dir, "openclaw.json");
-    await fs.writeFile(seedPath, body, "utf8");
-    return seedPath;
-  }
-
-  it("rejects --config paired with a mode that reads no config", async () => {
+  it.each(["isolated", "authEnvOnly"] as const)("rejects --config paired with %s", async (mode) => {
     const seedPath = await writeSeed("{}");
-
-    await expect(resolveExecBaseConfig({ config: seedPath, isolated: true })).rejects.toThrow(
-      "--config cannot be combined with --isolated",
-    );
-    await expect(resolveExecBaseConfig({ config: seedPath, authEnvOnly: true })).rejects.toThrow(
-      "--config cannot be combined with --auth-env-only",
+    await expect(resolveExecBaseConfig({ config: seedPath, [mode]: true })).rejects.toThrow(
+      `--config cannot be combined with --${mode === "isolated" ? mode : "auth-env-only"}`,
     );
   });
 });
 
 describe("agent exec tool lifetime", () => {
-  const runtime = createTestRuntime();
-
   it("closes retained tool closures when the invocation ends", async () => {
     const source = vi.fn(async () => ({ content: [], details: {} }));
     let retained: ReturnType<typeof wrapToolWithBeforeToolCallHook> | undefined;
-    const result = await runAgentExecWithMock("inspect", {}, runtime, async () => {
+    await runSuccessfulExec({}, () => {
       retained = wrapToolWithBeforeToolCallHook({ ...createStubTool("read"), execute: source });
-      return successResult();
     });
-
-    expect(result.exitCode).toBe(0);
     await expect(retained?.execute("late", {})).rejects.toThrow();
     expect(source).not.toHaveBeenCalled();
   });
@@ -617,18 +520,15 @@ describe("agent exec tool lifetime", () => {
   it("retained effect guards cannot borrow a replacement invocation's authority", async () => {
     let retainedGuard: (() => void) | undefined;
     const effect = vi.fn();
-    await runAgentExecWithMock("inspect", {}, runtime, async () => {
+    await runSuccessfulExec({}, () => {
       retainedGuard = captureAgentToolSourceExecutionGuard();
-      return successResult();
     });
-    const replacement = await runAgentExecWithMock("inspect", {}, runtime, async () => {
+    await runSuccessfulExec({}, () => {
       expect(() => {
         retainedGuard?.();
         effect();
       }).toThrow("execution scope is no longer active");
-      return successResult();
     });
-    expect(replacement.exitCode).toBe(0);
     expect(effect).not.toHaveBeenCalled();
   });
 });

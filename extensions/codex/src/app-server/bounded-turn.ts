@@ -158,13 +158,9 @@ async function runBoundedCodexAppServerTurnInWorkspace(
   appServer: ReturnType<typeof resolveCodexAppServerRuntimeOptions>,
   workspace: { codexHome?: string; cwd: string },
 ): Promise<CodexBoundedTurnResult> {
-  const totalTimeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 100, 100);
-  const timeoutError = new CodexBoundedTurnTimeoutError(params.taskLabel, totalTimeoutMs);
-  const deadline = performance.now() + totalTimeoutMs;
-  const timeoutMs = deadline - performance.now();
-  if (timeoutMs <= 0) {
-    throw timeoutError;
-  }
+  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 100, 100);
+  const timeoutError = new CodexBoundedTurnTimeoutError(params.taskLabel, timeoutMs);
+  const deadline = performance.now() + timeoutMs;
   params.assertCurrent?.();
   const agentDir = params.agentDir?.trim() || undefined;
   // Hosted search needs a private Codex home and cwd so inherited native tools

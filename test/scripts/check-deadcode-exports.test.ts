@@ -140,6 +140,29 @@ const offlineShell = { routes: routes.APP_ROUTE_PATHS };`;
     expect(compile(source, "config/unrelated.mjs")).toBe(source);
   });
 
+  it("models the locale catalogue members consumed through Vite's runner", () => {
+    const source = `const { module, dependencies } = await runnerImport<
+  typeof import("../../scripts/lib/control-ui-i18n-catalog.ts")
+>(sourceCatalogPath, options);
+const startup = module.loadControlUiStartupCatalog();
+const catalog = module.loadControlUiSourceCatalog();`;
+    vi.spyOn(fs, "readFileSync").mockReturnValue(source);
+    expect(scriptRootWorkspace.entry).toContain("config/knip.config.ts!");
+    expect(scriptRootWorkspace.entry).toContain("config/knip-vite-consumers.mjs!");
+    const compile = knipConfig.compilers.mjs;
+    expect(compile("// config", "config/knip-vite-consumers.mjs")).toContain(
+      'import { loadControlUiStartupCatalog as __vite0_0, loadControlUiSourceCatalog as __vite0_1 } from "../scripts/lib/control-ui-i18n-catalog.ts";',
+    );
+    const withoutStartup = source.replace(
+      "const startup = module.loadControlUiStartupCatalog();",
+      "",
+    );
+    vi.mocked(fs.readFileSync).mockReturnValue(withoutStartup);
+    expect(compile("// config", "config/knip-vite-consumers.mjs")).not.toContain(
+      "loadControlUiStartupCatalog",
+    );
+  });
+
   it("parses all compact export sections and expands symbol lists", () => {
     const output = [
       "Unused exports (2)\nsrc/b.ts: beta, alpha\n/tmp/outside.ts: noise\nC:\\tmp\\outside.ts: noise\nC:outside.ts: noise\n\\\\server\\share\\outside.ts: noise",

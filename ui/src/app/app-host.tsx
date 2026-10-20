@@ -13,13 +13,12 @@ import "../components/resizable-divider.ts";
 import type { AppSidebarElement } from "../components/app-sidebar.tsx";
 import type { CommandPaletteTargetDetail } from "../components/command-palette-contract.ts";
 import { askBrandLabel } from "../components/theme-brand-label.ts";
-import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { i18n } from "../i18n/index.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
 import { storedChatOutboxScopeKey } from "../lib/chat/outbox-store-scope.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
 import { projectI18n, t } from "../lib/reactive/i18n.ts";
-import { projectSource } from "../lib/reactive/projection.ts";
+import { projectOwner } from "../lib/reactive/projection.ts";
 import { projectTheme } from "../lib/reactive/theme.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import {
@@ -275,6 +274,7 @@ export class ShellOwner
   connect(): void {
     const context = this.context;
     this.resumePresentation();
+    // Lazy definitions invalidate commit receipts before queued actions can replay.
     this.cleanups.push(this.lazyCustomElements.subscribe(() => this.invalidate()));
     const runtime = this.runtime;
     if (context && runtime) {
@@ -311,16 +311,19 @@ export class ShellOwner
       watch(theme.preferences);
       watch(theme.appliedPalette);
       watch(context.runtimeConfig, () => {
-        this.ensureRuntimeConfig(context.gateway.snapshot, context.runtimeConfig);
+        void this.shellGateway
+          .ensureRuntimeConfig(context.gateway.snapshot, context.runtimeConfig)
+          .catch(() => undefined);
         void this.shellGateway.reconcileServerUiPrefs(context.runtimeConfig);
       });
-      const shellRoute = projectSource(runtime.router, {
-        read: (router) => selectShellRouteState(router.getState()),
-        subscribe: (router, notify) => router.subscribe(notify),
-        equality: equalShellRouteState,
-      });
+      const shellRoute = projectOwner(
+        runtime.router,
+        (router) => selectShellRouteState(router.getState()),
+        equalShellRouteState,
+      );
       this.cleanups.push(shellRoute.dispose);
       watch(shellRoute, () => this.shellNavigation.updateRouteState(shellRoute.read()));
+      // Optional owners publish shell properties through the same commit lifecycle.
       for (const source of [context.plugins, context.agentIdentity, context.nativeDeviceSettings]) {
         if (source) {
           this.cleanups.push(source.subscribe(() => this.invalidate()));
@@ -329,6 +332,7 @@ export class ShellOwner
       this.cleanups.push(
         context.gateway.subscribeEvents(this.handleGatewayEvent),
         this.shellGateway.observeSessions(context.sessions, () => this.syncDocumentTitle()),
+        // Recovery can retire the selected session before the next shell commit.
         context.placementStartup.subscribe(() => this.recoverDeletedActiveSession()),
       );
       let active = true;
@@ -399,7 +403,8 @@ export class ShellOwner
     this.outboxStoreUnsubscribe = null;
     this.lastLocalePrefSignature = null;
     setSettingsChangeListener(null);
-    this.resetForDocumentDisconnect();
+    this.shellChrome.preservePendingLazyActionForReload();
+    this.resetShellState();
   }
 
   private installOutboxStoreRuntime(runtime: OutboxStoreRuntime) {
@@ -409,6 +414,7 @@ export class ShellOwner
       return;
     }
     this.outboxStoreUnsubscribe?.();
+    // Outbox receipts publish native session facts and schedule the shell commit.
     this.outboxStoreUnsubscribe = runtime.subscribe(this.refreshStoredOutboxPresentation);
     this.refreshStoredOutboxPresentation();
   }
@@ -421,11 +427,6 @@ export class ShellOwner
     this.publishStoredOutboxSessionFacts();
     this.invalidate();
   };
-
-  private resetForDocumentDisconnect() {
-    this.shellChrome.preservePendingLazyActionForReload();
-    this.resetShellState();
-  }
 
   private resetShellState() {
     this.resetConnectionFeedback();
@@ -449,14 +450,6 @@ export class ShellOwner
   private readonly handleGatewayEvent = this.shellGateway.handleGatewayEvent.bind(
     this.shellGateway,
   );
-
-  readonly handleThemeChange = (event: CustomEvent<ThemeModeChangeDetail>) => {
-    const context = this.context;
-    if (!context) {
-      return;
-    }
-    context.theme.setMode(event.detail.mode, event.detail.element);
-  };
 
   async handleSettingsSearchQueryChange(nextQuery: string): Promise<void> {
     this.settingsSearchQuery = nextQuery;
@@ -658,13 +651,6 @@ export class ShellOwner
     this.lastNativeNavState = navState;
     // Shipped Mac app builds without web chrome still consume this bridge.
     postNativeNavState(navState);
-  }
-
-  private ensureRuntimeConfig(
-    snapshot: ApplicationContext["gateway"]["snapshot"],
-    runtimeConfig = this.context?.runtimeConfig,
-  ) {
-    void this.shellGateway.ensureRuntimeConfig(snapshot, runtimeConfig).catch(() => undefined);
   }
 
   readonly newSessionRouteAgentId = this.shellNavigation.newSessionRouteAgentId.bind(

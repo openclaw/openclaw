@@ -53,8 +53,10 @@ current working directory, unless an absolute PATH entry explicitly names their
 directory. OpenClaw's own private recovery directory is also allowed, so cached
 runtime reuse and the installation offer work when you launch from your home
 directory. This exception does not extend to other in-home executables or manager
-roots. On Windows, the service reader honors recorded code pages and Unicode
-byte-order marks. If the current Node build cannot decode a service script safely,
+roots. The POSIX root directory (`/`), where launchd jobs and system services
+commonly start, is not treated as a workspace. Windows drive and share roots keep
+the workspace checks. On Windows, the service reader honors recorded code pages
+and Unicode byte-order marks. If the current Node build cannot decode a service script safely,
 OpenClaw prints the code page and continues searching other sources. Unsupported
 OEM pages such as CP850 are skipped rather than guessed. CP949 is also skipped:
 Node's ICU `euc-kr` decoder silently misdecodes UHC extension characters. Neither

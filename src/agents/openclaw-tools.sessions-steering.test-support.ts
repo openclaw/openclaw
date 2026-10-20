@@ -5,16 +5,14 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { getSessionControllerOperation } from "../sessions/session-controller.js";
 import { captureSessionTarget } from "../sessions/session-controller.target.js";
-import {
-  createOperationalRunInstanceRef,
-  prepareAgentRunAdmission,
-} from "./admitted-run-context.js";
+import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
 import {
   detachActiveEmbeddedRun as clearActiveEmbeddedRun,
   attachActiveEmbeddedRun as setActiveEmbeddedRun,
   type EmbeddedAgentQueueHandle,
   type EmbeddedAgentQueueMessageOptions,
 } from "./embedded-agent-runner/runs.js";
+import { createEmbeddedRunHandle } from "./embedded-agent-runner/runs.test-support.js";
 import { withPreparedEmbeddedRunToolAuthority } from "./harness/tool-authority.runtime.js";
 import { captureRequesterOrigin } from "./requester-origin.js";
 
@@ -31,6 +29,38 @@ export function createSessionsSendTestCaller(sessionKey = "agent:re-portal:main"
     agentId: parseAgentSessionKey(sessionKey)?.agentId ?? "main",
     sessionKey,
     requesterOrigin,
+  };
+}
+
+export function createDurableSessionsSendTestRun(runId: string, afterCommit?: () => Promise<void>) {
+  const queueMessage = vi.fn<EmbeddedAgentQueueHandle["queueMessage"]>(async (_text, options) => {
+    const recorder = options?.userTurnTranscriptRecorder;
+    if (!recorder || !(await recorder.persistApproved())) {
+      throw new Error("Steering fixture did not commit the admitted guidance");
+    }
+    await afterCommit?.();
+  });
+  const handle = createEmbeddedRunHandle({
+    runId,
+    queueMessage,
+    supportsTranscriptCommitWait: true,
+  });
+  handle.messageInjectionV2 = queueInjection(queueMessage);
+  return { handle, queueMessage };
+}
+
+function queueInjection(
+  queue: EmbeddedAgentQueueHandle["queueMessage"],
+  isAvailable = () => true,
+): NonNullable<EmbeddedAgentQueueHandle["messageInjectionV2"]> {
+  return {
+    version: 2,
+    isAvailable,
+    queueMessage: async (text, options, assertCurrent) => {
+      assertCurrent();
+      await queue(text, options);
+      options?.onQueueAccepted?.(true);
+    },
   };
 }
 
@@ -60,15 +90,7 @@ export async function setSessionsSendTestActiveRun(
   const operation = getSessionControllerOperation(sessionKey, target);
   const runId = handle.runId ?? `sessions-target:${sessionId}`;
   const sessionFile = `/tmp/${sessionId}.jsonl`;
-  const admission = prepareAgentRunAdmission({
-    cfg: config,
-    operationalRunInstance: createOperationalRunInstanceRef(runId),
-    facts: {
-      agentId,
-      runId,
-      ingress: { kind: "system", state: "present", boundary: "sessions-send-test" },
-    },
-  });
+  const admission = prepareSystemAgentRunAdmission(config, runId, agentId, "sessions-send-test");
   const ready = createDeferred();
   const closed = createDeferred();
   const completion = (async () => {
@@ -146,22 +168,14 @@ export async function activeRun(
   await setSessionsSendTestActiveRun(
     options.sessionId ?? "caller-active-session",
     {
-      queueMessage,
-      messageInjectionV2: {
-        version: 2,
-        isAvailable: () => options.streaming ?? true,
-        queueMessage: async (text, queueOptions, assertCurrent) => {
-          assertCurrent();
-          await queueMessage(text, queueOptions);
-          queueOptions?.onQueueAccepted?.(true);
-        },
-      },
+      ...createEmbeddedRunHandle({
+        queueMessage,
+        isStopped: () => options.streaming === false,
+        supportsTranscriptCommitWait: true,
+      }),
       isStreaming: () => options.streaming ?? true,
-      isStopped: () => options.streaming === false,
-      isCompacting: () => false,
-      supportsTranscriptCommitWait: true,
+      messageInjectionV2: queueInjection(queueMessage, () => options.streaming ?? true),
       sourceReplyDeliveryMode: options.sourceReplyDeliveryMode ?? "message_tool_only",
-      abort: () => {},
     },
     sessionKey,
     options.requesterSessionKey,

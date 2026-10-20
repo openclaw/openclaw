@@ -37,7 +37,6 @@ import {
   isOllamaCloudOrigin,
   OLLAMA_CLOUD_PROVIDER_ID,
   OLLAMA_DEFAULT_BASE_URL,
-  OLLAMA_DEFAULT_MAX_TOKENS,
 } from "./defaults.js";
 import { normalizeOllamaWireModelId } from "./model-id.js";
 import { applyOllamaThinkingFloor } from "./model-reasoning.js";
@@ -151,12 +150,7 @@ function resolveOllamaNativeNumCtx(model: ProviderRuntimeModel): number | undefi
 function resolveOllamaModelOptions(model: ProviderRuntimeModel): Record<string, unknown> {
   const numCtx = resolveOllamaNativeNumCtx(model);
   return {
-    num_predict:
-      model.maxTokens ??
-      Math.min(
-        OLLAMA_DEFAULT_MAX_TOKENS,
-        model.contextTokens ?? model.contextWindow ?? OLLAMA_DEFAULT_MAX_TOKENS,
-      ),
+    num_predict: model.maxTokens,
     ...pickOllamaParams(model.params, OLLAMA_OPTION_PARAM_KEYS),
     ...(numCtx !== undefined ? { num_ctx: numCtx } : {}),
   };
@@ -600,7 +594,7 @@ function createRawOllamaStreamFn(
             id: model.id,
             reasoning: model.reasoning,
           };
-          const shouldEmitThinking = model.reasoning ?? true;
+          const shouldEmitThinking = model.reasoning;
           const visibleContentSanitizer = createOllamaVisibleContentSanitizer(model.id);
           const cooperativeScheduler = createOllamaStreamCooperativeScheduler(options?.signal);
           let streamStarted = false;
@@ -704,14 +698,9 @@ function createRawOllamaStreamFn(
           };
 
           const resolveVisibleContent = (final: boolean): string | undefined => {
-            const resolution = visibleContentSanitizer.resolveStreamText({
-              text: accumulatedRawContent,
-              final,
-            });
-            if (resolution.kind === "pending") {
-              return undefined;
-            }
-            return resolution.text;
+            return visibleContentSanitizer
+              ? visibleContentSanitizer({ text: accumulatedRawContent, final })
+              : accumulatedRawContent;
           };
 
           for await (const chunk of parseNdjsonStream(reader)) {
@@ -748,7 +737,7 @@ function createRawOllamaStreamFn(
               accumulatedRawContent += rawDelta;
               flushVisibleText(
                 resolveVisibleContent(false),
-                visibleContentSanitizer.preservesStreamText ? rawDelta : undefined,
+                visibleContentSanitizer ? undefined : rawDelta,
               );
             }
             if (chunk.message?.tool_calls?.length) {

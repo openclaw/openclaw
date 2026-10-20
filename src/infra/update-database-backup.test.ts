@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -10,13 +10,12 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { parseUpdateRecoveryBackupManifest } from "../commands/backup-verify-manifest.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { admitOpenClawMaintenanceLiveAuthorityReads } from "../state/openclaw-state-maintenance-context.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as durability from "./directory-durability.js";
 import * as diskSpace from "./disk-space.js";
-import { retireExpiredStandaloneDoctorCaptures } from "./doctor-capture-retention.js";
 import * as fileDescriptor from "./file-descriptor.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import * as sqliteIntegrity from "./sqlite-integrity.js";
+import * as sqliteSource from "./sqlite-snapshot-source.js";
 import * as sqliteSnapshot from "./sqlite-snapshot.js";
 import * as inspection from "./update-candidate-state.inspection.js";
 import { discoverUpdateStateSchemaInspectionInProcess } from "./update-candidate-state.js";
@@ -27,9 +26,8 @@ import {
   createUpdateDatabaseBackup,
   createUpdateDatabaseBackupInProcess,
 } from "./update-database-backup.js";
-import * as databaseGenerations from "./update-database-generations.js";
+import * as databaseGenerations from "./update-physical-database-generations.js";
 import type { UpdateRecoveryCaptureAcquisition } from "./update-recovery-capture-acquisition.js";
-import { getUpdateRunAsync } from "./update-run-reader.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -230,7 +228,7 @@ it("preserves stopped source WAL bookkeeping during the final inventory check", 
   ]);
 });
 
-it.each(["original-custody", "rollback"] as const)(
+it.each(["original-custody", "rollback", "ordinary", "maintenance"] as const)(
   "preserves committed WAL during %s capture without unused generation scans",
   async (mode) => {
     const f = await fixture();
@@ -241,59 +239,66 @@ it.each(["original-custody", "rollback"] as const)(
       database.exec("PRAGMA journal_mode=WAL; INSERT INTO payload VALUES ('checkpoint pending');");
       family = await Promise.all(files.map((file) => fs.readFile(file)));
     }
-    for (const [index, file] of files.entries()) {
-      await fs.writeFile(file, family[index]!);
-    }
+    await Promise.all(files.map((file, index) => fs.writeFile(file, family[index]!)));
     const generations = vi.spyOn(databaseGenerations, "readUpdatePhysicalDatabaseGenerations");
-    const backup = await createUpdateDatabaseBackupInProcess({
-      ...f.input,
-      inspectionPlan: f.inspectionPlan,
-      preserveSourceArtifacts: true,
-      originalCaptureSourcePaths: mode === "original-custody" ? [f.shared] : undefined,
-    });
-    expect(generations).toHaveBeenCalledTimes(mode === "rollback" ? 2 : 0);
-    expect(await Promise.all(files.map((file) => fs.readFile(file)))).toEqual(family);
-    using retained = new DatabaseSync(backup.databases[0]!.snapshotPath, { readOnly: true });
-    expect(retained.prepare("SELECT value FROM payload ORDER BY rowid").all()).toEqual([
-      { value: "retained" },
-      { value: "checkpoint pending" },
-    ]);
-    if (mode === "rollback") {
-      expect(backup.sourceGenerations[f.shared]).toBe(
-        (await databaseGenerations.readUpdatePhysicalDatabaseGenerations([f.shared]))[f.shared],
-      );
-    } else {
-      expect(backup.sourceGenerations[f.shared]).toBeUndefined();
+    // Observe real parent acquisitions; public discovery and backup still use real workers.
+    const parentImages = vi.spyOn(sqliteSource, "prepareSqliteReadOnlyLocationSync");
+    const scope =
+      mode === "ordinary" || mode === "maintenance"
+        ? createOpenClawDatabaseMaintenanceScope({
+            schemaMaintenance: true,
+            assertOwnerCurrent: () => {},
+            assertDatabaseAccess: () => {},
+          })
+        : undefined;
+    const input = { ...f.input, preserveSourceArtifacts: true };
+    try {
+      const backup = scope
+        ? await scope.run(() =>
+            createUpdateDatabaseBackup({
+              ...input,
+              backupRoot: path.join(f.root, "maintenance-rollback"),
+              acquisition: mode === "maintenance" ? { mode: "maintenance-owner" } : undefined,
+            }),
+          )
+        : await createUpdateDatabaseBackupInProcess({
+            ...input,
+            inspectionPlan: f.inspectionPlan,
+            originalCaptureSourcePaths: mode === "original-custody" ? [f.shared] : undefined,
+          });
+      if (scope) {
+        const parentPaths = parentImages.mock.calls.map(([file]) => file);
+        expect(parentPaths).toEqual(mode === "maintenance" ? [f.shared] : []);
+        expect(backup.originalCaptureSourcePaths).toBeUndefined();
+      } else {
+        expect(generations).toHaveBeenCalledTimes(mode === "rollback" ? 2 : 0);
+      }
+      expect(await Promise.all(files.map((file) => fs.readFile(file)))).toEqual(family);
+      expect(backup.databases).toHaveLength(1);
+      const snapshot = backup.databases[0]!;
+      const bytes = await fs.readFile(snapshot.snapshotPath);
+      expect(snapshot).toMatchObject({
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+        sizeBytes: bytes.length,
+      });
+      using retained = new DatabaseSync(snapshot.snapshotPath, { readOnly: true });
+      expect(retained.prepare("SELECT rowid,value FROM payload ORDER BY rowid").all()).toEqual([
+        { rowid: 42, value: "retained" },
+        { rowid: 43, value: "checkpoint pending" },
+      ]);
+      if (mode === "original-custody") {
+        expect(backup.sourceGenerations[f.shared]).toBeUndefined();
+      } else {
+        expect(backup.sourceGenerations[f.shared]).toBe(
+          (await databaseGenerations.readUpdatePhysicalDatabaseGenerations([f.shared]))[f.shared],
+        );
+        expect(backup.sourceGenerations[f.shared]).toEqual(expect.any(String));
+      }
+    } finally {
+      await scope?.close();
     }
   },
 );
-
-it("retains source generations for a generic backup under maintenance custody", async () => {
-  const f = await fixture();
-  const before = await fs.readFile(f.shared);
-  const scope = createOpenClawDatabaseMaintenanceScope({
-    schemaMaintenance: true,
-    assertOwnerCurrent: () => {},
-    assertDatabaseAccess: () => {},
-  });
-  try {
-    const backup = await scope.run(() =>
-      createUpdateDatabaseBackup({
-        ...f.input,
-        backupRoot: path.join(f.root, "maintenance-rollback"),
-        acquisition: { mode: "maintenance-owner" },
-      }),
-    );
-    expect(backup.originalCaptureSourcePaths).toBeUndefined();
-    expect(backup.sourceGenerations[f.shared]).toBe(
-      (await databaseGenerations.readUpdatePhysicalDatabaseGenerations([f.shared]))[f.shared],
-    );
-    expect(backup.sourceGenerations[f.shared]).toEqual(expect.any(String));
-    expect(await fs.readFile(f.shared)).toEqual(before);
-  } finally {
-    await scope.close();
-  }
-});
 
 it("keeps the verified digest when a snapshot is replaced before backup metadata is recorded", async () => {
   const f = await fixture();
@@ -478,6 +483,25 @@ async function originalCaptureFixture(externalAgents = false) {
       }),
   };
 }
+
+it("refuses an original capture before writing when its payload will not fit", async () => {
+  const f = await originalCaptureFixture();
+  const payloadBytes = 2 * 1024 * 1024;
+  await fs.truncate(f.applicationFile, payloadBytes);
+  const store = resolveUpdateCaptureRoot(f.stateDir);
+  vi.spyOn(diskSpace, "tryReadDiskSpace").mockImplementation((targetPath) => ({
+    targetPath,
+    checkedPath: targetPath,
+    availableBytes: 65 * 1024 * 1024,
+    totalBytes: 1024 * 1024 * 1024,
+  }));
+
+  await expect(f.captureOriginal("capacity")).rejects.toThrow(
+    `Original update capture needs 66 MiB near ${store}, but only 65 MiB is available`,
+  );
+  await expect(fs.lstat(store)).rejects.toMatchObject({ code: "ENOENT" });
+  expect((await fs.stat(f.applicationFile)).size).toBe(payloadBytes);
+});
 
 it("seals equivalent original bytes under isolated and maintenance-owned capture", async () => {
   const f = await originalCaptureFixture(true);
@@ -700,82 +724,6 @@ it("rejects an already-aborted in-process size inventory", async () => {
   await expect(
     databaseSizes.readUpdateStateDatabaseSizesInProcess(["never-read.sqlite"], signal),
   ).rejects.toBe(signal.reason);
-});
-
-it("retires only expired sealed standalone Doctor captures and preserves incomplete or linked copies", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const now = Date.parse("2026-09-30T12:00:00.000Z");
-    const day = 24 * 60 * 60_000;
-    const store = resolveUpdateCaptureRoot(state.stateDir);
-    const sealed = async (runId: string, ageDays: number, directory = path.join(store, runId)) => {
-      const manifest = {
-        schemaVersion: 2,
-        kind: "update-recovery",
-        generation: { kind: "baseline" },
-        databases: [],
-        runId,
-        installRoot: state.root,
-        stateDir: state.stateDir,
-        configPath: state.configPath,
-        configPaths: [state.configPath],
-        creator: { host: "fixture", pid: 1, startIdentity: "1" },
-        drivers: [],
-        createdAt: new Date(now - ageDays * day).toISOString(),
-        roots: [state.configPath],
-        excludedRoots: [],
-        protectedPaths: [state.configPath],
-        entries: [
-          { kind: "missing", sourcePath: state.configPath, sqlite: false, directory: false },
-        ],
-      };
-      const raw = JSON.stringify(manifest);
-      parseUpdateRecoveryBackupManifest(raw);
-      await fs.mkdir(directory, { recursive: true });
-      await fs.writeFile(path.join(directory, "manifest.json"), raw);
-      expect(await getUpdateRunAsync(runId)).toBeUndefined();
-      return directory;
-    };
-    const expired = await sealed(`doctor-${randomUUID()}`, 31);
-    const recent = await sealed(`doctor-${randomUUID()}`, 1);
-    const incomplete = path.join(store, `doctor-${randomUUID()}`);
-    await fs.mkdir(incomplete);
-    const update = await sealed(randomUUID(), 40);
-    const linkedId = `doctor-${randomUUID()}`;
-    const linkedTarget = await sealed(linkedId, 31, state.path("linked-capture"));
-    const linked = path.join(store, linkedId);
-    await fs.symlink(linkedTarget, linked, "dir");
-    const interrupted: string[] = [];
-    for (const kind of ["linked", "copied", "conflicting"]) {
-      const retained = await sealed(`doctor-${randomUUID()}`, 31);
-      const finalPath = path.join(retained, "manifest.json");
-      const partialPath = `${finalPath}.partial`;
-      if (kind === "linked") {
-        await fs.link(finalPath, partialPath);
-      } else if (kind === "copied") {
-        await fs.copyFile(finalPath, partialPath);
-      } else {
-        await fs.writeFile(partialPath, "different, unverified bytes");
-      }
-      interrupted.push(retained);
-    }
-    const assertCurrent = vi.fn();
-
-    const result = await retireExpiredStandaloneDoctorCaptures({
-      stateDir: state.stateDir,
-      keepRunId: path.basename(recent),
-      now,
-      assertCurrent,
-    });
-
-    expect(result).toEqual({ retired: [expired], warnings: [] });
-    expect(assertCurrent).toHaveBeenCalled();
-    await expect(fs.lstat(expired)).rejects.toMatchObject({ code: "ENOENT" });
-    for (const retained of [recent, incomplete, update, linkedTarget, ...interrupted]) {
-      expect((await fs.lstat(retained)).isDirectory()).toBe(true);
-    }
-    expect((await fs.lstat(linked)).isSymbolicLink()).toBe(true);
-    expect(await fs.readlink(linked)).toBe(linkedTarget);
-  });
 });
 
 it.each([

@@ -7,7 +7,7 @@ import {
   getPaneTestRuntime,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
-import { mutateChatRunState } from "./chat-state-render.ts";
+import { chatRunPresentation } from "./chat-run-presentation.ts";
 
 // mock-isolation: Exercise runtime commit cadence without initializing the full pane renderer.
 vi.mock("./chat-pane-layout-view.tsx", () => import("./chat-pane-layout.test-support.tsx"));
@@ -253,13 +253,9 @@ it("absorbs a queued stream frame into a property commit and accepts the next st
     stream: current.state.chatStream,
   }));
   const state = pane.state;
-  mutateChatRunState(
-    state,
-    () => {
-      state.chatStream = "First stream revision";
-    },
-    "animation-frame",
-  );
+  chatRunPresentation(state).batch(() => {
+    state.chatStream = "First stream revision";
+  }, "animation-frame");
   const queuedFrame = frames.get(state.chatStreamRenderFrame!);
   expect(queuedFrame).toBeDefined();
 
@@ -274,13 +270,9 @@ it("absorbs a queued stream frame into a property commit and accepts the next st
   await pane.updateComplete;
   expect(updates).toHaveBeenCalledOnce();
 
-  mutateChatRunState(
-    state,
-    () => {
-      state.chatStream = "Next stream revision";
-    },
-    "animation-frame",
-  );
+  chatRunPresentation(state).batch(() => {
+    state.chatStream = "Next stream revision";
+  }, "animation-frame");
   frames.get(state.chatStreamRenderFrame!)?.(0);
   await task(() => {});
   await pane.updateComplete;

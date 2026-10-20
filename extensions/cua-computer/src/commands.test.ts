@@ -5,8 +5,8 @@ import type { OpenClawPluginNodeHostCommand } from "openclaw/plugin-sdk/plugin-e
 import { createSolidPngBuffer } from "openclaw/plugin-sdk/test-fixtures";
 import { readImageMetadataFromHeader } from "rastermill";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import { createCuaComputerProvider } from "./commands.js";
 import {
+  createTestProvider,
   driver,
   execution,
   invalidMacOsEndpoints,
@@ -17,7 +17,13 @@ import {
   CUA_DRIVER_CONTRACT_FIXTURES,
   cuaToolResult,
 } from "./cua-driver-contract.test-fixtures.js";
-import { ClickButton, ScrollDirection, type CuaToolResult } from "./driver-client.js";
+import {
+  ClickButton,
+  createCuaDriver,
+  ScrollDirection,
+  type CuaToolResult,
+} from "./driver-client.js";
+import { createCuaMcpDriver } from "./mcp-driver-client.js";
 
 type ComputerExecution = Awaited<ReturnType<typeof execution>>;
 type WindowObservation = {
@@ -61,7 +67,7 @@ describe("cua-computer provider", () => {
       await ready.promise;
       available = true;
     };
-    const provider = createCuaComputerProvider({ platform: "linux", driver: session });
+    const provider = createTestProvider(session);
     const preparing = provider.prepare?.({ config: {}, env: {} });
     expect(provider.isAvailable()).toBe(false);
     ready.resolve();
@@ -73,11 +79,7 @@ describe("cua-computer provider", () => {
   it("advertises the macOS mapping only with a valid atomic app-provided endpoint", () => {
     const { session } = driver();
     const endpoint = macOsEndpoint();
-    const provider = createCuaComputerProvider({
-      platform: "darwin",
-      env: endpoint,
-      driver: session,
-    });
+    const provider = createTestProvider(session, "darwin", endpoint);
 
     expect(provider.isAvailable()).toBe(true);
     expect(provider.capabilities().actions).toContain("get_window_state");
@@ -88,8 +90,8 @@ describe("cua-computer provider", () => {
       multiDisplay: false,
     });
 
-    const createDriver = vi.fn(() => session);
-    const passive = createCuaComputerProvider({ platform: "darwin", env: endpoint, createDriver });
+    const createDriver = vi.mocked(createCuaMcpDriver);
+    const passive = createTestProvider(session, "darwin", endpoint);
     expect(passive.isAvailable()).toBe(true);
     const declared = passive.capabilities();
     expect(passive.capabilities()).toEqual(declared);
@@ -97,26 +99,21 @@ describe("cua-computer provider", () => {
     expect(createDriver).not.toHaveBeenCalled();
 
     for (const [label, env] of invalidMacOsEndpoints()) {
-      expect(
-        createCuaComputerProvider({ platform: "darwin", env, driver: session }).isAvailable(),
-        label,
-      ).toBe(false);
+      expect(createTestProvider(session, "darwin", env).isAvailable(), label).toBe(false);
     }
   });
 
   it("lazily owns one session and closes it when node-host availability stops", async () => {
     const { session, dispose } = driver();
-    const createDriver = vi.fn(() => session);
-    const clearInterval = vi.fn();
-    const provider = createCuaComputerProvider({
-      platform: "linux",
-      createDriver,
-      imageProcessor: {
-        encode: vi.fn(async () => ({ data: Buffer.from("jpeg"), width: 100, height: 50 })),
-      },
-      setInterval: vi.fn(() => Object.assign(1, { unref: vi.fn() })) as never,
-      clearInterval: clearInterval as never,
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
     });
+    const clearInterval = vi.spyOn(globalThis, "clearInterval");
+    onTestFinished(() => clearInterval.mockRestore());
+    const createDriver = vi.mocked(createCuaDriver);
+    const provider = createTestProvider(session);
+    createDriver.mockReturnValueOnce(session);
     expect(createDriver).not.toHaveBeenCalled();
 
     const computer = await provider.openExecution({
@@ -142,10 +139,7 @@ describe("cua-computer provider", () => {
         entered.resolve();
         return retiring.promise;
       });
-      const provider = createCuaComputerProvider({
-        platform: "linux",
-        createDriver: () => session,
-      });
+      const provider = createTestProvider(session);
       const stop = provider.watchAvailability?.({ config: {}, env: {} }, vi.fn());
       const first = Promise.resolve(stop?.());
       const second = Promise.resolve(stop?.());
@@ -684,11 +678,7 @@ describe("cua-computer desktop frames", () => {
           },
         ],
       });
-      const provider = createCuaComputerProvider({
-        platform,
-        env: macOsEndpoint(),
-        driver: input.session,
-      });
+      const provider = createTestProvider(input.session, platform);
       const commands: OpenClawPluginNodeHostCommand[] = [];
       registerComputerUseProvider(
         { registerNodeHostCommand: (command) => commands.push(command) },
@@ -869,10 +859,9 @@ describe("cua-computer desktop frames", () => {
         },
       ];
       getDesktopState.mockResolvedValue(desktop);
-      const computer = await createCuaComputerProvider({
-        platform: "linux",
-        driver: session,
-      }).openExecution({ executionId: "123e4567-e89b-42d3-a456-426614174000" });
+      const computer = await createTestProvider(session).openExecution({
+        executionId: "123e4567-e89b-42d3-a456-426614174000",
+      });
       const screen = JSON.parse(await computer.snapshot('{"format":"png","maxWidth":100}')) as {
         displayFrameId: string;
       };

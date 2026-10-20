@@ -166,7 +166,6 @@ describe("RequestClient", () => {
     await expect(first).resolves.toEqual({ ok: "first" });
     await expect(stale).rejects.toThrow(/Dropped stale background request/);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
-    expect(client.queueSize).toBe(0);
   });
 
   it("keeps standard mutations queued until Discord accepts or rejects them", async () => {
@@ -204,7 +203,6 @@ describe("RequestClient", () => {
       Array.from({ length: 7 }, () => ({ ok: true })),
     );
     expect(fetchSpy).toHaveBeenCalledTimes(requests.length + active.length);
-    expect(client.queueSize).toBe(0);
   });
 
   it("drains same-bucket requests when the active request finishes without polling", async () => {
@@ -304,16 +302,13 @@ describe("RequestClient", () => {
 
     const request = client.get("/channels/c1/messages");
     await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
-    expect(client.queueSize).toBe(1);
 
     client.clearQueue();
-    expect(client.queueSize).toBe(1);
 
     response.resolve(rateLimitResponse(0, { "X-RateLimit-Bucket": "channel-messages" }));
 
     await expectRateLimitError(request, { retryAfter: 0 });
     expect(fetchSpy).toHaveBeenCalledTimes(1);
-    expect(client.queueSize).toBe(0);
   });
 
   it.each([

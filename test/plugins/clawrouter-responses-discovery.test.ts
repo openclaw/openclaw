@@ -91,7 +91,7 @@ describe("ClawRouter Responses discovery to dispatch", () => {
       const provider = await registerSingleProviderPlugin(clawrouter);
       const runtimeHooks: ProviderRuntimeHooks = {
         prepareProviderDynamicModel: async ({ context }) => {
-          await provider.prepareDynamicModel?.(context);
+          return await provider.prepareDynamicModel?.(context);
         },
         runProviderDynamicModel: ({ context }) => provider.resolveDynamicModel?.(context),
         shouldPreferProviderRuntimeResolvedModel: ({ context }) =>

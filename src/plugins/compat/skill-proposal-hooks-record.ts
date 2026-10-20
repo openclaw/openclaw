@@ -4,7 +4,6 @@ export const SKILL_PROPOSAL_HOOKS_COMPAT_RECORD = {
   code: "removed-skill-proposal-hooks",
   status: "removed",
   owner: "sdk",
-  introduced: "2026-09-29",
   // Removal landed 2026-10-08 (#161057); the prior day was the final compatibility day.
   removeAfter: "2026-10-07",
   docsPath: "/plugins/sdk-migration/removed-surfaces#skill-workshop-proposal-hooks",
@@ -22,7 +21,4 @@ export const SKILL_PROPOSAL_HOOKS_COMPAT_RECORD = {
     "PluginHookSkillChangedEvent.proposal",
   ],
   diagnostics: ["plugin compatibility registry and migration guide"],
-  tests: ["src/plugins/compat/registry.test.ts"],
-  releaseNote:
-    "The Skill Workshop `skill_proposal_evaluate` and `skill_proposal_changed` plugin hooks were removed with Workshop proposals; Workshop now applies changes immediately with restorable versions.",
 } as const satisfies PluginCompatRecord;

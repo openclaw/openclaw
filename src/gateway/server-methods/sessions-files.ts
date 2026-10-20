@@ -1,5 +1,7 @@
 import { resolve as resolvePath } from "node:path";
 import {
+  ErrorCodes,
+  errorShape,
   isCloudWorkerPlacementState,
   type SessionFileEntry,
   type SessionsFilesGetParams,
@@ -18,11 +20,10 @@ import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { DEFAULT_IDENTITY_FILENAME } from "../../agents/workspace-bootstrap-policy.js";
 import type { SessionEntryReadScope } from "../../config/sessions/session-accessor.types.js";
 import { captureSessionActorStorageOwner } from "../../config/sessions/session-actor-storage-binding.js";
-import { readRetainedSessionEntryFacts } from "../../config/sessions/session-entry-read-facts.js";
-import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { prepareSessionFileWorkspace } from "../session-file-workspace.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { hasSessionReadAccessChanged } from "../session-sharing-policy.js";
@@ -31,9 +32,8 @@ import {
   toTranscriptReadScope,
 } from "../session-transcript-read-target.js";
 import type { SessionTranscriptReadScope } from "../session-transcript-readers.js";
-import { withGatewaySessionEntryReadOnly } from "../session-utils-read-lifetime.js";
+import { retainGatewaySessionEntryReadOnly } from "../session-utils-read-lifetime.js";
 import type { GatewaySessionEntryRead } from "../session-utils-store.js";
-import { resolveSessionWorkspaceRoots } from "../session-workspace-roots.js";
 import { readSessionWorkerPlacementAsync } from "../worker-environments/session-placement-lifecycle.js";
 import { WORKSPACE_PREVIEW_MAX_BYTES } from "../workspace-file-limits.js";
 import {
@@ -91,7 +91,7 @@ function rejectDeviceFolderFiles(
   return true;
 }
 
-function loadSessionFileRoot(loaded: GatewaySessionEntryRead) {
+async function loadSessionFileRoot(loaded: GatewaySessionEntryRead) {
   if (!loaded.entry?.sessionId) {
     return {
       ...loaded,
@@ -99,18 +99,28 @@ function loadSessionFileRoot(loaded: GatewaySessionEntryRead) {
       root: undefined,
       fileRoot: undefined,
       diffCwd: undefined,
+      fileWorkspace: undefined,
     };
   }
   if (loaded.entry.repositoryWorkspaceId) {
-    return { ...loaded, root: undefined, fileRoot: undefined, diffCwd: undefined };
+    return {
+      ...loaded,
+      root: undefined,
+      fileRoot: undefined,
+      diffCwd: undefined,
+      fileWorkspace: undefined,
+    };
   }
-  const { spawnedCwd, root, diffCwd } = resolveSessionWorkspaceRoots(
+  const fileWorkspace = await prepareSessionFileWorkspace(
     loaded.cfg,
     loaded.agentId,
+    loaded.canonicalKey,
     loaded.entry,
   );
+  const { spawnedCwd, root, diffCwd } = fileWorkspace;
   return {
     ...loaded,
+    fileWorkspace,
     root,
     fileRoot: resolveFileRoot({ root, spawnedCwd }),
     diffCwd,
@@ -121,71 +131,81 @@ function loadSessionFileRoot(loaded: GatewaySessionEntryRead) {
  * Reuse file-route workspace precedence, excluding remote-owned roots.
  * Exec-node sessions can otherwise fall back to a local agent directory.
  */
-export function resolveLocalSessionWorkspaceRoot(params: {
+export async function prepareLocalSessionWorkspaceRoot(params: {
   sessionKey: string;
   agentId?: string;
   source: { entry: Partial<InternalSessionEntry> | undefined; cfg: OpenClawConfig };
-}): string | undefined {
+}) {
   const { entry, cfg } = params.source;
-  const root =
-    entry?.sessionId && !entry.repositoryWorkspaceId
-      ? resolveSessionWorkspaceRoots(
-          cfg,
-          params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
-          entry,
-        ).root
-      : undefined;
-  return entry?.execNode || (root && getAgentWorkspaceAccess(root)) ? undefined : root;
+  if (!entry?.sessionId || entry.repositoryWorkspaceId || entry.execNode) {
+    return undefined;
+  }
+  const workspace = await prepareSessionFileWorkspace(
+    cfg,
+    params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
+    params.sessionKey,
+    entry,
+  );
+  return workspace.root && !getAgentWorkspaceAccess(workspace.root) ? workspace : undefined;
 }
 
-/** Keep actor metadata and its full planning row under one source lifetime. */
-export function withSessionFileRoot<T>(
+/** Retain workspace authority independently of the evictable planning-row cache. */
+export async function withSessionFileRoot<T>(
   params: {
     sessionKey: string;
     agentId?: string;
     projection?: SessionEntryReadScope["projection"];
+    getRuntimeConfig?: () => OpenClawConfig;
   },
   cfg: OpenClawConfig,
   consume: (
-    loaded: ReturnType<typeof loadSessionFileRoot>,
+    loaded: Awaited<ReturnType<typeof loadSessionFileRoot>>,
     assertCurrent: () => void,
+    readEntry: () => InternalSessionEntry | undefined,
   ) => Promise<T>,
 ): Promise<T> {
-  return withGatewaySessionEntryReadOnly(
-    { cfg, key: params.sessionKey, agentId: params.agentId, projection: params.projection },
-    async (session, assertSourceCurrent) => {
-      const metadata = captureSessionEntryMetadataRead(params, assertSourceCurrent);
-      const loaded = loadSessionFileRoot(session);
-      const assertCurrent = () => {
-        assertSourceCurrent();
-        if (!metadata) {
-          return;
-        }
-        const current = metadata.readCurrent();
-        if (!sessionFileWorkspaceMatches(session.entry, current)) {
-          throw new Error("Session workspace changed during file access");
-        }
-      };
-      assertCurrent();
-      const result = await consume(loaded, assertCurrent);
-      assertCurrent();
-      return result;
+  const session = await retainGatewaySessionEntryReadOnly(
+    params.sessionKey,
+    params.agentId,
+    sessionFileWorkspaceMatches,
+    cfg,
+    {
+      projection:
+        params.projection && params.projection !== "full"
+          ? [...(params.projection === "list" ? [] : params.projection), "skillsSnapshot"]
+          : "full",
     },
   );
+  try {
+    const loaded = await loadSessionFileRoot(session);
+    const assertCurrent = () => {
+      if (!session.isCurrentAtResponse()) {
+        throw new SessionMutationAuthorizationChangedError(
+          errorShape(ErrorCodes.FORBIDDEN, "Session workspace changed during file access"),
+        );
+      }
+      const current = session.readRetainedEntry();
+      if (current) {
+        loaded.fileWorkspace?.assertCurrent(params.getRuntimeConfig?.() ?? cfg, current);
+      }
+    };
+    assertCurrent();
+    const result = await consume(loaded, assertCurrent, session.readRetainedEntry);
+    assertCurrent();
+    return result;
+  } finally {
+    session.release();
+  }
 }
 
 async function loadSessionFiles(
-  loaded: ReturnType<typeof loadSessionFileRoot>,
+  loaded: Awaited<ReturnType<typeof loadSessionFileRoot>>,
   context: GatewayRequestContext,
   assertSourceCurrent: () => void,
 ): Promise<
   LoadedSessionFiles & { repository?: Awaited<ReturnType<typeof resolveRepositoryWorkspaceAccess>> }
 > {
   const { storePath, entry, canonicalKey, agentId } = loaded;
-  const metadata = captureSessionEntryMetadataRead(
-    { storePath, sessionKey: canonicalKey, agentId },
-    assertSourceCurrent,
-  );
   if (!entry?.sessionId || !storePath || !agentId) {
     return { files: [] };
   }
@@ -195,25 +215,7 @@ async function loadSessionFiles(
     await withSettledLocalWorkspacePath(
       {
         cwd: loaded.root,
-        assertCurrent: () => {
-          assertSourceCurrent();
-          const current = metadata
-            ? metadata.readCurrent()
-            : readRetainedSessionEntryFacts(
-                {
-                  agentId: loaded.readSource?.agentId ?? agentId,
-                  path: loaded.readSource?.path ?? storePath,
-                },
-                { sessionKeys: [canonicalKey], snapshotFields: [] },
-              )?.entries.find((row) => row.sessionKey === canonicalKey)?.entry;
-          if (
-            current?.sessionId !== entry.sessionId ||
-            current.lifecycleRevision !== entry.lifecycleRevision ||
-            current.worktree?.id !== entry.worktree?.id
-          ) {
-            throw new Error("Session workspace changed during file read");
-          }
-        },
+        assertCurrent: assertSourceCurrent,
       },
       async () => {},
     );
@@ -315,25 +317,36 @@ async function handleSessionFilesRead(
   const read = await retainSessionScopedRead(options, params.sessionKey, agentId, {
     requireMaterialized: true,
     retain: request.kind === "download",
+    projection: ["skillsSnapshot"],
     entryMatches: (previous, current) =>
       !hasSessionReadAccessChanged(previous, current) &&
       sessionFileWorkspaceMatches(previous, current),
   });
   let downloadOwnsRead = false;
+  let readAuthority: ReturnType<typeof createSessionFileReadAuthority> | undefined;
   return withSessionFileRoot(
-    { ...params, agentId },
+    { ...params, agentId, getRuntimeConfig: context.getRuntimeConfig },
     context.getRuntimeConfig(),
-    async (source, assertSourceCurrent) => {
+    async (source, assertSourceCurrent, readEntry) => {
       if (rejectDeviceFolderFiles(source.entry, respond)) {
         return;
       }
+      // HTTP delivery borrows the download grant's retained row, not this shorter callback.
+      const hostRead = createSessionFileReadAuthority(options, {
+        ...source,
+        agentId,
+        readEntry: read?.prepared.readRetainedEntry ?? readEntry,
+        assertSourceCurrent: read?.assertCurrent ?? assertSourceCurrent,
+      });
+      readAuthority = hostRead;
       const assertCurrent = () => {
         assertSourceCurrent();
         read?.assertCurrent();
+        hostRead.assertCurrent();
       };
-      const hostRead = createSessionFileReadAuthority(options, { ...source, agentId });
       let retainedRepository: Awaited<ReturnType<typeof resolveRepositoryWorkspaceAccess>>;
       try {
+        assertCurrent();
         // A download grant outlives this request's planning-row borrow, including
         // memory-backed repositories. Its retained read owns all later assertions.
         const loaded = await loadSessionFiles(
@@ -465,18 +478,6 @@ async function handleSessionFilesRead(
         } else {
           publish();
         }
-      } catch (error) {
-        if (
-          !hostRead.hasHostRead() ||
-          !(error instanceof SessionMutationAuthorizationChangedError)
-        ) {
-          throw error;
-        }
-        respondSessionFileNotFound(
-          respond,
-          "path" in params ? (params.path ?? "") : "",
-          "outside_session_boundary",
-        );
       } finally {
         if (!downloadOwnsRead) {
           retainedRepository?.[Symbol.dispose]();
@@ -484,11 +485,26 @@ async function handleSessionFilesRead(
         }
       }
     },
-  ).finally(() => {
-    if (!downloadOwnsRead) {
-      read?.release();
-    }
-  });
+  )
+    .finally(() => {
+      if (!downloadOwnsRead) {
+        read?.release();
+      }
+    })
+    .catch((error: unknown) => {
+      if (!(error instanceof SessionMutationAuthorizationChangedError)) {
+        throw error;
+      }
+      if (!readAuthority?.hasHostRead()) {
+        respond(false, undefined, error.error);
+        return;
+      }
+      respondSessionFileNotFound(
+        respond,
+        "path" in params ? (params.path ?? "") : "",
+        "outside_session_boundary",
+      );
+    });
 }
 
 export const sessionsFilesHandlers: GatewayRequestHandlers = {
@@ -527,7 +543,7 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
       return;
     }
     return withSessionFileRoot(
-      { ...params, agentId },
+      { ...params, agentId, getRuntimeConfig: context.getRuntimeConfig },
       context.getRuntimeConfig(),
       async (loaded, assertSourceCurrent) => {
         if (rejectDeviceFolderFiles(loaded.entry, respond)) {
@@ -617,7 +633,7 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
         return;
       }
       return withSessionFileRoot(
-        { sessionKey: params.key, agentId },
+        { sessionKey: params.key, agentId, getRuntimeConfig: context.getRuntimeConfig },
         context.getRuntimeConfig(),
         async (loaded, assertCurrent) => {
           if (rejectDeviceFolderFiles(loaded.entry, respond)) {

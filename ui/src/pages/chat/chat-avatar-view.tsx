@@ -50,7 +50,7 @@ export type ChatAvatarProps = {
 };
 
 export function ChatAvatar(props: ChatAvatarProps) {
-  const role = createMemo(() => normalizeRoleForGrouping(props.role));
+  const role = () => normalizeRoleForGrouping(props.role);
   return (
     <Show
       when={role() === "user" && props.sender ? props.sender : undefined}
@@ -105,7 +105,7 @@ function ProfileChatAvatar(props: {
   channelAvatar?: ChannelSenderAvatarSource;
 }) {
   const gateway = useAvatarGatewayContext();
-  const label = createMemo(() => formatSenderLabel(props.sender) ?? "");
+  const label = () => formatSenderLabel(props.sender) ?? "";
   const photo = createMemo(() =>
     resolveChannelSenderAvatarUrl(props.sender, props.channelAvatar, gateway().resourceBasePath),
   );

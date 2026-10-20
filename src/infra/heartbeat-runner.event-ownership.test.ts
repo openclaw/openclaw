@@ -7,6 +7,7 @@ import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { enqueueCommandInLane } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import type { HeartbeatConfig } from "./heartbeat-config.js";
+import { inactiveHeartbeatHours } from "./heartbeat-runner.boundary-test-support.js";
 import {
   type HeartbeatRoutingFixture,
   formatQueuedEvents,
@@ -113,7 +114,6 @@ describe("Heartbeat cron and exec event ownership", () => {
                   source: "cron",
                   intent: "immediate",
                   reason: "cron:nightly-report",
-                  deps: { nowMs: () => Date.UTC(2025, 0, 1, 7) },
                 }
               : { reason: "cron:reminder-job" },
           );
@@ -136,7 +136,7 @@ describe("Heartbeat cron and exec event ownership", () => {
         internal
           ? { target: "none" }
           : outsideHours
-            ? { activeHours: { start: "08:00", end: "24:00", timezone: "user" } }
+            ? { activeHours: inactiveHeartbeatHours() }
             : {},
       );
     },

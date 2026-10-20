@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync, writeSync } from "node:fs";
 import { Session } from "node:inspector/promises";
 import { availableParallelism } from "node:os";
 import { writeHeapSnapshot } from "node:v8";
@@ -7,6 +7,7 @@ import { getWorkerMessageMetrics } from "../../src/infra/worker-message-metrics.
 import { startGatewayBenchDiagnostics } from "./gateway-bench-diagnostics.ts";
 import {
   GATEWAY_PROFILE_CHANNEL,
+  GATEWAY_GC_TRACE_MARKER,
   GATEWAY_CPU_SAMPLE_INTERVAL_MICROS,
   GATEWAY_HEAP_SAMPLE_INTERVAL,
   type GatewayBenchCommand,
@@ -60,6 +61,25 @@ if (isMainThread) {
   const inspector = new Session();
   const workers = new GatewayBenchWorkerProfiler(inspector);
   let inspectorConnected = false;
+  const traceGc = process.execArgv.includes("--trace-gc-nvp");
+  const markGc = (phase: string, profilePath?: string) => {
+    if (traceGc) {
+      // Share V8's stdout descriptor without asynchronous stream buffering.
+      writeSync(
+        1,
+        `${GATEWAY_GC_TRACE_MARKER}${JSON.stringify({ phase, pid: process.pid, profilePath })}\n`,
+      );
+    }
+  };
+  if (traceGc) {
+    inspector.connect();
+    inspectorConnected = true;
+    // The preload runs before Gateway entry and its workers. Identify V8's
+    // main-isolate address with a forced GC outside every measured capture.
+    markGc("identify-start");
+    await inspector.post("HeapProfiler.collectGarbage");
+    markGc("identify-stop");
+  }
   const active = new Set<GatewayProfileCommand["kind"]>();
   const diagnosticCaptures = new Map<
     GatewayProfileCommand["kind"],
@@ -136,6 +156,7 @@ if (isMainThread) {
           return;
         }
         namedDiagnostics.set(captureId, startGatewayBenchDiagnostics());
+        markGc("diagnostics-start", captureId);
         reply();
       } else {
         const stopDiagnostics = namedDiagnostics.get(captureId);
@@ -143,6 +164,7 @@ if (isMainThread) {
           reply("Gateway diagnostics have not started");
           return;
         }
+        markGc("diagnostics-stop", captureId);
         const result = stopDiagnostics();
         namedDiagnostics.delete(captureId);
         process.send?.({
@@ -179,12 +201,11 @@ if (isMainThread) {
           });
           await inspector.post("Profiler.start");
         } else {
-          // Include dead allocations as well as survivors: retained heap alone
-          // misses the short-lived objects that cause busy-Gateway GC pressure.
+          // Churn includes dead allocations; retention captures only survivors.
           const options = {
-            samplingInterval: GATEWAY_HEAP_SAMPLE_INTERVAL,
-            includeObjectsCollectedByMajorGC: true,
-            includeObjectsCollectedByMinorGC: true,
+            samplingInterval: message.samplingIntervalBytes ?? GATEWAY_HEAP_SAMPLE_INTERVAL,
+            includeObjectsCollectedByMajorGC: message.includeCollectedObjects ?? true,
+            includeObjectsCollectedByMinorGC: message.includeCollectedObjects ?? true,
           };
           await inspector.post("HeapProfiler.startSampling", options);
         }
@@ -194,9 +215,16 @@ if (isMainThread) {
         }
         diagnosticCaptures.set(message.kind, startGatewayBenchDiagnostics());
         workerMessageStarts.set(message.kind, getWorkerMessageMetrics());
+        if (message.kind === "heap") {
+          markGc("heap-start", message.profilePath);
+        }
       } else if (message.action === "stop") {
         if (!active.has(message.kind)) {
           throw new Error(`Gateway ${message.kind} profile has not started`);
+        }
+        if (message.kind === "heap") {
+          // Exclude diagnostics aggregation and profile materialization from promotion.
+          markGc("heap-stop", message.profilePath);
         }
         const diagnostics = diagnosticCaptures.get(message.kind)?.();
         diagnosticCaptures.delete(message.kind);

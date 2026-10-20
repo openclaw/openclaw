@@ -24,12 +24,11 @@ import {
 import {
   assertInteractionCurrent,
   awaitActionWithAbort,
-  awaitNavigationGuardedInteraction,
   type GuardedInteractionOptions,
   type InteractionTargetOptions,
-  interactionNavigationPolicy,
   reconcileRemoteDialogAfterActionSettled,
   runCancellablePageInteraction,
+  runGuardedPageInteraction,
   throwIfInteractionAborted,
 } from "./pw-tools-core.interactions.navigation.js";
 import { normalizeTimeoutMs } from "./pw-tools-core.shared.js";
@@ -233,19 +232,7 @@ export async function waitForViaPlaywright(
     await runWaitSequence(waitForStep);
     return;
   }
-  await awaitNavigationGuardedInteraction(
-    {
-      action: async () => await runWaitSequence(waitForSettledStep),
-      cdpUrl: opts.cdpUrl,
-      page,
-      ...interactionNavigationPolicy(opts),
-      targetId: opts.targetId,
-      assertCurrent: opts.assertCurrent,
-    },
-    opts.signal,
-    opts.signal,
-    reconcileRemoteDialog,
-  );
+  await runGuardedPageInteraction(page, opts, () => runWaitSequence(waitForSettledStep));
 }
 
 type ScreenshotOptions = {

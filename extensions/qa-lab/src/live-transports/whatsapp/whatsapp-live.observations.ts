@@ -143,7 +143,7 @@ export async function waitForScenarioObservedMessage(
     timeoutMs?: number;
   },
 ) {
-  const message = await waitForWhatsAppObservedMessage(
+  return await waitForWhatsAppObservedMessage(
     context.driver,
     {
       observedAfter: params.observedAfter,
@@ -158,8 +158,6 @@ export async function waitForScenarioObservedMessage(
     },
     () => formatWhatsAppScenarioWaitDiagnostics(context, params),
   );
-  context.recordObservedMessage(message);
-  return message;
 }
 
 export async function waitForWhatsAppQuotedMessage(
@@ -296,7 +294,6 @@ export function isWhatsAppScenarioSutMessage(
 }
 
 export async function assertWhatsAppScenarioMessageBatch(params: {
-  alreadyRecordedMessageIds: Set<string>;
   context: WhatsAppQaMessageScenarioContext;
   observedAfter: Date;
   run: WhatsAppQaMessageScenarioRun;
@@ -329,13 +326,6 @@ export async function assertWhatsAppScenarioMessageBatch(params: {
     if (!joinedText.includes(expected)) {
       throw new Error(`expected joined WhatsApp SUT text to include ${expected}`);
     }
-  }
-  for (const message of uniqueMessages) {
-    if (!message.messageId || params.alreadyRecordedMessageIds.has(message.messageId)) {
-      continue;
-    }
-    params.context.recordObservedMessage(message);
-    params.alreadyRecordedMessageIds.add(message.messageId);
   }
   return `observed ${uniqueMessages.length} SUT message(s) after settle`;
 }

@@ -42,6 +42,7 @@ import { resolveReadOnlyWorkspaceSkillMounts } from "./sandbox/workspace-mounts.
 import { createLsTool, type LsOperations } from "./sessions/tools/ls.js";
 import { createReadTool } from "./sessions/tools/read.js";
 import type { ReadToolDetails } from "./sessions/tools/tool-contracts.js";
+import { bindAgentToolReplaySafety } from "./tool-replay-safety.js";
 import { resolveToolResultBudget } from "./tool-result-limits.js";
 import { getAgentWorkspaceAccess, WorkspaceAccessUnavailableError } from "./workspace-access.js";
 
@@ -300,13 +301,16 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
       const guardedLs = guardWorkspaceTool(ls);
       // Resolve the default directory before the guard as well as execution.
       base.push(
-        sandboxRoot
-          ? wrapSandboxFileToolPath(guardedLs, {
-              root: sandboxRoot,
-              bridge: sandboxFsBridge!,
-              defaultPath: ".",
-            })
-          : guardedLs,
+        bindAgentToolReplaySafety(
+          sandboxRoot
+            ? wrapSandboxFileToolPath(guardedLs, {
+                root: sandboxRoot,
+                bridge: sandboxFsBridge!,
+                defaultPath: ".",
+              })
+            : guardedLs,
+          "bounded-read",
+        ),
       );
     }
     const read = sandboxRoot
@@ -350,35 +354,38 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
           cwd: options.codingRoot,
         });
     base.push(
-      wrapReadToolWithSkillContent(
-        sandboxRoot ? wrapped : wrapWorkspaceSkillRead(wrapped, skillReadResources, options),
-        // A sandboxed run serves filesystem paths through its guarded bridge.
-        // Host-retained content and host-tree stamps describe host bytes:
-        // carrying either into the sandboxed wrapper would serve pre-sandbox
-        // instructions without consulting the bridge, or attribute
-        // bridge-served bytes to a host bundle. Drop both so filesystem reads
-        // use the bridge and carry no delivery identity — the activation then
-        // omits a fingerprint rather than borrowing a host stamp. node://
-        // entries have no filesystem path — retained content is their only
-        // serving route — so they keep their bytes and producer-stamped
-        // identity on every run.
-        skillReadResources?.map((skill) => {
-          const retainHostContent = !sandboxRoot || skill.filePath.startsWith("node://");
-          return {
-            filePath: resolveSkillReadPath(skill),
-            readContent: retainHostContent ? skill.readContent : undefined,
-            bundleFingerprint: retainHostContent ? skill.bundleFingerprint : undefined,
-          };
-        }),
-        {
-          modelContextWindowTokens: options.modelContextWindowTokens,
-          imageSanitization: options.imageSanitization,
-          cwd: options.codingRoot,
-          containerWorkdir: sandbox?.containerWorkdir,
-          instructionPaths: options.skillInstructionPaths,
-          instructionDeliveryCache: options.skillInstructionDeliveryCache,
-          instructionDeliveryMarkers: options.skillInstructionDeliveryMarkers,
-        },
+      bindAgentToolReplaySafety(
+        wrapReadToolWithSkillContent(
+          sandboxRoot ? wrapped : wrapWorkspaceSkillRead(wrapped, skillReadResources, options),
+          // A sandboxed run serves filesystem paths through its guarded bridge.
+          // Host-retained content and host-tree stamps describe host bytes:
+          // carrying either into the sandboxed wrapper would serve pre-sandbox
+          // instructions without consulting the bridge, or attribute
+          // bridge-served bytes to a host bundle. Drop both so filesystem reads
+          // use the bridge and carry no delivery identity — the activation then
+          // omits a fingerprint rather than borrowing a host stamp. node://
+          // entries have no filesystem path — retained content is their only
+          // serving route — so they keep their bytes and producer-stamped
+          // identity on every run.
+          skillReadResources?.map((skill) => {
+            const retainHostContent = !sandboxRoot || skill.filePath.startsWith("node://");
+            return {
+              filePath: resolveSkillReadPath(skill),
+              readContent: retainHostContent ? skill.readContent : undefined,
+              bundleFingerprint: retainHostContent ? skill.bundleFingerprint : undefined,
+            };
+          }),
+          {
+            modelContextWindowTokens: options.modelContextWindowTokens,
+            imageSanitization: options.imageSanitization,
+            cwd: options.codingRoot,
+            containerWorkdir: sandbox?.containerWorkdir,
+            instructionPaths: options.skillInstructionPaths,
+            instructionDeliveryCache: options.skillInstructionDeliveryCache,
+            instructionDeliveryMarkers: options.skillInstructionDeliveryMarkers,
+          },
+        ),
+        "bounded-read",
       ),
     );
     if (!options.readOnly && !sandboxRoot) {

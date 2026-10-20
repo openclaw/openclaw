@@ -32,8 +32,7 @@ type RuntimeModule = Awaited<
 
 function createFakeRuntime() {
   let status: ApplicationPlacementStartupStatus | null = null;
-  const listeners = new Set<() => void>();
-  const publish = () => listeners.forEach((listener) => listener());
+  let publish = () => {};
   const runtime: ApplicationPlacementStartupRuntime = {
     get: () => status,
     hasPendingTurn: () => status !== null,
@@ -49,14 +48,14 @@ function createFakeRuntime() {
     }),
     retry: vi.fn(),
     pause: vi.fn(),
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
     dispose: vi.fn(),
   };
   return {
     runtime,
+    factory: vi.fn<RuntimeModule["default"]>((_dependencies, onChange) => {
+      publish = onChange;
+      return runtime;
+    }),
   };
 }
 
@@ -73,7 +72,7 @@ describe("application session placement startup", () => {
   it("does not install a runtime that finishes loading after disposal", async () => {
     const moduleLoad = createDeferred<RuntimeModule>();
     const fake = createFakeRuntime();
-    const factory = vi.fn(() => fake.runtime);
+    const factory = fake.factory;
     const { startup, input } = createPlacementStartupHarness(vi.fn(), {
       loadRuntime: () => moduleLoad.promise,
     });
@@ -119,7 +118,7 @@ describe("application session placement startup", () => {
 
     expect(loader).toHaveBeenCalledOnce();
     expect(startup.get(starts[0]!.recovery.sessionKey)).toBeNull();
-    moduleLoad.resolve({ default: () => fake.runtime });
+    moduleLoad.resolve({ default: fake.factory });
     await flushStartupMicrotasks();
 
     expect(fake.runtime.start).toHaveBeenCalledTimes(32);
@@ -131,7 +130,7 @@ describe("application session placement startup", () => {
   it("lets Start own recovery when it arrives during connection prewarm", async () => {
     const moduleLoad = createDeferred<RuntimeModule>();
     const fake = createFakeRuntime();
-    const factory = vi.fn(() => fake.runtime);
+    const factory = fake.factory;
     const loader = vi.fn(() => moduleLoad.promise);
     const { startup, input } = createPlacementStartupHarness(vi.fn(), { loadRuntime: loader });
 
@@ -141,7 +140,7 @@ describe("application session placement startup", () => {
     await flushStartupMicrotasks();
 
     expect(loader).toHaveBeenCalledOnce();
-    expect(factory).toHaveBeenCalledWith(expect.anything());
+    expect(factory).toHaveBeenCalledWith(expect.anything(), expect.any(Function));
     expect(fake.runtime.start).toHaveBeenCalledWith(expect.objectContaining(input));
     startup.dispose();
   });
@@ -150,7 +149,7 @@ describe("application session placement startup", () => {
     "shows a failed restored startup and reloads its runtime through Retry (required=%s)",
     async (required) => {
       const fake = createFakeRuntime();
-      const factory = vi.fn(() => fake.runtime);
+      const factory = fake.factory;
       const loader = vi
         .fn<NonNullable<Parameters<typeof createApplicationPlacementStartup>[1]>>()
         .mockRejectedValueOnce(new Error("cloud startup chunk unavailable"))

@@ -1,19 +1,11 @@
+import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import {
-  getActiveGatewayRootWorkCount,
-  getGatewaySuspendAdmissionPhase,
-  tryBeginGatewayRootWorkAdmission,
-  tryBeginGatewaySuspendAdmission,
-} from "../../../process/gateway-work-admission.js";
+import * as admission from "../../../process/gateway-work-admission.js";
 import { getAsyncWorkSignal } from "../../../shared/async-work-scope.js";
-import {
-  activateSwarmRun,
-  closeSwarmScheduler,
-  isSwarmRunActive,
-  reserveSwarmRun,
-} from "../swarm/swarm-scheduler.js";
+import * as swarm from "../swarm/swarm-scheduler.js";
 import { withQueuedRegistrationFixture } from "./subagent-registry-queued-registration.test-support.js";
 
 export function registerQueuedRegistrationAdmissionCases() {
@@ -23,7 +15,7 @@ export function registerQueuedRegistrationAdmissionCases() {
       const groupId = "composed-suspended-collector";
       const lifecycleOwner = {};
       expect(
-        reserveSwarmRun({
+        swarm.reserveSwarmRun({
           groupId,
           runId: f.registration.runId,
           maxConcurrent: 1,
@@ -57,61 +49,54 @@ export function registerQueuedRegistrationAdmissionCases() {
         emitSpawnLifecycleHooks: async () => {},
         cleanupFailedSpawn: cleanup,
       });
-      const parent = tryBeginGatewayRootWorkAdmission("composed-original-parent");
-      if (!parent) {
-        throw new Error("missing original parent admission");
-      }
+      const parent = admission.tryBeginGatewayRootWorkAdmission("composed-original-parent");
+      assert(parent, "missing original parent admission");
       const activate = await parent.run(async () =>
         AsyncLocalStorage.bind(() => {
-          activateSwarmRun({ groupId, runId: entry.runId, lifecycleOwner, ...callbacks });
+          swarm.activateSwarmRun({ groupId, runId: entry.runId, lifecycleOwner, ...callbacks });
         }),
       );
       parent.release();
-      const suspension = tryBeginGatewaySuspendAdmission(() => {});
-      if (!suspension) {
-        throw new Error("missing reversible suspension");
-      }
+      const suspension = admission.tryBeginGatewaySuspendAdmission(() => {});
+      assert(suspension, "missing reversible suspension");
       expect(suspension.commit()).toBe(true);
       let closed = false;
       let closing: Promise<void> | undefined;
+      const state = () => ({
+        active: swarm.isSwarmRunActive(entry.runId),
+        roots: admission.getActiveGatewayRootWorkCount(),
+        phase: admission.getGatewaySuspendAdmissionPhase(),
+        closed,
+        aborted: disposalSignal?.aborted,
+      });
       try {
         activate();
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
-        expect(isSwarmRunActive(entry.runId)).toBe(true);
-        expect(getActiveGatewayRootWorkCount()).toBe(0);
+        await nextTurn();
+        expect(state()).toMatchObject({ active: true, roots: 0 });
         expect(launch).not.toHaveBeenCalled();
-        closing = closeSwarmScheduler(lifecycleOwner).then(() => {
+        closing = swarm.closeSwarmScheduler(lifecycleOwner).then(() => {
           closed = true;
         });
         await vi.waitFor(() => expect(dispose).toHaveBeenCalledOnce());
-        expect(disposalSignal).toBeDefined();
-        expect(disposalSignal?.aborted).toBe(false);
-        expect(closed).toBe(false);
-        expect(getGatewaySuspendAdmissionPhase()).toBe("prepared");
+        expect(state()).toMatchObject({ aborted: false, closed: false, phase: "prepared" });
         disposal.resolve();
         await closing;
-        expect(closed).toBe(true);
-        expect(getGatewaySuspendAdmissionPhase()).toBe("prepared");
+        expect(state()).toMatchObject({ closed: true, phase: "prepared" });
         expect(entry).toEqual(registeredSnapshot);
         expect(settle).not.toHaveBeenCalled();
         expect(cleanup).not.toHaveBeenCalled();
         expect(rollback).not.toHaveBeenCalled();
         expect(f.writes).toBe(2);
         expect(suspension.release()).toBe(true);
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await nextTurn();
         expect(launch).not.toHaveBeenCalled();
-        expect(isSwarmRunActive(entry.runId)).toBe(false);
-        expect(getActiveGatewayRootWorkCount()).toBe(0);
+        expect(state()).toMatchObject({ active: false, roots: 0 });
       } finally {
         suspension.release();
         parent.release();
         disposal.resolve();
         await closing;
-        await closeSwarmScheduler(lifecycleOwner);
+        await swarm.closeSwarmScheduler(lifecycleOwner);
       }
     });
   });

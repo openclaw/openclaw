@@ -120,10 +120,6 @@ export function readKnownSessionBranchMergedHeads(
 type LoadSessionPullRequestDeps = {
   read: ControlUiSessionPrReadContext;
   cacheSignal?: AbortSignal;
-  resolveGitRoot?: (params: ControlUiSessionPullRequestsParams) => Promise<string | null>;
-  resolveGitContext?: (
-    params: ControlUiSessionPullRequestsParams,
-  ) => Promise<GitCheckoutContext | null>;
 };
 
 // git push's own "create a pull request" hint URL; GitHub resolves the base
@@ -196,7 +192,7 @@ function derivePullState(value: Record<string, unknown>): ControlUiSessionPullRe
   return value.draft === true ? "draft" : "open";
 }
 
-export function parsePullListItem(value: unknown) {
+function parsePullListItem(value: unknown) {
   if (!isRecord(value)) {
     return null;
   }
@@ -568,22 +564,17 @@ async function loadControlUiSessionBranchPullRequests(
   try {
     assertCurrent();
     const request = { ...params, ...target.params };
-    let context: GitCheckoutContext | null;
-    if (deps.resolveGitContext) {
-      context = await deps.resolveGitContext(request);
-    } else {
-      const source = deps.resolveGitRoot ? await deps.resolveGitRoot(request) : target.source;
-      context =
-        typeof source === "string"
-          ? await runGitReadOperation(
-              {
-                type: "checkout.context",
-                input: { root: source, githubHost: deps.read.target.githubHost },
-              },
-              { refresh: request.refresh },
-            )
-          : source;
-    }
+    const source = target.source;
+    const context =
+      typeof source === "string"
+        ? await runGitReadOperation(
+            {
+              type: "checkout.context",
+              input: { root: source, githubHost: deps.read.target.githubHost },
+            },
+            { refresh: request.refresh },
+          )
+        : source;
     assertCurrent();
     if (!context) {
       branchCache.release(deps.cacheSignal);

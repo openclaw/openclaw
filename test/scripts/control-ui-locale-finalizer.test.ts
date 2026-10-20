@@ -26,9 +26,12 @@ describe.skipIf(process.platform === "win32")(
       });
     };
 
-    it("runs allowed catch-up through the provider and publishes only refreshed output", async () => {
-      const result = await harness.run({ publish: true });
+    it("re-pins main after bootstrap checkout and publishes only refreshed output", async () => {
+      const result = await harness.run({ publish: true, advanceDuringCheckout: true });
       assertValidated(result);
+      expect(result.publication.branchExists, result.publication.summary).toBe(true);
+      expect(result.sourceAtSetup).toBe(result.fresh);
+      expect(result.admittedSource).toBe(result.fresh);
       expect(result.workerRequests).toHaveLength(1);
       expect(result.workerRequests[0]?.ids).toEqual([
         "localeWorkflowProof.keep",
@@ -38,14 +41,14 @@ describe.skipIf(process.platform === "win32")(
       expect(result.providerRequests).toHaveLength(21);
       expect(result.providerRequests[0]?.proof).toEqual({
         "localeWorkflowProof.edit": "New locale proof {name}",
-        "localeWorkflowProof.add": "Added locale proof",
+        "localeWorkflowProof.add": "Latest locale proof",
       });
       for (const request of result.providerRequests) {
         expect(request.ids).toEqual(expectedDelta);
       }
       expect(translated(result, "sv", "keep")).toBe("worker::Keep locale proof");
       expect(translated(result, "sv", "edit")).toBe("finalizer::New locale proof {name}");
-      expect(translated(result, "sv", "add")).toBe("finalizer::Added locale proof");
+      expect(translated(result, "sv", "add")).toBe("finalizer::Latest locale proof");
       expect(translated(result, "sv", "remove")).toBeUndefined();
       expect(
         Object.fromEntries(
@@ -57,12 +60,30 @@ describe.skipIf(process.platform === "win32")(
       ).toEqual({
         "localeWorkflowProof.keep": "worker::Keep locale proof",
         "localeWorkflowProof.edit": "finalizer::New locale proof {name}",
-        "localeWorkflowProof.add": "finalizer::Added locale proof",
+        "localeWorkflowProof.add": "finalizer::Latest locale proof",
       });
-      expect(result.publication.branchExists).toBe(true);
       expect(result.publicationCalls.some((call) => call.startsWith("pr create "))).toBe(true);
       expect(result.publication.mergeCalls).toContain("--auto --squash --match-head-commit");
       expect(result.publication.mainHead).toBe(result.fresh);
+    });
+
+    it("still defers when main moves again after the warm checkout and catch-up", async () => {
+      const result = await harness.run({
+        publish: true,
+        advanceDuringCheckout: true,
+        advanceAfterCatchup: true,
+      });
+      assertValidated(result);
+      expect(result.sourceAtSetup).toBe(result.fresh);
+      expect(result.admittedSource).toBe(result.fresh);
+      expect(translated(result, "sv", "add")).toBe("finalizer::Latest locale proof");
+      expect(result.publication.mainHead).toBe(result.later);
+      expect(result.publication.branchExists).toBe(false);
+      expect(result.publication.summary).toContain(
+        "Deferred stale generated output because generator inputs changed on main.",
+      );
+      expect(result.publicationCalls.some((call) => call.startsWith("pr create "))).toBe(false);
+      expect(result.publication.mergeCalls).toBe("");
     });
 
     it.each([

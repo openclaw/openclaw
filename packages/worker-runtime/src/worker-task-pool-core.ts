@@ -55,6 +55,7 @@ import type {
 
 // Reusable workers must not retain the first submitting caller's async scope.
 const runInWorkerPoolContext = AsyncLocalStorage.snapshot();
+const memoryPressure = channel("openclaw.memory.critical");
 
 type WorkerReply<Output> = { status: "ok"; value: Output } | { status: "failed"; error: string };
 /** Bounded execution workers; each worker accepts one task at a time. */
@@ -306,7 +307,7 @@ export class WorkerTaskPoolCore<Input, Output> {
   ): Promise<void> {
     this.closedError ??= error;
     this.admission.close();
-    channel("openclaw.memory.critical").unsubscribe(this.retireIdleOnPressure);
+    memoryPressure.unsubscribe(this.retireIdleOnPressure);
     this.computeCapacity?.remove(this.resumeCompute);
     for (const task of this.queue.splice(0)) {
       this.finish(task, this.closedError);
@@ -334,7 +335,7 @@ export class WorkerTaskPoolCore<Input, Output> {
 
   private dispatch(): void {
     if (!this.slots.size) {
-      channel("openclaw.memory.critical").unsubscribe(this.retireIdleOnPressure);
+      memoryPressure.unsubscribe(this.retireIdleOnPressure);
     }
     if (!this.queue.length || this.closedError || !this.retirement.dispatchAllowed) {
       this.computeCapacity?.remove(this.resumeCompute);
@@ -435,9 +436,8 @@ export class WorkerTaskPoolCore<Input, Output> {
   // Worker listeners outlive tasks; their creation scope must not retain an async task frame.
   private createWorker(slot: Slot<Input, Output>): WorkerLifecycle {
     if ((this.options.idleTimeoutMs ?? 60_000) > 0) {
-      const pressure = channel("openclaw.memory.critical");
-      pressure.unsubscribe(this.retireIdleOnPressure);
-      pressure.subscribe(this.retireIdleOnPressure);
+      memoryPressure.unsubscribe(this.retireIdleOnPressure);
+      memoryPressure.subscribe(this.retireIdleOnPressure);
     }
     return createWorkerTaskPoolWorker({
       slot,

@@ -91,7 +91,7 @@ export function preparePostgresQuery(sql: string): {
       }
     } else {
       if (statementStart && /^pragma\b/i.test(rest)) {
-        throw new Error("The experimental PostgreSQL engine does not support PRAGMA statements");
+        throw new Error("The PostgreSQL engine does not support PRAGMA statements");
       }
       const number = /^(?:\d[\d_]*(?:\.[\d_]*)?|\.[\d_]+)(?:[eE][+-]?[\d_]+)?/.exec(rest)?.[0];
       if (number) {

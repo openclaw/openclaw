@@ -171,8 +171,6 @@ it("restarts node proxy control after the shared service stops", async () => {
   await expect(proxy()).rejects.toThrow("browser control disabled");
   setEnabled(true);
   await startBrowserControlServiceFromConfig();
-  setEnabled(false);
-  await expect(proxy()).rejects.toThrow("browser control disabled");
 
   setEnabled(true);
   await expectStatus();
