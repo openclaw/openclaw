@@ -53,12 +53,29 @@ class DoctorFixtureObservation {
       })}\n`,
     );
   }
-  async during<T>(phase: "body" | "fixture", run: () => Promise<T>): Promise<T> {
+  async during<T>(
+    phase: string,
+    run: () => T | Promise<T>,
+    lifetime?: "bodySettled" | "fixtureSettled",
+  ): Promise<T> {
+    const id = lifetime ? 0 : ++this.nextStep;
+    const tracked = !lifetime && this.pending.size < 16;
+    if (tracked) {
+      this.pending.set(id, phase);
+    } else if (!lifetime) {
+      this.omittedPending++;
+    }
     this.record(phase, "started");
     try {
       return await run();
     } finally {
-      this[phase === "body" ? "bodySettled" : "fixtureSettled"] = true;
+      if (lifetime) {
+        this[lifetime] = true;
+      } else if (tracked) {
+        this.pending.delete(id);
+      } else {
+        this.omittedPending--;
+      }
       this.record(phase, "settled");
     }
   }
@@ -74,27 +91,7 @@ export async function observeDoctorConfigStep<T>(
   run: () => T | Promise<T>,
 ): Promise<T> {
   const observation = fixtureObservation.getStore();
-  if (!observation) {
-    return await run();
-  }
-  const id = ++observation.nextStep;
-  const tracked = observation.pending.size < 16;
-  if (tracked) {
-    observation.pending.set(id, name);
-  } else {
-    observation.omittedPending++;
-  }
-  observation.record(name, "started");
-  try {
-    return await run();
-  } finally {
-    if (tracked) {
-      observation.pending.delete(id);
-    } else {
-      observation.omittedPending--;
-    }
-    observation.record(name, "settled");
-  }
+  return observation ? await observation.during(name, run) : await run();
 }
 
 /** Retain inspection imports across repair and reread within each temporary home. */
@@ -116,11 +113,14 @@ export function useDoctorConfigPreflightHome(diagnostic?: DoctorFixtureObservati
     }
     return fixtureObservation.run(observation, async () => {
       try {
-        return await observation.during("fixture", () =>
-          withDoctorConfigPreflightHome((home) => {
-            observation.ownsHome = () => process.env.HOME === home;
-            return observation.during("body", () => run(home));
-          }),
+        return await observation.during(
+          "fixture",
+          () =>
+            withDoctorConfigPreflightHome((home) => {
+              observation.ownsHome = () => process.env.HOME === home;
+              return observation.during("body", () => run(home), "bodySettled");
+            }),
+          "fixtureSettled",
         );
       } finally {
         activeObservations.delete(observation);

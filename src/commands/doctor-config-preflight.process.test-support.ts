@@ -14,6 +14,11 @@ import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 
 const execFileAsync = promisify(execFile);
 const isolatedRuntimeNodeExecPath = resolveTestNodeExecPath();
+type RuntimeArgs = [root: string, env: NodeJS.ProcessEnv, args: string[], timeout: number];
+type RuntimeOptions = Pick<
+  Parameters<typeof runCliProcessChild>[0],
+  "maxBuffer" | "onTestFinished"
+>;
 // The fixture owns its package assets; resolving linked source back to the checkout
 // makes Doctor repair that checkout instead, including building its Control UI.
 // Dependency realpaths still own their transitive packages under isolated installs.
@@ -40,41 +45,29 @@ export const ISOLATED_RUNTIME_NODE_ARGS = [
   `)}`,
 ];
 
-export function runBuiltRuntime(
-  runtimeRoot: string,
-  env: NodeJS.ProcessEnv,
-  args: string[],
-  timeout: number,
-  options: Pick<Parameters<typeof runCliProcessChild>[0], "maxBuffer" | "onTestFinished"> = {},
-) {
+function runRuntime([cwd, env, args, timeoutMs]: RuntimeArgs, options: RuntimeOptions = {}) {
   return runCliProcessChild({
     nodeExecutable: isolatedRuntimeNodeExecPath,
-    nodeArgs: [...ISOLATED_RUNTIME_NODE_ARGS, path.join(runtimeRoot, "dist", "entry.js"), ...args],
+    nodeArgs: [...ISOLATED_RUNTIME_NODE_ARGS, ...args],
     nodeArgsPolicy: "caller",
-    cwd: runtimeRoot,
+    cwd,
     env,
-    timeoutMs: timeout,
+    timeoutMs,
     maxBuffer: options.maxBuffer ?? 1024 * 1024,
     ...(options.onTestFinished ? { onTestFinished: options.onTestFinished } : {}),
   });
 }
 
-export function runSourceRuntime(
-  runtimeRoot: string,
-  env: NodeJS.ProcessEnv,
-  args: string[],
-  timeout: number,
-  maxBuffer?: number,
+export function runBuiltRuntime(
+  ...[root, env, args, timeout, options]: [...RuntimeArgs, RuntimeOptions?]
 ) {
-  return runCliProcessChild({
-    nodeExecutable: isolatedRuntimeNodeExecPath,
-    nodeArgs: [...ISOLATED_RUNTIME_NODE_ARGS, "--import", "tsx", ...args],
-    nodeArgsPolicy: "caller",
-    cwd: runtimeRoot,
-    env,
-    timeoutMs: timeout,
-    maxBuffer: maxBuffer ?? 1024 * 1024,
-  });
+  return runRuntime([root, env, [path.join(root, "dist", "entry.js"), ...args], timeout], options);
+}
+
+export function runSourceRuntime(
+  ...[root, env, args, timeout, maxBuffer]: [...RuntimeArgs, number?]
+) {
+  return runRuntime([root, env, ["--import", "tsx", ...args], timeout], { maxBuffer });
 }
 
 export function runIsolatedModuleScript(
