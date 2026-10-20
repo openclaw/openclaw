@@ -48,19 +48,12 @@ it.each(["feishu", "file-transfer"])(
     }
     expect(registered.length).toBeGreaterThan(1);
 
-    // Plugin suites own exact wording. This core contract protects its passage
-    // through real policy, normalization, and the final model-visible catalog.
     for (const selected of registered) {
+      const policy = { allow: [selected.name] };
       const authorized = applyToolPolicyPipeline({
         tools: registered,
         toolMeta: getPluginToolMeta,
-        steps: [
-          {
-            policy: { allow: [selected.name] },
-            label: "tools.allow",
-            stripPluginOnlyAllowlist: true,
-          },
-        ],
+        steps: [{ policy, label: "tools.allow", stripPluginOnlyAllowlist: true }],
         warn: () => {},
       });
       expect(authorized.map((tool) => tool.name)).toEqual([selected.name]);
