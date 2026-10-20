@@ -157,6 +157,7 @@ export function createNextcloudTalkWebhookSpool(options: {
     NextcloudTalkIngressPayload
   >({
     queue: getQueue,
+    inspect: inspectNextcloudTalkWebhookEnvelope,
     inspectAsync: async (rawEvent) => {
       await startAfterMigration;
       return inspectNextcloudTalkWebhookEnvelope(rawEvent);
