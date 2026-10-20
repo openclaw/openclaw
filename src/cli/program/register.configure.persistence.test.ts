@@ -6,7 +6,7 @@ import { createWizardPrompter } from "../../../test/helpers/wizard-prompter.js";
 import type { ChannelSetupPlugin } from "../../channels/plugins/setup-wizard-types.js";
 import { createConfigIO, readConfigFileSnapshot } from "../../config/config.js";
 import { hashConfigRaw } from "../../config/io.read-helpers.js";
-import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
 import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as setupShared from "../../wizard/setup.shared.js";
@@ -82,7 +82,6 @@ it("registered configure continues with canonical config after the committed-pat
           defaults: { workspace: state.workspaceDir },
           entries: { main: {} },
         },
-        commands: { ownerAllowFrom: ["telegram:123"] },
       });
       const includeRaw = JSON.stringify({ web: { fetch: { enabled: false } } });
       await fs.writeFile(includePath, includeRaw);
@@ -97,7 +96,7 @@ it("registered configure continues with canonical config after the committed-pat
         setupWizard: {
           channel: "telegram",
           getStatus: async () => ({ channel: "telegram", configured: false, statusLines: [] }),
-          configure: async ({ cfg }: { cfg: OpenClawConfig }) => {
+          configure: async ({ cfg }) => {
             events.push("channel setup");
             return { cfg: { ...cfg, gateway: { ...cfg.gateway, port: 19002 } }, accountId: "ops" };
           },
@@ -150,12 +149,9 @@ it("registered configure continues with canonical config after the committed-pat
       const receipt = expectDefined(committed, "registered configure write receipt");
       const snapshot = expectDefined(persisted, "canonical committed config");
       expect(events).toEqual(["channel setup", "persisted", "callback", "health continuation"]);
-      expect(receipt.path).toBe(state.configPath);
       expect(snapshot.valid).toBe(true);
-      expect({ config: receipt.nextConfig, hash: receipt.persistedHash }).toEqual({
-        config: snapshot.sourceConfig,
-        hash: snapshot.hash,
-      });
+      expect(receipt.nextConfig).toEqual(snapshot.sourceConfig);
+      expect(receipt).toMatchObject({ path: state.configPath, persistedHash: snapshot.hash });
       expect(receipt.persistedHash).not.toBe(hashConfigRaw(snapshot.raw));
       expect(receipt.nextConfig.messages?.responsePrefix).toBe("resolved prefix");
       expect(JSON.parse(await fs.readFile(receipt.path, "utf8"))).toMatchObject({

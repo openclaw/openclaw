@@ -14,9 +14,6 @@ vi.mock("./register.agent.js", () => ({
 vi.mock("./register.agent-turn.js", () => ({
   registerAgentTurnCommand: (program: Command) => registerNames(program, "agent"),
 }));
-vi.mock("./register.backup.js", () => ({
-  registerBackupCommand: (program: Command) => registerNames(program.command("backup"), "create"),
-}));
 vi.mock("./register.maintenance.js", () => ({
   registerMaintenanceCommands: (program: Command) =>
     registerNames(program, "doctor", "triage", "dashboard", "reset", "uninstall"),
@@ -24,12 +21,6 @@ vi.mock("./register.maintenance.js", () => ({
 vi.mock("./register.status-health-sessions.js", () => ({
   registerStatusHealthSessionsCommands: (program: Command) =>
     registerNames(program, "status", "health", "sessions"),
-}));
-vi.mock("./register.setup.js", () => ({
-  registerSetupCommand: (program: Command) => {
-    program.command("setup");
-    program.command("crestodian", { hidden: true }); // hidden alias
-  },
 }));
 
 import { registerCoreCliByName, registerCoreCliCommands } from "./command-registry-core.js";

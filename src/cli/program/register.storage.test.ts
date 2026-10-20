@@ -20,8 +20,6 @@ const fixture = vi.hoisted(() => {
 
 vi.mock("../../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/config.js")>()),
-  getRuntimeConfig: () => fixture.config,
-  loadConfig: () => fixture.config,
   captureRuntimeConfigAsyncReader: () => async () => fixture.config,
 }));
 vi.mock("../../runtime.js", async (importOriginal) => ({
@@ -40,105 +38,94 @@ vi.mock("../../storage/provider.js", async (importOriginal) => {
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const { runtime, acquire, release } = fixture;
 let root: string;
 
 beforeEach(() => {
   vi.clearAllMocks();
   root = tempDirs.make("openclaw-storage-cli-");
-  configureLocation("archive", {
-    provider: "filesystem",
-    settings: { path: root },
-    encryption: "none",
-  });
+  configureLocation("archive", "filesystem", { path: root });
 });
 
-async function runStorageCli(args: string[]) {
+async function runStorageCli(args: string) {
   const program = new OpenClawCommand();
   program.enablePositionalOptions();
   registerStorageCommand(program);
-  await program.parseAsync(["storage", ...args], { from: "user" });
+  await program.parseAsync(["storage", ...args.split(" ")], { from: "user" });
 }
 
-function loggedJson() {
-  return expect(JSON.parse(String(fixture.runtime.log.mock.lastCall?.[0])));
+async function expectJson(args: string, expected: object) {
+  await runStorageCli(args);
+  expect(runtime.error).not.toHaveBeenCalled();
+  expect(JSON.parse(String(runtime.log.mock.lastCall?.[0]))).toMatchObject(expected);
 }
 
-function configureLocation(name: string, location: StorageLocationConfig) {
-  fixture.config = { storage: { locations: { [name]: location } } };
+function configureLocation(
+  name: string,
+  provider: string,
+  settings: StorageLocationConfig["settings"],
+) {
+  fixture.config = {
+    storage: { locations: { [name]: { provider, settings, encryption: "none" } } },
+  };
 }
 
 describe("storage CLI with filesystem transport", () => {
   it("initializes, verifies a probe round trip, deletes the probe, and lists availability", async () => {
-    await runStorageCli(["--json", "init", "archive"]);
-    expect(fixture.runtime.error).not.toHaveBeenCalled();
-    loggedJson().toMatchObject({
+    await expectJson("--json init archive", {
       name: "archive",
       provider: "filesystem",
       state: "ok",
       encrypted: false,
     });
 
-    await runStorageCli(["test", "archive", "--json"]);
-    expect(fixture.runtime.error).not.toHaveBeenCalled();
-    loggedJson().toMatchObject({ name: "archive", state: "ok", sizeBytes: 256 });
+    await expectJson("test archive --json", { name: "archive", state: "ok", sizeBytes: 256 });
     expect(await fs.readdir(root)).toEqual(["openclaw-storage.json"]);
 
-    await runStorageCli(["list", "--json"]);
-    loggedJson().toMatchObject({
+    await expectJson("list --json", {
       locations: [{ name: "archive", provider: "filesystem", state: "ok" }],
     });
-    expect(fixture.runtime.exit).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])(
-    "lists plugin display targets even when opening fails (json=%s)",
-    async (json) => {
-      const provider: StorageProvider = {
-        id: "r2",
-        label: "R2",
-        describeTarget: (settings) => `r2://${String(settings.bucket)}/${String(settings.prefix)}`,
-        open: async () => {
-          throw new Error("synthetic-private-credential");
-        },
-      };
-      configureLocation("r2test", {
-        provider: "r2",
-        settings: { bucket: "bucket", prefix: "prefix" },
-        encryption: "none",
+  it.each([false, true])("lists targets and redacts open failures (json=%s)", async (json) => {
+    const provider: StorageProvider = {
+      id: "r2",
+      label: "R2",
+      describeTarget: (settings) => `r2://${String(settings.bucket)}/${String(settings.prefix)}`,
+      open: async () => {
+        throw new Error("synthetic-private-credential");
+      },
+    };
+    configureLocation("r2test", "r2", { bucket: "bucket", prefix: "prefix" });
+    acquire.mockResolvedValue({
+      provider,
+      registry: {
+        storageProviders: new Map([["r2", { pluginId: "cloudflare", source: "test", provider }]]),
+      },
+      release,
+    });
+    if (json) {
+      await expectJson("list --json", {
+        locations: [
+          { name: "r2test", provider: "r2", displayTarget: "r2://bucket/prefix", state: "error" },
+        ],
       });
-      fixture.acquire.mockResolvedValue({
-        provider,
-        registry: {
-          storageProviders: new Map([["r2", { pluginId: "cloudflare", source: "test", provider }]]),
-        },
-        release: fixture.release,
-      });
-      await runStorageCli(["list", ...(json ? ["--json"] : [])]);
-      if (json) {
-        loggedJson().toMatchObject({
-          locations: [
-            { name: "r2test", provider: "r2", displayTarget: "r2://bucket/prefix", state: "error" },
-          ],
-        });
-      } else {
-        expect(fixture.runtime.log).toHaveBeenCalledWith(
-          expect.stringContaining("r2test (r2): error — r2://bucket/prefix"),
-        );
-      }
-      expect(fixture.runtime.log.mock.calls.flat().join(" ")).not.toContain(
-        "synthetic-private-credential",
+    } else {
+      await runStorageCli("list");
+      expect(runtime.log).toHaveBeenCalledWith(
+        expect.stringContaining("r2test (r2): error — r2://bucket/prefix"),
       );
-      expect(fixture.acquire).toHaveBeenCalledTimes(1);
-      expect(fixture.release).toHaveBeenCalledTimes(1);
-    },
-  );
+    }
+    expect(runtime.log.mock.calls.flat().join(" ")).not.toContain("synthetic-private-credential");
+    expect(acquire).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
 
   it("refuses to test an uninitialized location without writing anything", async () => {
-    await runStorageCli(["test", "archive"]);
-    expect(fixture.runtime.exit).toHaveBeenCalledWith(1);
-    expect(fixture.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("storage init archive"),
-    );
+    await runStorageCli("test archive");
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("storage init archive"));
     expect(await fs.readdir(root)).toEqual([]);
   });
 });

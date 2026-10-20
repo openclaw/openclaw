@@ -37,27 +37,15 @@ describe("buildProgram", () => {
     vi.restoreAllMocks();
   });
 
-  it("sets exitCode to 1 on argument errors (fixes #60905)", async () => {
+  it.each([
+    { args: ["test", "unexpected-arg"], exitCode: 1, code: "commander.excessArguments" },
+    { args: ["--help"], exitCode: 0, code: "commander.helpDisplayed" },
+  ])("preserves $code exit status (regression #60905)", async ({ args, exitCode, code }) => {
     const program = buildProgram();
     program.command("test").description("Test command");
-
-    const error = await expectCommanderExit(
-      program.parseAsync(["test", "unexpected-arg"], { from: "user" }),
-      1,
-    );
-
-    expect(error.code).toBe("commander.excessArguments");
-    expect(process.exitCode).toBe(1);
-  });
-
-  it("preserves exitCode 0 for help display", async () => {
-    const program = buildProgram();
-    program.command("test").description("Test command");
-
-    const error = await expectCommanderExit(program.parseAsync(["--help"], { from: "user" }), 0);
-
-    expect(error.code).toBe("commander.helpDisplayed");
-    expect(process.exitCode).toBe(0);
+    const error = await expectCommanderExit(program.parseAsync(args, { from: "user" }), exitCode);
+    expect(error.code).toBe(code);
+    expect(process.exitCode).toBe(exitCode);
   });
 
   it("preserves caller-configured Commander error output", async () => {

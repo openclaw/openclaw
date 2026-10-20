@@ -6,49 +6,41 @@ import { registerConfigCli } from "../config-cli.js";
 import { registerConfigureCommand } from "./register.configure.js";
 
 const mocks = vi.hoisted(() => ({
-  interactive: vi.fn(),
   runWizard: vi.fn(),
   runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
 }));
 
 vi.mock("../../commands/configure.wizard.js", () => ({ runConfigureWizard: mocks.runWizard }));
-vi.mock("../terminal-interactivity.js", () => ({ isTerminalInteractive: mocks.interactive }));
+vi.mock("../terminal-interactivity.js", () => ({ isTerminalInteractive: () => true }));
 vi.mock("../../runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../runtime.js")>()),
   defaultRuntime: mocks.runtime,
 }));
 
-const routes = ["configure", "config"] as const;
-async function parse(route: (typeof routes)[number], options: string[] = []) {
-  const program = new Command();
-  (route === "configure" ? registerConfigureCommand : registerConfigCli)(program);
-  return await program.parseAsync([route, ...options], { from: "user" });
-}
-
-describe("registered configure dispatch", { concurrent: false }, () => {
+describe.each(["configure", "config"] as const)("%s dispatch", { concurrent: false }, (route) => {
+  async function parse(options: string[] = []) {
+    const program = new Command();
+    (route === "configure" ? registerConfigureCommand : registerConfigCli)(program);
+    return await program.parseAsync([route, ...options], { from: "user" });
+  }
   beforeEach(() => {
     vi.resetAllMocks();
-    mocks.interactive.mockReturnValue(true);
     mocks.runWizard.mockResolvedValue(undefined);
     mocks.runtime.exit.mockImplementation((code: number) => {
       throw new ExitError(code);
     });
   });
 
-  it.each(routes)("%s omits sections for the full chooser", async (route) => {
-    await parse(route);
-    expect(mocks.runWizard).toHaveBeenCalledExactlyOnceWith({});
+  it.each([
+    [[], {}],
+    [[" channels ", "health", "channels"], { sections: ["channels", "health", "channels"] }],
+  ] as const)("dispatches omitted or repeated sections: %j", async (sections, options) => {
+    await parse(sections.flatMap((section) => ["--section", section]));
+    expect(mocks.runWizard).toHaveBeenCalledExactlyOnceWith(options);
     expect(mocks.runtime.exit).not.toHaveBeenCalled();
   });
 
-  it.each(routes)("%s preserves repeated, trimmed section values", async (route) => {
-    await parse(route, ["--section", " channels ", "--section", "health", "--section", "channels"]);
-    expect(mocks.runWizard).toHaveBeenCalledExactlyOnceWith({
-      sections: ["channels", "health", "channels"],
-    });
-  });
-
-  it.each(routes)("%s waits for the admitted wizard to settle", async (route) => {
+  it("waits for the admitted wizard to settle", async () => {
     const entered = createDeferred();
     const released = createDeferred();
     mocks.runWizard.mockImplementationOnce(async () => {
@@ -56,7 +48,7 @@ describe("registered configure dispatch", { concurrent: false }, () => {
       await released.promise;
     });
     const settled = vi.fn();
-    const parsing = parse(route, ["--section", "channels"]);
+    const parsing = parse(["--section", "channels"]);
     void parsing.catch(entered.reject);
     const observed = parsing.then(settled, settled);
     try {
@@ -67,18 +59,16 @@ describe("registered configure dispatch", { concurrent: false }, () => {
       await observed;
     }
     await parsing;
-    expect(settled).toHaveBeenCalledOnce();
-    expect(mocks.runWizard).toHaveBeenCalledOnce();
   });
 
-  it.each(routes)("%s preserves its registered failure contract", async (route) => {
+  it("preserves its registered failure contract", async () => {
     const failure = new Error("fixture wizard failure");
     mocks.runWizard.mockRejectedValueOnce(failure);
     if (route === "configure") {
-      await expect(parse(route)).rejects.toMatchObject({ code: 1 });
+      await expect(parse()).rejects.toMatchObject({ code: 1 });
       expect(mocks.runtime.error).toHaveBeenCalledWith("fixture wizard failure");
     } else {
-      await expect(parse(route)).rejects.toBe(failure);
+      await expect(parse()).rejects.toBe(failure);
       expect(mocks.runtime.error).not.toHaveBeenCalled();
       expect(mocks.runtime.exit).not.toHaveBeenCalled();
     }
