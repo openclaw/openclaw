@@ -257,7 +257,7 @@ describe("agent tool definition adapter", () => {
       "call-invalid-exec-history-search",
       {
         command:
-          '⚠️ 🛠️ Bash failed: search "$40.00|$39.99|application fee|screening fee" in /home/ajbowlds/.openclaw-edp-realty/workspace/edpapp/web-apps/management/src/app/(public) (in /home/ajbowlds/.openclaw-edp-realty/workspace/agents/ada)',
+          '⚠️ 🛠️ Bash failed: search "40.00|39.99|application fee|screening fee" in /home/ajbowlds/.openclaw-edp-realty/workspace/edpapp/web-apps/management/src/app/(public) (in /home/ajbowlds/.openclaw-edp-realty/workspace/agents/ada)',
       },
       undefined,
       undefined,
