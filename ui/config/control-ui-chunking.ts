@@ -3,7 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build, type Plugin, type ResolvedConfig } from "vite";
-import { resolvedLocaleConfigHintsModulePrefix } from "./control-ui-locales.ts";
+import {
+  resolvedLocaleConfigHintsModulePrefix,
+  resolvedLocaleNamespaceModulePrefix,
+} from "./control-ui-locales.ts";
 
 const configDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(configDir, "../..");
@@ -101,6 +104,9 @@ export function controlUiStableChunkName(id: string): string | undefined {
 
   if (normalized.startsWith(resolvedLocaleConfigHintsModulePrefix)) {
     return `${controlUiLocaleConfigHintsChunkPrefix}${normalized.slice(resolvedLocaleConfigHintsModulePrefix.length)}`;
+  }
+  if (normalized.startsWith(resolvedLocaleNamespaceModulePrefix)) {
+    return `locale-namespace-${normalized.slice(resolvedLocaleNamespaceModulePrefix.length).replace("/", "-")}`;
   }
 
   if (normalized.endsWith("/ui/src/lib/gateway-methods.ts")) {

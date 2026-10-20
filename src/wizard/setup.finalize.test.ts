@@ -395,7 +395,6 @@ describe("finalizeSetupWizard", () => {
       provider: "anthropic",
       model: "claude-opus-4-8",
       status: "ready",
-      hasAuth: true,
     });
     resolveDefaultModelCatalogFacts.mockReset().mockReturnValue({});
     loadModelCatalog.mockReset().mockResolvedValue([]);
@@ -689,7 +688,6 @@ describe("finalizeSetupWizard", () => {
       provider: "openai",
       model: "gpt-5.5",
       status: "missing",
-      hasAuth: false,
     });
     const prompter = buildWizardPrompter();
 
@@ -724,8 +722,6 @@ describe("finalizeSetupWizard", () => {
       provider: "openai",
       model: "gpt-5.6",
       status: "incompatible",
-      hasAuth: false,
-      code: "auth_mode_unsupported",
       message: "gpt-5.6 requires OpenAI Platform API-key authentication.",
     });
     const prompter = buildWizardPrompter();

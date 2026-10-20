@@ -133,6 +133,10 @@ const sourceFiles = [
   "en-usage.ts",
 ];
 
+export function loadControlUiStartupCatalog(): TranslationMap {
+  return en;
+}
+
 export function loadControlUiSourceCatalog(): TranslationMap {
   const newSession: TranslationMap = {};
   for (const [key, value] of Object.entries(registerNewSessionSetupEnglish.catalog.newSession)) {
