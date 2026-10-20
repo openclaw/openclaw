@@ -42,7 +42,7 @@ function fixture(input: Partial<Parameters<typeof begin>[1]>) {
 }
 
 it.each(["draining", "legacy-null"] as const)(
-  "recovers %s journals without reopening a retired drain",
+  "recovers %s without reopening retired drains",
   async (format) => {
     const { input, open, write, restart } = fixture({ phase: "draining" });
     const original = open();
@@ -77,47 +77,42 @@ it.each(["draining", "legacy-null"] as const)(
   },
 );
 
-it.each([false, true])(
-  "retains Claw cleanup custody unless Gateway draining was recorded: %s",
-  (gatewayOwned) => {
-    const { input, open, write } = fixture({
-      agentId: "claw-worker",
-      operationId: "interrupted",
-      deleteFiles: false,
-      ...(gatewayOwned ? { phase: "draining" as const } : {}),
-    });
-    const database = open();
-    expect(pending(database).entries).toHaveLength(1);
-    database.db
-      .prepare(
-        `INSERT INTO claw_workspace_files
+it.each([false, true])("preserves Claw cleanup custody: gateway=%s", (gatewayOwned) => {
+  const { input, open, write } = fixture({
+    agentId: "claw-worker",
+    operationId: "interrupted",
+    deleteFiles: false,
+    ...(gatewayOwned ? { phase: "draining" as const } : {}),
+  });
+  const database = open();
+  expect(pending(database).entries).toHaveLength(1);
+  database.db
+    .prepare(
+      `INSERT INTO claw_workspace_files
           (agent_id, target_path, schema_version, workspace, source_path,
            content_digest, status, created_at_ms, updated_at_ms)
          VALUES (?, ?, '1', ?, 'AGENTS.md', 'sha256:fixture', 'modified', 1, 1)`,
-      )
-      .run(input.agentId, path.join(input.workspaceDir, "AGENTS.md"), input.workspaceDir);
-    expect(pending(database)).toMatchObject({
-      entries: gatewayOwned ? [expect.objectContaining({ agentId: input.agentId })] : [],
-      manualClawAgentIds: gatewayOwned ? [] : [input.agentId],
-    });
-    const facts = readRetainedAgentDeletionsFromDatabase(database.db, database.path);
-    expect(facts).toMatchObject({
-      status: "present",
-      entries: [{ agentId: input.agentId, cleanupCompleted: false }],
-    });
-    expect(facts.status === "present" && facts.entries[0]?.manualClawRemoval).toBe(
-      gatewayOwned ? undefined : true,
-    );
-    const recover = (operationId: string) =>
-      write((current) =>
-        begin(current, { ...input, operationId: "successor" }, false, operationId),
-      );
-    expect(() => recover("stale-attempt")).toThrow("changed before recovery");
-    if (gatewayOwned) {
-      expect(recover(input.operationId).entry.phase).toBe("draining");
-    } else {
-      expect(() => recover(input.operationId)).toThrow("Claw removal owner");
-      expect(read(database, input.agentId)?.operationId).toBe(input.operationId);
-    }
-  },
-);
+    )
+    .run(input.agentId, path.join(input.workspaceDir, "AGENTS.md"), input.workspaceDir);
+  expect(pending(database)).toMatchObject({
+    entries: gatewayOwned ? [expect.objectContaining({ agentId: input.agentId })] : [],
+    manualClawAgentIds: gatewayOwned ? [] : [input.agentId],
+  });
+  const facts = readRetainedAgentDeletionsFromDatabase(database.db, database.path);
+  expect(facts).toMatchObject({
+    status: "present",
+    entries: [{ agentId: input.agentId, cleanupCompleted: false }],
+  });
+  expect(facts.status === "present" && facts.entries[0]?.manualClawRemoval).toBe(
+    gatewayOwned ? undefined : true,
+  );
+  const recover = (operationId: string) =>
+    write((current) => begin(current, { ...input, operationId: "successor" }, false, operationId));
+  expect(() => recover("stale-attempt")).toThrow("changed before recovery");
+  if (gatewayOwned) {
+    expect(recover(input.operationId).entry.phase).toBe("draining");
+  } else {
+    expect(() => recover(input.operationId)).toThrow("Claw removal owner");
+    expect(read(database, input.agentId)?.operationId).toBe(input.operationId);
+  }
+});

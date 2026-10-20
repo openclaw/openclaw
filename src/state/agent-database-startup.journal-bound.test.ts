@@ -123,20 +123,17 @@ it("retries shared-pool capacity rejections and prepares the agent", async () =>
   expectAdmission(["agent-0"], [], 4);
 });
 
-it.each(["pending", "complete"] as const)(
-  "does not retry a %s deletion tombstone",
-  async (status) => {
-    readJournal.mockResolvedValue(status);
-    await prepareAgents(1);
-    expectAdmission([], ["agent-0"], 1);
-  },
-);
-
 it.each([
-  { name: "a genuine read failure", error: new Error("journal unreadable"), attempts: 1 },
-  { name: "exhausted capacity retries", error: overload(), attempts: 4 },
-])("records $name as degraded", async ({ error, attempts }) => {
-  readJournal.mockRejectedValue(error);
+  ["pending", 1],
+  ["complete", 1],
+  [new Error("journal unreadable"), 1],
+  [overload(), 4],
+] as const)("refuses startup for %s after %i reads", async (outcome, attempts) => {
+  if (outcome instanceof Error) {
+    readJournal.mockRejectedValue(outcome);
+  } else {
+    readJournal.mockResolvedValue(outcome);
+  }
   await prepareAgents(1);
   expectAdmission([], ["agent-0"], attempts);
 });

@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, expect, it, vi } from "vitest";
+import { afterAll, expect, it, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -65,24 +65,19 @@ afterAll(() => {
   clearRuntimeConfigSnapshot();
   vi.restoreAllMocks();
 });
-const counts: Array<{
-  owner: string;
-  userVersion: number;
-  sqliteMaster: number;
-  dataVersion: number;
-}> = [];
-
-function recordCounts(owner: string, database: EngineConnection) {
-  const sql = trace.execute.mock.calls.filter(([db]) => db === database).map(([, text]) => text);
-  counts.push({
-    owner,
-    userVersion: sql.filter((text) => /^PRAGMA user_version\b/i.test(text)).length,
-    sqliteMaster: sql.filter((text) => /\bsqlite_(master|schema)\b/i.test(text)).length,
-    dataVersion: sql.filter(trace.isVersionProbe).length,
-  });
+function expectNoChecks(databases: EngineConnection[]) {
+  expect(
+    trace.execute.mock.calls.filter(
+      ([db, sql]) =>
+        databases.includes(db) &&
+        (/^PRAGMA user_version\b/i.test(sql) ||
+          /\bsqlite_(master|schema)\b/i.test(sql) ||
+          trace.isVersionProbe(sql)),
+    ),
+  ).toEqual([]);
 }
 
-beforeAll(async () => {
+it("keeps admitted reads free of schema checks and freshness probes", async () => {
   setRuntimeConfigSnapshot({});
   const scope = {
     agentId: "main",
@@ -111,28 +106,12 @@ beforeAll(async () => {
   for (let i = 0; i < 100; i++) {
     read();
   }
-  for (const [owner, database] of [
-    ["agent", agent.db],
-    ["state", state.db],
-  ] as const) {
-    recordCounts(owner, database);
-  }
+  expectNoChecks([agent.db, state.db]);
   trace.execute.mockClear();
   for (let i = 0; i < 100; i++) {
     expect(withExistingOpenClawStateDatabaseReadOnly(({ db }) => db, scope)).toBe(state.db);
   }
-  recordCounts("state-readonly", state.db);
-});
-
-it("keeps admitted reads free of schema checks and freshness probes", () => {
-  expect(counts).toEqual(
-    ["agent", "state", "state-readonly"].map((owner) => ({
-      owner,
-      userVersion: 0,
-      sqliteMaster: 0,
-      dataVersion: 0,
-    })),
-  );
+  expectNoChecks([state.db]);
 });
 
 it("invalidates cached admission after terminal revocation", () => {

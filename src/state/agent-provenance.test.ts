@@ -19,32 +19,28 @@ const withState = (run: Parameters<typeof withOpenClawTestState>[1]) =>
     { layout: "state-only", scenario: "empty", label: "agent-provenance" },
     run,
   );
-const expectedProvenance = (
-  createdAtMs: number,
-  createdVia = "operator",
-  creatorAgentId: string | null = null,
-) => ({
+const operator = {
   agentId: "worker",
-  createdVia,
-  creatorAgentId,
-  createdAtMs,
-});
+  createdVia: "operator",
+  creatorAgentId: null,
+};
+const agent = { ...operator, createdVia: "agent", creatorAgentId: "main" };
 
 it("records captured provenance and destination in the worker", async () => {
-  await withState(async (state) => {
+  await withState(async ({ root, env }) => {
     const options = {
-      env: { ...state.env },
-      path: resolveOpenClawStateSqlitePath(state.env),
+      env: { ...env },
+      path: resolveOpenClawStateSqlitePath(env),
       nowMs: 42,
     };
-    const redirectedPath = path.join(state.root, "redirected.sqlite");
+    const redirectedPath = path.join(root, "redirected.sqlite");
     const provenance = { createdVia: "agent" as const, creatorAgentId: "Main" };
     const sql = observeMainThreadSql();
     try {
       const writing = record("Worker", provenance, options);
       provenance.creatorAgentId = "replacement";
       options.path = redirectedPath;
-      options.env.OPENCLAW_STATE_DIR = path.join(state.root, "redirected");
+      options.env.OPENCLAW_STATE_DIR = path.join(root, "redirected");
       options.nowMs = 99;
       await writing;
       sql.expectIdle();
@@ -52,22 +48,22 @@ it("records captured provenance and destination in the worker", async () => {
       sql.restore();
     }
     expect(fs.existsSync(redirectedPath)).toBe(false);
-    expect(readAgentProvenance("worker", { env: state.env })).toEqual(
-      expectedProvenance(42, "agent", "main"),
-    );
+    expect(readAgentProvenance("worker", { env })).toEqual({ ...agent, createdAtMs: 42 });
   });
 });
 
 it("reads absent provenance without creating state and observes its later writer", async () => {
-  await withState(async (state) => {
-    const options = { env: state.env };
+  await withState(async ({ env }) => {
+    const options = { env };
     const expectAbsent = async () => {
-      expect(readAgentProvenance("worker", options)).toBeUndefined();
-      expect(await list(options)).toEqual([]);
-      expect(await display(["worker"], options)).toEqual([]);
+      expect([
+        readAgentProvenance("worker", options),
+        await list(options),
+        await display(["worker"], options),
+      ]).toEqual([undefined, [], []]);
     };
     await expectAbsent();
-    expect(fs.existsSync(resolveOpenClawStateSqlitePath(state.env))).toBe(false);
+    expect(fs.existsSync(resolveOpenClawStateSqlitePath(env))).toBe(false);
 
     const database = openOpenClawStateDatabase(options);
     database.db.exec("DROP TABLE IF EXISTS agent_provenance");
@@ -77,8 +73,8 @@ it("reads absent provenance without creating state and observes its later writer
     await record("worker", { createdVia: "operator" }, { ...options, nowMs: 42 });
     expect(readAgentProvenance("worker", options)?.createdAtMs).toBe(42);
     expect(await display(["missing", "WORKER", "worker"], options)).toEqual([
-      expectedProvenance(42),
-      expectedProvenance(42),
+      { ...operator, createdAtMs: 42 },
+      { ...operator, createdAtMs: 42 },
     ]);
     database.db.exec("ALTER TABLE agent_provenance RENAME COLUMN created_via TO invalid_kind");
     expect(() => readAgentProvenance("worker", options)).toThrow();
@@ -88,10 +84,10 @@ it("reads absent provenance without creating state and observes its later writer
 it("records, replaces, lists, and deletes agent creation provenance", async () => {
   await withState(async ({ env }) => {
     await record("Worker", { createdVia: "operator" }, { env, nowMs: 10 });
-    expect(readAgentProvenance("worker", { env })).toEqual(expectedProvenance(10));
+    expect(readAgentProvenance("worker", { env })).toEqual({ ...operator, createdAtMs: 10 });
 
     await record("worker", { createdVia: "agent", creatorAgentId: "Main" }, { env, nowMs: 20 });
-    expect(await list({ env })).toEqual([expectedProvenance(20, "agent", "main")]);
+    expect(await list({ env })).toEqual([{ ...agent, createdAtMs: 20 }]);
 
     const database = openOpenClawStateDatabase({ env });
     remove(database.db, "worker");
