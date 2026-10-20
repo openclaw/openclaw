@@ -84,7 +84,11 @@ final class OpenClawSnapshotUITests: XCTestCase {
         let userRow = app.staticTexts[prompt]
         XCTAssertTrue(userRow.waitForExistence(timeout: 5), "The explicit fixture send was not accepted")
         // Only dismiss after sending: the empty-chat starter buttons also send on tap.
-        app.scrollViews["chat-transcript"].coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.05)).tap()
+        let transcript = app.scrollViews["chat-transcript"]
+        // The viewport can extend behind navigation; dismiss from its readable area.
+        let belowNavigation = app.navigationBars.firstMatch.frame.maxY - transcript.frame.minY + 16
+        transcript.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0))
+            .withOffset(CGVector(dx: 0, dy: belowNavigation)).tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3), "Fixture keyboard stayed open")
 
         // This tool row is emitted after both sources, not after deduplication succeeds.

@@ -78,18 +78,23 @@ struct ChatProTab: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     if let headerSidebarAction {
-                        OpenClawSidebarToolbarItem(
-                            action: headerSidebarAction,
-                            placement: .topBarLeading)
+                        ToolbarItem(placement: .topBarLeading) {
+                            Button(action: headerSidebarAction.action) {
+                                Image(systemName: headerSidebarAction.systemName)
+                                    .font(OpenClawType.subheadSemiBold)
+                                    .foregroundStyle(OpenClawBrand.accent)
+                            }
+                            .accessibilityLabel(headerSidebarAction.accessibilityLabel.text)
+                            .accessibilityIdentifier(headerSidebarAction
+                                .accessibilityIdentifier ?? "RootTabs.Sidebar.Show")
+                        }
                     }
-                    ToolbarItem(placement: .topBarLeading) {
+                    ToolbarItem(placement: .principal) {
                         self.headerAgentIdentity
                     }
-                    .sharedBackgroundVisibility(.hidden)
                     ToolbarItem(placement: .topBarTrailing) {
                         self.chatActionsMenu
                     }
-                    .sharedBackgroundVisibility(.hidden)
                 }
                 .sheet(item: self.$transcriptShareItem) { item in
                     OpenClawChatFileShareSheet(fileURL: item.fileURL)
@@ -410,12 +415,9 @@ struct ChatProTab: View {
         Button {
             self.showsChatActions.toggle()
         } label: {
-            Image(systemName: "ellipsis.circle")
+            Image(systemName: "ellipsis")
                 .foregroundStyle(OpenClawBrand.accent)
         }
-        .frame(width: 44, height: 44)
-        .contentShape(Rectangle())
-        .buttonStyle(.plain)
         .accessibilityLabel("Chat actions")
         .popover(isPresented: self.$showsChatActions, attachmentAnchor: .rect(.bounds), arrowEdge: .top) {
             self.chatActionsPopover

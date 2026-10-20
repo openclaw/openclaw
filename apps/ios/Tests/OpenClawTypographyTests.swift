@@ -382,11 +382,6 @@ struct OpenClawTypographyTests {
         let menu = try String(
             contentsOf: Self.sourceURL("Design/ChatModelControlsMenu.swift"),
             encoding: .utf8)
-        let chatActionsStart = try #require(chatTab.range(of: "private var chatActionsMenu: some View"))
-        let chatActionsEnd = try #require(chatTab.range(
-            of: "private var chatActionsPopover: some View",
-            range: chatActionsStart.upperBound..<chatTab.endIndex))
-        let chatActionsMenu = String(chatTab[chatActionsStart.lowerBound..<chatActionsEnd.lowerBound])
 
         #expect(chatTab.contains("title: \"New chat in worktree\""))
         #expect(!chatTab.contains("title: String(localized: \"Sessions…\")"))
@@ -398,8 +393,6 @@ struct OpenClawTypographyTests {
         #expect(!chatTab.contains("title: \"Export Transcript\""))
         #expect(!chatTab.contains("Divider()"))
         #expect(!menu.contains("Divider()"))
-        #expect(chatActionsMenu.contains(".buttonStyle(.plain)"))
-        #expect(chatTab.components(separatedBy: ".sharedBackgroundVisibility(.hidden)").count >= 3)
         #expect(menu.contains("Text(self.title)"))
         #expect(menu.contains(".font(OpenClawType.body)"))
         #expect(menu.contains(".font(OpenClawType.caption)"))
