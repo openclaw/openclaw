@@ -1,5 +1,7 @@
-// Discord tests cover exec approvals plugin behavior.
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type {
+  DiscordExecApprovalConfig,
+  OpenClawConfig,
+} from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import {
   getDiscordExecApprovalApprovers,
@@ -8,51 +10,31 @@ import {
 } from "./exec-approvals.js";
 
 function buildConfig(
-  execApprovals?: NonNullable<NonNullable<OpenClawConfig["channels"]>["discord"]>["execApprovals"],
+  execApprovals?: DiscordExecApprovalConfig,
   channelOverrides?: Partial<NonNullable<NonNullable<OpenClawConfig["channels"]>["discord"]>>,
 ): OpenClawConfig {
-  return {
-    channels: {
-      discord: {
-        token: "discord-token",
-        ...channelOverrides,
-        execApprovals,
-      },
-    },
-  } as OpenClawConfig;
+  return { channels: { discord: { token: "discord-token", ...channelOverrides, execApprovals } } };
+}
+
+function enabled(execApprovals?: DiscordExecApprovalConfig) {
+  return isDiscordExecApprovalClientEnabled({ cfg: buildConfig(execApprovals) });
 }
 
 describe("discord exec approvals", () => {
   it("requires explicit enablement even when owner approvers resolve", () => {
-    expect(isDiscordExecApprovalClientEnabled({ cfg: buildConfig() })).toBe(false);
-    expect(
-      isDiscordExecApprovalClientEnabled({
-        cfg: buildConfig({ enabled: true }),
-      }),
-    ).toBe(false);
-    expect(
-      isDiscordExecApprovalClientEnabled({
-        cfg: buildConfig({ approvers: ["123"] }),
-      }),
-    ).toBe(false);
+    expect(enabled()).toBe(false);
+    expect(enabled({ enabled: true })).toBe(false);
+    expect(enabled({ approvers: ["123"] })).toBe(false);
     expect(
       isDiscordExecApprovalClientEnabled({
         cfg: {
           ...buildConfig(),
           commands: { ownerAllowFrom: ["discord:789"] },
-        } as OpenClawConfig,
+        },
       }),
     ).toBe(false);
-    expect(
-      isDiscordExecApprovalClientEnabled({
-        cfg: buildConfig({ enabled: "auto", approvers: ["123"] }),
-      }),
-    ).toBe(true);
-    expect(
-      isDiscordExecApprovalClientEnabled({
-        cfg: buildConfig({ enabled: false, approvers: ["123"] }),
-      }),
-    ).toBe(false);
+    expect(enabled({ enabled: "auto", approvers: ["123"] })).toBe(true);
+    expect(enabled({ enabled: false, approvers: ["123"] })).toBe(false);
   });
 
   it("prefers explicit approvers when configured", () => {
@@ -66,10 +48,7 @@ describe("discord exec approvals", () => {
   it("does not infer approvers from allowFrom or default DM routes", () => {
     const cfg = buildConfig(
       { enabled: true },
-      {
-        allowFrom: ["123", "456"],
-        defaultTo: "user:789",
-      },
+      { allowFrom: ["123", "456"], defaultTo: "user:789" },
     );
 
     expect(getDiscordExecApprovalApprovers({ cfg })).toStrictEqual([]);

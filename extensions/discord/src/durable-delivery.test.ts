@@ -1,4 +1,3 @@
-// Discord tests cover durable delivery plugin behavior.
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
 import {
@@ -30,14 +29,11 @@ describe("durable Discord delivery", () => {
 
   beforeEach(() => {
     resetDiscordOutboundMocks(hoisted);
+    hoisted.sendMessageDiscordMock
+      .mockResolvedValueOnce({ messageId: "msg-chunk-1", channelId: "ch-1" })
+      .mockRejectedValueOnce(Object.assign(new Error("discord 500"), { status: 500 }));
     setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "discord",
-          source: "test",
-          plugin: discordPlugin,
-        },
-      ]),
+      createTestRegistry([{ pluginId: "discord", source: "test", plugin: discordPlugin }]),
     );
   });
 
@@ -47,13 +43,6 @@ describe("durable Discord delivery", () => {
   });
 
   it("does not replay earlier chunks when a later platform send fails", async () => {
-    hoisted.sendMessageDiscordMock
-      .mockResolvedValueOnce({
-        messageId: "msg-chunk-1",
-        channelId: "ch-1",
-      })
-      .mockRejectedValueOnce(Object.assign(new Error("discord 500"), { status: 500 }));
-
     const result = await sendDurableMessageBatch({
       cfg,
       channel: "discord",
@@ -67,19 +56,12 @@ describe("durable Discord delivery", () => {
       skipQueue: true,
     });
 
-    expect(result.status).toBe("partial_failed");
-    if (result.status !== "partial_failed") {
-      throw new Error("expected durable Discord send to report a partial failure");
-    }
-    expect(
-      result.results.map((entry) => ({
-        channel: entry.channel,
-        messageId: entry.messageId,
-      })),
-    ).toEqual([{ channel: "discord", messageId: "msg-chunk-1" }]);
-    expect(result.receipt.platformMessageIds).toEqual(["msg-chunk-1"]);
-    expect(result.sentBeforeError).toBe(true);
-    expect(hoisted.sendMessageDiscordMock).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({
+      status: "partial_failed",
+      results: [{ channel: "discord", messageId: "msg-chunk-1" }],
+      receipt: { platformMessageIds: ["msg-chunk-1"] },
+      sentBeforeError: true,
+    });
     expect(hoisted.sendMessageDiscordMock.mock.calls.map((call) => call[1])).toEqual([
       "first chunk",
       "second chunk",
@@ -87,25 +69,19 @@ describe("durable Discord delivery", () => {
   });
 
   it("keeps accepted Discord chunks visible when monitored reply delivery fails", async () => {
-    hoisted.sendMessageDiscordMock
-      .mockResolvedValueOnce({ messageId: "msg-chunk-1", channelId: "ch-1" })
-      .mockRejectedValueOnce(Object.assign(new Error("discord 500"), { status: 500 }));
-
-    let error: unknown;
-    try {
-      await deliverDiscordReply({
-        cfg,
-        replies: [{ text: "first chunk\nsecond chunk" }],
-        target: "channel:123456",
-        token: "test-token",
-        textLimit: 2000,
-        maxLinesPerMessage: 1,
-        chunkMode: "newline",
-        kind: "final",
-      });
-    } catch (caught) {
-      error = caught;
-    }
+    const error = await deliverDiscordReply({
+      cfg,
+      replies: [{ text: "first chunk\nsecond chunk" }],
+      target: "channel:123456",
+      token: "test-token",
+      textLimit: 2000,
+      maxLinesPerMessage: 1,
+      chunkMode: "newline",
+      kind: "final",
+    }).then(
+      () => undefined,
+      (caught: unknown) => caught,
+    );
 
     expect(isChannelPartialDeliveryError(error)).toBe(true);
     expect(error).toMatchObject({

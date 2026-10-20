@@ -13,6 +13,29 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { inspectDiscordConversationRouteOwner } from "./conversation-route-owner.test-support.js";
 
+function registerAdapter(overrides: Partial<SessionBindingAdapter> = {}) {
+  const adapter: SessionBindingAdapter = {
+    channel: "discord",
+    accountId: "default",
+    listBySession: () => [],
+    resolveByConversation: () => null,
+    ...overrides,
+  };
+  registerSessionBindingAdapter(adapter);
+  return adapter;
+}
+
+function inspect(
+  overrides: Partial<Parameters<typeof inspectDiscordConversationRouteOwner>[0]> = {},
+) {
+  return inspectDiscordConversationRouteOwner({
+    cfg: {},
+    accountId: "default",
+    conversation: { kind: "channel", peerId: "channel-1" },
+    ...overrides,
+  });
+}
+
 describe("inspectDiscordConversationRouteOwner", () => {
   let adapter: SessionBindingAdapter;
 
@@ -35,13 +58,7 @@ describe("inspectDiscordConversationRouteOwner", () => {
       ]),
     );
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
-    adapter = {
-      channel: "discord",
-      accountId: "default",
-      listBySession: () => [],
-      resolveByConversation: () => null,
-    };
-    registerSessionBindingAdapter(adapter);
+    adapter = registerAdapter();
   });
 
   afterEach(() => {
@@ -59,18 +76,10 @@ describe("inspectDiscordConversationRouteOwner", () => {
       status: "active" as const,
       boundAt: 1,
     }));
-    registerSessionBindingAdapter({
-      channel: "discord",
-      accountId: "default",
-      listBySession: () => [],
-      resolveByConversation,
-      touch,
-    });
+    registerAdapter({ resolveByConversation, touch });
 
     expect(
-      await inspectDiscordConversationRouteOwner({
-        cfg: {},
-        accountId: "default",
+      await inspect({
         conversation: { kind: "direct", peerId: "user-1", nativeChannelId: "dm-1" },
       }),
     ).toEqual({ kind: "agent", agentId: "finance" });
@@ -87,16 +96,9 @@ describe("inspectDiscordConversationRouteOwner", () => {
     "uses the native channel runtime identity for $kind conversations",
     async ({ kind, peerId }) => {
       const resolveByConversation = vi.fn(() => null);
-      registerSessionBindingAdapter({
-        channel: "discord",
-        accountId: "default",
-        listBySession: () => [],
-        resolveByConversation,
-      });
+      registerAdapter({ resolveByConversation });
 
-      await inspectDiscordConversationRouteOwner({
-        cfg: {},
-        accountId: "default",
+      await inspect({
         conversation: { kind, peerId, nativeChannelId: peerId },
       });
 
@@ -108,59 +110,28 @@ describe("inspectDiscordConversationRouteOwner", () => {
 
   it("reports temporary adapter unavailability only while bindings are enabled", async () => {
     unregisterSessionBindingAdapter({ channel: "discord", accountId: "default", adapter });
-    const conversation = { kind: "channel" as const, peerId: "channel-1" };
-
+    expect(await inspect()).toEqual({ kind: "unavailable" });
     expect(
-      await inspectDiscordConversationRouteOwner({ cfg: {}, accountId: "default", conversation }),
-    ).toEqual({ kind: "unavailable" });
-    expect(
-      await inspectDiscordConversationRouteOwner({
+      await inspect({
         cfg: { channels: { discord: { threadBindings: { enabled: false } } } },
-        accountId: "default",
-        conversation,
       }),
     ).toEqual({ kind: "agent", agentId: "main" });
   });
 
-  it.each([
-    {
-      name: "removed account",
-      accountId: "retired",
-      discord: { accounts: { default: {} } },
-    },
-    {
-      name: "disabled account",
-      accountId: "default",
-      discord: { accounts: { default: { enabled: false } } },
-    },
-    {
-      name: "disabled channel",
-      accountId: "default",
-      discord: { enabled: false, accounts: { default: { enabled: true } } },
-    },
-  ] satisfies Array<{
-    name: string;
-    accountId: string;
-    discord: NonNullable<OpenClawConfig["channels"]>["discord"];
-  }>)(
-    "rejects a $name without requiring a runtime binding owner",
-    async ({ accountId, discord }) => {
+  it.each<[string, string, NonNullable<OpenClawConfig["channels"]>["discord"]]>([
+    ["removed account", "retired", { accounts: { default: {} } }],
+    ["disabled account", "default", { accounts: { default: { enabled: false } } }],
+    ["disabled channel", "default", { enabled: false, accounts: { default: { enabled: true } } }],
+  ])(
+    "rejects a %s without requiring a runtime binding owner",
+    async (_name, accountId, discord) => {
       unregisterSessionBindingAdapter({ channel: "discord", accountId: "default", adapter });
-      expect(
-        await inspectDiscordConversationRouteOwner({
-          cfg: { channels: { discord } },
-          accountId,
-          conversation: { kind: "channel", peerId: "channel-1" },
-        }),
-      ).toBeNull();
+      expect(await inspect({ cfg: { channels: { discord } }, accountId })).toBeNull();
     },
   );
 
   it("preserves explicit plugin ownership independently of the target session key", async () => {
-    registerSessionBindingAdapter({
-      channel: "discord",
-      accountId: "default",
-      listBySession: () => [],
+    registerAdapter({
       resolveByConversation: (conversation) => ({
         bindingId: "binding-plugin",
         targetSessionKey: "agent:review:looks-owned",
@@ -176,12 +147,10 @@ describe("inspectDiscordConversationRouteOwner", () => {
       }),
     });
 
-    expect(
-      await inspectDiscordConversationRouteOwner({
-        cfg: {},
-        accountId: "default",
-        conversation: { kind: "channel", peerId: "channel-1" },
-      }),
-    ).toEqual({ kind: "plugin", pluginId: "review-plugin", fallbackAgentId: "main" });
+    expect(await inspect()).toEqual({
+      kind: "plugin",
+      pluginId: "review-plugin",
+      fallbackAgentId: "main",
+    });
   });
 });

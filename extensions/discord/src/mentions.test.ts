@@ -7,6 +7,14 @@ import {
   rewriteDiscordKnownMentions,
 } from "./mentions.js";
 
+function remember(handles: string[], userId = "123456789", accountId = "default") {
+  rememberDiscordDirectoryUser({ accountId, userId, handles });
+}
+
+function rewrite(text: string, accountId = "default") {
+  return rewriteDiscordKnownMentions(text, { accountId });
+}
+
 describe("formatMention", () => {
   it("formats channel mentions from ids", () => {
     expect(formatMention({ channelId: "777555333" })).toBe("<#777555333>");
@@ -23,23 +31,12 @@ describe("rewriteDiscordKnownMentions", () => {
   });
 
   it("rewrites @name mentions when a cached user id exists", () => {
-    rememberDiscordDirectoryUser({
-      accountId: "default",
-      userId: "123456789",
-      handles: ["Alice", "@alice_user", "alice#1234"],
-    });
-    const rewritten = rewriteDiscordKnownMentions("ping @Alice and @alice_user", {
-      accountId: "default",
-    });
-    expect(rewritten).toBe("ping <@123456789> and <@123456789>");
+    remember(["Alice", "@alice_user", "alice#1234"]);
+    expect(rewrite("ping @Alice and @alice_user")).toBe("ping <@123456789> and <@123456789>");
   });
 
   it("rewrites configured mention aliases before the cache", () => {
-    rememberDiscordDirectoryUser({
-      accountId: "default",
-      userId: "111111111",
-      handles: ["vladislava"],
-    });
+    remember(["vladislava"], "111111111");
     const rewritten = rewriteDiscordKnownMentions("ping @Vladislava and @BuildBot#1234", {
       accountId: "default",
       mentionAliases: {
@@ -62,11 +59,7 @@ describe("rewriteDiscordKnownMentions", () => {
   );
 
   it("prefers the longest known handle before treating trailing dots as punctuation", () => {
-    rememberDiscordDirectoryUser({
-      accountId: "default",
-      userId: "333333333",
-      handles: ["alice.."],
-    });
+    remember(["alice.."], "333333333");
     expect(
       rewriteDiscordKnownMentions("@alice. @alice.. @alice...", {
         accountId: "default",
@@ -76,11 +69,7 @@ describe("rewriteDiscordKnownMentions", () => {
   });
 
   it("preserves unknown mentions and reserved mentions", () => {
-    rememberDiscordDirectoryUser({
-      accountId: "default",
-      userId: "123456789",
-      handles: ["alice"],
-    });
+    remember(["alice"]);
     const text = "hello @unknown. @everyone. @here... @alice.dev. @a.";
     const rewritten = rewriteDiscordKnownMentions(text, {
       accountId: "default",
@@ -138,37 +127,20 @@ describe("rewriteDiscordKnownMentions", () => {
       expected: "literal \\` outside <@123456789> then `inside @alice",
     },
   ])("does not rewrite mentions inside $name", ({ input, expected }) => {
-    rememberDiscordDirectoryUser({
-      accountId: "default",
-      userId: "123456789",
-      handles: ["alice"],
-    });
-    expect(rewriteDiscordKnownMentions(input, { accountId: "default" })).toBe(expected);
+    remember(["alice"]);
+    expect(rewrite(input)).toBe(expected);
   });
 
   it("does not end longer code fences at triple-backtick literals inside the body", () => {
-    rememberDiscordDirectoryUser({
-      accountId: "default",
-      userId: "123456789",
-      handles: ["alice"],
-    });
+    remember(["alice"]);
     const text = '````ts\nconst fence = "```";\n@alice\n```` text @alice';
-    const rewritten = rewriteDiscordKnownMentions(text, {
-      accountId: "default",
-    });
-    expect(rewritten).toBe('````ts\nconst fence = "```";\n@alice\n```` text <@123456789>');
+    expect(rewrite(text)).toBe('````ts\nconst fence = "```";\n@alice\n```` text <@123456789>');
   });
 
   it("is account-scoped", () => {
-    rememberDiscordDirectoryUser({
-      accountId: "ops",
-      userId: "999888777",
-      handles: ["alice"],
-    });
-    const defaultRewrite = rewriteDiscordKnownMentions("@alice", { accountId: "default" });
-    const opsRewrite = rewriteDiscordKnownMentions("@alice", { accountId: "ops" });
-    expect(defaultRewrite).toBe("@alice");
-    expect(opsRewrite).toBe("<@999888777>");
+    remember(["alice"], "999888777", "ops");
+    expect(rewrite("@alice")).toBe("@alice");
+    expect(rewrite("@alice", "ops")).toBe("<@999888777>");
   });
 });
 

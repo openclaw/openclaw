@@ -18,15 +18,7 @@ vi.mock("openclaw/plugin-sdk/web-media", async () => {
 let discordPlugin: typeof import("./channel.js").discordPlugin;
 let sendMessageDiscord: typeof import("./send.js").sendMessageDiscord;
 
-const DISCORD_TEST_CFG = {
-  channels: {
-    discord: {
-      accounts: {
-        default: {},
-      },
-    },
-  },
-};
+const DISCORD_TEST_CFG = { channels: { discord: { accounts: { default: {} } } } };
 
 beforeAll(async () => {
   ({ discordPlugin } = await import("./channel.js"));
@@ -72,10 +64,7 @@ async function runDurableDiscordForumBatch(params: {
         source: "test",
         plugin: {
           ...discordPlugin,
-          outbound: {
-            ...discordPlugin.outbound,
-            afterDeliverPayload,
-          },
+          outbound: { ...discordPlugin.outbound, afterDeliverPayload },
         },
       },
     ]),
@@ -103,7 +92,19 @@ async function runDurableDiscordForumBatch(params: {
       },
       skipQueue: true,
     });
-    return { afterDeliverPayload, requests: [...loopback.requests], result };
+    expect(result.status).toBe("sent");
+    if (result.status !== "sent") {
+      throw new Error("expected durable Discord forum batch to send");
+    }
+    return {
+      postPaths: loopback.requests
+        .filter((request) => request.method === "POST")
+        .map((request) => request.path),
+      deliveredThreadIds: afterDeliverPayload.mock.calls.map(
+        ([ctx]) => (ctx as { target?: { threadId?: unknown } }).target?.threadId,
+      ),
+      receipt: result.receipt,
+    };
   } finally {
     await loopback.close();
     resetPluginRuntimeStateForTest();
@@ -116,57 +117,37 @@ describe("durable Discord forum batches", () => {
     ChannelType.GuildForum,
     ChannelType.GuildMedia,
   ])("keeps a payload batch in one created %s thread", async (parentType) => {
-    const { afterDeliverPayload, requests, result } = await runDurableDiscordForumBatch({
+    const { deliveredThreadIds, postPaths, receipt } = await runDurableDiscordForumBatch({
       parentType,
     });
-    const postPaths = requests
-      .filter((request) => request.method === "POST")
-      .map((request) => request.path);
 
     expect(postPaths).toEqual([
       `/v10${Routes.threads("700")}`,
       `/v10${Routes.channelMessages("701")}`,
       `/v10${Routes.channelMessages("701")}`,
     ]);
-    expect(
-      afterDeliverPayload.mock.calls.map(
-        ([ctx]) => (ctx as { target?: { threadId?: unknown } }).target?.threadId,
-      ),
-    ).toEqual(["701", "701"]);
-    expect(result.status).toBe("sent");
-    if (result.status !== "sent") {
-      throw new Error("expected durable Discord forum batch to send");
-    }
-    expect(result.receipt).toMatchObject({
+    expect(deliveredThreadIds).toEqual(["701", "701"]);
+    expect(receipt).toMatchObject({
       threadId: "701",
       platformMessageIds: ["starter-1", "message-1", "message-2"],
     });
   });
 
   it("keeps an explicit thread authoritative for the full payload batch", async () => {
-    const { afterDeliverPayload, requests, result } = await runDurableDiscordForumBatch({
+    const { deliveredThreadIds, postPaths, receipt } = await runDurableDiscordForumBatch({
       parentType: ChannelType.GuildForum,
       threadId: "900",
     });
-    const postPaths = requests
-      .filter((request) => request.method === "POST")
-      .map((request) => request.path);
 
     expect(postPaths).toEqual([
       `/v10${Routes.channelMessages("900")}`,
       `/v10${Routes.channelMessages("900")}`,
       `/v10${Routes.channelMessages("900")}`,
     ]);
-    expect(
-      afterDeliverPayload.mock.calls.map(
-        ([ctx]) => (ctx as { target?: { threadId?: unknown } }).target?.threadId,
-      ),
-    ).toEqual(["900", "900"]);
-    expect(result.status).toBe("sent");
-    if (result.status !== "sent") {
-      throw new Error("expected explicit-thread Discord batch to send");
-    }
-    expect(result.receipt.threadId).toBe("900");
-    expect(result.receipt.platformMessageIds).toEqual(["message-1", "message-2", "message-3"]);
+    expect(deliveredThreadIds).toEqual(["900", "900"]);
+    expect(receipt).toMatchObject({
+      threadId: "900",
+      platformMessageIds: ["message-1", "message-2", "message-3"],
+    });
   });
 });

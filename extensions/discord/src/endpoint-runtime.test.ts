@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { createServer, type Server } from "node:http";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   getDiscordEndpointRuntime,
@@ -15,19 +16,9 @@ const DISCORD_API_URL_ENV = "DISCORD_API_URL";
 
 afterEach(async () => {
   delete process.env[DISCORD_API_URL_ENV];
-  await new Promise<void>((resolve, reject) => {
-    if (!server) {
-      resolve();
-      return;
-    }
-    server.close((error) => {
-      if (error) {
-        reject(error);
-      } else {
-        resolve();
-      }
-    });
-  });
+  if (server) {
+    await promisify(server.close.bind(server))();
+  }
   server = undefined;
   vi.restoreAllMocks();
 });
@@ -84,11 +75,7 @@ describe("Discord endpoint runtime", () => {
   it("routes REST requests with their authentication and body to the configured origin", async () => {
     const observed: Array<{ url?: string; authorization?: string; body: string }> = [];
     const baseUrl = await startEndpointServer((request, body) => {
-      observed.push({
-        url: request.url,
-        authorization: request.headers.authorization,
-        body,
-      });
+      observed.push({ url: request.url, authorization: request.headers.authorization, body });
     });
     configureLoopbackEndpoint(baseUrl);
 
