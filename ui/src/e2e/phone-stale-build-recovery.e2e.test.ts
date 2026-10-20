@@ -502,17 +502,21 @@ suite.define(() => {
         const assignment = page.getByRole("menuitem", { name: "Assign to", exact: true });
         await assignment.waitFor();
         await assignment.tap();
-        const selectedOwner = page.getByRole("radio", {
-          checked: true,
+        const assignmentPage = page.locator(
+          '.chat-mobile-host__page[data-mobile-page="session-assign"]:visible',
+        );
+        const selectedOwner = assignmentPage.getByRole("button", {
+          pressed: true,
           exact: true,
           name: "Bob",
         });
         await selectedOwner.waitFor();
-        const selectedOwners = await page
-          .getByRole("radio", { checked: true })
+        const selectedOwners = await assignmentPage
+          .getByRole("button", { pressed: true })
           .evaluateAll((owners) =>
             owners.map(
-              (owner) => owner.querySelector(".session-menu__text")?.textContent?.trim() ?? "",
+              (owner) =>
+                owner.querySelector(":scope > span:not([aria-hidden])")?.textContent?.trim() ?? "",
             ),
           );
         expect(selectedOwners).toEqual(["Bob"]);

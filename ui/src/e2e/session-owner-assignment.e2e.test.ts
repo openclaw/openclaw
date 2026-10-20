@@ -119,23 +119,30 @@ async function expectAssignmentRequest(
   });
 }
 
-async function expectAssignmentAvatarLayout(page: Page): Promise<void> {
-  const layout = await page.locator('button[value^="assign-owner:"]:visible').evaluateAll((items) =>
-    items.map((item) => {
-      const avatar = item.querySelector(".viewer-avatar")!;
-      const slot = item.querySelector(".session-menu__avatar")!;
-      const label = item.querySelector(".session-menu__text")!;
-      const bounds = avatar.getBoundingClientRect();
-      const slotBounds = slot.getBoundingClientRect();
-      const style = getComputedStyle(avatar);
-      return {
-        width: style.width,
-        height: style.height,
-        square: Math.abs(bounds.width - bounds.height) < 0.01,
-        contained: bounds.left >= slotBounds.left && bounds.right <= slotBounds.right,
-        gap: label.getBoundingClientRect().left - bounds.right,
-      };
-    }),
+async function expectAssignmentAvatarLayout(page: Page, compact = false): Promise<void> {
+  const rows = ownerChoices(page, compact);
+  const choices = rows.filter({ has: page.locator(".session-menu__avatar") });
+  await expectBrowser(choices).toHaveCount((await rows.count()) - (compact ? 1 : 0));
+  const layout = await choices.evaluateAll(
+    (items, isCompact) =>
+      items.map((item) => {
+        const avatar = item.querySelector(".viewer-avatar")!;
+        const slot = item.querySelector(".session-menu__avatar")!;
+        const label = item.querySelector(
+          isCompact ? ":scope > span:not([aria-hidden])" : ".session-menu__text",
+        )!;
+        const bounds = avatar.getBoundingClientRect();
+        const slotBounds = slot.getBoundingClientRect();
+        const style = getComputedStyle(avatar);
+        return {
+          width: style.width,
+          height: style.height,
+          square: Math.abs(bounds.width - bounds.height) < 0.01,
+          contained: bounds.left >= slotBounds.left && bounds.right <= slotBounds.right,
+          gap: label.getBoundingClientRect().left - bounds.right,
+        };
+      }),
+    compact,
   );
   expect(layout.length).toBeGreaterThan(0);
   for (const avatar of layout) {
@@ -154,10 +161,18 @@ function menuItem(scope: Page | Locator, name: string) {
   return scope.getByRole("menuitem", { name, exact: true });
 }
 
-function assignee(scope: Page | Locator, name: string) {
-  return scope
-    .getByRole("menuitemradio", { name, exact: true })
-    .or(scope.getByRole("radio", { name, exact: true }));
+function assignee(scope: Page | Locator, name: string, compact = false) {
+  return compact
+    ? scope.getByRole("button", { name, exact: true })
+    : scope
+        .getByRole("menuitemradio", { name, exact: true })
+        .or(scope.getByRole("radio", { name, exact: true }));
+}
+
+function ownerChoices(page: Page, compact: boolean) {
+  return compact
+    ? page.locator(".session-actions-page:visible button[aria-pressed]")
+    : page.getByRole("menuitemradio");
 }
 
 async function confirmOwner(
@@ -509,12 +524,23 @@ suite.define(() => {
         );
         await openSessionActions(page, surface);
         const { assignTo } = ownerControls(page);
-        await expandAssignment(assignTo, surface === "compact header");
-        await assignee(page, "Me").waitFor();
+        const compact = surface === "compact header";
+        await expandAssignment(assignTo, compact);
+        await assignee(page, "Me", compact).waitFor();
         await expectBrowser(
-          page.locator('button[value^="assign-owner:"]:visible').locator(".session-menu__text"),
-        ).toHaveText([...ownerNames, ...extraNames]);
-        await expectAssignmentAvatarLayout(page);
+          ownerChoices(page, compact).locator(
+            compact ? ":scope > span:not([aria-hidden])" : ".session-menu__text",
+          ),
+        ).toHaveText([...(compact ? ["Unassigned"] : []), ...ownerNames, ...extraNames]);
+        if (compact) {
+          const unassigned = assignee(page, "Unassigned", true);
+          await expectBrowser(unassigned).toBeDisabled();
+          await expectBrowser(unassigned).toHaveAttribute("aria-pressed", "false");
+          const selected = assignee(page, "Bob", true);
+          await expectBrowser(selected).toBeDisabled();
+          await expectBrowser(selected).toHaveAttribute("aria-pressed", "true");
+        }
+        await expectAssignmentAvatarLayout(page, compact);
         const target = extraNames.at(-1) ?? "Carol";
         if (extraNames.length > 0) {
           await page.getByRole("searchbox", { name: "Search people and agents…" }).fill(target);
@@ -522,7 +548,7 @@ suite.define(() => {
             1,
           );
         }
-        const owner = assignee(page, target);
+        const owner = assignee(page, target, compact);
         await owner.scrollIntoViewIfNeeded();
         await expectBrowser(owner).toBeInViewport();
         await owner.click();
@@ -540,6 +566,7 @@ suite.define(() => {
       suite.withPage(
         { ...createControlUiE2eContextOptions(), viewport: { width, height: 900 } },
         async ({ page }) => {
+          const compact = width < 560;
           const names = Array.from(
             { length: 1000 },
             (_, i) => `Teammate ${String(i).padStart(4, "0")}`,
@@ -553,20 +580,21 @@ suite.define(() => {
           const openAssignment = async () => {
             await trigger.click();
             const assignTo = page.getByRole("menuitem", { name: /^Assign to…?$/u });
-            await expandAssignment(assignTo, width < 560);
+            await expandAssignment(assignTo, compact);
           };
           await openAssignment();
+          if (compact) {
+            const unassigned = assignee(page, "Unassigned", true);
+            await expectBrowser(unassigned).toBeDisabled();
+            await expectBrowser(unassigned).toHaveAttribute("aria-pressed", "false");
+          }
           const search = page.getByRole("searchbox", { name: "Search people and agents…" });
           await search.fill("Teammate 0999");
           await gateway.resolveDeferred("users.list", directoryResponse(names));
           await expectBrowser(search).toHaveValue("Teammate 0999");
-          await expectBrowser(page.locator('button[value^="assign-owner:"]:visible')).toHaveCount(
-            1,
-          );
+          await expectBrowser(ownerChoices(page, compact)).toHaveCount(compact ? 2 : 1);
           await search.clear();
-          await expectBrowser(page.locator('button[value^="assign-owner:"]:visible')).toHaveCount(
-            1004,
-          );
+          await expectBrowser(ownerChoices(page, compact)).toHaveCount(compact ? 1005 : 1004);
           await search.fill("Teammate 0999");
           await search.press("Escape");
           if (width < 560) {
@@ -591,11 +619,9 @@ suite.define(() => {
           await gateway.setMethodResponse("users.list", directory);
           await openAssignment();
           await search.fill("Renamed teammate");
-          const match = assignee(page, "Renamed teammate");
+          const match = assignee(page, "Renamed teammate", compact);
           await expectBrowser(match).toBeVisible();
-          await expectBrowser(page.locator('button[value^="assign-owner:"]:visible')).toHaveCount(
-            1,
-          );
+          await expectBrowser(ownerChoices(page, compact)).toHaveCount(compact ? 2 : 1);
           await search.press(width < 560 ? "Tab" : "ArrowDown");
           await expectBrowser(match).toBeFocused();
           await page.keyboard.press("Enter");
