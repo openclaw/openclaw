@@ -232,7 +232,19 @@ describe("update-cli", () => {
     mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
     const message =
       "discord is pinned to @openclaw/discord@2026.9.2 (installed 2026.9.2); registry latest resolves to 2026.9.3. Pass `openclaw plugins update @openclaw/discord@latest` to replace this version pin.";
-    pluginOutcome("discord", record, false, message);
+    setup.mockNpmPluginOutcomes(
+      [
+        {
+          pluginId: "discord",
+          status: "unchanged",
+          currentVersion: "2026.9.2",
+          nextVersion: "2026.9.3",
+          message,
+        },
+      ],
+      false,
+      { ...setup.baseConfig, plugins: { ...setup.baseConfig.plugins, installs: records } },
+    );
     mockPostCoreConvergenceOnce(modules.runPostCorePluginConvergenceSpy, {
       installRecords: records,
     });
