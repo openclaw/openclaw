@@ -8,8 +8,6 @@ import { valid as validVersion } from "semver";
 import { sanitizeForLog, stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
 import { isSecretRefShape } from "../config/redact-snapshot.secret-ref.js";
-import { classifyConfigSchemaPathSegment } from "../config/schema.lookup.js";
-import type { ConfigSchemaResponse } from "../config/schema.shared.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { UPDATE_CANDIDATE_STARTUP_FAILURES } from "../infra/update-preflight-details.js";
 import { tokenizeConcreteConfigPath } from "../shared/dot-path.js";
@@ -59,7 +57,8 @@ export type SupportRedactionContext = {
   stateDir: string;
   /** Shared only within one export; raw identifiers and their mapping never leave memory. */
   identifierKeys?: Map<string, string>;
-  configSchema?: ConfigSchemaResponse;
+  /** Exporters supply schema classification without adding it to shared logging's closure. */
+  redactConfigPathSegment?: (parentParts: readonly string[], segment: string) => string;
 };
 
 type RedactSupportStringOptions = {
@@ -446,8 +445,11 @@ export function redactPublicSupportVersion(version: string): string {
 }
 
 /** Validation paths may include operator-defined keys at any depth. */
-export function redactPublicSupportConfigKey(value: string, schema?: ConfigSchemaResponse): string {
-  if (schema) {
+export function redactPublicSupportConfigKey(
+  value: string,
+  redactSegment?: SupportRedactionContext["redactConfigPathSegment"],
+): string {
+  if (redactSegment) {
     if (!value || value === "<root>") {
       return "<root>";
     }
@@ -457,13 +459,7 @@ export function redactPublicSupportConfigKey(value: string, schema?: ConfigSchem
         return "[redacted-key]";
       }
       return parts
-        .map((part, index) => {
-          const kind = classifyConfigSchemaPathSegment(schema, parts.slice(0, index), part);
-          if (kind === "property" || kind === "array-index") {
-            return part;
-          }
-          return kind === "record-key" || kind === "invalid-record-key" ? "<id>" : "<key>";
-        })
+        .map((part, index) => redactSegment(parts.slice(0, index), part))
         .join(".")
         .slice(0, 128);
     } catch {
@@ -528,9 +524,10 @@ export function redactPublicSupportDiagnosticLine(
   const line = redactSupportDiagnosticLine(value, context);
   const startupSignal = /^startup crash with signal (SIG[A-Z0-9]+)$/u.exec(line)?.[1];
   if (
-    line === "readiness timeout" ||
-    UPDATE_CANDIDATE_STARTUP_FAILURES.some(([, cause]) => cause === line) ||
-    (startupSignal && Object.hasOwn(constants.signals, startupSignal))
+    !/[\r\n\u2028\u2029]/u.test(value) &&
+    (line === "readiness timeout" ||
+      UPDATE_CANDIDATE_STARTUP_FAILURES.some(([, cause]) => cause === line) ||
+      (startupSignal && Object.hasOwn(constants.signals, startupSignal)))
   ) {
     return line;
   }
@@ -633,13 +630,13 @@ export function redactPublicSupportDiagnosticLine(
   );
   const causes = (
     lines.match(
-      /\b(?:GLIBC_\d{1,3}(?:\.\d{1,3}){1,2} not found|[Cc]onnection (?:refused|closed|timed out)|[Pp]ermission denied|[Nn]o space left on device|MCP error -?\d{1,5}|HTTP [1-5]\d{2}|Invalid package dist content inventory|SQLite (?:snapshot (?:hash|size) mismatch|file generation (?:changed while reading|did not stabilize)|source did not stabilize|WAL commit (?:header is unavailable or changing|publication could not be verified))|Package rollback (?:launcher backup changed|verification (?:timed out|failed))|managed update handoff (?:exited before (?:responding|signaling readiness)|did not (?:respond|signal readiness)))\b/gu,
+      /\b(?:GLIBC_\d{1,3}(?:\.\d{1,3}){1,2} not found|[Cc]onnection (?:refused|closed|timed out)|[Pp]ermission denied|[Nn]o space left on device|MCP error -?\d{1,5}|HTTP [1-5]\d{2}|Invalid package dist content inventory|SQLite (?:snapshot (?:hash|size) mismatch|file generation (?:changed while reading|did not stabilize)|source did not stabilize|WAL commit (?:header is unavailable or changing|publication could not be verified))|Package rollback (?:launcher backup changed|verification (?:timed out|failed))|attempt state write refused|sentinel transaction (?:refused|unavailable)|pipe closed|managed update handoff (?:exited before (?:responding|signaling readiness)|did not (?:respond|signal readiness)))\b/gu,
     ) ?? []
   ).map((cause) => cause.replace(/^permission denied$/u, "Permission denied"));
   // Candidate admission's existing text protocol carries only these fixed validation lines.
   const configFields = parsePublicConfigDiagnosticLines(value).map(
     (issue) =>
-      `${redactPublicSupportConfigKey(issue.path, context.configSchema)}: ${issue.message}`,
+      `${redactPublicSupportConfigKey(issue.path, context.redactConfigPathSegment)}: ${issue.message}`,
   );
   return truncateUtf16Safe(
     [...new Set([...codes, ...causes, ...configFields])].join("; ") || "[redacted-diagnostic]",

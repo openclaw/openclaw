@@ -307,7 +307,7 @@ async function renderBoundedDiagnostics(
       facts.map(async (fact) => {
         const identifiers = await projectPublicUpdateFailureIdentifiers(fact);
         const affectedKey = fact.affectedKey
-          ? redactPublicSupportConfigKey(fact.affectedKey, context.configSchema)
+          ? redactPublicSupportConfigKey(fact.affectedKey, context.redactConfigPathSegment)
           : undefined;
         const issueKind = publicConfigIssueMessage({
           path: fact.affectedKey ?? "",
@@ -335,18 +335,23 @@ async function renderBoundedDiagnostics(
       : npm
         ? [npm.npmErrorCode, npm.packageSpec].filter(Boolean).join(" ")
         : truncateUtf8Prefix(
-            (publicFacts.some((fact) => fact.affectedKey)
-              ? publicFacts.filter((fact) => fact.affectedKey)
-              : publicFacts
-            )
-              .filter((fact) => fact.message && fact.message !== "[redacted-diagnostic]")
-              .map(
-                (fact) =>
-                  `${fact.affectedKey ? `${fact.affectedKey}: ` : ""}${fact.message}${fact.pluginId && fact.pluginId !== "[redacted-plugin]" ? `: ${fact.pluginId}` : ""}`,
-              )
-              .join("; "),
+            [
+              ...new Set(
+                [
+                  redactPublicSupportDiagnosticLine(message, context),
+                  ...publicFacts
+                    .filter((fact) => fact.message && fact.message !== "[redacted-diagnostic]")
+                    .map(
+                      (fact) =>
+                        `${fact.affectedKey ? `${fact.affectedKey}: ` : ""}${fact.message}${fact.pluginId && fact.pluginId !== "[redacted-plugin]" ? `: ${fact.pluginId}` : ""}`,
+                    ),
+                ]
+                  .flatMap((line) => line.split("; "))
+                  .filter((line) => line && line !== "[redacted-diagnostic]"),
+              ),
+            ].join("; "),
             200,
-          ) || redactPublicSupportDiagnosticLine(message, context);
+          ) || "[redacted-diagnostic]";
     const exit = `exit ${step.exitCode ?? "unknown"}`;
     const publicDetail = diagnostic === "[redacted-diagnostic]" ? undefined : diagnostic;
     const detail = !publicDetail
@@ -389,8 +394,27 @@ export async function prepareUpdateFailureReport(
   };
   const env = options.env ?? process.env;
   const stateDir = options.stateDir ?? resolveStateDir(env);
-  const { buildConfigSchemaCore } = await import("../config/schema.js");
-  const context = { env, stateDir, configSchema: buildConfigSchemaCore() };
+  const { buildConfigSchemaCore, classifyConfigSchemaPathSegment } =
+    await import("../config/schema.js");
+  const schema = buildConfigSchemaCore();
+  const context: UpdateFailureReportContext = {
+    env,
+    stateDir,
+    redactConfigPathSegment: (parentParts, segment) => {
+      // Runtime admission reports the package's engine field, outside the config schema.
+      if (
+        (parentParts.length === 0 && segment === "engines") ||
+        (parentParts.length === 1 && parentParts[0] === "engines" && segment === "node")
+      ) {
+        return segment;
+      }
+      const kind = classifyConfigSchemaPathSegment(schema, parentParts, segment);
+      if (kind === "property" || kind === "array-index") {
+        return segment;
+      }
+      return kind === "record-key" || kind === "invalid-record-key" ? "<id>" : "<key>";
+    },
+  };
   const version = sanitizeReportField(VERSION, context);
   const platform = sanitizeReportField(`${process.platform}/${process.arch}`, context);
   const target = resolveUpdateTarget(input, context);

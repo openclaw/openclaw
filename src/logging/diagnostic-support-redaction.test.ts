@@ -168,6 +168,10 @@ describe("diagnostic support redaction", () => {
   });
 
   it.each([
+    ["attempt state write refused", " for private-tenant at /private/example/state.sqlite"],
+    ["sentinel transaction refused", " on private-host.example"],
+    ["sentinel transaction unavailable", " for token=synthetic-private-token"],
+    ["pipe closed", " for private-host.example token=synthetic-private-token"],
     ["SQLite file generation changed while reading", ": /private/example/openclaw.sqlite"],
     ["SQLite file generation did not stabilize", " during confirmation: /private/example/a.sqlite"],
     [
@@ -181,7 +185,7 @@ describe("diagnostic support redaction", () => {
       "SQLite snapshot hash mismatch",
       ` for /private/example/a.sqlite-wal: expected ${"a".repeat(64)}, got ${"b".repeat(64)}`,
     ],
-  ])("keeps the fixed concurrent-write cause %s without its path", (cause, suffix) => {
+  ])("keeps the fixed failure cause %s without private context", (cause, suffix) => {
     expect(
       redactPublicSupportDiagnosticLine(`Warning: private-host.example\n${cause}${suffix}`, {
         env: {},

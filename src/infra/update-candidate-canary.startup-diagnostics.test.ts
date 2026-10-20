@@ -43,7 +43,7 @@ it.each([
   ["Invalid config at /home/private-owner/openclaw.json:", "Invalid configuration field"],
   [
     "Invalid config at /home/private-owner/openclaw.json:\n- private-config.json:12 — agents.entries.private-agent.model.primary: Invalid input: expected string, received number",
-    "agents.entries.<id>.model.primary: expected string, got number",
+    "Invalid configuration field; agents.entries.<id>.model.primary: expected string, got number",
   ],
   ["private-tenant startup failed at private-host.example", "[redacted-diagnostic]"],
   ["unterminated", "plugin load failed: discord"],
