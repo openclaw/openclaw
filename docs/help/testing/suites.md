@@ -282,6 +282,19 @@ Native dependency policy:
       `OPENCLAW_TEST_CHANGED_BROAD=1 pnpm test:changed` only when the agent
       decides a harness, config, package, or contract edit really needs
       broader Vitest coverage.
+    - `pnpm test:changed` compares against the local `origin/main` ref. A
+      single-branch or tag-only clone can omit that ref, causing Git to fail
+      before tests start. Check it with `git rev-parse --verify origin/main`.
+      If it is missing, fetch it explicitly and retry:
+
+      ```bash
+      git fetch origin main:refs/remotes/origin/main
+      pnpm test:changed
+      ```
+
+      The explicit refspec creates `origin/main` even when the clone's fetch
+      configuration tracks only another branch or tag. Your checked-out branch
+      stays selected.
     - `pnpm test:max` and `pnpm test:changed:max` keep the same routing
       behavior, just with a higher worker cap.
     - Local worker auto-scaling is intentionally conservative and backs off
