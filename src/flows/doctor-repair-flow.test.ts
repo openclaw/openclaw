@@ -47,6 +47,30 @@ function successfullyRepairedCheck(): DoctorHealthCheck {
 }
 
 describe("runDoctorHealthRepairs", () => {
+  it("preserves the check receiver while running repair through progress", async () => {
+    const check: DoctorHealthCheck = {
+      id: "test/receiver",
+      kind: "core",
+      description: "repair uses check metadata",
+      async detect({ cfg }) {
+        return cfg.gateway?.mode === "local" ? [] : [warningFinding(this.id)];
+      },
+      async repair({ cfg }) {
+        return {
+          config: { ...cfg, gateway: { ...cfg.gateway, mode: "local" } },
+          changes: [`Repaired ${this.id}.`],
+        };
+      },
+    };
+
+    const result = await runDoctorHealthRepairs(ctx({}), { checks: [check] });
+
+    expect(result.config.gateway?.mode).toBe("local");
+    expect(result.changes).toEqual(["Repaired test/receiver."]);
+    expect(result.remainingFindings).toEqual([]);
+    expect(result.warnings).toEqual([]);
+  });
+
   it("reports repair validation findings that remain after repair", async () => {
     const checks: DoctorHealthCheck[] = [
       normalizeHealthCheck({
