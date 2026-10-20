@@ -1,4 +1,3 @@
-// Control UI tests prove real PWA manifest loading through an HTTP Basic Auth proxy.
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { expect, it } from "vitest";
 import {
@@ -7,15 +6,7 @@ import {
   requireString,
 } from "./chat-flow.test-support.ts";
 
-type ManifestRequest = {
-  authorized: boolean;
-  status: 200 | 401;
-};
-
-const httpCredentials = {
-  password: "pwa-e2e-test-password",
-  username: "pwa-e2e-test-user",
-};
+const httpCredentials = { username: "pwa-user", password: "pwa-password" };
 const unforwardedHeaders = new Set([
   "cache-control",
   "connection",
@@ -24,7 +15,7 @@ const unforwardedHeaders = new Set([
 ]);
 
 async function startAuthenticatedProxy(upstreamBaseUrl: string) {
-  const manifestRequests: ManifestRequest[] = [];
+  const manifestRequests: Array<{ authorized: boolean; status: 200 | 401 }> = [];
   const expectedAuthorization = `Basic ${Buffer.from(
     `${httpCredentials.username}:${httpCredentials.password}`,
   ).toString("base64")}`;
@@ -115,11 +106,11 @@ suite.define(() => {
       expect(proxy.manifestRequests.length).toBeGreaterThan(0);
       expect(proxy.manifestRequests.filter((request) => !request.authorized)).toEqual([]);
       expect(proxy.manifestRequests.every((request) => request.status === 200)).toBe(true);
-      expect(manifest.url).toBe(manifestUrl.href);
-      expect(manifest.errors).toEqual([]);
-      expect(JSON.parse(manifest.data ?? "null")).toEqual(
-        expect.objectContaining({ display: "standalone", name: "OpenClaw Control" }),
-      );
+      expect(manifest).toMatchObject({ url: manifestUrl.href, errors: [] });
+      expect(JSON.parse(manifest.data ?? "null")).toMatchObject({
+        display: "standalone",
+        name: "OpenClaw Control",
+      });
       expect(
         await page.locator('link[rel="manifest"]').evaluate((link) => ({
           crossOrigin: (link as HTMLLinkElement).crossOrigin,

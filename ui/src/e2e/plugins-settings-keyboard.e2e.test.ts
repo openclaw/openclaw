@@ -1,4 +1,3 @@
-import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -18,20 +17,6 @@ async function openSettings(page: Page, responses = pluginResponses()) {
   return gateway;
 }
 
-async function capture(
-  page: Page,
-  name: string,
-  enabled = process.env.OPENCLAW_UPDATE_E2E_SCREENSHOTS === "1",
-) {
-  if (enabled) {
-    await page.screenshot({
-      path: path.join(suite.artifactDir, `${name}.png`),
-      animations: "disabled",
-      caret: "hide",
-    });
-  }
-}
-
 suite.define(() => {
   it("lets the Settings sidebar clear its search without closing plugin details", async () => {
     await suite.withPage({ viewport }, async ({ page }) => {
@@ -40,7 +25,6 @@ suite.define(() => {
       const search = page.locator(".settings-sidebar__search-input");
       await search.fill("appearance");
       await search.press("Escape");
-      await capture(page, "sidebar-escape", process.env.OPENCLAW_CAPTURE_UI_PROOF === "1");
       expect(page.url()).toBe(settingsUrl());
       expect(await search.inputValue()).toBe("");
       expect(await page.locator(".plugin-editor").isVisible()).toBe(true);
@@ -66,7 +50,6 @@ suite.define(() => {
         await item.waitFor();
         await (focus === "trigger" ? trigger : item).focus();
         await page.keyboard.press("Escape");
-        await capture(page, `escape-${focus}`);
         expect(page.url()).toBe(settingsUrl());
         await expect.poll(() => item.isVisible()).toBe(false);
         await expect
@@ -109,7 +92,6 @@ suite.define(() => {
           await number.fill(typed);
         }
         await number.press(key);
-        await capture(page, `number-${key}-${typed ?? "default"}`);
         expect(await number.inputValue()).toBe(String(expected));
         expect(await gateway.getRequests("config.set")).toHaveLength(0);
         await number.press(finish);
