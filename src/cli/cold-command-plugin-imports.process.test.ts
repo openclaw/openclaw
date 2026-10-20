@@ -15,6 +15,10 @@ import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
 const execFileAsync = promisify(execFile);
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cold-commands-"));
 
+function writeJson(dir: string, name: string, value: unknown) {
+  fs.writeFileSync(path.join(dir, name), JSON.stringify(value));
+}
+
 afterAll(() => {
   fs.rmSync(tempRoot, { recursive: true, force: true });
 });
@@ -58,24 +62,18 @@ it.each(cases)(
       // execute while the unrelated sentinel stays cold. memory-core behavior has
       // its own focused CLI suite, including the stale-search result contract.
       fs.mkdirSync(memoryOwnerDir, { recursive: true });
-      fs.writeFileSync(
-        path.join(memoryOwnerDir, "package.json"),
-        JSON.stringify({
-          name: "@example/openclaw-memory-owner",
-          version: "1.0.0",
-          type: "commonjs",
-          openclaw: { extensions: ["./index.cjs"] },
-        }),
-      );
-      fs.writeFileSync(
-        path.join(memoryOwnerDir, "openclaw.plugin.json"),
-        JSON.stringify({
-          id: "memory-owner",
-          name: "Memory Owner",
-          configSchema: { type: "object", additionalProperties: false, properties: {} },
-          commandAliases: [{ name: "fixture-memory", kind: "runtime-slash", cliCommand: "memory" }],
-        }),
-      );
+      writeJson(memoryOwnerDir, "package.json", {
+        name: "@example/openclaw-memory-owner",
+        version: "1.0.0",
+        type: "commonjs",
+        openclaw: { extensions: ["./index.cjs"] },
+      });
+      writeJson(memoryOwnerDir, "openclaw.plugin.json", {
+        id: "memory-owner",
+        name: "Memory Owner",
+        configSchema: { type: "object", additionalProperties: false, properties: {} },
+        commandAliases: [{ name: "fixture-memory", kind: "runtime-slash", cliCommand: "memory" }],
+      });
       fs.writeFileSync(
         path.join(memoryOwnerDir, "index.cjs"),
         [
@@ -96,19 +94,16 @@ it.each(cases)(
     }
     fs.mkdirSync(stateDir, { recursive: true });
     const configPath = path.join(stateDir, "openclaw.json");
-    fs.writeFileSync(
-      configPath,
-      JSON.stringify({
-        agents: { defaults: { workspace: workspaceDir } },
-        plugins: {
-          load: { paths: [pluginDir, ...(needsMemoryOwner ? [memoryOwnerDir] : [])] },
-          entries: {
-            [fixture.pluginId]: { enabled: true },
-            ...(needsMemoryOwner ? { "memory-owner": { enabled: true } } : {}),
-          },
+    writeJson(stateDir, "openclaw.json", {
+      agents: { defaults: { workspace: workspaceDir } },
+      plugins: {
+        load: { paths: [pluginDir, ...(needsMemoryOwner ? [memoryOwnerDir] : [])] },
+        entries: {
+          [fixture.pluginId]: { enabled: true },
+          ...(needsMemoryOwner ? { "memory-owner": { enabled: true } } : {}),
         },
-      }),
-    );
+      },
+    });
 
     const result = await execFileAsync(
       process.execPath,

@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { ClawAddPlan } from "../claws/types.js";
 
 const mocks = vi.hoisted(() => {
   const payloads: unknown[] = [];
@@ -27,14 +28,7 @@ vi.mock("../runtime.js", async () => ({
 vi.mock("../config/config.js", async () => ({
   ...(await vi.importActual<typeof import("../config/config.js")>("../config/config.js")),
   readConfigFileSnapshot: async () => ({
-    exists: true,
     valid: true,
-    issues: [],
-    warnings: [],
-    legacyIssues: [],
-    path: "/tmp/openclaw.json",
-    raw: {},
-    sourceConfig: {},
     resolved: {},
   }),
 }));
@@ -42,6 +36,7 @@ vi.mock("../config/config.js", async () => ({
 const { runClawsBuildCommand, runClawsCreateCommand, runClawsDevCommand, runClawsValidateCommand } =
   await import("./claws-cli.project.js");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const devPlan = (index: number) => (mocks.payloads[index] as { plan: ClawAddPlan }).plan;
 
 describe("Claw project CLI", () => {
   beforeEach(() => {
@@ -72,25 +67,22 @@ describe("Claw project CLI", () => {
       json: true,
     });
 
-    const payloads = mocks.payloads as Array<Record<string, unknown>>;
-    expect(payloads.map((payload) => payload.schemaVersion)).toEqual([
-      "openclaw.clawProject.v1",
-      "openclaw.clawProject.v1",
-      "openclaw.clawBuild.v1",
-      "openclaw.clawDev.v1",
+    expect(mocks.payloads).toMatchObject([
+      { schemaVersion: "openclaw.clawProject.v1" },
+      { schemaVersion: "openclaw.clawProject.v1", excludedPaths: [] },
+      { schemaVersion: "openclaw.clawBuild.v1", excludedPaths: [] },
+      { schemaVersion: "openclaw.clawDev.v1", mutationAllowed: false, offline: true },
     ]);
-    expect(payloads[1]).toMatchObject({ excludedPaths: [] });
-    expect(payloads[2]).toMatchObject({ excludedPaths: [] });
-    const dev = payloads[3] as { mutationAllowed: boolean; offline: boolean; plan: ClawPlan };
-    expect(dev).toMatchObject({ mutationAllowed: false, offline: true });
-    expect(dev.plan).toMatchObject({ mutationAllowed: false, blockers: [] });
-    expect(dev.plan.claw).toMatchObject({
-      integrityKind: "artifact",
-      integrity: (payloads[2] as { integrity: string }).integrity,
+    const { integrity } = mocks.payloads[2] as { integrity: string };
+    expect(devPlan(3)).toMatchObject({
+      mutationAllowed: false,
+      blockers: [],
+      claw: {
+        integrityKind: "artifact",
+        integrity,
+        packageRoot: `claw-artifact:${integrity}`,
+      },
     });
-    expect(dev.plan.claw.packageRoot).toBe(
-      `claw-artifact:${(payloads[2] as { integrity: string }).integrity}`,
-    );
   });
 
   it("emits stable dev plans without deleted extraction paths", async () => {
@@ -105,13 +97,10 @@ describe("Claw project CLI", () => {
     await runClawsDevCommand(root, options);
     await runClawsDevCommand(root, options);
 
-    const payloads = mocks.payloads as Array<Record<string, unknown>>;
-    const first = payloads[1] as { plan: ClawPlan };
-    const second = payloads[2] as { plan: ClawPlan };
-    expect(first.plan).toEqual(second.plan);
-    expect(first.plan.planIntegrity).toBe(second.plan.planIntegrity);
-    expect(JSON.stringify(first.plan)).not.toContain("openclaw-claw-artifact-");
-    expect(first.plan.claw.packageRoot).toMatch(/^claw-artifact:sha256:/u);
+    const first = devPlan(1);
+    expect(first).toEqual(devPlan(2));
+    expect(JSON.stringify(first)).not.toContain("openclaw-claw-artifact-");
+    expect(first.claw.packageRoot).toMatch(/^claw-artifact:sha256:/u);
   });
 
   it("uses command-specific schemas for build and dev failures", async () => {
@@ -125,17 +114,9 @@ describe("Claw project CLI", () => {
     ).rejects.toThrow("__exit__:1");
     await expect(runClawsDevCommand(missing, { json: true })).rejects.toThrow("__exit__:1");
 
-    const payloads = mocks.payloads as Array<Record<string, unknown>>;
-    expect(payloads).toMatchObject([
+    expect(mocks.payloads).toMatchObject([
       { schemaVersion: "openclaw.clawBuild.v1", ok: false },
       { schemaVersion: "openclaw.clawDev.v1", ok: false },
     ]);
   });
 });
-
-type ClawPlan = {
-  mutationAllowed: boolean;
-  planIntegrity: string;
-  blockers: unknown[];
-  claw: { integrityKind: string; integrity: string; packageRoot: string };
-};

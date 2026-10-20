@@ -1,4 +1,3 @@
-// Command bootstrap tests cover CLI command bootstrap sequencing and side effects.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveCliStartupPolicy } from "./command-startup-policy.js";
 
@@ -13,16 +12,31 @@ vi.mock("./plugin-registry-loader.js", () => ({
   ensureCliPluginRegistryLoaded: ensureCliPluginRegistryLoadedMock,
 }));
 
-function bootstrapPolicy(commandPath: string[], suppressDoctorStdout = false) {
-  return {
-    ...resolveCliStartupPolicy({ commandPath, jsonOutputMode: suppressDoctorStdout, env: {} }),
-    skipConfigGuard: false,
-    loadPlugins: false,
-  };
-}
-
 describe("ensureCliExecutionBootstrap", () => {
   let ensureCliExecutionBootstrap: typeof import("./command-execution-startup.js").ensureCliExecutionBootstrap;
+  const runtime = {} as never;
+
+  async function bootstrap(
+    commandPath: string[],
+    options: {
+      jsonOutputMode?: boolean;
+      allowInvalid?: boolean;
+      loadPlugins?: boolean;
+    } = {},
+  ) {
+    const { jsonOutputMode = false, allowInvalid, loadPlugins = true } = options;
+    await ensureCliExecutionBootstrap({
+      runtime,
+      commandPath,
+      allowInvalid,
+      loadPlugins,
+      startupPolicy: {
+        ...resolveCliStartupPolicy({ commandPath, jsonOutputMode, env: {} }),
+        skipConfigGuard: false,
+        loadPlugins: false,
+      },
+    });
+  }
 
   beforeAll(async () => {
     vi.resetModules();
@@ -34,16 +48,7 @@ describe("ensureCliExecutionBootstrap", () => {
   });
 
   it("runs config guard and plugin loading with shared options", async () => {
-    const runtime = {} as never;
-
-    await ensureCliExecutionBootstrap({
-      runtime,
-      commandPath: ["agents", "list"],
-      startupPolicy: bootstrapPolicy(["agents", "list"], true),
-      allowInvalid: true,
-      loadPlugins: true,
-    });
-
+    await bootstrap(["agents", "list"], { jsonOutputMode: true, allowInvalid: true });
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime,
       commandPath: ["agents", "list"],
@@ -58,15 +63,7 @@ describe("ensureCliExecutionBootstrap", () => {
   });
 
   it("uses validation-only admission for managed worktree commands", async () => {
-    const runtime = {} as never;
-
-    await ensureCliExecutionBootstrap({
-      runtime,
-      commandPath: ["worktrees", "gc"],
-      startupPolicy: bootstrapPolicy(["worktrees", "gc"]),
-      loadPlugins: false,
-    });
-
+    await bootstrap(["worktrees", "gc"], { loadPlugins: false });
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime,
       commandPath: ["worktrees", "gc"],
@@ -76,13 +73,7 @@ describe("ensureCliExecutionBootstrap", () => {
   });
 
   it("loads agent command plugins without package-manager repair", async () => {
-    await ensureCliExecutionBootstrap({
-      runtime: {} as never,
-      commandPath: ["agent"],
-      loadPlugins: true,
-      startupPolicy: bootstrapPolicy(["agent"]),
-    });
-
+    await bootstrap(["agent"]);
     expect(ensureCliPluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "all",
       routeLogsToStderr: false,
@@ -90,13 +81,7 @@ describe("ensureCliExecutionBootstrap", () => {
   });
 
   it("loads configured and persisted backend owners for sandbox management", async () => {
-    await ensureCliExecutionBootstrap({
-      runtime: {} as never,
-      commandPath: ["sandbox", "list"],
-      startupPolicy: bootstrapPolicy(["sandbox", "list"]),
-      loadPlugins: true,
-    });
-
+    await bootstrap(["sandbox", "list"]);
     expect(ensureCliPluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "sandbox-management",
       routeLogsToStderr: false,
