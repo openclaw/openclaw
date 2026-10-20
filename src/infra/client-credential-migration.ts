@@ -4,6 +4,7 @@ import { CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION } from "../state/openclaw-stat
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { readStateSchemaContentVersion } from "../state/openclaw-state-db-schema-version.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-maintenance-context.js";
+import { chunkItems } from "../utils/chunk-items.js";
 import {
   sourceRows,
   validateSource,
@@ -334,19 +335,17 @@ export function prepareClientCredentialMigration(
       ] as const) {
         executeSqliteQuerySync(database, db.deleteFrom(table));
       }
-      if (rows.identities.length) {
+      // Bound statement parameters for SQLite builds with the default variable limit.
+      for (const batch of chunkItems(rows.identities, 500)) {
+        executeSqliteQuerySync(database, db.insertInto("device_identities").values(batch));
+      }
+      for (const batch of chunkItems(rows.tokens, 500)) {
+        executeSqliteQuerySync(database, db.insertInto("device_auth_tokens").values(batch));
+      }
+      for (const batch of chunkItems(rows.origins, 500)) {
         executeSqliteQuerySync(
           database,
-          db.insertInto("device_identities").values(rows.identities),
-        );
-      }
-      if (rows.tokens.length) {
-        executeSqliteQuerySync(database, db.insertInto("device_auth_tokens").values(rows.tokens));
-      }
-      if (rows.origins.length) {
-        executeSqliteQuerySync(
-          database,
-          db.insertInto("gateway_origin_device_tokens").values(rows.origins),
+          db.insertInto("gateway_origin_device_tokens").values(batch),
         );
       }
       if (extracted.socket) {

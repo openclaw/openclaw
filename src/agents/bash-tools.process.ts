@@ -31,7 +31,6 @@ import {
   renderExecExitLabel,
 } from "./bash-tools.exec-output.js";
 import { ProcessToolOutputSchema } from "./bash-tools.process-schema.js";
-import { handleProcessSendKeys, writeProcessStdin } from "./bash-tools.process-send-keys.js";
 import { processSchema } from "./bash-tools.schemas.js";
 import {
   clampWithDefault,
@@ -41,7 +40,7 @@ import {
   truncateMiddle,
 } from "./bash-tools.shared.js";
 import { recordCommandPoll, resetCommandPollCount } from "./command-poll-backoff.js";
-import { encodePaste } from "./pty-keys.js";
+import { encodeKeySequence, encodePaste, hasCursorModeSensitiveKeys } from "./pty-keys.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { attachInternalToolResultAcknowledgement } from "./runtime/internal-hooks.js";
 import { PROCESS_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
@@ -113,6 +112,18 @@ function isWritableStdin(stdin: ManagedRunStdin | undefined): stdin is ManagedRu
     return false;
   }
   return true;
+}
+
+async function writeProcessStdin(stdin: ManagedRunStdin, data: string | Buffer) {
+  await new Promise<void>((resolve, reject) => {
+    stdin.write(data, (err) => {
+      if (err) {
+        reject(err);
+      } else {
+        resolve();
+      }
+    });
+  });
 }
 
 function resolvePollWaitMs(value: unknown) {
@@ -511,14 +522,32 @@ export function createProcessTool(
               return failText(`Session ${sessionId} stdin is not writable.`);
             }
             if (inputAction === "send-keys") {
-              return await handleProcessSendKeys({
-                sessionId,
-                session: scopedSession,
-                stdin,
+              const request = {
                 keys: params.keys,
                 hex: params.hex,
                 literal: params.literal,
-              });
+              };
+              if (
+                scopedSession.cursorKeyMode === "unknown" &&
+                hasCursorModeSensitiveKeys(request)
+              ) {
+                // Arrow/keypad encodings depend on cursor key mode. Wait for startup output
+                // to identify the mode before sending potentially wrong bytes.
+                return failText(
+                  `Session ${sessionId} cursor key mode is not known yet. Poll or log until startup output appears, then retry send-keys.`,
+                );
+              }
+              const cursorKeyMode =
+                scopedSession.cursorKeyMode === "unknown" ? undefined : scopedSession.cursorKeyMode;
+              const { data, warnings } = encodeKeySequence(request, cursorKeyMode);
+              if (data.length === 0) {
+                return failText("No key data provided.");
+              }
+              await writeProcessStdin(stdin, data);
+              const text =
+                `Sent ${data.length} bytes to session ${sessionId}.` +
+                (warnings.length ? `\nWarnings:\n- ${warnings.join("\n- ")}` : "");
+              return runningSessionResult(scopedSession, text);
             }
             const payload =
               inputAction === "paste"

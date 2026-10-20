@@ -3,7 +3,6 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { projectMutableSource } from "../../lib/reactive/projection.ts";
 import type {
-  LogbookDaysPayload,
   LogbookStatusPayload,
   LogbookTimelinePayload,
   LogbookUiState,
@@ -29,7 +28,6 @@ export function createLogbook(initialClient: GatewayBrowserClient | null) {
   const state: LogbookUiState = {
     day: localDayKey(),
     status: null,
-    days: [],
     timeline: null,
     loading: false,
     error: null,
@@ -82,16 +80,14 @@ export function createLogbook(initialClient: GatewayBrowserClient | null) {
       notify();
     }
     try {
-      const [status, days, timeline] = await Promise.all([
+      const [status, timeline] = await Promise.all([
         current.request<LogbookStatusPayload>("logbook.status", {}),
-        current.request<LogbookDaysPayload>("logbook.days", {}),
         current.request<LogbookTimelinePayload>("logbook.timeline", { day: requestedDay }),
       ]);
       if (client !== current || state.day !== requestedDay) {
         return;
       }
       state.status = status;
-      state.days = days.days;
       // Follow the capture host's day until the user explicitly selects one.
       if (!dayPinned && status.today !== state.day) {
         resetDay(status.today);

@@ -8,6 +8,7 @@ import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { SESSION_CREATED_NOTICE_CONTEXT_PREFIX } from "../sessions/session-state-event-kinds.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { bindHeartbeatReply, bindHeartbeatSend } from "./heartbeat-runner.boundary-test-support.js";
 import { formatQueuedEvents } from "./heartbeat-runner.event-routing.test-support.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import {
@@ -47,6 +48,8 @@ type Sandbox = Parameters<Parameters<typeof withTempHeartbeatSandbox>[0]>[0];
 function createExecFixture({ tmpDir, storePath, replySpy }: Sandbox) {
   const cfg = heartbeatTestConfig(tmpDir, "telegram", "telegram", storePath);
   const telegram = vi.fn();
+  bindHeartbeatReply(replySpy);
+  bindHeartbeatSend("telegram", telegram);
   return {
     cfg,
     replySpy,
@@ -62,7 +65,7 @@ function createExecFixture({ tmpDir, storePath, replySpy }: Sandbox) {
       enqueueSystemEvent(text, { sessionKey, contextKey, deliveryContext });
       return text;
     },
-    run: ({ deps, ...options }: Partial<Parameters<typeof runHeartbeatOnce>[0]> = {}) =>
+    run: (options: Partial<Parameters<typeof runHeartbeatOnce>[0]> = {}) =>
       runHeartbeatOnce({
         cfg,
         agentId: "main",
@@ -71,7 +74,6 @@ function createExecFixture({ tmpDir, storePath, replySpy }: Sandbox) {
         intent: "event",
         reason: "exec-event",
         ...options,
-        deps: { getReplyFromConfig: replySpy, telegram, ...deps },
       }),
   };
 }
@@ -119,7 +121,8 @@ it("exec capture outranks an explicit other channel", async () => {
     telegram.mockResolvedValue({ messageId: "sent", chatId: "-1003774691294" });
     const whatsapp = vi.fn().mockResolvedValue({ messageId: "wrong-route" });
     replySpy.mockResolvedValue({ text: marker });
-    const result = await run({ deps: { whatsapp } });
+    bindHeartbeatSend("whatsapp", whatsapp);
+    const result = await run();
     expect(result.status).toBe("ran");
     expect(telegram.mock.calls).toMatchObject([expectedSend]);
     expect(whatsapp).not.toHaveBeenCalled();

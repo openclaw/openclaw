@@ -9,8 +9,6 @@ type WizardSetupDeps = {
   clearSelection: () => void;
 };
 
-export type ChannelSetup = ReturnType<typeof createChannelSetup>;
-
 export function createChannelSetup(deps: WizardSetupDeps) {
   const [fields, setDraft] = createStore<{
     multiselect: unknown[];

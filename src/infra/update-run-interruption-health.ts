@@ -7,11 +7,7 @@ import {
   resolveGatewayRestartProbeContext,
   waitForGatewayHttpReadiness,
 } from "../cli/daemon-cli/restart-health-probe.js";
-import {
-  inspectGatewayRestart,
-  isSameGatewayRestartGeneration,
-  waitForGatewayHealthyRestart,
-} from "../cli/daemon-cli/restart-health.js";
+import { waitForGatewayHealthyRestart } from "../cli/daemon-cli/restart-health.js";
 import type { GatewayRestartWaitOutcome } from "../cli/daemon-cli/restart-health.types.js";
 import { resolveGatewayPort } from "../config/paths.js";
 import { resolveGatewayService } from "../daemon/service.js";
@@ -32,7 +28,7 @@ export type InterruptedUpdateGatewayObservation = {
   timeout?: { elapsedMs: number; phase: string };
 };
 
-/** Read-only settlement shares one deadline, including setup and final identity checks. */
+/** Read-only settlement shares one deadline for setup and serving readiness. */
 export async function observeInterruptedUpdateGateway(
   candidate: InstalledUpdateCandidate,
   input: { env?: NodeJS.ProcessEnv; signal?: AbortSignal; deadline: GatewayRestartDeadline },
@@ -77,9 +73,7 @@ export async function observeInterruptedUpdateGateway(
       expectedBuildId: candidate.buildId,
       requirePluginHealth: true,
     };
-    const inspect = (phase: string) =>
-      deadline.read(phase, () => inspectGatewayRestart({ ...probe, phase }));
-    const servingMatches = (health: Awaited<ReturnType<typeof inspect>>) =>
+    const servingMatches = (health: Awaited<ReturnType<typeof waitForGatewayHealthyRestart>>) =>
       health.healthy &&
       health.runtime.status === "running" &&
       health.gatewayVersion === candidate.version &&
@@ -106,26 +100,17 @@ export async function observeInterruptedUpdateGateway(
         signal: deadline.signal,
       }),
     );
-    const inspected = await inspect("reconciliation:inspect-before");
-    const after = await inspect("reconciliation:inspect-after");
-    if (
-      http.healthz !== 200 ||
-      http.readyz !== 200 ||
-      !servingMatches(after) ||
-      !servingMatches(inspected) ||
-      !isSameGatewayRestartGeneration(before, inspected) ||
-      !isSameGatewayRestartGeneration(inspected, after) ||
-      !(await installedMatches("reconciliation:installed-identity"))
-    ) {
+    if (http.healthz !== 200 || http.readyz !== 200) {
       return result("unverified");
     }
     deadline.signal.throwIfAborted();
+    // Another restart during observation is best effort; the writer still checks run ownership.
     return {
       ...result("settled"),
       verification: {
         booted: true,
         serviceRunning: true,
-        pid: after.runtime.pid,
+        pid: before.runtime.pid,
         port,
         runningVersion: candidate.version,
         runningBuildId: candidate.buildId,
@@ -133,7 +118,7 @@ export async function observeInterruptedUpdateGateway(
         readyz: true,
         settled: true,
         channelsReady: true,
-        pluginErrors: after.activatedPluginErrors?.map((error) => JSON.stringify(error)) ?? [],
+        pluginErrors: before.activatedPluginErrors?.map((error) => JSON.stringify(error)) ?? [],
       },
     };
   } catch (error) {

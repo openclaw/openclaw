@@ -7,9 +7,14 @@ import { updateAgentIdentity } from "../../lib/agents/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { assertUploadsEnabled, uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
 import { fileToAvatarDataUrl, type AvatarDataUrlResult } from "./avatar-image.ts";
-import type { AgentIdentityDraft } from "./panels-overview.tsx";
 
 registerSettingsEnglish();
+
+export type AgentIdentityDraft = {
+  name: string | null;
+  emoji: string | null;
+  avatar: string | null;
+};
 
 const AVATAR_REJECTION_MESSAGE_KEYS = {
   unusable: "agents.identity.imageUnusable",

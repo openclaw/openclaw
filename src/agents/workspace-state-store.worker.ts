@@ -13,7 +13,6 @@ import type { WorkerWriteOperationContext } from "../state/worker-operation-regi
 import { createWorkspaceStateIdentity } from "./workspace-state-identity.js";
 import {
   captureWorkspaceStateReceipt,
-  workspaceStateFactKey,
   workspaceStatePublication,
 } from "./workspace-state-publication.js";
 import {
@@ -73,9 +72,7 @@ function deleteWorkspace(
         .deleteFrom("workspace_path_aliases")
         .where("alias_key", "=", lexicalAlias.workspaceKey),
     );
-    workspaceStatePublication.stageDeletions(database.db, [
-      workspaceStateFactKey("alias", lexicalAlias.workspaceKey),
-    ]);
+    workspaceStatePublication.stagePostimages(database.db, [true]);
     storedIdentity = undefined;
   }
   const identity =
@@ -121,17 +118,14 @@ export function mergeWorkspaceSetupStateInDatabase(
     setup_completed_at: merged.setupCompletedAt ?? null,
     updated_at: nowMs,
   };
-  const setup = executeSqliteQueryTakeFirstSync(
+  executeSqliteQuerySync(
     database.db,
     kysely
       .insertInto("workspace_setup_state")
       .values({ workspace_key: identity.workspaceKey, ...values })
-      .onConflict((conflict) => conflict.column("workspace_key").doUpdateSet(values))
-      .returningAll(),
+      .onConflict((conflict) => conflict.column("workspace_key").doUpdateSet(values)),
   );
-  if (setup) {
-    workspaceStatePublication.stagePostimages(database.db, [{ kind: "setup", row: setup }]);
-  }
+  workspaceStatePublication.stagePostimages(database.db, [true]);
   registerWorkspaceStateAliasIdentitiesInTransaction({
     database,
     identity,

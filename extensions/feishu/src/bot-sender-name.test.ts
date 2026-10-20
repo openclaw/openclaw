@@ -12,7 +12,6 @@ vi.mock("./client.js", () => ({
 
 const account = {
   accountId: "main",
-  selectionSource: "explicit",
   enabled: true,
   configured: true,
   appId: "app-id",
