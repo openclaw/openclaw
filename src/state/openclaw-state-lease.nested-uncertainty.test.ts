@@ -1,7 +1,6 @@
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
-import type { OpenClawStateLeaseContext } from "./openclaw-state-lease-context.js";
 import { OpenClawStateLeaseError, withOpenClawStateLease } from "./openclaw-state-lease.js";
 
 const fixture = vi.hoisted(() => ({
@@ -60,16 +59,6 @@ afterEach(() => {
   }
 });
 
-function loseLease(lease: OpenClawStateLeaseContext): unknown {
-  fixture.loseRenewal = true;
-  // Drive the real native owner's renewal callback against the fake store.
-  vi.advanceTimersByTime(10_000);
-  expect(lease.signal.aborted).toBe(true);
-  expect(lease.signal.reason).toBeInstanceOf(OpenClawStateLeaseError);
-  expect(lease.signal.reason).toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST" });
-  return lease.signal.reason;
-}
-
 async function failUnderAuthority(
   failure: unknown,
   authority: "none" | "loss" | "abort" | "loss and abort" = "none",
@@ -88,7 +77,13 @@ async function failUnderAuthority(
     },
     async (lease) => {
       if (authority === "loss" || authority === "loss and abort") {
-        loss = loseLease(lease);
+        fixture.loseRenewal = true;
+        // Drive the real owner's renewal callback against the fake store.
+        vi.advanceTimersByTime(10_000);
+        expect(lease.signal.aborted).toBe(true);
+        loss = lease.signal.reason;
+        expect(loss).toBeInstanceOf(OpenClawStateLeaseError);
+        expect(loss).toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST" });
       }
       if (authority === "abort" || authority === "loss and abort") {
         caller.abort(abortCause);
@@ -97,49 +92,51 @@ async function failUnderAuthority(
       throw failure;
     },
   ).then(
-    () => {
-      throw new Error("Lease operation unexpectedly succeeded");
-    },
+    () => assert.fail("Lease operation unexpectedly succeeded"),
     (reason: unknown) => reason,
   );
   expect(fixture.release).toHaveBeenCalledOnce();
   return { error, loss, abortCause };
 }
 
-it("preserves a direct unknown failure by identity without outer authority loss", async () => {
-  const failure = new SqliteWorkerError("Nested write outcome is unknown", "outcome-unknown");
-  expect((await failUnderAuthority(failure)).error).toBe(failure);
-});
-
-it("normalizes a structured unknown marker without losing its cause", async () => {
-  const failure = { code: "outcome-unknown", message: "Nested write outcome is unknown" };
-  const { error } = await failUnderAuthority(failure);
-  expect(error).toBeInstanceOf(SqliteWorkerError);
-  expect(error).toMatchObject({ code: "outcome-unknown", cause: failure });
-});
-
 it.each([
+  { shape: "direct", authority: "none" },
+  { shape: "structured", authority: "none" },
   { shape: "direct", authority: "loss" },
   { shape: "cause", authority: "abort" },
   { shape: "aggregate", authority: "loss and abort" },
-] as const)(
-  "preserves $shape uncertainty across outer $authority",
-  async ({ shape, authority }) => {
-    const unknown = new SqliteWorkerError("Nested write outcome is unknown", "outcome-unknown");
-    const sibling = new Error("Sibling cleanup failed");
-    const failure =
-      shape === "direct"
-        ? unknown
-        : shape === "cause"
-          ? new Error("Nested operation failed", { cause: unknown })
-          : new AggregateError([sibling, unknown], "Nested failures");
-    const { error, loss, abortCause } = await failUnderAuthority(failure, authority);
-    expect(error).toMatchObject({ code: "outcome-unknown" });
+  { shape: "known", authority: "none" },
+  { shape: "known", authority: "loss" },
+  { shape: "known", authority: "abort" },
+] as const)("preserves $shape failure under $authority authority", async ({ shape, authority }) => {
+  const unknown = new SqliteWorkerError("Nested write outcome is unknown", "outcome-unknown");
+  const sibling = new Error("Sibling cleanup failed");
+  const failure = {
+    known: new Error("Known failure"),
+    structured: { code: "outcome-unknown", message: "Unknown outcome" },
+    cause: new Error("Nested failure", { cause: unknown }),
+    aggregate: new AggregateError([sibling, unknown], "Nested failures"),
+    direct: unknown,
+  }[shape];
+  const { error, loss, abortCause } = await failUnderAuthority(failure, authority);
+  if (shape === "known") {
+    if (authority === "abort") {
+      expect(error).toMatchObject({ code: "OPENCLAW_STATE_LEASE_ABORTED", cause: abortCause });
+    } else {
+      expect(error).toBe(authority === "loss" ? loss : failure);
+    }
+    return;
+  }
+  expect(error).toMatchObject({ code: "outcome-unknown" });
+  if (shape === "structured") {
+    expect(error).toBeInstanceOf(SqliteWorkerError);
+    expect(error).toMatchObject({ cause: failure });
+  } else if (authority === "none") {
+    expect(error).toBe(failure);
+  } else {
     const causes = collectNestedErrorCandidates(error);
-    expect(causes).toContain(unknown);
-    expect(causes).toContain(failure);
-    if (shape === "aggregate") {
-      expect(causes).toContain(sibling);
+    for (const cause of [unknown, failure, ...(shape === "aggregate" ? [sibling] : [])]) {
+      expect(causes).toContain(cause);
     }
     if (authority === "abort") {
       expect(causes).toContain(abortCause);
@@ -147,26 +144,8 @@ it.each([
         expect.objectContaining({ code: "OPENCLAW_STATE_LEASE_ABORTED", cause: abortCause }),
       );
     } else {
-      // Existing authority precedence selects lease loss when both signals have fired.
+      // Lease loss takes precedence when both authorities fire.
       expect(causes).toContain(loss);
     }
-  },
-);
-
-it.each(["none", "loss", "abort"] as const)(
-  "keeps known failure mapping and release unchanged with %s authority",
-  async (authority) => {
-    const failure = new Error("Known operation failure");
-    const { error, loss, abortCause } = await failUnderAuthority(failure, authority);
-    if (authority === "none") {
-      expect(error).toBe(failure);
-    } else if (authority === "loss") {
-      expect(error).toBe(loss);
-    } else {
-      expect(error).toMatchObject({
-        code: "OPENCLAW_STATE_LEASE_ABORTED",
-        cause: abortCause,
-      });
-    }
-  },
-);
+  }
+});
