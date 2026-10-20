@@ -89,26 +89,17 @@ describe("iMessage message-tool artifact", () => {
     },
   );
 
-  it("offers poll but hides poll-vote on imsg builds without the poll.vote rpc", () => {
-    cacheStatus({ selectors: pollSelectors });
-
+  it.each([
+    { rpcMethods: [], supported: false },
+    { rpcMethods: ["send", "poll.send", "poll.vote", "messages.poll.vote"], supported: true },
+  ])("gates poll-vote on RPC support $supported", ({ rpcMethods, supported }) => {
+    cacheStatus({ selectors: pollSelectors, rpcMethods });
     const discovery = discover();
-
     expect(discovery?.actions).toContain("poll");
-    expect(discovery?.actions).not.toContain("poll-vote");
-    expect(discovery?.schema).toBeUndefined();
-  });
-
-  it("offers poll-vote once imsg advertises the poll.vote rpc", () => {
-    cacheStatus({
-      selectors: pollSelectors,
-      rpcMethods: ["send", "poll.send", "poll.vote", "messages.poll.vote"],
-    });
-
-    const discovery = discover();
-
-    expect(discovery?.actions).toContain("poll");
-    expect(discovery?.actions).toContain("poll-vote");
+    expect(discovery?.actions.includes("poll-vote")).toBe(supported);
+    if (!supported) {
+      expect(discovery?.schema).toBeUndefined();
+    }
   });
 
   it("hides private actions when cached bridge status is unavailable", () => {

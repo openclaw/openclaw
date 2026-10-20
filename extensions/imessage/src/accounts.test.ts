@@ -23,6 +23,10 @@ function sourceOwner(cfg: ReturnType<typeof config>, accountId: string) {
   });
 }
 
+function remote(remoteHost: string): IMessageAccountConfig {
+  return { cliPath: "/usr/local/bin/imsg-ssh", dbPath: "/Users/bot/Messages/chat.db", remoteHost };
+}
+
 describe("resolveIMessageAccount", () => {
   it("resolves independent enabled and configured state for explicitly enabled named account", () => {
     expect(
@@ -56,16 +60,8 @@ describe("iMessage duplicate-source watcher ownership", () => {
   it.each([
     {
       name: "different remote hosts behind the same wrapper",
-      first: {
-        cliPath: "/usr/local/bin/imsg-ssh",
-        dbPath: "/Users/bot/Messages/chat.db",
-        remoteHost: "bot@primary.example",
-      },
-      second: {
-        cliPath: "/usr/local/bin/imsg-ssh",
-        dbPath: "/Users/bot/Messages/chat.db",
-        remoteHost: "bot@secondary.example",
-      },
+      first: remote("bot@primary.example"),
+      second: remote("bot@secondary.example"),
     },
     {
       name: "an explicitly remote and a local default binary",
@@ -74,10 +70,10 @@ describe("iMessage duplicate-source watcher ownership", () => {
     },
   ])("preserves independent watchers for $name", ({ first, second }) => {
     const cfg = config({ primary: first, secondary: second });
-    for (const accountId of ["primary", "secondary"]) {
-      expect(sourceOwner(cfg, accountId)).toBeUndefined();
-    }
-    expect(collectIMessageDuplicateAccountSourceWarnings({ cfg })).toEqual([]);
+    expect({
+      owners: [sourceOwner(cfg, "primary"), sourceOwner(cfg, "secondary")],
+      warnings: collectIMessageDuplicateAccountSourceWarnings({ cfg }),
+    }).toEqual({ owners: [undefined, undefined], warnings: [] });
   });
 
   it("never lets an unconfigured account own or warn for the only startable watcher", () => {

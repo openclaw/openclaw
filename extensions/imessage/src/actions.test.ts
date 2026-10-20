@@ -60,12 +60,8 @@ const { imessageMessageActions } = await import("./actions.js");
 const chatGuid = "iMessage;+;chat0000";
 const message = { chatGuid, messageId: "message-guid" };
 const poll = { chatGuid, pollQuestion: "Lunch?", pollOption: ["Pizza", "Sushi"] };
-const options = {
-  cliPath: "imsg",
-  dbPath: "/tmp/messages.db",
-  remoteHost: undefined,
-  timeoutMs: undefined,
-};
+const connection = { cliPath: "imsg", dbPath: "/tmp/messages.db" };
+const options = { ...connection, remoteHost: undefined, timeoutMs: undefined };
 const voteStatus = {
   available: true,
   v2Ready: true,
@@ -74,9 +70,10 @@ const voteStatus = {
 };
 const byteShape = expect.objectContaining({ 0: 0xfb, 1: 0xff, byteLength: 2 });
 const refreshOptions = ["imsg", 10_000, { forceRefresh: true }] as const;
+const readyStatus = { available: true, v2Ready: true, selectors: {} };
 
-function expectCall(mock: { mock: { calls: unknown[][] } }, params: unknown) {
-  expect(mock.mock.calls).toStrictEqual([[params]]);
+function expectCall(mock: { mock: { calls: unknown[][] } }, params: Record<string, unknown>) {
+  expect(mock.mock.calls).toStrictEqual([[{ options, ...params }]]);
 }
 
 function expectOwnedReference() {
@@ -86,27 +83,21 @@ function expectOwnedReference() {
   ]);
 }
 
-function expectAuthorization(fields: Record<string, unknown>) {
+function expectAuthorization(messageId = "message-guid", conversationReadOrigin = "delegated") {
   expect(runtimeMock.authorizeMessageReference).toHaveBeenCalledWith(
-    expect.objectContaining(fields),
+    expect.objectContaining({ accountId: "default", messageId, conversationReadOrigin }),
   );
 }
 
 function cfg(actions?: Record<string, boolean | undefined>): OpenClawConfig {
-  return { channels: { imessage: { cliPath: "imsg", dbPath: "/tmp/messages.db", actions } } };
+  return { channels: { imessage: { ...connection, actions } } };
 }
 function bridge(selectors: Record<string, boolean> = {}) {
-  probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
-    available: true,
-    v2Ready: true,
-    selectors,
-  });
+  probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({ ...readyStatus, selectors });
 }
 function attachmentBridge(supported = true) {
   probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
-    available: true,
-    v2Ready: true,
-    selectors: {},
+    ...readyStatus,
     cliCapabilities: { sendRichSupportsAttachment: supported },
   });
 }
@@ -160,10 +151,7 @@ describe("imessage message actions", () => {
       run(
         "renameGroup",
         { chatGuid, name: "Unauthorized rename" },
-        {
-          senderIsOwner: false,
-          gatewayClientScopes: ["operator.write"],
-        },
+        { senderIsOwner: false, gatewayClientScopes: ["operator.write"] },
       ),
     ).rejects.toThrow("iMessage group management requires an owner or operator.admin requester.");
     expect(runtimeMock.renameGroup).not.toHaveBeenCalled();
@@ -191,8 +179,7 @@ describe("imessage message actions", () => {
       rpcMethods: ["send"],
     });
     probeMock.probeIMessagePrivateApi.mockResolvedValue({
-      available: true,
-      v2Ready: true,
+      ...readyStatus,
       selectors: { pollPayloadMessage: true },
       rpcMethods: ["send", "poll.send"],
     });
@@ -203,12 +190,7 @@ describe("imessage message actions", () => {
       { toolContext: { currentChannelId: "chat_guid:" + chatGuid } },
     );
     expect(probeMock.probeIMessagePrivateApi).toHaveBeenCalledWith(...refreshOptions);
-    expectCall(runtimeMock.sendPoll, {
-      chatGuid,
-      question: "Lunch?",
-      choices: ["Pizza", "Sushi"],
-      options,
-    });
+    expectCall(runtimeMock.sendPoll, { chatGuid, question: "Lunch?", choices: ["Pizza", "Sushi"] });
     expect(result).toMatchObject({ details: { ok: true, messageId: "poll-guid" } });
   });
 
@@ -217,30 +199,10 @@ describe("imessage message actions", () => {
     await expect(
       run(
         "poll",
-        {
-          target: "***",
-          pollQuestion: "Lunch?",
-          pollOption: ["Pizza", "Sushi"],
-        },
+        { target: "***", pollQuestion: "Lunch?", pollOption: ["Pizza", "Sushi"] },
         { toolContext: { currentChannelId: "chat_guid:" + chatGuid } },
       ),
     ).rejects.toThrow("Omit the target to use the current conversation");
-    expect(runtimeMock.sendPoll).not.toHaveBeenCalled();
-  });
-
-  it("rejects a poll when refreshing still leaves its payload selector missing", async () => {
-    const stale = {
-      available: true,
-      v2Ready: true,
-      selectors: {},
-      rpcMethods: ["send", "poll.send"],
-    };
-    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue(stale);
-    probeMock.probeIMessagePrivateApi.mockResolvedValue(stale);
-    await expect(run("poll", poll)).rejects.toThrow(/pollPayloadMessage selector.*imsg launch/);
-    expect(probeMock.probeIMessagePrivateApi).toHaveBeenCalledWith("imsg", 10_000, {
-      forceRefresh: true,
-    });
     expect(runtimeMock.sendPoll).not.toHaveBeenCalled();
   });
 
@@ -251,27 +213,19 @@ describe("imessage message actions", () => {
     const result = await run(
       "poll-vote",
       { chatGuid, pollOptionIndex: 2 },
-      {
-        toolContext: { currentMessageId: 3 },
-        conversationReadOrigin: "delegated",
-      },
+      { toolContext: { currentMessageId: 3 }, conversationReadOrigin: "delegated" },
     );
     expect(runtimeMock.resolveIMessageMessageId).toHaveBeenCalledWith(
       "3",
       expect.objectContaining({ requireKnownShortId: true }),
     );
-    expectAuthorization({
-      accountId: "default",
-      messageId: "poll-full-guid",
-      conversationReadOrigin: "delegated",
-    });
+    expectAuthorization("poll-full-guid");
     expectCall(runtimeMock.sendPollVote, {
       chatGuid,
       pollGuid: "poll-full-guid",
       optionIndex: 2,
       optionId: undefined,
       optionText: undefined,
-      options,
     });
     expect(result).toMatchObject({
       details: { ok: true, messageId: "vote-guid", pollVotedOption: "Blue" },
@@ -290,23 +244,29 @@ describe("imessage message actions", () => {
 
   it.each([
     [
+      "poll",
+      { ...readyStatus, rpcMethods: ["send", "poll.send"] },
+      /pollPayloadMessage selector.*imsg launch/,
+    ],
+    [
+      "poll-vote",
       { ...voteStatus, rpcMethods: ["send", "poll.send", "messages.poll.send"] },
       /poll.vote capability/,
     ],
     [
+      "poll-vote",
       { ...voteStatus, selectors: { pollPayloadMessage: true } },
       /pollVoteMessage selector.*imsg launch/,
     ],
-  ] as const)("rejects missing poll-vote capability %j after refresh", async (stale, error) => {
+  ] as const)("rejects missing %s capability %j after refresh", async (action, stale, error) => {
     probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue(stale);
     probeMock.probeIMessagePrivateApi.mockResolvedValue(stale);
-    await expect(run("poll-vote", { chatGuid, pollId: "3", pollOptionIndex: 2 })).rejects.toThrow(
-      error,
-    );
-    expect(probeMock.probeIMessagePrivateApi).toHaveBeenCalledWith("imsg", 10_000, {
-      forceRefresh: true,
-    });
-    expect(runtimeMock.sendPollVote).not.toHaveBeenCalled();
+    const params = action === "poll" ? poll : { chatGuid, pollId: "3", pollOptionIndex: 2 };
+    await expect(run(action, params)).rejects.toThrow(error);
+    expect(probeMock.probeIMessagePrivateApi).toHaveBeenCalledWith(...refreshOptions);
+    expect(
+      action === "poll" ? runtimeMock.sendPoll : runtimeMock.sendPollVote,
+    ).not.toHaveBeenCalled();
   });
 
   it("dispatches a poll vote by plugin-owned text selector", async () => {
@@ -315,11 +275,7 @@ describe("imessage message actions", () => {
     runtimeMock.sendPollVote.mockResolvedValue({ messageId: "vote-guid" });
     await run("poll-vote", { chatGuid, pollId: "3", pollOptionText: "Blue" });
     expect(runtimeMock.sendPollVote).toHaveBeenCalledWith(
-      expect.objectContaining({
-        optionText: "Blue",
-        optionId: undefined,
-        optionIndex: undefined,
-      }),
+      expect.objectContaining({ optionText: "Blue", optionId: undefined, optionIndex: undefined }),
     );
   });
 
@@ -343,7 +299,7 @@ describe("imessage message actions", () => {
       remoteHost: undefined,
     });
     expectOwnedReference();
-    expectAuthorization({ messageId: "message-guid" });
+    expectAuthorization();
     expect(runtimeMock.editMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         text,
@@ -374,47 +330,57 @@ describe("imessage message actions", () => {
     expect(runtimeMock.sendReaction).not.toHaveBeenCalled();
   });
 
-  it("rejects configured-off actions at execution time", async () => {
-    await expect(
-      run("react", { ...message, emoji: "👍" }, { cfg: cfg({ reactions: false }) }),
-    ).rejects.toThrow(/disabled in config/i);
-    expect(runtimeMock.sendReaction).not.toHaveBeenCalled();
-  });
-
-  it("rejects an unbound alias before provider reads", async () => {
-    runtimeMock.authorizeMessageReference.mockImplementationOnce(() => {
-      throw new Error("iMessage message reference belongs to a different conversation.");
-    });
-    await expect(
-      run("react", { chatIdentifier: "foreign-chat", messageId: "foreign-guid", emoji: "👍" }),
-    ).rejects.toThrow("different conversation");
-    expect(runtimeMock.resolveChatGuidForTarget).not.toHaveBeenCalled();
-    expect(runtimeMock.sendReaction).not.toHaveBeenCalled();
-  });
-
-  it("authorizes a provider-resolved GUID independently of its input alias", async () => {
-    runtimeMock.resolveChatGuidForTarget.mockResolvedValue("iMessage;+;foreign");
-    runtimeMock.authorizeMessageReference.mockImplementation(({ chatContext }) => {
-      if (chatContext.chatGuid) {
-        throw new Error("iMessage message reference belongs to a different conversation.");
+  it.each([
+    ["foreign-chat", "foreign-guid", undefined],
+    ["trusted-alias", "message-guid", "iMessage;+;foreign"],
+  ] as const)(
+    "rejects unauthorized alias %s / %s / %s",
+    async (chatIdentifier, messageId, resolved) => {
+      runtimeMock.resolveChatGuidForTarget.mockResolvedValue(resolved);
+      runtimeMock.authorizeMessageReference.mockImplementation(({ chatContext }) => {
+        if (!resolved || chatContext.chatGuid) {
+          throw new Error("iMessage message reference belongs to a different conversation.");
+        }
+      });
+      await expect(run("react", { chatIdentifier, messageId, emoji: "👍" })).rejects.toThrow(
+        "different conversation",
+      );
+      const contexts = [{ chatIdentifier }, ...(resolved ? [{ chatGuid: resolved }] : [])];
+      expect(runtimeMock.authorizeMessageReference.mock.calls).toEqual(
+        contexts.map((chatContext) => [expect.objectContaining({ chatContext })]),
+      );
+      if (!resolved) {
+        expect(runtimeMock.resolveChatGuidForTarget).not.toHaveBeenCalled();
       }
-    });
-    await expect(
-      run("react", { chatIdentifier: "trusted-alias", messageId: "message-guid", emoji: "👍" }),
-    ).rejects.toThrow("different conversation");
-    expect(runtimeMock.authorizeMessageReference.mock.calls).toEqual([
-      [expect.objectContaining({ chatContext: { chatIdentifier: "trusted-alias" } })],
-      [expect.objectContaining({ chatContext: { chatGuid: "iMessage;+;foreign" } })],
-    ]);
-    expect(runtimeMock.sendReaction).not.toHaveBeenCalled();
-  });
+      expect(runtimeMock.sendReaction).not.toHaveBeenCalled();
+    },
+  );
 
-  it("rejects conflicting explicit aliases before provider reads", async () => {
-    await expect(run("react", { ...message, chatIdentifier: "two", emoji: "👍" })).rejects.toThrow(
-      "conflicting delivery target aliases",
-    );
-    expect(runtimeMock.resolveChatGuidForTarget).not.toHaveBeenCalled();
-    expect(runtimeMock.authorizeMessageReference).not.toHaveBeenCalled();
+  it.each([
+    [
+      "disabled",
+      { ...message, emoji: "👍" },
+      { cfg: cfg({ reactions: false }) },
+      /disabled in config/i,
+    ],
+    [
+      "conflicting",
+      { ...message, chatIdentifier: "two", emoji: "👍" },
+      {},
+      /conflicting delivery target aliases/,
+    ],
+    [
+      "missing",
+      { messageId: "x", emoji: "👍" },
+      { toolContext: { currentChannelId: "   \t  " } },
+      /requires chatGuid, chatId, chatIdentifier, or a chat target/,
+    ],
+  ] as const)("rejects %s reaction inputs", async (kind, params, context, error) => {
+    await expect(run("react", params, context)).rejects.toThrow(error);
+    if (kind === "conflicting") {
+      expect(runtimeMock.resolveChatGuidForTarget).not.toHaveBeenCalled();
+      expect(runtimeMock.authorizeMessageReference).not.toHaveBeenCalled();
+    }
     expect(runtimeMock.sendReaction).not.toHaveBeenCalled();
   });
 
@@ -422,11 +388,7 @@ describe("imessage message actions", () => {
     bridge({ retractMessagePart: true });
     await run("unsend", message, { conversationReadOrigin: "direct-operator" });
     expectOwnedReference();
-    expectAuthorization({
-      accountId: "default",
-      messageId: "message-guid",
-      conversationReadOrigin: "direct-operator",
-    });
+    expectAuthorization("message-guid", "direct-operator");
     expect(runtimeMock.unsendMessage).toHaveBeenCalledTimes(1);
   });
 
@@ -440,7 +402,6 @@ describe("imessage message actions", () => {
     });
     expectCall(runtimeMock.resolveChatGuidForTarget, {
       target: { kind: "chat_id", chatId: 42 },
-      options,
       conversationReadOrigin: "delegated",
     });
     expect(runtimeMock.authorizeMessageReference.mock.calls).toEqual([
@@ -453,7 +414,6 @@ describe("imessage message actions", () => {
       reaction: "like",
       remove: undefined,
       partIndex: undefined,
-      options,
     });
   });
 
@@ -469,7 +429,6 @@ describe("imessage message actions", () => {
     });
     expectCall(runtimeMock.resolveChatGuidForTarget, {
       target: { kind: "chat_identifier", chatIdentifier: "team-thread" },
-      options,
       conversationReadOrigin: "delegated",
     });
     expectCall(runtimeMock.sendRichMessage, {
@@ -477,18 +436,9 @@ describe("imessage message actions", () => {
       text: "here it is",
       replyToMessageId: "message-guid",
       partIndex: undefined,
-      attachment: {
-        kind: "buffer",
-        buffer: byteShape,
-        filename: "attachment.bin",
-      },
-      options,
+      attachment: { kind: "buffer", buffer: byteShape, filename: "attachment.bin" },
     });
-    expectAuthorization({
-      accountId: "default",
-      messageId: "message-guid",
-      conversationReadOrigin: "delegated",
-    });
+    expectAuthorization();
     expect(rememberIMessageReplyCacheMock).toHaveBeenCalledWith({
       accountId: "default",
       messageId: "reply-guid",
@@ -498,21 +448,25 @@ describe("imessage message actions", () => {
     });
   });
 
-  it("rejects reply paths that bypassed the outbound media resolver", async () => {
-    attachmentBridge();
-    for (const field of ["filePath", "path", "media", "mediaUrl", "fileUrl"]) {
-      await expect(
-        run("reply", { ...message, text: "reply", [field]: "/tmp/cute-lobster.png" }),
-      ).rejects.toThrow(/did not pass through the outbound media resolver/);
-    }
-    expect(runtimeMock.sendRichMessage).not.toHaveBeenCalled();
-  });
-
-  it("refuses to silently drop reply attachments on older imsg builds", async () => {
-    attachmentBridge(false);
-    await expect(
-      run("reply", { ...message, text: "reply", buffer: "UE5HREFUQQ==", filename: "card.png" }),
-    ).rejects.toThrow(/needs an imsg build that exposes `send-rich --file`/);
+  it.each([
+    ...["filePath", "path", "media", "mediaUrl", "fileUrl"].map((field) => ({
+      params: { [field]: "/tmp/cute-lobster.png" },
+      supported: true,
+      error: /did not pass through the outbound media resolver/,
+    })),
+    {
+      params: { buffer: "UE5HREFUQQ==", filename: "card.png" },
+      supported: false,
+      error: /needs an imsg build that exposes `send-rich --file`/,
+    },
+    {
+      params: { buffer: "!!!not-base64!!!", filename: "card.png" },
+      supported: true,
+      error: /must be valid base64/,
+    },
+  ])("rejects unsafe reply attachment $params", async ({ params, supported, error }) => {
+    attachmentBridge(supported);
+    await expect(run("reply", { ...message, text: "reply", ...params })).rejects.toThrow(error);
     expect(runtimeMock.sendRichMessage).not.toHaveBeenCalled();
   });
 
@@ -534,7 +488,6 @@ describe("imessage message actions", () => {
       replyToMessageId: "parent-guid",
       partIndex: undefined,
       attachment: undefined,
-      options,
     });
   });
 
@@ -560,20 +513,7 @@ describe("imessage message actions", () => {
       chatGuid,
       text: "boom",
       effectId: "com.apple.messages.effect.CKEchoEffect",
-      options,
     });
-  });
-
-  it("treats whitespace-only current channel ids as missing", async () => {
-    await expect(
-      run(
-        "react",
-        { messageId: "x", emoji: "👍" },
-        {
-          toolContext: { currentChannelId: "   \t  " },
-        },
-      ),
-    ).rejects.toThrow(/requires chatGuid, chatId, chatIdentifier, or a chat target/);
   });
 
   it("uploads URL-safe attachment bytes as voice", async () => {
@@ -589,7 +529,6 @@ describe("imessage message actions", () => {
       buffer: byteShape,
       filename: "photo.jpg",
       asVoice: true,
-      options,
     });
     expect(result?.details).toEqual({ ok: true, messageId: "sent-guid" });
   });
@@ -603,18 +542,5 @@ describe("imessage message actions", () => {
     expect(runtimeMock.setGroupIcon).toHaveBeenCalledWith(
       expect.objectContaining({ buffer: byteShape }),
     );
-  });
-
-  it("rejects malformed reply bytes before sending", async () => {
-    attachmentBridge();
-    await expect(
-      run("reply", {
-        ...message,
-        text: "here it is",
-        buffer: "!!!not-base64!!!",
-        filename: "card.png",
-      }),
-    ).rejects.toThrow(/must be valid base64/);
-    expect(runtimeMock.sendRichMessage).not.toHaveBeenCalled();
   });
 });
