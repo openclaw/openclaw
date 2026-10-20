@@ -40,7 +40,7 @@ export function ChatPullRequestChecks(props: {
   // Synchronize the native disclosure with the pane presentation and overlay owner.
   createEffect(
     () => ({ presented: props.presented, dismissed: props.dismissed }),
-    ({ presented, dismissed }) => sync(presented, dismissed),
+    (next) => sync(next.presented, next.dismissed),
   );
   onSettled(() => {
     overlay.bindSurface(surface);
