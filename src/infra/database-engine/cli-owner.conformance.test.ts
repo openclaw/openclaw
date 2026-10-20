@@ -42,7 +42,17 @@ function readAnchor(pathname: string) {
   };
 }
 
-async function configWriteFixture() {
+function withDsn(database: OpenClawConfig["database"], id: string): OpenClawConfig["database"] {
+  return {
+    ...database,
+    postgres: {
+      ...database?.postgres,
+      connection: { source: "env", provider: "default", id },
+    },
+  };
+}
+
+async function configWriteFixture(dsn = "OPENCLAW_CONFIG_WRITE_TEST_DSN") {
   const root = directories.make("config-write-postgres-");
   const foreignRoot = directories.make("config-write-foreign-");
   const configPath = path.join(root, "openclaw.json");
@@ -54,7 +64,7 @@ async function configWriteFixture() {
     database: {
       engine: "postgres",
       postgres: {
-        connection: { source: "env", provider: "default", id: "OPENCLAW_CONFIG_WRITE_TEST_DSN" },
+        connection: { source: "env", provider: "default", id: dsn },
         schemaPrefix,
       },
     },
@@ -65,7 +75,7 @@ async function configWriteFixture() {
     OPENCLAW_HOME: root,
     OPENCLAW_STATE_DIR: root,
     OPENCLAW_CONFIG_PATH: configPath,
-    OPENCLAW_CONFIG_WRITE_TEST_DSN: connection,
+    [dsn]: connection,
   };
   for (const key of [
     "HOME",
@@ -75,7 +85,7 @@ async function configWriteFixture() {
   ] as const) {
     vi.stubEnv(key, env[key]);
   }
-  vi.stubEnv("OPENCLAW_CONFIG_WRITE_TEST_DSN", undefined);
+  vi.stubEnv(dsn, undefined);
   vi.stubEnv("OPENCLAW_CONFIG_WRITE_UNRESOLVED_DSN", undefined);
   resetDatabaseEngineSelectionForTest();
   resetConfigRuntimeState();
@@ -112,6 +122,14 @@ async function configWriteFixture() {
       onForeignOwner: "refuse",
       runLocal: ({ assertCurrent }) => run(assertCurrent),
     });
+  const openState = async () =>
+    withDatabaseEngineSelection(await resolveDatabaseEngineSelection(config, env), async () => {
+      const namespace = withEngineStoreAdmission(
+        () => getPostgresPhysicalFacts(openOpenClawStateDatabase({ env }).db)?.namespace,
+      );
+      await closeOpenClawStateDatabaseByPathAsync(databasePath);
+      return namespace;
+    });
   return {
     root,
     foreignRoot,
@@ -123,6 +141,7 @@ async function configWriteFixture() {
     io,
     warn,
     own,
+    openState,
     [Symbol.asyncDispose]: close,
   };
 }
@@ -132,13 +151,7 @@ it.skipIf(!connection).each([false, true])(
   async (existing) => {
     await using f = await configWriteFixture();
     if (existing) {
-      await withDatabaseEngineSelection(
-        await resolveDatabaseEngineSelection(f.config, f.env),
-        async () => {
-          withEngineStoreAdmission(() => openOpenClawStateDatabase({ env: f.env }));
-          await closeOpenClawStateDatabaseByPathAsync(f.databasePath);
-        },
-      );
+      await f.openState();
     }
     await f.own(async (assertCurrent) => {
       // The writer's selected root must not be replaced by a caller's ambient environment.
@@ -183,17 +196,7 @@ it.skipIf(!connection).each([false, true])(
               f.io.writeConfigFile({
                 ...first.persistedConfig,
                 gateway: { mode: "local", port: 19472 },
-                database: {
-                  ...f.config.database,
-                  postgres: {
-                    ...f.config.database?.postgres,
-                    connection: {
-                      source: "env",
-                      provider: "default",
-                      id: "OPENCLAW_CONFIG_WRITE_UNRESOLVED_DSN",
-                    },
-                  },
-                },
+                database: withDsn(f.config.database, "OPENCLAW_CONFIG_WRITE_UNRESOLVED_DSN"),
               }),
           );
           expect(await journal()).toMatchObject([{ rawHash: second.persistedHash }]);
@@ -253,17 +256,7 @@ it.skipIf(!connection)(
       f.env.OPENCLAW_CONFIG_WRITE_REPAIRED_DSN = connection;
       await f.io.writeConfigFile({
         ...written.persistedConfig,
-        database: {
-          ...f.config.database,
-          postgres: {
-            ...f.config.database?.postgres,
-            connection: {
-              source: "env",
-              provider: "default",
-              id: "OPENCLAW_CONFIG_WRITE_REPAIRED_DSN",
-            },
-          },
-        },
+        database: withDsn(f.config.database, "OPENCLAW_CONFIG_WRITE_REPAIRED_DSN"),
       });
       expect(readAnchor(f.databasePath).tables).toEqual([{ name: "openclaw_engine_anchor" }]);
     });
@@ -291,14 +284,7 @@ it.skipIf(!connection).each([
   "validates memory $command $flags before PostgreSQL ownership without health writes",
   async ({ command, flags }) => {
     await using f = await configWriteFixture();
-    const selection = await resolveDatabaseEngineSelection(f.config, f.env);
-    const namespace = await withDatabaseEngineSelection(selection, async () => {
-      const schema = withEngineStoreAdmission(
-        () => getPostgresPhysicalFacts(openOpenClawStateDatabase({ env: f.env }).db)?.namespace,
-      );
-      await closeOpenClawStateDatabaseByPathAsync(f.databasePath);
-      return schema;
-    });
+    const namespace = await f.openState();
     assert(namespace);
     const before = readAnchor(f.databasePath);
     const healthRows = async () =>
@@ -344,20 +330,8 @@ it.skipIf(!connection).each([
 it.skipIf(!connection)(
   "admits PostgreSQL from selected state dotenv before a cold local command observes config",
   async () => {
-    const root = directories.make("cli-owner-postgres-");
-    const configPath = path.join(root, "openclaw.json");
-    const databasePath = path.join(root, "state", "openclaw.sqlite");
-    const config = {
-      gateway: { mode: "local" },
-      plugins: { enabled: false },
-      database: {
-        engine: "postgres",
-        postgres: {
-          connection: { source: "env", provider: "default", id: "OPENCLAW_CLI_OWNER_TEST_DSN" },
-          schemaPrefix: `cli_owner_${randomUUID().replaceAll("-", "").slice(0, 12)}`,
-        },
-      },
-    } satisfies OpenClawConfig;
+    await using f = await configWriteFixture("OPENCLAW_CLI_OWNER_TEST_DSN");
+    const { root, configPath, databasePath, config, client } = f;
     const raw = `${JSON.stringify(config)}\n`;
     await fs.writeFile(configPath, raw);
     await fs.writeFile(
@@ -365,72 +339,38 @@ it.skipIf(!connection)(
       `OPENCLAW_CLI_OWNER_TEST_DSN=${JSON.stringify(connection)}\n`,
       { mode: 0o600 },
     );
-    vi.stubEnv("HOME", root);
-    vi.stubEnv("OPENCLAW_HOME", root);
-    vi.stubEnv("OPENCLAW_STATE_DIR", root);
-    vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
-    vi.stubEnv("OPENCLAW_CLI_OWNER_TEST_DSN", undefined);
-    resetDatabaseEngineSelectionForTest();
-    resetConfigRuntimeState();
-    const client = new Client({ connectionString: connection });
-    await client.connect();
-    let namespace: string | undefined;
-    try {
-      // Seed a prior Gateway's store without installing a process-wide CLI boot choice.
-      const selection = await resolveDatabaseEngineSelection(config, {
-        ...process.env,
-        OPENCLAW_CLI_OWNER_TEST_DSN: connection,
-      });
-      await withDatabaseEngineSelection(selection, async () => {
-        namespace = withEngineStoreAdmission(
-          () => getPostgresPhysicalFacts(openOpenClawStateDatabase().db)?.namespace,
-        );
-        await closeOpenClawStateDatabaseByPathAsync(databasePath);
-      });
-      assert(namespace);
-      expect(getDatabaseEngineSelection()).toBeUndefined();
-      expect(process.env.OPENCLAW_CLI_OWNER_TEST_DSN).toBeUndefined();
-      const anchorBefore = readAnchor(databasePath);
-      expect(anchorBefore.tables).not.toContainEqual({ name: "config_health_entries" });
+    // Seed a prior Gateway's store without installing a process-wide CLI boot choice.
+    const namespace = await f.openState();
+    assert(namespace);
+    expect(getDatabaseEngineSelection()).toBeUndefined();
+    expect(process.env.OPENCLAW_CLI_OWNER_TEST_DSN).toBeUndefined();
+    const anchorBefore = readAnchor(databasePath);
+    expect(anchorBefore.tables).not.toContainEqual({ name: "config_health_entries" });
 
-      const operation = {
-        method: "memory.cli",
-        params: {},
-        target: "memory stores",
-        onForeignOwner: "refuse" as const,
-        databaseEngine: "configured" as const,
-        runLocal: async () =>
-          await captureRuntimeConfigAsyncReader({ skipPluginValidation: true })(),
-      };
-      const loaded = await runWithLocalStateOwner(operation);
-      expect(loaded.database?.engine).toBe("postgres");
-      expect(getDatabaseEngineSelection()).toBeUndefined();
-      await closeOpenClawStateDatabaseByPathAsync(databasePath);
+    const operation = {
+      method: "memory.cli",
+      params: {},
+      target: "memory stores",
+      onForeignOwner: "refuse" as const,
+      databaseEngine: "configured" as const,
+      runLocal: async () => await captureRuntimeConfigAsyncReader({ skipPluginValidation: true })(),
+    };
+    const loaded = await runWithLocalStateOwner(operation);
+    expect(loaded.database?.engine).toBe("postgres");
+    expect(getDatabaseEngineSelection()).toBeUndefined();
+    await closeOpenClawStateDatabaseByPathAsync(databasePath);
 
-      const health = await client.query<{ last_known_good_json: string }>(
-        `SELECT last_known_good_json FROM "${namespace}".config_health_entries WHERE config_path = $1`,
-        [configPath],
-      );
-      expect(health.rows).toHaveLength(1);
-      assert(health.rows[0]);
-      expect(JSON.parse(health.rows[0].last_known_good_json)).toMatchObject({
-        hash: createHash("sha256").update(raw).digest("hex"),
-        bytes: Buffer.byteLength(raw),
-        gatewayMode: "local",
-      });
-      expect(readAnchor(databasePath)).toEqual(anchorBefore);
-    } finally {
-      await closeOpenClawStateDatabaseByPathAsync(databasePath);
-      try {
-        if (namespace) {
-          await client.query(`DROP SCHEMA "${namespace}" CASCADE`);
-        }
-      } finally {
-        await client.end();
-        resetDatabaseEngineSelectionForTest();
-        resetConfigRuntimeState();
-        vi.unstubAllEnvs();
-      }
-    }
+    const health = await client.query<{ last_known_good_json: string }>(
+      `SELECT last_known_good_json FROM "${namespace}".config_health_entries WHERE config_path = $1`,
+      [configPath],
+    );
+    expect(health.rows).toHaveLength(1);
+    assert(health.rows[0]);
+    expect(JSON.parse(health.rows[0].last_known_good_json)).toMatchObject({
+      hash: createHash("sha256").update(raw).digest("hex"),
+      bytes: Buffer.byteLength(raw),
+      gatewayMode: "local",
+    });
+    expect(readAnchor(databasePath)).toEqual(anchorBefore);
   },
 );
