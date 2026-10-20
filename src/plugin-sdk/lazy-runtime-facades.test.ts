@@ -12,15 +12,7 @@ const minimaxArgs = [...usageArgs, { baseUrl: "https://usage.example/anthropic" 
 const preparationParams = {
   cfg: { agents: { defaults: { model: "synthetic/model" } } },
   agentId: "sdk-agent",
-  agentDir: "/tmp/sdk-agent",
   modelRef: "synthetic/model@profile",
-  useUtilityModel: true,
-  preferredProfile: "synthetic:preferred",
-  allowMissingApiKeyModes: ["aws-sdk"],
-  allowBundledStaticCatalogFallback: true,
-  useAsyncModelResolution: true,
-  skipAgentDiscovery: true,
-  bindAuthOwner: true,
 } satisfies Parameters<
   typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModelForAgent
 >[0];
@@ -82,12 +74,7 @@ describe("lazy SDK execution facades", () => {
     "defers $name to its execution owner and preserves arguments and outcomes",
     async (testCase) => {
       const loaded: string[] = [];
-      const resolvedError = {
-        provider: "openai",
-        displayName: "SDK fixture",
-        windows: [],
-        error: "Owner unavailable",
-      };
+      const resolvedError = { error: "Owner unavailable" };
       const failure = new Error("Owner request failed");
       const execute = vi.fn<(...args: unknown[]) => Promise<unknown>>();
       execute.mockResolvedValueOnce(resolvedError).mockRejectedValueOnce(failure);

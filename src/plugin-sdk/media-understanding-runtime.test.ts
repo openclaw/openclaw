@@ -35,23 +35,15 @@ describe("formatAudioTranscriptForAgent", () => {
 describe("createChannelPreflightAudio", () => {
   it("suppresses speculative echo without mutating the caller config", async () => {
     const transcribeFirstAudio = vi.fn<TranscribeFirstAudio>().mockResolvedValue("hello");
-    const preflight = createPreflight({
-      isAudio: (value: { contentType?: string }) =>
-        value.contentType?.startsWith("audio/") ?? false,
-      transcribeFirstAudio,
-    });
-
-    await expect(
-      preflight.resolve({
-        request: {
-          ctx: { media: [{ path: "/tmp/voice.ogg", contentType: "audio/ogg" }] },
-          cfg: audioConfig,
-        },
-      }),
-    ).resolves.toBe("hello");
+    const preflight = createPreflight({ transcribeFirstAudio });
+    const audioRequest = {
+      ctx: { media: [{ path: "/tmp/voice.ogg", contentType: "audio/ogg" }] },
+      cfg: audioConfig,
+    };
+    await expect(preflight.resolve({ request: audioRequest })).resolves.toBe("hello");
 
     expect(transcribeFirstAudio).toHaveBeenCalledWith({
-      ctx: { media: [{ path: "/tmp/voice.ogg", contentType: "audio/ogg" }] },
+      ctx: audioRequest.ctx,
       cfg: {
         tools: { media: { audio: { echoTranscript: false, echoFormat: "heard: {transcript}" } } },
       },
