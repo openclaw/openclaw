@@ -227,7 +227,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     // Live rows retire on disconnect; the session owner retains same-identity
     // presentation (including deferred metadata) until the next canonical list.
     const presentation =
-      this.context.gateway.snapshot.phase === "connected"
+      this.context.gateway.snapshot.phase === "connected" && stateValue.result
         ? stateValue
         : this.context.sessions.presentation;
     // A list for another agent must not overwrite this pane's global history.
