@@ -84,7 +84,7 @@ describe("waitForCompletionRequiredAsyncTasks", () => {
     void result.then(settled);
     await vi.advanceTimersByTimeAsync(499);
     expect(settled).not.toHaveBeenCalled();
-    completeTask(task.taskId, 2);
+    completeTask(task.taskId, Date.now());
     await vi.advanceTimersByTimeAsync(1);
     expect(await result).toEqual(emptyResult);
     expect(findMediaGenerationOperation(task.taskId)?.status).toBe("succeeded");

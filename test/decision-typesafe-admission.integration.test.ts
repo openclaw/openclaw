@@ -206,7 +206,6 @@ it("lets admitted TypeSafe work finish after opt-out while preserving independen
               admittedRequests,
               allowedRequests: requests - admittedRequests,
               admitted: admitted.status,
-              admittedReason: admitted.reason,
               clientReadyMs,
               elapsedMs: performance.now() - started,
               nextTurn: skipped.status,
