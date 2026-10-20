@@ -302,37 +302,6 @@ describe("retained existing-state writer", () => {
     }
   });
 
-  it("allows a retained writer to retry after refused integrity preparation", () => {
-    const options = fixture();
-    const peer = new DatabaseSync(options.path);
-    const writer = openExistingOpenClawStateWriter(options, contract);
-    try {
-      peer.exec(`
-        CREATE TABLE parents (id INTEGER PRIMARY KEY);
-        CREATE TABLE children (parent INTEGER REFERENCES parents(id));
-        PRAGMA foreign_keys = OFF;
-        INSERT INTO children VALUES (1);
-      `);
-      const mutate = vi.fn(({ db }: { db: DatabaseSync }) => {
-        db.exec("INSERT INTO records VALUES (1, 'after repair')");
-      });
-      expect(() => writer.run(mutate, options)).toThrow(/foreign_key_check/iu);
-      expect(mutate).not.toHaveBeenCalled();
-      expect(readValues(options.path)).toEqual([]);
-      peer.exec("INSERT INTO parents VALUES (1)");
-      writer.run(mutate, options);
-      writer.assertSettled();
-      expect(mutate).toHaveBeenCalledOnce();
-      expect(readValues(options.path)).toEqual([{ value: "after repair" }]);
-    } finally {
-      try {
-        writer.close();
-      } finally {
-        peer.close();
-      }
-    }
-  });
-
   it.skipIf(process.platform === "win32")(
     "rejects replacement before a retained write callback",
     () => {

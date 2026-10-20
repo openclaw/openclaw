@@ -1,15 +1,12 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
+import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync-cache-state.js";
 import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import {
   assertSqliteIntegrity,
   SqliteRepairableForeignKeyError,
 } from "../infra/sqlite-integrity.js";
-import {
-  runWithSqliteCleanup,
-  throwSqliteLifecycleErrors,
-} from "../infra/sqlite-lifecycle-errors.js";
 import { assertNoActiveSqliteReaders } from "../infra/sqlite-reader-lifecycle.js";
 import {
   assertSqliteSchemaContains,
@@ -21,7 +18,6 @@ import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import {
   assertTransactionUsable,
-  runSqliteDeferredTransactionSync,
   type SqliteTransactionOptions,
 } from "../infra/sqlite-transaction.js";
 import { withStateDatabaseSchemaMaintenance } from "../infra/state-database-maintenance.js";
@@ -32,7 +28,7 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db-contract.js";
 import { assertExistingOpenClawStateRuntimeSchema } from "./openclaw-state-db-existing-schema.js";
-import { openTrackedStateDatabase } from "./openclaw-state-db-handle.js";
+import { openTrackedStateDatabase, closeTrackedStateDatabase } from "./openclaw-state-db-handle.js";
 import { assertStateDatabaseIntegrityOnce } from "./openclaw-state-db-integrity-admission.js";
 import { assertOpenClawStateDatabaseOwner } from "./openclaw-state-db-maintenance.js";
 import {
@@ -105,9 +101,11 @@ export function runExistingOpenClawStateWriteTransaction<T>(
   const prepared = prepareExistingOpenClawStateWriter(options, contract);
   const write = () => {
     const writer = createExistingOpenClawStateWriter(prepared, contract);
-    return runWithSqliteCleanup({ release: () => writer.close() }, contract.operationLabel, () =>
-      writer.run(operation, options),
-    );
+    try {
+      return writer.run(operation, options);
+    } finally {
+      writer.close();
+    }
   };
   return contract.recoverTaskDeliveryOrphans
     ? withStateDatabaseSchemaMaintenance({ databasePath: prepared.pathname }, write)
@@ -162,7 +160,6 @@ function createExistingOpenClawStateWriter(
     // Match Doctor: inbound dependents must fail validation, never cascade away.
     ...(contract.recoverTaskDeliveryOrphans ? { enableForeignKeyConstraints: false } : {}),
   });
-  const database = { db, path: pathname };
   const admission = createStateSchemaAdmission(
     `state.subset:${createHash("sha256")
       .update(JSON.stringify([contract.schemaSql, contract.schemaCompatibility]))
@@ -193,13 +190,6 @@ function createExistingOpenClawStateWriter(
       const busyTimeoutMs =
         currentOptions.busyTimeoutMs ?? contract.busyTimeoutMs ?? OPENCLAW_SQLITE_BUSY_TIMEOUT_MS;
       setSqliteBusyTimeout(db, busyTimeoutMs);
-      if (admission.get(db) === undefined && !contract.recoverTaskDeliveryOrphans) {
-        // Cold integrity reads must not reserve the writer. The write below
-        // still checks current file identity, schema and live authority.
-        runSqliteDeferredTransactionSync(db, () => assertStateDatabaseIntegrityOnce(db, pathname), {
-          operationLabel: contract.operationLabel,
-        });
-      }
       return runManagedStateTransaction(
         db,
         () => {
@@ -287,10 +277,8 @@ function createExistingOpenClawStateWriter(
     },
     close() {
       closed = true;
-      throwSqliteLifecycleErrors(
-        openClawStateDatabaseCache.closeUnpublishedOpenClawStateDatabaseHandle(database),
-        "Existing-state writer cleanup failed.",
-      );
+      clearNodeSqliteKyselyCacheForDatabase(db);
+      closeTrackedStateDatabase(db);
     },
   };
 }
