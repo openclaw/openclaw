@@ -1,14 +1,23 @@
 // Control UI E2E tests cover composable skill references in the chat composer.
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const suite = createControlUiE2eSuite({
-  name: "Control UI skill references",
+const suite = createControlUiE2eSuite({ name: "Control UI skill references" });
+const skill = (name: string, skillDisplayName: string, description: string) => ({
+  acceptsArgs: true,
+  description,
+  name,
+  skillDisplayName,
+  scope: "both",
+  source: "skill",
+  skillModelVisible: true,
+  textAliases: [`/${name}`],
 });
 
 suite.define(() => {
@@ -26,36 +35,13 @@ suite.define(() => {
       },
       async ({ page }) => {
         const commands = [
-          {
-            acceptsArgs: true,
-            description: "Pre-commit and ship code review.",
-            name: "autoreview",
-            skillDisplayName: "Auto Review",
-            scope: "both",
-            source: "skill",
-            skillModelVisible: true,
-            textAliases: ["/autoreview"],
-          },
-          {
-            acceptsArgs: true,
-            description: "Build and review technical documentation.",
-            name: "technical_documentation",
-            skillDisplayName: "Technical Documentation",
-            scope: "both",
-            source: "skill",
-            skillModelVisible: true,
-            textAliases: ["/technical_documentation"],
-          },
-          {
-            acceptsArgs: true,
-            description: "Prepare a detailed status report.",
-            name: "status_report",
-            skillDisplayName: "Status Report",
-            scope: "both",
-            source: "skill",
-            skillModelVisible: true,
-            textAliases: ["/status_report"],
-          },
+          skill("autoreview", "Auto Review", "Pre-commit and ship code review."),
+          skill(
+            "technical_documentation",
+            "Technical Documentation",
+            "Build and review technical documentation.",
+          ),
+          skill("status_report", "Status Report", "Prepare a detailed status report."),
           {
             acceptsArgs: false,
             description: "Show gateway status.",
@@ -87,6 +73,15 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}chat`);
         await gateway.waitForRequest("chat.startup");
         const composer = page.locator(".agent-chat__composer-combobox textarea");
+        const draft = (value: string) => expect.poll(() => composer.inputValue()).toBe(value);
+        const screenshot = async (name: string, target: Locator) => {
+          if (artifactDir) {
+            await writeFile(
+              path.join(artifactDir, name),
+              await takeControlUiViewportScreenshot(page, page.locator(".shell"), [target]),
+            );
+          }
+        };
         await composer.fill("Review this with $auto");
 
         const picker = page.getByRole("listbox", { name: "Skill references" });
@@ -95,28 +90,15 @@ suite.define(() => {
         await expect
           .poll(() => picker.getByRole("option").first().textContent())
           .toContain("Auto Review");
-        if (artifactDir) {
-          await writeFile(
-            path.join(artifactDir, "skill-reference-picker.png"),
-            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [picker]),
-          );
-        }
+        await screenshot("skill-reference-picker.png", picker);
         await composer.press("Enter");
-        await expect.poll(() => composer.inputValue()).toBe("Review this with $autoreview ");
+        await draft("Review this with $autoreview ");
 
         await composer.fill(`${await composer.inputValue()}and $technical`);
         await expect.poll(() => picker.getByRole("option").count()).toBe(1);
         await composer.press("Tab");
-        await expect
-          .poll(() => composer.inputValue())
-          .toBe("Review this with $autoreview and $technical_documentation ");
-
-        if (artifactDir) {
-          await writeFile(
-            path.join(artifactDir, "skill-references-selected.png"),
-            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [composer]),
-          );
-        }
+        await draft("Review this with $autoreview and $technical_documentation ");
+        await screenshot("skill-references-selected.png", composer);
 
         await page.getByRole("button", { name: "Send message" }).click();
         const request = await gateway.waitForRequest("chat.send");
@@ -131,7 +113,7 @@ suite.define(() => {
         await slashPicker.waitFor({ state: "visible" });
         await expect.poll(() => slashPicker.getByRole("option").count()).toBe(1);
         await composer.press("Enter");
-        await expect.poll(() => composer.inputValue()).toBe("Review this with $autoreview ");
+        await draft("Review this with $autoreview ");
 
         await composer.fill("/");
         await page.getByRole("listbox", { name: "Slash commands" }).waitFor({ state: "visible" });
@@ -148,7 +130,7 @@ suite.define(() => {
           })
           .toEqual({ first: "/status", last: "/status_report" });
         await composer.press("Tab");
-        await expect.poll(() => composer.inputValue()).toBe("/status");
+        await draft("/status");
       },
     );
   });

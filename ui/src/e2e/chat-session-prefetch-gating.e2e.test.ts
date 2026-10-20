@@ -1,12 +1,5 @@
-// Control UI E2E: background session warming must never share the socket with the
-// transcript the user is looking at, including a reload that a Gateway event starts
-// inside the pane itself, where nothing re-renders the page.
 import { expect, it } from "vitest";
-import {
-  installMockGateway,
-  pauseVirtualClock,
-  type MockGatewayControls,
-} from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -32,16 +25,6 @@ function transcript(text: string, seq: number) {
   };
 }
 
-async function historyRequestCount(
-  gateway: MockGatewayControls,
-  sessionKey: string,
-): Promise<number> {
-  const requests = await gateway.getRequests("chat.history");
-  return requests.filter(
-    (request) => (request.params as { sessionKey?: string } | undefined)?.sessionKey === sessionKey,
-  ).length;
-}
-
 suite.define(() => {
   it("keeps queued warm-ups off the socket while the presented transcript reloads", async () => {
     const context = await suite.newBrowserContext({
@@ -53,8 +36,7 @@ suite.define(() => {
     await page.clock.install({ time: CLOCK_START });
     const mainSession = createControlUiSessionRow(MAIN_SESSION_KEY, "Main", CLOCK_START - 1_000);
     const gateway = await installMockGateway(page, {
-      // The presented pane boots through chat.startup; navigation intent below
-      // warms the other session through chat.history.
+      // Startup serves the foreground; navigation warms through chat.history.
       deferredMethods: ["chat.history"],
       historyMessages: [],
       sessions: [
@@ -66,6 +48,10 @@ suite.define(() => {
         [WARM_SESSION_KEY]: transcript("Warm transcript", 2),
       },
     });
+    const historyRequestCount = async (sessionKey: string) =>
+      (await gateway.getRequests("chat.history")).filter(
+        ({ params }) => (params as { sessionKey?: string } | undefined)?.sessionKey === sessionKey,
+      ).length;
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("chat.startup");
@@ -75,15 +61,12 @@ suite.define(() => {
         .locator(`openclaw-app-sidebar [data-session-key="${WARM_SESSION_KEY}"] a`)
         .first()
         .hover();
-      await expect.poll(() => historyRequestCount(gateway, WARM_SESSION_KEY)).toBe(1);
+      await expect.poll(() => historyRequestCount(WARM_SESSION_KEY)).toBe(1);
       expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
-      // A failed warm-up leaves the session eligible and arms the prefetcher's own
-      // cooldown retry timer, which fires without any page update in between.
-      // Not retryable: the Gateway client would otherwise re-issue the request itself.
+      // Non-retryable rejection leaves only the prefetch cooldown responsible for retry.
       await gateway.rejectDeferred("chat.history", { code: "UNAVAILABLE", message: "warm later" });
 
-      // A peer message makes the presented pane reload its transcript from inside
-      // the pane; hold that reload on the wire.
+      // Hold the pane-owned reload triggered by a peer message.
       await gateway.deferNext("chat.history", { sessionKey: MAIN_SESSION_KEY });
       await gateway.emitGatewayEvent("session.message", {
         sessionKey: MAIN_SESSION_KEY,
@@ -96,24 +79,22 @@ suite.define(() => {
         messageId: "peer-message",
         messageSeq: 5,
       });
-      await expect.poll(() => historyRequestCount(gateway, MAIN_SESSION_KEY)).toBe(1);
-      // The foreground read retries after its 30-second deadline. Keep that
-      // replacement in flight too, instead of letting its ordinary fixture ACK finish loading.
+      await expect.poll(() => historyRequestCount(MAIN_SESSION_KEY)).toBe(1);
+      // Hold the replacement foreground read after its 30-second deadline too.
       await gateway.deferNext("chat.history", { sessionKey: MAIN_SESSION_KEY });
 
-      // Fire every prefetch timer, including the cooldown retry, while the
-      // presented transcript is still in flight.
+      // Fire prefetch cooldowns while the foreground transcript is in flight.
       await pauseVirtualClock(page);
       await page.clock.runFor(35_000);
-      expect(await historyRequestCount(gateway, WARM_SESSION_KEY)).toBe(1);
-      expect(await historyRequestCount(gateway, MAIN_SESSION_KEY)).toBe(2);
+      expect(await historyRequestCount(WARM_SESSION_KEY)).toBe(1);
+      expect(await historyRequestCount(MAIN_SESSION_KEY)).toBe(2);
       await gateway.resolveDeferred("chat.history", {
         ...transcript("Retired foreground response", 6),
         sessionId: mainSession.sessionId,
       });
       await page.clock.runFor(1);
       expect(await page.getByText("Retired foreground response", { exact: true }).count()).toBe(0);
-      expect(await historyRequestCount(gateway, WARM_SESSION_KEY)).toBe(1);
+      expect(await historyRequestCount(WARM_SESSION_KEY)).toBe(1);
 
       // Only the current foreground response commits; warming then resumes on its own.
       await gateway.resolveDeferred("chat.history", {
@@ -122,7 +103,7 @@ suite.define(() => {
       });
       await page.locator(".chat-bubble", { hasText: "Main transcript reloaded" }).first().waitFor();
       await page.clock.runFor(35_000);
-      await expect.poll(() => historyRequestCount(gateway, WARM_SESSION_KEY)).toBe(2);
+      await expect.poll(() => historyRequestCount(WARM_SESSION_KEY)).toBe(2);
     } finally {
       await suite.closeBrowserContext(context);
     }

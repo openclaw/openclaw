@@ -1,6 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { beforeEach, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
@@ -17,12 +17,6 @@ const suite = createControlUiE2eSuite({
 });
 const openThemedChat = createThemedChatOpener(suite);
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-let artifactDir: string;
-beforeEach(() => {
-  if (captureProof) {
-    artifactDir = createControlUiE2eArtifactDir("diff-highlighting");
-  }
-});
 
 suite.define(() => {
   it.each(["light", "dark"] as const)(
@@ -34,14 +28,10 @@ suite.define(() => {
           seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
           return "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"[seed % 52];
         }).join("");
-      const before = Array.from(
-        { length: 64 },
-        (_, i) => "const before" + i + ' = "' + identifier() + '";',
-      );
-      const after = Array.from(
-        { length: 64 },
-        (_, i) => "const after" + i + ' = "' + identifier() + '";',
-      );
+      const lines = (prefix: string) =>
+        Array.from({ length: 64 }, (_, i) => `const ${prefix}${i} = "${identifier()}";`);
+      const before = lines("before");
+      const after = lines("after");
       const { page, gateway } = await openThemedChat("claw", mode, {
         featureMethods: ["chat.metadata", "chat.startup", "sessions.diff"],
         methodResponses: {
@@ -76,22 +66,16 @@ suite.define(() => {
       await focusChatSidePanel(page);
       const panel = page.locator(".session-diff");
       const readSide = (selector: string) => panel.locator(selector).allTextContents();
+      const splitSide = (side: string) =>
+        readSide(
+          `.session-diff-split__side--${side}.session-diff-split__side--filled .session-diff-split__text`,
+        );
       expect(await readSide(".chat-diff__row--del .chat-diff__text")).toEqual(before);
       expect(await readSide(".chat-diff__row--add .chat-diff__text")).toEqual(after);
       await panel.getByRole("button", { name: "Change view options" }).click();
       await page.getByRole("menuitem", { name: "Switch to Split Diff" }).click();
-      await expect
-        .poll(() =>
-          readSide(
-            ".session-diff-split__side--left.session-diff-split__side--filled .session-diff-split__text",
-          ),
-        )
-        .toEqual(before);
-      expect(
-        await readSide(
-          ".session-diff-split__side--right.session-diff-split__side--filled .session-diff-split__text",
-        ),
-      ).toEqual(after);
+      await expect.poll(() => splitSide("left")).toEqual(before);
+      expect(await splitSide("right")).toEqual(after);
       await panel.locator(".session-diff-split__row").last().scrollIntoViewIfNeeded();
       expect(await panel.locator(".session-diff-split__row").last().textContent()).toContain(
         after[63],
@@ -129,6 +113,7 @@ suite.define(() => {
         samples.push({ cpuRate, paintMs: await painted });
       }
       if (captureProof) {
+        const artifactDir = createControlUiE2eArtifactDir("diff-highlighting");
         console.log("DIFF_BROWSER_REFRESH_PAINT_MS", mode, JSON.stringify(samples));
         await panel.locator(".chat-diff__row").first().scrollIntoViewIfNeeded();
         const frame = await takeControlUiScreenshotFrame(

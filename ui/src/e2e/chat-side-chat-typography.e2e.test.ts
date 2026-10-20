@@ -8,7 +8,8 @@ const suite = createControlUiE2eSuite({ name: "side-chat typography" });
 const questionText = "What changed?";
 const question = `${questionText}\n\n\`\`\`text\none\ntwo\nthree\nfour\nfive\nsix\nseven\neight\n\`\`\``;
 const answerCode = `const detail = "${"A long line in a narrow side chat. ".repeat(6)}";`;
-const answer = `The same readable answer in both conversations.\n\n\`\`\`ts\n${answerCode}\n\`\`\``;
+const answerText = "The same readable answer in both conversations.";
+const answer = `${answerText}\n\n\`\`\`ts\n${answerCode}\n\`\`\``;
 
 function typography(element: Locator) {
   return element.evaluate((node) => {
@@ -52,33 +53,29 @@ suite.define(() => {
           });
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
           const main = page.locator(".chat-thread");
-          await main.getByText("The same readable answer in both conversations.").waitFor();
+          await main.getByText(answerText).waitFor();
           await openChatSidePanelType(page, "Side chat");
           const side = page.locator("openclaw-chat-session-rail");
-          await side.getByText("The same readable answer in both conversations.").waitFor();
+          await side.getByText(answerText).waitFor();
           await page.evaluate(() => document.fonts.ready);
-
-          for (const text of [questionText, "The same readable answer in both conversations."]) {
-            const expected = await typography(main.getByText(text, { exact: true }));
+          const textStyle = (surface: Locator, text: string) =>
+            typography(surface.getByText(text, { exact: true }));
+          for (const text of [questionText, answerText]) {
+            const expected = await textStyle(main, text);
             expect(expected.family).toContain("Fraunces");
-            expect(await typography(side.getByText(text, { exact: true }))).toEqual(expected);
+            expect(await textStyle(side, text)).toEqual(expected);
           }
           // The common scale owner must affect both reading surfaces, not only the main thread.
           await page.evaluate(() =>
             document.documentElement.style.setProperty("--control-ui-text-scale", "1.25"),
           );
-          expect(await typography(side.getByText(questionText, { exact: true }))).toEqual(
-            await typography(main.getByText(questionText, { exact: true })),
-          );
-          expect(await typography(side.getByRole("textbox"))).toEqual(
-            await typography(
-              page.getByRole("textbox", {
-                name: "Chat composer",
-                exact: true,
-                includeHidden: true,
-              }),
-            ),
-          );
+          expect(await textStyle(side, questionText)).toEqual(await textStyle(main, questionText));
+          const composer = page.getByRole("textbox", {
+            name: "Chat composer",
+            exact: true,
+            includeHidden: true,
+          });
+          expect(await typography(side.getByRole("textbox"))).toEqual(await typography(composer));
           await side.getByRole("button", { name: "Copy code", exact: true }).click();
           await expect
             .poll(() => page.evaluate(() => navigator.clipboard.readText()))
@@ -87,11 +84,8 @@ suite.define(() => {
           await expect.poll(() => wrap.isVisible()).toBe(true);
           await wrap.click();
           expect(await wrap.getAttribute("aria-pressed")).toBe("true");
-          expect(
-            await side
-              .locator(".code-block-viewport code")
-              .evaluate((node) => getComputedStyle(node).whiteSpace),
-          ).toBe("pre-wrap");
+          const code = side.locator(".code-block-viewport code");
+          expect(await code.evaluate((node) => getComputedStyle(node).whiteSpace)).toBe("pre-wrap");
           // Questions use the same plain, non-collapsing code presentation as main-chat users.
           for (const surface of [main, side]) {
             const user = surface.locator(".chat-group.user");

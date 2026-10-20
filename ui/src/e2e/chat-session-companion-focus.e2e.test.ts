@@ -4,7 +4,10 @@ import { expect, it } from "vitest";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  installMockGateway,
+  type ControlUiMockGatewayScenario,
+} from "../test-helpers/control-ui-e2e.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import {
@@ -23,6 +26,23 @@ async function enterSideCommand(scope: Page | Locator, command: string): Promise
   await input.press("Enter");
 }
 
+const desktop = { viewport: { width: 1440, height: 900 } };
+const sideComposer = (scope: Page | Locator) =>
+  scope.getByRole("textbox", { name: "Ask in side chat", exact: true });
+const focused = (input: Locator) => input.evaluate((element) => document.activeElement === element);
+const expectFocus = (input: Locator) => expect.poll(() => focused(input)).toBe(true);
+async function openChat(page: Page, scenario?: ControlUiMockGatewayScenario) {
+  const gateway = await installMockGateway(page, scenario);
+  await page.goto(`${suite.server.baseUrl}chat`);
+  return gateway;
+}
+async function resolveAnswer(
+  gateway: Awaited<ReturnType<typeof installMockGateway>>,
+  answer = "A side conversation.",
+) {
+  await gateway.resolveDeferred("sessions.companion.ask", { answer, ts: 1 });
+}
+
 suite.define(() => {
   for (const viewport of [
     { width: 1440, height: 900 },
@@ -30,28 +50,21 @@ suite.define(() => {
   ]) {
     it(`focuses Side chat on open, reopen, and tab activation at ${viewport.width}px`, async () => {
       await suite.withPage({ viewport }, async ({ page }) => {
-        await installMockGateway(page);
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await openChat(page);
         await openChatSidePanelType(page, "Side chat");
-        const input = page.getByRole("textbox", { name: "Ask in side chat", exact: true });
-        await expect
-          .poll(() => input.evaluate((element) => document.activeElement === element))
-          .toBe(true);
+        const input = sideComposer(page);
+        await expectFocus(input);
         await page.keyboard.type("Ready to ask");
         expect(await input.inputValue()).toBe("Ready to ask");
 
         await selectChatLayoutAction(page, "Minimize side panel");
         await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
-        await expect
-          .poll(() => input.evaluate((element) => document.activeElement === element))
-          .toBe(true);
+        await expectFocus(input);
         expect(await input.inputValue()).toBe("Ready to ask");
 
         await openChatSidePanelType(page, "Files");
         await page.getByRole("tab", { name: "Side chat", exact: true }).click();
-        await expect
-          .poll(() => input.evaluate((element) => document.activeElement === element))
-          .toBe(true);
+        await expectFocus(input);
         await page.keyboard.type(" again");
         expect(await input.inputValue()).toBe("Ready to ask again");
       });
@@ -61,34 +74,29 @@ suite.define(() => {
   it.each(["/btw", "/side"])(
     "preserves newer main focus while %s opens a delayed rail",
     async (command) => {
-      await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
+      await suite.withPage(desktop, async ({ page }) => {
         const held = await holdModuleResponse(
           page,
           controlUiE2eBuiltModuleRequest("ui/src/pages/chat/components/chat-session-rail.tsx"),
         );
         try {
-          await installMockGateway(page);
-          await page.goto(`${suite.server.baseUrl}chat`);
+          await openChat(page);
           const mainInput = page.locator(".agent-chat__composer-shell textarea");
           await enterSideCommand(page, command);
           await held.request;
-          const sideInput = page.getByRole("textbox", { name: "Ask in side chat", exact: true });
+          const sideInput = sideComposer(page);
           expect(await sideInput.count()).toBe(0);
           expect(await mainInput.inputValue()).toBe("");
           await mainInput.click();
           held.release();
           await sideInput.waitFor();
-          expect(await mainInput.evaluate((element) => document.activeElement === element)).toBe(
-            true,
-          );
+          expect(await focused(mainInput)).toBe(true);
           await page.keyboard.type("Keep typing here");
           expect(await mainInput.inputValue()).toBe("Keep typing here");
           expect(await sideInput.inputValue()).toBe("");
           await page.getByRole("button", { name: "Close Side chat", exact: true }).click();
           await openChatSidePanelType(page, "Side chat");
-          await expect
-            .poll(() => sideInput.evaluate((element) => document.activeElement === element))
-            .toBe(true);
+          await expectFocus(sideInput);
         } finally {
           held.release();
         }
@@ -99,17 +107,16 @@ suite.define(() => {
   it.each(["close", "minimize", "switch tabs"])(
     "focuses a new Side chat opening after %s supersedes an unmounted command",
     async (action) => {
-      await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
+      await suite.withPage(desktop, async ({ page }) => {
         const held = await holdModuleResponse(
           page,
           controlUiE2eBuiltModuleRequest("ui/src/pages/chat/components/chat-session-rail.tsx"),
         );
         try {
-          await installMockGateway(page);
-          await page.goto(`${suite.server.baseUrl}chat`);
+          await openChat(page);
           await enterSideCommand(page, "/btw");
           await held.request;
-          const sideInput = page.getByRole("textbox", { name: "Ask in side chat", exact: true });
+          const sideInput = sideComposer(page);
           expect(await sideInput.count()).toBe(0);
           await page.getByRole("tab", { name: "Side chat", exact: true }).waitFor();
           if (action === "close") {
@@ -127,9 +134,7 @@ suite.define(() => {
           } else {
             await page.getByRole("tab", { name: "Side chat", exact: true }).click();
           }
-          await expect
-            .poll(() => sideInput.evaluate((element) => document.activeElement === element))
-            .toBe(true);
+          await expectFocus(sideInput);
           await page.keyboard.type("New opening");
           expect(await sideInput.inputValue()).toBe("New opening");
         } finally {
@@ -140,17 +145,14 @@ suite.define(() => {
   );
 
   it("opens Side chat when selecting /btw from the slash menu", async () => {
-    await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
-      await installMockGateway(page);
-      await page.goto(`${suite.server.baseUrl}chat`);
+    await suite.withPage(desktop, async ({ page }) => {
+      await openChat(page);
       const mainInput = page.locator(".agent-chat__composer-shell textarea");
       await mainInput.fill("/bt");
       await page.locator(".chat-send-btn--send:enabled").waitFor({ state: "visible" });
       await page.getByRole("option").filter({ hasText: "/btw" }).click();
-      const input = page.getByRole("textbox", { name: "Ask in side chat", exact: true });
-      await expect
-        .poll(() => input.evaluate((element) => document.activeElement === element))
-        .toBe(true);
+      const input = sideComposer(page);
+      await expectFocus(input);
       expect(await mainInput.inputValue()).toBe("");
     });
   });
@@ -158,18 +160,15 @@ suite.define(() => {
   it.each([false, true])(
     "submits a side question and focuses its composer with panel open=%s",
     async (open) => {
-      await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
-        const gateway = await installMockGateway(page, {
+      await suite.withPage(desktop, async ({ page }) => {
+        const gateway = await openChat(page, {
           deferredMethods: ["sessions.companion.ask"],
         });
-        await page.goto(`${suite.server.baseUrl}chat`);
-        const input = page.getByRole("textbox", { name: "Ask in side chat", exact: true });
+        const input = sideComposer(page);
         if (open) {
           await openChatSidePanelType(page, "Side chat");
           // Complete the opening's focus handoff before filling the main composer.
-          await expect
-            .poll(() => input.evaluate((element) => document.activeElement === element))
-            .toBe(true);
+          await expectFocus(input);
         }
         const mainInput = page.locator(".agent-chat__composer-shell textarea");
         await enterSideCommand(page, "/btw what is this?");
@@ -177,14 +176,9 @@ suite.define(() => {
         expect(request.params).toMatchObject({ question: "what is this?" });
         await page.locator(".chat-session-rail__exchange--pending").waitFor();
         expect(await input.isDisabled()).toBe(false);
-        await gateway.resolveDeferred("sessions.companion.ask", {
-          answer: "A side conversation.",
-          ts: 1,
-        });
+        await resolveAnswer(gateway);
         await page.getByText("A side conversation.", { exact: true }).waitFor();
-        await expect
-          .poll(() => input.evaluate((element) => document.activeElement === element))
-          .toBe(true);
+        await expectFocus(input);
         expect(await mainInput.inputValue()).toBe("");
         await page.keyboard.type("Follow up");
         expect(await input.inputValue()).toBe("Follow up");
@@ -197,10 +191,9 @@ suite.define(() => {
     "cancels deferred side-chat focus after switching panes, returning=%s",
     async (returnToFirstPane) => {
       await suite.withPage({ viewport: { width: 2200, height: 1000 } }, async ({ page }) => {
-        const gateway = await installMockGateway(page, {
+        const gateway = await openChat(page, {
           deferredMethods: ["sessions.companion.ask"],
         });
-        await page.goto(`${suite.server.baseUrl}chat`);
         await selectChatLayoutAction(page, "Open split view");
         const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
         await expect.poll(() => panes.count()).toBe(2);
@@ -208,9 +201,7 @@ suite.define(() => {
         const secondInput = panes.last().locator(".agent-chat__composer-shell textarea");
         await enterSideCommand(panes.first(), "/btw what is this?");
         await gateway.waitForRequest("sessions.companion.ask");
-        const sideInput = panes
-          .first()
-          .getByRole("textbox", { name: "Ask in side chat", exact: true });
+        const sideInput = sideComposer(panes.first());
         await page.locator(".chat-session-rail__exchange--pending").waitFor();
         expect(await sideInput.isDisabled()).toBe(false);
         await secondInput.fill("Keep typing here");
@@ -218,15 +209,10 @@ suite.define(() => {
         if (returnToFirstPane) {
           await firstInput.fill("Keep typing here");
         }
-        await gateway.resolveDeferred("sessions.companion.ask", {
-          answer: "A side conversation.",
-          ts: 1,
-        });
+        await resolveAnswer(gateway);
         await panes.first().getByText("A side conversation.", { exact: true }).waitFor();
         await expect.poll(() => sideInput.isDisabled()).toBe(false);
-        expect(
-          await foregroundInput.evaluate((element) => document.activeElement === element),
-        ).toBe(true);
+        expect(await focused(foregroundInput)).toBe(true);
         await page.keyboard.type(".");
         expect(await foregroundInput.inputValue()).toBe("Keep typing here.");
         expect(await sideInput.inputValue()).toBe("");
@@ -235,8 +221,8 @@ suite.define(() => {
   );
 
   it("preserves main focus when the global session changes agent during a side question", async () => {
-    await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
+    await suite.withPage(desktop, async ({ page }) => {
+      const gateway = await openChat(page, {
         sessionKey: "global",
         sessionScope: "global",
         deferredMethods: ["sessions.companion.ask"],
@@ -258,7 +244,6 @@ suite.define(() => {
           },
         },
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
       const mainInput = page.locator(".agent-chat__composer-shell textarea");
       const sideInput = page.locator(".chat-session-rail__input");
       await enterSideCommand(page, "/btw what is this?");
@@ -272,11 +257,8 @@ suite.define(() => {
         context.agentSelection.set("work");
       });
       await expect.poll(() => sideInput.isDisabled()).toBe(false);
-      expect(await mainInput.evaluate((element) => document.activeElement === element)).toBe(true);
-      await gateway.resolveDeferred("sessions.companion.ask", {
-        answer: "Old agent answer",
-        ts: 1,
-      });
+      expect(await focused(mainInput)).toBe(true);
+      await resolveAnswer(gateway, "Old agent answer");
       await page.locator("openclaw-chat-pane").evaluate(async (pane) => {
         await (pane as HTMLElement & { updateComplete: Promise<unknown> }).updateComplete;
         const rail = pane.querySelector("openclaw-chat-session-rail") as HTMLElement & {
@@ -284,7 +266,7 @@ suite.define(() => {
         };
         await rail.updateComplete;
       });
-      expect(await mainInput.evaluate((element) => document.activeElement === element)).toBe(true);
+      expect(await focused(mainInput)).toBe(true);
       await page.keyboard.type("New agent draft");
       expect(await mainInput.inputValue()).toBe("New agent draft");
       expect(await sideInput.inputValue()).toBe("");
@@ -301,7 +283,7 @@ suite.define(() => {
     "sidebar menu",
     "sidebar menu before mount",
   ])("preserves newer input intent while a side answer is pending: %s", async (intent) => {
-    await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
+    await suite.withPage(desktop, async ({ page }) => {
       const held =
         intent === "sidebar menu before mount"
           ? await holdModuleResponse(
@@ -310,13 +292,12 @@ suite.define(() => {
             )
           : null;
       try {
-        const gateway = await installMockGateway(page, {
+        const gateway = await openChat(page, {
           deferredMethods: ["sessions.companion.ask"],
           sessions: [
             { key: "agent:main:sidebar-focus", label: "Sidebar focus", updatedAt: Date.now() },
           ],
         });
-        await page.goto(`${suite.server.baseUrl}chat`);
         const mainInput = page.locator(".agent-chat__composer-shell textarea");
         await enterSideCommand(page, "/btw what is this?");
         await gateway.waitForRequest("sessions.companion.ask");
@@ -362,16 +343,11 @@ suite.define(() => {
             await page.keyboard.press("Backspace");
           }
         }
-        await gateway.resolveDeferred("sessions.companion.ask", {
-          answer: "A side conversation.",
-          ts: 1,
-        });
+        await resolveAnswer(gateway);
         held?.release();
         await page.getByText("A side conversation.", { exact: true }).waitFor();
         await expect.poll(() => sideInput.isDisabled()).toBe(false);
-        expect(
-          await foregroundInput.evaluate((element) => document.activeElement === element),
-        ).toBe(true);
+        expect(await focused(foregroundInput)).toBe(true);
         await page.keyboard.type(".");
         expect(await foregroundInput.inputValue()).toBe(
           intent === "cleared draft" || intent === "click" || intent === "history"
@@ -388,17 +364,14 @@ suite.define(() => {
   it.each(["main", "side"])(
     "preserves the %s draft and focus when side-chat history loads",
     async (target) => {
-      await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
-        const gateway = await installMockGateway(page, {
+      await suite.withPage(desktop, async ({ page }) => {
+        const gateway = await openChat(page, {
           deferredMethods: ["sessions.companion.state"],
         });
-        await page.goto(`${suite.server.baseUrl}chat`);
         await gateway.waitForRequest("sessions.companion.state");
         await openChatSidePanelType(page, "Side chat");
-        const input = page.getByRole("textbox", { name: "Ask in side chat", exact: true });
-        await expect
-          .poll(() => input.evaluate((element) => document.activeElement === element))
-          .toBe(true);
+        const input = sideComposer(page);
+        await expectFocus(input);
         const mainInput = page.locator(".agent-chat__composer-shell textarea");
         const draftInput = target === "main" ? mainInput : input;
         await draftInput.fill("Keep typing here");
@@ -406,9 +379,7 @@ suite.define(() => {
           exchanges: [{ question: "What changed?", answer: "The introduction is ready.", ts: 1 }],
         });
         await page.getByText("The introduction is ready.", { exact: true }).waitFor();
-        expect(await draftInput.evaluate((element) => document.activeElement === element)).toBe(
-          true,
-        );
+        expect(await focused(draftInput)).toBe(true);
         await page.keyboard.type(".");
         expect(await draftInput.inputValue()).toBe("Keep typing here.");
         if (target === "side" && process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()) {

@@ -42,6 +42,8 @@ suite.define(() => {
         await openChatSidePanelType(page, "Side chat");
         const side = page.locator("openclaw-chat-session-rail");
         await side.getByText(sideAnswer, { exact: true }).waitFor();
+        const pending = side.locator(".chat-session-rail__exchange--pending");
+        const failed = side.locator(".chat-session-rail__exchange--error");
         const composer =
           entry === "side-composer"
             ? side.getByRole("textbox")
@@ -55,21 +57,12 @@ suite.define(() => {
             text.trim(),
           );
         await send(question);
-        await side.locator(".chat-session-rail__exchange--error").waitFor();
+        await failed.waitFor();
         await gateway.deferNext("sessions.companion.ask");
         await send(followup);
-        await side.locator(".chat-session-rail__exchange--pending").waitFor();
-        // Pending answers use the main transcript's working indicator, not a text hint.
-        await side
-          .locator(
-            ".chat-session-rail__exchange--pending .chat-working-indicator .chat-reading-indicator",
-          )
-          .waitFor();
-        expect(
-          await side
-            .locator(".chat-session-rail__exchange--pending .chat-session-rail__hint")
-            .count(),
-        ).toBe(0);
+        await pending.waitFor();
+        await pending.locator(".chat-working-indicator .chat-reading-indicator").waitFor();
+        expect(await pending.locator(".chat-session-rail__hint").count()).toBe(0);
         expect(await questions()).toEqual(["What changed?", question, followup]);
         expect(await side.locator(".chat-session-rail__retry").isDisabled()).toBe(true);
         await gateway.rejectDeferred("sessions.companion.ask", {
@@ -77,29 +70,23 @@ suite.define(() => {
           message: "Side chat timed out.",
           retryable: true,
         });
-        await expect
-          .poll(async () => side.locator(".chat-session-rail__exchange--error").count())
-          .toBe(2);
+        await expect.poll(async () => failed.count()).toBe(2);
         await gateway.deferNext("sessions.companion.ask");
         await side.locator(".chat-session-rail__retry").first().click();
-        await side.locator(".chat-session-rail__exchange--pending").waitFor();
+        await pending.waitFor();
         expect(await questions()).toEqual(["What changed?", question, followup]);
-        expect(
-          await side
-            .locator(".chat-session-rail__exchange--pending .chat-session-rail__question")
-            .textContent(),
-        ).toContain(question);
+        expect(await pending.locator(".chat-session-rail__question").textContent()).toContain(
+          question,
+        );
         await gateway.resolveDeferred("sessions.companion.ask", {
           answer: "Retry recovered the answer.",
           ts: 2000,
         });
         await side.getByText("Retry recovered the answer.", { exact: true }).waitFor();
         expect(await questions()).toEqual(["What changed?", question, followup]);
-        expect(
-          await side
-            .locator(".chat-session-rail__exchange--error .chat-session-rail__question")
-            .textContent(),
-        ).toContain(followup);
+        expect(await failed.locator(".chat-session-rail__question").textContent()).toContain(
+          followup,
+        );
         expect(await page.getByText(mainAnswer, { exact: true }).isVisible()).toBe(true);
         expect(await side.getByText(sideAnswer, { exact: true }).isVisible()).toBe(true);
         expect(
@@ -109,9 +96,9 @@ suite.define(() => {
           { sessionKey, agentId: "main", question: followup },
           { sessionKey, agentId: "main", question },
         ]);
-        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-        expect(await gateway.getRequests("sessions.reset")).toHaveLength(0);
-        expect(await gateway.getRequests("sessions.companion.reset")).toHaveLength(0);
+        for (const method of ["chat.send", "sessions.reset", "sessions.companion.reset"]) {
+          expect(await gateway.getRequests(method)).toHaveLength(0);
+        }
         expect(errors).toEqual([]);
       });
     },
