@@ -375,7 +375,7 @@ async function runBoundTurn(params: {
             // turn/start resolves the loaded thread before submitting any input.
             // Only that exact RPC rejection permits replay, never a transport failure.
             if (
-              !incognito &&
+              !params.incognito &&
               error instanceof CodexAppServerRpcError &&
               error.method === "turn/start" &&
               error.code === -32_600 &&
