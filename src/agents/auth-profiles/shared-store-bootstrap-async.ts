@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { getRuntimeConfigSnapshot } from "../../config/config.js";
 import {
   assertDatabasePathIdentity,
   inspectDatabasePathIdentitySync,
@@ -11,6 +12,7 @@ import {
 } from "../../infra/sqlite-worker-operation-admission.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
+import { resolveLegacyInheritedAuthSourceAgentDir } from "../legacy-inherited-auth-dir.js";
 import { reportCommittedInlineAuthFailure } from "./constants.js";
 import { resolveLegacyAuthProfileSourceCandidates } from "./legacy-source-files.js";
 import {
@@ -19,7 +21,6 @@ import {
   parseSharedAuthStoreOwnership,
   resolveSharedAuthStoreOwnershipAsync,
 } from "./path-resolve.js";
-import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
 import {
   hasInspectedLegacySharedAuthOwnership,
   isSharedAuthProfileWrite,
@@ -54,16 +55,21 @@ export async function prepareFreshSharedAuthStoreWriteAsync(params: {
     params.assertCurrent?.();
     return false;
   }
-  const sourcePath = path.join(resolveSharedMainAuthAgentDir(params.env), "openclaw-agent.sqlite");
+  const sourceDir = resolveLegacyInheritedAuthSourceAgentDir(
+    getRuntimeConfigSnapshot() ?? undefined,
+    params.env,
+  );
+  const sourcePath = path.join(sourceDir, "openclaw-agent.sqlite");
   let sourceIdentity: ReturnType<typeof inspectDatabasePathIdentitySync>;
   try {
     sourceIdentity = inspectDatabasePathIdentitySync(sourcePath);
   } catch {
     // Preserve Doctor ownership when the source cannot even be inspected.
   }
-  const legacySourcePaths = resolveLegacyAuthProfileSourceCandidates({ env: params.env }).map(
-    ({ path: source }) => source,
-  );
+  const legacySourcePaths = resolveLegacyAuthProfileSourceCandidates({
+    agentDir: sourceDir,
+    env: params.env,
+  }).map(({ path: source }) => source);
   const legacySourcesPresent = legacySourcePaths.map((source) => fs.existsSync(source));
   const commits = watchAuthProfileNativeCommits(sourcePath);
   const unchanged = commits.capture();

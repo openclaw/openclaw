@@ -10,7 +10,6 @@ import {
   noteCommittedSharedAuthStoreOwnership,
 } from "../agents/auth-profiles/path-resolve.js";
 import { prepareSharedAuthStoreOwnershipForNative as resolveSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.native.js";
-import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import {
   hasPendingSharedAuthCleanup,
   inspectSharedAuthLegacyRowsReadOnly,
@@ -26,6 +25,9 @@ import {
   closeAuthProfileReadPool,
   resolveAuthProfileDatabaseOwnerId,
 } from "../agents/auth-profiles/sqlite.js";
+import { resolveLegacyInheritedAuthSourceAgentDir } from "../agents/legacy-inherited-auth-dir.js";
+import { getRuntimeConfigSnapshot } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import {
@@ -458,12 +460,19 @@ async function cleanupSourceRows(params: {
 /** Detect relocation or unfinished cleanup only in the explicit Doctor repair path. */
 export function detectSharedAuthStoreMigration(params: {
   stateDir: string;
+  config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   doctorOnlyStateMigrations?: boolean;
   artifactPreservingReadOnly?: boolean;
 }): SharedAuthStoreMigrationDetection {
   const env = { ...(params.env ?? process.env), OPENCLAW_STATE_DIR: params.stateDir };
-  const sourcePath = path.join(resolveSharedMainAuthAgentDir(env), "openclaw-agent.sqlite");
+  const sourcePath = path.join(
+    resolveLegacyInheritedAuthSourceAgentDir(
+      params.config ?? getRuntimeConfigSnapshot() ?? undefined,
+      env,
+    ),
+    "openclaw-agent.sqlite",
+  );
   if (params.doctorOnlyStateMigrations !== true) {
     return { sourcePath, hasLegacy: false };
   }

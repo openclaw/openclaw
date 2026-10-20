@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { getRuntimeConfigSnapshot } from "../../config/config.js";
 import { assertEngineStoreExecutionAllowed } from "../../infra/database-engine/admission-scope.js";
 import { hasErrnoCode } from "../../infra/errno.js";
 import { executeWithCachedStatement } from "../../infra/kysely-sync-cache-state.js";
@@ -23,6 +24,7 @@ import {
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import { resolveUserPath } from "../../utils.js";
+import { resolveLegacyInheritedAuthSourceAgentDir } from "../legacy-inherited-auth-dir.js";
 import { listLegacyAuthProfileSources } from "./legacy-source-files.js";
 import {
   noteCommittedSharedAuthStoreOwnership,
@@ -284,9 +286,13 @@ function initializeFreshSharedAuthStore(env: NodeJS.ProcessEnv): void {
   if (ownership.location === "state-db" || inspectedLegacySharedAuthOwnerships.has(ownership)) {
     return;
   }
-  const sourcePath = path.join(resolveSharedMainAuthAgentDir(env), "openclaw-agent.sqlite");
+  const sourceDir = resolveLegacyInheritedAuthSourceAgentDir(
+    getRuntimeConfigSnapshot() ?? undefined,
+    env,
+  );
+  const sourcePath = path.join(sourceDir, "openclaw-agent.sqlite");
   try {
-    if (listLegacyAuthProfileSources({ env }).length > 0) {
+    if (listLegacyAuthProfileSources({ agentDir: sourceDir, env }).length > 0) {
       inspectedLegacySharedAuthOwnerships.add(ownership);
       return;
     }

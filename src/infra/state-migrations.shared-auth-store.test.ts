@@ -16,6 +16,7 @@ import {
   saveAuthProfileStore,
 } from "../agents/auth-profiles/store-runtime.js";
 import { upsertAuthProfileWithLockOrThrow } from "../agents/auth-profiles/upsert-with-lock.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -287,6 +288,31 @@ it.each([false, true])("records ownership only (source=%s)", async (hasSource) =
   expect(ownership.resolveSharedAuthStoreOwnership(fixture.env)).toEqual({
     location: "state-db",
   });
+});
+
+it("uses a configured non-main inheritance owner as the migration source", async () => {
+  const fixture = await createEmptyFixture(false);
+  const ownerDir = path.join(fixture.stateDir, "agents", "ops", "agent");
+  const ownerStore = makeStore("openai:inherited", "inherited-key");
+  sqlite.writePersistedAuthProfileStoreRaw(ownerStore, ownerDir);
+  const config: OpenClawConfig = {
+    agents: {
+      defaults: { authInheritance: { agentId: "ops" } },
+      entries: { main: {}, ops: {} },
+    },
+  };
+  const detected = fixture.detect({ config });
+
+  expect(detected).toEqual({
+    sourcePath: sqlite.resolveAuthProfileDatabasePath(ownerDir),
+    hasLegacy: true,
+  });
+  expect(await fixture.migrate(detected)).toMatchObject({
+    warnings: [],
+    changes: [expect.stringContaining("Relocated shared auth")],
+  });
+  expect(sharedAuth(fixture.env).store).toEqual(ownerStore);
+  expect(localAuth(ownerDir).store).toBeNull();
 });
 
 it("moves exact rows, preserves every effective agent store, and records receipts", async () => {

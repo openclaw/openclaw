@@ -1,7 +1,9 @@
 import fs from "node:fs";
+import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
@@ -31,6 +33,7 @@ import { updateAuthProfileStoreWithLock } from "./store-runtime.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
+  clearRuntimeConfigSnapshot();
   clearRuntimeAuthProfileStoreSnapshots();
 });
 
@@ -77,6 +80,28 @@ it.each(["missing", "credentials"] as const)(
     });
   },
 );
+
+it("keeps legacy ownership when the configured inheritance owner has credentials", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env, stateDir }) => {
+    const ownerDir = path.join(stateDir, "agents", "ops", "agent");
+    const ownerPath = resolveAuthProfileDatabasePath(ownerDir);
+    const database = openOpenClawAgentDatabase({ agentId: "ops", path: ownerPath, env });
+    writeAuthProfileJsonCell(database.db, "store", "agent", { version: 1, profiles: {} });
+    const config = {
+      agents: {
+        defaults: { authInheritance: { agentId: "ops" } },
+        entries: { main: {}, ops: {} },
+      },
+    };
+    setRuntimeConfigSnapshot(config, config);
+    await prepareActor(env);
+
+    const prepared = await prepareAuthProfileWriteTransactionAsync(undefined, { env });
+
+    expect(prepared.sharedOwner.location).toBe("legacy-main");
+    expect(readConfigMachineState(SHARED_AUTH_STORE_STATE_KEY, { env })).toBeUndefined();
+  });
+});
 
 it("holds an empty legacy source against a foreign writer through shared commit admission", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {

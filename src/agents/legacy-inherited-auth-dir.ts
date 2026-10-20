@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveAgentDir, tryResolveLegacyDataOwnerAgentId } from "./agent-scope-config.js";
 import { getPreparedSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
+import { resolveSharedMainAuthAgentDir } from "./auth-profiles/shared-main-dir.js";
 
 export function resolveLegacyInheritedAuthAgentId(config: OpenClawConfig): string {
   return (
@@ -19,6 +20,16 @@ export function resolveLegacyInheritedAuthAgentDir(
   env: NodeJS.ProcessEnv = process.env,
 ): string {
   return resolveAgentDir(config, resolveLegacyInheritedAuthAgentId(config), env);
+}
+
+/** Select the legacy source that shared-store cutover must preserve for inherited auth. */
+export function resolveLegacyInheritedAuthSourceAgentDir(
+  config: OpenClawConfig | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  return env.OPENCLAW_AGENT_DIR?.trim() || !config
+    ? resolveSharedMainAuthAgentDir(env)
+    : resolveLegacyInheritedAuthAgentDir(config, env);
 }
 
 export function resolveLegacyInheritedAuthDir(
