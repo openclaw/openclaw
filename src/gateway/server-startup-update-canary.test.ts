@@ -1,13 +1,15 @@
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
+import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { withAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
-import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import type { GatewayServer } from "./server-public.js";
+import { createStartupTestState } from "./server-startup.test-support.js";
 
-let state: Awaited<ReturnType<typeof createOpenClawTestState>> | undefined;
+let state: Awaited<ReturnType<typeof createStartupTestState>> | undefined;
 let claim: Awaited<ReturnType<typeof acquireTestPortBlock>> | undefined;
 let server: GatewayServer | undefined;
-const loadedPlugins: string[] = [];
+const pluginId = "canary-startup-fixture";
+let loadedPlugin: { id: string; status: string } | undefined;
 const deferredCalls: string[] = [];
 
 function rejectDeferredWork(name: string): never {
@@ -17,27 +19,12 @@ function rejectDeferredWork(name: string): never {
 
 beforeAll(async () => {
   claim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
-  state = await createOpenClawTestState({
-    label: "gateway-update-canary-startup",
-    env: {
-      OPENCLAW_GATEWAY_PASSWORD: undefined,
-      OPENCLAW_GATEWAY_TOKEN: undefined,
-      OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_PROVIDERS: "1",
-    },
+  state = await createStartupTestState("gateway-update-canary-startup", {
+    OPENCLAW_GATEWAY_PASSWORD: undefined,
+    OPENCLAW_GATEWAY_TOKEN: undefined,
+    OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
   });
-  const pluginId = "canary-startup-fixture";
-  await state.writeJson("plugin/package.json", {
-    name: pluginId,
-    version: "1.0.0",
-    type: "module",
-    openclaw: { extensions: ["./index.mjs"] },
-  });
+  await state.writeJson("plugin/package.json", { openclaw: { extensions: ["./index.mjs"] } });
   await state.writeJson("plugin/openclaw.plugin.json", {
     id: pluginId,
     activation: { onStartup: true },
@@ -105,28 +92,22 @@ beforeAll(async () => {
   });
   for (const result of pluginLoad.mock.results) {
     if (result.type === "return") {
-      const loaded = await result.value;
-      loadedPlugins.push(
-        ...loaded.pluginRegistry.plugins
-          .filter((plugin) => plugin.status === "loaded")
-          .map((plugin) => plugin.id),
-      );
+      const {
+        pluginRegistry: { plugins: registered },
+      } = await result.value;
+      loadedPlugin ??= registered.find((item) => item.id === pluginId && item.status === "loaded");
     }
   }
 });
 
-afterAll(async () => {
-  try {
-    await server?.close({ reason: "update canary startup proof complete" });
-  } finally {
-    vi.restoreAllMocks();
-    try {
-      await state?.cleanup();
-    } finally {
-      await claim?.release();
-    }
-  }
-});
+afterAll(() =>
+  runQaGatewayFixture(
+    async () => server?.close({ reason: "update canary startup proof complete" }),
+    () => vi.restoreAllMocks(),
+    () => state?.cleanup(),
+    () => claim?.release(),
+  ),
+);
 
 it("serves candidate readiness without starting normal Gateway maintenance", async () => {
   const health = { startupz: { status: "started" }, readyz: { ready: true } };
@@ -135,6 +116,6 @@ it("serves candidate readiness without starting normal Gateway maintenance", asy
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject(body);
   }
-  expect(loadedPlugins).toContain("canary-startup-fixture");
+  expect(loadedPlugin).toMatchObject({ id: pluginId, status: "loaded" });
   expect(deferredCalls).toEqual([]);
 });

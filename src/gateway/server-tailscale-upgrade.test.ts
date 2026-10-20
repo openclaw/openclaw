@@ -34,9 +34,9 @@ describe("managed Tailscale upgrade", () => {
     return marker;
   };
 
-  let exposure: ReturnType<typeof startGatewayTailscaleExposure> | undefined;
+  let cleanup: Awaited<ReturnType<typeof startGatewayTailscaleExposure>>;
   beforeEach(() => {
-    exposure = undefined;
+    cleanup = null;
     const env = captureEnv([
       "OPENCLAW_TEST_TAILSCALE_BINARY",
       "OPENCLAW_TEST_TAILSCALE_FIXTURE_MARKER",
@@ -45,18 +45,15 @@ describe("managed Tailscale upgrade", () => {
     ]);
     return async () => {
       try {
-        await exposure?.then(
-          (cleanup) => cleanup?.(),
-          () => undefined,
-        );
+        await cleanup?.();
       } finally {
         env.restore();
       }
     };
   });
 
-  const expose = (mode: "serve" | "funnel", port = 18789, info = vi.fn()) =>
-    (exposure = startGatewayTailscaleExposure({
+  const expose = async (mode: "serve" | "funnel", port = 18789, info = vi.fn()) =>
+    (cleanup = await startGatewayTailscaleExposure({
       tailscaleMode: mode,
       port,
       backend: { host: "127.0.0.1", port: 19000 },
@@ -100,9 +97,8 @@ describe("managed Tailscale upgrade", () => {
     ],
   ])("does not modify a %s", async (_label, config, recovery = /--https=443 --set-path=\/ off/) => {
     const marker = await installFixture(config, "serve");
-    const before = await readFile(marker, "utf8");
     await expect(expose("serve")).rejects.toThrow(recovery);
-    expect(await readFile(marker, "utf8")).toBe(before);
+    expect(await readFile(marker, "utf8")).toBe(JSON.stringify(config));
   });
 
   it("does not mutate an independent Tailscale Service", async () => {

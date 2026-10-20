@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import { createServer } from "node:https";
 import type { TlsOptions } from "node:tls";
 import { beforeEach, expect, it, vi } from "vitest";
-import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
+import * as pem from "../../test/helpers/tls-fixture.js";
 import type { GatewayTlsRuntime } from "../infra/tls/gateway.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -14,19 +14,16 @@ import { startGatewayTlsRenewal } from "./server-tls-renewal.js";
 const mocks = vi.hoisted(() => ({ watchFile: vi.fn(), unwatchFile: vi.fn(), load: vi.fn() }));
 vi.mock("node:fs", () => ({ watchFile: mocks.watchFile, unwatchFile: mocks.unwatchFile }));
 vi.mock("../infra/tls/gateway.js", () => ({ loadGatewayTlsServerRuntime: mocks.load }));
+const { TEST_TLS_CERT_PEM: cert, TEST_TLS_KEY_PEM: key } = pem;
+const fingerprint = "same-leaf-fingerprint";
 
 function material(ca?: TlsOptions["ca"]) {
   return {
     enabled: true,
     certPath: "/synthetic/cert.pem",
     keyPath: "/synthetic/key.pem",
-    fingerprintSha256: "same-leaf-fingerprint",
-    tlsOptions: {
-      cert: TEST_TLS_CERT_PEM,
-      key: TEST_TLS_KEY_PEM,
-      minVersion: "TLSv1.3",
-      ...(ca ? { ca } : {}),
-    },
+    fingerprintSha256: fingerprint,
+    tlsOptions: { cert, key, minVersion: "TLSv1.3", ...(ca ? { ca } : {}) },
   } satisfies GatewayTlsRuntime;
 }
 
@@ -46,41 +43,25 @@ function createRenewal() {
   const server = createServer(runtime.tlsOptions);
   const publish = vi.spyOn(server, "setSecureContext");
   const onRenewed = vi.fn(async () => {});
-  const owner = startGatewayTlsRenewal({
-    scheduler,
-    runtime,
-    servers: [server],
-    enabled: true,
-    onRenewed,
-    log: { info: vi.fn(), warn: vi.fn() },
-  });
+  const log = { info: vi.fn(), warn: vi.fn() };
+  const options = { scheduler, runtime, servers: [server], enabled: true, onRenewed, log };
+  const owner = startGatewayTlsRenewal(options);
   if (!owner) {
     throw new Error("TLS renewal owner was not created");
   }
-  return {
-    owner,
-    runtime,
-    publish,
-    watcher,
-    onRenewed,
-    clock,
-    scheduler,
-    started,
-    loaded,
-    wake: clock.advanceBy(300),
-  };
+  const read = { started, loaded, wake: clock.advanceBy(300) };
+  const events = { publish, onRenewed };
+  return { owner, runtime, watcher, clock, scheduler, read, events };
 }
 
 let tls: ReturnType<typeof createRenewal>;
 beforeEach(async () => {
-  for (const mock of Object.values(mocks)) {
-    mock.mockReset();
-  }
+  Object.values(mocks).forEach((mock) => mock.mockReset());
   tls = createRenewal();
-  await tls.started.promise;
+  await tls.read.started.promise;
   return async () => {
-    tls.loaded.resolve(material());
-    await Promise.all([tls.wake, tls.owner.stop(), tls.scheduler.stop()]);
+    tls.read.loaded.resolve(material());
+    await Promise.all([tls.read.wake, tls.owner.stop(), tls.scheduler.stop()]);
     expect(tls.watcher.listenerCount("all")).toBe(0);
   };
 });
@@ -95,48 +76,42 @@ it.each(["renewal", "scheduler"] as const)(
     });
     await Promise.resolve();
     expect(stopped).toBe(false);
-    tls.loaded.resolve({ ...material(TEST_TLS_CERT_PEM), fingerprintSha256: "retired" });
-    await Promise.all([tls.wake, stopping]);
+    tls.read.loaded.resolve({ ...material(cert), fingerprintSha256: "retired" });
+    await Promise.all([tls.read.wake, stopping]);
     expect(stopped).toBe(true);
-    expect([tls.publish.mock.calls, tls.onRenewed.mock.calls]).toEqual([[], []]);
-    expect(tls.runtime.fingerprintSha256).toBe("same-leaf-fingerprint");
+    expect([tls.events.publish.mock.calls, tls.events.onRenewed.mock.calls]).toEqual([[], []]);
+    expect(tls.runtime.fingerprintSha256).toBe(fingerprint);
   },
 );
 
-it("debounces file changes, ignores an older read, and adopts a CA change with the same leaf", async () => {
-  const next = material(TEST_TLS_CERT_PEM);
-  mocks.load.mockResolvedValueOnce(next);
-  const acceptedOptions = tls.runtime.tlsOptions;
-  tls.watcher.emit("all", "change", "/synthetic/cert.pem");
-  await tls.clock.advanceBy(200);
-  tls.watcher.emit("all", "change", "/synthetic/key.pem");
-  tls.loaded.resolve({ ...material([TEST_TLS_CERT_PEM]), fingerprintSha256: "stale" });
-  await tls.wake;
-  await tls.clock.advanceBy(299);
-  expect(mocks.load).toHaveBeenCalledOnce();
-  await tls.clock.advanceBy(1);
-  expect(mocks.load).toHaveBeenCalledTimes(2);
-  expect(tls.publish).toHaveBeenCalledExactlyOnceWith(next.tlsOptions);
-  expect(tls.runtime.tlsOptions).toBe(acceptedOptions);
-  expect(tls.runtime).toMatchObject({
-    tlsOptions: { ca: TEST_TLS_CERT_PEM },
-    fingerprintSha256: "same-leaf-fingerprint",
-  });
-  expect(tls.onRenewed).toHaveBeenCalledOnce();
-});
-
-it("fences a read when disabled and reconciles on re-enable without another file event", async () => {
-  const next = material(TEST_TLS_CERT_PEM);
-  mocks.load.mockResolvedValueOnce(next);
-  tls.owner.setEnabled(false);
-  tls.loaded.resolve({ ...material([TEST_TLS_CERT_PEM]), fingerprintSha256: "disabled" });
-  tls.watcher.emit("all", "change", "/synthetic/key.pem");
-  await tls.wake;
-  await tls.clock.advanceBy(300);
-  expect(tls.publish).not.toHaveBeenCalled();
-  expect(mocks.load).toHaveBeenCalledOnce();
-  tls.owner.setEnabled(true);
-  await tls.clock.advanceBy(300);
-  expect(tls.publish).toHaveBeenCalledExactlyOnceWith(next.tlsOptions);
-  expect(tls.onRenewed).toHaveBeenCalledOnce();
-});
+it.each(["debounce", "re-enable"] as const)(
+  "rejects stale reads and adopts same-leaf CA changes after %s",
+  async (mode) => {
+    const disabled = mode === "re-enable";
+    const next = material(cert);
+    mocks.load.mockResolvedValueOnce(next);
+    const acceptedOptions = tls.runtime.tlsOptions;
+    const stale = { ...material([cert]), fingerprintSha256: "stale" };
+    if (disabled) {
+      tls.owner.setEnabled(false);
+    } else {
+      tls.watcher.emit("all", "change", "/synthetic/cert.pem");
+      await tls.clock.advanceBy(200);
+    }
+    tls.watcher.emit("all", "change", "/synthetic/key.pem");
+    tls.read.loaded.resolve(stale);
+    await tls.read.wake;
+    await tls.clock.advanceBy(disabled ? 300 : 299);
+    expect(tls.events.publish).not.toHaveBeenCalled();
+    expect(mocks.load).toHaveBeenCalledOnce();
+    if (disabled) {
+      tls.owner.setEnabled(true);
+    }
+    await tls.clock.advanceBy(disabled ? 300 : 1);
+    expect(mocks.load).toHaveBeenCalledTimes(2);
+    expect(tls.events.publish).toHaveBeenCalledExactlyOnceWith(next.tlsOptions);
+    expect(tls.runtime.tlsOptions).toBe(acceptedOptions);
+    expect(tls.runtime).toMatchObject({ tlsOptions: { ca: cert }, fingerprintSha256: fingerprint });
+    expect(tls.events.onRenewed).toHaveBeenCalledOnce();
+  },
+);
