@@ -216,8 +216,7 @@ export async function completeReplyAgentRun(input: {
       });
       pendingText = stripped.shouldSkip ? "" : stripped.text || pendingText;
     }
-    // The observer or message tool already committed these replies to chat history.
-    // Their live notifications need no second durable delivery state machine.
+    // Committed text/media needs no second delivery state machine; other parts still do.
     const canUseLocalTranscript =
       isInternalSourceReplyChannel(sessionCtx) && !prepared.reminderNoteAppended;
     const sendableFinalPayloads = sourceReplyPolicy.suppressDelivery
@@ -230,16 +229,14 @@ export async function completeReplyAgentRun(input: {
             canUseLocalTranscript &&
             (metadata?.localTranscriptDeliveryConfirmed === true || committedSourceReply) &&
             !metadata?.assistantMediaFailures?.length &&
-            (committedSourceReply ||
-              (!payload.mediaUrl &&
-                !payload.mediaUrls?.length &&
-                !payload.attachments?.length &&
-                !payload.presentation &&
-                !payload.interactive &&
-                !payload.channelData &&
-                !payload.location &&
-                !payload.btw &&
-                !payload.delivery)) &&
+            (committedSourceReply || (!payload.mediaUrl && !payload.mediaUrls?.length)) &&
+            !payload.attachments?.length &&
+            !payload.presentation &&
+            !payload.interactive &&
+            !payload.channelData &&
+            !payload.location &&
+            !payload.btw &&
+            !payload.delivery &&
             !payload.spokenText &&
             !payload.ttsSupplement &&
             !metadata?.responsePrefix &&
