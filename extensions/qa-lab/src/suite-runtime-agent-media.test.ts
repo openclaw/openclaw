@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 const fetchJsonMock = vi.hoisted(() => vi.fn());
 const patchConfigMock = vi.hoisted(() =>
@@ -9,15 +9,13 @@ const patchConfigMock = vi.hoisted(() =>
 const readConfigSnapshotMock = vi.hoisted(() =>
   vi.fn(async () => ({ hash: "hash", config: { plugins: { allow: [] as string[] } } })),
 );
-const waitForGatewayHealthyMock = vi.hoisted(() => vi.fn(async () => undefined));
-const waitForTransportReadyMock = vi.hoisted(() => vi.fn(async () => undefined));
 
 vi.mock("./suite-runtime-gateway.js", () => ({
   fetchJson: fetchJsonMock,
   patchConfig: patchConfigMock,
   readConfigSnapshot: readConfigSnapshotMock,
-  waitForGatewayHealthy: waitForGatewayHealthyMock,
-  waitForTransportReady: waitForTransportReadyMock,
+  waitForGatewayHealthy: vi.fn(async () => undefined),
+  waitForTransportReady: vi.fn(async () => undefined),
 }));
 
 import {
@@ -52,86 +50,80 @@ function request(mediaPath: string, allInputText = "prompt snippet") {
 
 afterEach(cleanup);
 
-describe("qa suite runtime agent media helpers", () => {
-  beforeEach(() => {
-    fetchJsonMock.mockReset();
-    patchConfigMock.mockClear();
-    readConfigSnapshotMock.mockReset();
-    readConfigSnapshotMock.mockResolvedValue({ hash: "hash", config: { plugins: { allow: [] } } });
-    waitForGatewayHealthyMock.mockClear();
-    waitForTransportReadyMock.mockClear();
-  });
+beforeEach(() => {
+  fetchJsonMock.mockReset();
+  patchConfigMock.mockClear();
+  readConfigSnapshotMock.mockReset();
+  readConfigSnapshotMock.mockResolvedValue({ hash: "hash", config: { plugins: { allow: [] } } });
+});
 
-  it("extracts an attachment after invalid URLs and attachment entries", () => {
-    expect(
-      extractMediaPathFromText(
-        '{"details":{"media":{"mediaUrls":[null," ",false],"attachments":[null,[],false,{},{"path":" /tmp/from-attachment.png "}]}}}',
-      ),
-    ).toBe("/tmp/from-attachment.png");
-  });
-
-  it.each([
-    undefined,
-    "done",
-    "null",
+it.each([
+  [
+    '{"details":{"media":{"mediaUrls":[null," ",false],"attachments":[null,[],false,{},{"path":" /tmp/from-attachment.png "}]}}}',
+    "/tmp/from-attachment.png",
+  ],
+  [undefined, undefined],
+  ["done", undefined],
+  ["null", undefined],
+  [
     '{"details":{"media":{"mediaUrl":false,"path":" ","filePath":0,"mediaUrls":[null,false,""],"attachments":[null,[],{},{"path":false}]}}}',
-  ])("returns no media path for invalid or empty tool output %j", (text) => {
-    expect(extractMediaPathFromText(text)).toBeUndefined();
+    undefined,
+  ],
+])("extracts the media path from %j", (text, expected) => {
+  expect(extractMediaPathFromText(text)).toBe(expected);
+});
+
+it("resolves generated image paths from mock request logs first", async () => {
+  const tempRoot = await makeTempDir("qa-generated-image-request-");
+  const mediaPath = await writeImage(tempRoot, "generated.png");
+  fetchJsonMock.mockResolvedValue([request("/tmp/other.png", "irrelevant"), request(mediaPath)]);
+
+  await expect(resolveImage(tempRoot)).resolves.toBe(mediaPath);
+  expect(fetchJsonMock.mock.calls).toEqual([[expect.any(String), expect.any(Number)]]);
+  expect(fetchJsonMock.mock.calls[0]?.[1]).toBeLessThanOrEqual(2_000);
+});
+
+it.each(["missing", "stale"] as const)(
+  "ignores %s generated media paths returned by matching mock requests",
+  async (artifactState) => {
+    const tempRoot = await makeTempDir("qa-generated-image-invalid-request-");
+    const freshMediaPath = await writeImage(tempRoot, "state/media/outbound/fresh-generated.png");
+    const invalidMediaPath = path.join(tempRoot, `invalid-${artifactState}.png`);
+    if (artifactState === "stale") {
+      await writeImage(tempRoot, `invalid-${artifactState}.png`);
+      const staleTimestamp = new Date(Date.now() - 60_000);
+      await fs.utimes(invalidMediaPath, staleTimestamp, staleTimestamp);
+    }
+    fetchJsonMock.mockResolvedValue([request(invalidMediaPath)]);
+
+    await expect(resolveImage(tempRoot)).resolves.toBe(freshMediaPath);
+  },
+);
+
+it("falls back to generated image files when mock request logs are unavailable", async () => {
+  fetchJsonMock.mockRejectedValue(new Error("mock debug unavailable"));
+  const tempRoot = await makeTempDir("qa-generated-image-");
+  const mediaPath = await writeImage(tempRoot, "state/media/tool-image-generation/generated.png");
+
+  await expect(resolveImage(tempRoot)).resolves.toBe(mediaPath);
+});
+it("preserves plugins already allowed by the gateway when configuring media", async () => {
+  readConfigSnapshotMock.mockResolvedValue({
+    hash: "hash",
+    config: { plugins: { allow: ["acpx", "openai", "anthropic", "qa-channel"] } },
   });
 
-  it("resolves generated image paths from mock request logs first", async () => {
-    const tempRoot = await makeTempDir("qa-generated-image-request-");
-    const mediaPath = await writeImage(tempRoot, "generated.png");
-    fetchJsonMock.mockResolvedValue([request("/tmp/other.png", "irrelevant"), request(mediaPath)]);
+  await ensureImageGenerationConfigured({
+    gateway: { runtimeEnv: {} },
+    providerMode: "mock-openai",
+    mock: { baseUrl: "http://127.0.0.1:9999" },
+    transport: { requiredPluginIds: ["qa-channel"] },
+  } as never);
 
-    await expect(resolveImage(tempRoot)).resolves.toBe(mediaPath);
-    expect(fetchJsonMock).toHaveBeenCalledOnce();
-    expect(fetchJsonMock).toHaveBeenCalledWith(expect.any(String), expect.any(Number));
-    expect(fetchJsonMock.mock.calls[0]?.[1]).toBeLessThanOrEqual(2_000);
-  });
-
-  it.each(["missing", "stale"] as const)(
-    "ignores %s generated media paths returned by matching mock requests",
-    async (artifactState) => {
-      const tempRoot = await makeTempDir("qa-generated-image-invalid-request-");
-      const freshMediaPath = await writeImage(tempRoot, "state/media/outbound/fresh-generated.png");
-      const invalidMediaPath = path.join(tempRoot, `invalid-${artifactState}.png`);
-      if (artifactState === "stale") {
-        await writeImage(tempRoot, `invalid-${artifactState}.png`);
-        const staleTimestamp = new Date(Date.now() - 60_000);
-        await fs.utimes(invalidMediaPath, staleTimestamp, staleTimestamp);
-      }
-      fetchJsonMock.mockResolvedValue([request(invalidMediaPath)]);
-
-      await expect(resolveImage(tempRoot)).resolves.toBe(freshMediaPath);
-    },
+  expect(patchConfigMock).toHaveBeenCalledTimes(1);
+  expect(patchConfigMock.mock.calls[0]?.[0].patch.plugins).toStrictEqual(
+    expect.objectContaining({
+      allow: ["memory-core", "acpx", "openai", "anthropic", "qa-channel"],
+    }),
   );
-
-  it("falls back to generated image files when mock request logs are unavailable", async () => {
-    fetchJsonMock.mockRejectedValue(new Error("mock debug unavailable"));
-    const tempRoot = await makeTempDir("qa-generated-image-");
-    const mediaPath = await writeImage(tempRoot, "state/media/tool-image-generation/generated.png");
-
-    await expect(resolveImage(tempRoot)).resolves.toBe(mediaPath);
-  });
-  it("preserves plugins already allowed by the gateway when configuring media", async () => {
-    readConfigSnapshotMock.mockResolvedValue({
-      hash: "hash",
-      config: { plugins: { allow: ["acpx", "openai", "anthropic", "qa-channel"] } },
-    });
-
-    await ensureImageGenerationConfigured({
-      gateway: { runtimeEnv: {} },
-      providerMode: "mock-openai",
-      mock: { baseUrl: "http://127.0.0.1:9999" },
-      transport: { requiredPluginIds: ["qa-channel"] },
-    } as never);
-
-    expect(patchConfigMock).toHaveBeenCalledTimes(1);
-    expect(patchConfigMock.mock.calls[0]?.[0].patch.plugins).toStrictEqual(
-      expect.objectContaining({
-        allow: ["memory-core", "acpx", "openai", "anthropic", "qa-channel"],
-      }),
-    );
-  });
 });

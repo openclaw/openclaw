@@ -1,29 +1,23 @@
 import { createQaEvidenceInvocation } from "./evidence-invocation.js";
-import type { QaTransportPolicy } from "./qa-transport.js";
-import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
+import type { QaSeedScenarioWithSource as Scenario } from "./scenario-catalog.js";
 import type { QaSuiteRunParams, QaSuiteScenarioResult } from "./suite-types.js";
 
-type QaSuiteTestScenario = ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number];
+type Flow = Extract<Scenario["execution"], { kind: "flow" }>;
+type ScenarioOptions = Partial<
+  Pick<Scenario, "plugins" | "gatewayConfigPatch" | "runtimePairLane" | "surface">
+> &
+  Pick<
+    Flow,
+    "channel" | "config" | "flowKind" | "runtime" | "suiteIsolation" | "transportPolicy"
+  > & {
+    gatewayRuntime?: Omit<NonNullable<Scenario["gatewayRuntime"]>, "env">;
+  };
+type EvidenceParams = Pick<
+  QaSuiteRunParams,
+  "evidenceAnchors" | "evidenceContinuation" | "channelId" | "transportId"
+>;
 
-export function makeQaSuiteTestScenario(
-  id: string,
-  params: {
-    channel?: string;
-    config?: Record<string, unknown>;
-    plugins?: string[];
-    gatewayConfigPatch?: Record<string, unknown>;
-    gatewayRuntime?: {
-      allowUnhealthyStartup?: boolean;
-      forwardHostHome?: boolean;
-      preserveDebugArtifacts?: boolean;
-    };
-    flowKind?: "module" | "steps";
-    runtimePairLane?: QaSuiteTestScenario["runtimePairLane"];
-    suiteIsolation?: "isolated";
-    surface?: string;
-    transportPolicy?: QaTransportPolicy;
-  } = {},
-): QaSuiteTestScenario {
+export function makeQaSuiteTestScenario(id: string, params: ScenarioOptions = {}): Scenario {
   return {
     id,
     title: id,
@@ -37,6 +31,7 @@ export function makeQaSuiteTestScenario(
     sourcePath: `qa/scenarios/${id}.yaml`,
     execution: {
       kind: "flow",
+      ...(params.runtime ? { runtime: params.runtime } : {}),
       ...(params.channel ? { channel: params.channel } : {}),
       channels: params.channel ? [params.channel] : [],
       ...(params.suiteIsolation ? { suiteIsolation: params.suiteIsolation } : {}),
@@ -45,17 +40,12 @@ export function makeQaSuiteTestScenario(
       flowKind: params.flowKind ?? "steps",
       flow: { steps: [{ name: "noop", actions: [{ assert: "true" }] }] },
     },
-  } as QaSuiteTestScenario;
+  } as Scenario;
 }
 
 export function recordQaSuiteTestResults(
-  params:
-    | Pick<
-        QaSuiteRunParams,
-        "evidenceAnchors" | "evidenceContinuation" | "channelId" | "transportId"
-      >
-    | undefined,
-  definitions: readonly QaSuiteTestScenario[],
+  params: EvidenceParams | undefined,
+  definitions: readonly Scenario[],
   results: readonly QaSuiteScenarioResult[],
 ) {
   const anchor = params?.evidenceAnchors?.[0];
@@ -79,21 +69,12 @@ export function recordQaSuiteTestResults(
     const definition = definitions[index]!;
     const id = invocation.begin(index);
     const status = result.status === "skip" ? "skipped" : result.status;
-    invocation.complete(id, {
-      status,
-      entries: [
-        {
-          test: { kind: "qa-scenario", id: definition.id, title: definition.title },
-          coverage: [],
-          result: {
-            status,
-            ...(result.status === "fail" && result.details
-              ? { failure: { reason: result.details } }
-              : {}),
-          },
-        },
-      ],
-    });
+    const test = { kind: "qa-scenario" as const, id: definition.id, title: definition.title };
+    const observation =
+      result.status === "fail" && result.details
+        ? { status, failure: { reason: result.details } }
+        : { status };
+    invocation.complete(id, { status, entries: [{ test, coverage: [], result: observation }] });
     return { ...result, evidenceOccurrenceId: invocation.select(index, id) };
   });
   return {
