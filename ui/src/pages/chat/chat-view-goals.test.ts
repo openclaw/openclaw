@@ -14,8 +14,12 @@ import {
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
 
+let container: HTMLElement;
+let onGoalAction: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   installTranscriptDomMocks();
+  container = createComposerContainer();
+  onGoalAction = vi.fn();
 });
 
 afterEach(() => {
@@ -23,12 +27,16 @@ afterEach(() => {
   resetTranscriptTestDom();
 });
 
-function renderChatInto(
-  container: HTMLElement,
-  overrides: Parameters<typeof renderNativeChatInto>[1] = {},
-) {
-  renderNativeChatInto(container, { currentSessionId: "goal-session", ...overrides });
+function renderChat(overrides: Parameters<typeof renderNativeChatInto>[1] = {}) {
+  renderNativeChatInto(container, { currentSessionId: "goal-session", onGoalAction, ...overrides });
 }
+
+const objective = "Land the web goal UI";
+const pauseReason = "Paused after an error. Resume to continue.";
+const goalPart = (part: string) => container.querySelector(`.agent-chat__goal-${part}`);
+const text = (part: string) => goalPart(part)?.textContent;
+const button = (label: string) =>
+  container.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
 
 describe("chat goal status", () => {
   function goalSession(
@@ -42,7 +50,7 @@ describe("chat goal status", () => {
       goal: {
         schemaVersion: 1,
         id: "goal-1",
-        objective: "Land the web goal UI",
+        objective,
         status: "active",
         createdAt: Date.now() - 15_000,
         updatedAt: 2,
@@ -58,27 +66,19 @@ describe("chat goal status", () => {
   it.each([true, false])(
     "renders goal details and gates actions when connected=%s",
     (connected) => {
-      const onGoalAction = vi.fn();
-      const container = createComposerContainer();
-      const props = {
-        selectedSession: goalSession(),
-        onGoalAction,
-        connected,
-      };
-      renderChatInto(container, props);
+      const props = { selectedSession: goalSession(), connected };
+      renderChat(props);
       const goal = container.querySelector(".agent-chat__goal");
-      expect(goal?.querySelector(".agent-chat__goal-label")?.textContent).toBe("Pursuing goal");
-      expect(goal?.querySelector(".agent-chat__goal-objective")?.textContent).toBe(
-        "Land the web goal UI",
-      );
-      expect(goal?.querySelector(".agent-chat__goal-elapsed")?.textContent).toBe("15s");
+      expect([text("label"), text("objective"), text("elapsed")]).toEqual([
+        "Pursuing goal",
+        objective,
+        "15s",
+      ]);
       expect(goal?.getAttribute("aria-label")).toBe(
         "Pursuing goal (12k/50k): Land the web goal UI",
       );
       expect(goal?.closest(".agent-chat__goal-float")).not.toBeNull();
       expect(goal?.closest(".agent-chat__composer-status-stack")).toBeNull();
-      const button = (label: string) =>
-        container.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
       expect(button("Resume goal")).toBeNull();
       if (connected) {
         button("Pause goal")?.click();
@@ -88,23 +88,17 @@ describe("chat goal status", () => {
       } else {
         expect(button("Pause goal")).toBeNull();
       }
-      expect(container.querySelector(".agent-chat__goal-detail")?.getAttribute("aria-hidden")).toBe(
-        "true",
-      );
+      expect(goalPart("detail")?.getAttribute("aria-hidden")).toBe("true");
       const toggle = button("Show goal details");
       expect(toggle).not.toBeNull();
       expect(toggle?.getAttribute("aria-expanded")).toBe("false");
       toggle?.click();
       props.selectedSession = goalSession({ lastStatusNote: "Waiting for CI" });
-      renderChatInto(container, props);
-      const detail = container.querySelector(".agent-chat__goal-detail");
+      renderChat(props);
+      const detail = goalPart("detail");
       expect(detail?.getAttribute("aria-hidden")).toBe("false");
-      expect(detail?.querySelector(".agent-chat__goal-detail-objective")?.textContent).toBe(
-        "Land the web goal UI",
-      );
-      expect(detail?.querySelector(".agent-chat__goal-detail-note")?.textContent).toBe(
-        "Waiting for CI",
-      );
+      expect(text("detail-objective")).toBe(objective);
+      expect(text("detail-note")).toBe("Waiting for CI");
       expect(
         Array.from(
           detail?.querySelectorAll(".agent-chat__goal-detail-meta > span") ?? [],
@@ -116,12 +110,10 @@ describe("chat goal status", () => {
   );
 
   it("exposes the pause reason in a keyboard-accessible tooltip and freezes elapsed time", () => {
-    const container = createComposerContainer();
     const now = Date.now();
     const selectedSession = goalSession({ createdAt: now - 60_000 });
-    const onGoalAction = vi.fn();
-    renderChatInto(container, { selectedSession, onGoalAction });
-    const runningIcon = container.querySelector(".agent-chat__goal-icon")?.innerHTML;
+    renderChat({ selectedSession });
+    const runningIcon = goalPart("icon")?.innerHTML;
 
     const pausedSession = {
       ...selectedSession,
@@ -129,74 +121,59 @@ describe("chat goal status", () => {
         ...selectedSession.goal!,
         status: "paused" as const,
         pausedAt: now - 10_000,
-        lastStatusNote: "Paused after an error. Resume to continue.",
+        lastStatusNote: pauseReason,
       },
     };
-    renderChatInto(container, { selectedSession: pausedSession, onGoalAction });
+    renderChat({ selectedSession: pausedSession });
 
-    const goal = container.querySelector(".agent-chat__goal");
-    expect(goal?.querySelector(".agent-chat__goal-label")?.textContent).toBe("Goal paused");
-    const label = goal?.querySelector(".agent-chat__goal-label");
+    expect(text("label")).toBe("Goal paused");
+    const label = goalPart("label");
     expect(label?.getAttribute("tabindex")).toBe("0");
-    expect(label?.closest("openclaw-tooltip")?.content).toBe(
-      "Paused after an error. Resume to continue.",
-    );
-    expect(goal?.querySelector(".agent-chat__goal-detail-note")?.textContent).toBe(
-      "Paused after an error. Resume to continue.",
-    );
-    expect(goal?.querySelector(".agent-chat__goal-icon")?.innerHTML).not.toBe(runningIcon);
-    expect(goal?.querySelector(".agent-chat__goal-icon")?.getAttribute("aria-hidden")).toBe("true");
-    expect(goal?.querySelector(".agent-chat__goal-elapsed")?.textContent).toBe("50s");
-    expect(goal?.querySelector('button[aria-label="Pause goal"]')).toBeNull();
-    goal?.querySelector<HTMLButtonElement>('button[aria-label="Resume goal"]')?.click();
+    expect(label?.closest("openclaw-tooltip")?.content).toBe(pauseReason);
+    expect(text("detail-note")).toBe(pauseReason);
+    expect(goalPart("icon")?.innerHTML).not.toBe(runningIcon);
+    expect(goalPart("icon")?.getAttribute("aria-hidden")).toBe("true");
+    expect(text("elapsed")).toBe("50s");
+    expect(button("Pause goal")).toBeNull();
+    button("Resume goal")?.click();
     expect(onGoalAction).toHaveBeenCalledWith("goal-1", "resume");
 
-    renderChatInto(container, {
+    renderChat({
       selectedSession: goalSession({ lastStatusNote: "Continuing after the pause" }),
-      onGoalAction,
     });
-    const runningLabel = container.querySelector(".agent-chat__goal-label");
+    const runningLabel = goalPart("label");
     expect(runningLabel?.hasAttribute("tabindex")).toBe(false);
     expect(runningLabel?.closest("openclaw-tooltip")?.content).toBe("");
   });
 
   it("restores goal actions and expansion after a transient missing session goal", () => {
-    const container = createComposerContainer();
-    onTestFinished(() => {
-      disposeChatView(container);
-    });
-    const onGoalAction = vi.fn();
+    onTestFinished(() => disposeChatView(container));
     const selectedSession = goalSession({ status: "paused", pausedAt: Date.now() });
-    renderChatInto(container, { selectedSession, onGoalAction });
-    container.querySelector<HTMLButtonElement>('button[aria-label="Show goal details"]')!.click();
+    renderChat({ selectedSession });
+    button("Show goal details")!.click();
 
-    renderChatInto(container, { selectedSession: undefined, onGoalAction });
+    renderChat({ selectedSession: undefined });
     expect(container.querySelector(".agent-chat__goal")).toBeNull();
 
-    renderChatInto(container, {
+    renderChat({
       selectedSession: goalSession({ status: "paused", lastStatusNote: "Ready to resume" }),
-      onGoalAction,
     });
-    expect(container.querySelector(".agent-chat__goal-detail")?.getAttribute("aria-hidden")).toBe(
-      "false",
-    );
-    container.querySelector<HTMLButtonElement>('button[aria-label="Resume goal"]')!.click();
+    expect(goalPart("detail")?.getAttribute("aria-hidden")).toBe("false");
+    button("Resume goal")!.click();
     expect(onGoalAction).toHaveBeenCalledExactlyOnceWith("goal-1", "resume");
   });
 
   it("edits the plain objective and restores the conversation draft on cancellation", () => {
     let draft = "Keep my conversation draft";
     let goalDraftMode: ChatGoalDraftMode | null = null;
-    const container = createComposerContainer();
     const onDraftChange = vi.fn((next: string) => {
       draft = next;
     });
     const draw = () =>
-      renderChatInto(container, {
+      renderChat({
         selectedSession: goalSession(),
         draft,
         getDraft: () => draft,
-        onGoalAction: vi.fn(),
         onGoalSubmit: vi.fn(async () => true),
         goalDraftMode,
         onGoalDraftModeChange: (mode) => {
@@ -207,12 +184,12 @@ describe("chat goal status", () => {
       });
     draw();
 
-    container.querySelector<HTMLButtonElement>('button[aria-label="Edit goal"]')?.click();
+    button("Edit goal")?.click();
 
-    expect(onDraftChange).toHaveBeenCalledWith("Land the web goal UI", undefined);
-    expect(container.querySelector(".agent-chat__goal-mode")?.textContent).toContain("Edit goal");
-    container.querySelector<HTMLButtonElement>('button[aria-label="Cancel goal entry"]')?.click();
+    expect(onDraftChange).toHaveBeenCalledWith(objective, undefined);
+    expect(text("mode")).toContain("Edit goal");
+    button("Cancel goal entry")?.click();
     expect(draft).toBe("Keep my conversation draft");
-    expect(container.querySelector(".agent-chat__goal-mode")).toBeNull();
+    expect(goalPart("mode")).toBeNull();
   });
 });

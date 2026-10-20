@@ -8,14 +8,26 @@ import {
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
 
-beforeEach(() => {
-  installTranscriptDomMocks();
-});
+beforeEach(installTranscriptDomMocks);
 
 afterEach(() => {
   resetChatViewState();
   resetTranscriptTestDom();
 });
+
+const workingStatus = (container: HTMLElement) =>
+  container.querySelector(".chat-working-indicator__status")?.textContent;
+const stopButton = (container: HTMLElement) =>
+  container.querySelector<HTMLButtonElement>(".chat-send-btn--stop");
+function renderActive(overrides: Parameters<typeof renderChatView>[0] = {}) {
+  return renderChatView({
+    canAbort: true,
+    runActive: true,
+    runId: "run-1",
+    stream: "",
+    ...overrides,
+  });
+}
 
 describe("chat view state contention", () => {
   it("keeps a contention check separate from sending and the composer draft", () => {
@@ -41,20 +53,14 @@ describe("chat view state contention", () => {
   it("keeps Stop available during a quiet state contention wait", () => {
     const onAbort = vi.fn();
     const onSend = vi.fn();
-    const container = renderChatView({
-      canAbort: true,
-      runActive: true,
-      runId: "run-1",
-      stream: "",
+    const container = renderActive({
       startupStatus: { state: "status", runId: "run-1", phase: "waiting_for_state" },
       onAbort,
       onSend,
     });
-    expect(container.querySelector(".chat-working-indicator__status")?.textContent).toContain(
-      "Temporarily busy—retrying…",
-    );
+    expect(workingStatus(container)).toContain("Temporarily busy—retrying…");
     expect(container.querySelector(".chat-error")).toBeNull();
-    const stop = container.querySelector<HTMLButtonElement>(".chat-send-btn--stop");
+    const stop = stopButton(container);
     expect(stop).not.toBeNull();
     stop?.click();
     expect(onAbort).toHaveBeenCalledOnce();
@@ -63,9 +69,7 @@ describe("chat view state contention", () => {
 
   it("waits for startup progress rather than claiming preparation before the first status", () => {
     const container = renderChatView({ runActive: true, stream: "" });
-    expect(container.querySelector(".chat-working-indicator__status")?.textContent).toContain(
-      "Waiting for turn to start…",
-    );
+    expect(workingStatus(container)).toContain("Waiting for turn to start…");
   });
 
   it.each(["submitting", "sending", "waiting-model"] as const)(
@@ -79,35 +83,24 @@ describe("chat view state contention", () => {
           { id: "pending-send", sessionKey: "main", text: "Continue", createdAt: 1, sendState },
         ],
       });
-      expect(container.querySelector(".chat-working-indicator__status")?.textContent).toContain(
-        "Waiting for turn to start…",
-      );
-      expect(container.querySelector(".chat-send-btn--stop")).toBeNull();
+      expect(workingStatus(container)).toContain("Waiting for turn to start…");
+      expect(stopButton(container)).toBeNull();
     },
   );
 
   it("retains preparation and Stop once the Gateway reports context preparation", () => {
-    const container = renderChatView({
-      runActive: true,
-      canAbort: true,
-      runId: "run-1",
-      stream: "",
+    const container = renderActive({
       startupStatus: { state: "status", runId: "run-1", phase: "preparing_context" },
     });
-    expect(container.querySelector(".chat-working-indicator__status")?.textContent).toContain(
-      "Preparing this turn…",
-    );
-    expect(container.querySelector(".chat-send-btn--stop")).not.toBeNull();
+    expect(workingStatus(container)).toContain("Preparing this turn…");
+    expect(stopButton(container)).not.toBeNull();
   });
 
   it.each(["answer", "finishing"] as const)(
     "hides %s activity without releasing the active run or Stop",
     (phase) => {
       const onAbort = vi.fn();
-      const container = renderChatView({
-        canAbort: true,
-        runActive: true,
-        runId: "run-1",
+      const container = renderActive({
         stream: "The answer is ready.",
         startupStatus: { state: "status", runId: "run-1", phase },
         onAbort,
@@ -117,7 +110,7 @@ describe("chat view state contention", () => {
       expect(
         container.querySelector(".agent-chat__run-status-announcement")?.textContent?.trim(),
       ).toBe("");
-      const stop = container.querySelector<HTMLButtonElement>(".chat-send-btn--stop");
+      const stop = stopButton(container);
       expect(stop).not.toBeNull();
       stop?.click();
       expect(onAbort).toHaveBeenCalledOnce();

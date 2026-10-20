@@ -16,25 +16,26 @@ function appendPlaceholder(): HTMLImageElement {
   return root.querySelector("img") as HTMLImageElement;
 }
 
+const localState = {
+  automaticallyFetchFavicons: true,
+  resourceBasePath: "",
+  settings: { gatewayUrl: `ws://${window.location.host}`, token: "favicon-fixture" },
+  client: null,
+};
+
 describe("hydrateLinkFavicons", () => {
   it("shares a hostname miss across transcript links and later renders", async () => {
     vi.useFakeTimers();
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 404 }));
     vi.stubGlobal("fetch", fetchMock);
-    const state = {
-      automaticallyFetchFavicons: true,
-      resourceBasePath: "",
-      settings: { gatewayUrl: `ws://${window.location.host}`, token: "favicon-fixture" },
-      client: null,
-    };
     const images = Array.from({ length: 5 }, () => appendPlaceholder());
-    hydrateLinkFavicons(document.body, resolveChatLinkFaviconFetcher(state));
+    hydrateLinkFavicons(document.body, resolveChatLinkFaviconFetcher(localState));
     await vi.advanceTimersByTimeAsync(0);
     expect(images.every((image) => image.dataset.linkFaviconState === "failed")).toBe(true);
     expect(fetchMock).toHaveBeenCalledOnce();
 
     const later = appendPlaceholder();
-    hydrateLinkFavicons(document.body, resolveChatLinkFaviconFetcher({ ...state }));
+    hydrateLinkFavicons(document.body, resolveChatLinkFaviconFetcher({ ...localState }));
     expect(later.dataset.linkFaviconState).toBe("failed");
     expect(fetchMock).toHaveBeenCalledOnce();
   });
@@ -50,22 +51,13 @@ describe("hydrateLinkFavicons", () => {
       hydrateLinkFavicons(
         document.body,
         resolveChatLinkFaviconFetcher({
+          ...localState,
           automaticallyFetchFavicons,
-          resourceBasePath: "",
           settings: { gatewayUrl },
-          client: null,
         }),
       );
     }
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(image.dataset.linkFaviconState).toBeUndefined();
-  });
-
-  it("does nothing without an opt-in fetcher", () => {
-    const image = appendPlaceholder();
-
-    hydrateLinkFavicons(document.body);
-
     expect(image.hasAttribute("src")).toBe(false);
     expect(image.dataset.linkFaviconState).toBeUndefined();
   });

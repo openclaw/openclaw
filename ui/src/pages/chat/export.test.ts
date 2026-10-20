@@ -6,20 +6,18 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+const toolCall = {
+  role: "assistant",
+  content: [{ type: "toolCall", id: "call-1", name: "read", arguments: { path: "notes.txt" } }],
+};
+const textBlock = (text: string) => [{ type: "output_text", text }];
+const header = "# Chat with OpenClaw\n\n";
+const transcript = (messages: unknown[]) => buildChatMarkdown(messages, "OpenClaw");
+
 describe("exportChatMarkdown", () => {
   it.each([
     { name: "empty transcript", messages: [] },
-    {
-      name: "tool-only transcript",
-      messages: [
-        {
-          role: "assistant",
-          content: [
-            { type: "toolCall", id: "call-1", name: "read", arguments: { path: "notes.txt" } },
-          ],
-        },
-      ],
-    },
+    { name: "tool-only transcript", messages: [toolCall] },
     {
       name: "image-only transcript",
       messages: [{ role: "assistant", content: [{ type: "image", data: "synthetic-image" }] }],
@@ -33,7 +31,7 @@ describe("exportChatMarkdown", () => {
     const createObjectURL = vi.spyOn(URL, "createObjectURL");
     const click = vi.spyOn(HTMLAnchorElement.prototype, "click");
 
-    expect(buildChatMarkdown(messages, "OpenClaw")).toBeNull();
+    expect(transcript(messages)).toBeNull();
     expect(exportChatMarkdown(messages, "OpenClaw")).toBe("empty");
     expect(createObjectURL).not.toHaveBeenCalled();
     expect(click).not.toHaveBeenCalled();
@@ -70,39 +68,25 @@ describe("exportChatMarkdown", () => {
   });
 
   it("uses transcript speaker normalization and preserves prepared literal control text", () => {
-    const markdown = buildChatMarkdown(
-      [
-        {
-          role: "USER",
-          senderLabel: "Kai (123e4567-e89b-12d3-a456-426614174000)",
-          content: "Please check the build.",
-        },
-        {
-          role: "ASSISTANT",
-          __openclaw: { senderName: "Build assistant" },
-          content: [{ type: "output_text", text: "The build passed." }],
-          timestamp: 1_000,
-        },
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "toolCall",
-              id: "call-1",
-              name: "exec",
-              arguments: { command: "synthetic-check" },
-            },
-          ],
-          timestamp: 2_000,
-        },
-        { role: "tool_result", toolCallId: "call-1", content: "  exit 0\n" },
-        { role: "assistant", content: "NO_REPLY" },
-      ],
-      "OpenClaw",
-    );
+    const markdown = transcript([
+      {
+        role: "USER",
+        senderLabel: "Kai (123e4567-e89b-12d3-a456-426614174000)",
+        content: "Please check the build.",
+      },
+      {
+        role: "ASSISTANT",
+        __openclaw: { senderName: "Build assistant" },
+        content: textBlock("The build passed."),
+        timestamp: 1_000,
+      },
+      { ...toolCall, timestamp: 2_000 },
+      { role: "tool_result", toolCallId: "call-1", content: "  exit 0\n" },
+      { role: "assistant", content: "NO_REPLY" },
+    ]);
 
     expect(markdown).toBe(
-      "# Chat with OpenClaw\n\n" +
+      header +
         "## Kai\n\nPlease check the build.\n\n" +
         "## Build assistant (1970-01-01T00:00:01.000Z)\n\nThe build passed.\n\n" +
         "## Tool\n\n  exit 0\n\n\n" +
@@ -130,9 +114,7 @@ describe("exportChatMarkdown", () => {
       speaker: "OpenClaw",
     },
   ])("keeps canonical speaker classification for $name", ({ message, speaker }) => {
-    expect(buildChatMarkdown([message], "OpenClaw")).toBe(
-      `# Chat with OpenClaw\n\n## ${speaker}\n\nVisible body\n`,
-    );
+    expect(transcript([message])).toBe(`${header}## ${speaker}\n\nVisible body\n`);
   });
 
   it.each(["string", "blocks", "text"])(
@@ -150,13 +132,11 @@ describe("exportChatMarkdown", () => {
         timestamp: "1000",
         ...(shape === "text"
           ? { text: framed }
-          : { content: shape === "blocks" ? [{ type: "output_text", text: framed }] : framed }),
+          : { content: shape === "blocks" ? textBlock(framed) : framed }),
       };
       const original = structuredClone(message);
 
-      expect(buildChatMarkdown([message], "OpenClaw")).toBe(
-        `# Chat with OpenClaw\n\n## Imported assistant\n\n${body}\n`,
-      );
+      expect(transcript([message])).toBe(`${header}## Imported assistant\n\n${body}\n`);
       expect(message).toEqual(original);
     },
   );
