@@ -5,13 +5,13 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { openChatDetails } from "./chat-details.test-support.ts";
 import {
-  captureUiProof,
   chatMessage,
   chatSessionListResponse,
   controlUiSessionUrl,
   createChatFlowE2eSuite,
   installMockGateway,
 } from "./chat-flow.test-support.ts";
+import { settingsRow } from "./config-composer-fixtures.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
@@ -34,21 +34,13 @@ suite.define(() => {
           sessionKey,
           featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
           historyMessages: [
-            chatMessage("user", "Check the progress display setting."),
-            chatMessage(
-              "assistant",
-              "The task continues whether progress cards are visible or hidden.",
-            ),
+            chatMessage("user", "Show progress."),
+            chatMessage("assistant", "Working."),
           ],
           methodResponses: {
             "progressCard.get": { card: cardData },
             "sessions.list": chatSessionListResponse([
-              {
-                key: sessionKey,
-                kind: "direct",
-                label: "Progress display preference",
-                updatedAt: 1,
-              },
+              { key: sessionKey, kind: "direct", label: "Progress", updatedAt: 1 },
             ]),
           },
         });
@@ -56,7 +48,6 @@ suite.define(() => {
         const card = page.locator('[data-progress-card-placement="details"]');
         await openChatDetails(page);
         await expect.poll(() => card.isVisible()).toBe(true);
-        await captureUiProof(suite, page, "progress-preference", "01-cards-enabled.png");
 
         const settingsPage = await context.newPage();
         const settingsGateway = await installMockGateway(settingsPage, { sessionKey });
@@ -64,37 +55,28 @@ suite.define(() => {
           `${suite.server.baseUrl}settings/appearance?section=__appearance__#settings-appearance-chat`,
         );
         await waitForControlUiSettingsTakeover(settingsPage);
-        const row = (title: string) =>
-          settingsPage
-            .locator(".settings-row")
-            .filter({
-              has: settingsPage.locator(".settings-row__title", { hasText: title }),
-            })
-            .first();
-        const showRow = row("Show task progress cards");
-        const collapseRow = row("Collapse task progress by default on desktop");
+        const showRow = settingsRow(settingsPage, "Show task progress cards").first();
+        const collapseRow = settingsRow(
+          settingsPage,
+          "Collapse task progress by default on desktop",
+        ).first();
         const enabled = () => showRow.getByRole("switch").isChecked();
         await expect.poll(enabled).toBe(true);
         await expect.poll(() => showRow.textContent()).not.toContain("Using default:");
-        await settingsPage
-          .locator("#settings-appearance-chat")
-          .evaluate((element) => element.scrollIntoView({ block: "start", behavior: "instant" }));
-        await captureUiProof(suite, settingsPage, "progress-preference", "02-setting-default.png");
 
         await collapseRow.click();
         await showRow.click();
         await expect.poll(enabled).toBe(false);
         await expect.poll(() => collapseRow.getByRole("switch").isDisabled()).toBe(true);
         await expect.poll(() => card.count()).toBe(0);
-        await captureUiProof(suite, settingsPage, "progress-preference", "03-setting-disabled.png");
-        await captureUiProof(suite, page, "progress-preference", "04-cards-hidden.png");
 
         const reads = (await gateway.getRequests("progressCard.get")).length;
+        const progressed = "The task progressed while the card was hidden.";
         await gateway.setMethodResponse("progressCard.get", {
           card: {
             ...cardData,
             revision: 2,
-            markdown: "The task progressed while the card was hidden.",
+            markdown: progressed,
           },
         });
         await gateway.emitGatewayEvent("progressCard.changed", { sessionKey, revision: 2 });
@@ -112,9 +94,7 @@ suite.define(() => {
         await expect.poll(enabled).toBe(true);
         await openChatDetails(page);
         await expect.poll(() => card.isVisible()).toBe(true);
-        await expect
-          .poll(() => card.textContent())
-          .toContain("The task progressed while the card was hidden.");
+        await expect.poll(() => card.textContent()).toContain(progressed);
         expect(await card.getAttribute("open")).toBeNull();
         const persisted = await settingsPage.evaluate(
           (key) => JSON.parse(localStorage.getItem(key) ?? "{}"),
@@ -125,7 +105,6 @@ suite.define(() => {
         expect(await gateway.getRequests("progressCard.put")).toHaveLength(0);
         expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
         expect(await settingsGateway.getRequests("config.patch")).toHaveLength(0);
-        await settingsPage.close();
       },
     );
   });

@@ -1,45 +1,24 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
-import { expect, type Locator, type Page } from "playwright/test";
-import { beforeEach, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { expect, type Locator } from "playwright/test";
+import { it } from "vitest";
 import {
   controlUiSessionUrl,
   installMockGateway,
   pauseVirtualClock,
 } from "../test-helpers/control-ui-e2e.ts";
+import { chatSessionListResponse } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI session suggestions",
   startServerBeforeBrowser: true,
+  trackBrowserContexts: true,
 });
 
 const sessionKey = "agent:main:main";
 
-let proofArtifactDir: string | undefined;
-beforeEach(() => {
-  const parent = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
-  proofArtifactDir = parent
-    ? createControlUiE2eArtifactDir("session-suggestions", parent)
-    : undefined;
-});
-
 async function contextAndPage() {
-  const output = proofArtifactDir;
-  const context = await suite.browser.newContext({
-    viewport: { height: 760, width: 1180 },
-    ...(output ? { recordVideo: { dir: output, size: { height: 760, width: 1180 } } } : {}),
-  });
-  return { context, page: await context.newPage() };
-}
-
-async function screenshot(page: Page, name: string, target: Page | Locator = page) {
-  const output = proofArtifactDir;
-  if (output) {
-    await target.screenshot({ animations: "disabled", path: path.join(output, name) });
-  }
+  const context = await suite.newBrowserContext({ viewport: { height: 760, width: 1180 } });
+  return { page: await context.newPage() };
 }
 
 function presenceUser(
@@ -57,10 +36,7 @@ function presenceUser(
 
 function sessionRow(sharingRole: "owner" | "viewer", kind: "direct" | "group" = "direct") {
   return {
-    count: 1,
-    defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
-    path: "",
-    sessions: [
+    ...chatSessionListResponse([
       {
         key: sessionKey,
         kind,
@@ -71,7 +47,7 @@ function sessionRow(sharingRole: "owner" | "viewer", kind: "direct" | "group" = 
         visibility: "suggest",
         sharingRole,
       },
-    ],
+    ]),
     ts: 1,
   };
 }
@@ -91,7 +67,7 @@ async function openSuggestions(
   options: Parameters<typeof installMockGateway>[1] = {},
   kind: "direct" | "group" = "direct",
 ) {
-  const { context, page } = await contextAndPage();
+  const { page } = await contextAndPage();
   const gateway = await installMockGateway(page, {
     featureMethods,
     presenceUsers: [presenceUser("alice", true), presenceUser("owner")],
@@ -103,7 +79,10 @@ async function openSuggestions(
     },
   });
   await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-  return { context, page, gateway };
+  await gateway.waitForRequest("session.suggestions.list");
+  const composer = page.locator(".agent-chat__composer-combobox textarea");
+  await expect(composer).toBeEnabled();
+  return { page, gateway, composer };
 }
 
 function pendingSuggestion(id: string, text: string, createdAt: number) {
@@ -159,9 +138,13 @@ function bubbleGeometry(locator: Locator) {
   });
 }
 
+function afterAnimation(locator: Locator) {
+  return locator.evaluate((element) => getComputedStyle(element, "::after").animationName);
+}
+
 suite.define(() => {
   it("keeps the watched caret at the writer's multiline edit position", async () => {
-    const { context, page, gateway } = await openSuggestions("owner", {
+    const { page, gateway, composer } = await openSuggestions("owner", {
       presenceUsers: [
         presenceUser("alice", true, [sessionKey]),
         presenceUser("owner", false, [sessionKey]),
@@ -169,9 +152,6 @@ suite.define(() => {
       sessions: sessionRow("owner").sessions,
       methodResponses: { "session.typing": { ok: true, broadcast: true } },
     });
-    await gateway.waitForRequest("session.suggestions.list");
-    const composer = page.locator(".agent-chat__composer-combobox textarea");
-    await expect(composer).toBeEnabled();
     await page.clock.install();
     await pauseVirtualClock(page);
     const draft =
@@ -192,14 +172,6 @@ suite.define(() => {
       cursor,
     });
     await expect(preview).toHaveText(draft);
-    if (proofArtifactDir) {
-      const frame = await takeControlUiScreenshotFrame(page, row, [preview], {
-        elements: [row],
-        animations: "disabled",
-        scrollTo: row,
-      });
-      await writeFile(path.join(proofArtifactDir, "caret-multiline.png"), frame.elements[0]!.png);
-    }
     const requests = await gateway.getRequests("session.typing");
     expect(requests.at(-1)?.params).toMatchObject({ preview: draft, cursor });
     const caret = preview.locator(".agent-chat__typing-caret");
@@ -224,23 +196,19 @@ suite.define(() => {
         expect(box!.y - firstLine!.y).toBeCloseTo(5 * lineHeight, 0);
       }
     }
-    await context.close();
   });
 
   it("submits a viewer draft as a suggestion and shows its pending state", async () => {
     const suggestion = pendingSuggestion("suggestion-1", "Try the focused change", 1);
-    const { context, page, gateway } = await openSuggestions("viewer", {
+    const { page, gateway, composer } = await openSuggestions("viewer", {
       methodResponses: {
         "session.suggestions.add": { suggestion },
         "session.typing": { ok: true, broadcast: true },
       },
     });
-    const composer = page.locator(".agent-chat__composer-combobox textarea");
     const modelTrigger = page.locator(".chat-controls__model-trigger");
     const typingRow = page.locator('[data-virtual-row-key="presence:typing"]');
     const typingIndicator = typingRow.locator(".agent-chat__typing-indicator");
-    await gateway.waitForRequest("session.suggestions.list");
-    await expect(composer).toBeEnabled();
     await modelTrigger.waitFor();
     const idleModelBox = await modelTrigger.boundingBox();
     if (idleModelBox === null) {
@@ -290,12 +258,10 @@ suite.define(() => {
     });
     await expect(page.locator(".session-suggestion__state")).toHaveText("Pending");
     await expect(page.locator(".session-suggestion__text")).toHaveText("Try the focused change");
-    await screenshot(page, "viewer-pending.png");
-    await context.close();
   });
 
   it("does not offer live-session commands in a viewer suggestion composer", async () => {
-    const { context, page, gateway } = await openSuggestions("viewer", {
+    const { page, gateway, composer } = await openSuggestions("viewer", {
       methodResponses: {
         "commands.list": {
           commands: [
@@ -311,9 +277,6 @@ suite.define(() => {
         },
       },
     });
-    await gateway.waitForRequest("session.suggestions.list");
-    const composer = page.locator(".agent-chat__composer-combobox textarea");
-    await expect(composer).toBeEnabled();
     await composer.fill("Keep this /sta");
     await gateway.waitForRequest("commands.list");
     await expect(page.getByRole("option", { name: /\/status/u })).toHaveCount(0);
@@ -322,13 +285,12 @@ suite.define(() => {
     expect(await gateway.getRequests("session.suggestions.add")).toHaveLength(0);
     await expect(composer).toHaveValue("/btw ");
     expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-    await context.close();
   });
 
   it.each(["direct", "group"] as const)(
     "streams a remote draft into a live preview bubble (%s)",
     async (kind) => {
-      const { context, page, gateway } = await openSuggestions(
+      const { page, gateway } = await openSuggestions(
         "viewer",
         {
           presenceUsers: [
@@ -343,8 +305,6 @@ suite.define(() => {
       );
       const typingRow = page.locator('[data-virtual-row-key="presence:typing"]');
       const previewBubble = typingRow.locator(".agent-chat__typing-preview-text");
-      await gateway.waitForRequest("session.suggestions.list");
-      await expect(page.locator(".agent-chat__composer-combobox textarea")).toBeEnabled();
 
       await page.clock.install();
       const ownerTyping = (preview?: string) => typingEvent(gateway, preview ? { preview } : {});
@@ -357,7 +317,6 @@ suite.define(() => {
       );
       await expect(typingAvatar).toBeVisible();
       await expect(typingAvatar).toHaveCSS("position", "absolute");
-      await screenshot(page, "typing-dots-before.png");
 
       const draft = "yea, cool. Live drafts stream into the bubble now.";
       let visible = "";
@@ -365,28 +324,17 @@ suite.define(() => {
         visible = visible ? `${visible} ${word}` : word;
         await ownerTyping(visible);
         await expect(previewBubble).toHaveText(visible);
-        if (proofArtifactDir) {
-          // Readability pacing for the recorded artifact only; assertions above
-          // already proved each chunk rendered.
-          await page.waitForTimeout(160);
-        }
       }
       await expect(typingRow.locator(".agent-chat__typing-preview-label")).toHaveText("Owner");
       await expect(typingRow.locator(".agent-chat__typing-state")).toHaveText("is typing...");
       await expect(typingRow.locator(".agent-chat__typing-bubble")).toHaveCount(0);
-      await screenshot(page, "typing-preview-live.png");
       const activeBox = await previewBubble.boundingBox();
       await page.clock.runFor(10_000);
       await expect(previewBubble).toHaveText(draft);
       await expect(typingRow.locator(".agent-chat__typing-state")).toHaveText("Draft");
       await expect(typingRow.locator(".sr-only")).toBeEmpty();
       expect(await previewBubble.boundingBox()).toEqual(activeBox);
-      expect(
-        await previewBubble.evaluate(
-          (element) => getComputedStyle(element, "::after").animationName,
-        ),
-      ).toBe("none");
-      await screenshot(page, "typing-preview-paused.png");
+      expect(await afterAnimation(previewBubble)).toBe("none");
 
       await typingEvent(gateway, {
         actor: { type: "human", id: "zoe", label: "Zoe" },
@@ -397,7 +345,6 @@ suite.define(() => {
       const status = typingRow.locator(".sr-only");
       await expect(status).toHaveText("Owner, Zoe are typing…");
       await expect(status).not.toContainText("yea, cool");
-      await screenshot(page, "typing-preview-and-dots.png");
 
       await typingEvent(gateway, {
         actor: { type: "human", id: "zoe", label: "Zoe" },
@@ -426,16 +373,11 @@ suite.define(() => {
         expect(
           await previewBubble.evaluate((element) => element.scrollWidth <= element.clientWidth),
         ).toBe(true);
-        await screenshot(page, `typing-${mode}-${width}.png`, page.locator(".chat-thread"));
       }
       await page.emulateMedia({ reducedMotion: "reduce" });
       await ownerTyping("مسودة لم ترسل بعد 👋");
       await expect(previewBubble).toHaveCSS("direction", "rtl");
-      expect(
-        await previewBubble.evaluate(
-          (element) => getComputedStyle(element, "::after").animationName,
-        ),
-      ).toBe("none");
+      expect(await afterAnimation(previewBubble)).toBe("none");
       await page.setViewportSize({ width: 1180, height: 760 });
       await page.evaluate(() => {
         document.documentElement.dataset.theme = "light";
@@ -479,7 +421,6 @@ suite.define(() => {
       expect(afterSend.x).toBeCloseTo(beforeSend.x, 0);
       expect(afterSend.y).toBeCloseTo(beforeSend.y, 0);
       expect(afterSend.background).not.toBe(beforeSend.background);
-      await screenshot(page, "typing-sent.png", page.locator(".chat-thread"));
       await ownerTyping("Another unsent draft");
       await expect(previewBubble).toHaveText("Another unsent draft");
       await page.clock.runFor(10_000);
@@ -492,13 +433,12 @@ suite.define(() => {
         })),
       });
       await expect(typingRow).toHaveCount(0);
-      await context.close();
     },
   );
 
   it("shows four owner actions and loads edit into the composer", async () => {
     const suggestion = pendingSuggestion("suggestion-2", "Please edit this first", 2);
-    const { context, page, gateway } = await openSuggestions("owner", {
+    const { page, gateway, composer } = await openSuggestions("owner", {
       deferredMethods: ["session.suggestions.resolve"],
       presenceUsers: [presenceUser("owner", true), presenceUser("alice")],
       methodResponses: {
@@ -508,7 +448,6 @@ suite.define(() => {
 
     const row = page.locator(".session-suggestion");
     await expect(row).toBeVisible();
-    await expect(row.locator("button")).toHaveCount(4);
     expect(
       await row
         .locator("button")
@@ -521,47 +460,34 @@ suite.define(() => {
     ]);
     await page.getByRole("button", { name: "Edit Alice's suggestion" }).click();
     await gateway.waitForRequest("session.suggestions.resolve");
-    const composer = page.locator(".agent-chat__composer-combobox textarea");
     await expect(composer).toHaveValue("Please edit this first");
     await composer.fill("A newer owner draft");
     await gateway.resolveDeferred("session.suggestions.resolve", {
       suggestion: { ...suggestion, state: "accepted" },
     });
     await expect(composer).toHaveValue("A newer owner draft");
-    await screenshot(page, "owner-edit.png");
-    await context.close();
   });
 
-  it("keeps suggestion and typing UI dormant with one identity", async () => {
-    const { context, page } = await contextAndPage();
-    const gateway = await installMockGateway(page, {
-      featureMethods,
-      presenceUsers: [presenceUser("alice", true)],
-      methodResponses: { "sessions.list": sessionRow("viewer") },
-    });
+  it.each(["one identity", "unadvertised suggestion RPCs"] as const)(
+    "keeps the suggestion composer read-only with %s",
+    async (reason) => {
+      const { page } = await contextAndPage();
+      const solo = reason === "one identity";
+      const gateway = await installMockGateway(page, {
+        ...(solo ? { featureMethods } : {}),
+        presenceUsers: solo
+          ? [presenceUser("alice", true)]
+          : [presenceUser("alice", true, ["main"]), presenceUser("owner", false, ["main"])],
+        methodResponses: { "sessions.list": sessionRow("viewer") },
+      });
 
-    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-    await expect(page.locator(".agent-chat__composer-combobox textarea")).toBeDisabled();
-    await expect(page.getByRole("button", { name: "Suggest message" })).toHaveCount(0);
-    await expect(page.locator(".agent-chat__typing-indicator")).toHaveCount(0);
-    expect(await gateway.getRequests("session.suggestions.list")).toEqual([]);
-    await screenshot(page, "solo-dormant.png");
-    await context.close();
-  });
-
-  it("keeps older gateways read-only when suggestion RPCs are not advertised", async () => {
-    const { context, page } = await contextAndPage();
-    await installMockGateway(page, {
-      presenceUsers: [
-        presenceUser("alice", true, ["main"]),
-        presenceUser("owner", false, ["main"]),
-      ],
-      methodResponses: { "sessions.list": sessionRow("viewer") },
-    });
-
-    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-    await expect(page.locator(".agent-chat__composer-combobox textarea")).toBeDisabled();
-    await expect(page.getByRole("button", { name: "Suggest message" })).toHaveCount(0);
-    await context.close();
-  });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      await expect(page.locator(".agent-chat__composer-combobox textarea")).toBeDisabled();
+      await expect(page.getByRole("button", { name: "Suggest message" })).toHaveCount(0);
+      if (solo) {
+        await expect(page.locator(".agent-chat__typing-indicator")).toHaveCount(0);
+        expect(await gateway.getRequests("session.suggestions.list")).toEqual([]);
+      }
+    },
+  );
 });

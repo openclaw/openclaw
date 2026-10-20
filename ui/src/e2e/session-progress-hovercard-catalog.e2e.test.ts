@@ -71,11 +71,10 @@ suite.define(() => {
         await row.hover();
         const card = page.locator(".session-progress-hovercard");
         await card.waitFor({ state: "visible" });
-        expect(await card.locator(".session-hovercard__title").textContent()).toBe(
-          "Catalog release review",
-        );
-        expect(await card.locator(".session-hovercard__created-age").textContent()).toBe("2h");
-        expect(await card.locator(".session-hovercard__context-text").allTextContents()).toEqual([
+        const part = (name: string) => card.locator(`.session-hovercard__${name}`);
+        expect(await part("title").textContent()).toBe("Catalog release review");
+        expect(await part("created-age").textContent()).toBe("2h");
+        expect(await part("context-text").allTextContents()).toEqual([
           "openclaw",
           "catalog-hovercard",
         ]);

@@ -1,5 +1,4 @@
 import { mkdir } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
 import type { GatewayServer } from "../../../src/gateway/server-public.ts";
 import { createEmptyPluginRegistry } from "../../../src/plugins/registry.ts";
@@ -13,17 +12,16 @@ import { getFreePort } from "../../../src/test-utils/ports.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
+type ProgressRequest = { outcome: "pending" | "ok"; sessionKey: string };
 declare global {
   interface Window {
-    catalogProgressRequests?: Array<{ outcome: "error" | "ok"; sessionKey: string }>;
+    catalogProgressRequests?: ProgressRequest[];
   }
 }
 
 const suite = createControlUiE2eSuite({
   name: "Control UI catalog progress hovercard with a real Gateway",
   startServerBeforeBrowser: true,
-  unavailableMessage: (executablePath) =>
-    `Playwright Chromium is not available at ${executablePath}`,
 });
 
 const threadId = "00000000-0000-0000-0000-000000135156";
@@ -116,7 +114,6 @@ suite.define(() => {
         sidecarStartup: "start",
       });
 
-      const artifactDir = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1" ? suite.artifactDir : null;
       await suite.withPage(
         {
           hasTouch: false,
@@ -141,16 +138,6 @@ suite.define(() => {
             },
           );
           await row.waitFor({ state: "visible", timeout: 30_000 });
-          const screenshot = async (name: string) => {
-            if (artifactDir) {
-              await page.screenshot({
-                animations: "disabled",
-                fullPage: true,
-                path: path.join(artifactDir, name),
-              });
-            }
-          };
-          await screenshot("01-native-catalog-row.png");
           expect(await row.getAttribute("data-session-key")).toBe(catalogSessionKey);
           await evaluateControlUiContext(page, (context) => {
             const client = context.gateway.snapshot.client;
@@ -158,21 +145,20 @@ suite.define(() => {
               throw new Error("Control UI Gateway client is unavailable");
             }
             const request = client.request.bind(client);
-            const observed: Array<{ outcome: "error" | "ok"; sessionKey: string }> = [];
+            const observed: ProgressRequest[] = [];
             window.catalogProgressRequests = observed;
             client.request = async <T>(method: string, params?: unknown): Promise<T> => {
               if (method !== "progressCard.get") {
                 return await request<T>(method, params);
               }
-              const sessionKey = (params as { sessionKey: string }).sessionKey;
-              try {
-                const result = await request<T>(method, params);
-                observed.push({ outcome: "ok", sessionKey });
-                return result;
-              } catch (error) {
-                observed.push({ outcome: "error", sessionKey });
-                throw error;
-              }
+              const observedRequest: ProgressRequest = {
+                outcome: "pending",
+                sessionKey: (params as { sessionKey: string }).sessionKey,
+              };
+              observed.push(observedRequest);
+              const result = await request<T>(method, params);
+              observedRequest.outcome = "ok";
+              return result;
             };
           });
           await row.locator("a.sidebar-recent-session__link").focus();
@@ -182,7 +168,6 @@ suite.define(() => {
             .poll(() => page.evaluate(() => window.catalogProgressRequests))
             .toEqual([{ outcome: "ok", sessionKey: catalogSessionKey }]);
           await expect.poll(() => card.textContent()).toContain("Native catalog progress");
-          await screenshot("02-qualified-progress-card.png");
         },
       );
     } finally {

@@ -1,10 +1,7 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
-  captureUiProof,
-  captureUiProofEnabled,
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
   installMockGateway,
@@ -25,36 +22,28 @@ suite.define(() => {
       messages: [{ role: "assistant", content: reportText }],
       sessionId: report.sessionId,
     };
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { width: 1280, height: 900 },
-      ...(captureUiProofEnabled ? { recordVideo: { dir: suite.artifactDir } } : {}),
-    });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      sessionKey: workKey,
-      deferredMethods: ["chat.history"],
-      methodResponses: { "sessions.list": sessionsListResponse([workspace, report]) },
-      sessionTranscripts: {
-        [workKey]: { messages: [{ role: "assistant", content: "Workspace ready." }] },
-        [reportKey]: reportHistory,
-      },
-    });
-    try {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        sessionKey: workKey,
+        deferredMethods: ["chat.history"],
+        methodResponses: { "sessions.list": sessionsListResponse([workspace, report]) },
+        sessionTranscripts: {
+          [workKey]: { messages: [{ role: "assistant", content: "Workspace ready." }] },
+          [reportKey]: reportHistory,
+        },
+      });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, workKey));
       await page.locator(".chat-thread-inner").getByText("Workspace ready.").waitFor();
-      expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
+      const requests = gateway.getRequests;
+      expect(await requests("chat.startup")).toHaveLength(1);
       const reportTarget = { sessionKey: reportKey };
       const reportLink = page
         .locator(`openclaw-app-sidebar [data-session-key="${reportKey}"] a`)
         .first();
       await reportLink.hover();
-      await expect
-        .poll(async () => (await gateway.getRequests("chat.history", reportTarget)).length)
-        .toBe(1);
-      expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
-      const before = (await gateway.getRequests("sessions.list")).length;
+      await expect.poll(async () => (await requests("chat.history", reportTarget)).length).toBe(1);
+      expect(await requests("chat.startup")).toHaveLength(1);
+      const before = (await requests("sessions.list")).length;
       await gateway.setSessionsListResponse(
         sessionsListResponse([{ ...workspace, label: "Workspace updated", updatedAt: 3 }, report]),
       );
@@ -64,7 +53,7 @@ suite.define(() => {
         updatedAt: 3,
       });
       await expect
-        .poll(async () => (await gateway.getRequests("sessions.list")).length)
+        .poll(async () => (await requests("sessions.list")).length)
         .toBeGreaterThan(before);
       await expect
         .poll(() =>
@@ -78,18 +67,8 @@ suite.define(() => {
       await gateway.deferNext("chat.history", reportTarget);
       await gateway.deferNext("chat.startup", reportTarget);
       await reportLink.click();
-      try {
-        await page.locator(".chat-thread-inner").getByText(reportText).waitFor();
-      } finally {
-        await captureUiProof(suite, page, "prefetched-session-open.png");
-        await writeFile(
-          path.join(suite.artifactDir, "requests.json"),
-          JSON.stringify(await gateway.getRequests(), null, 2),
-        );
-      }
-      expect((await gateway.getRequests("chat.startup", reportTarget)).length).toBeGreaterThan(0);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
+      await page.locator(".chat-thread-inner").getByText(reportText).waitFor();
+      expect((await requests("chat.startup", reportTarget)).length).toBeGreaterThan(0);
+    });
   });
 });

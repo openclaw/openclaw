@@ -2,7 +2,6 @@ import { expect, it } from "vitest";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
-  captureUiProof,
   controlUiSessionPath,
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
@@ -15,23 +14,21 @@ const suite = createSessionManagementE2eSuite();
 
 suite.define(() => {
   it("direct session shortcuts preserve drafts, archive only the current conversation, and support Undo", async () => {
-    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    const main = sessionRow("agent:main:main", "Main", 1);
-    const target = sessionRow("agent:main:current-shortcut", "Current shortcut", 2);
-    const others = [
-      sessionRow("agent:main:selected-other-one", "Selected other one", 3),
-      sessionRow("agent:main:selected-other-two", "Selected other two", 4),
-    ];
-    const gateway = await installMockGateway(page, {
-      sessions: [main, target, ...others],
-      sessionKey: target.key,
-      sessionArchiveFiltering: true,
-      historyMessages: [
-        { role: "assistant", content: [{ type: "text", text: "Current conversation content" }] },
-      ],
-    });
-    try {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const main = sessionRow("agent:main:main", "Main", 1);
+      const target = sessionRow("agent:main:current-shortcut", "Current shortcut", 2);
+      const others = [
+        sessionRow("agent:main:selected-other-one", "Selected other one", 3),
+        sessionRow("agent:main:selected-other-two", "Selected other two", 4),
+      ];
+      const gateway = await installMockGateway(page, {
+        sessions: [main, target, ...others],
+        sessionKey: target.key,
+        sessionArchiveFiltering: true,
+        historyMessages: [
+          { role: "assistant", content: [{ type: "text", text: "Current conversation content" }] },
+        ],
+      });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, target.key));
       const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
       const composer = pane.locator(".agent-chat__composer-combobox > textarea");
@@ -42,7 +39,6 @@ suite.define(() => {
           .click({ modifiers: ["Alt"] });
       }
       await composer.focus();
-      await captureUiProof(suite, page, "direct-archive-before.png");
       const modifier = await page.evaluate(() =>
         /Mac|iPhone|iPad|iPod/u.test(navigator.platform) ? "Meta" : "Control",
       );
@@ -63,7 +59,6 @@ suite.define(() => {
       expect(await gateway.getRequests("sessions.delete")).toEqual([]);
       const undo = page.getByRole("button", { name: "Undo", exact: true });
       await undo.waitFor({ state: "visible" });
-      await captureUiProof(suite, page, "direct-archive-after.png");
       expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(target.key));
       await pane.getByText("Current conversation content", { exact: true }).waitFor();
       await undo.click();
@@ -86,21 +81,18 @@ suite.define(() => {
       await newSessionHelp.waitFor({ state: "visible" });
       await page.keyboard.press(`${modifier}+Shift+A`);
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(2);
-      await captureUiProof(suite, page, "direct-new-session-before.png");
       await page.keyboard.press(`${modifier}+Shift+O`);
       const newComposer = page.locator("openclaw-new-session-page .new-session-page__message");
+      const newComposerFocused = () =>
+        newComposer.evaluate((element) => element === document.activeElement);
       await newComposer.waitFor({ state: "visible" });
       await shortcuts.waitFor({ state: "detached" });
-      await expect
-        .poll(() => newComposer.evaluate((element) => element === document.activeElement))
-        .toBe(true);
+      await expect.poll(newComposerFocused).toBe(true);
       expect(await newComposer.inputValue()).toBe("");
       expect(await gateway.getRequests("sessions.create")).toEqual([]);
       expect(await gateway.getRequests("chat.send")).toEqual([]);
-      await captureUiProof(suite, page, "direct-new-session-after.png");
       await page.keyboard.press(`${modifier}+/`);
       await newSessionHelp.waitFor({ state: "visible" });
-      await captureUiProof(suite, page, "direct-session-shortcuts-help.png");
       await page.keyboard.press(`${modifier}+/`);
       await shortcuts.waitFor({ state: "detached" });
       await page.goBack();
@@ -113,11 +105,7 @@ suite.define(() => {
             requestAnimationFrame(() => resolve());
           }),
       );
-      await expect
-        .poll(() => newComposer.evaluate((element) => element === document.activeElement))
-        .toBe(true);
-    } finally {
-      await context.close();
-    }
+      await expect.poll(newComposerFocused).toBe(true);
+    });
   });
 });
