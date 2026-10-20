@@ -280,7 +280,7 @@ describe("git env exploit regression", () => {
   });
 
   it("forces inherited permissive GIT_PROTOCOL_FROM_USER to block file transport access", async () => {
-    await withGitRepo(async ({ gitPath, repoDir, root }) => {
+    await withGitRepo(async ({ git, repoDir, root }) => {
       const inheritedEnv = { ...gitEnv, GIT_PROTOCOL_FROM_USER: "1" };
       expect(await git(["clone", repoDir, path.join(root, "unsafe")], inheritedEnv)).toBe(0);
       const safeEnv = sanitizeHostExecEnv({ baseEnv: inheritedEnv });
