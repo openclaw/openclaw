@@ -3,6 +3,10 @@
  * This bypasses shared model runtime's content type system which does not have a "document" type.
  */
 
+import {
+  buildAnthropicClaudeCodeIdentity,
+  isAnthropicOAuthApiKey,
+} from "@openclaw/ai/internal/anthropic";
 import { resolveAnthropicMessagesUrl } from "@openclaw/ai/transports";
 import { readResponseBodySnippet } from "../../infra/http-error-body.js";
 import {
@@ -50,6 +54,37 @@ type NativePdfJsonRequest = {
   defaultAuthHeader: string;
   signal?: AbortSignal;
 };
+
+function appendAnthropicBetaHeader(headers: Headers, beta: string) {
+  const values = (headers.get("anthropic-beta") ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  if (!values.includes(beta)) {
+    values.push(beta);
+  }
+  headers.set("anthropic-beta", values.join(","));
+}
+
+function usesAnthropicBearerAuth(
+  request: ModelProviderRequestTransportOverrides | undefined,
+  headers: Headers,
+): boolean {
+  const auth = request?.auth;
+  if (auth?.mode === "authorization-bearer") {
+    return true;
+  }
+  if (auth?.mode === "header") {
+    const headerName = auth.headerName.trim().toLowerCase();
+    if (headerName === "x-api-key" || headerName === "api-key") {
+      return false;
+    }
+    if (headerName === "authorization") {
+      return `${auth.prefix ?? ""}${auth.value}`.trimStart().toLowerCase().startsWith("bearer ");
+    }
+  }
+  return headers.get("authorization")?.trimStart().toLowerCase().startsWith("bearer ") ?? false;
+}
 
 async function postNativePdfJson(params: NativePdfJsonRequest): Promise<Record<string, unknown>> {
   const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy, trustConfiguredBaseUrlOrigin } =
@@ -126,6 +161,45 @@ export async function anthropicAnalyzePdf(
     throw new Error("Anthropic PDF: apiKey required");
   }
 
+  const request = params.requestConfig?.request;
+  const headers = new Headers(params.requestConfig?.headers);
+  for (const [name, value] of new Headers(request?.headers)) {
+    headers.set(name, value);
+  }
+  const hasExplicitAuthOverride =
+    Boolean(request?.auth) ||
+    ["authorization", "x-api-key", "api-key"].some((name) => headers.has(name));
+  const usesOAuthApiKey = !hasExplicitAuthOverride && isAnthropicOAuthApiKey(apiKey);
+  const usesBearerAuth = usesAnthropicBearerAuth(request, headers) || usesOAuthApiKey;
+  const hasExplicitApiKeyHeader =
+    headers.has("x-api-key") ||
+    headers.has("api-key") ||
+    (request?.auth?.mode === "header" &&
+      ["x-api-key", "api-key"].includes(request.auth.headerName.trim().toLowerCase()));
+  if (usesBearerAuth) {
+    headers.delete("x-api-key");
+    headers.delete("api-key");
+    if (!headers.has("authorization")) {
+      headers.set("authorization", `Bearer ${apiKey}`);
+    }
+    appendAnthropicBetaHeader(headers, "claude-code-20250219");
+    appendAnthropicBetaHeader(headers, "oauth-2025-04-20");
+  } else if (!hasExplicitApiKeyHeader) {
+    headers.set("x-api-key", apiKey);
+  }
+  headers.set("anthropic-version", "2023-06-01");
+  appendAnthropicBetaHeader(headers, "pdfs-2024-09-25");
+  if (usesBearerAuth) {
+    const identity = buildAnthropicClaudeCodeIdentity(
+      headers.get("anthropic-beta") ?? "",
+      Object.fromEntries(headers.entries()),
+    );
+    for (const [name, value] of Object.entries(identity.headers)) {
+      headers.set(name, value);
+    }
+  }
+  const requestHeaders = Object.fromEntries(headers.entries());
+
   const json = await postNativePdfJson({
     provider: "anthropic",
     api: "anthropic-messages",
@@ -133,12 +207,7 @@ export async function anthropicAnalyzePdf(
     baseUrl: params.baseUrl,
     defaultBaseUrl: resolveAnthropicMessagesUrl(undefined).replace(/\/messages$/u, ""),
     resolveUrl: resolveAnthropicMessagesUrl,
-    headers: {
-      ...params.requestConfig?.headers,
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-      "anthropic-beta": "pdfs-2024-09-25",
-    },
+    headers: requestHeaders,
     body: {
       model: params.modelId,
       max_tokens: params.maxTokens ?? 4096,
@@ -155,8 +224,8 @@ export async function anthropicAnalyzePdf(
         },
       ],
     },
-    request: params.requestConfig?.request,
-    defaultAuthHeader: "x-api-key",
+    request: request ? { ...request, headers: requestHeaders } : undefined,
+    defaultAuthHeader: usesBearerAuth ? "authorization" : "x-api-key",
     signal: params.signal,
   });
 
