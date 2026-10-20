@@ -10,15 +10,10 @@ let db: DatabaseSync;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => {
   db = new DatabaseSync(":memory:");
-  ensureMemoryIndexSchema({
-    db,
-    cacheEnabled: false,
-    ftsEnabled: false,
-    ftsTokenizer: "unicode61",
-  });
+  ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: false });
 });
 afterEach(() => db.close());
-const load = () => loadMemorySourceFileState({ db, source: "memory" });
+const load = (paths?: string[]) => loadMemorySourceFileState({ db, source: "memory", paths });
 const inspect = (workspaceDir: string, extraPaths: { path: string; pattern?: string }[]) =>
   inspectMemorySourceState({
     readIndexedRows: async () => load(),
@@ -57,16 +52,11 @@ describe("memory source state", () => {
   });
 
   it.each([
-    { paths: [], expected: [] },
-    { paths: ["memory/one.md", "memory/one.md", "missing' OR 1=1 --"], expected: ["hash-1"] },
-    {
-      paths: [...Array.from({ length: 33_000 }, (_, index) => `missing-${index}`), "memory/one.md"],
-      expected: ["hash-1"],
-    },
-  ])("restricts source snapshots to $paths.length requested paths", ({ paths, expected }) => {
-    expect(
-      loadMemorySourceFileState({ db, source: "memory", paths }).map((row) => row.hash),
-    ).toEqual(expected);
+    [[], []],
+    [["memory/one.md", "memory/one.md", "missing' OR 1=1 --"], ["hash-1"]],
+    [[...Array.from({ length: 33_000 }, (_, i) => `missing-${i}`), "memory/one.md"], ["hash-1"]],
+  ])("restricts source snapshots to requested paths", (paths, expected) => {
+    expect(load(paths).map((row) => row.hash)).toEqual(expected);
   });
 });
 
@@ -87,11 +77,13 @@ describe("memory source inspection extra-path diagnostics", () => {
         { path: "missing" },
       ]);
 
-      expect(inspection.eligible).toBe(canonicalMemory ? 1 : 0);
-      expect(inspection.issues).toEqual([
-        ...(canonicalMemory ? [] : ["no eligible memory files found"]),
-        expect.stringContaining('extra path "' + linkedRoot + '" is a symlink root'),
-      ]);
+      expect(inspection).toMatchObject({
+        eligible: canonicalMemory ? 1 : 0,
+        issues: [
+          ...(canonicalMemory ? [] : ["no eligible memory files found"]),
+          expect.stringContaining('extra path "' + linkedRoot + '" is a symlink root'),
+        ],
+      });
       expect(inspection.issues.at(-1)).toContain("configure its resolved absolute directory");
     },
   );
@@ -104,10 +96,10 @@ describe("memory source inspection extra-path diagnostics", () => {
       await fs.writeFile(path.join(nestedTarget, "excluded.md"), "# Excluded\n");
       await fs.symlink(nestedTarget, path.join(vaultDir, "nested"), "dir");
 
-      const inspection = await inspect(workspaceDir, [{ path: vaultDir }]);
-
-      expect(inspection.eligible).toBe(2);
-      expect(inspection.issues).toEqual([]);
+      await expect(inspect(workspaceDir, [{ path: vaultDir }])).resolves.toMatchObject({
+        eligible: 2,
+        issues: [],
+      });
     },
   );
 });

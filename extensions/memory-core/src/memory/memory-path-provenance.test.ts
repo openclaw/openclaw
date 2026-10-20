@@ -12,9 +12,7 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-core", { spy: true });
 createMemoryCoreTestHarness();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-afterEach(() => {
-  vi.restoreAllMocks();
-});
+afterEach(() => vi.restoreAllMocks());
 const untrustedProvenance = {
   fileHash: "0".repeat(64),
   originClass: "untrusted",
@@ -75,42 +73,35 @@ describe("memory path provenance", () => {
     await fs.mkdir(path.join(workspaceDir, "Memory"), { recursive: true });
     await fs.mkdir(outsideDir, { recursive: true });
 
-    const classify = async (relativePath: string, source: "memory" | "sessions" = "memory") => {
-      const absolutePath = path.join(workspaceDir, relativePath);
-      await fs.mkdir(path.dirname(absolutePath), { recursive: true });
-      await fs.writeFile(absolutePath, "fixture");
-      return await resolveMemoryPathClassification({ absolutePath, source, workspaceDir });
-    };
-    const expectOrigin = async (
-      relativePath: string,
+    const check = async (
+      file: string,
       originClass: "agent" | "system" | "untrusted",
+      curatedRoot = false,
       source: "memory" | "sessions" = "memory",
     ) => {
-      await expect(classify(relativePath, source)).resolves.toMatchObject({ originClass });
+      const absolutePath = path.join(workspaceDir, file);
+      await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+      await fs.writeFile(absolutePath, "fixture");
+      await expect(
+        resolveMemoryPathClassification({ absolutePath, source, workspaceDir }),
+      ).resolves.toEqual({ curatedRoot, originClass });
     };
-
-    await expect(classify("MEMORY.md")).resolves.toEqual({
-      curatedRoot: true,
-      originClass: "agent",
-    });
-    await expect(classify("USER.md")).resolves.toEqual({ curatedRoot: true, originClass: "agent" });
-    await expect(classify("users/person/USER.md")).resolves.toEqual({
-      curatedRoot: false,
-      originClass: "agent",
-    });
-    await expectOrigin("users/person/notes.md", "untrusted");
+    await check("MEMORY.md", "agent", true);
+    await check("USER.md", "agent", true);
+    await check("users/person/USER.md", "agent");
+    await check("users/person/notes.md", "untrusted");
     vi.mocked(readMemoryArtifactProvenance).mockResolvedValueOnce(untrustedProvenance);
-    await expectOrigin("users/person/USER.md", "untrusted");
-    await expectOrigin("memory/2026-07-27.md", "agent");
-    await expectOrigin("memory/projects/notes.md", "agent");
-    await expectOrigin("DREAMS.md", "system");
-    await expectOrigin("memory/dreaming/deep/report.md", "system");
-    await expectOrigin("notes/extra.md", "untrusted");
+    await check("users/person/USER.md", "untrusted");
+    await check("memory/2026-07-27.md", "agent");
+    await check("memory/projects/notes.md", "agent");
+    await check("DREAMS.md", "system");
+    await check("memory/dreaming/deep/report.md", "system");
+    await check("notes/extra.md", "untrusted");
     const caseVariantDir = await fs.realpath(path.join(workspaceDir, "Memory"));
     if (path.basename(caseVariantDir) === "Memory") {
-      await expectOrigin("Memory/payload.md", "untrusted");
+      await check("Memory/payload.md", "untrusted");
     }
-    await expectOrigin("memory/2026-07-27.md", "untrusted", "sessions");
+    await check("memory/2026-07-27.md", "untrusted", false, "sessions");
 
     const outsideFile = path.join(outsideDir, "payload.md");
     await fs.writeFile(outsideFile, "outside");

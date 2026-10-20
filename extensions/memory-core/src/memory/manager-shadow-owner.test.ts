@@ -1,28 +1,23 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import type { MemorySourceIndexReplacement } from "./manager-source-index-kernel.js";
 
 const owners: MemoryIndexDatabase[] = [];
-const directories: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(async () => {
   vi.restoreAllMocks();
   for (const owner of owners.splice(0)) {
     await owner.closeShadow();
   }
-  for (const directory of directories.splice(0)) {
-    await fs.rm(directory, { recursive: true, force: true });
-  }
 });
 
 async function createShadow(filename: string) {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "memory-shadow-owner-"));
-  directories.push(directory);
+  const directory = tempDirs.make("memory-shadow-owner-");
   const owner = await MemoryIndexDatabase.openShadow(path.join(directory, filename), false);
   owners.push(owner);
   await owner.admitSchema({ cacheEnabled: false, ftsEnabled: true });
@@ -30,6 +25,7 @@ async function createShadow(filename: string) {
 }
 
 function sessionReplacement(sessionId: string, text: string): MemorySourceIndexReplacement {
+  const chunk = { startLine: 1, endLine: 1, text, hash: "chunk" };
   return {
     source: "sessions",
     agentId: "main",
@@ -39,17 +35,7 @@ function sessionReplacement(sessionId: string, text: string): MemorySourceIndexR
     vectorReady: false,
     entry: { path: `sessions/${sessionId}`, hash: "source", mtimeMs: 1, size: 1 },
     embeddings: [],
-    chunks: [
-      {
-        startLine: 1,
-        endLine: 1,
-        text,
-        hash: "chunk",
-        importance: null,
-        triggers: null,
-        projectKey: null,
-      },
-    ],
+    chunks: [{ ...chunk, importance: null, triggers: null, projectKey: null }],
   };
 }
 
@@ -86,16 +72,12 @@ describe("private shadow admission", () => {
     const closing = owner.closeShadow();
     try {
       await entered.promise;
-      expect(db.isOpen).toBe(true);
-      expect(owner.shadowReleased).toBe(false);
-      released.resolve();
-      await closing;
-      expect(db.isOpen).toBe(false);
-      expect(owner.shadowReleased).toBe(true);
+      expect(owner).toMatchObject({ db: { isOpen: true }, shadowReleased: false });
     } finally {
       released.resolve();
       await closing;
     }
+    expect(owner).toMatchObject({ db: { isOpen: false }, shadowReleased: true });
   });
 
   it("queues inherited reentrant callbacks until the native writer settles", async () => {

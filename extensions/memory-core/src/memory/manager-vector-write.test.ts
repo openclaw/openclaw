@@ -62,15 +62,11 @@ describe("memory vector dedupe", () => {
       }
       return constants.SQLITE_OK;
     });
-    try {
-      expect(() => write("chunk-1", [1, 0, 0])).toThrow(/not authorized/);
-      expect(denied).toBe(true);
-      expectVectors();
-      write("chunk-1", [0, 2, -0.5]);
-      expectVectors(["chunk-1", [0, 2, -0.5]]);
-    } finally {
-      db.setAuthorizer(null);
-    }
+    expect(() => write("chunk-1", [1, 0, 0])).toThrow(/not authorized/);
+    expect(denied).toBe(true);
+    expectVectors();
+    write("chunk-1", [0, 2, -0.5]);
+    expectVectors(["chunk-1", [0, 2, -0.5]]);
   });
 
   it("propagates DELETE step failure and reuses the writer after recovery", () => {
