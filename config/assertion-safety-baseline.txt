@@ -82,7 +82,6 @@ extensions/canvas/src/config-migration.ts	2
 extensions/canvas/src/tool.ts	1
 extensions/chutes/models.ts	1
 extensions/chutes/oauth.ts	1
-extensions/clawrouter/index.ts	1
 extensions/clawrouter/usage.ts	1
 extensions/clickclack/src/access.ts	2
 extensions/clickclack/src/channel-config.ts	5
@@ -165,7 +164,7 @@ extensions/cua-computer/src/driver-artifact-verification.ts	1
 extensions/cua-computer/src/driver-artifacts.ts	1
 extensions/cua-computer/src/driver-client.ts	9
 extensions/cua-computer/src/driver-result.ts	3
-extensions/cua-computer/src/mcp-driver-client.ts	3
+extensions/cua-computer/src/mcp-driver-client.ts	2
 extensions/cua-computer/src/window-actions.ts	3
 extensions/deepinfra/provider-models.ts	1
 extensions/deepseek/provider-policy-api.ts	2
@@ -180,7 +179,6 @@ extensions/diffs/src/plugin.ts	4
 extensions/diffs/src/store.ts	3
 extensions/diffs/src/tool.ts	2
 extensions/diffs/src/viewer-client.ts	1
-extensions/diffs/src/viewer-payload.ts	1
 extensions/discord/src/accounts.ts	2
 extensions/discord/src/actions/handle-action.ts	1
 extensions/discord/src/actions/runtime.guild.ts	1
@@ -229,7 +227,7 @@ extensions/discord/src/monitor/gateway-metadata.ts	6
 extensions/discord/src/monitor/gateway-plugin.ts	2
 extensions/discord/src/monitor/ingress.ts	6
 extensions/discord/src/monitor/message-channel-info.ts	1
-extensions/discord/src/monitor/message-forwarded.ts	5
+extensions/discord/src/monitor/message-forwarded.ts	2
 extensions/discord/src/monitor/message-handler.preflight.ts	1
 extensions/discord/src/monitor/message-text.ts	1
 extensions/discord/src/monitor/model-picker-preferences.ts	1
@@ -376,7 +374,6 @@ extensions/line/src/setup-core.ts	1
 extensions/line/src/webhook-spool.ts	2
 extensions/llm-task/doctor-contract-api.ts	1
 extensions/llm-task/src/llm-task-tool.ts	2
-extensions/lmstudio/src/models.ts	2
 extensions/lobster/src/lobster-runner.ts	2
 extensions/logbook/index.ts	5
 extensions/logbook/src/analyze.ts	5
