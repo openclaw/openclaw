@@ -29,7 +29,7 @@ describe("getMemberInfoMSTeams", () => {
     mockState.fetchWithSsrFGuard.mockImplementation(createGraphPageGuard(mockState.fetchGraphJson));
   });
 
-  it("accepts a normalized match on the final allowed team page", async () => {
+  it.each([true, false])("finds final-page member only when present: %s", async (found) => {
     let page = 0;
     mockState.fetchGraphJson.mockImplementation(async () => {
       page += 1;
@@ -37,28 +37,17 @@ describe("getMemberInfoMSTeams", () => {
         return { membershipType: "standard" };
       }
       return {
-        value: page === 101 ? [{ userId: "aad-final", email: " Alice@Contoso.com " }] : [],
+        value: found && page === 101 ? [{ userId: "aad-final", email: " Alice@Contoso.com " }] : [],
         "@odata.nextLink": "https://graph.microsoft.com/v1.0/teams/team-1/members?$skip=next",
       };
     });
 
-    await expect(memberInfo("teams:Alice@Contoso.com ")).resolves.toMatchObject({
-      user: { id: "aad-final" },
-    });
-    expect(mockState.fetchGraphJson).toHaveBeenCalledTimes(101);
-  });
-
-  it("preserves the exact team pagination-limit failure", async () => {
-    mockState.fetchGraphJson
-      .mockResolvedValueOnce({ membershipType: "standard" })
-      .mockResolvedValue({
-        value: [],
-        "@odata.nextLink": "https://graph.microsoft.com/v1.0/teams/team-1/members?$skip=next",
-      });
-
-    await expect(memberInfo("missing")).rejects.toThrow(
-      "Microsoft Teams team member pagination limit exceeded",
-    );
+    const result = memberInfo(found ? "teams:Alice@Contoso.com " : "missing");
+    if (found) {
+      await expect(result).resolves.toMatchObject({ user: { id: "aad-final" } });
+    } else {
+      await expect(result).rejects.toThrow("Microsoft Teams team member pagination limit exceeded");
+    }
     expect(mockState.fetchGraphJson).toHaveBeenCalledTimes(101);
   });
 

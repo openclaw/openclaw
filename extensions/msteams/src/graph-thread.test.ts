@@ -35,11 +35,12 @@ it("handles <at> tags with attributes", () => {
   );
 });
 
-it("fetchChannelMessage returns undefined on fetch error", async () => {
+it.each([
+  ["channel", () => fetchChannelMessage("tok", "group-1", "channel-1", "msg-1")],
+  ["chat", () => fetchChatMessageText("tok", "19:chat", "m-1")],
+] as const)("%s returns undefined on fetch error", async (_kind, fetchMessage) => {
   vi.mocked(fetchGraphJson).mockRejectedValueOnce(new Error("forbidden"));
-
-  const result = await fetchChannelMessage("tok", "group-1", "channel-1", "msg-1");
-  expect(result).toBeUndefined();
+  await expect(fetchMessage()).resolves.toBeUndefined();
 });
 
 describe("fetchChatMessageText", () => {
@@ -59,13 +60,6 @@ describe("fetchChatMessageText", () => {
       token: "tok",
       path: "/chats/19%3Achat%40thread.v2/messages/1783379480258",
     });
-  });
-
-  it("returns undefined on fetch error", async () => {
-    vi.mocked(fetchGraphJson).mockRejectedValueOnce(new Error("not found"));
-
-    const result = await fetchChatMessageText("tok", "19:chat", "m-1");
-    expect(result).toBeUndefined();
   });
 
   it("forwards a shared deadline to the Graph request", async () => {

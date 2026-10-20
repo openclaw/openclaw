@@ -32,7 +32,7 @@ const privateChannel = Object.freeze({
   description: "Engineering discussions",
   membershipType: "private",
 });
-const cfg = {};
+const request = { cfg: {}, teamId: "team-abc" };
 
 beforeEach(() => {
   mockState.resolveGraphToken.mockReset().mockResolvedValue(TOKEN);
@@ -46,10 +46,7 @@ describe("listChannelsMSTeams", () => {
   it("returns channels with all fields mapped", async () => {
     mockState.fetchGraphJson.mockResolvedValue({ value: [channel, privateChannel] });
 
-    const result = await listChannelsMSTeams({
-      cfg,
-      teamId: "team-abc",
-    });
+    const result = await listChannelsMSTeams(request);
 
     expect(result.channels).toEqual([channel, privateChannel]);
     expect(mockState.fetchGraphJson).toHaveBeenCalledWith({
@@ -61,10 +58,7 @@ describe("listChannelsMSTeams", () => {
   it("returns empty array when value is undefined", async () => {
     mockState.fetchGraphJson.mockResolvedValue({});
 
-    const result = await listChannelsMSTeams({
-      cfg,
-      teamId: "team-no-value",
-    });
+    const result = await listChannelsMSTeams({ ...request, teamId: "team-no-value" });
 
     expect(result.channels).toStrictEqual([]);
   });
@@ -79,11 +73,7 @@ describe("getChannelInfoMSTeams", () => {
     });
     mockState.fetchGraphJson.mockResolvedValue(details);
 
-    const result = await getChannelInfoMSTeams({
-      cfg,
-      teamId: "team-abc",
-      channelId: "ch-1",
-    });
+    const result = await getChannelInfoMSTeams({ ...request, channelId: "ch-1" });
 
     expect(result.channel).toEqual(details);
     expect(mockState.fetchGraphJson).toHaveBeenCalledWith({

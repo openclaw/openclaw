@@ -29,16 +29,13 @@ vi.mock("@microsoft/teams.api", () => ({
   }),
 }));
 
-vi.mock("./delegated-state.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./delegated-state.js")>();
-  return {
-    ...actual,
-    loadMSTeamsDelegatedTokens: async (accountId?: string | null) => {
-      hostMockState.delegatedTokenAccountId = accountId;
-      return hostMockState.delegatedTokens;
-    },
-  };
-});
+vi.mock("./delegated-state.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./delegated-state.js")>()),
+  loadMSTeamsDelegatedTokens: async (accountId?: string | null) => {
+    hostMockState.delegatedTokenAccountId = accountId;
+    return hostMockState.delegatedTokens;
+  },
+}));
 
 import { probeMSTeams } from "./probe.js";
 
@@ -107,40 +104,28 @@ describe("msteams probe", () => {
     });
   });
 
-  it("reports delegated tokens expired when the process clock is invalid", async () => {
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+  it.each([true, false])("delegated tokens: invalidClock=%s", async (invalidClock) => {
+    const nowSpy = invalidClock ? vi.spyOn(Date, "now").mockReturnValue(Number.NaN) : undefined;
     hostMockState.delegatedTokens = delegatedTokens();
-
     try {
-      await expect(probeMSTeams(config({ delegatedAuth: { enabled: true } }))).resolves.toEqual({
+      await expect(
+        probeMSTeams(config({ delegatedAuth: { enabled: true } }), {
+          accountId: invalidClock ? undefined : "support",
+        }),
+      ).resolves.toEqual({
         ok: true,
         appId: "app",
         graph: { ok: true, roles: undefined, scopes: undefined },
         delegatedAuth: {
-          ok: false,
+          ok: !invalidClock,
           scopes: ["ChatMessage.Send"],
           userPrincipalName: "user@example.com",
-          error: "token expired (will auto-refresh on next use)",
+          ...(invalidClock ? { error: "token expired (will auto-refresh on next use)" } : {}),
         },
       });
+      expect(hostMockState.delegatedTokenAccountId).toBe(invalidClock ? "default" : "support");
     } finally {
-      nowSpy.mockRestore();
+      nowSpy?.mockRestore();
     }
-  });
-
-  it("loads delegated tokens for the selected account", async () => {
-    hostMockState.delegatedTokens = delegatedTokens();
-
-    await expect(
-      probeMSTeams(config({ delegatedAuth: { enabled: true } }), { accountId: "support" }),
-    ).resolves.toMatchObject({
-      ok: true,
-      delegatedAuth: {
-        ok: true,
-        scopes: ["ChatMessage.Send"],
-        userPrincipalName: "user@example.com",
-      },
-    });
-    expect(hostMockState.delegatedTokenAccountId).toBe("support");
   });
 });

@@ -13,19 +13,18 @@ describe("msteams inbound", () => {
   });
 
   describe("parseMSTeamsActivityTimestamp", () => {
+    const timestamp = "2024-01-01T00:00:00.000Z";
     it("returns undefined for empty/invalid values", () => {
       expect(parseMSTeamsActivityTimestamp(undefined)).toBeUndefined();
       expect(parseMSTeamsActivityTimestamp("not-a-date")).toBeUndefined();
     });
 
     it("parses string timestamps", () => {
-      expect(parseMSTeamsActivityTimestamp("2024-01-01T00:00:00.000Z")?.toISOString()).toBe(
-        "2024-01-01T00:00:00.000Z",
-      );
+      expect(parseMSTeamsActivityTimestamp(timestamp)?.toISOString()).toBe(timestamp);
     });
 
     it("passes through Date instances", () => {
-      const d = new Date("2024-01-01T00:00:00.000Z");
+      const d = new Date(timestamp);
       expect(parseMSTeamsActivityTimestamp(d)).toBe(d);
     });
   });
