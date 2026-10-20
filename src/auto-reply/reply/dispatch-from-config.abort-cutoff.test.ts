@@ -1,4 +1,3 @@
-// Stopped queued input must not become a missing-reply warning at finalization.
 import { beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { MISSING_REPLY_NOTICE_TEXT } from "../../agents/reply-completion.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -103,22 +102,19 @@ it.each([
     },
   });
 
+  expect(continueTurn).toHaveBeenCalledTimes(cancelled ? 0 : 1);
+  expect(result.deliberateSilentTerminalReply).toBe(cancelled ? true : undefined);
+  expect(result.noVisibleReplyFallbackDelivered).toBe(cancelled ? undefined : true);
   if (cancelled) {
-    expect(continueTurn).not.toHaveBeenCalled();
     expect(typing.cleanup).toHaveBeenCalledOnce();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    expect(result.deliberateSilentTerminalReply).toBe(true);
-    expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
     expect(sessionEntry.abortCutoffMessageSid).toBe("42");
   } else {
-    expect(continueTurn).toHaveBeenCalledOnce();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledExactlyOnceWith({
       text: MISSING_REPLY_NOTICE_TEXT,
       isError: true,
       isStatusNotice: true,
     });
-    expect(result.noVisibleReplyFallbackDelivered).toBe(true);
-    expect(result.deliberateSilentTerminalReply).toBeUndefined();
     expect(sessionEntry.abortCutoffMessageSid).toBeUndefined();
     expect(sessionEntry.abortCutoffTimestamp).toBeUndefined();
   }

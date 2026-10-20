@@ -192,16 +192,6 @@ describe("restart tombstone channel feedback", () => {
     );
   });
 
-  it("does not notify for unauthorized inbound", async () => {
-    await rejectInbound({ context: { InboundAccessAuthorized: false } });
-    expect(deliver).not.toHaveBeenCalled();
-  });
-
-  it("honors explicit send-policy denial", async () => {
-    await rejectInbound({ sendPolicy: "deny" });
-    expect(deliver).not.toHaveBeenCalled();
-  });
-
   it("warns about ambiguous routed delivery without repeating the notice", async () => {
     mocks.routeReply.mockResolvedValueOnce({ ok: true, delivered: true, ambiguous: true });
     const context = { Provider: "slack", Surface: "slack" };
@@ -212,24 +202,26 @@ describe("restart tombstone channel feedback", () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("notice delivery was not confirmed"));
   });
 
-  it("rechecks ACP privacy after waiting for admission", async () => {
-    sessionStoreMocks.loadSessionEntry.mockImplementation(() => {
-      acpMocks.readAcpSessionEntry.mockReturnValue({
-        entry: { sessionId: "failed-session", spawnedBy: "agent:main:parent" },
-        acp: { backend: "acpx", mode: "persistent" },
+  it.each([
+    { label: "unauthorized inbound", context: { InboundAccessAuthorized: false } },
+    { label: "explicit send-policy denial", sendPolicy: "deny" as const },
+    { label: "ACP privacy after waiting for admission", acp: true },
+    { label: "send policy after waiting for admission", latePolicy: true },
+  ])("does not notify for $label", async ({ context, sendPolicy, acp, latePolicy }) => {
+    if (acp || latePolicy) {
+      sessionStoreMocks.loadSessionEntry.mockImplementation(() => {
+        if (acp) {
+          acpMocks.readAcpSessionEntry.mockReturnValue({
+            entry: { sessionId: "failed-session", spawnedBy: "agent:main:parent" },
+            acp: { backend: "acpx", mode: "persistent" },
+          });
+        } else {
+          sessionStoreMocks.currentEntry!.sendPolicy = "deny";
+        }
+        return sessionStoreMocks.currentEntry;
       });
-      return sessionStoreMocks.currentEntry;
-    });
-    await rejectInbound();
-    expect(deliver).not.toHaveBeenCalled();
-  });
-
-  it("rechecks send policy after waiting for admission", async () => {
-    sessionStoreMocks.loadSessionEntry.mockImplementation(() => {
-      sessionStoreMocks.currentEntry!.sendPolicy = "deny";
-      return sessionStoreMocks.currentEntry;
-    });
-    await rejectInbound();
+    }
+    await rejectInbound({ context, sendPolicy });
     expect(deliver).not.toHaveBeenCalled();
   });
 });

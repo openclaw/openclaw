@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GetReplyOptions } from "../types.js";
 import {
   createDispatcher,
@@ -15,6 +15,13 @@ import { buildTestCtx } from "./test-ctx.js";
 
 beforeAll(globalBeforeAll0);
 
+const preamble = (itemId: string, progressText: string, phase?: "update" | "end") => ({
+  kind: "preamble",
+  itemId,
+  progressText,
+  ...(phase ? { phase } : {}),
+});
+
 describe("durable commentary delivery", () => {
   beforeEach(describe0BeforeEach0);
 
@@ -22,7 +29,7 @@ describe("durable commentary delivery", () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = { verboseLevel: "off" };
     const dispatcher = createDispatcher();
-    const progress: unknown[] = [];
+    const onItemEvent = vi.fn(async () => true);
     await dispatchReplyFromConfig({
       ctx: buildTestCtx({
         Provider: "webchat",
@@ -35,17 +42,18 @@ describe("durable commentary delivery", () => {
       replyOptions: {
         progressRequiresReply: true,
         suppressDefaultToolProgressMessages: true,
-        onItemEvent: async (event) => {
-          progress.push(event);
-          return true;
-        },
+        onItemEvent,
       },
       replyResolver: async (_ctx, options) => {
         await options?.onItemEvent?.({ kind: "tool", name: "read", status: "running" });
         return { text: "Done." };
       },
     });
-    expect(progress).toEqual([{ kind: "tool", name: "read", status: "running" }]);
+    expect(onItemEvent).toHaveBeenCalledExactlyOnceWith({
+      kind: "tool",
+      name: "read",
+      status: "running",
+    });
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
       expect.objectContaining({ text: "Done." }),
     );
@@ -87,21 +95,11 @@ describe("durable commentary delivery", () => {
         },
         replyResolver: async (_ctx, options) => {
           callbacks = options;
-          const preamble = {
-            kind: "preamble",
-            itemId: "inspect",
-            progressText: "Inspecting files.",
-          };
-          await options?.onItemEvent?.({ ...preamble, phase: "update" });
+          await options?.onItemEvent?.(preamble("inspect", "Inspecting files.", "update"));
           await options?.onToolStart?.({ name: "read", phase: "start" });
-          await options?.onItemEvent?.({ ...preamble, phase: "end" });
+          await options?.onItemEvent?.(preamble("inspect", "Inspecting files.", "end"));
           const tool = options?.onToolResult?.({ text: "Read" });
-          await options?.onItemEvent?.({
-            kind: "preamble",
-            itemId: "summary",
-            progressText: "Writing the answer.",
-            phase: "end",
-          });
+          await options?.onItemEvent?.(preamble("summary", "Writing the answer.", "end"));
           await options?.onPartialReply?.({ text: "Done." });
           await tool;
           return { text: "Done." };
@@ -115,11 +113,7 @@ describe("durable commentary delivery", () => {
           : [],
       );
       expect(visible.slice(-2)).toEqual(["preview:Done.", "final:Done."]);
-      await callbacks?.onItemEvent?.({
-        kind: "preamble",
-        itemId: "late",
-        progressText: "Too late.",
-      });
+      await callbacks?.onItemEvent?.(preamble("late", "Too late."));
       await callbacks?.onToolResult?.({ text: "Late tool summary" });
       await dispatcher.waitForIdle();
       expect(visible.slice(-2)).toEqual(["preview:Done.", "final:Done."]);

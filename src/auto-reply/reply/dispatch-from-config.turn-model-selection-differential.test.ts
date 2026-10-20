@@ -41,8 +41,7 @@ async function expectHarnessSelection(fixture: TurnModelDifferentialFixture) {
       agents: { defaults: { model: { primary: turnModelRefLabel(TURN_MODEL_DEFAULT_REF) } } },
       channels: fixture.modelByChannel ? { modelByChannel: fixture.modelByChannel } : undefined,
     },
-    // Visible-reply defaults are queried only for direct delivery. The stored
-    // chat type still drives the real channel matcher for group fixtures.
+    // Direct delivery queries defaults; stored chat type still controls channel matching.
     chatType: "direct",
     ctx: buildTestCtx({ SessionKey: sessionKey, ...fixture.ctx }),
     entry: fixture.child,
@@ -60,12 +59,10 @@ describe("turn model selection harness-path differential", () => {
   beforeEach(() => {
     resetPluginRuntimeStateForTest();
     setActivePluginRegistry(createSessionConversationTestRegistry());
-    selectAgentHarnessMock.mockReturnValue({ visibleReplies: "automatic" });
+    selectAgentHarnessMock.mockReset().mockReturnValue({ visibleReplies: "automatic" });
   });
 
-  afterEach(() => {
-    resetPluginRuntimeStateForTest();
-  });
+  afterEach(resetPluginRuntimeStateForTest);
 
   it.each(
     TURN_MODEL_DIFFERENTIAL_FIXTURES.filter(
@@ -74,26 +71,19 @@ describe("turn model selection harness-path differential", () => {
         name === "parent persisted override versus channel" ||
         name === "explicit default rejects stale child and parent overrides",
     ),
-  )("pins observed $name behavior", async (fixture) => {
-    await expectHarnessSelection(fixture);
-  });
+  )("pins observed $name behavior", expectHarnessSelection);
 
   it("resolves turn aliases in the session agent scope", async () => {
     const sessionKey = "agent:worker:telegram:group:selection";
+    const aliased = (model: string) => ({ models: { [model]: { alias: "fast" } } });
     const cfg = {
       agents: {
         defaults: {
           model: "openai/global-model",
-          models: {
-            "openai/global-model": { alias: "fast" },
-          },
+          ...aliased("openai/global-model"),
         },
         entries: {
-          worker: {
-            models: {
-              "anthropic/worker-model": { alias: "fast" },
-            },
-          },
+          worker: aliased("anthropic/worker-model"),
         },
       },
     } as unknown as OpenClawConfig;
