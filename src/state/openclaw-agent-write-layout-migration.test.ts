@@ -35,6 +35,21 @@ const scope = [
   "sqlite_stat4",
   "transcript_event_identities",
 ];
+const rows = (database: DatabaseSync, sql: string) => database.prepare(sql).all();
+const row = (database: DatabaseSync, sql: string) => database.prepare(sql).get();
+const identities = (database: DatabaseSync) =>
+  rows(database, "SELECT * FROM transcript_event_identities ORDER BY seq");
+const origins = (database: DatabaseSync) =>
+  rows(database, "SELECT * FROM memory_entry_origins ORDER BY agent_id");
+const statistics = (database: DatabaseSync) =>
+  rows(database, "SELECT * FROM sqlite_stat1 ORDER BY tbl, idx");
+const originLayout = (database: DatabaseSync) =>
+  row(database, "SELECT wr FROM pragma_table_list WHERE name = 'memory_entry_origins'")?.wr;
+
+function expectVersion(database: DatabaseSync, version: number) {
+  expect(row(database, "PRAGMA user_version")?.user_version).toBe(version);
+  expect(row(database, "SELECT schema_version FROM schema_meta")?.schema_version).toBe(version);
+}
 
 function seed(database: DatabaseSync): void {
   database.exec(schemaV27);
@@ -110,10 +125,10 @@ describe("agent write layout migration", () => {
             expect(migrate).not.toThrow();
           }
         });
-        expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(
+        expect(row(database, "PRAGMA user_version")?.user_version).toBe(
           integrityCheck === "full" ? 27 : OPENCLAW_AGENT_SCHEMA_VERSION,
         );
-        expect(database.prepare("SELECT value FROM untouched_payloads NOT INDEXED").all()).toEqual([
+        expect(rows(database, "SELECT value FROM untouched_payloads NOT INDEXED")).toEqual([
           { value: "retained" },
         ]);
       });
@@ -151,14 +166,9 @@ describe("agent write layout migration", () => {
           database.exec("ROLLBACK TO physical_identity; RELEASE physical_identity");
         }
         const indexes = indexDefinitions(database);
-        const identities = database
-          .prepare("SELECT * FROM transcript_event_identities ORDER BY seq")
-          .all();
-        const windows = database.prepare("SELECT * FROM session_windows").all();
-        const origins =
-          outcome === "without-origins"
-            ? []
-            : database.prepare("SELECT * FROM memory_entry_origins ORDER BY agent_id").all();
+        const originalIdentities = identities(database);
+        const windows = rows(database, "SELECT * FROM session_windows");
+        const originalOrigins = outcome === "without-origins" ? [] : origins(database);
         if (outcome === "rollback") {
           database.setAuthorizer((action, name, value) =>
             action === constants.SQLITE_PRAGMA &&
@@ -188,9 +198,7 @@ describe("agent write layout migration", () => {
         if (originalWitness) {
           expect(
             assertOpenClawMigrationWitnessPreserved(originalWitness, captureWitness()),
-          ).toEqual({
-            warnings: [],
-          });
+          ).toEqual({ warnings: [] });
           for (const mutation of [
             "UPDATE memory_entry_origins SET origin_class = 'system' WHERE agent_id = 'main'",
             "ALTER TABLE memory_entry_origins ADD COLUMN unexpected TEXT",
@@ -205,16 +213,11 @@ describe("agent write layout migration", () => {
             database.exec("ROLLBACK TO retained_content; RELEASE retained_content");
           }
         }
-        expect(
-          database.prepare("SELECT * FROM transcript_event_identities ORDER BY seq").all(),
-        ).toEqual(identities);
-        expect(database.prepare("SELECT * FROM session_windows").all()).toEqual(windows);
-        expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+        expect(identities(database)).toEqual(originalIdentities);
+        expect(rows(database, "SELECT * FROM session_windows")).toEqual(windows);
+        expect(rows(database, "PRAGMA foreign_key_check")).toEqual([]);
         const expectedVersion = outcome === "rollback" ? 27 : AGENT_WRITE_LAYOUT_SCHEMA_VERSION;
-        expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(expectedVersion);
-        expect(
-          database.prepare("SELECT schema_version FROM schema_meta").get()?.schema_version,
-        ).toBe(expectedVersion);
+        expectVersion(database, expectedVersion);
         if (outcome === "rollback") {
           expect(indexDefinitions(database)).toEqual(indexes);
         } else {
@@ -229,46 +232,36 @@ describe("agent write layout migration", () => {
         }
         if (outcome === "without-origins") {
           expect(
-            database
-              .prepare("SELECT 1 FROM sqlite_schema WHERE name = 'memory_entry_origins'")
-              .get(),
+            row(database, "SELECT 1 FROM sqlite_schema WHERE name = 'memory_entry_origins'"),
           ).toBeUndefined();
         } else {
-          expect(
-            database.prepare("SELECT * FROM memory_entry_origins ORDER BY agent_id").all(),
-          ).toEqual(origins);
-          expect(
-            database
-              .prepare("SELECT wr FROM pragma_table_list WHERE name = 'memory_entry_origins'")
-              .get()?.wr,
-          ).toBe(outcome === "rollback" ? 0 : 1);
+          expect(origins(database)).toEqual(originalOrigins);
+          expect(originLayout(database)).toBe(outcome === "rollback" ? 0 : 1);
         }
         if (outcome === "commit") {
           // Lookup/FK behavior and uniqueness survive index retirement and narrowing.
           expect(
-            database
-              .prepare(
-                "SELECT event_id FROM transcript_event_identities WHERE session_id = 'session' AND parent_id = 'first'",
-              )
-              .all(),
+            rows(
+              database,
+              "SELECT event_id FROM transcript_event_identities WHERE session_id = 'session' AND parent_id = 'first'",
+            ),
           ).toEqual([{ event_id: "second" }]);
           database.exec("UPDATE session_windows SET updated_at = 4 WHERE session_id = 'session'");
           expect(
-            database
-              .prepare(
-                "SELECT session_id FROM session_windows WHERE primary_conversation_id = 'conversation'",
-              )
-              .all(),
+            rows(
+              database,
+              "SELECT session_id FROM session_windows WHERE primary_conversation_id = 'conversation'",
+            ),
           ).toEqual([{ session_id: "session" }]);
           database.exec("DELETE FROM conversations WHERE conversation_id = 'conversation'");
           expect(
-            database.prepare("SELECT primary_conversation_id FROM session_windows").get()
+            row(database, "SELECT primary_conversation_id FROM session_windows")
               ?.primary_conversation_id,
           ).toBeNull();
           database.exec("DELETE FROM transcript_events WHERE session_id = 'session' AND seq = 1");
-          expect(
-            database.prepare("SELECT event_id FROM transcript_event_identities").all(),
-          ).toEqual([{ event_id: "second" }]);
+          expect(rows(database, "SELECT event_id FROM transcript_event_identities")).toEqual([
+            { event_id: "second" },
+          ]);
         }
       });
     },
@@ -281,7 +274,7 @@ describe("agent write layout migration", () => {
       using database = new DatabaseSync(pathname);
       seed(database);
       const indexes = indexDefinitions(database);
-      const statistics = database.prepare("SELECT * FROM sqlite_stat1 ORDER BY tbl, idx").all();
+      const originalStatistics = statistics(database);
       expect(
         resolveSchemaMigrationBackupTables({
           kind: "agent",
@@ -302,19 +295,11 @@ describe("agent write layout migration", () => {
       await assertSqliteMigrationScopePreserved(database, scope, () =>
         restoreDoctorMigrationBackup({ sourcePath: pathname, backupPath, env: state.env }),
       );
-      expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(27);
+      expect(row(database, "PRAGMA user_version")?.user_version).toBe(27);
       expect(indexDefinitions(database)).toEqual(indexes);
-      expect(database.prepare("SELECT * FROM sqlite_stat1 ORDER BY tbl, idx").all()).toEqual(
-        statistics,
-      );
-      expect(
-        database
-          .prepare("SELECT wr FROM pragma_table_list WHERE name = 'memory_entry_origins'")
-          .get()?.wr,
-      ).toBe(0);
-      expect(database.prepare("SELECT hex(blob) AS bytes FROM cache_entries").get()?.bytes).toBe(
-        "BEEF",
-      );
+      expect(statistics(database)).toEqual(originalStatistics);
+      expect(originLayout(database)).toBe(0);
+      expect(row(database, "SELECT hex(blob) AS bytes FROM cache_entries")?.bytes).toBe("BEEF");
     });
   });
 });

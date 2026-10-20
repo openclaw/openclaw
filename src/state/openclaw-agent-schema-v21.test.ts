@@ -25,19 +25,21 @@ function captureDatabase(database: DatabaseSync) {
   };
 }
 
-function seedCurrentFixture(database: DatabaseSync) {
+function currentFixture(foreignKeys = 1) {
+  const database = new DatabaseSync(":memory:");
   database.exec(OPENCLAW_AGENT_SCHEMA_SQL);
   database.exec(`
+    PRAGMA foreign_keys = ${foreignKeys};
     INSERT INTO cache_entries (scope, key, value_json, updated_at)
       VALUES ('historical-fixture', 'preserved', '{"keep":true}', 7);
   `);
+  return database;
 }
 
 describe("historical schema-21 storage fixture", () => {
   it("restores the frozen outbox and trajectory storage", () => {
-    using database = new DatabaseSync(":memory:");
+    using database = currentFixture();
     using historical = new DatabaseSync(":memory:");
-    seedCurrentFixture(database);
     historical.exec(OPENCLAW_AGENT_SCHEMA_V21_SQL);
     const cacheRows = database.prepare("SELECT * FROM cache_entries").all();
 
@@ -46,11 +48,6 @@ describe("historical schema-21 storage fixture", () => {
     const outbox = collectSqliteSchemaShape(database).context_engine_turn_outbox;
     assert(outbox, "Historical fixture must contain the outbox");
     expect(outbox).toEqual(collectSqliteSchemaShape(historical).context_engine_turn_outbox);
-    expect(outbox.columns.map((column) => column.name)).not.toContain("enqueue_sequence");
-    expect(outbox.columns.map((column) => column.name)).not.toContain("payload_state");
-    expect(outbox.columns.filter((column) => column.pk !== 0)).toEqual([
-      expect.objectContaining({ name: "advancement_key", pk: 1 }),
-    ]);
     expect(collectSqliteSchemaShape(database).trajectory_runtime_events).toEqual(
       collectSqliteSchemaShape(historical).trajectory_runtime_events,
     );
@@ -62,9 +59,7 @@ describe("historical schema-21 storage fixture", () => {
   it.each([0, 1])(
     "refuses a populated outbox without changing data or schema (foreign_keys=%s)",
     (foreignKeys) => {
-      using database = new DatabaseSync(":memory:");
-      seedCurrentFixture(database);
-      database.exec(`PRAGMA foreign_keys = ${foreignKeys}`);
+      using database = currentFixture(foreignKeys);
       database.exec(`
         INSERT INTO context_engine_turn_outbox
           (advancement_key, engine_id, session_id, payload_json, created_at)
@@ -83,9 +78,7 @@ describe("historical schema-21 storage fixture", () => {
   it.each([0, 1])(
     "rolls back every dropped table when outbox reconstruction fails (foreign_keys=%s)",
     (foreignKeys) => {
-      using database = new DatabaseSync(":memory:");
-      seedCurrentFixture(database);
-      database.exec(`PRAGMA foreign_keys = ${foreignKeys}`);
+      using database = currentFixture(foreignKeys);
       const before = captureDatabase(database);
       const execute = database.exec.bind(database);
       const failure = new Error("injected after outbox drop");

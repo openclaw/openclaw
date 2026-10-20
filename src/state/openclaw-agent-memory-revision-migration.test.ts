@@ -16,6 +16,16 @@ import { assertSqliteMigrationScopePreserved } from "./sqlite-migration-scope.te
 const predecessor = 30;
 const target = 31;
 const scope = ["memory_index_chunks", "memory_index_sources", "schema_meta"];
+const rows = (database: DatabaseSync, sql: string) => database.prepare(sql).all();
+const row = (database: DatabaseSync, sql: string) => database.prepare(sql).get();
+const statistics = (database: DatabaseSync) =>
+  rows(database, "SELECT * FROM sqlite_stat1 ORDER BY tbl, idx");
+const captureWitness = (database: DatabaseSync) =>
+  captureOpenClawMigrationWitness(database, { role: "agent", agentId: "main" });
+
+function migrate(database: DatabaseSync, pathname: string, env: NodeJS.ProcessEnv) {
+  ensureOpenClawAgentDatabaseSchema(database, { agentId: "main", env, path: pathname });
+}
 // Frozen schema plus the previously published bundle DDL, independent of the new migration.
 const schemaV27 = fs.readFileSync(
   new URL("../../test/fixtures/sqlite/openclaw-agent-schema-v27.sql", import.meta.url),
@@ -76,9 +86,9 @@ function layout(database: DatabaseSync) {
 
 function retained(database: DatabaseSync) {
   return {
-    sources: database.prepare("SELECT * FROM memory_index_sources ORDER BY path, source").all(),
-    chunks: database.prepare("SELECT * FROM memory_index_chunks ORDER BY id").all(),
-    revision: database.prepare("SELECT revision FROM memory_index_state WHERE id = 1").get(),
+    sources: rows(database, "SELECT * FROM memory_index_sources ORDER BY path, source"),
+    chunks: rows(database, "SELECT * FROM memory_index_chunks ORDER BY id"),
+    revision: row(database, "SELECT revision FROM memory_index_state WHERE id = 1"),
   };
 }
 
@@ -92,10 +102,7 @@ describe("agent memory revision migration", () => {
         seed(database);
         const before = retained(database);
         const originalLayout = layout(database);
-        const witness = captureOpenClawMigrationWitness(database, {
-          role: "agent",
-          agentId: "main",
-        });
+        const witness = captureWitness(database);
         expect(originalLayout.filter((entry) => entry.type === "trigger")).toHaveLength(6);
         if (outcome === "rollback") {
           database.setAuthorizer((action, name, value) =>
@@ -108,38 +115,30 @@ describe("agent memory revision migration", () => {
         }
         await withAgentDatabaseMaintenanceLease({ env: state.env }, async () => {
           await assertSqliteMigrationScopePreserved(database, scope, () => {
-            const migrate = () =>
-              ensureOpenClawAgentDatabaseSchema(database, {
-                agentId: "main",
-                env: state.env,
-                path: pathname,
-              });
+            const run = () => migrate(database, pathname, state.env);
             if (outcome === "rollback") {
-              expect(migrate).toThrow(/authoriz/u);
+              expect(run).toThrow(/authoriz/u);
             } else {
-              migrate();
+              run();
             }
           });
         });
         database.setAuthorizer(null);
         expect(retained(database)).toEqual(before);
-        expect(
-          assertOpenClawMigrationWitnessPreserved(
-            witness,
-            captureOpenClawMigrationWitness(database, { role: "agent", agentId: "main" }),
-          ),
-        ).toEqual({ warnings: [] });
+        expect(assertOpenClawMigrationWitnessPreserved(witness, captureWitness(database))).toEqual({
+          warnings: [],
+        });
         const expectedVersion = outcome === "rollback" ? predecessor : target;
-        expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(expectedVersion);
-        expect(
-          database.prepare("SELECT schema_version FROM schema_meta").get()?.schema_version,
-        ).toBe(expectedVersion);
+        expect(row(database, "PRAGMA user_version")?.user_version).toBe(expectedVersion);
+        expect(row(database, "SELECT schema_version FROM schema_meta")?.schema_version).toBe(
+          expectedVersion,
+        );
         expect(layout(database)).toEqual(
           outcome === "rollback"
             ? originalLayout
             : originalLayout.filter((entry) => entry.type !== "trigger"),
         );
-        expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+        expect(rows(database, "PRAGMA foreign_key_check")).toEqual([]);
       });
     },
   );
@@ -152,7 +151,7 @@ describe("agent memory revision migration", () => {
       seed(database);
       const before = retained(database);
       const originalLayout = layout(database);
-      const statistics = database.prepare("SELECT * FROM sqlite_stat1 ORDER BY tbl, idx").all();
+      const originalStatistics = statistics(database);
       expect(
         resolveSchemaMigrationBackupTables({
           kind: "agent",
@@ -167,29 +166,19 @@ describe("agent memory revision migration", () => {
           tables: scope,
           beforePublish: () => lease.assertOwned(),
         });
-        ensureOpenClawAgentDatabaseSchema(database, {
-          agentId: "main",
-          env: state.env,
-          path: pathname,
-        });
+        migrate(database, pathname, state.env);
       });
       database.exec("UPDATE cache_entries SET blob = X'BEEF' WHERE scope = 'unrelated'");
       await assertSqliteMigrationScopePreserved(database, scope, () =>
         restoreDoctorMigrationBackup({ sourcePath: pathname, backupPath, env: state.env }),
       );
-      expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(predecessor);
+      expect(row(database, "PRAGMA user_version")?.user_version).toBe(predecessor);
       expect(retained(database)).toEqual(before);
       expect(layout(database)).toEqual(originalLayout);
-      expect(database.prepare("SELECT * FROM sqlite_stat1 ORDER BY tbl, idx").all()).toEqual(
-        statistics,
-      );
-      expect(database.prepare("SELECT hex(blob) AS bytes FROM cache_entries").get()?.bytes).toBe(
-        "BEEF",
-      );
+      expect(statistics(database)).toEqual(originalStatistics);
+      expect(row(database, "SELECT hex(blob) AS bytes FROM cache_entries")?.bytes).toBe("BEEF");
       database.exec("UPDATE memory_index_chunks SET text = 'old-writer-update'");
-      expect(
-        database.prepare("SELECT revision FROM memory_index_state WHERE id = 1").get(),
-      ).toEqual({
+      expect(row(database, "SELECT revision FROM memory_index_state WHERE id = 1")).toEqual({
         revision: 3,
       });
     });
