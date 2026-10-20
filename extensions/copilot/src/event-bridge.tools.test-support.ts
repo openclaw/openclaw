@@ -30,27 +30,16 @@ export function registerCopilotToolEventTests({ createFakeSession, makeEvent }: 
       onAgentEvent: direct,
     });
     try {
+      const raw = { content: "raw result" };
       for (const [toolCallId, requestedAction, executedAction, isError] of [
         ["mutation", "poll", "kill", false],
         ["quiet", "kill", "poll", false],
         ["failed", "poll", "poll", true],
       ] as const) {
-        emit("tool.execution_start", {
-          toolCallId,
-          toolName: "process",
-          arguments: { action: requestedAction },
-        });
-        bridge.completeTool({
-          toolCallId,
-          toolName: "process",
-          args: { action: executedAction },
-          isError,
-        });
-        emit("tool.execution_complete", {
-          toolCallId,
-          success: !isError,
-          result: { content: "raw result" },
-        });
+        const tool = { toolCallId, toolName: "process" };
+        emit("tool.execution_start", { ...tool, arguments: { action: requestedAction } });
+        bridge.completeTool({ ...tool, args: { action: executedAction }, isError });
+        emit("tool.execution_complete", { toolCallId, success: !isError, result: raw });
       }
       await bridge.awaitAgentEventChain();
       expect(bus).toHaveLength(6);
@@ -58,17 +47,16 @@ export function registerCopilotToolEventTests({ createFakeSession, makeEvent }: 
       for (const [index, [event]] of direct.mock.calls.entries()) {
         expect(event.data).toBe(bus[index]);
       }
-      expect(
-        bus
-          .filter((item) => item.phase === "end")
-          .map((item) => Boolean(item.hideFromChannelProgress)),
-      ).toEqual([false, true, false]);
+      const ended = bus.filter((item) => item.phase === "end");
+      expect(ended.map((item) => Boolean(item.hideFromChannelProgress))).toEqual([
+        false,
+        true,
+        false,
+      ]);
       expect(bridge.snapshot()).toMatchObject({ startedCount: 3, completedCount: 3 });
-      emit("tool.execution_start", {
-        toolCallId: "root-catalog",
-        toolName: "tool_search",
-        arguments: {},
-      });
+      const root = { toolCallId: "root-catalog", toolName: "tool_search" };
+      emit("tool.execution_start", { ...root, arguments: {} });
+      const nested = { parentToolCallId: root.toolCallId, isError: false };
       const approval = { approvalId: "approval", approvalSlug: "approve" };
       for (const [toolCallId, toolName, result, expected] of [
         ["root-nested", "read", undefined, { toolCallId: "root-nested", status: "completed" }],
@@ -79,13 +67,7 @@ export function registerCopilotToolEventTests({ createFakeSession, makeEvent }: 
           { status: "blocked", ...approval },
         ],
       ] as const) {
-        bridge.completeTool({
-          toolCallId,
-          toolName,
-          parentToolCallId: "root-catalog",
-          isError: false,
-          result,
-        });
+        bridge.completeTool({ ...nested, toolCallId, toolName, result });
         await bridge.awaitAgentEventChain();
         expect(bus.at(-1)).toMatchObject(expected);
       }

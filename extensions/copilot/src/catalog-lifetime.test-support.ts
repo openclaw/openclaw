@@ -23,13 +23,8 @@ export async function createCopilotFaultPeer() {
     socket.write(bytes);
   };
   const emit = (type: string, data: Record<string, unknown>) => {
-    const event = {
-      id: randomUUID(),
-      parentId: previousEventId,
-      timestamp: new Date().toISOString(),
-      type,
-      data,
-    };
+    const timestamp = new Date().toISOString();
+    const event = { id: randomUUID(), parentId: previousEventId, timestamp, type, data };
     send({ method: "session.event", params: { sessionId, event } });
     previousEventId = event.id;
   };
@@ -69,9 +64,8 @@ export async function createCopilotFaultPeer() {
         if (separator < 0) {
           return;
         }
-        const length = Number(
-          /Content-Length: (\d+)/i.exec(buffer.subarray(0, separator).toString())?.[1],
-        );
+        const header = buffer.subarray(0, separator).toString();
+        const length = Number(/Content-Length: (\d+)/i.exec(header)?.[1]);
         if (buffer.length < separator + 4 + length) {
           return;
         }
@@ -110,12 +104,8 @@ export async function createCopilotFaultPeer() {
       const requestId = randomUUID();
       const reply = createDeferred<Record<string, unknown>>();
       replies.set(requestId, reply);
-      emit("external_tool.requested", {
-        requestId,
-        toolCallId: requestId,
-        toolName: name,
-        arguments: args,
-      });
+      const tool = { toolCallId: requestId, toolName: name, arguments: args };
+      emit("external_tool.requested", { requestId, ...tool });
       return reply.promise;
     },
     async close() {
