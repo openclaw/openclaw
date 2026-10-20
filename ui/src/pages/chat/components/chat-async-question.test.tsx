@@ -418,32 +418,27 @@ it("keeps a persisted answer resolved across remount and reconnect and displays 
 });
 
 it.each([
-  { role: "user", content: historicalAnswer.content },
-  { ...historicalAnswer, content: "Everyone" },
-  { ...historicalAnswer, provenance: { kind: "internal_system" } },
-  { ...historicalAnswer, content: "> Which audience?\n\n" },
-])("does not treat an unsaved or unrelated reply as an answer: %j", (reply) => {
-  expect(historyPresentation([historicalQuestion(), reply]).pending).toHaveLength(1);
-});
-
-it("keeps a new same-title question pending after an earlier question was answered", () => {
-  expect(
-    pendingIds(
-      historyPresentation([
-        historicalQuestion(),
-        historicalAnswer,
-        historicalQuestion("new-question"),
-      ]),
-    ),
-  ).toEqual(["new-question"]);
-});
-
-it("does not guess which duplicate question an ambiguous answer belongs to", () => {
-  expect(
-    historyPresentation([historicalQuestion(), historicalQuestion("duplicate"), historicalAnswer])
-      .pending,
-  ).toHaveLength(2);
-});
+  ["unsaved answer", [{ role: "user", content: historicalAnswer.content }], 1],
+  ["unrelated text", [{ ...historicalAnswer, content: "Everyone" }], 1],
+  ["internal input", [{ ...historicalAnswer, provenance: { kind: "internal_system" } }], 1],
+  ["empty answer", [{ ...historicalAnswer, content: "> Which audience?\n\n" }], 1],
+  [
+    "new same-title question",
+    [historicalAnswer, historicalQuestion("new-question")],
+    ["new-question"],
+  ],
+  ["ambiguous duplicate", [historicalQuestion("duplicate"), historicalAnswer], 2],
+] satisfies [string, unknown[], number | string[]][])(
+  "resolves only the matching historical question: %s",
+  (_name, replies, expected) => {
+    const presentation = historyPresentation([historicalQuestion(), ...replies]);
+    if (typeof expected === "number") {
+      expect(presentation.pending).toHaveLength(expected);
+    } else {
+      expect(pendingIds(presentation)).toEqual(expected);
+    }
+  },
+);
 
 it("does not retain derived completion after authoritative history replaces the answer", () => {
   const state: QuestionState = { ...presentationState(), transcriptRenderContext: {} };

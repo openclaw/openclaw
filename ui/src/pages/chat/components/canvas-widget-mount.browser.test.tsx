@@ -74,8 +74,7 @@ it.each(["commit", "retirement"])(
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const [row, setRow] = createSignal("pending");
     const onElement = vi.fn();
-    const container = document.createElement("div");
-    document.body.append(container);
+    const container = document.body.appendChild(document.createElement("div"));
     const root = mountSolid(
       () => (
         <ApplicationProvider value={context} host={container}>
@@ -136,11 +135,9 @@ it.each(["commit", "retirement"])(
     expect(root.container.querySelector("openclaw-canvas-widget-view")).toBe(widget);
     const frame = widget.querySelector("iframe")!;
     expect(frame.srcdoc).toBe(documentView.html);
-    expect(request.mock.calls.filter(([method]) => method === "canvas.document.view")).toHaveLength(
-      2,
-    );
-    frame.style.width = "100%";
-    frame.style.boxSizing = "border-box";
+    const views = request.mock.calls.filter(([method]) => method === "canvas.document.view");
+    expect(views).toHaveLength(2);
+    Object.assign(frame.style, { width: "100%", boxSizing: "border-box" });
     const { width, height } = frame.getBoundingClientRect();
     expect(width).toBeGreaterThan(0);
     expect(height).toBeGreaterThan(0);

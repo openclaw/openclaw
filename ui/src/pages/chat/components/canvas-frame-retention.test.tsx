@@ -84,7 +84,7 @@ it.each(["transcript", "strict transcript", "sidebar"] as const)(
     original.dispatchEvent(new Event("load"));
     const prompts = vi.fn();
     root.container.addEventListener(WIDGET_PROMPT_EVENT, prompts);
-    let sendPrompt: (() => Promise<void>) | undefined;
+    let expectPrompts: (count: number) => Promise<void> = async () => {};
     if (surface === "transcript") {
       const channel = new MessageChannel();
       onTestFinished(() => {
@@ -101,18 +101,14 @@ it.each(["transcript", "strict transcript", "sidebar"] as const)(
       );
       original.checkVisibility = () => true;
       original.focus();
-      sendPrompt = () =>
-        new Promise((resolve) => {
+      expectPrompts = async (count) => {
+        await new Promise<void>((resolve) => {
           channel.port2.addEventListener("message", () => resolve(), { once: true });
           channel.port1.postMessage({ type: "openclaw:widget-prompt", prompt: "Keep working" });
         });
-    }
-    const expectPrompts = async (count: number) => {
-      if (sendPrompt) {
-        await sendPrompt();
         expect(prompts).toHaveBeenCalledTimes(count);
-      }
-    };
+      };
+    }
     await expectPrompts(1);
     const publish = (patch: Partial<ApplicationGatewaySnapshot>) => {
       bumpCanvasWidgetFrameConnectionGeneration();

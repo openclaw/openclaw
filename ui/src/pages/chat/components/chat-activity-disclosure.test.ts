@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { createComponent, createSignal } from "solid-js";
+import { createComponent, createSignal, merge } from "solid-js";
 import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createNestedToolActivity } from "../../../../../src/sessions/nested-tool-activity.ts";
 import { prepareChatHistoryFixture } from "../../../test-helpers/chat-activity-fixtures.ts";
@@ -9,8 +9,10 @@ import { flush } from "../../../test-helpers/solid-settle.ts";
 import { attachHistoryActivity } from "../chat-history-request.ts";
 import { buildChatItems } from "../chat-thread-build.ts";
 import { createProps } from "../chat-thread.test-support.ts";
-import { ActivityGroup, MessageGroup } from "./chat-message-group-view.tsx";
-import { createMessageGroupHarness } from "./chat-message-native.test-support.tsx";
+import {
+  createActivityGroupHarness,
+  createMessageGroupHarness,
+} from "./chat-message-native.test-support.tsx";
 import { WorkGroupSummary } from "./chat-message-stream-view.tsx";
 import {
   createAssistantMessage,
@@ -23,16 +25,16 @@ import {
 } from "./chat-message.test-support.ts";
 import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 
-type SummaryState = {
-  groups: Parameters<typeof ActivityGroup>[0]["groups"];
-  expanded: boolean;
-  durationMs: number | null;
-};
+type WorkProps = Parameters<typeof WorkGroupSummary>[0];
 let summaryContainer: HTMLDivElement;
-let updateSummary: ((state: SummaryState) => void) | undefined;
+let updateSummary: ((state: WorkProps) => void) | undefined;
+let activityRoot: ReturnType<typeof createActivityGroupHarness>;
+let messageRoot: ReturnType<typeof createMessageGroupHarness>;
 beforeEach(() => {
-  summaryContainer = document.createElement("div");
+  summaryContainer = document.body.appendChild(document.createElement("div"));
   updateSummary = undefined;
+  activityRoot = createActivityGroupHarness(summaryContainer);
+  messageRoot = createMessageGroupHarness(summaryContainer);
   onTestFinished(() => summaryContainer.remove());
 });
 const visibleTools = { showToolCalls: true, showReasoning: true };
@@ -50,17 +52,15 @@ function mountGroup(messages: Record<string, unknown>[]) {
   if (group?.kind !== "group") {
     throw new Error("expected a tool group");
   }
-  const container = document.createElement("div");
-  document.body.append(container);
-  const root = createMessageGroupHarness(container);
-  onTestFinished(() => {
-    root.unmount();
-    container.remove();
-  });
+  const container = summaryContainer;
   return {
     container,
     draw: async (expanded = false) => {
-      root.render(group, { ...visibleTools, showReasoning: false, isToolExpanded: () => expanded });
+      messageRoot.render(group, {
+        ...visibleTools,
+        showReasoning: false,
+        isToolExpanded: () => expanded,
+      });
       await settleToolBridges(container);
     },
   };
@@ -79,60 +79,43 @@ async function renderSummary(
 ) {
   const { expanded = false, durationMs = 1000 } = options;
   const container = summaryContainer;
-  const groups = [
+  let groups = [
     createToolGroup(
       "history",
       messages.map((message, index) => createMessageEntry(`message-${index}`, message)),
     ),
   ];
-  const next = {
-    groups: options.prepareHistory ? prepareHistoryGroups(groups) : groups,
-    expanded,
-    durationMs,
-  };
-  if (updateSummary) {
-    updateSummary(next);
+  if (options.prepareHistory) {
+    groups = prepareHistoryGroups(groups);
+  }
+  if (kind === "activity") {
+    const renderOptions = {
+      ...visibleTools,
+      isToolMessageExpanded: () => expanded,
+      onToggleToolMessageExpanded: options.onToggle,
+    };
+    if (options.messageGroup) {
+      messageRoot.render(groups[0]!, renderOptions);
+    } else {
+      activityRoot.render(groups, renderOptions);
+    }
   } else {
-    document.body.append(container);
-    mountSolid(
-      () => {
-        const [state, setState] = createSignal<SummaryState>(next);
-        updateSummary = setState;
-        const activityOptions = () => ({
-          ...visibleTools,
-          isToolMessageExpanded: () => state().expanded,
-          onToggleToolMessageExpanded: options.onToggle,
-        });
-        return kind === "activity"
-          ? options.messageGroup
-            ? createComponent(MessageGroup, {
-                get group() {
-                  return state().groups[0]!;
-                },
-                get options() {
-                  return activityOptions();
-                },
-              })
-            : createComponent(ActivityGroup, {
-                get groups() {
-                  return state().groups;
-                },
-                get options() {
-                  return activityOptions();
-                },
-                presentation: "standalone",
-              })
-          : createComponent(WorkGroupSummary, {
-              get item() {
-                return { key: "work", durationMs: state().durationMs, groups: state().groups };
-              },
-              get options() {
-                return { expanded: state().expanded, onToggle: options.onToggle ?? (() => {}) };
-              },
-            });
-      },
-      { container },
-    );
+    const next = {
+      item: { key: "work", durationMs, groups },
+      options: { expanded, onToggle: options.onToggle ?? (() => {}) },
+    };
+    if (updateSummary) {
+      updateSummary(next);
+    } else {
+      mountSolid(
+        () => {
+          const [state, setState] = createSignal<WorkProps>(next);
+          updateSummary = setState;
+          return createComponent(WorkGroupSummary, merge(state));
+        },
+        { container },
+      );
+    }
   }
   flush();
   await settleToolBridges(container);

@@ -302,35 +302,29 @@ it.each([
   { width: 390, expanded: false },
   { width: 1440, expanded: true },
   { width: 390, expanded: true },
-])(
-  "grows, caps and scrolls unfaded text ($width px, editing=$expanded)",
-  async ({ width, expanded }) => {
-    await page.viewport(width, 900);
-    const { input, popup } = openEditor(expanded);
-    const oneLine = rect(input).height;
-    const originalTop = rect(popup).top;
-    const lineHeight = Number.parseFloat(getComputedStyle(input).lineHeight);
-    await page.elementLocator(input).fill("First line\nSecond line\nThird line");
-    await expect.poll(() => rect(input).height).toBeGreaterThan(oneLine + lineHeight);
-    expect(input.placeholder).toBe("Add an optional comment…");
-    expect(rect(popup).top).toBeCloseTo(originalTop, 0);
-    await page.elementLocator(input).fill("One\nTwo\nThree\nFour\nFive\nSix\nSeven");
-    await expect.poll(() => input.scrollHeight).toBeGreaterThan(input.clientHeight);
-    expect(rect(input).height).toBeLessThanOrEqual(oneLine + lineHeight * 4 + 1);
-    for (const scrollTop of [
-      0,
-      (input.scrollHeight - input.clientHeight) / 2,
-      input.scrollHeight,
-    ]) {
-      input.scrollTop = scrollTop;
-      input.dispatchEvent(new Event("scroll"));
-      expect(getComputedStyle(input).maskImage).toBe("none");
-    }
-    expect(input.scrollTop).toBeGreaterThan(0);
-    expect(rect(popup).top).toBeCloseTo(originalTop, 0);
-    expect(rect(popup).right).toBeLessThanOrEqual(window.innerWidth);
-  },
-);
+])("grows, caps and scrolls unfaded text ($width, $expanded)", async ({ width, expanded }) => {
+  await page.viewport(width, 900);
+  const { input, popup } = openEditor(expanded);
+  const oneLine = rect(input).height;
+  const originalTop = rect(popup).top;
+  const lineHeight = Number.parseFloat(getComputedStyle(input).lineHeight);
+  await page.elementLocator(input).fill("First line\nSecond line\nThird line");
+  await expect.poll(() => rect(input).height).toBeGreaterThan(oneLine + lineHeight);
+  expect(input.placeholder).toBe("Add an optional comment…");
+  expect(rect(popup).top).toBeCloseTo(originalTop, 0);
+  await page.elementLocator(input).fill("One\nTwo\nThree\nFour\nFive\nSix\nSeven");
+  await expect.poll(() => input.scrollHeight).toBeGreaterThan(input.clientHeight);
+  expect(rect(input).height).toBeLessThanOrEqual(oneLine + lineHeight * 4 + 1);
+  const bottom = input.scrollHeight - input.clientHeight;
+  for (const scrollTop of [0, bottom / 2, input.scrollHeight]) {
+    input.scrollTop = scrollTop;
+    input.dispatchEvent(new Event("scroll"));
+    expect(getComputedStyle(input).maskImage).toBe("none");
+  }
+  expect(input.scrollTop).toBeGreaterThan(0);
+  expect(rect(popup).top).toBeCloseTo(originalTop, 0);
+  expect(rect(popup).right).toBeLessThanOrEqual(window.innerWidth);
+});
 
 it.each([false, true])("supports Enter, Shift+Enter and Escape (editing=%s)", async (expanded) => {
   const { input, popup, onSave, onCancel } = openEditor(expanded);

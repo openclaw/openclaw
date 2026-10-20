@@ -59,11 +59,7 @@ it("remounts across transcript rows when atomic moves are unavailable", () => {
   const [row, setRow] = createSignal("live-tool-output");
   const root = mountSolid(() => (
     <Show when={row()} keyed>
-      {(_key) => (
-        <section>
-          <CanvasWidgetMount {...properties} />
-        </section>
-      )}
+      {(_key) => <CanvasWidgetMount {...properties} />}
     </Show>
   ));
   flush();

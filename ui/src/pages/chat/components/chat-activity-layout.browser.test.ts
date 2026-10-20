@@ -28,11 +28,7 @@ function messageGroup(key: string, role: string, messages: unknown[]): MessageGr
     timestamp: 1000,
     isStreaming: false,
     visibleContent: "non-text",
-    messages: messages.map((message, index) => ({
-      key: key + index,
-      message,
-      hasVisibleContent: true,
-    })),
+    messages: messages.map((message, i) => ({ key: key + i, message, hasVisibleContent: true })),
   };
 }
 
@@ -47,26 +43,20 @@ function call(id: string, name: string, args: unknown, parentToolCallId?: string
   };
 }
 
-function child(
-  index: number,
-  name: string,
-  args: unknown,
-  parent: string,
-  text = "Source contents",
-): { role: string; content: unknown[]; timestamp: number } {
+function child(index: number, parent: string, process = false) {
   const id = "child-" + index;
+  const name = process ? "process" : "read";
+  const args = process ? { action: "poll" } : { path: `/${index}.ts` };
+  const text = process ? "running" : "Source contents";
+  const content: unknown[] = [
+    call(id, name, args, parent),
+    { type: "toolResult", toolCallId: id, toolName: name, content: [{ type: "text", text }] },
+  ];
   return {
     role: "custom",
-    content: [
-      call(id, name, args, parent),
-      {
-        type: "toolResult",
-        toolCallId: id,
-        toolName: name,
-        content: [{ type: "text", text }],
-      },
-    ],
-    timestamp: 1000 + index,
+    content,
+    timestamp: 1000 + index + Number(process),
+    ...(process ? { activity: [] } : {}),
   };
 }
 
@@ -77,12 +67,7 @@ function activityFixture(note = "") {
     timestamp: 1000,
   }));
   for (let index = 0; index < 40; index++) {
-    const message = child(
-      index,
-      "read",
-      { path: `/${index}.ts` },
-      "batch-" + Math.floor(index / 10),
-    );
+    const message = child(index, "batch-" + Math.floor(index / 10));
     if (index === 0 && note) {
       message.content.push({ type: "text", text: note });
     }
@@ -140,33 +125,30 @@ const bodyElement = () => container.querySelector<HTMLElement>(".chat-activity-g
 const cappedHeight = () => Math.min(420, window.innerHeight * 0.58);
 
 describe.runIf("__vitest_browser__" in globalThis)("activity group sizing", () => {
-  it.each(["standalone", "inline"] as const)(
-    "fits, caps and collapses rows (%s)",
-    async (presentation) => {
-      await mountActivity(activityFixture(), presentation === "inline");
-      const body = bodyElement();
-      const compactHeight = body.getBoundingClientRect().height;
-      expect(body.querySelectorAll(":scope > .chat-bubble")).toHaveLength(4);
-      expect(body.querySelectorAll(".chat-tool-row")).toHaveLength(4);
-      expect(body.scrollHeight).toBe(body.clientHeight);
-      expect(compactHeight).toBeGreaterThan(0);
-      expect(compactHeight).toBeLessThan(200);
+  it.each(["standalone", "inline"])("sizes and collapses %s", async (presentation) => {
+    await mountActivity(activityFixture(), presentation === "inline");
+    const body = bodyElement();
+    const compactHeight = body.getBoundingClientRect().height;
+    expect(body.querySelectorAll(":scope > .chat-bubble")).toHaveLength(4);
+    expect(body.querySelectorAll(".chat-tool-row")).toHaveLength(4);
+    expect(body.scrollHeight).toBe(body.clientHeight);
+    expect(compactHeight).toBeGreaterThan(0);
+    expect(compactHeight).toBeLessThan(200);
 
-      const toggle = () => body.querySelector<HTMLButtonElement>(".chat-tool-msg-summary")!.click();
-      toggle();
-      await settleToolBridges(container);
-      expect(body.querySelectorAll(".chat-tool-row")).toHaveLength(14);
-      expect(body.getBoundingClientRect().height).toBeCloseTo(cappedHeight(), 0);
-      expect(body.scrollHeight).toBeGreaterThan(body.clientHeight);
-      body.scrollTop = body.scrollHeight;
-      expect(body.scrollTop).toBeGreaterThan(0);
+    const toggle = () => body.querySelector<HTMLButtonElement>(".chat-tool-msg-summary")!.click();
+    toggle();
+    await settleToolBridges(container);
+    expect(body.querySelectorAll(".chat-tool-row")).toHaveLength(14);
+    expect(body.getBoundingClientRect().height).toBeCloseTo(cappedHeight(), 0);
+    expect(body.scrollHeight).toBeGreaterThan(body.clientHeight);
+    body.scrollTop = body.scrollHeight;
+    expect(body.scrollTop).toBeGreaterThan(0);
 
-      toggle();
-      await settleToolBridges(container);
-      expect(body.getBoundingClientRect().height).toBe(compactHeight);
-      expect(body).toMatchObject({ scrollHeight: body.clientHeight, scrollTop: 0 });
-    },
-  );
+    toggle();
+    await settleToolBridges(container);
+    expect(body.getBoundingClientRect().height).toBe(compactHeight);
+    expect(body).toMatchObject({ scrollHeight: body.clientHeight, scrollTop: 0 });
+  });
 
   it("caps an opened lone step whose nested calls are all routine", async () => {
     const group = messageGroup("step", "tool", [
@@ -187,11 +169,7 @@ describe.runIf("__vitest_browser__" in globalThis)("activity group sizing", () =
         ],
         timestamp: 1000,
       },
-      ...Array.from({ length: 40 }, (_, index) => ({
-        ...child(index, "process", { action: "poll" }, "step", "running"),
-        activity: [],
-        timestamp: 1001 + index,
-      })),
+      ...Array.from({ length: 40 }, (_, index) => child(index, "step", true)),
     ]);
     await mountActivity(group, false, false);
     expect(container.querySelector(".chat-activity-group__summary")).toBeNull();
@@ -200,7 +178,6 @@ describe.runIf("__vitest_browser__" in globalThis)("activity group sizing", () =
       getComputedStyle(body.querySelectorAll(".chat-tool-row__chevron")[row]!).opacity;
     expect(body.querySelectorAll(".chat-tool-row")).toHaveLength(1);
     expect(body.scrollHeight).toBe(body.clientHeight);
-    // The step's own row keeps its chevron; rows under it reveal theirs on hover.
     expect(chevronOpacity(0)).not.toBe("0");
 
     body.querySelector<HTMLButtonElement>(".chat-tool-msg-summary")!.click();
