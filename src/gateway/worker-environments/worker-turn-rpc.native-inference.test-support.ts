@@ -25,7 +25,6 @@ export function registerWorkerNativeInferenceRpcTests(): void {
         "session-local-proxy-denial",
         { executeInference },
       );
-      // Publish immutable profile facts through the real transaction owner.
       runOpenClawStateWriteTransaction(
         ({ db }) => {
           executeSqliteQuerySync(
@@ -34,13 +33,6 @@ export function registerWorkerNativeInferenceRpcTests(): void {
               .updateTable("worker_environments")
               .set({
                 provider_id: providerId,
-                node_device_id: "paired-inference-node",
-                shared_host: 1,
-                ssh_host: null,
-                ssh_port: null,
-                ssh_user: null,
-                ssh_host_key: null,
-                ssh_key_ref_json: null,
                 profile_snapshot_json: JSON.stringify({ settings: { inference } }),
               })
               .where("environment_id", "=", identity.environmentId),

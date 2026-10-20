@@ -42,7 +42,6 @@ function mediaFixture(
     prepareWorkerTurnMedia({
       turn: {
         ...input,
-        prompt: "Inspect the attached files",
         media,
         config: config ?? input.config,
       },
@@ -147,22 +146,20 @@ describe.each(["local", "repository"] as const)("%s workspace media policy", (ki
   });
 });
 
-describe("device-folder media policy", () => {
-  it("refuses current attachments and does not restage a refused one from history", async () => {
-    const saved = await saveMediaBuffer(Buffer.from("Refused note"), "text/plain", "inbound");
-    const fact: MediaFact = { path: saved.path, contentType: "text/plain" };
-    const { prepare, stageAttachments } = mediaFixture(
-      { kind: "device-folder", deviceId: "device-1", path: "/srv/project" },
-      "/srv/project",
-    );
-    await expect(prepare([fact], [])).rejects.toThrow("Attachments are not supported");
-    const refused = {
-      role: "user",
-      content: [{ type: "text", text: "Read the note" }],
-      timestamp: 1,
-      __openclaw: { media: [fact] },
-    } as AgentMessage;
-    await expect(prepare([], [refused])).resolves.toBeDefined();
-    expect(stageAttachments).not.toHaveBeenCalled();
-  });
+it("refuses device-folder attachments and does not restage a refused one from history", async () => {
+  const saved = await saveMediaBuffer(Buffer.from("Refused note"), "text/plain", "inbound");
+  const fact: MediaFact = { path: saved.path, contentType: "text/plain" };
+  const { prepare, stageAttachments } = mediaFixture(
+    { kind: "device-folder", deviceId: "device-1", path: "/srv/project" },
+    "/srv/project",
+  );
+  await expect(prepare([fact])).rejects.toThrow("Attachments are not supported");
+  const refused = {
+    role: "user",
+    content: [{ type: "text", text: "Read the note" }],
+    timestamp: 1,
+    __openclaw: { media: [fact] },
+  } as AgentMessage;
+  await expect(prepare([], [refused])).resolves.toBeDefined();
+  expect(stageAttachments).not.toHaveBeenCalled();
 });

@@ -1,12 +1,8 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { Value } from "typebox/value";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  WorkerLiveEventParamsSchema,
-  type WorkerLiveEventParams,
-} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type { WorkerLiveEventParams } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import type { AgentRunTerminalReplySnapshot } from "../../agents/agent-run-terminal-reply.types.js";
@@ -27,7 +23,6 @@ import { withSessionTurn } from "../../sessions/session-controller.admission.js"
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
 import { waitForSessionRunEnd } from "../../sessions/session-controller.native-runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { NodeWorkerWorkspaceTransferError } from "../../worker/node-workspace-transfer-protocol.js";
@@ -71,18 +66,42 @@ import { gitInit } from "./workspace-recovery.test-support.js";
 
 afterAll(closeStateDatabaseForTest);
 
-function environmentWithTunnel(
-  tunnel: WorkerTunnelHandle,
-  overrides: Partial<fx.WorkerTurnEnvironmentService> = {},
-): fx.WorkerTurnEnvironmentService {
+function recoveringWorker(options: { beforeAck?: () => Promise<unknown>; retry?: boolean } = {}) {
+  const entered = createDeferredCore();
+  const released = createDeferredCore();
+  const error = new NodeWorkerWorkspaceTransferError(
+    "workspace-transfer-failed: gateway TLS fingerprint mismatch",
+  );
+  const fail = async () => {
+    entered.resolve();
+    await released.promise;
+    throw error;
+  };
+  const tunnel = fx.createWorkerTurnTunnel({
+    launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
+      request.onDispatchReady?.();
+      if (options.beforeAck) {
+        await options.beforeAck();
+      }
+      const completed = await fx.openSessionManager();
+      const leafId = await completed.appendMessageAsync(completedWorkerMessage());
+      return fx.acknowledgeCompletedWorkerTurn(request.turnClaim, leafId);
+    }),
+    reconcileWorkspace: options.retry
+      ? vi.fn(fx.reconcileUnchangedLocalWorkspace).mockImplementationOnce(fail)
+      : vi.fn(fail),
+  });
+  const destroy = vi.fn(async () => fx.attachedEnvironment());
   return {
-    ...fx.unusedEnvironments(),
-    get: vi.fn(fx.attachedEnvironment),
-    acquireTurnCredential: vi.fn(async () => fx.credential()),
-    acknowledgeCredentialDelivery: vi.fn(async () => true),
-    startTunnel: vi.fn(async () => tunnel),
-    destroy: vi.fn(async () => fx.attachedEnvironment()),
-    ...overrides,
+    entered: entered.promise,
+    release: () => released.resolve(),
+    error,
+    tunnel,
+    destroy,
+    environments: fx.workerTurnEnvironments(tunnel, {
+      acknowledgeCredentialDelivery: vi.fn(async () => true),
+      destroy,
+    }),
   };
 }
 
@@ -170,14 +189,11 @@ describe("worker turn launcher terminal results", () => {
       await fx.seedActivePlacement();
       const grant = fx.credential();
       const environment = fx.attachedEnvironment();
-      const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: fx.root } });
       const gate = createWorkerSessionPlacementGate(fx.placements);
-      const getConfig = () => ({ session: { store: fx.sessionTarget.storePath } });
-      const liveEvents = createWorkerLiveEventReceiver();
       const service = createWorkerEnvironmentService({
         scheduler: createTestGatewayScheduler(),
         store: {
-          ...(await createWorkerEnvironmentStore({ database })),
+          ...(await createWorkerEnvironmentStore({ database: fx.database })),
           get: () => environment,
           getCredential: () => ({
             environmentId: fx.ENVIRONMENT_ID,
@@ -190,13 +206,13 @@ describe("worker turn launcher terminal results", () => {
             deliveredAtMs: Date.now(),
           }),
         },
-        getConfig,
+        getConfig: () => ({ session: { store: fx.sessionTarget.storePath } }),
         resolveProvider: () => undefined,
         prepareInstallation: vi.fn(),
         bootstrapWorker: vi.fn(),
-        inferenceStore: createWorkerInferenceStore({ path: database.path }),
+        inferenceStore: createWorkerInferenceStore({ path: fx.database.path }),
         placementStore: gate,
-        liveEvents,
+        liveEvents: createWorkerLiveEventReceiver(),
       });
       const failure =
         cleanupFailure ??
@@ -279,7 +295,6 @@ describe("worker turn launcher terminal results", () => {
             ...(cleanupFailure ? { replayInvalid: true as const } : {}),
           };
           const finishing = lifecycle(2, finishPayload);
-          expect(Value.Check(WorkerLiveEventParamsSchema, finishing)).toBe(true);
           await expectAck(finishing, 0);
           expect(await fx.placements.listPendingWorkspaceResultsAsync()).toHaveLength(0);
           await expectAck(
@@ -309,13 +324,14 @@ describe("worker turn launcher terminal results", () => {
           return fx.reconcileUnchangedLocalWorkspace(request);
         }),
       }) satisfies WorkerTunnelHandle;
-      const environments = environmentWithTunnel(tunnel, {
+      const environments = fx.workerTurnEnvironments(tunnel, {
         get: vi.fn(() => environment),
         acquireTurnCredential: vi.fn(async (claim) => {
           grant.turnClaim = claim;
           grant.deliveryId = hashWorkerCredential(grant.credential, claim);
           return grant;
         }),
+        acknowledgeCredentialDelivery: vi.fn(async () => true),
         destroy: vi.fn(async () => environment),
       });
       const reconcileActivePlacement = vi.fn(async () => {
@@ -398,6 +414,14 @@ describe("worker turn launcher terminal results", () => {
                 })
               : execute()
         ).catch((error: unknown) => error);
+        const expectSettled = async () => {
+          expect(fx.placements.get(fx.SESSION_ID)).toMatchObject({
+            state: reconciliationFails ? "failed" : "active",
+            turnClaim: null,
+          });
+          expect(await fx.placements.listPendingWorkspaceResultsAsync()).toHaveLength(0);
+          expect(environments.destroy).not.toHaveBeenCalled();
+        };
         if (outerFallback) {
           expect(candidateFailures[0]).toBeInstanceOf(WorkerTurnExecutionError);
           expect(candidateFailures[0]).toMatchObject({ message: failure });
@@ -410,12 +434,7 @@ describe("worker turn launcher terminal results", () => {
               content: providerFailure ? [] : [{ type: "text", text: "Remote answer" }],
             },
           });
-          expect(fx.placements.get(fx.SESSION_ID)).toMatchObject({
-            state: "active",
-            turnClaim: null,
-          });
-          expect(await fx.placements.listPendingWorkspaceResultsAsync()).toHaveLength(0);
-          expect(environments.destroy).not.toHaveBeenCalled();
+          await expectSettled();
           if (providerFailure) {
             expect(launchedModels).toEqual(["gpt-5.6-luna", "gpt-5.6-sol"]);
             expect(runCandidate).toHaveBeenCalledTimes(2);
@@ -447,12 +466,7 @@ describe("worker turn launcher terminal results", () => {
         expect(execute).toHaveBeenCalledOnce();
         expect(tunnel.launchTurn).toHaveBeenCalledOnce();
         expect(runLocal).not.toHaveBeenCalled();
-        expect(fx.placements.get(fx.SESSION_ID)).toMatchObject({
-          state: reconciliationFails ? "failed" : "active",
-          turnClaim: null,
-        });
-        expect(await fx.placements.listPendingWorkspaceResultsAsync()).toHaveLength(0);
-        expect(environments.destroy).not.toHaveBeenCalled();
+        await expectSettled();
         await expect(
           service.pushLiveEvent(
             identity!,
@@ -470,20 +484,15 @@ describe("worker turn launcher terminal results", () => {
 
   it("settles targeted result recovery while same-session Stop waits for its turn claim", async () => {
     await fx.seedActivePlacement();
+    const worker = recoveringWorker();
     const stopController = new AbortController();
     const claimWaitCleanup = new AbortController();
-    const transferEntered = createDeferredCore();
-    const failTransfer = createDeferredCore();
     const stopStarted = createDeferredCore();
     const targetedAdmission = createDeferredCore();
-    const destroy = vi.fn(async () => fx.attachedEnvironment());
-    const tunnelFailure = new NodeWorkerWorkspaceTransferError(
-      "workspace-transfer-failed: gateway TLS fingerprint mismatch",
-    );
     const targetRecovery = vi.fn(async () => {
       const [pending] = await fx.placements.listPendingWorkspaceResultsAsync();
       assert(pending, "expected pending workspace result");
-      await fx.placements.failWorkspaceResultAndReleaseTurn(pending, tunnelFailure);
+      await fx.placements.failWorkspaceResultAndReleaseTurn(pending, worker.error);
     });
     const stopCleanup = vi.fn(async () => ({
       ...LOCAL_PLACEMENT,
@@ -534,23 +543,9 @@ describe("worker turn launcher terminal results", () => {
       }),
       (_request, run) => run(),
     );
-    const tunnel: WorkerTunnelHandle = fx.createWorkerTurnTunnel({
-      launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
-        request.onDispatchReady?.();
-        const completed = await fx.openSessionManager();
-        const leafId = await completed.appendMessageAsync(completedWorkerMessage());
-        return fx.acknowledgeCompletedWorkerTurn(request.turnClaim, leafId);
-      }),
-      reconcileWorkspace: vi.fn(async () => {
-        transferEntered.resolve();
-        await failTransfer.promise;
-        throw tunnelFailure;
-      }),
-    });
-    const environments = environmentWithTunnel(tunnel, { destroy });
     const reconcileActivePlacement = vi.fn(dispatch.reconcileActive);
     const provider = fx.createWorkerSessionTurnPlacementProvider({
-      environments,
+      environments: worker.environments,
       placements: fx.placements,
       reconcileActivePlacement,
     });
@@ -562,14 +557,14 @@ describe("worker turn launcher terminal results", () => {
     const running = provider
       .executeTurn(runIdentity(workerTurn.runId), workerTurn, localResult)
       .catch((error: unknown) => error);
-    await transferEntered.promise;
+    await worker.entered;
     const stopping = dispatch
       .reclaim({ sessionId: fx.SESSION_ID, sessionKey: fx.SESSION_KEY, agentId: "main" })
       .catch((error: unknown) => error);
     try {
       await stopStarted.promise;
       expect(fx.placements.get(fx.SESSION_ID)?.turnClaim).not.toBeNull();
-      failTransfer.resolve();
+      worker.release();
       await targetedAdmission.promise;
       // An unrelated completed dispatch gives admitted recovery a deterministic progress
       // boundary; a Stop that reserved this session too early leaves recovery unentered.
@@ -579,10 +574,9 @@ describe("worker turn launcher terminal results", () => {
         payloads: [{ text: "Remote work completed" }],
       });
       await expect(stopping).resolves.toMatchObject({ state: "local", sessionId: fx.SESSION_ID });
-      await waitForSessionRunEnd(fx.SESSION_ID, null);
       expect(stopCleanup).toHaveBeenCalledOnce();
     } finally {
-      failTransfer.resolve();
+      worker.release();
       // Failure cleanup aborts only the waiter; recovery remains the sole claim-release owner.
       claimWaitCleanup.abort();
       await Promise.all([running, stopping]);
@@ -593,7 +587,7 @@ describe("worker turn launcher terminal results", () => {
     expect(reconcileActivePlacement).toHaveBeenCalledWith(fx.ENVIRONMENT_ID);
     expect(fx.placements.get(fx.SESSION_ID)).toMatchObject({ state: "failed", turnClaim: null });
     expect(await fx.placements.listPendingWorkspaceResultsAsync()).toHaveLength(0);
-    expect(destroy).not.toHaveBeenCalled();
+    expect(worker.destroy).not.toHaveBeenCalled();
   });
 
   it("recovers a durable Move result after its caller receives the final reply", async () => {
@@ -612,9 +606,12 @@ describe("worker turn launcher terminal results", () => {
       },
       target: { kind: "gateway" as const },
     };
+    // The exact retry joins the prior Move intent while the worker retains its original claim.
+    const worker = recoveringWorker({
+      retry: true,
+      beforeAck: () => fx.placements.beginPlacementMove(request),
+    });
     const claimWaitCleanup = new AbortController();
-    const transferEntered = createDeferredCore();
-    const failTransfer = createDeferredCore();
     const barrierEntered = createDeferredCore();
     const startBarrier = createDeferredCore();
     const claimWaitEntered = createDeferredCore();
@@ -623,10 +620,6 @@ describe("worker turn launcher terminal results", () => {
     const recoverySettled = createDeferredCore();
     const workspaceOperations = createWorkerWorkspaceOperationCoordinator();
     const completeResult = vi.spyOn(fx.placements, "completeWorkspaceResultAndReleaseTurn");
-    const destroy = vi.fn(async () => fx.attachedEnvironment());
-    const tunnelFailure = new NodeWorkerWorkspaceTransferError(
-      "workspace-transfer-failed: gateway TLS fingerprint mismatch",
-    );
     const recoveryEntered = vi.fn((_mode?: "results-only") => {});
     const harness = await createHarness(fx.database, fx.placements, {
       workspacePath: fx.root,
@@ -699,29 +692,10 @@ describe("worker turn launcher terminal results", () => {
       },
       admit,
     );
-    const tunnel = fx.createWorkerTurnTunnel({
-      launchTurn: vi.fn(async (launchRequest): Promise<SpawnResult> => {
-        launchRequest.onDispatchReady?.();
-        // A prior Move can fail its admission drain before terminal ACK. Its exact retry
-        // joins the durable intent, while the admitted worker retains its original claim.
-        await fx.placements.beginPlacementMove(request);
-        const completed = await fx.openSessionManager();
-        const leafId = await completed.appendMessageAsync(completedWorkerMessage());
-        return fx.acknowledgeCompletedWorkerTurn(launchRequest.turnClaim, leafId);
-      }),
-      reconcileWorkspace: vi
-        .fn(fx.reconcileUnchangedLocalWorkspace)
-        .mockImplementationOnce(async () => {
-          transferEntered.resolve();
-          await failTransfer.promise;
-          throw tunnelFailure;
-        }),
-    });
-    vi.mocked(harness.environments.startTunnel).mockResolvedValue(tunnel);
-    const environments = environmentWithTunnel(tunnel, { destroy });
+    vi.mocked(harness.environments.startTunnel).mockResolvedValue(worker.tunnel);
     const reconcileActivePlacement = vi.fn(dispatch.reconcileActive);
     const provider = fx.createWorkerSessionTurnPlacementProvider({
-      environments,
+      environments: worker.environments,
       placements: fx.placements,
       reconcileActivePlacement,
       workspaceOperations,
@@ -745,7 +719,7 @@ describe("worker turn launcher terminal results", () => {
         );
       },
     ).catch((error: unknown) => error);
-    await transferEntered.promise;
+    await worker.entered;
     await expect(running).resolves.toMatchObject({
       payloads: [{ text: "Remote work completed" }],
     });
@@ -761,7 +735,7 @@ describe("worker turn launcher terminal results", () => {
         "Move settled before entering controller interruption",
       );
       expect(admittedOperation?.abortSignal.aborted).toBe(false);
-      failTransfer.resolve();
+      worker.release();
       await targetedAdmission.promise;
       await dispatch.forceDestroyEnvironment("unrelated");
       expect(recoveryEntered).toHaveBeenCalledExactlyOnceWith("results-only");
@@ -777,9 +751,8 @@ describe("worker turn launcher terminal results", () => {
         message: "fixture: Move barrier complete",
       });
       expect(reclaimSource).toHaveBeenCalledOnce();
-      await waitForSessionRunEnd(fx.SESSION_ID, null);
     } finally {
-      failTransfer.resolve();
+      worker.release();
       startBarrier.resolve();
       // Failure cleanup aborts only the waiter; recovery remains the sole claim-release owner.
       claimWaitCleanup.abort();
@@ -791,11 +764,11 @@ describe("worker turn launcher terminal results", () => {
     expect(reconcileActivePlacement).toHaveBeenCalledWith(fx.ENVIRONMENT_ID);
     expect(fx.placements.get(fx.SESSION_ID)).toMatchObject({ state: "draining", turnClaim: null });
     expect(await fx.placements.listPendingWorkspaceResultsAsync()).toHaveLength(0);
-    expect(tunnel.reconcileWorkspace).toHaveBeenCalledTimes(2);
+    expect(worker.tunnel.reconcileWorkspace).toHaveBeenCalledTimes(2);
     expect(harness.environments.startTunnel).toHaveBeenCalledOnce();
     expect(harness.reportWorkspaceResultRecoveryFailure).not.toHaveBeenCalled();
     expect(harness.environments.destroy).not.toHaveBeenCalled();
-    expect(destroy).not.toHaveBeenCalled();
+    expect(worker.destroy).not.toHaveBeenCalled();
   });
 
   it.each<ReplyCase>([

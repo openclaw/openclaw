@@ -21,18 +21,16 @@ import { createWorkerLiveTrajectoryRecorder } from "./live-event-projection.js";
 import { getWorkerTurnExecutionIdentityCapability } from "./placement-turn-claim-events.js";
 import { WorkerRunnerCapacityError, type WorkerTunnelHandle } from "./tunnel-contract.js";
 import {
-  attachedEnvironment,
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
   createWorkerTurnTunnel,
-  credential,
   placements,
   root,
   seedActivePlacement,
   sessionTarget,
   setupWorkerTurnLauncherTest,
   turn,
-  unusedEnvironments,
+  workerTurnEnvironments,
 } from "./worker-turn-launcher.test-support.js";
 
 describe("worker turn trajectory authority", () => {
@@ -54,8 +52,6 @@ describe("worker turn trajectory authority", () => {
         async ({ turnClaim }) => {
           const source = getWorkerTurnExecutionIdentityCapability(placements, turnClaim);
           assert(source, "expected the launcher to bind its real receipt authority");
-          const prepareRecorder = () =>
-            createWorkerLiveTrajectoryRecorder({ runId: input.runId, source });
           const recorder = await withEnvAsync(
             {
               OPENCLAW_TRAJECTORY: authority === "disabled" ? "0" : "1",
@@ -63,7 +59,7 @@ describe("worker turn trajectory authority", () => {
                 ? { OPENCLAW_STATE_DIR: path.join(root, "simulated-worker") }
                 : {}),
             },
-            prepareRecorder,
+            () => createWorkerLiveTrajectoryRecorder({ runId: input.runId, source }),
           );
           if (authority === "disabled") {
             expect(recorder).toBeNull();
@@ -122,12 +118,7 @@ describe("worker turn trajectory authority", () => {
       });
       const provider = createWorkerSessionTurnPlacementProvider({
         placements,
-        environments: {
-          ...unusedEnvironments(),
-          get: attachedEnvironment,
-          acquireTurnCredential: async () => credential(),
-          startTunnel: async () => tunnel,
-        },
+        environments: workerTurnEnvironments(tunnel),
       });
       const runLocal = vi.fn();
       try {
