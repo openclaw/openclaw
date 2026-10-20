@@ -672,7 +672,11 @@ text and a 256×128 synthetic noise PNG, executes three real `read` tools with
 16 KiB text results, receives one synthetic output-limit stop,
 and completes the resulting transcript continuation. The driver requires one
 completed tool batch, output-limit response, and recovered response per child,
-and verifies inline images reach all three provider requests. These are
+and verifies inline images reach all three provider requests. Each provider
+response includes a distinct deterministic 16 KiB synthetic reasoning signature;
+the driver verifies that tool and recovery continuations replay the exact completed
+signature and omit the reasoning-only output-limit signature, as required by the
+replay owner. These are
 direct child-session `agent` calls, not model-driven `sessions_spawn` calls.
 Post-GC Gateway heap samples follow every completed cohort, and the optional
 final `settled.heapsnapshot` permits retainer inspection. Session resets exclude
@@ -690,7 +694,8 @@ node --import ./scripts/tsx.mjs scripts/perf/transcript-broadcast-measure.ts \
 ```
 
 This runs paced cohorts after five minutes of warmup, with one real `read` tool
-and a streamed completion per turn. Diagnostics and the Prometheus plugin are
+and a streamed completion per turn, including the same synthetic reasoning
+signature and replay check as `attempt-retention`. Diagnostics and the Prometheus plugin are
 enabled. Session generations reset every twenty cohorts (including warmup) to
 bound intentional live transcript growth; `--reset-every-rounds 0` keeps history
 instead. The report records resets and completed cohorts. It does not exercise

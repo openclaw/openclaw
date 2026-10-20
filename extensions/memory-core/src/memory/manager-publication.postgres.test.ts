@@ -733,6 +733,53 @@ describe.skipIf(!connection)("PostgreSQL memory publication worker", () => {
       }
     }));
 
+  it("evicts superseded cache rows first through both PostgreSQL cache paths", () =>
+    admitted(() => {
+      const identity = { provider: "fixture", model: "fixture", providerKey: "fixture" };
+      const unreferencedFirst = { identities: [identity] };
+      const seed = (hash: string, updatedAt: number) =>
+        pg().runTransaction(() =>
+          pg()
+            .prepare(
+              "INSERT INTO memory_embedding_cache (provider, model, provider_key, hash, embedding, dims, updated_at) VALUES ('fixture', 'fixture', 'fixture', ?, ?, 1, ?)",
+            )
+            .run(hash, encodeMemoryEmbedding([1]), updatedAt),
+        );
+      const hashes = () =>
+        pg()
+          .prepare("SELECT hash FROM memory_embedding_cache ORDER BY hash")
+          .all()
+          .map((row) => row.hash);
+      seed("live", 1);
+      seed("orphan", 5);
+      pg().runTransaction(() =>
+        pg()
+          .prepare(
+            "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES ('c', 'a.md', 'memory', 1, 1, 'live', 'fixture', 't', ?, 10)",
+          )
+          .run(encodeMemoryEmbedding([1, 0, 0])),
+      );
+      const header = {
+        agentId: "publication-fixture",
+        provider: { id: "fixture", model: "fixture" },
+        providerKey: "fixture",
+        maxEntries: 2,
+        unreferencedFirst,
+      };
+      expect(
+        backend.execute({
+          type: "cache.write.inline",
+          input: { header, entries: [{ hash: "new", embedding: [1] }] },
+        }),
+      ).toMatchObject({ ok: true });
+      expect(hashes()).toEqual(["live", "new"]);
+      seed("orphan-2", 6);
+      expect(
+        backend.execute({ type: "cache.prune", input: { maxEntries: 2, unreferencedFirst } }),
+      ).toMatchObject({ ok: true, value: true });
+      expect(hashes()).toEqual(["live", "new"]);
+    }));
+
   it("keeps the cache bounded when another owner commits before its transaction starts", () =>
     admitted(() => {
       const header = {
