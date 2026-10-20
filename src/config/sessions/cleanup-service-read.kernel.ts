@@ -74,7 +74,15 @@ export function readSessionCleanupSnapshotInDatabase(
         }
         try {
           // Cold, malformed, or unavailable transcripts cannot prove absence.
-          if (findTranscriptEventInDatabase(database, entry.sessionId, isTranscriptMessageRecord)) {
+          if (
+            findTranscriptEventInDatabase(
+              database,
+              entry.sessionId,
+              isTranscriptMessageRecord,
+              undefined,
+              { malformed: "throw" },
+            )
+          ) {
             continue;
           }
           missing.push({
