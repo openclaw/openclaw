@@ -186,12 +186,14 @@ export function createSessionDescribeReads(host: {
                 .admittedRow
             : undefined;
         if (next) {
-          // Events use the same descriptor projection, with optional previews included.
-          if (!read.params.includeDerivedTitles) {
+          // Full events include previews; omission clears them despite roster preservation.
+          if (!read.params.includeDerivedTitles || target[2].derivedTitle === undefined) {
             delete next.derivedTitle;
           }
-          if (!read.params.includeLastMessage) {
+          if (!read.params.includeLastMessage || target[2].lastMessagePreview === undefined) {
             delete next.lastMessagePreview;
+          }
+          if (!read.params.includeLastMessage || target[2].lastAssistantMessage === undefined) {
             delete next.lastAssistantMessage;
           }
           read.result = sampleRuntime({ session: next }, previous);

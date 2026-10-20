@@ -297,6 +297,25 @@ async function measureLoads(runs: number) {
       content: `;(() => { const __name = (target) => target; (${installProbe.toString()})(${values["request-stacks"]}); })();`,
     });
     const page = await context.newPage();
+    const openDetails = async () => {
+      const details = page
+        .getByRole("complementary", { name: "Details", exact: true })
+        .or(page.getByRole("dialog", { name: "Details", exact: true }));
+      if (!(await details.isVisible())) {
+        await page
+          .getByRole("button", { name: "Details", exact: true })
+          .or(page.getByRole("button").and(page.locator(".chat-header-session-menu__trigger")))
+          .filter({ visible: true })
+          .first()
+          .click();
+        const menu = page.getByRole("menuitem", { name: "Session details", exact: true });
+        await details.or(menu).filter({ visible: true }).first().waitFor();
+        if (await menu.isVisible()) {
+          await menu.click();
+        }
+      }
+      await details.waitFor();
+    };
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
     const scheduleStartAt = startAt ?? Date.now();
@@ -329,23 +348,7 @@ async function measureLoads(runs: number) {
         { timeout: 60_000 },
       );
       if (values["open-details"]) {
-        const details = page
-          .getByRole("complementary", { name: "Details", exact: true })
-          .or(page.getByRole("dialog", { name: "Details", exact: true }));
-        if (!(await details.isVisible())) {
-          await page
-            .getByRole("button", { name: "Details", exact: true })
-            .or(page.getByRole("button").and(page.locator(".chat-header-session-menu__trigger")))
-            .filter({ visible: true })
-            .first()
-            .click();
-          const menu = page.getByRole("menuitem", { name: "Session details", exact: true });
-          await details.or(menu).filter({ visible: true }).first().waitFor();
-          if (await menu.isVisible()) {
-            await menu.click();
-          }
-        }
-        await details.waitFor();
+        await openDetails();
       }
       const readyAtMs = await page.evaluate(() => performance.now());
       const activity: Array<{ method: string; atMs: number; elapsedMs: number; result?: unknown }> =
@@ -464,6 +467,7 @@ async function measureLoads(runs: number) {
       }
       let detailsVerification: unknown;
       if (activityClient && values["open-details"]) {
+        await openDetails();
         const key = await page.evaluate(() => window.openclawControlUi?.snapshot().sessionKey);
         const descriptor = await activityRpc("sessions.describe", { key });
         const session = asOptionalRecord(descriptor?.session);
@@ -476,6 +480,7 @@ async function measureLoads(runs: number) {
           "label",
           "model",
           "modelProvider",
+          "activeModel",
           "statusNote",
           "thinkingLevel",
         ];
@@ -505,9 +510,18 @@ async function measureLoads(runs: number) {
             .first()
             .waitFor();
         }
+        const displayedModel = session.activeModel || session.model;
+        if (typeof displayedModel === "string" && displayedModel) {
+          await page
+            .locator(".chat-details__environment")
+            .filter({ visible: true })
+            .getByText(displayedModel, { exact: true })
+            .waitFor();
+        }
         detailsVerification = {
           server: expected,
-          presentedDetailsMatch: true,
+          presentedDetailsInputMatch: true,
+          visibleDetailsModel: displayedModel,
           visibleConversationLabel: session.label,
         };
       }

@@ -259,11 +259,13 @@ It excludes `--activity-session` and `--activity-cron`. Catalog observations
 retain model rows for before/after option comparisons; use only synthetic
 catalogs. Compare warm session-scoped request counts and activity blocking time,
 keeping the initial catalogs separate from the activity window.
-With `--open-details`, the final check compares the presented Details component's
-session identity, label, model, status note, and thinking level with a fresh
-controller-side descriptor and separately checks the visible conversation header's
-label. The controller
-read is excluded from browser request counts. Request traces retain the preceding
+With `--open-details`, the final check reopens Details for the selected conversation
+after the activity window, then compares its session identity, label, model, status
+note, and thinking level with a fresh controller-side descriptor. It records this
+as an input-state comparison, then separately checks the rendered model in Details
+and the visible conversation header's label. The controller read is excluded
+from browser request counts; compare activity requests only between
+`activityStartedAtMs` and `activityEndedAtMs`. Request traces retain the preceding
 event's session key, reason, timestamp, and revision to distinguish event-driven
 reads from navigation or idle reads. Use `--request-stacks` for caller diagnosis,
 then omit it for paired timing.

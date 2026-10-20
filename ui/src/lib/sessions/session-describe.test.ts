@@ -126,13 +126,20 @@ describe("session descriptor reads", () => {
           runtimeMs: revision * 100,
         };
         h.setRow(next);
+        const enrichment =
+          revision % 2 === 0
+            ? {
+                derivedTitle: "Current title",
+                lastMessagePreview: "Current message",
+                lastAssistantMessage: "Current reply",
+              }
+            : {};
         h.event(revision % 2 ? "session.message" : "sessions.changed", {
           agentId: "main",
           reason: "patch",
           session: {
             ...next,
-            derivedTitle: "Current title",
-            lastMessagePreview: "Current message",
+            ...enrichment,
           },
           ancestorSessions: [],
         });
@@ -140,9 +147,7 @@ describe("session descriptor reads", () => {
           session: {
             ...next,
             runtimeSampledAt: revision * 1_000,
-            ...(previews
-              ? { derivedTitle: "Current title", lastMessagePreview: "Current message" }
-              : {}),
+            ...(previews ? enrichment : {}),
           },
         });
       }
