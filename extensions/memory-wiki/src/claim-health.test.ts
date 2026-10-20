@@ -41,11 +41,7 @@ describe("wiki claim health", () => {
   it("keeps malformed claim timestamps unknown instead of using page freshness", () => {
     const page = createPage("Delta");
     page.updatedAt = "2026-04-20T00:00:00.000Z";
-    const claim: WikiClaim = {
-      text: "Delta has malformed claim freshness metadata.",
-      updatedAt: "not-a-date",
-      evidence: [],
-    };
+    const claim: WikiClaim = { text: "Claim", updatedAt: "not-a-date", evidence: [] };
 
     const freshness = assessClaimFreshness({
       page,
@@ -61,11 +57,7 @@ describe("wiki claim health", () => {
     const timestamp = new Date(now.getTime() - 89 * 24 * 60 * 60 * 1000).toISOString();
     const page = createPage("Alpha");
     page.updatedAt = timestamp;
-    const claim: WikiClaim = {
-      text: "Alpha has timestamped evidence.",
-      updatedAt: timestamp,
-      evidence: [],
-    };
+    const claim: WikiClaim = { text: "Claim", updatedAt: timestamp, evidence: [] };
     const expected = {
       level: "aging",
       reason: `last touched ${timestamp}`,

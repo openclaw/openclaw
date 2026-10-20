@@ -7,6 +7,7 @@ import { resolveMemoryWikiAgentConfig, type ResolvedMemoryWikiConfig } from "./c
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const { createVault } = createMemoryWikiTestHarness();
+const createAgentVault = () => createVault({ config: { vault: { scope: "agent" } } });
 let stdoutWriteMock: ReturnType<typeof vi.fn>;
 
 describe("memory-wiki agent-scoped cli", () => {
@@ -57,9 +58,7 @@ describe("memory-wiki agent-scoped cli", () => {
   }
 
   it("gives actionable agent-selection guidance for a multi-agent roster", async () => {
-    const { config } = await createVault({
-      config: { vault: { scope: "agent" } },
-    });
+    const { config } = await createAgentVault();
     const { program, resolveConfig } = createAgentSelectionProgram({
       config,
       appConfig,
@@ -75,13 +74,10 @@ describe("memory-wiki agent-scoped cli", () => {
   });
 
   it("runs wiki doctor against explicitly selected agent-scoped vaults", async () => {
-    const { rootDir, config } = await createVault({
-      config: { vault: { scope: "agent" } },
-    });
+    const { rootDir, config } = await createAgentVault();
     const run = async (args: string[]) => {
       stdoutWriteMock.mockClear();
-      const program = new Command();
-      program.name("test").enablePositionalOptions();
+      const program = new Command().name("test").enablePositionalOptions();
       registerWikiCli(program, { config, getAppConfig: () => appConfig });
       await program.parseAsync(["wiki", ...args], { from: "user" });
       return stdoutWriteMock.mock.calls.map(([chunk]) => String(chunk)).join("");
@@ -101,7 +97,7 @@ describe("memory-wiki agent-scoped cli", () => {
   });
 
   it("does not require an agent to probe Obsidian CLI availability", async () => {
-    const { config } = await createVault({ config: { vault: { scope: "agent" } } });
+    const { config } = await createAgentVault();
     const { program, resolveConfig } = createAgentSelectionProgram({
       config,
       appConfig: { agents: { entries: {} } },
