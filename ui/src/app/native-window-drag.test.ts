@@ -19,15 +19,12 @@ function installBridge() {
 
 function buildHeader() {
   const header = document.createElement("div");
-  header.className = "chat-pane__header";
-  const title = document.createElement("span");
-  title.textContent = "iPhone";
   const button = document.createElement("button");
   button.type = "button";
-  header.append(title, button);
+  header.append(button);
   header.addEventListener("mousedown", beginNativeWindowDrag);
   document.body.append(header);
-  return { header, title, button };
+  return { header, button };
 }
 
 function mouseDown(target: Element, init: MouseEventInit = {}, offsetY?: number) {

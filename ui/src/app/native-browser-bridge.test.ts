@@ -1,5 +1,5 @@
 /* @vitest-environment jsdom */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   hasNativeBrowserBridge,
   postNativeBrowserMessage,
@@ -36,136 +36,111 @@ const snapshotReply = {
 };
 afterEach(() => vi.unstubAllGlobals());
 
-describe("native browser bridge wire contract", () => {
-  it("is inert outside the native host", async () => {
-    const listener = vi.fn();
-    expect(hasNativeBrowserBridge()).toBe(false);
-    expect(readNativeBrowserState()).toBeNull();
-    expect(await send("close")).toBeNull();
-    const unsubscribe = subscribeNativeBrowserState(listener);
-    push({ revision: 1, tabs: [tab] });
-    unsubscribe();
-    expect(listener).not.toHaveBeenCalled();
-  });
+it("is inert outside the native host", async () => {
+  const listener = vi.fn();
+  expect(hasNativeBrowserBridge()).toBe(false);
+  expect(readNativeBrowserState()).toBeNull();
+  expect(await send("close")).toBeNull();
+  const unsubscribe = subscribeNativeBrowserState(listener);
+  push({ revision: 1, tabs: [tab] });
+  unsubscribe();
+  expect(listener).not.toHaveBeenCalled();
+});
 
-  it("binds WebKit's receiver and preserves valid request values", async () => {
-    const messages: NativeBrowserMessage[] = [];
+it.each([
+  [
+    { type: "open", tabId: "mac-1", url: "about:blank", sessionKey: "", activate: false },
+    { ok: true, tabId: "mac-1" },
+  ],
+  [{ type: "present", scope: "scope", tabId: null, rect: null, visible: false }, { ok: true }],
+  [{ type: "release-scope", scope: "scope" }, { ok: true }],
+] satisfies [NativeBrowserMessage, unknown][])(
+  "binds receiver and preserves request %j",
+  async (message, reply) => {
+    const posted = vi.fn();
     const bridge = {
-      postMessage(message: NativeBrowserMessage) {
+      postMessage(request: NativeBrowserMessage) {
         expect(this).toBe(bridge);
-        messages.push(message);
-        return Promise.resolve(
-          message.type === "open" ? { ok: true, tabId: message.tabId } : { ok: true },
-        );
+        posted(request);
+        return Promise.resolve(reply);
       },
     };
     vi.stubGlobal("webkit", { messageHandlers: { openclawBrowser: bridge } });
-    const requests = [
-      { type: "open", tabId: "mac-1", url: "about:blank", sessionKey: "", activate: false },
-      { type: "present", scope: "scope", tabId: null, rect: null, visible: false },
-      { type: "release-scope", scope: "scope" },
-    ] satisfies NativeBrowserMessage[];
-    for (const message of requests) {
-      expect(await postNativeBrowserMessage({ ...message })).toEqual(
-        message.type === "open" ? { ok: true, tabId: message.tabId } : { ok: true },
-      );
-    }
-    expect(messages).toEqual(requests);
-  });
+    expect(await postNativeBrowserMessage({ ...message })).toEqual(reply);
+    expect(posted.mock.calls).toEqual([[message]]);
+  },
+);
 
-  it("downloads through the native tab and distinguishes a saved file from cancellation", async () => {
-    const post = install();
-    for (const cancelled of [false, true]) {
-      post.mockResolvedValueOnce({ ok: true, cancelled });
-      expect(await send("download")).toEqual({
-        ok: true,
-        cancelled,
-      });
-      expect(post).toHaveBeenLastCalledWith({ type: "download", tabId: "mac-1" });
-    }
-    for (const reply of [{ ok: true }, { ok: true, cancelled: "false" }]) {
-      post.mockResolvedValueOnce(reply);
-      expect(await send("download")).toEqual({
-        ok: false,
-        error: "Invalid native browser download",
-      });
-    }
-  });
+const invalid = (kind: string) => ({ ok: false, error: `Invalid native browser ${kind}` });
+it.each([
+  ["download", { ok: true, cancelled: false }, { ok: true, cancelled: false }],
+  ["download", { ok: true, cancelled: true }, { ok: true, cancelled: true }],
+  ["download", { ok: true }, invalid("download")],
+  ["download", { ok: true, cancelled: "false" }, invalid("download")],
+  ["snapshot", { ...snapshotReply }, snapshotReply],
+  ["snapshot", null, invalid("reply")],
+  ["snapshot", { ok: true }, invalid("snapshot")],
+  ["snapshot", { ...snapshotReply, dataUrl: "file:///example" }, invalid("snapshot")],
+  ["snapshot", { ...snapshotReply, cssWidth: 0 }, invalid("snapshot")],
+  ["reload", { ok: false, error: "Tab closed" }, { ok: false, error: "Tab closed" }],
+  ["close", new Error("WebKit unavailable"), { ok: false, error: "WebKit unavailable" }],
+] as const)("validates %s reply %j", async (type, reply, expected) => {
+  const post = install();
+  if (reply instanceof Error) {
+    post.mockRejectedValueOnce(reply);
+  } else {
+    post.mockResolvedValueOnce(reply);
+  }
+  expect(await send(type)).toEqual(expected);
+  expect(post).toHaveBeenCalledWith({ type, tabId: "mac-1" });
+});
 
-  it("rejects malformed snapshots and propagates native failures", async () => {
-    const post = install();
-    post.mockResolvedValueOnce({ ...snapshotReply });
-    expect(await send("snapshot")).toEqual(snapshotReply);
-    for (const reply of [
-      null,
-      { ok: true },
-      { ...snapshotReply, dataUrl: "file:///example" },
-      { ...snapshotReply, cssWidth: 0 },
-    ]) {
-      post.mockResolvedValueOnce(reply);
-      expect(await send("snapshot")).toMatchObject({
-        ok: false,
-      });
-    }
-    post.mockResolvedValueOnce({ ok: false, error: "Tab closed" });
-    expect(await send("reload")).toEqual({
-      ok: false,
-      error: "Tab closed",
-    });
-    post.mockRejectedValueOnce(new Error("WebKit unavailable"));
-    expect(await send("close")).toEqual({
-      ok: false,
-      error: "WebKit unavailable",
-    });
-  });
+it("validates initial state and ignores malformed, duplicate, stale, and unsubscribed pushes", () => {
+  install();
+  vi.stubGlobal("__OPENCLAW_NATIVE_BROWSER__", { revision: 2, tabs: [tab] });
+  expect(readNativeBrowserState()).toEqual({ revision: 2, tabs: [tab] });
+  const listener = vi.fn();
+  const unsubscribe = subscribeNativeBrowserState(listener);
+  for (const state of [
+    { revision: 1, tabs: [tab] },
+    { revision: 2, tabs: [] },
+    { revision: 3, tabs: [tab, tab] },
+    { revision: 3, tabs: [{ ...tab, openedBy: "other" }] },
+    { revision: 3, tabs: [{ ...tab, loading: 1 }] },
+    { revision: 3, tabs: [{ ...tab, sessionKey: null }] },
+    { revision: 3, tabs: [{ ...tab, sessionKey: " session " }] },
+    { revision: 3, tabs: [{ ...tab, url: "file:///example" }] },
+    { revision: 3.5, tabs: [] },
+  ]) {
+    push(state);
+  }
+  expect(listener).not.toHaveBeenCalled();
+  push({ revision: 3, tabs: [{ ...tab, openedBy: "native", openerTabId: "mac-opener" }] });
+  expect(listener).toHaveBeenCalledOnce();
+  unsubscribe();
+  push({ revision: 4, tabs: [] });
+  expect(listener).toHaveBeenCalledOnce();
+  vi.stubGlobal("__OPENCLAW_NATIVE_BROWSER__", { revision: 5, tabs: [tab, tab] });
+  expect(readNativeBrowserState()).toBeNull();
+});
 
-  it("validates initial state and ignores malformed, duplicate, stale, and unsubscribed pushes", () => {
-    install();
-    vi.stubGlobal("__OPENCLAW_NATIVE_BROWSER__", { revision: 2, tabs: [tab] });
-    expect(readNativeBrowserState()).toEqual({ revision: 2, tabs: [tab] });
-    const listener = vi.fn();
-    const unsubscribe = subscribeNativeBrowserState(listener);
-    for (const state of [
-      { revision: 1, tabs: [tab] },
-      { revision: 2, tabs: [] },
-      { revision: 3, tabs: [tab, tab] },
-      { revision: 3, tabs: [{ ...tab, openedBy: "other" }] },
-      { revision: 3, tabs: [{ ...tab, loading: 1 }] },
-      { revision: 3, tabs: [{ ...tab, sessionKey: null }] },
-      { revision: 3, tabs: [{ ...tab, sessionKey: " session " }] },
-      { revision: 3, tabs: [{ ...tab, url: "file:///example" }] },
-      { revision: 3.5, tabs: [] },
-    ]) {
-      push(state);
-    }
-    expect(listener).not.toHaveBeenCalled();
-    push({ revision: 3, tabs: [{ ...tab, openedBy: "native", openerTabId: "mac-opener" }] });
-    expect(listener).toHaveBeenCalledOnce();
+it.each([
+  { name: "PNG", favicon: "data:image/png;base64,eA==", accepted: true },
+  { name: "non-image", favicon: "data:text/html;base64,eA==", accepted: false },
+  { name: "oversized", favicon: "data:image/png;base64," + "A".repeat(98_283), accepted: false },
+  { name: "null", favicon: null, accepted: false },
+])("validates $name favicon on initial reads and pushes", ({ favicon, accepted }) => {
+  install();
+  const state = { revision: 1, tabs: [{ ...tab, favicon }] };
+  vi.stubGlobal("__OPENCLAW_NATIVE_BROWSER__", state);
+  expect(readNativeBrowserState()).toEqual(accepted ? state : null);
+  const listener = vi.fn();
+  const unsubscribe = subscribeNativeBrowserState(listener);
+  try {
+    const next = { ...state, revision: 2 };
+    push(next);
+    expect(listener.mock.calls).toEqual(accepted ? [[next]] : []);
+  } finally {
     unsubscribe();
-    push({ revision: 4, tabs: [] });
-    expect(listener).toHaveBeenCalledOnce();
-    vi.stubGlobal("__OPENCLAW_NATIVE_BROWSER__", { revision: 5, tabs: [tab, tab] });
-    expect(readNativeBrowserState()).toBeNull();
-  });
-
-  it.each([
-    { name: "PNG", favicon: "data:image/png;base64,eA==", accepted: true },
-    { name: "non-image", favicon: "data:text/html;base64,eA==", accepted: false },
-    { name: "oversized", favicon: "data:image/png;base64," + "A".repeat(98_283), accepted: false },
-    { name: "null", favicon: null, accepted: false },
-  ])("validates $name favicon on initial reads and pushes", ({ favicon, accepted }) => {
-    install();
-    const state = { revision: 1, tabs: [{ ...tab, favicon }] };
-    vi.stubGlobal("__OPENCLAW_NATIVE_BROWSER__", state);
-    expect(readNativeBrowserState()).toEqual(accepted ? state : null);
-    const listener = vi.fn();
-    const unsubscribe = subscribeNativeBrowserState(listener);
-    try {
-      const next = { ...state, revision: 2 };
-      push(next);
-      expect(listener.mock.calls).toEqual(accepted ? [[next]] : []);
-    } finally {
-      unsubscribe();
-    }
-  });
+  }
 });
