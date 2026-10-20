@@ -177,7 +177,6 @@ it("awaits target room sync before sending", async () => {
   mocks.waitForMatrixSyncStoreWithCursor.mockResolvedValue({
     cursor: "saved-cursor",
     pathname: "/tmp/unused-sync-store",
-    source: "sqlite",
     stateKey: "saved",
   });
   const context = createMatrixQaE2eeTestContext({
@@ -202,29 +201,48 @@ it("awaits target room sync before sending", async () => {
     expect.objectContaining({ accountId: "sut", accountConfig: { enabled: true } }),
   );
 });
-it("finds account metadata stored in account-local SQLite", async () => {
-  const stateDir = await mkdtemp(path.join(os.tmpdir(), "matrix-qa-storage-"));
-  try {
-    const accountRoot = path.join(stateDir, "matrix", "accounts", "stored-key", "server", "token");
-    createPluginStateSyncKeyedStoreForTests(
-      "matrix",
-      storageMetadataRuntime.openMatrixStorageMetaStoreOptions(accountRoot),
-    ).register("current", { deviceId: "DEVICE", userId: "@owner:matrix-qa.test" });
-    resetPluginStateStoreForTests();
-
-    await expect(
-      mutateMatrixQaCliStateLoss({
+it.each(["deviceId", "userId"] as const)(
+  "selects SQLite account metadata without deleting a different %s",
+  async (field) => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "matrix-qa-storage-"));
+    try {
+      const accountRoot = path.join(stateDir, "matrix", "accounts", "zz-target", "server", "token");
+      const otherRoot = path.join(stateDir, "matrix", "accounts", "aa-other", "server", "token");
+      const otherMetadata = {
         deviceId: "DEVICE",
-        preserveRecoveryKey: false,
-        runtime: { stateDir },
         userId: "@owner:matrix-qa.test",
-      }),
-    ).resolves.toMatchObject({ accountRoot });
-  } finally {
-    resetPluginStateStoreForTests();
-    await rm(stateDir, { force: true, recursive: true });
-  }
-});
+        [field]: "OTHER",
+      };
+      createPluginStateSyncKeyedStoreForTests(
+        "matrix",
+        storageMetadataRuntime.openMatrixStorageMetaStoreOptions(accountRoot),
+      ).register("current", { deviceId: "DEVICE", userId: "@owner:matrix-qa.test" });
+      createPluginStateSyncKeyedStoreForTests(
+        "matrix",
+        storageMetadataRuntime.openMatrixStorageMetaStoreOptions(otherRoot),
+      ).register("current", otherMetadata);
+      resetPluginStateStoreForTests();
+
+      await expect(
+        mutateMatrixQaCliStateLoss({
+          deviceId: "DEVICE",
+          preserveRecoveryKey: false,
+          runtime: { stateDir },
+          userId: "@owner:matrix-qa.test",
+        }),
+      ).resolves.toMatchObject({ accountRoot });
+      expect(
+        createPluginStateSyncKeyedStoreForTests(
+          "matrix",
+          storageMetadataRuntime.openMatrixStorageMetaStoreOptions(otherRoot),
+        ).lookup("current"),
+      ).toEqual(otherMetadata);
+    } finally {
+      resetPluginStateStoreForTests();
+      await rm(stateDir, { force: true, recursive: true });
+    }
+  },
+);
 
 it.each([
   { name: "external key", run: runMatrixQaE2eeStateLossExternalRecoveryKeyScenario },

@@ -373,7 +373,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     agentHarnessId: string;
   } = {
     modelCallSequence: (runInput.modelCallSequence ??= { value: 0 }),
-    compactionRequest: runInput.compactionRequest,
     bindWatchdogAttempt: attemptControls.bindWatchdogAttempt,
     providerReviewAcknowledgment: params.providerReviewAcknowledgment,
     awaitSessionDiffBaseline: params.awaitSessionDiffBaseline,
@@ -397,7 +396,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     memoryAudience,
     conversationRecall: params.conversationRecall,
     promptCacheKey: params.promptCacheKey,
-    postTurnMaintenance: params.postTurnMaintenance,
     sandboxSessionKey: params.sandboxSessionKey,
     sandboxAgentId: params.sandboxAgentId,
     trigger: params.trigger,

@@ -621,7 +621,6 @@ extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-e2ee-cli
 extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-gateway.ts	2
 extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-recovery.ts	2
 extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-verification.ts	2
-extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-e2ee-state.ts	1
 extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-state-files.ts	2
 extensions/qa-lab/src/live-transports/matrix/substrate/client.ts	3
 extensions/qa-lab/src/live-transports/matrix/substrate/config.ts	8

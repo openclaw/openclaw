@@ -396,16 +396,6 @@ export async function finalizeEmbeddedAgentCommand(params: {
             oneShotCliRun: params.opts.oneShotCliRun,
             agentHarnessId: agentMeta?.agentHarnessId,
             compactionRequestBudget: params.attempt.compactionRequestBudget,
-            requestedCompaction: agentMeta?.requestedCompaction,
-            cacheExpiry: agentMeta?.cacheExpiry,
-            expectedCompactionCount: sessionEntry.compactionCount,
-            expectedSelection: {
-              model: sessionEntry.model,
-              modelProvider: sessionEntry.modelProvider,
-              modelOverride: sessionEntry.modelOverride,
-              providerOverride: sessionEntry.providerOverride,
-              authProfileOverride: sessionEntry.authProfileOverride,
-            },
           }
         : undefined;
 

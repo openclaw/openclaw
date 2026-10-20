@@ -6,6 +6,7 @@ import path from "node:path";
 import type { Client } from "pg";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { describeAdmittedDatabaseStores } from "../infra/database-engine/admitted-diagnostics.js";
+import { formatDatabaseStoreDiagnostic } from "../infra/database-engine/diagnostics-format.js";
 import type { DatabaseStoreDiagnostic } from "../infra/database-engine/diagnostics.js";
 import { readBackupEngine } from "../infra/database-engine/physical-store.js";
 import type { PortDescriptor } from "../infra/database-engine/port-descriptor.js";
@@ -19,6 +20,7 @@ import {
 import { retireSqliteDatabaseAdmissionForPath } from "../infra/sqlite-database-admission.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
+import { inspectDoctorDatabaseEngines } from "./doctor-database-engine-inspection.js";
 import {
   buildStatusDatabaseStoreRows,
   resolveStatusDatabaseEngines,
@@ -107,7 +109,7 @@ export async function createDiagnosticStores(root: string) {
 }
 
 /** Populate actual owner admissions, independently from Doctor's inspection worker. */
-export async function admittedStatusOutput(
+async function admittedStatusOutput(
   root: string,
   config: OpenClawConfig,
   descriptors: Map<string, PortDescriptor>,
@@ -220,11 +222,32 @@ type DiagnosticSnapshot = {
   status: Awaited<ReturnType<typeof admittedStatusOutput>>;
 };
 
-export function normalizeDiagnosticOutput(
-  value: DiagnosticSnapshot,
+export async function inspectDiagnosticStores(root: string, config = diagnosticConfig()) {
+  return (
+    await inspectDoctorDatabaseEngines({
+      config,
+      stateDir: root,
+      env: { OPENCLAW_STATE_DIR: root, HOME: path.join(root, "home") },
+    })
+  ).stores!;
+}
+
+export async function diagnosticOutput(
   root: string,
+  config: OpenClawConfig,
+  descriptors: Map<string, PortDescriptor>,
+  stores: DatabaseStoreDiagnostic | DatabaseStoreDiagnostic[],
   connection?: string,
+  normalizedConnection = connection,
 ) {
+  const text = Array.isArray(stores)
+    ? stores.map(formatDatabaseStoreDiagnostic)
+    : formatDatabaseStoreDiagnostic(stores);
+  const status = await admittedStatusOutput(root, config, descriptors, connection);
+  return normalizeDiagnosticOutput({ text, json: stores, status }, root, normalizedConnection);
+}
+
+function normalizeDiagnosticOutput(value: DiagnosticSnapshot, root: string, connection?: string) {
   const packageJournal = resolvePackageActivationJournalPath(
     resolvePackageActivationAnchor(process.cwd()),
   );

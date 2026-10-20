@@ -91,7 +91,6 @@ export async function compactEmbeddedRunForRecovery(
     attempt: number;
     maxAttempts: number;
     currentTokenCount?: number;
-    requestedCompaction?: import("../../session-maintenance/request.js").SessionCompactionRequest;
   },
 ) {
   const { runParams } = input;
@@ -103,9 +102,7 @@ export async function compactEmbeddedRunForRecovery(
     sessionKey: input.resolvedSessionKey,
   };
   const recoveryKind = recovery.trigger === "timeout_recovery" ? "timeout" : recovery.trigger;
-  const reason = recovery.requestedCompaction
-    ? "model-requested compaction"
-    : `${recoveryKind === "budget" ? "context budget" : recoveryKind} recovery`;
+  const reason = `${recoveryKind === "budget" ? "context budget" : recoveryKind} recovery`;
   await input.runOwnsCompactionBeforeHook(reason);
   owner.assertActive();
   const runtimeContext = {
@@ -175,7 +172,6 @@ export async function compactEmbeddedRunForRecovery(
       ? { currentTokenCount: recovery.currentTokenCount }
       : {}),
     force: true,
-    customInstructions: recovery.requestedCompaction?.focus,
     compactionTarget: "budget",
     runtimeContext,
     runtimeSettings,

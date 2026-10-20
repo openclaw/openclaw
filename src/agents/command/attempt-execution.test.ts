@@ -302,6 +302,24 @@ describe("Claude CLI transcript probes", () => {
       [message("assistant", [tool("old")]), ...longPrefix, message("assistant", "moving on")],
     ],
     [
+      "answered calls repeated by a request echo before the final reply",
+      false,
+      [
+        message("assistant", [tool("spawn")]),
+        message("user", [result("spawn")]),
+        { type: "api-request-blob", message: { role: "assistant", content: [tool("spawn")] } },
+        { type: "api-request" },
+      ],
+    ],
+    [
+      "an orphan followed only by a request echo",
+      true,
+      [
+        message("assistant", [tool("orphan")]),
+        { type: "api-request-blob", message: { role: "user", content: [result("orphan")] } },
+      ],
+    ],
+    [
       "main-conversation orphans with sidechain results",
       true,
       [message("assistant", [tool("main")]), message("user", [result("main")], true)],

@@ -159,7 +159,6 @@ export async function runStaleSyncReplayDedupeScenario(context: MatrixQaScenario
     await rewriteMatrixSyncStoreCursor({
       cursor: staleCursor,
       pathname: syncStore.pathname,
-      source: syncStore.source,
       stateKey: syncStore.stateKey,
     });
   });

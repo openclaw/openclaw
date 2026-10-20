@@ -110,7 +110,6 @@ async function plan(
         allocateToolOutcomeOrdinal: undefined,
       },
       toolAbortSignal: abort.signal,
-      requestedCompaction: undefined,
       refreshPermissionMode: async () => {
         throw new Error("The catalog fixture does not prepare permission changes");
       },

@@ -72,10 +72,8 @@ vi.mock("../sessions/session-diff.js", async (importOriginal) => ({
     compactionTestState.captureSessionDiffBaselineMock(params),
 }));
 
-vi.mock("../config/io.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../config/io.js")>()),
+vi.mock("../config/io.js", () => ({
   getRuntimeConfig: () => compactionTestState.cfg,
-  getRuntimeConfigSnapshot: () => compactionTestState.cfg,
   readConfigFileSnapshotForWrite: async () => ({ snapshot: { valid: false } }),
 }));
 

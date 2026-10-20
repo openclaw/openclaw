@@ -40,7 +40,6 @@ export type OpenClawPluginToolOptions = Pick<
   | "conversationReadOrigin"
   | "requesterAgentIdOverride"
   | "sessionId"
-  | "sessionCompaction"
   | "conversationRecall"
   | "oneShotCliRun"
   | "sandboxBrowserBridgeUrl"
@@ -106,7 +105,6 @@ export function resolveOpenClawPluginToolInputs(params: {
       agentId: sessionAgentId,
       sessionKey,
       sessionId: options?.sessionId,
-      sessionCompaction: options?.sessionCompaction,
       approvalReviewerDeviceIds: options?.approvalReviewerDeviceIds
         ? [...options.approvalReviewerDeviceIds]
         : options?.approvalReviewerDeviceId

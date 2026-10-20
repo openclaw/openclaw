@@ -22,18 +22,6 @@ function expectSchemaFailurePath(result: SchemaParseResult, prefix: string): voi
 }
 
 describe("agent defaults schema", () => {
-  it("keeps cache-expiry compaction opt-in and rejects invented timer settings", () => {
-    expect(AgentDefaultsSchema.parse({ compaction: {} })).toEqual({ compaction: {} });
-    expect(AgentDefaultsSchema.parse({ compaction: { cacheExpiry: { enabled: true } } })).toEqual({
-      compaction: { cacheExpiry: { enabled: true } },
-    });
-    expect(
-      AgentDefaultsSchema.safeParse({ compaction: { cacheExpiry: { enabled: "yes" } } }).success,
-    ).toBe(false);
-    expect(
-      AgentDefaultsSchema.safeParse({ compaction: { cacheExpiry: { ttl: "55m" } } }).success,
-    ).toBe(false);
-  });
   it("accepts bounded explicit picker runtimes only on exact model refs", () => {
     const models = {
       "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" }, pickerRuntimes: ["codex"] },

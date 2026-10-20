@@ -106,7 +106,6 @@ export function buildFallbackCandidateTurnParams(params: AgentFallbackCandidateC
     preparedRunAdmission: params.preparedRunAdmission,
     messageActionTurnCapability: params.messageActionTurnCapability,
     trigger: resolveReplyRunTrigger(turn),
-    postTurnMaintenance: turn.isHeartbeat ? undefined : true,
     heartbeatEventQueueSessionKey: getReplySystemEventContext(turn.opts)
       ?.heartbeatEventQueueSessionKey,
     lane: params.runLane,
