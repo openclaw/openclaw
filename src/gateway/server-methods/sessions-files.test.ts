@@ -403,6 +403,19 @@ describe("sessions.files RPC handlers", () => {
     expect(payload.browser).toMatchObject({ search: "needle", truncated: true, entries: [] });
   });
 
+  it("marks searches incomplete when an excluded directory may hide a match", async () => {
+    writeWorkspace("src/REPORT.md", "# Source report\n");
+    writeWorkspace("dist/REPORT.md", "# Generated report\n");
+
+    const payload = await files.ok("list", { search: "REPORT.md" });
+
+    expect(payload.browser).toMatchObject({
+      search: "REPORT.md",
+      truncated: true,
+      entries: [{ path: "src/REPORT.md" }],
+    });
+  });
+
   it.runIf(process.platform === "linux")(
     "reports non-UTF-8 filenames during workspace browse",
     async () => {

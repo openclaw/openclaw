@@ -281,8 +281,15 @@ async function searchBrowserEntries(params: {
           entries.push(entry);
         }
       }
-      if (dirent.isDirectory && !SEARCH_SKIP_DIRS.has(dirent.name)) {
-        await visit(browserPath);
+      if (dirent.isDirectory) {
+        if (SEARCH_SKIP_DIRS.has(dirent.name)) {
+          // The public result only has a boolean completeness signal. A skipped
+          // directory can contain another filename match, so searches that saw
+          // one must not be presented as workspace-wide unique.
+          truncated = true;
+        } else {
+          await visit(browserPath);
+        }
       }
     }
   };
