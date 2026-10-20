@@ -60,28 +60,45 @@ describe("ensureMatrixCryptoRuntime", () => {
 
   afterEach(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
 
-  it("shares one bootstrap of missing crypto runtime and retries matrix SDK load", async () => {
-    const markerPath = path.join(tmpDir, "bootstrapped");
-    writeBootstrap([
-      `if (fs.realpathSync(process.cwd()) !== ${JSON.stringify(fs.realpathSync(tmpDir))}) process.exit(2);`,
-      'if (process.env.COREPACK_ENABLE_DOWNLOAD_PROMPT !== "0") process.exit(3);',
-      `fs.writeFileSync(${JSON.stringify(markerPath)}, "ok");`,
-    ]);
-    cryptoRequire.mockImplementation(() => {
-      if (!fs.existsSync(markerPath)) {
-        throw new Error(
-          "Cannot find module '@matrix-org/matrix-sdk-crypto-nodejs-linux-x64-gnu' (required by matrix sdk)",
-        );
+  it.each(["missing", "truncated"] as const)(
+    "bootstraps a %s runtime once, sharing concurrent loads",
+    async (mode) => {
+      const filename = mode === "missing" ? "bootstrapped" : resolveTestNativeBindingFilename();
+      if (!filename) {
+        return;
       }
-      return {};
-    });
-
-    await Promise.all([ensureMatrixCryptoRuntime(), ensureMatrixCryptoRuntime()]);
-    await ensureMatrixCryptoRuntime();
-
-    expect(fs.readFileSync(markerPath, "utf8")).toBe("ok");
-    expect(cryptoRequire).toHaveBeenCalledTimes(2);
-  });
+      const artifact = path.join(tmpDir, filename);
+      const bytes = mode === "missing" ? 2 : 1_000_000;
+      writeBootstrap([
+        `if (fs.realpathSync(process.cwd()) !== ${JSON.stringify(fs.realpathSync(tmpDir))}) process.exit(2);`,
+        'if (process.env.COREPACK_ENABLE_DOWNLOAD_PROMPT !== "0") process.exit(3);',
+        `fs.writeFileSync(${JSON.stringify(artifact)}, Buffer.alloc(${bytes}));`,
+      ]);
+      if (mode === "truncated") {
+        fs.writeFileSync(artifact, Buffer.alloc(16));
+      }
+      const bindingSizes: number[] = [];
+      cryptoRequire.mockImplementation(() => {
+        const size = fs.existsSync(artifact) ? fs.statSync(artifact).size : 0;
+        bindingSizes.push(size);
+        if (size !== bytes) {
+          throw new Error(
+            "Cannot find module '@matrix-org/matrix-sdk-crypto-nodejs-linux-x64-gnu' (required by matrix sdk)",
+          );
+        }
+        return {};
+      });
+      await Promise.all([ensureMatrixCryptoRuntime(), ensureMatrixCryptoRuntime()]);
+      await ensureMatrixCryptoRuntime();
+      expect(cryptoRequire).toHaveBeenCalledTimes(2);
+      if (mode === "missing") {
+        expect(fs.readFileSync(artifact)).toEqual(Buffer.alloc(bytes));
+      } else {
+        expect(fs.statSync(artifact).size).toBe(bytes);
+      }
+      expect(bindingSizes).toEqual([0, bytes]);
+    },
+  );
 
   it("rethrows non-crypto module errors and allows a later load to retry", async () => {
     cryptoRequire.mockImplementationOnce(() => {
@@ -94,37 +111,6 @@ describe("ensureMatrixCryptoRuntime", () => {
     await ensureMatrixCryptoRuntime();
 
     expect(cryptoRequire).toHaveBeenCalledTimes(2);
-  });
-
-  it("removes an incomplete native binding before loading the matrix SDK", async () => {
-    const nativeBindingFilename = resolveTestNativeBindingFilename();
-    if (!nativeBindingFilename) {
-      return;
-    }
-
-    const nativeBindingPath = path.join(tmpDir, nativeBindingFilename);
-    writeBootstrap([
-      `fs.writeFileSync(${JSON.stringify(nativeBindingPath)}, Buffer.alloc(1_000_000));`,
-    ]);
-    fs.writeFileSync(nativeBindingPath, Buffer.alloc(16));
-
-    const bindingSizes: number[] = [];
-    cryptoRequire.mockImplementation(() => {
-      const size = fs.existsSync(nativeBindingPath) ? fs.statSync(nativeBindingPath).size : 0;
-      bindingSizes.push(size);
-      if (size < 1_000_000) {
-        throw new Error(
-          "Cannot find module '@matrix-org/matrix-sdk-crypto-nodejs-linux-x64-gnu' (required by matrix sdk)",
-        );
-      }
-      return {};
-    });
-
-    await ensureMatrixCryptoRuntime();
-
-    expect(cryptoRequire).toHaveBeenCalledTimes(2);
-    expect(fs.statSync(nativeBindingPath).size).toBe(1_000_000);
-    expect(bindingSizes).toEqual([0, 1_000_000]);
   });
 });
 

@@ -31,10 +31,7 @@ describe("matrix profile sync", () => {
   });
 
   it("updates display name when desired name differs", async () => {
-    const client = createClientStub({
-      displayname: "Old Name",
-      avatar_url: "mxc://example/existing",
-    });
+    const client = createClientStub(oldProfile);
     expect(await syncProfile({ client, displayName: "New Name" })).toMatchObject({
       ...noUpdates,
       skipped: false,
@@ -49,15 +46,7 @@ describe("matrix profile sync", () => {
   ] as const)("uploads a %s avatar and updates the profile", async (source, input, uploaded) => {
     const client = createClientStub(oldProfile);
     client.uploadContent.mockResolvedValue(uploaded);
-    const loadAvatar = vi.fn(async () =>
-      source === "http"
-        ? avatarMedia
-        : {
-            ...avatarMedia,
-            contentType: "image/jpeg",
-            fileName: "avatar.jpg",
-          },
-    );
+    const loadAvatar = vi.fn(async () => avatarMedia);
     const result = await syncProfile({
       client,
       ...(source === "http"
