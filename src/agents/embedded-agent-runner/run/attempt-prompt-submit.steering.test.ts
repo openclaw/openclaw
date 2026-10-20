@@ -74,54 +74,12 @@ afterEach(() => {
 });
 
 async function prepareSteering() {
-  const storePath = await writeSubagentSessionEntry({
-    stateDir: fixture.stateDir,
-    agentId: "main",
+  const { child, terminalReply } = await publishChild(childRunId, answer, {
     sessionKey: childSessionKey,
-    defaultSessionId: "kept-child-session",
+    sessionId: "kept-child-session",
+    persistTranscript: false,
   });
-  await registerSubagentRun({
-    runId: childRunId,
-    childSessionKey,
-    childAgentId: "main",
-    sessionEntry: { sessionId: "kept-child-session" },
-    requesterSessionKey,
-    requesterDisplayKey: "main",
-    task: "Inspect the findings",
-    cleanup: "keep",
-    spawnMode: "session",
-    expectsCompletionMessage: true,
-  });
-  const terminalReply = prepareAgentRunTerminalReply({ rawText: answer }).terminalReply;
-  if (terminalReply.disposition !== "visible") {
-    throw new Error("Expected visible terminal reply");
-  }
   expect(terminalReply.text).toHaveLength(4_096);
-  const child = await mutateSubagentRuns([childRunId], (rows) => {
-    const current = rows.get(childRunId);
-    if (!current) {
-      throw new Error("Expected registered child");
-    }
-    const next = structuredClone(current);
-    next.execution = {
-      ...next.execution,
-      status: "terminal",
-      endedAt: Date.now(),
-      outcome: { status: "ok" },
-      transcriptTarget: {
-        agentId: "main",
-        sessionId: "kept-child-session",
-        sessionKey: childSessionKey,
-        storePath,
-      },
-    };
-    next.completion = { required: true, resultText: terminalReply.text, terminalReply };
-    Object.assign(ensureDeliveryState(next), {
-      status: "pending",
-      payload: loadPendingFinalDeliveryPayload(next),
-    });
-    return { value: next, postimages: new Map([[childRunId, next]]) };
-  });
   announceTesting.setDepsForTest({
     findTranscriptEvent: async (_target, match) => {
       const event = {
@@ -396,9 +354,16 @@ it("keeps source validation until foreground delivery after pre-prompt compactio
   });
 });
 
-async function publishChild(runId: string, resultText: string) {
-  const publishedSessionKey = `agent:main:subagent:${runId}`;
-  const childSessionId = `${runId}-session`;
+async function publishChild(
+  runId: string,
+  resultText: string,
+  options = {
+    sessionKey: `agent:main:subagent:${runId}`,
+    sessionId: `${runId}-session`,
+    persistTranscript: true,
+  },
+) {
+  const { sessionKey: publishedSessionKey, sessionId: childSessionId, persistTranscript } = options;
   const storePath = await writeSubagentSessionEntry({
     stateDir: fixture.stateDir,
     agentId: "main",
@@ -411,14 +376,16 @@ async function publishChild(runId: string, resultText: string) {
     sessionKey: publishedSessionKey,
     storePath,
   };
-  await appendTranscriptMessage(target, {
-    message: {
-      role: "assistant",
-      stopReason: "stop",
-      content: [{ type: "text", text: resultText }],
-      __openclaw: { runId },
-    },
-  });
+  if (persistTranscript) {
+    await appendTranscriptMessage(target, {
+      message: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [{ type: "text", text: resultText }],
+        __openclaw: { runId },
+      },
+    });
+  }
   await registerSubagentRun({
     runId,
     childSessionKey: publishedSessionKey,
@@ -449,7 +416,14 @@ async function publishChild(runId: string, resultText: string) {
       transcriptTarget: target,
     };
     next.completion = { required: true, resultText: terminalReply.text, terminalReply };
-    markPendingFinalDelivery({ entry: next });
+    if (persistTranscript) {
+      markPendingFinalDelivery({ entry: next });
+    } else {
+      Object.assign(ensureDeliveryState(next), {
+        status: "pending",
+        payload: loadPendingFinalDeliveryPayload(next),
+      });
+    }
     return { value: next, postimages: new Map([[runId, next]]) };
   });
   return { child, target, terminalReply };
@@ -528,32 +502,11 @@ it("submits deferred child results after canonical archive pruning without poiso
       createAssistant(model, [{ type: "text", text: "Parent answer complete." }]),
     );
   });
-  const onSteeringAcknowledged = vi.fn();
-  using promptStateLease = retainEmbeddedSessionPromptState(sessionId);
-  const sessionPromptState = promptStateLease.state;
-  const prompt = prependAgentSteeringPrompt({
-    steeringPrompt: leased.prompt,
-    prompt: "Use the findings to finish the answer.",
-  });
+  const input = submissionInput({ ...leased, leaseId });
   await submitEmbeddedAttemptPrompt({
-    attempt: { sessionId, sessionKey: requesterSessionKey },
+    ...input,
     activeSession: session,
-    contextTokenBudget: 32_000,
-    images: [],
-    leasedSteering: { ...leased, leaseId },
-    modelPrompt: prompt,
-    transcriptPrompt: prompt,
-    onFinalPromptText: vi.fn(),
-    onSteeringAcknowledged,
-    persistToolResultProjections: vi.fn(async () => {}),
     promptActiveSession: (text, options) => session.prompt(text, options),
-    runtimeOnly: false,
-    systemPrompt: "Use the child findings.",
-    toolResultAggregateMaxChars: 8_000,
-    toolResultMaxChars: 4_000,
-    toolResultPromptProjectionState: sessionPromptState.toolResults,
-    trajectoryRecorder: null,
-    transcriptLeafId: null,
   });
 
   expect(requests).toHaveLength(1);
@@ -563,7 +516,7 @@ it("submits deferred child results after canonical archive pruning without poiso
   expect(delivered).not.toContain("archive answer tail");
   expect(delivered).toContain(healthyAnswer);
   expect(delivered).not.toContain("Unrelated replacement answer.");
-  expect(onSteeringAcknowledged).toHaveBeenCalledOnce();
+  expect(input.onSteeringAcknowledged).toHaveBeenCalledOnce();
   for (const { child } of [archived, healthy]) {
     expect(subagentRuns.get(child.runId)?.delivery?.status).toBe("delivered");
     expect(subagentRuns.get(child.runId)?.delivery?.steeringLeaseId).toBeUndefined();

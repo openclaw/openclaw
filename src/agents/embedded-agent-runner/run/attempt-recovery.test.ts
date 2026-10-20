@@ -134,6 +134,47 @@ function recoveryCases(
   return cases.map(([name, scenario]) => [`${context}: ${name}`, { ...base, ...scenario }]);
 }
 
+function terminalRecoveryInput(
+  id: string,
+  attempt: ReturnType<typeof makeEmbeddedRunnerAttempt>,
+  assistant: ReturnType<typeof buildEmbeddedRunnerAssistant>,
+) {
+  return {
+    runInput: {
+      runParams: { sessionId: `session:${id}`, runId: `run:${id}` },
+      resolvedSessionKey: `agent:main:${id}`,
+      startedAtMs: Date.now(),
+    },
+    preparedRuntime: {
+      provider: "openai",
+      modelId: "synthetic-model",
+      model: { id: "synthetic-model" },
+      genericCompactionRecoveryAllowed: false,
+      snapshot: () => ({
+        thinkLevel: "off",
+        agentHarness: { id: "codex" },
+        outerContextTokenMeta: {},
+      }),
+    },
+    normalizedAttempt: {
+      attempt,
+      sessionIdUsed: attempt.sessionIdUsed,
+      attemptAssistant: assistant,
+      currentAttemptAssistant: attempt.currentAttemptAssistant,
+      currentAttemptCompletedAssistant: undefined,
+      terminalState: resolveEmbeddedRunAttemptTerminalState({ attempt, assistant }),
+      setTerminalLifecycleMeta: vi.fn(),
+      attemptCompactionCount: 0,
+      activeErrorContext: { provider: "openai", model: "synthetic-model" },
+      resolveReplayInvalidForAttempt: () => false,
+      canRestartForLiveSwitch: false,
+    },
+    runtimePlan: { auth: {} },
+    sessionPromptState: { sessionFile: "/tmp/session.jsonl" },
+    usageAccumulator: createUsageAccumulator(),
+  };
+}
+
 describe("recoverEmbeddedRunAttempt", () => {
   it.each([
     { retryAvailable: true, decision: "accepted", reason: "transient_retry" },
@@ -556,63 +597,42 @@ describe("recoverEmbeddedRunAttempt", () => {
     }
   });
 
-  it.each([
-    {
-      label: "fails over past the saved maxRetryDelayMs when a fallback exists",
-      errorMessage:
-        '429 rate limit: {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account\'s rate limit. Please try again later."}}',
-      errorBody: JSON.stringify({ headers: { "retry-after": "9897" } }),
-      fallbackConfigured: true,
-      replaySafe: true,
-      providerRetryMaxDelayMs: 30_000,
-      expectedAction: "proceed",
-      expectedSleepMs: undefined,
-    },
-    {
-      // Live shape: exec/write already ran, so rotation and fallback are both
-      // refused downstream. Declining the wait would end the turn; keep waiting.
-      label: "keeps waiting past the cap when tool activity made the attempt replay-unsafe",
-      errorMessage: "429 rate_limit_exceeded; Retry-After: 9897",
-      fallbackConfigured: true,
-      replaySafe: false,
-      providerRetryMaxDelayMs: 30_000,
-      expectedAction: "retry",
-      expectedSleepMs: 9_897_000,
-    },
-    {
-      label: "stops same-profile retries past the cap without model fallback",
-      errorMessage: "429 rate_limit_exceeded; Retry-After: 9897",
-      fallbackConfigured: false,
-      replaySafe: true,
-      providerRetryMaxDelayMs: 30_000,
-      expectedAction: "proceed",
-      expectedSleepMs: undefined,
-    },
-    {
-      label: "keeps a floor inside the cap on the same model",
-      errorMessage: "429 rate_limit_exceeded; Retry-After: 20",
-      fallbackConfigured: true,
-      replaySafe: true,
-      providerRetryMaxDelayMs: 30_000,
-      expectedAction: "retry",
-      expectedSleepMs: 20_000,
-    },
-  ])("$label", async (scenario) => {
+  it.each<[string, TransportDropScenario, number | undefined]>([
+    [
+      "fails over past the cap with a fallback",
+      {
+        errorMessage:
+          '429 rate limit: {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account\'s rate limit. Please try again later."}}',
+        errorBody: JSON.stringify({ headers: { "retry-after": "9897" } }),
+      },
+      undefined,
+    ],
+    // Settled writes forbid rotation and fallback; retain custody by waiting.
+    ["waits past the cap after replay-unsafe work", { replaySafe: false }, 9_897_000],
+    ["stops past the cap without fallback", { fallbackConfigured: false }, undefined],
+    [
+      "keeps an in-cap floor on the same model",
+      {
+        errorMessage: "429 rate_limit_exceeded; Retry-After: 20",
+      },
+      20_000,
+    ],
+  ])("%s", async (_label, scenario, expectedSleepMs) => {
     vi.mocked(sleepWithAbort).mockClear();
     const { recovery, continueFromCurrentTranscript } = await recoverAfterTransportDrop({
-      errorMessage: scenario.errorMessage,
-      errorBody: scenario.errorBody,
-      fallbackConfigured: scenario.fallbackConfigured,
-      replaySafe: scenario.replaySafe,
-      providerRetryMaxDelayMs: scenario.providerRetryMaxDelayMs,
+      errorMessage: "429 rate_limit_exceeded; Retry-After: 9897",
+      fallbackConfigured: true,
+      replaySafe: true,
+      providerRetryMaxDelayMs: 30_000,
       diagnostics: [],
+      ...scenario,
     });
-    expect(recovery.action).toBe(scenario.expectedAction);
-    if (scenario.expectedSleepMs === undefined) {
+    expect(recovery.action).toBe(expectedSleepMs === undefined ? "proceed" : "retry");
+    if (expectedSleepMs === undefined) {
       expect(sleepWithAbort).not.toHaveBeenCalled();
       expect(continueFromCurrentTranscript).not.toHaveBeenCalled();
     } else {
-      expect(sleepWithAbort).toHaveBeenCalledExactlyOnceWith(scenario.expectedSleepMs, undefined);
+      expect(sleepWithAbort).toHaveBeenCalledExactlyOnceWith(expectedSleepMs, undefined);
       expect(continueFromCurrentTranscript).toHaveBeenCalledOnce();
     }
   });
@@ -859,48 +879,10 @@ describe("recoverEmbeddedRunAttempt", () => {
       lastAssistant: historicalAssistant,
       currentAttemptAssistant: undefined,
     });
-    const terminalState = resolveEmbeddedRunAttemptTerminalState({
-      attempt,
-      assistant: historicalAssistant,
-    });
-    const setTerminalLifecycleMeta = vi.fn();
-
+    const input = terminalRecoveryInput("hook-block", attempt, historicalAssistant);
+    const { setTerminalLifecycleMeta } = input.normalizedAttempt;
     const recovery = await recoverEmbeddedRunAttempt({
-      runInput: {
-        runParams: {
-          sessionId: "session:hook-block",
-          runId: "run:hook-block",
-        },
-        resolvedSessionKey: "agent:main:hook-block",
-        startedAtMs: Date.now(),
-      },
-      preparedRuntime: {
-        provider: "openai",
-        modelId: "synthetic-model",
-        model: { id: "synthetic-model" },
-        genericCompactionRecoveryAllowed: false,
-        snapshot: () => ({
-          thinkLevel: "off",
-          agentHarness: { id: "codex" },
-          outerContextTokenMeta: {},
-        }),
-      },
-      normalizedAttempt: {
-        attempt,
-        sessionIdUsed: attempt.sessionIdUsed,
-        attemptAssistant: historicalAssistant,
-        currentAttemptAssistant: undefined,
-        currentAttemptCompletedAssistant: undefined,
-        terminalState,
-        setTerminalLifecycleMeta,
-        attemptCompactionCount: 0,
-        activeErrorContext: { provider: "openai", model: "synthetic-model" },
-        resolveReplayInvalidForAttempt: () => false,
-        canRestartForLiveSwitch: false,
-      },
-      runtimePlan: { auth: {} },
-      sessionPromptState: { sessionFile: "/tmp/session.jsonl" },
-      usageAccumulator: createUsageAccumulator(),
+      ...input,
       lastRunPromptUsage: carriedUsage,
     } as never);
 
@@ -970,52 +952,25 @@ describe("recoverEmbeddedRunAttempt", () => {
       currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
       itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
     });
-    const terminalState = resolveEmbeddedRunAttemptTerminalState({ attempt, assistant });
-
+    const input = terminalRecoveryInput("compaction-failure", attempt, assistant);
     const recovery = await recoverEmbeddedRunAttempt({
+      ...input,
       runInput: {
-        runParams: {
-          config: {},
-          agentId: "main",
-          sessionId: "session:compaction-failure",
-          runId: "run:compaction-failure",
-        },
-        resolvedSessionKey: "agent:main:compaction-failure",
-        startedAtMs: Date.now(),
+        ...input.runInput,
+        runParams: { ...input.runInput.runParams, config: {}, agentId: "main" },
       },
       preparedRuntime: {
-        provider: "openai",
-        modelId: "synthetic-model",
-        model: { id: "synthetic-model" },
-        genericCompactionRecoveryAllowed: false,
+        ...input.preparedRuntime,
         maybeRefreshRuntimeAuthForAuthError: promptFailover,
         snapshot: () => ({
-          thinkLevel: "off",
-          agentHarness: { id: "codex" },
-          outerContextTokenMeta: {},
+          ...input.preparedRuntime.snapshot(),
           lastProfileId: "profile-1",
           pluginHarnessOwnsTransport: false,
         }),
       },
-      normalizedAttempt: {
-        attempt,
-        sessionIdUsed: attempt.sessionIdUsed,
-        attemptAssistant: assistant,
-        currentAttemptAssistant: assistant,
-        currentAttemptCompletedAssistant: undefined,
-        terminalState,
-        setTerminalLifecycleMeta: vi.fn(),
-        attemptCompactionCount: 0,
-        activeErrorContext: { provider: "openai", model: "synthetic-model" },
-        resolveReplayInvalidForAttempt: () => false,
-        canRestartForLiveSwitch: false,
-      },
-      runtimePlan: { auth: {} },
-      sessionPromptState: { sessionFile: "/tmp/session.jsonl" },
       failoverRetryController,
       compactionRuntime: disabledCompactionRuntime,
       contextRecoveryState: createEmbeddedRunContextRecoveryState(),
-      usageAccumulator: createUsageAccumulator(),
       lastRunPromptUsage: undefined,
       runtimeAuthRetry: false,
       codexAppServerRecoveryRetryAvailable: false,
