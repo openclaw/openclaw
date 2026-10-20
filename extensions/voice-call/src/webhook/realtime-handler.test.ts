@@ -19,6 +19,7 @@ import {
   waitForClose,
 } from "../websocket-test-support.js";
 import { RealtimeAudioPacer } from "./realtime-audio-pacer.js";
+import { makeCall as makeCallRecord } from "./realtime-call-control.test-helpers.js";
 import { RealtimeCallHandler } from "./realtime-handler.js";
 import {
   createRealtimeConfig,
@@ -166,23 +167,6 @@ async function waitForRealtimeTest(
 type RealtimeBridgeRequest = Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0];
 type RecentTalkEvent = { turnId?: string; type: string };
 
-function makeCallRecord(providerCallId: string, overrides: Partial<CallRecord> = {}): CallRecord {
-  return {
-    callId: "call-1",
-    providerCallId,
-    provider: "twilio",
-    direction: "inbound",
-    state: "ringing",
-    from: "+15550001234",
-    to: "+15550009999",
-    startedAt: Date.now(),
-    transcript: [],
-    processedEventIds: [],
-    metadata: {},
-    ...overrides,
-  };
-}
-
 function makeCallHarness(
   bridge:
     | Partial<RealtimeVoiceBridge>
@@ -256,6 +240,21 @@ function requestConsult(
   question: string,
 ) {
   callTool(callbacks, callId, "openclaw_agent_consult", { question });
+}
+
+async function expectToolResult(
+  submit: RealtimeVoiceBridge["submitToolResult"],
+  id: string,
+  result: unknown,
+  last = false,
+) {
+  await waitForRealtimeTest(() => {
+    if (last) {
+      expect(submit).toHaveBeenLastCalledWith(id, result, undefined);
+    } else {
+      expect(submit).toHaveBeenCalledWith(id, result, undefined);
+    }
+  });
 }
 
 function resetContinuity(callbacks: RealtimeBridgeRequest | undefined) {
@@ -390,7 +389,7 @@ describe("RealtimeCallHandler path routing", () => {
       args: { question: "Check the deployment." },
     });
     const audio = Buffer.from([0xff, 0xfe]);
-    ws.send(JSON.stringify({ event: "media", media: { payload: audio.toString("base64") } }));
+    sendMedia(ws, audio);
     try {
       await waitForRealtimeTest(() => expect(sendAudio).toHaveBeenCalledWith(audio));
       expect(consult).not.toHaveBeenCalled();
@@ -488,11 +487,13 @@ describe("RealtimeCallHandler path routing", () => {
     );
     await waitForRealtimeTest(() => expect(createBridge).toHaveBeenCalled());
 
-    const eventTypes = processEvent.mock.calls.map(([event]) => event.type);
-    expect(eventTypes).toEqual(["call.answered"]);
-    expect(processEvent.mock.calls[0]?.[0].callId).toBe("call-1");
-    expect(createBridge.mock.calls[0]?.[0].instructions).toBe("instructions:support");
-    expect(createBridge.mock.calls[0]?.[0].agentId).toBe("support");
+    expect(processEvent.mock.calls).toEqual([
+      [expect.objectContaining({ type: "call.answered", callId: "call-1" })],
+    ]);
+    expect(createBridge.mock.calls[0]?.[0]).toMatchObject({
+      instructions: "instructions:support",
+      agentId: "support",
+    });
     callbacks[0]?.onReady?.();
     expect(triggerGreeting).toHaveBeenCalledTimes(1);
     expect(triggerGreeting.mock.calls[0]?.[0]).toContain("hello");
@@ -618,14 +619,8 @@ describe("RealtimeCallHandler path routing", () => {
     )?.turnId;
     expect(oldTurnId).toBeTruthy();
 
-    callbacks.onEvent?.({
-      direction: "client",
-      type: "session.continuity.reset",
-    });
-    callbacks.onEvent?.({
-      direction: "client",
-      type: "session.continuity.reset",
-    });
+    resetContinuity(callbacks);
+    resetContinuity(callbacks);
 
     await expectFrame(outboundMessages, "clear");
     expect(requireCancelledTurn(call).turnId).toBe(oldTurnId);
@@ -811,9 +806,7 @@ describe("RealtimeCallHandler path routing", () => {
     });
     expect(await closed).toEqual({ code: 1000, reason: "Call ended" });
     expect(submitToolResult).not.toHaveBeenCalled();
-    expect(recentTalkEvents(call)).toEqual(
-      expect.arrayContaining([expect.objectContaining({ type: "tool.result" })]),
-    );
+    expect(talkEvents(call, "tool.result").length).toBeGreaterThan(0);
   });
 
   it("reports an actionable end-call failure while leaving the current call connected", async () => {
@@ -831,22 +824,14 @@ describe("RealtimeCallHandler path routing", () => {
 
     callTool(callbacks, "provider-end-failed", "openclaw_end_call");
 
-    await waitForRealtimeTest(() =>
-      expect(submitToolResult).toHaveBeenCalledWith(
-        "provider-end-failed",
-        {
-          error:
-            "Could not end the current phone call: carrier rejected hangup. Tell the caller the call could not be ended and they can hang up or ask you to try again.",
-        },
-        undefined,
-      ),
-    );
+    await expectToolResult(submitToolResult, "provider-end-failed", {
+      error:
+        "Could not end the current phone call: carrier rejected hangup. Tell the caller the call could not be ended and they can hang up or ask you to try again.",
+    });
     expect(endCall).toHaveBeenCalledExactlyOnceWith("call-1");
     expect(closeBridge).not.toHaveBeenCalled();
     expect(ws.readyState).toBe(WebSocket.OPEN);
-    expect(recentTalkEvents(call)).toEqual(
-      expect.arrayContaining([expect.objectContaining({ type: "tool.error" })]),
-    );
+    expect(talkEvents(call, "tool.error").length).toBeGreaterThan(0);
   });
 
   it("submits continuing responses only for realtime agent consult calls", async () => {
@@ -906,14 +891,11 @@ describe("RealtimeCallHandler path routing", () => {
 
     consultResult.resolve({ text: "The basement lights are on." });
 
-    await waitForRealtimeTest(() =>
-      expect(submitToolResult).toHaveBeenLastCalledWith(
-        "consult-call",
-        {
-          text: "The basement lights are on.",
-        },
-        undefined,
-      ),
+    await expectToolResult(
+      submitToolResult,
+      "consult-call",
+      { text: "The basement lights are on." },
+      true,
     );
     expect(recentTalkEvents(call).some((event) => event.type === "tool.result")).toBe(false);
     finalSubmission.resolve();
@@ -925,9 +907,7 @@ describe("RealtimeCallHandler path routing", () => {
     submitToolResult.mockClear();
     callTool(callbacks, "custom-call", "custom_lookup");
 
-    await waitForRealtimeTest(() =>
-      expect(submitToolResult).toHaveBeenCalledWith("custom-call", { ok: true }, undefined),
-    );
+    await expectToolResult(submitToolResult, "custom-call", { ok: true });
     const customCallResults = submitToolResult.mock.calls.filter(
       ([callId]) => callId === "custom-call",
     );
@@ -1160,16 +1140,10 @@ describe("RealtimeCallHandler path routing", () => {
     coordinator.markCancelled(cancelled);
 
     requestConsult(callbacks, "native-cancelled", "same question");
-    await waitForRealtimeTest(() =>
-      expect(submitToolResult).toHaveBeenCalledWith(
-        "native-cancelled",
-        {
-          status: "cancelled",
-          message: "OpenClaw cancelled this consult before completion. Do not restart it.",
-        },
-        undefined,
-      ),
-    );
+    await expectToolResult(submitToolResult, "native-cancelled", {
+      status: "cancelled",
+      message: "OpenClaw cancelled this consult before completion. Do not restart it.",
+    });
     expect(consult).not.toHaveBeenCalled();
 
     resetContinuity(callbacks);
@@ -1203,9 +1177,7 @@ describe("RealtimeCallHandler path routing", () => {
         sendUserMessage: oldSendUserMessage,
         submitToolResult: oldSubmitToolResult,
       }),
-      makeBridge({
-        sendUserMessage: replacementSendUserMessage,
-      }),
+      makeBridge({ sendUserMessage: replacementSendUserMessage }),
     ];
     const { handler, callbacks, start } = makeCallHarness(
       (_request, index) => expectDefined(bridges[index], "replacement bridge"),
@@ -1390,12 +1362,11 @@ describe("RealtimeCallHandler path routing", () => {
     expect(oldSubmitToolResult).toHaveBeenCalledTimes(1);
 
     replacementResult.resolve({ text: "The new deployment is healthy." });
-    await waitForRealtimeTest(() =>
-      expect(replacementSubmitToolResult).toHaveBeenLastCalledWith(
-        "native-replacement",
-        { text: "The new deployment is healthy." },
-        undefined,
-      ),
+    await expectToolResult(
+      replacementSubmitToolResult,
+      "native-replacement",
+      { text: "The new deployment is healthy." },
+      true,
     );
   });
 
@@ -1461,13 +1432,7 @@ describe("RealtimeCallHandler path routing", () => {
       partialUserTranscript: "Send a Discord message.",
       abortSignal: expect.any(AbortSignal),
     });
-    await waitForRealtimeTest(() =>
-      expect(submitToolResult).toHaveBeenLastCalledWith(
-        "consult-call",
-        { text: "I sent it." },
-        undefined,
-      ),
-    );
+    await expectToolResult(submitToolResult, "consult-call", { text: "I sent it." }, true);
   });
 
   it("does not force a duplicate consult when the realtime provider calls the consult tool", async () => {
@@ -1484,12 +1449,11 @@ describe("RealtimeCallHandler path routing", () => {
     callbacks?.onTranscript?.("user", "Send me a Discord message.", true);
     requestConsult(callbacks, "consult-call", "Send me a Discord message.");
 
-    await waitForRealtimeTest(() =>
-      expect(submitToolResult).toHaveBeenLastCalledWith(
-        "consult-call",
-        { text: "Native consult result." },
-        undefined,
-      ),
+    await expectToolResult(
+      submitToolResult,
+      "consult-call",
+      { text: "Native consult result." },
+      true,
     );
     await vi.advanceTimersByTimeAsync(250);
     expect(consult).toHaveBeenCalledTimes(1);
@@ -1516,13 +1480,7 @@ describe("RealtimeCallHandler path routing", () => {
 
     requestConsult(callbacks, "consult-call", "What do you remember?");
 
-    await waitForRealtimeTest(() =>
-      expect(submitToolResult).toHaveBeenCalledWith(
-        "consult-call",
-        { text: "Fast context." },
-        undefined,
-      ),
-    );
+    await expectToolResult(submitToolResult, "consult-call", { text: "Fast context." });
     expect(submitToolResult).toHaveBeenCalledTimes(1);
   });
 

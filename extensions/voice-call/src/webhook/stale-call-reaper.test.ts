@@ -1,8 +1,24 @@
-// Voice Call tests cover stale call reaper plugin behavior.
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startStaleCallReaper } from "./stale-call-reaper.js";
+
+type ReaperManager = Parameters<typeof startStaleCallReaper>[0]["manager"];
+const staleCall = () => ({
+  callId: "call-stale",
+  startedAt: Date.now() - 61_000,
+  state: "active" as const,
+});
+function startReaper(
+  endCall: ReaperManager["endCall"],
+  getActiveCalls: ReaperManager["getActiveCalls"] = () => [staleCall()],
+) {
+  return startStaleCallReaper({
+    scheduler: createTestPluginServiceScheduler(),
+    manager: { getActiveCalls, endCall },
+    staleCallReaperSeconds: 60,
+  });
+}
 
 describe("startStaleCallReaper", () => {
   beforeEach(() => {
@@ -21,49 +37,27 @@ describe("startStaleCallReaper", () => {
       endCall: vi.fn(),
     };
 
-    expect(
-      startStaleCallReaper({
-        scheduler: createTestPluginServiceScheduler(),
-        manager,
-      }),
-    ).toBeNull();
-    expect(
-      startStaleCallReaper({
-        scheduler: createTestPluginServiceScheduler(),
-        manager,
-        staleCallReaperSeconds: 0,
-      }),
-    ).toBeNull();
+    for (const staleCallReaperSeconds of [undefined, 0]) {
+      expect(
+        startStaleCallReaper({
+          scheduler: createTestPluginServiceScheduler(),
+          manager,
+          staleCallReaperSeconds,
+        }),
+      ).toBeNull();
+    }
   });
 
   it("reaps stale calls and ignores fresh ones", async () => {
     const endCall = vi.fn(async () => ({ success: true }));
-    const manager = {
-      getActiveCalls: vi.fn(() => [
-        {
-          callId: "call-stale",
-          startedAt: Date.now() - 61_000,
-          state: "active" as const,
-        },
-        {
-          callId: "call-fresh",
-          startedAt: Date.now() - 10_000,
-          state: "active" as const,
-        },
-      ]),
-      endCall,
-    };
-
-    const stop = startStaleCallReaper({
-      scheduler: createTestPluginServiceScheduler(),
-      manager,
-      staleCallReaperSeconds: 60,
-    });
+    const stop = startReaper(endCall, () => [
+      staleCall(),
+      { callId: "call-fresh", startedAt: Date.now() - 10_000, state: "active" },
+    ]);
 
     await vi.advanceTimersByTimeAsync(30_000);
 
-    expect(endCall).toHaveBeenCalledTimes(1);
-    expect(endCall).toHaveBeenCalledWith("call-stale");
+    expect(endCall).toHaveBeenCalledExactlyOnceWith("call-stale");
 
     await stop?.();
   });
@@ -76,22 +70,7 @@ describe("startStaleCallReaper", () => {
       .fn()
       .mockImplementationOnce(() => firstEndCall.promise)
       .mockImplementationOnce(() => secondEndCall.promise);
-    const manager = {
-      getActiveCalls: vi.fn(() => [
-        {
-          callId: "call-stale",
-          startedAt: Date.now() - 61_000,
-          state: "active" as const,
-        },
-      ]),
-      endCall,
-    };
-
-    const stop = startStaleCallReaper({
-      scheduler: createTestPluginServiceScheduler(),
-      manager,
-      staleCallReaperSeconds: 60,
-    });
+    const stop = startReaper(endCall);
 
     await vi.advanceTimersByTimeAsync(30_000);
     await vi.advanceTimersByTimeAsync(30_000);
@@ -126,22 +105,9 @@ describe("startStaleCallReaper", () => {
     "does not reap live %s calls without answeredAt",
     async (state) => {
       const endCall = vi.fn(async () => ({ success: true }));
-      const manager = {
-        getActiveCalls: vi.fn(() => [
-          {
-            callId: `call-${state}`,
-            startedAt: Date.now() - 120_000,
-            state,
-          },
-        ]),
-        endCall,
-      };
-
-      const stop = startStaleCallReaper({
-        scheduler: createTestPluginServiceScheduler(),
-        manager,
-        staleCallReaperSeconds: 60,
-      });
+      const stop = startReaper(endCall, () => [
+        { callId: `call-${state}`, startedAt: Date.now() - 120_000, state },
+      ]);
 
       await vi.advanceTimersByTimeAsync(30_000);
 
@@ -157,22 +123,7 @@ describe("startStaleCallReaper", () => {
     const endCall = vi.fn(async () => {
       throw endCallError;
     });
-    const manager = {
-      getActiveCalls: vi.fn(() => [
-        {
-          callId: "call-stale",
-          startedAt: Date.now() - 61_000,
-          state: "active" as const,
-        },
-      ]),
-      endCall,
-    };
-
-    const stop = startStaleCallReaper({
-      scheduler: createTestPluginServiceScheduler(),
-      manager,
-      staleCallReaperSeconds: 60,
-    });
+    const stop = startReaper(endCall);
 
     await vi.advanceTimersByTimeAsync(30_000);
     await Promise.resolve();

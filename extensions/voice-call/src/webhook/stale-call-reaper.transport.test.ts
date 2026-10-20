@@ -1,5 +1,3 @@
-// Voice Call tests cover stale-call reaping through a real provider HTTP boundary.
-import type { ServerResponse } from "node:http";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
@@ -7,7 +5,7 @@ import { withFetchPreconnect, withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { endCall } from "../manager/outbound.js";
 import { TelnyxProvider } from "../providers/telnyx.js";
-import type { CallRecord } from "../types.js";
+import { makeCall } from "./realtime-call-control.test-helpers.js";
 import { startStaleCallReaper } from "./stale-call-reaper.js";
 
 async function waitForProofEvent<T>(promise: Promise<T>, label: string): Promise<T> {
@@ -47,13 +45,11 @@ describe("stale-call reaper provider transport", () => {
     const firstResponseClosed = createDeferred<void>();
     const secondRequestStarted = createDeferred<void>();
     let requestCount = 0;
-    let firstResponse: ServerResponse | undefined;
 
     await withServer(
       (_req, res) => {
         requestCount += 1;
         if (requestCount === 1) {
-          firstResponse = res;
           res.once("close", () => firstResponseClosed.resolve());
           firstRequestStarted.resolve();
           return;
@@ -75,22 +71,19 @@ describe("stale-call reaper provider transport", () => {
           apiKey: "KEY123",
           connectionId: "connection-test",
         });
-        const call = {
+        const call = makeCall("provider-stale", {
           callId: "call-stale",
-          providerCallId: "provider-stale",
           provider: "telnyx",
           direction: "outbound",
           from: "+10000000001",
           to: "+10000000002",
           startedAt: Date.now() - 61_000,
           state: "active" as const,
-          transcript: [],
-          processedEventIds: [],
-        } satisfies CallRecord;
+        });
         const context: Parameters<typeof endCall>[0] = {
           mutationQueue: new KeyedAsyncQueue(),
           activeCalls: new Map([[call.callId, call]]),
-          providerCallIdMap: new Map([[call.providerCallId, call.callId]]),
+          providerCallIdMap: new Map([["provider-stale", call.callId]]),
           provider,
           storePath: "/tmp/openclaw-voice-call-proof.json",
           transcriptWaiters: new Map(),
@@ -122,7 +115,6 @@ describe("stale-call reaper provider transport", () => {
         await vi.advanceTimersByTimeAsync(30_000);
         expect(requestCount).toBe(1);
         expect(manager.endCall).toHaveBeenCalledTimes(1);
-        expect(firstResponse).toBeDefined();
 
         const firstResult = await waitForProofEvent(
           firstOperation!,
