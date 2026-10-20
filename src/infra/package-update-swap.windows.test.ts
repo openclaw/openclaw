@@ -10,14 +10,12 @@ import * as retry from "./retry.js";
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const runRetry = retry.retryAsync;
 const backupPackageRoot = packageFilesystem.backupNpmPackageRoot;
-let backupPlatform: NodeJS.Platform;
 let wait: ReturnType<typeof vi.fn<(ms: number) => Promise<void>>>;
 beforeEach(() => {
-  backupPlatform = "win32";
   // Select only the rename policy; fs-safe must retain the host's native platform.
   vi.spyOn(packageFilesystem, "backupNpmPackageRoot").mockImplementation(
     (source, destination, assertCurrent, warnings) =>
-      backupPackageRoot(source, destination, assertCurrent, warnings, backupPlatform),
+      backupPackageRoot(source, destination, assertCurrent, warnings, "win32"),
   );
   wait = vi.fn(async (_ms: number) => {});
   // Keep the real retry policy; only replace its waiting clock.
@@ -27,13 +25,9 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-it.each([
-  { platform: "win32", code: "EPERM", transient: true },
-  { platform: "win32", code: "EPERM", transient: false },
-] as const)(
-  "handles $code on $platform without losing the installation (transient=$transient)",
-  async ({ platform, code, transient }) => {
-    backupPlatform = platform;
+it.each([true, false])(
+  "preserves the installation on Windows EPERM (transient=%s)",
+  async (transient) => {
     const { params, packageRoot, launcher } = await createPackageSwapFixture(
       dirs.make("openclaw-swap-rename-"),
     );
@@ -41,7 +35,7 @@ it.each([
     let attempts = 0;
     vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
       if (String(from) === packageRoot && (++attempts <= 2 || !transient)) {
-        throw Object.assign(new Error(`${code}: package is in use`), { code });
+        throw Object.assign(new Error("EPERM: package is in use"), { code: "EPERM" });
       }
       return rename(from, to);
     });
@@ -50,15 +44,15 @@ it.each([
       expect(result).toMatchObject({ status: "committed", step: { exitCode: 0 } });
       expect(attempts).toBe(3);
       expect(result.step.warnings).toEqual([
-        expect.stringContaining(`${code}: package is in use`),
-        expect.stringContaining(`${code}: package is in use`),
+        expect.stringContaining("EPERM: package is in use"),
+        expect.stringContaining("EPERM: package is in use"),
       ]);
     } else {
       expect(result).toMatchObject({
         status: "failed",
         activePackageRoot: packageRoot,
         packageRollbackVerified: true,
-        step: { exitCode: 1, failureFacts: [expect.objectContaining({ code })] },
+        step: { exitCode: 1, failureFacts: [expect.objectContaining({ code: "EPERM" })] },
       });
       expect(attempts).toBe(16);
       expect(result.step.warnings).toHaveLength(attempts - 1);

@@ -28,6 +28,8 @@ vi.mock("./package-update-activation-paths.js", async (original) => ({
 }));
 
 const fixtures = createPackageActivationLifetimeFixture();
+const detail =
+  "legacy package record settled by identity and version; content could not be re-verified";
 let fixtureRoot: string;
 beforeEach(() => {
   fixtureRoot = fixtures.setup().root;
@@ -53,13 +55,14 @@ it.skipIf(process.platform === "win32").each([
     );
     const journal = openPackageActivationJournal(f.anchor);
     const helper = fs.readFileSync(resolvePackageActivationHelper(f.anchor));
+    const publishing = phase === "publishing";
     await withUpdateCommandExecutor(randomUUID(), async (executor) => {
       const fence = await executor.enter(f.packageRoot);
       const record = journal.read();
       journal.transition(
         record,
         phase,
-        phase === "publishing" ? { kind: "publish" } : null,
+        publishing ? { kind: "publish" } : null,
         fence.assertCurrent,
         [],
       );
@@ -75,29 +78,22 @@ it.skipIf(process.platform === "win32").each([
       } finally {
         db.close();
       }
-      if (phase === "publishing") {
+      if (publishing) {
         fs.renameSync(f.packageRoot, path.join(f.anchor, "previous"));
       }
     });
-    const previous = phase === "publishing" ? path.join(f.anchor, "previous") : f.packageRoot;
+    const previous = publishing ? path.join(f.anchor, "previous") : f.packageRoot;
     const manifest = path.join(previous, "package.json");
     const before = fs.statSync(manifest, { bigint: true });
-    const link = path.join(path.dirname(f.anchor), "retention-link");
-    fs.linkSync(manifest, link);
+    fs.linkSync(manifest, path.join(path.dirname(f.anchor), "retention-link"));
     expect(fs.statSync(manifest, { bigint: true }).nlink).toBe(before.nlink + 1n);
 
     const reported = vi.fn();
     if (action === "public repair") {
       await expect(settlePendingPackageActivation(f.packageRoot, reported)).resolves.toMatchObject({
-        detail:
-          "legacy package record settled by identity and version; content could not be re-verified",
+        detail,
       });
-      expect(reported).toHaveBeenCalledWith(
-        expect.objectContaining({
-          detail:
-            "legacy package record settled by identity and version; content could not be re-verified",
-        }),
-      );
+      expect(reported).toHaveBeenCalledWith(expect.objectContaining({ detail }));
     } else {
       await expect(
         runPackageActivationRecovery(f.anchor, action, f.operationId),
@@ -106,7 +102,7 @@ it.skipIf(process.platform === "win32").each([
     expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
     expect(
       JSON.parse(fs.readFileSync(path.join(f.packageRoot, "package.json"), "utf8")).version,
-    ).toBe(phase === "publishing" ? "2.0.0" : "1.0.0");
+    ).toBe(publishing ? "2.0.0" : "1.0.0");
     const retained = `${f.anchor}.superseded-${f.operationId}`;
     expect(fs.readFileSync(path.join(retained, "control/recovery.mjs"))).toEqual(helper);
     const db = new DatabaseSync(path.join(retained, "control/operation.sqlite"), {
@@ -115,11 +111,7 @@ it.skipIf(process.platform === "win32").each([
     try {
       const row = db.prepare("SELECT phase, intent_json FROM package_activation").get();
       expect(row?.phase).toBe("superseded");
-      expect(JSON.parse(String(row?.intent_json))).toMatchObject({
-        settled: true,
-        detail:
-          "legacy package record settled by identity and version; content could not be re-verified",
-      });
+      expect(JSON.parse(String(row?.intent_json))).toMatchObject({ settled: true, detail });
     } finally {
       db.close();
     }
@@ -130,21 +122,19 @@ it.skipIf(process.platform === "win32").each([false, true])(
   "requires the complete legacy candidate digest after remount (modified=%s)",
   async (modified) => {
     const f = await prepareRemountedPublication(fixtures, fixtureRoot, true);
+    const settle = () =>
+      settlePendingPackageActivation(f.packageRoot, undefined, undefined, {
+        operationId: f.operationId,
+      });
     if (modified) {
       fs.appendFileSync(path.join(f.packageRoot, "openclaw.mjs"), "changed");
       const before = fs.readFileSync(f.journalPath);
-      await expect(
-        settlePendingPackageActivation(f.packageRoot, undefined, undefined, {
-          operationId: f.operationId,
-        }),
-      ).rejects.toThrow("full candidate fingerprint changed");
+      await expect(settle()).rejects.toThrow("full candidate fingerprint changed");
       expect(fs.readFileSync(f.journalPath)).toEqual(before);
     } else {
-      await expect(
-        settlePendingPackageActivation(f.packageRoot, undefined, undefined, {
-          operationId: f.operationId,
-        }),
-      ).resolves.toMatchObject({ reason: "publication-settled-external-change" });
+      await expect(settle()).resolves.toMatchObject({
+        reason: "publication-settled-external-change",
+      });
       expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
     }
   },
