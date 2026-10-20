@@ -365,7 +365,11 @@ export type SessionCapability = {
     key: string,
     path: string,
     content: string,
-    options: { agentId?: string | null; expectedHash: string },
+    options: {
+      agentId?: string | null;
+      expectedHash: string;
+      expectedSource?: SessionWorkspaceGetResult["source"];
+    },
   ) => Promise<SessionWorkspaceSetResult | null>;
   subscribeMessages: (
     key: string,

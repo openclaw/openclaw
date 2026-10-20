@@ -115,6 +115,7 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
       path,
       content,
       expectedHash: options.expectedHash,
+      ...(options.expectedSource ? { expectedSource: options.expectedSource } : {}),
       ...(options.agentId?.trim() ? { agentId: options.agentId.trim() } : {}),
     });
 
