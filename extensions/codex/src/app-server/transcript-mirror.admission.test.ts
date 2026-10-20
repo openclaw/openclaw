@@ -26,6 +26,59 @@ import {
 
 registerCodexEventProjectorTestLifecycle();
 
+it("does not report a rejected redacted annotation as a persistence failure", async () => {
+  const createUserTurnTranscriptRecorder = await loadUserTurnTranscriptRecorderFactoryForTest();
+  const base = await createParams();
+  const target = {
+    agentId: "main",
+    sessionId: base.sessionId,
+    sessionKey: "agent:main:redacted-prompt",
+    storePath: path.join(base.workspaceDir, "openclaw-agent.sqlite"),
+  };
+  const config = { logging: { redactPatterns: ["private-value"] } };
+  await upsertSessionEntry({ ...target, entry: { sessionId: target.sessionId, updatedAt: 1 } });
+  const onPersistenceError = vi.fn();
+  const recorder = createUserTurnTranscriptRecorder({
+    input: { text: "Check the monitor." },
+    target: { ...target, sessionEntry: undefined, config },
+    beforeMessageWrite: ({ message }) => message,
+    onPersistenceError,
+  });
+  await recorder.persistApproved();
+  const admitted = structuredClone(recorder.getPersistedMessage?.());
+  const before = await readSessionTranscriptEvents(target);
+  const markRuntimePersistencePending = vi.spyOn(recorder, "markRuntimePersistencePending");
+  const params = {
+    ...base,
+    ...target,
+    config,
+    sessionTarget: target,
+    userTurnTranscriptRecorder: recorder,
+  };
+  const host = await createAdmittedHostCapabilityTestFixture(params);
+  try {
+    await mirrorPromptAtTurnStartBestEffort({
+      params: { ...params, hostCapabilities: host.hostCapabilities },
+      agentId: target.agentId,
+      sessionKey: target.sessionKey,
+      cwd: base.workspaceDir,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      notifyUserMessagePersisted: createCodexAppServerUserMessagePersistenceNotifier(params),
+      upstreamUserText: "private-value",
+    });
+    await recorder.waitForRuntimePersistence();
+
+    expect(markRuntimePersistencePending).not.toHaveBeenCalled();
+    expect(onPersistenceError).not.toHaveBeenCalled();
+    expect(recorder.getPersistedMessage?.()).toEqual(admitted);
+    expect(await readSessionTranscriptEvents(target)).toEqual(before);
+  } finally {
+    host.closeHost();
+    host.closeAdmission();
+  }
+});
+
 it.each([
   {
     label: "monitor without source key",

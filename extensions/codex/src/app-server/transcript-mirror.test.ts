@@ -879,11 +879,19 @@ describe("mirrorCodexAppServerTranscript", () => {
     warn.mockClear();
     const runId = "run-1";
     const sessionId = "session-1";
+    const markRuntimePersistencePending = vi.fn();
     const params = {
       prompt: "persist me",
       runId,
       sessionId,
       sessionTarget: { storePath },
+      hostCapabilities: { assertActive: vi.fn(), annotateCurrentUserTurn: undefined },
+      userTurnTranscriptRecorder: {
+        message: makeAgentUserMessage({ content: "persist me", timestamp: Date.now() }),
+        resolveMessage: async () => undefined,
+        getAdmissionReceipt: () => undefined,
+        markRuntimePersistencePending,
+      },
     } as unknown as Parameters<typeof mirrorPromptAtTurnStartBestEffort>[0]["params"];
 
     await mirrorPromptAtTurnStartBestEffort({
@@ -896,6 +904,7 @@ describe("mirrorCodexAppServerTranscript", () => {
       upstreamUserText: "persist me",
     });
 
+    expect(markRuntimePersistencePending).toHaveBeenCalledOnce();
     expect(warn).toHaveBeenCalledWith("failed to mirror codex app-server prompt at turn start", {
       error: expect.any(String),
       runId,

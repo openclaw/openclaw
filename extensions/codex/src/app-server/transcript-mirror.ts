@@ -242,39 +242,39 @@ export async function mirrorPromptAtTurnStartBestEffort(params: {
     return;
   }
   try {
-    const mirrorPromise = (async () => {
-      const userPromptMessage = projectAgentHarnessTranscriptMessageForDisplay({
-        hidden: params.params.trigger === "memory",
-        inputProvenance: params.params.inputProvenance,
-        message: attachUpstreamUserText(
-          attachCodexMirrorIdentity(
-            await buildResolvedCodexUserPromptMessage(params.params),
-            `${params.turnId}:prompt`,
-          ),
-          params.upstreamUserText,
+    const userPromptMessage = projectAgentHarnessTranscriptMessageForDisplay({
+      hidden: params.params.trigger === "memory",
+      inputProvenance: params.params.inputProvenance,
+      message: attachUpstreamUserText(
+        attachCodexMirrorIdentity(
+          await buildResolvedCodexUserPromptMessage(params.params),
+          `${params.turnId}:prompt`,
         ),
+        params.upstreamUserText,
+      ),
+    });
+    const annotate = params.params.hostCapabilities.annotateCurrentUserTurn;
+    if (annotate) {
+      // Native turn acceptance supplies the identity. Annotate before taking the mirror lock:
+      // the anchored writer owns that same queue and must never be nested under it.
+      await annotate({
+        mirrorIdentity: `${params.turnId}:prompt`,
+        upstreamUserText: params.upstreamUserText,
+        mirrorOrigin: "codex-app-server",
+        mirrorSourceFingerprint: fingerprintCodexMirrorSourceMessage(userPromptMessage),
       });
-      const annotate = params.params.hostCapabilities.annotateCurrentUserTurn;
-      if (annotate) {
-        // Native turn acceptance supplies the identity. Annotate before taking the mirror lock:
-        // the anchored writer owns that same queue and must never be nested under it.
-        await annotate({
-          mirrorIdentity: `${params.turnId}:prompt`,
-          upstreamUserText: params.upstreamUserText,
-          mirrorOrigin: "codex-app-server",
-          mirrorSourceFingerprint: fingerprintCodexMirrorSourceMessage(userPromptMessage),
-        });
+    }
+    const recorder = params.params.userTurnTranscriptRecorder;
+    const admission = recorder?.getAdmissionReceipt();
+    if (admission) {
+      const message = recorder?.getPersistedMessage?.();
+      if (message) {
+        params.params.hostCapabilities.assertActive();
+        params.notifyUserMessagePersisted({ anchor: admission, appended: false, message });
       }
-      const recorder = params.params.userTurnTranscriptRecorder;
-      const admission = recorder?.getAdmissionReceipt();
-      if (admission) {
-        const message = recorder?.getPersistedMessage?.();
-        if (message) {
-          params.params.hostCapabilities.assertActive();
-          params.notifyUserMessagePersisted({ anchor: admission, appended: false, message });
-        }
-        return;
-      }
+      return;
+    }
+    const mirrorPromise = (async () => {
       const mirrorResult = await mirror({
         assertCurrent: createNativeSessionBindingAuthority(
           [],
@@ -295,7 +295,7 @@ export async function mirrorPromptAtTurnStartBestEffort(params: {
         params.notifyUserMessagePersisted(receipt);
       }
     })();
-    params.params.userTurnTranscriptRecorder?.markRuntimePersistencePending(mirrorPromise);
+    recorder?.markRuntimePersistencePending(mirrorPromise);
     await mirrorPromise;
   } catch (error) {
     embeddedAgentLog.warn("failed to mirror codex app-server prompt at turn start", {
