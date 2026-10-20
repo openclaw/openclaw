@@ -5,6 +5,7 @@ import {
   buildSessionPreviewItems,
   projectSessionDisplayMessage,
 } from "../../gateway/session-display-projection.js";
+import { readBoundedSessionPreviewItems } from "../../gateway/session-transcript-preview-bounds.js";
 import {
   SOURCE_PAGE_MAX_BYTES,
   SOURCE_PAGE_MAX_MESSAGES,
@@ -365,39 +366,34 @@ export function readSessionActorMemoryHistoryFacts(
     }
     case "session.history.preview": {
       const { maxItems, maxChars } = query.input;
-      const initialMaxEvents = Math.min(256, Math.max(64, Math.ceil(maxItems) * 4));
-      let items: ReturnType<typeof buildSessionPreviewItems> = [];
-      for (const { maxEvents, maxBytes } of [
-        { maxEvents: initialMaxEvents, maxBytes: 1024 * 1024 },
-        {
-          maxEvents: Math.min(2048, Math.max(1024, initialMaxEvents * 8, Math.ceil(maxItems))),
-          maxBytes: 8 * 1024 * 1024,
-        },
-      ]) {
-        const selected: SessionActorMemoryHistoryRow[] = [];
-        let bytes = 0;
-        for (
-          let index = navigation.visibleHistory.length - 1;
-          index >= 0 && selected.length < maxEvents;
-          index -= 1
-        ) {
-          const row = navigation.visibleHistory[index]!;
-          if (selected.length > 0 && bytes + row.serializedBytes > maxBytes) {
-            break;
+      return {
+        kind: "session-preview",
+        items: readBoundedSessionPreviewItems(maxItems, ({ maxEvents, maxBytes }) => {
+          const selected: SessionActorMemoryHistoryRow[] = [];
+          let bytes = 0;
+          for (
+            let index = navigation.visibleHistory.length - 1;
+            index >= 0 && selected.length < maxEvents;
+            index -= 1
+          ) {
+            const row = navigation.visibleHistory[index]!;
+            if (selected.length > 0 && bytes + row.serializedBytes > maxBytes) {
+              break;
+            }
+            selected.push(row);
+            bytes += row.serializedBytes;
           }
-          selected.push(row);
-          bytes += row.serializedBytes;
-        }
-        items = buildSessionPreviewItems(
-          selected.toReversed().map((row) => asOptionalRecord(row.event)?.message),
-          maxItems,
-          maxChars,
-        );
-        if (items.length >= maxItems || selected.length === navigation.visibleHistory.length) {
-          break;
-        }
-      }
-      return { kind: "session-preview", items };
+          return {
+            items: buildSessionPreviewItems(
+              selected.toReversed().map((row) => asOptionalRecord(row.event)?.message),
+              maxItems,
+              maxChars,
+            ),
+            hasOlderEvents: selected.length < navigation.visibleHistory.length,
+            scannedEvents: selected.length,
+          };
+        }),
+      };
     }
     case "session.history.branches":
       return window.hot.entry

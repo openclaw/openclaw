@@ -75,6 +75,7 @@ function fixture() {
       totalEvents: 2,
       transcriptMutationAt: 1,
       truncated: false,
+      selectedEventCount: 2,
       completeActivePath: true,
     },
   };

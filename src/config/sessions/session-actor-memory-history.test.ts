@@ -464,6 +464,37 @@ describe("memory actor history facts", () => {
     expect(await readMemory(storage, "session.history.message-presence", {})).toBe(true);
   });
 
+  it("recovers preview items behind a long hidden tool-result tail", async () => {
+    const events = [
+      ...Array.from({ length: 64 }, (_, index) =>
+        message(
+          `visible-${String(index)}`,
+          index === 0 ? null : `visible-${String(index - 1)}`,
+          "assistant",
+          `visible ${String(index)}`,
+        ),
+      ),
+      ...Array.from({ length: 1500 }, (_, index) =>
+        message(
+          `tool-${String(index)}`,
+          index === 0 ? "visible-63" : `tool-${String(index - 1)}`,
+          "toolResult",
+          `tool ${String(index)}`,
+        ),
+      ),
+    ];
+    const { storage } = await fixture(events);
+    expect(
+      await readMemory(storage, "session.history.preview", { maxItems: 12, maxChars: 120 }),
+    ).toEqual({
+      kind: "session-preview",
+      items: Array.from({ length: 12 }, (_, index) => ({
+        role: "assistant",
+        text: `visible ${String(52 + index)}`,
+      })),
+    });
+  });
+
   it("keeps history across compaction while accounting uses the retained context window", async () => {
     const keptUser = message("kept-user", "old", "user", "Keep this");
     const keptAssistant = message("kept-assistant", "kept-user", "assistant", [

@@ -2649,3 +2649,4 @@ src/infra/session-sqlite-migration-manifest.ts
 src/infra/sqlite-integrity-operation.ts
 src/infra/sqlite-migration-scoped-snapshot.ts
 src/infra/update-candidate-plugin-code-links.ts
+src/gateway/session-transcript-preview-bounds.ts

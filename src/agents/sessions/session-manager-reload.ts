@@ -14,6 +14,7 @@ import { resolveSqliteSessionTranscriptReadFence } from "../../config/sessions/s
 import { withSessionTranscriptReadSource } from "../../config/sessions/session-transcript-read-source.js";
 import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
+import { recordSessionManagerBoundedSelection } from "./session-manager-bounded-selection.js";
 import { captureSessionManagerIncognitoBinding } from "./session-manager-incognito-scope.js";
 import { prepareSessionManagerHydration } from "./session-manager-incognito.js";
 import { prepareSessionManagerMemoryRead } from "./session-manager-memory-read.js";
@@ -68,6 +69,7 @@ export async function openSessionManagerBoundedView<T extends object>(
     assertCurrent();
     const header = findSessionTranscriptHeader(context.events);
     const manager = create(cwd ?? header?.cwd ?? fallbackCwd, hydration.target, context, limits);
+    recordSessionManagerBoundedSelection(manager, context);
     if (cohort) {
       consumeSessionManagerReload(
         prepared,

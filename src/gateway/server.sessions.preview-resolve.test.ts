@@ -2,6 +2,8 @@ import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, onTestFinished, test, vi } from "vitest";
+import { readSessionManagerBoundedSelection } from "../agents/sessions/session-manager-bounded-selection.js";
+import { SessionManager } from "../agents/sessions/session-manager.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target-paths.js";
 import {
@@ -431,4 +433,139 @@ test("sessions.resolve by key respects spawnedBy visibility filters", async () =
   expect(resolved.error?.message).toContain(
     "No session found: agent:main:subagent:shared-child-key-filter",
   );
+});
+
+test("session preview reader recovers visible rows behind a long hidden tail", async () => {
+  const scope = await seedPreviewTail("sess-preview-deep-hidden-tail", [
+    ...Array.from({ length: 64 }, (_, index) => ({
+      role: "assistant",
+      content: `visible ${String(index)}`,
+    })),
+    ...Array.from({ length: 1500 }, (_, index) => ({
+      role: "toolResult",
+      content: `tool ${String(index)}`,
+    })),
+  ]);
+  const items = await readSessionPreviewItemsFromTranscriptAsync(scope, 12, 120);
+  expect(items).toEqual(
+    Array.from({ length: 12 }, (_, index) => ({
+      role: "assistant",
+      text: `visible ${String(52 + index)}`,
+    })),
+  );
+});
+
+test("session preview reader returns short visible history behind a long hidden tail", async () => {
+  const scope = await seedPreviewTail("sess-preview-short-visible", [
+    { role: "assistant", content: "only visible" },
+    ...Array.from({ length: 1500 }, (_, index) => ({
+      role: "toolResult",
+      content: `tool ${String(index)}`,
+    })),
+  ]);
+  const items = await readSessionPreviewItemsFromTranscriptAsync(scope, 12, 120);
+  expect(items).toEqual([{ role: "assistant", text: "only visible" }]);
+});
+
+test("session preview owner stops at its explicit tail scan ceiling", async () => {
+  const sessionId = "sess-preview-scan-ceiling";
+  // The hidden tail exceeds the 2,048-event ceiling, so the visible rows stay unreachable.
+  const scope = await seedPreviewTail(sessionId, [
+    ...Array.from({ length: 64 }, (_, index) => ({
+      role: "assistant",
+      content: `visible ${String(index)}`,
+    })),
+    ...Array.from({ length: 2100 }, (_, index) => ({
+      role: "toolResult",
+      content: `tool ${String(index)}`,
+    })),
+  ]);
+  const { path: databasePath } = resolveUnsuffixedSqliteTargetFromSessionStorePath(scope.storePath);
+  const { readSessionPreviewItemsReadOnly } =
+    await import("./session-transcript-preview-reader.js");
+  const historyQuery = await import("../config/sessions/session-accessor.sqlite-history-query.js");
+  const readPage = historyQuery.readRecentSessionTranscriptHistoryEventsFromProjection;
+  const calls: Array<{ maxMessages: number; events: number }> = [];
+  const spy = vi
+    .spyOn(historyQuery, "readRecentSessionTranscriptHistoryEventsFromProjection")
+    .mockImplementation((projection, options) => {
+      const page = readPage(projection, options);
+      calls.push({ maxMessages: options.maxMessages, events: page.events.length });
+      return page;
+    });
+  try {
+    const items = readSessionPreviewItemsReadOnly({
+      kind: "session-preview",
+      database: { agentId: "main", path: databasePath },
+      target: { agentId: "main", sessionId, sessionKey: "agent:main:main" },
+      maxItems: 12,
+      maxChars: 120,
+    });
+    // No preview result field reports scan exhaustion yet; this residual gap is explicit.
+    expect(items).toEqual([]);
+    expect(calls.map((call) => call.maxMessages)).toEqual([64, 1024, 2048]);
+    expect(calls.reduce((total, call) => total + call.events, 0)).toBeLessThanOrEqual(2048 * 2);
+  } finally {
+    spy.mockRestore();
+  }
+});
+
+test("Talk model-context preview shares the bounded hidden-tail recovery", async () => {
+  const scope = await seedPreviewTail("sess-preview-talk-hidden-tail", [
+    ...Array.from({ length: 64 }, (_, index) => ({
+      role: "assistant",
+      content: `visible ${String(index)}`,
+    })),
+    ...Array.from({ length: 1500 }, (_, index) => ({
+      role: "toolResult",
+      content: `tool ${String(index)}`,
+    })),
+  ]);
+  const items = await readSessionPreviewItemsFromTranscriptAsync(scope, 16, 800, "model-context");
+  expect(items).toEqual(
+    Array.from({ length: 16 }, (_, index) => ({
+      role: "assistant",
+      text: `visible ${String(48 + index)}`,
+    })),
+  );
+});
+
+test("Talk model-context stops when the byte budget caps the recovery page", async () => {
+  const sessionId = "sess-preview-talk-byte-cap";
+  // 1,023 tiny rows fit the 8 MiB recovery budget; the older 5 MiB row cannot.
+  const scope = await seedPreviewTail(sessionId, [
+    ...Array.from({ length: 64 }, (_, index) => ({
+      role: "assistant",
+      content: `visible ${String(index)}`,
+    })),
+    { role: "toolResult", content: "h".repeat(5 * 1024 * 1024) },
+    ...Array.from({ length: 1023 }, (_, index) => ({
+      role: "toolResult",
+      content: `${String(index)}${"t".repeat(4096)}`,
+    })),
+  ]);
+  const opens: number[] = [];
+  const managers: SessionManager[] = [];
+  const openBoundedAsync = SessionManager.openBoundedAsync.bind(SessionManager);
+  const spy = vi
+    .spyOn(SessionManager, "openBoundedAsync")
+    .mockImplementation(async (target, options) => {
+      const manager = await openBoundedAsync(target, options);
+      opens.push(options.maxEvents);
+      managers.push(manager);
+      return manager;
+    });
+  try {
+    const items = await readSessionPreviewItemsFromTranscriptAsync(scope, 12, 120, "model-context");
+    // No visible rows are inside the byte budget; the bounded read must not repeat it.
+    expect(items).toEqual([]);
+    expect(opens).toEqual([64, 1024]);
+    // The header is not a selected row: 1,023 is below the 1,024-event cap, so bytes stopped it.
+    expect(readSessionManagerBoundedSelection(managers[1]!)).toEqual({
+      selectedEvents: 1023,
+      truncated: true,
+    });
+  } finally {
+    spy.mockRestore();
+  }
 });

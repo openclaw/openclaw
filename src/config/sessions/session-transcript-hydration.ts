@@ -119,6 +119,7 @@ export function prepareSessionTranscriptHydration(
                 totalEvents: 0,
                 transcriptMutationAt: null,
                 truncated: false,
+                selectedEventCount: 0,
                 completeActivePath: true,
               },
             }

@@ -302,6 +302,7 @@ export function readSessionTranscriptBoundedActiveContextCore(
         totalEvents: 0,
         transcriptMutationAt: projection.version.updatedAt,
         truncated: false,
+        selectedEventCount: 0,
         ...(!fence ? { completeActivePath: true as const } : {}),
       };
     }
@@ -563,6 +564,7 @@ export function readSessionTranscriptBoundedActiveContextCore(
       totalEvents: projection.state.activeEventCount,
       transcriptMutationAt: version.updatedAt,
       truncated,
+      selectedEventCount: selectedRows.length,
       ...(!truncated &&
       !fence &&
       !projection.hasUnindexedPrefix &&

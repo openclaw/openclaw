@@ -350,3 +350,45 @@ it("reads unbound Gateway transcript state after an in-process append without cr
   expect(await readCount(missing)).toBe(0);
   expect(memorySessionActorOwners.list()).toHaveLength(1);
 });
+
+it("recovers model-context previews behind a long incognito tool-result tail", async () => {
+  const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env });
+  const owner = memorySessionActorOwners.get({ agentId: "main", path: storePath });
+  const sessionKey = "agent:main:dashboard:incognito-preview-tail";
+  const sessionId = "incognito-preview-tail";
+  const actor = await owner.acquire({ database: owner.identity, sessionKey }, lifetime);
+  const storage = actor.storage!;
+  const transcriptEvents = [
+    { type: "session", id: sessionId, version: 3, cwd: "/synthetic" },
+    ...Array.from({ length: 64 }, (_, index) =>
+      event(`visible-${String(index)}`, index === 0 ? null : `visible-${String(index - 1)}`, {
+        role: "assistant",
+        content: `visible ${String(index)}`,
+      }),
+    ),
+    ...Array.from({ length: 1500 }, (_, index) =>
+      event(`tool-${String(index)}`, index === 0 ? "visible-63" : `tool-${String(index - 1)}`, {
+        role: "toolResult",
+        content: `tool ${String(index)}`,
+      }),
+    ),
+  ];
+  readSessionActorStorageResult(
+    await storage.mutate(
+      {
+        type: "session.entry.create",
+        input: { entry: { sessionId, updatedAt: 1, incognito: true }, transcriptEvents },
+      },
+      authority,
+    ),
+  );
+  const scope = { agentId: "main", sessionKey, sessionId, storePath, env };
+  const items = await readSessionPreviewItemsFromTranscriptAsync(scope, 16, 800, "model-context");
+  expect(items).toEqual(
+    Array.from({ length: 16 }, (_, index) => ({
+      role: "assistant",
+      text: `visible ${String(48 + index)}`,
+    })),
+  );
+  owner.closeSession(sessionKey);
+});
