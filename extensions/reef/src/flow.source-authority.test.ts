@@ -1,15 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type {
-  OpenAsyncKeyedStoreOptions,
-  OpenKeyedStoreOptions,
-} from "openclaw/plugin-sdk/plugin-state-runtime";
-import {
-  createPluginStateKeyedStoreV2ForTests,
-  createPluginStateSyncKeyedStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { generateIdentity } from "../protocol/index.js";
 import { MemoryReplayStore } from "../protocol/memory-stores.test-support.js";
@@ -19,6 +10,7 @@ import {
   allow,
   config,
   envelope,
+  flowRuntime,
   guard,
   peerTrust,
   reefKeys,
@@ -37,15 +29,6 @@ afterEach(async () => {
   }
 });
 
-function runtime(env: NodeJS.ProcessEnv) {
-  const value = createPluginRuntimeMock();
-  value.state.openKeyedStoreV2 = <T>(options: OpenAsyncKeyedStoreOptions) =>
-    createPluginStateKeyedStoreV2ForTests<T>("reef", { ...options, env }, { assertCurrent() {} });
-  value.state.openSyncKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
-    createPluginStateSyncKeyedStoreForTests<T>("reef", { ...options, env });
-  return value;
-}
-
 describe("Reef captured source authority", () => {
   it.each(["outbound", "inbound", "recovery"] as const)(
     "refuses %s effects after the original database revokes trust and routing changes",
@@ -58,11 +41,11 @@ describe("Reef captured source authority", () => {
       const cfg = config();
       const peer = generateIdentity();
       const keys = reefKeys();
-      const original = openReefTrustStore(runtime(originalEnv), cfg);
-      const alternate = openReefTrustStore(runtime(alternateEnv), cfg);
+      const original = openReefTrustStore(flowRuntime(originalEnv), cfg);
+      const alternate = openReefTrustStore(flowRuntime(alternateEnv), cfg);
       await original.set("alice", peerTrust(peer));
       await alternate.set("alice", peerTrust(peer));
-      const currentRuntime = runtime(movingEnv);
+      const currentRuntime = flowRuntime(movingEnv);
       const trust = openReefTrustStore(currentRuntime, cfg);
       const fetcher = vi
         .fn<typeof fetch>()

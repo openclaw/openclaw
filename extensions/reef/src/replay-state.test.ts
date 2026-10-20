@@ -2,7 +2,6 @@ import { randomBytes } from "@noble/hashes/utils.js";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
   OpenAsyncKeyedStoreOptions,
-  OpenKeyedStoreOptions,
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
@@ -10,7 +9,6 @@ import {
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   closeOpenClawStateDatabaseAsync,
   observeHostDataSql,
@@ -18,6 +16,7 @@ import {
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { generateIdentity, signReceipt } from "../protocol/index.js";
+import { flowRuntime } from "./flow.test-helpers.js";
 import {
   REEF_REPLAY_MAX_ENTRIES,
   REEF_REPLAY_NAMESPACE,
@@ -35,7 +34,7 @@ const key = reefReplayStoreKey("alice", id);
 function fixture(maxEntries = REEF_REPLAY_MAX_ENTRIES) {
   const stateDir = temp.make("reef-replay-");
   const env = { OPENCLAW_STATE_DIR: stateDir };
-  const runtime = createPluginRuntimeMock();
+  const runtime = flowRuntime(env);
   const options = {
     namespace: REEF_REPLAY_NAMESPACE,
     maxEntries,
@@ -47,8 +46,6 @@ function fixture(maxEntries = REEF_REPLAY_MAX_ENTRIES) {
     assertCurrent() {},
   });
   const raw = createPluginStateSyncKeyedStoreForTests<ReefReplayRecord>("reef", options);
-  runtime.state.openSyncKeyedStore = <T>(opts: OpenKeyedStoreOptions) =>
-    createPluginStateSyncKeyedStoreForTests<T>("reef", { ...opts, env });
   runtime.state.openKeyedStoreV2 = <T>(opts: OpenAsyncKeyedStoreOptions) => {
     if (opts.retention === "retained" || opts.namespace !== REEF_REPLAY_NAMESPACE) {
       return createPluginStateKeyedStoreV2ForTests<T>(
@@ -85,25 +82,19 @@ describe("Reef replay worker ownership", () => {
   it("claims, refreshes, completes and reopens encrypted replay without host SQLite calls", async () => {
     const f = fixture();
     const replay = f.open();
-    const observation = observeHostDataSql();
-    const sql = observation.calls;
+    const sql = observeHostDataSql().calls;
+    const completed = { receipt: f.receipt, body: { text: "synthetic private body" } };
     await expect(replay.claim("alice", id, hash)).resolves.toBe("new");
     await replay.refresh?.("alice", id);
     await replay.complete("alice", id, f.receipt, { text: "synthetic private body" });
     await expect(replay.claim("alice", id, hash)).resolves.toBe("duplicate");
-    await expect(replay.completed("alice", id)).resolves.toEqual({
-      receipt: f.receipt,
-      body: { text: "synthetic private body" },
-    });
+    await expect(replay.completed("alice", id)).resolves.toEqual(completed);
     await expect(replay.claim("alice", id, "different")).resolves.toBe("mismatch");
     for (const spy of sql) {
       expect(spy).not.toHaveBeenCalled();
     }
     vi.restoreAllMocks();
-    await expect(f.open().completed("alice", id)).resolves.toEqual({
-      receipt: f.receipt,
-      body: { text: "synthetic private body" },
-    });
+    await expect(f.open().completed("alice", id)).resolves.toEqual(completed);
     expect(JSON.stringify(f.raw.lookup(key))).not.toContain("synthetic private body");
   });
 
@@ -238,8 +229,7 @@ describe("Reef replay worker ownership", () => {
     await replay.claim("alice", id, hash);
     const receipt = structuredClone(f.receipt);
     const body = { text: "original" };
-    const complete = replay.complete("alice", id, receipt, body);
-    await complete;
+    await replay.complete("alice", id, receipt, body);
     expect(ciphertexts).toHaveLength(2);
     expect(new Set(ciphertexts).size).toBe(1);
     expect(rng.mock.calls).toEqual([[12]]);

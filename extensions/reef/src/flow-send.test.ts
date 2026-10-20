@@ -20,27 +20,39 @@ import { ReefTransportClient } from "./transport.js";
 beforeEach(resetFlowStoresForTests);
 afterEach(resetFlowStoresForTests);
 
+async function fixture(rules?: { outbound: string }, fetcher?: typeof fetch) {
+  const alice = reefKeys();
+  const cfg = config();
+  cfg.handle = "alice";
+  if (rules) {
+    cfg.guard!.rules = rules;
+  }
+  const policyVersion = effectiveGuardPolicyVersion("v1", cfg.guard!.rules);
+  const guardMock = guard({ ...allow, policyVersion });
+  const trustedPeer = peerTrust(generateIdentity());
+  const { trusted, audit, ...stores } = await workerFlowStores(cfg, { bob: trustedPeer });
+  const relay = transport();
+  const flow = new ReefMessageFlow({
+    config: cfg,
+    trust: trusted,
+    keys: alice,
+    transport: fetcher
+      ? new ReefTransportClient(cfg.relayUrl, "alice", alice, fetcher)
+      : (relay as unknown as ReefTransportClient),
+    guard: guardMock,
+    audit,
+    replay: new MemoryReplayStore(),
+    ...stores,
+    onIngress: async () => {},
+    onOwnerNotice: async () => {},
+  });
+  return { flow, trusted, trustedPeer, relay, guardMock, policyVersion };
+}
+
 describe("ReefMessageFlow send recovery", () => {
   it("does not send to a peer revoked while delivery dispatch is prepared", async () => {
-    const alice = reefKeys();
     const fetcher = vi.fn<typeof fetch>();
-    const cfg = config();
-    cfg.handle = "alice";
-    const { trusted, audit, ...stores } = await workerFlowStores(cfg, {
-      bob: peerTrust(generateIdentity()),
-    });
-    const flow = new ReefMessageFlow({
-      config: cfg,
-      trust: trusted,
-      keys: alice,
-      transport: new ReefTransportClient(cfg.relayUrl, "alice", alice, fetcher),
-      guard: guard(allow),
-      audit,
-      replay: new MemoryReplayStore(),
-      ...stores,
-      onIngress: async () => {},
-      onOwnerNotice: async () => {},
-    });
+    const { flow, trusted } = await fixture(undefined, fetcher);
 
     const error = await flow
       .send("bob", "private coordination", {
@@ -56,25 +68,7 @@ describe("ReefMessageFlow send recovery", () => {
   });
 
   it("persists automatic resends as non-resendable deliveries", async () => {
-    const alice = reefKeys();
-    const bob = generateIdentity();
-    const cfg = config();
-    cfg.handle = "alice";
-    const trustedPeer = peerTrust(bob);
-    const { trusted, audit, ...stores } = await workerFlowStores(cfg, { bob: trustedPeer });
-    const relay = transport();
-    const flow = new ReefMessageFlow({
-      config: cfg,
-      trust: trusted,
-      keys: alice,
-      transport: relay as unknown as ReefTransportClient,
-      guard: guard(allow),
-      audit,
-      replay: new MemoryReplayStore(),
-      ...stores,
-      onIngress: async () => {},
-      onOwnerNotice: async () => {},
-    });
+    const { flow, trusted, trustedPeer, relay } = await fixture();
 
     const id = await flow.send("bob", " rephrased coordination ", { resendDisabled: true });
 
@@ -89,28 +83,10 @@ describe("ReefMessageFlow send recovery", () => {
   });
 
   it("classifies under the rules-bound effective guard policy version", async () => {
-    const alice = reefKeys();
-    const bob = generateIdentity();
-    const cfg = config();
-    cfg.handle = "alice";
-    cfg.guard!.rules = { outbound: "Never mention project Nightjar." };
-    const policyVersion = effectiveGuardPolicyVersion("v1", cfg.guard!.rules);
-    expect(policyVersion).toMatch(/^v1\+[0-9a-f]{64}$/);
-    const guardMock = guard({ ...allow, policyVersion });
-    const { trusted, audit, ...stores } = await workerFlowStores(cfg, { bob: peerTrust(bob) });
-    const relay = transport();
-    const flow = new ReefMessageFlow({
-      config: cfg,
-      trust: trusted,
-      keys: alice,
-      transport: relay as unknown as ReefTransportClient,
-      guard: guardMock,
-      audit,
-      replay: new MemoryReplayStore(),
-      ...stores,
-      onIngress: async () => {},
-      onOwnerNotice: async () => {},
+    const { flow, guardMock, relay, policyVersion } = await fixture({
+      outbound: "Never mention project Nightjar.",
     });
+    expect(policyVersion).toMatch(/^v1\+[0-9a-f]{64}$/);
 
     await flow.send("bob", "meeting at ten");
 
