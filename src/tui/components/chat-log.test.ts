@@ -317,10 +317,9 @@ describe("ChatLog", () => {
   it("dismisses a pending system notice by runId", () => {
     chatLog.addPendingSystem("run-1", "taking longer than expected");
     expect(raw()).toContain("taking longer than expected");
-    chatLog.dismissPendingSystem("run-1");
+    expect(chatLog.dismissPendingSystem("run-1")).toBe(true);
     expect(raw()).not.toContain("taking longer than expected");
-    chatLog.dismissPendingSystem("run-1");
-    expect(raw()).not.toContain("taking longer than expected");
+    expect(chatLog.dismissPendingSystem("run-1")).toBe(false);
   });
 
   it("replaces an existing pending system notice for the same runId", () => {

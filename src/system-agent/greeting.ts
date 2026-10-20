@@ -9,7 +9,7 @@ import {
   createSqliteAuditRecordReader,
   createSqliteAuditRecordWriter,
 } from "../infra/sqlite-audit-record-store.async.js";
-import { getUpdateAvailable } from "../infra/update-status-state.js";
+import { getUpdateAvailable, type UpdateAvailable } from "../infra/update-status-state.js";
 import { formatSystemAgentStartupMessage, type SystemAgentOverview } from "./overview.js";
 
 const SYSTEM_AGENT_GREETING_SCOPE = "system-agent-greeting";
@@ -158,6 +158,8 @@ export async function loadSystemAgentGreetingFacts(
     cacheStore?: SystemAgentGreetingCacheStore;
     openCache?: () => SystemAgentGreetingCacheStore;
     configAuditStore?: SystemAgentGreetingConfigAuditStore;
+    getUpdateAvailable?: () => UpdateAvailable | null;
+    getHealthCache?: () => HealthSummary | null;
   } = {},
 ): Promise<SystemAgentGreetingFacts> {
   // Facts stay best-effort: a broken snapshot source degrades that fact
@@ -189,8 +191,12 @@ export async function loadSystemAgentGreetingFacts(
       ? auditStore.configAuditFacts(cache?.lastSeenAuditSequence ?? 0)
       : { auditSequence: 0, recentExternalEdit: false },
   );
-  const update = await tryOr(null, getUpdateAvailable);
-  const health = await tryOr(null, getHealthCache);
+  const update = await tryOr<UpdateAvailable | null>(null, () =>
+    (opts.getUpdateAvailable ?? getUpdateAvailable)(),
+  );
+  const health = await tryOr<HealthSummary | null>(null, () =>
+    (opts.getHealthCache ?? getHealthCache)(),
+  );
   cacheStore?.assertCurrent();
   auditStore?.assertCurrent();
   return {

@@ -60,11 +60,13 @@ export async function probeLocalCommand(
 
 export async function probeGatewayUrl(
   url: string,
+  opts: { timeoutMs?: number } = {},
 ): Promise<{ reachable: boolean; url: string; error?: string }> {
   const httpUrl = url.replace(/^ws:/, "http:").replace(/^wss:/, "https:");
   const healthUrl = new URL("/healthz", httpUrl).toString();
+  const timeoutMs = resolveTimerTimeoutMs(opts.timeoutMs, 900);
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 900);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   let response: Response | undefined;
   try {
     response = await fetch(healthUrl, {

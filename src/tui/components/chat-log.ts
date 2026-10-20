@@ -255,13 +255,14 @@ export class ChatLog extends Container {
     this.append(message.component);
   }
 
-  dismissPendingSystem(runId: string): void {
+  dismissPendingSystem(runId: string) {
     const existing = this.pendingSystemNotices.get(runId);
     if (!existing) {
-      return;
+      return false;
     }
     this.removeChild(existing);
     this.pendingSystemNotices.delete(runId);
+    return true;
   }
 
   addUser(text: string, options?: { messageId?: string; images?: readonly TuiImageSource[] }) {
@@ -269,7 +270,7 @@ export class ChatLog extends Container {
     if (previous) {
       previous.setText(text);
       previous.setImages(options?.images ?? []);
-      return;
+      return previous;
     }
     const component = new MarkdownMessageComponent("user", text, this.imageRenderer);
     component.setImages(options?.images ?? []);
@@ -277,6 +278,7 @@ export class ChatLog extends Container {
       this.userComponents.set(options.messageId, component);
     }
     this.appendNonSystem(component);
+    return component;
   }
 
   addLiveUser(
@@ -290,8 +292,7 @@ export class ChatLog extends Container {
   ) {
     const existing = this.userComponents.get(options.messageId);
     if (existing) {
-      this.addUser(text, options);
-      return;
+      return this.addUser(text, options);
     }
 
     // Persisted execution ownership can differ from the originating send;
@@ -302,7 +303,7 @@ export class ChatLog extends Container {
       pending.component.setImages(options.images ?? []);
       this.pendingUsers.delete(options.sendId);
       this.userComponents.set(options.messageId, pending.component);
-      return;
+      return pending.component;
     }
 
     const component = new MarkdownMessageComponent("user", text, this.imageRenderer);
@@ -334,9 +335,10 @@ export class ChatLog extends Container {
       this.children.splice(firstRunComponentIndex, 0, component);
       this.reserveLiveUserSlot(protectedComponents, firstRunComponent, options.runId);
       this.pruneOverflow(protectedComponents);
-      return;
+      return component;
     }
     this.appendNonSystem(component);
+    return component;
   }
 
   addPendingUser(runId: string, text: string) {
@@ -344,35 +346,38 @@ export class ChatLog extends Container {
     if (existing) {
       existing.text = text;
       existing.component.setText(text);
-      return;
+      return existing.component;
     }
     const component = new MarkdownMessageComponent("user", text, this.imageRenderer);
     this.pendingUsers.set(runId, { component, text });
     this.appendNonSystem(component);
+    return component;
   }
 
-  dropPendingUser(runId: string): void {
+  dropPendingUser(runId: string) {
     const existing = this.pendingUsers.get(runId);
     if (!existing) {
-      return;
+      return false;
     }
     this.removeChild(existing.component);
     this.pendingUsers.delete(runId);
+    return true;
   }
 
   // Re-key in place: the gateway can assign its own runId after the optimistic
   // row is rendered. Swap the map key without re-mounting the component so the
   // row keeps its transcript position even if a reply already rendered below it.
-  rekeyPendingUser(fromRunId: string, toRunId: string): void {
+  rekeyPendingUser(fromRunId: string, toRunId: string) {
     if (fromRunId === toRunId) {
-      return;
+      return false;
     }
     const existing = this.pendingUsers.get(fromRunId);
     if (!existing) {
-      return;
+      return false;
     }
     this.pendingUsers.delete(fromRunId);
     this.pendingUsers.set(toRunId, existing);
+    return true;
   }
 
   countPendingUsers() {
@@ -546,11 +551,12 @@ export class ChatLog extends Container {
         this.removeChild(this.btwMessage);
         this.appendNonSystem(this.btwMessage);
       }
-      return;
+      return this.btwMessage;
     }
     const component = new BtwInlineMessage(params);
     this.btwMessage = component;
     this.appendNonSystem(component);
+    return component;
   }
 
   dismissBtw() {
