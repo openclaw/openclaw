@@ -1,6 +1,6 @@
 import { channel } from "node:diagnostics_channel";
 import { totalmem } from "node:os";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi, type MockInstance } from "vitest";
 import { recordCommandPoll } from "../agents/command-poll-backoff.js";
 import { detectToolCallLoop, recordToolCall } from "../agents/tool-loop-detection.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
@@ -36,6 +36,21 @@ import {
 } from "./diagnostic.js";
 import { resetDiagnosticStateForTest } from "./diagnostic.test-support.js";
 import { createDiagnosticMessageLifecycle } from "./message-lifecycle.js";
+
+function expectCalls(count: number, ...observers: MockInstance[]) {
+  for (const observer of observers) {
+    expect(observer).toHaveBeenCalledTimes(count);
+  }
+}
+
+function heartbeatOptions() {
+  return {
+    emitMemorySample: vi.fn(),
+    sampleLiveness: vi.fn(() => null),
+    getConfig: vi.fn(() => ({})),
+    recoverStuckSession: vi.fn(),
+  };
+}
 
 afterEach(() => {
   clearRuntimeConfigSnapshot();
@@ -77,10 +92,16 @@ it("coalesces diagnostic heartbeats after sleep", async () => {
 // production constant stays unexported because only tests would consume it.
 const MAX_DIAGNOSTIC_CONTENT_CHARS = 128 * 1024;
 
-it("bounds captured message content before diagnostic dispatch", () => {
+it("bounds captured content and preserves ingesting-agent attribution on dispatch", () => {
   setRuntimeConfigSnapshot({ diagnostics: { otel: { enabled: true, captureContent: true } } });
   const oversizedContent = `${"x".repeat(MAX_DIAGNOSTIC_CONTENT_CHARS - 1)}🚀tail`;
   const captured: Array<{ userPrompt?: string; finalResponse?: string }> = [];
+  const agents: Array<string | undefined> = [];
+  const unsubscribePublic = onDiagnosticEvent((event) => {
+    if (event.type === "message.processed") {
+      agents.push(event.agentId);
+    }
+  });
   const unsubscribe = onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
     if (event.type === "message.processed" && privateData.messageContent) {
       captured.push(privateData.messageContent);
@@ -92,22 +113,22 @@ it("bounds captured message content before diagnostic dispatch", () => {
       channel: "test",
       source: "test",
       trackSessionState: false,
+      sessionKey: "agent:main:lifecycle",
+      agentId: "main",
       userPrompt: oversizedContent,
     });
     lifecycle.markProcessed("completed", { finalResponse: oversizedContent });
   } finally {
     unsubscribe();
+    unsubscribePublic();
   }
 
   expect(captured).toHaveLength(1);
-  expect(captured[0]?.userPrompt?.length).toBeLessThanOrEqual(MAX_DIAGNOSTIC_CONTENT_CHARS);
-  expect(captured[0]?.finalResponse?.length).toBeLessThanOrEqual(MAX_DIAGNOSTIC_CONTENT_CHARS);
-  expect(captured[0]?.userPrompt?.charCodeAt((captured[0]?.userPrompt?.length ?? 0) - 1)).not.toBe(
-    0xd83d,
-  );
-  expect(
-    captured[0]?.finalResponse?.charCodeAt((captured[0]?.finalResponse?.length ?? 0) - 1),
-  ).not.toBe(0xd83d);
+  expect(agents).toEqual(["main"]);
+  for (const value of [captured[0]?.userPrompt, captured[0]?.finalResponse]) {
+    expect(value?.length).toBeLessThanOrEqual(MAX_DIAGNOSTIC_CONTENT_CHARS);
+    expect(value?.charCodeAt((value?.length ?? 0) - 1)).not.toBe(0xd83d);
+  }
 });
 
 it("preserves independent tool-loop and poll-backoff policy when diagnostic observation stops", () => {
@@ -151,18 +172,9 @@ it("keeps pressure sampling silent and reconciles diagnostic options on one cade
     })),
     { rss: () => criticalRss },
   );
-  const first = {
-    emitMemorySample: vi.fn(),
-    sampleLiveness: vi.fn(() => null),
-    getConfig: vi.fn(() => ({})),
-    recoverStuckSession: vi.fn(),
-  };
-  const latest = {
-    emitMemorySample: vi.fn(),
-    sampleLiveness: vi.fn(() => null),
-    getConfig: vi.fn(() => ({})),
-    recoverStuckSession: vi.fn(),
-  };
+  const first = heartbeatOptions();
+  const latest = heartbeatOptions();
+  const passive = [workerSamples, workerMessageSamples];
   pressure.subscribe(critical);
   try {
     setDiagnosticsEnabledForProcess(false);
@@ -170,18 +182,16 @@ it("keeps pressure sampling silent and reconciles diagnostic options on one cade
     await clock.advanceBy(30_000);
     expect(critical).toHaveBeenCalledTimes(1);
     expect(events).toEqual([]);
-    for (const observer of [
+    expectCalls(
+      0,
       ...Object.values(first),
-      workerSamples,
-      workerMessageSamples,
+      ...passive,
       childSamples,
       trackActivity,
       recordStability,
       fatalHook,
       warn,
-    ]) {
-      expect(observer).not.toHaveBeenCalled();
-    }
+    );
 
     setDiagnosticsEnabledForProcess(true);
     startGatewayDiagnosticHeartbeat(scheduler, undefined, first);
@@ -190,10 +200,13 @@ it("keeps pressure sampling silent and reconciles diagnostic options on one cade
     await clock.advanceBy(15_000);
     startGatewayDiagnosticHeartbeat(scheduler, undefined, latest);
     await clock.advanceBy(15_000);
-    expect(first.emitMemorySample).toHaveBeenCalledTimes(1);
-    expect(latest.emitMemorySample).toHaveBeenCalledTimes(1);
-    expect(latest.sampleLiveness).toHaveBeenCalledTimes(1);
-    expect(latest.getConfig).toHaveBeenCalledTimes(1);
+    expectCalls(
+      1,
+      first.emitMemorySample,
+      latest.emitMemorySample,
+      latest.sampleLiveness,
+      latest.getConfig,
+    );
     expect(childSamples).toHaveBeenCalledTimes(2);
 
     setDiagnosticsEnabledForProcess(false);
@@ -204,12 +217,8 @@ it("keeps pressure sampling silent and reconciles diagnostic options on one cade
     await waitForDiagnosticEventsDrained();
     expect(critical).toHaveBeenCalledTimes(2);
     expect(events).toHaveLength(observed);
-    expect(workerSamples).not.toHaveBeenCalled();
-    expect(workerMessageSamples).not.toHaveBeenCalled();
-    expect(latest.emitMemorySample).toHaveBeenCalledTimes(1);
-    expect(latest.sampleLiveness).toHaveBeenCalledTimes(1);
-    expect(latest.getConfig).toHaveBeenCalledTimes(1);
-    expect(latest.recoverStuckSession).not.toHaveBeenCalled();
+    expectCalls(0, ...passive, latest.recoverStuckSession);
+    expectCalls(1, latest.emitMemorySample, latest.sampleLiveness, latest.getConfig);
     expect(childSamples).toHaveBeenCalledTimes(2);
 
     setDiagnosticsEnabledForProcess(true);
@@ -222,9 +231,7 @@ it("keeps pressure sampling silent and reconciles diagnostic options on one cade
     await clock.advanceBy(30_000);
     expect(critical).toHaveBeenCalledTimes(3);
     expect(latest.emitMemorySample).toHaveBeenCalledTimes(2);
-    expect(workerSamples).not.toHaveBeenCalled();
-    expect(workerMessageSamples).not.toHaveBeenCalled();
-    expect(warn).not.toHaveBeenCalled();
+    expectCalls(0, ...passive, warn);
     expect(childSamples).toHaveBeenCalledTimes(3);
 
     scheduler.beginClose();
@@ -278,29 +285,4 @@ it("retires interrupted diagnostic observations before re-enable without revivin
     unsubscribe();
     await scheduler.stop();
   }
-});
-
-it("attributes message.processed to the ingesting agent recorded at the lifecycle owner", () => {
-  const processed: Extract<DiagnosticEventPayload, { type: "message.processed" }>[] = [];
-  const unsubscribe = onDiagnosticEvent((event) => {
-    if (event.type === "message.processed") {
-      processed.push(event);
-    }
-  });
-  try {
-    const lifecycle = createDiagnosticMessageLifecycle({
-      enabled: true,
-      channel: "test",
-      source: "test",
-      sessionKey: "agent:main:lifecycle",
-      trackSessionState: false,
-      agentId: "main",
-    });
-    lifecycle.markProcessed("completed");
-  } finally {
-    unsubscribe();
-  }
-
-  expect(processed).toHaveLength(1);
-  expect(processed[0]?.agentId).toBe("main");
 });

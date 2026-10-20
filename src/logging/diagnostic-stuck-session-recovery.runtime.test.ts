@@ -22,10 +22,25 @@ const classification = {
   activeWorkKind: "embedded_run",
   recoveryEligible: false,
 } as const;
-function begin() {
+function begin(backend?: Parameters<ReturnType<typeof createReplyOperation>["attachBackend"]>[0]) {
   const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
   operation.setPhase("running");
+  if (backend) {
+    operation.attachBackend(backend);
+  }
   return operation;
+}
+function physicalOwner(incarnation: string) {
+  return createReplyOperation({
+    sessionKey,
+    sessionId: `physical-${incarnation}`,
+    resetTriggered: false,
+    target: captureSessionTarget({
+      storeScope: `/synthetic/diagnostic-${incarnation}/sessions.sqlite`,
+      sessionKey,
+      incarnation: `physical-${incarnation}`,
+    }),
+  });
 }
 beforeEach(() => {
   vi.useFakeTimers();
@@ -39,26 +54,8 @@ afterEach(() => {
 
 describe("diagnostic recovery delegates only to a captured controller", () => {
   it("captures diagnostic recovery only for a unique matching physical session owner", () => {
-    const first = createReplyOperation({
-      sessionKey,
-      sessionId: "physical-first",
-      resetTriggered: false,
-      target: captureSessionTarget({
-        storeScope: "/synthetic/diagnostic-first/sessions.sqlite",
-        sessionKey,
-        incarnation: "physical-first",
-      }),
-    });
-    const second = createReplyOperation({
-      sessionKey,
-      sessionId: "physical-second",
-      resetTriggered: false,
-      target: captureSessionTarget({
-        storeScope: "/synthetic/diagnostic-second/sessions.sqlite",
-        sessionKey,
-        incarnation: "physical-second",
-      }),
-    });
+    const first = physicalOwner("first");
+    const second = physicalOwner("second");
     const activityBeforeRecovery = getDiagnosticSessionActivitySnapshot({ sessionKey });
     expect(activityBeforeRecovery.activeWorkKind).toBeUndefined();
     expect(activityBeforeRecovery.hasActiveEmbeddedRun).toBeUndefined();
@@ -82,9 +79,8 @@ describe("diagnostic recovery delegates only to a captured controller", () => {
   });
 
   it("cannot infer stop or idle authority from missing diagnostic/native records", async () => {
-    const operation = begin();
     const cancel = vi.fn();
-    operation.attachBackend({ kind: "embedded", cancel });
+    const operation = begin({ kind: "embedded", cancel });
     vi.setSystemTime(60 * 60_000);
     const outcome = await recoverStuckDiagnosticSession({
       sessionKey,
@@ -117,9 +113,8 @@ describe("diagnostic recovery delegates only to a captured controller", () => {
       });
       const capturedOperation = captured?.operation;
       first.complete();
-      const replacement = begin();
       const cancel = vi.fn();
-      replacement.attachBackend({ kind: "embedded", cancel });
+      const replacement = begin({ kind: "embedded", cancel });
       vi.setSystemTime(1_000_000);
       loaded.resolve();
       await completed.promise;
@@ -130,10 +125,9 @@ describe("diagnostic recovery delegates only to a captured controller", () => {
   );
 
   it("reports accepted model recovery without treating early diagnostics as stop authority", async () => {
-    const operation = begin();
     const cancel = vi.fn();
     const recoverStalledModelCall = vi.fn(() => true);
-    operation.attachBackend({ kind: "embedded", cancel, recoverStalledModelCall });
+    const operation = begin({ kind: "embedded", cancel, recoverStalledModelCall });
     const attempt = operation.watchdog.attachAttempt({ assertCurrent() {} });
     attempt.beginRequest({ deadlineAtMs: 45_000 });
     const request = { operation, sessionKey, sessionId, ageMs: 75_000, allowActiveAbort: true };
@@ -164,9 +158,8 @@ describe("diagnostic recovery delegates only to a captured controller", () => {
   });
 
   it("deduplicates stop on the operation, not a keyed recovery set", async () => {
-    const operation = begin();
     const cancel = vi.fn();
-    operation.attachBackend({ kind: "embedded", cancel });
+    const operation = begin({ kind: "embedded", cancel });
     const request = { operation, sessionKey, sessionId, ageMs: 6 * 60_000 };
     vi.setSystemTime(request.ageMs);
     const first = recoverStuckDiagnosticSession(request);
@@ -202,8 +195,7 @@ describe("diagnostic recovery delegates only to a captured controller", () => {
     });
     await done.promise;
     await Promise.resolve();
-    expect(state.state).toBe("processing");
-    expect(state.queueDepth).toBe(3);
+    expect(state).toMatchObject({ state: "processing", queueDepth: 3 });
     expect(getSessionControllerOperation(sessionKey)).toBe(operation);
   });
 });

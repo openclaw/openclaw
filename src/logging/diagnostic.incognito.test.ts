@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -6,10 +6,7 @@ import {
   waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
-import {
-  getDiagnosticSessionState,
-  resetDiagnosticSessionStateForTest,
-} from "./diagnostic-session-state.js";
+import { getDiagnosticSessionState } from "./diagnostic-session-state.js";
 import { logToolLoopAction } from "./diagnostic-tool-loop.js";
 import {
   diagnosticLogger,
@@ -22,6 +19,16 @@ import {
   startEnabledDiagnosticHeartbeatForTest,
 } from "./diagnostic.test-support.js";
 
+const events: DiagnosticEventPayload[] = [];
+beforeEach(() => {
+  resetDiagnosticStateForTest();
+  resetDiagnosticEventsForTest();
+  setDiagnosticsEnabledForProcess(true);
+  vi.spyOn(diagnosticLogger, "isEnabled").mockReturnValue(true);
+  events.length = 0;
+  onInternalDiagnosticEvent((event) => events.push(event));
+});
+
 afterEach(() => {
   resetDiagnosticStateForTest();
   resetDiagnosticEventsForTest();
@@ -33,15 +40,9 @@ afterEach(() => {
 it.each(["key", "session-id"] as const)(
   "keeps Incognito text out of formatted logs for a %s while retaining lifecycle state",
   async (identity) => {
-    resetDiagnosticSessionStateForTest();
-    resetDiagnosticEventsForTest();
-    setDiagnosticsEnabledForProcess(true);
-    vi.spyOn(diagnosticLogger, "isEnabled").mockReturnValue(true);
     const debug = vi.spyOn(diagnosticLogger, "debug").mockImplementation(() => {});
     const warn = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => {});
     const error = vi.spyOn(diagnosticLogger, "error").mockImplementation(() => {});
-    const events: DiagnosticEventPayload[] = [];
-    onInternalDiagnosticEvent((event) => events.push(event));
     const run = async (incognito: boolean) => {
       const sessionKey = `agent:main:dashboard:${incognito ? "incognito-" : ""}diagnostic`;
       const sessionId = incognito ? "private-diagnostic-id" : "ordinary-diagnostic-id";
@@ -50,21 +51,16 @@ it.each(["key", "session-id"] as const)(
       const marker = incognito
         ? "SYNTHETIC_PRIVATE_DIAGNOSTIC_TEXT"
         : "SYNTHETIC_ORDINARY_DIAGNOSTIC_TEXT";
+      const failed = { ...ref, outcome: "error", reason: marker, error: marker } as const;
       logMessageDispatchCompleted({
-        ...ref,
+        ...failed,
         source: "test",
         durationMs: 1,
-        outcome: "error",
-        reason: marker,
-        error: marker,
       });
       logMessageProcessed({
-        ...ref,
+        ...failed,
         agentId: "main",
         channel: "webchat",
-        outcome: "error",
-        reason: marker,
-        error: marker,
       });
       logSessionStateChange({ ...ref, state: "processing", reason: marker });
       expect(state.state).toBe("processing");
@@ -113,13 +109,7 @@ it.each([true, false])(
   async (incognito) => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
-    resetDiagnosticStateForTest();
-    resetDiagnosticEventsForTest();
-    setDiagnosticsEnabledForProcess(true);
-    vi.spyOn(diagnosticLogger, "isEnabled").mockReturnValue(true);
     const warn = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => {});
-    const events: DiagnosticEventPayload[] = [];
-    onInternalDiagnosticEvent((event) => events.push(event));
     const recoverStuckSession = vi.fn();
     const ref = {
       sessionId: incognito ? "private-stuck-id" : "ordinary-stuck-id",
