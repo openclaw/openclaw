@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, it } from "vitest";
+import { assert, expect, it } from "vitest";
 import type { AgentHarness } from "../../agents/harness/types.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
@@ -7,12 +7,7 @@ import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { markPluginRegistryActive } from "../../plugins/registry-lifecycle.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
-import {
-  forkSessionAtMessage,
-  loadSessionEntry,
-  rewindSessionToMessage,
-  switchSessionBranch,
-} from "./session-accessor.js";
+import * as sessions from "./session-accessor.js";
 import {
   agentId,
   sessionKey,
@@ -23,7 +18,6 @@ const { createSession } = useSessionMessageCutFixtures();
 
 async function nativeOwner() {
   const { env, scope } = await createSession();
-  const before = loadSessionEntry(scope);
   let binding: string | undefined = "native-history-before-cut";
   let finalized = false;
   const registry = createEmptyPluginRegistry();
@@ -32,25 +26,20 @@ async function nativeOwner() {
     id: "native-context",
     label: "Native cut owner",
     supports: () => ({ supported: true }),
-    runAttempt: async () => {
-      throw new Error("not used");
-    },
+    runAttempt: async () => assert.fail("Unexpected native harness attempt"),
     withSessionContextReset: async (params, run) => {
       params.assertCurrent();
       const previous = binding;
       let committed = false;
+      const settle = (next: string | undefined, commit: boolean) => {
+        params.assertCurrent();
+        binding = next;
+        committed = commit;
+      };
       try {
         return await run({
-          commit() {
-            params.assertCurrent();
-            binding = undefined;
-            committed = true;
-          },
-          rollback() {
-            params.assertCurrent();
-            binding = previous;
-            committed = false;
-          },
+          commit: () => settle(undefined, true),
+          rollback: () => settle(previous, false),
         });
       } finally {
         if (committed) {
@@ -64,17 +53,17 @@ async function nativeOwner() {
   registry.agentHarnesses.push({ harness, pluginId: record.id, source: "runtime" });
   markPluginRegistryActive(registry);
   return {
-    scope,
-    before,
-    read: () => ({ entry: loadSessionEntry(scope), binding, finalized }),
+    sourceId: scope.sessionId,
+    before: sessions.loadSessionEntry(scope),
+    read: () => ({ entry: sessions.loadSessionEntry(scope), binding, finalized }),
     run: (mode: "rewind" | "switch" | "fork", entryId = "user-2") =>
       withPluginRuntimeRegistryScope(registry, () => {
         const params = { agentId, env, sessionKey, entryId };
         return mode === "rewind"
-          ? rewindSessionToMessage(params)
+          ? sessions.rewindSessionToMessage(params)
           : mode === "switch"
-            ? switchSessionBranch({ ...params, leafEntryId: entryId })
-            : forkSessionAtMessage({ ...params, targetKey: `${sessionKey}:fork` });
+            ? sessions.switchSessionBranch({ ...params, leafEntryId: entryId })
+            : sessions.forkSessionAtMessage({ ...params, targetKey: `${sessionKey}:fork` });
       }),
   };
 }
@@ -94,9 +83,7 @@ it.each([
   expect((await owner.run(mode, entryId)).status).toBe(status);
   const reset = status === "created" && mode !== "fork";
   expect(owner.read()).toEqual({
-    entry: reset
-      ? expect.objectContaining({ previousSessionId: owner.scope.sessionId })
-      : owner.before,
+    entry: reset ? expect.objectContaining({ previousSessionId: owner.sourceId }) : owner.before,
     binding: reset ? undefined : "native-history-before-cut",
     finalized: reset,
   });
@@ -104,17 +91,19 @@ it.each([
 
 it("preserves native context when the worker cut commit is refused", async () => {
   const owner = await nativeOwner();
-  const fault = probe.admission(admission, (request, grant, callback) => {
-    const facts = isRecord(request.facts) ? request.facts.publication : undefined;
-    if (request.stage === "commit" && isRecord(facts) && facts.kind === "session-native-binding") {
-      throw new Error("injected context cut failure");
-    }
-    callback(request, grant);
-  });
-  try {
+  {
+    using _ = probe.admission(admission, (request, grant, callback) => {
+      const facts = isRecord(request.facts) ? request.facts.publication : undefined;
+      if (
+        request.stage === "commit" &&
+        isRecord(facts) &&
+        facts.kind === "session-native-binding"
+      ) {
+        throw new Error("injected context cut failure");
+      }
+      callback(request, grant);
+    });
     await expect(owner.run("rewind")).rejects.toThrow("injected context cut failure");
-  } finally {
-    fault.mockRestore();
   }
   expect(owner.read()).toEqual({
     entry: owner.before,

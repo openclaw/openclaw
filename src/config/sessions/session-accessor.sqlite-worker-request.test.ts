@@ -59,15 +59,10 @@ test("joins native exit before rejecting a Worker initialization error", async (
     completion: "exit",
     onCommitRequest,
     withWriteAdmission,
-  }).then(
-    () => {
-      events.push("resolved");
-    },
-    (error: unknown) => {
-      events.push("rejected");
-      return error;
-    },
-  );
+  }).catch((error: unknown) => {
+    events.push("rejected");
+    return error;
+  });
   try {
     const failure = await outcome;
     expect(observedError).toMatchObject({ message: "worker module initialization failed" });

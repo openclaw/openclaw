@@ -20,41 +20,33 @@ import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-t
 
 it("treats a streaming copy onto its source as a no-op without deleting any rows", () =>
   withOpenClawTestState({ label: "generation-self-copy" }, async (state) => {
-    const scope = {
-      agentId: "main",
-      env: state.env,
-      sessionKey: "agent:main:copy",
-      sessionId: "copy",
-    };
-    write(
-      (database) => {
-        appendTranscriptEventsInTransaction(database, scope, [
-          { type: "session", version: 3, id: scope.sessionId },
-          {
-            type: "message",
-            id: "message",
-            parentId: null,
-            message: { role: "user", content: "kept" },
-          },
-        ]);
-        const snapshot = () => ({
-          events: database.db.prepare("SELECT * FROM transcript_events ORDER BY seq").all(),
-          identities: database.db
-            .prepare("SELECT * FROM transcript_event_identities ORDER BY event_id")
-            .all(),
-        });
-        const before = snapshot();
-        expect(before.events).toHaveLength(2);
-        copyRows({
-          destination: database,
-          source: database,
-          sessionId: scope.sessionId,
-          sourceWindowPresent: true,
-        });
-        expect(snapshot()).toEqual(before);
-      },
-      { agentId: scope.agentId, env: scope.env },
-    );
+    const options = { agentId: "main", env: state.env };
+    const scope = { ...options, sessionKey: "agent:main:copy", sessionId: "copy" };
+    write((database) => {
+      appendTranscriptEventsInTransaction(database, scope, [
+        { type: "session", version: 3, id: scope.sessionId },
+        {
+          type: "message",
+          id: "message",
+          parentId: null,
+          message: { role: "user", content: "kept" },
+        },
+      ]);
+      const rows = (sql: string) => database.db.prepare(sql).all();
+      const snapshot = () => ({
+        events: rows("SELECT * FROM transcript_events ORDER BY seq"),
+        identities: rows("SELECT * FROM transcript_event_identities ORDER BY event_id"),
+      });
+      const before = snapshot();
+      expect(before.events).toHaveLength(2);
+      copyRows({
+        destination: database,
+        source: database,
+        sessionId: scope.sessionId,
+        sourceWindowPresent: true,
+      });
+      expect(snapshot()).toEqual(before);
+    }, options);
   }));
 
 it.each(["UTF-8", "UTF-16le"])(
@@ -78,12 +70,15 @@ it.each(["UTF-8", "UTF-16le"])(
       const destination = openOpenClawAgentDatabase(destinationOptions);
       const legacyJson = '{ "type": "legacy", "value": "retained exact whitespace" }';
       const compressedJson = JSON.stringify({ text: "retained 🦞 bytes ".repeat(256) });
-      const rowQuery = (database: typeof source) =>
-        getSessionKysely(database.db)
-          .selectFrom("trajectory_runtime_events")
-          .selectAll()
-          .where("session_id", "=", sessionId)
-          .orderBy("seq");
+      const readRows = (database: typeof source) =>
+        executeSqliteQuerySync(
+          database.db,
+          getSessionKysely(database.db)
+            .selectFrom("trajectory_runtime_events")
+            .selectAll()
+            .where("session_id", "=", sessionId)
+            .orderBy("seq"),
+        ).rows;
       for (const options of [sourceOptions, destinationOptions]) {
         write((database) => {
           appendTranscriptEventsInTransaction(
@@ -96,36 +91,37 @@ it.each(["UTF-8", "UTF-16le"])(
       write((database) => {
         const payload = prepareTrajectoryPayload(database.db, compressedJson);
         expect(payload.event_codec).not.toBeNull();
-        database.db
-          .prepare(
-            "INSERT INTO trajectory_runtime_events(session_id,seq,run_id,event_json,created_at) VALUES(?,0,'run',?,1)",
-          )
-          .run(sessionId, legacyJson);
+        const legacy = {
+          event_json: legacyJson,
+          event_payload: null,
+          event_codec: null,
+          event_utf8_bytes: null,
+        };
+        const metadata = { session_id: sessionId, run_id: "run" };
         executeSqliteQuerySync(
           database.db,
           getSessionKysely(database.db)
             .insertInto("trajectory_runtime_events")
-            .values({
-              session_id: sessionId,
-              seq: 1,
-              run_id: "run",
-              created_at: 2,
-              ...payload,
-            }),
+            .values([
+              { ...metadata, seq: 0, created_at: 1, ...legacy },
+              { ...metadata, seq: 1, created_at: 2, ...payload },
+            ]),
         );
       }, sourceOptions);
-      const before = executeSqliteQuerySync(source.db, rowQuery(source)).rows;
-      write((database) => {
-        copyRows({
-          destination: database,
-          sessionId,
-          source,
-          sourceWindowPresent: true,
-        });
-      }, destinationOptions);
-      const copied = executeSqliteQuerySync(destination.db, rowQuery(destination)).rows;
+      const before = readRows(source);
+      write(
+        (database) =>
+          copyRows({
+            destination: database,
+            sessionId,
+            source,
+            sourceWindowPresent: true,
+          }),
+        destinationOptions,
+      );
+      const copied = readRows(destination);
       expect(copied.map(readTrajectoryPayload)).toEqual([legacyJson, compressedJson]);
-      expect(executeSqliteQuerySync(source.db, rowQuery(source)).rows).toEqual(before);
+      expect(readRows(source)).toEqual(before);
       if (encoding === "UTF-8") {
         expect(copied).toEqual(before);
       } else {
