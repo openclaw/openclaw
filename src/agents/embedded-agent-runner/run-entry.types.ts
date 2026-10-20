@@ -38,6 +38,8 @@ export type ResolvedRunEntryModelSelection = {
 export type RunEntryCandidateOptions = {
   resolvedModelSelection?: ResolvedRunEntryModelSelection;
   modelFallbacksOverride?: string[];
+  /** Provenance of modelFallbacksOverride; caller-owned and hook chains carry none. */
+  modelFallbacksOverrideSource?: "configured";
   agentHarnessRuntimeOverride: string | undefined;
   assistantErrorTranscript: AssistantErrorTranscript;
   authProfileFailurePolicy?: AuthProfileFailurePolicy;
@@ -83,6 +85,8 @@ export type EmbeddedAgentRunEntryParams<T extends EmbeddedAgentRunResult> = {
     model: string;
     requestedRouteResolution?: ModelFallbackRouteResolution;
     fallbacksOverride?: string[];
+    /** Provenance for configured lists projected into an override. Omitted means absolute caller order. */
+    fallbacksOverrideSource?: "configured";
     agentDir?: string;
     userLockedAuthProfileId?: string;
   } & ModelManifestNormalizationContext;

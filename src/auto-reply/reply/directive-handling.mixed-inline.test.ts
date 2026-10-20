@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { prepareSharedAuthStoreOwnership } from "../../agents/auth-profiles/path-resolve.js";
@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { triggerSessionPatchHook } from "../../gateway/session-patch-hooks.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { submitSessionControllerInput } from "../../sessions/session-controller.mailbox.js";
 import {
   onSessionLifecycleEvent,
   type SessionLifecycleEvent,
@@ -23,6 +24,11 @@ import {
 import { routeReplyDirectivesForTest } from "./get-reply-directives-routing.test-support.js";
 import { resolveReplyExecOverrides } from "./get-reply-exec-overrides.js";
 import { refreshQueuedFollowupSession } from "./queue.js";
+import {
+  clearFollowupQueue,
+  getFollowupQueue,
+  refreshQueuedFollowupSession as refreshRealQueue,
+} from "./queue/state.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 async function routeDirectives(body: string, cfg: OpenClawConfig) {
@@ -118,6 +124,50 @@ describe("mixed inline directives", () => {
     unsubscribeLifecycle();
     vi.restoreAllMocks();
   });
+  it.each([
+    { directive: "/model openai/gpt-4o -s", policy: undefined },
+    { directive: "/think high", policy: "configured" as const },
+  ])(
+    "publishes $directive without retaining withdrawn fallback consent",
+    async ({ directive, policy }) => {
+      const sessionKey = "agent:main:dm:fallback-selection";
+      onTestFinished(() => void clearFollowupQueue(sessionKey));
+      const queue = getFollowupQueue(sessionKey, { mode: "followup" });
+      queue.lastRun = {
+        agentId: "main",
+        agentDir: "/tmp/agent",
+        sessionId: "session-1",
+        sessionKey,
+        sessionFile: "/tmp/session-1.jsonl",
+        workspaceDir: "/tmp/workspace",
+        config: {},
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+        modelOverrideSource: "user",
+        hasSessionModelOverride: true,
+        modelFallbackPolicy: "configured",
+        timeoutMs: 1000,
+        blockReplyBreak: "message_end",
+      };
+      // The refresh only reaches a mailbox with queued work; the next-turn default alone is not enough.
+      const waiting = { prompt: "waiting", enqueuedAt: 1, run: { ...queue.lastRun } };
+      const input = submitSessionControllerInput(queue.key, waiting, { mode: queue.mode });
+      input.payload = "ready";
+      input.phase = "waiting";
+      vi.mocked(refreshQueuedFollowupSession).mockImplementationOnce(refreshRealQueue);
+      const { result, sessionEntry } = await applyMixedDirectives({
+        body: `please reply ${directive}`,
+        sessionKey,
+        sessionEntry: createSessionEntry({ modelFallbackPolicy: "configured" }),
+        allowedModels: [{ provider: "openai", id: "gpt-4o", name: "GPT-4o" }],
+      });
+      expect(result.kind).toBe("continue");
+      expect(sessionEntry.modelFallbackPolicy).toBe(policy);
+      expect(queue.lastRun.modelFallbackPolicy).toBe(policy);
+      expect(waiting.run.modelFallbackPolicy).toBe(policy);
+    },
+  );
+
   it("continues mixed content with the selected route's context and thinking metadata", async () => {
     const selected: ModelCatalogEntry = {
       provider: "fixture-route",

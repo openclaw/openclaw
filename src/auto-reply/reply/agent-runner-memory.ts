@@ -63,7 +63,7 @@ import type {
   MemoryFlushResult,
   MemoryFlushRunParams,
 } from "./agent-runner-memory.types.js";
-import { buildRunEntrySelection } from "./agent-runner-run-params.js";
+import { buildCandidateChainParams, buildRunEntrySelection } from "./agent-runner-run-params.js";
 import {
   buildEmbeddedRunExecutionParams,
   buildModelResolveContext,
@@ -908,8 +908,7 @@ export async function runMemoryFlushIfNeeded(
           transcriptPrompt: "",
           extraSystemPrompt: flushSystemPrompt,
           isFinalFallbackAttempt: runOptions.isFinalFallbackAttempt,
-          resolvedModelSelection: runOptions.resolvedModelSelection,
-          modelFallbacksOverride: runOptions.modelFallbacksOverride,
+          ...buildCandidateChainParams(runOptions),
           bootstrapPromptWarningSignaturesSeen,
           bootstrapPromptWarningSignature: bootstrapPromptWarningSignaturesSeen.at(-1),
           abortSignal: deferredLifecycle.signal,

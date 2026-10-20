@@ -140,6 +140,14 @@ async function executeAgentTurnInternalLoop(
   ): void => {
     run.provider = err.provider;
     run.model = err.model;
+    // The next candidate cycle rebuilds fallback eligibility from the override
+    // status, its source, and the policy together; carrying only the policy
+    // would let a withdrawn opt-in keep the admitted default's configured
+    // chain, or a return to the default keep the pin's strictness.
+    run.hasSessionModelOverride = err.hasSessionModelOverride;
+    run.modelOverrideSource = err.modelOverrideSource;
+    run.modelFallbackPolicy = err.modelFallbackPolicy;
+    delete run.hasAutoFallbackProvenance;
     run.authProfileId = err.authProfileId;
     run.authProfileIdSource = err.authProfileId ? err.authProfileIdSource : undefined;
     run.autoFallbackPrimaryProbe = undefined;

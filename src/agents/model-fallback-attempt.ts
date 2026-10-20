@@ -577,6 +577,14 @@ export function hasDifferentLiveSessionRuntimeSelection(params: {
   );
 }
 
+/** Consent and harness-runtime changes return the switch to the outer retry owner. */
+export function liveSessionModelSwitchReturnsToOwner(params: {
+  error: LiveSessionModelSwitchError;
+  currentAgentHarnessRuntimeOverride?: string;
+}): boolean {
+  return params.error.modelFallbackPolicyChanged || hasDifferentLiveSessionRuntimeSelection(params);
+}
+
 export function throwFallbackFailureSummary(params: {
   attempts: FallbackAttempt[];
   candidates: ModelCandidate[];

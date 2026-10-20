@@ -448,8 +448,11 @@ export async function buildEmbeddedRunExecutionParams(params: {
   const embeddedContext = buildEmbeddedContextFromTemplate(params);
   const senderContext = buildTemplateSenderContext(params.sessionCtx);
   const config = params.run.config;
-  const { modelFallbackAvailability, fallbacksOverride: modelFallbacksOverride } =
-    resolveModelFallbackOptions(params.run);
+  const {
+    modelFallbackAvailability,
+    fallbacksOverride: modelFallbacksOverride,
+    fallbacksOverrideSource: modelFallbacksOverrideSource,
+  } = resolveModelFallbackOptions(params.run);
   let modelThinkingCapability: PreparedModelThinkingCapability | undefined;
   if (params.agentRuntime) {
     // Keep the lifecycle-owned catalog module lazy until this turn has a selected runtime.
@@ -508,7 +511,9 @@ export async function buildEmbeddedRunExecutionParams(params: {
     requestedRouteResolution: "resolved" as const,
     modelSelectionLocked: params.run.modelSelectionLocked,
     modelFallbackAvailability,
+    modelFallbackPolicy: params.run.modelFallbackPolicy,
     modelFallbacksOverride,
+    modelFallbacksOverrideSource,
     ...authProfile,
     thinkLevel: params.run.thinkLevel,
     thinkingExplicit: params.run.thinkingExplicit,

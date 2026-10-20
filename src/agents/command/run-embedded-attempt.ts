@@ -233,6 +233,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
     try {
       liveSwitchMediaTaskIds = getGeneratedMediaTaskIdsForSessionKey(sessionKey, sessionAgentId);
       const spawnedBy = normalizedSpawned.spawnedBy ?? sessionEntry?.spawnedBy;
+      const storedModelFallbackPolicy = sessionEntry?.modelFallbackPolicy;
       const effectiveFallbacksOverride = isModelSelectionLocked(sessionEntry)
         ? []
         : (params.opts.modelFallbacksOverride ??
@@ -243,6 +244,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
             hasSessionModelOverride:
               hasExplicitRunOverride || Boolean(storedProviderOverride || storedModelOverride),
             modelOverrideSource: hasExplicitRunOverride ? "user" : storedModelOverrideSource,
+            modelFallbackPolicy: hasExplicitRunOverride ? undefined : storedModelFallbackPolicy,
             subagentSpawnLineage: (sessionEntry?.spawnDepth ?? 0) > 0,
             hasAutoFallbackProvenance: hasExplicitRunOverride
               ? false
@@ -278,6 +280,8 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
           requestedRouteResolution: params.modelSelection.requestedRouteResolution,
           agentDir,
           fallbacksOverride: effectiveFallbacksOverride,
+          fallbacksOverrideSource:
+            params.opts.modelFallbacksOverride === undefined ? "configured" : undefined,
           userLockedAuthProfileId:
             resolveSessionAuthProfileOverrideSource(sessionEntryForAttempt) === "user"
               ? sessionEntryForAttempt?.authProfileOverride
@@ -464,6 +468,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
               ),
               configuredAuthProfileId,
               modelFallbacksOverride: runOptions.modelFallbacksOverride,
+              modelFallbacksOverrideSource: runOptions.modelFallbacksOverrideSource,
               originalProvider: provider,
               cfg,
               sessionEntry: attemptSessionEntry,
@@ -651,6 +656,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
               ? { kind: "set", runtime: err.agentRuntimeOverride }
               : { kind: "clear" },
           );
+          sessionEntry.modelFallbackPolicy = err.modelFallbackPolicy;
           sessionEntry.authProfileOverride = err.authProfileId;
           sessionEntry.authProfileOverrideSource = err.authProfileId
             ? err.authProfileIdSource

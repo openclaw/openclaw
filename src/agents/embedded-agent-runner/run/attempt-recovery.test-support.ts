@@ -51,6 +51,7 @@ export const outputLimitScenarios = [
 
 export type TransportDropScenario = {
   config?: OpenClawConfig;
+  modelFallbackPolicy?: "configured";
   assistant?: AssistantMessage;
   providerOwner?: PreparedProviderFailoverOwner;
   assistantTexts?: string[];
@@ -84,6 +85,7 @@ export type TransportDropScenario = {
   retryAvailable?: boolean;
   retryConnectionErrors?: boolean;
   replaySafe?: boolean;
+  canRestartForLiveSwitch?: boolean;
   fallbackConfigured?: boolean;
   providerRetryMaxDelayMs?: number;
   terminal?: Parameters<typeof makeEmbeddedRunnerAttempt>[0]["terminal"];
@@ -234,6 +236,7 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
       runInput: {
         runParams: {
           config: scenario.config ?? {},
+          modelFallbackPolicy: scenario.modelFallbackPolicy,
           agentId: "main",
           trigger: scenario.trigger,
           modelRun: scenario.modelRun,
@@ -282,7 +285,7 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
         attemptCompactionCount: 0,
         activeErrorContext: { provider, model: modelId },
         resolveReplayInvalidForAttempt: () => true,
-        canRestartForLiveSwitch: false,
+        canRestartForLiveSwitch: scenario.canRestartForLiveSwitch ?? false,
       },
       runtimePlan: { auth: {} },
       sessionPromptState: {

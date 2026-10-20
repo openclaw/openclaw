@@ -66,10 +66,7 @@ import {
   runCliAgent,
 } from "./run-execution.runtime.js";
 import type { CronRunExecutionParams } from "./run-execution.types.js";
-import {
-  prepareCronModelResolveInput,
-  resolveCronFallbacksOverride,
-} from "./run-fallback-policy.js";
+import { prepareCronModelResolveInput, resolveCronFallbackOptions } from "./run-fallback-policy.js";
 import { setCronSessionAgentHarnessId, setCronSessionRuntimeModel } from "./run-session-state.js";
 import { resolveThinkingSelection } from "./run.runtime.js";
 import type { CronCompletedPromptRun } from "./run.types.js";
@@ -95,15 +92,7 @@ export function createCronPromptExecutor(
   },
 ) {
   const trigger = params.trigger === "event" ? "event" : "cron";
-  const cronFallbacksOverride =
-    params.modelFallbacksOverride ??
-    resolveCronFallbacksOverride({
-      cfg: params.cfg,
-      job: params.job,
-      agentId: params.agentId,
-      useSubagentFallbacks: params.useSubagentFallbacks,
-      inheritDefaultFallbacksForAgentStringModel: params.inheritDefaultFallbacksForAgentStringModel,
-    });
+  const cronFallbacks = resolveCronFallbackOptions(params);
   const fastModeStartedAtMs = Date.now();
   const fastModeAutoProgressState: FastModeAutoProgressState = {
     offAnnounced: false,
@@ -265,7 +254,7 @@ export function createCronPromptExecutor(
           params.liveSelection.authProfileIdSource === "user"
             ? params.liveSelection.authProfileId
             : undefined,
-        fallbacksOverride: cronFallbacksOverride,
+        ...cronFallbacks,
       },
       identity: {
         runId,
@@ -647,7 +636,10 @@ export function createCronPromptExecutor(
           ).modelThinkingCapability,
           requestedRouteResolution: "resolved",
           modelFallbacksOverride: runOptions.modelFallbacksOverride,
+          modelFallbacksOverrideSource: runOptions.modelFallbacksOverrideSource,
           resolvedModelSelection: runOptions.resolvedModelSelection,
+          // Pairs the row's selection for live-switch comparison; cron lists stay job-owned.
+          modelFallbackPolicy: params.cronSession.sessionEntry.modelFallbackPolicy,
           authProfileId: binding?.profileId ?? params.liveSelection.authProfileId,
           ...(binding && inferenceAuthorization
             ? {

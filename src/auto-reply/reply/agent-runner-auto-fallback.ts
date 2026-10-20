@@ -55,6 +55,7 @@ export function resolveRunAfterAutoFallbackPrimaryProbeRecheck(params: {
       ? resolveSessionModelOverrideRouteResolution(params.entry)
       : params.run.requestedRouteResolution,
     autoFallbackPrimaryProbe: undefined,
+    modelFallbackPolicy: entryRef ? params.entry.modelFallbackPolicy : undefined,
   };
   if (entryRef) {
     fallbackRun.hasSessionModelOverride = true;

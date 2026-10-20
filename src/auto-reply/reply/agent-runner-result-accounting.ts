@@ -520,6 +520,7 @@ export async function accountFollowupTurn(params: {
       nextModel: accounting.sessionModel.model,
       nextModelOverrideSource:
         entry?.modelOverrideSource === "default" ? undefined : entry?.modelOverrideSource,
+      nextModelFallbackPolicy: entry?.modelFallbackPolicy,
       nextAuthProfileId: entry?.authProfileOverride,
       nextAuthProfileIdSource: resolveCollapsedSessionAuthPinSource(entry),
     });

@@ -121,6 +121,9 @@ it("strips duplicated provider prefixes from persisted overrides", async () => {
   ).toEqual({
     provider: "openai",
     model: "gpt-5.4",
+    hasSessionModelOverride: true,
+    modelOverrideSource: undefined,
+    modelFallbackPolicy: undefined,
     authProfileId: undefined,
     authProfileIdSource: undefined,
   });
@@ -161,6 +164,79 @@ it("returns undefined when sessionKey is missing", async () => {
   expect(
     await mod.shouldSwitchToLiveModel(makeShouldSwitchParams({ sessionKey: undefined })),
   ).toBeUndefined();
+});
+
+it.each([undefined, "configured"] as const)(
+  "carries persisted fallback policy %s through a live route switch",
+  async (modelFallbackPolicy) => {
+    const selection = await resolvePendingSelection({
+      providerOverride: "openai",
+      modelOverride: "gpt-5.4",
+      modelFallbackPolicy,
+    });
+    if (!selection) {
+      throw new Error("Expected a pending live model selection");
+    }
+    const error = new mod.LiveSessionModelSwitchError(selection);
+    expect(error.modelFallbackPolicy).toBe(modelFallbackPolicy);
+  },
+);
+
+it.each([
+  {
+    name: "a user pin",
+    entry: { providerOverride: "openai", modelOverride: "gpt-5.4", modelOverrideSource: "user" },
+    hasSessionModelOverride: true,
+    modelOverrideSource: "user",
+  },
+  {
+    name: "an automatic selection",
+    entry: { providerOverride: "openai", modelOverride: "gpt-5.4", modelOverrideSource: "auto" },
+    hasSessionModelOverride: true,
+    modelOverrideSource: "auto",
+  },
+  {
+    name: "an explicit return to the default",
+    entry: { modelOverrideSource: "default", modelProvider: "openai", model: "gpt-5.4" },
+    hasSessionModelOverride: false,
+    modelOverrideSource: undefined,
+  },
+  {
+    name: "the default",
+    entry: { modelProvider: "openai", model: "gpt-5.4" },
+    hasSessionModelOverride: false,
+    modelOverrideSource: undefined,
+  },
+])(
+  "carries the override status of $name through a live switch",
+  async ({ entry, hasSessionModelOverride, modelOverrideSource }) => {
+    // The retry owner rebuilds fallback eligibility from these fields, not the policy alone.
+    const selection = await resolvePendingSelection(entry);
+    expect(selection).toMatchObject({
+      provider: "openai",
+      model: "gpt-5.4",
+      hasSessionModelOverride,
+      modelOverrideSource,
+    });
+    if (!selection) {
+      throw new Error("Expected a pending live model selection");
+    }
+    const error = new mod.LiveSessionModelSwitchError(selection);
+    expect(error.hasSessionModelOverride).toBe(hasSessionModelOverride);
+    expect(error.modelOverrideSource).toBe(modelOverrideSource);
+  },
+);
+
+it.each([
+  { current: "configured" as const, next: undefined },
+  { current: undefined, next: "configured" as const },
+])("switches when only fallback policy changes to $next", async ({ current, next }) => {
+  const selection = await resolvePendingSelection(
+    { providerOverride: "anthropic", modelOverride: "claude-opus-4-6", modelFallbackPolicy: next },
+    { currentModelFallbackPolicy: current },
+  );
+  expect(selection).toMatchObject({ provider: "anthropic", model: "claude-opus-4-6" });
+  expect(selection?.modelFallbackPolicy).toBe(next);
 });
 it.each([
   ["different model", true, "anthropic", "claude-opus-4-6"],
@@ -210,6 +286,7 @@ describe.each(["already-applied", "accepted"] as const)(
     it.each([
       { field: "provider", newer: { providerOverride: "other-provider" } },
       { field: "model", newer: { modelOverride: "gpt-5.5" } },
+      { field: "fallback policy", newer: { modelFallbackPolicy: "configured" } },
       { field: "runtime", newer: { agentRuntimeOverride: "codex" } },
       { field: "auth profile", newer: { authProfileOverride: "profile-b" } },
       { field: "auth source", newer: { authProfileOverrideSource: "auto" } },

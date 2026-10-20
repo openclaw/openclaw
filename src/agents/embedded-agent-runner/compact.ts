@@ -158,19 +158,26 @@ export async function compactNativeCliSession(params: {
   };
 }
 
-function resolveCompactionFallbacksOverride(
-  params: CompactEmbeddedAgentSessionParams,
-): string[] | undefined {
+function resolveCompactionFallbackOptions(params: CompactEmbeddedAgentSessionParams): {
+  fallbacksOverride: string[] | undefined;
+  fallbacksOverrideSource?: "configured";
+} {
   if (params.modelSelectionLocked) {
-    return [];
+    return { fallbacksOverride: [] };
   }
-  return (
-    params.modelFallbacksOverride ??
-    resolveRunModelFallbacksOverride({
+  if (params.modelFallbacksOverride !== undefined) {
+    return {
+      fallbacksOverride: params.modelFallbacksOverride,
+      fallbacksOverrideSource: params.modelFallbacksOverrideSource,
+    };
+  }
+  return {
+    fallbacksOverride: resolveRunModelFallbacksOverride({
       cfg: params.config,
       sessionKey: params.sessionKey,
-    })
-  );
+    }),
+    fallbacksOverrideSource: "configured",
+  };
 }
 
 /**
@@ -320,9 +327,9 @@ export async function compactEmbeddedAgentSessionDirect(
               provider: selected.provider,
               model: selected.modelId,
               requestedRouteResolution: "resolved",
-              fallbacksOverride: seedCompaction
-                ? []
-                : resolveCompactionFallbacksOverride({ ...requestedParams, config }),
+              ...(seedCompaction
+                ? { fallbacksOverride: [] }
+                : resolveCompactionFallbackOptions({ ...requestedParams, config })),
             });
             return [
               {
@@ -384,7 +391,7 @@ export async function compactEmbeddedAgentSessionDirect(
           seedCompaction ||
           params.config?.agents?.defaults?.compaction?.model?.trim() ||
           (
-            resolveCompactionFallbacksOverride(params) ??
+            resolveCompactionFallbackOptions(params).fallbacksOverride ??
             resolveAgentModelFallbackValues(params.config?.agents?.defaults?.model)
           ).length === 0
         ) {
@@ -410,7 +417,7 @@ export async function compactEmbeddedAgentSessionDirect(
         const primaryAuthProviders = new Set(
           [primaryProvider, requestedPrimaryProvider].map(resolveAuthProvider),
         );
-        const fallbacksOverride = resolveCompactionFallbacksOverride(params);
+        const fallbackOptions = resolveCompactionFallbackOptions(params);
         const fallbackAgentId = resolveSessionAgentIds({
           sessionKey: params.sandboxSessionKey ?? params.sessionKey,
           config: params.config,
@@ -423,7 +430,7 @@ export async function compactEmbeddedAgentSessionDirect(
           provider: primaryProvider,
           model: primaryModel,
           requestedRouteResolution: "resolved" as const,
-          fallbacksOverride,
+          ...fallbackOptions,
         };
         const resolvedPrimaryCandidate = resolveModelCandidateChain(fallbackContext)[0];
         const fallbackSessionKey =

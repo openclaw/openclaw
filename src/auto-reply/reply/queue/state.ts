@@ -190,6 +190,7 @@ export function refreshQueuedFollowupSession(params: {
   nextModel?: string;
   nextRouteResolution?: ModelFallbackRouteResolution;
   nextModelOverrideSource?: "auto" | "user";
+  nextModelFallbackPolicy?: "configured";
   nextAuthProfileId?: string;
   nextAuthProfileIdSource?: "auto" | "user";
   nextThinking?: {
@@ -208,7 +209,9 @@ export function refreshQueuedFollowupSession(params: {
     params.previousSessionId !== params.nextSessionId;
   const hasNextModelRoute = params.nextProvider !== undefined || params.nextModel !== undefined;
   const shouldRewriteModelSelection =
-    hasNextModelRoute || Object.hasOwn(params, "nextModelOverrideSource");
+    hasNextModelRoute ||
+    Object.hasOwn(params, "nextModelOverrideSource") ||
+    Object.hasOwn(params, "nextModelFallbackPolicy");
   const shouldRewriteSelection =
     shouldRewriteModelSelection ||
     Object.hasOwn(params, "nextAuthProfileId") ||
@@ -244,6 +247,12 @@ export function refreshQueuedFollowupSession(params: {
         run.hasSessionModelOverride =
           params.nextModelOverrideSource !== undefined && Boolean(run.provider || run.model);
         run.modelOverrideSource = params.nextModelOverrideSource;
+      }
+      // Fallback consent belongs to the selection; a route rewrite without it withdraws consent.
+      if (Object.hasOwn(params, "nextModelFallbackPolicy")) {
+        run.modelFallbackPolicy = params.nextModelFallbackPolicy;
+      } else if (hasNextModelRoute) {
+        delete run.modelFallbackPolicy;
       }
       if (Object.hasOwn(params, "nextAuthProfileId")) {
         run.authProfileId = normalizeOptionalString(params.nextAuthProfileId);

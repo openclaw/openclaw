@@ -55,5 +55,7 @@ export function repairRetiredSessionModelRef(
     preserveAuthProfileOverride:
       decision.kind === "replace" || replacement.slice(0, slash) === decision.provider,
     selectionSource: entry.modelOverrideSource === "auto" ? "auto" : "user",
+    // A retired model's successor keeps the session preference; a clear drops it.
+    modelFallbackPolicy: entry.modelFallbackPolicy,
   }).updated;
 }

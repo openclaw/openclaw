@@ -231,6 +231,49 @@ describe("refreshQueuedFollowupSession", () => {
     });
   });
 
+  it.each([
+    {
+      name: "a route rewrite without policy withdraws",
+      patch: { nextProvider: "openai", nextModel: "gpt-4o", nextModelOverrideSource: "user" },
+      expected: undefined,
+    },
+    {
+      name: "a route rewrite with policy keeps",
+      patch: {
+        nextProvider: "openai",
+        nextModel: "gpt-4o",
+        nextModelOverrideSource: "user",
+        nextModelFallbackPolicy: "configured",
+      },
+      expected: "configured",
+    },
+    {
+      name: "a thinking-only refresh keeps",
+      patch: { nextThinking: { level: "low" } },
+      expected: "configured",
+    },
+    {
+      name: "a session rotation keeps",
+      patch: { previousSessionId: "session-1", nextSessionId: "session-2" },
+      expected: "configured",
+    },
+  ] as const)("$name queued fallback consent", ({ patch, expected }) => {
+    const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
+    const run: FollowupRun["run"] = {
+      ...makeRun(),
+      hasSessionModelOverride: true,
+      modelOverrideSource: "user",
+      modelFallbackPolicy: "configured",
+    };
+    queue.lastRun = { ...run };
+    addSources(queue, makeSource(run));
+
+    refresh(patch);
+
+    expect(run.modelFallbackPolicy).toBe(expected);
+    expect(queue.lastRun?.modelFallbackPolicy).toBe(expected);
+  });
+
   it("clears queued model override strictness when retargeting to the configured default", () => {
     const run = retarget(
       { hasSessionModelOverride: true, modelOverrideSource: "user" },

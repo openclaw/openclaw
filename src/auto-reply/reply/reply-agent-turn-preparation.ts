@@ -215,6 +215,7 @@ export async function prepareReplyAgentTurn<TConfigured>(
                 : undefined,
               hasSessionModelOverride: selected.hasSessionModelOverride,
               modelOverrideSource: selected.modelOverrideSource,
+              modelFallbackPolicy: selected.modelFallbackPolicy,
               authProfileId: selected.authProfileId,
               authProfileIdSource: selected.authProfileIdSource,
               thinkLevel: selected.thinkLevel,

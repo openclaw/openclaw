@@ -52,6 +52,7 @@ export type SessionEntryBookkeepingReducer =
           | "agentHarnessId"
           | "providerOverride"
           | "modelOverride"
+          | "modelFallbackPolicy"
           | "agentRuntimeOverride"
           | "authProfileOverride"
           | "authProfileOverrideSource"

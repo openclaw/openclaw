@@ -592,6 +592,7 @@ export function resolveModelFallbackAvailability(params: {
   sessionKey?: string | null;
   hasSessionModelOverride: boolean;
   modelOverrideSource?: "auto" | "user";
+  modelFallbackPolicy?: "configured";
   hasAutoFallbackProvenance?: boolean;
   modelSelectionLocked?: boolean;
   modelFallbacksOverride?: string[];
@@ -604,7 +605,10 @@ export function resolveModelFallbackAvailability(params: {
   if (params.modelFallbacksOverride !== undefined) {
     return modelFallbackAvailabilityFromModels(params.modelFallbacksOverride, "explicit");
   }
+  // A session preference can opt into the configured ladder. Unmarked user pins
+  // remain strict; runtime-created overrides retain their existing behavior.
   const canUseConfiguredFallbacks =
+    params.modelFallbackPolicy === "configured" ||
     params.modelOverrideSource === "auto" ||
     (params.modelOverrideSource === undefined && params.hasAutoFallbackProvenance === true);
   if (params.hasSessionModelOverride && !canUseConfiguredFallbacks) {
@@ -635,6 +639,7 @@ export function resolveEffectiveModelFallbacks(params: {
   sessionKey?: string | null;
   hasSessionModelOverride: boolean;
   modelOverrideSource?: "auto" | "user";
+  modelFallbackPolicy?: "configured";
   hasAutoFallbackProvenance?: boolean;
   subagentSpawnLineage?: boolean;
 }): string[] | undefined {

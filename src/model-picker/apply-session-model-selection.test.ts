@@ -1,13 +1,18 @@
-import { beforeAll, expect, it, vi } from "vitest";
+import { beforeAll, expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { prepareSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { loadProviderScopedThinkingCatalog } from "../agents/model-catalog.runtime.js";
-import { clearFollowupQueue, getFollowupQueue } from "../auto-reply/reply/queue/state.js";
+import {
+  clearFollowupQueue,
+  getFollowupQueue,
+  refreshQueuedFollowupSession,
+} from "../auto-reply/reply/queue/state.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { projectSessionsPatchEntry } from "../gateway/sessions-patch.js";
+import { submitSessionControllerInput } from "../sessions/session-controller.mailbox.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import {
   createModelSelectionInputs,
@@ -42,6 +47,41 @@ function createRequest(
 }
 
 beforeAll(() => prepareSharedAuthStoreOwnership());
+
+it("clears queued fallback policy when the model picker selects a strict route", async () => {
+  const sessionKey = "agent:main:dm:picker-fallback-policy";
+  onTestFinished(() => void clearFollowupQueue(sessionKey));
+  const queue = getFollowupQueue(sessionKey, { mode: "followup" });
+  queue.lastRun = {
+    agentId: "main",
+    agentDir: "/tmp/agent",
+    sessionId: "session-1",
+    sessionKey,
+    sessionFile: "/tmp/session-1.jsonl",
+    workspaceDir: "/tmp/workspace",
+    config: {},
+    provider: "anthropic",
+    model: "claude-opus-4-6",
+    modelOverrideSource: "user",
+    hasSessionModelOverride: true,
+    modelFallbackPolicy: "configured",
+    timeoutMs: 1000,
+    blockReplyBreak: "message_end",
+  };
+  // The refresh only reaches a mailbox with queued work; the next-turn default alone is not enough.
+  const waiting = { prompt: "waiting", enqueuedAt: 1, run: { ...queue.lastRun } };
+  const input = submitSessionControllerInput(queue.key, waiting, { mode: queue.mode });
+  input.payload = "ready";
+  input.phase = "waiting";
+  effects.refreshQueuedFollowupSession.mockImplementationOnce(refreshQueuedFollowupSession);
+  const sessionEntry = createEntry({ modelFallbackPolicy: "configured" });
+  const result = await applySessionModelSelection(createParams({ sessionKey, sessionEntry }));
+  expect(result.status).toBe("applied");
+  expect(sessionEntry.modelFallbackPolicy).toBeUndefined();
+  expect(queue.lastRun.model).toBe("gpt-4o");
+  expect(queue.lastRun.modelFallbackPolicy).toBeUndefined();
+  expect(waiting.run).toMatchObject({ model: "gpt-4o", modelFallbackPolicy: undefined });
+});
 
 it.each([false, true])("uses configured default only with reset intent=%s", async (reset) => {
   const modelCatalog = [

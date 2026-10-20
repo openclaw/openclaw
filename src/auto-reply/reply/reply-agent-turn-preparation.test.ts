@@ -643,6 +643,27 @@ describe("prepareReplyAgentTurn", () => {
     expect(queued.run.model).toBe("next-turn-model");
   });
 
+  it.each([
+    { before: "configured" as const, after: undefined },
+    { before: undefined, after: "configured" as const },
+  ])("captures fallback policy $after at the admission fence", async ({ before, after }) => {
+    const queued = createRun();
+    queued.run.modelFallbackPolicy = before;
+    state.admitReply.mockImplementationOnce(async ({ captureRunSelection }) => {
+      await Promise.resolve();
+      queued.run.modelFallbackPolicy = after;
+      captureRunSelection();
+      // A later preference edit must not rewrite the admitted turn's captured choice.
+      queued.run.modelFallbackPolicy = before;
+      return { status: "owned", operation: createOperation() };
+    });
+    const result = await prepareReplyAgentTurn({ queued, defaults: createDefaults() });
+    expect(result.kind).toBe("admitted");
+    if (result.kind === "admitted") {
+      expect(result.turn.queued.run.modelFallbackPolicy).toBe(after);
+    }
+  });
+
   it("clears queued generation facts when only the lifecycle revision advances", async () => {
     const operation = createOperation();
     const queuedEntry: SessionEntry = {

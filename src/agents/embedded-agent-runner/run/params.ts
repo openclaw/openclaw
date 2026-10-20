@@ -158,8 +158,12 @@ export type RunEmbeddedAgentParams = Pick<
   modelThinkingCapability?: PreparedModelThinkingCapability;
   /** Effective model fallback chain for this session attempt. Undefined uses config defaults. */
   modelFallbacksOverride?: string[];
+  /** Internal provenance: a configured projection remains eligible for peer priority. */
+  modelFallbacksOverrideSource?: "configured";
   /** Prepared fallback availability fact shared by selection and failure reporting. */
   modelFallbackAvailability?: ModelFallbackAvailability;
+  /** Admitted selection policy, paired with the route for live-switch comparison. */
+  modelFallbackPolicy?: "configured";
   /** Session-pinned embedded harness id. Prevents runtime hot-switching. */
   agentHarnessId?: string;
   /** Explicit runtime override selected for this turn. Unlike agentHarnessId, this may force OpenClaw. */
@@ -325,6 +329,7 @@ export type EmbeddedForegroundPromptContext = Pick<
   | "scheduledToolPolicy"
   | "modelThinkingCapability"
   | "modelFallbacksOverride"
+  | "modelFallbacksOverrideSource"
 > &
   AgentRunMessageContext &
   AgentRunChannelContext & {

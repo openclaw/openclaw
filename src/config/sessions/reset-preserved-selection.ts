@@ -8,6 +8,7 @@ type ResetPreservedSelectionState = Pick<
   | "providerOverride"
   | "modelOverride"
   | "modelOverrideSource"
+  | "modelFallbackPolicy"
   | "modelOverrideRouteResolution"
   | "agentRuntimeOverride"
   | "authProfileOverride"
@@ -48,6 +49,9 @@ export function resolveResetPreservedSelection(params: {
     preserved.modelOverrideSource = "user";
     if (entry.agentRuntimeOverride !== undefined) {
       preserved.agentRuntimeOverride = entry.agentRuntimeOverride;
+    }
+    if (entry.modelFallbackPolicy === "configured") {
+      preserved.modelFallbackPolicy = "configured";
     }
     if (entry.modelOverrideRouteResolution) {
       preserved.modelOverrideRouteResolution = entry.modelOverrideRouteResolution;
