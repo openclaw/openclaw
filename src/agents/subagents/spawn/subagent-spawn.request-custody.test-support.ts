@@ -9,6 +9,7 @@ import { captureExecRequestCancellation } from "../../bash-process-control.js";
 import { killSubagentRunAdmin } from "../registry/subagent-control-kill.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
+import { collectFailure } from "./subagent-spawn.fixtures.test-support.js";
 import {
   createBoundSpawnInvocation,
   type RequestCustodySpawnCaseOptions,
@@ -20,20 +21,12 @@ import {
 } from "./subagent-spawn.request-custody-completed.test-support.js";
 
 export function registerRequestCustodySpawnCases(options: RequestCustodySpawnCaseOptions) {
-  const {
-    createBoundParent,
-    createBoundGateway,
-    closeBoundGateway,
-    throwBoundFailures,
-    parentSessionKey,
-    parentRunId,
-    assertNoModelExecution,
-  } = options;
+  const { parentSessionKey, parentRunId } = options;
   it.each(["exact", "session"] as const)(
     "stops a native child through retained original request custody after its routed turn completes (%s)",
     async (mode) => {
-      const bound = await createBoundParent();
-      const { runtime } = await createBoundGateway(bound);
+      const bound = await options.createBoundParent();
+      const { runtime } = await options.createBoundGateway(bound);
       const { original, owners, event } = await retainOriginalRequest(
         bound,
         "original-exec-request",
@@ -48,16 +41,14 @@ export function registerRequestCustodySpawnCases(options: RequestCustodySpawnCas
         runId: capacity,
         maxConcurrent: 1,
         activeRunIds: [],
-        start: async () => {
-          started.resolve();
-        },
+        start: async () => started.resolve(),
         onStartFailure: () => true,
       });
       await started.promise;
       let childRunId: string | undefined;
       let childSessionKey: string | undefined;
       const failures: unknown[] = [];
-      try {
+      await collectFailure(failures, async () => {
         const invoke = await withExecRequestTurn(
           {
             identity: {
@@ -104,25 +95,19 @@ export function registerRequestCustodySpawnCases(options: RequestCustodySpawnCas
           requesterTurnRunId: parentRunId,
           execution: { status: "terminal" },
         });
-        assertNoModelExecution();
+        options.assertNoModelExecution();
         expect(captureExecRequestCancellation(original).owners).toEqual([]);
         const historical = requireLastRespondCall(await stop("request-owner", true));
         expect(historical.slice(0, 2)).toEqual([true, { ok: true, aborted: false, runIds: [] }]);
-      } catch (error) {
-        failures.push(error);
-      } finally {
-        consumeSelectedSystemEventEntries(original.sessionKey, [event]);
-        if (childSessionKey) {
-          try {
-            await killSubagentRunAdmin({ cfg: bound.cfg, sessionKey: childSessionKey });
-          } catch (error) {
-            failures.push(error);
-          }
-        }
-        releaseSwarmRun(capacity);
-        failures.push(...(await closeBoundGateway(bound, runtime, childRunId)));
-        throwBoundFailures(failures);
+      });
+      consumeSelectedSystemEventEntries(original.sessionKey, [event]);
+      if (childSessionKey) {
+        const target = { cfg: bound.cfg, sessionKey: childSessionKey };
+        await collectFailure(failures, () => killSubagentRunAdmin(target));
       }
+      releaseSwarmRun(capacity);
+      failures.push(...(await options.closeBoundGateway(bound, runtime, childRunId)));
+      options.throwBoundFailures(failures);
     },
   );
 

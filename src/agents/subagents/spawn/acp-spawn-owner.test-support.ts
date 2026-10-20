@@ -13,15 +13,14 @@ export function registerAcpSpawnOwnerTests(fixture: {
   spawn: SpawnFn;
   state: { cfg: OpenClawConfig };
   registerSubagentRunMock: unknown;
-  readAcpResumeSessionOwnerMock: {
-    mockResolvedValue: (value: unknown) => unknown;
-  };
+  readAcpResumeSessionOwnerMock: { mockResolvedValue: (value: unknown) => unknown };
   expectAcceptedSpawn: (result: SpawnResult) => Extract<SpawnResult, { status: "accepted" }>;
   expectInitializeSessionFields: (expected: Record<string, unknown>) => Record<string, unknown>;
   createCrossAgentWorkspaceFixture: (options?: {
     createTargetWorkspace?: boolean;
   }) => Promise<{ workspaceRoot: string; mainWorkspace: string; targetWorkspace: string }>;
 }) {
+  const { spawn, expectAcceptedSpawn, expectInitializeSessionFields } = fixture;
   it.each([
     { agent: "codex", exists: true },
     { agent: "claude-code", exists: true },
@@ -32,35 +31,27 @@ export function registerAcpSpawnOwnerTests(fixture: {
     });
     const rawHarness = agent === "codex";
     const owner = rawHarness ? "main" : agent;
+    const cfg = fixture.state.cfg;
     try {
-      fixture.state.cfg.acp = {
-        ...fixture.state.cfg.acp,
-        allowedAgents: rawHarness ? [agent] : ["codex", agent],
-      };
-      fixture.state.cfg.agents = {
+      cfg.acp = { ...cfg.acp, allowedAgents: rawHarness ? [agent] : ["codex", agent] };
+      cfg.agents = {
         entries: {
           main: { workspace: workspace.mainWorkspace },
           ...(!rawHarness ? { [agent]: { workspace: workspace.targetWorkspace } } : {}),
         },
       };
-      const accepted = fixture.expectAcceptedSpawn(
-        await fixture.spawn({ agentId: agent, mode: "run" }),
-      );
-      expect(accepted.childSessionKey).toMatch(new RegExp(`^agent:${owner}:acp:`));
-      fixture.expectInitializeSessionFields({
+      const { childSessionKey } = expectAcceptedSpawn(await spawn({ agentId: agent, mode: "run" }));
+      expect(childSessionKey).toMatch(new RegExp(`^agent:${owner}:acp:`));
+      expectInitializeSessionFields({
         agentId: owner,
         agent,
         cwd: rawHarness ? workspace.mainWorkspace : exists ? workspace.targetWorkspace : undefined,
-        sessionKey: accepted.childSessionKey,
+        sessionKey: childSessionKey,
       });
       if (rawHarness) {
         expectRegisteredSubagentRun(
           fixture.registerSubagentRunMock,
-          {
-            childSessionKey: accepted.childSessionKey,
-            childAgentId: "main",
-            requesterAgentId: "main",
-          },
+          { childSessionKey, childAgentId: "main", requesterAgentId: "main" },
           { assertCurrent: undefined },
         );
       }
@@ -70,8 +61,9 @@ export function registerAcpSpawnOwnerTests(fixture: {
   });
 
   it("resumes through the configured ACP owner and backend", async () => {
-    fixture.state.cfg.agents = {
-      ...fixture.state.cfg.agents,
+    const cfg = fixture.state.cfg;
+    cfg.agents = {
+      ...cfg.agents,
       entries: {
         reviewer: { runtime: { type: "acp", acp: { agent: "codex", backend: "fallback" } } },
       },
@@ -81,20 +73,11 @@ export function registerAcpSpawnOwnerTests(fixture: {
       sessionKey: "agent:reviewer:acp:owned",
       entry: { sessionId: "sess-owned", updatedAt: 100, spawnedBy: "agent:main:main" },
     });
-    fixture.expectAcceptedSpawn(await fixture.spawn({ agentId: "reviewer", resumeSessionId }));
+    expectAcceptedSpawn(await spawn({ agentId: "reviewer", resumeSessionId }));
+    const expected = { agentId: "reviewer", backendId: "fallback", resumeSessionId };
     expect(fixture.readAcpResumeSessionOwnerMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "reviewer",
-        runtimeAgentId: "codex",
-        backendId: "fallback",
-        resumeSessionId,
-      }),
+      expect.objectContaining({ ...expected, runtimeAgentId: "codex" }),
     );
-    fixture.expectInitializeSessionFields({
-      agentId: "reviewer",
-      agent: "codex",
-      resumeSessionId,
-      backendId: "fallback",
-    });
+    expectInitializeSessionFields({ ...expected, agent: "codex" });
   });
 }

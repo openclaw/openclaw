@@ -14,10 +14,7 @@ import {
   type ReplyOperationRunState,
 } from "../../../auto-reply/reply/reply-operation-run-state.js";
 import { buildTestCtx } from "../../../auto-reply/reply/test-ctx.js";
-import {
-  loadSessionEntry,
-  replaceSessionEntry,
-} from "../../../config/sessions/session-accessor.js";
+import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import {
   canRequesterAbortChatRun,
   resolveChatAbortRequester,
@@ -69,6 +66,11 @@ import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "../registry/subagent-registry-publication.js";
 import { prepareSubagentRunsByRunIds } from "../registry/subagent-registry.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
+import {
+  collectFailure,
+  sessionReader,
+  visibleResult,
+} from "./subagent-spawn.fixtures.test-support.js";
 import {
   createBoundSpawnInvocation,
   recordSpawnBoundaryFinal,
@@ -131,6 +133,7 @@ export function createCustodyStop(
 }
 
 const watchedCommand = `node -e "require('fs').watch('.', () => {})"`;
+const foregroundCommand = () => ({ command: watchedCommand, yieldMs: 10, timeoutSeconds: 60 });
 function commandTool(params: Parameters<typeof createLazyExecTool>[0]) {
   return createLazyExecTool({
     host: "gateway",
@@ -151,14 +154,7 @@ function commandSession(result: { details?: unknown }, label: string) {
 }
 
 export function registerCompletedRequestCustodySpawnCases(options: RequestCustodySpawnCaseOptions) {
-  const {
-    createBoundParent,
-    createBoundGateway,
-    closeBoundGateway,
-    throwBoundFailures,
-    parentSessionKey,
-    parentRunId,
-  } = options;
+  const { parentSessionKey, parentRunId } = options;
   it.for([
     "retained-exact",
     "consumed-session",
@@ -169,8 +165,9 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
   ] as const)(
     "preserves routed native Stop authority and existing receipts (%s)",
     async (mode, { signal }) => {
-      const bound = await createBoundParent();
-      const { runtime } = await createBoundGateway(bound);
+      const bound = await options.createBoundParent();
+      const { runtime } = await options.createBoundGateway(bound);
+      const readSession = sessionReader(bound.storePath);
       const { original, owners, event } = await retainOriginalRequest(
         bound,
         "completed-child-original-request",
@@ -178,6 +175,18 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
         "Exec completed (original-command, code 0) :: Finish original request",
         "original-request-generation",
       );
+      const originalTarget = {
+        agentId: original.agentId,
+        sessionKey: original.sessionKey,
+        sessionId: original.sessionId,
+      };
+      const telegramContext = {
+        Provider: "telegram",
+        Surface: "telegram",
+        From: "telegram:request-owner",
+        To: "telegram:request-owner",
+        SessionKey: original.sessionKey,
+      };
       const commandReady = createDeferred<ProcessSession>();
       void commandReady.promise.catch(() => undefined);
       const completeModel = createDeferred();
@@ -248,15 +257,7 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
             scopeKey: sessionKey,
           });
           const result = await withEnvAsync({ OPENCLAW_EXEC_SHELL_SNAPSHOT: "0" }, () =>
-            exec.execute(
-              "completed-routed-child-command",
-              {
-                command: watchedCommand,
-                yieldMs: 10,
-                timeoutSeconds: 60,
-              },
-              run.abortSignal,
-            ),
+            exec.execute("completed-routed-child-command", foregroundCommand(), run.abortSignal),
           );
           const details = asOptionalRecord(result.details);
           expect(details?.status).toBe("running");
@@ -283,13 +284,7 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
             runId: run.runId,
             text: "Completed child result",
           });
-          return {
-            payloads: [{ text: "Completed child result" }],
-            meta: {
-              durationMs: 1,
-              terminalReply: { disposition: "visible", text: "Completed child result" },
-            },
-          };
+          return visibleResult("Completed child result");
         });
       options.runEmbeddedAgent.mockImplementationOnce(async (params) => {
         try {
@@ -300,7 +295,7 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
         }
       });
       const failures: unknown[] = [];
-      try {
+      await collectFailure(failures, async () => {
         const invoke = await withExecRequestTurn(
           {
             identity: {
@@ -401,11 +396,7 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
                 config: bound.cfg,
                 cwd: expectDefined(bound.cfg.agents?.defaults?.workspace, "fixture workspace"),
                 scopeKey: parentSessionKey,
-              }).execute("later-human-command", {
-                command: watchedCommand,
-                yieldMs: 10,
-                timeoutSeconds: 60,
-              });
+              }).execute("later-human-command", foregroundCommand());
               return commandSession(result, "later human command");
             }),
           );
@@ -426,11 +417,7 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
               },
             }),
             {
-              admittedTarget: {
-                agentId: original.agentId,
-                sessionKey: original.sessionKey,
-                sessionId: original.sessionId,
-              },
+              admittedTarget: originalTarget,
               assertCurrent,
               assertTargetCurrent: assertCurrent,
             },
@@ -447,9 +434,7 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
             owners: captureExecRequestCancellation(original).owners,
             sessionOrigin: {
               target: {
-                agentId: original.agentId,
-                sessionKey: original.sessionKey,
-                sessionId: original.sessionId,
+                ...originalTarget,
                 storePath: bound.storePath,
                 lifecycleRevision: "original-request-generation",
               },
@@ -534,20 +519,13 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
           expect(runningCommand.exited).toBe(false);
           expect(owners.every((owner) => !owner.signal.aborted)).toBe(true);
         } else if (mode === "consumed-command-handler") {
-          const entry = expectDefined(
-            loadSessionEntry({ storePath: bound.storePath, sessionKey: original.sessionKey }),
-            "original session",
-          );
+          const entry = expectDefined(readSession(original.sessionKey), "original session");
           const cfg = {
             ...bound.cfg,
             commands: { ...bound.cfg.commands, text: true, allowFrom: { "*": ["*"] } },
           };
           const params = buildCommandTestParams("/stop", cfg, {
-            Provider: "telegram",
-            Surface: "telegram",
-            From: "telegram:request-owner",
-            To: "telegram:request-owner",
-            SessionKey: original.sessionKey,
+            ...telegramContext,
             CommandTargetSessionKey: original.sessionKey,
           });
           const stopped = await handleStopCommand(
@@ -564,9 +542,7 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
             shouldContinue: false,
             reply: { text: "⚙️ Agent was aborted." },
           });
-          expect(
-            loadSessionEntry({ storePath: bound.storePath, sessionKey: original.sessionKey }),
-          ).toMatchObject({
+          expect(readSession(original.sessionKey)).toMatchObject({
             abortedLastRun: true,
             sessionId: original.sessionId,
             lifecycleRevision: "original-request-generation",
@@ -578,12 +554,8 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
               CommandBody: "/stop",
               RawBody: "/stop",
               CommandAuthorized: true,
-              Provider: "telegram",
-              Surface: "telegram",
-              SessionKey: original.sessionKey,
+              ...telegramContext,
               AgentId: original.agentId,
-              From: "telegram:request-owner",
-              To: "telegram:request-owner",
             }),
           });
           expect(stopped).toMatchObject({
@@ -629,43 +601,35 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
           expect(independent?.exited).toBe(false);
           expect(laterHuman?.exited).toBe(false);
         }
-      } catch (error) {
-        failures.push(error);
-      } finally {
-        completeModel.resolve();
-        releaseCleanup.resolve();
-        restorePreparation?.();
-        stopObserving();
-        consumeSelectedSystemEventEntries(original.sessionKey, [event]);
-        for (const ownedProcess of [command, independent, laterHuman]) {
-          if (!ownedProcess) {
-            continue;
-          }
-          try {
-            getProcessSupervisor().cancel(ownedProcess.id, "manual-cancel");
-            await waitForExecSession(ownedProcess);
-            deleteSession(ownedProcess.id);
-          } catch (error) {
-            failures.push(error);
-          }
+      });
+      completeModel.resolve();
+      releaseCleanup.resolve();
+      restorePreparation?.();
+      stopObserving();
+      consumeSelectedSystemEventEntries(original.sessionKey, [event]);
+      for (const ownedProcess of [command, independent, laterHuman]) {
+        if (!ownedProcess) {
+          continue;
         }
-        await activeStop?.catch((error: unknown) => {
-          if (!failures.includes(error)) {
-            failures.push(error);
-          }
+        await collectFailure(failures, async () => {
+          getProcessSupervisor().cancel(ownedProcess.id, "manual-cancel");
+          await waitForExecSession(ownedProcess);
+          deleteSession(ownedProcess.id);
         });
-        if (childSessionKey) {
-          try {
-            await killSubagentRunAdmin({ cfg: bound.cfg, sessionKey: childSessionKey });
-          } catch (error) {
-            failures.push(error);
-          }
-        }
-        failures.push(...(await closeBoundGateway(bound, runtime, childRunId)));
-        model.mockRestore();
-        restoreProcess?.();
-        throwBoundFailures(failures);
       }
+      await activeStop?.catch((error: unknown) => {
+        if (!failures.includes(error)) {
+          failures.push(error);
+        }
+      });
+      if (childSessionKey) {
+        const target = { cfg: bound.cfg, sessionKey: childSessionKey };
+        await collectFailure(failures, () => killSubagentRunAdmin(target));
+      }
+      failures.push(...(await options.closeBoundGateway(bound, runtime, childRunId)));
+      model.mockRestore();
+      restoreProcess?.();
+      options.throwBoundFailures(failures);
     },
   );
 }

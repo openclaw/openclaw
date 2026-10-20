@@ -1,4 +1,5 @@
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
@@ -21,11 +22,22 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-function seedDepth(
-  scope: Parameters<typeof replaceSessionEntry>[0],
-  entry: Omit<Parameters<typeof replaceSessionEntry>[1], "updatedAt">,
+async function depthStore(
+  entries: Array<[string, { spawnDepth?: number; spawnedBy?: string }, string?]>,
+  fixed = false,
 ) {
-  return replaceSessionEntry(scope, { ...entry, updatedAt: Date.now() });
+  const store = path.join(
+    tempDirs.make("subagent-depth-"),
+    fixed ? "sessions.sqlite" : "sessions-{agentId}.json",
+  );
+  for (const [sessionKey, fields, owner] of entries) {
+    const agentId = expectDefined(owner ?? sessionKey.split(":")[1], "fixture owner");
+    await replaceSessionEntry(
+      { agentId, sessionKey, storePath: store.replaceAll("{agentId}", agentId) },
+      { sessionId: sessionKey, updatedAt: Date.now(), ...fields },
+    );
+  }
+  return store;
 }
 
 describe("getSubagentDepthFromSessionStore", () => {
@@ -42,76 +54,46 @@ describe("getSubagentDepthFromSessionStore", () => {
   });
 
   it("ignores parentSessionKey threading when resolving spawn depth", () => {
-    // parentSessionKey is UI threading (dashboard auto-parenting, forks); only
-    // stored spawnDepth and spawnedBy lineage may contribute depth.
     const store = createSessionCapabilityLookup({
-      "agent:main:main": { sessionId: "root" },
-      "agent:main:dashboard:operator": {
-        sessionId: "operator",
-        spawnDepth: 0,
-        parentSessionKey: "agent:main:main",
-      },
-      "agent:main:dashboard:legacy": {
-        sessionId: "legacy",
-        parentSessionKey: "agent:main:main",
-      },
+      "agent:main:main": {},
+      "agent:main:dashboard:operator": { spawnDepth: 0, parentSessionKey: "agent:main:main" },
+      "agent:main:dashboard:legacy": { parentSessionKey: "agent:main:main" },
     });
     expect(getSubagentDepthFromSessionStore("agent:main:dashboard:operator", { store })).toBe(0);
     expect(getSubagentDepthFromSessionStore("agent:main:dashboard:legacy", { store })).toBe(0);
   });
 
   it("resolves prefixed store keys when caller key omits the agent prefix", async () => {
-    const tmpDir = tempDirs.make("openclaw-subagent-depth-");
-    const storeTemplate = path.join(tmpDir, "sessions-{agentId}.json");
-    const prefixedKey = "agent:main:subagent:flat";
-    const storePath = storeTemplate.replaceAll("{agentId}", "main");
-    await seedDepth(
-      { storePath, sessionKey: prefixedKey },
-      { sessionId: "subagent-flat", spawnDepth: 2 },
-    );
+    const store = await depthStore([["agent:main:subagent:flat", { spawnDepth: 2 }]]);
     expect(
       await getSubagentDepthFromSessionStoreInWorker("subagent:flat", {
-        cfg: { session: { store: storeTemplate } },
+        cfg: { session: { store } },
       }),
     ).toBe(2);
   });
 
   it("reads a bare fixed-store key through its persisted owner", async () => {
-    const tmpDir = tempDirs.make("openclaw-subagent-depth-shared-");
-    const storePath = path.join(tmpDir, "sessions.sqlite");
-    await seedDepth(
-      { agentId: "ops", storePath, sessionKey: "global" },
-      { sessionId: "global-session", spawnDepth: 2 },
-    );
+    const store = await depthStore([["global", { spawnDepth: 2 }, "ops"]], true);
     const cfg = {
       agents: {
         ownership: "explicit",
         defaults: { sessionStore: { agentId: "ops" } },
         entries: { ops: {}, research: {} },
       },
-      session: { scope: "global", store: storePath },
+      session: { scope: "global", store },
     } satisfies OpenClawConfig;
 
     expect(await getSubagentDepthFromSessionStoreInWorker("global", { cfg })).toBe(2);
   });
 
   it("resolves a cross-agent parent outside the supplied child store", async () => {
-    const tmpDir = tempDirs.make("openclaw-subagent-depth-cross-agent-");
-    const storeTemplate = path.join(tmpDir, "sessions-{agentId}.json");
     const parentKey = "agent:main:dashboard:parent";
-    await seedDepth(
-      {
-        agentId: "main",
-        storePath: storeTemplate.replaceAll("{agentId}", "main"),
-        sessionKey: parentKey,
-      },
-      { sessionId: "parent", spawnDepth: 2 },
-    );
+    const store = await depthStore([[parentKey, { spawnDepth: 2 }]]);
 
     const depth = await getSubagentDepthFromSessionStoreInWorker("agent:work:dashboard:child", {
-      cfg: { session: { store: storeTemplate } },
+      cfg: { session: { store } },
       store: createSessionCapabilityLookup({
-        "agent:work:dashboard:child": { sessionId: "child", spawnedBy: parentKey },
+        "agent:work:dashboard:child": { spawnedBy: parentKey },
       }),
     });
 
@@ -119,24 +101,21 @@ describe("getSubagentDepthFromSessionStore", () => {
   });
 
   it("keeps agent-scoped views separate for a fixed shared store", async () => {
-    const tmpDir = tempDirs.make("openclaw-subagent-depth-fixed-");
-    const storePath = path.join(tmpDir, "sessions.sqlite");
     const childKey = "agent:ops:dashboard:child";
     const parentKey = "agent:research:dashboard:parent";
-    await seedDepth(
-      { agentId: "ops", storePath, sessionKey: childKey },
-      { sessionId: "child", spawnedBy: parentKey },
-    );
-    await seedDepth(
-      { agentId: "research", storePath, sessionKey: parentKey },
-      { sessionId: "parent", spawnDepth: 2 },
+    const store = await depthStore(
+      [
+        [childKey, { spawnedBy: parentKey }],
+        [parentKey, { spawnDepth: 2 }],
+      ],
+      true,
     );
 
     expect(
       await getSubagentDepthFromSessionStoreInWorker(childKey, {
         cfg: {
           agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
-          session: { store: storePath },
+          session: { store },
         },
       }),
     ).toBe(3);
