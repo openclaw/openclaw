@@ -53,6 +53,14 @@ type ProcessRow = ProcessIdentity & {
   ticks: number;
   nice: number;
 };
+type RelaySample = Omit<ProcessRow, "state" | "rss" | "ticks" | "comm"> & {
+  lastState: string;
+  firstAtMs: number;
+  lastAtMs: number;
+  peakRss: number;
+  firstTicks: number;
+  lastTicks: number;
+};
 
 const processKey = (row: ProcessIdentity) => `${row.pid}:${row.startTimeTicks}`;
 const isRelay = (row: ProcessRow) =>
@@ -514,19 +522,18 @@ export default {
             throw new Error("Gateway has no PID");
           }
           gatewayPid = gateway.pid;
-          const readCalls = async () =>
-            (
-              (await (
-                await fetch(`${gateway.baseUrl}/qa/native-hook-pressure`, {
-                  headers: { Authorization: `Bearer ${gateway.token}` },
-                })
-              ).json()) as { calls: Array<{ denied: boolean }> }
-            ).calls;
-          const registry = (await (
-            await fetch(`${gateway.baseUrl}/qa/native-hook-pressure`, {
-              headers: { Authorization: `Bearer ${gateway.token}` },
-            })
-          ).json()) as { hasPolicy: boolean; pid: number; nodeVersion: string };
+          const readRegistry = async () =>
+            (await (
+              await fetch(`${gateway.baseUrl}/qa/native-hook-pressure`, {
+                headers: { Authorization: `Bearer ${gateway.token}` },
+              })
+            ).json()) as {
+              calls: Array<{ denied: boolean }>;
+              hasPolicy: boolean;
+              pid: number;
+              nodeVersion: string;
+            };
+          const registry = await readRegistry();
           expect(registry.hasPolicy).toBe(selection !== "none");
           expect(registry.pid).toBe(gateway.pid);
           const cpuTickRate = Number((await execFileAsync("getconf", ["CLK_TCK"])).stdout.trim());
@@ -554,27 +561,12 @@ export default {
               failedResponses: 0,
               unacknowledgedRetries: 0,
             };
-            const callsBefore = (await readCalls()).length;
+            const callsBefore = (await readRegistry()).calls.length;
             const monitoring = new AbortController();
             let peakRelays = 0;
             let peakRelayRss = 0;
             let peakTreeRss = 0;
-            const relayIdentities = new Set<string>();
-            const relaySamples = new Map<
-              string,
-              {
-                pid: number;
-                startTimeTicks: number;
-                argv: string[];
-                nice: number;
-                lastState: string;
-                firstAtMs: number;
-                lastAtMs: number;
-                peakRss: number;
-                firstTicks: number;
-                lastTicks: number;
-              }
-            >();
+            const relaySamples = new Map<string, RelaySample>();
             let gatewayFirstTicks: number | undefined;
             let gatewayLastTicks: number | undefined;
             const healthMs: number[] = [];
@@ -590,7 +582,6 @@ export default {
                 for (const relay of relays) {
                   const key = processKey(relay);
                   observedRelays.set(key, { pid: relay.pid, startTimeTicks: relay.startTimeTicks });
-                  relayIdentities.add(key);
                   const previous = relaySamples.get(key);
                   relaySamples.set(key, {
                     pid: relay.pid,
@@ -659,9 +650,7 @@ export default {
                 }
               }
             }
-            const processEvidence = {
-              hardware,
-              scenarioId: scenario.id,
+            const measurement = {
               selection,
               count,
               mode,
@@ -669,6 +658,16 @@ export default {
               peakRelays,
               peakRelayRss,
               peakTreeRss,
+              observedGatewayCpuMs:
+                gatewayFirstTicks === undefined || gatewayLastTicks === undefined
+                  ? undefined
+                  : ((gatewayLastTicks - gatewayFirstTicks) * 1000) / cpuTickRate,
+              healthErrors,
+            };
+            const processEvidence = {
+              ...measurement,
+              hardware,
+              scenarioId: scenario.id,
               sampledRelays: [...relaySamples.values()].map((sample) => ({
                 pid: sample.pid,
                 startTimeTicks: sample.startTimeTicks,
@@ -681,18 +680,13 @@ export default {
                 peakRss: sample.peakRss,
                 observedCpuMs: ((sample.lastTicks - sample.firstTicks) * 1000) / cpuTickRate,
               })),
-              observedGatewayCpuMs:
-                gatewayFirstTicks === undefined || gatewayLastTicks === undefined
-                  ? undefined
-                  : ((gatewayLastTicks - gatewayFirstTicks) * 1000) / cpuTickRate,
               healthMs,
-              healthErrors,
             };
             if (failures.length > 0) {
               console.log("NATIVE_HOOK_PRESSURE_FAILURE " + JSON.stringify(processEvidence));
               throw new AggregateError(failures, "native hook pressure scenario failed");
             }
-            const calls = (await readCalls()).slice(callsBefore);
+            const calls = (await readRegistry()).calls.slice(callsBefore);
             const expectedCalls = selection === "matched" ? count : 0;
             let failureDetails: string | undefined;
             if (calls.length !== expectedCalls) {
@@ -702,11 +696,7 @@ export default {
                 tools: [...wireTools.values()].map(({ name, type }) => ({ name, type })),
                 peakRelays,
                 processEvidence,
-                registry: await (
-                  await fetch(`${gateway.baseUrl}/qa/native-hook-pressure`, {
-                    headers: { Authorization: `Bearer ${gateway.token}` },
-                  })
-                ).json(),
+                registry: await readRegistry(),
                 logs: gateway.logs(),
               });
             }
@@ -799,33 +789,22 @@ export default {
               .toEqual({ live: [], zombies: [] });
             healthMs.sort((a, b) => a - b);
             reports.push({
-              selection,
-              count,
-              mode,
+              ...measurement,
               binaries: binaryIdentities,
               syntheticPolicyDelayMs: 75,
               injectedResponseFailures: scenario.failedResponses,
               sampling:
                 "Non-atomic /proc snapshots; RSS can count shared pages; CPU omits work outside samples; elapsed windows are observation intervals, not process lifetimes.",
               // /proc sampling misses short-lived children and shares pages between RSS values.
-              sampledRelayWindows: [...relaySamples.values()].map((sample) => ({
-                observedWindowMs: sample.lastAtMs - sample.firstAtMs,
+              sampledRelayWindows: processEvidence.sampledRelays.map((sample) => ({
+                observedWindowMs: sample.observedWindowMs,
                 peakRss: sample.peakRss,
-                observedCpuMs: ((sample.lastTicks - sample.firstTicks) * 1000) / cpuTickRate,
+                observedCpuMs: sample.observedCpuMs,
               })),
-              observedGatewayCpuMs:
-                gatewayFirstTicks === undefined || gatewayLastTicks === undefined
-                  ? undefined
-                  : ((gatewayLastTicks - gatewayFirstTicks) * 1000) / cpuTickRate,
-              turnElapsedMs,
               policyCalls: calls.length,
               utilityRequests,
-              uniqueSampledRelayProcesses: relayIdentities.size,
-              peakRelays,
-              peakRelayRss,
-              peakTreeRss,
+              uniqueSampledRelayProcesses: relaySamples.size,
               healthSamples: healthMs.length,
-              healthErrors,
               healthMedianMs: healthMs[Math.floor(healthMs.length / 2)],
               healthP95Ms: healthMs[Math.floor(healthMs.length * 0.95)],
               healthMaxMs: healthMs.at(-1),

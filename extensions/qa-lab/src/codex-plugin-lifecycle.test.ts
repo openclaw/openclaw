@@ -1,4 +1,3 @@
-// Qa Lab tests cover codex plugin lifecycle plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -38,7 +37,7 @@ afterEach(async () => {
   await tempDirs.cleanup();
 });
 
-describe("codex plugin lifecycle: cold install", () => {
+describe("codex plugin lifecycle", () => {
   it("repairs a missing codex plugin before the retry succeeds without leaking to the API-key path", async () => {
     const { agentDir, agentId, stateDir } = await createAgentState("qa-codex-plugin-cold-");
     await removeCodexPluginFixture(agentDir);
@@ -49,9 +48,11 @@ describe("codex plugin lifecycle: cold install", () => {
       auth: await snapshotAuthProfiles(agentDir),
     });
 
-    expect(missing.status).toBe("repair-required");
-    expect(missing.remediation).toBe(CODEX_PLUGIN_LIFECYCLE_MESSAGES.missingPlugin);
-    expect(missing.selectedAuthProfileId).toBe(QA_CODEX_OAUTH_PROFILE_ID);
+    expect(missing).toMatchObject({
+      status: "repair-required",
+      remediation: CODEX_PLUGIN_LIFECYCLE_MESSAGES.missingPlugin,
+      selectedAuthProfileId: QA_CODEX_OAUTH_PROFILE_ID,
+    });
     expect(missing.selectedAuthProfileId).not.toBe(QA_OPENAI_API_KEY_PROFILE_ID);
 
     await installCodexPluginFixture(agentDir);
@@ -60,42 +61,28 @@ describe("codex plugin lifecycle: cold install", () => {
       auth: await snapshotAuthProfiles(agentDir),
     });
 
-    expect(repaired.status).toBe("ready");
+    expect(repaired).toMatchObject({ status: "ready", tokenRoute: "codex-oauth" });
     expect(repaired.remediation).toBeUndefined();
-    expect(repaired.tokenRoute).toBe("codex-oauth");
   });
-});
 
-describe("codex plugin lifecycle: OAuth-only with mixed profiles", () => {
   it("selects openai OAuth when openai API-key profiles are present", async () => {
     const { agentDir, agentId, stateDir } = await createAgentState("qa-codex-auth-mixed-");
     await seedAuthProfiles("mixed", { agentId, stateDir });
 
     const selection = resolveCodexAuthProfile(await snapshotAuthProfiles(agentDir));
 
-    expect(selection.status).toBe("ready");
-    if (selection.status !== "ready") {
-      throw new Error(selection.remediation);
-    }
-    expect(selection.profileId).toBe(QA_CODEX_OAUTH_PROFILE_ID);
-    expect(selection.profileId).not.toBe(QA_OPENAI_API_KEY_PROFILE_ID);
-    expect(selection.provider).toBe("openai");
-    expect(selection.mode).toBe("oauth");
+    expect(selection).toMatchObject({
+      status: "ready",
+      profileId: QA_CODEX_OAUTH_PROFILE_ID,
+      provider: "openai",
+      mode: "oauth",
+    });
+    expect(selection).not.toMatchObject({ profileId: QA_OPENAI_API_KEY_PROFILE_ID });
   });
-});
 
-describe("codex plugin lifecycle: doctor migration safety matrix", () => {
   it.each([
-    {
-      name: "oauth-only host",
-      profileShape: "oauth-only" as const,
-      config: {},
-    },
-    {
-      name: "mixed profile with no pin",
-      profileShape: "mixed" as const,
-      config: {},
-    },
+    { name: "oauth-only host", profileShape: "oauth-only" as const, config: {} },
+    { name: "mixed profile with no pin", profileShape: "mixed" as const, config: {} },
     {
       name: "mixed profile with defaults OpenClaw pin",
       profileShape: "mixed" as const,
@@ -122,10 +109,12 @@ describe("codex plugin lifecycle: doctor migration safety matrix", () => {
         doctorFix: true,
       });
 
-      expect(result.status).toBe("ready");
-      expect(result.selectedAuthProfileId).toBe(QA_CODEX_OAUTH_PROFILE_ID);
-      expect(result.tokenRoute).toBe("codex-oauth");
-      expect(result.removedRuntimePins).toEqual(expectedRemovedRuntimePins);
+      expect(result).toMatchObject({
+        status: "ready",
+        selectedAuthProfileId: QA_CODEX_OAUTH_PROFILE_ID,
+        tokenRoute: "codex-oauth",
+        removedRuntimePins: expectedRemovedRuntimePins,
+      });
     },
   );
 });

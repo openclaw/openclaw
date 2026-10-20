@@ -108,36 +108,27 @@ describe("Codex authenticated hook context product proof", () => {
     });
     await transport.waitReady({ gateway });
 
-    const outboundStartIndex = state
-      .getSnapshot()
-      .messages.filter((message) => message.direction === "outbound").length;
-    await transport.sendInbound({
-      accountId: "default",
-      conversation: CONVERSATION,
-      senderId: "ahmad",
-      senderName: "Ahmad",
-      text: `Preserve this authenticated sender while compacting. ${"context ".repeat(8_000)}`,
-    });
-    await transport.waitForOutbound({
-      conversation: CONVERSATION,
-      sinceIndex: outboundStartIndex,
-      timeoutMs: 120_000,
-    });
-    const secondOutboundIndex = state
-      .getSnapshot()
-      .messages.filter((message) => message.direction === "outbound").length;
-    await transport.sendInbound({
-      accountId: "default",
-      conversation: CONVERSATION,
-      senderId: "ahmad",
-      senderName: "Ahmad",
-      text: "Continue after preserving the authenticated sender.",
-    });
-    await transport.waitForOutbound({
-      conversation: CONVERSATION,
-      sinceIndex: secondOutboundIndex,
-      timeoutMs: 120_000,
-    });
+    async function sendTurn(text: string) {
+      const sinceIndex = state
+        .getSnapshot()
+        .messages.filter((message) => message.direction === "outbound").length;
+      await transport.sendInbound({
+        accountId: "default",
+        conversation: CONVERSATION,
+        senderId: "ahmad",
+        senderName: "Ahmad",
+        text,
+      });
+      await transport.waitForOutbound({
+        conversation: CONVERSATION,
+        sinceIndex,
+        timeoutMs: 120_000,
+      });
+    }
+    await sendTurn(
+      `Preserve this authenticated sender while compacting. ${"context ".repeat(8_000)}`,
+    );
+    await sendTurn("Continue after preserving the authenticated sender.");
 
     const response = await fetch(`${gateway.baseUrl}/qa/codex-hook-context-proof`, {
       headers: { Authorization: `Bearer ${gateway.token}` },
