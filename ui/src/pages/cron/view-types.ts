@@ -10,8 +10,6 @@ type OptionalViewProp =
   | "onRunMount";
 
 export type CronProps = Omit<CronViewProps, OptionalViewProp> &
-  Partial<Pick<CronViewProps, OptionalViewProp>> & {
-    runsSortBy?: "time" | "status";
-  };
+  Partial<Pick<CronViewProps, OptionalViewProp>>;
 
 export type CronPanelMode = "overview" | "create" | "job";

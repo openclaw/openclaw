@@ -33,7 +33,6 @@ type CronRunsRequestIdentity = {
   deliveryStatuses: CronDeliveryStatus[];
   query: string;
   sortDir: CronSortDir;
-  sortBy: "time" | "status";
   append: boolean;
   queued?: Deferred<CronRunsLoadStatus>;
 };
@@ -55,7 +54,6 @@ function matchesCronRunsView(state: CronState, request: CronRunsRequestIdentity)
     state.cronRunsLimit === request.limit &&
     state.cronRunsQuery.trim() === request.query &&
     state.cronRunsSortDir === request.sortDir &&
-    (state.cronRunsSortBy ?? "time") === request.sortBy &&
     state.cronRunsStatuses.length === request.statuses.length &&
     state.cronRunsStatuses.every((status, index) => status === request.statuses[index]) &&
     state.cronRunsDeliveryStatuses.length === request.deliveryStatuses.length &&
@@ -133,7 +131,6 @@ export async function loadCronRuns(
     deliveryStatuses: [...state.cronRunsDeliveryStatuses],
     query: state.cronRunsQuery.trim(),
     sortDir: state.cronRunsSortDir,
-    sortBy: state.cronRunsSortBy ?? "time",
     append,
   };
   activeCronRunsRequests.set(state, request);
@@ -157,7 +154,6 @@ export async function loadCronRuns(
       deliveryStatuses: request.deliveryStatuses.length > 0 ? request.deliveryStatuses : undefined,
       query: request.query || undefined,
       sortDir: request.sortDir,
-      sortBy: request.sortBy,
     });
     if (!ownsCronRunsRequest(state, request)) {
       return "skipped";
@@ -220,7 +216,6 @@ export function updateCronRunsFilter(
       | "cronRunsDeliveryStatuses"
       | "cronRunsQuery"
       | "cronRunsSortDir"
-      | "cronRunsSortBy"
     >
   >,
 ) {
@@ -238,7 +233,6 @@ export function updateCronRunsFilter(
     state.cronRunsQuery = patch.cronRunsQuery;
   }
   state.cronRunsSortDir = patch.cronRunsSortDir ?? state.cronRunsSortDir;
-  state.cronRunsSortBy = patch.cronRunsSortBy ?? state.cronRunsSortBy;
 }
 
 export function retireCronRunsRequest(state: CronState) {
