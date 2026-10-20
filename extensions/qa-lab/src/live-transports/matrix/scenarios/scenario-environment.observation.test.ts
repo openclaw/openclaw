@@ -1,27 +1,18 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mockMatrixQaHttp } from "../substrate/http.test-support.js";
 
-const buildMatrixQaConfig = vi.hoisted(() =>
-  vi.fn(() => ({ channels: { matrix: { execApprovals: { enabled: true } } } })),
-);
-const runMatrixQaCanary = vi.hoisted(() =>
-  vi.fn(async () => ({
-    driverEventId: "$canary-driver",
-    reply: { eventId: "$canary-reply" },
-    token: "MATRIX_QA_CANARY",
-  })),
-);
+const runMatrixQaCanary = vi.hoisted(() => vi.fn(async () => ({})));
 
-vi.mock("../substrate/config.js", () => ({ buildMatrixQaConfig }));
+vi.mock("../substrate/config.js", () => ({
+  buildMatrixQaConfig: () => ({ channels: { matrix: { execApprovals: { enabled: true } } } }),
+}));
 vi.mock("./scenario-runtime-room.js", () => ({ runMatrixQaCanary }));
 
 import { createMatrixQaScenarioEnvironment } from "./scenario-environment.js";
 import { createMatrixQaScenarioClient } from "./scenario-runtime-shared.js";
+import { matrixMessage, matrixSyncResponse } from "./scenario-runtime.test-support.js";
 
-afterEach(() => {
-  vi.useRealTimers();
-  vi.restoreAllMocks();
-});
+afterEach(() => vi.restoreAllMocks());
 
 describe("matrix scenario observation", () => {
   it("resets passive observers without acknowledging encrypted-device messages", async () => {
@@ -30,6 +21,7 @@ describe("matrix scenario observation", () => {
       { hash: "config-hash" },
       { appliedConfigHash: "config-hash", configRevisionHash: "config-hash", hash: "config-hash" },
     ];
+    const account = { accountId: "sut", connected: true, running: true };
     let configReadCount = 0;
     const gateway = {
       baseUrl: "http://127.0.0.1:12345",
@@ -44,20 +36,7 @@ describe("matrix scenario observation", () => {
           return { hash: "config-hash", changedPaths: [], noop: true, ok: true };
         }
         if (method === "channels.status") {
-          return {
-            channelAccounts: {
-              matrix: [
-                {
-                  accountId: "sut",
-                  connected: true,
-                  healthState: "healthy",
-                  lastStartAt: 100,
-                  restartPending: false,
-                  running: true,
-                },
-              ],
-            },
-          };
+          return { channelAccounts: { matrix: [account] } };
         }
         throw new Error(`unexpected gateway method ${method}`);
       }),
@@ -94,8 +73,6 @@ describe("matrix scenario observation", () => {
 
     const second = await environment.prepareFlow(input);
 
-    expect(second.scenarioContext.syncStreams.driver).not.toBe(staleObserver);
-    expect(second.scenarioContext.syncStreams.observer).not.toBe(staleObserver);
     expect(second.scenarioContext.timeoutMs).toBe(8_000);
     expect(input.waitForConfigRestartSettle).not.toHaveBeenCalled();
     expect(runMatrixQaCanary).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 60_000 }));
@@ -113,36 +90,21 @@ describe("matrix scenario observation", () => {
       if (url.searchParams.get("since") === `${token}-delivered`) {
         pending.delete(token);
       }
-      return Response.json({
-        next_batch: `${token}-delivered`,
-        to_device: { events: pending.get(token) ?? [] },
-        rooms: {
-          join: {
-            "!room:test": {
-              timeline: {
-                events: [
-                  {
-                    event_id: "$reply",
-                    sender: "@sut:test",
-                    type: "m.room.message",
-                    content: { body: "reply", msgtype: "m.text" },
-                  },
-                ],
-              },
-            },
-          },
-        },
-      });
+      return matrixSyncResponse(
+        "!room:test",
+        [matrixMessage("$reply", "reply", "@sut:test", "m.text")],
+        `${token}-delivered`,
+        { to_device: { events: pending.get(token) ?? [] } },
+      );
     };
     mockMatrixQaHttp(fetchImpl);
     for (const actorId of ["driver", "observer"] as const) {
+      expect(second.scenarioContext.syncStreams[actorId]).not.toBe(staleObserver);
       const accessToken = second.scenarioContext[`${actorId}AccessToken`];
       const client = createMatrixQaScenarioClient({
+        ...second.scenarioContext,
         accessToken,
         actorId,
-        baseUrl: second.scenarioContext.baseUrl,
-        observedEvents: second.scenarioContext.observedEvents,
-        syncStreams: second.scenarioContext.syncStreams,
       });
       await client.primeRoom();
       await client.waitForRoomEvent({

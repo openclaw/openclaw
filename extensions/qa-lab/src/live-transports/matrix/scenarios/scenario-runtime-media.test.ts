@@ -14,21 +14,19 @@ import type {
   MatrixQaScenarioContext,
 } from "./scenario-runtime-shared.js";
 
-describe("Matrix voice preflight reply matching", () => {
-  it("accepts punctuation differences in the transcribed marker", () => {
-    expect(
-      testing.hasMatrixQaVoicePreflightReply(
-        '📝 "C3PLQA reply with only these words Matrix QA voice pre-flight OK."',
-      ),
-    ).toBe(true);
-  });
+it("accepts punctuation differences in the voice preflight marker", () => {
+  expect(
+    testing.hasMatrixQaVoicePreflightReply(
+      '📝 "C3PLQA reply with only these words Matrix QA voice pre-flight OK."',
+    ),
+  ).toBe(true);
 });
 
 const roomId = "!media:matrix-qa.test";
 
 function createGeneratedImageContext(
   observedEvents: MatrixQaScenarioContext["observedEvents"] = [],
-): MatrixQaScenarioContext {
+) {
   return createMatrixQaE2eeTestContext({
     observedEvents,
     roomId,
@@ -38,16 +36,11 @@ function createGeneratedImageContext(
       defaultRoomKey: "media",
       rooms: [
         {
-          encrypted: false,
           key: "media",
           kind: "group",
-          memberRoles: ["driver", "observer", "sut"],
-          memberUserIds: [
-            "@driver:matrix-qa.test",
-            "@observer:matrix-qa.test",
-            "@sut:matrix-qa.test",
-          ],
-          name: "Matrix QA Media Room",
+          memberRoles: [],
+          memberUserIds: [],
+          name: "media",
           requireMention: true,
           roomId,
         },
@@ -55,6 +48,13 @@ function createGeneratedImageContext(
     },
   });
 }
+
+const eventBase = {
+  kind: "message" as const,
+  type: "m.room.message",
+  roomId,
+  sender: "@sut:matrix-qa.test",
+};
 
 function primeGeneratedImageClient(
   waitForOptionalRoomEvent: ReturnType<
@@ -70,21 +70,16 @@ function primeGeneratedImageClient(
 }
 
 describe("Matrix generated image delivery", () => {
-  afterEach(() => {
-    vi.clearAllMocks();
-  });
+  afterEach(() => vi.clearAllMocks());
 
   it("sends one trigger and accepts one fresh top-level image", async () => {
     const waitForOptionalRoomEvent = vi.fn(async ({ predicate }) => {
       const event = {
-        attachment: { filename: "generated.png", kind: "image" as const },
+        ...eventBase,
         eventId: "$generated-image",
-        kind: "message" as const,
+        attachment: { filename: "generated.png", kind: "image" as const },
         msgtype: "m.image",
         originServerTs: Date.now() + 1,
-        roomId,
-        sender: "@sut:matrix-qa.test",
-        type: "m.room.message",
       };
       expect(predicate(event)).toBe(true);
       return { event, matched: true as const, since: "next" };
@@ -101,17 +96,15 @@ describe("Matrix generated image delivery", () => {
 
   it("bounds timeout diagnostics to the last eight room events", async () => {
     const observedEvents = Array.from({ length: 10 }, (_, index) => ({
-      body: `event body ${index + 1}`,
+      ...eventBase,
       eventId: `$event-${index + 1}`,
-      kind: "message" as const,
-      roomId,
-      sender: "@sut:matrix-qa.test",
-      type: "m.room.message",
+      body: `event body ${index + 1}`,
     }));
     observedEvents.push({
-      ...observedEvents[0],
+      ...eventBase,
       eventId: "$other-room",
       roomId: "!other:matrix-qa.test",
+      body: "other room",
     });
     const sendTextMessage = primeGeneratedImageClient(
       vi.fn(async () => ({ matched: false as const, since: "next" })),
