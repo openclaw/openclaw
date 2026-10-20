@@ -15,6 +15,8 @@ export function registerCanaryMigrationPolicyTests({
   canaryStateOptions: (timeoutMs?: number) => Parameters<typeof validateUpdateCandidateCanary>[0];
   getChildEnv: () => NodeJS.ProcessEnv;
 }) {
+  const step = (name: string, exitCode: number | null) =>
+    expect.objectContaining({ name, exitCode });
   it.each([
     { migrationPolicy: "rehearse", startupMigration: false, expected: "ok" },
     { migrationPolicy: "startup-only", startupMigration: false, expected: "error" },
@@ -63,19 +65,14 @@ export function registerCanaryMigrationPolicyTests({
 
       expect(result, result.logTail.join("\n")).toMatchObject({ status: expected });
       expect(result.steps).toContainEqual(
-        expect.objectContaining({
-          name: "candidate-gateway-startup",
-          exitCode: expected === "ok" ? 0 : 1,
-        }),
+        step("candidate-gateway-startup", expected === "ok" ? 0 : 1),
       );
       if (migrationPolicy === "startup-only") {
         expect(inputAtBoot?.meta?.lastTouchedVersion).toBeUndefined();
         expect(inputAtBoot?.agents?.list?.map(({ id }) => id)).toEqual(["main"]);
         expect(inputAtBoot?.agents?.entries).toBeUndefined();
         expect(result.steps.some(({ name }) => name === "candidate-doctor")).toBe(false);
-        expect(result.steps).toContainEqual(
-          expect.objectContaining({ name: "candidate-recovery", exitCode: 0 }),
-        );
+        expect(result.steps).toContainEqual(step("candidate-recovery", 0));
       } else {
         expect(inputAtBoot?.meta?.lastTouchedVersion).toBe("2026.9.1");
       }
@@ -104,18 +101,14 @@ export function registerCanaryMigrationPolicyTests({
       });
       expect(result.candidateSchemaVersions).toBeUndefined();
       expect(result).not.toHaveProperty("checkpointContinuation");
-      if (migrationPolicy === "rehearse") {
-        expect(result.steps).toEqual([
-          expect.objectContaining({
-            name: "candidate-recovery",
-            exitCode: null,
-            stdoutTail: "This version uses the current updater to finish installation",
-          }),
-        ]);
-      } else {
-        expect(result.steps).toEqual([
-          expect.objectContaining({ name: "candidate-runtime", exitCode: 1 }),
-        ]);
+      const rehearsing = migrationPolicy === "rehearse";
+      expect(result.steps).toEqual([
+        step(rehearsing ? "candidate-recovery" : "candidate-runtime", rehearsing ? null : 1),
+      ]);
+      if (rehearsing) {
+        expect(result.steps[0]?.stdoutTail).toBe(
+          "This version uses the current updater to finish installation",
+        );
       }
       expect(onStep).toHaveBeenCalledWith(result.steps[0]);
       expect(mocks.snapshot).not.toHaveBeenCalled();

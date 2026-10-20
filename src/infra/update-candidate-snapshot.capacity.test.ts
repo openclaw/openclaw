@@ -31,7 +31,17 @@ async function fixture() {
       db.close();
     }
   }
-  return { root, stateDir, files };
+  const before = await databaseHashes(files);
+  const options = { config: {}, stateDir, candidateRoot: root, env: {} };
+  return {
+    root,
+    stateDir,
+    files,
+    assess: () => assessInitialUpdateSnapshotCapacity(options),
+    prepare: (config: OpenClawConfig = {}) =>
+      prepareUpdateCandidateRehearsal({ ...options, config }),
+    unchanged: async () => expect(await databaseHashes(files)).toEqual(before),
+  };
 }
 
 async function databaseHashes(files: string[]) {
@@ -55,28 +65,17 @@ function availableSpace(bytes: number) {
 
 it("admits one private generation and sequential scratch without reserving removed copies", async () => {
   const f = await fixture();
-  const before = await databaseHashes(f.files);
   availableSpace(100 * 1024 ** 2);
-  const result = await assessInitialUpdateSnapshotCapacity({
-    config: {},
-    stateDir: f.stateDir,
-    env: {},
-  });
+  const result = await f.assess();
   expect(result.exitCode, result.stderrTail ?? undefined).toBe(0);
-  expect(await databaseHashes(f.files)).toEqual(before);
+  await f.unchanged();
 });
 
 it("copies and verifies both databases within the admitted capacity", async () => {
   const f = await fixture();
   await materializeUpdateCandidateStateWorker(f.root);
-  const before = await databaseHashes(f.files);
   availableSpace(100 * 1024 ** 2);
-  const rehearsal = await prepareUpdateCandidateRehearsal({
-    config: {},
-    stateDir: f.stateDir,
-    candidateRoot: f.root,
-    env: {},
-  });
+  const rehearsal = await f.prepare();
   try {
     expect(rehearsal.snapshotCapacity.requiredBytes).toBeLessThan(100 * 1024 ** 2);
     for (const file of f.files) {
@@ -95,31 +94,22 @@ it("copies and verifies both databases within the admitted capacity", async () =
     await rehearsal.cleanup();
   }
   await expect(fs.stat(rehearsal.stateDir)).rejects.toMatchObject({ code: "ENOENT" });
-  expect(await databaseHashes(f.files)).toEqual(before);
+  await f.unchanged();
 });
 
 it("refuses insufficient capacity without changing the source databases", async () => {
   const f = await fixture();
-  const before = await databaseHashes(f.files);
   availableSpace(70 * 1024 ** 2);
-  const result = await assessInitialUpdateSnapshotCapacity({
-    config: {},
-    stateDir: f.stateDir,
-    env: {},
-  });
+  const result = await f.assess();
   expect(result.exitCode).toBe(1);
   expect(result.stderrTail).toContain("snapshot-capacity-insufficient");
-  expect(await databaseHashes(f.files)).toEqual(before);
+  await f.unchanged();
 });
 
 it("defers unknown free space to the complete candidate check", async () => {
   const f = await fixture();
   vi.spyOn(diskSpace, "tryReadDiskSpace").mockReturnValue(null);
-  const result = await assessInitialUpdateSnapshotCapacity({
-    config: {},
-    stateDir: f.stateDir,
-    env: {},
-  });
+  const result = await f.assess();
   expect(result.exitCode).toBe(0);
   expect(result.diagnostics?.join("\n")).toContain("free space unknown");
 });
@@ -140,17 +130,11 @@ it("keeps the larger allowance when the candidate omits the copy capability", as
      };
      ${source}`,
   );
-  const before = await databaseHashes(f.files);
   availableSpace(100 * 1024 ** 2);
-  await expect(
-    prepareUpdateCandidateRehearsal({
-      config: {},
-      stateDir: f.stateDir,
-      candidateRoot: f.root,
-      env: {},
-    }),
-  ).rejects.toMatchObject({ capacity: { reason: "snapshot-capacity-insufficient" } });
-  expect(await databaseHashes(f.files)).toEqual(before);
+  await expect(f.prepare()).rejects.toMatchObject({
+    capacity: { reason: "snapshot-capacity-insufficient" },
+  });
+  await f.unchanged();
 });
 
 it.each([
@@ -176,19 +160,13 @@ it.each([
   async (_selection, config) => {
     const f = await fixture();
     await materializeUpdateCandidateStateWorker(f.root);
-    const before = await databaseHashes(f.files);
     availableSpace(100 * 1024 ** 2);
-    const rehearsal = prepareUpdateCandidateRehearsal({
-      config: {
-        ...config,
-        database: {
-          ...config.database,
-          postgres: { connection: "postgresql://fixture:fixture@127.0.0.1:1/snapshot_fixture" },
-        },
+    const rehearsal = f.prepare({
+      ...config,
+      database: {
+        ...config.database,
+        postgres: { connection: "postgresql://fixture:fixture@127.0.0.1:1/snapshot_fixture" },
       },
-      stateDir: f.stateDir,
-      candidateRoot: f.root,
-      env: {},
     });
     try {
       await expect(rehearsal).rejects.toMatchObject({
@@ -200,6 +178,6 @@ it.each([
         () => {},
       );
     }
-    expect(await databaseHashes(f.files)).toEqual(before);
+    await f.unchanged();
   },
 );
