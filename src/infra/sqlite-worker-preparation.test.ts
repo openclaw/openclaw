@@ -36,7 +36,7 @@ it.each([
   { mib: 40, owner: "client" },
   { mib: 0, owner: "host" },
 ] as const)(
-  "retains FIFO, cancellation, and $owner close while preparing a $mib MiB command",
+  "retains captured FIFO, cancellation, and $owner close while preparing a $mib MiB command",
   async ({ mib, owner }) => {
     const { databasePath, markerPath, gatePath } = preparationPaths();
     const store = await open(databasePath, { type: "prepare", markerPath, gatePath });
@@ -58,7 +58,9 @@ it.each([
       const reason = new Error("Cancel the queued command");
       queuedCancel.abort(reason);
       await expect(canceled).rejects.toBe(reason);
-      following = append(store, "second");
+      const next = { type: "append" as const, input: { value: "second" } };
+      following = store.execute(next);
+      next.input.value = "mutated after enqueue";
       activeCancel.abort(new Error("Dispatched preparation remains owned"));
       let closed = false;
       closing = (

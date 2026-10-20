@@ -533,16 +533,6 @@ describe("SQLite worker store", () => {
     }
   });
 
-  it("snapshots command input before a queued caller can mutate it", async () => {
-    const store = await open(databasePath());
-    const first = append(store, "first");
-    const command = { type: "append" as const, input: { value: "admitted" } };
-    const queued = store.execute(command);
-    command.input.value = "mutated";
-    await Promise.all([first, queued]);
-    expect(await read(store)).toEqual(["first", "admitted"]);
-  });
-
   it("bounds reserved and live clients sharing one actor until close or failed admission drains", async () => {
     const file = databasePath();
     const retiring = await open(file);

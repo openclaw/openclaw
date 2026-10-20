@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { existsSync, linkSync, renameSync, writeFileSync } from "node:fs";
+import { setTimeout as delay } from "node:timers/promises";
 import { parentPort, threadId } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Generated } from "kysely";
@@ -74,23 +75,14 @@ export type FixtureOperations = {
   commitThenExit: Operation<Value, never>;
   commitWithoutReceipt: Operation<Value & { mode: "native" | "schema-maintenance" }, never>;
   commitUnserializable: Operation<Value, symbol>;
-  failClose: Operation<undefined, undefined>;
   delayClose: Operation<{ markerPath: string; reject: boolean }, undefined>;
   illegalAsync: Operation<Value & { gatePath: string; reject: boolean }, Promise<Receipt>>;
 };
 
-function waitForFile(file: string): Promise<void> {
-  return new Promise((resolve) => {
-    const check = () => {
-      if (existsSync(file)) {
-        clearInterval(poll);
-        resolve();
-      }
-    };
-    // Worker watch notifications can be missed or coalesced; observe the persistent gate.
-    const poll = setInterval(check, 50);
-    check();
-  });
+async function waitForFile(file: string): Promise<void> {
+  while (!existsSync(file)) {
+    await delay(50);
+  }
 }
 
 export function createSqliteWorkerBackend(
@@ -135,7 +127,6 @@ function createFixtureBackend(
   let writes = 0;
   let prepared = false;
   const preparationOwners: (SqliteReaderOwner | undefined)[] = [];
-  let failClose = false;
   let delayedClose: { markerPath: string; reject: boolean } | undefined;
   function append(value: string): Receipt {
     runSqliteImmediateTransactionSync(db, () => {
@@ -159,9 +150,6 @@ function createFixtureBackend(
   function closeNative(): undefined {
     clearNodeSqliteKyselyCacheForDatabase(db);
     db.close();
-    if (failClose) {
-      throw new Error("Fixture native database closed with a cleanup failure");
-    }
   }
   if (input?.type === "disk-full") {
     db.exec("PRAGMA journal_mode=WAL; PRAGMA max_page_count=2");
@@ -204,10 +192,6 @@ function createFixtureBackend(
           return Promise.reject(new Error("Fixture async operation rejected"));
         }
         return waitForFile(command.input.gatePath).then(() => append(command.input.value));
-      }
-      if (command.type === "failClose") {
-        failClose = true;
-        return undefined;
       }
       if (command.type === "read") {
         return executeSqliteQuerySync(
