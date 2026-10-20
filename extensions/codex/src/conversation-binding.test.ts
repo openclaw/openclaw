@@ -732,7 +732,7 @@ it("keeps queued bound turns ahead of retirement through the registered entry", 
   const handleClaim = (event: Parameters<InboundClaim>[0], ctx: Parameters<InboundClaim>[1]) =>
     hook({ senderIsOwner: true, ...event }, ctx);
   const order: string[] = [];
-  const { client, notify } = conversationClient({
+  const { client, request, notify } = conversationClient({
     "turn/start": () => {
       const turnId = `turn-${order.filter((entry) => entry.startsWith("turn-")).length + 1}`;
       order.push(turnId);
@@ -745,7 +745,7 @@ it("keeps queued bound turns ahead of retirement through the registered entry", 
     notify(turnCompleted("bound-thread", turnId, turnId, `${turnId}-answer`));
 
   const firstTurn = handleClaim(event, ctx);
-  await vi.waitFor(() => expect(client.request).toHaveBeenCalledOnce());
+  await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
   const secondTurn = handleClaim(event, ctx);
   const retirement = withCodexConversationThreadActivity(
     legacyCodexConversationBindingId(sessionFile),
@@ -755,7 +755,7 @@ it("keeps queued bound turns ahead of retirement through the registered entry", 
   );
 
   completeTurn("turn-1");
-  await vi.waitFor(() => expect(client.request).toHaveBeenCalledTimes(2));
+  await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
   try {
     expect(order).toEqual(["turn-1", "turn-2"]);
   } finally {

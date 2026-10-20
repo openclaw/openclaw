@@ -147,6 +147,7 @@ vi.mock("../agents/harness/hook-helpers.js", () => ({
   runAgentHarnessBeforeMessageWriteHook: ({ message }: { message: unknown }) => message,
 }));
 
+// mock-isolation: Command cases own model metadata; runtime catalog hydration is tested separately.
 vi.mock("../agents/thinking-runtime.js", () => {
   // Runtime selection is covered in thinking-runtime.test.ts.
   type Catalog = Array<{ id: string; provider: string; reasoning?: boolean }>;
@@ -211,6 +212,7 @@ vi.mock("../agents/command/assistant-transcript-repair.js", () => ({
   repairPendingAssistantTranscriptTurns: vi.fn(async () => undefined),
 }));
 
+// mock-isolation: Command delivery fixtures record payloads without using live channel transports.
 vi.mock("../agents/command/delivery.runtime.js", () => {
   return {
     deliverAgentCommandResult: vi.fn(

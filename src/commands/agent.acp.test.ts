@@ -70,6 +70,7 @@ vi.mock("../infra/agent-run-registry.js", async (importOriginal) => {
   };
 });
 
+// mock-isolation: ACP routing captures delivered payloads without invoking outbound transports.
 vi.mock("../agents/command/delivery.runtime.js", () => ({
   deliverAgentCommandResult: vi.fn(
     async (params: Parameters<typeof deliverAgentCommandResult>[0]) => {

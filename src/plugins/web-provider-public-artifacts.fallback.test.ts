@@ -31,6 +31,7 @@ vi.mock("./web-provider-resolution-shared.js", async (importOriginal) => ({
   }),
 }));
 
+// mock-isolation: Fallback routing supplies explicit-provider results without loading plugins.
 vi.mock("./web-provider-public-artifacts.explicit.js", () => ({
   resolveBundledExplicitWebSearchProvidersFromPublicArtifacts: mocks.loadSearch,
   resolveBundledExplicitWebFetchProvidersFromPublicArtifacts: mocks.loadFetch,

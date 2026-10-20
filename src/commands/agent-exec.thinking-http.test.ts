@@ -45,7 +45,9 @@ it("preserves template defaults and selected thinking through agent exec", async
             choices: [{ index: 0, delta: { role: "assistant", content }, finish_reason: "stop" }],
           })}\n\ndata: [DONE]\n\n`,
         );
-      })().catch((error: Error) => response.destroy(error));
+      })().catch((error: unknown) => {
+        response.destroy(error instanceof Error ? error : new Error(String(error)));
+      });
     },
     async (baseUrl) => {
       const compat = {

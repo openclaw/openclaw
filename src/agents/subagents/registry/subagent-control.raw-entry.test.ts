@@ -108,15 +108,6 @@ const cancelAdmin = (
     expectedRunId,
     expectedGeneration,
   });
-function sendWatched(opts: Parameters<typeof createSessionsSendTool>[0], mode = "followup") {
-  return createSessionsSendTool(opts).execute("send", {
-    sessionKey: "global",
-    message: "Continue the child task",
-    mode,
-    watch: true,
-    timeoutSeconds: 0,
-  });
-}
 function expectAccepted(result: { details: unknown }, expected: Record<string, unknown> = {}) {
   expect(result.details).toMatchObject({ status: "accepted", ...expected });
 }
@@ -284,16 +275,19 @@ async function prepareWatchedRawChildren(watchResearch = true) {
     );
   }
   const send = (agentId: string, turn: string, mode: "followup" | "steer" = "followup") =>
-    sendWatched(
-      {
-        config: cfg,
-        agentId,
-        agentSessionKey: children.get(agentId)!.parentKey,
-        requesterTurnRunId: turn,
-        callGateway,
-      },
+    createSessionsSendTool({
+      config: cfg,
+      agentId,
+      agentSessionKey: children.get(agentId)!.parentKey,
+      requesterTurnRunId: turn,
+      callGateway,
+    }).execute("send", {
+      sessionKey: "global",
+      message: `Continue ${agentId}`,
       mode,
-    );
+      watch: true,
+      timeoutSeconds: 0,
+    });
   expectAccepted(await send("main", "main-turn"), { watched: false });
   if (watchResearch) {
     expectAccepted(await send("research", "research-turn"));

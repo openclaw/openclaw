@@ -53,14 +53,14 @@ export function createConversationClaimFixtures(
   return {
     conversationClaimContext,
     legacyConversationData,
-    boundConversationClaim(sessionFile: string, sessionKey?: string) {
+    boundConversationClaim(this: void, sessionFile: string, sessionKey?: string) {
       return {
         event: conversationMessage("continue", sessionKey ? { sessionKey } : {}),
         ctx: conversationClaimContext(legacyConversationData(sessionFile), sessionKey || undefined),
       };
     },
 
-    denyConversationBinding(data: NonNullable<PluginConversationBinding["data"]>) {
+    denyConversationBinding(this: void, data: NonNullable<PluginConversationBinding["data"]>) {
       return handleCodexConversationBindingResolved(
         {
           status: "denied",

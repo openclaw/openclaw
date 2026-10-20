@@ -129,6 +129,7 @@ function enqueueSystemEventWithReceipt(text: string, opts?: unknown) {
   return mocks.removeEvent;
 }
 
+// mock-isolation: Cron cases capture queue entries and receipts without the process event queue.
 vi.mock("../infra/system-events.js", () => ({ enqueueSystemEvent, enqueueSystemEventWithReceipt }));
 
 vi.mock("../infra/heartbeat-wake.js", async (importOriginal) => ({
@@ -159,6 +160,7 @@ vi.mock("../config/io.js", async (importOriginal) => ({
   getRuntimeConfig: () => mocks.config(),
 }));
 
+// mock-isolation: Cron callback cases supply network responses without external requests.
 vi.mock("../infra/net/fetch-guard.js", () => ({ fetchWithSsrFGuard: mocks.fetch }));
 
 vi.mock("../cron/delivery.js", async (importOriginal) => ({
@@ -171,14 +173,17 @@ vi.mock("../cron/isolated-agent/delivery-target.js", async (importOriginal) => (
   resolveDeliveryTarget: mocks.target,
 }));
 
+// mock-isolation: Scripted agent outcomes isolate cron scheduling from model execution.
 vi.mock("../cron/isolated-agent.js", () => ({
   runCronIsolatedAgentTurn: mocks.runAgent,
 }));
 
+// mock-isolation: Each cron case owns its hooks instead of sharing the active plugin registry.
 vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: mocks.hooks,
 }));
 
+// mock-isolation: Cancellation cases control drain settlement without starting embedded agents.
 vi.mock("../agents/embedded-agent.js", () => ({
   abortAndDrainEmbeddedAgentRun: mocks.abortRun,
 }));
@@ -188,10 +193,12 @@ vi.mock("../agents/agent-bundle-mcp-manager-api.js", async (importOriginal) => (
   captureSessionMcpRuntimeRetirement: mocks.captureMcp,
 }));
 
+// mock-isolation: Cron command fixtures control child settlement without spawning processes.
 vi.mock("../process/supervisor/index.js", () => ({
   getProcessSupervisor: mocks.supervisor,
 }));
 
+// mock-isolation: Cron trigger cases provide script outcomes without executing user scripts.
 vi.mock("../cron/trigger-script.js", () => ({
   createCronScriptRuntime: mocks.scriptRuntime,
 }));
