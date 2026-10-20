@@ -1,6 +1,7 @@
 import { flush } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import type { PluginDiscoveryDetailResult } from "../../lib/plugins/index.ts";
+import { domProbe } from "../../test-helpers/dom-probe.ts";
 import { mountSolid, cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import {
   renderPluginCatalogDetail as PluginCatalogDetail,
@@ -8,10 +9,7 @@ import {
 } from "./catalog-detail.tsx";
 import { createDiscoveryDetail, createPlugin } from "./plugins-page.test-support.ts";
 
-afterEach(() => {
-  cleanupSolid();
-  document.body.replaceChildren();
-});
+afterEach(cleanupSolid);
 
 function mount(
   result: PluginDiscoveryDetailResult,
@@ -32,7 +30,7 @@ function mount(
   };
   const view = mountSolid(() => <PluginCatalogDetail {...props} />);
   flush();
-  return view.container;
+  return { container: view.container, ...domProbe(view.container) };
 }
 
 it("keeps long README tails and wires fenced-code controls", () => {
@@ -41,23 +39,20 @@ it("keeps long README tails and wires fenced-code controls", () => {
     createPlugin({ id: "demo", name: "Demo", installed: false, state: "not-installed" }),
   );
   result.detail.readme = `\`\`\`bash\necho demo\n\`\`\`\n${"x".repeat(150_000)}${tail}`;
-  const container = mount(result);
+  const { container, query, text } = mount(result);
 
-  expect(container.querySelector(".code-block-copy")).not.toBeNull();
+  expect(query(".code-block-copy")).not.toBeNull();
   expect(container.textContent).toContain(tail);
-  const heading = container.querySelector(".plugin-catalog-detail__readme-section > h2");
-  expect(heading?.textContent).toBe("README");
+  expect(text(".plugin-catalog-detail__readme-section > h2")).toBe("README");
 });
 
 it("uses a white tile for an official package icon", () => {
   const imageUrl = "https://example.com/icon.png";
   const result = createDiscoveryDetail(createPlugin({ origin: "official" }));
   result.plugin.catalog.imageUrl = imageUrl;
-  const container = mount(result, { iconUrls: { [imageUrl]: "blob:package-icon" } });
+  const { query } = mount(result, { iconUrls: { [imageUrl]: "blob:package-icon" } });
 
-  expect(
-    container.querySelector(".plugin-catalog-detail__icon .plugins-tile--white"),
-  ).not.toBeNull();
+  expect(query(".plugin-catalog-detail__icon .plugins-tile--white")).not.toBeNull();
 });
 
 it.each([
@@ -73,10 +68,8 @@ it.each([
     result.plugin.local.action = installed ? "manage" : "install";
     const onInstall = vi.fn();
     const onAskPlugin = vi.fn();
-    const container = mount(result, { canInstall, busy, onInstall, onAskPlugin });
-    document.body.append(container);
-    flush();
-    const actions = container.querySelector(".plugin-catalog-detail__actions")!;
+    const { query } = mount(result, { canInstall, busy, onInstall, onAskPlugin });
+    const actions = query(".plugin-catalog-detail__actions")!;
     const primaryButton = actions.querySelector<HTMLButtonElement>("button.primary")!;
     expect(primaryButton.textContent?.trim()).toBe(primary);
     expect(actions.querySelectorAll("button.primary")).toHaveLength(1);
@@ -107,18 +100,13 @@ it.each([false, true])(
     result.detail.channels = ["messaging-channel"];
     result.detail.skills = mixed ? [{ name: "video-guide" }] : [];
     result.detail.mcpServers = mixed ? ["media-server"] : [];
-    const container = mount(result);
-    const sections = [...container.querySelectorAll(".plugin-capabilities")];
-    expect(container.querySelector(".plugin-capabilities button")).toBeNull();
-    expect(sections.map((section) => section.querySelector("h2")?.textContent)).toEqual([
+    const { query, all, container } = mount(result);
+    expect(query(".plugin-capabilities button")).toBeNull();
+    expect([...all(".plugin-capabilities h2")].map((heading) => heading.textContent)).toEqual([
       "Capabilities3",
       ...(mixed ? ["Skills1", "Tools1", "MCP Server1"] : []),
     ]);
-    expect(
-      sections.flatMap((section) =>
-        [...section.querySelectorAll("strong")].map((item) => item.textContent),
-      ),
-    ).toEqual([
+    expect([...all(".plugin-capabilities strong")].map((item) => item.textContent)).toEqual([
       "Video generation",
       "Dashboard widgets",
       "Link previews",

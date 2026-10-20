@@ -4,6 +4,7 @@ import type { PluginCredentialInspection } from "../../../../packages/gateway-pr
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { REDACTED_SENTINEL } from "../../lib/config-form-utils.ts";
 import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
+import { domProbe } from "../../test-helpers/dom-probe.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
   PluginCredentialEditor,
@@ -82,16 +83,9 @@ async function mount(state: PluginCredentialInspection = { kind: "literal" }, wi
   help.textContent = "Provider-owned credential help.";
   document.body.append(help, host);
   const [props, setProps] = createSignal({ field: { ...field }, context: { ...context } });
-  mountSolid(
-    () => (
-      <PluginCredentialEditor
-        field={props().field}
-        descriptor={descriptor}
-        context={props().context}
-      />
-    ),
-    { container: host },
-  );
+  mountSolid(() => <PluginCredentialEditor {...props()} descriptor={descriptor} />, {
+    container: host,
+  });
   const editor = host.querySelector<HTMLElement>("openclaw-plugin-credential-editor")!;
   const update = async () => {
     setProps({ field: { ...field }, context: { ...context } });
@@ -100,7 +94,19 @@ async function mount(state: PluginCredentialInspection = { kind: "literal" }, wi
   flush();
   await vi.waitFor(() => expect(scope.client.request).toHaveBeenCalledOnce());
   await vi.waitFor(() => expect(editor.textContent).not.toContain("Loading"));
-  return { editor, scope, context, field, update };
+  return {
+    editor,
+    scope,
+    context,
+    field,
+    update,
+    ...domProbe(editor),
+    get input() {
+      return editor.querySelector<HTMLInputElement>("input")!;
+    },
+    committed: (value: unknown) =>
+      vi.waitFor(() => expect(context.onCommit).toHaveBeenCalledWith(path, value)),
+  };
 }
 function button(editor: Element, text: string) {
   const result = [...editor.querySelectorAll("button")].find(
@@ -128,19 +134,13 @@ function editInput(element: HTMLInputElement, value: string) {
 
 describe("plugin credential authoring controls", () => {
   it("keeps entered credentials and a reference dialog through same-client reconnects", async () => {
-    const { editor, context, field, scope, update } = await mount();
-    const input = editor.querySelector<HTMLInputElement>("input")!;
+    const { editor, context, field, scope, update, input } = await mount();
     editInput(input, "synthetic-unsaved-key");
     await open(editor, "Use a secret reference");
     const referenceInput = dialogInputs(editor)[1]!;
     editInput(referenceInput, "DRAFT_KEY");
     const gateway = context.gateway;
-    Object.assign(gateway, {
-      epoch: 2,
-      connected: false,
-      capture: () => null,
-      isCurrent: () => false,
-    });
+    Object.assign(gateway, retiredGateway());
     field.disabled = true;
     await update();
     expect([input.value, referenceInput.value]).toEqual(["synthetic-unsaved-key", "DRAFT_KEY"]);
@@ -188,8 +188,7 @@ describe("plugin credential authoring controls", () => {
   );
 
   it("preserves an uncommitted literal while an unrelated configuration revision arrives", async () => {
-    const { editor, context, scope, update } = await mount();
-    const input = editor.querySelector<HTMLInputElement>("input")!;
+    const { context, scope, update, input, committed } = await mount();
     input.focus();
     editInput(input, "synthetic-pending-key");
     context.baseHash = "next-revision";
@@ -201,9 +200,7 @@ describe("plugin credential authoring controls", () => {
     expect(input.value).toBe("synthetic-pending-key");
     expect(context.onCommit).not.toHaveBeenCalled();
     input.blur();
-    await vi.waitFor(() =>
-      expect(context.onCommit).toHaveBeenCalledWith(path, "synthetic-pending-key"),
-    );
+    await committed("synthetic-pending-key");
   });
 
   it("commits when focus leaves for another credential, but not its own reveal button", async () => {
@@ -211,20 +208,19 @@ describe("plugin credential authoring controls", () => {
     const second = await mount();
     second.field.path = [...path.slice(0, -1), "otherKey"];
     await second.update();
-    const input = first.editor.querySelector<HTMLInputElement>("input")!;
+    const input = first.input;
     input.focus();
     editInput(input, "synthetic-first-key");
     revealButton(first.editor).focus();
     expect(first.context.onCommit).not.toHaveBeenCalled();
-    second.editor.querySelector<HTMLInputElement>("input")!.focus();
+    second.input.focus();
     await vi.waitFor(() => expect(first.context.onCommit).toHaveBeenCalledOnce());
     expect(first.context.onCommit).toHaveBeenCalledWith(path, "synthetic-first-key");
     expect(second.context.onCommit).not.toHaveBeenCalled();
   });
 
   it("reveals a stored literal only on request without committing it, and clears it on hide", async () => {
-    const { editor, scope, context } = await mount();
-    const input = editor.querySelector<HTMLInputElement>("input")!;
+    const { editor, scope, context, input } = await mount();
     const reveal = revealButton(editor);
     expect(input.value).toBe("");
     expect(scope.client.request).toHaveBeenCalledWith("plugins.credentials.inspect", {
@@ -257,7 +253,7 @@ describe("plugin credential authoring controls", () => {
   it.each(["revision", "connection", "permission", "field"])(
     "discards a pending stored-key reveal after %s changes",
     async (change) => {
-      const { editor, scope, context, field, update } = await mount();
+      const { editor, scope, context, field, update, query } = await mount();
       const pending = createDeferred<unknown>();
       scope.client.request.mockReturnValueOnce(pending.promise).mockResolvedValue({
         baseHash: "new-revision",
@@ -284,37 +280,36 @@ describe("plugin credential authoring controls", () => {
       });
       await pending.promise;
       flush();
-      expect(editor.querySelector<HTMLInputElement>("input")?.value).toBe("");
+      expect(query<HTMLInputElement>("input")?.value).toBe("");
       expect(editor.innerHTML).not.toContain("stale-private-key");
       expect(context.onCommit).not.toHaveBeenCalled();
     },
   );
 
   it("keeps the stored sentinel out of edits and reveals entered drafts locally", async () => {
-    const { editor, context } = await mount();
-    const field = editor.querySelector<HTMLInputElement>("input")!;
-    expect(field.getAttribute("aria-describedby")).toBe("credential-help");
-    expect(field).toMatchObject({ value: "", placeholder: "••••••••" });
-    expect(editor.querySelector("a")?.href).toBe("https://example.com/keys");
-    field.focus();
-    field.blur();
+    const { editor, context, input, committed, attr, query } = await mount();
+    expect(attr("input", "aria-describedby")).toBe("credential-help");
+    expect(input).toMatchObject({ value: "", placeholder: "••••••••" });
+    expect(query("a")?.href).toBe("https://example.com/keys");
+    input.focus();
+    input.blur();
     expect(context.onCommit).not.toHaveBeenCalled();
-    editInput(field, "synthetic-new-key");
+    editInput(input, "synthetic-new-key");
     flush();
     revealButton(editor).click();
     flush();
-    expect(field).toMatchObject({ type: "text", value: "synthetic-new-key" });
-    field.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    await vi.waitFor(() =>
-      expect(context.onCommit).toHaveBeenCalledWith(path, "synthetic-new-key"),
-    );
+    expect(input).toMatchObject({ type: "text", value: "synthetic-new-key" });
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await committed("synthetic-new-key");
   });
 
   it.each(["env", "file"] as const)(
     "inspects and edits the exact %s pointer; Cancel never patches",
     async (source) => {
       const id = source === "file" ? "/original/key" : "ORIGINAL_KEY";
-      const { editor, context } = await mount(reference({ source, provider: "original", id }));
+      const { editor, context, committed } = await mount(
+        reference({ source, provider: "original", id }),
+      );
       const { trigger } = await open(editor);
       expect(trigger.getAttribute("aria-describedby")).toBe("credential-help");
       expect(editor.querySelector<HTMLSelectElement>("select")!.value).toBe(source);
@@ -331,23 +326,19 @@ describe("plugin credential authoring controls", () => {
       editInput(next[0]!, "changed");
       flush();
       button(editor, "Save").click();
-      await vi.waitFor(() =>
-        expect(context.onCommit).toHaveBeenCalledWith(path, { source, provider: "changed", id }),
-      );
+      await committed({ source, provider: "changed", id });
     },
   );
 
   it("retains the reference draft and Cancel on write failure until the existing owner acknowledges retry", async () => {
-    const { editor, context } = await mount(reference(undefined, true));
+    const { editor, context, text } = await mount(reference(undefined, true));
     vi.mocked(context.onCommit).mockResolvedValueOnce(false).mockResolvedValueOnce(true);
     await open(editor);
     const id = dialogInputs(editor)[1]!;
     editInput(id, "CHANGED_KEY");
     flush();
     button(editor, "Save").click();
-    await vi.waitFor(() =>
-      expect(editor.querySelector('[role="alert"]')?.textContent).toContain("could not be saved"),
-    );
+    await vi.waitFor(() => expect(text('[role="alert"]')).toContain("could not be saved"));
     expect(id.value).toBe("CHANGED_KEY");
     expect(button(editor, "Cancel")).toBeDefined();
     button(editor, "Save").click();
@@ -355,9 +346,9 @@ describe("plugin credential authoring controls", () => {
   });
 
   it("keeps environment fallback inspect-only and validates source-specific identifiers", async () => {
-    const { editor, context } = await mount({ kind: "environment", envVar: "EXAMPLE_KEY" });
+    const { editor, context, query } = await mount({ kind: "environment", envVar: "EXAMPLE_KEY" });
     await open(editor, "View source");
-    expect(editor.querySelector(".plugin-credential__dialog input")).toBeNull();
+    expect(query(".plugin-credential__dialog input")).toBeNull();
     expect(editor.textContent).toContain("Change that environment variable at its source");
     expect(context.onCommit).not.toHaveBeenCalled();
   });
@@ -371,8 +362,7 @@ describe("plugin credential authoring controls", () => {
     expect(rect.right).toBeLessThanOrEqual(width);
     expect(rect.bottom).toBeLessThanOrEqual(844);
     const input = dialogInputs(editor)[1]!;
-    input.value = "invalid lower-case env id";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
+    editInput(input, "invalid lower-case env id");
     flush();
     expect(button(editor, "Save").disabled).toBe(true);
   });
@@ -393,7 +383,7 @@ describe("plugin credential authoring controls", () => {
   it.each(["plugin", "permission"])(
     "clears private reference metadata after %s identity changes",
     async (change) => {
-      const { editor, context, update } = await mount(
+      const { editor, context, update, query } = await mount(
         reference({ source: "file", provider: "vault", id: "/private/key" }),
       );
       await open(editor);
@@ -404,7 +394,7 @@ describe("plugin credential authoring controls", () => {
       }
       await update();
       expect(modal(editor)).toBeNull();
-      expect(editor.querySelector("input")?.value).not.toBe("/private/key");
+      expect(query("input")?.value).not.toBe("/private/key");
       expect(context.onCommit).not.toHaveBeenCalled();
     },
   );

@@ -11,14 +11,14 @@ vi.mock("./icon-loader.ts", () => ({
 }));
 
 const { PluginIconOwner } = await import("./plugin-icon-owner.ts");
-
+const imageUrl = "https://cdn.example.com/test.png";
 const entry = {
   id: "ch_dGVzdA",
   catalog: {
     name: "Test",
     official: false,
     categories: ["tools"],
-    imageUrl: "https://cdn.example.com/test.png",
+    imageUrl,
   },
   local: {
     present: false,
@@ -29,21 +29,24 @@ const entry = {
   },
 } satisfies PluginDiscoveryEntry;
 
-function createController(
-  onUrlsChange: (urls: Record<string, string>) => void,
-  onLoadingChange?: () => void,
-) {
-  return new PluginIconOwner({
-    kind: "catalog",
-    getFetchContext: () => ({ gatewayUrl: "ws://localhost", resourceBasePath: "", auth: {} }),
-    isConnected: () => true,
-    onUrlsChange,
-    onLoadingChange,
-  });
-}
+let controller: InstanceType<typeof PluginIconOwner>;
+const events: string[] = [];
+const published = vi.fn(() => events.push("urls"));
+const settled = () => vi.waitFor(() => expect(controller.isLoading(imageUrl)).toBe(false));
 
 describe("catalog icon lifecycle", () => {
-  beforeEach(() => fetchIcon.mockReset());
+  beforeEach(() => {
+    fetchIcon.mockReset();
+    published.mockClear();
+    events.length = 0;
+    controller = new PluginIconOwner({
+      kind: "catalog",
+      getFetchContext: () => ({ gatewayUrl: "ws://localhost", resourceBasePath: "", auth: {} }),
+      isConnected: () => true,
+      onUrlsChange: published,
+      onLoadingChange: () => events.push("loading"),
+    });
+  });
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
@@ -52,36 +55,31 @@ describe("catalog icon lifecycle", () => {
   it("publishes proxied catalog icons and revokes them when the entry leaves", async () => {
     fetchIcon.mockResolvedValue("blob:test-icon");
     const revokeObjectURL = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
-    const published: Array<Record<string, string>> = [];
-    const controller = createController((urls) => published.push(urls));
 
     controller.syncCatalog([entry], [], new Set());
     expect(fetchIcon).not.toHaveBeenCalled();
     controller.syncCatalog([entry], [], new Set([entry.id]));
-    expect(controller.isLoading(entry.catalog.imageUrl)).toBe(true);
+    expect(controller.isLoading(imageUrl)).toBe(true);
     await vi.waitFor(() =>
-      expect(published.at(-1)).toEqual({
-        "https://cdn.example.com/test.png": "blob:test-icon",
-      }),
+      expect(published).toHaveBeenLastCalledWith({ [imageUrl]: "blob:test-icon" }),
     );
 
-    expect(controller.isLoading(entry.catalog.imageUrl)).toBe(false);
+    expect(controller.isLoading(imageUrl)).toBe(false);
     controller.syncCatalog([entry], [], new Set());
     expect(revokeObjectURL).not.toHaveBeenCalled();
     controller.syncCatalog([entry], [], new Set([entry.id]));
     expect(fetchIcon).toHaveBeenCalledOnce();
     controller.syncCatalog([]);
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:test-icon");
-    expect(published.at(-1)).toEqual({});
+    expect(published).toHaveBeenLastCalledWith({});
   });
 
   it.each(["empty", "error"])("retains a %s miss across removal until reset", async (kind) => {
     fetchIcon.mockImplementationOnce(() =>
       kind === "empty" ? Promise.resolve(null) : Promise.reject(new Error("failed")),
     );
-    const controller = createController(() => undefined);
     controller.syncCatalog([entry]);
-    await vi.waitFor(() => expect(controller.isLoading(entry.catalog.imageUrl)).toBe(false));
+    await settled();
     controller.syncCatalog([]);
     controller.syncCatalog([entry]);
     expect(fetchIcon).toHaveBeenCalledOnce();
@@ -89,25 +87,18 @@ describe("catalog icon lifecycle", () => {
     fetchIcon.mockResolvedValueOnce(null);
     controller.syncCatalog([entry]);
     expect(fetchIcon).toHaveBeenCalledTimes(2);
-    await vi.waitFor(() => expect(controller.isLoading(entry.catalog.imageUrl)).toBe(false));
+    await settled();
   });
 
   it.each(["success", "error"])(
     "keeps slow reads alive and retires a late %s safely",
     async (outcome) => {
-      const events: string[] = [];
       vi.spyOn(URL, "revokeObjectURL").mockImplementation((url) => {
         events.push(`revoke:${url}`);
       });
-      const published = vi.fn(() => {
-        events.push("urls");
-      });
-      const controller = createController(published, () => {
-        events.push("loading");
-      });
       fetchIcon.mockResolvedValueOnce("blob:first");
       controller.syncCatalog([entry]);
-      await vi.waitFor(() => expect(controller.isLoading(entry.catalog.imageUrl)).toBe(false));
+      await settled();
       vi.useFakeTimers();
       const pending = createDeferred<string>();
       const slow = "https://cdn.example.com/slow.png";
