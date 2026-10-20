@@ -65,6 +65,7 @@ describe("device-folder launch fencing", () => {
     await using context = fixture();
     const acquired = createDeferred();
     const resume = createDeferred();
+    using release = { [Symbol.dispose]: () => resume.resolve() };
     // oxlint-disable-next-line typescript/unbound-method -- apply below preserves the original receiver.
     const originalClaim = NodeWorkerCapacity.prototype.claim;
     const claim = vi.spyOn(NodeWorkerCapacity.prototype, "claim");
@@ -76,25 +77,18 @@ describe("device-folder launch fencing", () => {
     });
     const prepare = vi.spyOn(transport, "prepareNodeWorkerLaunchTransport");
     const launch = context.launch("capacity-wait");
-    const settled = launch.then(
-      () => undefined,
-      (error: unknown) => error,
+    const settled = launch.catch((error: unknown) => error);
+    await awaitGateBeforeSettlement(
+      acquired.promise,
+      launch,
+      "Launch ended before capacity acquisition",
     );
-    try {
-      await awaitGateBeforeSettlement(
-        acquired.promise,
-        launch,
-        "Launch ended before capacity acquisition",
-      );
-      context.retarget();
-      resume.resolve();
-      expect(await settled).toBeInstanceOf(Error);
-      expect(String(await settled)).toContain("acquired device folder changed");
-      expect(prepare).not.toHaveBeenCalled();
-      context.expectUntouched();
-    } finally {
-      resume.resolve();
-    }
+    context.retarget();
+    release[Symbol.dispose]();
+    expect(await settled).toBeInstanceOf(Error);
+    expect(String(await settled)).toContain("acquired device folder changed");
+    expect(prepare).not.toHaveBeenCalled();
+    context.expectUntouched();
   });
 
   it.each(["journal", "startup", "retained"] as const)("rechecks after %s", async (stage) => {

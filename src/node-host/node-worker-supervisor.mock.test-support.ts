@@ -75,10 +75,7 @@ vi.mock("./node-worker-workspace.js", async (importOriginal) => {
     NodeWorkerWorkspaceRuntime: class {
       acquirePreparedWorkspace = mocks.acquirePreparedWorkspace;
       applyRetainSnapshot = mocks.retain;
-      quiescence = {
-        hasActiveWork: () => false,
-        close: mocks.quiescenceClose,
-      };
+      quiescence = { hasActiveWork: () => false, close: mocks.quiescenceClose };
       processes = new NodeWorkerWorkspaceProcesses();
     },
   };

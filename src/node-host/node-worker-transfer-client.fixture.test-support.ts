@@ -5,7 +5,7 @@ import type { Server as HttpsServer } from "node:https";
 import path from "node:path";
 import { buffer } from "node:stream/consumers";
 import {
-  serializeWorkerWorkspaceManifest,
+  serializeWorkerWorkspaceManifest as serializeManifest,
   type WorkerWorkspaceManifest,
 } from "../gateway/worker-environments/workspace-manifest.js";
 import { runNodeWorkerWorkspaceTransfer } from "./node-worker-transfer-client.js";
@@ -18,26 +18,15 @@ type TransferOverrides = Omit<
 
 export const digest = (body: string | Buffer) => createHash("sha256").update(body).digest("hex");
 
-export function fileEntry(filePath: string, body: Buffer, mode = 0o644) {
-  return {
-    path: filePath,
-    type: "file" as const,
-    mode,
-    size: body.byteLength,
-    sha256: digest(body),
-  };
+export function fileEntry(file: string, body: Buffer, mode = 0o644) {
+  return { path: file, type: "file" as const, mode, size: body.length, sha256: digest(body) };
 }
 
 export function manifestFixture(
   entries: WorkerWorkspaceManifest["entries"] = [],
   options: Partial<Omit<WorkerWorkspaceManifest, "version" | "entries">> = {},
 ) {
-  const rawManifest = serializeWorkerWorkspaceManifest({
-    version: 1,
-    baseCommit: null,
-    ...options,
-    entries,
-  });
+  const rawManifest = serializeManifest({ version: 1, baseCommit: null, ...options, entries });
   return { rawManifest, manifestRef: `sha256:${digest(rawManifest)}` };
 }
 
@@ -101,25 +90,24 @@ export function workspaceTransferHandler(
   contentLength = false,
 ) {
   return transferHandler(async (request, response) => {
-    let body: string | Buffer | undefined;
-    let json = false;
-    if (request.url?.endsWith("/manifest")) {
-      body = rawManifest;
-    } else if (
+    const manifest = request.url?.endsWith("/manifest");
+    const reconcile =
+      !manifest &&
       request.method === "POST" &&
       request.url?.includes("/reconciliations/") &&
-      currentRef
-    ) {
+      currentRef;
+    if (reconcile) {
       for await (const chunk of request) {
         void chunk;
       }
-      body = JSON.stringify({ manifestRef: currentRef() });
-      json = true;
-    } else {
-      body = blobs.get(request.url?.match(/\/blobs\/([a-f0-9]{64})$/u)?.[1] ?? "");
     }
+    const body = manifest
+      ? rawManifest
+      : reconcile
+        ? JSON.stringify({ manifestRef: reconcile() })
+        : blobs.get(request.url?.match(/\/blobs\/([a-f0-9]{64})$/u)?.[1] ?? "");
     response.writeHead(body === undefined ? 404 : 200, {
-      ...(json && contentLength ? { "content-type": "application/json" } : {}),
+      ...(reconcile && contentLength ? { "content-type": "application/json" } : {}),
       ...(contentLength && body !== undefined
         ? { "content-length": String(Buffer.byteLength(body)) }
         : {}),
