@@ -80,33 +80,43 @@ async function fixture(
   if (options.initialize !== false) {
     await index.initialize();
   }
-  const complete = () =>
-    harness.send({ method: "turn/completed", params: { threadId: "thread-1", turn: {} } });
+  const notify = (method: string, params: Record<string, unknown>) =>
+    harness.send({ method, params });
+  const complete = () => notify("turn/completed", { threadId: "thread-1", turn: {} });
+  const started = (value = thread()) => notify("thread/started", { thread: value });
+  const status = (value: CodexThread["status"], threadId = "thread-1") =>
+    notify("thread/status/changed", { threadId, status: value });
+  const name = (threadName: string) =>
+    notify("thread/name/updated", { threadId: "thread-1", threadName });
   const reply = async (position: number, value: CodexThread) => {
     const request = JSON.parse(await harness.waitForWrite(position));
     expect(request).toMatchObject({
       method: "thread/read",
-      params: { threadId: "thread-1", includeTurns: false },
+      params: { threadId: value.id, includeTurns: false },
     });
     harness.send({ id: request.id, result: { thread: value } });
     await nativeReads.mock.results[position]!.value;
   };
-  return { index, harness, startOptions, nativeReads, readNative, complete, reply };
+  return {
+    index,
+    harness,
+    startOptions,
+    readNative,
+    complete,
+    reply,
+    started,
+    status,
+    name,
+  };
 }
 
-function notifyNameAndStatus(harness: ReturnType<typeof createClientHarness>): void {
-  harness.send({
-    method: "thread/name/updated",
-    params: { threadId: "thread-1", threadName: "New title before publication" },
-  });
-  harness.send({
-    method: "thread/status/changed",
-    params: {
-      threadId: "thread-1",
-      status: { type: "active", activeFlags: ["waitingOnApproval"] },
-    },
-  });
-}
+const activeStatus = (flag = "waitingOnApproval") => ({
+  type: "active" as const,
+  activeFlags: [flag],
+});
+const activeSession = (flag = "waitingOnApproval") => ({ status: "active", activeFlags: [flag] });
+const settled = (index: CodexCatalogIndex) =>
+  vi.waitFor(() => expect(index.hasActiveWork()).toBe(false));
 
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0)) {
@@ -121,20 +131,19 @@ describe("resident Codex catalog notifications", () => {
     "settles a failed %s refresh until fresh activity or the next safety cycle",
     async (trigger) => {
       vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
-      const { index, harness, readNative } = await fixture();
+      const { index, started: notify, readNative } = await fixture();
       const warnings = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
       readNative.mockRejectedValueOnce(new Error("native catalog unavailable"));
-      const notify = () => harness.send({ method: "thread/started", params: { thread: thread() } });
       if (trigger === "activity") {
         notify();
-        await vi.waitFor(() => expect(index.hasActiveWork()).toBe(false));
+        await settled(index);
       }
       await vi.advanceTimersByTimeAsync(trigger === "activity" ? 30_000 : 15 * 60_000);
       if (trigger === "safety") {
         expect(readNative).toHaveBeenCalledOnce();
         await index.list({});
       }
-      await vi.waitFor(() => expect(index.hasActiveWork()).toBe(false));
+      await settled(index);
       expect(readNative).toHaveBeenCalledTimes(2);
       expect(warnings).toHaveBeenCalledOnce();
       expect(warnings).toHaveBeenCalledWith("Codex resident catalog background update failed", {
@@ -145,9 +154,9 @@ describe("resident Codex catalog notifications", () => {
       await vi.advanceTimersByTimeAsync(4 * 30_000);
       expect(readNative).toHaveBeenCalledTimes(2);
       notify();
-      await vi.waitFor(() => expect(index.hasActiveWork()).toBe(false));
+      await settled(index);
       await vi.advanceTimersByTimeAsync(30_000);
-      await vi.waitFor(() => expect(index.hasActiveWork()).toBe(false));
+      await settled(index);
       expect(readNative).toHaveBeenCalledTimes(3);
       expect(warnings).toHaveBeenCalledOnce();
     },
@@ -212,17 +221,17 @@ describe("resident Codex catalog notifications", () => {
     const inventory = Array.from({ length: 256 }, (_, i) =>
       thread({ id: `stored-${i}`, recencyAt: 1_000 - i }),
     );
-    const { index, harness, readNative } = await fixture(inventory);
+    const { index, started, readNative } = await fixture(inventory);
     inventory[16]!.name = "Renamed without new activity";
     inventory[220]!.name = "Silent tail rename";
     inventory.pop();
     inventory.unshift(thread({ id: "missed-start", recencyAt: 1_999 }));
     const newer = thread({ id: "notified-start", recencyAt: 2_000 });
     inventory.unshift(newer);
-    harness.send({ method: "thread/started", params: { thread: newer } });
+    started(newer);
     await vi.waitFor(() => expect(index.get(newer.id)).toBeDefined());
     await vi.advanceTimersByTimeAsync(30_000);
-    await vi.waitFor(() => expect(index.hasActiveWork()).toBe(false));
+    await settled(index);
     expect(readNative).toHaveBeenCalledTimes(19);
     expect(index.get("missed-start")).toBeDefined();
     expect(index.get("stored-16")?.page.sessions[0]?.name).toBe("Renamed without new activity");
@@ -231,7 +240,7 @@ describe("resident Codex catalog notifications", () => {
     await vi.advanceTimersByTimeAsync(14 * 60_000 + 30_000);
     expect(readNative).toHaveBeenCalledTimes(19);
     await index.list({ limit: 64 });
-    await vi.waitFor(() => expect(index.hasActiveWork()).toBe(false));
+    await settled(index);
     expect(readNative).toHaveBeenCalledTimes(36);
     expect(index.get("stored-220")?.page.sessions[0]?.name).toBe("Silent tail rename");
     expect(index.get("stored-255")).toBeUndefined();
@@ -246,7 +255,7 @@ describe("resident Codex catalog notifications", () => {
     async ({ repeatFirst, expected }) => {
       const first = thread({ id: "first" });
       const second = thread({ id: "second" });
-      const { index, harness, nativeReads, readNative } = await fixture([first, second]);
+      const { index, harness, reply, readNative } = await fixture([first, second]);
       let turn = 0;
       const start = (threadId: string) =>
         harness.send({
@@ -267,29 +276,16 @@ describe("resident Codex catalog notifications", () => {
         harness.send({ method: "turn/completed", params: { threadId: first.id, turn: {} } });
         start(first.id);
       }
-      harness.send({
-        id: secondRead.id,
-        result: { thread: { ...second, name: "Second read returned first" } },
-      });
-      await nativeReads.mock.results[1]!.value;
+      await reply(1, { ...second, name: "Second read returned first" });
       await vi.waitFor(() =>
         expect(index.get(second.id)?.page.sessions[0]?.name).toBe("Second read returned first"),
       );
-      harness.send({
-        id: firstRead.id,
-        result: { thread: { ...first, name: "First read returned last" } },
-      });
-      await nativeReads.mock.results[0]!.value;
+      await reply(0, { ...first, name: "First read returned last" });
       await vi.waitFor(() =>
         expect(index.get(first.id)?.page.sessions[0]?.name).toBe("First read returned last"),
       );
       if (repeatFirst === "inflight") {
-        const latestRead = JSON.parse(await harness.waitForWrite(2));
-        harness.send({
-          id: latestRead.id,
-          result: { thread: { ...first, name: "Latest first turn" } },
-        });
-        await nativeReads.mock.results[2]!.value;
+        await reply(2, { ...first, name: "Latest first turn" });
         await vi.waitFor(() =>
           expect(index.get(first.id)?.page.sessions[0]?.name).toBe("Latest first turn"),
         );
@@ -348,13 +344,10 @@ describe("resident Codex catalog notifications", () => {
 
   it("clears local live status on disconnect and accepts fresh status after reconnect", async () => {
     const { index, harness, startOptions, readNative } = await fixture(
-      [thread({ status: { type: "active", activeFlags: ["waitingOnApproval"] } })],
+      [thread({ status: activeStatus() })],
       { local: true },
     );
-    expect((await index.list({})).sessions[0]).toMatchObject({
-      status: "active",
-      activeFlags: ["waitingOnApproval"],
-    });
+    expect((await index.list({})).sessions[0]).toMatchObject(activeSession());
     harness.client.close();
     const disconnected = (await index.list({})).sessions[0];
     expect(disconnected?.status).toBe("notLoaded");
@@ -367,13 +360,10 @@ describe("resident Codex catalog notifications", () => {
       method: "thread/status/changed",
       params: {
         threadId: "thread-1",
-        status: { type: "active", activeFlags: ["freshStatus"] },
+        status: activeStatus("freshStatus"),
       },
     });
-    expect((await index.list({})).sessions[0]).toMatchObject({
-      status: "active",
-      activeFlags: ["freshStatus"],
-    });
+    expect((await index.list({})).sessions[0]).toMatchObject(activeSession("freshStatus"));
     expect(readNative).toHaveBeenCalledOnce();
   });
 
@@ -387,7 +377,7 @@ describe("resident Codex catalog notifications", () => {
         setCodexCatalogSource(
           thread({
             cwd: "/workspace/fresh",
-            status: { type: "active", activeFlags: ["staleStatus"] },
+            status: activeStatus("staleStatus"),
           }),
           codexCatalogSourceForClient(harness.client),
         ),
@@ -416,18 +406,12 @@ describe("resident Codex catalog notifications", () => {
   });
 
   it("uses started payloads without a read and waits for first-user content before publishing empty threads", async () => {
-    const { index, harness, readNative } = await fixture([]);
+    const { index, harness, started, readNative } = await fixture([]);
     const nativeObserver = vi.fn();
     harness.client.addNotificationHandler(nativeObserver);
     const preview = "User request ".repeat(100);
-    harness.send({
-      method: "thread/started",
-      params: { thread: thread({ id: "empty", preview: "", recencyAt: null }) },
-    });
-    harness.send({
-      method: "thread/started",
-      params: { thread: thread({ preview }) },
-    });
+    started(thread({ id: "empty", preview: "", recencyAt: null }));
+    started(thread({ preview }));
     await vi.waitFor(async () => {
       const page = await index.list({});
       expect(page.sessions).toHaveLength(1);
@@ -455,20 +439,23 @@ describe("resident Codex catalog notifications", () => {
       register: async () => {},
       delete: async () => false,
     };
-    const { index, harness, readNative } = await fixture([], { initialize: false, state });
+    const { index, harness, name, status, readNative } = await fixture([], {
+      initialize: false,
+      state,
+    });
     const page = await projectCodexCatalogPage({ data: [thread({ name: "Saved title" })] });
     const listing = index.list({});
     try {
       await started.promise;
-      notifyNameAndStatus(harness);
+      name("New title before publication");
+      status(activeStatus());
       response.resolve([
         { key: "row", createdAt: 1, value: { version: 1, kind: "row", row: page.rows[0]! } },
         { key: "complete", createdAt: 1, value: { version: 1, kind: "complete" } },
       ]);
       expect((await listing).sessions[0]).toMatchObject({
         name: "New title before publication",
-        status: "active",
-        activeFlags: ["waitingOnApproval"],
+        ...activeSession(),
       });
       expect(readNative).not.toHaveBeenCalled();
       expect(harness.writes).toEqual([]);
@@ -479,29 +466,14 @@ describe("resident Codex catalog notifications", () => {
   });
 
   it("applies names and status immediately with the catalog bounds and no metadata read", async () => {
-    const { index, harness } = await fixture();
-    harness.send({
-      method: "thread/name/updated",
-      params: { threadId: "thread-1", threadName: `  ${"Title ".repeat(200)}  ` },
-    });
-    harness.send({
-      method: "thread/status/changed",
-      params: {
-        threadId: "thread-1",
-        status: { type: "active", activeFlags: [" waitingOnApproval "] },
-      },
-    });
+    const { index, harness, name, status } = await fixture();
+    name(`  ${"Title ".repeat(200)}  `);
+    status(activeStatus(" waitingOnApproval "));
     const active = (await index.list({})).sessions[0];
     expect(active?.name).toHaveLength(500);
-    expect(active).toMatchObject({ status: "active", activeFlags: ["waitingOnApproval"] });
-    harness.send({
-      method: "thread/status/changed",
-      params: { threadId: "thread-1", status: { type: "idle" } },
-    });
-    harness.send({
-      method: "thread/status/changed",
-      params: { threadId: "unknown", status: { type: "active" } },
-    });
+    expect(active).toMatchObject(activeSession());
+    status({ type: "idle" });
+    status({ type: "active" }, "unknown");
     expect((await index.list({})).sessions[0]).toMatchObject({ status: "idle" });
     expect((await index.list({})).sessions[0]?.activeFlags).toBeUndefined();
     expect(harness.writes).toEqual([]);

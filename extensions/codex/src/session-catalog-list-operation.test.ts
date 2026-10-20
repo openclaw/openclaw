@@ -12,6 +12,15 @@ import { CODEX_APP_SERVER_THREADS_LIST_COMMAND } from "./session-catalog-parsing
 import { CODEX_TERMINAL_START_COMMAND } from "./session-catalog-terminal.js";
 import type { CodexSessionCatalogPage } from "./session-catalog-types.js";
 
+const fulfilled = <T>(value: T) => ({ status: "fulfilled", value });
+const failedHost = (code: string) => ({ error: { code } });
+const payload = (ids: string[] = []) => ({ payloadJSON: JSON.stringify(page(ids)) });
+const catalogNode = (nodeId = "remote", connected = true, displayName?: string) => ({
+  nodeId,
+  connected,
+  ...(displayName ? { displayName } : {}),
+  commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND],
+});
 const adoption = vi.hoisted(() => ({
   hold: undefined as { promise: Promise<Map<string, never>>; started: () => void } | undefined,
 }));
@@ -116,10 +125,9 @@ describe("Codex catalog list operation", () => {
       await nextTurn();
       expect(advancing.state.settled).toBe(false);
       held.resolve(page(["managed"], "next"));
-      await expect(advancing.done).resolves.toMatchObject({
-        status: "fulfilled",
-        value: { done: true, hosts: [{ error: { code: "APP_SERVER_UNAVAILABLE" } }] },
-      });
+      await expect(advancing.done).resolves.toMatchObject(
+        fulfilled({ done: true, hosts: [failedHost("APP_SERVER_UNAVAILABLE")] }),
+      );
       operation.close();
       expect(f.listPage).toHaveBeenCalledOnce();
     } finally {
@@ -172,10 +180,7 @@ describe("Codex catalog list operation", () => {
           refillStarted.promise.then(() => "refilled"),
         ]),
       ).resolves.toBe("yielded");
-      await expect(advancing.done).resolves.toEqual({
-        status: "fulfilled",
-        value: { done: false },
-      });
+      await expect(advancing.done).resolves.toEqual(fulfilled({ done: false }));
       expect(f.listPage).toHaveBeenCalledOnce();
       await expect(operation.next()).resolves.toMatchObject({
         done: true,
@@ -238,13 +243,7 @@ describe("Codex catalog list operation", () => {
       const operation = f.start({
         hostIds: undefined,
         listNodes: async () => ({
-          nodes: [
-            {
-              nodeId: "remote",
-              connected: true,
-              commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND],
-            },
-          ],
+          nodes: [catalogNode()],
         }),
         // oxlint-disable-next-line typescript/no-misused-promises -- A JS publication promise remains owned after the fail-soft response.
         onHost: (host) => {
@@ -261,19 +260,18 @@ describe("Codex catalog list operation", () => {
         await invoked.promise;
         await vi.advanceTimersByTimeAsync(CODEX_CATALOG_HOST_RESPONSE_TIMEOUT_MS);
         expect(advancing.state.settled).toBe(true);
-        await expect(advancing.done).resolves.toMatchObject({
-          status: "fulfilled",
-          value: {
+        await expect(advancing.done).resolves.toMatchObject(
+          fulfilled({
             done: true,
             hosts: [
-              { error: { code: "APP_SERVER_UNAVAILABLE" } },
-              { hostId: "node:remote", error: { code: "NODE_INVOKE_FAILED" } },
+              failedHost("APP_SERVER_UNAVAILABLE"),
+              { hostId: "node:remote", ...failedHost("NODE_INVOKE_FAILED") },
             ],
-          },
-        });
+          }),
+        );
         operation.close();
         first.resolve(page(["managed"], "second"));
-        invokeResult.resolve({ payloadJSON: JSON.stringify(page([])) });
+        invokeResult.resolve(payload());
         await published.promise;
         const tails = observe(Promise.allSettled(f.publications));
         await vi.advanceTimersByTimeAsync(0);
@@ -291,7 +289,7 @@ describe("Codex catalog list operation", () => {
           outcome === "reject" ? [{ status: "rejected", reason: publicationError }] : [],
         );
       } finally {
-        invokeResult.resolve({ payloadJSON: JSON.stringify(page([])) });
+        invokeResult.resolve(payload());
         publication.resolve();
         first.resolve(page([]));
         await advancing.done;
@@ -317,9 +315,9 @@ describe("Codex catalog list operation", () => {
       await vi.advanceTimersByTimeAsync(250);
       expect(first.state.settled).toBe(true);
       expect(second.state.settled).toBe(true);
-      newer.resolve({ payloadJSON: JSON.stringify(page(["newer-answer"])) });
+      newer.resolve(payload(["newer-answer"]));
       await nextTurn();
-      older.resolve({ payloadJSON: JSON.stringify(page(["first-answer"])) });
+      older.resolve(payload(["first-answer"]));
       await nextTurn();
       expect(firstHost).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -327,7 +325,7 @@ describe("Codex catalog list operation", () => {
           sessions: [expect.objectContaining({ threadId: "first-answer" })],
         }),
       );
-      newer.resolve({ payloadJSON: JSON.stringify(page(["newer-answer"])) });
+      newer.resolve(payload(["newer-answer"]));
       await Promise.all(f.publications);
       expect(secondHost).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -336,8 +334,8 @@ describe("Codex catalog list operation", () => {
         }),
       );
     } finally {
-      older.resolve({ payloadJSON: JSON.stringify(page([])) });
-      newer.resolve({ payloadJSON: JSON.stringify(page([])) });
+      older.resolve(payload());
+      newer.resolve(payload());
       await Promise.allSettled([first.done, second.done, ...f.publications]);
       vi.useRealTimers();
     }
@@ -357,7 +355,7 @@ describe("Codex catalog list operation", () => {
     try {
       await nextTurn();
       await vi.advanceTimersByTimeAsync(250);
-      old.resolve({ payloadJSON: JSON.stringify(page(["obsolete"])) });
+      old.resolve(payload(["obsolete"]));
       await nextTurn();
       expect(pending.state.settled).toBe(true);
       expect(
@@ -368,8 +366,8 @@ describe("Codex catalog list operation", () => {
       const result = await pending.done;
       expect(result.status).toBe("fulfilled");
     } finally {
-      old.resolve({ payloadJSON: JSON.stringify(page([])) });
-      held.resolve({ payloadJSON: JSON.stringify(page([])) });
+      old.resolve(payload());
+      held.resolve(payload());
       await pending.done;
       await Promise.allSettled(f.publications);
       vi.useRealTimers();
@@ -389,18 +387,8 @@ describe("Codex catalog list operation", () => {
       hostIds: ["node:offline", "node:online"],
       listNodes: async () => ({
         nodes: [
-          {
-            nodeId: "offline",
-            displayName: "A offline",
-            connected: false,
-            commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND],
-          },
-          {
-            nodeId: "online",
-            displayName: "B online",
-            connected: true,
-            commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND],
-          },
+          catalogNode("offline", false, "A offline"),
+          catalogNode("online", true, "B online"),
         ],
       }),
       onHost: (host) => {
@@ -415,11 +403,11 @@ describe("Codex catalog list operation", () => {
       await nextTurn();
       expect.soft(advancing.state.settled).toBe(false);
       expect.soft(() => operation.close()).toThrow(/active/);
-      held.resolve({ payloadJSON: JSON.stringify(page([])) });
+      held.resolve(payload());
       await expect(advancing.done).resolves.toEqual({ status: "rejected", reason });
       expect(f.runtime.nodes.invoke).toHaveBeenCalledOnce();
     } finally {
-      held.resolve({ payloadJSON: JSON.stringify(page([])) });
+      held.resolve(payload());
       await advancing.done;
       operation.close();
       await Promise.allSettled(f.publications);
@@ -446,16 +434,12 @@ describe("Codex catalog list operation", () => {
       await survivorStarted.promise;
       await nextTurn();
       surviving.resolve(page(["managed"], "next"));
-      await expect(advancing.done).resolves.toMatchObject({
-        status: "fulfilled",
-        value: {
+      await expect(advancing.done).resolves.toMatchObject(
+        fulfilled({
           done: true,
-          hosts: [
-            { error: { code: "APP_SERVER_UNAVAILABLE" } },
-            { sessions: [{ threadId: "survivor" }] },
-          ],
-        },
-      });
+          hosts: [failedHost("APP_SERVER_UNAVAILABLE"), { sessions: [{ threadId: "survivor" }] }],
+        }),
+      );
       expect(f.listPage).toHaveBeenCalledTimes(3);
     } finally {
       surviving.resolve(page([]));
@@ -498,27 +482,22 @@ describe("Codex catalog list operation", () => {
       await started.promise;
       if (progressive) {
         await vi.advanceTimersByTimeAsync(250);
-        await expect(advancing.done).resolves.toMatchObject({
-          status: "fulfilled",
-          value: {
+        await expect(advancing.done).resolves.toMatchObject(
+          fulfilled({
             done: true,
             hosts: [{ pending: true }, { sessions: [{ threadId: "survivor" }] }],
-          },
-        });
+          }),
+        );
         operation.close();
       }
       await vi.advanceTimersByTimeAsync(CODEX_CATALOG_HOST_RESPONSE_TIMEOUT_MS);
       if (!progressive) {
-        await expect(advancing.done).resolves.toMatchObject({
-          status: "fulfilled",
-          value: {
+        await expect(advancing.done).resolves.toMatchObject(
+          fulfilled({
             done: true,
-            hosts: [
-              { error: { code: "APP_SERVER_UNAVAILABLE" } },
-              { sessions: [{ threadId: "survivor" }] },
-            ],
-          },
-        });
+            hosts: [failedHost("APP_SERVER_UNAVAILABLE"), { sessions: [{ threadId: "survivor" }] }],
+          }),
+        );
       }
       await Promise.all(f.publications);
       expect(f.onHost).toHaveBeenCalledWith(

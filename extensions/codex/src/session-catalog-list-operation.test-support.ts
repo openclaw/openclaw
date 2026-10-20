@@ -1,5 +1,6 @@
 import type { SessionCatalogProvider } from "openclaw/plugin-sdk/session-catalog";
 import { vi } from "vitest";
+import { runCatalogListInline } from "./session-catalog-list-operation.js";
 import { catalogFactory } from "./session-catalog-resident.test-support.js";
 import type {
   CodexSessionCatalogPage,
@@ -63,7 +64,6 @@ export async function fixture(homeCount = 1) {
     managedThreads: { has: vi.fn(async () => false), mark: vi.fn(async () => true), snapshot },
   });
   const { api, getProvider } = createGatewayApi(runtime, config);
-  let runtimeConfig = config;
   registerCodexSessionCatalog({
     api,
     bindingStore,
@@ -75,7 +75,7 @@ export async function fixture(homeCount = 1) {
           listPage: (params) => listPage(source!.sourceHomeId, params),
         }),
     },
-    getRuntimeConfig: () => runtimeConfig,
+    getRuntimeConfig: () => config,
   });
   const controller = new AbortController();
   const onHost = vi.fn();
@@ -106,9 +106,6 @@ export async function fixture(homeCount = 1) {
     onHost,
     publications,
     start,
-    replaceConfig: () => {
-      runtimeConfig = structuredClone(config);
-    },
   };
 }
 
@@ -123,23 +120,14 @@ export async function nodeFixture() {
   const listNodes = vi.fn(async () => ({ nodes: [node] }));
   const invoke = vi.mocked(f.runtime.nodes.invoke);
   invoke.mockResolvedValue({ payloadJSON: JSON.stringify(page(["original"])) });
-  const read = async (params: Partial<Parameters<SessionCatalogProvider["list"]>[0]> = {}) => {
-    const operation = f.start({
-      hostIds: undefined,
-      allowPartialResults: true,
-      listNodes,
-      ...params,
-    });
-    try {
-      for (;;) {
-        const result = await operation.next();
-        if (result.done) {
-          return result.hosts;
-        }
-      }
-    } finally {
-      operation.close();
-    }
-  };
+  const read = (params: Partial<Parameters<SessionCatalogProvider["list"]>[0]> = {}) =>
+    runCatalogListInline(
+      f.start({
+        hostIds: undefined,
+        allowPartialResults: true,
+        listNodes,
+        ...params,
+      }),
+    );
   return { ...f, node, listNodes, invoke, read };
 }
