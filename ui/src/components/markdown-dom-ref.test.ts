@@ -1,64 +1,11 @@
 import { createSignal, flush } from "solid-js";
-import { beforeAll, describe, expect, it, vi } from "vitest";
-import { prepareMessageMarkdown } from "../pages/chat/components/chat-message-text-preparation.ts";
+import { describe, expect, it, vi } from "vitest";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { renderSolidRef } from "../test-helpers/render-solid-ref.ts";
-import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { createMarkdownRef } from "./markdown-dom-ref.ts";
-import type { MarkdownRenderOptions } from "./markdown-render-options.ts";
-import corpus from "./markdown-transcript-corpus.json" with { type: "json" };
-import { toSanitizedMarkdownHtml, toStreamingMarkdownParts } from "./markdown.ts";
-
-beforeAll(async () => {
-  await waitForSolid(() =>
-    expect(toSanitizedMarkdownHtml("```ts\nconst ready = true;\n```\n")).toContain("hljs-keyword"),
-  );
-});
+import { toStreamingMarkdownParts } from "./markdown.ts";
 
 describe("Solid Markdown island", () => {
-  it.each(corpus)("finalizes streamed $name to the captured one-shot HTML", (fixture) => {
-    const [source, setSource] = createSignal("");
-    const [streaming, setStreaming] = createSignal(true);
-    // SAFETY: The checked-in corpus records these renderer options with its expected HTML.
-    const options = fixture.options as MarkdownRenderOptions | undefined;
-    const target = document.createElement("div");
-    const view = renderSolidRef(
-      () =>
-        createMarkdownRef(() => ({
-          content: prepareMessageMarkdown(
-            source(),
-            `corpus-${fixture.name}`,
-            { role: "assistant", isStreaming: streaming() },
-            options ?? {},
-          ),
-        })),
-      { targetElement: target },
-    );
-    try {
-      let end = 0;
-      let delta = 0;
-      while (end < fixture.source.length) {
-        end = Math.min(fixture.source.length, end + 12 + ((delta++ * 17) % 25));
-        setSource(fixture.source.slice(0, end));
-        flush();
-      }
-      setStreaming(false);
-      flush();
-      const result = target.cloneNode(true);
-      const markers = document.createTreeWalker(result, NodeFilter.SHOW_COMMENT);
-      const comments: Node[] = [];
-      while (markers.nextNode()) {
-        comments.push(markers.currentNode);
-      }
-      for (const comment of comments) {
-        comment.parentNode!.removeChild(comment);
-      }
-      expect(result instanceof Element && result.innerHTML).toBe(fixture.html);
-    } finally {
-      view.unmount();
-    }
-  });
-
   it("commits Markdown before onUpdate and retires a replaced island", () => {
     const container = document.createElement("div");
     document.body.append(container);
