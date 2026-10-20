@@ -1,9 +1,7 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { exactButton } from "./chat-presentation.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { sessionsListResponse } from "./session-management.test-support.ts";
 
@@ -60,47 +58,24 @@ suite.define(() => {
         .waitFor();
       const notice = pane.locator(".chat-child-attention");
       const composer = pane.locator(".agent-chat__input");
-      try {
-        await notice.waitFor();
-        expect(await notice.textContent()).toContain(child.agentStatus!.note);
-        expect(await notice.getAttribute("data-child-session-key")).toBe(child.key);
-        expect(
-          await notice
-            .locator(".chat-composer-neighbor-card__copy span")
-            .evaluate((node) => getComputedStyle(node).whiteSpace),
-        ).toBe("normal");
+      await notice.waitFor();
+      expect(await notice.textContent()).toContain(child.agentStatus!.note);
+      expect(await notice.getAttribute("data-child-session-key")).toBe(child.key);
+      expect(
         await notice
-          .getByRole("button", { name: "Open session", exact: true })
-          .click({ trial: true });
-        const noticeBox = await notice.boundingBox();
-        const composerBox = await composer.boundingBox();
-        expect(noticeBox).not.toBeNull();
-        expect(composerBox).not.toBeNull();
-        expect(noticeBox!.x).toBeCloseTo(composerBox!.x, 0);
-        expect(noticeBox!.width).toBeCloseTo(composerBox!.width, 0);
-        expect(await notice.evaluate((node) => getComputedStyle(node).borderRadius)).toBe(
-          await composer.evaluate((node) => getComputedStyle(node).borderRadius),
-        );
-      } finally {
-        if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR) {
-          const frame = await takeControlUiScreenshotFrame(
-            page,
-            pane,
-            [
-              pane.getByText("The diagnostic has resumed. Waiting for its result.", {
-                exact: true,
-              }),
-              ...((await notice.isVisible()) ? [notice] : []),
-              composer,
-            ],
-            { animations: "disabled" },
-          );
-          await writeFile(
-            path.join(suite.artifactDir, `child-attention-${viewport.width}.png`),
-            frame.png,
-          );
-        }
-      }
+          .locator(".chat-composer-neighbor-card__copy span")
+          .evaluate((node) => getComputedStyle(node).whiteSpace),
+      ).toBe("normal");
+      await exactButton(notice, "Open session").click({ trial: true });
+      const noticeBox = await notice.boundingBox();
+      const composerBox = await composer.boundingBox();
+      expect(noticeBox).not.toBeNull();
+      expect(composerBox).not.toBeNull();
+      expect(noticeBox!.x).toBeCloseTo(composerBox!.x, 0);
+      expect(noticeBox!.width).toBeCloseTo(composerBox!.width, 0);
+      expect(await notice.evaluate((node) => getComputedStyle(node).borderRadius)).toBe(
+        await composer.evaluate((node) => getComputedStyle(node).borderRadius),
+      );
     });
   });
 

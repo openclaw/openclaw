@@ -1,9 +1,8 @@
-// Composer native undo/redo regression: the controlled `.value` binding must
-// not re-apply the textarea value after native input, which clobbers the
-// browser's undo/redo bookkeeping (#131708).
+// Native value write-back must not clobber undo/redo bookkeeping (#131708).
 import type { Page } from "playwright";
 import { beforeAll, expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { twoFrames } from "./chat-presentation.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -21,8 +20,6 @@ suite.define(() => {
     const context = await suite.newBrowserContext({});
     page = await context.newPage();
     await installMockGateway(page);
-    // Count every programmatic textarea value write so the binding contract
-    // (no re-apply after native input) is asserted directly.
     await page.addInitScript(() => {
       const descriptor = Object.getOwnPropertyDescriptor(
         HTMLTextAreaElement.prototype,
@@ -61,44 +58,21 @@ suite.define(() => {
     });
   }
 
-  it("keeps native redo working after undo in the composer textarea", async () => {
-    const textarea = page.locator(COMPOSER_TEXTAREA);
-    await textarea.click();
-    await textarea.type(TYPED_TEXT);
-    expect(await textarea.inputValue()).toBe(TYPED_TEXT);
-
-    await page.keyboard.press("ControlOrMeta+a");
-    await page.keyboard.press("Backspace");
-    expect(await textarea.inputValue()).toBe("");
-
-    await page.keyboard.press("ControlOrMeta+z");
-    expect(await textarea.inputValue()).toBe(TYPED_TEXT);
-
-    // Redo must re-apply the deletion, exactly like a native textarea.
-    await page.keyboard.press("ControlOrMeta+Shift+z");
-    expect(await textarea.inputValue()).toBe("");
-  });
-
   it("does not re-apply the textarea value after native input", async () => {
     const textarea = page.locator(COMPOSER_TEXTAREA);
     await textarea.click();
-    await page.keyboard.press("ControlOrMeta+a");
-    await page.keyboard.press("Backspace");
 
     const beforeTyping = await valueWriteCount();
     await textarea.type(TYPED_TEXT);
-    const afterTyping = await valueWriteCount();
+    expect(await textarea.inputValue()).toBe(TYPED_TEXT);
+    expect((await valueWriteCount()) - beforeTyping).toBe(0);
 
-    // Typing reaches the draft owner and requests renders, but none of those
-    // renders may write the textarea value back: the DOM already holds it, and
-    // a programmatic re-apply resets the browser's undo/redo bookkeeping.
-    expect(afterTyping - beforeTyping).toBe(0);
-
-    // Native undo/redo must likewise complete without any value write-back.
     const beforeUndo = await valueWriteCount();
     await page.keyboard.press("ControlOrMeta+a");
     await page.keyboard.press("Backspace");
+    expect(await textarea.inputValue()).toBe("");
     await page.keyboard.press("ControlOrMeta+z");
+    expect(await textarea.inputValue()).toBe(TYPED_TEXT);
     await page.keyboard.press("ControlOrMeta+Shift+z");
     expect(await textarea.inputValue()).toBe("");
     expect((await valueWriteCount()) - beforeUndo).toBe(0);
@@ -106,6 +80,13 @@ suite.define(() => {
 
   it("shrinks a capped draft when removing its scrollbar allows fewer wrapped lines", async () => {
     const textarea = page.locator(COMPOSER_TEXTAREA);
+    const measure = () =>
+      textarea.evaluate((element: HTMLTextAreaElement) => ({
+        width: element.offsetWidth,
+        contentWidth: element.clientWidth,
+        height: element.clientHeight,
+        contentHeight: element.scrollHeight,
+      }));
     const style = await page.addStyleTag({
       content: `
         ${COMPOSER_TEXTAREA} {
@@ -123,32 +104,13 @@ suite.define(() => {
     });
     try {
       await textarea.fill("x".repeat(150));
-      await page.evaluate(
-        () =>
-          new Promise<void>((resolve) => {
-            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-          }),
-      );
-      expect(
-        await textarea.evaluate((element: HTMLTextAreaElement) => ({
-          width: element.offsetWidth,
-          contentWidth: element.clientWidth,
-          height: element.clientHeight,
-        })),
-      ).toEqual({ width: 200, contentWidth: 170, height: 75 });
+      await twoFrames(page);
+      expect(await measure()).toMatchObject({ width: 200, contentWidth: 170, height: 75 });
 
       await textarea.fill("x".repeat(60));
-      expect(
-        await textarea.evaluate((element: HTMLTextAreaElement) => ({
-          contentWidth: element.clientWidth,
-          height: element.clientHeight,
-          contentHeight: element.scrollHeight,
-        })),
-      ).toEqual({ contentWidth: 200, height: 60, contentHeight: 60 });
+      expect(await measure()).toMatchObject({ contentWidth: 200, height: 60, contentHeight: 60 });
     } finally {
-      await style.evaluate((element) => {
-        element.parentNode?.removeChild(element);
-      });
+      await style.evaluate((element) => element.remove());
       await textarea.fill("");
     }
   });

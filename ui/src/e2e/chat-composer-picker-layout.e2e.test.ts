@@ -1,10 +1,8 @@
-import { writeFile } from "node:fs/promises";
 import { expect, it } from "vitest";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiElementScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { thinkingLevels } from "./chat-flow.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -44,10 +42,6 @@ suite.define(() => {
   });
 
   it("keeps model and effort targets separate when Files narrows the composer", async () => {
-    const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-    const artifactDir = artifactRoot
-      ? createControlUiE2eArtifactDir("composer-picker-targets", artifactRoot)
-      : undefined;
     // Keep the shell desktop-sized; Files supplies the narrow composer.
     await suite.withPage({ viewport: { width: 1100, height: 729 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
@@ -56,11 +50,7 @@ suite.define(() => {
           createControlUiSessionRow("agent:main:main", "Main", 1, {
             contextTokens: 200_000,
             thinkingLevel: "medium",
-            thinkingLevels: [
-              { id: "low", label: "low" },
-              { id: "medium", label: "medium" },
-              { id: "high", label: "high" },
-            ],
+            thinkingLevels: thinkingLevels("low", "medium", "high"),
             totalTokens: 21_000,
             totalTokensFresh: true,
           }),
@@ -84,12 +74,6 @@ suite.define(() => {
         }
         await page.setViewportSize({ width, height: 729 });
         await page.mouse.move(0, 0);
-        if (artifactDir) {
-          await writeFile(
-            `${artifactDir}/composer-${width}.png`,
-            await takeControlUiElementScreenshot(page, composer, []),
-          );
-        }
         await expect
           .poll(() =>
             composer.locator(".agent-chat__composer-footer").evaluate((footer) => {
@@ -140,18 +124,10 @@ suite.define(() => {
           }),
         );
         for (const [triggerSelector, menuSelector, otherMenuSelector] of [
-          [
-            '[data-chat-model-select="true"]',
-            ".chat-controls__model-menu",
-            ".chat-controls__effort-menu",
-          ],
-          [
-            '[data-chat-thinking-select="true"]',
-            ".chat-controls__effort-menu",
-            ".chat-controls__model-menu",
-          ],
+          ["model", ".chat-controls__model-menu", ".chat-controls__effort-menu"],
+          ["thinking", ".chat-controls__effort-menu", ".chat-controls__model-menu"],
         ] as const) {
-          const trigger = composer.locator(triggerSelector);
+          const trigger = composer.locator(`[data-chat-${triggerSelector}-select="true"]`);
           await expect
             .poll(() =>
               trigger.evaluate((node) => {

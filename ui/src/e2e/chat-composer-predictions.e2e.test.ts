@@ -1,13 +1,12 @@
-// Exercise the production composer and Gateway event boundary with synthetic model output.
-import { writeFile } from "node:fs/promises";
 import { expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   createControlUiMockBootstrapConfig,
   installMockGateway,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
+import { sendChat } from "./chat-flow-fixtures.test-support.ts";
+import { requireString } from "./chat-flow.test-support.ts";
+import { exactButton } from "./chat-presentation.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI composer predictions" });
@@ -44,14 +43,6 @@ suite.define(() => {
           has: page.locator(".settings-row__title", { hasText: "Composer predictions" }),
         });
         expect(await row.getByRole("switch").isChecked()).toBe(false);
-        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-          const artifacts = createControlUiE2eArtifactDir("composer-prediction-labs");
-          const frame = await takeControlUiScreenshotFrame(page, row, [select], {
-            animations: "disabled",
-            scrollTo: row,
-          });
-          await writeFile(artifacts + "/labs.png", frame.png);
-        }
       },
     );
   });
@@ -72,44 +63,22 @@ suite.define(() => {
         );
         const textarea = page.locator(".agent-chat__composer-combobox textarea");
         const ghost = page.locator(".agent-chat__composer-prediction");
-        const composer = page.locator(".agent-chat__input");
-        const artifacts =
-          process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
-            ? createControlUiE2eArtifactDir("composer-predictions")
-            : null;
-        const capture = async (name: string) => {
-          if (!artifacts) {
-            return;
-          }
-          await page.mouse.move(600, 450);
-          const frame = await takeControlUiScreenshotFrame(page, composer, [textarea], {
-            elements: [composer],
-            animations: "disabled",
-          });
-          await writeFile(artifacts + "/" + name + ".png", frame.png);
-          await writeFile(artifacts + "/" + name + "-composer.png", frame.elements[0]!.png);
-        };
         await page.goto(suite.server.baseUrl + "chat");
         await gateway.waitForRequest("chat.startup");
         await expect.poll(() => textarea.isDisabled()).toBe(false);
-        await textarea.fill("Explain the trade-offs.");
-        await page.getByRole("button", { name: "Send message", exact: true }).click();
-        const disabledSend = await gateway.waitForRequest("chat.send");
+        const disabledSend = await sendChat(page, gateway, "Explain the trade-offs.");
         await gateway.emitChatFinal({
-          runId: (disabledSend.params as { idempotencyKey: string }).idempotencyKey,
+          runId: requireString(disabledSend.idempotencyKey, "run id"),
           text: "An example makes these trade-offs easier to compare.",
         });
         expect(await gateway.getRequests("chat.predict")).toHaveLength(0);
-        await capture("before");
 
         enabled = true;
         await page.reload();
         await gateway.waitForRequest("chat.startup");
         await expect.poll(() => textarea.isDisabled()).toBe(false);
-        await textarea.fill("Explain the trade-offs.");
-        await page.getByRole("button", { name: "Send message", exact: true }).click();
-        const send = await gateway.waitForRequest("chat.send");
-        const runId = (send.params as { idempotencyKey: string }).idempotencyKey;
+        const send = await sendChat(page, gateway, "Explain the trade-offs.");
+        const runId = requireString(send.idempotencyKey, "run id");
         await gateway.emitChatFinal({
           runId,
           text: "An example makes these trade-offs easier to compare.",
@@ -119,7 +88,6 @@ suite.define(() => {
         await gateway.resolveDeferred("chat.predict", { text: suggestion });
         await expect.poll(() => ghost.textContent()).toBe(suggestion);
         expect(await textarea.inputValue()).toBe("");
-        await capture("after");
         await textarea.focus();
         await textarea.press("Tab");
         await expect.poll(() => textarea.inputValue()).toBe(suggestion);
@@ -136,8 +104,7 @@ suite.define(() => {
         await gateway.resolveDeferred("chat.predict", { text: suggestion });
         await expect.poll(() => ghost.textContent()).toBe(suggestion);
         await page.setViewportSize({ width: 390, height: 844 });
-        await capture("mobile");
-        await page.getByRole("button", { name: "Use suggestion", exact: true }).click();
+        await exactButton(page, "Use suggestion").click();
         await expect.poll(() => textarea.inputValue()).toBe(suggestion);
         expect(await gateway.getRequests("chat.send")).toHaveLength(1);
       },
