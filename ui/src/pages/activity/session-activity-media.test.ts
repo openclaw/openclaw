@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { createComponent, createSignal, createStore } from "solid-js";
+import { createComponent, createSignal, createStore, type Accessor } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ArtifactsListResult } from "../../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
@@ -60,6 +60,39 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+const imageAlt = (root: ParentNode) => root.querySelector("img")?.getAttribute("alt");
+const waitImage = (root: ParentNode, alt: string) =>
+  waitForSolid(() => expect(imageAlt(root)).toBe(alt));
+const mediaContext = (request: GatewayRequestHandler) => {
+  const harness = createGatewayHarness(createTestGatewayClient(request));
+  return { harness, context: createContext(harness.gateway, createSessions("main", [])) };
+};
+
+function mountRows(
+  request: GatewayRequestHandler,
+  keys: string[],
+  changing: string,
+  revision: Accessor<number>,
+) {
+  const { context } = mediaContext(request);
+  mountSolid(
+    () =>
+      keys.map((sessionKey) =>
+        createComponent(ActivitySessionMedia, {
+          context,
+          sessionKey,
+          agentId: "main",
+          get revision() {
+            return sessionKey === changing ? revision() : 0;
+          },
+        }),
+      ),
+    { container },
+  );
+  flush();
+  return [...container.querySelectorAll<HTMLElement>("openclaw-activity-session-media")];
+}
+
 function images(label: string, count = 4): ArtifactsListResult {
   return {
     artifacts: Array.from({ length: count }, (_, index) => ({
@@ -84,8 +117,7 @@ function mountMedia(
     session?: GatewaySessionRow;
   } = {},
 ) {
-  const harness = createGatewayHarness(createTestGatewayClient(request));
-  const context = createContext(harness.gateway, createSessions("main", []));
+  const { harness, context } = mediaContext(request);
   const [props, setProps] = createStore<ActivitySessionMediaProps>(
     { context, sessionKey, agentId, session, revision: 0 },
     { shallow: true },
@@ -102,8 +134,7 @@ function mountMedia(
 it("waits for the viewport, limits concurrent discovery, and opens four thumbnails in the shared viewer", async () => {
   const pending = Array.from({ length: 4 }, () => createDeferred<ArtifactsListResult>());
   const request = vi.fn(async () => pending[request.mock.calls.length - 1]!.promise);
-  const harness = createGatewayHarness(createTestGatewayClient(request));
-  const context = createContext(harness.gateway, createSessions("main", []));
+  const { context } = mediaContext(request);
   const media = [0, 1, 2, 3].map((index) =>
     createStore<ActivitySessionMediaProps>(
       { context, sessionKey: `agent:main:images-${index}`, agentId: "main", revision: 0 },
@@ -151,14 +182,12 @@ it("waits for the viewport, limits concurrent discovery, and opens four thumbnai
   try {
     await waitForSolid(() => expect(request).toHaveBeenCalledTimes(4));
     expect(first.querySelectorAll(".chat-message-image")).toHaveLength(4);
-    expect(first.querySelector("img")?.getAttribute("alt")).toBe("first-0");
+    expect(imageAlt(first)).toBe("first-0");
     expect(first.querySelector("openclaw-image-lightbox")).toBe(lightbox);
   } finally {
     pending[3]!.resolve(images("refreshed"));
   }
-  await waitForSolid(() =>
-    expect(first.querySelector("img")?.getAttribute("alt")).toBe("refreshed-0"),
-  );
+  await waitImage(first, "refreshed-0");
   expect(first.querySelector("openclaw-image-lightbox")).toBe(lightbox);
   expect(lightbox?.querySelector(".image")?.getAttribute("src")).toBe(
     "https://images.example.test/first-0.png",
@@ -189,9 +218,7 @@ it.each(["initial discovery", "revision refresh"])(
     await waitForSolid(() => expect(observers.has(row)).toBe(true));
     observers.get(row)?.(true);
     if (!initialDiscovery) {
-      await waitForSolid(() =>
-        expect(row.querySelector("img")?.getAttribute("alt")).toBe("original-0"),
-      );
+      await waitImage(row, "original-0");
       setProps((props) => {
         props.revision = 1;
       });
@@ -200,7 +227,7 @@ it.each(["initial discovery", "revision refresh"])(
       await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
       failedRefresh.reject(new Error("Unavailable"));
       await waitForSolid(() => expect(row.querySelector('[role="status"]')).not.toBeNull());
-      expect(row.querySelector("img")?.getAttribute("alt")).toBe("original-0");
+      expect(imageAlt(row)).toBe("original-0");
       const retryButton = [...row.querySelectorAll<HTMLButtonElement>("button")].find(
         (button) => button.textContent?.trim() === "Retry",
       );
@@ -210,11 +237,9 @@ it.each(["initial discovery", "revision refresh"])(
       );
       retryButton!.click();
       await waitForSolid(() => expect(request).toHaveBeenCalledTimes(3));
-      expect(row.querySelector("img")?.getAttribute("alt")).toBe("original-0");
+      expect(imageAlt(row)).toBe("original-0");
       retry.resolve(images("fresh", 1));
-      await waitForSolid(() =>
-        expect(row.querySelector("img")?.getAttribute("alt")).toBe("fresh-0"),
-      );
+      await waitImage(row, "fresh-0");
       expect(row.querySelector('[role="status"]')).toBeNull();
       request.mockResolvedValueOnce({ artifacts: [] });
       setProps((props) => {
@@ -244,9 +269,7 @@ it.each(["session", "agent", "connection"] as const)(
     });
     await waitForSolid(() => expect(observers.has(row)).toBe(true));
     observers.get(row)?.(true);
-    await waitForSolid(() =>
-      expect(row.querySelector("img")?.getAttribute("alt")).toBe("original-0"),
-    );
+    await waitImage(row, "original-0");
     setProps((props) => {
       props.revision = 1;
     });
@@ -272,16 +295,14 @@ it.each(["session", "agent", "connection"] as const)(
         expect(row.querySelector("img")).toBeNull();
       }
       fresh.resolve(images("fresh", 1));
-      await waitForSolid(() =>
-        expect(row.querySelector("img")?.getAttribute("alt")).toBe("fresh-0"),
-      );
+      await waitImage(row, "fresh-0");
       expect(row.querySelectorAll("img")).toHaveLength(1);
       if (change === "connection") {
         stale.resolve(images("stale"));
         await Promise.resolve();
         flush();
         expect(row.querySelectorAll("img")).toHaveLength(1);
-        expect(row.querySelector("img")?.getAttribute("alt")).toBe("fresh-0");
+        expect(imageAlt(row)).toBe("fresh-0");
         row.querySelector<HTMLButtonElement>(".chat-message-image-button")!.click();
         await waitForSolid(() =>
           expect(row.querySelector("openclaw-image-lightbox")).not.toBeNull(),
@@ -300,24 +321,13 @@ it.each(["session", "agent", "connection"] as const)(
 it("coalesces queued revisions without moving the session behind later arrivals", async () => {
   const pending = Array.from({ length: 4 }, () => createDeferred<ArtifactsListResult>());
   const request = vi.fn(async () => pending[request.mock.calls.length - 1]!.promise);
-  const harness = createGatewayHarness(createTestGatewayClient(request));
-  const context = createContext(harness.gateway, createSessions("main", []));
   const [revision, setRevision] = createSignal(1);
-  mountSolid(
-    () =>
-      [0, 1, 2, 3].map((index) =>
-        createComponent(ActivitySessionMedia, {
-          context,
-          sessionKey: `agent:main:queue-${index}`,
-          agentId: "main",
-          get revision() {
-            return index === 2 ? revision() : 0;
-          },
-        }),
-      ),
-    { container },
+  mountRows(
+    request,
+    [0, 1, 2, 3].map((index) => `agent:main:queue-${index}`),
+    "agent:main:queue-2",
+    revision,
   );
-  flush();
   await waitForSolid(() => expect(observers.size).toBe(4));
   for (const notify of observers.values()) {
     notify(true);
@@ -438,7 +448,7 @@ it.each([
         await vi.advanceTimersByTimeAsync(0);
         flush();
         expect(row.querySelectorAll(".chat-image-frame")).toHaveLength(4);
-        expect(row.querySelector("img")?.getAttribute("alt")).toBe("replacement-0");
+        expect(imageAlt(row)).toBe("replacement-0");
         expect(row.querySelector(".activity-feed__note-action")).toBeNull();
         expect(row.querySelector(".activity-feed__note")).toBeNull();
       }
@@ -489,7 +499,7 @@ it("loads bounded reference-only previews through the shared RPC path with their
     const downloaded = await fetch(imageSource);
     expect(downloaded.headers.get("content-type")).toBe("image/webp");
     expect(await downloaded.text()).toBe("preview");
-    expect(row.querySelector("img")?.getAttribute("alt")).toBe("Inline screenshot");
+    expect(imageAlt(row)).toBe("Inline screenshot");
   } finally {
     vi.useRealTimers();
   }
@@ -513,25 +523,8 @@ it("keeps queued pagination separate from background revalidation", async () => 
       }
       return blockers[Number(sessionKey)]!.promise;
     });
-    const harness = createGatewayHarness(createTestGatewayClient(request));
-    const context = createContext(harness.gateway, createSessions("main", []));
     const [revision, setRevision] = createSignal(0);
-    mountSolid(
-      () =>
-        ["target", "0", "1"].map((sessionKey) =>
-          createComponent(ActivitySessionMedia, {
-            context,
-            sessionKey,
-            agentId: "main",
-            get revision() {
-              return sessionKey === "target" ? revision() : 0;
-            },
-          }),
-        ),
-      { container },
-    );
-    flush();
-    const rows = [...container.querySelectorAll<HTMLElement>("openclaw-activity-session-media")];
+    const rows = mountRows(request, ["target", "0", "1"], "target", revision);
     const row = rows[0]!;
     observers.get(row)?.(true);
     await vi.advanceTimersByTimeAsync(0);
@@ -545,7 +538,7 @@ it("keeps queued pagination separate from background revalidation", async () => 
     row.querySelector<HTMLButtonElement>(".activity-feed__note-action")!.click();
     await vi.advanceTimersByTimeAsync(0);
     flush();
-    expect(row.querySelector("img")?.getAttribute("alt")).toBe("queued-0");
+    expect(imageAlt(row)).toBe("queued-0");
     expect(row.querySelector<HTMLButtonElement>(".activity-feed__note-action")?.disabled).toBe(
       true,
     );
@@ -567,7 +560,7 @@ it("keeps queued pagination separate from background revalidation", async () => 
     await vi.advanceTimersByTimeAsync(0);
     flush();
     expect(row.querySelectorAll("img")).toHaveLength(4);
-    expect(row.querySelector("img")?.getAttribute("alt")).toBe("new-0");
+    expect(imageAlt(row)).toBe("new-0");
   } finally {
     for (const blocker of blockers) {
       blocker.resolve({ artifacts: [] });

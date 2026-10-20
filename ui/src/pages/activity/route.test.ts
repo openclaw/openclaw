@@ -25,23 +25,24 @@ function loadRoute(search: string, pathname = "/activity", basePath = ""): Activ
   return resolveActivityRouteData(loaded.search, activityPersonFromPath(loaded.pathname, basePath));
 }
 
+const sessions = (personId: string | null = null, query = "", time = "7d") => ({
+  mode: "sessions",
+  filters: { personId, query, time },
+  selector: null,
+});
+const run = (
+  selector: ActivityRouteData["selector"] = null,
+  selectorId: string | null = null,
+  decisionCursor: string | null = null,
+) => ({ mode: "run", selector, selectorId, decisionCursor });
+
 describe("resolveActivityRouteData", () => {
   it("opens the session feed by default and decodes its linkable filters", () => {
-    expect(loadRoute("")).toEqual({
-      mode: "sessions",
-      filters: { personId: null, query: "", time: "7d" },
-      selector: null,
-    });
-    expect(loadRoute("?view=other&run=ignored")).toEqual({
-      mode: "sessions",
-      filters: { personId: null, query: "", time: "7d" },
-      selector: null,
-    });
-    expect(loadRoute("?person=alice&time=30d&q=release")).toEqual({
-      mode: "sessions",
-      filters: { personId: "alice", query: "release", time: "30d" },
-      selector: null,
-    });
+    expect(loadRoute("")).toEqual(sessions());
+    expect(loadRoute("?view=other&run=ignored")).toEqual(sessions());
+    expect(loadRoute("?person=alice&time=30d&q=release")).toEqual(
+      sessions("alice", "release", "30d"),
+    );
   });
 
   it("scopes readable person paths independently of query filters and mounted prefixes", () => {
@@ -52,11 +53,7 @@ describe("resolveActivityRouteData", () => {
         search: `?${INTERNAL_ACTIVITY_PATH_PARAM}=%2Fui%2Factivity%2Fada-12345678&person=ignored&time=30d&q=release`,
       },
     ]) {
-      expect(loadRoute(search, pathname, "/ui")).toEqual({
-        mode: "sessions",
-        filters: { personId: "12345678", time: "30d", query: "release" },
-        selector: null,
-      });
+      expect(loadRoute(search, pathname, "/ui")).toEqual(sessions("12345678", "release", "30d"));
     }
     expect(loadRoute("?view=live", "/activity/ada-12345678")).toEqual({
       mode: "live",
@@ -68,43 +65,20 @@ describe("resolveActivityRouteData", () => {
     const executionId = "execution:a/b % lobster";
     expect(
       loadRoute(`?view=run&run=ambiguous&execution=${encodeURIComponent(executionId)}`),
-    ).toEqual({
-      mode: "run",
-      selector: { kind: "execution", id: executionId },
-      selectorId: null,
-      decisionCursor: null,
-    });
+    ).toEqual(run({ kind: "execution", id: executionId }));
   });
 
   it("preserves an encoded receipt deep link only with its selected page", () => {
     expect(
       loadRoute("?view=run&run=run-1&receipt=receipt%3Aa%2Fb&decision=cursor%3A10%3A2"),
-    ).toEqual({
-      mode: "run",
-      selector: { kind: "run", id: "run-1" },
-      selectorId: "receipt:a/b",
-      decisionCursor: "cursor:10:2",
-    });
-    expect(loadRoute("?view=run&run=run-1&decision=ignored-without-receipt")).toEqual({
-      mode: "run",
-      selector: { kind: "run", id: "run-1" },
-      selectorId: null,
-      decisionCursor: null,
-    });
+    ).toEqual(run({ kind: "run", id: "run-1" }, "receipt:a/b", "cursor:10:2"));
+    expect(loadRoute("?view=run&run=run-1&decision=ignored-without-receipt")).toEqual(
+      run({ kind: "run", id: "run-1" }),
+    );
   });
 
   it("keeps a run view with an empty selection explicit", () => {
-    expect(loadRoute("?view=run")).toEqual({
-      mode: "run",
-      selector: null,
-      selectorId: null,
-      decisionCursor: null,
-    });
-    expect(loadRoute("?view=run&run=%20%20")).toEqual({
-      mode: "run",
-      selector: null,
-      selectorId: null,
-      decisionCursor: null,
-    });
+    expect(loadRoute("?view=run")).toEqual(run());
+    expect(loadRoute("?view=run&run=%20%20")).toEqual(run());
   });
 });
