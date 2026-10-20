@@ -8,6 +8,8 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createTranscriptEventReader } from "./session-sqlite-migration-readers.js";
 import { verifyTranscriptEvents } from "./session-sqlite-transcript-verification.js";
 
+const verified = { events: 2, missingEvents: 0, sqliteEvents: 2 };
+
 it("verifies legacy media without accepting changed events or rewriting history", async () => {
   await withOpenClawTestState({ label: "verify-legacy-media" }, async (state) => {
     const sessionId = "legacy-media";
@@ -61,32 +63,18 @@ it("verifies legacy media without accepting changed events or rewriting history"
       },
     });
     for (const mode of ["ordered", "contained", "appendable"] as const) {
-      expect(verifyTranscriptEvents(database.db, source, mode)).toEqual({
-        events: 2,
-        missingEvents: 0,
-        sqliteEvents: 2,
-      });
+      expect(verifyTranscriptEvents(database.db, source, mode)).toEqual(verified);
     }
     expect(fs.readFileSync(filename, "utf8")).toBe(original);
 
     for (const changed of [
-      { ...legacyMediaMessage, message: { ...legacyMediaMessage.message, content: "changed" } },
-      {
-        ...legacyMediaMessage,
-        message: {
-          ...legacyMediaMessage.message,
-          MediaPath: "/tmp/other.png",
-          MediaPaths: ["/tmp/other.png", "/tmp/document.pdf"],
-        },
-      },
-      {
-        ...legacyMediaMessage,
-        message: { ...legacyMediaMessage.message, __openclaw: { retained: "changed metadata" } },
-      },
+      { content: "changed" },
+      { MediaPath: "/tmp/other.png", MediaPaths: ["/tmp/other.png", "/tmp/document.pdf"] },
+      { __openclaw: { retained: "changed metadata" } },
     ]) {
       await state.writeText(
         "legacy.jsonl",
-        `${JSON.stringify(header)}\n${JSON.stringify(changed)}\n`,
+        `${JSON.stringify(header)}\n${JSON.stringify({ ...legacyMediaMessage, message: { ...legacyMediaMessage.message, ...changed } })}\n`,
       );
       expect(verifyTranscriptEvents(database.db, source, "ordered")).toBeUndefined();
       expect(verifyTranscriptEvents(database.db, source, "contained")).toBeUndefined();
@@ -136,11 +124,7 @@ it.each(["openai", "openai-codex"])(
       const source = { path: filename, sessionId, originalPath: filename };
       expect(verifyTranscriptEvents(database.db, source, "ordered")).toBeUndefined();
       for (const mode of ["contained", "appendable"] as const) {
-        expect(verifyTranscriptEvents(database.db, source, mode)).toEqual({
-          events: 2,
-          missingEvents: 0,
-          sqliteEvents: 2,
-        });
+        expect(verifyTranscriptEvents(database.db, source, mode)).toEqual(verified);
       }
       expect(loadTranscriptEventsSync(scope)).toEqual(stored);
     });

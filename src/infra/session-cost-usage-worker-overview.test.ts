@@ -4,6 +4,7 @@ import { encodeSessionArchiveContent } from "../config/sessions/archive-compress
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
+import { createUsageTranscriptEntry } from "./session-cost-usage-fixtures.test-support.js";
 import { observeUsageWorkerReads } from "./session-cost-usage-worker-io.test-support.js";
 import { loadSessionCostSummariesFromCache } from "./session-cost-usage.js";
 
@@ -15,14 +16,7 @@ it("keeps overview reads on committed aggregates and preserves exact transcript 
       { timestamp: "2026-09-18T23:58:00Z", tokens: 2 },
       { timestamp: "2026-09-18T23:59:00Z", tokens: 3 },
     ].map(({ timestamp, tokens }) =>
-      JSON.stringify({
-        type: "message",
-        timestamp,
-        message: {
-          role: "assistant",
-          usage: { input: tokens, output: 0, totalTokens: tokens, cost: { total: tokens } },
-        },
-      }),
+      JSON.stringify(createUsageTranscriptEntry(tokens, { timestamp, cost: tokens })),
     );
     const content = records.join("\n") + "\n";
     await fs.writeFile(sessionFile, content);
@@ -39,13 +33,15 @@ it("keeps overview reads on committed aggregates and preserves exact transcript 
       endMs: Date.UTC(2026, 8, 19) - 1,
       dayBucket: { mode: "utc-offset" as const, utcOffsetMinutes: 0 },
     };
+    const fresh = (totalTokens: number) => ({
+      summaries: [{ totalTokens }],
+      cacheStatus: { status: "fresh" },
+    });
+    const partial = { status: "partial", staleFiles: 0, pendingFiles: 1 };
     await probe.run(async () => {
       await expect(
         loadSessionCostSummariesFromCache({ ...request, committedOnly: true }),
-      ).resolves.toMatchObject({
-        summaries: [{ totalTokens: 5 }],
-        cacheStatus: { status: "fresh" },
-      });
+      ).resolves.toMatchObject(fresh(5));
       for (const boundary of [
         { startMs: Date.UTC(2026, 8, 18, 23, 59), totalTokens: 3 },
         { dayBucket: { mode: "utc-offset" as const, utcOffsetMinutes: 1 }, totalTokens: 5 },
@@ -57,9 +53,7 @@ it("keeps overview reads on committed aggregates and preserves exact transcript 
         ).resolves.toMatchObject({
           summaries: [null],
           cacheStatus: {
-            status: "partial",
-            staleFiles: 0,
-            pendingFiles: 1,
+            ...partial,
             partial: {
               reason: "aggregate-boundary",
               message: expect.stringContaining("exact usage"),
@@ -69,10 +63,7 @@ it("keeps overview reads on committed aggregates and preserves exact transcript 
         expect((await probe.read()).filter((entry) => entry.kind === "transcript")).toEqual([]);
         await expect(
           loadSessionCostSummariesFromCache({ ...request, ...range }),
-        ).resolves.toMatchObject({
-          summaries: [{ totalTokens }],
-          cacheStatus: { status: "fresh" },
-        });
+        ).resolves.toMatchObject(fresh(totalTokens));
         expect((await probe.read()).some((entry) => entry.kind === "transcript")).toBe(true);
       }
       if (archive.suffix) {
@@ -91,9 +82,7 @@ it("keeps overview reads on committed aggregates and preserves exact transcript 
           ).resolves.toMatchObject({
             summaries: [{ totalTokens: 5 }, null],
             cacheStatus: {
-              status: "partial",
-              staleFiles: 0,
-              pendingFiles: 1,
+              ...partial,
               partial: { reason: "aggregate-boundary" },
             },
           });

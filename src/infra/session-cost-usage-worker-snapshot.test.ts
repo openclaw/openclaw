@@ -7,6 +7,10 @@ import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promis
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
+import {
+  createUsageCheckpoint,
+  createUsageTranscriptEntry,
+} from "./session-cost-usage-fixtures.test-support.js";
 import { partitionUsageCostRollup } from "./session-cost-usage-partitions.js";
 import {
   decodeUsageCostRollupEnvelope,
@@ -96,12 +100,7 @@ function reportEntry(file: UsageCostTranscriptFile, tokens: number): UsageCostRo
     version: USAGE_COST_ROLLUP_VERSION,
     pricingFingerprint,
     checkpoint: {
-      kind: "jsonl",
-      parsedOffset: file.size,
-      observedSize: file.size,
-      observedMtimeMs: file.mtimeMs,
-      device: file.device ?? 0,
-      inode: file.inode ?? 0,
+      ...createUsageCheckpoint(file.size, file.mtimeMs, file.inode ?? 0),
       anchorHash: "synthetic-anchor",
     },
     scannedAt: timestamp,
@@ -109,6 +108,25 @@ function reportEntry(file: UsageCostTranscriptFile, tokens: number): UsageCostRo
     countedRecords: 1,
     rollup,
   };
+}
+
+function execute(
+  operation: UsageCostWorkerInput["operation"],
+  request: Parameters<typeof executeUsageCostWorker>[1]["request"] = vi.fn(),
+) {
+  return executeUsageCostWorker(
+    {
+      kind: "usage-cost",
+      location: { agentId: "main", databasePath: ":memory:", storePath: ":memory:", env: {} },
+      databases: [{ agentId: "main", path: ":memory:" }],
+      stores: [],
+      archiveStorePaths: [],
+      operation,
+    },
+    { consumeInput() {}, notify() {}, request },
+    { runNativeSection: async (run) => run(), throwIfCancelled() {} },
+    async (_database, read) => read(),
+  );
 }
 
 it.for([
@@ -119,17 +137,9 @@ it.for([
   "batches whole transcripts and retains pending selectors ($selected, $scanMs ms)",
   async ({ selected, scanMs }) => {
     const root = tempDirs.make("usage-batch-quantum-");
-    const text =
-      JSON.stringify({
-        type: "message",
-        id: "usage",
-        parentId: null,
-        timestamp: "2026-09-18T00:00:00Z",
-        message: {
-          role: "assistant",
-          usage: { input: 7, output: 3, totalTokens: 10, cost: { total: 1 } },
-        },
-      }) + "\n";
+    const entry = createUsageTranscriptEntry(7, { cost: 1 });
+    Object.assign(entry.message.usage, { output: 3, totalTokens: 10 });
+    const text = JSON.stringify({ ...entry, id: "usage", parentId: null }) + "\n";
     const files: UsageCostTranscriptFile[] = ["a", "b"].map((name) => {
       const filePath = path.join(root, `${name}.jsonl`);
       fs.writeFileSync(filePath, text);
@@ -161,43 +171,30 @@ it.for([
     const written: string[] = [];
     const batches: number[] = [];
     try {
-      const result = await executeUsageCostWorker(
+      const result = await execute(
         {
-          kind: "usage-cost",
-          location: { agentId: "main", databasePath: ":memory:", storePath: ":memory:", env: {} },
-          databases: [{ agentId: "main", path: ":memory:" }],
-          stores: [],
-          archiveStorePaths: [],
-          operation: {
-            kind: "refresh",
-            pricingFingerprint: "synthetic-pricing",
-            maxFiles: 50,
-            sessionFiles: selected ? requested.map((file) => file.sourcePath) : undefined,
-          },
+          kind: "refresh",
+          pricingFingerprint,
+          maxFiles: 50,
+          sessionFiles: selected ? requested.map((file) => file.sourcePath) : undefined,
         },
-        {
-          consumeInput() {},
-          notify() {},
-          async request(value) {
-            let output: unknown;
-            if (isRecord(value) && value.kind === "write" && Array.isArray(value.input)) {
-              batches.push(value.input.length);
-              for (const row of value.input) {
-                if (isRecord(row) && typeof row.key === "string") {
-                  written.push(row.key);
-                }
+        async (value) => {
+          let output: unknown;
+          if (isRecord(value) && value.kind === "write" && Array.isArray(value.input)) {
+            batches.push(value.input.length);
+            for (const row of value.input) {
+              if (isRecord(row) && typeof row.key === "string") {
+                written.push(row.key);
               }
-              output = true;
-            } else if (isRecord(value) && value.kind === "refresh-session") {
-              now += scanMs;
-            } else if (isRecord(value) && value.kind === "pricing" && Array.isArray(value.input)) {
-              output = value.input.map(() => undefined);
             }
-            return { input: output, consumed() {} };
-          },
+            output = true;
+          } else if (isRecord(value) && value.kind === "refresh-session") {
+            now += scanMs;
+          } else if (isRecord(value) && value.kind === "pricing" && Array.isArray(value.input)) {
+            output = value.input.map(() => undefined);
+          }
+          return { input: output, consumed() {} };
         },
-        { runNativeSection: async (operation) => operation(), throwIfCancelled() {} },
-        async (_database, read) => read(),
       );
       clock.mockRestore();
       expect(batches).toEqual(scanMs ? [1] : [2]);
@@ -306,27 +303,14 @@ it("ends the cache snapshot before projection awaits and preserves a concurrent 
     return [file];
   });
   fixture.inventory.mockResolvedValue([file]);
-  const input: UsageCostWorkerInput = {
-    kind: "usage-cost",
-    location: { agentId: "main", databasePath: ":memory:", storePath: ":memory:", env: {} },
-    databases: [{ agentId: "main", path: ":memory:" }],
-    archiveStorePaths: [],
-    stores: [],
-    operation: {
+  const report = () =>
+    execute({
       kind: "summary",
       pricingFingerprint,
       startMs: timestamp,
       endMs: timestamp,
       dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
-    },
-  };
-  const report = () =>
-    executeUsageCostWorker(
-      input,
-      { consumeInput() {}, notify() {}, request: vi.fn() },
-      { runNativeSection: async (operation) => operation(), throwIfCancelled() {} },
-      async (_database, read) => read(),
-    );
+    });
   const pending = report();
   try {
     await withinTest(
