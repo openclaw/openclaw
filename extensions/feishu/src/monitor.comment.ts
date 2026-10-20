@@ -12,6 +12,7 @@ import { raceWithTimeoutAndAbort, waitForAbortableDelay } from "./async.js";
 import { createFeishuClient } from "./client.js";
 import {
   encodeQuery,
+  extractFeishuApiErrorMeta,
   parseCommentContentElements,
   type FeishuDriveCommentCard,
   type FeishuDriveCommentReply,
@@ -344,20 +345,17 @@ async function requestFeishuOpenApi<T>(params: {
     if (!isRecord(error)) {
       return typeof error === "string" ? error : JSON.stringify(error);
     }
-    const response = isRecord(error.response) ? error.response : undefined;
-    const responseData = isRecord(response?.data) ? response?.data : undefined;
-    const details = {
-      message: typeof error.message === "string" ? error.message : JSON.stringify(error),
-      code: readString(error.code),
-      method: readString(isRecord(error.config) ? error.config.method : undefined),
-      url: readString(isRecord(error.config) ? error.config.url : undefined),
-      http_status: typeof response?.status === "number" ? response.status : undefined,
-      feishu_code:
-        typeof responseData?.code === "number" ? responseData.code : readString(responseData?.code),
-      feishu_msg: readString(responseData?.msg),
-      feishu_log_id: readString(responseData?.log_id),
-    };
-    return JSON.stringify(details);
+    const meta = extractFeishuApiErrorMeta(error);
+    return JSON.stringify({
+      message: meta.message,
+      code: meta.code,
+      method: readString(meta.config?.method),
+      url: readString(meta.config?.url),
+      http_status: meta.httpStatus,
+      feishu_code: meta.feishuCode,
+      feishu_msg: meta.feishuMsg,
+      feishu_log_id: meta.feishuLogId,
+    });
   };
 
   const result = await raceWithTimeoutAndAbort(
