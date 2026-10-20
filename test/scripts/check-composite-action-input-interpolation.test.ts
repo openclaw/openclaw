@@ -1,4 +1,3 @@
-// Check Composite Action Input Interpolation tests cover check composite action input interpolation script behavior.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -14,7 +13,11 @@ function writeAction(rootDir: string, name: string, source: string): void {
   fs.writeFileSync(actionPath, source, "utf8");
 }
 
-function runCheck(cwd: string) {
+function runCheck(actions: Record<string, string>) {
+  const cwd = createTempDir("openclaw-composite-action-inputs-");
+  for (const [name, source] of Object.entries(actions)) {
+    writeAction(cwd, name, source);
+  }
   return spawnSync("python3", [scriptPath], {
     cwd,
     encoding: "utf8",
@@ -23,23 +26,15 @@ function runCheck(cwd: string) {
 
 describe("check-composite-action-input-interpolation", () => {
   it("rejects direct inputs interpolation inside composite run blocks", () => {
-    const rootDir = createTempDir("openclaw-composite-action-inputs-");
-    writeAction(
-      rootDir,
-      "unsafe",
-      [
-        "name: unsafe",
-        "runs:",
-        "  using: composite",
-        "  steps:",
-        "    - shell: bash",
-        "      run: |",
-        '        echo "${{ inputs.token }}"',
-      ].join("\n"),
-    );
-
-    const result = runCheck(rootDir);
-
+    const result = runCheck({
+      unsafe: `name: unsafe
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        echo "\${{ inputs.token }}"`,
+    });
     expect(result.status).toBe(1);
     expect(result.stdout).toContain("Disallowed direct inputs interpolation");
     expect(result.stdout).toContain(".github/actions/unsafe/action.yml:7");
@@ -52,58 +47,40 @@ describe("check-composite-action-input-interpolation", () => {
     { name: "single-quoted using", using: "'composite'", firstKey: false },
     { name: "quoted using with a comment", using: '"composite" # runtime', firstKey: true },
   ])("rejects direct interpolation with $name", ({ using, firstKey }) => {
-    const rootDir = createTempDir("openclaw-composite-action-inputs-");
-    writeAction(
-      rootDir,
-      "unsafe",
-      [
-        "name: unsafe",
-        "runs:",
-        `  using: ${using}`,
-        "  steps:",
-        ...(firstKey
-          ? ["    - run: |", '        echo "${{ inputs.value }}"', "      shell: bash"]
-          : ["    - shell: bash", '      run: echo "${{ inputs.value }}"']),
-      ].join("\n"),
-    );
-    const result = runCheck(rootDir);
+    const result = runCheck({
+      unsafe: `name: unsafe
+runs:
+  using: ${using}
+  steps:
+${
+  firstKey
+    ? '    - run: |\n        echo "${{ inputs.value }}"\n      shell: bash'
+    : '    - shell: bash\n      run: echo "${{ inputs.value }}"'
+}`,
+    });
     expect(result.status).toBe(1);
     expect(result.stdout).toContain(".github/actions/unsafe/action.yml:6");
     expect(result.stdout).toContain("Disallowed direct inputs interpolation");
   });
 
   it("allows env indirection and ignores non-composite actions", () => {
-    const rootDir = createTempDir("openclaw-composite-action-inputs-");
-    writeAction(
-      rootDir,
-      "safe",
-      [
-        "name: safe",
-        "runs:",
-        "  using: composite",
-        "  steps:",
-        "    - run: |",
-        '        echo "$TOKEN"',
-        "      shell: bash",
-        "      env:",
-        "        TOKEN: ${{ inputs.token }}",
-      ].join("\n"),
-    );
-    writeAction(
-      rootDir,
-      "non-composite",
-      [
-        "name: non-composite",
-        "runs:",
-        "  using: node24",
-        "  main: dist/index.js",
-        "  steps:",
-        '    - run: echo "${{ inputs.token }}"',
-      ].join("\n"),
-    );
-
-    const result = runCheck(rootDir);
-
+    const result = runCheck({
+      safe: `name: safe
+runs:
+  using: composite
+  steps:
+    - run: |
+        echo "$TOKEN"
+      shell: bash
+      env:
+        TOKEN: \${{ inputs.token }}`,
+      "non-composite": `name: non-composite
+runs:
+  using: node24
+  main: dist/index.js
+  steps:
+    - run: echo "\${{ inputs.token }}"`,
+    });
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("No direct inputs interpolation found");
   });

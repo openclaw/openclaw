@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { parse } from "acorn";
 import { afterEach, describe, expect, it } from "vitest";
@@ -8,17 +7,12 @@ import {
   discoverStandaloneWorkers,
   prepareStandaloneWorkers,
 } from "../../scripts/lib/bun-standalone-workers.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const roots: string[] = [];
-afterEach(() => {
-  for (const root of roots.splice(0)) {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-});
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function fixture(files: Record<string, string>) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-standalone-workers-"));
-  roots.push(root);
+  const root = tempDirs.make("openclaw-standalone-workers-");
   const runtimeRoot = path.join(root, "runtime");
   const outputRoot = path.join(root, "build");
   fs.mkdirSync(outputRoot, { recursive: true });
@@ -28,6 +22,42 @@ function fixture(files: Record<string, string>) {
     fs.writeFileSync(target, contents);
   }
   return { runtimeRoot, outputRoot };
+}
+
+function discover(
+  files: Record<string, string>,
+  runtimeEntrypoints = {},
+  moduleEntries = Object.keys(files),
+) {
+  return discoverStandaloneWorkers({
+    ...fixture(files),
+    moduleEntries,
+    runtimeEntrypoints,
+    parse,
+  });
+}
+
+function prepare(source: string) {
+  const paths = fixture({ "dist/entry.mjs": source });
+  const prepared = prepareStandaloneWorkers({
+    ...paths,
+    runtimeBootstrap: path.join(paths.outputRoot, "bootstrap.mjs"),
+    workerEntries: [],
+    moduleEntries: ["dist/entry.mjs"],
+    parse,
+  });
+  return {
+    ...prepared,
+    rewrite: () =>
+      prepared.rewriteInlineWorkers(path.join(paths.runtimeRoot, "dist/entry.mjs"), source),
+  };
+}
+
+function expectBody(entrypoint: string | undefined) {
+  assert.ok(entrypoint, "expected embedded worker entrypoint");
+  expect(fs.readFileSync(entrypoint.replace(/\.mjs$/, ".body.cjs"), "utf8")).toBe(
+    "require('node:worker_threads').parentPort.postMessage(7)\n",
+  );
 }
 
 describe("standalone worker discovery", () => {
@@ -41,19 +71,14 @@ describe("standalone worker discovery", () => {
       "dist/shadowed.mjs":
         'import { Worker } from "node:worker_threads"; function local(Worker) { return new Worker(new URL(import.meta.url)); }',
     };
-    const { runtimeRoot } = fixture(files);
-    expect(
-      discoverStandaloneWorkers({
-        runtimeRoot,
-        moduleEntries: Object.keys(files),
-        runtimeEntrypoints: {},
-        parse,
-      }),
-    ).toEqual(["dist/node-compile-cache-chunk.mjs", "node-compile-cache.mjs"]);
+    expect(discover(files)).toEqual([
+      "dist/node-compile-cache-chunk.mjs",
+      "node-compile-cache.mjs",
+    ]);
   });
 
   it("retains manifest launchers without worker suffixes and adds built plugin workers once", () => {
-    const { runtimeRoot } = fixture({
+    const files = {
       "dist/process/supervisor/service-child-relay.js": "",
       "dist/process/spawn-broker/worker.js": "",
       "dist/extensions/example/store.worker.mjs": "",
@@ -61,26 +86,14 @@ describe("standalone worker discovery", () => {
       "dist/worker/worker-chunk-abc.js": "",
       "dist/telegram-ingress-worker.runtime.js": "",
       "dist/ordinary.mjs": "",
-    });
-    expect(
-      discoverStandaloneWorkers({
-        runtimeRoot,
-        moduleEntries: Object.keys({
-          "dist/process/supervisor/service-child-relay.js": 0,
-          "dist/extensions/example/store.worker.mjs": 0,
-          "dist/worker/memory-worker-entry.js": 0,
-          "dist/worker/worker-chunk-abc.js": 0,
-          "dist/telegram-ingress-worker.runtime.js": 0,
-          "dist/ordinary.mjs": 0,
-        }),
-        runtimeEntrypoints: {
-          relay: { distWorkerPath: "process/supervisor/service-child-relay.js" },
-          broker: { distWorkerPath: "process/spawn-broker/worker.js" },
-          duplicate: { distWorkerPath: "process/supervisor/service-child-relay.js" },
-        },
-        parse,
-      }),
-    ).toEqual([
+    };
+    const runtimeEntrypoints = {
+      relay: { distWorkerPath: "process/supervisor/service-child-relay.js" },
+      broker: { distWorkerPath: "process/spawn-broker/worker.js" },
+      duplicate: { distWorkerPath: "process/supervisor/service-child-relay.js" },
+    };
+    const moduleEntries = Object.keys(files).filter((entry) => !entry.includes("spawn-broker"));
+    expect(discover(files, runtimeEntrypoints, moduleEntries)).toEqual([
       "dist/extensions/example/store.worker.mjs",
       "dist/process/spawn-broker/worker.js",
       "dist/process/supervisor/service-child-relay.js",
@@ -90,14 +103,8 @@ describe("standalone worker discovery", () => {
   });
 
   it("refuses missing launcher outputs before producing an incomplete image", () => {
-    const { runtimeRoot } = fixture({ "dist/present.js": "" });
     expect(() =>
-      discoverStandaloneWorkers({
-        runtimeRoot,
-        moduleEntries: [],
-        runtimeEntrypoints: { missing: { distWorkerPath: "agents/github-exec-launcher.js" } },
-        parse,
-      }),
+      discover({}, { missing: { distWorkerPath: "agents/github-exec-launcher.js" } }),
     ).toThrow("Missing standalone worker outputs: dist/agents/github-exec-launcher.js");
   });
 });
@@ -113,34 +120,14 @@ var SOURCE;
 const initialize = () => { SOURCE = "require('node:worker_threads').parentPort.postMessage(7)"; };
 ${unrelated}
 function launch() { return new Worker(SOURCE, { eval: true }); }`;
-    const paths = fixture({ "dist/entry.mjs": source });
-    const prepared = prepareStandaloneWorkers({
-      ...paths,
-      runtimeBootstrap: path.join(paths.outputRoot, "bootstrap.mjs"),
-      workerEntries: [],
-      moduleEntries: ["dist/entry.mjs"],
-      parse,
-    });
-    assert.ok(prepared.entrypoints[0]);
-    expect(fs.readFileSync(prepared.entrypoints[0].replace(/\.mjs$/, ".body.cjs"), "utf8")).toBe(
-      "require('node:worker_threads').parentPort.postMessage(7)\n",
-    );
+    expectBody(prepare(source).entrypoints[0]);
   });
 
   it("refuses a dynamic worker source that shadows a fixed module binding", () => {
-    const paths = fixture({
-      "dist/entry.mjs": `import { Worker } from "node:worker_threads";
-const SOURCE = "wrong program";
-function launch(SOURCE) { return new Worker(SOURCE, { eval: true }); }`,
-    });
     expect(() =>
-      prepareStandaloneWorkers({
-        ...paths,
-        runtimeBootstrap: path.join(paths.outputRoot, "bootstrap.mjs"),
-        workerEntries: [],
-        moduleEntries: ["dist/entry.mjs"],
-        parse,
-      }),
+      prepare(`import { Worker } from "node:worker_threads";
+const SOURCE = "wrong program";
+function launch(SOURCE) { return new Worker(SOURCE, { eval: true }); }`),
     ).toThrow("Unsupported fixed worker source expression: Identifier SOURCE");
   });
 
@@ -153,29 +140,15 @@ function launch(SOURCE) { return new Worker(SOURCE, { eval: true }); }`,
     ['import { createCpuTrackedWorker as task } from "./worker-cpu-abc.mjs";', "task"],
   ])("embeds fixed payloads for a recognized worker binding (%s)", (binding, callee) => {
     const source = `${binding}\nconst SOURCE = "require('node:worker_threads').parentPort.postMessage(7)";\n${callee}(SOURCE, { eval: true, workerData: { value: 3 } });`;
-    const paths = fixture({ "dist/entry.mjs": source });
-    const prepared = prepareStandaloneWorkers({
-      ...paths,
-      runtimeBootstrap: path.join(paths.outputRoot, "bootstrap.mjs"),
-      workerEntries: [],
-      moduleEntries: ["dist/entry.mjs"],
-      parse,
-    });
+    const prepared = prepare(source);
     expect(prepared.inlineWorkers).toHaveLength(1);
-    const transformed = prepared.rewriteInlineWorkers(
-      path.join(paths.runtimeRoot, "dist/entry.mjs"),
-      source,
-    );
+    const transformed = prepared.rewrite();
     const ast = parse(transformed, { ecmaVersion: "latest", sourceType: "module" });
     expect(ast).toBeDefined();
     expect(transformed).toContain("eval: false");
     expect(transformed).toContain("workerData: { value: 3 }");
     expect(transformed).toContain("file:///$bunfs/root/standalone-workers/inline/");
-    const entrypoint = prepared.entrypoints[0];
-    assert.ok(entrypoint, "expected embedded worker entrypoint");
-    expect(fs.readFileSync(entrypoint.replace(/\.mjs$/, ".body.cjs"), "utf8")).toBe(
-      "require('node:worker_threads').parentPort.postMessage(7)\n",
-    );
+    expectBody(prepared.entrypoints[0]);
   });
 
   it("leaves unrelated and shadowed eval options unchanged", () => {
@@ -183,17 +156,8 @@ function launch(SOURCE) { return new Worker(SOURCE, { eval: true }); }`,
 function unrelated(value, options) { return value; }
 unrelated("not worker code", { eval: true });
 function useShadow(Worker) { return new Worker("also unrelated", { eval: true }); }`;
-    const paths = fixture({ "dist/entry.mjs": source });
-    const prepared = prepareStandaloneWorkers({
-      ...paths,
-      runtimeBootstrap: path.join(paths.outputRoot, "bootstrap.mjs"),
-      workerEntries: [],
-      moduleEntries: ["dist/entry.mjs"],
-      parse,
-    });
+    const prepared = prepare(source);
     expect(prepared.inlineWorkers).toEqual([]);
-    expect(
-      prepared.rewriteInlineWorkers(path.join(paths.runtimeRoot, "dist/entry.mjs"), source),
-    ).toBe(source);
+    expect(prepared.rewrite()).toBe(source);
   });
 });

@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { copyBundledPluginMetadata } from "../../scripts/copy-bundled-plugin-metadata.mts";
@@ -9,13 +8,15 @@ import {
   withAugmentedPluginNpmManifestForPackage,
 } from "../../scripts/lib/plugin-npm-package-manifest.mts";
 import { resolvePluginNpmRuntimeBuildPlan } from "../../scripts/lib/plugin-npm-runtime-build.mts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const roots: string[] = [];
-afterEach(() => {
-  for (const root of roots.splice(0)) {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-});
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+function catalogs(prefix: string, extension: string) {
+  return {
+    capabilityCatalogEntry: `${prefix}/catalog/voice${extension}`,
+    providerCatalogEntry: `${prefix}/catalog/models${extension}`,
+  };
+}
 
 describe("capability catalog artifact ownership", () => {
   it.each([
@@ -25,23 +26,25 @@ describe("capability catalog artifact ownership", () => {
   ] as const)(
     "carries declarations into $runtimeFormat artifacts (browser: $browser)",
     ({ runtimeFormat, browser }) => {
-      const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-catalog-artifacts-"));
-      roots.push(root);
+      const root = tempDirs.make("openclaw-catalog-artifacts-");
       const plugin = path.join(root, "extensions", "catalog-fixture");
-      fs.mkdirSync(path.join(plugin, "catalog"), { recursive: true });
+      const write = (file: string, content: string) => {
+        const target = path.join(plugin, file);
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.writeFileSync(target, content);
+      };
+      const readManifest = () => fs.readFileSync(path.join(plugin, "openclaw.plugin.json"), "utf8");
+      const params = { repoRoot: root, packageDir: plugin };
       const manifest = {
         id: "catalog-fixture",
         configSchema: { type: "object" },
         ...(browser
           ? { controlUi: { entry: "dist/control-ui/authored/index.js" } }
-          : {
-              capabilityCatalogEntry: "./catalog/voice.ts",
-              providerCatalogEntry: "./catalog/models.ts",
-            }),
+          : catalogs(".", ".ts")),
       };
       fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
-      fs.writeFileSync(
-        path.join(plugin, "package.json"),
+      write(
+        "package.json",
         JSON.stringify({
           name: "@openclaw/catalog-fixture",
           version: "2026.9.1",
@@ -53,37 +56,27 @@ describe("capability catalog artifact ownership", () => {
           },
         }),
       );
-      fs.writeFileSync(path.join(plugin, "openclaw.plugin.json"), JSON.stringify(manifest));
+      write("openclaw.plugin.json", JSON.stringify(manifest));
       for (const file of ["index.ts", "browser.ts", "catalog/voice.ts", "catalog/models.ts"]) {
-        fs.writeFileSync(path.join(plugin, file), "export default {};\n");
+        write(file, "export default {};\n");
       }
 
       const [entry] = collectSourceCheckoutPluginBuildEntries({ cwd: root, env: {} });
       const extension = runtimeFormat === "cjs" ? ".cjs" : ".js";
-      const plan = resolvePluginNpmRuntimeBuildPlan({ repoRoot: root, packageDir: plugin })!;
+      const plan = resolvePluginNpmRuntimeBuildPlan(params)!;
       const expected = browser
         ? { controlUi: { entry: "dist/control-ui/fresh/index.js" } }
-        : {
-            capabilityCatalogEntry: `./dist/catalog/voice${extension}`,
-            providerCatalogEntry: `./dist/catalog/models${extension}`,
-          };
+        : catalogs("./dist", extension);
       if (browser) {
-        fs.mkdirSync(path.join(plugin, "dist"));
-        fs.writeFileSync(path.join(plugin, "dist/openclaw.plugin.json"), JSON.stringify(expected));
+        write("dist/openclaw.plugin.json", JSON.stringify(expected));
         for (const output of plan.runtimeBuildOutputs) {
-          const target = path.join(plugin, output);
-          fs.mkdirSync(path.dirname(target), { recursive: true });
-          fs.writeFileSync(target, "export default {};\n");
+          write(output, "export default {};\n");
         }
-        const authoredBytes = fs.readFileSync(path.join(plugin, "openclaw.plugin.json"), "utf8");
-        withAugmentedPluginNpmManifestForPackage({ repoRoot: root, packageDir: plugin }, () => {
-          expect(
-            JSON.parse(fs.readFileSync(path.join(plugin, "openclaw.plugin.json"), "utf8")),
-          ).toMatchObject(expected);
+        const authoredBytes = readManifest();
+        withAugmentedPluginNpmManifestForPackage(params, () => {
+          expect(JSON.parse(readManifest())).toMatchObject(expected);
         });
-        expect(fs.readFileSync(path.join(plugin, "openclaw.plugin.json"), "utf8")).toBe(
-          authoredBytes,
-        );
+        expect(readManifest()).toBe(authoredBytes);
       } else {
         expect(entry?.sourceEntries).toEqual(
           expect.arrayContaining(["./catalog/voice.ts", "./catalog/models.ts"]),
@@ -91,9 +84,7 @@ describe("capability catalog artifact ownership", () => {
         expect(plan.entry["catalog/voice"]).toBe(path.join(plugin, "catalog/voice.ts"));
         expect(plan.runtimeBuildOutputs).toContain(`./dist/catalog/voice${extension}`);
       }
-      expect(
-        resolveAugmentedPluginNpmManifest({ repoRoot: root, packageDir: plugin }).manifest,
-      ).toMatchObject(expected);
+      expect(resolveAugmentedPluginNpmManifest(params).manifest).toMatchObject(expected);
 
       copyBundledPluginMetadata({ cwd: root, env: {} });
       const emitted = JSON.parse(
@@ -102,17 +93,8 @@ describe("capability catalog artifact ownership", () => {
           "utf8",
         ),
       );
-      expect(emitted).toMatchObject(
-        browser
-          ? expected
-          : {
-              capabilityCatalogEntry: `./catalog/voice${extension}`,
-              providerCatalogEntry: `./catalog/models${extension}`,
-            },
-      );
-      expect(
-        JSON.parse(fs.readFileSync(path.join(plugin, "openclaw.plugin.json"), "utf8")),
-      ).toEqual(manifest);
+      expect(emitted).toMatchObject(browser ? expected : catalogs(".", extension));
+      expect(JSON.parse(readManifest())).toEqual(manifest);
     },
   );
 });

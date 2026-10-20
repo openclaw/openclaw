@@ -28,13 +28,15 @@ function renderFile(file: string, version: string) {
   });
 }
 
+function expectHtml(result: ReturnType<typeof renderFile>, content: string, version = "2026.8.2") {
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.stdout).toBe(`<h2>OpenClaw ${version}</h2>\n${content}\n${footer}\n`);
+}
+
 describe("changelog release HTML", () => {
   it("renders the selected split file through the source index", () => {
     const result = render("## 2026.8.2\n\n### Fixes\n- Current release.\n", "2026.8.2", true);
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toBe(
-      `<h2>OpenClaw 2026.8.2</h2>\n<h3>Fixes</h3>\n<ul>\n<li>Current release.</li>\n</ul>\n${footer}\n`,
-    );
+    expectHtml(result, "<h3>Fixes</h3>\n<ul>\n<li>Current release.</li>\n</ul>");
   });
 
   it.each(["index", "entry"])(
@@ -59,49 +61,37 @@ describe("changelog release HTML", () => {
       writeFileSync(entryPath, renderReleaseDocsMirror({ rootDir, version, sources: [source] }));
 
       const result = renderFile(route === "index" ? indexPath : entryPath, version);
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout).toBe(
-        `<h2>OpenClaw ${version}</h2>\n<h3>Release notes</h3>\n<ul>\n<li>Current release.</li>\n</ul>\n${footer}\n`,
-      );
+      expectHtml(result, "<h3>Release notes</h3>\n<ul>\n<li>Current release.</li>\n</ul>", version);
     },
   );
 
   it("preserves markup ordering, literal HTML, links, backslashes and list boundaries", () => {
-    const result = render(
-      [
-        "# Changelog",
-        "## 2026.8.2 (Unreleased)",
-        "",
-        "### Highlights",
-        "- **Fast** & reliable `path\\file`",
-        "- [Guide](https://example.com?a=1&b=2) and **bold**",
-        "",
-        "#### Details",
-        "<p>Existing &amp; HTML</p>",
-        "##### More",
-        "- Plain <tag>",
-        "## 2026.8.1",
-        "- Old release",
-      ].join("\n"),
-    );
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toBe(
-      [
-        "<h2>OpenClaw 2026.8.2</h2>",
-        "<h3>Highlights</h3>",
-        "<ul>",
-        "<li><strong>Fast</strong> & reliable <code>path\\file</code></li>",
-        '<li><a href="https://example.com?a=1&b=2">Guide</a> and <strong>bold</strong></li>',
-        "</ul>",
-        "<h4>Details</h4>",
-        "<p>Existing &amp; HTML</p>",
-        "<h5>More</h5>",
-        "<ul>",
-        "<li>Plain <tag></li>",
-        "</ul>",
-        footer,
-        "",
-      ].join("\n"),
+    const result = render(`# Changelog
+## 2026.8.2 (Unreleased)
+
+### Highlights
+- **Fast** & reliable \`path\\file\`
+- [Guide](https://example.com?a=1&b=2) and **bold**
+
+#### Details
+<p>Existing &amp; HTML</p>
+##### More
+- Plain <tag>
+## 2026.8.1
+- Old release`);
+    expectHtml(
+      result,
+      `<h3>Highlights</h3>
+<ul>
+<li><strong>Fast</strong> & reliable <code>path\\file</code></li>
+<li><a href="https://example.com?a=1&b=2">Guide</a> and <strong>bold</strong></li>
+</ul>
+<h4>Details</h4>
+<p>Existing &amp; HTML</p>
+<h5>More</h5>
+<ul>
+<li>Plain <tag></li>
+</ul>`,
     );
   });
 
@@ -113,28 +103,21 @@ describe("changelog release HTML", () => {
     );
     const result = render(`## 2026.8.2\n\n### Contributions\n${entries.join("\n")}\n`);
     expect(result.error).toBeUndefined();
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toBe(
-      [
-        "<h2>OpenClaw 2026.8.2</h2>",
-        "<h3>Contributions</h3>",
-        "<ul>",
-        ...entries.map(
-          (_, index) =>
-            `<li><strong>Fix ${index}</strong>: preserve <code>bytes</code> & <a href="https://example.com/${index}">credit</a></li>`,
-        ),
-        "</ul>",
-        footer,
-        "",
-      ].join("\n"),
+    expectHtml(
+      result,
+      "<h3>Contributions</h3>\n<ul>\n" +
+        entries
+          .map(
+            (_, index) =>
+              `<li><strong>Fix ${index}</strong>: preserve <code>bytes</code> & <a href="https://example.com/${index}">credit</a></li>`,
+          )
+          .join("\n") +
+        "\n</ul>",
     );
   });
 
   it("keeps the missing-version fallback", () => {
     const result = render("## 2026.8.1\n- Previous release\n");
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toBe(
-      `<h2>OpenClaw 2026.8.2</h2>\n<p>Latest OpenClaw update.</p>\n${footer}\n`,
-    );
+    expectHtml(result, "<p>Latest OpenClaw update.</p>");
   });
 });

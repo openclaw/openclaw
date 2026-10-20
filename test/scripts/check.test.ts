@@ -1,4 +1,3 @@
-// Check tests cover check script behavior.
 import { spawnSync } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
 import { main, PREFLIGHT_CHECKS, runCommand } from "../../scripts/check.mts";
@@ -34,16 +33,9 @@ describe("scripts/check", () => {
   });
 
   it("runs pnpm commands through the managed child runner", async () => {
-    const calls: Array<{ args: string[]; bin: string }> = [];
-    const result = await runCommand(
-      { args: ["lint"], name: "lint" },
-      async (options: { args: string[]; bin: string }) => {
-        calls.push(options);
-        return 0;
-      },
-    );
-
-    expect(calls).toEqual([{ args: ["lint"], bin: "pnpm" }]);
+    const run = vi.fn<NonNullable<Parameters<typeof runCommand>[1]>>().mockResolvedValue(0);
+    const result = await runCommand({ args: ["lint"], name: "lint" }, run);
+    expect(run.mock.calls).toEqual([[{ args: ["lint"], bin: "pnpm" }]]);
     expect(result).toMatchObject({ name: "lint", status: 0 });
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
   });
@@ -66,35 +58,24 @@ describe("scripts/check", () => {
   });
 
   it("keeps script policy guards in the aggregate preflight", () => {
-    expect(PREFLIGHT_CHECKS).not.toContainEqual({
-      name: "environment variable count ratchet",
-      args: ["check:env-var-count"],
+    const exact = (name: string, command: string, usesBase?: true) => ({
+      name,
+      args: [command],
+      ...(usesBase ? { usesBase } : {}),
     });
-    expect(PREFLIGHT_CHECKS).toContainEqual(
-      expect.objectContaining({
-        name: "max-lines suppression ratchet",
-        args: ["check:max-lines-ratchet"],
-      }),
+    expect(PREFLIGHT_CHECKS).not.toContainEqual(
+      exact("environment variable count ratchet", "check:env-var-count"),
     );
-    expect(PREFLIGHT_CHECKS).toContainEqual(
-      expect.objectContaining({
-        name: "assertion SAFETY comment ratchet",
-        args: ["check:assertion-safety"],
-      }),
+    expect(PREFLIGHT_CHECKS).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining(exact("max-lines suppression ratchet", "check:max-lines-ratchet")),
+        expect.objectContaining(
+          exact("assertion SAFETY comment ratchet", "check:assertion-safety"),
+        ),
+        exact("test timeout race ratchet", "check:test-timeout-race-ratchet", true),
+        exact("first-party mock export ratchet", "check:test-mock-exports", true),
+        exact("script TypeScript erasability", "check:script-erasability"),
+      ]),
     );
-    expect(PREFLIGHT_CHECKS).toContainEqual({
-      name: "test timeout race ratchet",
-      args: ["check:test-timeout-race-ratchet"],
-      usesBase: true,
-    });
-    expect(PREFLIGHT_CHECKS).toContainEqual({
-      name: "first-party mock export ratchet",
-      args: ["check:test-mock-exports"],
-      usesBase: true,
-    });
-    expect(PREFLIGHT_CHECKS).toContainEqual({
-      name: "script TypeScript erasability",
-      args: ["check:script-erasability"],
-    });
   });
 });
