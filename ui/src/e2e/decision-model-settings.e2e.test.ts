@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { applyMergePatch } from "../../../src/config/merge-patch.js";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -17,6 +18,8 @@ const decisionModels = [
   { provider: "typesafe", id: "jev-latest", name: "Jev", pluginId: "typesafe" },
   { provider: "typesafe", id: "jev-preview", name: "Jev Preview", pluginId: "typesafe" },
 ];
+const capture = (page: Page, name: string) =>
+  page.screenshot({ path: path.join(suite.artifactDir, name + ".png") });
 
 suite.define(() => {
   it("saves global decisions without a chat model and preserves per-agent inheritance, disable, and override", async () => {
@@ -65,12 +68,10 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}settings/model-providers`);
         const global = page.locator("openclaw-select-picker:has(#model-providers-decision-model)");
         await expect.poll(() => pickerValue(global)).toBe("");
-        await page.screenshot({ path: path.join(suite.artifactDir, "global-disabled.png") });
+        await capture(page, "global-disabled");
         await global.locator("button").first().click();
         await global.getByRole("option", { name: "Jev", exact: true }).waitFor();
-        await page.screenshot({
-          path: path.join(suite.artifactDir, "global-decision-options.png"),
-        });
+        await capture(page, "global-decision-options");
         await page.keyboard.press("Escape");
         for (const value of ["typesafe/jev-latest", "", "typesafe/jev-latest"]) {
           const before = (await gateway.getRequests("config.patch")).length;
@@ -90,17 +91,17 @@ suite.define(() => {
           await expect.poll(() => pickerValue(global)).toBe(value);
         }
         expect(JSON.stringify(config)).not.toContain('"model":');
-        await page.screenshot({ path: path.join(suite.artifactDir, "global-jev-saved.png") });
+        await capture(page, "global-jev-saved");
 
         await page.goto(`${suite.server.baseUrl}settings/agents/scout/overview`);
         const agent = page.locator("openclaw-select-picker:has(#agent-decision-model)");
         await expect.poll(() => pickerValue(agent)).toBe("__openclaw_inherit_decision__");
         expect(await agent.textContent()).toContain("Use global default · Jev");
-        await page.screenshot({ path: path.join(suite.artifactDir, "agent-inherited.png") });
-        for (const [value, expected] of [
-          ["", ""],
-          ["typesafe/jev-preview", "typesafe/jev-preview"],
-          ["__openclaw_inherit_decision__", undefined],
+        await capture(page, "agent-inherited");
+        for (const [value, expected, proof] of [
+          ["", "", "agent-disabled"],
+          ["typesafe/jev-preview", "typesafe/jev-preview", "agent-override"],
+          ["__openclaw_inherit_decision__", undefined, "agent-inheritance-restored"],
         ] as const) {
           await selectPickerValue(agent, value);
           const before = (await gateway.getRequests("config.set")).length;
@@ -126,16 +127,7 @@ suite.define(() => {
           await gateway.resolveDeferred("config.set", { ...snapshot(), ok: true });
           await page.reload();
           await expect.poll(() => pickerValue(agent)).toBe(value);
-          await page.screenshot({
-            path: path.join(
-              suite.artifactDir,
-              expected === undefined
-                ? "agent-inheritance-restored.png"
-                : expected === ""
-                  ? "agent-disabled.png"
-                  : "agent-override.png",
-            ),
-          });
+          await capture(page, proof);
         }
         await gateway.setMethodResponse("models.list", {
           models: [{ id: "chat", provider: "fixture", name: "Chat" }],
@@ -149,15 +141,13 @@ suite.define(() => {
         ).toBe(1);
         expect(await global.locator('[role="option"][data-value="fixture/chat"]').count()).toBe(0);
         await page.keyboard.press("Escape");
-        await page.screenshot({
-          path: path.join(suite.artifactDir, "global-with-chat-catalog.png"),
-        });
+        await capture(page, "global-with-chat-catalog");
         await page.setViewportSize({ width: 520, height: 900 });
         await global.scrollIntoViewIfNeeded();
         expect(
           await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
         ).toBe(true);
-        await page.screenshot({ path: path.join(suite.artifactDir, "global-narrow.png") });
+        await capture(page, "global-narrow");
       },
     );
   });

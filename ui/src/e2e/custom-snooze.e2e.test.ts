@@ -1,5 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createControlUiMockSameOriginGatewayScript } from "../test-helpers/control-ui-e2e.ts";
@@ -14,6 +15,8 @@ import {
 } from "./session-management.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
+const expectFocus = (target: Locator) =>
+  expect.poll(() => target.evaluate((element) => element === document.activeElement)).toBe(true);
 suite.define(() => {
   it.each([1280, 390])(
     "validates, cancels, applies, and reuses custom snoozes at width %s",
@@ -54,20 +57,18 @@ suite.define(() => {
             if (process.env.OPENCLAW_CAPTURE_UI_PROOF !== "1") {
               return;
             }
-            const frame = await takeControlUiScreenshotFrame(
+            const { png } = await takeControlUiScreenshotFrame(
               page,
               page.locator(".shell"),
               [page.getByRole("menuitem", { name: "Choose another time", exact: true })],
               { animations: "disabled" },
             );
-            await writeFile(path.join(suite.artifactDir, name + "-" + width + ".png"), frame.png);
+            await writeFile(path.join(suite.artifactDir, `${name}-${width}.png`), png);
           };
           const openSnooze = async (sessionKey: string) => {
             await page
               .locator(
-                '.sidebar-session-content [data-session-key="' +
-                  sessionKey +
-                  '"] .sidebar-recent-session__link',
+                `.sidebar-session-content [data-session-key="${sessionKey}"] .sidebar-recent-session__link`,
               )
               .click({ button: "right" });
             if (width === 390) {
@@ -84,9 +85,7 @@ suite.define(() => {
           const picker = page.getByRole("dialog", { name: "Choose another time", exact: true });
           const field = picker.getByLabel("Date and time", { exact: true });
           await field.waitFor();
-          await expect
-            .poll(() => field.evaluate((element) => element === document.activeElement))
-            .toBe(true);
+          await expectFocus(field);
           await field.fill("2020-01-01T09:00");
           await field.press("Enter");
           await picker.getByRole("alert").waitFor();
@@ -97,9 +96,7 @@ suite.define(() => {
           ).toHaveLength(0);
           await field.press("Escape");
           await picker.waitFor({ state: "hidden" });
-          await expect
-            .poll(() => chooser.evaluate((element) => element === document.activeElement))
-            .toBe(true);
+          await expectFocus(chooser);
           await chooser.click();
           await picker.getByRole("button", { name: "Cancel", exact: true }).click();
           await picker.waitFor({ state: "hidden" });
@@ -109,26 +106,14 @@ suite.define(() => {
             date.setHours(10, 30, 0, 0);
             const pad = (n: number) => String(n).padStart(2, "0");
             return {
-              input:
-                date.getFullYear() +
-                "-" +
-                pad(date.getMonth() + 1) +
-                "-" +
-                pad(date.getDate()) +
-                "T10:30",
+              input: `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T10:30`,
               timestamp: date.getTime(),
             };
           });
           await field.fill(value.input);
           await capture("after-picker");
           await field.press("Tab");
-          await expect
-            .poll(() =>
-              picker
-                .getByRole("button", { name: "Cancel", exact: true })
-                .evaluate((element) => element === document.activeElement),
-            )
-            .toBe(true);
+          await expectFocus(picker.getByRole("button", { name: "Cancel", exact: true }));
           await page.keyboard.press("Tab");
           await page.keyboard.press("Enter");
           const patch = await waitForPatch(

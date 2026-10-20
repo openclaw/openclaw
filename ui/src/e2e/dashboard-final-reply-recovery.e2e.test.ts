@@ -11,28 +11,22 @@ const suite = createControlUiE2eSuite({
 });
 
 const sessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
-
-function dashboardPath(): string {
-  return controlUiSessionPath(sessionKey).replace(/^\/chat\//u, "/dashboard/");
-}
+const dashboardPath = controlUiSessionPath(sessionKey).replace(/^\/chat\//u, "/dashboard/");
+const textContent = (text: string) => [{ type: "text", text }];
 
 suite.define(() => {
   it("projects a distinct durable reply after interim text and a message-less terminal", async () => {
     const recordProof = process.env.OPENCLAW_UI_E2E_RECORD === "1";
+    const proofDir = path.join(suite.artifactDir, "dashboard-final-reply-recovery");
     if (recordProof) {
-      await mkdir(path.join(suite.artifactDir, "dashboard-final-reply-recovery"), {
-        recursive: true,
-      });
+      await mkdir(proofDir, { recursive: true });
     }
     const context = await suite.browser.newContext({
       locale: "en-US",
       viewport: { height: 900, width: 1280 },
       ...(recordProof
         ? {
-            recordVideo: {
-              dir: path.join(suite.artifactDir, "dashboard-final-reply-recovery"),
-              size: { height: 900, width: 1280 },
-            },
+            recordVideo: { dir: proofDir, size: { height: 900, width: 1280 } },
           }
         : {}),
     });
@@ -68,7 +62,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(new URL(dashboardPath(), suite.server.baseUrl).href);
+      await page.goto(new URL(dashboardPath, suite.server.baseUrl).href);
       const prompt = "Why did Done appear without my reply?";
       const interimText = "Checking the dashboard state.";
       const updatedInterimText = "Still checking the dashboard state.";
@@ -83,38 +77,25 @@ suite.define(() => {
       const runId = typeof params.idempotencyKey === "string" ? params.idempotencyKey : "";
       expect(runId).not.toBe("");
 
-      await gateway.emitGatewayEvent("chat", {
-        runId,
-        sessionKey,
-        seq: 1,
-        state: "delta",
-        deltaText: interimText,
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: interimText }],
-          timestamp: 1,
-        },
-      });
+      const emitDelta = (text: string, seq: number, replace = false) =>
+        gateway.emitGatewayEvent("chat", {
+          runId,
+          sessionKey,
+          seq,
+          state: "delta",
+          deltaText: text,
+          ...(replace ? { replace } : {}),
+          message: { role: "assistant", content: textContent(text), timestamp: seq },
+        });
+      await emitDelta(interimText, 1);
       await page.locator(".chat-thread-inner", { hasText: interimText }).waitFor();
-      await gateway.emitGatewayEvent("chat", {
-        runId,
-        sessionKey,
-        seq: 2,
-        state: "delta",
-        deltaText: partialFinalText,
-        replace: true,
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: partialFinalText }],
-          timestamp: 2,
-        },
-      });
+      await emitDelta(partialFinalText, 2, true);
       await page.locator(".chat-thread-inner", { hasText: partialFinalText }).waitFor();
 
       const persistedInterimHistory = [
         {
           role: "user",
-          content: [{ type: "text", text: prompt }],
+          content: textContent(prompt),
           timestamp: 1,
           __openclaw: { id: "dashboard-prompt", idempotencyKey: `${runId}:user`, seq: 1 },
         },
@@ -133,11 +114,7 @@ suite.define(() => {
           role: "assistant",
           phase: "final_answer",
           content: [
-            {
-              text: stalePartialFinalText,
-              type: "text",
-              cache_control: { type: "ephemeral" },
-            },
+            { text: stalePartialFinalText, type: "text", cache_control: { type: "ephemeral" } },
           ],
           timestamp: 3,
           __openclaw: { id: "dashboard-partial-final", runId, seq: 3 },
@@ -147,7 +124,7 @@ suite.define(() => {
         ...persistedInterimHistory,
         {
           role: "assistant",
-          content: [{ type: "text", text: finalText }],
+          content: textContent(finalText),
           stopReason: "stop",
           timestamp: 4,
           __openclaw: { id: "dashboard-final", runId, seq: 4 },
@@ -173,10 +150,7 @@ suite.define(() => {
         .toBe(historyCount + 1);
       if (recordProof) {
         await writeFile(
-          path.join(
-            path.join(suite.artifactDir, "dashboard-final-reply-recovery"),
-            "dashboard-final-reply-recovered.png",
-          ),
+          path.join(proofDir, "dashboard-final-reply-recovered.png"),
           await takeControlUiViewportScreenshot(page, page.locator(".shell"), [visibleFinal]),
         );
       }
@@ -184,12 +158,7 @@ suite.define(() => {
       const video = page.video();
       await context.close();
       if (recordProof && video) {
-        await video.saveAs(
-          path.join(
-            path.join(suite.artifactDir, "dashboard-final-reply-recovery"),
-            "dashboard-final-reply-recovered.webm",
-          ),
-        );
+        await video.saveAs(path.join(proofDir, "dashboard-final-reply-recovered.webm"));
       }
     }
   });
