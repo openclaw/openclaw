@@ -156,6 +156,8 @@ it("refreshes notification presentation from in-place owner publications", () =>
 it("renders Web Push registration publications and dispatches Unsubscribe without reloading", () => {
   const snapshot: WebPushSnapshot = {
     supported: true,
+    canManage: true,
+    canReadPreferences: true,
     permission: "default",
     subscription: "unknown",
     loading: false,
