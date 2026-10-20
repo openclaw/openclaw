@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { setImmediate } from "node:timers/promises";
+import { collectForRetentionCheck } from "../test-utils/retention.js";
 import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
 import { Agent } from "./runtime/index.js";
 import { createResourceLoader } from "./sessions/agent-session-loop-resource-loader.test-support.js";
@@ -12,15 +12,6 @@ import { SettingsManager } from "./sessions/settings-manager.js";
 import { createToolDefinitionFromAgentTool } from "./sessions/tools/tool-definition-wrapper.js";
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
 import { clearToolSearchCatalog, createToolSearchCatalogRef } from "./tool-search-catalog.js";
-
-async function collect() {
-  const gc = globalThis.gc;
-  assert.ok(gc, "The retention child requires --expose-gc");
-  for (let pass = 0; pass < 8; pass += 1) {
-    await setImmediate();
-    gc();
-  }
-}
 
 function collected(...references: WeakRef<object>[]) {
   for (const reference of references) {
@@ -105,7 +96,7 @@ try {
   await scenario.reload();
   await scenario.reload();
   const control = new WeakRef({ unowned: true });
-  await collect();
+  await collectForRetentionCheck("description-replaced");
   const [heldWrapper, refreshedWrapper, reloadedWrapper] = scenario.wrappers;
   const [heldRunner, replacedRunner] = scenario.runners;
   assert.ok(heldWrapper && refreshedWrapper && reloadedWrapper && heldRunner && replacedRunner);
@@ -113,12 +104,12 @@ try {
   assert.ok(heldWrapper.deref(), "Externally held wrapper remains usable");
   assert.ok(heldRunner.deref(), "Held wrapper still owns its execution context");
   scenario.releaseHeld();
-  await collect();
+  await collectForRetentionCheck("description-released");
   collected(heldWrapper, heldRunner);
   const { wrappers, runners } = scenario;
   scenario.dispose();
   scenario = undefined;
-  await collect();
+  await collectForRetentionCheck("description-disposed");
   collected(...wrappers, ...runners);
   process.stdout.write(JSON.stringify({ obsoleteWrappersReleased: true }));
 } finally {

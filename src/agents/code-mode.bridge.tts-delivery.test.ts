@@ -1,4 +1,3 @@
-/** Nested TTS crosses real catalog acceptance and subscribed source delivery. */
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -15,12 +14,7 @@ import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 import { createTtsTool } from "./tools/tts-tool.js";
 
 const audioPath = "/tmp/nested-tts-reply.mp3";
-const speechResult = {
-  success: true,
-  audioPath,
-  provider: "test",
-  voiceCompatible: false,
-};
+const speechResult = { success: true, audioPath, provider: "test" };
 const suppressionState = {
   ctx: {},
   explicitCommandTurnCtx: false,
