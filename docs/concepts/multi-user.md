@@ -220,7 +220,10 @@ another mention. After five minutes, it refreshes cached results in the backgrou
 without hiding the people you can already select. Switching sessions, profiles,
 or connections clears that cache. Results older than 30 minutes are discarded.
 The picker shows placeholders for uncached searches, an empty message when nobody
-matches, and **Retry** if a search without usable cached results fails.
+matches, and **Retry** if a search without usable cached results fails temporarily.
+Permission, profile-verification, and unsupported-conversation rejections clear
+cached people and show guidance instead of Retry. Follow that guidance to restore
+your access or choose a supported conversation.
 **Will notify** reuses the selected person's photo, with initials while it loads or
 when the photo is unavailable.
 

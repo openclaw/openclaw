@@ -33,6 +33,8 @@ suite.define(() => {
           },
         );
         const archived = sessionRow("agent:main:completed", "Completed work", baseTime - 2);
+        // Default rows show observer headlines only when session previews are on.
+        await seedStorage(page, { "openclaw:sidebar:sessions:show-preview": "true" });
         const gateway = await installMockGateway(page, {
           historyMessages: [
             {

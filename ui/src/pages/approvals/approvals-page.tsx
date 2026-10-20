@@ -27,11 +27,14 @@ import {
   LearnMoreLink,
 } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
+import { registerApprovalsEnglish } from "../../i18n/locales/en-approvals.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { formatDateTimeMs } from "../../lib/reactive/format.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+
+registerEnglishCatalog(registerApprovalsEnglish);
 
 const APPROVAL_HISTORY_PAGE_SIZE = 50;
 
