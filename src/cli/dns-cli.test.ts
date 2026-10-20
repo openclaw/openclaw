@@ -1,6 +1,3 @@
-// Regression: the dns setup brew-prefix probe must be bounded by a SIGKILL-backed
-// timeout so a hung binary cannot block `openclaw dns setup`, while long-running
-// setup steps (install/restart/sudo writes) stay unbounded.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -16,30 +13,24 @@ vi.mock("node:child_process", async () => {
   );
 });
 
-vi.mock("../infra/widearea-dns.js", async () => {
-  return {
-    getWideAreaZonePath: () => testState.zonePath,
-    normalizeWideAreaDomain: (d: string) => d,
-    replaceWideAreaZoneFile: vi.fn(),
-    resolveWideAreaDiscoveryDomain: () => "openclaw.internal.",
-  };
-});
+vi.mock("../infra/widearea-dns.js", () => ({
+  getWideAreaZonePath: () => testState.zonePath,
+  normalizeWideAreaDomain: (d: string) => d,
+  replaceWideAreaZoneFile: vi.fn(),
+  resolveWideAreaDiscoveryDomain: () => "openclaw.internal.",
+}));
 
-vi.mock("../infra/tailnet.js", async () => {
-  return {
-    pickPrimaryTailnetIPv4: () => "100.64.0.1",
-    pickPrimaryTailnetIPv6: () => undefined,
-  };
-});
+vi.mock("../infra/tailnet.js", () => ({
+  pickPrimaryTailnetIPv4: () => "100.64.0.1",
+  pickPrimaryTailnetIPv6: () => undefined,
+}));
 
 // mock-isolation: DNS fixtures use empty config without loading operator state.
-vi.mock("../config/config.js", async () => {
-  return {
-    getRuntimeConfig: () => ({}),
-    loadConfig: () => ({}),
-    captureRuntimeConfigAsyncReader: () => async () => ({}),
-  };
-});
+vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: () => ({}),
+  loadConfig: () => ({}),
+  captureRuntimeConfigAsyncReader: () => async () => ({}),
+}));
 
 import { Command } from "commander";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
@@ -63,12 +54,9 @@ describe("dns-cli probe bounds", () => {
     brewPrefix = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-dns-cli-test-"));
     testState.zonePath = path.join(brewPrefix, "test.zone");
     spawnSyncMock.mockReset();
-    spawnSyncMock.mockImplementation((cmd: string, args: string[]) => {
-      if (cmd === "brew" && args?.[0] === "--prefix") {
-        return spawnOk(`${brewPrefix}\n`);
-      }
-      return spawnOk();
-    });
+    spawnSyncMock.mockImplementation((cmd: string, args: string[]) =>
+      spawnOk(isBrewPrefixProbe([cmd, args]) ? `${brewPrefix}\n` : ""),
+    );
   });
 
   afterEach(() => {

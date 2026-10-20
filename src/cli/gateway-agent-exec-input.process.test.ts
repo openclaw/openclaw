@@ -16,6 +16,7 @@ import {
   tempDirs,
 } from "./gateway-backed-exit.process.test-support.js";
 
+const message = "Worker result";
 const cases = [
   {
     name: "raw session send",
@@ -24,23 +25,14 @@ const cases = [
       "call",
       "sessions.send",
       "--params",
-      JSON.stringify({ key: "agent:main:target", message: "Worker result" }),
+      JSON.stringify({ key: "agent:main:target", message }),
       "--json",
     ],
     method: "sessions.send",
   },
   {
     name: "agent command with model override",
-    args: [
-      "agent",
-      "--agent",
-      "main",
-      "--model",
-      "test/model",
-      "--message",
-      "Worker result",
-      "--json",
-    ],
+    args: ["agent", "--agent", "main", "--model", "test/model", "--message", message, "--json"],
     method: "agent",
   },
 ];

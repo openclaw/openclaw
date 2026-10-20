@@ -1,23 +1,10 @@
-// Dependency tests cover CLI dependency imports and cold-start safety.
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { createOutboundSendDeps } from "./outbound-send-deps.js";
 
 const mocks = vi.hoisted(() => ({
   runtimeLoaded: vi.fn(),
   sendMessage: vi.fn(async () => ({ messageId: "sent" })),
-}));
-
-vi.mock("../channels/plugins/index.js", () => ({
-  listChannelPlugins: () =>
-    ["whatsapp", "telegram", "discord", "slack", "signal", "imessage"].map(
-      (id) =>
-        ({
-          id,
-          meta: { label: id, selectionLabel: id, docsPath: `/channels/${id}`, blurb: "" },
-        }) as ChannelPlugin,
-    ),
 }));
 
 vi.mock("./send-runtime/channel-outbound-send.js", async (importOriginal) => {
@@ -29,13 +16,13 @@ vi.mock("./send-runtime/channel-outbound-send.js", async (importOriginal) => {
 });
 
 describe("createDefaultDeps", () => {
-  async function loadCreateDefaultDeps(scope: string) {
+  async function loadDeps(scope: string) {
     return (
       await importFreshModule<typeof import("./deps.js")>(
         import.meta.url,
         `./deps.js?scope=${scope}`,
       )
-    ).createDefaultDeps;
+    ).createDefaultDeps();
   }
 
   beforeEach(() => {
@@ -43,8 +30,7 @@ describe("createDefaultDeps", () => {
   });
 
   it("loads the send runtime only when used and routes each call to its channel", async () => {
-    const createDefaultDeps = await loadCreateDefaultDeps("lazy-load");
-    const deps = createDefaultDeps();
+    const deps = await loadDeps("lazy-load");
     const sendTelegram = deps.telegram as (...args: unknown[]) => Promise<unknown>;
     const sendDiscord = deps.discord as (...args: unknown[]) => Promise<unknown>;
 
@@ -64,8 +50,7 @@ describe("createDefaultDeps", () => {
   });
 
   it("does not create channel senders for Discord voice helper keys", async () => {
-    const createDefaultDeps = await loadCreateDefaultDeps("discord-voice-helper");
-    const deps = createDefaultDeps();
+    const deps = await loadDeps("discord-voice-helper");
 
     expect(deps.discordVoice).toBeUndefined();
     expect(deps.sendDiscordVoice).toBeUndefined();
@@ -73,8 +58,7 @@ describe("createDefaultDeps", () => {
   });
 
   it("does not expose lazy channel senders as low-level outbound transports", async () => {
-    const createDefaultDeps = await loadCreateDefaultDeps("outbound-transport-boundary");
-    const deps = createDefaultDeps();
+    const deps = await loadDeps("outbound-transport-boundary");
 
     const sendTelegram = deps.telegram as (...args: unknown[]) => Promise<unknown>;
     await sendTelegram("chat", "hello", { verbose: false });
@@ -87,8 +71,7 @@ describe("createDefaultDeps", () => {
 
   it("allows another send after a transient channel failure", async () => {
     mocks.sendMessage.mockRejectedValueOnce(new Error("transient channel failure"));
-    const createDefaultDeps = await loadCreateDefaultDeps("send-retry");
-    const deps = createDefaultDeps();
+    const deps = await loadDeps("send-retry");
     const sendTelegram = deps.telegram as (...args: unknown[]) => Promise<unknown>;
 
     await expect(sendTelegram("chat", "first", { verbose: false })).rejects.toThrow(

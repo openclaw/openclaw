@@ -33,6 +33,13 @@ describe("config CLI database effects", () => {
   let owner: GatewayLockHandle | null;
   let originalConfig: string;
 
+  const run = (childEnv: NodeJS.ProcessEnv, args: string[], input?: string) =>
+    runCliProcessChild({ nodeArgs: [...entrypoint, ...args], env: childEnv, input });
+  async function expectUnchanged() {
+    expect(await fs.readFile(env.OPENCLAW_CONFIG_PATH!, "utf8")).toBe(originalConfig);
+    expect(await readLatestConfigSnapshotAuditRecordAsync({ env })).toBeNull();
+  }
+
   async function fixture(home: string): Promise<NodeJS.ProcessEnv> {
     const stateDir = path.join(home, "state");
     const configPath = path.join(home, "openclaw.json");
@@ -69,23 +76,15 @@ describe("config CLI database effects", () => {
   it.each(operations)(
     "allows $name previews while another process owns state",
     async ({ args, input }) => {
-      const result = await runCliProcessChild({
-        nodeArgs: [...entrypoint, ...args, "--dry-run"],
-        env,
-        input,
-      });
+      const result = await run(env, [...args, "--dry-run"], input);
       expect(result.code, result.stderr).toBe(0);
-      expect(await fs.readFile(env.OPENCLAW_CONFIG_PATH!, "utf8")).toBe(originalConfig);
-      expect(await readLatestConfigSnapshotAuditRecordAsync({ env })).toBeNull();
+      await expectUnchanged();
     },
   );
 
   it("does not bootstrap state for an unchanged config value", async () => {
     const offline = await fixture(roots.make("openclaw-config-unchanged-"));
-    const result = await runCliProcessChild({
-      nodeArgs: [...entrypoint, "config", "set", "logging.level", "debug"],
-      env: offline,
-    });
+    const result = await run(offline, ["config", "set", "logging.level", "debug"]);
     expect(result.code, result.stderr).toBe(0);
     expect(result.stdout).toContain("No change");
     await expect(
@@ -96,12 +95,11 @@ describe("config CLI database effects", () => {
   it.each(operations)(
     "refuses $name before changing live-owned config",
     async ({ args, input }) => {
-      const result = await runCliProcessChild({ nodeArgs: [...entrypoint, ...args], env, input });
+      const result = await run(env, args, input);
       expect(result.code, result.stderr).toBe(1);
       expect(result.stderr).toContain("exclusive offline state ownership");
       expect(result.stderr).toContain("stop the Gateway");
-      expect(await fs.readFile(env.OPENCLAW_CONFIG_PATH!, "utf8")).toBe(originalConfig);
-      expect(await readLatestConfigSnapshotAuditRecordAsync({ env })).toBeNull();
+      await expectUnchanged();
     },
   );
 
@@ -110,23 +108,16 @@ describe("config CLI database effects", () => {
     async ({ args, input, level }) => {
       const home = roots.make("openclaw-config-offline-");
       const offline = await fixture(home);
-      const result = await runCliProcessChild({
-        nodeArgs: [...entrypoint, ...args],
-        env: offline,
-        input,
-      });
+      const result = await run(offline, args, input);
       expect(result.code, result.stderr).toBe(0);
       const raw = await fs.readFile(offline.OPENCLAW_CONFIG_PATH!, "utf8");
       expect(JSON.parse(raw).logging?.level).toBe(level);
       expect(
         await readLatestConfigSnapshotAuditRecordAsync({ env: offline, homedir: () => home }),
       ).toMatchObject({ rawHash: hashConfigRaw(raw) });
-      expect(
-        readRecentConfigAuditRecords({ env: offline, homedir: () => home, limit: 20 }),
-      ).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ event: "config.write", result: "rename" }),
-        ]),
+      const audit = readRecentConfigAuditRecords({ env: offline, homedir: () => home, limit: 20 });
+      expect(audit).toContainEqual(
+        expect.objectContaining({ event: "config.write", result: "rename" }),
       );
       expect(readConfigMachineState("config.lastTouchedAt", { env: offline })).toEqual(
         expect.any(String),
