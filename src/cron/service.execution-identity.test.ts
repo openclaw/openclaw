@@ -8,14 +8,14 @@ import { processExecutionIdentityAdmissionWorkInDatabase } from "../audit/execut
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { prepareCronRunAdmission } from "./run-admission.js";
+import { cronTestDeps, cronTestInput } from "./service.fixture-builders.test-support.js";
 import type { CronService } from "./service.js";
-import { createCronServiceWithStateForTest, createNoopLogger } from "./service.test-harness.js";
+import { createCronServiceWithStateForTest } from "./service.test-harness.js";
 import type { CronServiceDeps } from "./service/state.js";
 import { onTimer } from "./service/timer.test-support.js";
 
@@ -70,28 +70,23 @@ describe("scheduled cron execution identity", () => {
         }
         return { status: "ok" };
       });
-      const service = createCronServiceWithStateForTest({
-        scheduler: createTestGatewayScheduler(),
-        storePath: fixture.statePath("cron", "jobs.json"),
-        cronEnabled: true,
-        defaultAgentId: "main",
-        nowMs: () => clock.now,
-        log: createNoopLogger(),
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
-        runIsolatedAgentJob,
-      });
+      const service = createCronServiceWithStateForTest(
+        cronTestDeps({
+          storePath: fixture.statePath("cron", "jobs.json"),
+          defaultAgentId: "main",
+          nowMs: () => clock.now,
+          runIsolatedAgentJob,
+        }),
+      );
       cron = service.cron;
-      const job = await cron.add({
-        name: "identity-linked scheduled run",
-        agentId: "main",
-        enabled: true,
-        schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "agentTurn", message: "record one scheduled execution" },
-        delivery: { mode: "none" },
-      });
+      const job = await cron.add(
+        cronTestInput({
+          name: "identity-linked scheduled run",
+          agentId: "main",
+          payload: { kind: "agentTurn", message: "record one scheduled execution" },
+          delivery: { mode: "none" },
+        }),
+      );
       clock.now = job.state.nextRunAtMs!;
       await onTimer(service.state);
       expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
@@ -105,10 +100,9 @@ describe("scheduled cron execution identity", () => {
         return;
       }
       expect(admissions).toHaveLength(2);
-      const context = processExecutionIdentityAdmissionWorkInDatabase(admissions[0], { database });
-      const payloadContext = processExecutionIdentityAdmissionWorkInDatabase(admissions[1], {
-        database,
-      });
+      const [context, payloadContext] = admissions.map((work) =>
+        processExecutionIdentityAdmissionWorkInDatabase(work, { database }),
+      );
       expect(context.contextId).not.toBe(payloadContext.contextId);
       expect(
         database.db

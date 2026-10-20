@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { cronTestJob } from "./service.fixture-builders.test-support.js";
 import { createMockCronStateForJobs } from "./service.test-harness.js";
 import { recomputeNextRunsForMaintenance } from "./service/jobs-scheduling.test-support.js";
 import type { CronJob } from "./types.js";
@@ -9,19 +10,16 @@ const badFuture = Date.parse("2026-05-12T16:00:00.000Z");
 const deferred = now + 120_000;
 
 function createMaintenanceJob(name: string, overrides: Partial<CronJob>): CronJob {
-  return {
+  return cronTestJob({
     id: name,
-    name,
-    enabled: true,
     createdAtMs: Date.parse("2026-05-05T00:00:00.000Z"),
     updatedAtMs: Date.parse("2026-05-05T00:00:00.000Z"),
     schedule: { kind: "cron", expr: "0 0 21 * * *", tz: "Asia/Shanghai", staggerMs: 0 },
     sessionTarget: "main",
     wakeMode: "now",
     payload: { kind: "systemEvent", text: "tick" },
-    state: {},
     ...overrides,
-  };
+  });
 }
 
 type MaintenanceCase = {
@@ -145,29 +143,23 @@ const cases: MaintenanceCase[] = [
 ];
 
 describe("cron schedule maintenance", () => {
-  it.each(cases)(
-    "$name",
-    ({
-      name,
-      job: overrides,
-      nowMs = now,
-      recomputeExpired,
-      changed,
-      expected,
-      expectedSchedule,
-    }) => {
-      const job = createMaintenanceJob(name, overrides);
-      const state = createMockCronStateForJobs({ jobs: [job], nowMs });
-      expect(
-        recomputeNextRunsForMaintenance(state, { recomputeExpired, deferredNotifications: [] }),
-      ).toBe(changed);
-      expect(job.state.nextRunAtMs).toBe(expected.nextRunAtMs);
-      expect(job.state.scheduleErrorCount).toBe(expected.scheduleErrorCount);
-      if (expectedSchedule) {
-        expect(job.schedule).toEqual(expectedSchedule);
-      }
-    },
-  );
+  it.each(cases)("$name", ({ name, job: overrides, nowMs = now, ...testCase }) => {
+    const job = createMaintenanceJob(name, overrides);
+    const state = createMockCronStateForJobs({ jobs: [job], nowMs });
+    expect(
+      recomputeNextRunsForMaintenance(state, {
+        recomputeExpired: testCase.recomputeExpired,
+        deferredNotifications: [],
+      }),
+    ).toBe(testCase.changed);
+    expect(job.state).toMatchObject({
+      nextRunAtMs: testCase.expected.nextRunAtMs,
+      scheduleErrorCount: testCase.expected.scheduleErrorCount,
+    });
+    if (testCase.expectedSchedule) {
+      expect(job.schedule).toEqual(testCase.expectedSchedule);
+    }
+  });
 
   it.each([true, false])(
     "preserves startup catch-up deferrals only while enabled=%s",
@@ -178,8 +170,10 @@ describe("cron schedule maintenance", () => {
       });
       const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
       expect(recomputeNextRunsForMaintenance(state, { deferredNotifications: [] })).toBe(!enabled);
-      expect(job.state.nextRunAtMs).toBe(enabled ? deferred : undefined);
-      expect(job.state.startupCatchupAtMs).toBe(enabled ? deferred : undefined);
+      expect(job.state).toMatchObject({
+        nextRunAtMs: enabled ? deferred : undefined,
+        startupCatchupAtMs: enabled ? deferred : undefined,
+      });
       if (enabled) {
         expect(
           recomputeNextRunsForMaintenance(state, {
@@ -188,8 +182,7 @@ describe("cron schedule maintenance", () => {
             repairFutureCronNextRunAtMs: true,
           }),
         ).toBe(false);
-        expect(job.state.startupCatchupAtMs).toBe(deferred);
-        expect(job.state.nextRunAtMs).toBe(deferred);
+        expect(job.state).toMatchObject({ nextRunAtMs: deferred, startupCatchupAtMs: deferred });
       }
     },
   );

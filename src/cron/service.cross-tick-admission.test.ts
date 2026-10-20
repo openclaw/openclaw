@@ -97,12 +97,11 @@ describe("cron service cross-tick admission", () => {
     const store = await seedJobs([jobA, jobB]);
 
     const blocked = blockedRuns([jobA, jobB]);
-    const runIsolatedAgentJob = blocked.run;
     const state = createCronRegressionState({
       scheduler,
       storePath: store.storePath,
       nowMs: clock.clock.now,
-      runIsolatedAgentJob,
+      runIsolatedAgentJob: blocked.run,
     });
 
     const { wake } = await captureCronSchedulerWakeForTest(() =>
@@ -114,14 +113,14 @@ describe("cron service cross-tick admission", () => {
     try {
       await blocked.started(jobA);
       await tickA;
-      expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+      expect(blocked.run).toHaveBeenCalledTimes(1);
       expect(store.receipt(jobB)).toBeUndefined();
       clock.setTime(t0 + 1_500);
       tickB = wake(state);
       await blocked.started(jobB);
       await tickB;
 
-      expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
+      expect(blocked.run).toHaveBeenCalledTimes(2);
       expect(blocked.peakActive).toBe(2);
       expect(store.receipt(jobB)).toBeDefined();
       expect(getActiveGatewayRootWorkHolders()).toEqual(["cron:run (2)"]);
@@ -167,10 +166,10 @@ describe("cron service cross-tick admission", () => {
 
       expect(runIsolatedAgentJob).not.toHaveBeenCalled();
       expect(getActiveGatewayRootWorkCount()).toBe(0);
-      const persisted = await loadCronStore(store.storePath);
-      expect(persisted.jobs[0]?.state).toMatchObject({ nextRunAtMs: nowMs });
-      expect(persisted.jobs[0]?.state.queuedAtMs).toBeUndefined();
-      expect(persisted.jobs[0]?.state.runningAtMs).toBeUndefined();
+      const persisted = (await loadCronStore(store.storePath)).jobs[0]?.state;
+      expect(persisted).toMatchObject({ nextRunAtMs: nowMs });
+      expect(persisted?.queuedAtMs).toBeUndefined();
+      expect(persisted?.runningAtMs).toBeUndefined();
     } finally {
       restartSignal?.rollback();
       stop(state);

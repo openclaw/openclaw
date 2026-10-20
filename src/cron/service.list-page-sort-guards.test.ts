@@ -120,8 +120,7 @@ describe("cron listPage sort guards", () => {
       }).toThrow(TypeError);
       expect(clone).toHaveBeenCalledExactlyOnceWith(jobs[1]);
       const visibilityPass = await listPage(state, options, () => false);
-      expect(visibilityPass.jobs).toEqual([]);
-      expect(visibilityPass.total).toBe(0);
+      expect(visibilityPass).toMatchObject({ jobs: [], total: 0 });
       const repeated = await listPage(state, options);
       expect(repeated.jobs[0]).toBe(page.jobs[0]);
       expect(await status(state)).toBe(firstStatus);
@@ -138,9 +137,8 @@ describe("cron listPage sort guards", () => {
       });
       const changed = await listPage(state, options);
 
-      expect(changed.jobs.map((job) => job.id)).toEqual(["job-b"]);
+      expect(changed.jobs).toMatchObject([{ id: "job-b", state: { lastStatus: "ok" } }]);
       expect(changed.snapshotRevision).not.toBe(page.snapshotRevision);
-      expect(changed.jobs[0]?.state.lastStatus).toBe("ok");
       expect(repeated.jobs[0]?.state.lastStatus).toBeUndefined();
       const changedStatus = await status(state);
       expect(changedStatus.nextWakeAtMs).toBe(100);
@@ -177,9 +175,7 @@ describe("cron listPage sort guards", () => {
       trigger: "conditional",
       limit: 1,
     });
-    expect(page.jobs.map((job) => job.id)).toEqual(["cron-unknown"]);
-    expect(page.total).toBe(1);
-    expect(page.hasMore).toBe(false);
+    expect(page).toMatchObject({ jobs: [{ id: "cron-unknown" }], total: 1, hasMore: false });
   });
 });
 
