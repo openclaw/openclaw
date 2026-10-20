@@ -43,14 +43,10 @@ describe("applySessionHints", () => {
       throw new Error("foreground recovery owner was not acquired");
     }
     entry = owner.entry;
-    const prepared = {
+    const body = applySessionHints({
       baseBody: "organize my sessions",
       abortedLastRun: true,
-      sessionEntry: entry,
-      sessionStore: { [sessionKey]: entry },
-      ...scope,
-    };
-    const body = await Promise.resolve(applySessionHints(prepared));
+    });
     expect(body).toContain("organize my sessions");
 
     await using actor = createReplyRecoveryActorFixture({

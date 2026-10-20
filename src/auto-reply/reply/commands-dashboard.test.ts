@@ -1,4 +1,3 @@
-// Tests the first-class /dashboard command's bridge into the Control UI skill.
 import { describe, expect, it } from "vitest";
 import type { SkillCommandSpec } from "../../skills/types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
@@ -27,6 +26,7 @@ const releaseNotesSkill: SkillCommandSpec = {
   skillFile: "/workspace/skills/release-notes/SKILL.md",
   modelVisible: true,
 };
+const controlUiSelections = [{ name: "control-ui", path: controlUiSkill.skillFile }];
 
 function buildParams(
   commandBodyNormalized: string,
@@ -38,37 +38,13 @@ function buildParams(
       Provider: INTERNAL_MESSAGE_CHANNEL,
       Surface: INTERNAL_MESSAGE_CHANNEL,
       CommandSource: "text",
-      Body: commandBodyNormalized,
-      RawBody: commandBodyNormalized,
-      CommandBody: commandBodyNormalized,
-      BodyForCommands: commandBodyNormalized,
       BodyForAgent: commandBodyNormalized,
-      BodyStripped: commandBodyNormalized,
     },
     command: {
       commandBodyNormalized,
       isAuthorizedSender: true,
-      senderIsOwner: true,
-      senderId: "tester",
-      channel: INTERNAL_MESSAGE_CHANNEL,
-      channelId: INTERNAL_MESSAGE_CHANNEL,
-      surface: INTERNAL_MESSAGE_CHANNEL,
-      ownerList: [],
       rawBodyNormalized: commandBodyNormalized,
     },
-    directives: {},
-    elevated: { enabled: true, allowed: true, failures: [] },
-    agentId: "main",
-    sessionKey: "agent:main:webchat:test",
-    workspaceDir: "/workspace",
-    provider: "openai",
-    model: "test-model",
-    contextTokens: 0,
-    defaultGroupActivation: () => "mention",
-    resolvedVerboseLevel: "off",
-    resolvedReasoningLevel: "off",
-    resolveDefaultThinkingLevel: async () => undefined,
-    isGroup: false,
     skillCommands: skills,
   } as unknown as HandleCommandsParams;
 }
@@ -82,9 +58,7 @@ describe("dashboard command", () => {
 
     expect(result).toEqual({
       shouldContinue: true,
-      explicitSkillSelections: [
-        { name: "control-ui", path: "/bundled/skills/control-ui/SKILL.md" },
-      ],
+      explicitSkillSelections: controlUiSelections,
     });
     expect(prompt).toContain("Use the following explicitly referenced skills");
     expect(prompt).toContain("- control-ui");
@@ -100,9 +74,7 @@ describe("dashboard command", () => {
 
       const result = await handleDashboardCommand(params, true);
 
-      expect(result?.explicitSkillSelections).toEqual([
-        { name: "control-ui", path: "/bundled/skills/control-ui/SKILL.md" },
-      ]);
+      expect(result?.explicitSkillSelections).toEqual(controlUiSelections);
       expect(params.ctx.BodyForAgent).toContain(`Dashboard requirements:\n${requirements}`);
     },
   );
@@ -116,7 +88,7 @@ describe("dashboard command", () => {
     const result = await handleDashboardCommand(params, true);
 
     expect(result?.explicitSkillSelections).toEqual([
-      { name: "control-ui", path: "/bundled/skills/control-ui/SKILL.md" },
+      ...controlUiSelections,
       { name: "release_notes", path: "/workspace/skills/release-notes/SKILL.md" },
     ]);
     expect(params.ctx.BodyForAgent).toContain("- release-notes");
@@ -128,9 +100,7 @@ describe("dashboard command", () => {
 
     const result = await handleDashboardCommand(params, true);
 
-    expect(result?.explicitSkillSelections).toEqual([
-      { name: "control-ui", path: "/bundled/skills/control-ui/SKILL.md" },
-    ]);
+    expect(result?.explicitSkillSelections).toEqual(controlUiSelections);
     expect(params.ctx.BodyForAgent).toContain("- control-ui");
   });
 
@@ -140,9 +110,7 @@ describe("dashboard command", () => {
 
     const result = await handleDashboardCommand(params, true);
 
-    expect(result?.explicitSkillSelections).toEqual([
-      { name: "control-ui", path: "/bundled/skills/control-ui/SKILL.md" },
-    ]);
+    expect(result?.explicitSkillSelections).toEqual(controlUiSelections);
     expect(params.ctx.BodyForAgent).toContain("release health");
   });
 

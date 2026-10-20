@@ -1,4 +1,3 @@
-// Tests abort trigger command parsing and cancellation requests.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { handleAbortTrigger } from "./commands-session-abort.js";
@@ -46,6 +45,7 @@ vi.mock("./commands-session-store.js", () => ({
 }));
 
 function buildAbortParams(): HandleCommandsParams {
+  const sessionEntry = { sessionId: "session-1", updatedAt: Date.now(), abortedLastRun: false };
   return {
     cfg: {
       commands: { text: true },
@@ -70,35 +70,29 @@ function buildAbortParams(): HandleCommandsParams {
       to: "bot",
     },
     sessionKey: "agent:main:main",
-    sessionEntry: {
-      sessionId: "session-1",
-      updatedAt: Date.now(),
-      abortedLastRun: false,
-    },
-    sessionStore: {
-      "agent:main:main": {
-        sessionId: "session-1",
-        updatedAt: Date.now(),
-        abortedLastRun: false,
-      },
-    },
+    sessionEntry,
+    sessionStore: { "agent:main:main": { ...sessionEntry } },
   } as unknown as HandleCommandsParams;
+}
+
+function abortOutcome(alreadyFinalizing: boolean) {
+  return {
+    aborted: false,
+    alreadyFinalizing,
+    queuedCancelled: 0,
+    activeCancelled: 0,
+    childrenStopped: 0,
+    childFailures: 0,
+    failures: [],
+    settled: Promise.resolve(),
+  };
 }
 
 describe("handleAbortTrigger", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     abortSessionRunTargetWithOutcomeMock.mockImplementation((params) => {
-      const outcome = {
-        aborted: false,
-        alreadyFinalizing: false,
-        queuedCancelled: 0,
-        activeCancelled: 0,
-        childrenStopped: 0,
-        childFailures: 0,
-        failures: [],
-        settled: Promise.resolve(),
-      };
+      const outcome = abortOutcome(false);
       return {
         ...outcome,
         completed: (async () => {
@@ -122,16 +116,7 @@ describe("handleAbortTrigger", () => {
     params.command.isAuthorizedSender = true;
     params.command.senderIsOwner = true;
     abortSessionRunTargetWithOutcomeMock.mockImplementation((abortParams) => {
-      const outcome = {
-        aborted: false,
-        alreadyFinalizing: true,
-        queuedCancelled: 0,
-        activeCancelled: 0,
-        childrenStopped: 0,
-        childFailures: 0,
-        failures: [],
-        settled: Promise.resolve(),
-      };
+      const outcome = abortOutcome(true);
       return {
         ...outcome,
         completed: (async () => {

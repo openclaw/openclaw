@@ -1,4 +1,3 @@
-// /acp cancel and /acp steer act on the target session's controller turns.
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
@@ -15,6 +14,7 @@ import { handleAcpCommand } from "./commands-acp.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
 
 type Fixture = Parameters<Parameters<typeof withAcpCancellationFixture>[0]>[0];
+type CommandFixture = Fixture & { hook: ReturnType<typeof vi.fn> };
 
 /** Runs one /acp command from a Discord conversation that targets the fixture session. */
 async function runAcpCommand(f: Fixture, body: string) {
@@ -48,7 +48,7 @@ function startTurn(
   });
 }
 
-async function withCommandFixture(run: (f: Fixture) => Promise<void>) {
+async function withCommandFixture(run: (f: CommandFixture) => Promise<void>) {
   await withAcpCancellationFixture(async (f) => {
     acpManagerTesting.setAcpSessionManagerForTests(f.manager);
     const hook = vi.fn();
@@ -64,7 +64,6 @@ async function withCommandFixture(run: (f: Fixture) => Promise<void>) {
 
 it("/acp cancel stops the running turn and its queued successor through Stop", async () => {
   await withCommandFixture(async (f) => {
-    const hook = (f as Fixture & { hook: ReturnType<typeof vi.fn> }).hook;
     const entered = createDeferred();
     f.runTurn.mockImplementationOnce(async function* (input) {
       entered.resolve();
@@ -92,7 +91,7 @@ it("/acp cancel stops the running turn and its queued successor through Stop", a
       expect(readDurableAcpSignals(f, "queued-child-run")).toMatchObject([
         { kind: "run_failed", payload_json: expect.stringContaining("cancelled") },
       ]);
-      expect(hook).toHaveBeenCalledOnce();
+      expect(f.hook).toHaveBeenCalledOnce();
     } finally {
       await Promise.allSettled([running, queued]);
     }
@@ -101,7 +100,6 @@ it("/acp cancel stops the running turn and its queued successor through Stop", a
 
 it("/acp cancel sends ACP cancel to an idle backend", async () => {
   await withCommandFixture(async (f) => {
-    const hook = (f as Fixture & { hook: ReturnType<typeof vi.fn> }).hook;
     const result = await runAcpCommand(f, "/acp cancel");
     expect(result?.reply?.text).toContain(
       `Cancel requested for ACP session ${f.target.sessionKey}`,
@@ -110,7 +108,7 @@ it("/acp cancel sends ACP cancel to an idle backend", async () => {
       expect.objectContaining({ reason: "manual-cancel" }),
     );
     expect(readAcpSessionEntry(f.target)?.acp?.state).toBe("idle");
-    expect(hook).toHaveBeenCalledOnce();
+    expect(f.hook).toHaveBeenCalledOnce();
   });
 });
 

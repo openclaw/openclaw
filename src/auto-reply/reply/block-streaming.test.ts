@@ -1,4 +1,3 @@
-// Tests block streaming policy and buffered reply pipeline behavior.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -26,50 +25,30 @@ describe("resolveEffectiveBlockStreamingConfig", () => {
   });
 
   it("reuses caller-provided chunking for shared main/subagent/ACP config resolution", () => {
+    const chunking = { minChars: 10, maxChars: 20, breakPreference: "paragraph" as const };
     const resolved = resolveEffectiveBlockStreamingConfig({
       cfg: undefined,
-      chunking: {
-        minChars: 10,
-        maxChars: 20,
-        breakPreference: "paragraph",
-      },
+      chunking,
       coalesceIdleMs: 0,
     });
-
-    expect(resolved.chunking).toEqual({
-      minChars: 10,
-      maxChars: 20,
-      breakPreference: "paragraph",
-    });
-    expect(resolved.coalescing.maxChars).toBe(20);
-    expect(resolved.coalescing.idleMs).toBe(0);
+    expect(resolved.chunking).toEqual(chunking);
+    expect(resolved.coalescing).toMatchObject({ maxChars: 20, idleMs: 0 });
   });
 
   it("honors newline chunkMode for plugin channels even before the plugin registry is loaded", () => {
     const cfg = {
-      channels: {
-        imessage: {
-          streaming: { chunkMode: "newline" },
-        },
-      },
+      channels: { imessage: { streaming: { chunkMode: "newline" } } },
       agents: {
         defaults: {
-          blockStreamingChunk: {
-            minChars: 1,
-            maxChars: 4000,
-            breakPreference: "paragraph",
-          },
+          blockStreamingChunk: { minChars: 1, maxChars: 4000, breakPreference: "paragraph" },
         },
       },
     } as OpenClawConfig;
 
-    const resolved = resolveEffectiveBlockStreamingConfig({
-      cfg,
-      provider: "imessage",
+    expect(resolveEffectiveBlockStreamingConfig({ cfg, provider: "imessage" })).toMatchObject({
+      chunking: { flushOnParagraph: true },
+      coalescing: { joiner: "\n\n" },
     });
-
-    expect(resolved.chunking.flushOnParagraph).toBe(true);
-    expect(resolved.coalescing.joiner).toBe("\n\n");
   });
 
   it("honors channel and account scoped nested block coalescing", () => {
@@ -100,11 +79,7 @@ describe("resolveEffectiveBlockStreamingConfig", () => {
 
   it("allows ACP maxChunkChars overrides above base defaults up to provider text limits", () => {
     const cfg = {
-      channels: {
-        discord: {
-          textChunkLimit: 4096,
-        },
-      },
+      channels: { discord: { textChunkLimit: 4096 } },
     } as OpenClawConfig;
 
     const baseChunking = resolveBlockStreamingChunking(cfg, "discord");
