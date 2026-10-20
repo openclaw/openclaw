@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { createComponent } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import type { SelectPicker } from "../../components/select-picker.ts";
@@ -10,6 +11,10 @@ import { flush } from "../../test-helpers/solid-settle.ts";
 import { Talk, type TalkRealtimeProviderOption } from "./talk.tsx";
 
 type TalkProps = Parameters<typeof Talk>[0];
+const modelPicker = (container: HTMLElement) =>
+  expectDefined(
+    container.querySelector<SelectPicker>("openclaw-select-picker.model-picker__select"),
+  );
 
 function renderFixture(
   overrides: Partial<Omit<TalkProps, "selection" | "catalog">> & {
@@ -85,11 +90,7 @@ describe("renderTalk", () => {
     const voice = [...container.querySelectorAll<HTMLSelectElement>("select")];
     expect(voice).toHaveLength(1);
     expect(voice.every((select) => select.disabled)).toBe(true);
-    expect(
-      container
-        .querySelector("openclaw-select-picker.model-picker__select")
-        ?.querySelector<HTMLButtonElement>("button")?.disabled,
-    ).toBe(true);
+    expect(modelPicker(container).querySelector<HTMLButtonElement>("button")?.disabled).toBe(true);
   });
 
   it("commits provider-local model ids without qualifying them", async () => {
@@ -100,14 +101,10 @@ describe("renderTalk", () => {
     });
     await updatePickers(container);
 
-    const picker = container.querySelector<SelectPicker>(
-      "openclaw-select-picker.model-picker__select",
-    )!;
+    const picker = modelPicker(container);
     await openPicker(picker);
     expect(picker?.querySelector('[role="option"][data-value="gpt-realtime"]')).not.toBeNull();
-    if (picker) {
-      await choosePickerValue(picker, "gpt-realtime");
-    }
+    await choosePickerValue(picker, "gpt-realtime");
     expect(onModelChange).toHaveBeenCalledWith("gpt-realtime");
   });
 

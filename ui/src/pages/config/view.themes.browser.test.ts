@@ -2,7 +2,7 @@ import { expect, it, vi } from "vitest";
 import { BUILTIN_THEMES } from "../../../../packages/gateway-protocol/src/theme.ts";
 import { updatePickers, openPicker } from "../../test-helpers/select-picker.ts";
 import "../../styles.css";
-import { renderAppearance, renderConfigView } from "./config-view.test-support.tsx";
+import { renderAppearance } from "./config-view.test-support.tsx";
 
 it("hides the collection and visit controls without changing their saved preferences", () => {
   const { container, props } = renderAppearance({
@@ -35,9 +35,7 @@ it("hides the collection and visit controls without changing their saved prefere
 
 it("offers plugin and personal themes from the shared catalog with their descriptions", () => {
   const setTheme = vi.fn();
-  const { container } = renderConfigView({
-    activeSection: "__appearance__",
-    includeSections: ["__appearance__"],
+  const { container } = renderAppearance({
     setTheme,
     themeCatalog: {
       error: null,
@@ -78,9 +76,7 @@ it.each(["profile", "device-local"] as const)(
   "shows Claw presentation while preserving an unavailable %s plugin selection",
   async (provenance) => {
     const missingTheme = "space-pack/xenovessel";
-    const { container, props } = renderConfigView({
-      activeSection: "__appearance__",
-      includeSections: ["__appearance__"],
+    const { container, props } = renderAppearance({
       theme: missingTheme,
       themeOverridden: true,
       themeProvenance: provenance,
@@ -116,9 +112,7 @@ it.each(["profile", "device-local"] as const)(
 
 it("offers an explicit retry when the theme catalog cannot load", () => {
   const onRetryThemeCatalog = vi.fn();
-  const { container } = renderConfigView({
-    activeSection: "__appearance__",
-    includeSections: ["__appearance__"],
+  const { container } = renderAppearance({
     themeCatalog: { themes: [...BUILTIN_THEMES], error: "Theme palette temporarily unavailable" },
     onRetryThemeCatalog,
   });

@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { setPluginEnabled } from "../../lib/plugins/index.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
@@ -14,10 +15,7 @@ vi.mock("../../lib/plugins/index.ts", async (importOriginal) => {
 function createRoute(params: Partial<Parameters<typeof createMemoryPage>[0]> = {}) {
   vi.mocked(setPluginEnabled).mockReset();
   const fixture = createMemoryPage({ configObject: {}, ...params });
-  const routeData = fixture.element.routeData;
-  if (!routeData) {
-    throw new Error("Missing Memory route fixture");
-  }
+  const routeData = expectDefined(fixture.element.routeData, "Missing Memory route fixture");
   return {
     ...fixture,
     routeData,
@@ -28,6 +26,12 @@ function createRoute(params: Partial<Parameters<typeof createMemoryPage>[0]> = {
     },
   };
 }
+
+const agentRoute = () =>
+  createRoute({
+    agents: [{ id: "main" }, { id: "research" }],
+    routeData: memoryRoute("/settings/memory?agent=research"),
+  });
 
 it.each([
   ["/settings/memory?tab=dreaming", "/settings/memory/dreams"],
@@ -80,10 +84,7 @@ it("normalizes an old Memory link again after leaving its retained Settings owne
 });
 
 it("applies an admitted URL agent before mounting the first Memory presentation", async () => {
-  const fixture = createRoute({
-    agents: [{ id: "main" }, { id: "research" }],
-    routeData: memoryRoute("/settings/memory?agent=research"),
-  });
+  const fixture = agentRoute();
   fixture.mount();
   await waitForSolid(() => expect(fixture.settingsViews.length).toBeGreaterThan(0));
   expect(fixture.settingsViews.every((view) => view.snapshot.agentId === "research")).toBe(true);
@@ -92,10 +93,7 @@ it("applies an admitted URL agent before mounting the first Memory presentation"
 it.each([["main"], ["research", "main"]])(
   "keeps newer sidebar intent when a pending Memory link mounts (%j)",
   async (...choices: string[]) => {
-    const fixture = createRoute({
-      agents: [{ id: "main" }, { id: "research" }],
-      routeData: memoryRoute("/settings/memory?agent=research"),
-    });
+    const fixture = agentRoute();
     for (const agentId of choices) {
       fixture.settingsAgentSelection.set(agentId);
     }
@@ -107,10 +105,7 @@ it.each([["main"], ["research", "main"]])(
 );
 
 it("honors a fresh explicit Memory navigation after the sidebar changed the same URL's agent", async () => {
-  const fixture = createRoute({
-    agents: [{ id: "main" }, { id: "research" }],
-    routeData: memoryRoute("/settings/memory?agent=research"),
-  });
+  const fixture = agentRoute();
   const view = fixture.mount();
   await waitForSolid(() =>
     expect(fixture.settingsAgentSelection.state.selectedId).toBe("research"),

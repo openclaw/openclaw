@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { createSignal } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
@@ -16,6 +17,13 @@ import { curatedSettingsPresentation } from "./curated-settings-presentation.ts"
 import { CuratedSettingsPanel } from "./curated-settings.tsx";
 
 const presentation = curatedSettingsPresentation("memory-dreaming-settings");
+const panelDefaults = {
+  presentation,
+  parameters: { configOwner: "memory-core" },
+  messageParameters: { plugin: "memory-core" },
+  support: "supported",
+  disabled: false,
+} satisfies Partial<Parameters<typeof CuratedSettingsPanel>[0]>;
 
 function dreamingConfig(dreaming: Record<string, unknown> | null) {
   return {
@@ -31,11 +39,8 @@ function renderInto(
 ): HTMLElement {
   const { container } = mountSolid(() => (
     <CuratedSettingsPanel
-      presentation={presentation}
-      parameters={{ configOwner: "memory-core" }}
-      messageParameters={{ plugin: "memory-core" }}
+      {...panelDefaults}
       config={dreamingConfig(dreaming)}
-      support="supported"
       disabled={disabled}
       onPatch={(_, path, value) => onPatch(path, value)}
     />
@@ -45,28 +50,26 @@ function renderInto(
 }
 
 function numberInput(container: HTMLElement, label: string): HTMLInputElement {
-  const input = [...container.querySelectorAll<HTMLInputElement>("input.settings-input")].find(
-    (candidate) => candidate.getAttribute("aria-label") === label,
+  return expectDefined(
+    [...container.querySelectorAll<HTMLInputElement>("input.settings-input")].find(
+      (candidate) => candidate.getAttribute("aria-label") === label,
+    ),
+    `no input labelled ${label}`,
   );
-  if (!input) {
-    throw new Error(`no input labelled ${label}`);
-  }
-  return input;
 }
 
-function editNumber(input: HTMLInputElement, value: string) {
+function editNumber(input: HTMLInputElement, value: string, bubbles = false) {
   input.value = value;
-  input.dispatchEvent(new Event("change"));
+  input.dispatchEvent(new Event("change", { bubbles }));
 }
 
 function rowFor(container: HTMLElement, title: string): HTMLElement {
-  const row = [...container.querySelectorAll<HTMLElement>(".settings-row")].find(
-    (candidate) => candidate.querySelector(".settings-row__title")?.textContent?.trim() === title,
+  return expectDefined(
+    [...container.querySelectorAll<HTMLElement>(".settings-row")].find(
+      (candidate) => candidate.querySelector(".settings-row__title")?.textContent?.trim() === title,
+    ),
+    `no row titled ${title}`,
   );
-  if (!row) {
-    throw new Error(`no row titled ${title}`);
-  }
-  return row;
 }
 
 /** Toggle state keyed by "<section heading>/<row title>"; `checked` is a property binding. */
@@ -129,17 +132,11 @@ describe("plugin-owned Dreaming settings presentation", () => {
     expect(
       row.querySelector('[role="option"][data-value="anthropic/claude-sonnet"]'),
     ).not.toBeNull();
-    const custom = row.querySelector<HTMLInputElement>(".model-picker__custom");
-    expect(custom?.hidden).toBe(false);
-    if (custom) {
-      custom.value = "vendor/model with spaces";
-      custom.dispatchEvent(new Event("change", { bubbles: true }));
-    }
+    const custom = expectDefined(row.querySelector<HTMLInputElement>(".model-picker__custom"));
+    expect(custom.hidden).toBe(false);
+    editNumber(custom, "vendor/model with spaces", true);
     expect(onPatch).toHaveBeenCalledWith(["model"], "vendor/model with spaces");
-    if (custom) {
-      custom.value = "";
-      custom.dispatchEvent(new Event("change", { bubbles: true }));
-    }
+    editNumber(custom, "", true);
     expect(onPatch).toHaveBeenCalledWith(["model"], undefined);
 
     const inherited = renderInto({ execution: { defaults: { model: "openai/gpt-5.6" } } });
@@ -159,16 +156,6 @@ describe("plugin-owned Dreaming settings presentation", () => {
     expect(
       [...container.querySelectorAll<HTMLInputElement>("input")].every((input) => input.disabled),
     ).toBe(true);
-    expect(
-      [...container.querySelectorAll<HTMLInputElement>(".settings-toggle__input")].every(
-        (toggle) => toggle.disabled,
-      ),
-    ).toBe(true);
-    expect(
-      [...container.querySelectorAll<HTMLInputElement>(".settings-segmented__input")].every(
-        (input) => input.disabled,
-      ),
-    ).toBe(true);
   });
 });
 
@@ -176,12 +163,8 @@ it("keeps the edited field mounted when the owner publishes updated config", () 
   const [dreaming, setDreaming] = createSignal<Record<string, unknown>>({ frequency: "0 3 * * *" });
   const view = mountSolid(() => (
     <CuratedSettingsPanel
-      presentation={presentation}
-      parameters={{ configOwner: "memory-core" }}
-      messageParameters={{ plugin: "memory-core" }}
+      {...panelDefaults}
       config={dreamingConfig(dreaming())}
-      support="supported"
-      disabled={false}
       onPatch={(_, _path, value) => setDreaming({ frequency: value })}
     />
   ));
@@ -195,8 +178,6 @@ it("keeps the edited field mounted when the owner publishes updated config", () 
 });
 
 describe("numeric field bounds", () => {
-  // extensions/memory-core/openclaw.plugin.json: counts are integers with a
-  // minimum, similarity/score fields are numbers in 0..1.
   it("rejects values the memory-core manifest would refuse instead of patching them", () => {
     const onPatch = vi.fn();
     const container = renderInto(
@@ -262,12 +243,9 @@ it("submits edited values and removals through the shared config owner without m
     const runtime = projectRuntimeConfig(runtimeConfig);
     return (
       <CuratedSettingsPanel
-        presentation={presentation}
+        {...panelDefaults}
         config={currentConfigObject(runtime.read().state)}
-        parameters={{ configOwner: "memory-core" }}
-        messageParameters={{ plugin: "memory-core" }}
         support="unknown"
-        disabled={false}
         onPatch={edit}
       />
     );
@@ -276,12 +254,12 @@ it("submits edited values and removals through the shared config owner without m
     flush();
     expect(request.mock.calls.filter(([method]) => method === "config.set")).toHaveLength(0);
     editNumber(numberInput(view.container, "Limit"), "0");
-    const toggle = rowFor(view.container, "Verbose logging").querySelector<HTMLInputElement>(
-      ".settings-toggle__input",
+    const toggle = expectDefined(
+      rowFor(view.container, "Verbose logging").querySelector<HTMLInputElement>(
+        ".settings-toggle__input",
+      ),
+      "Missing verbose logging toggle",
     );
-    if (!toggle) {
-      throw new Error("Missing verbose logging toggle");
-    }
     toggle.checked = false;
     toggle.dispatchEvent(new Event("change", { bubbles: true }));
     editNumber(numberInput(view.container, "Dreaming frequency"), "");
