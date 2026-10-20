@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { once } from "node:events";
 import {
   rawDataToString,
@@ -14,17 +15,22 @@ type RealtimeProviderKind = "native" | "gpt-live";
 
 async function withRealtimeProvider(
   kind: RealtimeProviderKind,
-  prepareAudio: (bridge: RealtimeVoiceBridge) => void,
   expectedAudio: number[],
+  prepareAudio: (bridge: RealtimeVoiceBridge) => void,
 ): Promise<void> {
   const audioEventType = kind === "native" ? "input_audio_buffer.append" : "input_audio.append";
   const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   await once(server, "listening");
   const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("expected an available local realtime WebSocket address");
-  }
+  assert(address && typeof address !== "string", "expected a local realtime WebSocket address");
   const received: Buffer[] = [];
+  const acknowledgement =
+    kind === "native"
+      ? { type: "session.updated" }
+      : {
+          type: "session.started",
+          session: { id: "fixture-live", expires_at: Math.floor(Date.now() / 1000) + 60 },
+        };
   server.once("connection", (socket) => {
     socket.on("message", (payload) => {
       const event = JSON.parse(rawDataToString(payload)) as Record<string, unknown>;
@@ -32,21 +38,13 @@ async function withRealtimeProvider(
         received.push(Buffer.from(String(event.audio), "base64"));
       }
       if (event.type === "session.update") {
-        socket.send(
-          JSON.stringify(
-            kind === "native"
-              ? { type: "session.updated" }
-              : {
-                  type: "session.started",
-                  session: { id: "fixture-live", expires_at: Math.floor(Date.now() / 1000) + 60 },
-                },
-          ),
-        );
+        socket.send(JSON.stringify(acknowledgement));
       }
     });
   });
 
   const endpoint = `http://127.0.0.1:${address.port}`;
+  const socketUrl = `ws://127.0.0.1:${address.port}`;
   const audioCallbacks = { onAudio: vi.fn(), onClearAudio: vi.fn() };
   const bridge =
     kind === "native"
@@ -65,12 +63,7 @@ async function withRealtimeProvider(
             audioFormat: { encoding: "pcm16", sampleRateHz: 24000, channels: 1 },
             resolveAuth: async () => ({ type: "api-key", token: "fixture-local" }),
             mediaSocketFactory: (_url, options, media, callbacks) =>
-              OpenAIQuicksilverWorkerSocket.create(
-                `ws://127.0.0.1:${address.port}`,
-                options,
-                media,
-                callbacks,
-              ),
+              OpenAIQuicksilverWorkerSocket.create(socketUrl, options, media, callbacks),
             ...audioCallbacks,
           },
           openAIRealtimeHost,
@@ -97,41 +90,30 @@ async function withRealtimeProvider(
 describe("OpenAI realtime queued audio buffer ownership", () => {
   it.each<RealtimeProviderKind>(["native", "gpt-live"])(
     "%s preserves each reusable producer frame until the real WebSocket is ready",
-    async (kind) => {
-      await withRealtimeProvider(
-        kind,
-        (bridge) => {
-          const producerAllocation = Buffer.alloc(2 * 1024 * 1024, 0x7f);
-          // Each view contains a complete PCM16 sample; worker batching may merge frames.
-          const producerView = producerAllocation.subarray(0, 2);
-          bridge.sendAudio(producerView);
-          producerView.fill(0x41);
-          bridge.sendAudio(producerView);
-          producerView.fill(0);
-        },
-        [0x7f, 0x7f, 0x41, 0x41],
-      );
-    },
+    (kind) =>
+      withRealtimeProvider(kind, [0x7f, 0x7f, 0x41, 0x41], (bridge) => {
+        // Each view contains a complete PCM16 sample; worker batching may merge frames.
+        const producerView = Buffer.alloc(2 * 1024 * 1024, 0x7f).subarray(0, 2);
+        bridge.sendAudio(producerView);
+        producerView.fill(0x41);
+        bridge.sendAudio(producerView);
+        producerView.fill(0);
+      }),
   );
 
   it.each<RealtimeProviderKind>(["native", "gpt-live"])(
     "%s rejects oversized producer frames before allocating a queued copy",
-    async (kind) => {
-      await withRealtimeProvider(
-        kind,
-        (bridge) => {
-          const oversized = Buffer.alloc(1024 * 1024 + 2);
-          const copyBuffer = vi.spyOn(Buffer, "from");
-          try {
-            bridge.sendAudio(oversized);
-            expect(copyBuffer.mock.calls.some(([source]) => source === oversized)).toBe(false);
-          } finally {
-            copyBuffer.mockRestore();
-          }
-          bridge.sendAudio(Buffer.from([0x7f, 0x7f]));
-        },
-        [0x7f, 0x7f],
-      );
-    },
+    (kind) =>
+      withRealtimeProvider(kind, [0x7f, 0x7f], (bridge) => {
+        const oversized = Buffer.alloc(1024 * 1024 + 2);
+        const copyBuffer = vi.spyOn(Buffer, "from");
+        try {
+          bridge.sendAudio(oversized);
+          expect(copyBuffer.mock.calls.some(([source]) => source === oversized)).toBe(false);
+        } finally {
+          copyBuffer.mockRestore();
+        }
+        bridge.sendAudio(Buffer.from([0x7f, 0x7f]));
+      }),
   );
 });

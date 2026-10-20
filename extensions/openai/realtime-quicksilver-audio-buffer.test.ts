@@ -7,9 +7,8 @@ import {
 const MAX_PENDING_AUDIO_BYTES = OPENAI_QUICKSILVER_RELAY_FRAME_BYTES * 250;
 
 function readPendingAudio(pending: OpenAIQuicksilverPendingAudio): Buffer {
-  const length = pending.length;
-  const audio = Buffer.alloc(length);
-  expect(pending.readInto(audio)).toBe(length);
+  const audio = Buffer.alloc(pending.length);
+  expect(pending.readInto(audio)).toBe(audio.length);
   return audio;
 }
 
@@ -37,12 +36,11 @@ describe("GPT-Live pending microphone audio", () => {
     const expectedOversizedTail = Buffer.from(oversized.subarray(4));
     pending.append(oversized);
     oversized.fill(0xff);
-    const oversizedResult = readPendingAudio(pending);
 
     expect(appended).toHaveLength(MAX_PENDING_AUDIO_BYTES);
     expect(appended.subarray(0, -2).every((byte) => byte === 0x01)).toBe(true);
     expect(appended.subarray(-2)).toEqual(Buffer.from([0x02, 0x02]));
-    expect(oversizedResult).toEqual(expectedOversizedTail);
+    expect(readPendingAudio(pending)).toEqual(expectedOversizedTail);
   });
 
   it("reads ordered PCM across both sides of the circular storage", () => {

@@ -23,26 +23,20 @@ function createProjectionContext(params?: {
     contextWindow: 96_000,
     maxTokens: 128_000,
   };
-  return {
+  const context: ProviderNormalizeResolvedModelContext = {
     provider: "openai",
     modelId,
     model,
-    ...(params?.providerApi
-      ? {
-          config: {
-            models: {
-              providers: {
-                openai: {
-                  api: params.providerApi,
-                  baseUrl: "https://api.openai.com/v1",
-                  models: [{ ...model, api: params.configuredModelApi }],
-                },
-              },
-            },
-          },
-        }
-      : {}),
   };
+  if (params?.providerApi) {
+    const openai = {
+      api: params.providerApi,
+      baseUrl: "https://api.openai.com/v1",
+      models: [{ ...model, api: params.configuredModelApi }],
+    };
+    context.config = { models: { providers: { openai } } };
+  }
+  return context;
 }
 
 describe("OpenAI configured-row projection", () => {
