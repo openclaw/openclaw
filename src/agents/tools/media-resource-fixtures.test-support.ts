@@ -81,8 +81,10 @@ export function admitTask(
       taskLabel: "Synthetic resource proof",
     }),
   );
-  const completed = vi.spyOn(lifecycle, "completeTaskRun");
-  const failed = vi.spyOn(lifecycle, "failTaskRun");
+  const completeTaskRun = lifecycle.completeTaskRun.bind(lifecycle);
+  const failTaskRun = lifecycle.failTaskRun.bind(lifecycle);
+  const completed = vi.spyOn(lifecycle, "completeTaskRun").mockImplementation(completeTaskRun);
+  const failed = vi.spyOn(lifecycle, "failTaskRun").mockImplementation(failTaskRun);
   const settlement = observeMediaGenerationSettlement({
     completeOperation: completed,
     failOperation: failed,
