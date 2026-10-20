@@ -92,31 +92,27 @@ export function createCompactHooksPreparedModelRuntime(input: {
   };
 }
 
-function createCompactHooksAuthStorage() {
+export function createCompactHooksResolvedModel(
+  provider = "openai",
+  modelId = "fake",
+): MockResolvedModel {
   const runtimeKeys = new Map<string, string>();
   return {
-    setRuntimeApiKey: vi.fn((provider: string, apiKey: string) => {
-      runtimeKeys.set(provider, apiKey);
-    }),
-    getApiKey: vi.fn(async (provider: string) => runtimeKeys.get(provider)),
-  } satisfies MockResolvedModel["authStorage"];
-}
-
-export function createCompactHooksResolvedModel(
-  provider?: string,
-  modelId?: string,
-): MockResolvedModel {
-  return {
-    logicalRef: { provider: provider ?? "openai", model: modelId ?? "fake" },
+    logicalRef: { provider, model: modelId },
     model: {
-      provider: provider ?? "openai",
+      provider,
       api: "openai-responses",
       baseUrl: "https://api.openai.com/v1",
-      id: modelId ?? "fake",
+      id: modelId,
       input: [],
     },
     error: null,
-    authStorage: createCompactHooksAuthStorage(),
+    authStorage: {
+      setRuntimeApiKey: vi.fn((providerKey: string, apiKey: string) => {
+        runtimeKeys.set(providerKey, apiKey);
+      }),
+      getApiKey: vi.fn(async (providerKey: string) => runtimeKeys.get(providerKey)),
+    },
     modelRegistry: {},
   };
 }

@@ -10,7 +10,6 @@ import {
   useNoBundledPlugins,
   writePlugin,
 } from "../../plugins/loader.test-fixtures.js";
-import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -21,6 +20,7 @@ import {
   refreshPreparedModelRuntimeSnapshots,
 } from "../prepared-model-runtime.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../prepared-model-runtime.test-support.js";
+import type { PreparedModelRuntimeLeaseOptions } from "../prepared-model-runtime.types.js";
 import { resolveCompactionRuntimeSelection } from "./compaction-runtime-preparation.js";
 
 let state: OpenClawTestState;
@@ -123,13 +123,7 @@ it.each([
       return committedConfig;
     }, publication);
     const admissionOptions = {
-      deriveRuntimePluginSelections: ({
-        config: admittedConfig,
-        metadataSnapshot,
-      }: {
-        config: OpenClawConfig;
-        metadataSnapshot: PluginMetadataSnapshot;
-      }) => {
+      deriveRuntimePluginSelections: ({ config: admittedConfig, metadataSnapshot }) => {
         const selection = resolveCompactionRuntimeSelection({
           ...requested,
           config: admittedConfig,
@@ -139,7 +133,7 @@ it.each([
         });
         return [{ provider: selection.provider, modelId: selection.modelId, runtime: "openclaw" }];
       },
-    };
+    } satisfies PreparedModelRuntimeLeaseOptions;
     const pending = acquireAgentRunPreparedModelRuntime(input, admissionOptions);
     const derive = admissionOptions.deriveRuntimePluginSelections;
     if (mutate === "recipe") {
@@ -150,39 +144,29 @@ it.each([
     try {
       resumePublication.resolve();
       await publishing;
-      const lease = await pending;
+      await using lease = await pending;
       admissionOptions.deriveRuntimePluginSelections = derive;
-      try {
-        const providers = lease.snapshot.pluginRegistry?.providers.map(
-          ({ provider }) => provider.id,
-        );
-        expect(lease.snapshot.config).toBe(committedConfig);
-        expect(lease.snapshot.workspaceDir).toBe(requestWorkspace);
-        expect(providers).toEqual(
-          !locked && nextProvider
-            ? ["caller-provider", "requested-extra", nextProvider]
-            : ["caller-provider", "requested-extra"],
-        );
-        const expectedSelections = [requested, extra];
-        if (!locked && nextProvider) {
-          expectedSelections.push({ ...requested, provider: nextProvider });
-        }
-        expect(
-          getPreparedModelRuntimeSnapshot({
-            ...input,
-            config: committedConfig,
-            runtimePluginSelections: expectedSelections,
-          }),
-        ).toBe(lease.snapshot);
-        const repeated = await acquireAgentRunPreparedModelRuntime(input, admissionOptions);
-        expect(repeated.snapshot).toBe(lease.snapshot);
-        await repeated[Symbol.asyncDispose]();
-        expect(
-          previous.snapshot.pluginRegistry?.providers.map(({ provider }) => provider.id),
-        ).toEqual(["caller-provider", "requested-extra", "summary-old"]);
-      } finally {
-        await lease[Symbol.asyncDispose]();
+      const providers = lease.snapshot.pluginRegistry?.providers.map(({ provider }) => provider.id);
+      expect(lease.snapshot.config).toBe(committedConfig);
+      expect(lease.snapshot.workspaceDir).toBe(requestWorkspace);
+      const expectedSelections = [requested, extra];
+      if (!locked && nextProvider) {
+        expectedSelections.push({ ...requested, provider: nextProvider });
       }
+      expect(providers).toEqual(expectedSelections.map(({ provider }) => provider));
+      expect(
+        getPreparedModelRuntimeSnapshot({
+          ...input,
+          config: committedConfig,
+          runtimePluginSelections: expectedSelections,
+        }),
+      ).toBe(lease.snapshot);
+      const repeated = await acquireAgentRunPreparedModelRuntime(input, admissionOptions);
+      expect(repeated.snapshot).toBe(lease.snapshot);
+      await repeated[Symbol.asyncDispose]();
+      expect(
+        previous.snapshot.pluginRegistry?.providers.map(({ provider }) => provider.id),
+      ).toEqual(["caller-provider", "requested-extra", "summary-old"]);
     } finally {
       resumePublication.resolve();
       await publishing;
