@@ -579,7 +579,8 @@ export function runSqliteReadOnlyWorkerSync(
     {
       encoding: "utf8",
       windowsHide: true,
-      stdio: "pipe",
+      // Requests are argument-fed; an unused stdin pipe can fail shutdown in restricted hosts.
+      stdio: ["ignore", "pipe", "pipe"],
       env: resolveNodeCompileCacheEnv(),
       maxBuffer: SQLITE_READONLY_WORKER_MAX_BUFFER,
       timeout: timeoutMs,

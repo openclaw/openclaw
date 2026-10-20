@@ -47,6 +47,60 @@ vi.mock("node:child_process", async (importOriginal) => {
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+it.runIf(process.platform === "linux")(
+  "preserves a large diagnostic across nonblocking worker stdout",
+  async () => {
+    const root = tempDirs.make("sqlite-large-diagnostic-");
+    const pathname = path.join(root, "source.sqlite");
+    const diagnostic =
+      "synthetic SQLite inspection failure: " + "\u0001".repeat(90_000) + ":end ⚡";
+    const payloadBytes = Buffer.byteLength(JSON.stringify({ ok: false, message: diagnostic }));
+    expect(payloadBytes).toBeGreaterThan(512 * 1024);
+    expect(payloadBytes).toBeLessThan(1024 * 1024);
+    const preload = path.join(root, "large-diagnostic.mjs");
+    // Inject a deterministic native-boundary error only in the real child. Native
+    // ENAMETOOLONG messages are truncated by Bun before the worker serializes them.
+    fs.writeFileSync(
+      preload,
+      `
+      import fs from "node:fs";
+      import { syncBuiltinESMExports } from "node:module";
+      const openSync = fs.openSync;
+      fs.openSync = function (file, ...args) {
+        if (file === ${JSON.stringify(pathname)}) {
+          throw new Error("synthetic SQLite inspection failure: " + "\\u0001".repeat(90_000) + ":end ⚡");
+        }
+        return openSync.call(this, file, ...args);
+      };
+      syncBuiltinESMExports();
+      // Exercise a nonblocking pipe/socket even before startup imports touch stdout.
+      process.stdout._handle.setBlocking(false);
+    `,
+    );
+    const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+    let response: ReturnType<typeof actual.spawnSync> | undefined;
+    vi.mocked(spawnSync).mockImplementationOnce((file, args, options) => {
+      response = actual.spawnSync(file, ["--import", preload, ...(args ?? [])], options);
+      return response;
+    });
+    let failure: unknown;
+    try {
+      runSqliteReadOnlyWorkerSync(pathname, undefined, "file-generation");
+    } catch (error) {
+      failure = error;
+    }
+    expect(response?.error).toBeUndefined();
+    expect(response?.status).toBe(1);
+    expect(response?.stderr).toBe("");
+    expect(Buffer.byteLength(String(response?.stdout))).toBe(payloadBytes);
+    expect(failure).toBeInstanceOf(Error);
+    const expectedFailure = `SQLite read-only worker ${diagnostic}`;
+    expect((failure as Error).message.length).toBe(expectedFailure.length);
+    expect((failure as Error).message).toBe(expectedFailure);
+  },
+);
+
 beforeEach(() => {
   vi.mocked(execFile).mockReset();
   vi.mocked(spawn).mockClear();
@@ -341,6 +395,40 @@ it("sums serial size-aware schema inspection budgets without giant fixtures", ()
   ).toBe(MAX_TIMER_TIMEOUT_MS);
 });
 
+describe("argument-fed synchronous SQLite workers", () => {
+  it.each(["EPERM", "ENOBUFS"])("retains %s despite status 0 and valid JSON", (code) => {
+    const error = Object.assign(new Error(`spawnSync ${code}`), { code });
+    const stdout = '{"ok":true,"location":"private.sqlite"}';
+    vi.mocked(spawnSync).mockReturnValueOnce({
+      pid: 1,
+      output: [null, stdout, ""],
+      stdout,
+      stderr: "",
+      status: 0,
+      signal: null,
+      error,
+    });
+
+    expect(() => runSqliteReadOnlyWorkerSync("source.sqlite", undefined)).toThrow(
+      expect.objectContaining({ cause: error }),
+    );
+  });
+
+  it("rejects an empty response even when the child exits successfully", () => {
+    vi.mocked(spawnSync).mockReturnValueOnce({
+      pid: 1,
+      output: [null, "", ""],
+      stdout: "",
+      stderr: "",
+      status: 0,
+      signal: null,
+    });
+    expect(() => runSqliteReadOnlyWorkerSync("source.sqlite", undefined)).toThrow(
+      "returned no JSON result",
+    );
+  });
+});
+
 it("preserves an intermittent failed launch without parsing absent worker output", async () => {
   const source = createDatabase(null);
   const stagingRoot = tempDirs.make("openclaw-snapshot-launch-");
@@ -380,7 +468,7 @@ describe.each(["async", "sync"] as const)("SQLite read-only snapshot worker (%s)
     expect(calls).toHaveLength(1);
     expect(calls[0]?.[2]).toMatchObject({ timeout, killSignal: "SIGKILL", windowsHide: true });
     if (mode === "sync") {
-      expect(calls[0]?.[2]).toHaveProperty("stdio", "pipe");
+      expect(calls[0]?.[2]).toHaveProperty("stdio", ["ignore", "pipe", "pipe"]);
     }
   }
 
