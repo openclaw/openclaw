@@ -59,29 +59,20 @@ export function readRepositoryGitHubPublicationFixture(requestId: string) {
   return readRepositoryGitHubPublicationInDatabase(openOpenClawStateDatabase().db, requestId);
 }
 
+type ExecutionStore = ReturnType<typeof createGitHubPublicationExecutionStoreInDatabase>;
+
 export function createGitHubPublicationExecutionStoreFixture(instanceId: string) {
-  const write = <T>(
-    operation: (store: ReturnType<typeof createGitHubPublicationExecutionStoreInDatabase>) => T,
-  ) =>
+  const write = <T>(operation: (store: ExecutionStore) => T) =>
     runOpenClawStateWriteTransaction((database) =>
       operation(createGitHubPublicationExecutionStoreInDatabase(database, instanceId)),
     );
   return {
-    bindWorkspaceSnapshot: (
-      ...args: Parameters<
-        ReturnType<typeof createGitHubPublicationExecutionStoreInDatabase>["bindWorkspaceSnapshot"]
-      >
-    ) => write((store) => store.bindWorkspaceSnapshot(...args)),
-    updatePublishingFacts: (
-      ...args: Parameters<
-        ReturnType<typeof createGitHubPublicationExecutionStoreInDatabase>["updatePublishingFacts"]
-      >
-    ) => write((store) => store.updatePublishingFacts(...args)),
-    complete: (
-      ...args: Parameters<
-        ReturnType<typeof createGitHubPublicationExecutionStoreInDatabase>["complete"]
-      >
-    ) => write((store) => store.complete(...args)),
+    bindWorkspaceSnapshot: (...args: Parameters<ExecutionStore["bindWorkspaceSnapshot"]>) =>
+      write((store) => store.bindWorkspaceSnapshot(...args)),
+    updatePublishingFacts: (...args: Parameters<ExecutionStore["updatePublishingFacts"]>) =>
+      write((store) => store.updatePublishingFacts(...args)),
+    complete: (...args: Parameters<ExecutionStore["complete"]>) =>
+      write((store) => store.complete(...args)),
   };
 }
 
