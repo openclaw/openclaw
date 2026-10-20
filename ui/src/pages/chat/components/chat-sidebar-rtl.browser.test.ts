@@ -27,29 +27,20 @@ async function mountDetailPanel(content: SidebarContent) {
   return panel;
 }
 
-const HEBREW_DOCUMENT = [
-  "## כותרת המסמך",
-  "",
-  "> ציטוט בעברית",
-  "",
-  "- פריט ראשון",
-  "- פריט שני",
-  "- [ ] משימה פתוחה",
-].join("\n");
-
-const ENGLISH_DOCUMENT = [
-  "## Document heading",
-  "",
-  "> An English quote",
-  "",
-  "- First item",
-  "- [ ] An open task",
-].join("\n");
-
 describe.runIf(browserMode)("chat sidebar markdown direction", () => {
   it.each([
-    { dir: "rtl", content: HEBREW_DOCUMENT, start: "Right", end: "Left" },
-    { dir: "ltr", content: ENGLISH_DOCUMENT, start: "Left", end: "Right" },
+    {
+      dir: "rtl",
+      content: "> ציטוט בעברית\n\n- פריט ראשון\n- [ ] משימה פתוחה",
+      start: "Right",
+      end: "Left",
+    },
+    {
+      dir: "ltr",
+      content: "> An English quote\n\n- First item\n- [ ] An open task",
+      start: "Left",
+      end: "Right",
+    },
   ] as const)(
     "lays out the quote, list and checkbox for $dir",
     async ({ dir, content, start, end }) => {
@@ -58,8 +49,7 @@ describe.runIf(browserMode)("chat sidebar markdown direction", () => {
       expect(reader.getAttribute("dir")).toBe(dir);
       const style = (selector: string) => getComputedStyle(reader.querySelector(selector)!);
       const quote = style("blockquote");
-      expect(quote[`border${start}Width`]).toBe("3px");
-      expect(quote[`border${end}Width`]).toBe("0px");
+      expect(quote).toMatchObject({ [`border${start}Width`]: "3px", [`border${end}Width`]: "0px" });
       const list = style("ul");
       expect(Number.parseFloat(list[`padding${start}`])).toBeGreaterThan(0);
       expect(Number.parseFloat(list[`padding${end}`])).toBe(0);
@@ -75,7 +65,7 @@ describe.runIf(browserMode)("chat sidebar markdown direction", () => {
   it("gives each line of a code block its own direction", async () => {
     const panel = await mountDetailPanel({
       kind: "markdown",
-      content: ["```", "שורה בעברית", "an english line", "```"].join("\n"),
+      content: "```\nשורה בעברית\nan english line\n```",
     });
 
     const pre = panel.querySelector<HTMLElement>(".sidebar-markdown-reader pre");

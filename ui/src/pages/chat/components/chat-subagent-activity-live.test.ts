@@ -16,7 +16,7 @@ import { projectSubagentStatus } from "../chat-subagent-wait.ts";
 import { ChatSubagentActivity } from "./chat-subagent-activity-live.tsx";
 import type { SubagentActivityProps } from "./chat-subagent-activity.tsx";
 
-type ChatSubagentActivityLive = SolidBridgeElement<SubagentActivityProps>;
+type ActivityElement = SolidBridgeElement<SubagentActivityProps>;
 
 it("keeps live child headlines scoped to their run, incarnation, and connection", async () => {
   const connection = createApplicationGateway();
@@ -62,9 +62,7 @@ it("keeps live child headlines scoped to their run, incarnation, and connection"
   const view = mountSolid(() => createComponent(ChatSubagentActivity, { rows: rows(child) }), {
     wrapper: provider.wrapper,
   });
-  const element = view.container.querySelector<ChatSubagentActivityLive>(
-    "openclaw-chat-subagent-activity",
-  )!;
+  const element = view.container.querySelector<ActivityElement>("openclaw-chat-subagent-activity")!;
   onTestFinished(() => {
     view.unmount();
     sessions.dispose();
@@ -88,9 +86,8 @@ it("keeps live child headlines scoped to their run, incarnation, and connection"
     headline: "Verifying the API response",
     health: "on-track",
   };
-  const emit = async (patch: Partial<SessionObserverDigest> = {}) => {
+  const emit = async (patch: Partial<SessionObserverDigest> = {}) =>
     publish("session.observer", { ...digest, ...patch });
-  };
   expect(subscribe).toHaveBeenCalledWith(child.key, expect.objectContaining({ mode: "narration" }));
   narrate("Reading sources. **Checking the API response.**");
   expect(element.textContent).toContain("Checking the API response.");

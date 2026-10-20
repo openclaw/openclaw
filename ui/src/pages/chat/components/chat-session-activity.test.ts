@@ -14,7 +14,6 @@ import {
 
 const sessionKey = "agent:main:dashboard:activity-preview";
 const sourceKey = "agent:main:dashboard:icon-work";
-const options = { sessionKey, runWorking: false, searchActive: false };
 const container = document.createElement("div");
 const view = createMessageGroupHarness(container);
 
@@ -40,7 +39,7 @@ function chain(messages: unknown[], searchActive = false) {
       streamStartedAt: null,
       showToolCalls: true,
     }),
-    { ...options, searchActive },
+    { sessionKey, runWorking: false, searchActive },
   );
 }
 function activityGroup(projection: ReturnType<typeof chain>, index = 0) {
@@ -73,6 +72,7 @@ function drawExpandable(group: ReturnType<typeof activityGroup>, assistantName?:
 }
 afterEach(() => {
   view.unmount();
+  container.remove();
   resetChatThreadState();
 });
 
@@ -89,31 +89,34 @@ function automation(id: string, jobId = "daily", source = sessionKey) {
     },
   };
 }
+function query<T extends HTMLElement = HTMLElement>(
+  selector: string,
+  root: ParentNode = container,
+) {
+  return root.querySelector<T>(selector);
+}
 
 describe("session activity", () => {
   it("collapses recorded automation inputs and reveals their exact run from the shared disclosure", () => {
     const projection = chain([automation("execution")]);
     const { expanded, draw } = drawExpandable(activityGroup(projection));
-    const disclosure = container.querySelector<HTMLDetailsElement>(".chat-session-activity");
-    expect(disclosure).not.toBeNull();
-    expect(disclosure?.open).toBe(false);
+    const disclosure = query<HTMLDetailsElement>(".chat-session-activity");
+    expect(disclosure).toMatchObject({ open: false });
     expect(disclosure?.querySelector("summary")?.textContent).toContain("Daily report");
-    expect(disclosure?.querySelector("summary a[data-cron-run-link]")?.getAttribute("href")).toBe(
+    expect(query("summary a[data-cron-run-link]", disclosure!)?.getAttribute("href")).toBe(
       "/automations?job=daily&run=execution",
     );
     expect(container.textContent).not.toContain("Original receipt");
-    expect(
-      container.querySelector(".chat-avatar, .chat-group--forwarded, .chat-bubble"),
-    ).toBeNull();
+    expect(query(".chat-avatar, .chat-group--forwarded, .chat-bubble")).toBeNull();
     expect(markers(projection, expanded)).toHaveLength(0);
     expect(latestTranscriptAnnouncement(projection.collapsedItems)?.text).toBe(
       "1 update from Daily report",
     );
     expandReplyTargetWork(projection.transcriptItems, expanded, "execution");
     draw();
-    expect(disclosure?.open).toBe(true);
+    expect(disclosure).toMatchObject({ open: true });
     expect(container.textContent).toContain("END execution");
-    expect(disclosure?.querySelector("a[data-cron-run-link]")?.getAttribute("href")).toBe(
+    expect(query("a[data-cron-run-link]", disclosure!)?.getAttribute("href")).toBe(
       "/automations?job=daily&run=execution",
     );
     expect(disclosure?.querySelector(".chat-message-disclosure__toggle")).toBeNull();
@@ -133,34 +136,21 @@ describe("session activity", () => {
     );
     const projection = chain(messages);
     expect(projection.transcriptItems).toHaveLength(2);
-    for (const [index, group] of projection.transcriptItems.entries()) {
-      if (group.kind !== "group") {
-        throw new Error("expected automation group");
-      }
-      expect(group.messages.map((entry) => entry.message)).toEqual([messages[index]]);
+    for (const [index, message] of messages.entries()) {
+      expect(activityGroup(projection, index).messages.map((entry) => entry.message)).toEqual([
+        message,
+      ]);
     }
   });
 
   it.each([
     { kind: "internal_system", sourceTool: "cron" },
-    {
-      kind: "internal_system",
-      sourceTool: "cron",
-      jobId: "daily",
-      runId: 42,
-      sourceSessionKey: sessionKey,
-    },
-    {
-      kind: "internal_system",
-      sourceTool: "hook",
-      jobId: "daily",
-      runId: "execution",
-      sourceSessionKey: sessionKey,
-    },
+    { ...automation("execution").provenance, runId: 42 },
+    { ...automation("execution").provenance, sourceTool: "hook" },
   ])("does not disguise incomplete or unrelated system input as automation: %j", (provenance) => {
     const group = activityGroup(chain([{ ...automation("input"), provenance }]));
     view.render(group, { showReasoning: false });
-    expect(container.querySelector(".chat-session-activity")).toBeNull();
+    expect(query(".chat-session-activity")).toBeNull();
   });
 
   it("folds adjacent same-source inputs without changing message order or reply identities", () => {
@@ -188,13 +178,7 @@ describe("session activity", () => {
     update("other-source", "agent:main:dashboard:other"),
     {
       ...update("automation"),
-      provenance: {
-        kind: "internal_system",
-        sourceTool: "cron",
-        jobId: "job",
-        runId: "run",
-        sourceSessionKey: sourceKey,
-      },
+      provenance: automation("run", "job", sourceKey).provenance,
     },
   ])(
     "never folds across a different source or visible conversation boundary: $role",
@@ -209,7 +193,7 @@ describe("session activity", () => {
       activityGroup(chain([update("first"), update("second")])),
       "OpenClaw",
     );
-    const disclosure = container.querySelector<HTMLDetailsElement>(".chat-session-activity");
+    const disclosure = query<HTMLDetailsElement>(".chat-session-activity");
     const summary = disclosure?.querySelector("summary");
     if (!disclosure || !summary) {
       throw new Error("expected disclosure");
@@ -222,22 +206,16 @@ describe("session activity", () => {
       "2 updates from Visualize tool icons",
     );
     expect(container.textContent).not.toContain("Original receipt");
-    expect(
-      container.querySelector(".chat-avatar, .chat-avatar-slot, .chat-group--forwarded"),
-    ).toBeNull();
-    expect(summary.querySelector("a[data-session-key]")?.getAttribute("data-session-key")).toBe(
-      sourceKey,
-    );
+    expect(query(".chat-avatar, .chat-avatar-slot, .chat-group--forwarded")).toBeNull();
+    expect(query("a[data-session-key]", summary)?.getAttribute("data-session-key")).toBe(sourceKey);
     disclosure.open = true;
     disclosure.dispatchEvent(new Event("toggle"));
     expect(disclosure.querySelectorAll(".chat-reply-attribution")).toHaveLength(1);
     expect(summaryMarkup()).toBe(collapsedMarkup);
-    expect(
-      disclosure.querySelector(".chat-session-activity__body .chat-reply-attribution"),
-    ).toBeNull();
+    expect(query(".chat-session-activity__body .chat-reply-attribution", disclosure)).toBeNull();
     expect(container.textContent).toContain("END first");
     expect(container.textContent).toContain("END second");
-    expect(container.querySelector(".chat-message-disclosure__toggle")).toBeNull();
+    expect(query(".chat-message-disclosure__toggle")).toBeNull();
     expect(container.querySelectorAll(".chat-group-timestamp")).toHaveLength(2);
     draw();
     expect(disclosure.open).toBe(true);
@@ -257,24 +235,18 @@ describe("session activity", () => {
       });
     };
     document.body.append(container);
-    try {
-      draw(message.content);
-      const action = container.querySelector<HTMLButtonElement>(
-        ".chat-group-footer-actions .chat-reply-btn",
-      );
-      expect(action).not.toBeNull();
-      action!.focus();
-      expect(document.activeElement).toBe(action);
-      draw("refreshed " + message.content);
-      expect(container.textContent).toContain("refreshed");
-      expect(container.querySelector(".chat-group-footer-actions .chat-reply-btn")).toBe(action);
-      expect(document.activeElement).toBe(action);
-      action!.click();
-      expect(onReply).toHaveBeenCalledOnce();
-      expect(onReply.mock.calls[0]?.[0].text).toContain("refreshed");
-    } finally {
-      container.remove();
-    }
+    draw(message.content);
+    const action = query<HTMLButtonElement>(".chat-group-footer-actions .chat-reply-btn");
+    expect(action).not.toBeNull();
+    action!.focus();
+    expect(document.activeElement).toBe(action);
+    draw("refreshed " + message.content);
+    expect(container.textContent).toContain("refreshed");
+    expect(query(".chat-group-footer-actions .chat-reply-btn")).toBe(action);
+    expect(document.activeElement).toBe(action);
+    action!.click();
+    expect(onReply).toHaveBeenCalledOnce();
+    expect(onReply.mock.calls[0]?.[0].text).toContain("refreshed");
   });
 
   it("keeps reply-bearing receipts separate and preserves navigation to their original", () => {
@@ -288,30 +260,25 @@ describe("session activity", () => {
     expect(projection.transcriptItems).toHaveLength(3);
     const group = activityGroup(projection, 1);
     const onOpenReply = vi.fn();
-    const resolveReplyPreview = createReplyPreviewResolver(
-      new Map([
-        [
-          "older",
-          {
-            message: {
-              role: "user",
-              content: "Earlier question",
-              __openclaw: { id: "older", senderId: "alice", senderName: "Alice" },
-            },
-            messageId: "older-render",
-            senderLabel: "Alice",
-          },
-        ],
-      ]),
-      { assistantName: "Assistant" },
-    );
+    const original = {
+      message: {
+        role: "user",
+        content: "Earlier question",
+        __openclaw: { id: "older", senderId: "alice", senderName: "Alice" },
+      },
+      messageId: "older-render",
+      senderLabel: "Alice",
+    };
+    const resolveReplyPreview = createReplyPreviewResolver(new Map([["older", original]]), {
+      assistantName: "Assistant",
+    });
     view.render(group, {
       showReasoning: false,
       isToolMessageExpanded: () => true,
       resolveReplyPreview,
       onOpenReply,
     });
-    const target = container.querySelector<HTMLButtonElement>(
+    const target = query<HTMLButtonElement>(
       '.chat-reply-attribution button[aria-label="Replying to Alice"]',
     );
     expect(target).not.toBeNull();
@@ -327,10 +294,10 @@ describe("session activity", () => {
       searchResult: true,
       isToolMessageExpanded: () => false,
     });
-    expect(container.querySelector<HTMLDetailsElement>(".chat-session-activity")?.open).toBe(true);
+    expect(query(".chat-session-activity")).toMatchObject({ open: true });
     expect(container.textContent).toContain("END search");
     expect(container.querySelectorAll(".chat-reply-attribution")).toHaveLength(1);
-    const sourceLink = container.querySelector("summary a[data-session-key]");
+    const sourceLink = query("summary a[data-session-key]");
     expect(sourceLink).not.toBeNull();
     const sourceClick = new MouseEvent("click", { bubbles: true, cancelable: true });
     sourceLink?.dispatchEvent(sourceClick);
@@ -342,7 +309,7 @@ describe("session activity", () => {
     ).toHaveLength(1);
     expect(collapsed.get("session-activity:" + group.key)).toBe(false);
     const click = new MouseEvent("click", { bubbles: true, cancelable: true });
-    container.querySelector("summary")?.dispatchEvent(click);
+    query("summary")?.dispatchEvent(click);
     expect(click.defaultPrevented).toBe(true);
   });
 });
