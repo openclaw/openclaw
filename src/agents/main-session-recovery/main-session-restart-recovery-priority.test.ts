@@ -8,15 +8,8 @@ import { admitAgentRestartRecovery } from "../../gateway/agent-turn/agent-run-re
 import { registerChatAbortController } from "../../gateway/chat-abort.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
 import { createContext as createGatewayTestContext } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
-import {
-  getAgentEventLifecycleGeneration,
-  resetAgentEventsForTest,
-} from "../../infra/agent-events.js";
-import {
-  enqueueCommandInLane,
-  getQueueSize,
-  setCommandLaneConcurrency,
-} from "../../process/command-queue.js";
+import * as agentEvents from "../../infra/agent-events.js";
+import * as queue from "../../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
@@ -28,10 +21,7 @@ import { reserveRestoredSubagentControllerSources } from "../subagents/announce/
 import { subagentRuns } from "../subagents/registry/subagent-registry-memory.js";
 import { createRecoveryRuntimeFixture } from "./main-session-recovery-runtime.test-support.js";
 import { settleAcceptedRestartRecovery } from "./main-session-restart-dispatch-settlement.js";
-import {
-  createRestartRecoveryStoreFixture,
-  mainSessionEntry,
-} from "./main-session-restart-recovery-fixture.test-support.js";
+import * as fixtures from "./main-session-restart-recovery-fixture.test-support.js";
 import { makeUserMessage } from "./main-session-restart-recovery-transcript.test-support.js";
 import { retryRestartAbortedMainSessionRecovery } from "./main-session-restart-recovery.js";
 
@@ -46,19 +36,30 @@ const mockRecoveryRuntime = createRecoveryRuntimeFixture({
   getDispatchSettlement: () => dispatchSettlement.promise,
   sendRecoveryNotice: async () => ({ suppressed: false }),
 });
-const { makeMainSessionFixture, writeTranscript } = createRestartRecoveryStoreFixture(() => tmpDir);
-async function mainFixture(overrides: Parameters<typeof mainSessionEntry>[0] = {}) {
+const { makeMainSessionFixture, writeTranscript } = fixtures.createRestartRecoveryStoreFixture(
+  () => tmpDir,
+);
+async function mainFixture(overrides: Parameters<typeof fixtures.mainSessionEntry>[0] = {}) {
   const fixture = await makeMainSessionFixture(overrides);
   const cfg = { session: { store: fixture.storePath } };
   await writeTranscript(fixture.sessionsDir, "main-session", [
     makeUserMessage("finish the interrupted task"),
   ]);
-  return { ...fixture, cfg };
+  const retry = (gatewayRuntime: GatewayRecoveryRuntime, lane?: CommandLane.Main) =>
+    retryRestartAbortedMainSessionRecovery({
+      agentId: "main",
+      sessionKey: fixture.sessionKey,
+      storePath: fixture.storePath,
+      expectedSessionId: session.sessionId,
+      gatewayRuntime,
+      lane,
+    });
+  return { ...fixture, cfg, retry };
 }
 async function blockLane(lane: string) {
   const entered = createDeferred();
   const release = createDeferred();
-  const task = enqueueCommandInLane(lane, async () => {
+  const task = queue.enqueueCommandInLane(lane, async () => {
     entered.resolve();
     await release.promise;
   });
@@ -68,7 +69,7 @@ async function blockLane(lane: string) {
 beforeEach(() => {
   callGateway.mockClear();
   dispatchSettlement = createDeferred();
-  resetAgentEventsForTest();
+  agentEvents.resetAgentEventsForTest();
   resetGatewayWorkAdmission();
   resetCommandQueueStateForTest();
   tmpDir = tempDirs.make("openclaw-recovery-priority-");
@@ -108,7 +109,7 @@ it("admits visible input recovery without waiting for unrelated background work"
         sourceInput,
         timeoutMs: 60_000,
       });
-      const lifecycleGeneration = getAgentEventLifecycleGeneration();
+      const lifecycleGeneration = agentEvents.getAgentEventLifecycleGeneration();
       let executionStarted = false;
       options?.onStartOwner?.({
         observe: () => ({ executionStarted, startDeadlineAtMs: Date.now() + 60_000 }),
@@ -129,7 +130,7 @@ it("admits visible input recovery without waiting for unrelated background work"
             storePath,
             activeRunAbort: registration,
           });
-          return await enqueueCommandInLane(request.lane ?? "main", async () => {
+          return await queue.enqueueCommandInLane(request.lane ?? "main", async () => {
             executionStarted = true;
             registration.markExecutionStarted();
             options?.onExecutionStarted?.();
@@ -165,23 +166,19 @@ it("admits visible input recovery without waiting for unrelated background work"
     resolveGatewayContext: () => context,
     upstreamAbortSignal: signal,
   });
-  let admitted: Awaited<typeof input> | undefined;
   try {
     await withinTest(recoveryEntered.promise, signal);
     expect(dispatches).toBe(1);
-    expect(getQueueSize("background")).toBe(1);
+    expect(queue.getQueueSize("background")).toBe(1);
     finishRecovery.resolve();
-    admitted = await withinTest(input, signal);
+    const admitted = await withinTest(input, signal);
     expect(admitted.status).toBe("owned");
     expect(dispatches).toBe(1);
     expect(readEntry()?.abortedLastRun).toBe(false);
-    expect(getQueueSize("background")).toBe(1);
+    expect(queue.getQueueSize("background")).toBe(1);
   } finally {
     finishRecovery.resolve();
     releaseBackground.resolve();
-    if (admitted?.status === "owned") {
-      admitted.operation.complete();
-    }
     const settled = await input.catch(() => undefined);
     if (settled?.status === "owned") {
       settled.operation.complete();
@@ -191,7 +188,7 @@ it("admits visible input recovery without waiting for unrelated background work"
 });
 
 it("resumes an unmarked startup orphan before reserving its child completions", async () => {
-  const { storePath, sessionKey, cfg, readEntry } = await mainFixture({
+  const { storePath, sessionKey, cfg, readEntry, retry } = await mainFixture({
     status: undefined,
     abortedLastRun: false,
     mainRestartRecovery: undefined,
@@ -248,15 +245,7 @@ it("resumes an unmarked startup orphan before reserving its child completions", 
     // Those children must not hold raw FIFO positions ahead of the interrupted turn.
     expect(inputs).toHaveLength(0);
     expect(readEntry()?.abortedLastRun).toBe(true);
-    await expect(
-      retryRestartAbortedMainSessionRecovery({
-        agentId: "main",
-        sessionKey,
-        storePath,
-        expectedSessionId: "main-session",
-        gatewayRuntime: runtime,
-      }),
-    ).resolves.toMatchObject({ started: 1, failed: 0 });
+    await expect(retry(runtime)).resolves.toMatchObject({ started: 1, failed: 0 });
     expect(callGateway).toHaveBeenCalledOnce();
     const restored = await reserveRestoredSubagentControllerSources(children);
     inputs.push(...restored);
@@ -278,19 +267,12 @@ it("resumes an unmarked startup orphan before reserving its child completions", 
 it.each([false, true])(
   "respects main capacity before recovery ownership (replaced=%s)",
   async (replaced) => {
-    const { storePath, sessionKey, readEntry } = await mainFixture();
-    setCommandLaneConcurrency("main", 1);
+    const { storePath, sessionKey, readEntry, retry } = await mainFixture();
+    queue.setCommandLaneConcurrency("main", 1);
     const { task: blocker, release } = await blockLane("main");
-    const recovery = retryRestartAbortedMainSessionRecovery({
-      agentId: "main",
-      sessionKey,
-      storePath,
-      expectedSessionId: "main-session",
-      lane: CommandLane.Main,
-      gatewayRuntime: mockRecoveryRuntime,
-    });
+    const recovery = retry(mockRecoveryRuntime, CommandLane.Main);
     try {
-      await waitForFast(() => expect(getQueueSize("main")).toBe(2));
+      await waitForFast(() => expect(queue.getQueueSize("main")).toBe(2));
       expect(callGateway).not.toHaveBeenCalled();
       const pending = readEntry()?.mainRestartRecovery;
       expect({
@@ -300,7 +282,7 @@ it.each([false, true])(
       if (replaced) {
         await replaceSessionEntry(
           { storePath, sessionKey },
-          mainSessionEntry({ sessionId: "replacement-session" }),
+          fixtures.mainSessionEntry({ sessionId: "replacement-session" }),
         );
       }
       release.resolve();
