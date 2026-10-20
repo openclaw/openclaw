@@ -11,12 +11,7 @@ import { createSqliteWorkerWriteAdmission } from "../infra/sqlite-worker-store.j
 import { createDeferredCore } from "../shared/deferred.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-  type OpenClawStateDatabaseOptions,
-} from "../state/openclaw-state-db.js";
+import * as stateDb from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import * as stateWorkerStore from "../state/openclaw-state-worker-store.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -30,11 +25,6 @@ import {
   PARENT_SESSION_KEY,
   SOURCE_SESSION_KEY,
 } from "./operator-approval-session-events.test-support.js";
-import {
-  insertOperatorApproval,
-  resolveOperatorApproval,
-  type OperatorApprovalRecord,
-} from "./operator-approval-store.js";
 import * as operatorApprovalStore from "./operator-approval-store.js";
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import { createSessionMessageSubscriberRegistry } from "./server-chat-state.js";
@@ -43,6 +33,8 @@ const SIBLING_SESSION_KEY = "agent:main:parent:sibling";
 const tempDirs: string[] = [];
 const subscriptions: Array<() => void> = [];
 type PendingInput = NonNullable<Parameters<typeof createPendingRecord>[0]>;
+type OperatorApprovalRecord = operatorApprovalStore.OperatorApprovalRecord;
+type OpenClawStateDatabaseOptions = stateDb.OpenClawStateDatabaseOptions;
 
 function createDatabaseOptions(): OpenClawStateDatabaseOptions {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-events-"));
@@ -140,7 +132,7 @@ async function denyApproval(
   id: string,
   nowMs = 5_001,
 ) {
-  const result = await resolveOperatorApproval({
+  const result = await operatorApprovalStore.resolveOperatorApproval({
     databaseOptions,
     id,
     nowMs,
@@ -158,7 +150,7 @@ async function insertPendingApproval(
   params: PendingInput & { databaseOptions: OpenClawStateDatabaseOptions; id: string },
 ): Promise<OperatorApprovalRecord> {
   const approval = createPendingRecord({ audienceSessionKeys: [SOURCE_SESSION_KEY], ...params });
-  const inserted = await insertOperatorApproval({
+  const inserted = await operatorApprovalStore.insertOperatorApproval({
     approval,
     databaseOptions: params.databaseOptions,
   });
@@ -175,8 +167,8 @@ describe("operator approval session events", () => {
     }
     vi.useRealTimers();
     vi.restoreAllMocks();
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
+    await stateDb.closeOpenClawStateDatabaseAsync();
+    stateDb.closeOpenClawStateDatabaseForTest();
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { force: true, recursive: true });
     }
@@ -185,23 +177,19 @@ describe("operator approval session events", () => {
   it.each(["pending", "terminal"] as const)(
     "publishes only valid %s state to opted-in, authorized audiences",
     (phase) => {
-      const sourceClients = [
-        createClient({ connId: "source-admin", scopes: ["operator.admin"] }),
-        createReviewer("source-device", "source-reviewer"),
-        createClient({ connId: "source-no-device", scopes: ["operator.approvals"] }),
-        createReviewer("source-unrelated-device", "unrelated-device"),
-        createReviewer("source-requester-device", "requester-device"),
-        createClient({
-          connId: "source-no-scope",
-          scopes: ["operator.read"],
-          deviceId: "unprivileged-device",
-        }),
-        createClient({
-          connId: "source-invalidated",
-          scopes: ["operator.admin"],
-          invalidated: true,
-        }),
-      ];
+      const sourceClients = (
+        [
+          ["source-admin", "operator.admin"],
+          ["source-device", "operator.approvals", "source-reviewer"],
+          ["source-no-device", "operator.approvals"],
+          ["source-unrelated-device", "operator.approvals", "unrelated-device"],
+          ["source-requester-device", "operator.approvals", "requester-device"],
+          ["source-no-scope", "operator.read", "unprivileged-device"],
+          ["source-invalidated", "operator.admin", undefined, true],
+        ] as const
+      ).map(([connId, scope, deviceId, invalidated]) =>
+        createClient({ connId, scopes: [scope], deviceId, invalidated }),
+      );
       const { broadcastToConnIds, runtime, subscribers } = createRuntime({
         clients: [
           ...sourceClients,
@@ -262,16 +250,9 @@ describe("operator approval session events", () => {
       ]);
 
       const payloads = broadcastToConnIds.mock.calls.map((call) => call[1]);
-      expect(payloads).not.toContainEqual(
-        expect.objectContaining({ sessionKey: SIBLING_SESSION_KEY }),
+      expect(JSON.stringify(payloads)).not.toMatch(
+        /requester-device|requester-client|private-session-id|private-run-id|private-tool-call-id|private-runtime-epoch/,
       );
-      const serialized = JSON.stringify(payloads);
-      expect(serialized).not.toContain("requester-device");
-      expect(serialized).not.toContain("requester-client");
-      expect(serialized).not.toContain("private-session-id");
-      expect(serialized).not.toContain("private-run-id");
-      expect(serialized).not.toContain("private-tool-call-id");
-      expect(serialized).not.toContain("private-runtime-epoch");
     },
   );
 
@@ -330,7 +311,7 @@ describe("operator approval session events", () => {
         });
       }
       if (padded) {
-        const { db } = openOpenClawStateDatabase(databaseOptions);
+        const { db } = stateDb.openOpenClawStateDatabase(databaseOptions);
         executeSqliteQuerySync(
           db,
           getNodeSqliteKysely<Pick<DB, "operator_approvals">>(db)
@@ -771,29 +752,27 @@ describe("operator approval session events", () => {
     runtime.publish({ phase: "pending", record });
     expect(executionEvents).toHaveLength(1);
     executionEvents.length = 0;
-    live = { ...live, resolvedAtMs: Date.now() };
-    runtime.publish({ phase: "pending", record });
-    live = {
-      ...live,
-      resolvedAtMs: undefined,
-      request: { ...live.request, sessionId: "replacement-session" },
-    };
-    runtime.publish({ phase: "pending", record });
-    live = {
-      ...live,
-      request: { ...live.request, sessionId: record.source.sessionId },
-      expiresAtMs: Date.now() - 1,
-    };
-    runtime.publish({ phase: "pending", record });
-    live = { ...live, expiresAtMs: record.expiresAtMs };
-    manager.runtimeEpoch = "replacement-manager";
-    runtime.publish({ phase: "pending", record });
-    manager.runtimeEpoch = record.runtimeEpoch;
-    managerAvailable = false;
-    runtime.publish({ phase: "pending", record });
-    managerAvailable = true;
-    current = false;
-    runtime.publish({ phase: "pending", record });
+    const matchingLive = live;
+    const stale: Array<{
+      live?: Partial<typeof live>;
+      epoch?: string;
+      available?: boolean;
+      current?: boolean;
+    }> = [
+      { live: { resolvedAtMs: Date.now() } },
+      { live: { request: { ...record.source, sessionId: "replacement-session" } } },
+      { live: { expiresAtMs: Date.now() - 1 } },
+      { epoch: "replacement-manager" },
+      { available: false },
+      { current: false },
+    ];
+    for (const variant of stale) {
+      live = { ...matchingLive, ...variant.live };
+      manager.runtimeEpoch = variant.epoch ?? record.runtimeEpoch;
+      managerAvailable = variant.available ?? true;
+      current = variant.current ?? true;
+      runtime.publish({ phase: "pending", record });
+    }
     expect(executionEvents).toEqual([]);
   });
 });
