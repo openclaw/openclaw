@@ -124,8 +124,7 @@ it.each([
       expect(target.issues).toContainEqual(
         expect.objectContaining({ code: "sqlite_transcript_count_mismatch" }),
       );
-      expect(receipt.validationBeforeArchive).toBe("failed");
-      expect(receipt.completedMoves).toEqual([]);
+      expect(receipt).toMatchObject({ validationBeforeArchive: "failed", completedMoves: [] });
       expect(fs.readFileSync(store.transcriptPath, "utf8")).toBe(original);
       expect(fs.readFileSync(store.storePath, "utf8")).toBe(originalIndex);
       expect(loadTranscriptEventsSync(scope)).toEqual(stored);

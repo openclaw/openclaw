@@ -19,29 +19,25 @@ function expectSettled(result: Awaited<ReturnType<typeof settleDuplicateSessionS
   ]);
 }
 
-it.each([1, 7, 29])(
-  "keeps the first artifact selected by a linear lookup (seed %s)",
-  async (seed) => {
-    await withDuplicateArchives(3, async ({ artifacts, settle }) => {
-      const copies = artifacts.map((item) => ({ ...item }));
-      artifacts.push(...copies);
-      let random = seed;
-      for (let i = artifacts.length - 1; i > 0; i--) {
-        random = (Math.imul(random, 1664525) + 1013904223) >>> 0;
-        const j = random % (i + 1);
-        [artifacts[i], artifacts[j]] = [artifacts[j]!, artifacts[i]!];
-      }
-      const expected = copies
-        .slice(1)
-        .map((item) => artifacts.find((candidate) => candidate.path === item.path)!);
-      const untouched = artifacts.filter((item) => !expected.includes(item));
-      const before = untouched.map((item) => ({ ...item }));
-      expectSettled(await settle());
-      expect(expected.map((item) => item.outcome)).toEqual(["removed", "removed", "removed"]);
-      expect(untouched).toEqual(before);
-    });
-  },
-);
+it("keeps the first matching artifact when copies precede or follow the original", async () => {
+  await withDuplicateArchives(3, async ({ artifacts, settle }) => {
+    const originals = artifacts.splice(0);
+    const copies = originals.map((item) => ({ ...item }));
+    artifacts.push(
+      ...originals.flatMap((item, index) =>
+        index % 2 ? [copies[index]!, item] : [item, copies[index]!],
+      ),
+    );
+    const expected = copies
+      .slice(1)
+      .map((item) => artifacts.find((candidate) => candidate.path === item.path)!);
+    const untouched = artifacts.filter((item) => !expected.includes(item));
+    const before = untouched.map((item) => ({ ...item }));
+    expectSettled(await settle());
+    expect(expected.map((item) => item.outcome)).toEqual(["removed", "removed", "removed"]);
+    expect(untouched).toEqual(before);
+  });
+});
 
 it.each(["artifacts", "moves"] as const)(
   "settles many duplicates with linear %s visits",

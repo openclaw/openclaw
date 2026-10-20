@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { loadSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { importSqliteSessionRows } from "../config/sessions/session-accessor.sqlite-import.test-support.js";
 import { loadTranscriptEventsSync } from "../config/sessions/session-accessor.sqlite-read.js";
@@ -21,7 +21,6 @@ import {
 import { noteSessionTranscriptHealth } from "./doctor-session-transcripts.js";
 
 const { createLegacyStore } = useDoctorSessionSqliteTestFixture();
-afterEach(() => vi.restoreAllMocks());
 
 it.each(["matching", "conflicting", "malformed", "pending-plugin"] as const)(
   "continues Doctor and later plugin repairs with %s residual history and an unreadable receipt",
@@ -73,8 +72,6 @@ it.each(["matching", "conflicting", "malformed", "pending-plugin"] as const)(
         type: "session",
         version: 3,
         id: "new-session",
-        cwd: "/fixture",
-        timestamp: "2026-08-30T00:00:00Z",
       },
       messageEvent("new", "user", "new"),
     ];
@@ -85,7 +82,7 @@ it.each(["matching", "conflicting", "malformed", "pending-plugin"] as const)(
       fs.writeFileSync(path.join(dir, "new-session.jsonl"), jsonl(...newEvents));
     }
     // Observe the real session gate without running unrelated plugin discovery and hooks.
-    const laterRepair = vi
+    using laterRepair = vi
       .spyOn(pluginDoctor, "runPostSessionPluginDoctorStateRepairs")
       .mockResolvedValue({ changes: [], warnings: [] });
     const warnings: string[] = [];
@@ -126,13 +123,11 @@ it.each(["matching", "conflicting", "malformed", "pending-plugin"] as const)(
       expect(warnings).toContainEqual(expect.stringContaining("plugin_migration_source_retained"));
       return;
     }
-    const manifests = fs
+    const move = fs
       .readdirSync(runsDir)
-      .filter((name) => name.endsWith(".json"))
       .map((name) => path.join(runsDir, name))
-      .filter((name) => name !== unreadableManifest)
-      .map(readMigrationManifest);
-    const move = manifests
+      .filter((name) => name.endsWith(".json") && name !== unreadableManifest)
+      .map(readMigrationManifest)
       .flatMap((manifest) => manifest.targets.flatMap((target) => target.completedMoves))
       .find((candidate) => candidate.sourcePath === store.transcriptPath);
     expect(move).toBeDefined();
