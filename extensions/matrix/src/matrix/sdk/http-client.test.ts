@@ -1,4 +1,3 @@
-// Matrix tests cover http client plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { performMatrixRequestMock } = vi.hoisted(() => ({
@@ -10,6 +9,12 @@ vi.mock("./transport.js", () => ({
 }));
 
 let MatrixAuthedHttpClient: typeof import("./http-client.js").MatrixAuthedHttpClient;
+const auth = { homeserver: "https://matrix.example.org", accessToken: "token" };
+const request = {
+  method: "GET",
+  endpoint: "/_matrix/client/v3/account/whoami",
+  timeoutMs: 5000,
+} as const;
 
 function mockResponse(text: string, contentType = "application/json", status = 200) {
   performMatrixRequestMock.mockResolvedValue({
@@ -28,48 +33,34 @@ describe("MatrixAuthedHttpClient", () => {
 
   beforeEach(() => {
     performMatrixRequestMock.mockReset();
-    client = new MatrixAuthedHttpClient({
-      homeserver: "https://matrix.example.org",
-      accessToken: "token",
-    });
+    client = new MatrixAuthedHttpClient(auth);
   });
 
   it("parses mixed-case JSON responses and forwards absolute-endpoint opt-in", async () => {
     mockResponse('{"ok":true}', "Application/JSON; charset=utf-8");
 
-    const configuredClient = new MatrixAuthedHttpClient({
-      homeserver: "https://matrix.example.org",
-      accessToken: "token",
-      ssrfPolicy: {
-        allowPrivateNetwork: true,
-      },
+    const policies = {
+      ssrfPolicy: { allowPrivateNetwork: true },
       dispatcherPolicy: {
-        mode: "explicit-proxy",
+        mode: "explicit-proxy" as const,
         proxyUrl: "http://proxy.internal:8080",
       },
-    });
-    const result = await configuredClient.requestJson({
-      method: "GET",
+    };
+    const configuredClient = new MatrixAuthedHttpClient({ ...auth, ...policies });
+    const absoluteRequest = {
+      ...request,
       endpoint: "https://matrix.example.org/_matrix/client/v3/account/whoami",
-      timeoutMs: 5000,
       allowAbsoluteEndpoint: true,
-    });
+    };
+    const result = await configuredClient.requestJson(absoluteRequest);
 
     expect(result).toEqual({ ok: true });
     expect(performMatrixRequestMock).toHaveBeenCalledWith({
-      homeserver: "https://matrix.example.org",
-      accessToken: "token",
-      method: "GET",
-      endpoint: "https://matrix.example.org/_matrix/client/v3/account/whoami",
+      ...auth,
+      ...policies,
+      ...absoluteRequest,
       qs: undefined,
       body: undefined,
-      timeoutMs: 5000,
-      ssrfPolicy: { allowPrivateNetwork: true },
-      dispatcherPolicy: {
-        mode: "explicit-proxy",
-        proxyUrl: "http://proxy.internal:8080",
-      },
-      allowAbsoluteEndpoint: true,
     });
   });
 
@@ -77,11 +68,7 @@ describe("MatrixAuthedHttpClient", () => {
     "does not parse a non-JSON media type containing application/json (%s)",
     async (contentType) => {
       mockResponse('{"ok":true}', contentType);
-      const result = await client.requestJson({
-        method: "GET",
-        endpoint: "/_matrix/client/v3/account/whoami",
-        timeoutMs: 5000,
-      });
+      const result = await client.requestJson(request);
 
       expect(result).toBe('{"ok":true}');
     },
@@ -96,9 +83,8 @@ describe("MatrixAuthedHttpClient", () => {
     });
 
     const result = await client.requestRaw({
-      method: "GET",
+      ...request,
       endpoint: "/_matrix/media/v3/download/example/id",
-      timeoutMs: 5000,
     });
 
     expect(result).toEqual(payload);
@@ -106,37 +92,15 @@ describe("MatrixAuthedHttpClient", () => {
 
   it("raises HTTP errors with status code metadata", async () => {
     mockResponse('{"error":"forbidden"}', "application/json", 403);
-    let rejection: unknown;
-    try {
-      await client.requestJson({
-        method: "GET",
-        endpoint: "/_matrix/client/v3/rooms",
-        timeoutMs: 5000,
-      });
-    } catch (error) {
-      rejection = error;
-    }
-
-    expect(rejection).toBeInstanceOf(Error);
-    const httpError = rejection as Error & { statusCode?: unknown };
-    expect(httpError.message).toBe("forbidden");
-    expect(httpError.statusCode).toBe(403);
+    const result = client.requestJson({ ...request, endpoint: "/_matrix/client/v3/rooms" });
+    await expect(result).rejects.toBeInstanceOf(Error);
+    await expect(result).rejects.toMatchObject({ message: "forbidden", statusCode: 403 });
   });
 
   it("throws descriptive error on malformed JSON success response", async () => {
     mockResponse("NOT JSON {{{");
-    let rejection: unknown;
-    try {
-      await client.requestJson({
-        method: "GET",
-        endpoint: "/_matrix/client/v3/sync",
-        timeoutMs: 5000,
-      });
-    } catch (error) {
-      rejection = error;
-    }
-
-    expect(rejection).toBeInstanceOf(Error);
-    expect((rejection as Error).message).toContain("malformed JSON");
+    const result = client.requestJson({ ...request, endpoint: "/_matrix/client/v3/sync" });
+    await expect(result).rejects.toBeInstanceOf(Error);
+    await expect(result).rejects.toThrow("malformed JSON");
   });
 });

@@ -16,11 +16,26 @@ type DecryptRetentionContext = {
 
 export function registerDecryptRetentionTests(context: DecryptRetentionContext): void {
   const { createSdkClient, getMatrixJsClient } = context;
-
-  it("stops decryption retries after hitting retry cap", async () => {
+  function setup() {
     vi.useFakeTimers();
     const client = createSdkClient();
-    const matrixJsClient = getMatrixJsClient();
+    const sdk = getMatrixJsClient();
+    sdk.decryptEventIfNeeded = vi.fn(async () => {
+      throw new Error("still missing key");
+    });
+    const emitFailure = (event: FakeMatrixEvent) => {
+      sdk.emit("event", event);
+      event.emit("decrypted", event, new Error("missing room key"));
+    };
+    const expectAttempts = async (count: number) => {
+      await vi.advanceTimersByTimeAsync(200_000);
+      expect(sdk.decryptEventIfNeeded).toHaveBeenCalledTimes(count);
+    };
+    return { client, emitFailure, expectAttempts };
+  }
+
+  it("stops decryption retries after hitting retry cap", async () => {
+    const { client, emitFailure, expectAttempts } = setup();
     const failed: string[] = [];
 
     client.on("room.failed_decryption", (_roomId, eventValue, error) => {
@@ -29,37 +44,25 @@ export function registerDecryptRetentionTests(context: DecryptRetentionContext):
 
     const encrypted = makeMatrixEvent({ decryptionFailure: true });
 
-    matrixJsClient.decryptEventIfNeeded = vi.fn(async () => {
-      throw new Error("still missing key");
-    });
-
     await client.start();
-    matrixJsClient.emit("event", encrypted);
-    encrypted.emit("decrypted", encrypted, new Error("missing room key"));
+    emitFailure(encrypted);
 
     expect(failed).toEqual(["missing room key"]);
 
-    await vi.advanceTimersByTimeAsync(200_000);
-    expect(matrixJsClient.decryptEventIfNeeded).toHaveBeenCalledTimes(8);
+    await expectAttempts(8);
 
     encrypted.emit("decrypted", encrypted, new Error("missing room key again"));
 
-    await vi.advanceTimersByTimeAsync(200_000);
-    expect(matrixJsClient.decryptEventIfNeeded).toHaveBeenCalledTimes(8);
+    await expectAttempts(8);
     expect(failed).toEqual(["missing room key"]);
   });
 
   it.each(["capacity", "expiry"] as const)(
     "retires failed-decryption notifications with exhausted retries on %s",
     async (retirement) => {
-      vi.useFakeTimers();
-      const client = createSdkClient();
-      const matrixJsClient = getMatrixJsClient();
+      const { client, emitFailure, expectAttempts } = setup();
       const failed = vi.fn();
       client.on("room.failed_decryption", failed);
-      matrixJsClient.decryptEventIfNeeded = vi.fn(async () => {
-        throw new Error("still missing key");
-      });
       const oldest = makeMatrixEvent({ eventId: "$oldest", decryptionFailure: true });
       let retained = oldest;
       const events = [
@@ -68,25 +71,19 @@ export function registerDecryptRetentionTests(context: DecryptRetentionContext):
           makeMatrixEvent({ eventId: `$retained-${index}`, decryptionFailure: true }),
         ),
       ];
-      const emitFailure = (event: FakeMatrixEvent) => {
-        matrixJsClient.emit("event", event);
-        event.emit("decrypted", event, new Error("missing room key"));
-      };
 
       await client.start();
       for (const event of events) {
         emitFailure(event);
         retained = event;
       }
-      await vi.advanceTimersByTimeAsync(200_000);
-      expect(matrixJsClient.decryptEventIfNeeded).toHaveBeenCalledTimes(events.length * 8);
+      await expectAttempts(events.length * 8);
 
       if (retirement === "expiry") {
         await vi.advanceTimersByTimeAsync(60 * 60_000 + 1);
         retained = makeMatrixEvent({ eventId: "$retained", decryptionFailure: true });
         emitFailure(retained);
-        await vi.advanceTimersByTimeAsync(200_000);
-        expect(matrixJsClient.decryptEventIfNeeded).toHaveBeenCalledTimes(16);
+        await expectAttempts(16);
       }
 
       const initialNotifications = retirement === "capacity" ? 513 : 2;
