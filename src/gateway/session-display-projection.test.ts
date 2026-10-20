@@ -184,4 +184,13 @@ describe("projectSessionDisplayMessage", () => {
 
     expect(preview?.text).toBe(expected);
   });
+
+  test.each(["~~~", "~~~~"])("omits %s code blocks before bounding a preview", (fence) => {
+    const content = `Before\n${fence}ts\n${"hidden ".repeat(60)}\n${fence}\nAfter`;
+    const message = { role: "assistant", content };
+    expect(projectSessionDisplayMessage(message, { flattenMarkdown: true })?.text).toBe(
+      "Before After",
+    );
+    expect(projectSessionDisplayMessage(message, { maxChars: 800 })?.text).toBe(content);
+  });
 });

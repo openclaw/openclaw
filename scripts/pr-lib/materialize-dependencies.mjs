@@ -63,6 +63,7 @@ const dependencies = [
         "jiti",
         "json5",
         "kysely",
+        "markdown-it",
         ...markdownDependencies,
         "p-map",
         "partial-json",
