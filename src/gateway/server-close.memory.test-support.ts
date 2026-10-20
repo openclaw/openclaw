@@ -1,12 +1,17 @@
+// Real Memory Core manager and embedding close contract shared by Gateway close tests.
 import assert from "node:assert/strict";
 import path from "node:path";
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
-import type { OpenKeyedStoreOptions } from "../plugin-state/plugin-state-store.types.js";
+import type {
+  OpenKeyedStoreOptions,
+  PluginStateKeyedStore,
+} from "../plugin-state/plugin-state-store.types.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
-import { createPluginRegistry, type PluginRecord } from "../plugins/registry.js";
+import type { MemoryPluginRuntime } from "../plugins/registry-contribution-types.js";
+import { createPluginRegistry } from "../plugins/registry.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import {
   resolveBundledPluginPublicModulePath,
@@ -15,9 +20,14 @@ import {
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 
 // Load the real plugin fixture during collection, outside individual test deadlines.
-const { createMemoryRuntime } = await vi.importActual<
-  typeof import("../../extensions/memory-core/runtime-api.js")
->(
+const { createMemoryRuntime, configureMemoryCoreDreamingState } = await vi.importActual<{
+  createMemoryRuntime: (host: {
+    runInBackgroundContext: <T>(run: () => T) => T;
+  }) => MemoryPluginRuntime;
+  configureMemoryCoreDreamingState: (
+    open: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>,
+  ) => void;
+}>(
   resolveRelativeBundledPluginPublicModuleId({
     fromModuleUrl: import.meta.url,
     pluginId: "memory-core",
@@ -35,40 +45,45 @@ export function createGatewayMemoryCloseRegistryFactory(config: OpenClawConfig) 
   deleteTestEnvValue("OPENCLAW_DISABLE_BUNDLED_PLUGINS");
   setTestEnvValue("OPENCLAW_BUNDLED_PLUGINS_DIR", path.dirname(path.dirname(workerApi)));
   const env = { ...process.env };
-  return (close: () => Promise<void>, beforeEmbedBatch?: () => Promise<void>) => {
+  const registry = (close: () => Promise<void>, beforeEmbedBatch?: () => Promise<void>) => {
     const builder = createPluginRegistry({
       logger: { info() {}, warn() {}, error() {}, debug() {} },
       runtime: {} as PluginRuntime,
       activateGlobalSideEffects: false,
     });
-    const addPlugin = (id: string, contracts?: PluginRecord["contracts"]) => {
-      const record = createPluginRecord({
-        id,
-        source: "fixture",
-        origin: "config",
-        enabled: true,
-        configSchema: false,
-        contracts,
-      });
-      builder.registry.plugins.push(record);
-      return record;
-    };
-    const memory = addPlugin("memory-fixture");
+    const memory = createPluginRecord({
+      id: "memory-fixture",
+      source: "fixture",
+      origin: "config",
+      enabled: true,
+      configSchema: false,
+    });
     memory.kind = "memory";
     memory.memorySlotSelected = true;
+    builder.registry.plugins.push(memory);
     const api = builder.createApi(memory, { config });
-    const { runInBackgroundContext } = api.lifecycle;
-    assert(runInBackgroundContext);
-    // Runtime creation initializes dreaming in the plugin's instance context (#167724).
-    const runtime = runInBackgroundContext(() =>
-      createMemoryRuntime({
-        runInBackgroundContext,
-        openKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
-          createPluginStateKeyedStore<T>("memory-core", { ...options, env }),
-      }),
+    assert(api.lifecycle.runInBackgroundContext);
+    // Dreaming state is instance-owned (#167724): configure it where the memory
+    // registration runs, as Memory Core's own register() does.
+    api.lifecycle.runInBackgroundContext(() =>
+      configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) =>
+        createPluginStateKeyedStore<T>("memory-core", { ...options, env }),
+      ),
     );
-    api.registerMemoryCapability({ runtime });
-    const embedding = addPlugin("fixture-embedding", { embeddingProviders: ["fixture-embedding"] });
+    api.registerMemoryCapability({
+      runtime: createMemoryRuntime({
+        runInBackgroundContext: api.lifecycle.runInBackgroundContext,
+      }),
+    });
+    const embedding = createPluginRecord({
+      id: "fixture-embedding",
+      source: "fixture",
+      origin: "config",
+      enabled: true,
+      configSchema: false,
+      contracts: { embeddingProviders: ["fixture-embedding"] },
+    });
+    builder.registry.plugins.push(embedding);
     builder.createApi(embedding, { config }).registerEmbeddingProvider({
       id: "fixture-embedding",
       transport: "remote",
@@ -85,6 +100,9 @@ export function createGatewayMemoryCloseRegistryFactory(config: OpenClawConfig) 
         },
       }),
     });
+    const runtime = builder.registry.memoryCapabilities[0]?.capability.runtime;
+    assert(runtime);
     return { ...builder, runtime, instance: getPluginInstance(memory)! };
   };
+  return registry;
 }
