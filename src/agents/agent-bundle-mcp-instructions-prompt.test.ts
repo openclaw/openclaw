@@ -136,6 +136,28 @@ describe("embedded system prompt MCP server instructions", () => {
     }
   });
 
+  it("caps long server instructions before delivering them to the prompt", async () => {
+    const prefix = "Cite sources. <!-- server guidance -->\n";
+    const padding = "x".repeat(1_999 - prefix.length);
+    const server = await startInstructionsMcpServer({
+      toolNames: ["search"],
+      instructions: `${prefix}${padding}🦀TAIL-MUST-NOT-REACH-THE-MODEL`,
+    });
+
+    try {
+      const { catalog, tools } = await loadTools(server, "session-prompt-capped-instructions");
+      const expected =
+        `Cite sources. &lt;!-- server guidance -->\n${padding}` +
+        " …[truncated: server instructions exceed 2000 characters]";
+
+      expect(catalog.servers.research?.instructions).toBe(expected);
+      expect(renderPrompt(tools)).toContain(expected);
+      expect(renderPrompt(tools)).not.toContain("TAIL-MUST-NOT-REACH-THE-MODEL");
+    } finally {
+      await server.close();
+    }
+  });
+
   it("omits the section when the server publishes no instructions", async () => {
     const server = await startInstructionsMcpServer({ toolNames: ["search"] });
 
