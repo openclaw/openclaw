@@ -1,5 +1,5 @@
-// Covers real session-delivery retry failures against the persistent SQLite queue.
 import { describe, expect, it, vi } from "vitest";
+import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   drainPendingSessionDelivery,
@@ -11,6 +11,31 @@ import {
 } from "./session-delivery-queue-storage.js";
 import { SessionDeliveryDeadLetteredError } from "./session-delivery-queue.records.js";
 import { withSessionDeliveryQueue } from "./session-delivery-queue.test-helpers.js";
+
+function rejectWrite(
+  db: ReturnType<typeof openOpenClawStateDatabase>["db"],
+  id: string,
+  phase: "retry" | "settlement",
+) {
+  // A real trigger is visible to the worker's existing connection.
+  db.exec(`CREATE TRIGGER main.reject_session_delivery_${phase}
+    BEFORE UPDATE ON delivery_queue_entries
+    WHEN OLD.queue_name = 'session' AND OLD.id = '${id.replaceAll("'", "''")}'
+    BEGIN
+      SELECT RAISE(ABORT, 'synthetic session delivery ${phase} write failure');
+    END;`);
+}
+
+function recover(
+  mode: "startup" | "targeted drain",
+  options: Parameters<typeof recoverPendingSessionDeliveries>[0],
+  id: string,
+  logLabel: string,
+) {
+  return mode === "startup"
+    ? recoverPendingSessionDeliveries(options)
+    : drainPendingSessionDelivery({ ...options, id, logLabel });
+}
 
 describe("session-delivery recovery persistence", () => {
   it.each(["startup", "targeted drain"] as const)(
@@ -29,32 +54,15 @@ describe("session-delivery recovery persistence", () => {
           env: { ...process.env, OPENCLAW_STATE_DIR: tempDir },
         });
         const deliver = vi.fn(async () => {
-          // An ordinary schema trigger is visible to the worker's existing connection.
-          db.exec(`
-            CREATE TRIGGER main.reject_session_delivery_retry
-            BEFORE UPDATE ON delivery_queue_entries
-            WHEN OLD.queue_name = 'session' AND OLD.id = '${id.replaceAll("'", "''")}'
-            BEGIN
-              SELECT RAISE(ABORT, 'synthetic session delivery retry write failure');
-            END;
-          `);
+          rejectWrite(db, id, "retry");
           throw new Error("session delivery interrupted");
         });
-        const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+        const log = createInfoWarnErrorLogger();
 
         try {
-          const recovery =
-            mode === "startup"
-              ? recoverPendingSessionDeliveries({ deliver, queueContext, log })
-              : drainPendingSessionDelivery({
-                  id,
-                  logLabel: "test rejected retry persistence",
-                  deliver,
-                  queueContext,
-                  log,
-                });
-
-          await expect(recovery).rejects.toThrow("synthetic session delivery retry write failure");
+          await expect(
+            recover(mode, { deliver, queueContext, log }, id, "test rejected retry persistence"),
+          ).rejects.toThrow("synthetic session delivery retry write failure");
         } finally {
           db.exec("DROP TRIGGER IF EXISTS main.reject_session_delivery_retry");
         }
@@ -66,11 +74,7 @@ describe("session-delivery recovery persistence", () => {
 
         const retryDelivery = vi.fn(async () => undefined);
         await expect(
-          recoverPendingSessionDeliveries({
-            deliver: retryDelivery,
-            queueContext,
-            log,
-          }),
+          recoverPendingSessionDeliveries({ deliver: retryDelivery, queueContext, log }),
         ).resolves.toMatchObject({ recovered: 1 });
         expect(retryDelivery).toHaveBeenCalledTimes(1);
         expect(await loadPendingSessionDeliveries(queueContext)).toEqual([]);
@@ -94,32 +98,15 @@ describe("session-delivery recovery persistence", () => {
           env: { ...process.env, OPENCLAW_STATE_DIR: tempDir },
         });
         const deliver = vi.fn(async () => {
-          db.exec(`
-            CREATE TRIGGER main.reject_session_delivery_settlement
-            BEFORE UPDATE ON delivery_queue_entries
-            WHEN OLD.queue_name = 'session' AND OLD.id = '${id.replaceAll("'", "''")}'
-            BEGIN
-              SELECT RAISE(ABORT, 'synthetic session delivery settlement write failure');
-            END;
-          `);
+          rejectWrite(db, id, "settlement");
           throw new SessionDeliveryDeadLetteredError("ambiguous side effects");
         });
-        const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+        const log = createInfoWarnErrorLogger();
 
         try {
-          const recovery =
-            mode === "startup"
-              ? recoverPendingSessionDeliveries({ deliver, queueContext, log })
-              : drainPendingSessionDelivery({
-                  id,
-                  logLabel: "Session delivery",
-                  deliver,
-                  queueContext,
-                  log,
-                });
-          await expect(recovery).resolves.toMatchObject(
-            mode === "startup" ? { recovered: 0, failed: 0 } : { id },
-          );
+          await expect(
+            recover(mode, { deliver, queueContext, log }, id, "Session delivery"),
+          ).resolves.toMatchObject(mode === "startup" ? { recovered: 0, failed: 0 } : { id });
         } finally {
           db.exec("DROP TRIGGER IF EXISTS main.reject_session_delivery_settlement");
         }

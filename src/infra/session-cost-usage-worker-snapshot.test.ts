@@ -13,6 +13,7 @@ import {
   encodeUsageCostRollup,
   USAGE_COST_ROLLUP_SCOPE,
   USAGE_COST_ROLLUP_VERSION,
+  type UsageCostRollupEntry,
 } from "./session-cost-usage-rollup-codec.js";
 import {
   appendSessionUsageRollupContribution,
@@ -55,6 +56,61 @@ vi.mock("./session-cost-usage-collection.js", async (importOriginal) => ({
 afterEach(() => vi.resetAllMocks());
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+const timestamp = Date.UTC(2026, 8, 18);
+const pricingFingerprint = "synthetic-pricing";
+function cacheDatabase() {
+  const db = new (requireNodeSqlite().DatabaseSync)(":memory:");
+  db.exec(`CREATE TABLE cache_entries (
+    scope TEXT NOT NULL, key TEXT NOT NULL, value_json TEXT, blob BLOB,
+    expires_at INTEGER, updated_at INTEGER NOT NULL, PRIMARY KEY (scope, key)
+  )`);
+  return db;
+}
+function reportFile(filePath: string, inode: number): UsageCostTranscriptFile {
+  return {
+    filePath,
+    sourcePath: filePath,
+    kind: "jsonl",
+    size: 100,
+    mtimeMs: timestamp,
+    device: 1,
+    inode,
+  };
+}
+function reportEntry(file: UsageCostTranscriptFile, tokens: number): UsageCostRollupEntry {
+  const rollup = createSessionUsageRollupData();
+  appendSessionUsageRollupContribution(rollup, {
+    timestamp,
+    role: "assistant",
+    toolNames: [],
+    toolResultCounts: { total: 0, errors: 0 },
+    usageTotals: {
+      ...createEmptyCostUsageTotals(),
+      input: tokens,
+      totalTokens: tokens,
+      inputCost: tokens / 10,
+      totalCost: tokens / 10,
+    },
+  });
+  return {
+    version: USAGE_COST_ROLLUP_VERSION,
+    pricingFingerprint,
+    checkpoint: {
+      kind: "jsonl",
+      parsedOffset: file.size,
+      observedSize: file.size,
+      observedMtimeMs: file.mtimeMs,
+      device: file.device ?? 0,
+      inode: file.inode ?? 0,
+      anchorHash: "synthetic-anchor",
+    },
+    scannedAt: timestamp,
+    parsedRecords: 1,
+    countedRecords: 1,
+    rollup,
+  };
+}
+
 it.for([
   { selected: false, scanMs: 11_000 },
   { selected: true, scanMs: 11_000 },
@@ -95,11 +151,7 @@ it.for([
       files[1]!,
     ];
     fixture.selectedFiles.mockResolvedValue(requested);
-    const db = new (requireNodeSqlite().DatabaseSync)(":memory:");
-    db.exec(`CREATE TABLE cache_entries (
-    scope TEXT NOT NULL, key TEXT NOT NULL, value_json TEXT, blob BLOB,
-    expires_at INTEGER, updated_at INTEGER NOT NULL, PRIMARY KEY (scope, key)
-  )`);
+    const db = cacheDatabase();
     fixture.withRead.mockImplementation((read: (opened: { db: DatabaseSync }) => unknown) => ({
       found: true,
       value: read({ db }),
@@ -170,54 +222,15 @@ it.for([
 );
 
 it("spends the shared decoded budget on complete reports after preparing the snapshot", async () => {
-  const timestamp = Date.UTC(2026, 8, 18);
-  const pricingFingerprint = "synthetic-pricing";
   const entries = [17, 23].map((tokens) => {
-    const rollup = createSessionUsageRollupData();
-    appendSessionUsageRollupContribution(rollup, {
-      timestamp,
-      role: "assistant",
-      toolNames: [],
-      toolResultCounts: { total: 0, errors: 0 },
-      usageTotals: {
-        ...createEmptyCostUsageTotals(),
-        input: tokens,
-        totalTokens: tokens,
-        inputCost: tokens / 10,
-        totalCost: tokens / 10,
-      },
-    });
+    const file = reportFile(`/synthetic/report-${tokens}.jsonl`, tokens);
+    const entry = reportEntry(file, tokens);
     // Untimestamped tool counts remain in the body, not its dated partitions.
-    appendSessionUsageRollupContribution(rollup, {
+    appendSessionUsageRollupContribution(entry.rollup, {
       toolNames: Array.from({ length: 32 }, (_, index) => `synthetic-unattributed-tool-${index}`),
       toolResultCounts: { total: 0, errors: 0 },
     });
-    const file: UsageCostTranscriptFile = {
-      filePath: `/synthetic/report-${tokens}.jsonl`,
-      sourcePath: `/synthetic/report-${tokens}.jsonl`,
-      kind: "jsonl",
-      size: 100,
-      mtimeMs: timestamp,
-      device: 1,
-      inode: tokens,
-    };
-    const encoded = partitionUsageCostRollup({
-      version: USAGE_COST_ROLLUP_VERSION,
-      pricingFingerprint,
-      checkpoint: {
-        kind: "jsonl",
-        parsedOffset: file.size,
-        observedSize: file.size,
-        observedMtimeMs: file.mtimeMs,
-        device: file.device ?? 0,
-        inode: file.inode ?? 0,
-        anchorHash: "synthetic-anchor",
-      },
-      scannedAt: timestamp,
-      parsedRecords: 1,
-      countedRecords: 1,
-      rollup,
-    });
+    const encoded = partitionUsageCostRollup(entry);
     const envelope = decodeUsageCostRollupEnvelope(encoded.valueJson, pricingFingerprint);
     if (!envelope) {
       throw new Error("Encoded fixture must have a valid rollup envelope");
@@ -271,54 +284,10 @@ it("spends the shared decoded budget on complete reports after preparing the sna
 it("ends the cache snapshot before projection awaits and preserves a concurrent write", async ({
   signal,
 }) => {
-  const db = new (requireNodeSqlite().DatabaseSync)(":memory:");
-  db.exec(`CREATE TABLE cache_entries (
-    scope TEXT NOT NULL, key TEXT NOT NULL, value_json TEXT, blob BLOB,
-    expires_at INTEGER, updated_at INTEGER NOT NULL, PRIMARY KEY (scope, key)
-  )`);
-  const timestamp = Date.UTC(2026, 8, 18);
-  const pricingFingerprint = "synthetic-pricing";
-  const file: UsageCostTranscriptFile = {
-    filePath: "/synthetic/report.jsonl",
-    sourcePath: "/synthetic/report.jsonl",
-    kind: "jsonl",
-    size: 100,
-    mtimeMs: timestamp,
-    device: 1,
-    inode: 2,
-  };
+  const db = cacheDatabase();
+  const file = reportFile("/synthetic/report.jsonl", 2);
   const write = (connection: DatabaseSync, tokens: number) => {
-    const rollup = createSessionUsageRollupData();
-    appendSessionUsageRollupContribution(rollup, {
-      timestamp,
-      role: "assistant",
-      toolNames: [],
-      toolResultCounts: { total: 0, errors: 0 },
-      usageTotals: {
-        ...createEmptyCostUsageTotals(),
-        input: tokens,
-        totalTokens: tokens,
-        inputCost: tokens / 10,
-        totalCost: tokens / 10,
-      },
-    });
-    const encoded = encodeUsageCostRollup({
-      version: USAGE_COST_ROLLUP_VERSION,
-      pricingFingerprint,
-      checkpoint: {
-        kind: "jsonl",
-        parsedOffset: file.size,
-        observedSize: file.size,
-        observedMtimeMs: file.mtimeMs,
-        device: file.device ?? 0,
-        inode: file.inode ?? 0,
-        anchorHash: "synthetic-anchor",
-      },
-      scannedAt: timestamp,
-      parsedRecords: 1,
-      countedRecords: 1,
-      rollup,
-    });
+    const encoded = encodeUsageCostRollup(reportEntry(file, tokens));
     connection
       .prepare(`INSERT INTO cache_entries (scope, key, value_json, blob, updated_at)
         VALUES (?, ?, ?, ?, ?)

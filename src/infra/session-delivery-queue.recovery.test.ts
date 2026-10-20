@@ -1,4 +1,3 @@
-// Covers session delivery queue recovery behavior.
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { controlNextRecoverySleep } from "../../test/helpers/infra/delivery-recovery.js";
@@ -29,6 +28,47 @@ import {
   type QueuedSessionDelivery,
 } from "./session-delivery-queue.records.js";
 
+type QueueContext = Parameters<typeof enqueueSessionDelivery>[1];
+type AgentTurn = Extract<Parameters<typeof enqueueSessionDelivery>[0], { kind: "agentTurn" }>;
+const enqueueTurn = (
+  queueContext: QueueContext,
+  messageId: string,
+  overrides: Partial<AgentTurn> = {},
+) =>
+  enqueueSessionDelivery(
+    {
+      kind: "agentTurn",
+      sessionKey: "agent:main:main",
+      message: "generated image ready",
+      messageId,
+      ...overrides,
+    },
+    queueContext,
+  );
+const enqueueEvent = (queueContext: QueueContext, text: string) =>
+  enqueueSessionDelivery(
+    { kind: "systemEvent", sessionKey: "agent:main:main", text },
+    queueContext,
+  );
+
+function recover(
+  queueContext: QueueContext,
+  options: Omit<Parameters<typeof recoverPendingSessionDeliveries>[0], "queueContext" | "log">,
+) {
+  return recoverPendingSessionDeliveries({
+    ...options,
+    queueContext,
+    log: createInfoWarnErrorLogger(),
+  });
+}
+async function firstPending(queueContext: QueueContext) {
+  const [entry] = await loadPendingSessionDeliveries(queueContext);
+  if (!entry) {
+    throw new Error("Expected pending session delivery");
+  }
+  return entry;
+}
+
 describe("session-delivery queue recovery", () => {
   beforeEach(() => {
     sleepMock.mockReset();
@@ -37,18 +77,8 @@ describe("session-delivery queue recovery", () => {
 
   it("replays and acks old SQLite entries on recovery", async () => {
     await withSessionDeliveryQueue(async (stateDir, queueContext) => {
-      await enqueueSessionDelivery(
-        {
-          kind: "systemEvent",
-          sessionKey: "agent:main:main",
-          text: "restart complete",
-        },
-        queueContext,
-      );
-      const [entry] = await loadPendingSessionDeliveries(queueContext);
-      if (!entry) {
-        throw new Error("Expected queued session delivery");
-      }
+      await enqueueEvent(queueContext, "restart complete");
+      const entry = await firstPending(queueContext);
       seedDeliveryQueueEntry({
         queueName: "session",
         entry: { ...entry, enqueuedAt: Date.now() - 6 * 24 * 60 * 60_000 },
@@ -57,11 +87,9 @@ describe("session-delivery queue recovery", () => {
 
       const deliver = vi.fn(async () => undefined);
       const onSettled = vi.fn(async () => undefined);
-      const summary = await recoverPendingSessionDeliveries({
+      const summary = await recover(queueContext, {
         deliver,
         onSettled,
-        queueContext,
-        log: createInfoWarnErrorLogger(),
       });
 
       expect(deliver).toHaveBeenCalledTimes(1);
@@ -73,15 +101,7 @@ describe("session-delivery queue recovery", () => {
 
   it("lets the delivery owner persist its fence at the side-effect boundary", async () => {
     await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
-      const id = await enqueueSessionDelivery(
-        {
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "generated image ready",
-          messageId: "image:task-preflight-owner:agent-loop",
-        },
-        queueContext,
-      );
+      const id = await enqueueTurn(queueContext, "image:task-preflight-owner:agent-loop");
       const deliver = vi.fn(async (entry, context) => {
         expect(context).toEqual({ queueContext });
         await markSessionDeliveryAttemptStarted(entry, queueContext);
@@ -90,10 +110,8 @@ describe("session-delivery queue recovery", () => {
         ]);
       });
 
-      await recoverPendingSessionDeliveries({
+      await recover(queueContext, {
         deliver,
-        queueContext,
-        log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
       });
 
       expect(deliver).toHaveBeenCalledTimes(1);
@@ -103,24 +121,13 @@ describe("session-delivery queue recovery", () => {
 
   it("retries settlement cleanup without replaying a delivered side effect", async () => {
     await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
-      const id = await enqueueSessionDelivery(
-        {
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "generated image ready",
-          messageId: "image:task-settlement-retry:agent-loop",
-        },
-        queueContext,
-      );
+      const id = await enqueueTurn(queueContext, "image:task-settlement-retry:agent-loop");
       const deliver = vi.fn(async () => undefined);
-      let failCleanup = true;
-      const onSettled = vi.fn(async () => {
-        if (failCleanup) {
-          failCleanup = false;
-          throw new Error("cleanup interrupted");
-        }
-      });
-      const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+      const onSettled = vi
+        .fn<() => Promise<void>>()
+        .mockRejectedValueOnce(new Error("cleanup interrupted"))
+        .mockResolvedValue(undefined);
+      const log = createInfoWarnErrorLogger();
 
       const first = await recoverPendingSessionDeliveries({
         deliver,
@@ -157,26 +164,15 @@ describe("session-delivery queue recovery", () => {
     "retries dead-letter cleanup through %s without replaying an ambiguous agent turn",
     async (mode) => {
       await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
-        const id = await enqueueSessionDelivery(
-          {
-            kind: "agentTurn",
-            sessionKey: "agent:main:main",
-            message: "generated image ready",
-            messageId: "image:task-dead-letter-cleanup:agent-loop",
-          },
-          queueContext,
-        );
+        const id = await enqueueTurn(queueContext, "image:task-dead-letter-cleanup:agent-loop");
         const deliver = vi.fn(async () => {
           throw new SessionDeliveryDeadLetteredError("ambiguous side effects");
         });
-        let failCleanup = true;
-        const onSettled = vi.fn(async () => {
-          if (failCleanup) {
-            failCleanup = false;
-            throw new Error("cleanup interrupted");
-          }
-        });
-        const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+        const onSettled = vi
+          .fn<() => Promise<void>>()
+          .mockRejectedValueOnce(new Error("cleanup interrupted"))
+          .mockResolvedValue(undefined);
+        const log = createInfoWarnErrorLogger();
 
         const options = { deliver, onSettled, queueContext, log };
         const drain = () =>
@@ -216,19 +212,8 @@ describe("session-delivery queue recovery", () => {
 
   it("cleans an acknowledged tombstone without replaying delivery", async () => {
     await withSessionDeliveryQueue(async (tempDir, queueContext) => {
-      await enqueueSessionDelivery(
-        {
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "generated image ready",
-          messageId: "image:task-1:agent-loop",
-        },
-        queueContext,
-      );
-      const [entry] = await loadPendingSessionDeliveries(queueContext);
-      if (!entry) {
-        throw new Error("Expected pending session delivery");
-      }
+      await enqueueTurn(queueContext, "image:task-1:agent-loop");
+      const entry = await firstPending(queueContext);
       seedDeliveryQueueEntry({
         queueName: "session",
         entry: {
@@ -243,10 +228,8 @@ describe("session-delivery queue recovery", () => {
       });
 
       const deliver = vi.fn(async () => undefined);
-      const summary = await recoverPendingSessionDeliveries({
+      const summary = await recover(queueContext, {
         deliver,
-        queueContext,
-        log: createInfoWarnErrorLogger(),
       });
 
       expect(deliver).not.toHaveBeenCalled();
@@ -257,20 +240,10 @@ describe("session-delivery queue recovery", () => {
 
   it("drains an exhausted acknowledged tombstone without replay or backoff", async () => {
     await withSessionDeliveryQueue(async (tempDir, queueContext) => {
-      const id = await enqueueSessionDelivery(
-        {
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "generated image ready",
-          messageId: "image:task-drain-ack:agent-loop",
-          maxRetries: 1,
-        },
-        queueContext,
-      );
-      const [entry] = await loadPendingSessionDeliveries(queueContext);
-      if (!entry) {
-        throw new Error("Expected pending session delivery");
-      }
+      const id = await enqueueTurn(queueContext, "image:task-drain-ack:agent-loop", {
+        maxRetries: 1,
+      });
+      const entry = await firstPending(queueContext);
       seedDeliveryQueueEntry({
         queueName: "session",
         entry: {
@@ -291,7 +264,7 @@ describe("session-delivery queue recovery", () => {
         deliver,
         onSettled,
         queueContext,
-        log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        log: createInfoWarnErrorLogger(),
       });
 
       expect(deliver).not.toHaveBeenCalled();
@@ -311,32 +284,16 @@ describe("session-delivery queue recovery", () => {
     try {
       const controlledSleep = controlNextRecoverySleep(sleepMock);
       await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
-        await enqueueSessionDelivery(
-          {
-            kind: "systemEvent",
-            sessionKey: "agent:main:main",
-            text: "first",
-          },
-          queueContext,
-        );
-        await enqueueSessionDelivery(
-          {
-            kind: "systemEvent",
-            sessionKey: "agent:main:main",
-            text: "second",
-          },
-          queueContext,
-        );
+        await enqueueEvent(queueContext, "first");
+        await enqueueEvent(queueContext, "second");
 
         const deliveryTimes: number[] = [];
         const deliver = vi.fn(async () => {
           deliveryTimes.push(Date.now());
         });
 
-        const recovery = recoverPendingSessionDeliveries({
+        const recovery = recover(queueContext, {
           deliver,
-          queueContext,
-          log: createInfoWarnErrorLogger(),
         });
 
         await expect(controlledSleep.started).resolves.toBe(RECOVERY_REPLAY_SPACING_MS);
@@ -361,14 +318,7 @@ describe("session-delivery queue recovery", () => {
       const controlledSleep = controlNextRecoverySleep(sleepMock);
       await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
         for (const text of ["first", "second", "third"]) {
-          await enqueueSessionDelivery(
-            {
-              kind: "systemEvent",
-              sessionKey: "agent:main:main",
-              text,
-            },
-            queueContext,
-          );
+          await enqueueEvent(queueContext, text);
         }
 
         const deliveryTimes: number[] = [];
@@ -376,11 +326,9 @@ describe("session-delivery queue recovery", () => {
           deliveryTimes.push(Date.now());
         });
 
-        const recovery = recoverPendingSessionDeliveries({
+        const recovery = recover(queueContext, {
           deliver,
-          queueContext,
           maxRecoveryMs: 1,
-          log: createInfoWarnErrorLogger(),
         });
 
         await expect(controlledSleep.started).resolves.toBe(1);
@@ -403,14 +351,7 @@ describe("session-delivery queue recovery", () => {
     vi.setSystemTime(new Date(MAX_DATE_TIMESTAMP_MS));
 
     await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
-      await enqueueSessionDelivery(
-        {
-          kind: "systemEvent",
-          sessionKey: "agent:main:main",
-          text: "leave queued",
-        },
-        queueContext,
-      );
+      await enqueueEvent(queueContext, "leave queued");
 
       const deliver = vi.fn(async () => undefined);
       const warn = vi.fn();
@@ -438,15 +379,9 @@ describe("session-delivery queue recovery", () => {
 
   it("keeps failed entries queued with retry metadata for later recovery", async () => {
     await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
-      const id = await enqueueSessionDelivery(
-        {
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "continue",
-          messageId: "restart-sentinel:agent:main:main:agentTurn:123",
-        },
-        queueContext,
-      );
+      const id = await enqueueTurn(queueContext, "restart-sentinel:agent:main:main:agentTurn:123", {
+        message: "continue",
+      });
 
       const onSettled = vi.fn(async () => undefined);
       const log = createInfoWarnErrorLogger();
@@ -473,22 +408,16 @@ describe("session-delivery queue recovery", () => {
 
   it("leaves pre-dispatch failures retryable without claiming side-effect ownership", async () => {
     await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
-      await enqueueSessionDelivery(
-        {
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "continue",
-          messageId: "restart-sentinel:pre-dispatch-failure",
-        },
-        queueContext,
-      );
+      await enqueueTurn(queueContext, "restart-sentinel:pre-dispatch-failure", {
+        message: "continue",
+      });
 
       await recoverPendingSessionDeliveries({
         deliver: vi.fn(async () => {
           throw new Error("session lookup unavailable");
         }),
         queueContext,
-        log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        log: createInfoWarnErrorLogger(),
       });
 
       expect(await loadPendingSessionDeliveries(queueContext)).toEqual([
@@ -502,15 +431,7 @@ describe("session-delivery queue recovery", () => {
 
   it("releases attempt ownership only for an explicitly safe retry", async () => {
     await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
-      await enqueueSessionDelivery(
-        {
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "continue",
-          messageId: "restart-sentinel:safe-retry",
-        },
-        queueContext,
-      );
+      await enqueueTurn(queueContext, "restart-sentinel:safe-retry", { message: "continue" });
 
       await recoverPendingSessionDeliveries({
         deliver: vi.fn(async (entry) => {
@@ -518,7 +439,7 @@ describe("session-delivery queue recovery", () => {
           throw new SessionDeliverySafeRetryError("busy before agent start");
         }),
         queueContext,
-        log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        log: createInfoWarnErrorLogger(),
       });
 
       expect(await loadPendingSessionDeliveries(queueContext)).toEqual([
@@ -529,15 +450,7 @@ describe("session-delivery queue recovery", () => {
 
   it("defers active agent ownership without consuming retry budget", async () => {
     await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
-      const id = await enqueueSessionDelivery(
-        {
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "generated image ready",
-          messageId: "image:task-owned:agent-loop",
-        },
-        queueContext,
-      );
+      const id = await enqueueTurn(queueContext, "image:task-owned:agent-loop");
 
       const summary = await recoverPendingSessionDeliveries({
         deliver: vi.fn(async () => {
@@ -545,7 +458,7 @@ describe("session-delivery queue recovery", () => {
           throw new SessionDeliveryDeferredError("agent run still active");
         }),
         queueContext,
-        log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        log: createInfoWarnErrorLogger(),
       });
 
       const [entry] = await loadPendingSessionDeliveries(queueContext);
@@ -557,22 +470,12 @@ describe("session-delivery queue recovery", () => {
 
   it("does not charge retry budget twice after a charged transition failure", async () => {
     await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
-      const id = await enqueueSessionDelivery(
-        {
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "generated image ready",
-          messageId: "image:task-charged-transition:agent-loop",
-        },
-        queueContext,
-      );
-      const summary = await recoverPendingSessionDeliveries({
-        queueContext,
+      const id = await enqueueTurn(queueContext, "image:task-charged-transition:agent-loop");
+      const summary = await recover(queueContext, {
         deliver: async () => {
           await failSessionDelivery(id, "terminal attempt failed", queueContext);
           throw new SessionDeliveryRetryChargedError("advance failed after retry charge");
         },
-        log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
       });
 
       expect(summary.failed).toBe(1);
@@ -591,20 +494,12 @@ describe("session-delivery queue recovery", () => {
     async (mode) => {
       await withSessionDeliveryQueue(async (stateDir, queueContext) => {
         const token = "sk-abcdefghijklmnopqrstuv";
-        const id = await enqueueSessionDelivery(
-          {
-            kind: "agentTurn",
-            sessionKey: "agent:main:private-session",
-            message: "private queued message",
-            messageId: "image:task-dead-lettered:agent-loop",
-            route: { channel: "test", to: "private-recipient", chatType: "direct" },
-          },
-          queueContext,
-        );
-        const [entry] = await loadPendingSessionDeliveries(queueContext);
-        if (!entry) {
-          throw new Error("Expected queued session delivery");
-        }
+        const id = await enqueueTurn(queueContext, "image:task-dead-lettered:agent-loop", {
+          sessionKey: "agent:main:private-session",
+          message: "private queued message",
+          route: { channel: "test", to: "private-recipient", chatType: "direct" },
+        });
+        const entry = await firstPending(queueContext);
         seedDeliveryQueueEntry({
           queueName: "session",
           entry: { ...entry, lastError: "previous retry failure" },
@@ -612,7 +507,7 @@ describe("session-delivery queue recovery", () => {
         });
 
         const onSettled = vi.fn(async () => undefined);
-        const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+        const log = createInfoWarnErrorLogger();
         const options = {
           deliver: vi.fn(async () => {
             throw new SessionDeliveryDeadLetteredError(
@@ -668,16 +563,10 @@ describe("session-delivery queue recovery", () => {
 
   it("uses the entry retry budget when draining entries", async () => {
     await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
-      const id = await enqueueSessionDelivery(
-        {
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "continue",
-          messageId: "restart-sentinel:agent:main:main:agentTurn:123",
-          maxRetries: 20,
-        },
-        queueContext,
-      );
+      const id = await enqueueTurn(queueContext, "restart-sentinel:agent:main:main:agentTurn:123", {
+        message: "continue",
+        maxRetries: 20,
+      });
       for (let attempt = 0; attempt < 5; attempt += 1) {
         await failSessionDelivery(id, "busy", queueContext);
       }
@@ -699,15 +588,10 @@ describe("session-delivery queue recovery", () => {
 
   it("settles entries moved to failed after drain retry exhaustion", async () => {
     await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
-      const id = await enqueueSessionDelivery(
-        {
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "continue",
-          messageId: "restart-sentinel:agent:main:main:agentTurn:drain-exhausted",
-          maxRetries: 1,
-        },
+      const id = await enqueueTurn(
         queueContext,
+        "restart-sentinel:agent:main:main:agentTurn:drain-exhausted",
+        { message: "continue", maxRetries: 1 },
       );
       await failSessionDelivery(id, "busy", queueContext);
 
@@ -720,7 +604,7 @@ describe("session-delivery queue recovery", () => {
         deliver,
         onSettled,
         queueContext,
-        log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        log: createInfoWarnErrorLogger(),
       });
 
       expect(deliver).not.toHaveBeenCalled();
@@ -735,25 +619,18 @@ describe("session-delivery queue recovery", () => {
 
   it("settles entries moved to failed after startup retry exhaustion", async () => {
     await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
-      const id = await enqueueSessionDelivery(
-        {
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "continue",
-          messageId: "restart-sentinel:agent:main:main:agentTurn:startup-exhausted",
-          maxRetries: 1,
-        },
+      const id = await enqueueTurn(
         queueContext,
+        "restart-sentinel:agent:main:main:agentTurn:startup-exhausted",
+        { message: "continue", maxRetries: 1 },
       );
       await failSessionDelivery(id, "busy", queueContext);
 
       const deliver = vi.fn(async () => undefined);
       const onSettled = vi.fn(async () => undefined);
-      const summary = await recoverPendingSessionDeliveries({
+      const summary = await recover(queueContext, {
         deliver,
         onSettled,
-        queueContext,
-        log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
       });
 
       expect(deliver).not.toHaveBeenCalled();
@@ -775,22 +652,10 @@ describe("session-delivery queue recovery", () => {
       }
       try {
         await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
-          const id = await enqueueSessionDelivery(
-            {
-              kind: "agentTurn",
-              sessionKey: "agent:main:main",
-              message: "generated image ready",
-              messageId: `image:task-exhausted-${mode}:agent-loop`,
-              maxRetries: 1,
-            },
-            queueContext,
-          );
-          const entry = await loadPendingSessionDeliveries(queueContext).then(
-            (entries) => entries[0],
-          );
-          if (!entry) {
-            throw new Error("Expected pending session delivery");
-          }
+          const id = await enqueueTurn(queueContext, `image:task-exhausted-${mode}:agent-loop`, {
+            maxRetries: 1,
+          });
+          const entry = await firstPending(queueContext);
           await markSessionDeliveryAttemptStarted(entry, queueContext);
           await failSessionDelivery(id, "final response lost", queueContext);
 
@@ -809,13 +674,11 @@ describe("session-delivery queue recovery", () => {
               bypassBackoff: true,
               deliver,
               queueContext,
-              log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+              log: createInfoWarnErrorLogger(),
             });
           } else {
-            const summary = await recoverPendingSessionDeliveries({
+            const summary = await recover(queueContext, {
               deliver,
-              queueContext,
-              log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
             });
             expect(summary.skippedMaxRetries).toBe(0);
           }
@@ -836,20 +699,10 @@ describe("session-delivery queue recovery", () => {
 
   it("dead-letters a started agent turn after its bounded reconciliation fails", async () => {
     await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
-      const id = await enqueueSessionDelivery(
-        {
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "generated image ready",
-          messageId: "image:task-reconciliation-failed:agent-loop",
-          maxRetries: 1,
-        },
-        queueContext,
-      );
-      const [entry] = await loadPendingSessionDeliveries(queueContext);
-      if (!entry) {
-        throw new Error("Expected pending session delivery");
-      }
+      const id = await enqueueTurn(queueContext, "image:task-reconciliation-failed:agent-loop", {
+        maxRetries: 1,
+      });
+      const entry = await firstPending(queueContext);
       await markSessionDeliveryAttemptStarted(entry, queueContext);
       await failSessionDelivery(id, "final response lost", queueContext);
 
@@ -863,7 +716,7 @@ describe("session-delivery queue recovery", () => {
           bypassBackoff: true,
           deliver,
           queueContext,
-          log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+          log: createInfoWarnErrorLogger(),
         });
 
       await drain();
@@ -883,32 +736,16 @@ describe("session-delivery queue recovery", () => {
     vi.setSystemTime(new Date("2026-04-23T00:00:00.000Z"));
 
     await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
-      await enqueueSessionDelivery(
-        {
-          kind: "systemEvent",
-          sessionKey: "agent:main:main",
-          text: "recover old entry",
-        },
-        queueContext,
-      );
+      await enqueueEvent(queueContext, "recover old entry");
       const maxEnqueuedAt = Date.now();
 
       vi.setSystemTime(new Date("2026-04-23T00:00:05.000Z"));
-      await enqueueSessionDelivery(
-        {
-          kind: "systemEvent",
-          sessionKey: "agent:main:main",
-          text: "leave fresh entry queued",
-        },
-        queueContext,
-      );
+      await enqueueEvent(queueContext, "leave fresh entry queued");
 
       const deliver = vi.fn(async () => undefined);
-      const summary = await recoverPendingSessionDeliveries({
+      const summary = await recover(queueContext, {
         deliver,
-        queueContext,
         maxEnqueuedAt,
-        log: createInfoWarnErrorLogger(),
       });
 
       expect(deliver).toHaveBeenCalledTimes(1);
