@@ -61,10 +61,7 @@ it.each(["empty", "order", "reconnect"])("adopts sibling pins across %s writes",
     ...(mode === "reconnect" ? [] : ["route:plugins"]),
   ];
   expect(b.profiles.a?.[pins]).toEqual(expected);
-  expect(queued).toMatchObject({
-    ...pending,
-    railShortcuts: expected,
-  });
+  expect(queued).toMatchObject({ ...pending, railShortcuts: expected });
   expect(localStorage.getItem(pendingKey)).toBeNull();
 });
 

@@ -67,25 +67,23 @@ export function createProfilePrefsServer(
 ) {
   const profiles = structuredClone(initial);
   const connect = (profileId: string) => {
-    const request = vi.fn<(method: string, params?: unknown) => Promise<unknown>>(
-      async (method, params) => {
-        const entries = (profiles[profileId] ??= {});
-        if (method === "users.prefs.get") {
-          return { status: "ok", entries: structuredClone(entries) };
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      const entries = (profiles[profileId] ??= {});
+      if (method === "users.prefs.get") {
+        return { status: "ok", entries: structuredClone(entries) };
+      }
+      if (method !== "users.prefs.set") {
+        throw new Error("unexpected global mutation: " + method);
+      }
+      const update = params as UsersPrefsSetParams;
+      for (const [key, expected] of Object.entries(update.expectedEntries ?? {})) {
+        if (JSON.stringify(entries[key] ?? null) !== JSON.stringify(expected)) {
+          return { status: "conflict" };
         }
-        if (method !== "users.prefs.set") {
-          throw new Error("unexpected global mutation: " + method);
-        }
-        const update = params as UsersPrefsSetParams;
-        for (const [key, expected] of Object.entries(update.expectedEntries ?? {})) {
-          if (JSON.stringify(entries[key] ?? null) !== JSON.stringify(expected)) {
-            return { status: "conflict" };
-          }
-        }
-        Object.assign(entries, structuredClone(update.entries));
-        return { status: "ok" };
-      },
-    );
+      }
+      Object.assign(entries, structuredClone(update.entries));
+      return { status: "ok" };
+    });
     const writer = createServerPrefsWriter(request, scope, true, { ok: true }, false);
     return { writer, request, refresh: () => refreshServerPrefsProfile(writer, profileId, config) };
   };

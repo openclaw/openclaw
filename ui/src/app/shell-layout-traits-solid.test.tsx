@@ -153,10 +153,9 @@ it("publishes settings layout before mounted descendants measure updates", () =>
       </SettingsPage>
     </SettingsWorkspace>
   ));
-  expect(observations[0]).toContain("content--settings-workspace");
-  expect(observations[0]).toContain("content--settings-page");
-  expect(observations[0]).toContain("content--settings-wide");
-  expect(observations[0]).toContain("content--toolbar-header");
+  for (const trait of ["settings-workspace", "settings-page", "settings-wide", "toolbar-header"]) {
+    expect(observations[0]).toContain(`content--${trait}`);
+  }
   setWide(false);
   flush();
   expect(observations.at(-1)).not.toContain("content--settings-wide");

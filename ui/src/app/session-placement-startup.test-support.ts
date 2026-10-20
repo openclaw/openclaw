@@ -38,11 +38,7 @@ export function createPlacementStartupHarness(
   } = {},
 ) {
   const sessionKey = "agent:cloud:startup";
-  const client = {
-    request,
-    recoveryScope: "principal-a",
-    recoveryScopeReady: true,
-  };
+  const client = { request, recoveryScope: "principal-a", recoveryScopeReady: true };
   const gateway = {
     connectionRevision: 0,
     connection: { gatewayUrl: "ws://gateway.example" },

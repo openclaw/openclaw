@@ -25,9 +25,7 @@ it("preserves a routed page's focused draft through loader updates and retryable
           value={draft()}
           onInput={(event) => setDraft(event.currentTarget.value)}
         />
-        <p>
-          {String(props.data)} / {props.loaderPending ? "loading" : "ready"}
-        </p>
+        <p>{`${String(props.data)} / ${props.loaderPending ? "loading" : "ready"}`}</p>
       </section>
     );
   }
