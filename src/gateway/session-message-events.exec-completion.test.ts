@@ -4,7 +4,7 @@ import path from "node:path";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "vitest";
 import type { RawData } from "ws";
 import {
   GATEWAY_CLIENT_CAPS,
@@ -16,7 +16,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
 import { enqueueSystemEvent, peekSystemEventEntries } from "../infra/system-events.js";
 import { removeSessionTestDirectories } from "./session-test-directories.test-support.js";
-import { testState } from "./test-helpers.runtime-state.js";
+import { gatewayReplyMock, testState } from "./test-helpers.runtime-state.js";
 import {
   connectOk,
   createGatewaySuiteHarness,
@@ -150,7 +150,7 @@ describe("exec completion WebChat publication", () => {
         }
         const live = disconnected ? undefined : waitForSessionMessageEvent(ws, sessionKey);
         enqueueSystemEvent(`Exec completed (webchat-proof, code 0) :: ${marker}`, { sessionKey });
-        const reply = vi.fn().mockResolvedValue(
+        const reply = gatewayReplyMock.mockResolvedValue(
           createHeartbeatToolResponsePayload({
             outcome: "done",
             notify: true,
@@ -166,7 +166,6 @@ describe("exec completion WebChat publication", () => {
             source: "exec-event",
             intent: "event",
             reason: "exec-event",
-            deps: { getReplyFromConfig: reply },
           });
         expect((await wake()).status).toBe("ran");
         expect(peekSystemEventEntries(sessionKey)).toEqual([]);

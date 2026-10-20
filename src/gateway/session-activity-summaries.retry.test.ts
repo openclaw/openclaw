@@ -22,7 +22,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
-import { trackAsyncWork } from "../shared/async-work-scope.js";
+import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import {
   createGatewaySchedulerClock,
@@ -44,6 +44,7 @@ import {
   type ActivitySummaryTarget,
 } from "./session-activity-summary-state.js";
 import type { defaultCompleteModel, defaultPrepareModel } from "./session-observer-model.js";
+import * as observerModel from "./session-observer-model.js";
 
 const result = {
   text: "Verified the change.",
@@ -115,9 +116,23 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
       scheduler,
       getConfig: () => cfg,
       onChanged: changed,
-      prepareModel: prepare,
-      completeModel: complete,
     });
+
+  const restartWithClock = async (onArmed: () => void) => {
+    await service.dispose();
+    await scheduler.stop();
+    const time = createGatewaySchedulerClock(Date.now());
+    scheduler = createTestGatewayScheduler({
+      ...time.clock,
+      arm(run, delayMs) {
+        const cancel = time.clock.arm(run, delayMs);
+        onArmed();
+        return cancel;
+      },
+    });
+    service = createService();
+    return time;
+  };
 
   const ensureRecap = async (target: Parameters<SessionActivitySummaryService["ensure"]>[0]) =>
     service.ensure(
@@ -135,6 +150,8 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     setRuntimeConfigSnapshot(cfg);
     complete.mockReset().mockResolvedValue(result);
     prepare.mockReset().mockImplementation(prepareModel);
+    vi.spyOn(observerModel, "defaultPrepareModel").mockImplementation(prepare);
+    vi.spyOn(observerModel, "defaultCompleteModel").mockImplementation(complete);
     changed.mockReset();
     scheduler = createTestGatewayScheduler("fake-timers");
     service = createService();
@@ -805,7 +822,7 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     }
   });
 
-  it.each([
+  it.for([
     {
       name: "overload",
       error: Object.assign(new Error("Overloaded"), { status: 529 }),
@@ -833,26 +850,30 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     },
   ])(
     "retries $name automatically and retains cached text without rebilling repeated ensure requests",
-    async ({ error, delay }) => {
+    async ({ error, delay }, { signal }) => {
+      const retryArmed = createDeferred();
+      const time = await restartWithClock(() => retryArmed.resolve());
       const target = await addSession(1);
-      await ensureRecap(target);
-      await vi.waitFor(() => expect(view(target)?.state).toBe("current"));
+      const initialWork = new AsyncWorkScope();
+      await initialWork.track(() => ensureRecap(target));
+      await initialWork.drain();
+      expect(view(target)?.state).toBe("current");
       await appendWork(target);
       fakeTime();
       complete.mockRejectedValueOnce(error);
       await ensureRecap(target);
-      await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(2));
-      await vi.advanceTimersByTimeAsync(0);
-      const failedAt = Date.now();
+      await withinTest(retryArmed.promise, signal);
+      expect(complete).toHaveBeenCalledTimes(2);
+      const failedAt = time.clock.now();
       for (let index = 0; index < 20; index += 1) {
         await ensureRecap(target);
       }
       expect(view(target)).toMatchObject({ state: "updating", text: result.text });
-      await vi.advanceTimersByTimeAsync(delay - 1_000);
+      await time.advanceBy(delay - 1_000);
       expect(complete).toHaveBeenCalledTimes(2);
-      await vi.advanceTimersByTimeAsync(1_000);
-      await vi.waitFor(() => expect(view(target)?.state).toBe("current"));
-      expect(Date.now() - failedAt).toBeGreaterThanOrEqual(delay);
+      await time.advanceBy(1_000);
+      expect(view(target)?.state).toBe("current");
+      expect(time.clock.now() - failedAt).toBeGreaterThanOrEqual(delay);
       expect(complete).toHaveBeenCalledTimes(3);
     },
   );
@@ -936,19 +957,8 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
   it("stops after bounded retries and starts a fresh retry chain for new work after cooldown", async ({
     signal,
   }) => {
-    await service.dispose();
-    await scheduler.stop();
-    const time = createGatewaySchedulerClock(Date.now());
     let retryArmed = createDeferred();
-    scheduler = createTestGatewayScheduler({
-      ...time.clock,
-      arm(run, delayMs) {
-        const cancel = time.clock.arm(run, delayMs);
-        retryArmed.resolve();
-        return cancel;
-      },
-    });
-    service = createService();
+    const time = await restartWithClock(() => retryArmed.resolve());
     const target = await addSession(1);
     fakeTime();
     complete.mockRejectedValue(Object.assign(new Error("Overloaded"), { status: 529 }));
