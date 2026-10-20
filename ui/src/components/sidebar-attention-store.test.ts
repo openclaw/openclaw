@@ -771,62 +771,68 @@ describe("sidebar attention source publication", () => {
     },
   );
 
-  it("creates one mention owner on activation, retains it without listeners, and disposes it", async () => {
-    const mention = inboxMention("mention-first");
-    let result = { gatewayInstanceId: "boot-a", revision: 1, items: [mention] };
-    const responses: Record<string, unknown> = {
-      "cron.list": { ...cronPage(), snapshotRevision: "lifecycle" },
-      "cron.status": { enabled: true, triggersEnabled: true, jobs: 0 },
-      "models.authStatus": { ts: 1, providers: [] },
-    };
-    const request = vi.fn(async (method: string) => {
-      if (method === "mentions.list") {
-        return result;
+  it.each(["operator.read", "operator.sessions.read", "operator.sessions.write"])(
+    "creates and retains one mention owner without broadening inventory access (%s)",
+    async (scope) => {
+      const mention = inboxMention("mention-first");
+      let result = { gatewayInstanceId: "boot-a", revision: 1, items: [mention] };
+      const responses: Record<string, unknown> = {
+        "cron.list": { ...cronPage(), snapshotRevision: "lifecycle" },
+        "cron.status": { enabled: true, triggersEnabled: true, jobs: 0 },
+        "models.authStatus": { ts: 1, providers: [] },
+      };
+      const request = vi.fn(async (method: string) => {
+        if (method === "mentions.list") {
+          return result;
+        }
+        if (method in responses) {
+          return responses[method];
+        }
+        throw new Error(`Unexpected request: ${method}`);
+      });
+      const harness = gateway(request);
+      harness.update({
+        hello: {
+          type: "hello-ok",
+          protocol: 1,
+          server: { bootId: "boot-a", connId: "connection-a" },
+          auth: { role: "operator", scopes: [scope] },
+          features: { methods: ["mentions.list", "mentions.dismiss"] },
+        },
+        selfUser: { id: "bob", identity: { type: "profile", id: "bob" }, name: "Bob" },
+      });
+      store = createStore(harness.gateway);
+      expect(request).not.toHaveBeenCalled();
+      const publish = vi.fn();
+      const stop = store.subscribe(publish);
+      const mentions = store.activate(SidebarAttentionStoreOwner);
+      expect(store.activate(SidebarAttentionStoreOwner)).toBe(mentions);
+      await waitForFast(() => expect(mentions.snapshot.items).toEqual([mention]));
+      expect(request.mock.calls.filter(([method]) => method === "mentions.list")).toHaveLength(1);
+      if (scope !== "operator.read") {
+        expect(request.mock.calls.map(([method]) => method)).toEqual(["mentions.list"]);
       }
-      if (method in responses) {
-        return responses[method];
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const harness = gateway(request);
-    harness.update({
-      hello: {
-        type: "hello-ok",
-        protocol: 1,
-        server: { bootId: "boot-a", connId: "connection-a" },
-        auth: { role: "operator", scopes: ["operator.read"] },
-        features: { methods: ["mentions.list", "mentions.dismiss"] },
-      },
-      selfUser: { id: "bob", identity: { type: "profile", id: "bob" }, name: "Bob" },
-    });
-    store = createStore(harness.gateway);
-    expect(request).not.toHaveBeenCalled();
-    const publish = vi.fn();
-    const stop = store.subscribe(publish);
-    const mentions = store.activate(SidebarAttentionStoreOwner);
-    expect(store.activate(SidebarAttentionStoreOwner)).toBe(mentions);
-    await waitForFast(() => expect(mentions.snapshot.items).toEqual([mention]));
-    expect(request.mock.calls.filter(([method]) => method === "mentions.list")).toHaveLength(1);
 
-    stop();
-    publish.mockClear();
-    result = { ...result, revision: 2, items: [{ ...mention, id: "mention-second" }] };
-    harness.emitEvent("mentions.changed", { gatewayInstanceId: "boot-a", revision: 2 });
-    await waitForFast(() =>
-      expect(store?.entries.filter((entry) => entry.type === "mention")).toMatchObject([
-        { mention: { id: "mention-second" } },
-      ]),
-    );
-    expect(publish).not.toHaveBeenCalled();
-    expect(store.activate(SidebarAttentionStoreOwner)).toBe(mentions);
+      stop();
+      publish.mockClear();
+      result = { ...result, revision: 2, items: [{ ...mention, id: "mention-second" }] };
+      harness.emitEvent("mentions.changed", { gatewayInstanceId: "boot-a", revision: 2 });
+      await waitForFast(() =>
+        expect(store?.entries.filter((entry) => entry.type === "mention")).toMatchObject([
+          { mention: { id: "mention-second" } },
+        ]),
+      );
+      expect(publish).not.toHaveBeenCalled();
+      expect(store.activate(SidebarAttentionStoreOwner)).toBe(mentions);
 
-    store.dispose();
-    store = undefined;
-    request.mockClear();
-    harness.emitEvent("mentions.changed", { gatewayInstanceId: "boot-a", revision: 3 });
-    await mentions.refresh();
-    expect(request).not.toHaveBeenCalled();
-  });
+      store.dispose();
+      store = undefined;
+      request.mockClear();
+      harness.emitEvent("mentions.changed", { gatewayInstanceId: "boot-a", revision: 3 });
+      await mentions.refresh();
+      expect(request).not.toHaveBeenCalled();
+    },
+  );
 
   it("clears reviewed local incidents offline without deleting their drafts", async () => {
     const { sidebarInboxTabCounts } = await import("./sidebar-attention-entries.ts");
