@@ -7,32 +7,43 @@ import { runExtraParamsCase } from "./extra-params.test-support.js";
 vi.mock("../../llm/stream.js", () => createLlmStreamSimpleMock());
 
 function runDeepSeekV4Case(params: {
-  modelId: string;
-  messages?: Array<Record<string, unknown>>;
+  modelId?: string;
+  replay?: boolean;
   payloadExtras?: Record<string, unknown>;
   provider?: string;
   thinkingFormat?: ModelCompatConfig["thinkingFormat"];
   thinkingLevel?: "off" | "high";
 }): Record<string, unknown> {
   const provider = params.provider ?? "opencode";
-  const compat = params.thinkingFormat ? { thinkingFormat: params.thinkingFormat } : undefined;
+  const modelId = params.modelId ?? "DeepSeek-V4-Flash";
   return runExtraParamsCase({
-    applyProvider: provider,
-    applyModelId: params.modelId,
     mockProviderRuntime: true,
     thinkingLevel: params.thinkingLevel ?? "high",
     model: {
       api: "openai-completions",
       provider,
-      id: params.modelId,
-      ...(compat ? { compat } : {}),
+      id: modelId,
+      ...(params.thinkingFormat ? { compat: { thinkingFormat: params.thinkingFormat } } : {}),
     } as Model<"openai-completions">,
     payload: {
-      model: params.modelId,
-      messages: params.messages ?? [],
+      model: modelId,
+      messages: params.replay
+        ? [
+            { role: "user", content: "continue" },
+            { role: "assistant", content: "prior", reasoning_content: "native reasoning" },
+          ]
+        : [],
       ...params.payloadExtras,
     },
-  }).payload as Record<string, unknown>;
+  }).payload;
+}
+
+function expectNoNativeThinking(payload: Record<string, unknown>) {
+  expect(payload).not.toHaveProperty("thinking");
+  expect(payload).not.toHaveProperty("reasoning_effort");
+  expect((payload.messages as Array<Record<string, unknown>>)[1]).not.toHaveProperty(
+    "reasoning_content",
+  );
 }
 
 describe("extra-params: DeepSeek OpenAI-compatible thinking fallback", () => {
@@ -45,40 +56,16 @@ describe("extra-params: DeepSeek OpenAI-compatible thinking fallback", () => {
     },
   );
 
-  it.each(["microsoft-foundry", "microsoft-foundry-9433"])(
-    "suppresses native thinking and replay fields on %s",
-    (provider) => {
-      const payload = runDeepSeekV4Case({
-        modelId: "DeepSeek-V4-Flash",
-        provider,
-        messages: [
-          { role: "user", content: "continue" },
-          { role: "assistant", content: "prior", reasoning_content: "native reasoning" },
-        ],
-      });
-      expect(payload).not.toHaveProperty("thinking");
-      expect(payload).not.toHaveProperty("reasoning_effort");
-      expect((payload.messages as Array<Record<string, unknown>>)[1]).not.toHaveProperty(
-        "reasoning_content",
-      );
+  it.each([
+    ["microsoft-foundry", undefined],
+    ["microsoft-foundry-9433", undefined],
+    ["opencode", "openai"],
+  ] as const)(
+    "strips native thinking and replay fields on %s with format %s",
+    (provider, thinkingFormat) => {
+      expectNoNativeThinking(runDeepSeekV4Case({ provider, thinkingFormat, replay: true }));
     },
   );
-
-  it("strips native thinking and replay fields when thinkingFormat is openai", () => {
-    const payload = runDeepSeekV4Case({
-      modelId: "DeepSeek-V4-Flash",
-      messages: [
-        { role: "user", content: "continue" },
-        { role: "assistant", content: "prior", reasoning_content: "native reasoning" },
-      ],
-      thinkingFormat: "openai",
-    });
-    expect(payload).not.toHaveProperty("thinking");
-    expect(payload).not.toHaveProperty("reasoning_effort");
-    expect((payload.messages as Array<Record<string, unknown>>)[1]).not.toHaveProperty(
-      "reasoning_content",
-    );
-  });
 
   it("preserves OpenRouter auto-detected reasoning for a namespaced model", () => {
     const payload = runDeepSeekV4Case({
@@ -93,7 +80,6 @@ describe("extra-params: DeepSeek OpenAI-compatible thinking fallback", () => {
 
   it("does not inject thinking:disabled when thinkingFormat is openai and thinking is off", () => {
     const payload = runDeepSeekV4Case({
-      modelId: "DeepSeek-V4-Flash",
       thinkingFormat: "openai",
       thinkingLevel: "off",
     });

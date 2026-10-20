@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Model } from "../../llm/types.js";
 import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata.test-support.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { resolveAgentToolSurfacePlan } from "../tool-surface-plan.js";
 import { normalizeResolvedModel, resolveRuntimeHooks } from "./model.provider-hooks.js";
 
@@ -18,19 +19,15 @@ vi.mock("../../plugins/provider-runtime.js", () => ({
 }));
 
 function model(overrides: Partial<Model> = {}): Model {
-  return {
+  return makeProviderModelFixture({
     id: "small-model",
     name: "Small model",
     provider: "custom-host",
     api: "ollama",
     baseUrl: "http://model-host.example:11434",
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 32_768,
-    maxTokens: 4_096,
     ...overrides,
-  };
+  });
 }
 
 function toolSearchEnabled(resolvedModel: Model, config: OpenClawConfig = {}): boolean {
@@ -75,13 +72,12 @@ describe("resolved model Tool Search policy", () => {
   });
 
   it("uses the final transport and clears a previous attempt's preference", () => {
-    const original = model();
-    const local = normalizeResolvedModel({ provider: original.provider, model: original });
+    const local = normalizeResolvedModel({ provider: "custom-host", model: model() });
     expect(local).toHaveProperty("toolSearchMode", "tools");
     expect(toolSearchEnabled(local)).toBe(true);
 
     const hosted = normalizeResolvedModel({
-      provider: original.provider,
+      provider: "custom-host",
       model: local,
       runtimeHooks: {
         ...resolveRuntimeHooks(),
@@ -114,40 +110,31 @@ describe("resolved model Tool Search policy", () => {
         }),
       },
     });
-    expect(resolved.id).toBe("normalized-model");
-    expect(resolved.baseUrl).toBe("https://transport.example/v1/normalized-model");
+    expect(resolved).toMatchObject({
+      id: "normalized-model",
+      baseUrl: "https://transport.example/v1/normalized-model",
+    });
   });
 
   it.each([
-    {
-      finalBaseUrl: "http://managed.example:8080/v1/",
-      api: "openai-completions",
-      expected: "tools",
-    },
-    { finalBaseUrl: "https://hosted.example/v1", api: "openai-completions", expected: undefined },
-  ] as const)(
-    "limits managed inference defaults to $finalBaseUrl",
-    ({ finalBaseUrl, api, expected }) => {
-      const cfg: OpenClawConfig = {
-        models: {
-          providers: {
-            " CUSTOM-HOST ": {
-              baseUrl: "http://managed.example:8080/v1",
-              api,
-              models: [],
-              localService: { command: "/fixture/server" },
-            },
-          },
-        },
-      };
-      const resolved = normalizeResolvedModel({
-        provider: "custom-host",
-        model: model({ api, baseUrl: finalBaseUrl }),
-        cfg,
-      });
-      expect(resolved).toHaveProperty("toolSearchMode", expected);
-      expect(toolSearchEnabled(resolved, cfg)).toBe(true);
-      expect(cfg.tools).toBeUndefined();
-    },
-  );
+    ["http://managed.example:8080/v1/", "tools"],
+    ["https://hosted.example/v1", undefined],
+  ] as const)("limits managed inference defaults to %s", (finalBaseUrl, expected) => {
+    const api = "openai-completions" as const;
+    const providerConfig = {
+      baseUrl: "http://managed.example:8080/v1",
+      api,
+      models: [],
+      localService: { command: "/fixture/server" },
+    };
+    const cfg: OpenClawConfig = { models: { providers: { " CUSTOM-HOST ": providerConfig } } };
+    const resolved = normalizeResolvedModel({
+      provider: "custom-host",
+      model: model({ api, baseUrl: finalBaseUrl }),
+      cfg,
+    });
+    expect(resolved).toHaveProperty("toolSearchMode", expected);
+    expect(toolSearchEnabled(resolved, cfg)).toBe(true);
+    expect(cfg.tools).toBeUndefined();
+  });
 });
