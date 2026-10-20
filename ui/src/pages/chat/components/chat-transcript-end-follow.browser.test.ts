@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished } from "vitest";
 import { page } from "vitest/browser";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
@@ -126,6 +126,20 @@ async function resizeViewport(host: EndFollowFixture, thread: HTMLElement, heigh
   await expect.poll(() => thread.clientHeight).toBe(height);
 }
 
+async function growLastRow(host: EndFollowFixture, extent: HTMLElement) {
+  host.lastRowHeight += 48;
+  host.requestRender();
+  await expect.poll(() => extent.offsetHeight).toBe(1348);
+  await settleFrames();
+}
+
+function departAndClamp(host: EndFollowFixture, thread: HTMLElement) {
+  host.followEnabled = false;
+  thread.dispatchEvent(new WheelEvent("wheel", { deltaY: -32 }));
+  thread.scrollTop -= 32;
+  host.viewportHeight = 600;
+}
+
 async function commitTask(host: EndFollowFixture, change: () => void) {
   await new Promise<void>((resolve) => {
     setTimeout(() => {
@@ -188,17 +202,14 @@ it("paints a saved reader only after its measured range and offset commit togeth
     };
     frame = requestAnimationFrame(sample);
   });
-  try {
-    await mountEndFollowFixture(400);
-    await frames;
-    expect(visible.length).toBeGreaterThan(0);
-    expect(
-      visible.every(({ top, height }) => top === 400 && height === 1300),
-      JSON.stringify(visible),
-    ).toBe(true);
-  } finally {
-    cancelAnimationFrame(frame);
-  }
+  onTestFinished(() => cancelAnimationFrame(frame));
+  await mountEndFollowFixture(400);
+  await frames;
+  expect(visible.length).toBeGreaterThan(0);
+  expect(
+    visible.every(({ top, height }) => top === 400 && height === 1300),
+    JSON.stringify(visible),
+  ).toBe(true);
 });
 
 it.each(["requested", "smooth no-op", "native observation"] as const)(
@@ -295,13 +306,13 @@ it.each([null, 400, 380])(
 );
 
 it.each([
-  { deltaY: 120, follows: true, earlierGrowth: 0 },
-  { deltaY: -120, follows: false, earlierGrowth: 0 },
-  { deltaY: 120, follows: true, earlierGrowth: 11 },
-  { deltaY: -120, follows: false, earlierGrowth: 11 },
+  [120, 0],
+  [-120, 0],
+  [120, 11],
+  [-120, 11],
 ])(
-  "preserves wheel intent through late growth ($deltaY, $earlierGrowth px above the viewport)",
-  async ({ deltaY, follows, earlierGrowth }) => {
+  "preserves wheel intent through late growth (%i, %i px above the viewport)",
+  async (deltaY, earlierGrowth) => {
     const { host, thread, extent, row, dock, distance } = await mountFollowingFixture();
 
     // Intrinsic growth must trigger its own measured-range commit. Growth above
@@ -317,8 +328,8 @@ it.each([
     });
     await expect.poll(() => extent.offsetHeight).toBe(1500 + earlierGrowth);
     await settleFrames();
-    expect(distance()).toBe(follows ? 0 : 200);
-    if (follows) {
+    expect(distance()).toBe(deltaY > 0 ? 0 : 200);
+    if (deltaY > 0) {
       expect(row.getBoundingClientRect().bottom).toBeLessThanOrEqual(
         dock.getBoundingClientRect().top,
       );
@@ -328,12 +339,7 @@ it.each([
 
 it("does not turn a resize-clamped reader into permission to follow", async () => {
   const { host, thread, extent, distance } = await mountFollowingFixture();
-  await commitTask(host, () => {
-    host.followEnabled = false;
-    thread.dispatchEvent(new WheelEvent("wheel", { deltaY: -32 }));
-    thread.scrollTop -= 32;
-    host.viewportHeight = 600;
-  });
+  await commitTask(host, () => departAndClamp(host, thread));
   await expect.poll(distance).toBe(0);
   const clamped = thread.scrollTop;
   expect(host.transcript.scrollToEnd({ source: "auto" })).toBe(false);
@@ -364,12 +370,7 @@ it("preserves compensation provenance for later native scroll listeners", async 
       }
     });
   });
-  await commitTask(host, () => {
-    host.followEnabled = false;
-    thread.dispatchEvent(new WheelEvent("wheel", { deltaY: -32 }));
-    thread.scrollTop -= 32;
-    host.viewportHeight = 600;
-  });
+  await commitTask(host, () => departAndClamp(host, thread));
   await readerIdle;
   await expect.poll(distance).toBe(0);
   await settleFrames();
@@ -395,12 +396,12 @@ it("preserves compensation provenance for later native scroll listeners", async 
 });
 
 it.each([
-  { readerMovement: 0, beforeClamp: false },
-  { readerMovement: 8, beforeClamp: false },
-  { readerMovement: 8, beforeClamp: true },
-])(
-  "preserves layout clamps versus $readerMovement px reader movement (before clamp: $beforeClamp)",
-  async ({ readerMovement, beforeClamp }) => {
+  [0, false],
+  [8, false],
+  [8, true],
+] as const)(
+  "preserves layout clamps versus %i px reader movement (before clamp: %s)",
+  async (readerMovement, beforeClamp) => {
     const { host, thread, extent } = await mountFollowingFixture();
     const original = thread.scrollTop;
     if (beforeClamp) {
@@ -418,22 +419,19 @@ it.each([
     await settleFrames();
     expect(thread.scrollTop).toBe(readerMovement ? readerPosition : original);
 
-    host.lastRowHeight += 48;
-    host.requestRender();
-    await expect.poll(() => extent.offsetHeight).toBe(1348);
-    await settleFrames();
+    await growLastRow(host, extent);
     expect(thread.scrollTop).toBe(readerMovement ? readerPosition : original + 48);
   },
 );
 
 it.each([
-  { behavior: "auto", fromEnd: true },
-  { behavior: "auto", fromEnd: false },
-  { behavior: "smooth", fromEnd: true },
-  { behavior: "smooth", fromEnd: false },
+  ["auto", true],
+  ["auto", false],
+  ["smooth", true],
+  ["smooth", false],
 ] as const)(
-  "preserves a departed reader through clamped idle ($behavior, starts at end: $fromEnd)",
-  async ({ behavior, fromEnd }) => {
+  "preserves a departed reader through clamped idle (%s, starts at end: %s)",
+  async (behavior, fromEnd) => {
     const { host, thread, extent, distance } = await mountEndFollowFixture();
     if (fromEnd) {
       host.transcript.scrollToEnd({ behavior });
@@ -478,10 +476,7 @@ it.each([
       await resizeViewport(host, thread, 400);
       await settleFrames();
       expect(thread.scrollTop).toBe(readerPosition);
-      host.lastRowHeight += 48;
-      host.requestRender();
-      await expect.poll(() => extent.offsetHeight).toBe(1348);
-      await settleFrames();
+      await growLastRow(host, extent);
       expect(thread.scrollTop).toBe(readerPosition);
     } finally {
       unsubscribe();

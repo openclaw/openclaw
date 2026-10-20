@@ -49,9 +49,6 @@ it.each([
     const { element, anchor, commit, resize } = fixture(offset);
     const resized = vi.fn();
     onTestFinished(subscribeTranscriptScroll(element, resized));
-    if (resumeFollow) {
-      element.scrollTop = before;
-    }
     anchor.invalidateComposerResize(true);
     element.scrollTop = before;
     resize(height);

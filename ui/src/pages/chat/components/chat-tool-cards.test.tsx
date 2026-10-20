@@ -35,6 +35,19 @@ const patchCard = (args: ToolCard["args"], extra: Partial<ToolCard> = {}): ToolC
   args,
   ...extra,
 });
+const canvasPreview = (viewId: string) => ({
+  ...canvas,
+  viewId,
+  url: `/__openclaw__/canvas/documents/${viewId}/index.html`,
+});
+function mountTool(
+  name: string,
+  card: Partial<ToolCard>,
+  options?: Parameters<typeof mountCard>[1],
+  container?: HTMLElement,
+) {
+  return mountCard({ id: name, name, ...card }, options, container);
+}
 
 it("routes MCP App previews through the dedicated double-iframe host", async () => {
   const container = document.createElement("div");
@@ -82,9 +95,7 @@ it("switches a completed patch between mutually exclusive diff and raw bodies", 
 
   const tabGroup = query(container, ".chat-tool-card__modes");
   const tabList = query(tabGroup, '[role="tablist"]');
-  await waitForSolid(() => {
-    expect(tabList?.getAttribute("aria-label")).toBe("Tool detail view");
-  });
+  await waitForSolid(() => expect(tabList?.getAttribute("aria-label")).toBe("Tool detail view"));
   const tabs = Array.from(tabGroup?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ?? []);
   expect(tabs.map((tab) => [tab.textContent?.trim(), tab.getAttribute("aria-selected")])).toEqual([
     ["Diff", "true"],
@@ -92,15 +103,15 @@ it("switches a completed patch between mutually exclusive diff and raw bodies", 
   ]);
   const diffBody = query(container, '[id$="-diff-panel"]');
   const rawBody = query(container, '[id$="-raw-panel"]');
-  expect(diffBody?.hidden).toBe(false);
-  expect(rawBody?.hidden).toBe(true);
+  const expectPanels = (raw: boolean) =>
+    expect([diffBody?.hidden, rawBody?.hidden]).toEqual([raw, !raw]);
+  expectPanels(false);
 
   tabs[1]?.click();
-  await waitForSolid(() => {
-    expect(tabs.map((tab) => tab.getAttribute("aria-selected"))).toEqual(["false", "true"]);
-  });
-  expect(diffBody?.hidden).toBe(true);
-  expect(rawBody?.hidden).toBe(false);
+  await waitForSolid(() =>
+    expect(tabs.map((tab) => tab.getAttribute("aria-selected"))).toEqual(["false", "true"]),
+  );
+  expectPanels(true);
   expect(query(rawBody, "code")?.textContent).toBe("Applied patch");
 
   await mountCard(
@@ -121,33 +132,28 @@ it("switches a completed patch between mutually exclusive diff and raw bodies", 
 });
 
 it.each([
-  { outcome: "failed", outputText: "Patch context did not match", details: undefined },
-  {
-    outcome: "skipped",
-    outputText: "Skipped to process an incoming message.",
-    details: { status: "skipped", deniedReason: "steering" },
-  },
-])(
-  "shows $outcome edit output before the attempted diff",
-  async ({ outcome, outputText, details }) => {
-    const container = await mountCard({
-      id: "msg:edit:failed",
-      name: "edit",
-      args: { path: "src/a.ts", oldText: "before", newText: "after" },
-      outputText,
-      details,
-      completed: true,
-      isError: outcome === "failed",
-    });
+  [true, "Patch context did not match", undefined],
+  [
+    false,
+    "Skipped to process an incoming message.",
+    { status: "skipped", deniedReason: "steering" },
+  ],
+] as const)("prefers rejected edit output (%s)", async (isError, outputText, details) => {
+  const container = await mountTool("edit", {
+    args: { path: "src/a.ts", oldText: "before", newText: "after" },
+    outputText,
+    details,
+    completed: true,
+    isError,
+  });
 
-    const rawTab = query(container, '[role="tab"][data-tab-value="raw"]');
-    await waitForSolid(() => expect(rawTab?.getAttribute("aria-selected")).toBe("true"));
-    const rawBody = query(container, '[id$="-raw-panel"]');
-    expect(rawBody?.hidden).toBe(false);
-    expect(query(rawBody, "code")?.textContent).toBe(outputText);
-    container.remove();
-  },
-);
+  const rawTab = query(container, '[role="tab"][data-tab-value="raw"]');
+  await waitForSolid(() => expect(rawTab?.getAttribute("aria-selected")).toBe("true"));
+  const rawBody = query(container, '[id$="-raw-panel"]');
+  expect(rawBody?.hidden).toBe(false);
+  expect(query(rawBody, "code")?.textContent).toBe(outputText);
+  container.remove();
+});
 
 it("labels a completed Codex file creation from its recorded operation", async () => {
   const onOpenWorkspaceFile = vi.fn();
@@ -175,30 +181,17 @@ it("labels a completed Codex file creation from its recorded operation", async (
 });
 
 it.each([
-  {
-    label: "multi-file",
-    patch:
-      "*** Begin Patch\n*** Update File: src/a.ts\n@@\n-old\n+new\n*** Add File: src/b.ts\n+added\n*** End Patch",
-    target: "2 files",
-  },
-  {
-    label: "moved",
-    patch:
-      "*** Begin Patch\n*** Update File: src/old.ts\n*** Move to: src/new.ts\n@@\n-old\n+new\n*** End Patch",
-    target: "old.ts → new.ts",
-  },
-  {
-    // A successful delete removes its own target, so the workspace loader
-    // would only ever report "Failed to load".
-    label: "deleted",
-    patch: "*** Begin Patch\n*** Delete File: src/gone.ts\n*** End Patch",
-    target: "gone.ts",
-  },
-])("keeps $label patch summaries non-navigable", async ({ patch, target }) => {
+  ["*** Update File: src/a.ts\n@@\n-old\n+new\n*** Add File: src/b.ts\n+added", "2 files"],
+  ["*** Update File: src/old.ts\n*** Move to: src/new.ts\n@@\n-old\n+new", "old.ts → new.ts"],
+  ["*** Delete File: src/gone.ts", "gone.ts"],
+])("keeps patch summaries non-navigable: %s", async (body, target) => {
   const onOpenWorkspaceFile = vi.fn();
   const onToggleExpanded = vi.fn();
   const container = await mountCard(
-    patchCard({ patch }, { id: `msg:patch:${target}`, completed: true }),
+    patchCard(
+      { patch: `*** Begin Patch\n${body}\n*** End Patch` },
+      { id: `msg:patch:${target}`, completed: true },
+    ),
     { expanded: false, onOpenWorkspaceFile, onToggleExpanded },
   );
 
@@ -258,41 +251,36 @@ it.each([false, true])("reports clipboard failure=%s when copying a patch", asyn
   vi.stubGlobal("navigator", { clipboard: { writeText } });
   const container = document.body.appendChild(document.createElement("div"));
   const onOpenSidebar = vi.fn();
-  try {
-    await mountCard(
-      patchCard(
-        {
-          changes: [
-            change(
-              "src/patch.ts",
-              "--- a/src/patch.ts\n+++ b/src/patch.ts\n@@ -1 +1 @@\n-old patch\n+new patch\n",
-            ),
-          ],
-        },
-        { id: "copy", completed: true },
-      ),
-      { onOpenSidebar },
-      container,
-    );
-    const copyButton = query(container, '.chat-tool-card__actions button[aria-label="Copy"]');
-    expect(copyButton).toBeInstanceOf(HTMLButtonElement);
-    copyButton!.click();
-    await vi.waitFor(() => expect(copyButton!.getAttribute("aria-label")).toBe(feedback));
-    expect(writeText).toHaveBeenCalledWith(expect.stringContaining("new patch"));
-    const status = copyButton!.parentElement?.querySelector<HTMLElement>('[role="status"]');
-    expect(status?.textContent).toBe(feedback);
-    expect(status?.hidden).toBe(false);
-    const sidebarButton = query(
-      container,
-      `.chat-tool-card__actions button[aria-label="${t("chat.toolCards.openDetails")}"]`,
-    );
-    expect(sidebarButton).toBeInstanceOf(HTMLButtonElement);
-    sidebarButton!.click();
-    expect(onOpenSidebar).toHaveBeenCalledOnce();
-  } finally {
-    container.remove();
-    vi.unstubAllGlobals();
-  }
+  onTestFinished(vi.unstubAllGlobals);
+  await mountCard(
+    patchCard(
+      {
+        changes: [
+          change(
+            "src/patch.ts",
+            "--- a/src/patch.ts\n+++ b/src/patch.ts\n@@ -1 +1 @@\n-old patch\n+new patch\n",
+          ),
+        ],
+      },
+      { id: "copy", completed: true },
+    ),
+    { onOpenSidebar },
+    container,
+  );
+  const copyButton = query(container, '.chat-tool-card__actions button[aria-label="Copy"]');
+  expect(copyButton).toBeInstanceOf(HTMLButtonElement);
+  copyButton!.click();
+  await vi.waitFor(() => expect(copyButton!.getAttribute("aria-label")).toBe(feedback));
+  expect(writeText).toHaveBeenCalledWith(expect.stringContaining("new patch"));
+  const status = copyButton!.parentElement?.querySelector<HTMLElement>('[role="status"]');
+  expect(status).toMatchObject({ textContent: feedback, hidden: false });
+  const sidebarButton = query(
+    container,
+    `.chat-tool-card__actions button[aria-label="${t("chat.toolCards.openDetails")}"]`,
+  );
+  expect(sidebarButton).toBeInstanceOf(HTMLButtonElement);
+  sidebarButton!.click();
+  expect(onOpenSidebar).toHaveBeenCalledOnce();
 });
 
 it("keeps read ranges visible and opens the unmodified file path", async () => {
@@ -317,41 +305,38 @@ it("keeps read ranges visible and opens the unmodified file path", async () => {
   ]);
 });
 
-it.each(["structured", "serialized"])(
-  "keeps %s message captions in expanded diagnostics, not the collapsed row",
-  async (shape) => {
-    const privateCaption =
-      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nPrivate synthetic caption.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
-    const args = { action: "send", to: "fixture-room", message: privateCaption };
-    const card = {
-      id: "message-caption",
-      name: "message",
-      args: shape === "structured" ? args : JSON.stringify(args),
-      inputText: JSON.stringify(args),
-    };
-    const options = { messageKey: "test-message", onToggleExpanded: vi.fn() };
-    const container = await mountCard(card, { ...options, expanded: false });
+it.each(["structured", "serialized"])("keeps %s captions out of collapsed rows", async (shape) => {
+  const privateCaption =
+    "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nPrivate synthetic caption.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
+  const args = { action: "send", to: "fixture-room", message: privateCaption };
+  const card = {
+    id: "message-caption",
+    name: "message",
+    args: shape === "structured" ? args : JSON.stringify(args),
+    inputText: JSON.stringify(args),
+  };
+  const options = { messageKey: "test-message", onToggleExpanded: vi.fn() };
+  const container = await mountCard(card, { ...options, expanded: false });
 
-    const summary = query(container, "button.chat-tool-msg-summary");
-    expect(textOf(container, ".chat-tool-msg-summary__label")).toBe(
-      shape === "serialized" ? "Message" : undefined,
-    );
-    expect(query(summary, ".chat-tool-msg-summary__icon")?.getAttribute("aria-label")).toBe(
-      "message",
-    );
-    if (shape === "structured") {
-      expect(summary?.textContent).toContain("fixture-room");
-    }
-    expect(summary?.textContent).not.toContain("BEGIN_OPENCLAW_INTERNAL_CONTEXT");
-    expect(container.textContent).not.toContain("Private synthetic caption.");
-    expect(query(container, ".chat-tool-msg-body")).toBeNull();
+  const summary = query(container, "button.chat-tool-msg-summary");
+  expect(textOf(container, ".chat-tool-msg-summary__label")).toBe(
+    shape === "serialized" ? "Message" : undefined,
+  );
+  expect(query(summary, ".chat-tool-msg-summary__icon")?.getAttribute("aria-label")).toBe(
+    "message",
+  );
+  if (shape === "structured") {
+    expect(summary?.textContent).toContain("fixture-room");
+  }
+  expect(summary?.textContent).not.toContain("BEGIN_OPENCLAW_INTERNAL_CONTEXT");
+  expect(container.textContent).not.toContain("Private synthetic caption.");
+  expect(query(container, ".chat-tool-msg-body")).toBeNull();
 
-    await mountCard(card, { ...options }, container);
-    const diagnostics = query(container, ".chat-tool-msg-body");
-    expect(diagnostics?.textContent).toContain("BEGIN_OPENCLAW_INTERNAL_CONTEXT");
-    expect(diagnostics?.textContent).toContain("Private synthetic caption.");
-  },
-);
+  await mountCard(card, { ...options }, container);
+  const diagnostics = query(container, ".chat-tool-msg-body");
+  expect(diagnostics?.textContent).toContain("BEGIN_OPENCLAW_INTERNAL_CONTEXT");
+  expect(diagnostics?.textContent).toContain("Private synthetic caption.");
+});
 
 it("previews common intent arguments across generic tools", async () => {
   expect(resolveCollapsedToolArgumentPreview({ task: "Review the PR" })).toBe("Review the PR");
@@ -368,15 +353,9 @@ it("previews common intent arguments across generic tools", async () => {
 
 it("marks expanded raw block-art output so QR whitespace uses block-art rendering", async () => {
   const blockArt = "  ▄▄▄▄▄▄▄  \n  █ ▄▄▄ █  \n  █▄▄▄▄▄█  ";
-  const container = await mountCard({
-    id: "msg:view:block-art",
-    name: "canvas_render",
+  const container = await mountTool("canvas_render", {
     outputText: blockArt,
-    preview: {
-      ...canvas,
-      viewId: "qr_preview",
-      url: "/__openclaw__/canvas/documents/qr_preview/index.html",
-    },
+    preview: canvasPreview("qr_preview"),
   });
 
   const rawToggle = query(container, ".chat-tool-card__raw-toggle");
@@ -397,21 +376,17 @@ it("marks expanded raw block-art output so QR whitespace uses block-art renderin
 
 it("opens assistant-surface canvas payloads in the sidebar when explicitly requested", async () => {
   const onOpenSidebar = vi.fn();
-  const url = "/__openclaw__/canvas/documents/cv_sidebar/index.html";
-  const container = await mountCard(
+  const preview = canvasPreview("cv_sidebar");
+  const { url } = preview;
+  const container = await mountTool(
+    "canvas_render",
     {
-      id: "msg:view:8",
-      name: "canvas_render",
       outputText: JSON.stringify({
         kind: "canvas",
         view: { backend: "canvas", id: "cv_sidebar", url },
         presentation: { target: "assistant_message" },
       }),
-      preview: {
-        ...canvas,
-        viewId: "cv_sidebar",
-        url,
-      },
+      preview,
     },
     { onOpenSidebar },
   );
@@ -430,115 +405,108 @@ it("opens assistant-surface canvas payloads in the sidebar when explicitly reque
 });
 
 it.each([
-  { status: "failed", label: "failed" },
-  { status: "blocked", label: "Blocked" },
-  { status: "skipped", label: "Skipped" },
-  { status: undefined, label: "Outcome unknown" },
-] as const)(
-  "reconciles prepared $status outcomes through live items and history attachment",
-  async ({ status, label }) => {
-    const item = projectAgentActivityItem({
-      itemId: "collaboration-call",
-      toolCallId: "collaboration-call",
-      kind: "tool",
-      name: "subagents",
-      title: "Delegate task",
-      phase: "end",
-      ...(status ? { status } : { summary: "Outcome unknown" }),
-    } satisfies AgentActivityItem);
-    const host = createHost({ chatRunId: "run-outcome" });
-    handleAgentEvent(host, agentEvent("run-outcome", 1, "item", item));
-    const live = host.chatToolMessages[0];
-    expect(live).toBeDefined();
-    const saved = {
-      role: "assistant",
-      messageId: "stored-call",
-      content: [
-        {
-          type: "toolCall",
-          id: "collaboration-call",
-          name: "subagents",
-          arguments: { task: "Check the report" },
-        },
-      ],
-    };
-    const history = attachHistoryActivity({
-      messages: [saved],
-      activity: [{ messageId: "stored-call", items: [item] }],
-    });
-    const container = document.createElement("div");
-    const view = createActivityGroupHarness(container);
-    for (const [message, runActive] of [
-      [live, true],
-      [history.messages[0], false],
-    ] as const) {
-      const group = createToolGroup("outcome", [createMessageEntry("call", message)]);
-      view.render([group], { showReasoning: false, runActive });
-      await settleToolBridges(container);
-      expect(container.querySelectorAll(".chat-tool-failure")).toHaveLength(
-        status === "failed" ? 1 : 0,
-      );
-      view.render([group], {
-        showReasoning: false,
-        runActive,
-        isToolMessageExpanded: () => true,
-        isToolExpanded: () => true,
-      });
-      await settleToolBridges(container);
-      expect(textOf(container, ".chat-tool-card__outcome")).toBe(label);
-      expect(query(container, ".chat-tool-row--running")).toBeNull();
-      const card = extractToolCardsCached(message)[0]!;
-      expect(card.outputText).toBeUndefined();
-      expect(card.isError).toBeUndefined();
-      expect(card.completed === true).toBe(message === live);
-    }
-    expect(live).toMatchObject({ __openclawToolStreamResultReceived: false });
-    expect(saved).not.toHaveProperty("activity");
-  },
-);
-
-it.each([
-  { exitCode: 2, status: "completed", isError: false, label: "Exit code 2" },
-  { exitCode: 0, status: "error", isError: true, label: "failed" },
-])(
-  "keeps a prepared failure visible with exit code $exitCode",
-  async ({ exitCode, status, isError, label }) => {
-    const host = createHost({ chatRunId: "command-run" });
-    const args = { command: "check-report" };
-    const result = {
-      content: [{ type: "text", text: "Validation report" }],
-      details: { status, exitCode },
-    };
-    const tool = { toolCallId: "check", name: "exec" };
-    const end = { phase: "result" as const, ...tool, isError, result };
-    handleAgentEvent(host, agentEvent("command-run", 1, "tool", { phase: "start", ...tool, args }));
-    handleAgentEvent(host, agentEvent("command-run", 2, "tool", end));
-    handleAgentEvent(
-      host,
-      agentEvent("command-run", 3, "item", projectAgentToolActivity({ ...end, args })),
+  ["failed", "failed"],
+  ["blocked", "Blocked"],
+  ["skipped", "Skipped"],
+  [undefined, "Outcome unknown"],
+] as const)("reconciles %s live/history outcomes", async (status, label) => {
+  const item = projectAgentActivityItem({
+    itemId: "collaboration-call",
+    toolCallId: "collaboration-call",
+    kind: "tool",
+    name: "subagents",
+    title: "Delegate task",
+    phase: "end",
+    ...(status ? { status } : { summary: "Outcome unknown" }),
+  } satisfies AgentActivityItem);
+  const host = createHost({ chatRunId: "run-outcome" });
+  handleAgentEvent(host, agentEvent("run-outcome", 1, "item", item));
+  const live = host.chatToolMessages[0];
+  expect(live).toBeDefined();
+  const saved = {
+    role: "assistant",
+    messageId: "stored-call",
+    content: [
+      {
+        type: "toolCall",
+        id: "collaboration-call",
+        name: "subagents",
+        arguments: { task: "Check the report" },
+      },
+    ],
+  };
+  const history = attachHistoryActivity({
+    messages: [saved],
+    activity: [{ messageId: "stored-call", items: [item] }],
+  });
+  const container = document.createElement("div");
+  const view = createActivityGroupHarness(container);
+  for (const [message, runActive] of [
+    [live, true],
+    [history.messages[0], false],
+  ] as const) {
+    const group = createToolGroup("outcome", [createMessageEntry("call", message)]);
+    view.render([group], { showReasoning: false, runActive });
+    await settleToolBridges(container);
+    expect(container.querySelectorAll(".chat-tool-failure")).toHaveLength(
+      status === "failed" ? 1 : 0,
     );
-    const card = extractToolCardsCached(host.chatToolMessages[0])[0]!;
-    expect(card).toMatchObject({
-      isError,
-      exitCode,
-      completed: true,
-      outputText: "Validation report",
-      details: result.details,
+    view.render([group], {
+      showReasoning: false,
+      runActive,
+      isToolMessageExpanded: () => true,
+      isToolExpanded: () => true,
     });
-
-    const container = await mountCard(card, {
-      messageKey: "result",
-      runActive: true,
-      expanded: false,
-    });
-    expect(textOf(container, ".chat-tool-msg-summary")).toContain(label);
-    await mountCard(card, { messageKey: "result", runActive: true }, container);
+    await settleToolBridges(container);
     expect(textOf(container, ".chat-tool-card__outcome")).toBe(label);
     expect(query(container, ".chat-tool-row--running")).toBeNull();
-    expect(container.textContent).toContain("Validation report");
-    expect(container.textContent).toContain("check-report");
-  },
-);
+    const card = extractToolCardsCached(message)[0]!;
+    expect([card.outputText, card.isError]).toEqual([undefined, undefined]);
+    expect(card.completed === true).toBe(message === live);
+  }
+  expect(live).toMatchObject({ __openclawToolStreamResultReceived: false });
+  expect(saved).not.toHaveProperty("activity");
+});
+
+it.each([
+  [2, "completed", false, "Exit code 2"],
+  [0, "error", true, "failed"],
+] as const)("shows prepared failure (%s)", async (exitCode, status, isError, label) => {
+  const host = createHost({ chatRunId: "command-run" });
+  const args = { command: "check-report" };
+  const result = {
+    content: [{ type: "text", text: "Validation report" }],
+    details: { status, exitCode },
+  };
+  const tool = { toolCallId: "check", name: "exec" };
+  const end = { phase: "result" as const, ...tool, isError, result };
+  handleAgentEvent(host, agentEvent("command-run", 1, "tool", { phase: "start", ...tool, args }));
+  handleAgentEvent(host, agentEvent("command-run", 2, "tool", end));
+  handleAgentEvent(
+    host,
+    agentEvent("command-run", 3, "item", projectAgentToolActivity({ ...end, args })),
+  );
+  const card = extractToolCardsCached(host.chatToolMessages[0])[0]!;
+  expect(card).toMatchObject({
+    isError,
+    exitCode,
+    completed: true,
+    outputText: "Validation report",
+    details: result.details,
+  });
+
+  const container = await mountCard(card, {
+    messageKey: "result",
+    runActive: true,
+    expanded: false,
+  });
+  expect(textOf(container, ".chat-tool-msg-summary")).toContain(label);
+  await mountCard(card, { messageKey: "result", runActive: true }, container);
+  expect(textOf(container, ".chat-tool-card__outcome")).toBe(label);
+  expect(query(container, ".chat-tool-row--running")).toBeNull();
+  expect(container.textContent).toContain("Validation report");
+  expect(container.textContent).toContain("check-report");
+});
 
 it.each([
   { name: "write", args: { path: "/workspace/operation.json", content: "{}" } },
@@ -602,8 +570,7 @@ it("renders Tool Search like a direct call and retains the sidebar identity", as
       expect(onOpenSidebar.mock.calls[0]?.[0].card).toBe(card);
     }
   }
-  expect(card.name).toBe("tool_call");
-  expect(card.args).toEqual({ id: name, args });
+  expect([card.name, card.args]).toEqual(["tool_call", { id: name, args }]);
 });
 
 it("keeps command progress neutral across the row, expanded body, and sidebar until completion", async () => {
@@ -629,8 +596,8 @@ it("keeps command progress neutral across the row, expanded body, and sidebar un
   expect(onOpenSidebar).toHaveBeenCalledWith(
     expect.objectContaining({ kind: "tool-output", card }),
   );
-  expect(onOpenSidebar.mock.calls[0]?.[0].card.completed).toBe(false);
-  expect(onOpenSidebar.mock.calls[0]?.[0].card.isError).toBeUndefined();
+  const sidebarCard = onOpenSidebar.mock.calls[0]?.[0].card;
+  expect([sidebarCard.completed, sidebarCard.isError]).toEqual([false, undefined]);
 
   card.completed = true;
   card.isError = false;
@@ -647,21 +614,20 @@ it("keeps command progress neutral across the row, expanded body, and sidebar un
 it("keeps diagnostics inside expanded tool details", async () => {
   const diagnostic = "Cannot connect to the service";
   const output = JSON.stringify({ error: diagnostic });
-  const exitCode = 1;
   const outcome = "Exit code 1";
 
   const container = document.createElement("div");
   let expanded = false;
   const show = async () =>
-    await mountCard(
+    await mountTool(
+      "exec",
       {
         id: "login-failure",
-        name: "exec",
         isError: true,
         completed: true,
         args: { title: "Sign in to GitHub", command: "gh auth login" },
         outputText: output,
-        exitCode,
+        exitCode: 1,
       },
       {
         messageKey: "login",
@@ -690,7 +656,7 @@ it("keeps diagnostics inside expanded tool details", async () => {
 });
 
 it("renders a plain error detail when a failed tool has no output", async () => {
-  const container = await mountCard({ id: "msg:err:no-output", name: "lookup", isError: true });
+  const container = await mountTool("lookup", { isError: true });
 
   expect(query(container, ".chat-tool-card__status-badge")).toBeNull();
   expect(textOf(container, ".chat-tool-card__block-label")).toBe("Tool error");
@@ -711,9 +677,7 @@ it.each([
   },
   { args: { markdown: "Waiting on review." }, expected: "Progress note updated" },
 ])("renders progress_card as a compact receipt: $expected", async ({ args, expected }) => {
-  const container = await mountCard({
-    id: `progress:${expected}`,
-    name: "progress_card",
+  const container = await mountTool("progress_card", {
     args,
     outputText: "Progress card updated",
     completed: true,
@@ -727,9 +691,7 @@ it.each([
 
 async function highlighted(card: ToolCard) {
   const container = await mountCard(card);
-  onTestFinished(async () => {
-    await vi.dynamicImportSettled();
-  });
+  onTestFinished(() => vi.dynamicImportSettled());
   await vi.dynamicImportSettled();
   return container;
 }
@@ -747,53 +709,47 @@ it("highlights edit previews using their file languages", async () => {
   expect(textOf(container, ".tok-string")).toMatch(/"(?:old|new)"/);
 });
 
-it.each([
-  { format: "text", multiple: true },
-  { format: "structured", multiple: false },
-])(
-  "highlights each side of a $format rename with multiple=$multiple",
-  async ({ format, multiple }) => {
-    const before = '<section data-mode="before">Hello</section>';
-    const after = 'const value = "after";';
-    const args =
-      format === "text"
-        ? {
-            patch: `*** Begin Patch\n*** Update File: example.html\n*** Move to: example.ts\n@@\n-${before}\n+${after}\n*** Add File: helper.py\n+def greet():\n+    return "hello"\n*** End Patch`,
-          }
-        : {
-            changes: [
-              {
-                path: "example.html",
-                kind: { type: "update", move_path: "example.ts" },
-                diff: ["@@ -1 +1 @@", `-${before}`, `+${after}`].join("\n"),
-              },
-            ],
-          };
-    const container = await highlighted(
-      patchCard(args, {
-        id: "rename",
-        ...(format === "structured" ? { outputText: "Applied patch" } : {}),
-      }),
-    );
-    await vi.waitFor(() => {
-      expect(textOf(container, ".chat-diff__row--del .tok-propertyName")).toBe("data-mode");
-      expect(textOf(container, ".chat-diff__row--add .tok-keyword")).toBe("const");
-    });
-    expect(textOf(container, ".chat-diff__row--del .chat-diff__text")).toBe(before);
-    expect(textOf(container, ".chat-diff__row--add .chat-diff__text")).toBe(after);
-    if (multiple) {
-      expect(
-        [...container.querySelectorAll(".tok-keyword")].map((node) => node.textContent),
-      ).toContain("def");
-    }
-  },
-);
+it.each(["text", "structured"])("highlights both sides of %s renames", async (format) => {
+  const before = '<section data-mode="before">Hello</section>';
+  const after = 'const value = "after";';
+  const args =
+    format === "text"
+      ? {
+          patch: `*** Begin Patch\n*** Update File: example.html\n*** Move to: example.ts\n@@\n-${before}\n+${after}\n*** Add File: helper.py\n+def greet():\n+    return "hello"\n*** End Patch`,
+        }
+      : {
+          changes: [
+            {
+              path: "example.html",
+              kind: { type: "update", move_path: "example.ts" },
+              diff: ["@@ -1 +1 @@", `-${before}`, `+${after}`].join("\n"),
+            },
+          ],
+        };
+  const container = await highlighted(
+    patchCard(args, {
+      id: "rename",
+      ...(format === "structured" ? { outputText: "Applied patch" } : {}),
+    }),
+  );
+  await vi.waitFor(() => {
+    expect(textOf(container, ".chat-diff__row--del .tok-propertyName")).toBe("data-mode");
+    expect(textOf(container, ".chat-diff__row--add .tok-keyword")).toBe("const");
+  });
+  expect(textOf(container, ".chat-diff__row--del .chat-diff__text")).toBe(before);
+  expect(textOf(container, ".chat-diff__row--add .chat-diff__text")).toBe(after);
+  if (format === "text") {
+    expect(
+      [...container.querySelectorAll(".tok-keyword")].map((node) => node.textContent),
+    ).toContain("def");
+  }
+});
 
-function renderWidgetPreviewFrame(url: string, allowExternalEmbedUrls = false) {
+function promptFixture(url: string, allowExternalEmbedUrls = false) {
   const container = document.createElement("div");
   document.body.append(container);
   mountPreview(
-    { kind: "canvas", surface: "assistant_message", render: "url", url },
+    { ...canvas, url },
     "chat_message",
     allowExternalEmbedUrls ? { allowExternalEmbedUrls } : {},
     container,
@@ -801,7 +757,15 @@ function renderWidgetPreviewFrame(url: string, allowExternalEmbedUrls = false) {
   const frame = container.querySelector("iframe");
   expect(frame).not.toBeNull();
   expect(frame!.contentWindow).not.toBeNull();
-  return { container, frame: frame! };
+  const received: string[] = [];
+  container.addEventListener(WIDGET_PROMPT_EVENT, (event) => {
+    received.push((event as CustomEvent<WidgetPromptEventDetail>).detail.text);
+  });
+  onTestFinished(() => {
+    restoreActiveElement();
+    container.remove();
+  });
+  return { frame: frame!, received };
 }
 
 function offerPromptPort(frame: HTMLIFrameElement): MessagePort {
@@ -837,26 +801,8 @@ function emulateInteractableFrame(frame: HTMLIFrameElement) {
   Object.defineProperty(document, "activeElement", { get: () => frame, configurable: true });
 }
 
-function collectPromptEvents(container: HTMLElement): string[] {
-  const received: string[] = [];
-  container.addEventListener(WIDGET_PROMPT_EVENT, (event) => {
-    received.push((event as CustomEvent<WidgetPromptEventDetail>).detail.text);
-  });
-  return received;
-}
-
 function restoreActiveElement() {
   delete (document as unknown as Record<string, unknown>).activeElement;
-}
-
-function promptFixture(url: string, external = false) {
-  const { container, frame } = renderWidgetPreviewFrame(url, external);
-  const received = collectPromptEvents(container);
-  onTestFinished(() => {
-    restoreActiveElement();
-    container.remove();
-  });
-  return { frame, received };
 }
 
 it("adopts the bridge's prompt port offer and enforces the prompt contract", async () => {
@@ -873,17 +819,13 @@ it("adopts the bridge's prompt port offer and enforces the prompt contract", asy
   postPrompt(port, "  Show details  ");
   await flushPorts();
   expect(received).toEqual(["Show details"]);
-  // Slash and bang commands would run host commands on the widget's behalf;
-  // the send path must only ever receive conversational text.
-  postPrompt(port, "/approve");
-  postPrompt(port, "!pwd");
-  postPrompt(port, "   ");
-  postPrompt(port, 42);
-  postPrompt(port, "x".repeat(4_001));
+  // Widgets may send conversation, not slash/bang commands.
+  for (const invalid of ["/approve", "!pwd", "   ", 42, "x".repeat(4_001)]) {
+    postPrompt(port, invalid);
+  }
   await flushPorts();
   expect(received).toEqual(["Show details"]);
-  // A replacement document's later offer must not displace or re-arm the
-  // adopted grant, even across another load event.
+  // A replacement document cannot displace or re-arm the adopted grant.
   const lateOfferPort = offerPromptPort(frame);
   frame.dispatchEvent(new Event("load"));
   postPrompt(lateOfferPort, "From takeover");
@@ -904,25 +846,20 @@ it("adopts the bridge's prompt port offer and enforces the prompt contract", asy
   expect(received.at(-1)).toBe("Prompt 10");
 });
 
-it("adopts a prompt offer that arrives after the frame's load event", async () => {
-  const { frame, received } = promptFixture(
-    "/__openclaw__/canvas/documents/cv_late_offer/index.html",
-  );
-  // Posted-message and load tasks have no guaranteed ordering; here load wins.
-  frame.dispatchEvent(new Event("load"));
+it.each([
+  ["adopts late internal offers", canvasPreview("cv_late_offer").url, false, ["Late but valid"]],
+  ["rejects external embed offers", "https://canvas.example/widget", true, []],
+] as const)("%s", async (_label, url, external, expected) => {
+  const { frame, received } = promptFixture(url, external);
+  if (!external) {
+    frame.dispatchEvent(new Event("load"));
+  }
   const port = offerPromptPort(frame);
+  if (external) {
+    frame.dispatchEvent(new Event("load"));
+  }
   emulateInteractableFrame(frame);
   postPrompt(port, "Late but valid");
   await flushPorts();
-  expect(received).toEqual(["Late but valid"]);
-});
-
-it("never adopts prompt offers from externally allowed embed URLs", async () => {
-  const { frame, received } = promptFixture("https://canvas.example/widget", true);
-  const port = offerPromptPort(frame);
-  frame.dispatchEvent(new Event("load"));
-  emulateInteractableFrame(frame);
-  postPrompt(port, "External send");
-  await flushPorts();
-  expect(received).toEqual([]);
+  expect(received).toEqual(expected);
 });
