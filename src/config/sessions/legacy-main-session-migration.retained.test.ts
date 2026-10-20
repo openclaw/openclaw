@@ -41,13 +41,9 @@ it("migrates active legacy-main rows without admitting retained retired database
   closeOpenClawAgentDatabasesForTest();
   const { DatabaseSync } = requireNodeSqlite();
   for (const pathname of [activePath, ordinaryPath, ...retiredPaths]) {
-    const db = new DatabaseSync(pathname);
-    try {
-      db.exec("ALTER TABLE session_windows DROP COLUMN row_transcript_json");
-      db.exec("ALTER TABLE session_windows DROP COLUMN row_transcript_updated_at");
-    } finally {
-      db.close();
-    }
+    using db = new DatabaseSync(pathname);
+    db.exec("ALTER TABLE session_windows DROP COLUMN row_transcript_json");
+    db.exec("ALTER TABLE session_windows DROP COLUMN row_transcript_updated_at");
   }
   for (const [index, agentId] of retiredIds.entries()) {
     const operationId = `retain-${agentId}`;

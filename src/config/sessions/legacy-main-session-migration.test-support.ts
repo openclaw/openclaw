@@ -3,20 +3,10 @@ import path from "node:path";
 import { afterEach, expect, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import {
-  markPluginRegistryActive,
-  markPluginRegistryRetired,
-} from "../../plugins/registry-lifecycle.js";
+import * as registryLifecycle from "../../plugins/registry-lifecycle.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawAgentDatabasesForTest,
-  runOpenClawAgentWriteTransaction,
-} from "../../state/openclaw-agent-db.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-} from "../../state/openclaw-state-db.js";
+import * as agentDb from "../../state/openclaw-agent-db.js";
+import * as stateDb from "../../state/openclaw-state-db.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type { migrateLegacyMainSessionKeys } from "./legacy-main-session-migration.js";
 import { assignSessionOwner } from "./session-accessor.js";
@@ -37,10 +27,10 @@ export const humanOwner = {
 export function setupLegacyMainSessionMigrationTests() {
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     afterEach(async () => {
-      await closeOpenClawAgentDatabasesAsync();
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawAgentDatabasesForTest();
-      closeOpenClawStateDatabaseForTest();
+      await agentDb.closeOpenClawAgentDatabasesAsync();
+      await stateDb.closeOpenClawStateDatabaseAsync();
+      agentDb.closeOpenClawAgentDatabasesForTest();
+      stateDb.closeOpenClawStateDatabaseForTest();
       cleanup();
     }),
   );
@@ -83,18 +73,14 @@ const claimScope = ({
   key: sessionKey,
 }: ClaimTarget) => ({ agentId, path: pathname, sessionKey });
 
-export function seedClaim(
-  params: ClaimTarget & {
-    entry?: SessionEntry;
-    events?: unknown[];
-  },
-): SessionEntry {
+type SeedClaim = ClaimTarget & { entry?: SessionEntry; events?: unknown[] };
+export function seedClaim(params: SeedClaim): SessionEntry {
   const scope = claimScope(params);
   const entry = params.entry ?? {
     sessionId: `session-${params.key.replaceAll(":", "-")}`,
     updatedAt: 100,
   };
-  runOpenClawAgentWriteTransaction((database) => {
+  agentDb.runOpenClawAgentWriteTransaction((database) => {
     writeSessionEntry(database, params.key, entry, {
       allowStoredAliases: true,
       previousEntry: null,
@@ -112,14 +98,14 @@ export function seedClaim(
 }
 
 export function readClaim(params: ClaimTarget) {
-  return runOpenClawAgentWriteTransaction((database) => {
+  return agentDb.runOpenClawAgentWriteTransaction((database) => {
     const entry = readExactSessionEntryRowForCanonicalRepair(database, params.key)?.entry;
-    return entry
-      ? {
-          entry,
-          events: readTranscriptEventRows(database, entry.sessionId).map((row) => row.eventJson),
-        }
-      : undefined;
+    return (
+      entry && {
+        entry,
+        events: readTranscriptEventRows(database, entry.sessionId).map((row) => row.eventJson),
+      }
+    );
   }, claimScope(params));
 }
 
@@ -157,10 +143,9 @@ export async function recordHarnessDeletions<T>(
       },
     },
   });
-  markPluginRegistryActive(registry);
-  try {
-    return { result: await withPluginRuntimeRegistryScope(registry, run), committed };
-  } finally {
-    markPluginRegistryRetired(registry);
-  }
+  registryLifecycle.markPluginRegistryActive(registry);
+  using _ = {
+    [Symbol.dispose]: () => registryLifecycle.markPluginRegistryRetired(registry),
+  };
+  return { result: await withPluginRuntimeRegistryScope(registry, run), committed };
 }

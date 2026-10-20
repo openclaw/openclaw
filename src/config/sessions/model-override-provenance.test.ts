@@ -13,15 +13,16 @@ const origin = {
   modelOverrideFallbackOriginModel: "main",
 };
 const fallback = { ...selection, ...origin };
+const selfOrigin = { ...origin, providerOverride: "primary", modelOverride: "main" };
+const withSource = <T extends object>(
+  entry: T,
+  modelOverrideSource: "user" | "auto" | "default",
+) => ({ ...entry, modelOverrideSource });
 
 it.each([
   ["legacy user override", pin, true],
   ["legacy fallback provenance", fallback, false],
-  [
-    "explicit default with stale override fields",
-    { ...pin, modelOverrideSource: "default" },
-    false,
-  ],
+  ["explicit default with stale override fields", withSource(pin, "default"), false],
 ] as const)("hasUserPinnedModelSelection classifies %s", (_, entry, expected) => {
   expect(hasUserPinnedModelSelection(entry)).toBe(expected);
 });
@@ -48,31 +49,11 @@ it.each([
 });
 
 it.each([
-  [
-    "configured automatic selection without fallback provenance",
-    { ...selection, modelOverrideSource: "auto" },
-    false,
-    false,
-  ],
-  ["different automatic selection", { ...fallback, modelOverrideSource: "auto" }, true, true],
+  ["automatic selection without fallback provenance", withSource(selection, "auto"), false, false],
+  ["different automatic selection", withSource(fallback, "auto"), true, true],
   ["legacy fallback provenance", fallback, true, true],
-  [
-    "self-origin configured selection",
-    {
-      ...origin,
-      providerOverride: "primary",
-      modelOverride: "main",
-      modelOverrideSource: "auto",
-    },
-    true,
-    false,
-  ],
-  [
-    "user selection with stale provenance",
-    { ...fallback, modelOverrideSource: "user" },
-    false,
-    false,
-  ],
+  ["self-origin configured selection", withSource(selfOrigin, "auto"), true, false],
+  ["user selection with stale provenance", withSource(fallback, "user"), false, false],
 ] as const)(
   "hasSessionActiveAutoModelFallback classifies %s",
   (_, entry, automaticSelection, expected) => {

@@ -32,37 +32,25 @@ it("recovers lifecycle timestamps without caller SQL and observes foreign header
     const entry = { sessionId: scope.sessionId, updatedAt: 42, lastInteractionAt: 7 };
     const read = async (currentEntry: typeof entry & { sessionStartedAt?: number } = entry) => {
       const sql = observeHostDataSql();
-      try {
-        const result = await resolveSessionLifecycleTimestampsAsync({
-          ...scope,
-          entry: currentEntry,
-        });
-        expect(sql.queries).toEqual([]);
-        return result;
-      } finally {
-        sql.restore();
-      }
+      using _ = { [Symbol.dispose]: () => sql.restore() };
+      const result = await resolveSessionLifecycleTimestampsAsync({
+        ...scope,
+        entry: currentEntry,
+      });
+      expect(sql.queries).toEqual([]);
+      return result;
     };
-    await expect(read()).resolves.toEqual({
-      sessionStartedAt: Date.parse(header.timestamp),
-      lastInteractionAt: 7,
-    });
-    const foreign = new DatabaseSync(scope.storePath);
-    try {
+    const expectStart = (sessionStartedAt: number, currentEntry?: Parameters<typeof read>[0]) =>
+      expect(read(currentEntry)).resolves.toEqual({ sessionStartedAt, lastInteractionAt: 7 });
+    await expectStart(Date.parse(header.timestamp));
+    {
+      using foreign = new DatabaseSync(scope.storePath);
       foreign
         .prepare("UPDATE transcript_events SET event_json = ? WHERE session_id = ? AND seq = 0")
         .run(JSON.stringify({ ...header, timestamp: "2027" }), scope.sessionId);
-    } finally {
-      foreign.close();
     }
-    await expect(read()).resolves.toEqual({
-      sessionStartedAt: Date.parse("2027"),
-      lastInteractionAt: 7,
-    });
-    await expect(read({ ...entry, sessionStartedAt: 10 })).resolves.toEqual({
-      sessionStartedAt: 10,
-      lastInteractionAt: 7,
-    });
+    await expectStart(Date.parse("2027"));
+    await expectStart(10, { ...entry, sessionStartedAt: 10 });
   });
 });
 
@@ -102,15 +90,16 @@ it.each(["rewrite", "close"] as const)(
             },
           };
         });
-      try {
-        await expect(resolveSessionLifecycleTimestampsAsync({ ...scope, entry })).rejects.toThrow(
-          /transcript|revoked|closed|current|admission/i,
-        );
-        expect(intercepted).toBe(true);
-      } finally {
-        spy.mockRestore();
-        await closing;
-      }
+      await using _ = {
+        [Symbol.asyncDispose]: async () => {
+          spy.mockRestore();
+          await closing;
+        },
+      };
+      await expect(resolveSessionLifecycleTimestampsAsync({ ...scope, entry })).rejects.toThrow(
+        /transcript|revoked|closed|current|admission/i,
+      );
+      expect(intercepted).toBe(true);
     });
   },
 );
