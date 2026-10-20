@@ -86,6 +86,38 @@ let stormTime = 0;
 const assignedWorkerId = () =>
   (fixture.executions.at(-1)!.input as CodeModeNodeInput).gcAttribution!.workerId;
 
+function holdRetirement(pool: (typeof fixture.pools)[number]) {
+  const release = createDeferred();
+  const retiring = createDeferred();
+  pool.close.mockImplementationOnce(async () => {
+    retiring.resolve();
+    await release.promise;
+    pool.isClosed = true;
+  });
+  return { release: release.resolve, retiring: retiring.promise };
+}
+
+function holdRun(pool: (typeof fixture.pools)[number]) {
+  const started = createDeferred();
+  const result = createDeferred<CodeModeWorkerThreadResult<undefined>>();
+  pool.run.mockImplementationOnce(async () => {
+    started.resolve();
+    return result.promise;
+  });
+  return { started: started.promise, complete: result.resolve };
+}
+
+function parkedResult(): CodeModeWorkerThreadResult<undefined> {
+  return {
+    status: "waiting",
+    continuation: undefined,
+    pendingRequests: [{ id: "bridge:yield:1", method: "yield", args: [] }],
+    canceledRequestIds: [],
+    settlementMode: { kind: "awaiting" },
+    output: fixture.completed.output,
+  };
+}
+
 beforeEach(() => {
   host = new LegacyPluginSdkResourceHost();
   scheduler = createTestGatewayScheduler("fake-timers");
@@ -134,24 +166,12 @@ describe("Node Code Mode worker custody", () => {
         await run();
         const pool = fixture.pools.at(-1)!;
         const workerId = assignedWorkerId();
-        const started = createDeferred();
-        const parked = createDeferred<CodeModeWorkerThreadResult<undefined>>();
-        pool.run.mockImplementationOnce(async () => {
-          started.resolve();
-          return parked.promise;
-        });
+        const held = holdRun(pool);
         const active = run();
-        await started.promise;
+        await held.started;
         channel("openclaw.code-mode.gc-storm").publish(workerId);
         expect(pool.close).not.toHaveBeenCalled();
-        parked.resolve({
-          status: "waiting",
-          continuation: undefined,
-          pendingRequests: [{ id: "bridge:yield:1", method: "yield", args: [] }],
-          canceledRequestIds: [],
-          settlementMode: { kind: "awaiting" },
-          output: fixture.completed.output,
-        });
+        held.complete(parkedResult());
         const result = await active;
         if (result.status !== "waiting") {
           throw new Error("Expected a live continuation");
@@ -227,26 +247,21 @@ describe("Node Code Mode worker custody", () => {
     const sibling = new LegacyPluginSdkResourceHost();
     const siblingScheduler = createTestGatewayScheduler();
     sibling.bindScheduler(siblingScheduler);
-    const released = createDeferred();
-    const retiring = createDeferred();
+    let held: ReturnType<typeof holdRetirement> | undefined;
     try {
       await run();
       const owned = fixture.pools.at(-1)!;
       await sibling.run(() => nodeCodeModeExecutor.execute(input, { timeoutMs: 1000 }));
       const survivor = fixture.pools.at(-1)!;
       expect(survivor).not.toBe(owned);
-      owned.close.mockImplementationOnce(async () => {
-        retiring.resolve();
-        await released.promise;
-        owned.isClosed = true;
-      });
+      held = holdRetirement(owned);
       const completed = vi.fn();
       const closing = host.close().then(completed);
-      await retiring.promise;
+      await held.retiring;
       expect(completed).not.toHaveBeenCalled();
       expect(scheduler.nextWakeAtMs).toBeNull();
       expect(survivor.isClosed).toBe(false);
-      released.resolve();
+      held.release();
       await closing;
       expect(owned.close).toHaveBeenCalledWith(undefined, "shutdown");
       const count = fixture.pools.length;
@@ -255,7 +270,7 @@ describe("Node Code Mode worker custody", () => {
       expect(survivor.isClosed).toBe(false);
       await expect(run()).rejects.toThrow("Plugin SDK resource host is closed");
     } finally {
-      released.resolve();
+      held?.release();
       await sibling.close();
       await siblingScheduler.stop();
     }
@@ -421,13 +436,7 @@ describe("Node Code Mode worker custody", () => {
       const previous = fixture.pools.at(-1)!;
       const poolCount = fixture.pools.length;
       const executionCount = fixture.executions.length;
-      const release = createDeferred();
-      const retiring = createDeferred();
-      previous.close.mockImplementationOnce(async () => {
-        retiring.resolve();
-        await release.promise;
-        previous.isClosed = true;
-      });
+      const held = holdRetirement(previous);
       fixture.workerUrl += ".updated";
       const controller = new AbortController();
       let observed: unknown;
@@ -440,7 +449,7 @@ describe("Node Code Mode worker custody", () => {
           return result;
         });
       try {
-        await retiring.promise;
+        await held.retiring;
         if (reason === "abort") {
           controller.abort();
         }
@@ -453,7 +462,7 @@ describe("Node Code Mode worker custody", () => {
         expect(fixture.pools).toHaveLength(poolCount);
         expect(fixture.executions).toHaveLength(executionCount);
       } finally {
-        release.resolve();
+        held.release();
         await execution;
         await vi.advanceTimersByTimeAsync(0);
         vi.useRealTimers();
@@ -466,14 +475,7 @@ describe("Node Code Mode worker custody", () => {
   it("retries failed continuation cleanup without restoring resume authority", async () => {
     await run();
     const pool = fixture.pools.at(-1)!;
-    pool.run.mockResolvedValueOnce({
-      status: "waiting",
-      continuation: undefined,
-      pendingRequests: [{ id: "bridge:yield:1", method: "yield", args: [] }],
-      canceledRequestIds: [],
-      settlementMode: { kind: "awaiting" },
-      output: { count: 0, source: { kind: "complete", json: "[]" } },
-    });
+    pool.run.mockResolvedValueOnce(parkedResult());
     const result = await run();
     if (result.status !== "waiting") {
       throw new Error("Expected a live continuation");
@@ -530,20 +532,14 @@ describe("Node Code Mode worker custody", () => {
     const previous = fixture.pools.at(-1)!;
     const sibling = fixture.pools.at(-2)!;
     const previousExecutions = previous.run.mock.calls.length;
-    const joined = createDeferred();
-    const retiring = createDeferred();
-    previous.close.mockImplementationOnce(async () => {
-      retiring.resolve();
-      await joined.promise;
-      previous.isClosed = true;
-    });
+    const held = holdRetirement(previous);
     fixture.workerUrl += ".updated";
     const poolCount = fixture.pools.length;
     const result = run();
-    await retiring.promise;
+    await held.retiring;
     expect(fixture.pools).toHaveLength(poolCount);
     fixture.workerUrl += ".newer";
-    joined.resolve();
+    held.release();
     expect(await result).toMatchObject({ status: "completed" });
     expect(fixture.pools).toHaveLength(poolCount + 1);
     expect(previous.run).toHaveBeenCalledTimes(previousExecutions);
@@ -554,18 +550,13 @@ describe("Node Code Mode worker custody", () => {
   it("does not release an excess completed pool after native cleanup fails", async () => {
     await run();
     const first = fixture.pools.at(-1)!;
-    const complete = createDeferred<CodeModeWorkerThreadResult<undefined>>();
-    const starting = createDeferred();
-    first.run.mockImplementationOnce(async () => {
-      starting.resolve();
-      return complete.promise;
-    });
+    const held = holdRun(first);
     const pending = run();
-    await starting.promise;
+    await held.started;
     const siblings = await Promise.all(Array.from({ length: 4 }, run));
     expect(siblings.every((result) => result.status === "completed")).toBe(true);
     first.close.mockRejectedValueOnce(new Error("native exit uncertain"));
-    complete.resolve(fixture.completed);
+    held.complete(fixture.completed);
     expect(await pending).toMatchObject({ status: "failed", error: "native exit uncertain" });
     expect(first.close).toHaveBeenCalledTimes(2);
     expect(first.isClosed).toBe(true);

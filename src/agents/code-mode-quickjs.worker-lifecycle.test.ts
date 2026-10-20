@@ -125,25 +125,21 @@ describe("QuickJS host lifecycle and output", () => {
   );
 
   it.each([
-    { label: "returned values", source: 'return "x".repeat(2_048);', status: "completed" },
-    {
-      label: "combined output and returned values",
-      source: 'text("x".repeat(700)); return "y".repeat(700);',
-      status: "completed",
-    },
-    {
-      label: "suspended output",
-      source: 'text("x".repeat(2_048)); await yield_control("pause"); return true;',
-      status: "waiting",
-    },
-    {
-      label: "failed output",
-      source: 'text("x".repeat(2_048)); throw new Error("boom");',
-      status: "failed",
-    },
-  ])(
-    "bounds oversized $label before sending it across worker threads",
-    async ({ source, status }) => {
+    ["returned values", 'return "x".repeat(2_048);', "completed"],
+    [
+      "combined output and returned values",
+      'text("x".repeat(700)); return "y".repeat(700);',
+      "completed",
+    ],
+    [
+      "suspended output",
+      'text("x".repeat(2_048)); await yield_control("pause"); return true;',
+      "waiting",
+    ],
+    ["failed output", 'text("x".repeat(2_048)); throw new Error("boom");', "failed"],
+  ] as const)(
+    "bounds oversized %s before sending it across worker threads",
+    async (_label, source, status) => {
       const config = resolveCodeModeConfig({
         tools: { codeMode: { enabled: true, maxOutputBytes: 1_024 } },
       } as never);
