@@ -56,8 +56,7 @@ async function readOverrides(owner: OpenClawTestInstance, key: string) {
     JSON.stringify({ key, agentId: "main" }),
     "--json",
   ]);
-  expect(result.code, result.stderr).toBe(0);
-  expect(result.signal).toBeNull();
+  expect(result, result.stderr).toMatchObject({ code: 0, signal: null });
   const response: { session: { toolOverrides?: SessionToolOverrides } } = JSON.parse(result.stdout);
   return response.session.toolOverrides;
 }
@@ -66,26 +65,19 @@ function observeRequests(page: Page) {
   const requests: Request[] = [];
   const replies = new Map<string, boolean>();
   page.on("websocket", (socket) => {
-    const methods = new Map<string, string>();
     socket.on("framesent", ({ payload }) => {
       const frame: Request = JSON.parse(payload.toString());
       if (frame.type !== "req") {
         return;
       }
-      methods.set(frame.id, frame.method);
       if (frame.method === "connect") {
         return;
       }
       requests.push(frame);
     });
     socket.on("framereceived", ({ payload }) => {
-      const frame: { type: string; id: string; ok: boolean; payload?: unknown; error?: unknown } =
-        JSON.parse(payload.toString());
+      const frame: { type: string; id: string; ok: boolean } = JSON.parse(payload.toString());
       if (frame.type !== "res") {
-        return;
-      }
-      const method = methods.get(frame.id);
-      if (!method || method === "connect") {
         return;
       }
       replies.set(frame.id, frame.ok);
@@ -305,34 +297,20 @@ for (const globallyEnabled of [false, true]) {
               const initiallyEnabled = scenario.name !== "false";
               await expect.poll(() => checked(webSearch)).toBe(initiallyEnabled);
               expect(await webSearch.isDisabled()).toBe(false);
-              await webSearch.click();
-              await expect.poll(() => traffic.patches().length).toBe(patchStart + 1);
-              await expect.poll(() => traffic.succeeded(traffic.patches()[patchStart]!)).toBe(true);
-              const firstOverrides = initiallyEnabled
-                ? { ...siblings, webSearch: false }
-                : siblings;
-              expect(traffic.patches().at(-1)?.params).toEqual({
-                key,
-                toolOverrides: firstOverrides,
-              });
-              await expect.poll(() => checked(webSearch)).toBe(!initiallyEnabled);
-              await expect.poll(() => webSearch.isDisabled()).toBe(false);
-              const toggled = await readOverrides(instance, key);
-              expect(toggled).toEqual(firstOverrides);
-              await webSearch.click();
-              await expect.poll(() => traffic.patches().length).toBe(patchStart + 2);
-              await expect
-                .poll(() => traffic.succeeded(traffic.patches()[patchStart + 1]!))
-                .toBe(true);
-              expect(traffic.patches().at(-1)?.params).toEqual({
-                key,
-                toolOverrides: initiallyEnabled ? siblings : { ...siblings, webSearch: false },
-              });
-              await expect.poll(() => checked(webSearch)).toBe(initiallyEnabled);
-              const restored = await readOverrides(instance, key);
-              expect(restored).toEqual(
-                initiallyEnabled ? siblings : { ...siblings, webSearch: false },
-              );
+              for (const [index, enabled] of [!initiallyEnabled, initiallyEnabled].entries()) {
+                await webSearch.click();
+                await expect.poll(() => traffic.patches().length).toBe(patchStart + index + 1);
+                await expect
+                  .poll(() => traffic.succeeded(traffic.patches()[patchStart + index]!))
+                  .toBe(true);
+                const toolOverrides = enabled ? siblings : { ...siblings, webSearch: false };
+                expect(traffic.patches().at(-1)?.params).toEqual({ key, toolOverrides });
+                await expect.poll(() => checked(webSearch)).toBe(enabled);
+                if (index === 0) {
+                  await expect.poll(() => webSearch.isDisabled()).toBe(false);
+                }
+                expect(await readOverrides(instance, key)).toEqual(toolOverrides);
+              }
             }
           },
         );

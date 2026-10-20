@@ -57,6 +57,7 @@ suite.define(() => {
         expect(await bubble.textContent()).not.toContain("Working context captured");
         expect(await bubble.getAttribute("data-message-text")).toBe(text);
         const attached = page.locator(".chat-context-attachment").first();
+        const technical = attached.locator(".chat-context-attachment__technical > summary");
         await attached.waitFor();
         expect(await attached.getAttribute("open")).toBeNull();
         const summary = attached.locator(":scope > summary");
@@ -64,13 +65,13 @@ suite.define(() => {
         await page.keyboard.press("Enter");
         await attached.locator("dd").filter({ hasText: snapshot.workspace }).waitFor();
         expect(await attached.getAttribute("open")).not.toBeNull();
-        await attached.locator(".chat-context-attachment__technical > summary").click();
+        await technical.click();
         const technicalJson = await attached.locator("pre").textContent();
         if (technicalJson === null) {
           throw new Error("Attached context JSON is missing");
         }
         expect(JSON.parse(technicalJson)).toEqual(snapshot);
-        await attached.locator(".chat-context-attachment__technical > summary").click();
+        await technical.click();
         await page.setViewportSize({ width: 390, height: 844 });
         expect(
           await attached.evaluate((element) => element.scrollWidth <= element.clientWidth + 1),
@@ -78,9 +79,7 @@ suite.define(() => {
         await page.setViewportSize({ width: 1280, height: 900 });
         await page.reload();
         await page.locator(".chat-context-attachment").first().waitFor();
-        expect(
-          await page.locator(".chat-bubble").filter({ hasText: text }).first().textContent(),
-        ).not.toContain("Working context captured");
+        expect(await bubble.textContent()).not.toContain("Working context captured");
         await page.getByRole("button", { name: "Talk to your Home agent", exact: true }).click();
         const home = page.locator("openclaw-home-session");
         const composer = home.locator(".agent-chat__composer-combobox textarea");

@@ -17,6 +17,12 @@ const suite = createControlUiE2eSuite({
   startServer: () => startControlUiE2eServer(undefined, { source: true }),
 });
 const sessionKey = "agent:main:export-attribution";
+const toolCall = {
+  type: "toolCall",
+  id: "build-check",
+  name: "exec",
+  arguments: { command: "synthetic-check" },
+};
 const messages = [
   { role: "user", content: "Please review the checklist.", __openclaw: { senderIsOwner: true } },
   { role: "user", senderLabel: "Alex", content: "I will write the release notes." },
@@ -25,23 +31,9 @@ const messages = [
     __openclaw: { senderName: "Sam", senderId: "sam@example.invalid" },
     content: "I will verify the build.",
   },
-  {
-    role: "assistant",
-    content: [
-      {
-        type: "toolCall",
-        id: "build-check",
-        name: "exec",
-        arguments: { command: "synthetic-check" },
-      },
-    ],
-  },
+  { role: "assistant", content: [toolCall] },
   { role: "toolResult", toolCallId: "build-check", content: "  Build verification passed.\n" },
-  {
-    role: "assistant",
-    senderLabel: "Review assistant",
-    content: "Alex owns the notes; Sam owns build verification.",
-  },
+  { role: "assistant", senderLabel: "Review assistant", content: "Ready." },
 ];
 
 suite.define(() => {
@@ -79,9 +71,7 @@ suite.define(() => {
           await gateway.waitForRequest("chat.startup");
           const thread = page.locator(".chat-thread-inner");
           for (const sender of ["Alex", "Sam", "Review assistant"]) {
-            await thread.locator(".chat-sender-name").getByText(sender, { exact: true }).waitFor({
-              state: "visible",
-            });
+            await thread.locator(".chat-sender-name").getByText(sender, { exact: true }).waitFor();
           }
           const unattributed = thread.locator(".chat-group.user").filter({
             has: page.getByText("Please review the checklist.", { exact: true }),

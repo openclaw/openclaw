@@ -1,7 +1,6 @@
 import { expect, it } from "vitest";
 import { installMockGateway, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
-import { chatMessage } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -40,16 +39,6 @@ suite.define(() => {
             branch: "feature/workspace-navigation",
           },
         },
-      ],
-      historyMessages: [
-        chatMessage(
-          "user",
-          "Make workspace navigation easier to scan and keep the layout compact.",
-        ),
-        chatMessage(
-          "assistant",
-          "The navigation update is ready. I simplified the file list, refined keyboard focus, and verified the compact layout.",
-        ),
       ],
       methodResponses: {
         "cron.list": {

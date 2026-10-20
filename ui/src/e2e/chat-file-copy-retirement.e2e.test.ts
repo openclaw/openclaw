@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { chatMessage } from "./chat-flow.test-support.ts";
+import { chatMessage, exactButton } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "File copy retirement" });
@@ -25,22 +25,17 @@ suite.define(() => {
     "scopes $action copy fallback to its $lifecycle file presentation",
     async ({ lifecycle, action }) => {
       await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+        const content = "File contents";
         await page.clock.install();
         await page.addInitScript(() => {
           window.fileCopyProof = { nativeWrites: [], fallbacks: [] };
-          Object.defineProperty(navigator, "clipboard", {
-            configurable: true,
-            value: {
-              writeText: (text: string) => {
-                window.fileCopyProof.nativeWrites.push(text);
-                return new Promise<void>((resolve, reject) => {
-                  window.fileCopyProof.resolve = resolve;
-                  window.fileCopyProof.reject = () =>
-                    reject(new Error("Synthetic clipboard rejection"));
-                });
-              },
-            },
-          });
+          const writeText = (text: string) =>
+            new Promise<void>((resolve, reject) => {
+              window.fileCopyProof.nativeWrites.push(text);
+              window.fileCopyProof.resolve = resolve;
+              window.fileCopyProof.reject = () => reject(new Error("Clipboard denied"));
+            });
+          Object.defineProperty(navigator, "clipboard", { value: { writeText } });
           document.execCommand = (command: string) => {
             if (command !== "copy") {
               throw new Error(`Unexpected clipboard command: ${command}`);
@@ -60,7 +55,7 @@ suite.define(() => {
               file: {
                 previewKind: "text",
                 contentEncoding: "utf8",
-                content: "Synthetic file copy content",
+                content,
                 kind: "read",
                 missing: false,
                 name: "notes.txt",
@@ -74,25 +69,22 @@ suite.define(() => {
         await page.locator('a.markdown-file-link[data-file-path="notes.txt"]').click();
         const panel = page.locator("openclaw-chat-detail-panel:visible");
         await panel.locator(".cm-content").waitFor({ state: "visible" });
-        const copyButton = panel.getByRole("button", {
-          name: action === "path" ? "Copy path" : "Copy file contents",
-          exact: true,
-        });
-        const copied = panel.getByRole("button", { name: "Copied!", exact: true });
+        const copyTitle = action === "path" ? "Copy path" : "Copy file contents";
+        const copyButton = exactButton(panel, copyTitle);
+        const copied = exactButton(panel, "Copied!");
         await copyButton.click();
         await page.waitForFunction(() => window.fileCopyProof.nativeWrites.length === 1);
-        const expected = action === "path" ? "notes.txt" : "Synthetic file copy content";
+        const expected = action === "path" ? "notes.txt" : content;
         expect(await page.evaluate(() => window.fileCopyProof.nativeWrites)).toEqual([expected]);
         if (lifecycle === "close") {
-          await page.getByRole("button", { name: "Close tab: notes.txt", exact: true }).click();
+          await exactButton(page, "Close tab: notes.txt").click();
           await expect.poll(() => page.locator(".sidebar-file-view:visible").count()).toBe(0);
         } else if (lifecycle === "raw") {
-          await panel.getByRole("button", { name: "View Raw Text", exact: true }).click();
+          await exactButton(panel, "View Raw Text").click();
           await expect.poll(() => panel.locator(".sidebar-file-view").count()).toBe(0);
         }
         // Keep transient feedback alive until its assertions settle.
-        const pendingAt = await page.evaluate(() => Date.now());
-        await page.clock.pauseAt(pendingAt + 1_000);
+        await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 1_000);
         await page.evaluate(() => window.fileCopyProof.reject!());
         if (lifecycle === "current") {
           await copied.waitFor({ state: "visible" });
@@ -101,7 +93,6 @@ suite.define(() => {
           lifecycle === "current" ? [expected] : [],
         );
         if (lifecycle === "current") {
-          expect(await copied.count()).toBe(1);
           // Retire the first attempt's feedback before proving native success.
           await page.clock.fastForward(1_500);
           await copyButton.waitFor({ state: "visible" });
@@ -109,10 +100,8 @@ suite.define(() => {
           await page.waitForFunction(() => window.fileCopyProof.nativeWrites.length === 2);
           await page.evaluate(() => window.fileCopyProof.resolve!());
           await copied.waitFor({ state: "visible" });
-          expect(await page.evaluate(() => window.fileCopyProof.nativeWrites)).toEqual([
-            expected,
-            expected,
-          ]);
+          const writes = await page.evaluate(() => window.fileCopyProof.nativeWrites);
+          expect(writes).toEqual([expected, expected]);
           expect(await page.evaluate(() => window.fileCopyProof.fallbacks)).toEqual([expected]);
         } else {
           expect(await page.locator(".sidebar-file-view:visible button.copied").count()).toBe(0);

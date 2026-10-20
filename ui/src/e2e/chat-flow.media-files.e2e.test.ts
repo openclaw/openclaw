@@ -25,6 +25,18 @@ const assistantHistory = (content: unknown) => [
   { role: "assistant", content, timestamp: Date.now() },
 ];
 
+const imageWidths = (locator: Locator) =>
+  locator.evaluateAll((images) =>
+    images.map((image) =>
+      image instanceof HTMLImageElement && image.complete ? image.naturalWidth : 0,
+    ),
+  );
+const mediaTicket = (ticket: string) => ({
+  available: true,
+  mediaTicket: ticket,
+  mediaTicketExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+});
+
 const rectangle = (locator: Locator) =>
   locator.evaluate((element) => {
     const { x, y, width, height } = element.getBoundingClientRect();
@@ -49,11 +61,7 @@ suite.define(() => {
           contentType: "application/json",
           body: JSON.stringify(
             url.searchParams.get("source") === source
-              ? {
-                  available: true,
-                  mediaTicket: "ticket-relative-image",
-                  mediaTicketExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
-                }
+              ? mediaTicket("ticket-relative-image")
               : { available: false, code: "file-not-found", reason: "File not found" },
           ),
         });
@@ -133,9 +141,7 @@ suite.define(() => {
     await image.waitFor({ state: "visible", timeout: 10_000 });
     expect(await image.getAttribute("src")).toBe(`data:image/png;base64,${imageData}`);
     await gateway.waitForRequest("chat.startup");
-    await expect
-      .poll(() => image.evaluate((element) => (element as HTMLImageElement).naturalWidth))
-      .toBe(1);
+    await expect.poll(() => imageWidths(image)).toEqual([1]);
   });
 
   it("shares a managed image across historical URLs through one artifact-scoped ticket", async () => {
@@ -183,15 +189,7 @@ suite.define(() => {
     await page.goto(`${suite.server.baseUrl}chat`);
     const images = page.getByAltText(/^Ticketed generated image \d$/u);
     await expect.poll(() => images.count()).toBe(3);
-    await expect
-      .poll(() =>
-        images.evaluateAll((elements) =>
-          elements.map((element) =>
-            element instanceof HTMLImageElement && element.complete ? element.naturalWidth : 0,
-          ),
-        ),
-      )
-      .toEqual([1, 1, 1]);
+    await expect.poll(() => imageWidths(images)).toEqual([1, 1, 1]);
     const request = await gateway.waitForRequest("artifacts.download");
     expect(request.params).toMatchObject({
       sessionKey: "agent:main:main",
@@ -202,30 +200,21 @@ suite.define(() => {
 
   it("keeps managed document cards stable while their downloads become available", async () => {
     const page = await newChatPage(suite);
-    const managedAttachmentSource = (artifactId: string) =>
-      `/api/chat/media/outgoing/agent%3Amain%3Amain/${artifactId.slice("artifact_managed_media_".length)}/full`;
-    const makeAttachment = (id: string, label: string, mimeType: string, sizeBytes: number) => ({
+    const attachments = (
+      [
+        ["11111111-1111-4111-8111-111111111111", "report.pdf", "application/pdf", 8_231],
+        ["22222222-2222-4222-8222-222222222222", "table.csv", "text/csv", 2_774],
+        ["33333333-3333-4333-8333-333333333333", "notes.txt", "text/plain", 981],
+        ["44444444-4444-4444-8444-444444444444", "bundle.zip", "application/zip", 42_831],
+      ] as const
+    ).map(([id, label, mimeType, sizeBytes]) => ({
       artifactId: `artifact_managed_media_${id}`,
+      url: `/api/chat/media/outgoing/agent%3Amain%3Amain/${id}/full`,
+      kind: "document",
       label,
       mimeType,
       sizeBytes,
-    });
-    const attachments = [
-      makeAttachment(
-        "11111111-1111-4111-8111-111111111111",
-        "report.pdf",
-        "application/pdf",
-        8_231,
-      ),
-      makeAttachment("22222222-2222-4222-8222-222222222222", "table.csv", "text/csv", 2_774),
-      makeAttachment("33333333-3333-4333-8333-333333333333", "notes.txt", "text/plain", 981),
-      makeAttachment(
-        "44444444-4444-4444-8444-444444444444",
-        "bundle.zip",
-        "application/zip",
-        42_831,
-      ),
-    ];
+    }));
     const methodCases = attachments.map((attachment) => {
       const id = attachment.artifactId.slice("artifact_managed_media_".length);
       return {
@@ -247,17 +236,7 @@ suite.define(() => {
     const gateway = await installMockGateway(page, {
       heldMethods: ["artifacts.download"],
       historyMessages: assistantHistory(
-        attachments.map((attachment) => ({
-          type: "attachment",
-          attachment: {
-            artifactId: attachment.artifactId,
-            url: managedAttachmentSource(attachment.artifactId),
-            kind: "document",
-            label: attachment.label,
-            mimeType: attachment.mimeType,
-            sizeBytes: attachment.sizeBytes,
-          },
-        })),
+        attachments.map((attachment) => ({ type: "attachment", attachment })),
       ),
       methodResponses: {
         "artifacts.download": { cases: methodCases },
@@ -364,6 +343,10 @@ suite.define(() => {
           : {}),
       });
       const requestedMediaUrls: URL[] = [];
+      const originals = () =>
+        requestedMediaUrls.filter(
+          (url) => !url.searchParams.has("variant") && !url.searchParams.has("meta"),
+        );
       await page.route("**/__openclaw__/assistant-media?**", async (route) => {
         const request = route.request();
         const url = new URL(request.url());
@@ -373,11 +356,7 @@ suite.define(() => {
           expect(request.headers().authorization).toBe("Bearer e2e-device-token");
           await route.fulfill({
             contentType: "application/json",
-            body: JSON.stringify({
-              available: true,
-              mediaTicket: "ticket-inbound",
-              mediaTicketExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
-            }),
+            body: JSON.stringify(mediaTicket("ticket-inbound")),
           });
           return;
         }
@@ -437,33 +416,19 @@ suite.define(() => {
           )
           .toBe(2);
         await retry.waitFor();
-        expect(
-          requestedMediaUrls.filter(
-            (url) => !url.searchParams.has("variant") && !url.searchParams.has("meta"),
-          ),
-        ).toHaveLength(0);
+        expect(originals()).toHaveLength(0);
         await page.getByRole("button", { name: "Image actions", exact: true }).click();
         await page.getByRole("menuitem", { name: "Copy image", exact: true }).waitFor();
         const download = page.waitForEvent("download");
         await page.getByRole("menuitem", { name: "Download image", exact: true }).click();
         expect((await download).suggestedFilename()).toBe("Attached image.png");
-        expect(
-          requestedMediaUrls.filter(
-            (url) => !url.searchParams.has("variant") && !url.searchParams.has("meta"),
-          ),
-        ).toHaveLength(1);
+        expect(originals()).toHaveLength(1);
         expect(await page.locator("openclaw-image-lightbox").count()).toBe(0);
         return;
       }
       const image = page.locator("img.chat-message-image");
       await image.waitFor({ state: "visible", timeout: 10_000 });
-      await expect
-        .poll(() =>
-          image.evaluate((element) =>
-            element instanceof HTMLImageElement && element.complete ? element.naturalWidth : 0,
-          ),
-        )
-        .toBe(1);
+      await expect.poll(() => imageWidths(image)).toEqual([1]);
       const previewRequest = requestedMediaUrls.find((url) => url.searchParams.get("meta") !== "1");
       expect(previewRequest?.searchParams.get("variant")).toBe(boundedPreview ? "thumbnail" : null);
       const inlineSource = await image.getAttribute("src");
@@ -541,17 +506,14 @@ suite.define(() => {
       });
     });
 
-    const historyFor = (indexes: number[], labelPrefix: string) => [
-      {
-        content: indexes.map((index) => ({
+    const historyFor = (indexes: number[], labelPrefix: string) =>
+      assistantHistory(
+        indexes.map((index) => ({
           alt: `${labelPrefix} ${index + 1}`,
           type: "image",
           url: imageUrls[index],
         })),
-        role: "assistant",
-        timestamp: Date.now(),
-      },
-    ];
+      );
     const gateway = await installMockGateway(page, {
       historyMessages: historyFor(
         Array.from({ length: 64 }, (_, index) => index),
@@ -568,7 +530,8 @@ suite.define(() => {
         return { created: [...proof.created], revoked: [...proof.revoked] };
       });
     let proofMessageSequence = 100;
-    const replaceHistory = async (messages: unknown[], visibleAlt: string) => {
+    const replaceHistory = async (index: number, label: string) => {
+      const messages = historyFor([index], label);
       const historyRequestsBefore = (await gateway.getRequests("chat.history")).length;
       await gateway.setHistoryMessages(messages);
       proofMessageSequence += 1;
@@ -593,7 +556,9 @@ suite.define(() => {
           timeout: 15_000,
         })
         .toBeGreaterThan(historyRequestsBefore);
-      await page.getByAltText(visibleAlt).waitFor({ state: "visible", timeout: 10_000 });
+      await page
+        .getByAltText(`${label} ${index + 1}`)
+        .waitFor({ state: "visible", timeout: 10_000 });
     };
 
     await page.goto(`${suite.server.baseUrl}chat`);
@@ -604,34 +569,20 @@ suite.define(() => {
       await frame.scrollIntoViewIfNeeded();
     }
     await expect.poll(async () => (await readBlobProof()).created.length).toBe(64);
-    await expect
-      .poll(() =>
-        page
-          .locator("img.chat-message-image")
-          .evaluateAll(
-            (images) =>
-              images.filter(
-                (image) =>
-                  image instanceof HTMLImageElement && image.complete && image.naturalWidth === 1,
-              ).length,
-          ),
-      )
-      .toBe(64);
-    const initialBlobUrls = await page
-      .locator("img.chat-message-image")
-      .evaluateAll((images) => images.map((image) => image.getAttribute("src")));
+    const images = page.locator("img.chat-message-image");
+    await expect.poll(() => imageWidths(images)).toEqual(Array(64).fill(1));
+    const initialBlobUrls = await images.evaluateAll((nodes) =>
+      nodes.map((image) => image.getAttribute("src")),
+    );
     const retainedRecentBlobUrl = expectDefined(
       initialBlobUrls[0],
       "recent managed image Blob URL",
     );
 
-    await replaceHistory(
-      historyFor([0], "Recently viewed managed image"),
-      "Recently viewed managed image 1",
-    );
+    await replaceHistory(0, "Recently viewed managed image");
     expect((await readBlobProof()).created).toHaveLength(64);
 
-    await replaceHistory(historyFor([64], "Overflow managed image"), "Overflow managed image 65");
+    await replaceHistory(64, "Overflow managed image");
     await expect.poll(async () => (await readBlobProof()).created.length).toBe(65);
     const overflowProof = await readBlobProof();
     // Concurrent image fetches can resolve in any order. Find the real LRU
@@ -655,30 +606,21 @@ suite.define(() => {
       (request) => request.pathname === evictedPath,
     ).length;
     const revisitedImageAlt = `Refetched managed image ${evictedImageIndex + 1}`;
-    await replaceHistory(
-      historyFor([evictedImageIndex], "Refetched managed image"),
-      revisitedImageAlt,
-    );
+    await replaceHistory(evictedImageIndex, "Refetched managed image");
     const revisitedImage = page.getByAltText(revisitedImageAlt);
-    await expect
-      .poll(() =>
-        revisitedImage.evaluate((image) =>
-          image instanceof HTMLImageElement && image.complete ? image.naturalWidth : 0,
-        ),
-      )
-      .toBe(1);
+    await expect.poll(() => imageWidths(revisitedImage)).toEqual([1]);
     await expect.poll(async () => (await readBlobProof()).created.length).toBe(66);
     const evictedImageFetches = fetchedMedia.filter(
       (request) => request.pathname === evictedPath,
     ).length;
     expect(evictedImageFetches).toBe(fetchesBeforeRevisit + 1);
     expect(fetchedMedia).not.toHaveLength(0);
-    expect(
-      fetchedMedia.every((request) => request.authorization === "Bearer e2e-device-token"),
-    ).toBe(true);
-    expect(fetchedMedia.every((request) => request.requesterSessionKey === "agent:main:main")).toBe(
-      true,
-    );
+    for (const request of fetchedMedia) {
+      expect(request).toMatchObject({
+        authorization: "Bearer e2e-device-token",
+        requesterSessionKey: "agent:main:main",
+      });
+    }
   });
 
   it("copies a code block over a non-secure context via the execCommand fallback", async () => {
@@ -705,34 +647,19 @@ suite.define(() => {
       Math.round((element as HTMLElement).scrollTop),
     );
     // The copied class clears after 1500ms, so click and read it in one browser step.
-    const copied = await copyButton.evaluate(async (element) => {
-      const button = element as HTMLButtonElement;
-      const owner = element.closest("openclaw-chat-pane") as
-        | (HTMLElement & {
-            updateComplete: Promise<unknown>;
-          })
-        | null;
-      if (!owner) {
-        throw new Error("Chat pane owner is unavailable");
-      }
-      let copyObserver: MutationObserver | undefined;
-      const copySettled = new Promise<void>((resolve) => {
-        copyObserver = new MutationObserver(() => {
-          if (button.classList.contains("copied")) {
-            copyObserver?.disconnect();
-            resolve();
-          }
-        });
-        copyObserver.observe(button, { attributeFilter: ["class"], attributes: true });
-      });
-      button.click();
-      await owner.updateComplete;
-      if (!button.classList.contains("copied")) {
-        await copySettled;
-      }
-      copyObserver?.disconnect();
-      return button.classList.contains("copied");
-    });
+    const copied = await copyButton.evaluate(
+      (element) =>
+        new Promise<boolean>((resolve) => {
+          const observer = new MutationObserver(() => {
+            if (element.classList.contains("copied")) {
+              observer.disconnect();
+              resolve(true);
+            }
+          });
+          observer.observe(element, { attributeFilter: ["class"], attributes: true });
+          (element as HTMLButtonElement).click();
+        }),
+    );
     expect(copied).toBe(true);
     expect(await copiedViaExec(page)).toContain(code);
     await expect

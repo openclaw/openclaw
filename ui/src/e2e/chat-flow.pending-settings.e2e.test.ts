@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
+import { sendMessage } from "./chat-flow-fixtures.test-support.ts";
 import {
   newChatPage,
   thinkingLevels,
@@ -14,40 +15,29 @@ import {
 
 const suite = createChatFlowE2eSuite();
 const rosterMatch = { includeGlobal: true };
+const sessionKey = "agent:main:session-a";
 
 suite.define(() => {
   it("keeps send pending until reasoning and speed patches finish", async () => {
     const page = await newChatPage(suite);
+    const roster = chatSessionListResponse();
     const gateway = await installMockGateway(page, {
       methodResponses: {
         "sessions.list": {
-          ...chatSessionListResponse([
-            {
-              effectiveFastMode: false,
-              fastMode: false,
-              key: "agent:main:session-a",
-              kind: "direct",
-              label: "Session A",
-              model: "gpt-5.5",
-              modelProvider: "openai",
-              thinkingLevel: "high",
-              updatedAt: 2,
-            },
-          ]),
+          ...roster,
+          count: 1,
+          sessions: [{ ...roster.sessions[0], fastMode: false, thinkingLevel: "high" }],
           defaults: {
-            contextTokens: null,
-            model: "gpt-5.5",
-            modelProvider: "openai",
+            ...roster.defaults,
             thinkingDefault: "high",
             thinkingLevels: thinkingLevels("off", "low", "medium", "high"),
           },
         },
       },
-      models: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai" }],
-      sessionKey: "agent:main:session-a",
+      sessionKey,
     });
 
-    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
 
     const main = page.getByRole("main");
     await main.locator('[data-chat-thinking-select="true"]').click();
@@ -64,8 +54,7 @@ suite.define(() => {
     await page.keyboard.press("Escape");
 
     const prompt = "send with the new reasoning and speed";
-    await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
-    await page.getByRole("button", { name: "Send message" }).click();
+    await sendMessage(page, prompt);
     await page.locator(".chat-queue").getByText("Applying chat settings").waitFor({
       timeout: 10_000,
     });
@@ -82,19 +71,16 @@ suite.define(() => {
 
     await gateway.resolveDeferred("sessions.patch", {});
     const sendRequest = await gateway.waitForRequest("chat.send");
-    expect(requireRecord(sendRequest.params)).toMatchObject({
-      message: prompt,
-      sessionKey: "agent:main:session-a",
-    });
+    expect(sendRequest.params).toMatchObject({ message: prompt, sessionKey });
   });
 
   it("dispatches after its settings refresh while a later roster refresh is still pending", async () => {
     const page = await newChatPage(suite);
     const gateway = await installMockGateway(page, {
-      sessionKey: "agent:main:session-a",
+      sessionKey,
       models: [{ id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" }],
     });
-    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
     const main = page.getByRole("main");
     await main.locator('[data-chat-thinking-select="true"]').click();
     const listsBefore = (await gateway.getRequests("sessions.list", rosterMatch)).length;
@@ -104,8 +90,7 @@ suite.define(() => {
     await gateway.waitForRequest("sessions.patch");
     await waitForRequests(gateway, "sessions.list", listsBefore + 1, rosterMatch);
     await page.keyboard.press("Escape");
-    await page.locator(".agent-chat__composer-combobox textarea").fill("send after my settings");
-    await page.getByRole("button", { name: "Send message" }).click();
+    await sendMessage(page, "send after my settings");
     await page.locator(".chat-queue").getByText("Applying chat settings").waitFor();
     expect(await gateway.getRequests("chat.send")).toHaveLength(0);
     await evaluateControlUiContext(page, (application) => {
