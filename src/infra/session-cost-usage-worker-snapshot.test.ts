@@ -46,9 +46,7 @@ vi.mock("../state/openclaw-agent-db-readonly.js", () => ({
 }));
 // mock-isolation: Pause transcript discovery without loading the worker's retained refresh state.
 vi.mock("./session-cost-usage-refresh-inputs.worker.js", () => ({
-  createUsageCostCollectionAccess: () => ({
-    inventory: fixture.inventory,
-  }),
+  createUsageCostCollectionAccess: () => ({ inventory: fixture.inventory }),
   usageRefreshInputs: vi.fn(),
 }));
 // mock-isolation: Supply captured aliases without opening a second native store in this worker test.
@@ -271,9 +269,7 @@ it("spends the shared decoded budget on complete reports after preparing the sna
       cacheBudget,
     });
   expect(await read(first)).toMatchObject({
-    rollup: {
-      buckets: { [String(timestamp)]: { totals: { totalTokens: 17, totalCost: 1.7 } } },
-    },
+    rollup: { buckets: { [String(timestamp)]: { totals: { totalTokens: 17, totalCost: 1.7 } } } },
   });
   expect(await read(second)).toBeNull();
 });

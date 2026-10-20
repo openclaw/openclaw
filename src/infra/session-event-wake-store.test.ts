@@ -82,10 +82,7 @@ it("retires queued work and its context at store publication, then admits new-st
 
     publishStore(newStore);
     await expect(pending).resolves.toEqual({ status: "skipped", reason: "store-replaced" });
-    expect(getLastHeartbeatEvent()).toMatchObject({
-      status: "skipped",
-      reason: "store-replaced",
-    });
+    expect(getLastHeartbeatEvent()).toMatchObject({ status: "skipped", reason: "store-replaced" });
     expect(peekSystemEventEntries(target.sessionKey)).toEqual([]);
     requestSessionEventWake({ ...wake, sessionStorePath: oldStore, coalesceMs: 0 });
     requestSessionEventWake({ ...wake, sessionStorePath: null, coalesceMs: 0 });

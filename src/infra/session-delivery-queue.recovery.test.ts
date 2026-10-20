@@ -86,10 +86,7 @@ describe("session-delivery queue recovery", () => {
 
       const deliver = vi.fn(async () => undefined);
       const onSettled = vi.fn(async () => undefined);
-      const summary = await recover(queueContext, {
-        deliver,
-        onSettled,
-      });
+      const summary = await recover(queueContext, { deliver, onSettled });
 
       expect(deliver).toHaveBeenCalledTimes(1);
       expect(onSettled).toHaveBeenCalledWith(expect.any(Object), "recovered", queueContext);
@@ -109,9 +106,7 @@ describe("session-delivery queue recovery", () => {
         ]);
       });
 
-      await recover(queueContext, {
-        deliver,
-      });
+      await recover(queueContext, { deliver });
 
       expect(deliver).toHaveBeenCalledTimes(1);
       expect(await loadPendingSessionDeliveries(queueContext)).toEqual([]);
@@ -280,11 +275,7 @@ describe("session-delivery queue recovery", () => {
         deliver,
         queueContext,
         maxRecoveryMs: 1,
-        log: {
-          info: vi.fn(),
-          warn,
-          error: vi.fn(),
-        },
+        log: { info: vi.fn(), warn, error: vi.fn() },
       });
 
       expect(deliver).not.toHaveBeenCalled();
@@ -298,78 +289,58 @@ describe("session-delivery queue recovery", () => {
     vi.useRealTimers();
   });
 
-  it("keeps failed entries queued with retry metadata for later recovery", async () => {
-    await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
-      const id = await enqueueTurn(queueContext, "restart-sentinel:agent:main:main:agentTurn:123", {
-        message: "continue",
+  it.each([
+    {
+      failure: "transient failure",
+      started: true,
+      safe: false,
+      messageId: "restart-sentinel:agent:main:main:agentTurn:123",
+    },
+    {
+      failure: "session lookup unavailable",
+      started: false,
+      safe: false,
+      messageId: "restart-sentinel:pre-dispatch-failure",
+    },
+    {
+      failure: "busy before agent start",
+      started: true,
+      safe: true,
+      messageId: "restart-sentinel:safe-retry",
+    },
+  ])(
+    "keeps $failure retryable with correct attempt ownership",
+    async ({ failure, started, safe, messageId }) => {
+      await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
+        const id = await enqueueTurn(queueContext, messageId, { message: "continue" });
+        const log = createInfoWarnErrorLogger();
+        const summary = await recoverPendingSessionDeliveries({
+          deliver: vi.fn(async (entry) => {
+            if (started) {
+              await markSessionDeliveryAttemptStarted(entry, queueContext);
+            }
+            throw safe ? new SessionDeliverySafeRetryError(failure) : new Error(failure);
+          }),
+          onSettled: vi.fn(async () => undefined),
+          queueContext,
+          log,
+        });
+        expect(summary.failed).toBe(1);
+        const pending = await loadPendingSessionDeliveries(queueContext);
+        expect(pending).toEqual([expect.objectContaining({ retryCount: 1, lastError: failure })]);
+        expect(pending).toEqual([
+          started && !safe
+            ? expect.objectContaining({ deliveryStartedAt: expect.any(Number) })
+            : expect.not.objectContaining({ deliveryStartedAt: expect.any(Number) }),
+        ]);
+        if (started && !safe) {
+          expect(log.warn).toHaveBeenCalledExactlyOnceWith(
+            `Session delivery retry failed for entry ${id}: transient failure`,
+          );
+        }
       });
-
-      const onSettled = vi.fn(async () => undefined);
-      const log = createInfoWarnErrorLogger();
-      const summary = await recoverPendingSessionDeliveries({
-        deliver: vi.fn(async (entry) => {
-          await markSessionDeliveryAttemptStarted(entry, queueContext);
-          throw new Error("transient failure");
-        }),
-        onSettled,
-        queueContext,
-        log,
-      });
-
-      const [failedEntry] = await loadPendingSessionDeliveries(queueContext);
-      expect(summary.failed).toBe(1);
-      expect(failedEntry).toMatchObject({
-        retryCount: 1,
-        lastError: "transient failure",
-        deliveryStartedAt: expect.any(Number),
-      });
-      expect(log.warn).toHaveBeenCalledExactlyOnceWith(
-        `Session delivery retry failed for entry ${id}: transient failure`,
-      );
-    });
-  });
-
-  it("leaves pre-dispatch failures retryable without claiming side-effect ownership", async () => {
-    await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
-      await enqueueTurn(queueContext, "restart-sentinel:pre-dispatch-failure", {
-        message: "continue",
-      });
-
-      await recoverPendingSessionDeliveries({
-        deliver: vi.fn(async () => {
-          throw new Error("session lookup unavailable");
-        }),
-        queueContext,
-        log: createInfoWarnErrorLogger(),
-      });
-
-      expect(await loadPendingSessionDeliveries(queueContext)).toEqual([
-        expect.objectContaining({ retryCount: 1, lastError: "session lookup unavailable" }),
-      ]);
-      expect(await loadPendingSessionDeliveries(queueContext)).toEqual([
-        expect.not.objectContaining({ deliveryStartedAt: expect.any(Number) }),
-      ]);
-    });
-  });
-
-  it("releases attempt ownership only for an explicitly safe retry", async () => {
-    await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
-      await enqueueTurn(queueContext, "restart-sentinel:safe-retry", { message: "continue" });
-
-      await recoverPendingSessionDeliveries({
-        deliver: vi.fn(async (entry) => {
-          await markSessionDeliveryAttemptStarted(entry, queueContext);
-          throw new SessionDeliverySafeRetryError("busy before agent start");
-        }),
-        queueContext,
-        log: createInfoWarnErrorLogger(),
-      });
-
-      expect(await loadPendingSessionDeliveries(queueContext)).toEqual([
-        expect.not.objectContaining({ deliveryStartedAt: expect.any(Number) }),
-      ]);
-    });
-  });
+    },
+  );
 
   it("defers active agent ownership without consuming retry budget", async () => {
     await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
@@ -403,11 +374,7 @@ describe("session-delivery queue recovery", () => {
 
       expect(summary.failed).toBe(1);
       expect(await loadPendingSessionDeliveries(queueContext)).toEqual([
-        expect.objectContaining({
-          id,
-          retryCount: 1,
-          lastChargedAgentRunAttempt: 0,
-        }),
+        expect.objectContaining({ id, retryCount: 1, lastChargedAgentRunAttempt: 0 }),
       ]);
     });
   });
@@ -579,9 +546,7 @@ describe("session-delivery queue recovery", () => {
               log: createInfoWarnErrorLogger(),
             });
           } else {
-            const summary = await recover(queueContext, {
-              deliver,
-            });
+            const summary = await recover(queueContext, { deliver });
             expect(summary.skippedMaxRetries).toBe(0);
           }
 
@@ -645,10 +610,7 @@ describe("session-delivery queue recovery", () => {
       await enqueueEvent(queueContext, "leave fresh entry queued");
 
       const deliver = vi.fn(async () => undefined);
-      const summary = await recover(queueContext, {
-        deliver,
-        maxEnqueuedAt,
-      });
+      const summary = await recover(queueContext, { deliver, maxEnqueuedAt });
 
       expect(deliver).toHaveBeenCalledTimes(1);
       expect(summary.recovered).toBe(1);

@@ -6,7 +6,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
 import { createUsageTranscriptEntry } from "./session-cost-usage-fixtures.test-support.js";
 import { observeUsageWorkerReads } from "./session-cost-usage-worker-io.test-support.js";
-import { loadSessionCostSummariesFromCache } from "./session-cost-usage.js";
+import { loadSessionCostSummariesFromCache as load } from "./session-cost-usage.js";
 
 it("keeps overview reads on committed aggregates and preserves exact transcript details", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -33,60 +33,43 @@ it("keeps overview reads on committed aggregates and preserves exact transcript 
       endMs: Date.UTC(2026, 8, 19) - 1,
       dayBucket: { mode: "utc-offset" as const, utcOffsetMinutes: 0 },
     };
-    const fresh = (totalTokens: number) => ({
-      summaries: [{ totalTokens }],
-      cacheStatus: { status: "fresh" },
-    });
-    const partial = { status: "partial", staleFiles: 0, pendingFiles: 1 };
+    type Query = Partial<Parameters<typeof load>[0]>;
+    const fresh = { status: "fresh" };
+    const exactUsage = expect.stringContaining("exact usage");
+    const partial = {
+      status: "partial",
+      staleFiles: 0,
+      pendingFiles: 1,
+      partial: { reason: "aggregate-boundary", message: exactUsage },
+    };
+    const check = (options: Query, tokens: Array<number | null>, cacheStatus = fresh) =>
+      expect(load({ ...request, ...options })).resolves.toMatchObject({
+        summaries: tokens.map((totalTokens) => (totalTokens === null ? null : { totalTokens })),
+        cacheStatus,
+      });
     await probe.run(async () => {
-      await expect(
-        loadSessionCostSummariesFromCache({ ...request, committedOnly: true }),
-      ).resolves.toMatchObject(fresh(5));
+      await check({ committedOnly: true }, [5]);
       for (const boundary of [
         { startMs: Date.UTC(2026, 8, 18, 23, 59), totalTokens: 3 },
         { dayBucket: { mode: "utc-offset" as const, utcOffsetMinutes: 1 }, totalTokens: 5 },
       ]) {
         const { totalTokens, ...range } = boundary;
         await probe.clear();
-        await expect(
-          loadSessionCostSummariesFromCache({ ...request, ...range, committedOnly: true }),
-        ).resolves.toMatchObject({
-          summaries: [null],
-          cacheStatus: {
-            ...partial,
-            partial: {
-              reason: "aggregate-boundary",
-              message: expect.stringContaining("exact usage"),
-            },
-          },
-        });
+        await check({ ...range, committedOnly: true }, [null], partial);
         expect((await probe.read()).filter((entry) => entry.kind === "transcript")).toEqual([]);
-        await expect(
-          loadSessionCostSummariesFromCache({ ...request, ...range }),
-        ).resolves.toMatchObject(fresh(totalTokens));
+        await check(range, [totalTokens]);
         expect((await probe.read()).some((entry) => entry.kind === "transcript")).toBe(true);
       }
       if (archive.suffix) {
         await probe.clear();
         const work = new AsyncWorkScope();
+        const archived = {
+          sessions: [{ sessionFile }, { sessionFile: archiveFile }],
+          committedOnly: true,
+          requestRefresh: true,
+        };
         try {
-          await expect(
-            work.track(() =>
-              loadSessionCostSummariesFromCache({
-                ...request,
-                sessions: [{ sessionFile }, { sessionFile: archiveFile }],
-                committedOnly: true,
-                requestRefresh: true,
-              }),
-            ),
-          ).resolves.toMatchObject({
-            summaries: [{ totalTokens: 5 }, null],
-            cacheStatus: {
-              ...partial,
-              partial: { reason: "aggregate-boundary" },
-            },
-          });
-          await work.runWhenIdle(() => undefined);
+          await work.track(() => check(archived, [5, null], partial));
         } finally {
           await work.drain();
         }
