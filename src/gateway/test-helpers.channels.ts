@@ -8,17 +8,10 @@ type StubChannelOptions = {
   summary?: Record<string, unknown>;
 };
 
-const createStubOutboundAdapter = (channelId: ChannelPlugin["id"]): ChannelOutboundAdapter => ({
-  deliveryMode: "direct",
-  sendText: async () => ({
-    channel: channelId,
-    messageId: `${channelId}-msg`,
-  }),
-  sendMedia: async () => ({
-    channel: channelId,
-    messageId: `${channelId}-msg`,
-  }),
-});
+const createStubOutboundAdapter = (channel: ChannelPlugin["id"]): ChannelOutboundAdapter => {
+  const send = async () => ({ channel, messageId: `${channel}-msg` });
+  return { deliveryMode: "direct", sendText: send, sendMedia: send };
+};
 
 const createStubChannelPlugin = (params: StubChannelOptions): ChannelPlugin => ({
   id: params.id,
@@ -36,10 +29,7 @@ const createStubChannelPlugin = (params: StubChannelOptions): ChannelPlugin => (
     isConfigured: async () => false,
   },
   status: {
-    buildChannelSummary: async () => ({
-      configured: false,
-      ...(params.summary ? params.summary : {}),
-    }),
+    buildChannelSummary: async () => ({ configured: false, ...params.summary }),
   },
   outbound: createStubOutboundAdapter(params.id),
   messaging: {

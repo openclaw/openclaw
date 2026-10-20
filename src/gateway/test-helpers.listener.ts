@@ -12,31 +12,23 @@ import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
 import { GatewayStartupCleanupError } from "./server-shutdown.js";
 import type { GatewayServer } from "./server.js";
 
-/** Claim a Gateway E2E port block; release it only after the Gateway bound to it has closed. */
-export async function acquireGatewayE2ePortBlock(): Promise<TestPortClaim> {
-  return await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
-}
+const offsets = [0, 1, 2, 3, 4];
+const isCleanupError = (cause: unknown) => cause instanceof GatewayStartupCleanupError;
 
-export async function getGatewayTestPort(): Promise<number> {
-  return await getDeterministicFreePortBlock({ offsets: [0, 1, 2, 3, 4] });
-}
+/** Claim a Gateway E2E port block; release it only after the Gateway bound to it has closed. */
+export const acquireGatewayE2ePortBlock = () => acquireTestPortBlock({ offsets });
+export const getGatewayTestPort = () => getDeterministicFreePortBlock({ offsets });
 
 export function canRetryPort(error: unknown): boolean {
   const causes = collectNestedErrorCandidates(error);
-  return (
-    !causes.some((cause) => cause instanceof GatewayStartupCleanupError) &&
-    causes.some((cause) => hasErrnoCode(cause, "EADDRINUSE"))
-  );
+  return !causes.some(isCleanupError) && causes.some((cause) => hasErrnoCode(cause, "EADDRINUSE"));
 }
 
 export async function startClaimedGateway(
   port: number | TestPortClaim,
   start: () => Promise<GatewayServer>,
 ) {
-  const claim =
-    typeof port === "number"
-      ? await acquireTestPortBlock({ port, offsets: [0, 1, 2, 3, 4] })
-      : port;
+  const claim = typeof port === "number" ? await acquireTestPortBlock({ port, offsets }) : port;
   try {
     const server = await start();
     const close = server.close.bind(server);
@@ -48,11 +40,7 @@ export async function startClaimedGateway(
       })());
     return server;
   } catch (error) {
-    if (
-      !collectNestedErrorCandidates(error).some(
-        (cause) => cause instanceof GatewayStartupCleanupError,
-      )
-    ) {
+    if (!collectNestedErrorCandidates(error).some(isCleanupError)) {
       await claim.release();
     }
     throw error;
@@ -92,7 +80,7 @@ let activeDispatcher:
 export async function reserveGatewayTestListener(port: number | TestPortClaim = 0) {
   const rejectEarlyConnection = (socket: Socket) => socket.destroy();
   const { claim, listener, releaseListener } = await reserveTestPortListener({
-    offsets: [0, 1, 2, 3, 4],
+    offsets,
     ...(port ? { port } : {}),
     createListener: () => createServer().on("connection", rejectEarlyConnection),
   });

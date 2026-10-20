@@ -1,10 +1,8 @@
-// Shared LAN self-connect harness for node pairing auto-approval suites.
-// Tests bind the gateway to the primary LAN IPv4 and connect from that same
-// address so the server observes a direct non-loopback client IP. Skips
-// silently on hosts without a usable LAN interface.
+// Self-connect from the LAN address, not loopback; unavailable interfaces skip the suite.
 import net from "node:net";
 import { afterAll, beforeAll, describe } from "vitest";
 import { WebSocket } from "ws";
+import { acquireGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
 import { getPairedDevice, removePairedDevice } from "../infra/device-pairing.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { loadDeviceIdentity } from "./device-authz.test-helpers.js";
@@ -19,32 +17,6 @@ const NODE_CLIENT = {
   platform: "ios",
   mode: GATEWAY_CLIENT_MODES.NODE,
 };
-
-async function openLanGatewayWs(params: { host: string; port: number }): Promise<WebSocket> {
-  const ws = new WebSocket(`ws://${params.host}:${params.port}`, {
-    localAddress: params.host,
-  });
-  trackConnectChallengeNonce(ws);
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("timeout waiting for ws open")), 10_000);
-    const cleanup = () => {
-      clearTimeout(timer);
-      ws.off("open", onOpen);
-      ws.off("error", onError);
-    };
-    const onOpen = () => {
-      cleanup();
-      resolve();
-    };
-    const onError = (error: Error) => {
-      cleanup();
-      reject(error);
-    };
-    ws.once("open", onOpen);
-    ws.once("error", onError);
-  });
-  return ws;
-}
 
 async function canUseLanSelfConnect(host: string): Promise<boolean> {
   return await new Promise<boolean>((resolve) => {
@@ -85,8 +57,7 @@ async function canUseLanSelfConnect(host: string): Promise<boolean> {
 type LanNodePairingContext = {
   lanIp: string;
   loaded: ReturnType<typeof loadDeviceIdentity>;
-  /** Open a fresh LAN WebSocket, run the node connect handshake, close it. */
-  connectNode: () => Promise<Awaited<ReturnType<typeof connectReq>>>;
+  connectNode: () => ReturnType<typeof connectReq>;
 };
 
 type LanNodePairingAttempt = (params: {
@@ -95,8 +66,7 @@ type LanNodePairingAttempt = (params: {
   run: (ctx: LanNodePairingContext) => Promise<void>;
 }) => Promise<void>;
 
-// Pairing config is read when each WebSocket handler attaches. Reuse the real
-// Gateway while suite-scoped hooks reset mutable runtime state between cases.
+// Each new WebSocket observes config changes while sharing the suite Gateway.
 export function describeWithLanNodePairingServer(
   name: string,
   defineTests: (attempt: LanNodePairingAttempt) => void,
@@ -134,14 +104,14 @@ export function describeWithLanNodePairingServer(
       }
       await params.configure?.(host);
       const loaded = loadDeviceIdentity(params.identityName);
-      // The suite shares one state home under --isolate=false; drop any paired
-      // record for this identity so a sibling suite's row cannot mask a fresh
-      // pairing (a stale approvedVia would survive a re-approve by design).
+      // A sibling's paired row would preserve stale approvedVia on re-approval.
       if (await getPairedDevice(loaded.identity.deviceId)) {
         await removePairedDevice(loaded.identity.deviceId);
       }
       const connectNode = async () => {
-        const ws = await openLanGatewayWs({ host, port: activeServer.port });
+        const ws = new WebSocket(`ws://${host}:${activeServer.port}`, { localAddress: host });
+        trackConnectChallengeNonce(ws);
+        await acquireGatewayTestWebSocket(ws, 10_000);
         openSockets.add(ws);
         try {
           return await connectReq(ws, {
@@ -152,8 +122,7 @@ export function describeWithLanNodePairingServer(
             deviceIdentityPath: loaded.identityPath,
           });
         } finally {
-          // These tests cover pairing, not the WebSocket close handshake. Terminate so
-          // gateway cleanup never waits on a client that has already returned its result.
+          // Pairing is complete; do not wait for a client close handshake during cleanup.
           openSockets.delete(ws);
           ws.terminate();
         }

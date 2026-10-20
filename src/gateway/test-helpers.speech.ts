@@ -1,15 +1,12 @@
-// Speech test helpers provide stub speech providers and fetch-backed audio
-// synthesis fixtures for gateway Talk and media suites.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { withTestTimeout } from "../../test/helpers/promise.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
 import {
   TALK_TEST_PROVIDER_ID,
   TALK_TEST_PROVIDER_LABEL,
 } from "../test-utils/talk-test-provider.js";
 
-type StubSpeechProviderOptions = {
-  id: SpeechProviderPlugin["id"];
-  label: string;
+type StubSpeechProviderOptions = Pick<SpeechProviderPlugin, "id" | "label"> & {
   aliases?: string[];
   voices?: string[];
   resolveTalkOverrides?: SpeechProviderPlugin["resolveTalkOverrides"];
@@ -24,22 +21,7 @@ function override(key: string, value: string | number | undefined) {
   return value === undefined ? {} : { [key]: value };
 }
 
-async function fetchStubSpeechAudio(
-  url: string,
-  init: RequestInit,
-  providerId: string,
-): Promise<Buffer> {
-  const withTimeout = async <T>(label: string, run: Promise<T>): Promise<T> =>
-    await Promise.race([
-      run,
-      new Promise<T>((_, reject) => {
-        setTimeout(() => reject(new Error(`${providerId} stub ${label} timed out`)), 5_000);
-      }),
-    ]);
-  const response = await withTimeout("fetch", globalThis.fetch(url, init));
-  const arrayBuffer = await withTimeout("read", response.arrayBuffer());
-  return Buffer.from(arrayBuffer);
-}
+const mp3Format = { outputFormat: "mp3", fileExtension: ".mp3" };
 
 const createStubSpeechProvider = (params: StubSpeechProviderOptions): SpeechProviderPlugin => ({
   id: params.id,
@@ -52,8 +34,7 @@ const createStubSpeechProvider = (params: StubSpeechProviderOptions): SpeechProv
     params.synthesize ??
     (async () => ({
       audioBuffer: Buffer.from(`${params.id}-audio`, "utf8"),
-      outputFormat: "mp3",
-      fileExtension: ".mp3",
+      ...mp3Format,
       voiceCompatible: true,
     })),
   listVoices: async () => (params.voices ?? []).map((id) => ({ id, name: id })),
@@ -85,21 +66,19 @@ export function createDefaultGatewayTestSpeechProviders() {
             "alloy",
           ...override("speed", asNumber(overrides.speed)),
         });
-        const audioBuffer = await fetchStubSpeechAudio(
-          "https://api.openai.com/v1/audio/speech",
-          {
+        const response = await withTestTimeout(
+          globalThis.fetch("https://api.openai.com/v1/audio/speech", {
             method: "POST",
             headers: { "content-type": "application/json" },
             body,
-          },
-          "openai",
+          }),
+          5_000,
+          "openai stub fetch timed out",
         );
-        return {
-          audioBuffer,
-          outputFormat: "mp3",
-          fileExtension: ".mp3",
-          voiceCompatible: false,
-        };
+        const audioBuffer = Buffer.from(
+          await withTestTimeout(response.arrayBuffer(), 5_000, "openai stub read timed out"),
+        );
+        return { audioBuffer, ...mp3Format, voiceCompatible: false };
       },
     },
     {

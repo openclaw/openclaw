@@ -35,13 +35,12 @@ export function createRpcSourceForTest(
     accepted?: boolean;
   } & Partial<RpcSourceIdentity> = {},
 ): RpcSourceRef {
-  const { projectSessionActive, ...adapterMetadata } = metadata;
+  const { projectSessionActive, ...adapter } = metadata;
   const identity = {
     sessionKey: options.sessionKey ?? "agent:main:fixture",
     sessionId: options.sessionId ?? "fixture-session",
     agentId: options.agentId,
   };
-  const adapter: RpcSourceAdapter = { ...adapterMetadata };
   const target = captureSessionTarget({
     storeScope: options.storeScope ?? `/synthetic/rpc-source-fixture/${randomUUID()}/sessions`,
     sessionKey: identity.sessionKey,
@@ -58,15 +57,15 @@ export function createRpcSourceForTest(
   input.custody.rpcAccepted = options.accepted === true ? true : undefined;
   input.retirementRequested = options.retirementRequested === true;
   if (options.phase === "waiting") {
-    const run = createQueueTestRun({ prompt: "queued RPC fixture" });
-    run.run = {
-      ...run.run,
-      sessionKey: target.sessionKey,
-      sessionId: identity.sessionId,
-      agentId: target.agentId ?? run.run.agentId,
-      config: { ...run.run.config, session: { store: target.storeScope } },
-    };
-    run.abortSignal = input.abortSignal;
+    const run = createQueueTestRun(
+      { prompt: "queued RPC fixture", abortSignal: input.abortSignal },
+      {
+        sessionKey: target.sessionKey,
+        sessionId: identity.sessionId,
+        ...(target.agentId == null ? {} : { agentId: target.agentId }),
+        config: { session: { store: target.storeScope } },
+      },
+    );
     bindSessionControllerSource(input, run);
     enqueueFollowupRun(target.sessionKey, run, { mode: "followup" }, "none");
   } else if (options.phase === "consumed") {
@@ -91,11 +90,8 @@ export async function claimRpcSourceForTest(
   options: { executionStarted?: boolean } = {},
 ): Promise<() => void> {
   const claim = await claimSessionControllerTask(ref.input, (selectedClaim) => {
-    const identity = getRpcSourceIdentity(ref);
     const operation = createReplyOperation({
-      sessionKey: identity.sessionKey,
-      sessionId: identity.sessionId,
-      agentId: identity.agentId,
+      ...getRpcSourceIdentity(ref),
       resetTriggered: false,
       upstreamAbortSignal: ref.input.abortSignal,
       mailboxClaim: selectedClaim,
