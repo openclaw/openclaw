@@ -24,37 +24,24 @@ const sqliteEngines = {
 };
 
 describe("host database engine selection", () => {
-  it.each([undefined, "sqlite"] as const)(
-    "keeps the public resolver on the default engine (%s), regardless of family overrides",
+  it.each([undefined, "sqlite", "postgres"] as const)(
+    "keeps the public default independent of family overrides: %s",
     async (engine) => {
+      const isPostgres = engine === "postgres";
+      const families: NonNullable<OpenClawConfig["database"]>["families"] = isPostgres
+        ? {
+            state: { engine: "sqlite" },
+            agent: { engine: "sqlite" },
+            workboard: { engine: "sqlite" },
+            logbook: { engine: "sqlite" },
+            "team-reports": { engine: "sqlite" },
+          }
+        : { state: { engine: "postgres" } };
       await expect(
-        input({
-          engine,
-          families: { state: { engine: "postgres" } },
-          postgres: unavailable,
-        }),
-      ).resolves.toBeUndefined();
+        input({ engine, families, postgres: isPostgres ? { connection } : unavailable }),
+      ).resolves.toEqual(isPostgres ? { connection, schemaPrefix: "openclaw" } : undefined);
     },
   );
-
-  it("preserves the public PostgreSQL default even when built-in families override to SQLite", async () => {
-    await expect(
-      input({
-        engine: "postgres",
-        families: {
-          state: { engine: "sqlite" },
-          agent: { engine: "sqlite" },
-          workboard: { engine: "sqlite" },
-          logbook: { engine: "sqlite" },
-          "team-reports": { engine: "sqlite" },
-        },
-        postgres: { connection },
-      }),
-    ).resolves.toEqual({
-      connection,
-      schemaPrefix: "openclaw",
-    });
-  });
 
   it("captures a frozen connection from the supplied host environment for an override", async () => {
     const selection = await select(
@@ -74,26 +61,12 @@ describe("host database engine selection", () => {
     expect(Object.isFrozen(selection.postgres)).toBe(true);
   });
 
-  it("refuses a store-backed secret before opening shared state", async () => {
-    await expect(
-      select({
-        families: { workboard: { engine: "postgres" } },
-        postgres: { connection: { source: "store", provider: "default", id: "database-dsn" } },
-      }),
-    ).rejects.toThrow(/store-backed SecretRef/);
-  });
-
-  it("defaults to SQLite and does not resolve unused PostgreSQL credentials", async () => {
-    await expect(select(undefined)).resolves.toEqual({
-      effectiveEngines: sqliteEngines,
-    });
-    await expect(
-      select({
-        engine: "sqlite",
-        postgres: unavailable,
-      }),
-    ).resolves.toEqual({ effectiveEngines: sqliteEngines });
-  });
+  it.each([undefined, { engine: "sqlite", postgres: unavailable }] as const)(
+    "defaults to SQLite without resolving unused credentials %#",
+    async (database) => {
+      await expect(select(database)).resolves.toEqual({ effectiveEngines: sqliteEngines });
+    },
+  );
 
   it("applies the PostgreSQL default only to capable families and honors SQLite overrides", async () => {
     await expect(
@@ -131,12 +104,20 @@ describe("host database engine selection", () => {
     ).resolves.toEqual({ connection: fileConnection, schemaPrefix: "fixture" });
   });
 
-  it.each([undefined, unavailable])(
-    "refuses missing or unresolved PostgreSQL connections for a family override %#",
+  it.each([
+    undefined,
+    unavailable,
+    { connection: { source: "store", provider: "default", id: "database-dsn" } },
+  ] as const)(
+    "refuses missing, unresolved or store-backed family credentials %#",
     async (postgres) => {
+      const error =
+        postgres?.connection.source === "store"
+          ? /store-backed SecretRef/
+          : /database.postgres.connection.*(?:Configure|configured)/;
       await expect(
         select({ engine: "sqlite", families: { workboard: { engine: "postgres" } }, postgres }),
-      ).rejects.toThrow(/database.postgres.connection.*(?:Configure|configured)/);
+      ).rejects.toThrow(error);
     },
   );
 });

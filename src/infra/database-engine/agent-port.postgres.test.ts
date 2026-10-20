@@ -71,6 +71,10 @@ const trajectoryRow = (
   event_json: string,
   event_utf8_bytes: number | null = Buffer.byteLength(event_json),
 ) => ({ event_json, event_payload: null, event_codec: null, event_utf8_bytes });
+const trajectoryValues = (row: TrajectoryPayloadRecord) =>
+  [row.event_json, row.event_payload, row.event_codec, row.event_utf8_bytes] as const;
+const jsonLines = (...records: unknown[]) =>
+  records.map((row) => JSON.stringify(row)).join("\n") + "\n";
 
 describe.skipIf(!connection)("agent database port", () => {
   const client = new Client({ connectionString: connection });
@@ -112,22 +116,19 @@ describe.skipIf(!connection)("agent database port", () => {
         const descriptor = await agentPortProvider.loadDescriptor();
         const agentPath = path.join(state.agentDir("main"), "openclaw-agent.sqlite");
         fs.mkdirSync(path.dirname(agentPath), { recursive: true });
+        const notice = { type: "custom_message", customType: "synthetic-note", display: true };
         const events = [
           {
-            type: "custom_message",
+            ...notice,
             id: "raw-notice",
             parentId: null,
-            customType: "synthetic-note",
-            display: true,
             content: "raw notice",
             timestamp: "2026-10-17T00:00:00.000Z",
           },
           {
-            type: "custom_message",
+            ...notice,
             id: "compressed-notice",
             parentId: "raw-notice",
-            customType: "synthetic-note",
-            display: true,
             content: "compressed notice ".repeat(200),
             timestamp: "2026-10-17T00:00:01.000Z",
           },
@@ -224,8 +225,7 @@ describe.skipIf(!connection)("agent database port", () => {
                   if (read.kind !== "value") {
                     throw new Error("Expected the port to publish readable history");
                   }
-                  expect(read.value.count).toBe(2);
-                  expect(read.value.page.totalMessages).toBe(2);
+                  expect(read.value).toMatchObject({ count: 2, page: { totalMessages: 2 } });
                   expect(read.value.page.events.map(({ event }) => event)).toEqual(events);
                 } finally {
                   db.close();
@@ -286,15 +286,14 @@ describe.skipIf(!connection)("agent database port", () => {
               event_payload: null,
               event_codec: null,
             };
+      const expected = {
+        session_id: "session",
+        run_id: null,
+        event_json: event,
+        ...trajectoryColumns,
+      };
       expect(await rows(`SELECT * FROM "${namespace}".trajectory_runtime_events`)).toEqual([
-        {
-          session_id: "session",
-          seq: "0",
-          run_id: null,
-          event_json: event,
-          created_at: "1",
-          ...trajectoryColumns,
-        },
+        { ...expected, seq: "0", created_at: "1" },
       ]);
       expect(
         await rows(
@@ -316,14 +315,7 @@ describe.skipIf(!connection)("agent database port", () => {
       using restored = openNodeSqliteDatabase(":memory:");
       await port(pg(namespace), sqlite(restored), descriptor, storeId);
       expect(restored.prepare("SELECT * FROM trajectory_runtime_events").all()).toEqual([
-        {
-          session_id: "session",
-          seq: 0,
-          run_id: null,
-          event_json: event,
-          created_at: 1,
-          ...trajectoryColumns,
-        },
+        { ...expected, seq: 0, created_at: 1 },
       ]);
       restored.exec(`INSERT INTO memory_index_sources (path, source, hash, mtime, size)
           VALUES ('retained.md', 'memory', 'hash', 1, 1);`);
@@ -359,7 +351,7 @@ describe.skipIf(!connection)("agent database port", () => {
         `INSERT INTO "${namespace}".trajectory_runtime_events
           (session_id, seq, event_json, event_payload, event_codec, event_utf8_bytes, created_at)
           VALUES ('session', $1, $2, $3, $4, $5, 1)`,
-        [seq, row.event_json, row.event_payload, row.event_codec, row.event_utf8_bytes],
+        [seq, ...trajectoryValues(row)],
       );
     }
     using restored = openNodeSqliteDatabase(":memory:");
@@ -413,8 +405,7 @@ describe.skipIf(!connection)("agent database port", () => {
       message: { role: "user", content: [{ type: "text", text: "café sentinel ".repeat(200) }] },
     });
     const payload = prepareTranscriptPayload(source, event);
-    expect(payload.event_json).toBeNull();
-    expect(payload.event_zstd).toBeInstanceOf(Uint8Array);
+    expect(payload).toMatchObject({ event_json: null, event_zstd: expect.any(Uint8Array) });
     source
       .prepare(`INSERT INTO transcript_events
       (session_id, seq, event_json, event_zstd, event_utf8_bytes, navigation_json, created_at)
@@ -433,8 +424,10 @@ describe.skipIf(!connection)("agent database port", () => {
     const smallTrajectory = '{ "type": "small", "data": "7aQ9vE2xR8kM4pL6" }';
     const trajectoryPayload = prepareTrajectoryPayload(source, compressedTrajectory);
     const smallPayload = prepareTrajectoryPayload(source, smallTrajectory);
-    expect(trajectoryPayload.event_payload).toBeInstanceOf(Uint8Array);
-    expect(trajectoryPayload.event_codec).toBe("br");
+    expect(trajectoryPayload).toMatchObject({
+      event_payload: expect.any(Uint8Array),
+      event_codec: "br",
+    });
     expect(smallPayload).toEqual(trajectoryRow(smallTrajectory));
     source
       .prepare(`INSERT INTO trajectory_runtime_events
@@ -443,14 +436,8 @@ describe.skipIf(!connection)("agent database port", () => {
         ('session', 2, ?, ?, ?, ?, 1)`)
       .run(
         legacyTrajectory,
-        trajectoryPayload.event_json,
-        trajectoryPayload.event_payload,
-        trajectoryPayload.event_codec,
-        trajectoryPayload.event_utf8_bytes,
-        smallPayload.event_json,
-        smallPayload.event_payload,
-        smallPayload.event_codec,
-        smallPayload.event_utf8_bytes,
+        ...trajectoryValues(trajectoryPayload),
+        ...trajectoryValues(smallPayload),
       );
     const archivedEvent = JSON.stringify({
       type: "message",
@@ -459,19 +446,10 @@ describe.skipIf(!connection)("agent database port", () => {
     });
     const cold = zstdCompressSync(
       Buffer.from(
-        [
-          JSON.stringify({
-            kind: "header",
-            version: 1,
-            sessionId: "session",
-            generation: "old-generation",
-          }),
-          JSON.stringify({
-            kind: "event",
-            row: { seq: 0, event_json: archivedEvent, created_at: 0 },
-          }),
-          "",
-        ].join("\n"),
+        jsonLines(
+          { kind: "header", version: 1, sessionId: "session", generation: "old-generation" },
+          { kind: "event", row: { seq: 0, event_json: archivedEvent, created_at: 0 } },
+        ),
       ),
     );
     const coldHash = createHash("sha256").update(cold).digest("hex");
