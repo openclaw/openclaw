@@ -639,7 +639,7 @@ it.each([false, true])(
     const resolveCreatorToolAuthority = deferred
       ? vi.fn(async () => ({
           ...resolvedCreatorAuthority(["message"]),
-          holdsRuntimeAuthority: true,
+          holdsRuntimeAuthority: true as const,
         }))
       : undefined;
     await expect(
