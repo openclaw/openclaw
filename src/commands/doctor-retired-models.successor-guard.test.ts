@@ -2,8 +2,8 @@ import { expect, it, vi } from "vitest";
 import type { ModelAuthAvailabilityEvaluation } from "../agents/model-auth-availability.js";
 import { createRetiredModelFixture as fixture } from "./doctor-retired-models.test-support.js";
 import {
-  createRetiredModelRefRepairResolver,
-  repairRetiredConfigModelRefs,
+  createRetiredModelRefRepairResolver as createResolver,
+  repairRetiredConfigModelRefs as repairConfig,
 } from "./doctor/shared/retired-model-ref-repair.js";
 
 async function useRealRoutes() {
@@ -14,16 +14,10 @@ async function useRealRoutes() {
   );
 }
 
-function repairContext(
-  params: Omit<Parameters<typeof createRetiredModelRefRepairResolver>[0], "warnings">,
-) {
+function repairContext(params: Omit<Parameters<typeof createResolver>[0], "warnings">) {
   const warnings: string[] = [];
-  const resolve = createRetiredModelRefRepairResolver({ ...params, warnings });
-  return {
-    warnings,
-    resolve,
-    repair: () => repairRetiredConfigModelRefs(params.cfg, resolve, warnings),
-  };
+  const resolve = createResolver({ ...params, warnings });
+  return { warnings, resolve, repair: () => repairConfig(params.cfg, resolve, warnings) };
 }
 
 // #156155: validate successors against the selected route before rewriting config.
@@ -38,10 +32,10 @@ it.each(["available", "cooldown", "authoritative-cooldown"] as const)(
     );
     if (availability === "authoritative-cooldown") {
       const modelAuthAvailability = await import("../agents/model-auth-availability.js");
-      const createResolver = modelAuthAvailability.createModelAuthAvailabilityResolver;
+      const createAuthResolver = modelAuthAvailability.createModelAuthAvailabilityResolver;
       vi.spyOn(modelAuthAvailability, "createModelAuthAvailabilityResolver").mockImplementation(
         (params) => {
-          const resolver = createResolver(params);
+          const resolver = createAuthResolver(params);
           return {
             ...resolver,
             evaluateRuntimeModelAuth: (provider, ref): ModelAuthAvailabilityEvaluation => {
@@ -79,11 +73,10 @@ it.each(["available", "cooldown", "authoritative-cooldown"] as const)(
     });
     const repaired = repair();
     expect(cfg).toEqual(originalConfig);
-    expect(repaired.config.agents?.defaults?.model).toEqual({
-      primary: successor,
-      fallbacks: [successor],
+    expect(repaired.config.agents?.defaults).toEqual({
+      model: { primary: successor, fallbacks: [successor] },
+      modelPolicy: { allow: [source, successor] },
     });
-    expect(repaired.config.agents?.defaults?.modelPolicy?.allow).toEqual([source, successor]);
     expect(warnings).toEqual([]);
   },
 );
@@ -116,7 +109,7 @@ it.each([
   ["inherited", "qualified"],
   ["local", "unqualified"],
   ["explicit-successor", "unqualified"],
-] as const)("checks the runtime settings preserved by repair (%s, %s)", async (scope, keyForm) => {
+] as const)("preserves runtime settings (%s, %s)", async (scope, keyForm) => {
   const { cfg, state } = await fixture("oauth");
   await useRealRoutes();
   delete cfg.models;

@@ -7,12 +7,12 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
 import {
-  createOpenClawTestState,
+  createOpenClawTestState as createState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 
-const retirementRules = vi.hoisted(() => {
-  return (
+const retirementRules = vi.hoisted(() =>
+  (
     [
       ["gpt-5.4", "current-model", "route"],
       ["retired-with-successor", "current-model", "route"],
@@ -37,25 +37,24 @@ const retirementRules = vi.hoisted(() => {
             ...(scope === "api" ? { providerConfigApiIn: ["openai-chatgpt-responses"] } : {}),
           },
     retirement: replacedBy === undefined ? {} : { replacedBy },
-  }));
-});
+  })),
+);
 
 vi.mock(import("../plugins/manifest-contract-eligibility.js"), async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
-    loadManifestMetadataSnapshot: (
-      ...args: Parameters<typeof actual.loadManifestMetadataSnapshot>
-    ) => {
-      const snapshot = actual.loadManifestMetadataSnapshot(...args);
-      const plugins = snapshot.plugins.slice();
-      for (const [index, plugin] of snapshot.plugins.entries()) {
-        if (plugin.id === "openai") {
-          plugins[index] = {
-            ...plugin,
-            modelCatalog: { ...plugin.modelCatalog, suppressions: retirementRules },
-          };
-        }
+    loadManifestMetadataSnapshot(
+      params: Parameters<typeof actual.loadManifestMetadataSnapshot>[0],
+    ) {
+      const snapshot = actual.loadManifestMetadataSnapshot(params);
+      const plugins: Array<(typeof snapshot.plugins)[number]> = [];
+      for (const plugin of snapshot.plugins) {
+        plugins.push(
+          plugin.id === "openai"
+            ? { ...plugin, modelCatalog: { ...plugin.modelCatalog, suppressions: retirementRules } }
+            : plugin,
+        );
       }
       return { ...snapshot, plugins };
     },
@@ -101,10 +100,7 @@ export async function createRetiredModelFixture(
   auth: "oauth" | "api-key" = "oauth",
   cooldownUntil?: number,
 ) {
-  const state = await createOpenClawTestState({
-    layout: "state-only",
-    prefix: "doctor-retired-model-",
-  });
+  const state = await createState({ layout: "state-only", prefix: "doctor-retired-model-" });
   states.push(state);
   vi.stubEnv("OPENAI_API_KEY", undefined);
   await state.writeAuthProfiles({
@@ -146,14 +142,12 @@ export async function createNativeXaiRetirementFixture() {
     modelPolicy: { allow: ["xai/auto", "xai/grok-4.3"] },
   };
   cfg.auth = { order: { xai: ["xai:fixture"] } };
-  cfg.models = {
-    providers: {
-      xai: {
-        baseUrl: "https://api.x.ai/v1",
-        api: "openai-responses",
-        auth: "api-key",
-        models: [],
-      },
+  cfg.models!.providers = {
+    xai: {
+      baseUrl: "https://api.x.ai/v1",
+      api: "openai-responses",
+      auth: "api-key",
+      models: [],
     },
   };
   cfg.plugins = { allow: ["xai"], entries: { xai: { enabled: true } } };

@@ -16,7 +16,6 @@ import { seedCompletedRuntimePinMigration } from "../daemon/test-helpers/service
 import { runGatewayServicesHealth } from "../flows/doctor-health-contribution-runners.gateway.js";
 import * as exec from "../process/exec.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { captureEnv } from "../test-utils/env.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import * as foreignJobs from "./doctor-foreign-launchd-jobs.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
@@ -34,19 +33,7 @@ let home: string;
 let packageRoot: string;
 let plist: string;
 let original: string;
-let restoreEnv: ReturnType<typeof captureEnv>;
-const serviceEnv = () => ({ ...process.env, ...resolveNodeServiceIdentityEnvironment() });
-const nodeOptions = [
-  "node",
-  "run",
-  "--host",
-  "node.example.test",
-  "--port",
-  "9443",
-  "--tls",
-  "--display-name",
-  "Original node",
-];
+const nodeOptions = ["node", "run", "--display-name", "Original node"];
 const isolatedEnvKeys = [
   "OPENCLAW_HOME",
   "OPENCLAW_CONFIG_PATH",
@@ -59,7 +46,7 @@ const isolatedEnvKeys = [
 const bootstrapped = () => native.exec.mock.calls.some(([args]) => args[0] === "bootstrap");
 
 async function writeDefinition(entry = "index.js", customPolicy = false) {
-  const env = serviceEnv();
+  const env = { ...process.env, ...resolveNodeServiceIdentityEnvironment() };
   const { stdoutPath } = resolveGatewaySupervisorLogPaths(env);
   original = buildLaunchAgentPlist({
     label: "ai.openclaw.node",
@@ -100,12 +87,11 @@ beforeEach(async () => {
   vi.spyOn(notes, "note").mockImplementation(() => {});
   vi.spyOn(foreignJobs, "noteMacForeignLaunchdJobs").mockResolvedValue(undefined);
   vi.spyOn(repairPolicy, "shouldManageGatewayService").mockResolvedValue(false);
-  restoreEnv = captureEnv(["HOME", "OPENCLAW_STATE_DIR", ...isolatedEnvKeys]);
   home = await fs.realpath(await fs.mkdtemp(path.join(process.env.HOME!, "doctor-node-")));
-  process.env.HOME = home;
-  process.env.OPENCLAW_STATE_DIR = path.join(home, ".openclaw");
+  vi.stubEnv("HOME", home);
+  vi.stubEnv("OPENCLAW_STATE_DIR", path.join(home, ".openclaw"));
   for (const key of isolatedEnvKeys) {
-    delete process.env[key];
+    vi.stubEnv(key, undefined);
   }
   mockSystemAccountHome();
   // Private SQLite creation belongs to the host OS, before the launchd simulation.
@@ -156,16 +142,17 @@ beforeEach(async () => {
 
 afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
-  restoreEnv.restore();
+  vi.unstubAllEnvs();
   vi.restoreAllMocks();
   await fs.rm(home, { recursive: true, force: true });
 });
 
 function repair() {
+  const options = { repair: true };
   return runGatewayServicesHealth({
     runtime,
-    prompter: createDoctorPrompter({ runtime, options: { repair: true } }),
-    options: { repair: true },
+    prompter: createDoctorPrompter({ runtime, options }),
+    options,
     cfg: { gateway: { mode: "remote" } },
     cfgForPersistence: {},
     configResult: { cfg: {} },

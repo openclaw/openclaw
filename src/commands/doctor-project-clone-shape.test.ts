@@ -23,16 +23,14 @@ it.each(["full", "partial", "shallow", "both", "missing"])(
   async (shape) => {
     await withOpenClawTestState({ prefix: "openclaw-doctor-clones-" }, async (state) => {
       const userInfo = ["user", ["synthetic", "secret"].join("-")].join(":");
-      const remotePath = "example.invalid/project.git?opaque=query-private#fragment-private";
-      const urlRemote = `https://${userInfo}@${remotePath}`;
-      const addressRemotes = [
-        urlRemote,
-        `https::${urlRemote}`,
-        `${userInfo}@${remotePath.replace("/project", ":org/project")}`,
-        `odd_scheme://${userInfo}@${remotePath}`,
-      ];
-      const urlKeys = addressRemotes.flatMap((remote) =>
-        ["promisor", "partialclonefilter"].map((field) => `remote.${remote}.${field}`),
+      const prefixes = ["https://", "https::https://", "", "odd_scheme://"];
+      const remote = (prefix: string, auth: string) =>
+        `${prefix}${auth}@example.invalid${prefix ? "/" : ":org/"}project.git`;
+      const urlKeys = prefixes.flatMap((prefix) =>
+        ["promisor", "partialclonefilter"].map(
+          (field) =>
+            `remote.${remote(prefix, userInfo)}?opaque=query-private#fragment-private.${field}`,
+        ),
       );
       const source = state.path("source");
       await git(state.root, "init", "-b", "main", source);
@@ -111,14 +109,9 @@ it.each(["full", "partial", "shallow", "both", "missing"])(
             expect(output).not.toContain(credential);
           }
         }
-        for (const remote of [
-          "https://***@example.invalid/project.git",
-          "https::https://***@example.invalid/project.git",
-          "***@example.invalid:org/project.git",
-          "odd_scheme://***@example.invalid/project.git",
-        ]) {
+        for (const prefix of prefixes) {
           for (const field of ["promisor", "partialclonefilter"]) {
-            expect(finding.message).toContain(`remote.${remote}.${field}`);
+            expect(finding.message).toContain(`remote.${remote(prefix, "***")}.${field}`);
           }
         }
         expect(finding.message).toContain("extensions.partialclone");
