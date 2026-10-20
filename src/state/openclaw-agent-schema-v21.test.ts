@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   OPENCLAW_AGENT_SCHEMA_V21_SQL,
   restoreEmptyV21StorageForHistoricalFixture,
@@ -36,70 +36,60 @@ function currentFixture(foreignKeys = 1) {
   return database;
 }
 
-describe("historical schema-21 storage fixture", () => {
-  it("restores the frozen outbox and trajectory storage", () => {
-    using database = currentFixture();
-    using historical = new DatabaseSync(":memory:");
-    historical.exec(OPENCLAW_AGENT_SCHEMA_V21_SQL);
-    const cacheRows = database.prepare("SELECT * FROM cache_entries").all();
+it("restores the frozen outbox and trajectory storage", () => {
+  using database = currentFixture();
+  using historical = new DatabaseSync(":memory:");
+  historical.exec(OPENCLAW_AGENT_SCHEMA_V21_SQL);
+  const cacheRows = database.prepare("SELECT * FROM cache_entries").all();
 
-    restoreEmptyV21StorageForHistoricalFixture(database);
+  restoreEmptyV21StorageForHistoricalFixture(database);
 
-    const outbox = collectSqliteSchemaShape(database).context_engine_turn_outbox;
-    assert(outbox, "Historical fixture must contain the outbox");
-    expect(outbox).toEqual(collectSqliteSchemaShape(historical).context_engine_turn_outbox);
-    expect(collectSqliteSchemaShape(database).trajectory_runtime_events).toEqual(
-      collectSqliteSchemaShape(historical).trajectory_runtime_events,
-    );
-    expect(database.prepare("SELECT * FROM cache_entries").all()).toEqual(cacheRows);
-    expect(database.prepare("PRAGMA foreign_keys").get()?.foreign_keys).toBe(1);
-    expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-  });
-
-  it.each([0, 1])(
-    "refuses a populated outbox without changing data or schema (foreign_keys=%s)",
-    (foreignKeys) => {
-      using database = currentFixture(foreignKeys);
-      database.exec(`
-        INSERT INTO context_engine_turn_outbox
-          (advancement_key, engine_id, session_id, payload_json, created_at)
-          VALUES ('pending-turn', 'engine', 'session', '{}', 1);
-      `);
-      const before = captureDatabase(database);
-
-      expect(() => restoreEmptyV21StorageForHistoricalFixture(database)).toThrow(
-        "Historical fixture must not discard context_engine_turn_outbox data",
-      );
-
-      expect(captureDatabase(database)).toEqual(before);
-    },
+  const outbox = collectSqliteSchemaShape(database).context_engine_turn_outbox;
+  assert(outbox, "Historical fixture must contain the outbox");
+  expect(outbox).toEqual(collectSqliteSchemaShape(historical).context_engine_turn_outbox);
+  expect(collectSqliteSchemaShape(database).trajectory_runtime_events).toEqual(
+    collectSqliteSchemaShape(historical).trajectory_runtime_events,
   );
+  expect(database.prepare("SELECT * FROM cache_entries").all()).toEqual(cacheRows);
+  expect(database.prepare("PRAGMA foreign_keys").get()?.foreign_keys).toBe(1);
+  expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+});
 
-  it.each([0, 1])(
-    "rolls back every dropped table when outbox reconstruction fails (foreign_keys=%s)",
-    (foreignKeys) => {
-      using database = currentFixture(foreignKeys);
-      const before = captureDatabase(database);
-      const execute = database.exec.bind(database);
-      const failure = new Error("injected after outbox drop");
-      const fault = vi.spyOn(database, "exec").mockImplementation((sql) => {
-        execute(sql);
-        if (sql === "DROP TABLE context_engine_turn_outbox") {
-          expect(database.prepare("PRAGMA foreign_keys").get()?.foreign_keys).toBe(0);
-          throw failure;
-        }
-      });
-      try {
-        expect(() => restoreEmptyV21StorageForHistoricalFixture(database)).toThrow(failure);
-      } finally {
-        fault.mockRestore();
+afterEach(() => vi.restoreAllMocks());
+
+it.each([
+  ["populated", 0],
+  ["populated", 1],
+  ["rollback", 0],
+  ["rollback", 1],
+] as const)("preserves storage after %s rejection (foreign_keys=%s)", (mode, foreignKeys) => {
+  using database = currentFixture(foreignKeys);
+  const failure = new Error(
+    mode === "populated"
+      ? "Historical fixture must not discard context_engine_turn_outbox data"
+      : "injected after outbox drop",
+  );
+  if (mode === "populated") {
+    database.exec(`INSERT INTO context_engine_turn_outbox
+      (advancement_key, engine_id, session_id, payload_json, created_at)
+      VALUES ('pending-turn', 'engine', 'session', '{}', 1)`);
+  } else {
+    const execute = database.exec.bind(database);
+    vi.spyOn(database, "exec").mockImplementation((sql) => {
+      execute(sql);
+      if (sql === "DROP TABLE context_engine_turn_outbox") {
+        expect(database.prepare("PRAGMA foreign_keys").get()?.foreign_keys).toBe(0);
+        throw failure;
       }
-
-      expect(captureDatabase(database)).toEqual(before);
-      expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-      expect(database.prepare("PRAGMA integrity_check").get()?.integrity_check).toBe("ok");
-      // A new transaction proves the failed reconstruction did not leave its writer open.
-      database.exec("BEGIN IMMEDIATE; ROLLBACK");
-    },
-  );
+    });
+  }
+  const before = captureDatabase(database);
+  expect(() => restoreEmptyV21StorageForHistoricalFixture(database)).toThrow(failure);
+  vi.restoreAllMocks();
+  expect(captureDatabase(database)).toEqual(before);
+  if (mode === "rollback") {
+    expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    expect(database.prepare("PRAGMA integrity_check").get()?.integrity_check).toBe("ok");
+    database.exec("BEGIN IMMEDIATE; ROLLBACK");
+  }
 });

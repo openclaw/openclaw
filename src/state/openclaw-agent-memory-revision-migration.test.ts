@@ -1,17 +1,17 @@
 import fs from "node:fs";
 import { constants, DatabaseSync } from "node:sqlite";
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { restoreDoctorMigrationBackup } from "../commands/doctor-migration-backup-restore.js";
 import { createScopedMigrationSnapshot } from "../infra/sqlite-migration-scoped-snapshot.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
+import { withAgentDatabaseMaintenanceLease as withLease } from "./openclaw-agent-db-maintenance-lease.js";
 import { ensureOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
 import {
-  assertOpenClawMigrationWitnessPreserved,
+  assertOpenClawMigrationWitnessPreserved as assertWitnessPreserved,
   captureOpenClawMigrationWitness,
 } from "./openclaw-migration-witness.js";
 import { resolveSchemaMigrationBackupTables } from "./schema-migration-backup-scope.js";
-import { assertSqliteMigrationScopePreserved } from "./sqlite-migration-scope.test-support.js";
+import { assertSqliteMigrationScopePreserved as assertScope } from "./sqlite-migration-scope.test-support.js";
 
 const predecessor = 30;
 const target = 31;
@@ -89,98 +89,92 @@ function retained(database: DatabaseSync) {
     sources: rows(database, "SELECT * FROM memory_index_sources ORDER BY path, source"),
     chunks: rows(database, "SELECT * FROM memory_index_chunks ORDER BY id"),
     revision: row(database, "SELECT revision FROM memory_index_state WHERE id = 1"),
+    layout: layout(database),
+    userVersion: row(database, "PRAGMA user_version")?.user_version,
+    schemaVersion: row(database, "SELECT schema_version FROM schema_meta")?.schema_version,
   };
 }
 
-describe("agent memory revision migration", () => {
-  it.each(["commit", "rollback"] as const)(
-    "preserves rows, sibling tables and atomic schema publication (%s)",
-    async (outcome) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        const pathname = state.statePath("memory-revision.sqlite");
-        using database = new DatabaseSync(pathname);
-        seed(database);
-        const before = retained(database);
-        const originalLayout = layout(database);
-        const witness = captureWitness(database);
-        expect(originalLayout.filter((entry) => entry.type === "trigger")).toHaveLength(6);
-        if (outcome === "rollback") {
-          database.setAuthorizer((action, name, value) =>
-            action === constants.SQLITE_PRAGMA &&
-            name === "user_version" &&
-            value === String(target)
-              ? constants.SQLITE_DENY
-              : constants.SQLITE_OK,
-          );
-        }
-        await withAgentDatabaseMaintenanceLease({ env: state.env }, async () => {
-          await assertSqliteMigrationScopePreserved(database, scope, () => {
-            const run = () => migrate(database, pathname, state.env);
-            if (outcome === "rollback") {
-              expect(run).toThrow(/authoriz/u);
-            } else {
-              run();
-            }
-          });
-        });
-        database.setAuthorizer(null);
-        expect(retained(database)).toEqual(before);
-        expect(assertOpenClawMigrationWitnessPreserved(witness, captureWitness(database))).toEqual({
-          warnings: [],
-        });
-        const expectedVersion = outcome === "rollback" ? predecessor : target;
-        expect(row(database, "PRAGMA user_version")?.user_version).toBe(expectedVersion);
-        expect(row(database, "SELECT schema_version FROM schema_meta")?.schema_version).toBe(
-          expectedVersion,
-        );
-        expect(layout(database)).toEqual(
-          outcome === "rollback"
-            ? originalLayout
-            : originalLayout.filter((entry) => entry.type !== "trigger"),
-        );
-        expect(rows(database, "PRAGMA foreign_key_check")).toEqual([]);
-      });
-    },
-  );
-
-  it("restores historical triggers while retaining later unrelated writes and statistics", async () => {
+it.each(["commit", "rollback"] as const)(
+  "preserves rows, sibling tables and atomic schema publication (%s)",
+  async (outcome) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const pathname = state.statePath("memory-revision-restore.sqlite");
-      const backupPath = state.statePath("memory-revision.scoped.bak");
+      const pathname = state.statePath("memory-revision.sqlite");
       using database = new DatabaseSync(pathname);
       seed(database);
       const before = retained(database);
-      const originalLayout = layout(database);
-      const originalStatistics = statistics(database);
-      expect(
-        resolveSchemaMigrationBackupTables({
-          kind: "agent",
-          foundVersion: predecessor,
-          supportedVersion: target,
-        }),
-      ).toEqual(scope);
-      await withAgentDatabaseMaintenanceLease({ env: state.env }, async (lease) => {
-        await createScopedMigrationSnapshot({
-          sourcePath: pathname,
-          targetPath: backupPath,
-          tables: scope,
-          beforePublish: () => lease.assertOwned(),
+      const witness = captureWitness(database);
+      expect(before.layout.filter((entry) => entry.type === "trigger")).toHaveLength(6);
+      if (outcome === "rollback") {
+        database.setAuthorizer((action, name, value) =>
+          action === constants.SQLITE_PRAGMA && name === "user_version" && value === String(target)
+            ? constants.SQLITE_DENY
+            : constants.SQLITE_OK,
+        );
+      }
+      await withLease({ env: state.env }, async () => {
+        await assertScope(database, scope, () => {
+          const run = () => migrate(database, pathname, state.env);
+          if (outcome === "rollback") {
+            expect(run).toThrow(/authoriz/u);
+          } else {
+            run();
+          }
         });
-        migrate(database, pathname, state.env);
       });
-      database.exec("UPDATE cache_entries SET blob = X'BEEF' WHERE scope = 'unrelated'");
-      await assertSqliteMigrationScopePreserved(database, scope, () =>
-        restoreDoctorMigrationBackup({ sourcePath: pathname, backupPath, env: state.env }),
-      );
-      expect(row(database, "PRAGMA user_version")?.user_version).toBe(predecessor);
-      expect(retained(database)).toEqual(before);
-      expect(layout(database)).toEqual(originalLayout);
-      expect(statistics(database)).toEqual(originalStatistics);
-      expect(row(database, "SELECT hex(blob) AS bytes FROM cache_entries")?.bytes).toBe("BEEF");
-      database.exec("UPDATE memory_index_chunks SET text = 'old-writer-update'");
-      expect(row(database, "SELECT revision FROM memory_index_state WHERE id = 1")).toEqual({
-        revision: 3,
+      database.setAuthorizer(null);
+      expect(assertWitnessPreserved(witness, captureWitness(database))).toEqual({
+        warnings: [],
       });
+      const expectedVersion = outcome === "rollback" ? predecessor : target;
+      expect(retained(database)).toEqual({
+        ...before,
+        userVersion: expectedVersion,
+        schemaVersion: expectedVersion,
+        layout:
+          outcome === "rollback"
+            ? before.layout
+            : before.layout.filter((entry) => entry.type !== "trigger"),
+      });
+      expect(rows(database, "PRAGMA foreign_key_check")).toEqual([]);
+    });
+  },
+);
+
+it("restores historical triggers while retaining later unrelated writes and statistics", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const pathname = state.statePath("memory-revision-restore.sqlite");
+    const backupPath = state.statePath("memory-revision.scoped.bak");
+    using database = new DatabaseSync(pathname);
+    seed(database);
+    const before = retained(database);
+    const originalStatistics = statistics(database);
+    expect(
+      resolveSchemaMigrationBackupTables({
+        kind: "agent",
+        foundVersion: predecessor,
+        supportedVersion: target,
+      }),
+    ).toEqual(scope);
+    await withLease({ env: state.env }, async (lease) => {
+      await createScopedMigrationSnapshot({
+        sourcePath: pathname,
+        targetPath: backupPath,
+        tables: scope,
+        beforePublish: () => lease.assertOwned(),
+      });
+      migrate(database, pathname, state.env);
+    });
+    database.exec("UPDATE cache_entries SET blob = X'BEEF' WHERE scope = 'unrelated'");
+    await assertScope(database, scope, () =>
+      restoreDoctorMigrationBackup({ sourcePath: pathname, backupPath, env: state.env }),
+    );
+    expect(retained(database)).toEqual(before);
+    expect(statistics(database)).toEqual(originalStatistics);
+    expect(row(database, "SELECT hex(blob) AS bytes FROM cache_entries")?.bytes).toBe("BEEF");
+    database.exec("UPDATE memory_index_chunks SET text = 'old-writer-update'");
+    expect(row(database, "SELECT revision FROM memory_index_state WHERE id = 1")).toEqual({
+      revision: 3,
     });
   });
 });
