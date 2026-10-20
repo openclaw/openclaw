@@ -1,53 +1,28 @@
-// Slack tests cover shared plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { slackSetupPlugin } from "./channel.setup.js";
 import { setSlackChannelAllowlist } from "./setup-shared.js";
 import { slackPluginBase as plugin, slackConfigAdapter } from "./shared.js";
 
-describe("slackPluginBase", () => {
-  it("owns Slack native command name overrides", () => {
-    expect(
-      plugin.commands?.resolveNativeCommandName?.({
-        commandKey: "status",
-        defaultName: "status",
-      }),
-    ).toBe("agentstatus");
-    expect(
-      plugin.commands?.resolveNativeCommandName?.({
-        commandKey: "tts",
-        defaultName: "tts",
-      }),
-    ).toBe("tts");
-    expect(
-      plugin.commands?.resolveNativeCommandName?.({
-        commandKey: "login",
-        defaultName: "login",
-      }),
-    ).toBe("login");
-  });
+it("owns Slack native command name overrides", () => {
+  const resolve = (commandKey: string) =>
+    plugin.commands?.resolveNativeCommandName?.({ commandKey, defaultName: commandKey });
+  expect([resolve("status"), resolve("tts"), resolve("login")]).toEqual([
+    "agentstatus",
+    "tts",
+    "login",
+  ]);
 });
 
-describe("setSlackChannelAllowlist", () => {
-  it("writes canonical enabled entries for setup-generated channel allowlists", () => {
-    const result = setSlackChannelAllowlist(
-      {
-        channels: {
-          slack: {
-            accounts: {
-              work: {},
-            },
-          },
-        },
-      },
-      "work",
-      ["C123", "C456"],
-    );
-
-    expect(result.channels?.slack?.accounts?.work?.channels).toEqual({
-      C123: { enabled: true },
-      C456: { enabled: true },
-    });
+it("writes canonical enabled entries for setup-generated channel allowlists", () => {
+  const result = setSlackChannelAllowlist(
+    { channels: { slack: { accounts: { work: {} } } } },
+    "work",
+    ["C123", "C456"],
+  );
+  expect(result.channels?.slack?.accounts?.work?.channels).toEqual({
+    C123: { enabled: true },
+    C456: { enabled: true },
   });
 });
 
@@ -82,19 +57,16 @@ describe("slackConfigAdapter", () => {
   });
 
   it("keeps read-only accessors from resolving token SecretRefs", () => {
+    const provider = (name: string) => ({
+      source: "file",
+      path: `/tmp/openclaw-missing-slack-${name}-token`,
+      mode: "singleValue",
+    });
     const cfg = {
       secrets: {
         providers: {
-          slack_bot: {
-            source: "file",
-            path: "/tmp/openclaw-missing-slack-bot-token",
-            mode: "singleValue",
-          },
-          slack_app: {
-            source: "file",
-            path: "/tmp/openclaw-missing-slack-app-token",
-            mode: "singleValue",
-          },
+          slack_bot: provider("bot"),
+          slack_app: provider("app"),
         },
       },
       channels: {
@@ -107,11 +79,9 @@ describe("slackConfigAdapter", () => {
       },
     } as unknown as OpenClawConfig;
 
-    expect(slackConfigAdapter.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual(["U123"]);
-    expect(slackConfigAdapter.resolveDefaultTo?.({ cfg, accountId: "default" })).toBe("C123");
-    expect(slackSetupPlugin.config.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual([
-      "U123",
-    ]);
-    expect(slackSetupPlugin.config.resolveDefaultTo?.({ cfg, accountId: "default" })).toBe("C123");
+    for (const adapter of [slackConfigAdapter, slackSetupPlugin.config]) {
+      expect(adapter.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual(["U123"]);
+      expect(adapter.resolveDefaultTo?.({ cfg, accountId: "default" })).toBe("C123");
+    }
   });
 });
