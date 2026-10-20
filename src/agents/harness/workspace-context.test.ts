@@ -11,19 +11,27 @@ afterEach(() => {
 
 describe("agent workspace context preparation", () => {
   const workspaceDir = path.resolve("workspace-context-fixture");
+  type BootstrapFile = Awaited<
+    ReturnType<typeof bootstrapRuntime.resolveBootstrapFilesForRun>
+  >[number];
+  const budget = { agents: { defaults: { bootstrapMaxChars: 300, bootstrapTotalMaxChars: 300 } } };
+  function prepare(
+    files: BootstrapFile[],
+    params: Partial<Parameters<typeof prepareAgentWorkspaceContext>[0]> = {},
+  ) {
+    vi.spyOn(bootstrapRuntime, "resolveBootstrapFilesForRun").mockResolvedValue(files);
+    return prepareAgentWorkspaceContext({ workspaceDir, scope: "full", ...params });
+  }
 
   it("budgets the root instruction snapshot independently of unsupported turn context", async () => {
-    const rules = "Bounded fixture operating rules.\n".repeat(30);
-    vi.spyOn(bootstrapRuntime, "resolveBootstrapFilesForRun").mockResolvedValue([
-      bootstrapFile("SOUL.md", "Persona context.\n".repeat(100)),
-      bootstrapFile("AGENTS.md", rules),
-      bootstrapFile("MEMORY.md", "Durable memory.\n".repeat(100)),
-    ]);
-    const context = await prepareAgentWorkspaceContext({
-      workspaceDir,
-      scope: "instructions-only",
-      config: { agents: { defaults: { bootstrapMaxChars: 300, bootstrapTotalMaxChars: 300 } } },
-    });
+    const context = await prepare(
+      [
+        bootstrapFile("SOUL.md", "Persona context.\n".repeat(100)),
+        bootstrapFile("AGENTS.md", "Bounded fixture operating rules.\n".repeat(30)),
+        bootstrapFile("MEMORY.md", "Durable memory.\n".repeat(100)),
+      ],
+      { scope: "instructions-only", config: budget },
+    );
     expect(context.instructionSnapshot.files).toHaveLength(1);
     expect(context.instructionSnapshot.files[0]?.content).toContain(
       "Bounded fixture operating rules.",
@@ -36,7 +44,7 @@ describe("agent workspace context preparation", () => {
   });
 
   it("prepares ordered personal instructions for the current profile in a remapped workspace", async () => {
-    const personalFiles = (profile?: string, root = workspaceDir) =>
+    const personalFiles = (profile?: string, root = workspaceDir): BootstrapFile[] =>
       profile
         ? [
             {
@@ -45,7 +53,7 @@ describe("agent workspace context preparation", () => {
                 `${profile} preferences.`,
                 path.join(root, "users", profile, "USER.md"),
               ),
-              personalUser: true as const,
+              personalUser: true,
             },
           ]
         : [];
@@ -65,12 +73,12 @@ describe("agent workspace context preparation", () => {
           path.join(projectedWorkspace, path.relative(workspaceDir, filePath)),
       });
       const shared = context.sharedPersonaInstructions ?? "";
-      expect(shared).toContain("Shared preferences.");
-      expect(shared).toContain("Agent identity.");
-      expect(shared).toContain("Agent voice.");
-      expect(shared).not.toContain("alice preferences.");
-      expect(shared).not.toContain("bob preferences.");
-      expect(shared).not.toContain("belongs to this session");
+      for (const text of ["Shared preferences.", "Agent identity.", "Agent voice."]) {
+        expect(shared).toContain(text);
+      }
+      for (const text of ["alice preferences.", "bob preferences.", "belongs to this session"]) {
+        expect(shared).not.toContain(text);
+      }
       const turn = context.personaInstructions ?? "";
       expect(turn).toContain("<AGENT_SOUL>");
       expect(turn).toContain("</AGENT_SOUL>");
@@ -100,16 +108,9 @@ describe("agent workspace context preparation", () => {
       path.join(workspaceDir, "packages", "pkg", "MEMORY.md"),
     );
     const instructions = bootstrapFile("AGENTS.md", "Keep the bounded operating rules.");
-    vi.spyOn(bootstrapRuntime, "resolveBootstrapFilesForRun").mockResolvedValue([
-      rootMemory,
-      nestedMemory,
-      instructions,
-    ]);
-    const context = await prepareAgentWorkspaceContext({
-      workspaceDir,
-      scope: "full",
+    const context = await prepare([rootMemory, nestedMemory, instructions], {
       memoryToolRouted: true,
-      config: { agents: { defaults: { bootstrapMaxChars: 300, bootstrapTotalMaxChars: 300 } } },
+      config: budget,
     });
     expect(context.memoryReferenceFiles).toEqual([contextFile(rootMemory)]);
     expect(context.memoryToolRoutedBootstrapFiles).toEqual([rootMemory]);
@@ -119,7 +120,6 @@ describe("agent workspace context preparation", () => {
   });
 
   it("passes agent context to active memory guidance without requiring root MEMORY.md", async () => {
-    vi.spyOn(bootstrapRuntime, "resolveBootstrapFilesForRun").mockResolvedValue([]);
     let observedContext:
       | { agentId?: string; agentSessionKey?: string; sandboxed?: boolean }
       | undefined;
@@ -133,9 +133,7 @@ describe("agent workspace context preparation", () => {
         ];
       },
     });
-    const context = await prepareAgentWorkspaceContext({
-      workspaceDir,
-      scope: "full",
+    const context = await prepare([], {
       agentId: "marketing-agent",
       sessionKey: "agent:marketing-agent:session-1",
       memoryToolRouted: true,
@@ -162,13 +160,7 @@ describe("agent workspace context preparation", () => {
       "Setup guidance.",
       path.join(workspaceDir, "pkg", "BOOTSTRAP.md"),
     );
-    vi.spyOn(bootstrapRuntime, "resolveBootstrapFilesForRun").mockResolvedValue([
-      paddedSoul,
-      bootstrap,
-    ]);
-    const context = await prepareAgentWorkspaceContext({
-      workspaceDir,
-      scope: "full",
+    const context = await prepare([paddedSoul, bootstrap], {
       contextFileOrder: new Map([
         ["soul.md", 10],
         ["bootstrap.md", 50],
@@ -178,10 +170,10 @@ describe("agent workspace context preparation", () => {
   });
 
   function bootstrapFile(
-    name: Awaited<ReturnType<typeof bootstrapRuntime.resolveBootstrapFilesForRun>>[number]["name"],
+    name: BootstrapFile["name"],
     content: string,
     filePath = path.join(workspaceDir, name),
-  ): Awaited<ReturnType<typeof bootstrapRuntime.resolveBootstrapFilesForRun>>[number] {
+  ): BootstrapFile {
     return { name, path: filePath, content, missing: false };
   }
 

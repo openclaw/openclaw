@@ -28,6 +28,30 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+type Admission = Parameters<Parameters<typeof admitted>[0]>[0];
+async function withOperation(
+  run: (context: Admission & { operation: ReplyOperation }) => Promise<void>,
+  direct = true,
+) {
+  return admitted(async (context) => {
+    const operation = createReplyOperation({
+      sessionId,
+      sessionKey,
+      resetTriggered: false,
+      ...(direct ? { turnKind: "direct" as const } : {}),
+    });
+    try {
+      await run({ ...context, operation });
+    } finally {
+      operation.complete();
+    }
+  });
+}
+
+function publish(handle: Parameters<typeof publishHarnessActiveEmbeddedRun>[1]) {
+  return publishHarnessActiveEmbeddedRun(sessionId, handle, sessionKey, attempt.sessionFile);
+}
+
 describe("host-prepared embedded tool authority", () => {
   it.each([
     ["current", "inherited"],
@@ -62,10 +86,10 @@ describe("host-prepared embedded tool authority", () => {
               runId: attempt.runId,
               toolAuthorityFingerprint: prepared.toolAuthorityFingerprint,
             });
-            const publish = () =>
-              publishHarnessActiveEmbeddedRun(sessionId, handle, sessionKey, attempt.sessionFile);
-            expect(() => withoutGatewayToolCallerIdentity(publish)).toThrow("host-admitted");
-            const cleanup = publish();
+            expect(() => withoutGatewayToolCallerIdentity(() => publish(handle))).toThrow(
+              "host-admitted",
+            );
+            const cleanup = publish(handle);
             expect(cleanup).toBeTypeOf("function");
             cleanup?.();
             return "entered";
@@ -105,14 +129,9 @@ describe("host-prepared embedded tool authority", () => {
           await expect(
             observed?.bindToolAuthorityRouteAsync({ provider: "openai", model: "gpt-test" }),
           ).rejects.toThrow("Reply operation authority is no longer active");
-          expect(() =>
-            publishHarnessActiveEmbeddedRun(
-              sessionId,
-              createEmbeddedRunHandle({ runId: attempt.runId }),
-              sessionKey,
-              attempt.sessionFile,
-            ),
-          ).toThrow("host-admitted");
+          expect(() => publish(createEmbeddedRunHandle({ runId: attempt.runId }))).toThrow(
+            "host-admitted",
+          );
         }
       });
     },
@@ -121,180 +140,142 @@ describe("host-prepared embedded tool authority", () => {
   it.each(["cancel-target", "replace-target", "cancel-both"] as const)(
     "preserves valid source fallback when projection loses its target (%s)",
     async (transition) => {
-      await admitted(async ({ admittedRunContext }) => {
-        const operation = createReplyOperation({
-          sessionId,
-          sessionKey,
-          resetTriggered: false,
-          turnKind: "direct",
-        });
-        try {
-          await withPreparedEmbeddedRunToolAuthority(
-            { admittedRunContext, replyOperation: operation },
-            attempt,
-            undefined,
-            async (prepared) => {
-              const queue = vi.fn(async () => {});
-              const handle = createEmbeddedRunHandle({
-                runId: attempt.runId,
-                toolAuthorityFingerprint: prepared.toolAuthorityFingerprint,
-                guarded: true,
-                queueMessage: queue,
-              });
-              const releaseHandle = publishHarnessActiveEmbeddedRun(
-                sessionId,
-                handle,
-                sessionKey,
-                attempt.sessionFile,
-              );
-              const target = captureCurrentReplyMessageInjectionTarget(sessionKey)!;
-              const entered = createDeferred();
-              const resume = createDeferred();
-              const project = operation.projectToolAuthorityFingerprintAsync;
-              vi.spyOn(operation, "projectToolAuthorityFingerprintAsync").mockImplementation(
-                async (overlay) => {
-                  const fingerprint = await project(overlay);
-                  entered.resolve();
-                  await resume.promise;
-                  return fingerprint;
-                },
-              );
-              const source = new AbortController();
-              const sourceError = new Error("incoming source cancelled");
-              const pending = beginReplyMessageInjectionTarget(target, "retained input", {
-                isInboundUserMessage: true,
-                toolAuthorityOverlay: {
-                  messageProvider: "webchat",
-                  senderId: "authority-requester",
-                  senderIsOwner: true,
-                  disableTools: false,
-                  traceAuthorized: false,
-                },
-                assertCurrent: () => source.signal.throwIfAborted(),
-              });
-              let releaseReplacement: (() => void) | undefined;
-              try {
-                await awaitGateBeforeSettlement(entered.promise, pending, "Projection not reached");
-                if (transition === "replace-target") {
-                  releaseReplacement = publishHarnessActiveEmbeddedRun(
-                    sessionId,
-                    { ...handle },
-                    sessionKey,
-                    attempt.sessionFile,
-                  );
-                } else {
-                  operation.abortByUser();
-                  if (transition === "cancel-both") {
-                    source.abort(sourceError);
-                  }
-                }
-                resume.resolve();
-                if (transition === "cancel-both") {
-                  await expect(pending).rejects.toBe(sourceError);
-                } else {
-                  const injection = await pending;
-                  await expect(injection.acceptance).resolves.toBe(false);
-                  await expect(injection.outcome).resolves.toEqual({
-                    status: "rejected",
-                    reason: transition === "replace-target" ? "no_active_run" : "not_running",
-                  });
-                }
-                expect(queue).not.toHaveBeenCalled();
-              } finally {
-                resume.resolve();
-                await Promise.allSettled([pending]);
-                releaseReplacement?.();
-                releaseHandle?.();
-              }
-            },
-          );
-        } finally {
-          operation.complete();
-        }
-      });
-    },
-  );
-
-  it("prepares direct successor attempts on one controller and revokes retained attempt authority", async () => {
-    await admitted(async ({ admittedRunContext }) => {
-      const operation = createReplyOperation({
-        sessionId,
-        sessionKey,
-        resetTriggered: false,
-        turnKind: "direct",
-      });
-      let previousCaller: ReturnType<typeof getGatewayToolCallerIdentity>;
-      let previousFingerprint: string | undefined;
-      try {
+      await withOperation(async ({ admittedRunContext, operation }) => {
         await withPreparedEmbeddedRunToolAuthority(
           { admittedRunContext, replyOperation: operation },
           attempt,
           undefined,
           async (prepared) => {
-            previousCaller = getGatewayToolCallerIdentity();
-            previousFingerprint = prepared.toolAuthorityFingerprint;
-            expect(operation.toolAuthorityFingerprint).toBe(previousFingerprint);
+            const queue = vi.fn(async () => {});
+            const handle = createEmbeddedRunHandle({
+              runId: attempt.runId,
+              toolAuthorityFingerprint: prepared.toolAuthorityFingerprint,
+              guarded: true,
+              queueMessage: queue,
+            });
+            const releaseHandle = publish(handle);
+            const target = captureCurrentReplyMessageInjectionTarget(sessionKey)!;
+            const entered = createDeferred();
+            const resume = createDeferred();
+            const project = operation.projectToolAuthorityFingerprintAsync;
+            vi.spyOn(operation, "projectToolAuthorityFingerprintAsync").mockImplementation(
+              async (overlay) => {
+                const fingerprint = await project(overlay);
+                entered.resolve();
+                await resume.promise;
+                return fingerprint;
+              },
+            );
+            const source = new AbortController();
+            const sourceError = new Error("incoming source cancelled");
+            const pending = beginReplyMessageInjectionTarget(target, "retained input", {
+              isInboundUserMessage: true,
+              toolAuthorityOverlay: {
+                messageProvider: "webchat",
+                senderId: "authority-requester",
+                senderIsOwner: true,
+                disableTools: false,
+                traceAuthorized: false,
+              },
+              assertCurrent: () => source.signal.throwIfAborted(),
+            });
+            let releaseReplacement: (() => void) | undefined;
+            try {
+              await awaitGateBeforeSettlement(entered.promise, pending, "Projection not reached");
+              if (transition === "replace-target") {
+                releaseReplacement = publish({ ...handle });
+              } else {
+                operation.abortByUser();
+                if (transition === "cancel-both") {
+                  source.abort(sourceError);
+                }
+              }
+              resume.resolve();
+              if (transition === "cancel-both") {
+                await expect(pending).rejects.toBe(sourceError);
+              } else {
+                const injection = await pending;
+                await expect(injection.acceptance).resolves.toBe(false);
+                await expect(injection.outcome).resolves.toEqual({
+                  status: "rejected",
+                  reason: transition === "replace-target" ? "no_active_run" : "not_running",
+                });
+              }
+              expect(queue).not.toHaveBeenCalled();
+            } finally {
+              resume.resolve();
+              await Promise.allSettled([pending]);
+              releaseReplacement?.();
+              releaseHandle?.();
+            }
           },
         );
-        expect(operation.toolAuthorityFingerprint).toBeUndefined();
-        const successorId = `${sessionId}-successor`;
-        operation.updateSessionId(successorId);
-        await withPreparedEmbeddedRunToolAuthority(
-          { admittedRunContext, replyOperation: operation },
-          { ...attempt, sessionId: successorId },
-          undefined,
-          async (prepared) => {
-            expect(prepared.replyOperation).toBe(operation);
-            expect(operation.toolAuthorityFingerprint).toBe(prepared.toolAuthorityFingerprint);
-            await expect(
-              withoutGatewayToolCallerIdentity(() =>
-                withGatewayToolCallerIdentity(previousCaller, () =>
-                  publishHarnessActiveEmbeddedRun(
-                    sessionId,
-                    createEmbeddedRunHandle({
-                      runId: attempt.runId,
-                      toolAuthorityFingerprint: previousFingerprint,
-                    }),
-                    sessionKey,
-                    attempt.sessionFile,
-                  ),
+      });
+    },
+  );
+
+  it("prepares direct successor attempts on one controller and revokes retained attempt authority", async () => {
+    await withOperation(async ({ admittedRunContext, operation }) => {
+      let previousCaller: ReturnType<typeof getGatewayToolCallerIdentity>;
+      let previousFingerprint: string | undefined;
+      await withPreparedEmbeddedRunToolAuthority(
+        { admittedRunContext, replyOperation: operation },
+        attempt,
+        undefined,
+        async (prepared) => {
+          previousCaller = getGatewayToolCallerIdentity();
+          previousFingerprint = prepared.toolAuthorityFingerprint;
+          expect(operation.toolAuthorityFingerprint).toBe(previousFingerprint);
+        },
+      );
+      expect(operation.toolAuthorityFingerprint).toBeUndefined();
+      const successorId = `${sessionId}-successor`;
+      operation.updateSessionId(successorId);
+      await withPreparedEmbeddedRunToolAuthority(
+        { admittedRunContext, replyOperation: operation },
+        { ...attempt, sessionId: successorId },
+        undefined,
+        async (prepared) => {
+          expect(prepared.replyOperation).toBe(operation);
+          expect(operation.toolAuthorityFingerprint).toBe(prepared.toolAuthorityFingerprint);
+          await expect(
+            withoutGatewayToolCallerIdentity(() =>
+              withGatewayToolCallerIdentity(previousCaller, () =>
+                publish(
+                  createEmbeddedRunHandle({
+                    runId: attempt.runId,
+                    toolAuthorityFingerprint: previousFingerprint,
+                  }),
                 ),
               ),
-            ).rejects.toThrow("no longer active");
-          },
-        );
-        expect(operation.toolAuthorityFingerprint).toBeUndefined();
-      } finally {
-        operation.complete();
-      }
+            ),
+          ).rejects.toThrow("no longer active");
+        },
+      );
+      expect(operation.toolAuthorityFingerprint).toBeUndefined();
     });
   });
 
   it.each(["caller", "controller"] as const)(
     "passes borrowed-turn cancellation from the %s to the harness attempt",
     async (source) => {
-      await admitted(async ({ admittedRunContext }) => {
-        const operation = createReplyOperation({ sessionId, sessionKey, resetTriggered: false });
+      await withOperation(async ({ admittedRunContext, operation }) => {
         const caller = new AbortController();
-        try {
-          await withPreparedEmbeddedRunToolAuthority(
-            { admittedRunContext, replyOperation: operation },
-            { ...attempt, abortSignal: caller.signal },
-            undefined,
-            async (prepared) => {
-              expect(prepared.abortSignal.aborted).toBe(false);
-              if (source === "caller") {
-                caller.abort(new Error("caller cancelled"));
-              } else {
-                operation.abortByUser();
-              }
-              expect(prepared.abortSignal.aborted).toBe(true);
-            },
-          );
-        } finally {
-          operation.complete();
-        }
-      });
+        await withPreparedEmbeddedRunToolAuthority(
+          { admittedRunContext, replyOperation: operation },
+          { ...attempt, abortSignal: caller.signal },
+          undefined,
+          async (prepared) => {
+            expect(prepared.abortSignal.aborted).toBe(false);
+            if (source === "caller") {
+              caller.abort(new Error("caller cancelled"));
+            } else {
+              operation.abortByUser();
+            }
+            expect(prepared.abortSignal.aborted).toBe(true);
+          },
+        );
+      }, false);
     },
   );
 });

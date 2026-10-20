@@ -32,6 +32,15 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
+function attention(activity: ReturnType<typeof getDiagnosticSessionActivitySnapshot>) {
+  return classifySessionAttention({
+    state: "processing",
+    queueDepth: 0,
+    activity,
+    staleMs: 120_000,
+  });
+}
+
 describe("Code Mode diagnostic lifetime", () => {
   it.each([
     { control: "exec", terminal: "complete" },
@@ -110,14 +119,7 @@ describe("Code Mode diagnostic lifetime", () => {
           activeToolCallId: "outer-call",
           lastProgressReason: "tool:sessions_spawn:ended",
         });
-        expect(
-          classifySessionAttention({
-            state: "processing",
-            queueDepth: 0,
-            activity,
-            staleMs: 120_000,
-          }),
-        ).toMatchObject({ classification: "blocked_tool_call" });
+        expect(attention(activity)).toMatchObject({ classification: "blocked_tool_call" });
         expect(resolveRunStaleThresholdMs(activity)).toBeGreaterThan(activity.lastProgressAgeMs!);
 
         if (terminal === "abort") {
@@ -132,14 +134,7 @@ describe("Code Mode diagnostic lifetime", () => {
         now.mockReturnValue(1_000 + 14 * 60_000);
         const settled = getDiagnosticSessionActivitySnapshot(ref);
         expect(settled.activeToolName).toBeUndefined();
-        expect(
-          classifySessionAttention({
-            state: "processing",
-            queueDepth: 0,
-            activity: settled,
-            staleMs: 120_000,
-          }),
-        ).toMatchObject({ classification: "stalled_agent_run" });
+        expect(attention(settled)).toMatchObject({ classification: "stalled_agent_run" });
       } finally {
         abort.abort();
         release.resolve();

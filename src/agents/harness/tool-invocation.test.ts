@@ -4,7 +4,11 @@ import type { AgentToolResult } from "../../../packages/agent-core/src/types.js"
 import type { AnyAgentTool } from "../agent-tools.types.js";
 import { createAgentHarnessToolExecutionBoundaryRegistry } from "./tool-execution.js";
 import { runAgentHarnessToolInvocation } from "./tool-invocation.js";
-import { recordAgentHarnessToolResultTelemetry } from "./tool-result-facts.js";
+import {
+  createTelemetry,
+  recordTelemetry,
+  textToolResult,
+} from "./tool-result-facts.test-support.js";
 
 describe("runAgentHarnessToolInvocation", () => {
   it.each([
@@ -70,41 +74,20 @@ describe("runAgentHarnessToolInvocation", () => {
         return event.result;
       },
     );
-    const telemetry = {
-      didSendViaMessagingTool: false,
-      messagingToolSentTexts: [],
-      messagingToolSentMediaUrls: [],
-      messagingToolSentTargets: [],
-      messagingToolSourceReplyPayloads: [],
-      confirmedMediaDeliveries: [],
-      toolMediaUrls: [],
-      toolAutoDeliveryMediaUrls: [],
-      coreTtsToolResults: [],
-      toolAudioAsVoice: false,
-      successfulCronAdds: 0,
-    };
-    recordAgentHarnessToolResultTelemetry({
+    const telemetry = createTelemetry();
+    telemetry.successfulCronAdds = 0;
+    recordTelemetry({
       toolName: "cron",
       args: execution.executedArguments,
       result: execution.result,
       telemetry,
       isError: execution.isError,
-      messagingDelivered: false,
-      mediaDeliveryConfirmed: false,
-      extractSourceReplyPayload: () => undefined,
-      collectMessagingMediaUrls: () => [],
-      resolveMessagingMediaSourceUrls: (urls) => urls,
-      signal: new AbortController().signal,
     });
 
     expect(execution.boundary.executionStarted).toBe(true);
     expect(telemetry.successfulCronAdds).toBe(1);
   });
 });
-
-function textToolResult(text: string, details: unknown): AgentToolResult<unknown> {
-  return { content: [{ type: "text", text }], details };
-}
 
 function invokeTool(
   result: AgentToolResult<unknown>,

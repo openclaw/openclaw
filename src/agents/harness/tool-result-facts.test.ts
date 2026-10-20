@@ -1,23 +1,24 @@
 import { describe, expect, it } from "vitest";
-import type { AgentToolResult } from "../../../packages/agent-core/src/types.js";
 import { HEARTBEAT_RESPONSE_TOOL_NAME } from "../../auto-reply/heartbeat-tool-response.js";
-import { extractMessagingToolSourceReplyPayload } from "../embedded-agent-messaging-extraction.js";
 import {
   collectMessagingMediaUrlsFromRecord,
   collectMessagingMediaUrlsFromToolResult,
 } from "../embedded-agent-tool-media.js";
+import { resolveAgentHarnessToolResultPresentation } from "./tool-result-facts.js";
 import {
-  recordAgentHarnessToolResultTelemetry,
-  resolveAgentHarnessToolResultPresentation,
-  type AgentHarnessToolResultTelemetry,
-} from "./tool-result-facts.js";
+  createTelemetry,
+  recordTelemetry,
+  textToolResult,
+} from "./tool-result-facts.test-support.js";
 
 describe("resolveAgentHarnessToolResultPresentation", () => {
   it.each(["rejected", "plugin-defined-outcome"])(
     "treats plugin-owned status %s as successful by default",
     (status) => {
       const result = textToolResult(`Proposal is ${status}.`, { status });
-      expect(present(result)).toMatchObject({ result, isError: false });
+      expect(
+        resolveAgentHarnessToolResultPresentation({ result, executionIsError: false }),
+      ).toMatchObject({ result, isError: false });
     },
   );
 });
@@ -66,9 +67,11 @@ describe("recordAgentHarnessToolResultTelemetry", () => {
         telemetry,
       });
 
-      expect(telemetry.toolMediaUrls).toEqual([media.mediaUrl]);
-      expect(telemetry.toolAutoDeliveryMediaUrls).toEqual([]);
-      expect(telemetry.toolAudioAsVoice).toBe(voice);
+      expect(telemetry).toMatchObject({
+        toolMediaUrls: [media.mediaUrl],
+        toolAutoDeliveryMediaUrls: [],
+        toolAudioAsVoice: voice,
+      });
     },
   );
 
@@ -90,9 +93,11 @@ describe("recordAgentHarnessToolResultTelemetry", () => {
       telemetry,
     });
 
-    expect(telemetry.didSendViaMessagingTool).toBe(true);
-    expect(telemetry.messagingToolSentTexts).toEqual(["hello from Codex"]);
-    expect(telemetry.messagingToolSentMediaUrls).toEqual(["/tmp/reply.png"]);
+    expect(telemetry).toMatchObject({
+      didSendViaMessagingTool: true,
+      messagingToolSentTexts: ["hello from Codex"],
+      messagingToolSentMediaUrls: ["/tmp/reply.png"],
+    });
     expect(telemetry.messagingToolSentTargets).toEqual([
       {
         tool: "message",
@@ -107,71 +112,19 @@ describe("recordAgentHarnessToolResultTelemetry", () => {
 
   it("accepts heartbeat response tool outcomes", () => {
     const telemetry = createTelemetry();
-    recordTelemetry({
-      toolName: HEARTBEAT_RESPONSE_TOOL_NAME,
-      result: textToolResult("Accepted.", {
-        status: "accepted",
-        outcome: "needs_attention",
-        notify: true,
-        summary: "Build is blocked.",
-        notificationText: "Build is blocked on missing credentials.",
-        priority: "high",
-      }),
-      telemetry,
-    });
-
-    expect(telemetry.heartbeatToolResponse).toEqual({
+    const response = {
       outcome: "needs_attention",
       notify: true,
       summary: "Build is blocked.",
       notificationText: "Build is blocked on missing credentials.",
       priority: "high",
+    };
+    recordTelemetry({
+      toolName: HEARTBEAT_RESPONSE_TOOL_NAME,
+      result: textToolResult("Accepted.", { status: "accepted", ...response }),
+      telemetry,
     });
+
+    expect(telemetry.heartbeatToolResponse).toEqual(response);
   });
 });
-
-function textToolResult(text: string, details: unknown): AgentToolResult<unknown> {
-  return { content: [{ type: "text", text }], details };
-}
-
-function present(result: AgentToolResult<unknown>) {
-  return resolveAgentHarnessToolResultPresentation({ result, executionIsError: false });
-}
-
-function createTelemetry(): AgentHarnessToolResultTelemetry {
-  return {
-    didSendViaMessagingTool: false,
-    messagingToolSentTexts: [],
-    messagingToolSentMediaUrls: [],
-    messagingToolSentTargets: [],
-    messagingToolSourceReplyPayloads: [],
-    confirmedMediaDeliveries: [],
-    toolMediaUrls: [],
-    toolAutoDeliveryMediaUrls: [],
-    coreTtsToolResults: [],
-    toolAudioAsVoice: false,
-  };
-}
-
-function recordTelemetry(
-  params: Pick<
-    Parameters<typeof recordAgentHarnessToolResultTelemetry>[0],
-    "toolName" | "result" | "telemetry"
-  > & {
-    args?: Record<string, unknown>;
-    messagingDelivered?: boolean;
-    mediaDeliveryConfirmed?: boolean;
-  },
-) {
-  return recordAgentHarnessToolResultTelemetry({
-    args: {},
-    isError: false,
-    messagingDelivered: false,
-    mediaDeliveryConfirmed: false,
-    extractSourceReplyPayload: extractMessagingToolSourceReplyPayload,
-    collectMessagingMediaUrls: collectMessagingMediaUrlsFromRecord,
-    resolveMessagingMediaSourceUrls: (urls) => urls,
-    signal: new AbortController().signal,
-    ...params,
-  });
-}

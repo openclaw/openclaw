@@ -15,6 +15,8 @@ export const sessionId = "authority-session";
 export const sessionKey = "agent:main:main";
 type EmbeddedRunHandle = ReturnType<typeof createEmbeddedRunHandle>;
 type QueueMessage = EmbeddedRunHandle["queueMessage"];
+type QueueMock = ReturnType<typeof vi.fn<QueueMessage>>;
+type OperatorAuthority = Parameters<typeof prepareAgentRunAdmission>[0]["operatorAuthority"];
 export const attempt = {
   sessionId,
   sessionKey,
@@ -37,7 +39,7 @@ export async function admitted<T>(
     admittedRunContext: Awaited<ReturnType<ReturnType<typeof prepareAgentRunAdmission>["admit"]>>;
     close: () => void;
   }) => Promise<T>,
-  operatorAuthority?: Parameters<typeof prepareAgentRunAdmission>[0]["operatorAuthority"],
+  operatorAuthority?: OperatorAuthority,
 ) {
   const admission = prepareAgentRunAdmission({
     cfg: {},
@@ -73,14 +75,7 @@ export function publishPreparedHandle(
   handle.kind = "embedded";
   handle.cancel = (reason) => handle.abort(reason === "restart" ? reason : undefined);
   // Host-prepared tool authority binds every steer to final dispatch, as real runtimes do.
-  handle.messageInjectionV2 = {
-    version: 2,
-    isAvailable: () => true,
-    queueMessage: async (text, options, assertCurrent) => {
-      assertCurrent();
-      return queueMessage(text, options);
-    },
-  };
+  interceptMessages(handle, (text, options) => queueMessage(text, options));
   configure?.(handle, queueMessage);
   setActiveEmbeddedRun(sessionId, handle, sessionKey, attempt.sessionFile);
   return handle;
@@ -101,17 +96,13 @@ export function interceptMessages(
 }
 
 export async function published<T>(
-  run: (owner: {
-    handle: ReturnType<typeof createEmbeddedRunHandle>;
-    queue: ReturnType<typeof vi.fn<ReturnType<typeof createEmbeddedRunHandle>["queueMessage"]>>;
-    close: () => void;
-  }) => Promise<T>,
+  run: (owner: { handle: EmbeddedRunHandle; queue: QueueMock; close: () => void }) => Promise<T>,
   params: Partial<typeof attempt> &
     Pick<
       ReplyToolAuthorityOverlay,
       "toolsAllow" | "senderId" | "senderName" | "clientCaps" | "gatewayUiCommandTarget"
     > = {},
-  operatorAuthority?: Parameters<typeof prepareAgentRunAdmission>[0]["operatorAuthority"],
+  operatorAuthority?: OperatorAuthority,
   configureHandle?: (handle: EmbeddedRunHandle, queueMessage: QueueMessage) => void,
 ) {
   return admitted(
@@ -121,9 +112,7 @@ export async function published<T>(
         { ...attempt, ...params },
         undefined,
         async (prepared) => {
-          const queue = vi.fn<ReturnType<typeof createEmbeddedRunHandle>["queueMessage"]>(
-            async () => {},
-          );
+          const queue = vi.fn<QueueMessage>(async () => {});
           const handle = publishPreparedHandle(
             prepared.toolAuthorityFingerprint,
             queue,
