@@ -1,4 +1,4 @@
-import { expect, it, onTestFinished, vi } from "vitest";
+import { expect, it, onTestFinished, vi, type Mock } from "vitest";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
@@ -9,7 +9,55 @@ import {
   registerAgentRunContext,
 } from "../infra/agent-run-registry.js";
 import type { EmbeddedTuiBackend } from "./embedded-backend.js";
-import { deferred, flushMicrotasks, sendMainChat } from "./embedded-backend.test-helpers.js";
+import {
+  deferred,
+  flushMicrotasks,
+  localSessionEntry,
+  sendMainChat,
+} from "./embedded-backend.test-helpers.js";
+
+export function pendingReply(mock: Mock, onStart?: (signal?: AbortSignal) => void) {
+  const pending = deferred<EmbeddedAgentResult>();
+  if (onStart) {
+    mock.mockImplementationOnce((opts: { abortSignal?: AbortSignal }) => {
+      onStart(opts.abortSignal);
+      return pending.promise;
+    });
+  } else {
+    mock.mockReturnValueOnce(pending.promise);
+  }
+  return pending;
+}
+
+export function mockLocalSession(
+  mock: Mock<typeof localSessionEntry>,
+  overrides: () => Parameters<typeof localSessionEntry>[2],
+) {
+  mock.mockImplementation((key, opts) => localSessionEntry(key, opts, overrides()));
+}
+
+export async function expectAgentCall(
+  mock: Mock,
+  count: number,
+  expected: Record<string, unknown>,
+) {
+  await vi.waitFor(() => expect(mock).toHaveBeenCalledTimes(count));
+  expect(mock.mock.calls[count - 1]?.[0]).toMatchObject(expected);
+}
+
+type ChatPayload = {
+  state?: string;
+  deltaText?: string;
+  replace?: boolean;
+  errorMessage?: string;
+  message?: { content?: Array<{ type?: string; text?: string }> };
+};
+
+export function getChatPayloads(events: Array<{ event: string; payload: unknown }>) {
+  return events
+    .filter((event) => event.event === "chat")
+    .map((event) => event.payload as ChatPayload);
+}
 
 export function agentResult(text?: string, meta: Record<string, unknown> = {}) {
   return { payloads: text === undefined ? [] : [{ text }], meta };
@@ -65,6 +113,17 @@ export function registerEmbeddedBackendStreamTests({
 }: StreamTestContext) {
   const emitRun = (runId: string, stream: string, data: unknown) =>
     emitAgentEvent({ runId, stream, data });
+  async function startStream(
+    message: string,
+    runId: string,
+    onStart?: (signal: AbortSignal) => void,
+  ) {
+    const pending = deferred<EmbeddedAgentResult>();
+    prepareReply(pending.promise, onStart);
+    const { backend, events } = startBackend(createBackend);
+    await sendMainChat(backend, message, runId);
+    return { pending, backend, events };
+  }
   it.each([
     { method: "abortChat", wait: "pending", caveat: true },
     { method: "abortChat", wait: "absent", caveat: false },
@@ -75,7 +134,6 @@ export function registerEmbeddedBackendStreamTests({
   ])(
     "reports cancellation eligibility for $method with $wait wait",
     async ({ method, wait, caveat }) => {
-      const pending = deferred<EmbeddedAgentResult>();
       const started = deferred<AbortSignal>();
       const runId = `local-cancel-${method}-${wait}`;
       const sessionKey = "agent:main:main";
@@ -85,12 +143,10 @@ export function registerEmbeddedBackendStreamTests({
       if (!context) {
         throw new Error("Expected the test run to be registered");
       }
-      prepareReply(pending.promise, (signal) => {
+      const { pending, backend, events } = await startStream("long task", runId, (signal) => {
         signal.addEventListener("abort", () => delete context.localModelWait, { once: true });
         started.resolve(signal);
       });
-      const { backend, events } = startBackend(createBackend);
-      await backend.sendChat({ sessionKey, message: "long task", runId });
       const signal = await started.promise;
       if (wait !== "absent") {
         context.localModelWait = { requestId: `${runId}:model:1` };
@@ -116,28 +172,17 @@ export function registerEmbeddedBackendStreamTests({
       pending.resolve(agentResult(undefined, { aborted: true }));
       await flushMicrotasks();
       expect(events.filter((event) => event.event === "chat")).toEqual([
-        {
-          event: "chat",
-          payload: {
-            runId,
-            sessionKey,
-            agentId: "main",
-            state: "aborted",
-            ...(caveat ? { localModelMayStillBeFinishing: true } : {}),
-          },
-        },
+        mainChatEvent(runId, {
+          state: "aborted",
+          ...(caveat ? { localModelMayStillBeFinishing: true } : {}),
+        }),
       ]);
     },
   );
 
   it("paces display deltas and flushes them before tools, corrections, and completion", async () => {
-    const pending = deferred<EmbeddedAgentResult>();
-    prepareReply(pending.promise);
-    const backend = createBackend();
-    const events = captureBackendEvents(backend);
     const runId = "run-local-paced";
-    backend.start();
-    await sendMainChat(backend, "pace text", runId);
+    const { pending, events } = await startStream("pace text", runId);
     const append = (delta: string) =>
       emitAgentEvent({
         runId,
@@ -188,11 +233,10 @@ export function registerEmbeddedBackendStreamTests({
   });
 
   it("keeps internal context private when local deltas split its delimiters", async () => {
-    const pending = deferred<EmbeddedAgentResult>();
-    prepareReply(pending.promise);
-
-    const { backend, events } = startBackend(createBackend);
-    await sendMainChat(backend, "split internal context", "run-local-split-context");
+    const { pending, events } = await startStream(
+      "split internal context",
+      "run-local-split-context",
+    );
 
     const deltas = [
       `Visible\n${INTERNAL_RUNTIME_CONTEXT_BEGIN}\n`,
@@ -206,9 +250,7 @@ export function registerEmbeddedBackendStreamTests({
     pending.resolve(agentResult("Visible\n\nAfter"));
     await flushMicrotasks();
 
-    const chatPayloads = events
-      .filter((entry) => entry.event === "chat")
-      .map((entry) => entry.payload);
+    const chatPayloads = getChatPayloads(events);
     expect(JSON.stringify(chatPayloads)).not.toContain("private runtime detail");
     expect(chatPayloads.at(-1)).toMatchObject({
       state: "final",
@@ -292,11 +334,7 @@ export function registerEmbeddedBackendStreamTests({
   ])(
     "EmbeddedTuiBackend.sendChat projects $name",
     async ({ updates, expectedDeltas, expectedText }) => {
-      const pending = deferred<EmbeddedAgentResult>();
-      prepareReply(pending.promise);
-
-      const { backend, events } = startBackend(createBackend);
-      await sendMainChat(backend, "replace", "run-local-replace");
+      const { pending, events } = await startStream("replace", "run-local-replace");
 
       for (const data of updates) {
         emitRun("run-local-replace", "assistant", data);
@@ -305,24 +343,11 @@ export function registerEmbeddedBackendStreamTests({
       pending.resolve(agentResult(undefined));
       await flushMicrotasks();
 
-      const chatPayloads = events
-        .filter((entry) => entry.event === "chat")
-        .map(
-          (entry) =>
-            entry.payload as {
-              state?: string;
-              deltaText?: string;
-              replace?: boolean;
-              message?: { content?: Array<{ text?: string }> };
-            },
-        );
+      const chatPayloads = getChatPayloads(events);
       expect(
         chatPayloads
           .filter((payload) => payload.state === "delta")
-          .map((payload) => ({
-            deltaText: payload.deltaText,
-            replace: payload.replace,
-          })),
+          .map((payload) => ({ deltaText: payload.deltaText, replace: payload.replace })),
       ).toEqual(expectedDeltas);
       expect(chatPayloads.at(-1)).toMatchObject({
         state: "final",
@@ -334,13 +359,8 @@ export function registerEmbeddedBackendStreamTests({
   it.each(["final", "aborted"] as const)(
     "EmbeddedTuiBackend.sendChat keeps a failed clear visible before %s without exposing suppressed output",
     async (state) => {
-      const pending = deferred<EmbeddedAgentResult>();
-      prepareReply(pending.promise);
-      const backend = createBackend();
-      const events = captureBackendEvents(backend);
       const runId = `run-local-clear-${state}`;
-      backend.start();
-      await sendMainChat(backend, "clear the failed draft", runId);
+      const { pending, backend, events } = await startStream("clear the failed draft", runId);
 
       emitRun(runId, "assistant", {
         itemId: "failed",
@@ -359,19 +379,14 @@ export function registerEmbeddedBackendStreamTests({
       expect(events.filter((entry) => entry.event === "chat")).toHaveLength(1);
 
       emitRun(runId, "assistant", { itemId: "failed", text: "", delta: "", replace: true });
-      expect(
-        events.filter((entry) => entry.event === "chat").map((entry) => entry.payload),
-      ).toEqual([
+      expect(getChatPayloads(events)).toEqual([
         expect.objectContaining({ state: "delta", deltaText: "Failed draft" }),
-        {
-          runId,
-          sessionKey: "agent:main:main",
-          agentId: "main",
+        mainChatEvent(runId, {
           state: "delta",
           deltaText: "",
           replace: true,
           message: assistantMessage("", embeddedEventTimestamp),
-        },
+        }).payload,
       ]);
 
       if (state === "aborted") {
@@ -384,16 +399,9 @@ export function registerEmbeddedBackendStreamTests({
       pending.resolve(agentResult(undefined, state === "aborted" ? { aborted: true } : {}));
       await flushMicrotasks();
 
-      const chatPayloads = events
-        .filter((entry) => entry.event === "chat")
-        .map((entry) => entry.payload);
+      const chatPayloads = getChatPayloads(events);
       expect(chatPayloads).toHaveLength(3);
-      expect(chatPayloads.at(-1)).toEqual({
-        runId,
-        sessionKey: "agent:main:main",
-        agentId: "main",
-        state,
-      });
+      expect(chatPayloads.at(-1)).toEqual(mainChatEvent(runId, { state }).payload);
     },
   );
 }
