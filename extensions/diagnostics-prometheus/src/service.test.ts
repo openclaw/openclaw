@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
+import type { DiagnosticEventPayload } from "../api.js";
 import { createDiagnosticsPrometheusExporter } from "./service.js";
 import {
   metricsTest as test,
@@ -22,10 +23,9 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
   }),
 }));
 
-type RpcEvent = Extract<
-  Parameters<ReturnType<typeof createMetricsHarness>["record"]>[0],
-  { type: "gateway.rpc" }
->;
+type TestEvent = Parameters<ReturnType<typeof createMetricsHarness>["record"]>[0];
+type RpcEvent = Extract<TestEvent, { type: "gateway.rpc" }>;
+type MetricCase = [string, TestEvent | TestEvent[], string, string[]?];
 const rpcDefaults = {
   received: { phase: "received" },
   response: { phase: "response", outcome: "ok", durationMs: 20 },
@@ -90,15 +90,8 @@ describe("diagnostics-prometheus service", () => {
       },
     }));
     metrics.record({ type: "gateway.rpc", method: "health", phase: "received" });
-    for (const clientKind of [
-      "control-ui",
-      "macos",
-      "ios",
-      "android",
-      "cli",
-      "node",
-      "plugin",
-    ] as const) {
+    const clients = ["control-ui", "macos", "ios", "android", "cli", "node", "plugin"] as const;
+    for (const clientKind of clients) {
       metrics.record({ type: "gateway.rpc", method: "health", phase: "received", clientKind });
     }
     const rendered = metrics.render();
@@ -135,9 +128,7 @@ describe("diagnostics-prometheus service", () => {
     ).toHaveLength(2);
   });
 
-  test("counts egress outcomes and catalog preparation independently of log records", ({
-    metrics,
-  }) => {
+  test("counts egress outcomes and catalog preparation independently", ({ metrics }) => {
     for (const outcome of ["forwarded", "refused"] as const) {
       for (const substituted of [false, true]) {
         metrics.record({ type: "secret.egress", outcome, substituted });
@@ -157,9 +148,7 @@ describe("diagnostics-prometheus service", () => {
     `);
   });
 
-  test("distinguishes long runs through one hour without changing shorter-duration histograms", ({
-    metrics,
-  }) => {
+  test("extends run duration buckets without changing short histograms", ({ metrics }) => {
     for (const durationMs of [30_000, 120_000, 900_000, 1_800_000, 3_600_000, 3_600_001]) {
       const run = { runId: "long-run", provider: "test", model: "test-model", durationMs };
       metrics.record({ ...run, type: "run.completed", outcome: "completed" });
@@ -267,9 +256,7 @@ describe("diagnostics-prometheus service", () => {
     `);
   });
 
-  test("exports bounded byte histograms, including late frames and negative heap changes", ({
-    metrics,
-  }) => {
+  test("bounds late-response bytes and signed heap changes", ({ metrics }) => {
     metrics.record(rpc("response", { durationMs: 10, responseBytes: 1024, firstResponse: true }));
     metrics.record(rpc("response", { responseBytes: 67108864, firstResponse: false }));
     for (const heapDeltaBytes of [-2048, 4096]) {
@@ -287,26 +274,8 @@ describe("diagnostics-prometheus service", () => {
       openclaw_gateway_rpc_handler_seconds_count{method="sessions.history"} 3
     `);
     for (const [metric, sum, buckets] of [
-      [
-        "response",
-        67109888,
-        [
-          [1024, 1],
-          [67108864, 2],
-          ["+Inf", 2],
-        ],
-      ],
-      [
-        "handler_heap_delta",
-        2048,
-        [
-          [-1024, 1],
-          [0, 1],
-          [4096, 2],
-          [67108864, 2],
-          ["+Inf", 2],
-        ],
-      ],
+      ["response", 67109888, { 1024: 1, 67108864: 2, "+Inf": 2 }],
+      ["handler_heap_delta", 2048, { "-1024": 1, 0: 1, 4096: 2, 67108864: 2, "+Inf": 2 }],
     ] as const) {
       const name = `openclaw_gateway_rpc_${metric}_bytes`;
       expectMetrics(rendered)(`
@@ -314,7 +283,7 @@ describe("diagnostics-prometheus service", () => {
         ${name}_sum{method="sessions.history"} ${sum}
         ${name}_count{method="sessions.history"} 2
       `);
-      for (const [le, count] of buckets) {
+      for (const [le, count] of Object.entries(buckets)) {
         expect(rendered).toContain(`${name}_bucket{le="${le}",method="sessions.history"} ${count}`);
       }
     }
@@ -328,20 +297,18 @@ describe("diagnostics-prometheus service", () => {
   it.each([
     [
       "records hook-blocked run metrics with safe blocker originator only",
-      [
-        {
-          type: "run.completed",
-          runId: "run-should-not-export",
-          sessionKey: "session-should-not-export",
-          provider: "openai",
-          model: "gpt-5.4",
-          channel: "slack",
-          trigger: "message",
-          durationMs: 250,
-          outcome: "blocked",
-          blockedBy: "policy-plugin",
-        },
-      ],
+      {
+        type: "run.completed",
+        runId: "run-should-not-export",
+        sessionKey: "session-should-not-export",
+        provider: "openai",
+        model: "gpt-5.4",
+        channel: "slack",
+        trigger: "message",
+        durationMs: 250,
+        outcome: "blocked",
+        blockedBy: "policy-plugin",
+      },
       `openclaw_run_completed_total{blocked_by="policy-plugin",channel="slack",model="gpt-5.4",outcome="blocked",provider="openai",trigger="message"} 1`,
       ["run-should-not-export", "session-should-not-export", "matched secret prompt"],
     ],
@@ -372,38 +339,32 @@ describe("diagnostics-prometheus service", () => {
       ],
       `openclaw_model_call_total{api="openai-responses",error_category="none",model="gpt-5.4",observation_unit="request",outcome="completed",provider="openai",transport="http"} 1
 openclaw_model_call_duration_seconds_sum{api="claude-code",error_category="none",model="claude-opus-4-7",observation_unit="turn",outcome="completed",provider="anthropic",transport="stdio-live"} 2.5`,
-      [],
     ],
     [
       "records sanitized async diagnostic queue drop summaries from core diagnostics",
-      [
-        {
-          type: "diagnostic.async_queue.dropped",
-          droppedEvents: 3,
-          droppedTrustedEvents: 1,
-          droppedUntrustedEvents: 2,
-          queueLength: 0,
-          maxQueueLength: 10_000,
-          drainBatchSize: 100,
-        },
-      ],
+      {
+        type: "diagnostic.async_queue.dropped",
+        droppedEvents: 3,
+        droppedTrustedEvents: 1,
+        droppedUntrustedEvents: 2,
+        queueLength: 0,
+        maxQueueLength: 10_000,
+        drainBatchSize: 100,
+      },
       `openclaw_diagnostic_async_queue_dropped_total{drop_class="total"} 3
 openclaw_diagnostic_async_queue_dropped_total{drop_class="trusted"} 1
 openclaw_diagnostic_async_queue_dropped_total{drop_class="untrusted"} 2
 openclaw_diagnostic_async_queue_length 0`,
-      [],
     ],
     [
       "records one metric for one signal-level exporter lifecycle fact",
-      [
-        {
-          type: "telemetry.exporter",
-          exporter: "diagnostics-otel",
-          signal: "logs",
-          status: "started",
-          reason: "configured",
-        },
-      ],
+      {
+        type: "telemetry.exporter",
+        exporter: "diagnostics-otel",
+        signal: "logs",
+        status: "started",
+        reason: "configured",
+      },
       `openclaw_telemetry_exporter_total{exporter="diagnostics-otel",reason="configured",signal="logs",status="started"} 1`,
       [
         'openclaw_telemetry_exporter_total{exporter="diagnostics-otel",reason="configured",signal="logs",status="started"} 2',
@@ -411,14 +372,12 @@ openclaw_diagnostic_async_queue_length 0`,
     ],
     [
       "redacts and bounds label values",
-      [
-        {
-          type: "tool.execution.error",
-          toolName: "shell\nbad",
-          durationMs: 25,
-          errorCategory: "Bearer sk-secret-token-value",
-        },
-      ],
+      {
+        type: "tool.execution.error",
+        toolName: "shell\nbad",
+        durationMs: 25,
+        errorCategory: "Bearer sk-secret-token-value",
+      },
       `openclaw_tool_execution_total{error_category="other",outcome="error",params_kind="unknown",tool="tool",tool_owner="none",tool_source="core"} 1`,
       ["Bearer", "sk-secret"],
     ],
@@ -516,24 +475,22 @@ openclaw_liveness_cpu_core_ratio_sum{reason="event_loop_delay:cpu"} 1.4`,
     ],
     [
       "keeps only the bounded prefix from scoped queue lane labels",
-      [{ type: "queue.lane.enqueue", lane: "dreaming-narrative:session-main", queueSize: 2 }],
+      { type: "queue.lane.enqueue", lane: "dreaming-narrative:session-main", queueSize: 2 },
       `openclaw_queue_lane_size{lane="dreaming-narrative"} 2`,
       ["session-main"],
     ],
     [
       "records skill usage metrics without raw paths or session identifiers",
-      [
-        {
-          type: "skill.used",
-          agentId: "main",
-          runId: "run-should-not-export",
-          sessionKey: "session-should-not-export",
-          skillName: "tiny-llm-brainstorm",
-          skillSource: "workspace",
-          activation: "read",
-          toolName: "read",
-        },
-      ],
+      {
+        type: "skill.used",
+        agentId: "main",
+        runId: "run-should-not-export",
+        sessionKey: "session-should-not-export",
+        skillName: "tiny-llm-brainstorm",
+        skillSource: "workspace",
+        activation: "read",
+        toolName: "read",
+      },
       `# TYPE openclaw_skill_used_total counter
 openclaw_skill_used_total{activation="read",agent="main",skill="tiny-llm-brainstorm",source="workspace"} 1`,
       ["run-should-not-export", "session-should-not-export", "SKILL.md"],
@@ -647,25 +604,18 @@ openclaw_talk_audio_bytes_sum{brain="agent-consult",event_type="input.audio.delt
         "turn-should-not-export",
       ],
     ],
-  ] satisfies Array<
-    [string, Parameters<ReturnType<typeof createMetricsHarness>["record"]>[0][], string, string[]]
-  >)("%s", (_name, events, samples, excluded) => {
+  ] satisfies MetricCase[])("%s", (_name, events, samples, excluded) => {
     const metrics = createMetricsHarness();
-    try {
-      for (const event of events) {
-        metrics.record(event);
-      }
-      const rendered = metrics.render();
-      expectMetrics(rendered)(samples);
-      expectExcludes(rendered, ...excluded);
-    } finally {
-      metrics.stop();
+    onTestFinished(metrics.stop);
+    for (const event of Array.isArray(events) ? events : [events]) {
+      metrics.record(event);
     }
+    const rendered = metrics.render();
+    expectMetrics(rendered)(samples);
+    expectExcludes(rendered, ...(excluded ?? []));
   });
 
-  test("keeps existing operational samples updating when RPC timings fill the shared cap", ({
-    metrics,
-  }) => {
+  test("updates existing samples after RPC timings exhaust the series cap", ({ metrics }) => {
     const queue = {
       ...baseEvent(),
       type: "queue.lane.dequeue" as const,
@@ -708,18 +658,14 @@ openclaw_talk_audio_bytes_sum{brain="agent-consult",event_type="input.audio.delt
     const emitted: unknown[] = [];
     const healthReports: ExporterHealthReport[] = [];
     const error = vi.fn();
+    const noop = () => {};
     const exporter = createDiagnosticsPrometheusExporter();
     const unsubscribe = vi.fn();
 
     exporter.service.start({
       config: {},
       stateDir: "/tmp/openclaw-prometheus-test",
-      logger: {
-        info: vi.fn(),
-        warn: vi.fn(),
-        error,
-        debug: vi.fn(),
-      },
+      logger: { info: noop, warn: noop, error, debug: noop },
       internalDiagnostics: {
         emit: (event) => emitted.push(event),
         onEvent: (listener) => {
@@ -734,18 +680,23 @@ openclaw_talk_audio_bytes_sum{brain="agent-consult",event_type="input.audio.delt
     });
 
     expect(listeners).toHaveLength(1);
-    expectDefined(listeners[0], "Prometheus diagnostics listener")(
-      {
-        ...baseEvent(),
-        type: "model.usage",
-        agentId: "Agent:qa:otel-trace-smoke",
-        provider: "openai",
-        model: "gpt-5.4",
-        usage: { input: 12, output: 3, total: 15 },
-      },
-      trusted,
-      {},
-    );
+    const recordUsage = (
+      usage: Extract<DiagnosticEventPayload, { type: "model.usage" }>["usage"],
+      agentId?: string,
+    ) =>
+      expectDefined(listeners[0], "Prometheus diagnostics listener")(
+        {
+          ...baseEvent(),
+          type: "model.usage",
+          provider: "openai",
+          model: "gpt-5.4",
+          usage,
+          agentId,
+        },
+        trusted,
+        {},
+      );
+    recordUsage({ input: 12, output: 3, total: 15 }, "Agent:qa:otel-trace-smoke");
 
     expect(emitted).toStrictEqual([
       {
@@ -770,21 +721,11 @@ openclaw_talk_audio_bytes_sum{brain="agent-consult",event_type="input.audio.delt
     expect(exporter.render()).not.toContain("Agent:qa:otel-trace-smoke");
 
     const prefix = "x".repeat(499);
-    expectDefined(listeners[0], "Prometheus diagnostics listener")(
-      {
-        ...baseEvent(),
-        type: "model.usage",
-        provider: "openai",
-        model: "gpt-5.4",
-        usage: {
-          get input() {
-            throw new Error(`${prefix}😀`);
-          },
-        },
+    recordUsage({
+      get input() {
+        throw new Error(`${prefix}😀`);
       },
-      trusted,
-      {},
-    );
+    });
     expect(error).toHaveBeenCalledWith(
       `diagnostics-prometheus: event handler failed (model.usage): ${prefix}`,
     );
