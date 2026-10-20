@@ -12,6 +12,8 @@ import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import { mountPeopleSharing } from "./session-people-search.test-support.ts";
 
+const owners = (root: ParentNode) => root.querySelectorAll('[data-value^="assign-owner:"]');
+
 describe("searchable session people", () => {
   it("preserves a loading query until the connection changes", async () => {
     const pending = createDeferred<ReturnType<typeof sessionOwnerProfiles>>();
@@ -26,7 +28,7 @@ describe("searchable session people", () => {
     pending.resolve(sessionOwnerProfiles("Ada", "Bob", "Carol"));
     await waitForFast(() => expect(menu.textContent).toContain("Carol"));
     expect(search.value).toBe("Carol");
-    expect(menu.querySelectorAll('[data-value^="assign-owner:"]')).toHaveLength(1);
+    expect(owners(menu)).toHaveLength(1);
 
     publish({ phase: "reconnecting" });
     publish({ phase: "connected" });
@@ -45,14 +47,12 @@ describe("searchable session people", () => {
     const search = menu.querySelector<HTMLInputElement>('input[type="search"]')!;
     search.value = "Assistant";
     search.dispatchEvent(new InputEvent("input", { bubbles: true }));
-    await waitForSolid(() =>
-      expect(menu.querySelectorAll('[data-value^="assign-owner:"]')).toHaveLength(0),
-    );
+    await waitForSolid(() => expect(owners(menu)).toHaveLength(0));
 
     await agentIdentity.ensure(["research:one"]);
     await waitForSolid(() => expect(menu.textContent).toContain("Research Assistant"));
     expect(search.value).toBe("Assistant");
-    expect(menu.querySelectorAll('[data-value^="assign-owner:"]')).toHaveLength(1);
+    expect(owners(menu)).toHaveLength(1);
   });
 
   it("filters the member directory and preserves remove-member selection", async () => {
@@ -73,10 +73,9 @@ describe("searchable session people", () => {
     );
     expect(root.querySelector("input[type='search']")).toBe(search);
     expect(document.activeElement).toBe(search);
-    expect(
-      root.querySelector('[data-value="member:person-100"] .session-menu__check'),
-    ).not.toBeNull();
-    root.querySelector<HTMLButtonElement>('[data-value="member:person-100"]')!.click();
+    const member = root.querySelector<HTMLButtonElement>('[data-value="member:person-100"]')!;
+    expect(member.querySelector(".session-menu__check")).not.toBeNull();
+    member.click();
     await waitForFast(() => expect(onMemberChange).toHaveBeenCalledWith("person-100", false));
   });
 });

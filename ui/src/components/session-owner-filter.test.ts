@@ -7,7 +7,7 @@ import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import { sessionsResult } from "../lib/sessions/session-capability.test-support.ts";
 import type { SessionListSnapshot } from "../lib/sessions/session-capability.ts";
 import { createApplicationGateway } from "../test-helpers/application-context-fixtures.ts";
-import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import {
   loadStoredSidebarSessionOwnerFilter,
@@ -16,26 +16,22 @@ import {
 import { createSessionOwnerFilterQuery, SessionOwnerFilter } from "./session-owner-filter.ts";
 
 beforeEach(() => vi.stubGlobal("localStorage", createStorageMock()));
-afterEach(() => {
-  cleanupSolid();
-  vi.unstubAllGlobals();
-});
+afterEach(() => vi.unstubAllGlobals());
+
+const gatewayUrl = "wss://one.example/ws";
+const choice = (ownerId: string | null, involvingMe = false) => ({ ownerId, involvingMe });
+const saved = (profile = "profile-ada") => loadStoredSidebarSessionOwnerFilter(gatewayUrl, profile);
 
 function fixture(snapshot: Partial<ApplicationGatewaySnapshot> = {}) {
-  const { gateway } = createApplicationGateway({
-    client: null,
+  const { gateway } = createApplicationGateway();
+  Object.assign(gateway.snapshot, {
     phase: "connected",
-    offlineStable: false,
-    hello: null,
-    canvasPluginSurfaceUrl: null,
     assistantAgentId: "main",
     sessionKey: "agent:main:main",
-    lastError: null,
-    lastErrorCode: null,
     selfUser: { id: "profile-ada" },
     ...snapshot,
   });
-  gateway.connection.gatewayUrl = "wss://one.example/ws";
+  gateway.connection.gatewayUrl = gatewayUrl;
   let facet: SessionListSnapshot | undefined;
   let invalidate = () => {};
   const filter = new SessionOwnerFilter(
@@ -44,10 +40,10 @@ function fixture(snapshot: Partial<ApplicationGatewaySnapshot> = {}) {
   );
   const host = {
     isConnected: false,
-    sidebarSessionOwnerFilter: () => ({
-      ownerId: filter.read().ownerId,
-      involvingMe: filter.read().involvingMe,
-    }),
+    sidebarSessionOwnerFilter: () => {
+      const { ownerId, involvingMe } = filter.read();
+      return { ownerId, involvingMe };
+    },
     sessionData: {
       resetSessionList: vi.fn(),
       refreshSidebarSessions: vi.fn(() => Promise.resolve()),
@@ -76,40 +72,29 @@ function fixture(snapshot: Partial<ApplicationGatewaySnapshot> = {}) {
     host.isConnected = false;
     mounted?.unmount();
   };
-  const update = () => {
+  const update = (patch: Partial<ApplicationGatewaySnapshot> = {}, url?: string) => {
+    Object.assign(gateway.snapshot, patch);
+    if (url) {
+      gateway.connection.gatewayUrl = url;
+    }
     invalidate();
     flush();
   };
   connect();
-  return {
-    host,
-    filter,
-    connect,
-    disconnect,
-    gateway,
-    update,
-    facet: (value: SessionListSnapshot) => {
-      facet = value;
-      update();
-    },
+  const setFacet = (value: SessionListSnapshot) => {
+    facet = value;
+    update();
   };
+  return { host, filter, connect, disconnect, gateway, update, facet: setFacet };
 }
 function ownerFacet(id: string): SessionListSnapshot {
-  return {
-    result: { ...sessionsResult([], 1), owners: [{ type: "human", id }] },
-    loading: false,
-    error: null,
-    agentId: "main",
-    readSucceeded: true,
-  };
+  const result = { ...sessionsResult([], 1), owners: [{ type: "human" as const, id }] };
+  return { result, loading: false, error: null, agentId: "main", readSucceeded: true };
 }
 
-function expectOwner(
-  host: ReturnType<typeof fixture>["host"],
-  ownerId: string | null,
-  involvingMe = false,
-) {
-  expect(host.sidebarSessionOwnerFilter()).toEqual({ ownerId, involvingMe });
+type Host = ReturnType<typeof fixture>["host"];
+function expectOwner(host: Host, ownerId: string | null, involvingMe = false) {
+  expect(host.sidebarSessionOwnerFilter()).toEqual(choice(ownerId, involvingMe));
 }
 
 function expectReads(host: ReturnType<typeof fixture>["host"], scheduled: number, refreshed = 0) {
@@ -131,11 +116,10 @@ describe("sidebar owner filter", () => {
   });
 
   it.each([null, undefined])("uses everyone when self identity is %s", (selfUser) => {
-    const { gateway, host, update } = fixture({ selfUser });
+    const { host, update } = fixture({ selfUser });
     update();
     expectOwner(host, null);
-    gateway.snapshot.selfUser = { id: "profile-ada" };
-    update();
+    update({ selfUser: { id: "profile-ada" } });
     expectOwner(host, "profile-ada");
   });
 
@@ -143,30 +127,24 @@ describe("sidebar owner filter", () => {
     const { gateway, host, update } = fixture();
     update();
     for (const phase of ["reconnecting", "connected"] as const) {
-      gateway.snapshot.phase = phase;
-      gateway.snapshot.selfUser = undefined;
-      update();
+      update({ phase, selfUser: undefined });
       expectOwner(host, "profile-ada");
       expect(host.sessionData.scheduleSidebarSessions).toHaveBeenCalledOnce();
       expect(host.sessionData.resetSessionList).not.toHaveBeenCalled();
     }
-    gateway.snapshot.selfUser = null;
-    update();
+    update({ selfUser: null });
     expectOwner(host, null);
 
-    gateway.snapshot.selfUser = { id: "profile-ada" };
-    update();
-    gateway.connection.gatewayUrl = "wss://two.example/ws";
+    update({ selfUser: { id: "profile-ada" } });
     Object.assign(gateway, { connectionRevision: 1 });
-    gateway.snapshot.selfUser = undefined;
-    update();
+    update({ selfUser: undefined }, "wss://two.example/ws");
     expectOwner(host, null);
   });
 
   it.each(["no query change", "replacement profile", "disconnected host"])(
     "does not carry explicit intent into later automatic work after %s",
     (retirement) => {
-      const { connect, disconnect, filter, host, gateway, update } = fixture();
+      const { connect, disconnect, filter, host, update } = fixture();
       update();
       filter.set(filter.read().ownerId, filter.read().involvingMe);
       if (retirement === "no query change") {
@@ -175,76 +153,53 @@ describe("sidebar owner filter", () => {
         disconnect();
         connect();
       }
-      gateway.snapshot.selfUser = { id: "replacement-profile" };
-      update();
+      update({ selfUser: { id: "replacement-profile" } });
       expectReads(host, 2);
       expectOwner(host, "replacement-profile");
     },
   );
 
-  it.each([
-    { ownerId: "owner-bob", involvingMe: false },
-    { ownerId: null, involvingMe: true },
-    { ownerId: null, involvingMe: false },
-  ])(
+  it.each([choice("owner-bob"), choice(null, true), choice(null)])(
     "restores $ownerId/$involvingMe before initial subscription without another read",
     (savedFilter) => {
-      storeSidebarSessionOwnerFilter("wss://one.example/ws", "profile-ada", savedFilter);
+      storeSidebarSessionOwnerFilter(gatewayUrl, "profile-ada", savedFilter);
       const { filter, host, update } = fixture();
       expect(filter.read()).toMatchObject(savedFilter);
       update();
       update();
       expectReads(host, 1);
-      expect(loadStoredSidebarSessionOwnerFilter("wss://one.example/ws", "profile-ada")).toEqual(
-        savedFilter,
-      );
-      const reloaded = fixture();
-      expect(reloaded.host.sidebarSessionOwnerFilter()).toEqual(savedFilter);
+      expect(saved()).toEqual(savedFilter);
+      expect(fixture().host.sidebarSessionOwnerFilter()).toEqual(savedFilter);
     },
   );
 
   it("keeps profiles and gateways isolated, including a temporarily unavailable identity", () => {
-    const { filter, gateway, update, host } = fixture();
+    const { filter, update, host } = fixture();
     update();
     filter.set("owner-ada");
     update();
-    storeSidebarSessionOwnerFilter("wss://one.example/ws", "profile-bob", {
-      ownerId: null,
-      involvingMe: true,
-    });
-    gateway.snapshot.selfUser = null;
-    update();
+    storeSidebarSessionOwnerFilter(gatewayUrl, "profile-bob", choice(null, true));
+    update({ selfUser: null });
     expectOwner(host, null);
-    gateway.snapshot.selfUser = { id: "profile-bob" };
-    update();
+    update({ selfUser: { id: "profile-bob" } });
     expectOwner(host, null, true);
-    gateway.connection.gatewayUrl = "wss://two.example/ws";
-    update();
+    update({}, "wss://two.example/ws");
     expectOwner(host, "profile-bob");
     filter.set("owner-two");
     update();
-    gateway.connection.gatewayUrl = "wss://one.example/ws";
-    gateway.snapshot.selfUser = { id: "profile-ada" };
-    update();
+    update({ selfUser: { id: "profile-ada" } }, gatewayUrl);
     expect(filter.read().ownerId).toBe("owner-ada");
-    expect(loadStoredSidebarSessionOwnerFilter("wss://one.example/ws", "profile-bob")).toEqual({
-      ownerId: null,
-      involvingMe: true,
-    });
+    expect(saved("profile-bob")).toEqual(choice(null, true));
   });
 
   it("waits for the replacement profile's query before validating its saved owner", async () => {
-    const { filter, host, gateway, update, facet } = fixture();
+    const { filter, host, update, facet } = fixture();
     update();
     facet(ownerFacet("owner-ada"));
-    storeSidebarSessionOwnerFilter("wss://one.example/ws", "profile-bob", {
-      ownerId: "owner-bob",
-      involvingMe: false,
-    });
+    storeSidebarSessionOwnerFilter(gatewayUrl, "profile-bob", choice("owner-bob"));
     const pending = createDeferred();
     host.sessionData.scheduleSidebarSessions.mockReturnValueOnce(pending.promise);
-    gateway.snapshot.selfUser = { id: "profile-bob" };
-    update();
+    update({ selfUser: { id: "profile-bob" } });
     facet(ownerFacet("owner-ada"));
     expect(filter.read().ownerId).toBe("owner-bob");
     expectReads(host, 2);
@@ -275,10 +230,7 @@ describe("sidebar owner filter", () => {
     expect(filter.read().ownerId).toBe("owner-bob");
     facet(ownerFacet("profile-ada"));
     expect(filter.read().ownerId).toBeNull();
-    expect(loadStoredSidebarSessionOwnerFilter("wss://one.example/ws", "profile-ada")).toEqual({
-      ownerId: null,
-      involvingMe: false,
-    });
+    expect(saved()).toEqual(choice(null));
     update();
     expectReads(host, 1, 1);
   });

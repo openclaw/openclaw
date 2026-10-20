@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_SERVER_CAPS as CAPS } from "../../../packages/gateway-protocol/src/index.js";
 import type {
   SessionsPatchManyParams,
   SessionsPatchManyResult,
@@ -33,7 +33,6 @@ export function sessionTarget(row: SidebarRecentSession) {
 export function createHarness(
   params: {
     methods?: string[] | null;
-    capabilities?: string[];
     scopes?: string[];
     current?: boolean;
     staleAfterRequest?: number;
@@ -77,9 +76,7 @@ export function createHarness(
           ? {}
           : {
               methods: params.methods ?? [...SESSION_MUTATION_TEST_METHODS],
-              capabilities: params.capabilities ?? [
-                GATEWAY_SERVER_CAPS.SESSION_UNREAD_ACK_CONTRACT,
-              ],
+              capabilities: [CAPS.SESSION_UNREAD_ACK_CONTRACT],
             },
       auth: { role: "operator", scopes: params.scopes ?? ["operator.write"] },
     },
