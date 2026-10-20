@@ -1,15 +1,13 @@
-// Codex tests protect native-home ownership and prepared billing routes.
 import type { AuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
   applyCodexAppServerAuthProfile,
   resolveCodexAppServerPreparedAuthHandoff,
 } from "./auth-bridge.js";
-import type { CodexAppServerHomeScope } from "./config-contracts.js";
+import type { CodexAppServerHomeScope as Home } from "./config-contracts.js";
 
 const AGENT_DIR = "/tmp/openclaw-codex-auth-matrix";
 const SUBSCRIPTION_REQUIRED_ERROR = "subscription profile required";
-const SUBSCRIPTION_UNUSABLE_ERROR = "subscription profile unusable";
 
 type StoredProfileKind = "oauth" | "api_key" | "unusable" | "none";
 type AuthRequirement = "subscription" | "api-key" | undefined;
@@ -40,7 +38,7 @@ function buildStore(kind: StoredProfileKind): AuthProfileStore {
 const handoffDefaults = {
   agentDir: AGENT_DIR,
   subscriptionProfileRequiredError: SUBSCRIPTION_REQUIRED_ERROR,
-  subscriptionProfileUnusableError: SUBSCRIPTION_UNUSABLE_ERROR,
+  subscriptionProfileUnusableError: "subscription profile unusable",
 };
 
 const preparedKey = {
@@ -57,12 +55,8 @@ const nativeProfile = (nativeAuthProfile: boolean) => ({
   nativeAuthProfile,
 });
 const nativeHome = { nativeAuthProfile: true };
-const HANDOFF_MATRIX: [
-  CodexAppServerHomeScope,
-  AuthRequirement,
-  StoredProfileKind,
-  Record<string, unknown> | string,
-][] = [
+type Handoff = [Home, AuthRequirement, StoredProfileKind, Record<string, unknown> | string];
+const HANDOFF_MATRIX: Handoff[] = [
   ["agent", "api-key", "oauth", preparedKey],
   ["agent", "api-key", "none", preparedKey],
   ["agent", "subscription", "oauth", preparedProfile],
@@ -148,10 +142,8 @@ describe("native Codex account verification", () => {
       } else {
         await expect(apply).resolves.toBeUndefined();
       }
-      expect(
-        request.mock.calls.map(([method, requestParams]) => ({ method, params: requestParams })),
-      ).toEqual(
-        authRequirement ? [{ method: "account/read", params: { refreshToken: false } }] : [],
+      expect(request.mock.calls.map(([method, params]) => [method, params])).toEqual(
+        authRequirement ? [["account/read", { refreshToken: false }]] : [],
       );
     },
   );

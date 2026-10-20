@@ -1,13 +1,15 @@
 import assert from "node:assert/strict";
-import fs from "node:fs/promises";
-import { fileURLToPath } from "node:url";
 import { nativeHookRelayTesting } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  acquireInitializedLease,
+  setupStartupLifecycle,
+} from "./attempt-startup-lifecycle.test-support.js";
 import {
   answerInitialize,
   createAttemptPaths,
@@ -22,30 +24,13 @@ import { CodexAppServerClient } from "./client.js";
 import { threadStartResult as createThreadStartResult } from "./codex-app-server.test-fixtures.js";
 import { type CodexPluginConfig, resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { setCodexTestToolFactory } from "./host-capability.test-support.js";
-import { setManagedCodexPluginRoot } from "./managed-binary.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
-import { defaultCodexPluginMetadataCache } from "./plugin-metadata-cache.js";
 import * as runAttemptResources from "./run-attempt-resources.js";
-import {
-  createCodexRuntimePlanFixture,
-  createRuntimeDynamicTool,
-  createStartedThreadHarness,
-  createTestParams,
-  runCodexAppServerAttempt,
-  setCodexTestModelSupportsTools,
-  setupRunAttemptTestHooks,
-} from "./run-attempt-test-harness.js";
+import * as attempts from "./run-attempt-test-harness.js";
 import * as sandboxExecServer from "./sandbox-exec-server.js";
 import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
-import {
-  resetCodexTestBindingStore,
-  testCodexAppServerBindingStore,
-} from "./session-binding.test-helpers.js";
-import {
-  clearSharedCodexAppServerClientAndWait,
-  getLeasedSharedCodexAppServerClient,
-  releaseLeasedSharedCodexAppServerClient,
-} from "./shared-client.js";
+import { testCodexAppServerBindingStore } from "./session-binding.test-helpers.js";
+import { releaseLeasedSharedCodexAppServerClient } from "./shared-client.js";
 import { createInferenceReadyClientHarness } from "./test-support.js";
 
 vi.mock("./desktop-generation.js", async (importOriginal) => ({
@@ -70,27 +55,7 @@ function sendLateThread(harness: ReturnType<typeof createAttemptClientHarness>, 
 }
 
 describe("startup cancellation with a healthy peer and replacement attempt", () => {
-  beforeEach(async () => {
-    vi.stubEnv("CODEX_API_KEY", "");
-    vi.stubEnv("OPENAI_API_KEY", "");
-    await clearSharedCodexAppServerClientAndWait();
-    setManagedCodexPluginRoot(fileURLToPath(new URL("../../", import.meta.url)));
-    defaultCodexPluginMetadataCache.clear();
-    resetCodexTestBindingStore();
-  });
-
-  afterEach(async () => {
-    vi.useRealTimers();
-    await clearSharedCodexAppServerClientAndWait();
-    setManagedCodexPluginRoot(undefined);
-    defaultCodexPluginMetadataCache.clear();
-    vi.restoreAllMocks();
-    vi.unstubAllEnvs();
-    for (const root of tempRoots) {
-      await fs.rm(root, { recursive: true, force: true });
-    }
-    tempRoots.clear();
-  });
+  setupStartupLifecycle(tempRoots);
 
   it("retires indeterminate thread startup while another leased peer completes", async () => {
     const threadWritten = createDeferred<{ id: number }>();
@@ -111,12 +76,10 @@ describe("startup cancellation with a healthy peer and replacement attempt", () 
     const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
     const paths = createAttemptPaths(tempRoots);
 
-    const retainedLease = getLeasedSharedCodexAppServerClient({
+    await acquireInitializedLease(retained, {
       startOptions: appServer.start,
       agentDir: paths.agentDir,
     });
-    await answerInitialize(retained);
-    await expect(retainedLease).resolves.toBe(retained.client);
 
     const peer = retained.client.request("turn/start", { threadId: "healthy-peer" });
     void peer.catch(() => undefined);
@@ -166,8 +129,9 @@ describe("startup cancellation with a healthy peer and replacement attempt", () 
     expect(tool).not.toHaveBeenCalled();
     expect(mutate).toHaveBeenCalledTimes(writesAfterReplacement);
     expect(testCodexAppServerBindingStore.read(bindingKey)).toEqual(binding);
-    expect(readHarnessRequestMethods(replacement)).not.toContain("thread/unsubscribe");
-    expect(readHarnessRequestMethods(replacement)).not.toContain("turn/start");
+    for (const forbidden of ["thread/unsubscribe", "turn/start"]) {
+      expect(readHarnessRequestMethods(replacement)).not.toContain(forbidden);
+    }
     // Positive route control: only the authoritative client's tool request runs.
     replacement.send({ id: "current-tool", ...toolRequest });
     await vi.waitFor(() => expect(tool).toHaveBeenCalledTimes(1));
@@ -183,21 +147,21 @@ describe("startup cancellation with a healthy peer and replacement attempt", () 
 });
 
 describe("Codex runtime startup resource lifetime", () => {
-  setupRunAttemptTestHooks();
+  attempts.setupRunAttemptTestHooks();
   afterEach(() => clearRuntimeConfigSnapshot());
 
   it.each(["capture-failed", "abort"] as const)(
     "releases allocated runtime owners once when native monitor setup ends with %s",
     async (ending) => {
-      const harness = createStartedThreadHarness();
-      const params = createTestParams();
+      const harness = attempts.createStartedThreadHarness();
+      const params = attempts.createTestParams();
       setRuntimeConfigSnapshot(params.config ?? {});
       const abortController = new AbortController();
       params.abortSignal = abortController.signal;
       params.sandbox = createSandboxContext({});
-      params.runtimePlan = createCodexRuntimePlanFixture();
-      setCodexTestModelSupportsTools(params, true);
-      setCodexTestToolFactory(params, () => [createRuntimeDynamicTool("message")]);
+      params.runtimePlan = attempts.createCodexRuntimePlanFixture();
+      attempts.setCodexTestModelSupportsTools(params, true);
+      setCodexTestToolFactory(params, () => [attempts.createRuntimeDynamicTool("message")]);
       const resourcesSpy = vi.spyOn(runAttemptResources, "prepareCodexAttemptResources");
       const releaseSandbox = vi.spyOn(
         sandboxExecServer,
@@ -215,15 +179,12 @@ describe("Codex runtime startup resource lifetime", () => {
         .spyOn(codexNativeSubagentMonitorRuntime, "register")
         .mockImplementationOnce(async (options) => {
           const state = resourcesSpy.mock.results[0]?.value.state;
-          assert(state?.turnRoute, "startup must allocate a route before monitor setup");
           assert(
-            state.sandboxExecEnvironment,
-            "startup must allocate a sandbox before monitor setup",
-          );
-          assert(state.nativeHookRelay, "startup must allocate a relay before monitor setup");
-          assert(
-            state.releaseSharedClientLease,
-            "startup must allocate a client lease before monitor setup",
+            state?.turnRoute &&
+              state.sandboxExecEnvironment &&
+              state.nativeHookRelay &&
+              state.releaseSharedClientLease,
+            "startup must allocate route, sandbox, relay and client lease before monitor setup",
           );
           vi.spyOn(state.turnRoute, "release");
           vi.spyOn(state.nativeHookRelay, "unregister");
@@ -243,7 +204,7 @@ describe("Codex runtime startup resource lifetime", () => {
         });
 
       try {
-        const run = runCodexAppServerAttempt(params, {
+        const run = attempts.runCodexAppServerAttempt(params, {
           pluginConfig: { appServer: { mode: "yolo", experimental: { sandboxExecServer: true } } },
           nativeHookRelay: { enabled: true, events: ["pre_tool_use"] },
         });
@@ -271,13 +232,10 @@ describe("Codex runtime startup resource lifetime", () => {
         expect
           .soft(releaseSandbox)
           .toHaveBeenCalledExactlyOnceWith(params.sandbox, owners.sandboxExecEnvironment);
-        expect
-          .soft(
-            nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(
-              owners.nativeHookRelay!.relayId,
-            ),
-          )
-          .toBeUndefined();
+        const relay = nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(
+          owners.nativeHookRelay!.relayId,
+        );
+        expect.soft(relay).toBeUndefined();
         expect(harness.requests.some((request) => request.method === "turn/start")).toBe(false);
       } finally {
         releaseCapture.resolve();

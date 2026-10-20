@@ -3,7 +3,7 @@ import {
   replaceRuntimeAuthProfileStoreSnapshots,
   type AuthProfileStore,
 } from "openclaw/plugin-sdk/agent-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   fingerprintCodexAppServerAuthBinding,
   prepareCodexAppServerAuthBinding,
@@ -20,6 +20,7 @@ const bindingParams = (credential: AuthProfileStore["profiles"][string]) => ({
   authProfileId: profileId,
   authProfileStore: storeWith(credential),
   agentDir: "/tmp/openclaw-codex-auth-binding",
+  config: {},
 });
 const authConfig = (provider: string, mode: "api_key" | "token") => ({
   auth: { profiles: { [profileId]: { provider, mode } } },
@@ -28,7 +29,6 @@ const authConfig = (provider: string, mode: "api_key" | "token") => ({
 describe("Codex app-server auth binding", () => {
   afterEach(() => {
     clearRuntimeAuthProfileStoreSnapshots();
-    vi.unstubAllEnvs();
   });
 
   it.each([true, false])(
@@ -43,7 +43,7 @@ describe("Codex app-server auth binding", () => {
         refresh: `fake-refresh-${rotation}`,
         expires: Date.now() + 60_000,
       });
-      const params = { ...bindingParams(credential("workspace-a", "first")), config: {} };
+      const params = bindingParams(credential("workspace-a", "first"));
       const store = params.authProfileStore;
       const prepared = await prepareCodexAppServerAuthBinding(params);
       const first = prepared?.fingerprint;
@@ -63,17 +63,7 @@ describe("Codex app-server auth binding", () => {
 
   it("names a repair when a selected profile cannot resolve credentials", async () => {
     await expect(
-      prepareCodexAppServerAuthBinding({
-        authProfileId: "openai:missing-key",
-        authProfileStore: {
-          version: 1,
-          profiles: {
-            "openai:missing-key": { type: "api_key", provider: "openai" },
-          },
-        },
-        agentDir: "/tmp/codex-binding",
-        config: {},
-      }),
+      prepareCodexAppServerAuthBinding(bindingParams({ type: "api_key", provider: "openai" })),
     ).rejects.toThrow(/could not resolve.*[Rr]epair/);
   });
 
@@ -86,19 +76,13 @@ describe("Codex app-server auth binding", () => {
           ? { type, provider: "openai", key: "work-key" }
           : { type, provider: "openai", token },
       );
-      await expect(
+      const snapshot = (provider: string) =>
         resolveCodexAppServerPreparedAuthProfileSnapshot({
           ...params,
-          config: authConfig("anthropic", type),
-        }),
-      ).rejects.toThrow("does not contain usable credentials");
-
-      await expect(
-        resolveCodexAppServerPreparedAuthProfileSnapshot({
-          ...params,
-          config: authConfig("openai", type),
-        }),
-      ).resolves.toMatchObject({
+          config: authConfig(provider, type),
+        });
+      await expect(snapshot("anthropic")).rejects.toThrow("does not contain usable credentials");
+      await expect(snapshot("openai")).resolves.toMatchObject({
         loginParams:
           type === "api_key"
             ? { type: "apiKey", apiKey: "work-key" }
