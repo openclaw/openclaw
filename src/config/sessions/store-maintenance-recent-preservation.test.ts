@@ -1,6 +1,5 @@
-// Recent-session preservation tests cover the operator-configured retention shield.
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
@@ -13,6 +12,19 @@ import {
 import type { SessionEntry } from "./types.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const recentKey = "agent:main:dashboard:recent";
+const staleKey = "agent:main:dashboard:stale";
+const preserveRecentMs = 7 * DAY_MS;
+
+afterEach(() => resetPluginRuntimeStateForTest());
+
+function entry(
+  sessionId: string,
+  updatedAt: number,
+  extra: Partial<SessionEntry> = {},
+): SessionEntry {
+  return { sessionId, updatedAt, ...extra };
+}
 
 function installThrowingConversationResolver() {
   const resolveSessionConversation = vi.fn(() => {
@@ -60,34 +72,26 @@ describe("recent session maintenance preservation", () => {
         [...protectedKeys, ...removableKeys].map((key) => [key, { sessionId: key, updatedAt }]),
       );
 
-      try {
-        if (boundary === "pruning") {
-          expect(pruneStaleEntries(store, 30 * DAY_MS, { log: false })).toBe(1);
-        } else {
-          expect(capEntryCount(store, protectedKeys.length, { log: false })).toBe(3);
-        }
-
-        for (const key of protectedKeys) {
-          expect(store[key]).toEqual({ sessionId: key, updatedAt });
-        }
-        expect(resolveSessionConversation).not.toHaveBeenCalled();
-      } finally {
-        resetPluginRuntimeStateForTest();
+      if (boundary === "pruning") {
+        expect(pruneStaleEntries(store, 30 * DAY_MS, { log: false })).toBe(1);
+      } else {
+        expect(capEntryCount(store, protectedKeys.length, { log: false })).toBe(3);
       }
+      for (const key of protectedKeys) {
+        expect(store[key]).toEqual({ sessionId: key, updatedAt });
+      }
+      expect(resolveSessionConversation).not.toHaveBeenCalled();
     },
   );
 
   it("is opt-in and keeps recent interactive sessions through prune and cap pressure", () => {
     const now = Date.now();
-    const recentKey = "agent:main:dashboard:recent";
-    const staleKey = "agent:main:dashboard:stale";
     const syntheticKey = "agent:main:subagent:recent-worker";
     const store: Record<string, SessionEntry> = {
-      [recentKey]: { sessionId: "recent", updatedAt: now - DAY_MS },
-      [staleKey]: { sessionId: "stale", updatedAt: now - 8 * DAY_MS },
-      [syntheticKey]: { sessionId: "synthetic", updatedAt: now - DAY_MS },
+      [recentKey]: entry("recent", now - DAY_MS),
+      [staleKey]: entry("stale", now - 8 * DAY_MS),
+      [syntheticKey]: entry("synthetic", now - DAY_MS),
     };
-    const preserveRecentMs = 7 * DAY_MS;
 
     expect(resolveMaintenanceConfigFromInput().preserveRecentMs).toBeNull();
     expect(
@@ -97,11 +101,7 @@ describe("recent session maintenance preservation", () => {
       preserveRecentMs,
     );
 
-    expect(
-      pruneStaleEntries(store, 12 * 60 * 60 * 1000, {
-        preserveRecentMs,
-      }),
-    ).toBe(1);
+    expect(pruneStaleEntries(store, 12 * 60 * 60 * 1000, { preserveRecentMs })).toBe(1);
     expect(store).toHaveProperty(recentKey);
     expect(store[staleKey]?.archivedAt).toEqual(expect.any(Number));
     expect(store).not.toHaveProperty(syntheticKey);
@@ -114,51 +114,35 @@ describe("recent session maintenance preservation", () => {
 
   it("keeps recent and external sessions under disk pressure without invoking plugins", async () => {
     const resolveSessionConversation = installThrowingConversationResolver();
-    try {
-      await withTestDir({ prefix: "openclaw-preserve-recent-budget-" }, async (dir) => {
-        const now = Date.now();
-        const recentKey = "agent:main:dashboard:recent";
-        const staleKey = "agent:main:dashboard:stale";
-        const externalKey = "agent:main:broken:group:room:thread:reply";
-        const store: Record<string, SessionEntry> = {
-          [recentKey]: {
-            sessionId: "recent",
-            updatedAt: now,
-            displayName: "r".repeat(4_000),
-          },
-          [staleKey]: {
-            sessionId: "stale",
-            updatedAt: now - 8 * DAY_MS,
-            archivedAt: now - 8 * DAY_MS,
-            archiveReason: "active-session-cap",
-            displayName: "s".repeat(4_000),
-          },
-          [externalKey]: {
-            sessionId: "external",
-            updatedAt: now - 9 * DAY_MS,
-            displayName: "e".repeat(4_000),
-          },
-        };
+    await withTestDir({ prefix: "openclaw-preserve-recent-budget-" }, async (dir) => {
+      const now = Date.now();
+      const externalKey = "agent:main:broken:group:room:thread:reply";
+      const store: Record<string, SessionEntry> = {
+        [recentKey]: entry("recent", now, { displayName: "r".repeat(4_000) }),
+        [staleKey]: entry("stale", now - 8 * DAY_MS, {
+          archivedAt: now - 8 * DAY_MS,
+          archiveReason: "active-session-cap",
+          displayName: "s".repeat(4_000),
+        }),
+        [externalKey]: entry("external", now - 9 * DAY_MS, { displayName: "e".repeat(4_000) }),
+      };
 
-        const result = await enforceSessionDiskBudget({
-          store,
-          storePath: path.join(dir, "sessions.json"),
-          maintenance: {
-            highWaterBytes: 1,
-            maxDiskBytes: 1,
-            preserveRecentMs: 7 * DAY_MS,
-          },
-          warnOnly: false,
-        });
-
-        expect(result?.removedEntries).toBe(1);
-        expect(store).toHaveProperty(recentKey);
-        expect(store).toHaveProperty(externalKey);
-        expect(store).not.toHaveProperty(staleKey);
-        expect(resolveSessionConversation).not.toHaveBeenCalled();
+      const result = await enforceSessionDiskBudget({
+        store,
+        storePath: path.join(dir, "sessions.json"),
+        maintenance: {
+          highWaterBytes: 1,
+          maxDiskBytes: 1,
+          preserveRecentMs,
+        },
+        warnOnly: false,
       });
-    } finally {
-      resetPluginRuntimeStateForTest();
-    }
+
+      expect(result?.removedEntries).toBe(1);
+      expect(store).toHaveProperty(recentKey);
+      expect(store).toHaveProperty(externalKey);
+      expect(store).not.toHaveProperty(staleKey);
+      expect(resolveSessionConversation).not.toHaveBeenCalled();
+    });
   });
 });

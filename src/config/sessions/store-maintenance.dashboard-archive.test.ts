@@ -12,11 +12,22 @@ function entry(updatedAt: number, extra: Partial<SessionEntry> = {}): SessionEnt
   return { sessionId: `session-${updatedAt}`, updatedAt, ...extra };
 }
 
-function artifacts() {
-  return {
-    archiveRemovedSessionTranscripts: async () => new Set<string>(),
-    cleanupArchivedSessionTranscripts: async () => {},
-  };
+function maintain(store: Record<string, SessionEntry>, mode: "warn" | "enforce" = "enforce") {
+  return applyFileBackedSessionStoreMaintenance({
+    storePath: "/tmp/openclaw-sessions/sessions.json",
+    store,
+    maintenanceConfig: resolveMaintenanceConfigFromInput({
+      mode,
+      pruneAfter: "30d",
+      archiveDashboardAfter: "7d",
+      maxDiskBytes: false,
+    }),
+    log: { warn: () => {}, info: () => {} },
+    artifacts: {
+      archiveRemovedSessionTranscripts: async () => new Set<string>(),
+      cleanupArchivedSessionTranscripts: async () => {},
+    },
+  });
 }
 
 describe("archiveStaleDashboardEntries", () => {
@@ -41,8 +52,7 @@ describe("archiveStaleDashboardEntries", () => {
         preserveKeys: new Set([preservedKey]),
       }),
     ).toBe(1);
-    expect(store[staleKey]?.archivedAt).toBe(now);
-    expect(store[staleKey]?.archiveReason).toBe("stale-dashboard");
+    expect(store[staleKey]).toMatchObject({ archivedAt: now, archiveReason: "stale-dashboard" });
     expect(store[activeKey]?.archivedAt).toBeUndefined();
     expect(store[preservedKey]?.archivedAt).toBeUndefined();
   });
@@ -86,37 +96,18 @@ describe("dashboard archive maintenance ordering", () => {
     const dashboardKey = "agent:main:dashboard:stale-visible-session";
     const store = { [dashboardKey]: entry(Date.now() - 31 * DAY_MS) };
 
-    await applyFileBackedSessionStoreMaintenance({
-      storePath: "/tmp/openclaw-sessions/sessions.json",
-      store,
-      maintenanceConfig: resolveMaintenanceConfigFromInput({
-        pruneAfter: "30d",
-        maxDiskBytes: false,
-      }),
-      log: { warn: () => {}, info: () => {} },
-      artifacts: artifacts(),
+    await maintain(store);
+    expect(store[dashboardKey]).toMatchObject({
+      archivedAt: expect.any(Number),
+      archiveReason: "stale-dashboard",
     });
-
-    expect(store[dashboardKey]?.archivedAt).toEqual(expect.any(Number));
-    expect(store[dashboardKey]?.archiveReason).toBe("stale-dashboard");
   });
 
   it("does not archive in warn mode", async () => {
     const dashboardKey = "agent:main:dashboard:warn-only";
     const store = { [dashboardKey]: entry(Date.now() - 10 * DAY_MS) };
 
-    await applyFileBackedSessionStoreMaintenance({
-      storePath: "/tmp/openclaw-sessions/sessions.json",
-      store,
-      maintenanceConfig: resolveMaintenanceConfigFromInput({
-        mode: "warn",
-        archiveDashboardAfter: "7d",
-        maxDiskBytes: false,
-      }),
-      log: { warn: () => {}, info: () => {} },
-      artifacts: artifacts(),
-    });
-
+    await maintain(store, "warn");
     expect(store[dashboardKey]?.archivedAt).toBeUndefined();
   });
 });

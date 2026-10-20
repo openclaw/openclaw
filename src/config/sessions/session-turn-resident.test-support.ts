@@ -50,6 +50,15 @@ function countReads(f: Fixture) {
   );
 }
 
+function withReads(f: Fixture, run: (counts: { read: number }) => void) {
+  const reads = countReads(f);
+  try {
+    run(reads.counts);
+  } finally {
+    reads.restore();
+  }
+}
+
 async function stage(f: Fixture, plan: SessionTurnPlan) {
   const before = withEngineStoreAdmission(() => f.read());
   const pending = {
@@ -99,22 +108,19 @@ export function runSessionTurnResidentTests(
         transcriptInputId: pending.inputId,
       };
       withEngineStoreAdmission(() => {
-        const reads = countReads(f);
-        try {
+        withReads(f, (reads) => {
           expect(f.prepareTurn(plan)).toMatchObject({
             runtimeTarget: { sessionKey: f.scope.sessionKey, selectedSessionId: f.scope.sessionId },
             expectedSessionState: { restartRecoveryDeliveryRunId: "next-run" },
             messages: [{ pending: true, existing: undefined }],
             version: { rawSeq: null },
           });
-          expect(reads.counts.read).toBe(0);
+          expect(reads.read).toBe(0);
           // Resident pending rows are facts, never permission to consume another input.
           expect(() => f.prepareTurn({ ...plan, custody: undefined })).toThrow(
             "Pending input cannot be appended outside its admitted turn",
           );
-        } finally {
-          reads.restore();
-        }
+        });
       });
     });
   });
@@ -150,14 +156,10 @@ export function runSessionTurnResidentTests(
             },
           ]),
         );
-        const prepared = f.prepareTurn(turn(f));
-        expect(prepared.expectedSessionState).toMatchObject({
-          restartRecoveryDeliveryRunId: "native-run",
-        });
-        expect(prepared.version?.rawSeq).toBe(0);
-        expect(prepared.messages?.[0]?.existing).toMatchObject({
-          messageId: "native",
-          message: { content: "native write" },
+        expect(f.prepareTurn(turn(f))).toMatchObject({
+          expectedSessionState: { restartRecoveryDeliveryRunId: "native-run" },
+          version: { rawSeq: 0 },
+          messages: [{ existing: { messageId: "native", message: { content: "native write" } } }],
         });
       }),
     );
@@ -204,8 +206,7 @@ export function runSessionTurnResidentTests(
               f.read({ ...f.target, sessionKey: `agent:main:other-${index}` });
             }
           }
-          const reads = countReads(f);
-          try {
+          withReads(f, (reads) => {
             expect(f.prepareTurn(turn(f))).toMatchObject({
               runtimeTarget: {
                 sessionKey: f.scope.sessionKey,
@@ -213,10 +214,8 @@ export function runSessionTurnResidentTests(
               },
               messages: [{ pending: false, existing: undefined }],
             });
-            expect(reads.counts.read).toBeGreaterThan(1);
-          } finally {
-            reads.restore();
-          }
+            expect(reads.read).toBeGreaterThan(1);
+          });
         }),
       );
     },
@@ -238,14 +237,13 @@ export function runSessionTurnResidentTests(
       };
       await f.prepare(command);
       expect(withEngineStoreAdmission(() => f.mutate(command)).kind).toBe("committed");
-      withEngineStoreAdmission(() => {
-        const reads = countReads(f);
-        try {
+      withEngineStoreAdmission(() =>
+        withReads(f, (reads) => {
           expect(f.prepareTurn(turn(f))).toMatchObject({
             version: { rawSeq: 1 },
             expectedSessionState: { restartRecoveryDeliveryRunId: "append-run" },
           });
-          expect(reads.counts.read).toBe(0);
+          expect(reads.read).toBe(0);
           const retry = turn(f, "committed-input");
           retry.options.messages[0]!.message = {
             role: "user",
@@ -255,10 +253,8 @@ export function runSessionTurnResidentTests(
           expect(f.prepareTurn(retry).messages?.[0]?.existing).toMatchObject({
             message: { content: "committed-input" },
           });
-        } finally {
-          reads.restore();
-        }
-      });
+        }),
+      );
     });
   });
 
@@ -286,13 +282,10 @@ export function runSessionTurnResidentTests(
           });
           expect(f.prepareTurn(plan).messages).toEqual(prepared.messages);
         }
-        const reads = countReads(f);
-        try {
+        withReads(f, (reads) => {
           expect(f.prepareTurn(turn(f)).messages?.[0]?.existing).toBeUndefined();
-          expect(reads.counts.read).toBe(1);
-        } finally {
-          reads.restore();
-        }
+          expect(reads.read).toBe(1);
+        });
       }),
     );
   });

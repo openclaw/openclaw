@@ -1,4 +1,3 @@
-// Session config tests cover session creation, updates, and persistence.
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -54,6 +53,17 @@ type NormalizationCase = {
   absent?: string[];
   sessionKey?: string;
 };
+
+const repairBacklog = [
+  {
+    id: "repair-1",
+    text: "recoverable assistant final",
+    provider: "openai",
+    model: "gpt-5.5",
+    createdAt: 42,
+  },
+  { id: "repair-2", text: "second recoverable assistant final", createdAt: 43 },
+];
 
 it.each<NormalizationCase>([
   {
@@ -159,30 +169,8 @@ it.each<NormalizationCase>([
   },
   {
     name: "preserves the assistant transcript repair backlog",
-    input: {
-      pendingTranscriptRepair: [
-        {
-          id: "repair-1",
-          text: "recoverable assistant final",
-          provider: "openai",
-          model: "gpt-5.5",
-          createdAt: 42,
-        },
-        { id: "repair-2", text: "second recoverable assistant final", createdAt: 43 },
-      ],
-    },
-    expected: {
-      pendingTranscriptRepair: [
-        {
-          id: "repair-1",
-          text: "recoverable assistant final",
-          provider: "openai",
-          model: "gpt-5.5",
-          createdAt: 42,
-        },
-        { id: "repair-2", text: "second recoverable assistant final", createdAt: 43 },
-      ],
-    },
+    input: { pendingTranscriptRepair: structuredClone(repairBacklog) },
+    expected: { pendingTranscriptRepair: repairBacklog },
   },
   ...[
     { id: "repair-1", text: "recoverable assistant final", createdAt: 42 },

@@ -14,15 +14,11 @@ describe("session store target dedupe", () => {
         agentId: "main",
         storePath: path.join(home, `shared-${index}.sqlite`),
       }));
-      const readRegistry = vi.spyOn(databaseRegistry, "listOpenClawRegisteredAgentDatabases");
-      try {
-        expect(
-          dedupeSessionStoreTargetsBySqliteTarget(targets, { defaultAgentId: "main" }),
-        ).toEqual(targets);
-        expect(readRegistry).toHaveBeenCalledTimes(1);
-      } finally {
-        readRegistry.mockRestore();
-      }
+      using readRegistry = vi.spyOn(databaseRegistry, "listOpenClawRegisteredAgentDatabases");
+      expect(dedupeSessionStoreTargetsBySqliteTarget(targets, { defaultAgentId: "main" })).toEqual(
+        targets,
+      );
+      expect(readRegistry).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -69,20 +65,16 @@ describe("session store target dedupe", () => {
           defaultAgentId: "main",
           registeredDatabases: [{ agentId: "ops", path: path.join(realDir, "shared.sqlite") }],
         };
-        const exactLocator = path.join(aliasDir, "shared.sqlite");
-        const customLocator = path.join(aliasDir, "shared.json");
-        expect(
-          resolveSqliteTargetFromSessionStorePath(exactLocator, resolverOptions),
-        ).toMatchObject({
+        const resolve = (name: string) =>
+          resolveSqliteTargetFromSessionStorePath(path.join(aliasDir, name), resolverOptions);
+        expect(resolve("shared.sqlite")).toMatchObject({
           agentId: "ops",
           ownerSource: "database-registry",
-          path: exactLocator,
+          path: path.join(aliasDir, "shared.sqlite"),
           shared: true,
         });
-        expect(
-          resolveSqliteTargetFromSessionStorePath(customLocator, resolverOptions),
-        ).toMatchObject({
-          path: exactLocator,
+        expect(resolve("shared.json")).toMatchObject({
+          path: path.join(aliasDir, "shared.sqlite"),
           unsuffixedOwnerAgentId: "ops",
         });
 
@@ -99,17 +91,13 @@ describe("session store target dedupe", () => {
         await fs.mkdir(otherDir);
         await fs.unlink(aliasDir);
         await fs.symlink(otherDir, aliasDir, "dir");
-        expect(
-          resolveSqliteTargetFromSessionStorePath(exactLocator, resolverOptions),
-        ).toMatchObject({
+        expect(resolve("shared.sqlite")).toMatchObject({
           agentId: "main",
           ownerSource: "configured-default",
-          path: exactLocator,
+          path: path.join(aliasDir, "shared.sqlite"),
           shared: true,
         });
-        expect(
-          resolveSqliteTargetFromSessionStorePath(customLocator, resolverOptions),
-        ).toMatchObject({
+        expect(resolve("shared.json")).toMatchObject({
           path: path.join(aliasDir, "shared.ops.sqlite"),
           unsuffixedOwnerAgentId: "main",
         });
@@ -143,22 +131,18 @@ describe("session store target dedupe", () => {
       const databasePaths = new Set(
         [...databaseDirs].map((databaseDir) => path.join(databaseDir, "openclaw-agent.sqlite")),
       );
-      const realpathNative = vi.spyOn(realpathSync, "native");
-      try {
-        expect(
-          dedupeSessionStoreTargetsBySqliteTarget([...targets, ...targets], {
-            defaultAgentId: targets[0]!.agentId,
-          }),
-        ).toEqual(targets);
-        // Parent lookup can use fs-safe's native backend; every identity starts here.
-        const preparedPaths = realpathNative.mock.calls.flatMap(([pathname]) =>
-          typeof pathname === "string" && databasePaths.has(pathname) ? [pathname] : [],
-        );
-        expect(preparedPaths).toHaveLength(targets.length);
-        expect(new Set(preparedPaths).size).toBe(preparedPaths.length);
-      } finally {
-        realpathNative.mockRestore();
-      }
+      using realpathNative = vi.spyOn(realpathSync, "native");
+      expect(
+        dedupeSessionStoreTargetsBySqliteTarget([...targets, ...targets], {
+          defaultAgentId: targets[0]!.agentId,
+        }),
+      ).toEqual(targets);
+      // Parent lookup can use fs-safe's native backend; every identity starts here.
+      const preparedPaths = realpathNative.mock.calls.flatMap(([pathname]) =>
+        typeof pathname === "string" && databasePaths.has(pathname) ? [pathname] : [],
+      );
+      expect(preparedPaths).toHaveLength(targets.length);
+      expect(new Set(preparedPaths).size).toBe(preparedPaths.length);
     });
   });
 });
