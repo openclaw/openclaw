@@ -96,14 +96,12 @@ describe("plugin link-reader discovery", () => {
         register("writer", { write: true });
         expect(readers(["operator.admin"]).map((reader) => reader.pluginId)).toEqual(["notes"]);
       }
-      const method = registry.registry.gatewayMethodDescriptors.find(
+      const descriptors = registry.registry.gatewayMethodDescriptors;
+      const method = descriptors.find(
         (entry) => entry.name === (image ? "notes.image" : "notes.read"),
       )!;
       if (kind === "missing image method") {
-        registry.registry.gatewayMethodDescriptors.splice(
-          registry.registry.gatewayMethodDescriptors.indexOf(method),
-          1,
-        );
+        descriptors.splice(descriptors.indexOf(method), 1);
       } else if (image) {
         method.controlPlaneWrite = true;
       } else {

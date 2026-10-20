@@ -56,9 +56,8 @@ it("restores the mounted canonical path before SPA scripts with the full app CSP
   expect(html.indexOf("history.replaceState")).toBeLessThan(html.indexOf('type="module"'));
   expect(html).toContain('src="/control/assets/app.js"');
   expect(response.setHeader).toHaveBeenCalledWith("Cache-Control", "no-store");
-  const csp = response.setHeader.mock.calls.findLast(
-    ([name]) => name === "Content-Security-Policy",
-  )?.[1];
+  const headers = response.setHeader.mock.calls;
+  const csp = headers.findLast(([name]) => name === "Content-Security-Policy")?.[1];
   expect(csp).toContain("connect-src 'self' ws: wss:");
   for (const hash of computeInlineScriptHashes(html)) {
     expect(csp).toContain(hash);

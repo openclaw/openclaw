@@ -1,6 +1,6 @@
-import { runInNewContext } from "node:vm";
+import { runInContext } from "node:vm";
 import { JSDOM } from "jsdom";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { renderPublicSessionDocument } from "./control-ui-public-session-render.js";
 
 // Synthetic catalog fixture isolates reader behavior from generated translation freshness.
@@ -19,17 +19,10 @@ vi.mock("./control-ui-public-session-locales.js", async (importOriginal) => ({
     de: { top: "</script><img src=x onerror=alert(1)>" },
   },
 }));
-const readers: JSDOM[] = [];
-afterEach(() => {
-  readers.splice(0).forEach((dom) => dom.window.close());
-  vi.useRealTimers();
-});
+afterEach(() => vi.useRealTimers());
 const messages = [
-  { role: "user", content: "Keep this original request" },
-  {
-    role: "assistant",
-    content: "Original answer\n\n```js\nconst value = 1;\n```",
-  },
+  { role: "user", content: "Question" },
+  { role: "assistant", content: "Answer\n\n```js\n1;\n```" },
 ];
 function render(unavailable = false) {
   return renderPublicSessionDocument({
@@ -44,35 +37,29 @@ function render(unavailable = false) {
 }
 function open(language: string, preference?: string, blockedStorage = false) {
   vi.useFakeTimers();
-  const dom = new JSDOM(render(), { url: "https://reader.test/chat/main/topic" });
-  readers.push(dom);
+  const dom = new JSDOM(render(), {
+    url: "https://reader.test/chat/main/topic",
+    runScripts: "outside-only",
+  });
+  onTestFinished(() => dom.window.close());
   const { document, localStorage } = dom.window;
   Object.defineProperty(document, "hidden", { value: false });
   if (preference !== undefined) {
     localStorage.setItem("openclaw.i18n.locale", preference);
   }
-  const storage = blockedStorage
-    ? {
-        getItem() {
-          throw new Error("Blocked");
-        },
-      }
-    : localStorage;
+  Object.defineProperty(dom.window.navigator, "language", { value: language });
+  if (blockedStorage) {
+    Object.defineProperty(dom.window, "localStorage", {
+      get() {
+        throw new Error("Blocked");
+      },
+    });
+  }
   const fetch = vi
     .fn<typeof globalThis.fetch>()
     .mockImplementation(async () => new Response(render(), { status: 200 }));
-  runInNewContext(document.querySelector("script")!.textContent!, {
-    document,
-    window: dom.window,
-    location: dom.window.location,
-    navigator: { language },
-    localStorage: storage,
-    fetch,
-    AbortSignal,
-    setTimeout,
-    clearTimeout,
-    DOMParser: dom.window.DOMParser,
-  });
+  Object.assign(dom.window, { fetch, AbortSignal, setTimeout, clearTimeout });
+  runInContext(document.querySelector("script")!.textContent!, dom.getInternalVMContext());
   const find = (selector: string) => document.querySelector<HTMLElement>(selector);
   return { document, fetch, localStorage, find };
 }
@@ -95,9 +82,9 @@ describe("public reader language", () => {
       expect(document.documentElement).toMatchObject({ lang: locale, dir: direction });
       expect(find("[data-public-top]")?.textContent).toContain(top);
       expect(document.title).toBe("Original title · OpenClaw");
-      expect(find(".content")?.textContent).toBe("Keep this original request\n");
+      expect(find(".content")?.textContent).toBe("Question\n");
       expect(find(".content")?.getAttribute("dir")).toBe("auto");
-      expect(find("code")?.textContent).toBe("const value = 1;\n");
+      expect(find("code")?.textContent).toBe("1;\n");
       expect(localStorage.getItem("openclaw.i18n.locale")).toBe(preference ?? null);
     },
   );

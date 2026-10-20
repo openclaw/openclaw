@@ -1,6 +1,6 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { DOMParser } from "linkedom";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   renderPublicSessionCardPng,
   type PublicSessionCard,
@@ -83,41 +83,33 @@ describe("public session preview card", () => {
     }
   });
 
-  it("bounds long text and breaks unspaced text into at most three title and quote lines", () => {
+  it.each([true, false])("wraps and positions long preview text (unspaced: %s)", (unspaced) => {
     const { document, text } = render({
       ...CARD,
-      title: `${"W".repeat(2_000)}TITLE_END`,
-      quote: `${"W".repeat(2_000)}QUOTE_END`,
+      title: unspaced ? `${"W".repeat(2_000)}TITLE_END` : "A very long title ".repeat(30),
+      quote: unspaced ? `${"W".repeat(2_000)}QUOTE_END` : CARD.quote,
     });
     const titles = [...document.querySelectorAll('text[font-size="56"]')];
     const quotes = [...document.querySelectorAll('text[font-family="Instrument Serif"]')];
-    for (const lines of [titles, quotes]) {
-      expect(lines).toHaveLength(3);
-      expect(lines.at(-1)?.textContent).toMatch(/…$/u);
+    if (unspaced) {
+      for (const lines of [titles, quotes]) {
+        expect(lines).toHaveLength(3);
+        expect(lines.at(-1)?.textContent).toMatch(/…$/u);
+      }
+      expect(text).not.toMatch(/TITLE_END|QUOTE_END/u);
+      expect(text?.length).toBeLessThan(500);
     }
-    expect(text).not.toMatch(/TITLE_END|QUOTE_END/u);
-    expect(text?.length).toBeLessThan(500);
-  });
-
-  it("keeps the opening quote directly below the title", () => {
-    const { document } = render({ ...CARD, title: "A very long title ".repeat(30) });
-    const title = [...document.querySelectorAll('text[font-size="56"]')].at(-1);
-    const quote = document.querySelector('text[font-family="Instrument Serif"]');
-    const gap = Number(quote?.getAttribute("y")) - Number(title?.getAttribute("y"));
+    const gap = Number(quotes[0]?.getAttribute("y")) - Number(titles.at(-1)?.getAttribute("y"));
     expect(gap).toBeGreaterThan(50);
     expect(gap).toBeLessThan(80);
   });
 
   it("renders bundled fonts into a 1200 by 630 PNG through the worker", async () => {
     const renderer = createPublicSessionCardRenderer();
-    try {
-      const png = await renderer.render(CARD);
-      expect(png.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
-      expect(png.readUInt32BE(16)).toBe(1200);
-      expect(png.readUInt32BE(20)).toBe(630);
-      expect(png.byteLength).toBeGreaterThan(10_000);
-    } finally {
-      await renderer.dispose();
-    }
+    onTestFinished(() => renderer.dispose());
+    const png = await renderer.render(CARD);
+    expect(png.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+    expect([png.readUInt32BE(16), png.readUInt32BE(20)]).toEqual([1200, 630]);
+    expect(png.byteLength).toBeGreaterThan(10_000);
   });
 });
