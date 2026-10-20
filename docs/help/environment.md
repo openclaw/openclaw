@@ -74,10 +74,9 @@ Explicit path variables such as `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, an
 Packaged OpenClaw uses `NODE_COMPILE_CACHE/openclaw/<version>/<build>` when
 `NODE_COMPILE_CACHE` is set, or `node-compile-cache/openclaw` under the OS temporary
 directory otherwise. Gateway workers and child processes reuse the same build
-namespace, including when running a built source checkout. On Node 26.8 and later,
-the Gateway main thread reads existing bytecode without writing cache entries;
-earlier Node versions and cold caches keep it uncached. This avoids synchronous
-cache flushes stalling its event loop at startup or shutdown. Workers retain their existing flush boundaries on their
+namespace, including when running a built source checkout. The Gateway main
+thread stays uncached: Node's synchronous cache flush can stall its event loop
+at startup or shutdown. Workers retain their existing flush boundaries on their
 own threads. An inherited active cache requires a startup respawn; on platforms
 with `execve`, the serving process keeps its PID. Node permission mode retains
 an already-active caller cache because it can forbid process replacement.
