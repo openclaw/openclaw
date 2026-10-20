@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   collectFilesSync,
   isCodeFile,
@@ -28,61 +28,52 @@ function fixture(...files: string[]) {
 }
 const includeFile = (file: string) => file.endsWith(".ts");
 
-describe("scripts/check-file-utils", () => {
-  afterEach(() => execFileSyncMock.mockReset());
-  it.each([
-    {
-      name: "common generated dirs",
-      skipped: ["dist/skip.ts", "docs/.generated/skip.ts"],
-      skipDirNames: undefined,
-    },
-    {
-      name: "custom skipped directories",
-      skipped: ["fixtures/skip.ts"],
-      skipDirNames: new Set(["fixtures"]),
-    },
-  ])("collects matching files while skipping $name", ({ skipped, skipDirNames }) => {
-    const kept = ["src/keep.ts", "src/nested/keep.test.ts"];
-    const root = fixture(...kept, ...skipped);
-    const files = collectFilesSync(root, { includeFile, skipDirNames })
-      .map((file) => toPosixPath(path.relative(root, file)))
-      .toSorted((a, b) => a.localeCompare(b));
-    expect(files).toEqual(kept);
+afterEach(() => execFileSyncMock.mockReset());
+it.each([
+  ["common generated dirs", ["dist/skip.ts", "docs/.generated/skip.ts"], undefined],
+  ["custom skipped directories", ["fixtures/skip.ts"], new Set(["fixtures"])],
+])("collects matching files while skipping %s", (_name, skipped, skipDirNames) => {
+  const kept = ["src/keep.ts", "src/nested/keep.test.ts"];
+  const root = fixture(...kept, ...skipped);
+  const files = collectFilesSync(root, { includeFile, skipDirNames })
+    .map((file) => toPosixPath(path.relative(root, file)))
+    .toSorted((a, b) => a.localeCompare(b));
+  expect(files).toEqual(kept);
+});
+
+it("renders repo-relative paths when possible", () => {
+  expect(relativeToCwd(path.join(process.cwd(), "scripts", "check-file-utils.ts"))).toBe(
+    "scripts/check-file-utils.ts",
+  );
+});
+
+it("filters tracked source files and bounds the git lookup", () => {
+  execFileSyncMock.mockReturnValue("src/keep.ts\nsrc/keep.mjs\nsrc/skip.d.ts\n");
+
+  expect(listRepoFilesSync("/fake/repo", { includeFile: isCodeFile })).toEqual([
+    "src/keep.mjs",
+    "src/keep.ts",
+  ]);
+  expect(execFileSyncMock).toHaveBeenCalledWith(
+    "git",
+    expect.arrayContaining(["-C", "/fake/repo", "ls-files", "--"]),
+    expect.objectContaining({
+      timeout: 30_000,
+      killSignal: "SIGKILL",
+      maxBuffer: 64 * 1024 * 1024,
+    }),
+  );
+});
+
+it("falls back to filesystem traversal when git ls-files times out", () => {
+  const error = Object.assign(new Error("Command timed out"), {
+    code: "ETIMEDOUT",
+    signal: "SIGKILL",
   });
-
-  it("renders repo-relative paths when possible", () => {
-    expect(relativeToCwd(path.join(process.cwd(), "scripts", "check-file-utils.ts"))).toBe(
-      "scripts/check-file-utils.ts",
-    );
+  execFileSyncMock.mockImplementation(() => {
+    throw error;
   });
+  const rootDir = fixture("src/keep.ts");
 
-  it("filters tracked source files and bounds the git lookup", () => {
-    execFileSyncMock.mockReturnValue("src/keep.ts\nsrc/keep.mjs\nsrc/skip.d.ts\n");
-
-    expect(listRepoFilesSync("/fake/repo", { includeFile: isCodeFile })).toEqual([
-      "src/keep.mjs",
-      "src/keep.ts",
-    ]);
-    expect(execFileSyncMock).toHaveBeenCalledWith(
-      "git",
-      expect.arrayContaining(["-C", "/fake/repo", "ls-files", "--"]),
-      expect.objectContaining({
-        timeout: 30_000,
-        killSignal: "SIGKILL",
-        maxBuffer: 64 * 1024 * 1024,
-      }),
-    );
-  });
-
-  it("falls back to filesystem traversal when git ls-files times out", () => {
-    const error: NodeJS.ErrnoException & { signal?: string } = new Error("Command timed out");
-    error.code = "ETIMEDOUT";
-    error.signal = "SIGKILL";
-    execFileSyncMock.mockImplementation(() => {
-      throw error;
-    });
-    const rootDir = fixture("src/keep.ts");
-
-    expect(listRepoFilesSync(rootDir, { includeFile })).toEqual(["src/keep.ts"]);
-  });
+  expect(listRepoFilesSync(rootDir, { includeFile })).toEqual(["src/keep.ts"]);
 });
