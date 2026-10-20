@@ -3,7 +3,6 @@ import {
   emitTrustedDiagnosticEvent as emitPluginTrustedDiagnosticEvent,
   emitTrustedDiagnosticEventWithPrivateData as emitPluginTrustedDiagnosticEventWithPrivateData,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
-// Backend silence allowances belong to one live execution, not diagnostic payloads.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   emitTrustedDiagnosticEvent,
@@ -40,6 +39,22 @@ afterEach(() => {
   resetDiagnosticEventsForTest();
 });
 
+function startOwnedRun(ref: Parameters<typeof createDiagnosticEmbeddedRunOwner>[0]) {
+  const owner = createDiagnosticEmbeddedRunOwner(ref);
+  startDiagnosticRunActivityTracking();
+  markDiagnosticEmbeddedRunStarted({ ...ref, owner });
+  return {
+    owner,
+    snapshot: () =>
+      getDiagnosticSessionActivitySnapshot({
+        sessionId: ref.sessionId,
+        sessionKey: ref.sessionKey,
+      }),
+    begin: (noOutputTimeoutMs = 480_000, assertCurrent = () => {}) =>
+      beginDiagnosticBackendActivity({ owner, noOutputTimeoutMs, assertCurrent }),
+  };
+}
+
 describe("owned backend silence allowances", () => {
   it.each([
     { name: "public emitter", emit: emitPluginDiagnosticEvent },
@@ -58,9 +73,7 @@ describe("owned backend silence allowances", () => {
   ])("does not accept backend allowance fields from the $name", async ({ emit }) => {
     const ref = { sessionId: "forged-allowance", sessionKey: "agent:main:forged-allowance" };
     const runId = "forged-allowance-run";
-    const owner = createDiagnosticEmbeddedRunOwner({ ...ref, runId });
-    startDiagnosticRunActivityTracking();
-    markDiagnosticEmbeddedRunStarted({ ...ref, runId, owner });
+    const { snapshot } = startOwnedRun({ ...ref, runId });
     const forged = {
       type: "run.progress" as const,
       ...ref,
@@ -73,13 +86,12 @@ describe("owned backend silence allowances", () => {
     emit(forged);
     await waitForDiagnosticEventsDrained();
 
-    const snapshot = getDiagnosticSessionActivitySnapshot(ref);
-    expect(snapshot).toMatchObject({
+    expect(snapshot()).toMatchObject({
       hasActiveEmbeddedRun: true,
       lastProgressReason: "embedded_run:started",
       activeModelCallRequestTimeoutMs: undefined,
     });
-    expect(snapshot.activeBackendLivenessDeadlineAtMs).toBeUndefined();
+    expect(snapshot().activeBackendLivenessDeadlineAtMs).toBeUndefined();
   });
 
   it.each(["owned tool", "same-id successor"] as const)(
@@ -90,9 +102,7 @@ describe("owned backend silence allowances", () => {
       vi.setSystemTime(startedAt);
       const ref = { sessionId: "queued-progress", sessionKey: "agent:main:queued-progress" };
       const runId = "reused-progress-run";
-      const owner = createDiagnosticEmbeddedRunOwner({ ...ref, runId });
-      startDiagnosticRunActivityTracking();
-      markDiagnosticEmbeddedRunStarted({ ...ref, runId, owner });
+      const { owner, snapshot } = startOwnedRun({ ...ref, runId });
       emitTrustedDiagnosticEvent({
         type: "run.progress",
         ...ref,
@@ -113,7 +123,7 @@ describe("owned backend silence allowances", () => {
         markDiagnosticEmbeddedRunStarted({ ...ref, runId, owner: successor });
       }
       vi.setSystemTime(startedAt + 2_000);
-      const before = getDiagnosticSessionActivitySnapshot(ref);
+      const before = snapshot();
       expect(before).toMatchObject({
         activeWorkKind: target === "owned tool" ? "tool_call" : "embedded_run",
         lastProgressAgeMs: 1_000,
@@ -123,7 +133,7 @@ describe("owned backend silence allowances", () => {
       await vi.advanceTimersByTimeAsync(0);
       await waitForDiagnosticEventsDrained();
 
-      expect(getDiagnosticSessionActivitySnapshot(ref)).toEqual(before);
+      expect(snapshot()).toEqual(before);
     },
   );
 
@@ -131,15 +141,9 @@ describe("owned backend silence allowances", () => {
     let now = 1_000_000;
     vi.spyOn(Date, "now").mockImplementation(() => now);
     const ref = { sessionId: "cli-session", sessionKey: "agent:main:cli" };
-    const owner = createDiagnosticEmbeddedRunOwner({ ...ref, runId: "cli-run" });
-    startDiagnosticRunActivityTracking();
-    markDiagnosticEmbeddedRunStarted({ ...ref, runId: owner.runId, owner });
-    const backend = beginDiagnosticBackendActivity({
-      owner,
-      noOutputTimeoutMs: 480_000,
-      assertCurrent: () => {},
-    });
-    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
+    const { snapshot, begin } = startOwnedRun({ ...ref, runId: "cli-run" });
+    const backend = begin();
+    expect(snapshot()).toMatchObject({
       activeWorkKind: "embedded_run",
       lastProgressReason: "embedded_run:started",
       activeBackendLivenessDeadlineAtMs: now + 480_000,
@@ -147,7 +151,7 @@ describe("owned backend silence allowances", () => {
 
     now += 60_000;
     backend.observeOutput(false);
-    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
+    expect(snapshot()).toMatchObject({
       lastProgressAgeMs: 60_000,
       lastProgressReason: "embedded_run:started",
       activeBackendLivenessDeadlineAtMs: now + 480_000,
@@ -155,7 +159,7 @@ describe("owned backend silence allowances", () => {
 
     now += 60_000;
     expect(backend.observeOutput(true)).toBe(true);
-    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
+    expect(snapshot()).toMatchObject({
       lastProgressAgeMs: 0,
       lastProgressReason: "model_call:stream_progress",
       activeBackendLivenessDeadlineAtMs: now + 480_000,
@@ -163,7 +167,7 @@ describe("owned backend silence allowances", () => {
     });
 
     backend.close();
-    const closed = getDiagnosticSessionActivitySnapshot(ref);
+    const closed = snapshot();
     expect(closed.activeWorkKind).toBe("embedded_run");
     expect(closed.activeBackendLivenessDeadlineAtMs).toBeUndefined();
   });
@@ -175,31 +179,22 @@ describe("owned backend silence allowances", () => {
       const startedAt = 1_000_000;
       vi.setSystemTime(startedAt);
       const ref = { sessionId: "background-allowance", runId: "background-allowance-run" };
-      const owner = createDiagnosticEmbeddedRunOwner(ref);
-      markDiagnosticEmbeddedRunStarted({ ...ref, owner });
-      const backend = beginDiagnosticBackendActivity({
-        owner,
-        noOutputTimeoutMs,
-        assertCurrent: () => {},
-      });
+      const { owner, snapshot, begin } = startOwnedRun(ref);
+      const backend = begin(noOutputTimeoutMs);
       try {
         vi.setSystemTime(startedAt + 60_000);
         backend.setOutstandingWork(true);
         const deadline = startedAt + Math.max(noOutputTimeoutMs, BLOCKED_TOOL_CALL_ABORT_FLOOR_MS);
-        expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
+        expect(snapshot()).toMatchObject({
           activeBackendLivenessDeadlineAtMs: deadline,
           lastProgressAgeMs: 60_000,
           lastProgressReason: "embedded_run:started",
         });
         vi.setSystemTime(deadline);
         backend.setOutstandingWork(true);
-        expect(getDiagnosticSessionActivitySnapshot(ref).activeBackendLivenessDeadlineAtMs).toBe(
-          deadline,
-        );
+        expect(snapshot().activeBackendLivenessDeadlineAtMs).toBe(deadline);
         backend.setOutstandingWork(false);
-        expect(getDiagnosticSessionActivitySnapshot(ref).activeBackendLivenessDeadlineAtMs).toBe(
-          startedAt + noOutputTimeoutMs,
-        );
+        expect(snapshot().activeBackendLivenessDeadlineAtMs).toBe(startedAt + noOutputTimeoutMs);
       } finally {
         backend.close();
         closeDiagnosticEmbeddedRunOwner(owner);
@@ -214,18 +209,12 @@ describe("owned backend silence allowances", () => {
       vi.spyOn(Date, "now").mockImplementation(() => now);
       const ref = { sessionId: "reused-session", sessionKey: "agent:main:reused" };
       const runId = "reused-run";
-      const owner = createDiagnosticEmbeddedRunOwner({ ...ref, runId });
-      startDiagnosticRunActivityTracking();
-      markDiagnosticEmbeddedRunStarted({ ...ref, runId, owner });
+      const { owner, snapshot, begin } = startOwnedRun({ ...ref, runId });
       let current = true;
-      const backend = beginDiagnosticBackendActivity({
-        owner,
-        noOutputTimeoutMs: 480_000,
-        assertCurrent: () => {
-          if (!current) {
-            throw new Error("Execution authority expired");
-          }
-        },
+      const backend = begin(480_000, () => {
+        if (!current) {
+          throw new Error("Execution authority expired");
+        }
       });
       expect(backend.observeOutput(true)).toBe(true);
       backend.setOutstandingWork(true);
@@ -237,9 +226,7 @@ describe("owned backend silence allowances", () => {
       } else {
         closeDiagnosticEmbeddedRunOwner(owner);
       }
-      expect(
-        getDiagnosticSessionActivitySnapshot(ref).activeBackendLivenessDeadlineAtMs,
-      ).toBeUndefined();
+      expect(snapshot().activeBackendLivenessDeadlineAtMs).toBeUndefined();
 
       const replacementOwner =
         closure === "owner replacement"
@@ -257,17 +244,15 @@ describe("owned backend silence allowances", () => {
             })
           : undefined;
       if (replacement) {
-        expect(getDiagnosticSessionActivitySnapshot(ref).activeBackendLivenessDeadlineAtMs).toBe(
-          now + 90_000,
-        );
+        expect(snapshot().activeBackendLivenessDeadlineAtMs).toBe(now + 90_000);
       }
       now += 1_000;
-      const before = getDiagnosticSessionActivitySnapshot(ref);
+      const before = snapshot();
       expect(backend.observeOutput(true)).toBe(false);
       backend.setOutstandingWork(false);
       backend.setOutstandingWork(true);
       backend.close();
-      expect(getDiagnosticSessionActivitySnapshot(ref)).toEqual(before);
+      expect(snapshot()).toEqual(before);
       replacement?.close();
     },
   );
@@ -297,23 +282,18 @@ describe("owned backend silence allowances", () => {
       runId: "agent-run",
     };
     logSessionStateChange({ ...ref, state: "processing" });
-    const owner = createDiagnosticEmbeddedRunOwner(ref);
-    markDiagnosticEmbeddedRunStarted({ ...ref, owner });
+    const { owner, snapshot, begin } = startOwnedRun(ref);
     markDiagnosticToolStartedForTest({
       ...ref,
       toolName: "Agent",
       toolCallId: "toolu_parent",
     });
-    const backend = beginDiagnosticBackendActivity({
-      owner,
-      noOutputTimeoutMs: 180_000,
-      assertCurrent: () => {},
-    });
+    const backend = begin(180_000);
     try {
       await advanceHeartbeats(14 * 60_000);
       expect(recoverStuckSession).not.toHaveBeenCalled();
       expect(backend.observeAttributedAgentProgress("toolu_bash")).toBe(false);
-      expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
+      expect(snapshot()).toMatchObject({
         activeToolName: "Agent",
         activeToolCallId: "toolu_parent",
         lastProgressReason: "tool:Agent:started",
@@ -321,7 +301,7 @@ describe("owned backend silence allowances", () => {
       });
 
       expect(backend.observeAttributedAgentProgress("toolu_parent")).toBe(true);
-      expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
+      expect(snapshot()).toMatchObject({
         lastProgressReason: "tool:Agent:subagent_progress",
         lastProgressAgeMs: 0,
         activeToolAgeMs: 14 * 60_000,

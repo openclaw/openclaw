@@ -67,7 +67,14 @@ const mocks = vi.hoisted(() => ({
   >(async () => undefined),
 }));
 
-vi.mock("./progress.js", () => ({ printResult: mocks.printResult }));
+vi.mock("./progress.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./progress.js")>()),
+  printResult: mocks.printResult,
+  prepareResult:
+    async (...args: Parameters<typeof import("./progress.js").printResult>) =>
+    () =>
+      mocks.printResult(...args.slice(0, 3)),
+}));
 vi.mock("./update-command-verification.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-verification.js")>()),
   verifyUpdatedGateway: mocks.verifyGateway,
@@ -556,7 +563,9 @@ describe("failed update recovery restart", () => {
       const nextAction = getUpdateRun(run.runId, { env })?.origin.nextAction;
       expect(mocks.restart).not.toHaveBeenCalled();
       expect(nextAction).toContain("Run `openclaw --profile work triage`");
-      expect(nextAction?.includes("Keep the gateway stopped")).toBe(stopped);
+      expect(nextAction).not.toMatch(/keep the gateway stopped/i);
+      expect(nextAction).toContain("openclaw --profile work update repair");
+      expect(nextAction).toContain("openclaw --profile work gateway status --deep");
       expect(mocks.printResult.mock.lastCall?.[2]).toEqual({ nextAction });
     },
   );
@@ -603,6 +612,7 @@ describe("failed update recovery restart", () => {
       expect(recorded.origin.nextAction).not.toContain("remains stopped");
       expect(recorded.origin.nextAction).toContain("triage");
       expect(recorded.origin.nextAction).toContain("update repair");
+      expect(recorded.origin.nextAction).toContain("gateway status --deep");
       expect(recorded.verification).toMatchObject({ serviceRunning: true, pid });
       expect(recorded.verification.runningVersion).toBe(version);
       expect(mocks.printResult.mock.lastCall?.[2]).toEqual({

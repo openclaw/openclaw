@@ -3,15 +3,14 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { readStableSqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import "../test-utils/prepare-compiled-subprocesses.js";
+import { recordOpenClawAgentDatabaseOpenFailure } from "./openclaw-agent-db-lifecycle.js";
 import { openOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
-  recordOpenClawAgentDatabaseOpenFailure,
   resolveOpenClawAgentSqlitePath,
   withOpenClawAgentDatabaseAsync,
 } from "./openclaw-agent-db.js";
@@ -34,43 +33,6 @@ beforeAll(async () => {
   closeOpenClawAgentDatabasesForTest();
   await closeStateDatabaseForTest();
 });
-
-it.each(["readonly", "async"] as const)(
-  "invalidates generation-bound schema refusals during %s admission",
-  async (admission) => {
-    const env = { OPENCLAW_STATE_DIR: tempDirs.make("agent-schema-recovery-") };
-    const options = { agentId: "worker-1", env };
-    const pathname = resolveOpenClawAgentSqlitePath(options);
-    fs.mkdirSync(path.dirname(pathname), { recursive: true });
-    fs.copyFileSync(templatePath, pathname, fs.constants.COPYFILE_EXCL);
-    const failure = new Error("unsupported schema generation");
-    failure.name = "SqliteSchemaVersionError";
-    recordOpenClawAgentDatabaseOpenFailure(
-      pathname,
-      failure,
-      readStableSqliteFileGeneration(pathname),
-    );
-    const open = async () => {
-      if (admission === "async") {
-        await withOpenClawAgentDatabaseAsync(options, () => undefined);
-      } else {
-        const result = openOpenClawAgentDatabaseReadOnly(options);
-        expect(result.found).toBe(true);
-        if (result.found) {
-          result.database.close();
-        }
-      }
-    };
-    await expect(open()).rejects.toBe(failure);
-    const changed = new (requireNodeSqlite().DatabaseSync)(pathname);
-    try {
-      changed.exec("PRAGMA application_id = 1;");
-    } finally {
-      changed.close();
-    }
-    await expect(open()).resolves.toBeUndefined();
-  },
-);
 
 it.each(["writable", "readonly", "async"] as const)(
   "refuses orphan rows and recovers %s admission after external repair",
@@ -110,11 +72,7 @@ it.each(["writable", "readonly", "async"] as const)(
     if (admission === "readonly") {
       const failure = new Error("foreign_key_check failed before external repair");
       failure.name = "SqliteIntegrityError";
-      recordOpenClawAgentDatabaseOpenFailure(
-        databasePath,
-        failure,
-        readStableSqliteFileGeneration(databasePath),
-      );
+      recordOpenClawAgentDatabaseOpenFailure(databasePath, failure);
       const changed = new DatabaseSync(databasePath);
       try {
         changed.prepare("UPDATE session_windows SET updated_at = 2").run();

@@ -13,7 +13,7 @@ import {
   type ProviderAuthResult,
 } from "openclaw/plugin-sdk/provider-auth";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
-import { sleep } from "openclaw/plugin-sdk/runtime-env";
+import { sleep, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asOptionalRecord,
@@ -316,7 +316,7 @@ async function requestXaiDeviceCode(
 }
 
 function resolveNextXaiDeviceCodePollDelayMs(intervalMs: number, deadlineMs: number): number {
-  const remainingMs = Math.max(0, deadlineMs - Date.now());
+  const remainingMs = Math.max(0, deadlineMs - performance.now());
   return Math.min(Math.max(intervalMs, XAI_DEVICE_CODE_MIN_INTERVAL_MS), remainingMs);
 }
 
@@ -328,10 +328,10 @@ async function pollXaiDeviceCodeToken(
     intervalMs: number;
   } & XaiOAuthFetchOptions,
 ): Promise<XaiOAuthTokenResponse> {
-  const deadlineMs = Date.now() + params.expiresInMs;
+  const deadlineMs = performance.now() + params.expiresInMs;
   let intervalMs = params.intervalMs;
 
-  while (Date.now() < deadlineMs) {
+  while (performance.now() < deadlineMs) {
     const result = await fetchXaiOAuth(
       requireTrustedXaiOAuthEndpoint(params.tokenEndpoint, "token endpoint"),
       params,
@@ -385,26 +385,14 @@ async function pollXaiDeviceCodeToken(
 }
 
 async function waitForXaiDeviceCodePoll(delayMs: number, signal?: AbortSignal): Promise<void> {
-  if (!signal) {
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, delayMs);
-    });
-    return;
-  }
-  await new Promise<void>((resolve, reject) => {
-    const onAbort = () => {
-      clearTimeout(timeout);
-      reject(signal.reason instanceof Error ? signal.reason : new Error("xAI login cancelled"));
-    };
-    const timeout = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    }, delayMs);
-    signal.addEventListener("abort", onAbort, { once: true });
-    if (signal.aborted) {
-      onAbort();
+  try {
+    await sleepWithAbort(delayMs, signal);
+  } catch (error) {
+    if (signal?.aborted) {
+      throw signal.reason instanceof Error ? signal.reason : new Error("xAI login cancelled");
     }
-  });
+    throw error;
+  }
 }
 
 function decodeJwtPayload(token: string | undefined): Record<string, unknown> {

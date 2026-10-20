@@ -21,6 +21,7 @@ import {
   runBenchmarkEntrypoint,
 } from "./lib/benchmark-harness.mts";
 import { startBenchmarkIntervalDelay } from "./lib/benchmark-interval-delay.ts";
+import { createBuildSmokeEnv } from "./lib/build-smoke-env.mts";
 import { stopChild } from "./lib/gateway-bench-child.ts";
 
 const exec = promisify(execFile);
@@ -244,9 +245,7 @@ function isolatedEnv(root: string): NodeJS.ProcessEnv {
     TMPDIR: process.env.TMPDIR,
     TEMP: process.env.TEMP,
     TMP: process.env.TMP,
-    HOME: path.join(root, "home"),
-    USERPROFILE: path.join(root, "home"),
-    OPENCLAW_HOME: path.join(root, "home"),
+    ...createBuildSmokeEnv(path.join(root, "home"), {}),
     OPENCLAW_STATE_DIR: path.join(root, "state"),
     OPENCLAW_CONFIG_PATH: path.join(root, "config.json"),
     NODE_ENV: "test",

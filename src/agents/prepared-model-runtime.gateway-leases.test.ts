@@ -108,18 +108,22 @@ describe("prepared model runtime Gateway leases", () => {
     };
     const configured = expectDefined(getPreparedModelRuntimeSnapshot(input), "configured snapshot");
     const loadsBeforeRun = mocks.loadAgentRuntimePluginRegistryHandle.mock.calls.length;
-    await using covered = await acquireAgentRunPreparedModelRuntime({
-      ...input,
-      runtimePluginSelections: [
-        { provider: "configured-provider", modelId: "utility", runtime: "openclaw" },
-      ],
-    });
-    expect(covered.snapshot).toBe(configured);
-    expect(covered.pluginGeneration).toBe(published.pluginGeneration);
-    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(loadsBeforeRun);
+    for (const workspaceDir of [input.workspaceDir, "/tmp/outside-folder"]) {
+      await using covered = await acquireAgentRunPreparedModelRuntime({
+        ...input,
+        workspaceDir,
+        runtimePluginSelections: [
+          { provider: "configured-provider", modelId: "utility", runtime: "openclaw" },
+        ],
+      });
+      expect(covered.snapshot).toBe(configured);
+      expect(covered.pluginGeneration).toBe(published.pluginGeneration);
+      expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(loadsBeforeRun);
+    }
 
     await using uncovered = await acquireAgentRunPreparedModelRuntime({
       ...input,
+      workspaceDir: "/tmp/outside-folder",
       runtimePluginSelections: [
         { provider: "additional-provider", modelId: "utility", runtime: "openclaw" },
       ],

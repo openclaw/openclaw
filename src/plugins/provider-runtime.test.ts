@@ -416,7 +416,7 @@ describe("provider-runtime", () => {
     });
   });
 
-  it("dispatches session OAuth operations to the owning provider", async () => {
+  it.each([true, false])("dispatches session OAuth with owner available=%s", async (available) => {
     const loginOAuth = vi.fn(async () => ({
       access: "login-access",
       refresh: "login-refresh",
@@ -439,78 +439,60 @@ describe("provider-runtime", () => {
             : "wrong-region-access",
       }),
     );
-    resolvePluginProvidersMock.mockReturnValue([
-      {
-        id: "plugin-oauth",
-        label: "Plugin OAuth",
-        auth: [],
-        loginOAuth,
-        refreshOAuth,
-        formatApiKey: (credential) =>
-          credential.type === "oauth" ? `formatted:${credential.access}` : "",
+    if (!available) {
+      resolveOwningPluginIdsForProviderMock.mockReturnValue(["plugin-oauth"]);
+    }
+    resolvePluginProvidersMock.mockReturnValue(
+      available
+        ? [
+            {
+              id: "plugin-oauth",
+              label: "Plugin OAuth",
+              auth: [],
+              loginOAuth,
+              refreshOAuth,
+              formatApiKey: (credential) =>
+                credential.type === "oauth" ? `formatted:${credential.access}` : "",
+            },
+          ]
+        : [],
+    );
+
+    const login = await loginProviderOAuthWithPlugin({
+      provider: "plugin-oauth",
+      context: { onAuth: vi.fn(), onPrompt: vi.fn(async () => "") },
+    });
+    const credential = await resolveProviderOAuthCredentialWithPlugin({
+      provider: "plugin-oauth",
+      ...(available ? { config: refreshConfig } : {}),
+      credential: {
+        type: "oauth",
+        provider: "plugin-oauth",
+        access: "old-access",
+        refresh: "refresh",
+        expires: 1,
       },
-    ]);
-
-    await expect(
-      loginProviderOAuthWithPlugin({
-        provider: "plugin-oauth",
-        context: { onAuth: vi.fn(), onPrompt: vi.fn(async () => "") },
-      }),
-    ).resolves.toMatchObject({
-      status: "available",
-      credentials: { access: "login-access", refresh: "login-refresh" },
+      refresh: true,
     });
-    await expect(
-      resolveProviderOAuthCredentialWithPlugin({
-        provider: "plugin-oauth",
-        config: refreshConfig,
-        credential: {
-          type: "oauth",
-          provider: "plugin-oauth",
-          access: "old-access",
-          refresh: "refresh",
-          expires: 1,
-        },
-        refresh: true,
-      }),
-    ).resolves.toMatchObject({
-      status: "available",
-      apiKey: "formatted:refreshed-access",
-      credential: { access: "refreshed-access" },
-    });
+    if (available) {
+      expect(login).toMatchObject({
+        status: "available",
+        credentials: { access: "login-access", refresh: "login-refresh" },
+      });
+      expect(credential).toMatchObject({
+        status: "available",
+        apiKey: "formatted:refreshed-access",
+        credential: { access: "refreshed-access" },
+      });
+    } else {
+      expect(login).toEqual({ status: "configured-unavailable" });
+      expect(credential).toEqual({ status: "configured-unavailable" });
+    }
     expect(resolveProviderOAuthRefreshCapabilityWithPlugin({ provider: "plugin-oauth" })).toEqual({
-      status: "available",
+      status: available ? "available" : "configured-unavailable",
     });
-    expect(loginOAuth).toHaveBeenCalledOnce();
-    expect(refreshOAuth).toHaveBeenCalledOnce();
-  });
-
-  it("distinguishes an owned but unavailable OAuth provider", async () => {
-    resolveOwningPluginIdsForProviderMock.mockReturnValue(["plugin-oauth"]);
-    resolvePluginProvidersMock.mockReturnValue([]);
-
-    await expect(
-      loginProviderOAuthWithPlugin({
-        provider: "plugin-oauth",
-        context: { onAuth: vi.fn(), onPrompt: vi.fn(async () => "") },
-      }),
-    ).resolves.toEqual({ status: "configured-unavailable" });
-    await expect(
-      resolveProviderOAuthCredentialWithPlugin({
-        provider: "plugin-oauth",
-        credential: {
-          type: "oauth",
-          provider: "plugin-oauth",
-          access: "old-access",
-          refresh: "refresh",
-          expires: 1,
-        },
-        refresh: true,
-      }),
-    ).resolves.toEqual({ status: "configured-unavailable" });
-    expect(resolveProviderOAuthRefreshCapabilityWithPlugin({ provider: "plugin-oauth" })).toEqual({
-      status: "configured-unavailable",
-    });
+    expect(loginOAuth).toHaveBeenCalledTimes(available ? 1 : 0);
+    expect(refreshOAuth).toHaveBeenCalledTimes(available ? 1 : 0);
   });
 
   it("auto-discovers only usage providers declared by their owning plugin", () => {
@@ -681,30 +663,50 @@ describe("provider-runtime", () => {
     expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
   });
 
-  it("matches active provider hooks through a custom provider's native api owner", () => {
+  it.each([
+    {
+      providerId: "ollama",
+      requestedProvider: "ollama-spark",
+      api: "ollama",
+      baseUrl: "http://127.0.0.1:11434",
+      aliases: [],
+      loaded: true,
+      matches: true,
+    },
+    {
+      providerId: "qwen",
+      requestedProvider: "modelstudio",
+      api: "dashscope",
+      baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1",
+      aliases: ["modelstudio"],
+      loaded: false,
+      matches: false,
+    },
+  ])("selects $requestedProvider hooks by its configured API owner $api", (row) => {
     const provider: ProviderPlugin = {
-      id: "ollama",
-      label: "Ollama",
+      id: row.providerId,
+      label: row.providerId,
+      aliases: row.aliases,
       auth: [],
       createStreamFn: vi.fn(() => vi.fn()),
     };
-    const registry = createEmptyPluginRegistry();
-    registry.providers.push({
-      pluginId: "ollama",
-      provider,
-      source: "test",
-    });
-    setActivePluginRegistry(registry, "startup-registry", "gateway-bindable", "/tmp/workspace");
+    if (row.loaded) {
+      const registry = createEmptyPluginRegistry();
+      registry.providers.push({ pluginId: row.providerId, provider, source: "test" });
+      setActivePluginRegistry(registry, "startup-registry", "gateway-bindable", "/tmp/workspace");
+    } else {
+      resolvePluginProvidersMock.mockReturnValue([provider]);
+    }
 
     const plugin = resolveProviderRuntimePlugin({
-      provider: "ollama-spark",
-      workspaceDir: "/tmp/workspace",
+      provider: row.requestedProvider,
+      ...(row.loaded ? { workspaceDir: "/tmp/workspace" } : {}),
       config: {
         models: {
           providers: {
-            "ollama-spark": {
-              api: "ollama",
-              baseUrl: "http://127.0.0.1:11434",
+            [row.requestedProvider]: {
+              api: row.api,
+              baseUrl: row.baseUrl,
               models: [],
             },
           },
@@ -712,9 +714,17 @@ describe("provider-runtime", () => {
       } as never,
     });
 
-    expect(plugin?.id).toBe("ollama");
-    expect(plugin?.pluginId).toBe("ollama");
-    expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
+    if (row.matches) {
+      expect(plugin?.id).toBe(row.providerId);
+      expect(plugin?.pluginId).toBe(row.providerId);
+      expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
+    } else {
+      expect(plugin).toBeUndefined();
+      expect(getLastResolvePluginProvidersParams().providerRefs).toEqual([
+        row.requestedProvider,
+        row.api,
+      ]);
+    }
   });
 
   it("installs provider stream hooks into the AI transport host", () => {
@@ -2417,38 +2427,6 @@ describe("provider-runtime", () => {
     expect(plugin).toBeUndefined();
     expect(getLastResolvePluginProvidersParams().providerRefs).toEqual(["tui-pty-mock"]);
     expect(getLastResolvePluginProvidersParams().modelRefs).toEqual(["tui-pty-mock/gpt-5.5"]);
-  });
-
-  it("does not match alias hooks when an exact custom provider declares a foreign api owner", () => {
-    const qwenPlugin: ProviderPlugin = {
-      id: "qwen",
-      label: "Qwen",
-      aliases: ["modelstudio"],
-      auth: [],
-      createStreamFn: vi.fn(() => vi.fn()),
-    };
-    resolvePluginProvidersMock.mockReturnValue([qwenPlugin]);
-
-    const plugin = resolveProviderRuntimePlugin({
-      provider: "modelstudio",
-      config: {
-        models: {
-          providers: {
-            modelstudio: {
-              api: "dashscope",
-              baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1",
-              models: [],
-            },
-          },
-        },
-      } as never,
-    });
-
-    expect(plugin).toBeUndefined();
-    expect(getLastResolvePluginProvidersParams().providerRefs).toEqual([
-      "modelstudio",
-      "dashscope",
-    ]);
   });
 
   it("applies foreign transport normalization for custom provider hosts", () => {

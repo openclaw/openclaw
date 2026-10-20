@@ -23,7 +23,7 @@ import {
   emitAssistantTextEnd,
 } from "./embedded-agent-subscribe.e2e-harness.js";
 import { resolveManagedStreamMediaUrls } from "./embedded-agent-subscribe.handlers.messages.replies.js";
-import { resolveStreamingReply } from "./embedded-agent-subscribe.handlers.messages.stream.js";
+import { createStreamingReplyResolver } from "./embedded-agent-subscribe.handlers.messages.stream.js";
 
 const googleModel: Model<"google-generative-ai"> = {
   id: "gemini-2.5-flash",
@@ -186,7 +186,10 @@ const prefixCorrectionCases = [
     leadChunks.join("") +
     replacementChunks[0].replace("one", value) +
     replacementChunks.slice(1).join(""),
-  correctedStatement: `The current value is ${value} for this item.`,
+  correctedText:
+    `The current value is ${value} for this item. Continue. ` +
+    "Keep this sentence unchanged. Retain each result. " +
+    "The final summary also remains unchanged.",
 }));
 
 it.each([...cases, ...prefixCorrectionCases])(
@@ -348,10 +351,9 @@ it.each([...cases, ...prefixCorrectionCases])(
       if ("prefixCorrection" in scenario) {
         const recipientText = delivered.map((payload) => payload.text ?? "");
         const additional = recipientText.slice(beforeTerminalCount);
-        if (scenario.correctedStatement) {
-          expect(additional.join(" ")).toContain(scenario.correctedStatement);
-        }
-        expect(recipientText.join(" ").split(scenario.marker)).toHaveLength(2);
+        // A rewritten native item is delivered again without reconstructing its
+        // historical chunk breaks. The unchanged earlier prefix stays delivered once.
+        expect(additional.join(" ")).toBe(scenario.correctedText);
         for (const sentence of scenario.unchangedLeadSentences) {
           expect.soft(recipientText.join(" ").split(sentence)).toHaveLength(2);
         }
@@ -467,7 +469,7 @@ it.each([
     .toEqual(scenario.expectedMedia);
 });
 
-it.each(["literal", "voice", "silent"] as const)(
+it.each(["literal", "voice", "token"] as const)(
   "preserves terminal voice semantics for %s",
   async (kind) => {
     const { delivered, blocks, emit, flush } = createDeliveryHarness({
@@ -477,7 +479,7 @@ it.each(["literal", "voice", "silent"] as const)(
     const parts =
       kind === "literal"
         ? ["Use `" + "x".repeat(60), ` ${marker}\` literally.`]
-        : [marker + (kind === "silent" ? "NO_REPLY" : "")];
+        : [marker + (kind === "token" ? "NO_REPLY" : "")];
     emit({ type: "message_start", message: createAssistantOutput(googleModel) });
     emit({ type: "message_end", message: textMessage(parts) });
     await flush();
@@ -498,7 +500,7 @@ it.each(["literal", "voice", "silent"] as const)(
           silentReply: getReplyPayloadMetadata(payload)?.silentReply,
         })),
       ).toEqual([
-        { text: "", audioAsVoice: true, silentReply: kind === "silent" ? true : undefined },
+        { text: kind === "token" ? "NO_REPLY" : "", audioAsVoice: true, silentReply: undefined },
       ]);
     }
   },
@@ -579,14 +581,14 @@ it("appends visible text across long blank runs without stalling the media scan"
   const delta = `before${"\n".repeat(60_000)}after`;
   const started = performance.now();
   expect(
-    resolveStreamingReply({
+    createStreamingReplyResolver()({
       evtType: "text_delta",
       next: delta,
       previousText: "",
       previousCleaned: "",
       visibleDelta: delta,
       appendDelta: delta,
-      parsedStreamDirectives: { text: delta, replyToTag: false, isSilent: false },
+      parsedStreamDirectives: { text: delta, replyToTag: false },
       previousAudioDirectiveCount: 0,
     }),
   ).toEqual({
@@ -594,7 +596,7 @@ it("appends visible text across long blank runs without stalling the media scan"
     delta,
     replace: false,
     hasText: true,
-    replyDirectives: { text: delta, replyToTag: false, isSilent: false },
+    replyDirectives: { text: delta, replyToTag: false },
     audioDirectiveCount: 0,
   });
   expect(performance.now() - started).toBeLessThan(1_000);
@@ -615,6 +617,7 @@ it("streams a long reply-tagged answer without a quadratic slowdown", () => {
   for (let end = 40; end - 40 < text.length; end += 40) {
     emitText(emit, "text_delta", text.slice(0, end), { delta: text.slice(end - 40, end) });
   }
+  emitText(emit, "text_end", text);
   expect(performance.now() - started).toBeLessThan(1_000);
   expect(partials.at(-1)?.text).toBe(`Intro.\n\n${body}`);
 });

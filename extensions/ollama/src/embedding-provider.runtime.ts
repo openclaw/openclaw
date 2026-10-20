@@ -69,6 +69,8 @@ export type OllamaEmbeddingClient = Omit<RemoteEmbeddingClient, "fetchImpl"> & {
   outputDimensionality?: number;
   localServiceTarget?: Parameters<MemoryCoreAcquireLocalService>[0];
   acquireLocalService?: MemoryCoreAcquireLocalService;
+  /** Provider ownership permits the guard to check its narrow Podman origin exception. */
+  allowPodmanHostGatewayLinkLocal?: boolean;
   embedBatch: (texts: string[]) => Promise<number[][]>;
 };
 
@@ -94,8 +96,7 @@ const QUERY_INSTRUCTION_TEMPLATES = [
 ] as const;
 
 function normalizeOllamaEmbedding(vec: unknown[], outputDimensionality?: number): number[] {
-  const selected =
-    typeof outputDimensionality === "number" ? vec.slice(0, outputDimensionality) : vec;
+  const selected = outputDimensionality !== undefined ? vec.slice(0, outputDimensionality) : vec;
   if (selected.length === 0) {
     throw new Error("Ollama embed response contains an empty embedding");
   }
@@ -327,6 +328,7 @@ async function resolveOllamaEmbeddingClient(
     baseUrl,
     headers,
     ssrfPolicy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl),
+    allowPodmanHostGatewayLinkLocal: providerOwnsHost,
     model,
     outputDimensionality: options.dimensions,
     ...(localService && baseUrlOrigin !== "remote-config"
@@ -375,6 +377,7 @@ export async function createOllamaEmbeddingProvider(
         url: embedUrl,
         policy: client.ssrfPolicy,
         configuredLocalOriginBaseUrl: client.baseUrl,
+        allowPodmanHostGatewayLinkLocal: client.allowPodmanHostGatewayLinkLocal,
         auditContext: "ollama-memory-embedding",
         signal,
         init: {

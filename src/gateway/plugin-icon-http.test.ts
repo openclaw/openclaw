@@ -2,7 +2,7 @@
 // package loading, SVG normalization, caching, and failure fallback behavior.
 import { execFileSync } from "node:child_process";
 import fs, { mkdirSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
-import { createServer, type ServerResponse } from "node:http";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { syncBuiltinESMExports } from "node:module";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
@@ -375,6 +375,84 @@ describe("Control UI plugin and catalog icon routes", () => {
     expect(mocks.readRemoteMediaBuffer).toHaveBeenCalledOnce();
   });
 
+  it("bounds favicon work without blocking cached icons or caching capacity rejection", async () => {
+    const cachedPath = "/__openclaw__/link-favicon/cached.example";
+    const overflowPath = "/__openclaw__/link-favicon/overflow.example";
+    const heldPrefix = "/__openclaw__/link-favicon/held-";
+    const releaseFetches = createDeferredCore();
+    const heldReceived = createDeferredCore();
+    const cachedReceived = createDeferredCore<ServerResponse>();
+    const overflowReceived = createDeferredCore<ServerResponse>();
+    const ownedRequests: Array<Promise<number>> = [];
+    let receivedCount = 0;
+    let activeFetches = 0;
+    let peakFetches = 0;
+    const requestIcon = (pathname: string) => {
+      const pending = request(pathname).then(async (response) => {
+        await response.arrayBuffer();
+        return response.status;
+      });
+      ownedRequests.push(pending);
+      return pending;
+    };
+    const observeRequest = (req: IncomingMessage, res: ServerResponse) => {
+      if (req.url?.startsWith(heldPrefix) && ++receivedCount === 32) {
+        heldReceived.resolve();
+      } else if (req.url === cachedPath) {
+        cachedReceived.resolve(res);
+      } else if (req.url === overflowPath) {
+        overflowReceived.resolve(res);
+      }
+    };
+
+    try {
+      expect(await requestIcon(cachedPath)).toBe(200);
+      mocks.readRemoteMediaBuffer.mockImplementation(async () => {
+        activeFetches++;
+        peakFetches = Math.max(peakFetches, activeFetches);
+        try {
+          await releaseFetches.promise;
+          return { buffer: PNG_BYTES, contentType: "image/png" };
+        } finally {
+          activeFetches--;
+        }
+      });
+      server.on("request", observeRequest);
+      const held = Array.from({ length: 32 }, (_, index) =>
+        requestIcon(`${heldPrefix}${index}.example`),
+      );
+      await heldReceived.promise;
+      const cached = requestIcon(cachedPath);
+      const overflow = requestIcon(overflowPath);
+      const [cachedResponse, overflowResponse] = await Promise.all([
+        cachedReceived.promise,
+        overflowReceived.promise,
+      ]);
+      // A later fetch-free HTTP turn drains admission without awaiting a wrongly queued probe.
+      expect(await requestIcon("/__openclaw__/link-favicon/localhost")).toBe(404);
+
+      expect(activeFetches).toBe(4);
+      expect(mocks.readRemoteMediaBuffer).toHaveBeenCalledTimes(5);
+      expect(cachedResponse.writableEnded).toBe(true);
+      expect(cachedResponse.statusCode).toBe(200);
+      expect(overflowResponse.writableEnded).toBe(true);
+      expect(overflowResponse.statusCode).toBe(404);
+
+      releaseFetches.resolve();
+      expect(await Promise.all(held)).toEqual(Array.from({ length: 32 }, () => 200));
+      expect(await cached).toBe(200);
+      expect(await overflow).toBe(404);
+      expect(peakFetches).toBe(4);
+      expect(mocks.readRemoteMediaBuffer).toHaveBeenCalledTimes(33);
+      expect(await requestIcon(overflowPath)).toBe(200);
+      expect(mocks.readRemoteMediaBuffer).toHaveBeenCalledTimes(34);
+    } finally {
+      server.off("request", observeRequest);
+      releaseFetches.resolve();
+      await Promise.allSettled(ownedRequests);
+    }
+  });
+
   it.each(INVALID_ICON_ROUTES)(
     "claims $label instead of falling through to the Control UI",
     async ({ pathname }) => {
@@ -693,7 +771,7 @@ describe("Control UI plugin and catalog icon routes", () => {
     expect(mocks.readRemoteMediaBuffer).not.toHaveBeenCalled();
   });
 
-  it.each(ICON_ROUTES)(
+  it.each(ALL_ICON_ROUTES)(
     "shares one $label icon download across concurrent GET and HEAD",
     async ({ label, pathname }) => {
       const [get, head] = await Promise.all([
@@ -704,7 +782,7 @@ describe("Control UI plugin and catalog icon routes", () => {
       expect(get.status).toBe(200);
       expect(head.status).toBe(200);
       expect((await head.arrayBuffer()).byteLength).toBe(0);
-      expect(mocks.readRemoteMediaBuffer).toHaveBeenCalledTimes(label === "catalog" ? 1 : 0);
+      expect(mocks.readRemoteMediaBuffer).toHaveBeenCalledTimes(label === "plugin" ? 0 : 1);
       expect(mocks.encodeImage).toHaveBeenCalledTimes(1);
     },
   );

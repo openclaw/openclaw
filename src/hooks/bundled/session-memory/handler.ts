@@ -133,8 +133,6 @@ async function saveSessionMemoryNow(
   transcript: SessionMemoryTranscript,
 ): Promise<void> {
   try {
-    log.debug("Session memory hook triggered", { action: event.action, type: event.type });
-
     const context = event.context || {};
     const cfg = context.cfg as OpenClawConfig | undefined;
     const contextWorkspaceDir = readNonBlankString(context.workspaceDir);
@@ -166,11 +164,6 @@ async function saveSessionMemoryNow(
     ) as Record<string, unknown>;
     const currentSessionId = normalizeOptionalString(sessionEntry.sessionId);
 
-    log.debug("Session context resolved", {
-      sessionId: currentSessionId,
-      hasCfg: Boolean(cfg),
-    });
-
     const hookConfig = resolveHookConfig(cfg, "session-memory");
     let slug: string | null = null;
     if (transcript.status === "unavailable") {
@@ -185,7 +178,6 @@ async function saveSessionMemoryNow(
       const allowLlmSlug = !isTestEnv && hookConfig?.llmSlug === true;
 
       if (transcript.status === "available" && transcript.content && cfg && allowLlmSlug) {
-        log.debug("Calling generateSlugViaLLM...");
         const slugModel = typeof hookConfig?.model === "string" ? hookConfig.model : undefined;
         slug = await generateSlugViaLLM({
           sessionContent: transcript.content,
@@ -193,21 +185,15 @@ async function saveSessionMemoryNow(
           agentId,
           model: slugModel,
         });
-        log.debug("Generated slug", { slug });
       }
     }
 
     if (!slug) {
       slug = localTimestamp.timeSlug;
-      log.debug("Using fallback timestamp slug", { slug });
     }
 
     const filename = await resolveAvailableMemoryFilename({ memoryDir, dateStr, slug });
     const memoryFilePath = path.join(memoryDir, filename);
-    log.debug("Memory file path resolved", {
-      filename,
-      path: shortenHomePath(memoryFilePath),
-    });
 
     const timeStr = localTimestamp.time;
 
@@ -258,7 +244,6 @@ async function saveSessionMemoryNow(
       contentAfter: entry,
       commit,
     });
-    log.debug("Memory file written successfully");
 
     const relPath = shortenHomePath(memoryFilePath);
     log.info(`Session context saved to ${relPath}`);

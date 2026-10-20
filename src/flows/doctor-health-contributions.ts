@@ -13,6 +13,8 @@ import {
 } from "../infra/state-migrations.messages.js";
 import { recordUpdateDoctorDeferredInspectionChecks } from "../infra/update-doctor-result.js";
 import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
+import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import {
   runAuthProfileMigration,
   runAuthProfileDiagnostics as runAuthProfileHealth,
@@ -155,7 +157,7 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
         ctx.options.yes === true)
     ) {
       const { isRedactedSecretValue } = await import("../config/redact-sentinel.js");
-      const { readSecretStoreValue, writeSecretStoreEntryWithRollback } =
+      const { readSecretStoreValue, writeSecretStoreEntry } =
         await import("../secrets/store/secret-store.js");
       const { createVerifiedSqliteSnapshot } = await import("../infra/sqlite-snapshot.js");
       const { resolveOpenClawStateSqlitePath } =
@@ -163,7 +165,6 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
       const { randomToken } = await import("../commands/onboard-helpers.js");
       const database = { env: ctx.env ?? process.env };
       const entry = { scope: { kind: "team" as const }, name: gatewayTokenRef.id, database };
-      let rollback: (() => Promise<boolean>) | undefined;
       try {
         const current = await readSecretStoreValue(entry);
         if (!current.ok || !isRedactedSecretValue(current.value)) {
@@ -180,34 +181,19 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
           preserveRowIds: true,
         });
         const nextToken = randomToken();
-        ({ rollback } = await writeSecretStoreEntryWithRollback({
+        await writeSecretStoreEntry({
           ...entry,
           value: nextToken,
           expectedValue: current.value,
           kind: "secret",
           updatedBy: "doctor",
-        }));
-        const repaired = await readSecretStoreValue(entry);
-        if (!repaired.ok || repaired.value !== nextToken) {
-          throw new Error("the replacement token could not be verified");
-        }
-        rollback = undefined;
+        });
         note(
           `Regenerated Gateway token in secret store entry "${entry.name}"; gateway.auth.token remains a SecretRef. Backup: ${backup.path}\nRestart the Gateway, then reconnect or re-pair devices with the new token.`,
           "Gateway auth",
         );
       } catch (error) {
-        let recovery = "";
-        try {
-          if (rollback) {
-            recovery = (await rollback())
-              ? " The previous entry was restored."
-              : " The entry changed again and was left untouched.";
-          }
-        } catch (rollbackError) {
-          recovery = ` Rollback failed: ${scrubDoctorErrorMessage(rollbackError)}.`;
-        }
-        const warning = `Could not repair Gateway token in secret store entry "${entry.name}": ${scrubDoctorErrorMessage(error)}.${recovery} Rerun \`openclaw doctor --fix\` after resolving the reported problem.`;
+        const warning = `Could not repair Gateway token in secret store entry "${entry.name}": ${scrubDoctorErrorMessage(error)}. Rerun \`openclaw doctor --fix\` after resolving the reported problem.`;
         note(warning, "Gateway auth");
         recordDoctorHealthWarnings(ctx, [], [warning]);
       }
@@ -282,6 +268,7 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
     if (migrate) {
       const migrated = await runLegacyStateMigrations({
         detected: legacyState,
+        integrityCheck: ctx.options.fullIntegrityCheck ? "full" : "quick",
         config: ctx.cfg,
         ...(doctorOnlyStateMigrations ? { doctorOnlyStateMigrations: true } : {}),
         legacySessionSurfaces,
@@ -439,7 +426,6 @@ async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<voi
   });
   ctx.gatewayHealthSkipped = false;
   ctx.healthOk = healthOk;
-  ctx.gatewayHealthAuthenticated = authenticated;
   ctx.gatewayStatus = status;
   ctx.gatewayMemoryProbe = authenticated
     ? await probeGatewayMemoryStatus({
@@ -548,6 +534,8 @@ async function runDoctorHealthContributionList(
   ctx: DoctorHealthFlowContext,
   contributions: readonly DoctorHealthContribution[],
 ): Promise<void> {
+  const signal = resolveCommandProcessSignal(getAsyncWorkSignal());
+  signal?.throwIfAborted();
   const runWithPluginMetadataSnapshot = ctx.runWithPluginMetadataSnapshot;
   throwIfDoctorStateMigrationRefused(ctx.configResult.stateMigrationStepReceipts);
   const env = ctx.env ?? process.env;
@@ -601,6 +589,7 @@ async function runDoctorHealthContributionList(
     : contributions;
   try {
     for (const contribution of ordered) {
+      signal?.throwIfAborted();
       const inspectionIds = postActivationInspections.get(contribution);
       if (inspectionIds) {
         deferredCheckIds = recordUpdateDoctorDeferredInspectionChecks(inspectionIds);
@@ -629,6 +618,7 @@ async function runDoctorHealthContributionList(
       }
       try {
         const run = async () => {
+          signal?.throwIfAborted();
           try {
             await contribution.run(ctx);
           } finally {
@@ -648,12 +638,15 @@ async function runDoctorHealthContributionList(
             await runWithPluginMetadataSnapshot({ config: ctx.cfg, workspaceDir }, run);
           }
         });
+        signal?.throwIfAborted();
         if (ctx.configWriteRefusal) {
           // Later repairs consume the candidate. Stop before they persist state
           // derived from config that the writer deliberately left non-durable.
           return;
         }
       } catch (error) {
+        // Cancellation ends the command, including when an optional check reports a warning.
+        signal?.throwIfAborted();
         if (
           contribution.required ||
           error instanceof DoctorStateMigrationRefusalError ||

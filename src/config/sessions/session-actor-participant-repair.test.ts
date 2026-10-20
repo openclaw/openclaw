@@ -5,7 +5,7 @@ import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { copySessionNodeArtifactsForRepair } from "./session-accessor.sqlite-node-artifacts.js";
 import { participantRecordsBySessionKey } from "./session-accessor.sqlite-participant-projection.js";
 import { recordSessionParticipantFromWorker } from "./session-accessor.sqlite-participants.native.js";
-import { withActor } from "./session-actor-worker.test-support.js";
+import { participantRecord, withActor } from "./session-actor-worker.test-support.js";
 import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
 import { readSessionMembershipFactsInDatabase } from "./session-membership-facts.js";
 
@@ -64,24 +64,9 @@ it.each(["same-store", "cross-store"])(
       expect(f.read().participants).toEqual(before.participants);
       runSqliteImmediateTransactionSync(f.database.db, repair);
       const expected = [
-        {
-          identity: { type: "agent", id: "new" },
-          contributionCount: 1,
-          firstPromptedAt: 5,
-          lastPromptedAt: 5,
-        },
-        {
-          identity: { type: "agent", id: "shared" },
-          contributionCount: kind === "same-store" ? 4 : 2,
-          firstPromptedAt: 10,
-          lastPromptedAt: 30,
-        },
-        {
-          identity: { type: "agent", id: "destination-only" },
-          contributionCount: 1,
-          firstPromptedAt: 15,
-          lastPromptedAt: 15,
-        },
+        participantRecord("new", 1, 5),
+        participantRecord("shared", kind === "same-store" ? 4 : 2, 10, 30),
+        participantRecord("destination-only", 1, 15),
       ];
       expect(f.read().participants).toEqual(expected);
       expect(postimages.get(f.target.sessionKey)?.entry).toMatchObject({

@@ -19,6 +19,8 @@ export type UsageCostTranscriptFile = {
   inode?: number;
   eventCount?: number;
   maxSeq?: number;
+  generation?: string | null;
+  cold?: boolean;
 };
 
 export type ParsedTranscriptEntry = {
@@ -69,6 +71,7 @@ export type CostUsageSummary = {
     pendingFiles: number;
     staleFiles: number;
     refreshedAt?: number;
+    partial?: { reason: "aggregate-boundary"; message: string };
   };
 };
 
@@ -177,6 +180,7 @@ export type DiscoveredSession = {
   sessionId: string;
   sessionFile: string;
   mtime: number;
+  transcriptFile?: UsageCostTranscriptFile;
 };
 
 export type SessionLogEntry = {

@@ -13,13 +13,13 @@ import {
   truncateToolSchemaDepth,
 } from "@openclaw/ai/internal/tool-schema";
 import { isRecord as isSchemaRecord } from "@openclaw/normalization-core/record-coerce";
-// Provider tool helpers expose shared tool-call payload contracts for provider plugins.
 import type { TSchema } from "typebox";
 import {
   mergeLiteralSchemas,
   readLiteralSchemaValues,
   schemaAnnotationsOnly,
 } from "../shared/json-schema-literals.js";
+import { mapArrayIfChanged } from "../shared/map-array-if-changed.js";
 import type {
   AnyAgentTool,
   ProviderNormalizeToolSchemasContext,
@@ -33,6 +33,8 @@ export {
   findLlamacppGbnfSchemaViolations,
   findOpenAIStrictSchemaViolations,
   GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS,
+  SCHEMA_MAP_KEYS,
+  SCHEMA_NESTED_KEYS,
   stripUnsupportedSchemaKeywords,
 };
 
@@ -246,13 +248,7 @@ function isNullSchemaVariant(schema: unknown): boolean {
 
 function normalizeDeepSeekSchema(schema: unknown): unknown {
   if (Array.isArray(schema)) {
-    let changed = false;
-    const normalized = schema.map((entry) => {
-      const next = normalizeDeepSeekSchema(entry);
-      changed ||= next !== entry;
-      return next;
-    });
-    return changed ? normalized : schema;
+    return mapArrayIfChanged(schema, normalizeDeepSeekSchema);
   }
   if (!schema || typeof schema !== "object") {
     return schema;

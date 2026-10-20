@@ -119,9 +119,11 @@ function createMaintenanceRuntime(params: {
       goneEnvironmentIds.has(environmentId)
         ? { state: "destroyed" as const, leaseId: null }
         : { state: "attached" as const, leaseId: "cloud-lease" },
-    subscribeMachineShapeChanged: vi.fn(() => vi.fn()),
+    machineShapeNotifications: { onChanged: (_profileId: string) => {} },
     installReconcileEnvironmentGuard: vi.fn(() => vi.fn()),
     start: vi.fn(),
+    isStopping: () => false,
+    beginClose: vi.fn(),
     stop,
   };
   const runtime = createGatewayWorkerPlacementRuntime({

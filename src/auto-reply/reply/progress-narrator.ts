@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import {
   createSessionActivityNoteState,
   flushSessionActivityAssistantNote,
@@ -22,8 +23,8 @@ import {
 
 const narratorLog = createSubsystemLogger("auto-reply/progress-narrator");
 
-const MIN_EVENTS_PER_NARRATION = 4;
 const MIN_INTERVAL_MS = 12_000;
+const NARRATION_TIMEOUT_MS = 10_000;
 const NARRATION_MAX_CHARS = 280;
 const NARRATION_NOTE_MAX_CHARS = 160;
 const VISIBILITY_RETRY_MS = 1_000;
@@ -125,29 +126,43 @@ function createProgressNarrator(params: {
   }
 
   const generate = async (input: ProgressNarrationInput, abortSignal: AbortSignal) => {
-    const prepared = await (preparedPromise ??= prepareNarrationModel({
-      cfg: params.cfg,
-      agentId: params.agentId,
-    }));
-    // Failed or borrowed routes recheck credentials on the next narration.
-    if (!prepared || prepared.agentHarnessRuntimeOverride) {
-      preparedPromise = undefined;
+    const deadline = performance.now() + NARRATION_TIMEOUT_MS;
+    const controller = new AbortController();
+    const signal = AbortSignal.any([abortSignal, controller.signal]);
+    const timeout = setTimeout(() => controller.abort(), NARRATION_TIMEOUT_MS);
+    try {
+      // Preparation shares the request budget, but stays awaited so expired work
+      // cannot abandon the cached route or start another preparation in parallel.
+      const prepared = await (preparedPromise ??= prepareNarrationModel({
+        cfg: params.cfg,
+        agentId: params.agentId,
+      }));
+      // Failed or borrowed routes recheck credentials on the next narration.
+      if (!prepared || prepared.agentHarnessRuntimeOverride) {
+        preparedPromise = undefined;
+      }
+      const remainingTimeoutMs = deadline - performance.now();
+      if (signal.aborted || remainingTimeoutMs <= 0) {
+        return null;
+      }
+      if (!prepared) {
+        disableNarration();
+        return null;
+      }
+      const { provider, model, authProfileId } = prepared;
+      utilityModelLabel = `${provider}/${model}${authProfileId ? ` via ${authProfileId}` : ""}`;
+      const outcome = await generateNarrationWithUtilityModel({
+        cfg: params.cfg,
+        prepared,
+        input,
+        abortSignal: signal,
+        // Runtime timers require integer milliseconds; the outer deadline stays exact.
+        timeoutMs: Math.ceil(remainingTimeoutMs),
+      });
+      return signal.aborted || performance.now() >= deadline ? null : outcome;
+    } finally {
+      clearTimeout(timeout);
     }
-    if (abortSignal.aborted) {
-      return null;
-    }
-    if (!prepared) {
-      disableNarration();
-      return null;
-    }
-    const { provider, model, authProfileId } = prepared;
-    utilityModelLabel = `${provider}/${model}${authProfileId ? ` via ${authProfileId}` : ""}`;
-    return await generateNarrationWithUtilityModel({
-      cfg: params.cfg,
-      prepared,
-      input,
-      abortSignal,
-    });
   };
 
   const recordEvent = (
@@ -176,27 +191,12 @@ function createProgressNarrator(params: {
     }
   };
 
-  const shouldRunNow = (immediate: boolean): boolean => {
-    const newNotes = activity.noteSequence - Math.max(0, noteSequenceAtLastRun);
-    return (
-      newNotes > 0 &&
-      (immediate ||
-        noteSequenceAtLastRun < 0 ||
-        newNotes >= MIN_EVENTS_PER_NARRATION ||
-        Date.now() - lastRunAt >= MIN_INTERVAL_MS)
-    );
-  };
-
   // Skips retain note bookkeeping; one replaceable timer rechecks the active gate.
   const scheduleRetry = (delayMs: number, immediate: boolean) => {
     retryImmediate ||= immediate;
     if (retryTimer !== undefined) {
       clearTimeout(retryTimer);
       retryTimer = undefined;
-    }
-    if (turnController.signal.aborted || disabled || params.abortSignal?.aborted) {
-      retryImmediate = false;
-      return;
     }
     retryTimer = setTimeout(
       () => {
@@ -236,7 +236,14 @@ function createProgressNarrator(params: {
       pendingImmediate ||= runImmediately;
       return;
     }
-    if (!shouldRunNow(runImmediately)) {
+    if (activity.noteSequence <= Math.max(0, noteSequenceAtLastRun)) {
+      return;
+    }
+    const remainingInterval = MIN_INTERVAL_MS - (Date.now() - lastRunAt);
+    if (!runImmediately && noteSequenceAtLastRun >= 0 && remainingInterval > 0) {
+      // Coalesce ordinary tool bursts, but flush the latest notes even if no
+      // further event arrives. First updates and failures keep their urgency.
+      scheduleRetry(remainingInterval, false);
       return;
     }
     if (narrationCount >= MAX_NARRATIONS_PER_TURN) {

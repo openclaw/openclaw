@@ -108,4 +108,16 @@ describe("openclaw plugin tool context", () => {
 
     expect(result.context.deliveryContext?.to).toBe("user:U123");
   });
+
+  it("carries the host-selected approval reviewer into plugin tools", () => {
+    const result = resolve({ approvalReviewerDeviceIds: ["device-reviewer"] });
+
+    expect(result.context.approvalReviewerDeviceIds).toEqual(["device-reviewer"]);
+  });
+
+  it("maps a single host-selected approval reviewer into plugin tools", () => {
+    const result = resolve({ approvalReviewerDeviceId: "device-reviewer" });
+
+    expect(result.context.approvalReviewerDeviceIds).toEqual(["device-reviewer"]);
+  });
 });

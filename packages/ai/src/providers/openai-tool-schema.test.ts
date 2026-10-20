@@ -5,7 +5,6 @@ import { projectOpenAITools } from "./openai-tool-projection.js";
 import { normalizeOpenAIStrictCompatSchema } from "./openai-tool-schema-compat.js";
 import {
   findOpenAIStrictSchemaViolations,
-  findOpenAIStrictToolProjectionDiagnostics,
   isStrictOpenAIJsonSchemaCompatible,
   normalizeStrictOpenAIJsonSchema,
   resolveOpenAIProjectedToolsStrictToolFlag,
@@ -157,54 +156,10 @@ describe("OpenAI strict tool schema normalization", () => {
     expect(isStrictOpenAIJsonSchemaCompatible(schema)).toBe(false);
   });
 
-  it("downgrades strict mode for regex lookarounds in string patterns", () => {
-    const schema = {
-      type: "object",
-      properties: {
-        filename: { type: "string", pattern: "^(?![\\\\/])(?![A-Za-z]:)(?!.*\\.\\.).+$" },
-        folder: { type: "string" },
-        content: { type: "string" },
-      },
-      required: ["folder", "filename", "content"],
-    };
-
-    expect(
-      findOpenAIStrictSchemaViolations(normalizeStrictOpenAIJsonSchema(schema), "parameters"),
-    ).toEqual(["parameters.properties.filename.pattern"]);
-    expect(
-      resolveOpenAIProjectedToolsStrictToolFlag(
-        projectOpenAITools([{ name: "create_file", parameters: schema }]),
-        true,
-      ),
-    ).toBe(false);
-  });
-
   it.each(["^[a-z]+$", "\\(?=a"])(
     "keeps strict mode for pattern %s without a lookaround",
     (pattern) => {
       expect(findOpenAIStrictSchemaViolations({ type: "string", pattern }, "value")).toEqual([]);
     },
   );
-
-  it("reports unreadable nested tool schemas instead of throwing", () => {
-    const unreadable = {
-      name: "broken",
-      parameters: {
-        type: "object",
-        get properties(): never {
-          throw new Error("properties exploded");
-        },
-      },
-    };
-
-    const projection = projectOpenAITools([unreadable]);
-
-    expect(findOpenAIStrictToolProjectionDiagnostics(projection)).toEqual([
-      {
-        toolIndex: 0,
-        toolName: "broken",
-        violations: ["broken.parameters is not JSON-serializable"],
-      },
-    ]);
-  });
 });

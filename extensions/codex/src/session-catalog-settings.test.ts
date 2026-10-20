@@ -1,4 +1,3 @@
-import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerStartOptions } from "./app-server/config-contracts.js";
 import type { CodexThread, CodexThreadListParams } from "./app-server/protocol.js";
@@ -11,7 +10,7 @@ import {
   subscribeCodexCatalogEvents,
 } from "./session-catalog-events.js";
 import { CodexCatalogIndex } from "./session-catalog-index.js";
-import { projectCodexCatalogPage } from "./session-catalog-projection.js";
+import { projectNativeCatalogFixture as projectCodexCatalogPage } from "./session-catalog-projection.test-support.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 let fixtureId = 0;
@@ -141,7 +140,6 @@ async function fixture(overflow = false, evicted = false) {
         await (overflow ? b.client : a.client).request("thread/list", params, {
           catalogPreview: true,
         }),
-        { sanitize: sanitizeTerminalText },
       ),
     assertCurrent: () => {},
   });

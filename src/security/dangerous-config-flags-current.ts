@@ -1,15 +1,9 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { collectPluginConfigContractMatches } from "../plugins/config-contract-matches.js";
+import type { PluginConfigContractMetadata } from "../plugins/config-contracts.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
-import type { PluginManifestConfigContracts } from "../plugins/manifest.js";
-import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { isRecord } from "../utils.js";
 import { collectEnabledInsecureOrDangerousFlagsFromContracts } from "./dangerous-config-flags-core.js";
-
-type PluginConfigContractMetadata = {
-  origin: PluginOrigin;
-  configContracts: PluginManifestConfigContracts;
-};
 
 /**
  * Collect dangerous flags using the gateway's current plugin metadata snapshot when it is complete.

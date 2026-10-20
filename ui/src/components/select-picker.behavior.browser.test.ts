@@ -1,11 +1,7 @@
-import { html, render } from "lit";
+import { createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  renderPicker,
-  type PickerParams,
-  type PickerOption,
-  type SelectPicker,
-} from "./select-picker.ts";
+import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
+import { Picker, type PickerParams, type PickerOption } from "./select-picker.ts";
 import overlayStyles from "./solid/overlay.css?inline";
 
 const options: PickerOption[] = [
@@ -18,7 +14,10 @@ const options: PickerOption[] = [
   })),
 ];
 
-afterEach(() => document.body.replaceChildren());
+afterEach(() => {
+  cleanupSolid();
+  document.body.replaceChildren();
+});
 
 async function mount(overrides: Partial<PickerParams<PickerOption>> = {}) {
   const params: PickerParams<PickerOption> = {
@@ -31,13 +30,33 @@ async function mount(overrides: Partial<PickerParams<PickerOption>> = {}) {
   };
   const container = document.createElement("div");
   document.body.append(container);
+  const mountTarget = document.createElement("div");
+  container.append(mountTarget);
+  let setParams!: (next: PickerParams<PickerOption>) => void;
+  mountSolid(
+    () => {
+      const [current, setCurrent] = createSignal({ ...params });
+      setParams = setCurrent;
+      return Picker({
+        get params() {
+          return current();
+        },
+      });
+    },
+    { container: mountTarget },
+  );
+  const picker = container.querySelector("openclaw-select-picker")!;
+  const next = document.createElement("button");
+  next.id = "next";
+  next.textContent = "Next";
+  container.append(next);
   const update = async (patch: Partial<PickerParams<PickerOption>>) => {
     Object.assign(params, patch);
-    render(html`${renderPicker({ ...params })}<button id="next">Next</button>`, container);
-    await container.querySelector<SelectPicker>("openclaw-select-picker")!.updateComplete;
+    setParams({ ...params });
+    flush();
+    await picker.updateComplete;
   };
-  await update({});
-  const picker = container.querySelector<SelectPicker>("openclaw-select-picker")!;
+  await picker.updateComplete;
   const trigger = picker.querySelector<HTMLButtonElement>("button")!;
   const open = async () => {
     trigger.click();
@@ -66,7 +85,42 @@ async function mount(overrides: Partial<PickerParams<PickerOption>> = {}) {
   return { params, picker, trigger, open, search, rows, key, update, container };
 }
 
-describe("renderPicker", () => {
+describe("Picker", () => {
+  it("keeps closed choices unmounted across catalog refreshes and shows current choices on open", async () => {
+    const p = await mount({ searchable: false });
+    const menu = p.picker.querySelector<HTMLElement>(".picker-select__menu")!;
+    expect(p.rows()).toHaveLength(0);
+    const mutations: MutationRecord[] = [];
+    const observer = new MutationObserver((records) => mutations.push(...records));
+    observer.observe(menu, {
+      attributes: true,
+      childList: true,
+      characterData: true,
+      subtree: true,
+    });
+    try {
+      await p.update({
+        options: [{ value: "updated", label: "Updated choice" }],
+        value: "updated",
+      });
+      mutations.push(...observer.takeRecords());
+      expect(mutations).toHaveLength(0);
+      expect(p.trigger.getAttribute("aria-label")).toBe("Model: Updated choice");
+      await p.key("ArrowDown");
+      expect(p.rows().map((row) => row.textContent?.trim())).toEqual(["Updated choice"]);
+      expect(document.activeElement).toBe(p.picker.querySelector(".picker-select__options"));
+      await p.key("Escape");
+      expect(p.rows()).toHaveLength(0);
+      await p.update({ options, value: "fixture/anchor" });
+      expect(p.rows()).toHaveLength(0);
+      await p.open();
+      expect(p.rows()).toHaveLength(options.length);
+      expect(p.params.onChange).not.toHaveBeenCalled();
+    } finally {
+      observer.disconnect();
+    }
+  });
+
   it("keeps grouped choices clickable near the viewport edge when overlay styles load later", async () => {
     const { page } = await import("vitest/browser");
     const initialViewport = { width: innerWidth, height: innerHeight };
@@ -89,6 +143,11 @@ describe("renderPicker", () => {
       });
       p.container.style.cssText = "position:fixed;right:12px;top:calc(100vh - 50px);width:240px";
       await page.elementLocator(p.trigger).click();
+      expect(
+        p.picker
+          .querySelector<HTMLElement>(".picker-select__menu")!
+          .style.getPropertyValue("position-anchor"),
+      ).toBe(p.trigger.style.getPropertyValue("anchor-name"));
       const row = p.picker.querySelector<HTMLElement>('[role="option"][data-value=""]')!;
       const menu = p.picker.querySelector<HTMLElement>(".picker-select__menu")!;
       const bounds = menu.getBoundingClientRect();
@@ -176,14 +235,6 @@ describe("renderPicker", () => {
       }
     },
   );
-
-  it("anchors its native popup to the mounted trigger before the first open", async () => {
-    const p = await mount();
-    const popup = p.picker.querySelector<HTMLElement>(".picker-select__menu")!;
-    expect(popup.style.getPropertyValue("position-anchor")).toBe(
-      p.trigger.style.getPropertyValue("anchor-name"),
-    );
-  });
 
   it("leaves closed-trigger Escape to the page after dismissing the menu without a write", async () => {
     const p = await mount();
@@ -404,12 +455,12 @@ describe("renderPicker", () => {
       value: "plain",
       onOpen,
     });
+    expect(onOpen).not.toHaveBeenCalled();
+    await p.open();
     const labels = p.rows().map((row) => row.querySelector<HTMLElement>(".picker-select__label")!);
     expect(p.rows().map((row) => row.getAttribute("title"))).toEqual(["plain", "styled"]);
     expect(labels[0]?.hasAttribute("style")).toBe(false);
     expect(labels[1]?.style.fontFamily).toBe("Georgia");
-    expect(onOpen).not.toHaveBeenCalled();
-    await p.open();
     expect(onOpen).toHaveBeenCalledOnce();
   });
 });

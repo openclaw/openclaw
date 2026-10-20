@@ -44,7 +44,7 @@ export function applyReplyTagsToPayload(params: {
         });
 
   // Inline reply tags override implicit threading without losing payload metadata.
-  if (typeof resolved.text === "string" && resolved.text.includes("[[")) {
+  if (resolved.text?.includes("[[")) {
     const tags = parseInlineDirectives(resolved.text, {
       currentMessageId,
       stripAudioTag: false,

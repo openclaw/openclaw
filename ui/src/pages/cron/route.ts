@@ -11,7 +11,7 @@ export const page = definePage({
     import("./cron-page.tsx").then((module) => ({
       header: true,
       renderSolid: (props: SolidRouteProps) =>
-        createComponent(module.CronPageBridge, {
+        createComponent(module.CronPage, {
           get routeSearch() {
             return typeof props.data === "string" ? props.data : "";
           },

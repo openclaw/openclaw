@@ -1,9 +1,8 @@
-import { isDeepStrictEqual } from "node:util";
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { resolveSandboxWorkspaceAuthority } from "../../agents/sandbox/workspace-authority.js";
 import { withPreparedSessionCapabilityRead } from "../../agents/subagents/spawn/subagent-session-store.js";
 import { runWithLocalStateOwner } from "../../cli/local-state-owner.js";
-import { getRuntimeConfig } from "../../config/config.js";
 import { captureMemoryExactSessionReader } from "../../config/sessions/session-accessor.memory-exact-read.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
 import {
@@ -14,10 +13,8 @@ import {
 import { RequestScopedSubagentRuntimeError } from "../../plugin-sdk/error-runtime.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
-  createLazyRuntimeMethod,
   createLazyRuntimeMethodBinder,
   createLazyRuntimeModule,
-  createLazyRuntimeSurface,
 } from "../../shared/lazy-runtime.js";
 import { VERSION } from "../../version.js";
 import {
@@ -80,6 +77,7 @@ function createRuntimeTts(): PluginRuntime["tts"] {
   const bindTtsRuntime = createLazyRuntimeMethodBinder(loadTtsRuntime);
   const bindTtsRequestRuntime = createLazyRuntimeMethodBinder(loadTtsRequestRuntime);
   return {
+    buildSystemPromptHintAsync: bindTtsRuntime((runtime) => runtime.buildTtsSystemPromptHintAsync),
     prepareTtsRequest: bindTtsRequestRuntime((runtime) => runtime.prepareTtsRequest),
     textToSpeech: bindTtsRuntime((runtime) => runtime.textToSpeech),
     textToSpeechStream: bindTtsRuntime((runtime) => runtime.textToSpeechStream),
@@ -106,27 +104,6 @@ function createRuntimeMediaUnderstandingFacade(): PluginRuntime["mediaUnderstand
     ),
     describeVideoFile: bindMediaUnderstandingRuntime((runtime) => runtime.describeVideoFile),
     transcribeAudioFile: bindMediaUnderstandingRuntime((runtime) => runtime.transcribeAudioFile),
-  };
-}
-
-function createRuntimeLlmFacade(): PluginRuntime["llm"] {
-  const loadAcquireLocalService = createLazyRuntimeMethod(
-    () => import("../../agents/provider-local-service.js"),
-    (runtime) => runtime.createConfiguredProviderLocalServiceAcquirer(getRuntimeConfig),
-  );
-  const loadLlm = createLazyRuntimeSurface(
-    () => import("./runtime-llm.runtime.js"),
-    (m) =>
-      m.createRuntimeLlm({
-        getConfig: getRuntimeConfig,
-        authority: {
-          allowComplete: true,
-        },
-      }),
-  );
-  return {
-    acquireLocalService: loadAcquireLocalService,
-    complete: createLazyRuntimeMethod(loadLlm, (llm) => llm.complete),
   };
 }
 
@@ -252,65 +229,67 @@ function createRuntimeSandbox(agent: PluginRuntime["agent"]): PluginRuntime["san
     },
     async prepareWorkspaceAuthority(input) {
       const params = { ...input };
-      const memory = captureMemoryExactSessionReader(params);
-      const sessionEntry = await agent.session.getSessionEntryAsync({
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-        ...(params.storePath ? { storePath: params.storePath } : {}),
-      });
-      const fields = [
-        "sessionId",
-        "lifecycleRevision",
-        "sandbox",
-        "sandboxMode",
-        "createdActor",
-        "execHost",
-        "execNode",
-        "model",
-        "modelProvider",
-        "modelOverride",
-        "providerOverride",
-      ] as const;
-      const expected = fields.map((field) => structuredClone(sessionEntry?.[field]));
-      const assertCurrent = () => {
-        const current = readCurrentEntry(params, memory);
-        if (fields.some((field, index) => !isDeepStrictEqual(expected[index], current?.[field]))) {
-          throw new Error("Session workspace authority changed during sandbox preparation.");
-        }
-      };
-      assertCurrent();
-      const preparedRuntimeStatus = resolveSandboxRuntimeStatus({
-        cfg: params.config,
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-        preparedSessionEntry: sessionEntry ?? null,
-      });
-      const authority = await withPreparedSessionCapabilityRead(() =>
-        resolveSandboxWorkspaceAuthority({
-          ...params,
-          sessionEntry,
-          preparedRuntimeStatus,
+      const { captureSessionEntryCurrentCheckAsyncInternal } =
+        await import("../../config/sessions/session-entry-current-check.js");
+      const prepared = await captureSessionEntryCurrentCheckAsyncInternal({
+        agentId: resolveSessionAgentId({
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          config: params.config,
         }),
-      );
-      if (!authority.sandboxed || authority.confinementError) {
-        return authority;
-      }
-      const { resolveSandboxContext } = await import("../../agents/sandbox/context.js");
-      assertCurrent();
-      const sandbox = await resolveSandboxContext({
-        config: params.config,
-        agentId: params.agentId,
         sessionKey: params.sessionKey,
-        workspaceDir: params.workspaceDir,
-        requireCurrentConfig: true,
-        preparedRuntimeStatus,
-        assertCurrent,
+        storePath: params.storePath,
+        config: params.config,
+        fields: [
+          "sandbox",
+          "sandboxMode",
+          "createdActor",
+          "execHost",
+          "execNode",
+          "model",
+          "modelProvider",
+          "modelOverride",
+          "providerOverride",
+        ],
+        errorMessage: "Session workspace authority changed during sandbox preparation.",
       });
       try {
-        assertCurrent();
-        return authority;
+        const sessionEntry = prepared.entry;
+        const preparedRuntimeStatus = resolveSandboxRuntimeStatus({
+          cfg: params.config,
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          preparedSessionEntry: sessionEntry ?? null,
+        });
+        const authority = await withPreparedSessionCapabilityRead(() =>
+          resolveSandboxWorkspaceAuthority({
+            ...params,
+            sessionEntry,
+            preparedRuntimeStatus,
+          }),
+        );
+        if (!authority.sandboxed || authority.confinementError) {
+          prepared.source();
+          return authority;
+        }
+        const { resolveSandboxContext } = await import("../../agents/sandbox/context.js");
+        const sandbox = await resolveSandboxContext({
+          config: params.config,
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          workspaceDir: params.workspaceDir,
+          requireCurrentConfig: true,
+          preparedRuntimeStatus,
+          assertCurrent: prepared.source,
+        });
+        try {
+          prepared.source();
+          return authority;
+        } finally {
+          sandbox?.[Symbol.dispose]?.();
+        }
       } finally {
-        sandbox?.[Symbol.dispose]?.();
+        prepared.release();
       }
     },
   };
@@ -330,6 +309,8 @@ export const createPluginRuntime: PluginRuntimeFactory = (
     decisions: {
       evaluate: async (...args) =>
         (await import("../../decisions/runtime.js")).evaluateDecision(...args),
+      evaluateV2: async (...args) =>
+        (await import("../../decisions/runtime.js")).evaluateDecisionV2(...args),
     },
     gateway: _options.gateway ?? createRuntimeGateway(),
     config: base.config,
@@ -390,7 +371,7 @@ export const createPluginRuntime: PluginRuntimeFactory = (
         (await import("../../music-generation/runtime.js")).generateMusic(params),
       listProviders: (params) => listMusicGenerationProviders(params?.config),
     },
-    llm: createRuntimeLlmFacade(),
+    llm: base.llm,
   };
   // SDK consumers retain these getter-only descriptors after lazy runtime materialization.
   for (const key of [

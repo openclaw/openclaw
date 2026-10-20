@@ -1,7 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { assertLegacyOperatorCronOwners } from "../../scripts/e2e/lib/upgrade-survivor/legacy-operator-state.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -25,8 +25,8 @@ it.each([
   writeFileSync(
     path.join(binDir, "getent"),
     `#!/bin/sh\nprintf 'fixture:x:1000:1000:Fixture:%s:/bin/sh\\n' "$FIXTURE_ACCOUNT_HOME"\n`,
+    { mode: 0o755 },
   );
-  chmodSync(path.join(binDir, "getent"), 0o755);
   writeFileSync(
     probePath,
     `#!${process.execPath}
@@ -163,13 +163,13 @@ if (args[0] === "config") {
   fs.writeFileSync(path.join(process.env.FIXTURE_ROOT, "updated"), "complete");
 }
 `,
+    { mode: 0o755 },
   );
-  chmodSync(probePath, 0o755);
   writeFileSync(
     path.join(binDir, "systemctl"),
     `#!/bin/sh\nexec "${process.execPath}" "$FIXTURE_PROBE" fixture-systemctl "$@"\n`,
+    { mode: 0o755 },
   );
-  chmodSync(path.join(binDir, "systemctl"), 0o755);
   const source = readFileSync("scripts/e2e/lib/upgrade-survivor/run.sh", "utf8");
   const phaseStart = source.indexOf("phase storage-preflight");
   const updatePhase = "phase update-candidate update_candidate";
@@ -190,6 +190,7 @@ resolve_candidate_version() { candidate_version=2026.8.2; }
 configure_clawhub_fixture() { :; }
 configure_plugin_registry() { :; }
 prepare_restart_inference() { :; }
+prepare_restart_plugin_release_selectors() { :; }
 prepare_restart_fixture() {
   restart_fixture_package="$FIXTURE_ROOT/future.tgz"
   restart_fixture_version=2100.1.0
@@ -252,47 +253,35 @@ const baselineJobs = [
   { id: "job-ops", name: "survivor-ops-owner", agentId: "ops" },
 ];
 
-function migratedJobs() {
-  return baselineJobs.map((job) => ({ ...job, effectiveAgentId: job.agentId ?? "main" }));
+type Owner = { agentId?: string; effectiveAgentId?: string };
+function migratedJobs(main: Owner = {}, ops: Owner = {}) {
+  return baselineJobs.map((job, index) => ({
+    ...job,
+    effectiveAgentId: job.agentId ?? "main",
+    ...(index === 0 ? main : ops),
+  }));
 }
-
-// These checks protect the lane's independent acceptance contract: merely
-// retaining cron rows must not conceal a lost effective owner after Doctor.
-describe("legacy operator cron acceptance", () => {
-  it("allows candidate maintenance jobs but rejects duplicated operator jobs", () => {
-    const jobs = [
-      ...migratedJobs(),
-      { id: "heartbeat", name: "heartbeat-main", agentId: "main", effectiveAgentId: "main" },
-    ];
-    expect(() => assertLegacyOperatorCronOwners({ jobs }, { jobs: baselineJobs })).not.toThrow();
-    jobs.push({ ...jobs[0]!, id: "duplicate-default" });
-    expect(() => assertLegacyOperatorCronOwners({ jobs }, { jobs: baselineJobs })).toThrow(
-      "cron job count changed",
-    );
-  });
-
-  it.each([undefined, "ops"])("rejects default-owner projection %s", (effectiveAgentId) => {
-    const jobs = migratedJobs();
-    Object.assign(jobs[0]!, { effectiveAgentId });
-    expect(() => assertLegacyOperatorCronOwners({ jobs }, { jobs: baselineJobs })).toThrow(
-      "cron owner unresolved or changed: survivor-default-owner",
-    );
-  });
-
-  it("accepts Doctor pinning an ownerless job to its historical owner", () => {
-    const jobs = migratedJobs();
-    jobs[0]!.agentId = "main";
-    expect(() => assertLegacyOperatorCronOwners({ jobs }, { jobs: baselineJobs })).not.toThrow();
-  });
-
-  it("rejects a missing job and an explicit owner rewritten behind a correct projection", () => {
-    expect(() =>
-      assertLegacyOperatorCronOwners({ jobs: migratedJobs().slice(1) }, { jobs: baselineJobs }),
-    ).toThrow("cron job count changed");
-    const jobs = migratedJobs();
-    jobs[1]!.agentId = "main";
-    expect(() => assertLegacyOperatorCronOwners({ jobs }, { jobs: baselineJobs })).toThrow(
-      "cron explicit owner changed",
-    );
-  });
+const withMaintenance = [
+  ...migratedJobs(),
+  { id: "heartbeat", name: "heartbeat-main", agentId: "main", effectiveAgentId: "main" },
+];
+it.each<[string, ReturnType<typeof migratedJobs>]>([
+  ["maintenance", withMaintenance],
+  ["pinned historical owner", migratedJobs({ agentId: "main" })],
+])("accepts %s alongside retained cron jobs", (_, jobs) => {
+  expect(() => assertLegacyOperatorCronOwners({ jobs }, { jobs: baselineJobs })).not.toThrow();
+});
+const ownerError = "cron owner unresolved or changed: survivor-default-owner";
+it.each<[string, ReturnType<typeof migratedJobs>, string]>([
+  [
+    "duplicate",
+    [...withMaintenance, { ...withMaintenance[0]!, id: "duplicate-default" }],
+    "cron job count changed",
+  ],
+  ["missing", migratedJobs().slice(1), "cron job count changed"],
+  ["unresolved", migratedJobs({ effectiveAgentId: undefined }), ownerError],
+  ["changed default", migratedJobs({ effectiveAgentId: "ops" }), ownerError],
+  ["rewritten explicit", migratedJobs({}, { agentId: "main" }), "cron explicit owner changed"],
+])("rejects %s cron ownership", (_, jobs, error) => {
+  expect(() => assertLegacyOperatorCronOwners({ jobs }, { jobs: baselineJobs })).toThrow(error);
 });

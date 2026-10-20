@@ -1,10 +1,9 @@
-import fs from "node:fs";
 import path from "node:path";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { resolveUserPath } from "openclaw/plugin-sdk/account-resolution";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveOAuthDir } from "openclaw/plugin-sdk/state-paths";
-import { hasWebCredsSync } from "./src/creds-files.js";
+import { collectWhatsAppAuthDirs, hasWebCredsSync } from "./src/creds-files.js";
 
 type WhatsAppAuthPresenceParams =
   | {
@@ -53,18 +52,7 @@ function listWhatsAppAuthDirs(
     }
   }
 
-  try {
-    const entries = fs.readdirSync(accountsRoot, { withFileTypes: true });
-    for (const entry of entries) {
-      if (entry.isDirectory()) {
-        authDirs.add(path.join(accountsRoot, entry.name));
-      }
-    }
-  } catch {
-    // Missing directories mean no auth state.
-  }
-
-  return [...authDirs];
+  return collectWhatsAppAuthDirs(accountsRoot, authDirs);
 }
 
 export function hasAnyWhatsAppAuth(

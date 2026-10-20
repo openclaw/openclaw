@@ -276,11 +276,13 @@ it.runIf(process.platform !== "win32")(
       const releasePath = path.join(fixtureRoot, "release");
       for (const filename of [
         "openclaw.mjs",
+        "cli-invocation.mjs",
         "node-host-launcher.mjs",
         "node-compile-cache.mjs",
         "node-version.mjs",
         "node-runtime-update.mjs",
         "node-runtime-recovery.mjs",
+        "cli-parent-lifetime.mjs",
         "node-runtime-env.mjs",
         "cli-root-options.mjs",
         "gateway-run-argv.mjs",

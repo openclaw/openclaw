@@ -1,6 +1,6 @@
 import path from "node:path";
 import "../../test-utils/prepare-compiled-subprocesses.js";
-import { expect, it, vi } from "vitest";
+import { assert, expect, it, vi } from "vitest";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { prepareSessionCostUsageRefreshLock } from "../../infra/session-cost-usage-cache.sqlite.js";
 import {
@@ -36,10 +36,7 @@ import {
   consumeSessionPendingInput,
   readSessionInputCompletion,
 } from "./session-accessor.sqlite-pending-inputs.js";
-import {
-  appendTranscriptEventSync,
-  replaceTranscriptEventsSync,
-} from "./session-accessor.sqlite-transcript-write.test-support.js";
+import { appendTranscriptEventSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import type {
   SessionActorHotState,
   SessionActorOperations,
@@ -51,8 +48,12 @@ import {
   createSessionActorReplica,
   readSessionActorEntryFacts,
   readSessionActorRowFacts,
+  readSessionActorTranscriptReplica,
   retainSessionActorEntryFacts,
+  retainSessionActorTranscriptReplica,
 } from "./session-actor-replica.js";
+import type { SessionActorTranscriptReplica } from "./session-actor-transcript-replica.js";
+import { sessionActorFileTarget } from "./session-actor-worker.test-support.js";
 import { createSessionActor } from "./session-actor.js";
 import { readSessionEntryReadOnlyInWorker } from "./session-entry-read-runtime.js";
 import { mutatePendingInput, readPendingInput } from "./session-pending-input-operations.kernel.js";
@@ -73,29 +74,20 @@ async function withReplica(
     reacquire: () => ReturnType<typeof createSessionActorReplica>;
     retireGeneration: () => void;
   }) => void | Promise<void>,
+  sessionKey = "agent:main:actor-replica",
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
     const scope = {
       agentId: "main",
-      sessionKey: "agent:main:actor-replica",
+      sessionKey,
       storePath: database.path,
       env,
     };
     replaceSessionEntrySync(scope, { sessionId: "replica-session", updatedAt: 1, label: "before" });
     const identity = readOpenClawAgentDatabaseIdentity(database);
-    if (typeof identity.identity !== "string") {
-      throw new Error("Replica fixture requires a durable database");
-    }
-    const target = {
-      sessionKey: scope.sessionKey,
-      database: {
-        kind: "file" as const,
-        physicalIdentity: identity.identity,
-        birthtime: identity.birthtime,
-        nativeLocation: database.path,
-      },
-    };
+    assert(typeof identity.identity === "string", "Replica fixture requires a durable database");
+    const target = sessionActorFileTarget(database, scope.sessionKey);
     let generation = 0;
     const reacquire = () =>
       createSessionActorReplica({
@@ -109,9 +101,7 @@ async function withReplica(
         database.path,
         collectSessionEntryLookupKeys(target.sessionKey),
       );
-      if (!writeToken) {
-        throw new Error("Replica fixture has an unsettled native writer");
-      }
+      assert(writeToken, "Replica fixture has an unsettled native writer");
       const state = hydrateSessionActorState(database, target, { epoch, sequence }, writeToken).hot;
       state.writeToken = readSqliteDatabaseScopedWriteTokenForPath(database.path, [
         ...collectSessionEntryLookupKeys(target.sessionKey),
@@ -139,9 +129,192 @@ async function withReplica(
 function hydrate({ replica, load }: Fixture, epoch = "first", sequence = 0) {
   const selected = replica.beginRead();
   const snapshot = load(epoch, sequence);
-  expect(selected.install(snapshot)).toBe(true);
+  expect(selected(snapshot)).toBe(true);
   return snapshot;
 }
+
+function reloadInvalidated(fixture: Fixture) {
+  expect(fixture.replica.read()).toBeUndefined();
+  return hydrate(fixture);
+}
+
+it("keeps transcript replacement charges within the shared byte and entry budgets", async () => {
+  await drainGlobalSingletonLifecycleState("restart");
+  await withReplica((fixture) => {
+    const original = fixture.load();
+    fixture.replica.close();
+    fixture.replica.invalidate();
+    const cells: Array<{
+      replica: ReturnType<typeof createSessionActorReplica>;
+      state: SessionActorHotState;
+    }> = [];
+    const create = (entryFirst = false, keepOpen = false) => {
+      const state: SessionActorHotState = {
+        ...structuredClone(original),
+        target: { ...original.target, sessionKey: `agent:main:budget-${cells.length}` },
+      };
+      state.dependencySessionIds = [];
+      state.writeToken = readSqliteDatabaseScopedWriteTokenForPath(
+        fixture.database.path,
+        collectSessionEntryLookupKeys(state.target.sessionKey),
+      )!;
+      assert(state.target.database.kind === "file", "Replica fixture requires a durable target");
+      const target = { ...state.target, database: state.target.database };
+      if (entryFirst) {
+        retainSessionActorEntryFacts(
+          target.database,
+          [{ sessionKey: target.sessionKey, facts: { entry: state.entry, snapshots: "full" } }],
+          "budget-reader",
+        );
+      }
+      const replica = createSessionActorReplica({
+        target,
+        lifetime: { assertCurrent() {}, assertReadable() {} },
+        currentGeneration: () => "budget-reader",
+      });
+      expect(replica.beginRead()(state)).toBe(true);
+      if (!keepOpen) {
+        replica.close();
+      }
+      const cell = { replica, state };
+      cells.push(cell);
+      return cell;
+    };
+    const retain = (cell: (typeof cells)[number], characters: number) => {
+      const transcript: SessionActorTranscriptReplica = {
+        sessionId: cell.state.entry?.sessionId,
+        version: cell.state.transcript.version,
+        tail: {
+          coveredAfterSeq: -1,
+          events: [
+            { rawSeq: 0, event: { text: "x".repeat(characters) }, serializedBytes: characters },
+          ],
+        },
+      };
+      retainSessionActorTranscriptReplica(cell.state, transcript);
+      return transcript;
+    };
+    try {
+      const first = create(false, true);
+      const second = create(true);
+      const third = create();
+      const firstTranscript = retain(first, 1024 * 1024);
+      retain(second, 1024 * 1024);
+      const thirdTranscript = retain(third, 1024 * 1024);
+      // Three 2 MiB charges fit; growing and touching the oldest evicts the next oldest.
+      // Shared payloads still count at each occurrence after a copy-on-write append.
+      const grown: SessionActorTranscriptReplica = {
+        ...firstTranscript,
+        tail: {
+          ...firstTranscript.tail,
+          events: [
+            ...firstTranscript.tail.events,
+            { ...firstTranscript.tail.events[0]!, rawSeq: 1 },
+          ],
+        },
+      };
+      retainSessionActorTranscriptReplica(first.state, grown);
+      expect(readSessionActorTranscriptReplica(second.state)).toBeUndefined();
+      expect(readSessionActorTranscriptReplica(third.state)).toBe(thirdTranscript);
+      expect(readSessionActorTranscriptReplica(first.state)).toBe(grown);
+      retain(first, 512 * 1024);
+      first.replica.invalidate();
+      expect(first.replica.beginRead()(first.state)).toBe(true);
+      retain(first, 1024 * 1024);
+      const fourth = create();
+      retain(fourth, 2 * 1024 * 1024);
+      expect(readSessionActorTranscriptReplica(third.state)).toBeUndefined();
+      expect(readSessionActorTranscriptReplica(first.state)).toBeDefined();
+      const oversized = retain(fourth, 5 * 1024 * 1024);
+      expect(readSessionActorTranscriptReplica(first.state)).toBeUndefined();
+      expect(readSessionActorTranscriptReplica(fourth.state)).toBe(oversized);
+      retain(fourth, 16);
+      for (const cell of cells) {
+        cell.replica.close();
+        cell.replica.invalidate();
+      }
+      const small = Array.from({ length: 129 }, (_, index) => {
+        const cell = create(index % 2 === 0, true);
+        return { cell, transcript: retain(cell, 16) };
+      });
+      expect(readSessionActorTranscriptReplica(small[0]!.cell.state)).toBeUndefined();
+      for (const { cell, transcript } of small.slice(1)) {
+        expect(readSessionActorTranscriptReplica(cell.state)).toBe(transcript);
+      }
+    } finally {
+      for (const { replica } of cells) {
+        replica.close();
+        replica.invalidate();
+      }
+    }
+  });
+});
+
+it.each(["entry", "transcript", "plugin keys"] as const)(
+  "evicts old replicas for large %s strings and releases replaced bytes",
+  async (payload) => {
+    await withReplica(({ replica, load }) => {
+      const first = load();
+      assert(first.target.database.kind === "file", "Replica fixture requires a durable target");
+      const database = first.target.database;
+      const siblingTarget = {
+        database,
+        sessionKey: "agent:main:budget-sibling",
+      };
+      const sibling = createSessionActorReplica({
+        target: siblingTarget,
+        lifetime: { assertCurrent() {}, assertReadable() {} },
+        currentGeneration: () => "budget-sibling",
+      });
+      const large = "x".repeat(5 * 1024 * 1024);
+      const install = (label: string) => {
+        const next = load();
+        if (payload !== "transcript") {
+          next.entry = { sessionId: "replica-session", updatedAt: 1, label };
+          if (payload === "plugin keys") {
+            next.entry.label = "before";
+            next.entry.pluginExtensions = { fixture: { [label]: null } };
+          }
+        }
+        expect(replica.beginRead()(next)).toBe(true);
+        if (payload === "transcript") {
+          retainSessionActorTranscriptReplica(next, {
+            version: next.transcript.version,
+            sessionId: next.entry?.sessionId,
+            tail: {
+              coveredAfterSeq: -1,
+              events: [{ rawSeq: 0, event: { text: label }, serializedBytes: label.length }],
+            },
+          });
+        }
+        return next;
+      };
+      const installSibling = () => {
+        const next = { ...load(), target: siblingTarget };
+        next.writeToken = readSqliteDatabaseScopedWriteTokenForPath(database.nativeLocation, [
+          ...collectSessionEntryLookupKeys(siblingTarget.sessionKey),
+          ...next.dependencySessionIds.map(sqliteSessionIdWriteScope),
+        ])!;
+        expect(sibling.beginRead()(next)).toBe(true);
+        return next;
+      };
+      try {
+        const oversized = install(large);
+        expect(replica.read()).toBe(oversized);
+        const small = installSibling();
+        expect(replica.read() === undefined).toBe(true);
+        expect(sibling.read()).toBe(small);
+        install(large);
+        expect(sibling.read()).toBeUndefined();
+        const replaced = install("small");
+        installSibling();
+        expect(replica.read()).toBe(replaced);
+      } finally {
+        sibling.close();
+      }
+    });
+  },
+);
 
 it("keeps actor facts after usage cache writes and pruning", async () => {
   await withReplica(async (fixture) => {
@@ -153,14 +326,7 @@ it("keeps actor facts after usage cache writes and pruning", async () => {
       expect(await usage.acquire()).toBe(true);
       const snapshot = hydrate(fixture);
       const valueJson = new TextEncoder().encode("{}");
-      expect(
-        await usage.writeRollup({
-          rollupId: "usage-rollup",
-          valueJson,
-          blob: null,
-          updatedAt: 1,
-        }),
-      ).toBe(true);
+      await usage.writeRollup([{ rollupId: "usage-rollup", valueJson, blob: null, updatedAt: 1 }]);
       expect(replica.read()).toEqual(snapshot);
       await usage.pruneRows([{ key: "usage-rollup", valueJson, updatedAt: 1 }]);
       expect(replica.read()).toEqual(snapshot);
@@ -181,19 +347,7 @@ it("retains the first creation after restart before any replica reader and appli
       entry: { sessionId: "first-reader-session", updatedAt: 1, label: "created" },
     }));
     expect(created.ok).toBe(true);
-    const identity = readOpenClawAgentDatabaseIdentity(database);
-    if (typeof identity.identity !== "string") {
-      throw new Error("Expected durable session target");
-    }
-    const durableTarget = {
-      sessionKey,
-      database: {
-        kind: "file" as const,
-        physicalIdentity: identity.identity,
-        birthtime: identity.birthtime,
-        nativeLocation: database.path,
-      },
-    };
+    const durableTarget = sessionActorFileTarget(database, sessionKey);
     expect(readSessionActorEntryFacts(durableTarget)?.entry).toMatchObject({ label: "created" });
     await patchSessionEntryCore(createdScope, () => ({ updatedAt: 2, label: "updated" }));
     expect(readSessionActorEntryFacts(durableTarget)?.entry).toMatchObject({ label: "updated" });
@@ -291,6 +445,13 @@ it("returns a newer committed replica when a receipt arrives during a worker rea
 
 it("shares committed facts across released handles and retires them for writes and worker loss", async () => {
   await withReplica((fixture) => {
+    hydrate(fixture);
+    const change = { ...fixture.scope, sessionKey: fixture.scope.sessionKey.toLowerCase() };
+    sessionChanges.invalidate({ ...change, factsInvalidated: true });
+    expect(fixture.replica.read()).toBeUndefined();
+    hydrate(fixture);
+    sessionChanges.invalidate({ all: true, scope: { storePath: change.storePath } });
+    expect(fixture.replica.read()).toBeUndefined();
     const first = hydrate(fixture);
     const replacement = fixture.reacquire();
     fixture.replica.close();
@@ -330,7 +491,7 @@ it("shares committed facts across released handles and retires them for writes a
     } finally {
       replacement.close();
     }
-  });
+  }, "agent:main:matrix:group:!Room:server");
 });
 
 it("retains unrelated session postimages but invalidates a shared physical session window", async () => {
@@ -338,12 +499,10 @@ it("retains unrelated session postimages but invalidates a shared physical sessi
     const other = { ...fixture.scope, sessionKey: "agent:main:other-replica" };
     replaceSessionEntrySync(other, { sessionId: "other-session", updatedAt: 1, label: "other" });
     const snapshot = hydrate(fixture);
-    if (snapshot.target.database.kind !== "file") {
-      throw new Error("Replica fixture requires a durable target");
-    }
+    assert(snapshot.target.database.kind === "file", "Replica fixture requires a durable target");
     retainSessionActorEntryFacts(
-      { ...snapshot.target, database: snapshot.target.database },
-      { entry: snapshot.entry, snapshots: [] },
+      snapshot.target.database,
+      [{ sessionKey: snapshot.target.sessionKey, facts: { entry: snapshot.entry, snapshots: [] } }],
       "partial-entry-reader",
     );
     expect(fixture.replica.read()).toEqual(snapshot);
@@ -396,8 +555,7 @@ it("invalidates partial native publications before disclosure and count-only par
       addSessionMember(scope, { identityId: "reader", addedBy: "owner", addedAt: 2 });
       expect(disclosures.length).toBeGreaterThan(0);
       expect(disclosures.every((value) => value === undefined)).toBe(true);
-      expect(replica.read()).toBeUndefined();
-      expect(hydrate(fixture).members).toEqual([
+      expect(reloadInvalidated(fixture).members).toEqual([
         { identityId: "reader", addedBy: "owner", addedAt: 2 },
       ]);
 
@@ -410,8 +568,7 @@ it("invalidates partial native publications before disclosure and count-only par
       expect(replica.read()?.participants[0]?.contributionCount).toBe(1);
       recordSessionParticipant(scope, { ...participant, promptedAt: 4 });
       // This writer intentionally omits a display delta for contribution-only changes.
-      expect(replica.read()).toBeUndefined();
-      expect(hydrate(fixture).participants[0]).toMatchObject({
+      expect(reloadInvalidated(fixture).participants[0]).toMatchObject({
         contributionCount: 2,
         lastPromptedAt: 4,
       });
@@ -437,28 +594,15 @@ it("invalidates partial native publications before disclosure and count-only par
   });
 });
 
-it("installs complete outcomes, fences unknowns, and rejects delayed epochs", async () => {
+it("invalidates unaccounted native writes and retains accepted postimages across handle closure", async () => {
   await withReplica((fixture) => {
     const { replica, load, scope, database } = fixture;
     const initial = hydrate(fixture);
-    if (initial.target.database.kind !== "file") {
-      throw new Error("Replica fixture requires a durable target");
-    }
-    const target = { ...initial.target, database: initial.target.database };
-    expect(readSessionActorEntryFacts(target)?.predicateColumns).toEqual({
-      session_started_at: null,
-      has_optional_references: 0,
-    });
     const shared = replica.read()!;
+    expect(shared).toBe(initial);
     expect(replica.read()).toBe(shared);
-    expect(replica.beginRead().install(shared)).toBe(true);
+    expect(replica.beginRead()(shared)).toBe(true);
     expect(replica.read()).toBe(shared);
-    expect(() => {
-      shared.entry!.label = "caller edit";
-    }).toThrow(TypeError);
-    const detached = structuredClone(shared);
-    detached.entry!.label = "caller edit";
-    expect(replica.read()?.entry?.label).toBe("before");
 
     const accepted = command(initial, "accepted");
     const pending = replica.beginCommand();
@@ -486,74 +630,14 @@ it("installs complete outcomes, fences unknowns, and rejects delayed epochs", as
     });
     const outcome = committed(accepted, load("first", 1));
     expect(pending.settle(outcome)).toBe(true);
-    expect(readSessionActorEntryFacts(target)?.predicateColumns).toEqual({
-      session_started_at: 23,
-      has_optional_references: 1,
-    });
-    outcome.receipt.postimage.entry!.label = "receipt caller edit";
-    expect(replica.read()?.entry?.label).toBe("before");
-    expect(pending.settle(outcome)).toBe(false);
-
-    const rollback = replica.beginCommand();
-    expect(
-      rollback.settle({ kind: "rolled-back", error: { name: "Error", message: "refused" } }),
-    ).toBe(true);
-    expect(replica.read()?.version.sequence).toBe(1);
-    const unknown = replica.beginCommand();
-    expect(
-      unknown.settle({
-        kind: "unknown",
-        target: initial.target,
-        commandId: "unknown",
-        error: { name: "Error", message: "reply lost without receipt" },
-      }),
-    ).toBe(false);
-    expect(replica.read()).toBeUndefined();
-    expect(readSessionActorEntryFacts(target)).toBeUndefined();
-    retainSessionActorEntryFacts(
-      target,
-      { entry: load().entry, snapshots: "full" },
-      "cold-entry-reader",
-    );
-    expect(readSessionActorEntryFacts(target)?.predicateColumns).toEqual({
-      session_started_at: 23,
-      has_optional_references: 1,
-    });
-
-    const stale = replica.beginCommand();
-    const superseded = load("superseded");
-    expect(
-      stale.settle({
-        kind: "stale-version",
-        expected: initial.version,
-        postimage: superseded,
-        error: { name: "SessionActorStaleVersionError", message: "Session actor version changed" },
-      }),
-    ).toBe(true);
-    expect(replica.read()?.version).toEqual(superseded.version);
-    const older = replica.beginRead();
-    const newer = replica.beginRead();
-    expect(newer.install(load("second"))).toBe(true);
-    expect(older.install(initial)).toBe(false);
-    expect(replica.read()?.version.epoch).toBe("second");
-
-    const delayedContext = command(load("second"), "delayed");
-    const delayed = replica.beginCommand();
-    sessionChanges.invalidate({
-      sessionKey: scope.sessionKey,
-      storePath: scope.storePath,
-      factsInvalidated: true,
-    });
-    hydrate(fixture, "reconciled");
-    expect(delayed.settle(committed(delayedContext, load("second", 1)))).toBe(false);
-    expect(replica.read()?.version.epoch).toBe("reconciled");
+    expect(replica.read()).toBe(outcome.receipt.postimage);
 
     const opaque = load("opaque");
     opaque.entry!.swarmOutputSchema = { value: new Date(0) };
-    expect(replica.beginRead().install(opaque)).toBe(true);
+    expect(replica.beginRead()(opaque)).toBe(true);
     const borrowed = replica.read()!;
-    expect(replica.beginRead().install(borrowed)).toBe(true);
-    expect(replica.read()).not.toBe(borrowed);
+    expect(replica.beginRead()(borrowed)).toBe(true);
+    expect(replica.read()).toBe(borrowed);
     expect(replica.read()?.entry?.swarmOutputSchema).toEqual({ value: new Date(0) });
 
     const current = hydrate(fixture, "final");
@@ -562,58 +646,6 @@ it("installs complete outcomes, fences unknowns, and rejects delayed epochs", as
     replica.close();
     expect(closing.settle(committed(closingContext, load("final", 1)))).toBe(true);
     expect(replica.read()).toBeUndefined();
-  });
-});
-
-it("invalidates for native owner, replacement, transcript and deletion writers", async () => {
-  await withReplica((fixture) => {
-    const { replica, scope, database } = fixture;
-    hydrate(fixture);
-    assignSessionOwner(scope, {
-      owner: { type: "agent", id: "assigned" },
-      assignedBy: { type: "agent", id: "main" },
-      assignedAt: 10,
-    });
-    expect(replica.read()).toBeUndefined();
-    expect(hydrate(fixture).entry?.owner?.actor.id).toBe("assigned");
-
-    replaceSessionEntrySync(scope, {
-      ...fixture.load().entry!,
-      category: "work",
-      archivedAt: 12,
-      restartRecoveryDeliveryRunId: "recovery-run",
-      restartRecoveryDeliveryReceiptState: "terminal-pending",
-    });
-    expect(replica.read()).toBeUndefined();
-    expect(hydrate(fixture).entry).toMatchObject({
-      category: "work",
-      archivedAt: 12,
-      restartRecoveryDeliveryRunId: "recovery-run",
-    });
-
-    const transcriptScope = { ...scope, sessionId: "replica-session" };
-    expect(
-      appendTranscriptEventSync(transcriptScope, { type: "proof", id: "first-event" }).ok,
-    ).toBe(true);
-    expect(replica.read()).toBeUndefined();
-    const first = hydrate(fixture).transcript.watermark;
-    expect(first.maxSeq).not.toBeNull();
-    expect(
-      replaceTranscriptEventsSync(transcriptScope, [{ type: "proof", id: "replacement-event" }]),
-    ).toBe(true);
-    expect(replica.read()).toBeUndefined();
-    expect(hydrate(fixture).transcript.watermark).not.toEqual(first);
-
-    runOpenClawAgentWriteTransaction(
-      (current) => deleteSessionEntryRows(current, scope.sessionKey),
-      {
-        agentId: scope.agentId,
-        path: database.path,
-        env: scope.env,
-      },
-    );
-    expect(replica.read()).toBeUndefined();
-    expect(hydrate(fixture).entry).toBeUndefined();
   });
 });
 
@@ -648,15 +680,11 @@ it("reuses list facts and invalidates summary watermarks after transcript writes
       hasBoard: false,
       activitySummaryWatermark: { generation: null, maxSeq: null },
     });
-    if (!facts) {
-      throw new Error("Expected resident row facts");
-    }
+    assert(facts, "Expected resident row facts");
     facts.entry.label = "caller edit";
     expect(readSessionActorRowFacts(target)?.entry.label).toBeUndefined();
 
-    if (before.target.database.kind !== "file") {
-      throw new Error("Replica fixture requires a durable target");
-    }
+    assert(before.target.database.kind === "file", "Replica fixture requires a durable target");
     const entryTarget = { ...before.target, database: before.target.database };
     const projection = {
       hasBoard: before.hasBoard,
@@ -669,20 +697,43 @@ it("reuses list facts and invalidates summary watermarks after transcript writes
     const selected = readSessionActorEntryFacts(entryTarget, ["skillsSnapshot"]);
     expect(selected?.snapshots).toEqual(["skillsSnapshot"]);
     expect(selected?.entry?.skillsSnapshot?.prompt).toBe("Saved instructions");
-    selected!.entry!.skillsSnapshot!.prompt = "Caller edit";
+    expect(selected?.entry?.skillsSnapshot).toBe(before.entry?.skillsSnapshot);
+    expect(() => {
+      selected!.entry!.skillsSnapshot!.prompt = "Caller edit";
+    }).toThrow(TypeError);
     expect(readSessionActorEntryFacts(entryTarget)?.entry?.skillsSnapshot?.prompt).toBe(
       "Saved instructions",
     );
     replica.invalidate();
+    const retainedEntry = { ...before.entry!, skillsSnapshot: undefined };
     retainSessionActorEntryFacts(
-      entryTarget,
-      {
-        entry: { ...before.entry!, skillsSnapshot: undefined },
-        snapshots: [],
-        projection,
-      },
+      entryTarget.database,
+      [
+        {
+          sessionKey: entryTarget.sessionKey,
+          facts: {
+            entry: retainedEntry,
+            snapshots: [],
+            projection,
+          },
+        },
+      ],
       "row-facts-reader",
     );
+    const retained = readSessionActorEntryFacts(entryTarget)!;
+    expect(retained.entry).toBe(retainedEntry);
+    expect(retained.projection).toBe(projection);
+    expect(retained.entry?.label).toBeUndefined();
+    expect(retained.projection?.hasBoard).toBe(false);
+    expect(readSessionActorEntryFacts(entryTarget)?.entry).toBe(retained.entry);
+    expect(() => {
+      retained.entry!.label = "Caller edit after reading";
+    }).toThrow(TypeError);
+    expect(() => {
+      retained.projection!.hasBoard = true;
+    }).toThrow(TypeError);
+    expect(readSessionActorEntryFacts(entryTarget)?.entry?.label).toBeUndefined();
+    expect(readSessionActorEntryFacts(entryTarget)?.projection?.hasBoard).toBe(false);
     expect(readSessionActorEntryFacts(entryTarget, ["skillsSnapshot"])?.snapshots).toEqual([]);
     expect((await readSessionEntryReadOnlyInWorker(scope))?.skillsSnapshot?.prompt).toBe(
       "Saved instructions",
@@ -707,7 +758,7 @@ it("reuses list facts and invalidates summary watermarks after transcript writes
 
 it("invalidates pending custody for staging, promotion, terminal completion and withdrawal", async () => {
   await withReplica((fixture) => {
-    const { replica, scope, database } = fixture;
+    const { scope, database } = fixture;
     const options = { agentId: scope.agentId, path: database.path, env: scope.env };
     const mutate = (input: PendingInputMutation) =>
       mutatePendingInput(
@@ -733,9 +784,7 @@ it("invalidates pending custody for staging, promotion, terminal completion and 
         kind: "stage",
         trackCompletion: true,
       });
-      if (expected.kind !== "stage") {
-        throw new Error("Expected a pending input staging snapshot");
-      }
+      assert(expected.kind === "stage", "Expected a pending input staging snapshot");
       mutate({
         ...identity,
         kind: "stage",
@@ -749,8 +798,7 @@ it("invalidates pending custody for staging, promotion, terminal completion and 
 
     hydrate(fixture);
     stage("promote");
-    expect(replica.read()).toBeUndefined();
-    expect(hydrate(fixture).pendingInputs).toMatchObject([
+    expect(reloadInvalidated(fixture).pendingInputs).toMatchObject([
       { input_id: "promote", state: "queued" },
     ]);
     runOpenClawAgentWriteTransaction(
@@ -762,14 +810,12 @@ it("invalidates pending custody for staging, promotion, terminal completion and 
         }),
       options,
     );
-    expect(replica.read()).toBeUndefined();
-    expect(hydrate(fixture).pendingInputs).toEqual([]);
+    expect(reloadInvalidated(fixture).pendingInputs).toEqual([]);
 
     const complete = stage("complete");
     hydrate(fixture);
     mutate({ ...complete, kind: "complete", outcome: { reason: "completed", status: "ok" } });
-    expect(replica.read()).toBeUndefined();
-    expect(hydrate(fixture).pendingInputs).toEqual([]);
+    expect(reloadInvalidated(fixture).pendingInputs).toEqual([]);
     expect(readSessionInputCompletion(database, complete)?.outcome).toMatchObject({
       reason: "completed",
       status: "ok",
@@ -778,8 +824,7 @@ it("invalidates pending custody for staging, promotion, terminal completion and 
     const withdraw = stage("withdraw");
     hydrate(fixture);
     mutate({ ...withdraw, kind: "finish", inputId: "withdraw", disposition: "cancelled" });
-    expect(replica.read()).toBeUndefined();
-    expect(hydrate(fixture).pendingInputs).toMatchObject([
+    expect(reloadInvalidated(fixture).pendingInputs).toMatchObject([
       { input_id: "withdraw", state: "cancelled" },
     ]);
   });
@@ -787,7 +832,7 @@ it("invalidates pending custody for staging, promotion, terminal completion and 
 
 it("retires hot facts across the released SDK and restart delivery owners", async () => {
   await withReplica(async (fixture) => {
-    const { scope, replica } = fixture;
+    const { scope } = fixture;
     replaceSessionEntrySync(scope, {
       ...fixture.load().entry!,
       restartRecoveryDeliveryRunId: "recovery-run",
@@ -801,8 +846,7 @@ it("retires hot facts across the released SDK and restart delivery owners", asyn
         update: () => ({ label: "sdk label" }),
       }),
     ).resolves.toMatchObject({ label: "sdk label" });
-    expect(replica.read()).toBeUndefined();
-    expect(hydrate(fixture).entry).toMatchObject({
+    expect(reloadInvalidated(fixture).entry).toMatchObject({
       label: "sdk label",
       restartRecoveryDeliveryRunId: "recovery-run",
     });
@@ -814,17 +858,19 @@ it("retires hot facts across the released SDK and restart delivery owners", asyn
       toolCallId: "synthetic-delivery",
     };
     await expect(beginRestartRecoveryTerminalDelivery(delivery)).resolves.toBe("started");
-    expect(replica.read()).toBeUndefined();
-    expect(hydrate(fixture).entry?.restartRecoveryDeliveryReceiptState).toBe("terminal-pending");
+    expect(reloadInvalidated(fixture).entry?.restartRecoveryDeliveryReceiptState).toBe(
+      "terminal-pending",
+    );
     await expect(completeRestartRecoveryTerminalDelivery(delivery)).resolves.toBe("recorded");
-    expect(replica.read()).toBeUndefined();
-    expect(hydrate(fixture).entry?.restartRecoveryDeliveryReceiptState).toBe("delivered-terminal");
+    expect(reloadInvalidated(fixture).entry?.restartRecoveryDeliveryReceiptState).toBe(
+      "delivered-terminal",
+    );
   });
 });
 
 it("retires a resident session when native maintenance archives it", async () => {
   await withReplica(async (fixture) => {
-    const { scope, replica, database } = fixture;
+    const { scope, database } = fixture;
     const preservation = await prepareSessionMaintenancePreservation(scope.storePath);
     try {
       hydrate(fixture);
@@ -846,8 +892,7 @@ it("retires a resident session when native maintenance archives it", async () =>
         { agentId: scope.agentId, path: database.path, env: scope.env },
       );
       expect(result.archived).toBe(1);
-      expect(replica.read()).toBeUndefined();
-      expect(hydrate(fixture).entry).toMatchObject({
+      expect(reloadInvalidated(fixture).entry).toMatchObject({
         archivedAt: expect.any(Number),
         archiveReason: "age-retention",
       });

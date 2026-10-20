@@ -1,7 +1,7 @@
 import { createComponent } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
-import { settleModelCatalogRequests } from "../../lib/model-catalog-store.ts";
+import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
 import { NewSessionPlaceControls } from "./target-controls-view.tsx";
@@ -91,7 +91,7 @@ function fixture(
 async function ready(f: ReturnType<typeof fixture>) {
   await Promise.all([
     f.gateway.retryRequiredPlacement(),
-    settleModelCatalogRequests(f.context.gateway.snapshot.client!, { agentId: "main" }),
+    loadModelCatalog(f.context.gateway.snapshot.client!, { agentId: "main" }),
   ]);
   f.place.restorePreferenceSelections();
   f.flow.setMessage("Inspect the workspace");
@@ -191,8 +191,11 @@ it("applies a newly required profile over an open hosted draft without advertisi
 
   current = catalog;
   await f.gateway.retryRequiredPlacement();
+  const close = vi.spyOn(f.place.browser, "close");
   f.place.browser.popoverCallbacks("where").onPopoverShow();
   f.place.restorePreferenceSelections();
+  f.place.restorePreferenceSelections();
+  expect(close).toHaveBeenCalledOnce();
   expect(f.place.hostedEnvironment).toBeUndefined();
   expect(f.place.modelControl.modelDefaultsPolicy).toBe("configured");
   expect(f.place.browser.popoverOpen("where")).toBe(false);
@@ -209,34 +212,30 @@ it("applies a newly required profile over an open hosted draft without advertisi
   expect(f.flow.canSubmit()).toBe(true);
 });
 
-it.each(["worker", "gateway"] as const)(
-  "uses %s configured defaults instead of a cached external runtime without deleting preferences",
-  async (inference) => {
-    const f = fixture(async () => ({ ...catalog, profiles: [{ ...profile, inference }] }));
-    const preference = {
-      model: "openai/default",
-      agentRuntime: "external-runtime",
-      where: { kind: "local" as const },
-      folder: "/old-project",
-      freshWorkspace: false,
-    };
-    vi.spyOn(f.gateway, "readPreference").mockReturnValue(preference);
-    f.place.modelControl.load(f.context, "main", true, {
-      agent: f.place.selectedAgent(),
-      preference,
-    });
-    await settleModelCatalogRequests(f.context.gateway.snapshot.client!, { agentId: "main" });
-    expect(f.place.modelControl.agentRuntime).toBe("external-runtime");
-    await ready(f);
-    expect(f.place.modelControl.modelForSubmission()).toBe("");
-    expect(f.place.modelControl.agentRuntime).toBeUndefined();
-    expect(f.place.devicePlacementRuntime()?.id).toBe("openclaw");
-    expect(f.flow.canSubmit()).toBe(inference === "worker");
-    expect(f.gateway.readPreference("main")).toEqual(preference);
-    f.place.modelControl.selected = "openai/default";
-    expect(f.flow.submitBlock()?.gate).toBe("model-unavailable");
-  },
-);
+it("uses worker configured defaults instead of a cached external runtime without deleting preferences", async () => {
+  const f = fixture();
+  const preference = {
+    model: "openai/default",
+    agentRuntime: "external-runtime",
+    where: { kind: "local" as const },
+    folder: "/old-project",
+    freshWorkspace: false,
+  };
+  vi.spyOn(f.gateway, "readPreference").mockReturnValue(preference);
+  f.place.modelControl.load(f.context, "main", true, {
+    agent: f.place.selectedAgent(),
+    preference,
+  });
+  await vi.waitFor(() => expect(f.place.modelControl.agentRuntime).toBe("external-runtime"));
+  await ready(f);
+  expect(f.place.modelControl.modelForSubmission()).toBe("");
+  expect(f.place.modelControl.agentRuntime).toBeUndefined();
+  expect(f.place.devicePlacementRuntime()?.id).toBe("openclaw");
+  expect(f.flow.canSubmit()).toBe(true);
+  expect(f.gateway.readPreference("main")).toEqual(preference);
+  f.place.modelControl.selected = "openai/default";
+  expect(f.flow.submitBlock()?.gate).toBe("model-unavailable");
+});
 
 it("does not grant a model or write permission through required worker metadata", async () => {
   const restricted = fixture(undefined, { restricted: true, defaultModel: null });
@@ -246,17 +245,6 @@ it("does not grant a model or write permission through required worker metadata"
   await ready(f);
   f.context.gateway.snapshot.hello!.auth!.scopes = ["operator.read"];
   expect(f.flow.submitBlock()?.gate).toBe("access");
-});
-
-it("keeps local submission when the authoritative catalog has no required policy", async () => {
-  const f = createDraftFixture({
-    methods: ["environments.list", "sessions.create"],
-    request: async () => ({ profiles: [], environments: [] }),
-  });
-  await f.gateway.retryRequiredPlacement();
-  f.flow.setMessage("Start normally");
-  expect(f.place.remotePlacement).toBe(false);
-  expect(f.flow.canSubmit()).toBe(true);
 });
 
 it("renders required placement as a readonly indicator, not a machine or workspace picker", async () => {
@@ -276,14 +264,14 @@ it("renders required placement as a readonly indicator, not a machine or workspa
           onConnectMachine: vi.fn(),
           onNavigate: vi.fn(),
           onFocusComposer: vi.fn(),
-          requestUpdate: vi.fn(),
+          onChange: vi.fn(),
         },
       }),
     { container },
   );
   expect(container.textContent).toContain("OpenClaw worker");
   expect(container.querySelector("[data-required-placement]")).not.toBeNull();
-  expect(container.querySelector("button, input, wa-popover")).toBeNull();
+  expect(container.querySelector("button, input, .oc-popover")).toBeNull();
 });
 
 it("keeps an initial failed catalog closed and allows its existing refresh owner to recover", async () => {
@@ -329,17 +317,7 @@ it("keeps a server startup failure with the created session for Retry rather tha
       }),
     }),
   );
-  expect(f.request).not.toHaveBeenCalledWith("sessions.send", expect.anything());
-});
-
-it("retires an open placement picker once when policy takes over, without a render loop", async () => {
-  const f = fixture();
-  await ready(f);
-  const close = vi.spyOn(f.place.browser, "close");
-  f.place.browser.popoverCallbacks("where").onPopoverShow();
-  f.place.restorePreferenceSelections();
-  f.place.restorePreferenceSelections();
-  expect(close).toHaveBeenCalledOnce();
+  expect(f.request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(0);
 });
 
 it("keeps a cold required-worker draft on configured defaults across asynchronous catalogs", async () => {
@@ -353,7 +331,7 @@ it("keeps a cold required-worker draft on configured defaults across asynchronou
   await read;
   f.place.restorePreferenceSelections();
   modelsReady.resolve();
-  await settleModelCatalogRequests(f.context.gateway.snapshot.client!, { agentId: "main" });
+  await loadModelCatalog(f.context.gateway.snapshot.client!, { agentId: "main" });
   f.place.restorePreferenceSelections();
   expect(f.place.modelControl.modelForSubmission()).toBe("");
   expect(f.place.modelControl.agentRuntime).toBeUndefined();

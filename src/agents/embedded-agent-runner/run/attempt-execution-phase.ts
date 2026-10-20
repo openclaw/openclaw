@@ -11,6 +11,7 @@ import {
   type AgentRunAttemptTerminal,
 } from "../../agent-run-terminal-outcome.js";
 import { agentSessionSetContextReplacementHook } from "../../sessions/agent-session-compaction.js";
+import { getGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { log } from "../logger.js";
 import { declarePromptHistoryRewrite } from "../prompt-cache-observability.js";
 import type { EmbeddedAgentQueueHandle } from "../runs.js";
@@ -57,6 +58,7 @@ export async function runEmbeddedAttemptExecutionPhase(
     sessionId: attempt.sessionId,
     sessionKey: attempt.sessionKey,
     runId: attempt.runId,
+    watchdogAttempt: getGatewayToolCallerIdentity()?.watchdogAttempt,
   });
   const mergeTerminal = (incoming: AgentRunAttemptTerminal) => {
     state.terminal = mergeAgentRunAttemptTerminal(state.terminal, incoming);
@@ -68,7 +70,13 @@ export async function runEmbeddedAttemptExecutionPhase(
       onRejectedProviderReplayRepaired: () => {
         repairedRejectedProviderReplay = true;
       },
-      onIdleTimeout: (error) => idleTimeoutTriggerRef.current?.(error),
+      onIdleTimeout: (error) => {
+        // Compaction owns request failures and fallback; the stream watchdog
+        // already aborted that request. Keep its enclosing turn live.
+        if (!activeSession.isCompacting) {
+          idleTimeoutTriggerRef.current?.(error);
+        }
+      },
       diagnosticOwner,
     });
   input.setup.prepStages.mark("stream-setup");
@@ -76,7 +84,10 @@ export async function runEmbeddedAttemptExecutionPhase(
 
   let preparedHistory: Awaited<ReturnType<typeof prepareEmbeddedAttemptHistory>>;
   try {
-    preparedHistory = await prepareEmbeddedAttemptHistory(input, assertActive);
+    preparedHistory = await withOwnedSessionTranscriptWrites(
+      input.sessionLock.ownedTranscriptWriteContext,
+      () => prepareEmbeddedAttemptHistory(input, assertActive),
+    );
   } catch (error) {
     await cleanupEmbeddedAttemptResources({
       flushPendingToolResultsAfterIdle,
@@ -148,7 +159,10 @@ export async function runEmbeddedAttemptExecutionPhase(
     recoverStalledModelCall: () =>
       isModelCallActive() &&
       interruptIdleRequest(
-        new Error("LLM idle timeout (diagnostic stuck recovery): no response from model"),
+        Object.assign(
+          new Error("LLM idle timeout (diagnostic stuck recovery): no response from model"),
+          { code: "OPENCLAW_SESSION_WATCHDOG" },
+        ),
       ),
     getRunState: () => {
       const terminal = projectAgentRunAttemptTerminal(state.terminal);

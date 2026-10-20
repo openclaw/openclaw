@@ -23,6 +23,7 @@ type RuntimeConfigGatewaySnapshot = {
   phase: ApplicationGatewayPhase;
   sessionKey: string;
   hello?: GatewayHelloOk | null;
+  pluginCapabilities?: { generation?: number } | null;
 };
 
 const initialConfigValue = <T>(value: T): T => value;
@@ -73,10 +74,7 @@ export type RuntimeConfigState = Omit<
     chatError?: string | null;
   };
 
-const requestVersionsByState = new WeakMap<
-  RuntimeConfigState,
-  { config: number; schema: number }
->();
+const requestVersionsByState = new WeakMap<RuntimeConfigState, number>();
 const connectionEpochsByState = new WeakMap<object, number>();
 const staleConfigSnapshots = new WeakSet<object>();
 export type ConfigRead = {
@@ -103,7 +101,7 @@ export function beginConfigRead(
   client: GatewayBrowserClient,
 ): ConfigRead {
   const read: ConfigRead = {
-    version: nextRequestVersion(state, "config"),
+    version: nextRequestVersion(state),
     client,
     connectionEpoch: currentConfigConnectionEpoch(state),
     completion: createDeferredCore(),
@@ -133,14 +131,11 @@ type ConfigConnectionState = {
   connected: boolean;
 };
 
-export function nextRequestVersion(state: RuntimeConfigState, key: "config" | "schema"): number {
-  if (key === "config") {
-    invalidateConfigRead(state);
-  }
-  const current = requestVersionsByState.get(state) ?? { config: 0, schema: 0 };
-  const next = { ...current, [key]: current[key] + 1 };
+export function nextRequestVersion(state: RuntimeConfigState): number {
+  invalidateConfigRead(state);
+  const next = (requestVersionsByState.get(state) ?? 0) + 1;
   requestVersionsByState.set(state, next);
-  return next[key];
+  return next;
 }
 
 export function clearConfigRequestVersions(state: RuntimeConfigState): void {
@@ -177,14 +172,13 @@ export function isCurrentConfigConnection(
 
 export function isCurrentRequest(
   state: RuntimeConfigState,
-  key: "config" | "schema",
   version: number,
   client: GatewayBrowserClient,
   connectionEpoch: number,
 ): boolean {
   return (
     isCurrentConfigConnection(state, client, connectionEpoch) &&
-    requestVersionsByState.get(state)?.[key] === version
+    requestVersionsByState.get(state) === version
   );
 }
 

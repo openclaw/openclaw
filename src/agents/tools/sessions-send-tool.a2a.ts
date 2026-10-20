@@ -1,3 +1,4 @@
+import { HEARTBEAT_TOKEN } from "../../auto-reply/tokens.js";
 import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
 import { bindInProcessSessionDeliveryGeneration } from "../../gateway/in-process-session-delivery.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -21,7 +22,6 @@ import {
 } from "./in-process-gateway.js";
 import { resolveSessionsSendReplyTarget } from "./sessions-delivery-target.js";
 import type { SessionDeliveryTarget } from "./sessions-send-helpers.js";
-import { isNonDeliverableSessionsReply } from "./sessions-send-tokens.js";
 
 const log = createSubsystemLogger("agents/sessions-send");
 
@@ -72,6 +72,8 @@ export async function runSessionsSendA2AFlow(params: {
   callGateway?: AgentToolGatewayRequestCaller;
   targetSessionKey: string;
   targetAgentId: string;
+  targetSession?: AgentStepSession;
+  replyAdmission?: Parameters<typeof runAgentStep>[0]["replyAdmission"];
   displayKey: string;
   runId: string;
   replyTimeoutMs: number;
@@ -81,6 +83,7 @@ export async function runSessionsSendA2AFlow(params: {
   requesterSession?: AgentStepSession;
   requesterDeliveryGeneration?: SessionDeliveryGeneration;
   requesterOrigin?: DeliveryContext;
+  requester?: Parameters<typeof runAgentStep>[0]["requester"];
   requesterChannel?: string;
   reply?: AgentWaitResult & { replyText?: string };
   notifyRequesterOnWaitFailure?: boolean;
@@ -93,9 +96,13 @@ export async function runSessionsSendA2AFlow(params: {
   const requesterStepContext = {
     agentId: params.requesterAgentId,
     deliveryContext: params.requesterOrigin,
+    requester: params.requester,
     expectedSession: params.requesterSession,
+    expectedSourceSession: params.targetSession,
+    replyAdmission: params.replyAdmission,
     timeoutMs: params.replyTimeoutMs,
     sourceSessionKey: params.targetSessionKey,
+    ...(child ? {} : { sourceAgentId: params.targetAgentId }),
     callGateway: gatewayCall,
     sourceTool: child ? "subagent_announce" : "sessions_send",
     ...(child ? { sourceRole: "subagent" as const } : {}),
@@ -117,8 +124,7 @@ export async function runSessionsSendA2AFlow(params: {
         ((wait.status === "error" && !wait.retryableTransportError) ||
           isTerminalAgentWaitTimeout(wait))
       ) {
-        const error =
-          typeof wait.error === "string" && wait.error.trim() ? `: ${wait.error.trim()}` : "";
+        const error = wait.error?.trim() ? `: ${wait.error.trim()}` : "";
         await deliverRequesterReply({
           ...requesterStepContext,
           sessionKey: params.requesterSessionKey,
@@ -133,7 +139,11 @@ export async function runSessionsSendA2AFlow(params: {
       return;
     }
     const reply = wait.replyText;
-    if (!reply?.trim() || isNonDeliverableSessionsReply(reply)) {
+    if (
+      wait.terminalReply?.disposition !== "visible" ||
+      !reply?.trim() ||
+      reply.trim() === HEARTBEAT_TOKEN
+    ) {
       return;
     }
 

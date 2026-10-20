@@ -89,7 +89,7 @@ export class GuildMember extends Base {
     return this.rawData.user ? new User(this.client, this.rawData.user) : null;
   }
   get roles() {
-    return (this.rawData.roles ?? []) as Array<string | Role>;
+    return this.rawData.roles ?? [];
   }
   get nickname() {
     return this.rawData.nick ?? undefined;
@@ -156,6 +156,9 @@ export class Message<IsPartial extends boolean = false> extends Base {
   }
   get embeds(): APIEmbed[] {
     return this.rawDataValue?.embeds ?? [];
+  }
+  get components() {
+    return this.rawDataValue?.components;
   }
   get attachments() {
     return this.rawDataValue?.attachments ?? [];

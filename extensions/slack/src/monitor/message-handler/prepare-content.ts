@@ -92,11 +92,6 @@ function filterInheritedParentFiles(params: {
   }
   const starterFileIds = new Set(threadStarter.files.map((file) => file.id));
   const filtered = files.filter((file) => !file.id || !starterFileIds.has(file.id));
-  if (filtered.length < files.length) {
-    logVerbose(
-      `slack: filtered ${files.length - filtered.length} inherited parent file(s) from thread reply`,
-    );
-  }
   return filtered.length > 0 ? filtered : undefined;
 }
 
@@ -109,8 +104,6 @@ export async function resolveSlackMessageContent(params: {
   client?: SlackWebClient;
   mediaMaxBytes: number;
   resolveUserName?: (userId: string) => Promise<{ name?: string }>;
-  mediaReadIdleTimeoutMs?: number;
-  mediaTotalTimeoutMs?: number;
   abortSignal?: AbortSignal;
   assertCurrent?: () => void;
   preloadedMedia?: ReadonlyMap<SlackFile, SlackMediaResult>;
@@ -130,8 +123,6 @@ export async function resolveSlackMessageContent(params: {
             client: params.client,
             token: params.botToken,
             maxBytes: params.mediaMaxBytes,
-            readIdleTimeoutMs: params.mediaReadIdleTimeoutMs,
-            totalTimeoutMs: params.mediaTotalTimeoutMs,
             abortSignal: params.abortSignal,
             assertCurrent: params.assertCurrent,
             preloadedMedia: params.preloadedMedia,

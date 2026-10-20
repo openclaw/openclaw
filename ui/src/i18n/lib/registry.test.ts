@@ -1,31 +1,8 @@
 // @vitest-environment node
 
 import { describe, expect, it } from "vitest";
-import {
-  DEFAULT_LOCALE,
-  loadLazyLocaleTranslation,
-  resolveNavigatorLocale,
-  SUPPORTED_LOCALES,
-} from "./registry.ts";
-
-describe("resolveNavigatorLocale", () => {
-  it.each([
-    ["zh", "zh-CN"],
-    ["zh-SG", "zh-CN"],
-    ["ZH-hAnT-CN", "zh-TW"],
-    ["ZH-hAnS-hK", "zh-CN"],
-    ["zh-TW", "zh-TW"],
-    ["zh-HK", "zh-TW"],
-    ["zh-MO", "zh-TW"],
-    ["pt-PT", "pt-BR"],
-    ["DE-at", "de"],
-    ["ja-JP", "ja-JP"],
-    ["sv-SE", "en"],
-    ["", "en"],
-  ] as const)("maps browser language %s to %s", (browserLanguage, expectedLocale) => {
-    expect(resolveNavigatorLocale(browserLanguage)).toBe(expectedLocale);
-  });
-});
+import { DEFAULT_LOCALE, SUPPORTED_LOCALES } from "../../../../src/shared/control-ui-locale.ts";
+import { loadLazyLocaleTranslation } from "./registry.ts";
 
 describe("lazy locale registry", () => {
   it("keeps English as the default and materializes every registered foreign catalog", async () => {

@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { resolveSessionPinnedHarnessId } from "../sessions/agent-harness-session-key.js";
 import type { SessionRowChange } from "../sessions/session-row-changes.js";
 import * as records from "./session-row-projection-record.js";
 
@@ -98,7 +99,7 @@ export function createSessionRowProjectionArchive(params: {
       return undefined;
     },
     invalidateRows(
-      change: Extract<SessionRowChange, { all: true }>,
+      change: Extract<SessionRowChange, { all: true }> & { runtimeOwnershipChanged?: true },
       candidates: Iterable<records.Row>,
     ) {
       const catalogOnly = change.scope === "catalog" && !change.factsInvalidated;
@@ -106,8 +107,19 @@ export function createSessionRowProjectionArchive(params: {
         if (change.factsInvalidated) {
           params.invalidateFacts(row);
         }
+        if (change.runtimeOwnershipChanged && resolveSessionPinnedHarnessId(row.entry)) {
+          // Completed policy changes expire native ownership; queued work keeps accepted facts.
+          records.invalidateDatabaseFacts(
+            row,
+            row.retainedDatabaseFacts && {
+              ...row.retainedDatabaseFacts,
+              runtimeOwnership: undefined,
+              runtimeOwnershipDependencies: undefined,
+            },
+          );
+        }
         if (catalogOnly && row.entry?.archivedAt === undefined) {
-          if (!params.dirty.has(records.identity(row))) {
+          if (row.materialized && !params.dirty.has(records.identity(row))) {
             row.pendingDatabaseFacts = records.isPreparedSessionRowDatabaseFacts(
               row.retainedDatabaseFacts,
             )
@@ -123,7 +135,12 @@ export function createSessionRowProjectionArchive(params: {
           if (!catalogOnly) {
             records.invalidateDatabaseFacts(current);
           }
-          if (current.preparedAcpMeta === undefined || current.hasBoard === undefined) {
+          // Catalog policy can expire native ownership while retaining ACP and Board facts.
+          if (
+            current.preparedAcpMeta === undefined ||
+            current.preparedRuntimeOwnership === undefined ||
+            current.hasBoard === undefined
+          ) {
             params.dirty.add(records.identity(current));
           }
           continue;

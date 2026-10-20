@@ -1,5 +1,8 @@
+import type { SessionActivitySummary } from "./activity-summary.js";
 import type { RestartRecoveryTerminalDeliveryClaim } from "./restart-recovery-receipt-state.js";
 import type { HarnessCompletionRecovery } from "./restart-recovery-types.js";
+import type { ConversationPublication } from "./session-accessor.sqlite-conversation-publication.js";
+import type { SessionActorDeliveryEvidence } from "./session-actor-delivery-evidence.types.js";
 import type {
   SessionActorAuthority,
   SessionActorTarget,
@@ -48,6 +51,8 @@ export type {
   SessionActorHotState,
   SessionActorSettlement,
 } from "./session-actor-state.types.js";
+
+export type { SessionActorDeliveryEvidence } from "./session-actor-delivery-evidence.types.js";
 
 /** Serializable, pure bookkeeping. These reducers cannot change session identity or authority. */
 export type SessionActorReducer = SessionEntryBookkeepingReducer;
@@ -102,12 +107,6 @@ export type SessionActorInputRecovery = {
 export type SessionActorPendingFinalDelivery = NonNullable<SessionEntry["pendingFinalDelivery"]> & {
   intentId: string;
   deliveries: NonNullable<NonNullable<SessionEntry["pendingFinalDelivery"]>["deliveries"]>;
-};
-
-/** Already validated by the host; live authority is checked again at commit. */
-export type SessionActorDeliveryEvidence = {
-  claim: HarnessCompletionRecovery;
-  result?: { channel: string; target?: { id: string }; platformMessageId?: string };
 };
 
 export type SessionActorPhaseInputs = {
@@ -170,6 +169,7 @@ export type SessionActorPhaseInputs = {
     /** Exact delivery intent and payload IDs join terminal accounting in this commit. */
     pendingFinalDelivery?: SessionActorPendingFinalDelivery;
     restartClaimCleanup?: Extract<SessionEntryPatchOperation, { kind: "restart-claim-clear" }>;
+    activitySummary?: SessionActivitySummary;
   };
   deliveryPending:
     | {
@@ -256,6 +256,7 @@ export type SessionActorReceipt = {
     append?: SessionActorAppendCommitted;
     projectionNeedsReconcile: boolean;
   };
+  conversationPublication?: readonly ConversationPublication[];
   pendingInputReceipt?: SessionPendingInputWorkerReceipt;
   pendingInputMutationReceipt?: PendingInputMutationReceipt;
   pendingFinalDelivery?: SessionEntry["pendingFinalDelivery"];
@@ -301,14 +302,17 @@ export type SessionActorCommitObserver<Value> = {
   committed(outcome: Extract<SessionActorOutcome<Value>, { kind: "committed" }>): void;
 };
 
-/** Storage-independent commands and receipts; database handles stay inside each backend. */
+/** Private durable worker commands; the actor reconstructs outcomes from native receipts. */
 export type SessionActorOperations = {
   [Phase in SessionActorPhase as `session.actor.${Phase}`]: {
     input: SessionActorCommandContext &
       SessionActorPhaseInputs[Phase] & {
         target: SessionActorTarget;
       };
-    output: SessionActorOutcome<SessionActorPhaseResults[Phase]>;
+    /** Native settlement owns committed data; the reply only acknowledges it. */
+    output:
+      | Exclude<SessionActorOutcome<never>, { kind: "committed" }>
+      | Pick<Extract<SessionActorOutcome<never>, { kind: "committed" }>, "kind" | "failure">;
   };
 } & {
   "session.actor.read": {
@@ -326,7 +330,11 @@ type SessionActorCommands = {
 };
 
 type SessionActorStorageCommitObserver<Value> = {
-  beforeCommit?(outcome: Extract<SessionActorStorageOutcome<Value>, { kind: "committed" }>): void;
+  beforeCommit?(
+    outcome: Extract<SessionActorStorageOutcome<Value>, { kind: "committed" }>,
+  ): void | Promise<void>;
+  /** Memory companions settle before this owner's FIFO admits later work. */
+  settled?(outcome: SessionActorStorageOutcome<Value>): void | Promise<void>;
   committed?(outcome: Extract<SessionActorStorageOutcome<Value>, { kind: "committed" }>): void;
 };
 

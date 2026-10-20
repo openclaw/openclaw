@@ -372,7 +372,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
       return params.inference.stream({
         modelRef: params.modelRef,
         context: projected.context,
-        options: structuredClone(params.inferenceOptions),
+        options: params.inferenceOptions,
         ...(options?.signal ? { signal: options.signal } : {}),
       });
     };
@@ -440,6 +440,8 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
         provider: model.provider,
         modelId: model.id,
         modelApi: model.api,
+        terminalReplyExpectation: "result-required",
+        replyDeliveryState: completion.getSourceReplyDeliveryState() ?? "missing",
         aborted: false,
         timedOut: false,
         attempt,

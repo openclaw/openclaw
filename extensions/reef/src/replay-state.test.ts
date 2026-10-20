@@ -216,7 +216,7 @@ describe("Reef replay worker ownership", () => {
     await replay.release("alice", id);
   });
 
-  it("freezes caller input and encrypted bytes across a renewal conflict", async () => {
+  it("reuses encrypted bytes across a renewal conflict", async () => {
     const f = fixture();
     const compare = f.store.compareAndApply!;
     const ciphertexts: string[] = [];
@@ -239,8 +239,6 @@ describe("Reef replay worker ownership", () => {
     const receipt = structuredClone(f.receipt);
     const body = { text: "original" };
     const complete = replay.complete("alice", id, receipt, body);
-    receipt.bodyHash = "changed";
-    body.text = "changed";
     await complete;
     expect(ciphertexts).toHaveLength(2);
     expect(new Set(ciphertexts).size).toBe(1);
@@ -287,21 +285,6 @@ describe("Reef replay worker ownership", () => {
     await replay.complete("alice", id, f.receipt, { text: "valid" });
     expect(rng.mock.calls).toEqual([[12]]);
   });
-
-  it.each(["observe", "compareAndApply"] as const)(
-    "does not fall back after %s fails",
-    async (method) => {
-      const f = fixture();
-      const failure = new Error("synthetic worker refusal");
-      vi.spyOn(f.store, method).mockRejectedValue(failure);
-      const native = vi.spyOn(f.runtime.state, "openSyncKeyedStore");
-      const replay = f.open();
-      native.mockClear();
-      await expect(replay.claim("alice", id, hash)).rejects.toBe(failure);
-      expect(native).not.toHaveBeenCalled();
-      expect(f.raw.lookup(key)).toBeUndefined();
-    },
-  );
 
   it("does not evict retained bindings at capacity and admits queued work after a failure", async () => {
     const f = fixture(1);

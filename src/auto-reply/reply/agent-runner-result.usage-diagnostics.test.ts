@@ -3,10 +3,10 @@ import {
   onInternalDiagnosticEvent,
   type DiagnosticEventPayload,
 } from "../../infra/diagnostic-events.js";
-import { SILENT_REPLY_TOKEN } from "../tokens.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
+import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import { finalizeReplyAgentRun } from "./agent-runner-result.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
-import { createReplyOperation } from "./reply-run-registry.js";
 import { createMockFollowupRun, createMockTypingController } from "./test-helpers.js";
 import { createTypingSignaler } from "./typing-mode.js";
 
@@ -31,6 +31,12 @@ it("emits usage diagnostics for a deliberate silent reply", async () => {
     sessionKey,
     sessionId,
     resetTriggered: false,
+    target: captureSessionTarget({
+      storeScope: "/synthetic/usage-diagnostics",
+      sessionKey,
+      incarnation: sessionId,
+      agentId: "main",
+    }),
   });
   replyOperation.setPhase("running");
   const diagnostics: DiagnosticEventPayload[] = [];
@@ -63,9 +69,10 @@ it("emits usage diagnostics for a deliberate silent reply", async () => {
       kind: "settled",
       status: "ok",
       result: {
-        payloads: [{ text: SILENT_REPLY_TOKEN }],
+        payloads: [],
         meta: {
           durationMs: 1,
+          terminalReply: { disposition: "silent" },
           agentMeta: {
             sessionId,
             provider: "openai",
@@ -77,7 +84,6 @@ it("emits usage diagnostics for a deliberate silent reply", async () => {
       resolved: { provider: "openai", model: "gpt-5.6-luna" },
       fallback: { exhausted: false, attempts: [] },
       autoCompactionCount: 0,
-      didLogHeartbeatStrip: false,
     },
     runId: "silent-usage-run",
     runStartedAt: Date.now(),

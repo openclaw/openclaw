@@ -87,7 +87,7 @@ describe("runReplyAgent direct replies and compaction notices", () => {
     async (_label, agentResult) => {
       const onAgentRunTerminalOutcome = vi.fn();
       const result = await runEmptyDirectReply(agentResult, { onAgentRunTerminalOutcome });
-      expect(onAgentRunTerminalOutcome).toHaveBeenLastCalledWith("failed");
+      expect(onAgentRunTerminalOutcome).toHaveBeenCalledExactlyOnceWith("failed");
       expect(result).toMatchObject({ isError: true });
     },
   );
@@ -116,7 +116,7 @@ describe("runReplyAgent direct replies and compaction notices", () => {
 
     expect(result).toMatchObject({
       isError: true,
-      text: expect.stringContaining("did not produce a visible reply"),
+      text: "No answer was returned. Ask again if you still need one.",
     });
     expect(onBlockReply).not.toHaveBeenCalled();
   });
@@ -192,7 +192,7 @@ describe("runReplyAgent direct replies and compaction notices", () => {
 
     expect(result).toMatchObject({
       isError: true,
-      text: expect.stringContaining("did not produce a visible reply"),
+      text: "No answer was returned. Ask again if you still need one.",
     });
   });
 });

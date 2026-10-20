@@ -2,12 +2,9 @@
 // finalize output hashes after wait(), so no later output may reach them.
 import crypto from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
-  fixtureReceiptClientSource,
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
 } from "../../../test/helpers/fixture-receipts.js";
@@ -15,11 +12,13 @@ import { isProcessAlive } from "../../../test/helpers/process-wait.js";
 import { withinTest } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { killPidIfAlive } from "../../test-utils/process-tree.js";
+import {
+  createLeakedPipeScope,
+  FORCED_SETTLEMENT_TEST_TIMEOUT_MS,
+} from "./supervisor.forced-settlement.test-support.js";
 import { createProcessSupervisor } from "./supervisor.js";
 import type { ManagedRun } from "./types.js";
 
-// SIGTERM plus the adapter's kill-wait fallback is a fixed ~9s production window.
-const FORCED_SETTLEMENT_TEST_TIMEOUT_MS = 60_000;
 const LATE_OUTPUT_OBSERVATION_MS = 500;
 
 const activePids = new Set<number>();
@@ -66,59 +65,6 @@ afterEach(async ({ signal }) => {
   }
 });
 
-async function createLeakedPipeScope() {
-  const cwd = tempDirs.make("openclaw-forced-settlement-");
-  const leakPath = path.join(cwd, "leak.mjs");
-  const leakPidPath = path.join(cwd, "leak.pid");
-  const leakTickPath = path.join(cwd, "leak.ticks");
-  const leakReadyPath = path.join(cwd, "leak.ready");
-  const rootPath = path.join(cwd, "root.mjs");
-  await writeFile(
-    leakPath,
-    `
-      import { appendFileSync, writeFileSync } from "node:fs";
-      ${fixtureReceiptClientSource(receipts.endpoint)}
-      // Adapter disposal closes the parent-side pipes. Keep the escaped process
-      // alive so its independent tick file proves output attempts continue.
-      process.stdout.on("error", () => {});
-      process.stderr.on("error", () => {});
-      let tick = 0;
-      setInterval(() => {
-        tick += 1;
-        appendFileSync(process.argv[3], ".");
-        process.stdout.write("leaked-stdout-" + tick + "\\n");
-        process.stderr.write("leaked-stderr-" + tick + "\\n");
-      }, 50);
-      writeFileSync(${JSON.stringify(leakReadyPath)}, "ready");
-      sendReceipt(${JSON.stringify(leakReadyPath)}, "ready");
-    `,
-    "utf8",
-  );
-  await writeFile(
-    rootPath,
-    `
-      import { spawn } from "node:child_process";
-      import { writeFileSync } from "node:fs";
-      process.stdout.write("live-stdout\\n");
-      process.stderr.write("live-stderr\\n");
-      // Inherit this root's stdout/stderr so the pipes outlive it, and detach so
-      // the supervisor's process-group kill cannot reach the descendant. This is
-      // the shipped CLI shape that would leave stdio open without terminal disposal.
-      const leak = spawn(
-        process.execPath,
-        [${JSON.stringify(leakPath)}, ${JSON.stringify(leakPidPath)}, ${JSON.stringify(leakTickPath)}],
-        { stdio: ["ignore", "inherit", "inherit"], detached: true },
-      );
-      // Retain identity before child boot, including when the test aborts during readiness.
-      writeFileSync(${JSON.stringify(leakPidPath)}, String(leak.pid));
-      leak.unref();
-      setInterval(() => {}, 1_000);
-    `,
-    "utf8",
-  );
-  return { cwd, rootPath, leakPidPath, leakTickPath, leakReadyPath };
-}
-
 function readTickCount(tickPath: string): number {
   try {
     return statSync(tickPath).size;
@@ -132,7 +78,10 @@ describe.skipIf(process.platform === "win32")("supervisor forced settlement outp
     "delivers nothing after forced settlement with inherited pipes held by a descendant",
     async ({ signal }) => {
       const { cwd, rootPath, leakPidPath, leakTickPath, leakReadyPath } =
-        await createLeakedPipeScope();
+        await createLeakedPipeScope(
+          tempDirs.make("openclaw-forced-settlement-"),
+          receipts.endpoint,
+        );
       activePidFiles.add(leakPidPath);
       const stdoutHash = crypto.createHash("sha256");
       const stderrHash = crypto.createHash("sha256");
@@ -209,6 +158,9 @@ describe.skipIf(process.platform === "win32")("supervisor forced settlement outp
       expect(hashFailures).toEqual([]);
       expect(delivered).toEqual(settledDelivered);
       expect(run.activity.lastOutputAtMs).toBe(settledOutputAtMs);
+      // The terminal result must retain its own failed cleanup join for callers.
+      expect(run.waitForExtinction).toBeTypeOf("function");
+      await expect(run.waitForExtinction!()).rejects.toThrow("cleanup could not be confirmed");
       await expect(supervisor.shutdown()).rejects.toThrow("cleanup could not be confirmed");
     },
     FORCED_SETTLEMENT_TEST_TIMEOUT_MS,

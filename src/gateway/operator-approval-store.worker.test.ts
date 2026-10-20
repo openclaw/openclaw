@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createExecApprovalPolicySnapshot } from "../infra/exec-approvals-allow-always.js";
+import { recordAllowlistMatchesUse } from "../infra/exec-approvals-authorization.js";
+import {
+  prepareExecApprovalsCurrentRead,
+  updateExecApprovals,
+} from "../infra/exec-approvals-store.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
@@ -9,6 +15,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import * as store from "./operator-approval-store.js";
 import * as native from "./operator-approval-store.kernel.worker.js";
@@ -112,10 +119,122 @@ it("preserves serialized records, first-answer wins, consumption and history thr
   );
 });
 
+it("keeps Allow Once executable during approval bookkeeping but rejects a later policy denial", async () => {
+  const databaseOptions = options();
+  const context = captureOpenClawStateWorkerContext(databaseOptions);
+  const policy = await updateExecApprovals(
+    { update: { kind: "replace", file: { version: 1, defaults: { security: "allowlist" } } } },
+    context,
+  );
+  assert(policy);
+  const input = approval("allow-once");
+  await store.insertOperatorApproval({ approval: input, databaseOptions });
+  expect(
+    await store.resolveOperatorApproval({
+      id: input.id,
+      decision: "allow-once",
+      resolver: { kind: "device", id: "reviewer" },
+      nowMs: 2000,
+      databaseOptions,
+    }),
+  ).toMatchObject({ outcome: "resolved", record: { decision: "allow-once" } });
+  const assertCurrent = await recordAllowlistMatchesUse(
+    {
+      agentId: "main",
+      matches: [],
+      command: "printf 'héllo  world'",
+      authorization: {
+        source: "explicit-approval",
+        security: "allowlist",
+        ask: "always",
+        allowlistSatisfied: false,
+        policySnapshot: createExecApprovalPolicySnapshot({ file: policy.file, agentId: "main" }),
+      },
+    },
+    context,
+  );
+  const stages: string[] = [];
+  const failures: unknown[] = [];
+  const admissionProbe = probe.admission(workerAdmission, (request, grant, admit) => {
+    admit(request, grant);
+    stages.push(request.stage);
+    try {
+      assertCurrent();
+    } catch (error) {
+      failures.push(error);
+    }
+  });
+  expect(
+    await store.consumeOperatorApprovalAllowOnce({
+      id: input.id,
+      consumerId: "synthetic-consumer",
+      nowMs: 2001,
+      databaseOptions,
+    }),
+  ).toMatchObject({ outcome: "consumed" });
+  // Terminal Web Push performs this lookup while the approved command reaches its final guard.
+  expect(
+    await store.getOperatorApprovalDetailed({ id: input.id, nowMs: 2002, databaseOptions }),
+  ).toMatchObject({ outcome: "found", record: { decision: "allow-once" } });
+  expect(stages).toEqual(["transaction", "commit", "transaction", "commit"]);
+  expect(failures).toEqual([]);
+  expect(assertCurrent).not.toThrow();
+  admissionProbe.mockRestore();
+
+  await updateExecApprovals(
+    { update: { kind: "replace", file: { version: 1, defaults: { security: "deny" } } } },
+    context,
+  );
+  expect(assertCurrent).toThrow("Exec approval changed before execution");
+});
+
+it("fences exec while an Allow Always MCP grant commits and publishes the new policy", async () => {
+  const databaseOptions = options();
+  const context = captureOpenClawStateWorkerContext(databaseOptions);
+  await updateExecApprovals({ update: { kind: "replace", file: { version: 1 } } }, context);
+  await store.insertOperatorApproval({
+    approval: {
+      ...approval("mcp-grant"),
+      kind: "plugin",
+      presentation: {
+        kind: "plugin",
+        title: "Approve tool",
+        description: "Allow the synthetic tool",
+        severity: "warning",
+        pluginId: "test-plugin",
+        toolName: "test-tool",
+        agentId: "main",
+        allowedDecisions: ["allow-once", "allow-always", "deny"],
+      },
+    },
+    databaseOptions,
+  });
+  const readCurrent = await prepareExecApprovalsCurrentRead(context);
+  const stages: string[] = [];
+  probe.admission(workerAdmission, (request, grant, admit) => {
+    admit(request, grant);
+    stages.push(request.stage);
+    expect(readCurrent).toThrow("Exec approval policy is unavailable or changing before execution");
+  });
+  expect(
+    await store.resolveOperatorApproval({
+      id: "mcp-grant",
+      decision: "allow-always",
+      resolver: { kind: "device", id: "reviewer" },
+      mcpToolGrant: { agentId: "main", server: "test-server", tool: "test-tool" },
+      nowMs: 2000,
+      databaseOptions,
+    }),
+  ).toMatchObject({ outcome: "resolved" });
+  expect(stages).toEqual(["transaction", "commit"]);
+  expect(readCurrent().agents?.main?.mcpTools).toEqual([
+    expect.objectContaining({ server: "test-server", tool: "test-tool" }),
+  ]);
+});
+
 it("publishes exact native postimages only after the outer commit and retention tombstones", () => {
   const databaseOptions = options();
   const facts = new Map<string, OperatorApprovalRow>();
-  const snapshots: string[][] = [];
   const releaseFacts = operatorApprovalPublication.subscribeFacts((change) => {
     if (change.kind !== "committed") {
       return;
@@ -128,9 +247,6 @@ it("publishes exact native postimages only after the outer commit and retention 
         facts.delete(key);
       }
     }
-  });
-  const releaseObserver = operatorApprovalPublication.subscribe(() => {
-    snapshots.push([...facts.values()].map((row) => `${row.approval_id}:${row.status}`));
   });
   try {
     runOpenClawStateWriteTransaction(() => {
@@ -151,9 +267,9 @@ it("publishes exact native postimages only after the outer commit and retention 
       native.insertOperatorApprovalInDatabase({ approval: approval("second"), databaseOptions });
       expect(facts.size).toBe(0);
     }, databaseOptions);
-    expect(snapshots).toEqual([
-      ["first:pending", "second:pending"],
-      ["first:pending", "second:pending"],
+    expect([...facts.values()].map((row) => `${row.approval_id}:${row.status}`)).toEqual([
+      "first:pending",
+      "second:pending",
     ]);
     native.getOperatorApprovalDetailedInDatabase({ id: "first", nowMs: 10_000, databaseOptions });
     expect(facts.get("first")?.status).toBe("expired");
@@ -181,7 +297,6 @@ it("publishes exact native postimages only after the outer commit and retention 
     expect(facts.size).toBe(0);
   } finally {
     releaseFacts();
-    releaseObserver();
   }
 });
 
@@ -211,9 +326,9 @@ it("runs startup recovery, lookup, expiry and history without host SQLite calls 
     });
     const pending = await store.listPendingOperatorApprovals({ nowMs: 2000, databaseOptions });
     expect(pending.map((record) => record.id)).toEqual(["off-thread"]);
-    expect(
-      (await store.expireDueOperatorApprovals({ nowMs: 10_000, databaseOptions })).affected,
-    ).toBe(1);
+    const expired = await store.prepareOperatorApprovalReplay({ nowMs: 10_000, databaseOptions });
+    expect(expired.outcome).toBe("expired");
+    expect(expired.records.map((record) => record.id)).toEqual(["off-thread"]);
     expect(
       await store.getOperatorApprovalDetailed({ id: "off-thread", nowMs: 10_001, databaseOptions }),
     ).toMatchObject({ outcome: "found", record: { status: "expired" } });
@@ -268,10 +383,13 @@ it.each(["worker", "native-compatibility"] as const)(
         guard,
       });
       expect(pending.map((record) => record.id)).toEqual(["expiry"]);
-      expect(
-        (await store.expireDueOperatorApprovals({ nowMs: 10_000, databaseOptions, guard }))
-          .affected,
-      ).toBe(1);
+      const expired = await store.prepareOperatorApprovalReplay({
+        nowMs: 10_000,
+        databaseOptions,
+        guard,
+      });
+      expect(expired.outcome).toBe("expired");
+      expect(expired.records.map((record) => record.id)).toEqual(["expiry"]);
       expect(
         await store.getOperatorApprovalDetailed({
           id: "expiry",

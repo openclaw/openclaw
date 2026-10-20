@@ -1,5 +1,6 @@
 import type { AgentEvent } from "../../packages/gateway-protocol/src/schema/agent.js";
 import type { AgentRunContext } from "./agent-run-registry.types.js";
+import type { captureAgentRunTerminalPersistence } from "./agent-run-terminal-writes.js";
 
 /** Payload for approval requests and their later resolution events. */
 export type AgentApprovalEventData = {
@@ -59,16 +60,20 @@ export type AgentAssistantSourceReceipt = {
   itemId?: string;
   /** Undefined until commit; null is durable without an available transcript position. */
   committedMessageSeq?: number | null;
+  /** Exact transcript occurrence assigned by the persistence owner after commit. */
+  committedMessageId?: string;
 };
 
 export type AgentAssistantProjection = {
   itemId: string;
-  text: string;
   replace: boolean;
-};
+  /** Raw append prepared by the producer; display corrections can differ from HTTP output. */
+  rawDelta?: string;
+} & ({ text: string; delta?: never } | { delta: string; text?: never });
 
 /** Gateway-only routing metadata stamped onto events after public input validation. */
 export type AgentEventRuntimePayload = AgentEventPayload & {
+  readonly terminalPersistence?: ReturnType<typeof captureAgentRunTerminalPersistence>;
   readonly admitLifecyclePublication?: () => boolean;
   readonly assistantSource?: AgentAssistantSourceReceipt;
   readonly assistantProjection?: AgentAssistantProjection;

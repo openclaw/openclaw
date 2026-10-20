@@ -43,9 +43,9 @@ describe("OpenClawTerminalPanel dock suppression", () => {
     document.body.append(panel);
     await panel.updateComplete;
 
-    expect(panel.renderRoot.querySelector(".tp")).not.toBeNull();
+    expect(panel.querySelector(".tp")).not.toBeNull();
     panel.suppressed = true;
-    await waitForFast(() => expect(panel.renderRoot.querySelector(".tp")).toBeNull());
+    await waitForFast(() => expect(panel.querySelector(".tp")).toBeNull());
 
     expect(document.documentElement.style.getPropertyValue("--oc-terminal-reserve-bottom")).toBe(
       "0px",
@@ -55,9 +55,9 @@ describe("OpenClawTerminalPanel dock suppression", () => {
     });
 
     panel.suppressed = false;
-    await waitForFast(() => expect(panel.renderRoot.querySelector(".tp")).not.toBeNull());
+    await waitForFast(() => expect(panel.querySelector(".tp")).not.toBeNull());
 
-    expect(panel.renderRoot.querySelector(".tp")).not.toBeNull();
+    expect(panel.querySelector(".tp")).not.toBeNull();
   });
 
   it("restores a suppressed main placement", async () => {
@@ -69,17 +69,17 @@ describe("OpenClawTerminalPanel dock suppression", () => {
     panel.available = true;
     document.body.append(panel);
     await panel.updateComplete;
-    expect(panel.renderRoot.querySelector(".tp--main")).not.toBeNull();
+    expect(panel.querySelector(".tp--main")).not.toBeNull();
 
     panel.suppressed = true;
-    await waitForFast(() => expect(panel.renderRoot.querySelector(".tp")).toBeNull());
+    await waitForFast(() => expect(panel.querySelector(".tp")).toBeNull());
     expect(JSON.parse(localStorage.getItem("openclaw.terminal.panel.v1") ?? "{}")).toMatchObject({
       open: true,
       dock: "main",
     });
 
     panel.suppressed = false;
-    await waitForFast(() => expect(panel.renderRoot.querySelector(".tp--main")).not.toBeNull());
+    await waitForFast(() => expect(panel.querySelector(".tp--main")).not.toBeNull());
   });
 
   it("defers availability restore until suppression ends", async () => {

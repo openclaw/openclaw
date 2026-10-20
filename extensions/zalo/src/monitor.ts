@@ -289,8 +289,8 @@ async function handleImageMessage(
       });
       mediaPath = saved.path;
       mediaType = saved.contentType;
-    } catch (err) {
-      runtime.error?.(`[${account.accountId}] Failed to download Zalo image: ${String(err)}`);
+    } catch {
+      runtime.error?.(`[${account.accountId}] Failed to download Zalo image`);
     }
   }
 
@@ -401,7 +401,7 @@ async function authorizeZaloMessage(
       await pairing.issueChallenge({
         senderId,
         senderIdLine: `Your Zalo user id: ${senderId}`,
-        meta: { name: senderName ?? undefined },
+        meta: { name: senderName },
         onCreated: () => {
           logVerbose(core, runtime, `zalo pairing request sender=${senderId}`);
         },
@@ -728,7 +728,7 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
   // into a 0-byte limit the media core rejects.
   const configuredMediaMaxMb = account.config.mediaMaxMb;
   const effectiveMediaMaxMb =
-    typeof configuredMediaMaxMb === "number" && configuredMediaMaxMb > 0
+    configuredMediaMaxMb !== undefined && configuredMediaMaxMb > 0
       ? configuredMediaMaxMb
       : DEFAULT_MEDIA_MAX_MB;
   const fetcher = fetcherOverride ?? resolveZaloProxyFetch(account.config.proxy);

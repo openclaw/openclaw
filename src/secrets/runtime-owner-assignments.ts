@@ -30,10 +30,8 @@ import {
   type ResolverContext,
   type SecretAssignment,
 } from "./runtime-shared.js";
-import {
-  getActiveSecretsRuntimeSnapshotState,
-  hasSameSecretProviderDefinition,
-} from "./runtime-state.js";
+import { hasSameSecretProviderDefinition } from "./runtime-source-contract.js";
+import { getActiveSecretsRuntimeSnapshotState } from "./runtime-state.js";
 
 type SecretResolutionOptions = Parameters<typeof resolveSecretRefValues>[1];
 
@@ -495,7 +493,7 @@ export async function resolveAndApplySecretAssignments(params: {
         applyResolvedAssignments({ assignments: readyAssignments, resolved: resolution.resolved });
         for (const assignment of readyAssignments) {
           const refKey = secretRefKey(assignment.ref);
-          resolvedValues.set(refKey, structuredClone(resolution.resolved.get(refKey)));
+          resolvedValues.set(refKey, resolution.resolved.get(refKey));
         }
       } catch (error) {
         associateAssignmentFailureOwners(readyAssignments, error, params);
@@ -539,7 +537,7 @@ export async function resolveAndApplySecretAssignments(params: {
           if (degradationState === "stale") {
             const value = activeValues.get(refKey);
             assignment.apply(structuredClone(value));
-            resolvedValues.set(refKey, structuredClone(value));
+            resolvedValues.set(refKey, value);
           } else if (assignment.applyUnavailable) {
             assignment.applyUnavailable();
           } else {

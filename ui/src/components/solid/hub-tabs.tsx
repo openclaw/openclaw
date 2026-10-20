@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, onSettled, untrack } from "solid-js";
+import { createMemo, onSettled } from "solid-js";
 import { reclaimHubTabFocus, rememberHubTabFocus } from "../hub-tabs-focus.ts";
 import { Tabs } from "./tabs.tsx";
 import "../../styles/hub-tabs.css";
@@ -8,7 +8,6 @@ import hubStyles from "../../styles/hub-tabs.css?inline";
 export type HubTabsProps<T extends string> = {
   id: string;
   active: T | null;
-  requestedActive?: T;
   tabs: readonly {
     value: T;
     label: JSX.Element;
@@ -34,7 +33,7 @@ export function HubTabs<T extends string>(props: HubTabsProps<T>) {
       panelId: props.panelId,
       disabled: tab.disabled,
       testId: tab.testId,
-      className: `hub-tab ${props.carapace ? "oc-segmented-item" : ""}`,
+      className: ["hub-tab", { "oc-segmented-item": props.carapace }],
       label: (
         <>
           {tab.label}
@@ -46,20 +45,16 @@ export function HubTabs<T extends string>(props: HubTabsProps<T>) {
       ),
     })),
   );
-  let tablist: HTMLDivElement | undefined;
+  let tabElement!: (value: string) => HTMLElement | undefined;
   onSettled(() => {
-    const initial = untrack(() => ({ id: props.id, active: props.active }));
-    const selected = [...(tablist?.querySelectorAll<HTMLElement>("[role=tab]") ?? [])].find(
-      (tab) => tab.dataset.tabValue === initial.active,
-    );
-    if (initial.active !== null) {
-      reclaimHubTabFocus(initial.id, initial.active, selected);
+    if (props.active !== null) {
+      reclaimHubTabFocus(props.id, props.active, tabElement(props.active));
     }
   });
   return (
     <Tabs
-      ref={(node) => {
-        tablist = node;
+      ref={(_element, findTab) => {
+        tabElement = findTab;
       }}
       id={`${props.id}-tabs`}
       shadowStyles={[hubStyles]}
@@ -76,7 +71,7 @@ export function HubTabs<T extends string>(props: HubTabsProps<T>) {
       ]}
       onActivate={(value, element, event) => {
         const tab = props.tabs.find((entry) => entry.value === value);
-        if (!tab || tab.value === (props.requestedActive ?? props.active)) {
+        if (!tab || tab.value === props.active) {
           return false;
         }
         if (event instanceof KeyboardEvent) {

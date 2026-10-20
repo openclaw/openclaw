@@ -4,6 +4,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { SESSION_PARTICIPANT_LIMIT } from "../../packages/gateway-protocol/src/schema/session-participant.js";
+import { resolveAgentConfig } from "../agents/agent-scope.js";
 import { resolveModelContextTokenProjection } from "../agents/context.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import type { AgentHarnessSessionRuntimeOwnership } from "../agents/harness/types.js";
@@ -36,6 +37,7 @@ import {
 } from "../infra/agent-run-registry.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveSessionCommunicationPolicy } from "../sessions/communication-policy.js";
 import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
 import { deriveSessionUnread } from "../shared/session-unread.js";
@@ -103,7 +105,10 @@ export function readSessionRowInputs(params: {
   preparedRepositoryWorkspace?: Readonly<SessionRepositoryWorkspaceRecord> | null;
   modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
   now?: number;
-  preparedTitle?: Pick<GatewaySessionRow, "derivedTitle" | "lastMessagePreview">;
+  preparedTitle?: Pick<
+    GatewaySessionRow,
+    "derivedTitle" | "lastMessagePreview" | "lastAssistantMessage"
+  >;
   childLinks?: SessionChildLink[];
   excludedChildKeys?: ReadonlySet<string>;
   rowContext?: SessionListRowContext;
@@ -200,6 +205,7 @@ export function readSessionRowInputs(params: {
       key,
       entry,
       lightweight,
+      preparedRuntimeOwnership: params.preparedRuntimeOwnership,
       swarm: buildSessionSwarmSummary(
         params.rowContext?.subagentRuns.swarmRunsByRequesterSessionKey.get(key) ?? [],
         key,
@@ -226,6 +232,7 @@ export function readSessionRowInputs(params: {
       displayName,
       derivedTitle: params.preparedTitle?.derivedTitle,
       lastMessagePreview: params.preparedTitle?.lastMessagePreview,
+      lastAssistantMessage: params.preparedTitle?.lastAssistantMessage,
       thinkingProjection,
       agentRuntime: projectWorkerPlacementAgentRuntime(thinkingProjection.agentRuntime),
       contextWindowProfile,
@@ -418,7 +425,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
 
   const row: GatewaySessionRow = {
     key,
-    sessionModelRevision: sessionModelRevision(entry),
+    sessionModelRevision: sessionModelRevision(entry, undefined, input.preparedRuntimeOwnership),
     // Only explicitly requested summaries may clear swarm state in event merges.
     ...(input.includeSwarmSummary ? { swarm: input.swarm } : {}),
     visibility: entry ? (entry.visibility ?? "shared") : undefined,
@@ -438,6 +445,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
       ? { sessionRoot: entry.sessionRoot }
       : {}),
     worktree: entry?.worktree,
+    deviceFolder: entry?.deviceFolder,
     repositoryWorkspaceId: entry?.repositoryWorkspaceId,
     ...(input.repository ? { repository: input.repository } : {}),
     execNode: entry?.execNode,
@@ -467,6 +475,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     displayName: input.displayName,
     derivedTitle: input.derivedTitle,
     lastMessagePreview: input.lastMessagePreview,
+    lastAssistantMessage: input.lastAssistantMessage,
     channel,
     subject: entry?.subject,
     groupChannel: entry?.groupChannel,
@@ -504,6 +513,9 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     systemSent: entry?.systemSent,
     abortedLastRun: entry?.abortedLastRun,
     restartRecoveryStatus: entry?.mainRestartRecovery?.tombstone ? "tombstoned" : undefined,
+    restartRecoveryCycleId: entry?.mainRestartRecovery?.tombstone
+      ? entry.mainRestartRecovery.cycleId
+      : undefined,
     thinkingLevel: input.thinkingProjection.thinkingLevel,
     contextWindow: input.contextWindowProfile.contextWindow,
     contextWindows: input.contextWindowProfile.contextWindows,
@@ -519,6 +531,9 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     verboseLevel: entry?.verboseLevel,
     traceLevel: entry?.traceLevel,
     reasoningLevel: entry?.reasoningLevel,
+    reasoningDefault:
+      resolveAgentConfig(cfg, input.agentId)?.reasoningDefault ??
+      cfg.agents?.defaults?.reasoningDefault,
     elevatedLevel: entry?.elevatedLevel,
     sendPolicy: entry?.sendPolicy,
     inputTokens: entry?.inputTokens,
@@ -574,6 +589,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
   return {
     row,
     source: {
+      parsedKey: parseAgentSessionKey(key),
       cfg,
       entry,
       selectedModel: input.selectedModel,
@@ -591,6 +607,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
       estimatedCostUsd: input.estimatedCostUsd,
       subagentRunInputs: input.subagentRunInputs,
       lastMessagePreview: input.lastMessagePreview,
+      lastAssistantMessage: input.lastAssistantMessage,
       childLinks: projectSessionRowChildLinks(input.childLinks),
     },
   };
@@ -611,6 +628,7 @@ export function presentSessionRow(
     options.subagentRuns ?? buildSubagentRunReadIndexFromRuns({ ...source.subagentRunInputs, now });
   const { subagentRun, subagentOwner, fields } = projectGatewaySessionRunState({
     key: row.key,
+    parsedKey: source.parsedKey,
     entry,
     now,
     rowContext: {
@@ -637,13 +655,14 @@ export function presentSessionRow(
   row.estimatedCostUsd =
     source.estimatedCostUsd ??
     asNonNegativeFiniteNumber(source.lightweight ? undefined : usage?.estimatedCostUsd);
-  const children = source.childLinks?.flatMap(({ key, entry: childEntry }) => {
+  const children = source.childLinks?.flatMap(({ key, parsedKey, entry: childEntry }) => {
     if (options.excludedChildKeys?.has(key)) {
       return [];
     }
     const childActive = projectGatewaySessionRunState({
       key,
       entry: childEntry,
+      parsedKey,
       now,
       rowContext: {
         subagentRuns,
@@ -655,6 +674,7 @@ export function presentSessionRow(
       !resolveSessionChildOwners({
         key,
         entry: childEntry,
+        parsedKey,
         now,
         subagentRuns,
         hasActiveRun: childActive,

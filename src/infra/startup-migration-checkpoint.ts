@@ -1,7 +1,6 @@
 // Serializes Doctor repair and current-state startup writes in shared state.
 import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
-import type { DatabaseSync } from "node:sqlite";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import {
   withExistingOpenClawStateDatabaseCurrentReadOnly,
@@ -25,6 +24,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import type { EngineConnection } from "./sql-connection.js";
 import { sqlitePrimaryResultCode } from "./sqlite-error-diagnostics.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import {
@@ -52,7 +52,7 @@ export const STARTUP_MIGRATION_HEARTBEAT_INTERVAL_MS = 60_000;
 export type StartupMigrationLease = {
   /** Publication guards may already hold the SQLite writer, so this check must stay read-only. */
   assertOwned: () => void;
-  assertOwnedInTransaction: (database: DatabaseSync, params?: { nowMs?: number }) => void;
+  assertOwnedInTransaction: (database: EngineConnection, params?: { nowMs?: number }) => void;
   heartbeat: (params?: { nowMs?: number }) => void;
   release: () => void;
   readonly owner: string;
@@ -79,7 +79,7 @@ export class StartupMigrationLeaseLostError extends Error {}
 
 function writeStartupMigrationCheckpointDatabase<T>(
   env: NodeJS.ProcessEnv,
-  callback: (db: DatabaseSync) => T,
+  callback: (db: EngineConnection) => T,
 ): T {
   const databasePath = resolveOpenClawStateSqlitePath(env);
   return withOpenClawStateStartupMigrationCheckpointDatabase(
@@ -272,7 +272,7 @@ export function acquireStartupMigrationLeaseWithWait(
 
 /** Unfinished owner work cannot retain an earlier successful aggregate checkpoint. */
 export function invalidateSuccessfulMigrationCheckpointsInTransaction(
-  database: DatabaseSync,
+  database: EngineConnection,
 ): void {
   executeSqliteQuerySync(
     database,

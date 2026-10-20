@@ -363,13 +363,14 @@ describe("AppSidebar viewer presence", () => {
     vi.useFakeTimers();
     const now = Date.now();
     const project = presenceUsers.presenceViewerActivity;
+    gateway.publishEvent("presence", {
+      presence: [{ user: { id: "alice", name: "Alice" }, ts: now, lastActivityAt: now - 119_999 }],
+    });
+    // Event admission may read activity too; advance the clock only in the queued render.
     vi.spyOn(presenceUsers, "presenceViewerActivity").mockImplementationOnce((user) => {
       const state = project(user);
       vi.setSystemTime(now + 2);
       return state;
-    });
-    gateway.publishEvent("presence", {
-      presence: [{ user: { id: "alice", name: "Alice" }, ts: now, lastActivityAt: now - 119_999 }],
     });
     await sidebar.updateComplete;
     const row = sidebar.querySelector<HTMLElement>('[data-online-user-id="alice"]')!;
@@ -377,6 +378,13 @@ describe("AppSidebar viewer presence", () => {
     await vi.advanceTimersByTimeAsync(2);
     await settleLitElement(sidebar);
     expect(row.dataset.presenceActivity).toBe("idle");
+    gateway.publishEvent("presence", {
+      presence: [
+        { user: { id: "alice", name: "Alice" }, ts: Date.now(), lastActivityAt: Date.now() },
+      ],
+    });
+    await settleLitElement(sidebar);
+    expect(row.dataset.presenceActivity).toBe("active");
   });
 
   it("ages rows and an open card into idle without another presence event", async () => {
@@ -442,7 +450,6 @@ describe("AppSidebar viewer presence", () => {
         expect(document.querySelector("openclaw-elapsed-time")?.textContent).toBeTruthy(),
       );
       const elapsed = document.querySelector("openclaw-elapsed-time")!;
-      await elapsed.updateComplete;
       const cardIntervals = scheduleInterval.mock.results
         .filter((result) => result.type === "return")
         .map((result) => result.value);
@@ -472,7 +479,7 @@ describe("AppSidebar viewer presence", () => {
       await vi.waitFor(() =>
         expect(document.querySelector(".person-activity-hovercard")).toBeNull(),
       );
-      // The bridge waits one microtask before disposing a disconnected view.
+      // The hovercard waits one microtask before disposing a disconnected view.
       await Promise.resolve();
       expect(elapsed.isConnected).toBe(false);
       for (const interval of cardIntervals) {
@@ -533,7 +540,7 @@ describe("AppSidebar viewer presence", () => {
     expect(sidebar.querySelector(".sidebar-online__list")).not.toBeNull();
     expect(sidebar.querySelectorAll(".sidebar-online__person")).toHaveLength(5);
     expect(localStorage.getItem("openclaw:sidebar:sessions:collapsed-sections")).toBe(
-      JSON.stringify([]),
+      JSON.stringify(["online"]),
     );
     await selectSidebarView(sidebar, "sessions");
     expect(sidebar.querySelector(".sidebar-online")).toBeNull();

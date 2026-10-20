@@ -24,6 +24,7 @@ export type LogsProps = {
   levelFilters: Record<LogLevel, boolean>;
   autoFollow: boolean;
   truncated: boolean;
+  onStreamRef?: (element: HTMLDivElement) => void;
   onFilterTextChange: (next: string) => void;
   onLevelToggle: (level: LogLevel, enabled: boolean) => void;
   onToggleAutoFollow: (next: boolean) => void;
@@ -113,7 +114,7 @@ export function LogsView(props: LogsProps) {
           <div class="chip-row">
             <For each={LOG_LEVELS}>
               {(level) => (
-                <label class={`chip log-chip ${level}`}>
+                <label class={["chip log-chip", level]}>
                   <input
                     type="checkbox"
                     checked={props.levelFilters[level]}
@@ -139,6 +140,7 @@ export function LogsView(props: LogsProps) {
           </div>
         </Show>
         <div
+          ref={(element) => props.onStreamRef?.(element)}
           class="log-stream"
           role="region"
           aria-label={t("gatewayLogs.title")}

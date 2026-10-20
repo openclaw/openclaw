@@ -1,23 +1,18 @@
 import "../../../styles/chat/side-panel.css";
 import "./chat-files-panel.tsx";
-import { render } from "@solidjs/web";
-import {
-  For,
-  Show,
-  createEffect,
-  createMemo,
-  createSignal,
-  getOwner,
-  onCleanup,
-  untrack,
-} from "solid-js";
+import { Portal } from "@solidjs/web";
+import { For, Show, createSignal, onCleanup, onSettled, untrack } from "solid-js";
+import { registryFor } from "../../../components/overlay-registry.ts";
 import { PANEL_HOSTED_TABS_CHANGE_EVENT } from "../../../components/panel-hosted-tabs.ts";
+import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../../lit/solid-bridge.ts";
-import { LitContent, emptyLegacyContent } from "../../../lit/solid-content.tsx";
+import { listen } from "../../../lib/reactive/listener.ts";
+import { defineSolidBridge } from "../../../lib/solid-bridge.ts";
+import { createTabFocus } from "../../../lib/tabs.ts";
 import { sidebarPanelDefinitions } from "../chat-pane-embedded-panels.ts";
+import { SidebarPanel as SidebarPanelView } from "../chat-pane-embedded-view.tsx";
 import {
   SIDEBAR_GEOMETRY_COMMIT_EVENT,
   SIDEBAR_MIN_HEIGHT_PX,
@@ -29,6 +24,7 @@ import {
   isSidebarSlotVisible,
   type SidebarColumn,
   type SidebarPanel,
+  type SidebarSlotId,
 } from "../sidebar-layout.ts";
 import {
   SidebarRegionHeader,
@@ -36,21 +32,65 @@ import {
   sidebarPanelType,
   readRegionHostedTabs,
 } from "./chat-sidebar-region-header.tsx";
-import type { RegionProps, RegionElement, RegionMethods } from "./chat-sidebar-region-types.ts";
+import type {
+  RegionProps,
+  RegionElement,
+  RegionMethods,
+  SidebarPanelHost,
+} from "./chat-sidebar-region-types.ts";
 
-function activePanelTab(root: ParentNode | null | undefined) {
-  return root?.querySelector<HTMLElement>('.tabstrip-tab[aria-selected="true"]');
-}
+const regionOperations = new WeakMap<
+  RegionElement,
+  Pick<RegionMethods, "readPanelHost" | "focusActiveSideTab"> & {
+    inputsChanged(key: keyof RegionProps): void;
+  }
+>();
 
 function Region(props: RegionProps, host: RegionElement) {
+  const panelHosts = new Map<SidebarSlotId, SidebarPanelHost>();
+  const panelElements = new Map<string, HTMLDivElement>();
+  let sideHeader: HTMLElement | null = null;
+  const tabFocus = createTabFocus();
+  const focusActiveSideTab = tabFocus.focusActive;
+  const operations = {
+    readPanelHost: (slot: SidebarSlotId) =>
+      panelHosts.get(slot) ??
+      props.panelDefinitions.find((definition) => definition.slot === slot)?.panelHost ??
+      null,
+    focusActiveSideTab,
+    inputsChanged(key: keyof RegionProps) {
+      if (key === "elements") {
+        bindHostedTabsRoot();
+      }
+      if (key === "elements" || key === "layout" || key === "panelDefinitions") {
+        scheduleGeometryCommit();
+      }
+      if (key === "elements" || key === "sideFocusLocked") {
+        scheduleFocusTransition();
+      }
+    },
+  };
+  regionOperations.set(host, operations);
+  let panelElement: HTMLDivElement | undefined;
   let previousGeometry = "";
   let focusFrame: number | null = null;
   let focusedSurface: Element | null = null;
   let focusBeforeSideLock: HTMLElement | null = null;
-  let contentMounted = false;
   // Child panels publish hosted tabs synchronously while their parent commits.
   const [hostedRevision, setHostedRevision] = createSignal(0, { ownedWrite: true });
-  const refreshHostedTabs = () => setHostedRevision((value) => value + 1);
+  const refreshHostedTabs = () => {
+    setHostedRevision((value) => value + 1);
+    scheduleGeometryCommit();
+  };
+  const panelHostRegistration = (initialSlot: SidebarSlotId) => (element: SidebarPanelHost) => {
+    panelHosts.set(initialSlot, element);
+    refreshHostedTabs();
+    return () => {
+      if (panelHosts.get(initialSlot) === element) {
+        panelHosts.delete(initialSlot);
+      }
+    };
+  };
   const trackFocus = (event: Event): void => {
     const surface = event
       .composedPath()
@@ -59,7 +99,7 @@ function Region(props: RegionProps, host: RegionElement) {
           node instanceof Element && node.matches("[data-region], [data-region-header]"),
       );
     focusedSurface =
-      surface && surface.closest(".sidebar-region") === host.parentElement ? surface : null;
+      surface && surface.closest(".sidebar-region") === props.elements?.shell ? surface : null;
   };
 
   const closeFocusedPanel = (event: Event): void => {
@@ -74,12 +114,10 @@ function Region(props: RegionProps, host: RegionElement) {
     const browserScope = event instanceof CustomEvent ? event.detail?.browserScope : undefined;
     // Native browser content is a separate NSView, so its responder scope is
     // authoritative over the dashboard document's previous DOM focus.
+    const browserHost = host.readPanelHost("browser");
     const browser =
-      typeof browserScope === "string"
-        ? [
-            ...(host.parentElement?.querySelectorAll<HTMLElement>("[data-native-browser-scope]") ??
-              []),
-          ].find((element) => element.dataset.nativeBrowserScope === browserScope)
+      typeof browserScope === "string" && browserHost?.dataset.nativeBrowserScope === browserScope
+        ? browserHost
         : undefined;
     const frame =
       document.activeElement instanceof HTMLIFrameElement
@@ -93,21 +131,24 @@ function Region(props: RegionProps, host: RegionElement) {
     if (
       !active ||
       !surface?.isConnected ||
-      surface.closest(".sidebar-region") !== host.parentElement ||
+      surface.closest(".sidebar-region") !== props.elements?.shell ||
       !surface.matches('[data-region="side"], [data-region-header="side"]') ||
       surface.closest('[hidden], [inert], [aria-hidden="true"]') ||
       document.openClawModalLayers?.size ||
-      document.querySelector("dialog[open], [aria-modal='true']")
+      [...registryFor(document).members.keys()].some(
+        ({ surface: modal }) =>
+          modal instanceof HTMLDialogElement && modal.open && modal.isConnected,
+      )
     ) {
       return;
     }
     event.preventDefault();
     // Keep successive Close commands in the tab strip after its content unmounts.
-    const header = host.parentElement?.querySelector('[data-region-header="side"]') ?? null;
+    const header = sideHeader ?? null;
     focusedSurface = header;
     const restoreFocus = () => {
       if (props.layout.open && focusedSurface === header && header?.isConnected) {
-        activePanelTab(header)?.focus();
+        focusActiveSideTab();
       }
     };
     const hosted = readRegionHostedTabs(host, active);
@@ -131,9 +172,12 @@ function Region(props: RegionProps, host: RegionElement) {
     const dock = () => sidebarDock(props.layout);
     const dimension = () => (dock() === "bottom" ? "height" : "width");
     const measure = () => {
-      const shell = host.parentElement;
-      const primary = shell?.querySelector<HTMLElement>('[data-region="main"]');
-      const panel = shell?.querySelector<HTMLElement>('[data-region="side"]:not([hidden])');
+      const shell = props.elements?.shell;
+      const surfaces = [props.elements?.primary, ...panelElements.values()];
+      const primary = surfaces.find((element) => element?.dataset.region === "main");
+      const panel = surfaces.find(
+        (element) => element?.dataset.region === "side" && !element.hidden,
+      );
       const primarySize = primary?.getBoundingClientRect()[dimension()] ?? 0;
       const panelSize = panel?.getBoundingClientRect()[dimension()] ?? view.column[dimension()];
       // Grid columns mirror in RTL; divider ratios follow physical left/top movement.
@@ -156,7 +200,7 @@ function Region(props: RegionProps, host: RegionElement) {
         }}
         prop:measureSize={() => measure().total}
         onResize={(event: CustomEvent<{ splitRatio: number }>) => {
-          const bounds = host.parentElement?.getBoundingClientRect();
+          const bounds = props.elements?.shell.getBoundingClientRect();
           const regionSize =
             dimension() === "width" && props.availableWidth > 0
               ? props.availableWidth
@@ -182,21 +226,27 @@ function Region(props: RegionProps, host: RegionElement) {
    * held focus there. Focus continues on the panel's tab, and goes back to that
    * control once the panel is closed.
    */
-  function moveFocusWithSideLock(side: HTMLElement | null | undefined): void {
-    const region = host.parentElement;
+  function moveFocusWithSideLock(state: {
+    locked: boolean;
+    managed?: boolean;
+    origin?: () => HTMLElement | null;
+    open: boolean;
+  }): void {
+    const side = props.elements?.outlet;
+    const region = props.elements?.shell;
     const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const inSide = Boolean(active && side?.contains(active));
-    if (props.sideFocusLocked) {
+    if (state.locked) {
       // The first panel a pane opens mounts this component after the browser
       // has dropped focus from the hidden view; the pane then says what held it.
-      const given = props.sideFocusOrigin?.() ?? null;
+      const given = state.origin?.() ?? null;
       const origin = active && region?.contains(active) && !inSide ? active : given;
       // A pane that merely loads this way has neither, and takes no focus.
       if (origin) {
         focusBeforeSideLock = origin;
         // Content with an opening focus request owns entry. Focusing its tab here
         // would look like newer input and cancel that request. Keep the return target.
-        if (props.sideFocusManaged) {
+        if (state.managed) {
           return;
         }
         // A tab strip rendered just now is focusable from its next frame.
@@ -208,7 +258,7 @@ function Region(props: RegionProps, host: RegionElement) {
           const now = document.activeElement;
           const moved = now instanceof HTMLElement && now !== document.body && now !== origin;
           if (props.sideFocusLocked && !moved) {
-            activePanelTab(side?.querySelector('[data-region-header="side"]'))?.focus();
+            focusActiveSideTab();
           }
         });
       }
@@ -218,37 +268,39 @@ function Region(props: RegionProps, host: RegionElement) {
     focusBeforeSideLock = null;
     const adrift = !active || active === document.body;
     // A panel that is still open, beside or under the main view, keeps the focus it has.
-    if (!before || !(adrift || (inSide && props.layout.open !== true))) {
+    if (!before || !(adrift || (inSide && !state.open))) {
       return;
     }
     before.focus({ preventScroll: true });
     if (document.activeElement !== before) {
       // That control is gone by now; carry on from the main view's own header.
-      region
-        ?.querySelector<HTMLElement>(":scope > .sidebar-region__header button:not([disabled])")
-        ?.focus({ preventScroll: true });
+      props.elements?.header.focus({ preventScroll: true });
     }
   }
 
   function scheduleGeometryCommit() {
     scheduleLayout(host, () => {
-      const shell = host.parentElement;
-      if (!host.isConnected || !shell) {
+      const elements = props.elements;
+      if (!host.isConnected || !elements) {
         return undefined;
       }
-      const panel = shell.querySelector<HTMLElement>(
-        ".sidebar-region__right-runtime > .side-panel",
-      );
-      const geometry = Array.from(
-        shell.querySelectorAll<HTMLElement>(".sidebar-region__primary, .side-panel__panel"),
-        (content) =>
-          `${content.dataset.panelSlot ?? "conversation"}:${content.getBoundingClientRect().width}`,
-      ).join(":");
-      // The manual panel render is the commit boundary for its transcript.
+      const geometry = [
+        elements.primary,
+        ...(props.layout.columns[0]?.panels.flatMap((panel) => {
+          const element = panelElements.get(panel.id);
+          return element ? [element] : [];
+        }) ?? []),
+      ]
+        .map(
+          (content) =>
+            `${content.dataset.panelSlot ?? "conversation"}:${content.getBoundingClientRect().width}`,
+        )
+        .join(":");
+      // The panel commit is the geometry boundary for its transcript.
       // Track content, not region roles: swapping can keep the same main/side
       // widths while changing the transcript width and its row measurements.
       return () => {
-        panel?.dispatchEvent(
+        panelElement?.dispatchEvent(
           new CustomEvent(SIDEBAR_GEOMETRY_COMMIT_EVENT, {
             bubbles: true,
             detail: {
@@ -289,10 +341,10 @@ function Region(props: RegionProps, host: RegionElement) {
         {(type) => (
           <div class="side-panel-empty side-panel-empty--type">
             <PanelEmptyState
-              icon={<LitContent value={type().icon} />}
+              icon={<Icon name={type().icon} />}
               heading={type().label}
               description={type().empty.description}
-              action={<LitContent value={type().empty.action} />}
+              action={type().empty.action}
             />
           </div>
         )}
@@ -309,27 +361,38 @@ function Region(props: RegionProps, host: RegionElement) {
     return (
       <div class="side-panel__body">
         <For each={panels()} keyed={(panel) => panel.id}>
-          {(panel) => (
-            <div
-              id={`${props.panelIdPrefix}-${encodeURIComponent(panel().slot)}`}
-              class="side-panel__panel"
-              role="region"
-              aria-label={sidebarPanelType(props.panelDefinitions, panel().slot).label}
-              data-panel-slot={panel().slot}
-              data-region={panel().id === props.layout.mainPanelId ? "main" : "side"}
-              hidden={!isSidebarSlotVisible(props.layout, panel().slot)}
-            >
-              <LitContent
-                value={
-                  sidebarPanelType(props.panelDefinitions, panel().slot).content ??
-                  emptyLegacyContent
-                }
-              />
-              <Show when={sidebarPanelType(props.panelDefinitions, panel().slot).content == null}>
-                <Empty panel={panel()} />
-              </Show>
-            </div>
-          )}
+          {(panel) => {
+            // The semantic key owns this container until that panel is removed.
+            const initialPanelId = untrack(() => panel().id);
+            onCleanup(() => panelElements.delete(initialPanelId));
+            return (
+              <div
+                ref={(element) => panelElements.set(initialPanelId, element)}
+                id={`${props.panelIdPrefix}-${encodeURIComponent(panel().slot)}`}
+                class="side-panel__panel"
+                role="region"
+                aria-label={sidebarPanelType(props.panelDefinitions, panel().slot).label}
+                data-panel-slot={panel().slot}
+                data-region={panel().id === props.layout.mainPanelId ? "main" : "side"}
+                hidden={!isSidebarSlotVisible(props.layout, panel().slot)}
+              >
+                <SidebarPanelView
+                  definition={sidebarPanelType(props.panelDefinitions, panel().slot)}
+                  registerPanelHost={panelHostRegistration(panel().slot)}
+                />
+                <Show
+                  when={
+                    !sidebarPanelType(props.panelDefinitions, panel().slot).view &&
+                    sidebarPanelType(props.panelDefinitions, panel().slot).loadState ===
+                      undefined &&
+                    sidebarPanelType(props.panelDefinitions, panel().slot).content == null
+                  }
+                >
+                  <Empty panel={panel()} />
+                </Show>
+              </div>
+            );
+          }}
         </For>
         <Show when={sidebarSidePanels(props.layout).length === 0}>
           <div class="side-panel__empty-body" data-region="side">
@@ -339,15 +402,15 @@ function Region(props: RegionProps, host: RegionElement) {
       </div>
     );
   }
-  const mounted = createMemo(() => {
-    if (!props.layout.columns[0]) {
-      return (contentMounted = false);
-    }
-    return (contentMounted ||=
-      (props.layout.open === true &&
-        (!props.layout.expanded || props.layout.expandedSide === true)) ||
-      (sidebarMainPanel(props.layout)?.slot ?? "conversation") !== "conversation");
-  });
+  // Keep opened content mounted while its column survives hidden presentation.
+  const [mounted] = createSignal(
+    (previous = false): boolean =>
+      Boolean(props.layout.columns[0]) &&
+      (previous ||
+        (props.layout.open === true &&
+          (!props.layout.expanded || props.layout.expandedSide === true)) ||
+        (sidebarMainPanel(props.layout)?.slot ?? "conversation") !== "conversation"),
+  );
   function Panel() {
     return (
       <Show when={props.layout.columns[0]}>
@@ -360,13 +423,15 @@ function Region(props: RegionProps, host: RegionElement) {
             >
               {(value) => <Divider column={value()} />}
             </Show>
-            <div class="side-panel">
+            <div class="side-panel" ref={(element) => (panelElement = element)}>
               <Show when={sidebarSidePanels(props.layout).length > 0}>
                 <SidebarRegionHeader
                   {...props}
                   host={host}
                   hostedRevision={hostedRevision}
                   refreshHostedTabs={refreshHostedTabs}
+                  headerRef={(element) => (sideHeader = element)}
+                  tabFocus={tabFocus}
                 />
               </Show>
               <Show when={mounted()}>
@@ -378,40 +443,49 @@ function Region(props: RegionProps, host: RegionElement) {
       </Show>
     );
   }
+  let previousLock: boolean | undefined;
+  let focusQueued = false;
+  function scheduleFocusTransition() {
+    if (focusQueued) {
+      return;
+    }
+    focusQueued = true;
+    onSettled(() => {
+      focusQueued = false;
+      if (regionOperations.get(host) !== operations || previousLock === props.sideFocusLocked) {
+        return;
+      }
+      previousLock = props.sideFocusLocked;
+      moveFocusWithSideLock({
+        locked: props.sideFocusLocked,
+        managed: props.sideFocusManaged,
+        origin: props.sideFocusOrigin,
+        open: props.layout.open === true,
+      });
+    });
+  }
   const listeners = new AbortController();
   const options = { capture: true, signal: listeners.signal };
-  host.parentElement?.addEventListener(PANEL_HOSTED_TABS_CHANGE_EVENT, refreshHostedTabs, {
-    signal: listeners.signal,
+  let stopHostedTabs = () => {};
+  function bindHostedTabsRoot() {
+    stopHostedTabs();
+    const shell = host.elements?.shell;
+    stopHostedTabs = shell
+      ? listen(shell, PANEL_HOSTED_TABS_CHANGE_EVENT, refreshHostedTabs)
+      : () => {};
+  }
+  // Descendants can publish hosted tabs synchronously during their first commit.
+  bindHostedTabsRoot();
+  listen(document, "pointerdown", trackFocus, options);
+  listen(document, "focusin", trackFocus, options);
+  listen(window, "openclaw:native-close-focused-panel", closeFocusedPanel, options);
+  onSettled(() => {
+    scheduleGeometryCommit();
+    scheduleFocusTransition();
   });
-  document.addEventListener("pointerdown", trackFocus, options);
-  document.addEventListener("focusin", trackFocus, options);
-  window.addEventListener("openclaw:native-close-focused-panel", closeFocusedPanel, options);
-  const owner = getOwner();
-  let dispose: (() => void) | undefined;
-  let disposed = false;
-  // The pane owns this sibling outlet. Mount after the bridge commit, outside its flush.
-  queueMicrotask(() => {
-    const root = host.parentElement?.querySelector<HTMLElement>(".sidebar-region__right-runtime");
-    if (!disposed && root) {
-      dispose = render(() => <Panel />, root, undefined, { owner });
-    }
-  });
-  createEffect(
-    () => [props.layout, props.panelDefinitions, hostedRevision()],
-    scheduleGeometryCommit,
-  );
-  createEffect(
-    () => props.sideFocusLocked,
-    () =>
-      untrack(() =>
-        moveFocusWithSideLock(
-          host.parentElement?.querySelector<HTMLElement>(".sidebar-region__right-runtime"),
-        ),
-      ),
-  );
   onCleanup(() => {
-    disposed = true;
-    dispose?.();
+    regionOperations.delete(host);
+    stopHostedTabs();
     listeners.abort();
     focusedSurface = null;
     cancelLayout(host);
@@ -419,7 +493,15 @@ function Region(props: RegionProps, host: RegionElement) {
       cancelAnimationFrame(focusFrame);
     }
   });
-  return null;
+  return (
+    <Show when={props.elements}>
+      {(elements) => (
+        <Portal mount={elements().outlet}>
+          <Panel />
+        </Portal>
+      )}
+    </Show>
+  );
 }
 
 export const ChatSidebarRegion = defineSolidBridge<RegionProps, RegionMethods>(
@@ -427,6 +509,7 @@ export const ChatSidebarRegion = defineSolidBridge<RegionProps, RegionMethods>(
   Region,
   {
     properties: {
+      elements: { default: null, attribute: false },
       panelIdPrefix: { default: "", attribute: false },
       conversationTab: { default: undefined, attribute: false },
       layout: { default: { columns: [] }, attribute: false },
@@ -440,21 +523,32 @@ export const ChatSidebarRegion = defineSolidBridge<RegionProps, RegionMethods>(
       availableWidth: { default: 0 },
     },
     methods: {
+      readPanelHost: (host, slot) => regionOperations.get(host)?.readPanelHost(slot) ?? null,
+      awaitPanelCommit: async (host, slot) => {
+        await host.updateComplete;
+        // The sibling outlet owns this exact recipient's commit, not the region header.
+        await host.readPanelHost(slot)?.updateComplete;
+      },
+      activateTerminalHost: (host) => {
+        const terminal = host.readPanelHost("terminal");
+        if (!terminal?.isConnected || !terminal.activateTerminalHost) {
+          return false;
+        }
+        terminal.activateTerminalHost();
+        return true;
+      },
+      focusActiveSideTab: (host, options) =>
+        regionOperations.get(host)?.focusActiveSideTab(options),
       deliverPanelEvent: (host, slot, event) => {
-        const panel = host.parentElement?.querySelector(
-          `[data-panel-slot="${slot}"]`,
-        )?.firstElementChild;
-        if (
-          !(panel instanceof HTMLElement) ||
-          !("handleToggleRequest" in panel) ||
-          typeof panel.handleToggleRequest !== "function"
-        ) {
+        const panel = host.readPanelHost(slot);
+        if (!panel?.handleToggleRequest) {
           return false;
         }
         panel.handleToggleRequest(event);
         return true;
       },
     },
+    propertyChanged: (host, key) => regionOperations.get(host)?.inputsChanged(key),
   },
 );
 declare global {

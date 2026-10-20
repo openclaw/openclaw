@@ -666,12 +666,14 @@ function mapChecks(ctx: Context, mapping: TableMapping, sqlTokens: string[]): vo
         const value = member.split(".").reduce(firstJsonMember, "document");
         return `${value} AS ${quote(`j_${member}`)}`;
       });
+      // STRICT skips absent metadata; a fixed builtin path also avoids parsing this
+      // CTE on every INSERT just to discover that SQL-function inlining is impossible.
       ctx.record(
         "function",
         name,
         functionName,
         item.source,
-        `CREATE FUNCTION ${quote(functionName)}(navigation_json text) RETURNS boolean LANGUAGE sql IMMUTABLE AS $navigation$\nWITH input AS (SELECT CASE WHEN navigation_json IS JSON THEN navigation_json::json END AS document),\nmembers AS (SELECT ${members.join(",\n")} FROM input)\nSELECT ${item.sql} FROM members;\n$navigation$;`,
+        `CREATE FUNCTION ${quote(functionName)}(navigation_json text) RETURNS boolean LANGUAGE sql IMMUTABLE STRICT SET search_path = pg_catalog AS $navigation$\nWITH input AS (SELECT CASE WHEN navigation_json IS JSON THEN navigation_json::json END AS document),\nmembers AS (SELECT ${members.join(",\n")} FROM input)\nSELECT ${item.sql} FROM members;\n$navigation$;`,
       );
       item.sql = `${quote(functionName)}("navigation_json")`;
     }

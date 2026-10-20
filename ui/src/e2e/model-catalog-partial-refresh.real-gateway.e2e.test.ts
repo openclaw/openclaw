@@ -263,20 +263,18 @@ suite.define(() => {
                   return false;
                 }
                 const rendered = await page.evaluate(
-                  ({ key: expectedKey, sessionId: expectedSessionId }) => {
+                  async ({ key: expectedKey, sessionId: expectedSessionId }) => {
                     const pane = document.querySelector<
                       HTMLElement & {
                         state?: ChatPageHost;
                         transcriptReady: boolean;
-                        hasUpdated: boolean;
-                        isUpdatePending: boolean;
+                        updateComplete: Promise<unknown>;
                       }
                     >('openclaw-chat-pane[aria-hidden="false"]');
+                    await pane?.updateComplete;
                     const state = pane?.state;
                     return (
-                      pane?.hasUpdated === true &&
-                      !pane.isUpdatePending &&
-                      pane.transcriptReady &&
+                      pane?.transcriptReady &&
                       state?.sessionKey === expectedKey &&
                       state.currentSessionId === expectedSessionId &&
                       !state.chatLoading

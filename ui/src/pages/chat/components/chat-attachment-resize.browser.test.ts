@@ -1,15 +1,18 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { render } from "lit";
+import { createComponent } from "solid-js";
 import { beforeAll, describe, expect, it, onTestFinished } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { flush } from "../../../test-helpers/solid-settle.ts";
 import {
   getChatAttachmentBlob,
   getChatAttachmentDataUrl,
   releaseChatAttachmentPayloads,
 } from "../attachment-payload-store.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
-import { renderChatAttachmentInputs } from "./chat-attachment-inputs.ts";
+import { createChatAttachmentInputHandle } from "./chat-attachment-inputs.ts";
+import { ChatAttachmentInputs } from "./chat-attachment-inputs.tsx";
 import { ChatAttachmentReadLifecycle } from "./chat-attachment-reads.ts";
 import { createChatAttachmentDropHandlers, handleChatAttachmentPaste } from "./chat-attachments.ts";
 
@@ -75,10 +78,11 @@ describe.runIf(browserMode)("oversized composer images", () => {
       };
       const host = document.createElement("div");
       document.body.append(host);
+      let view: ReturnType<typeof mountSolid> | undefined;
       onTestFinished(() => {
         reads.abortReads();
         releaseChatAttachmentPayloads(attachments);
-        render(null, host);
+        view?.unmount();
         host.remove();
       });
       const transfer = new DataTransfer();
@@ -88,7 +92,11 @@ describe.runIf(browserMode)("oversized composer images", () => {
         host.addEventListener("drop", handlers.onDrop);
         host.dispatchEvent(new DragEvent("drop", { dataTransfer: transfer, cancelable: true }));
       } else if (route === "picker") {
-        render(renderChatAttachmentInputs(props), host);
+        const inputHandle = createChatAttachmentInputHandle();
+        view = mountSolid(() => createComponent(ChatAttachmentInputs, { ...props, inputHandle }), {
+          container: host,
+        });
+        flush();
         const input = expectDefined(host.querySelector<HTMLInputElement>("input"), "file picker");
         input.files = transfer.files;
         input.dispatchEvent(new Event("change"));

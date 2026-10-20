@@ -10,6 +10,7 @@ export type MediaGenerationOperation = {
   runId?: string;
   taskKind: string;
   sourceId?: string;
+  requestKey?: string;
   requesterSessionKey: string;
   requesterAgentId?: string;
   task?: string;
@@ -19,6 +20,8 @@ export type MediaGenerationOperation = {
   endedAt?: number;
   lastEventAt?: number;
   progressSummary?: string;
+  /** The durable queue owns delivery; the requester must release its turn. */
+  completionDelivery?: "queued";
   terminalSummary?: string;
   terminalOutcome?: "blocked";
   error?: string;
@@ -132,7 +135,6 @@ export function adoptMediaGenerationProgressDraft(
         ? [
             [
               operation.runId,
-              // `image_generation` → `Image generation`
               `${operation.taskKind.charAt(0).toUpperCase()}${operation.taskKind.slice(1).replaceAll("_", " ")}`,
             ] as const,
           ]
@@ -169,10 +171,12 @@ export function updateMediaGenerationOperation(
   update: Partial<
     Pick<
       MediaGenerationOperation,
+      | "requestKey"
       | "status"
       | "endedAt"
       | "lastEventAt"
       | "progressSummary"
+      | "completionDelivery"
       | "terminalSummary"
       | "terminalOutcome"
       | "error"

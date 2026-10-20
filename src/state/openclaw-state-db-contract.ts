@@ -1,28 +1,13 @@
 import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import type { SqliteWalMaintenance } from "../infra/sqlite-wal.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 
 export type OpenClawStateSchemaReadAdmission = (database: DatabaseSync) => (() => void) | undefined;
 
-// v22 promotes ACP resume keys and explicit portable cursor identities.
-// v21 derives meeting transcript selectors and bounded delivery retention columns.
-// v20 fences possibly delivered cron completions across restart recovery.
-// v19 preserves original channel-owner authorization across recovery.
-// v18 binds shared GitHub publication to its original requesting authority.
-// v17 records one-use prepared worker capacity and node workspace ownership.
-// v16 makes Skill Workshop ownership directory-based instead of row-provenance-based.
-// v15 removes redundant agent/session projections from conversation bindings.
-// v14 retains unknown creator namespaces on historical cron jobs.
-// v13 keeps cron jobs and subagent runs canonical in JSON, removing unused projections.
-// v12 folds singleton state into config_machine_state and retires write-only cron epochs.
-// v11 retires the legacy skill curator lifecycle and write-only proposal origin runs.
-// v10 retires six dead tables that shipped without runtime owners.
-// v9 stores in-root agent database registry paths relative to the state dir.
-// v8 records cloud-placement execution mode and mode-aware turn claims.
-// v7 retires the inert shared commitments table.
-// v6 makes every committed shared-state table part of the canonical runtime schema.
-// v5 records durable cloud-worker result refs on pending workspace fences.
-export const OPENCLAW_STATE_SCHEMA_VERSION = 22;
+export const MEETING_TRANSCRIPT_START_TIME_SCHEMA_VERSION = 23;
+export const CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION = 29;
+export { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-schema-versions.js";
 export const OPENCLAW_STATE_STRICT_SCHEMA_VERSION = 3;
 // Absence records lost history; only Doctor may reconstruct these on existing state.
 export const DOCTOR_OWNED_STATE_TABLES = ["agent_deletion_journal"] as const;
@@ -119,7 +104,7 @@ export const OPENCLAW_DATABASE_SCHEMA_DOCS_URL =
 
 /** Open shared SQLite database handle plus WAL maintenance lifecycle. */
 export type OpenClawStateDatabase = {
-  db: DatabaseSync;
+  db: EngineConnection;
   path: string;
   walMaintenance: SqliteWalMaintenance;
 };
@@ -162,7 +147,14 @@ export const STATE_SCHEMA_MIGRATION_DESCRIPTIONS = {
     "prepared workers → one-use capacity and fixed workspace ownership",
   "github-publication-requester-authority-v18":
     "GitHub publication receipts → original requesting authority",
+  "meeting-transcript-start-time": "meeting transcript start dates → persisted milliseconds",
   "portable-identity-columns-v22": "ACP resume keys and receipt cursors → portable columns",
+  "task-run-indexes-v24": "retained task indexes → ordered cron history and runtime/run lookup",
+  "subagent-operator-recovery-v25": "subagent recovery → original operator authority required",
+  "session-state-head-layout-v26": "session state heads → composite primary-key storage",
+  "state-write-indexes-v27": "replay, skill usage, and lease writes → smaller index maintenance",
+  "github-publication-draft-v28": "GitHub publication requests → durable draft choice",
+  "local-client-credentials-v29": "client credentials and native socket material → local owner",
   "predicate-columns-v21": "meeting transcripts and delivery retention → derived predicate columns",
   "operator-approvals-system-agent": "operator approvals → OpenClaw system changes",
   "session-watch-cursor-provenance-v4": "session watch cursors → provenance column",

@@ -2,18 +2,18 @@ import type { JSX } from "@solidjs/web";
 import { createMemo, For } from "solid-js";
 import { isSystemMonitorDeclaration } from "../../../../src/cron/system-owned-declaration.js";
 import type { CronJobsEnabledFilter, CronJob } from "../../api/types.ts";
+import { AgentRowChip } from "../../components/agent-row-chip.tsx";
 import { CronJobsPagination } from "../../components/cron-jobs-pagination.tsx";
-import { renderHubTabs } from "../../components/hub-tabs.ts";
+import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsSection, SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { isCronJobActiveFailure, isCronJobRunning } from "../../lib/cron-status.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
-import { formatCronSchedule } from "../../lib/presenter.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { LitContent } from "../../lit/solid-bridge.ts";
 import { CRON_SUGGESTIONS, suggestionFormPatch } from "./suggestions.ts";
 import { AdminRequired, ErrorBanner, EnabledSwitch, JobMenu } from "./view-controls.tsx";
 import {
+  describeJobSchedule,
   JobStateIndicator,
   TriggerIndicator,
   DisabledNote,
@@ -90,38 +90,36 @@ export function ListView(props: CronProps) {
 }
 function ListTabs(props: CronProps) {
   return (
-    <LitContent
-      render={() =>
-        renderHubTabs({
-          id: "cron-list",
-          panelId: "cron-list-panel",
-          className: "cron-tabs",
-          active: props.listTab === "activity" ? "activity" : props.jobsEnabledFilter,
-          tabs: [
-            ...ENABLED_TABS.map((tab) => ({
-              value: tab.value,
-              label: t(tab.labelKey),
-              testId: `cron-tab-${tab.value}`,
-            })),
-            {
-              value: "activity",
-              label: t("cron.list.activityTab"),
-              testId: "cron-list-tab-activity",
-            },
-          ],
-          ariaLabel: t("cron.list.viewLabel"),
-          onSelect: (value) => {
-            if (value === "activity") {
-              props.onListTabChange("activity");
-              return;
-            }
-            props.onListTabChange("tasks");
-            if (value !== props.jobsEnabledFilter) {
-              void props.onJobsFiltersChange({ cronJobsEnabledFilter: value });
-            }
+    <HubTabs<CronJobsEnabledFilter | "activity">
+      {...{
+        id: "cron-list",
+        panelId: "cron-list-panel",
+        class: "cron-tabs",
+        active: props.listTab === "activity" ? "activity" : props.jobsEnabledFilter,
+        tabs: [
+          ...ENABLED_TABS.map((tab) => ({
+            value: tab.value,
+            label: t(tab.labelKey),
+            testId: `cron-tab-${tab.value}`,
+          })),
+          {
+            value: "activity",
+            label: t("cron.list.activityTab"),
+            testId: "cron-list-tab-activity",
           },
-        })
-      }
+        ],
+        ariaLabel: t("cron.list.viewLabel"),
+        onSelect: (value) => {
+          if (value === "activity") {
+            props.onListTabChange("activity");
+            return;
+          }
+          props.onListTabChange("tasks");
+          if (value !== props.jobsEnabledFilter) {
+            props.onJobsFiltersChange({ cronJobsEnabledFilter: value });
+          }
+        },
+      }}
     />
   );
 }
@@ -147,7 +145,7 @@ function Toolbar(
               aria-label={t("cron.list.searchPlaceholder")}
               placeholder={t("cron.list.searchPlaceholder")}
               onInput={(e) =>
-                void props.onJobsFiltersChange({
+                props.onJobsFiltersChange({
                   cronJobsQuery: e.currentTarget.value,
                 })
               }
@@ -258,7 +256,7 @@ function JobRow(
   const description = () => props.job.description?.trim();
   const systemOwned = () => isSystemMonitorDeclaration(props.job.declarationKey);
   const nextRunAtMs = () => props.job.state?.nextRunAtMs;
-  const hasNextRun = () => typeof nextRunAtMs() === "number" && Number.isFinite(nextRunAtMs());
+  const hasNextRun = () => nextRunAtMs() !== undefined;
   return (
     <div
       class={["cron-table__row", { "cron-table__row--paused": !props.job.enabled }]}
@@ -272,7 +270,7 @@ function JobRow(
             <span class="cron-table__name-text">{displayName()}</span>
             {props.job.trigger ? <TriggerIndicator /> : undefined}
           </span>
-          {systemOwned() ? undefined : <openclaw-agent-row-chip prop:agentId={props.job.agentId} />}
+          {systemOwned() ? undefined : <AgentRowChip agentId={props.job.agentId} />}
           {description() || !props.job.enabled ? (
             <span class="cron-table__name-meta">
               {description() ? (
@@ -297,7 +295,7 @@ function JobRow(
       <JobCell
         class="cron-table__schedule"
         label={t("cron.jobs.schedule")}
-        value={formatCronSchedule(props.job)}
+        value={describeJobSchedule(props.job)}
       />
       <JobCell
         class="cron-table__next"
@@ -325,7 +323,7 @@ function JobRow(
             data-test-id={`cron-row-run-${props.job.id}`}
             title={t("cron.actions.runNowJob", { name: displayName() })}
             aria-label={t("cron.actions.runNowJob", { name: displayName() })}
-            disabled={props.busy}
+            disabled={props.busy || !props.connected}
             onClick={() => props.onRun(props.job, "force")}
           >
             <Icon name="play" />
@@ -339,7 +337,7 @@ function JobRow(
 }
 function JobCell(props: { class: string; label: string; value: JSX.Element }) {
   return (
-    <span class={`cron-table__cell ${props.class}`}>
+    <span class={["cron-table__cell", props.class]}>
       <span class="cron-table__cell-label">{props.label}</span>
       <span class="cron-table__cell-value">{props.value}</span>
     </span>

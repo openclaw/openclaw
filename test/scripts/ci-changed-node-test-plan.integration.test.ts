@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   createChangedNodeTestShards,
   hasControlUiPerformanceAffectingChange,
@@ -8,6 +8,7 @@ import {
 import {
   createNodeTestShardBundles,
   createSelectedNodeTestShardBundles,
+  resolveUiE2ePrTestSelection,
   type CompactNodeTestShard,
 } from "../../scripts/lib/ci-node-test-plan.mts";
 import {
@@ -16,22 +17,12 @@ import {
   PR_PROTECTED_RUNTIME_TEST_FILES,
 } from "../../scripts/lib/ci-proof-test-inventory.mts";
 import * as testTimings from "../../scripts/lib/ci-test-timings.mts";
+import { fallbackGroups, selectedFiles } from "./ci-changed-node-test-plan.test-support.js";
+
+afterEach(() => vi.unstubAllEnvs());
 
 // Real-checkout compositions share the planner's process-scoped import-graph cache.
 // Small synthetic graphs and canonical process selection remain in the unit file.
-function fallbackGroups(shards: NonNullable<ReturnType<typeof createChangedNodeTestShards>>) {
-  return shards.flatMap((shard) => shard.groups ?? [{ ...shard, shard_name: shard.shardName }]);
-}
-
-function selectedFiles(shards: ReturnType<typeof createChangedNodeTestShards>) {
-  return (shards ?? []).flatMap((shard) =>
-    (shard.targets ?? []).concat(
-      shard.includePatterns ?? [],
-      shard.groups?.flatMap((group) => group.includePatterns ?? []) ?? [],
-    ),
-  );
-}
-
 function canonicalOwner(jobs: CompactNodeTestShard[], shardName: string) {
   const job = expectDefined(
     jobs.find((candidate) => candidate.groups.some((group) => group.shard_name === shardName)),
@@ -91,19 +82,10 @@ it("keeps the hybrid hourly plan within the main-tier cap", () => {
   expect(hourly.length).toBeLessThanOrEqual(79);
 });
 
-it.each(
-  [
-    {
-      target: "test/scripts/bench-gateway-installed.test.ts",
-      sources: ["scripts/bench-gateway-startup.ts"],
-      preciseSubjects: true,
-    },
-  ].flatMap(({ target, sources, preciseSubjects }) =>
-    [target, ...sources].map((changedPath) => ({ target, changedPath, preciseSubjects })),
-  ),
-)(
-  "opts in $target for $changedPath beside hub inputs",
-  ({ target, changedPath, preciseSubjects }) => {
+it.each(["test/scripts/bench-gateway-installed.test.ts", "scripts/bench-gateway-startup.ts"])(
+  "opts in the installed benchmark for %s beside hub inputs",
+  (changedPath) => {
+    const target = "test/scripts/bench-gateway-installed.test.ts";
     expect(listPrExemptRuntimeTestFiles()).toContain(target);
     const options = {
       runnerBackend: "github",
@@ -111,26 +93,12 @@ it.each(
       includePrExemptRuntimeTests: false,
       includeReleaseOnlyToolingShards: false,
     };
-    const fallbackFiles = (changedPaths: string[]) =>
-      createNodeTestShardBundles({
-        ...options,
-        compactMode: "pull-request",
-        changedPaths,
-      }).flatMap((job) => job.groups.flatMap((group) => group.includePatterns ?? []));
     const precise = createChangedNodeTestShards([changedPath], options);
-    if (preciseSubjects || changedPath === target) {
-      expect(precise, changedPath).not.toBeNull();
-    }
-    expect(precise ? selectedFiles(precise) : fallbackFiles([changedPath]), changedPath).toContain(
-      target,
-    );
+    expect(precise, changedPath).not.toBeNull();
+    expect(selectedFiles(precise), changedPath).toContain(target);
     const withHub = createChangedNodeTestShards(["tsconfig.json", changedPath], options);
-    if (preciseSubjects) {
-      expect(withHub, changedPath).not.toBeNull();
-    }
-    const withHubFiles = withHub
-      ? selectedFiles(withHub)
-      : fallbackFiles(["tsconfig.json", changedPath]);
+    expect(withHub, changedPath).not.toBeNull();
+    const withHubFiles = selectedFiles(withHub);
     expect(withHubFiles, changedPath).toContain(target);
     expect(withHubFiles).not.toContain(
       "extensions/acpx/src/runtime-advertised-model.process.test.ts",
@@ -185,7 +153,42 @@ it.each(["packages/markdown-core/src/render-aware-chunking.ts"])(
   },
 );
 
-it("keeps UI and core changes with exact owners and direct consumers", () => {
+// #170662 moved transcript layout completion to a microtask. PR selection omitted
+// these mocked-Gateway cases, so the resulting renderer freeze first failed on main.
+it.each([
+  {
+    name: "the #170662 diff",
+    paths: [
+      "docs/web/control-ui.md",
+      "ui/src/lib/reactive/README.md",
+      "ui/src/pages/chat/components/chat-transcript-controller.test.ts",
+      "ui/src/pages/chat/components/chat-transcript-layout-solid.tsx",
+      "ui/src/pages/chat/components/chat-transcript-layout.ts",
+      "ui/src/pages/chat/components/chat-transcript-message-reveal.test.ts",
+      "ui/src/pages/chat/components/chat-transcript-replies.test.ts",
+      "ui/src/pages/chat/components/chat-transcript-virtualizer-host.ts",
+      "ui/src/pages/chat/solid-render-lifecycle.test.tsx",
+      "ui/src/pages/chat/solid-render-lifecycle.ts",
+    ],
+  },
+  { name: "message reveal", paths: ["ui/src/pages/chat/components/chat-message-reveal.ts"] },
+  { name: "Solid render lifecycle", paths: ["ui/src/pages/chat/solid-render-lifecycle.ts"] },
+])("selects transcript browser owners for $name", ({ paths }) => {
+  const selection = resolveUiE2ePrTestSelection(paths);
+  expect(selection.mode).toBe("owners");
+  for (const file of [
+    "ui/src/e2e/chat-collapsed-reply-reveal.e2e.test.ts",
+    "ui/src/e2e/chat-position-rail.e2e.test.ts",
+    "ui/src/e2e/chat-reply-preview-recovery.e2e.test.ts",
+  ]) {
+    expect(selection.reasons[file], file).toEqual(
+      expect.arrayContaining([expect.stringMatching(/^direct route\/component dependency: /u)]),
+    );
+  }
+});
+
+it.each(["node", "bun-all"])("keeps exact UI and core owners with %s timings", (runtimePolicy) => {
+  vi.stubEnv("OPENCLAW_CI_TEST_RUNTIME_POLICY", runtimePolicy);
   const paths = [
     "ui/src/components/markdown-file-links.ts",
     "src/agents/live-provider-owner.ts",
@@ -310,13 +313,17 @@ it("keeps UI and core changes with exact owners and direct consumers", () => {
       for (const key of [
         "env",
         "runner",
-        "planConcurrency",
         "pretestBuildMode",
         "requiresDist",
         "timeoutMinutes",
       ] as const) {
         expect(job[key], `${group.shard_name} job ${key}`).toEqual(selectedJob[key]);
       }
+      expect(job.planConcurrency, `${group.shard_name} job planConcurrency`).toBe(
+        job.groups?.length === 1 && selectedJob.planConcurrency === 2
+          ? 1
+          : selectedJob.planConcurrency,
+      );
     }
   }
   expect(createChangedNodeTestShards([paths[1]!, "ui/src/AGENTS.md"], options)).toEqual(

@@ -19,8 +19,11 @@ import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw
 import { projectionOperations } from "./local-workspace-state.js";
 import { withLocalWorkspaceStore, type LocalWorkspaceStore } from "./local-workspace-store.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
+import { isLocalWorkspaceBaseRefreshRef } from "./workspace-result-inventory.js";
 
 type LocalWorkspaceCustody = {
+  worktreeId: string;
+  projectionPath?: string;
   prepareArchive?: (snapshot: string) => Promise<void>;
   canonicalPaths?: () => Promise<Set<string>>;
   assertCurrent: () => void;
@@ -48,6 +51,7 @@ export async function withSettledLocalWorkspace<T>(
       const row = store.get();
       if (!row) {
         return await operation({
+          worktreeId: params.worktree.id,
           assertCurrent: store.assertCurrent,
           workerAuthority: store.workerAuthority,
         });
@@ -102,12 +106,18 @@ export async function withSettledLocalWorkspace<T>(
         return await operation(
           state.current().baseline_ref
             ? {
+                worktreeId: worktree.id,
+                projectionPath: state.current().projection_path,
                 prepareArchive: state.prepareArchive,
                 canonicalPaths: state.canonicalPaths,
                 assertCurrent: state.current,
                 workerAuthority: state.workerAuthority,
               }
-            : { assertCurrent: store.assertCurrent, workerAuthority: store.workerAuthority },
+            : {
+                worktreeId: worktree.id,
+                assertCurrent: store.assertCurrent,
+                workerAuthority: store.workerAuthority,
+              },
         );
       });
     },
@@ -141,10 +151,11 @@ export async function withLocalWorkspaceProjection<T>(
       >
     >,
   ) => Promise<T>,
-  options: { provision?: boolean } = {},
+  options: { provision?: boolean; signal?: AbortSignal } = {},
 ) {
-  return await withLocalWorkspaceStore({ ...owner, worktreeId: owner.worktree.id }, (store) =>
-    runLocalWorkspaceProjection(owner, store, run, options),
+  return await withLocalWorkspaceStore(
+    { ...owner, worktreeId: owner.worktree.id, signal: options.signal },
+    (store) => runLocalWorkspaceProjection(owner, store, run, options),
   );
 }
 
@@ -204,7 +215,11 @@ async function runLocalWorkspaceProjection<T>(
   } finally {
     // Only acknowledged journal changes allow the frozen guest to resume.
     const retained = store.get();
-    if (retained && !retained.journal_json) {
+    if (
+      retained &&
+      !retained.journal_json &&
+      !(retained.pending_target && isLocalWorkspaceBaseRefreshRef(retained.pending_ref))
+    ) {
       await quiescence?.resume();
     }
   }

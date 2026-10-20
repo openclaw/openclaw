@@ -1,16 +1,13 @@
 // Covers system-run approval binding normalization and matching.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import * as commandResolution from "./exec-command-resolution.js";
 import {
   APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE,
-  buildSystemRunApprovalBinding,
   buildSystemRunApprovalEnvBinding,
   matchSystemRunApprovalBinding,
-  missingSystemRunApprovalBinding,
   prepareSystemRunMutableFileBinding,
   prepareSystemRunMutableFileApproval,
   revalidateSystemRunMutableFileBinding,
@@ -30,7 +27,30 @@ function expectOk<T extends { ok: boolean }>(result: T): T & { ok: true } {
   return result as T & { ok: true };
 }
 
+function expectRevalidation(
+  binding: Parameters<typeof revalidateSystemRunMutableFileBinding>[0]["binding"],
+  cwd?: string,
+  ok = true,
+) {
+  return expect(revalidateSystemRunMutableFileBinding({ binding, cwd })).resolves.toEqual(
+    ok ? { ok: true } : { ok: false, message: APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE },
+  );
+}
+
 describe("normalizeSystemRunApprovalPlan", () => {
+  const emptyFields = {
+    commandPreview: null,
+    cwd: null,
+    agentId: null,
+    sessionKey: null,
+    mutableFileOperand: undefined,
+  };
+  const policy = {
+    security: "allowlist",
+    ask: "on-miss",
+    askFallback: "deny",
+    autoAllowSkills: false,
+  };
   it.each([
     {
       name: "accepts commandText and normalized mutable file operands",
@@ -67,10 +87,7 @@ describe("normalizeSystemRunApprovalPlan", () => {
         argv: ["echo", "hi"],
         commandText: "echo hi",
         policySnapshot: {
-          security: "allowlist",
-          ask: "on-miss",
-          askFallback: "deny",
-          autoAllowSkills: false,
+          ...policy,
           allowlistRules: [
             { pattern: "/usr/bin/zsh", source: "allow-always" },
             { pattern: "/usr/bin/echo" },
@@ -81,21 +98,14 @@ describe("normalizeSystemRunApprovalPlan", () => {
       expected: {
         argv: ["echo", "hi"],
         commandText: "echo hi",
-        commandPreview: null,
-        cwd: null,
-        agentId: null,
-        sessionKey: null,
+        ...emptyFields,
         policySnapshot: {
-          security: "allowlist",
-          ask: "on-miss",
-          askFallback: "deny",
-          autoAllowSkills: false,
+          ...policy,
           allowlistRules: [
             { pattern: "/usr/bin/echo" },
             { pattern: "/usr/bin/zsh", source: "allow-always" },
           ],
         },
-        mutableFileOperand: undefined,
       },
     },
     {
@@ -104,10 +114,8 @@ describe("normalizeSystemRunApprovalPlan", () => {
         argv: ["echo", "hi"],
         commandText: "echo hi",
         policySnapshot: {
-          security: "allowlist",
+          ...policy,
           ask: "always",
-          askFallback: "deny",
-          autoAllowSkills: false,
           allowlistRules: [
             { pattern: "/😀" },
             { pattern: "/A", argPattern: "z" },
@@ -122,15 +130,10 @@ describe("normalizeSystemRunApprovalPlan", () => {
       expected: {
         argv: ["echo", "hi"],
         commandText: "echo hi",
-        commandPreview: null,
-        cwd: null,
-        agentId: null,
-        sessionKey: null,
+        ...emptyFields,
         policySnapshot: {
-          security: "allowlist",
+          ...policy,
           ask: "always",
-          askFallback: "deny",
-          autoAllowSkills: false,
           allowlistRules: [
             { pattern: "/A" },
             { pattern: "/A", source: "allow-always" },
@@ -141,7 +144,6 @@ describe("normalizeSystemRunApprovalPlan", () => {
             { pattern: "/😀" },
           ],
         },
-        mutableFileOperand: undefined,
       },
     },
     {
@@ -153,11 +155,7 @@ describe("normalizeSystemRunApprovalPlan", () => {
       expected: {
         argv: ["bash", "-lc", "echo hi"],
         commandText: 'bash -lc "echo hi"',
-        commandPreview: null,
-        cwd: null,
-        agentId: null,
-        sessionKey: null,
-        mutableFileOperand: undefined,
+        ...emptyFields,
       },
     },
   ])("$name", ({ input, expected }) => {
@@ -219,45 +217,7 @@ describe("buildSystemRunApprovalEnvBinding", () => {
       envHash: null,
       envKeys: [],
     });
-    expect(
-      buildSystemRunApprovalEnvBinding({
-        bad: 1,
-      }),
-    ).toEqual({
-      envHash: null,
-      envKeys: [],
-    });
-  });
-});
-
-describe("buildSystemRunApprovalBinding", () => {
-  it("normalizes argv and metadata into a binding", () => {
-    const envBinding = buildSystemRunApprovalEnvBinding({
-      beta: "2",
-      alpha: "1",
-    });
-
-    expect(
-      buildSystemRunApprovalBinding({
-        argv: ["bash", "-lc", 12],
-        cwd: " /tmp ",
-        agentId: " main ",
-        sessionKey: " agent:main:main ",
-        env: {
-          beta: "2",
-          alpha: "1",
-        },
-      }),
-    ).toEqual({
-      binding: {
-        argv: ["bash", "-lc", "12"],
-        cwd: "/tmp",
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        envHash: envBinding.envHash,
-      },
-      envKeys: ["alpha", "beta"],
-    });
+    expect(buildSystemRunApprovalEnvBinding({ bad: 1 })).toEqual({ envHash: null, envKeys: [] });
   });
 });
 
@@ -271,7 +231,6 @@ describe("matchSystemRunApprovalBinding", () => {
   };
 
   it.each([
-    { name: "exact match", actual: { ...expected } },
     {
       name: "argv mismatch",
       actual: { ...expected, argv: ["bash", "-lc", "echo bye"] },
@@ -288,35 +247,18 @@ describe("matchSystemRunApprovalBinding", () => {
       name: "session mismatch",
       actual: { ...expected, sessionKey: "agent:main:other" },
     },
-  ])("matches approval bindings: $name", ({ name, actual }) => {
+  ])("rejects approval bindings: $name", ({ actual }) => {
     expect(
       matchSystemRunApprovalBinding({
         expected,
         actual,
         actualEnvKeys: ["ALPHA"],
       }),
-    ).toEqual(
-      name === "exact match"
-        ? { ok: true }
-        : {
-            ok: false,
-            code: "APPROVAL_REQUEST_MISMATCH",
-            message: "approval id does not match request",
-            details: undefined,
-          },
-    );
-  });
-});
-
-describe("missingSystemRunApprovalBinding", () => {
-  it("reports env keys with request mismatches", () => {
-    expect(missingSystemRunApprovalBinding({ actualEnvKeys: ["ALPHA", "BETA"] })).toEqual({
+    ).toEqual({
       ok: false,
       code: "APPROVAL_REQUEST_MISMATCH",
       message: "approval id does not match request",
-      details: {
-        envKeys: ["ALPHA", "BETA"],
-      },
+      details: undefined,
     });
   });
 });
@@ -337,33 +279,6 @@ describe("POSIX shell stdin option detection", () => {
 });
 
 describe("mutable file operand binding", () => {
-  it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
-    "binds protected env and ls identities in dispatch order",
-    async () => {
-      const prepared = await prepareSystemRunMutableFileBinding({
-        command: { kind: "shell", text: "env ls" },
-        env: { PATH: "/usr/bin:/bin" },
-      });
-      expect(prepared.ok).toBe(true);
-      if (!prepared.ok) {
-        throw new Error(prepared.message);
-      }
-      expect(prepared.binding.operands.filter((operand) => operand.executable)).toEqual([
-        expect.objectContaining({
-          kind: "identity",
-          snapshot: { argvIndex: 0, path: fs.realpathSync("/usr/bin/env") },
-        }),
-        expect.objectContaining({
-          kind: "identity",
-          snapshot: { argvIndex: 0, path: fs.realpathSync("/bin/ls") },
-        }),
-      ]);
-      await expect(
-        revalidateSystemRunMutableFileBinding({ binding: prepared.binding }),
-      ).resolves.toEqual({ ok: true });
-    },
-  );
-
   it.runIf(process.platform !== "win32")(
     "binds protected executable identity without hashing or requiring one-shot approval",
     async () => {
@@ -388,9 +303,7 @@ describe("mutable file operand binding", () => {
         ]);
         const reads = vi.spyOn(fs, "readFileSync");
         try {
-          await expect(
-            revalidateSystemRunMutableFileBinding({ binding: prepared.binding }),
-          ).resolves.toEqual({ ok: true });
+          await expectRevalidation(prepared.binding);
           expect(reads).not.toHaveBeenCalled();
         } finally {
           reads.mockRestore();
@@ -407,12 +320,7 @@ describe("mutable file operand binding", () => {
           return access(target, mode);
         });
         try {
-          await expect(
-            revalidateSystemRunMutableFileBinding({ binding: prepared.binding }),
-          ).resolves.toEqual({
-            ok: false,
-            message: APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE,
-          });
+          await expectRevalidation(prepared.binding, undefined, false);
         } finally {
           accessSpy.mockRestore();
         }
@@ -481,25 +389,16 @@ describe("mutable file operand binding", () => {
       const command = { kind: "shell" as const, text: "sh first.sh && python3 second.py" };
       const prepared = expectOk(await prepareSystemRunMutableFileBinding({ command, cwd }));
 
-      // Assert the script operands by path: a host whose interpreters live in a writable
-      // prefix (Homebrew, asdf, nix profiles) also binds those executables, so an operand
-      // count would only describe the host that ran the test.
+      // Writable interpreter prefixes also bind executables; assert scripts by path.
       expect(
         prepared.binding.operands
           .filter((operand) => !operand.executable)
           .map((operand) => operand.snapshot.path),
       ).toEqual([first, second]);
-      await expect(
-        revalidateSystemRunMutableFileBinding({ binding: prepared.binding, cwd }),
-      ).resolves.toEqual({ ok: true });
+      await expectRevalidation(prepared.binding, cwd);
 
       fs.writeFileSync(second, "print('changed')\n");
-      await expect(
-        revalidateSystemRunMutableFileBinding({ binding: prepared.binding, cwd }),
-      ).resolves.toEqual({
-        ok: false,
-        message: APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE,
-      });
+      await expectRevalidation(prepared.binding, cwd, false);
     });
   });
 
@@ -571,9 +470,7 @@ describe("mutable file operand binding", () => {
       } else {
         expect(operands).toHaveLength(kind === "path" ? 1 : 2);
       }
-      await expect(
-        revalidateSystemRunMutableFileBinding({ binding: prepared.binding, cwd }),
-      ).resolves.toEqual({ ok: true });
+      await expectRevalidation(prepared.binding, cwd);
       if (kind === "native") {
         fs.appendFileSync(executable, Buffer.from([0]));
       } else {
@@ -587,12 +484,7 @@ describe("mutable file operand binding", () => {
           { mode: 0o755 },
         );
       }
-      await expect(
-        revalidateSystemRunMutableFileBinding({ binding: prepared.binding, cwd }),
-      ).resolves.toEqual({
-        ok: false,
-        message: APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE,
-      });
+      await expectRevalidation(prepared.binding, cwd, false);
     });
   });
 
@@ -690,23 +582,23 @@ describe("mutable file operand binding", () => {
   it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
     "fails closed when a script operand is unreadable",
     async () => {
-      const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-system-run-unreadable-"));
-      const script = path.join(cwd, "unreadable.sh");
-      try {
+      await withTempDir("openclaw-system-run-unreadable-", async (cwd) => {
+        const script = path.join(cwd, "unreadable.sh");
         fs.writeFileSync(script, "#!/bin/sh\necho hidden\n", { mode: 0o000 });
-        await expect(
-          prepareSystemRunMutableFileBinding({
-            command: { kind: "shell", text: "sh unreadable.sh" },
-            cwd,
-          }),
-        ).resolves.toEqual({
-          ok: false,
-          message: "SYSTEM_RUN_DENIED: approval requires a readable script operand",
-        });
-      } finally {
-        fs.chmodSync(script, 0o600);
-        fs.rmSync(cwd, { recursive: true, force: true });
-      }
+        try {
+          await expect(
+            prepareSystemRunMutableFileBinding({
+              command: { kind: "shell", text: "sh unreadable.sh" },
+              cwd,
+            }),
+          ).resolves.toEqual({
+            ok: false,
+            message: "SYSTEM_RUN_DENIED: approval requires a readable script operand",
+          });
+        } finally {
+          fs.chmodSync(script, 0o600);
+        }
+      });
     },
   );
 });

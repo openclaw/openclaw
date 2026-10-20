@@ -1,32 +1,47 @@
-import { createMemo } from "solid-js";
+import { createMemo, createSignal, onSettled } from "solid-js";
+import { pathForClawCatalogEntry } from "../../app-route-paths.ts";
 import { rosterActivityStore } from "../../lib/agents/roster-activity-store.ts";
+import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
-import { projectAgents, projectRosterActivity } from "../../lib/reactive/domain-capabilities.ts";
-import { createParkedProjection } from "../../lib/reactive/parked-projection.ts";
+import {
+  projectAgents,
+  projectRosterActivity,
+  projectRuntimeConfig,
+} from "../../lib/reactive/domain-capabilities.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
+import { LAB_FEATURES, resolveLabFeatureState } from "../labs/labs-registry.ts";
+import type { ClawCatalogEntry } from "./claws-catalog-client.ts";
+import { ClawsCatalogDialog } from "./claws-catalog-dialog.tsx";
 import { AgentsHomeView } from "./view.tsx";
 
-function AgentsHomePageContent(props: { active: boolean }) {
+const clawsLab = LAB_FEATURES.find((feature) => feature.id === "claws");
+
+export function AgentsHomePage() {
   const context = useApplication();
   const store = rosterActivityStore(context);
   const roster = projectRosterActivity(store);
   const gateway = projectGateway(context.gateway);
   const agents = projectAgents(context.agents);
-  const snapshot = createParkedProjection(
-    () => {
-      const currentGateway = gateway.read().snapshot;
-      return {
-        roster: roster.read(),
-        defaultId: agents.read().agentsList?.defaultId,
-        connected: currentGateway.phase === "connected",
-        canCreate: canCallGatewayMethod(currentGateway, "openclaw.chat", "operator.admin"),
-      };
-    },
-    () => props.active,
-  );
+  const runtimeConfig = projectRuntimeConfig(context.runtimeConfig);
+  const [catalogOpen, setCatalogOpen] = createSignal(false);
+  onSettled(() => {
+    void context.runtimeConfig.ensureLoaded();
+  });
+  const snapshot = createMemo(() => {
+    const currentGateway = gateway.read().snapshot;
+    return {
+      roster: roster.read(),
+      defaultId: agents.read().agentsList?.defaultId,
+      connected: currentGateway.phase === "connected",
+      canCreate: canCallGatewayMethod(currentGateway, "openclaw.chat", "operator.admin"),
+      showExplore: Boolean(
+        clawsLab &&
+        resolveLabFeatureState(currentConfigObject(runtimeConfig.read().state), clawsLab).enabled,
+      ),
+    };
+  });
   const cards = createMemo(() => {
     const defaultId = snapshot().defaultId;
     return snapshot()
@@ -48,21 +63,41 @@ function AgentsHomePageContent(props: { active: boolean }) {
           a.id.localeCompare(b.id),
       );
   });
+  const selectClaw = (entry: ClawCatalogEntry) => {
+    setCatalogOpen(false);
+    context.navigate("claws", {
+      pathname: pathForClawCatalogEntry(entry.packageName, context.basePath),
+    });
+  };
   return (
-    <AgentsHomeView
-      cards={cards()}
-      context={context}
-      connected={snapshot().connected}
-      loading={snapshot().roster.loading}
-      error={snapshot().roster.error ?? snapshot().roster.subscriptionError}
-      onRetry={() => void store.refresh()}
-      canCreate={snapshot().canCreate}
-    />
+    <openclaw-agents-home-page>
+      <AgentsHomeView
+        cards={cards()}
+        context={context}
+        connected={snapshot().connected}
+        loading={snapshot().roster.loading}
+        error={snapshot().roster.error ?? snapshot().roster.subscriptionError}
+        onRetry={() => void store.refresh()}
+        canCreate={snapshot().canCreate}
+        showExplore={snapshot().showExplore}
+        onOpenCatalog={() => setCatalogOpen(true)}
+        onSelectClaw={selectClaw}
+      />
+      {snapshot().showExplore && catalogOpen() ? (
+        <ClawsCatalogDialog
+          onSelectEntry={selectClaw}
+          onClose={() => setCatalogOpen(false)}
+          onAdded={() => void store.refresh()}
+        />
+      ) : undefined}
+    </openclaw-agents-home-page>
   );
 }
 
-export const AgentsHomePage = defineSolidBridge(
-  "openclaw-agents-home-page",
-  AgentsHomePageContent,
-  { properties: { active: { default: true, attribute: false } } },
-);
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-agents-home-page": HTMLAttributes<HTMLElement>;
+    }
+  }
+}

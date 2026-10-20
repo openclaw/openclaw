@@ -1,3 +1,4 @@
+import type { AgentHarnessSessionRuntimeOwnership } from "../../agents/harness/types.js";
 import type { GatewayStoredSessionTarget } from "../../config/sessions/combined-store-gateway.js";
 import type { SessionRowDatabaseFacts } from "../../config/sessions/session-row-facts.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -6,6 +7,7 @@ import { projectSessionActivitySummary } from "../session-activity-summary-state
 import { sessionModelRevision } from "../session-model-revision.js";
 import { isSessionPermissionChangePending } from "../session-permission-change.js";
 import type { SessionRowPlacementFactsReader } from "../session-row-placement-projection.types.js";
+import type { GatewaySessionRow } from "../session-utils.types.js";
 import {
   projectWorkerPlacementMove,
   projectWorkerSessionPlacement,
@@ -30,12 +32,14 @@ export function readSessionRowFacts(params: {
   cfg: OpenClawConfig;
   target: Pick<GatewayStoredSessionTarget, "agentId" | "storeTarget"> & { key: string };
   entry: SessionEntry;
+  preparedRuntimeOwnership?: AgentHarnessSessionRuntimeOwnership | null;
   context?: PlacementReadContext;
   placementFactsReader?: SessionRowPlacementFactsReader;
   activitySummaryEnabled?: boolean;
   databaseFacts: Pick<SessionRowDatabaseFacts, "hasBoard" | "activitySummaryWatermark">;
 }) {
-  const { cfg, entry, placementFactsReader, activitySummaryEnabled } = params;
+  const { cfg, entry, preparedRuntimeOwnership, placementFactsReader, activitySummaryEnabled } =
+    params;
   const { key, agentId } = params.target;
   const context = params.context ?? {};
   let placementSource = placementFactsReader?.getProjectionFacts(entry.sessionId);
@@ -76,15 +80,19 @@ export function readSessionRowFacts(params: {
       workspaceResultReconciling,
       environment,
       identity,
-      sessionModelRevision: sessionModelRevision(entry, identity?.inference),
+      sessionModelRevision: sessionModelRevision(
+        entry,
+        identity?.inference,
+        preparedRuntimeOwnership,
+      ),
       failedRecoveryAction,
       retryOnSend,
     };
   };
   let placementFacts = readPlacementFacts();
   let activitySummaryFacts = params.databaseFacts;
-  const readActivitySummary = () =>
-    projectSessionActivitySummary({
+  const readActivitySummary = () => {
+    const summary = projectSessionActivitySummary({
       key,
       agentId,
       cfg,
@@ -92,12 +100,27 @@ export function readSessionRowFacts(params: {
       enabled: activitySummaryEnabled,
       watermark: activitySummaryFacts.activitySummaryWatermark,
     });
+    return summary && Object.freeze(summary);
+  };
   let activitySummary = readActivitySummary();
+  let unplaced:
+    | Readonly<
+        Pick<
+          GatewaySessionRow,
+          | "sessionModelRevision"
+          | "permissionModePending"
+          | "activitySummary"
+          | "placement"
+          | "placementMove"
+        >
+      >
+    | undefined;
   return {
     hasBoard: params.databaseFacts.hasBoard,
     refreshActivitySummary(databaseFacts = activitySummaryFacts) {
       activitySummaryFacts = databaseFacts;
       activitySummary = readActivitySummary();
+      unplaced = undefined;
     },
     present: () => {
       const currentSource = placementFactsReader?.getProjectionFacts(entry.sessionId);
@@ -115,6 +138,21 @@ export function readSessionRowFacts(params: {
         failedRecoveryAction,
         retryOnSend,
       } = placementFacts;
+      const permissionModePending = isSessionPermissionChangePending(entry.sessionId);
+      if (!placement && !move) {
+        if (
+          !unplaced ||
+          unplaced.permissionModePending !== permissionModePending ||
+          unplaced.sessionModelRevision !== revision
+        ) {
+          unplaced = Object.freeze({
+            sessionModelRevision: revision,
+            permissionModePending,
+            activitySummary,
+          });
+        }
+        return unplaced;
+      }
       return {
         sessionModelRevision: revision,
         ...(placement
@@ -143,8 +181,8 @@ export function readSessionRowFacts(params: {
             }
           : {}),
         ...(move ? { placementMove: projectWorkerPlacementMove(move) } : {}),
-        permissionModePending: isSessionPermissionChangePending(entry.sessionId),
-        activitySummary: activitySummary ? { ...activitySummary } : undefined,
+        permissionModePending,
+        activitySummary,
       };
     },
   };

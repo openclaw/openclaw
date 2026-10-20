@@ -55,9 +55,14 @@ export function resolveSidebarSessionSubtitle(params: {
   > | null;
 }): SidebarSessionSubtitle {
   const { session } = params;
-  // Questions use the leading hand tooltip; failures use the session hovercard.
-  // Neither should grow a second line or fall back to lower-priority activity.
-  if (session.attention.kind === "question" || session.attention.kind === "error") {
+  // Questions and approvals use the leading attention icon tooltip; failures use
+  // the session hovercard. None should grow a second line or fall back to
+  // lower-priority activity.
+  if (
+    session.attention.kind === "question" ||
+    session.attention.kind === "approval" ||
+    session.attention.kind === "error"
+  ) {
     return { subtitle: undefined, narration: undefined };
   }
   const attention = sessionAttentionSubtitle(session.attention);
@@ -83,7 +88,7 @@ export function resolveSidebarSessionSubtitle(params: {
   );
   const observer = running || finalDigestUnread ? projectedDigest?.headline : undefined;
   // Preview off hides ambient text only. Subtitle-owned attention and a critical
-  // observer headline survive the toggle: pending approvals and the
+  // observer headline survive the toggle: agent-declared attention and the
   // stuck / waiting-on-user health states still belong beside their session, even
   // when the operator hides routine activity previews.
   if (!params.showPreview) {

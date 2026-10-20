@@ -65,11 +65,8 @@ export function prepareReefOutboundComposition(options: {
   resendDisabled?: true;
   recovery?: ReefRejectionRecovery;
   authoritySignal?: AbortSignal;
-}): { compose(): Promise<{ envelope: Envelope; assertCurrent(): void }> } | undefined {
+}): { compose(): Promise<{ envelope: Envelope; assertCurrent(): void }> } {
   const activeState = getReefTrustOperationState(options.trust);
-  if (!activeState) {
-    return undefined;
-  }
   const recovery = options.recovery ? getReefRecoveryOperationState(options.recovery) : undefined;
   const state = options.recovery ? recovery : activeState;
   const audit = getReefAuditOperationState(options.audit);

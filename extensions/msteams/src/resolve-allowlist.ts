@@ -546,7 +546,7 @@ export async function resolveMSTeamsUserAllowlist(params: {
         input,
         resolved: true,
         id: match.id,
-        name: match.displayName ?? undefined,
+        name: match.displayName,
       };
     },
   });

@@ -1,9 +1,8 @@
 import type { SkillsWorkshopReadResult } from "@openclaw/gateway-protocol";
-import { createEffect, createMemo, createSignal, onCleanup } from "solid-js";
+import { createMemo, createSignal, onCleanup, onSettled } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { projectGateway, projectAgentSelection } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectAgents, projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -15,7 +14,6 @@ import {
   resolveUiSelectedGlobalAgentId,
 } from "../../lib/sessions/session-key.ts";
 import { generateUUID } from "../../lib/uuid.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { buildInitialChatSubmission } from "../chat/user-message-content.ts";
 import { retainRejectedInitialTurn } from "../new-session/rejected-initial-turn.ts";
 import { resolveWorkshopAccess } from "./access.ts";
@@ -33,17 +31,15 @@ import {
   type WorkshopViewerTarget,
 } from "./view.tsx";
 
-type WorkshopScope = { client: GatewayBrowserClient; agentId: string };
+type WorkshopScope = { client: GatewayBrowserClient; agentId: string; abort: AbortController };
 
 function resolveWorkshopAgentId(context: ApplicationContext): string {
   const snapshot = context.gateway.snapshot;
-  const selectedAgentId = context.agentSelection.state.selectedId;
-  const sessionAgentId = parseAgentSessionKey(snapshot.sessionKey)?.agentId;
-  return selectedAgentId
-    ? normalizeAgentId(selectedAgentId)
-    : sessionAgentId
-      ? normalizeAgentId(sessionAgentId)
-      : resolveUiSelectedGlobalAgentId(snapshot);
+  return normalizeAgentId(
+    context.agentSelection.state.selectedId ||
+      parseAgentSessionKey(snapshot.sessionKey)?.agentId ||
+      resolveUiSelectedGlobalAgentId(snapshot),
+  );
 }
 
 class SkillWorkshopPageState {
@@ -64,35 +60,38 @@ class SkillWorkshopPageState {
 
   constructor(
     private readonly context: ApplicationContext,
-    private readonly revision: () => number,
     private readonly changed: () => void,
   ) {
-    const gateway = projectGateway(context.gateway);
-    const selection = projectAgentSelection(context.agentSelection);
-    const agents = projectAgents(context.agents);
-    const config = projectRuntimeConfig(context.runtimeConfig);
-    createEffect(
-      () =>
-        [gateway.revision(), selection.revision(), agents.revision(), config.revision()] as const,
-      () => {
+    onSettled(() => {
+      const sync = () => {
         this.syncScope();
         changed();
-      },
-    );
+      };
+      const stops = [
+        // Connection receipts retire the prior workshop scope before pending operations settle.
+        context.gateway.subscribe(sync),
+        // Selection receipts abort prior-agent work before another workshop action starts.
+        context.agentSelection.subscribe(sync),
+      ];
+      sync();
+      return () => stops.forEach((stop) => stop());
+    });
     onCleanup(() => {
+      this.scope?.abort.abort();
       this.scope = null;
     });
   }
 
   private syncScope() {
     const context = this.context;
-    const snapshot = context?.gateway.snapshot;
-    const client = snapshot?.phase === "connected" ? snapshot.client : null;
-    const agentId = context && client ? resolveWorkshopAgentId(context) : null;
+    const snapshot = context.gateway.snapshot;
+    const client = snapshot.phase === "connected" ? snapshot.client : null;
+    const agentId = client ? resolveWorkshopAgentId(context) : null;
     if (client === (this.scope?.client ?? null) && agentId === (this.scope?.agentId ?? null)) {
       return;
     }
-    this.scope = client && agentId ? { client, agentId } : null;
+    this.scope?.abort.abort();
+    this.scope = client && agentId ? { client, agentId, abort: new AbortController() } : null;
     this.snapshot = null;
     this.error = null;
     this.viewer = null;
@@ -113,7 +112,7 @@ class SkillWorkshopPageState {
     if (!scope) {
       return;
     }
-    void this.context?.runtimeConfig.ensureLoaded();
+    void this.context.runtimeConfig.ensureLoaded();
     this.loading = true;
     this.error = null;
     this.changed();
@@ -134,7 +133,7 @@ class SkillWorkshopPageState {
       // A chat notice links here with ?skill=<name>; open it in whichever list holds it.
       const requested = this.viewer
         ? null
-        : new URLSearchParams(this.context?.router.getState().location.search).get("skill");
+        : new URLSearchParams(this.context.router.getState().location.search).get("skill");
       const requestedLive = snapshot.list.skills.some((skill) => skill.name === requested);
       if (
         requested &&
@@ -146,10 +145,14 @@ class SkillWorkshopPageState {
         this.selectFirst();
       }
     } catch (error) {
-      this.error = formatUiError(error);
+      if (this.scope === scope) {
+        this.error = formatUiError(error);
+      }
     } finally {
-      this.loading = false;
-      this.changed();
+      if (this.scope === scope) {
+        this.loading = false;
+        this.changed();
+      }
     }
   }
 
@@ -214,9 +217,7 @@ class SkillWorkshopPageState {
       ? undefined
       : list?.archived.find((skill) => skill.name === name)?.versions[0]?.id;
     if (live || versionId) {
-      if (this.tab === "files" || this.viewer?.target.name !== name) {
-        this.tab = this.tab === "history" ? "history" : "instructions";
-      }
+      this.tab = this.tab === "history" ? "history" : "instructions";
       void this.open({ name, filePath: "SKILL.md", versionId });
     }
   };
@@ -248,7 +249,7 @@ class SkillWorkshopPageState {
 
   private readonly mutate = async (mutation: WorkshopMutation, key: string) => {
     const scope = this.scope;
-    const access = resolveWorkshopAccess(this.context?.gateway.snapshot);
+    const access = resolveWorkshopAccess(this.context.gateway.snapshot);
     const allowed =
       mutation.method === "skills.workshop.archive" ? access.canArchive : access.canRestore;
     if (!scope || !allowed || this.pendingAction) {
@@ -287,23 +288,14 @@ class SkillWorkshopPageState {
 
   private readonly setMode = async (mode: SkillWorkshopMode) => {
     const context = this.context;
-    const runtimeConfig = context?.runtimeConfig;
-    if (
-      !context ||
-      !runtimeConfig ||
-      this.modeBusy ||
-      !resolveWorkshopAccess(context.gateway.snapshot).canSetMode
-    ) {
+    if (this.modeBusy || !resolveWorkshopAccess(context.gateway.snapshot).canSetMode) {
       return;
     }
     this.modeBusy = true;
     this.modeError = null;
     this.changed();
     try {
-      const error = await setWorkshopMode(runtimeConfig, mode);
-      if (this.context === context) {
-        this.modeError = error;
-      }
+      this.modeError = await setWorkshopMode(context.runtimeConfig, mode);
     } finally {
       this.modeBusy = false;
       this.changed();
@@ -313,11 +305,11 @@ class SkillWorkshopPageState {
   private readonly learn = async () => {
     const context = this.context;
     const scope = this.scope;
-    if (!context || !scope || this.learningBusy) {
+    if (!scope || this.learningBusy) {
       return;
     }
     const { client, agentId } = scope;
-    const isCurrent = () => this.context === context && this.scope === scope;
+    const isCurrent = () => this.scope === scope;
     const message = SKILL_WORKSHOP_LEARNING_PROMPT;
     const params = {
       agentId,
@@ -339,7 +331,10 @@ class SkillWorkshopPageState {
     this.changed();
     const createdAt = Date.now();
     try {
-      const result = await context.sessions.createResult(params, { reconciliation: "background" });
+      const result = await context.sessions.createResult(params, {
+        reconciliation: "background",
+        signal: scope.abort.signal,
+      });
       if (context.gateway.snapshot.client !== client) {
         return;
       }
@@ -392,7 +387,6 @@ class SkillWorkshopPageState {
   };
 
   viewProps() {
-    this.revision();
     const context = this.context;
     return {
       context,
@@ -433,15 +427,23 @@ class SkillWorkshopPageState {
   }
 }
 
-export const SkillWorkshopPage = defineSolidBridge(
-  "openclaw-skill-workshop-page",
-  () => {
-    const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-    const state = new SkillWorkshopPageState(useApplication(), revision, () => {
-      setRevision((value) => value + 1);
-    });
-    const view = createMemo(() => state.viewProps());
-    return <SkillWorkshopView view={view} />;
-  },
-  { properties: {} },
-);
+export function SkillWorkshopPage() {
+  const context = useApplication();
+  const agents = projectAgents(context.agents);
+  const runtimeConfig = projectRuntimeConfig(context.runtimeConfig);
+  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
+  const state = new SkillWorkshopPageState(context, () => {
+    setRevision((value) => value + 1);
+  });
+  const view = createMemo(() => {
+    revision();
+    agents.read();
+    runtimeConfig.read();
+    return state.viewProps();
+  });
+  return (
+    <openclaw-skill-workshop-page>
+      <SkillWorkshopView view={view} />
+    </openclaw-skill-workshop-page>
+  );
+}

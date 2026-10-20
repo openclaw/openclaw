@@ -4,7 +4,6 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import type { JsonTestResults } from "vitest/node";
 import type { VitestReportCapture } from "../scripts/lib/vitest-report-capture.mts";
-import { resolveTestNodeExecPath } from "../src/test-utils/node-process.js";
 import { runVitestShutdownCommand } from "./helpers/vitest-shutdown-command.ts";
 import { sqliteLifecycleFixtureFiles } from "./non-isolated-runner.sqlite-fixtures.ts";
 
@@ -54,7 +53,7 @@ export default defineConfig({
     );
     const reportPath = path.join(root, "report.json");
     const result = await runVitestShutdownCommand({
-      bin: resolveTestNodeExecPath(),
+      bin: process.execPath,
       args: [
         path.join(vitestDir, "vitest.mjs"),
         "run",
@@ -98,8 +97,8 @@ export default defineConfig({
     expect(identity.path).toContain(path.join(root, "retained-agent-state"));
     const report: JsonTestResults = JSON.parse(await fs.readFile(reportPath, "utf8"));
     expect(report).toMatchObject({
-      numTotalTests: 17,
-      numPassedTests: 16,
+      numTotalTests: 21,
+      numPassedTests: 20,
       numFailedTests: 0,
       numPendingTests: 1,
       numTodoTests: 0,

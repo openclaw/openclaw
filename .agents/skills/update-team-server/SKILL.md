@@ -90,6 +90,14 @@ rehearse each crossing, implement migrations, or copy database SQL into its
 admission rules. Older databases use OpenClaw's supported forward migrations;
 unknown future schemas and downgrades are refused by that owner.
 
+Same-schema activation still requires the candidate's native database admission.
+Same-version additive session columns must be checked against its saved catalog
+facts before admission reuses a seal. Every affected agent stays unavailable until writable
+admission installs missing columns under the existing maintenance authority,
+before session preparation or readers run. An unchanged schema version does not
+prove reader readiness. The controller delegates this ordering to OpenClaw;
+never add controller SQL or manual ALTER statements as an activation path.
+
 Keep the incumbent serving during the off-path build. Under the existing
 maintenance authority, drain and stop it, then invoke the candidate's internal
 `update migrate` command. That owner captures WAL-safe database and authored

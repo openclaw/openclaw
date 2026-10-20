@@ -95,7 +95,7 @@ export async function reconcileCodexCatalogFiles(
     thread.preview ||= existing?.preview;
     const projected = await projectCodexCatalogPage(
       { data: [projectCodexCatalogNativeThread(thread, sanitizeTerminalText)] },
-      { localSessionsRoot: root, sanitize: sanitizeTerminalText },
+      { localSessionsRoot: root },
     );
     owner.assertCurrent();
     observed.set(file, fingerprint);

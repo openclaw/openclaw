@@ -2,6 +2,7 @@
 
 import { flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createGatewayHarness } from "../app/overlays-access.test-support.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { showInputDialog } from "./input-dialog.ts";
 
@@ -73,6 +74,26 @@ describe("showInputDialog", () => {
 
     await expect(result).resolves.toBeNull();
     expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+  });
+
+  it("allows an explicitly admitted offline submit and updates admission with the Gateway", async () => {
+    const harness = createGatewayHarness(null, false);
+    const submit = vi.fn().mockResolvedValue(null);
+    const closed = showInputDialog({
+      title: "Rename session",
+      gateway: harness.gateway,
+      canSubmit: () => harness.gateway.snapshot.phase === "offline",
+      submit,
+    });
+    await getRenderedModalDialog(document.body);
+    await type("Notes");
+    expect(findButton("Save").disabled).toBe(true);
+    harness.update({ phase: "offline" });
+    flush();
+    expect(findButton("Save").disabled).toBe(false);
+    submitForm();
+    await expect(closed).resolves.toBe("Notes");
+    expect(submit).toHaveBeenCalledExactlyOnceWith("Notes");
   });
 
   it("rejects a reentrant input request instead of stacking or replaying it", async () => {
@@ -160,7 +181,7 @@ describe("showInputDialog", () => {
     expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
   });
 
-  it.each(["synchronous"])(
+  it.each(["synchronous", "asynchronous"])(
     "recovers from a %s failure without discarding the input",
     async (mode) => {
       const submit = vi
@@ -184,6 +205,7 @@ describe("showInputDialog", () => {
       expect(dialogInput().disabled).toBe(false);
       expect(dialogInput().value).toBe("Client work");
       expect(findButton("Create group").disabled).toBe(false);
+      expect(document.activeElement).toBe(dialogInput());
 
       submitForm();
       await closed;

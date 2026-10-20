@@ -48,7 +48,7 @@ function scan(
     path.join(bin, "gh"),
     `#!/usr/bin/env bash
 set -euo pipefail
-[[ "$1" == api && "$2" == --paginate && "$3" == repos/openclaw/openclaw/pulls/123/files ]]
+[[ "$1" == api && "$2" == --paginate && "$3" == "repos/openclaw/openclaw/pulls/123/files?per_page=100" ]]
 call=$(( $(cat calls) + 1 ))
 echo "$call" > calls
 if [[ "$call" == "$FAIL_CALL" ]]; then
@@ -80,6 +80,17 @@ fi
 }
 
 describe("network CodeQL PR routing", () => {
+  it("selects the network shard for the exec-host socket owner", () => {
+    const { result, output } = scan(
+      [{ filename: "src/infra/exec-host.ts" }],
+      0,
+      undefined,
+      "detect",
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(output.split("\n")).toContain("network_runtime=true");
+  });
+
   it.each([
     ["tests/network-runtime/packages/net-policy/src/client.ts", true],
     ["tests/unrelated/example.qlref", false],
@@ -109,7 +120,7 @@ describe("network CodeQL PR routing", () => {
     ["tls require", "extensions/irc/src/client.ts", '+const tls = require("tls");', true],
     ["http2 import", "src/infra/push-apns-http2.ts", '+import http2 from "node:http2";', true],
     ["raw connection", "src/infra/net/client.ts", "+net.createConnection(options);", true],
-    ["socket constructor", "src/infra/jsonl-socket.ts", "+new Socket();", true],
+    ["socket constructor", "src/infra/exec-host.ts", "+new Socket();", true],
     [
       "transport path as data",
       "packages/net-policy/src/client.ts",
@@ -140,6 +151,7 @@ describe("network CodeQL PR routing", () => {
       [qaOwner, true],
       ["packages/net-policy/src/client.ts", true],
       ["src/infra/net/client.ts", true],
+      ["src/infra/exec-host.ts", true],
       ["extensions/qa-lab/src/example.e2e.test.tsx", false],
       ["src/infra/net/client.test.ts", false],
       ["src/example.ts", false],

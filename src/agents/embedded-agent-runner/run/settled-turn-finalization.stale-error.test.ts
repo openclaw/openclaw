@@ -5,6 +5,7 @@ import {
   prepareSystemAgentRunAdmission,
   type AdmittedRunContext,
 } from "../../admitted-run-context.js";
+import { prepareAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
 import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,
@@ -150,6 +151,7 @@ describe("settled-turn finalization after an earlier tool failure", () => {
             assistant: buildEmbeddedRunnerAssistant({
               content: [{ type: "text", text: finalText }],
             }),
+            preparedTerminalReply: prepareAgentRunTerminalReply({ rawText: finalText }),
           },
         });
       }

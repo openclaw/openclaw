@@ -9,7 +9,7 @@ import {
   parseAcceptedWorkspaceSettlement,
   type AcceptedWorkspaceSettlementOutcome,
 } from "./workspace-accepted-publication.js";
-import type { WorkspaceHashMemo, WorkspaceReconcileMetrics } from "./workspace-hash-memo.js";
+import type { WorkspaceHashMemo } from "./workspace-hash-memo.js";
 import { serializeWorkspaceManifest } from "./workspace-manifest-worker.js";
 import type { WorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { changedPaths, manifestNodes } from "./workspace-reconcile.js";
@@ -67,7 +67,6 @@ export function createAcceptedWorkspacePublisher(params: {
   remoteManifest: WorkerWorkspaceManifest;
   initialRemoteRef: string;
   hashMemo: WorkspaceHashMemo;
-  metrics: WorkspaceReconcileMetrics;
 }) {
   let expectedRemoteRef = params.initialRemoteRef;
   const publish = async (accepted: {
@@ -105,7 +104,6 @@ export function createAcceptedWorkspacePublisher(params: {
         baseCommit: accepted.manifest.baseCommit,
         priorManifestDigests: accepted.manifest.baseCommit ? [acceptedDigest] : [],
         hashMemo: params.hashMemo,
-        metrics: params.metrics,
       });
       if (verifiedRef !== accepted.manifestRef) {
         throw new Error(

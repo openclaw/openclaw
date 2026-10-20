@@ -31,7 +31,7 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 <Steps>
   <Step title="Install the plugin">
     ```bash
-    openclaw plugins install clawhub:@openclaw/diagnostics-prometheus
+    openclaw plugins install @openclaw/diagnostics-prometheus
     ```
   </Step>
   <Step title="Enable the plugin">
@@ -100,16 +100,36 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | --------------------------------------------------------- | --------- | ----------------------------------------------------------------------------------------- |
 | `openclaw_gateway_build_info`                             | gauge     | `process_instance_id`, optional `build_id`                                                |
 | `openclaw_gateway_http_cancelled_total`                   | counter   | `source` (`client` or `shutdown`)                                                         |
-| `openclaw_gc_duration_seconds`                            | histogram | none                                                                                      |
+| `openclaw_gc_duration_seconds`                            | histogram | `kind`, `thread`                                                                          |
 | `openclaw_gateway_rpc_requests_total`                     | counter   | `method`                                                                                  |
+| `openclaw_gateway_rpc_client_requests_total`              | counter   | `method`, `client_kind`                                                                   |
+| `openclaw_models_list_requests_total`                     | counter   | `client_kind`, `source`, `view`, `scope`, `refresh`, `prepared_only`                      |
+| `openclaw_sessions_list_requests_total`                   | counter   | `client_kind`, `source`, `caller_source`, `row_mode`, `filter`                            |
+| `openclaw_sessions_list_response_bytes_total`             | counter   | `client_kind`, `source`, `caller_source`, `row_mode`, `filter`, `rows_outcome`            |
+| `openclaw_sessions_list_baseline_retirements_total`       | counter   | `cause`                                                                                   |
+| `openclaw_sessions_list_base_misses_total`                | counter   | `reason`                                                                                  |
+| `openclaw_chat_history_requests_total`                    | counter   | `client_kind`, `source`, `shape`, `limit_bucket`, `outcome`                               |
+| `openclaw_chat_history_response_bytes_total`              | counter   | `client_kind`, `source`, `shape`, `limit_bucket`, `outcome`                               |
+| `openclaw_cron_list_requests_total`                       | counter   | `client_kind`, `source`, `scope`, `compact`, `page`                                       |
 | `openclaw_gateway_rpc_first_response_seconds`             | histogram | `method`                                                                                  |
 | `openclaw_gateway_rpc_response_bytes`                     | histogram | `method`                                                                                  |
+| `openclaw_gateway_ws_events_total`                        | counter   | `event`                                                                                   |
+| `openclaw_gateway_ws_session_event_frames_total`          | counter   | `event`, `reason`, `delivery`                                                             |
+| `openclaw_gateway_ws_session_event_bytes_total`           | counter   | `event`, `reason`, `delivery`                                                             |
+| `openclaw_gateway_ws_event_bytes_total`                   | counter   | `event`                                                                                   |
+| `openclaw_gateway_ws_event_wire_bytes_total`              | counter   | `event`                                                                                   |
+| `openclaw_gateway_ws_event_frame_bytes`                   | counter   | `event`, `le`                                                                             |
+| `openclaw_gateway_ws_presence_frames_total`               | counter   | `mode`                                                                                    |
+| `openclaw_gateway_ws_presence_bytes_total`                | counter   | `mode`                                                                                    |
+| `openclaw_gateway_ws_operator_connections`                | gauge     | none                                                                                      |
 | `openclaw_gateway_rpc_handler_heap_delta_bytes`           | histogram | `method`                                                                                  |
 | `openclaw_gateway_rpc_handler_heap_delta_exclusive_total` | counter   | `method`                                                                                  |
 | `openclaw_gateway_rpc_handler_seconds`                    | histogram | `method`                                                                                  |
 | `openclaw_gateway_rpc_admission_seconds`                  | histogram | `method`                                                                                  |
 | `openclaw_gateway_rpc_queue_wait_seconds`                 | histogram | `method`                                                                                  |
 | `openclaw_chat_send_phase_seconds`                        | histogram | `phase`, `stage` (`request`, `startup`, `steer`, or `queued`)                             |
+| `openclaw_diff_stage_seconds`                             | histogram | `method`, `stage`, `outcome`                                                              |
+| `openclaw_diff_cache_misses_total`                        | counter   | `method`, `reason`                                                                        |
 | `openclaw_gateway_rpc_stage_seconds`                      | histogram | `method`, `phase`                                                                         |
 | `openclaw_gateway_rpc_stage_thread_cpu_seconds`           | histogram | `method`, `phase`                                                                         |
 | `openclaw_worktree_preparation_seconds`                   | histogram | `kind`, `template`, `outcome`, `phase`                                                    |
@@ -160,6 +180,8 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_session_recovery_age_seconds`                   | histogram | `action`, `active_work_kind`, `state`, `status`                                           |
 | `openclaw_gateway_event_loop_delay_max_seconds`           | histogram | none                                                                                      |
 | `openclaw_gateway_event_loop_observed_seconds_total`      | counter   | none                                                                                      |
+| `openclaw_gateway_main_thread_stall_seconds`              | histogram | `task`                                                                                    |
+| `openclaw_gateway_main_thread_stalls_dropped_total`       | counter   | none                                                                                      |
 | `openclaw_liveness_warning_total`                         | counter   | `reason`                                                                                  |
 | `openclaw_liveness_sessions`                              | gauge     | `state`                                                                                   |
 | `openclaw_liveness_event_loop_delay_p99_seconds`          | histogram | `reason`                                                                                  |
@@ -169,6 +191,7 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_payload_large_total`                            | counter   | `action`, `channel`, `plugin`, `reason`, `surface`                                        |
 | `openclaw_payload_large_bytes`                            | histogram | `action`, `channel`, `plugin`, `reason`, `surface`                                        |
 | `openclaw_memory_bytes`                                   | gauge     | `kind`                                                                                    |
+| `openclaw_process_anonymous_memory_bytes`                 | gauge     | `kind` (`rss`, `swap`)                                                                    |
 | `openclaw_heap_space_bytes`                               | gauge     | `space`, `stat`                                                                           |
 | `openclaw_worker_count`                                   | gauge     | none (aggregate), `script`                                                                |
 | `openclaw_worker_queue_depth`                             | gauge     | `kind`                                                                                    |
@@ -176,8 +199,15 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_worker_request_seconds`                         | histogram | `kind`, `request_class`                                                                   |
 | `openclaw_worker_heap_sampled_count`                      | gauge     | none (aggregate), `script`                                                                |
 | `openclaw_worker_heap_used_bytes`                         | gauge     | `script`                                                                                  |
+| `openclaw_worker_heap_space_used_bytes`                   | gauge     | `script`, `space`                                                                         |
+| `openclaw_worker_external_bytes`                          | gauge     | `script`                                                                                  |
+| `openclaw_worker_array_buffers_bytes`                     | gauge     | `script`                                                                                  |
+| `openclaw_code_mode_worker_memory_bytes`                  | gauge     | `slot`, `kind` (`external`, `array_buffers`)                                              |
 | `openclaw_worker_started_total`                           | counter   | `script`                                                                                  |
 | `openclaw_worker_retired_total`                           | counter   | `script`, `reason`                                                                        |
+| `openclaw_worker_messages_total`                          | counter   | `kind`, `direction`                                                                       |
+| `openclaw_worker_message_payload_bytes_total`             | counter   | `kind`, `direction`                                                                       |
+| `openclaw_worker_message_unmeasured_total`                | counter   | `kind`, `direction`                                                                       |
 | `openclaw_child_process_spawn_total`                      | counter   | `family`, `operation`                                                                     |
 | `openclaw_memory_rss_bytes`                               | histogram | none                                                                                      |
 | `openclaw_memory_pressure_total`                          | counter   | `level`, `reason`                                                                         |
@@ -185,6 +215,39 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_prometheus_series_dropped_total`                | counter   | none                                                                                      |
 | `openclaw_diagnostic_async_queue_dropped_total`           | counter   | `drop_class`                                                                              |
 | `openclaw_diagnostic_async_queue_length`                  | gauge     | none                                                                                      |
+
+On Linux, `openclaw_process_anonymous_memory_bytes` reports `RssAnon` as `kind="rss"`
+and `VmSwap` as `kind="swap"` from `/proc/self/status`, converted to bytes. The
+existing diagnostic heartbeat reads these counters asynchronously. They include
+managed heaps and buffers; they do not measure total native or allocator memory.
+`VmSwap` excludes shared-memory swap. Unavailable counters are omitted, including
+when a later read fails, rather than reported as zero or retained from an older
+sample. Other platforms do not expose these gauges. OpenClaw does not currently
+expose a total SQLite or jemalloc allocation counter.
+
+Worker message counters describe posts and receives on Gateway main-thread worker transports,
+with `direction="to_worker"` or `direction="from_worker"`. The fixed `kind` labels
+separate SQLite requests and replies, task inputs and replies, task requests,
+notifications, consumption receipts, admission, authority, resources, lifecycle,
+memory, realtime, and other messages. Totals survive worker retirement and are
+published with memory samples. Posts queued on a worker-bound port count when
+accepted by the port, even if cancellation later prevents handing that port to a
+worker. These counters describe transport work, not confirmed delivery.
+
+Payload bytes use existing encoded buffer sizes or inexpensive owner estimates;
+they exclude transport framing and do not measure structured-clone allocations.
+Commit receipts reuse their already-computed serialized fact sizes. Memory reports
+count numeric heap counters and GC durations; GC kind labels and object envelopes
+are excluded. Authority includes transaction/commit admission and settlement, not
+just authorization checks; arbitrary admission facts can still be unmeasured.
+Object graphs without a known size increase `openclaw_worker_message_unmeasured_total`
+instead of appearing as measured zero-byte messages. Compare byte rankings with
+this coverage counter before drawing conclusions; nested worker-to-worker traffic
+does not cross the main-thread boundary.
+
+Foreign Worker instances with accessor or read-only methods, or nonextensible
+instances, retain CPU and lifecycle tracking but exclude per-message traffic.
+Instrumentation does not replace those protected methods.
 
 For model-call metrics, `observation_unit="request"` measures one observable
 provider request. `observation_unit="turn"` measures a synthetic Claude Code
@@ -201,6 +264,68 @@ They measure elapsed time, not CPU time. Early acknowledgments and responses
 after handler return are distinct from completed agent work. See
 [Gateway RPC timing semantics](/gateway/opentelemetry#gateway-rpc).
 
+`openclaw_gateway_ws_events_total` counts outbound event frames accepted by the
+sender, once per socket, so a broadcast to ten sockets counts ten frames.
+`openclaw_gateway_ws_event_bytes_total` sums the encoded UTF-8 bytes of those full
+JSON frames before WebSocket framing or compression. Neither counter proves
+client receipt. Their only label is `event`: a known protocol event name, such as
+`chat` or `sessions.changed`, or `other` for an unrecognized name. No payload,
+session, user, or connection identifiers are exported. The
+`openclaw_gateway_ws_operator_connections` gauge reports connected authenticated
+operator sockets without labels. These observations use the existing bounded
+diagnostic queue and shared exporter series cap. Event observations are batched
+by event name within one event-loop turn while preserving per-socket frame and
+byte totals. Connection counts update on
+connect/disconnect and refresh every 30 seconds so a late-starting exporter or
+dropped snapshot can recover.
+
+`openclaw_gateway_ws_event_wire_bytes_total{event}` sums payload bytes actually
+handed to the socket after the codec: deflated payload length when compressed,
+raw length otherwise. It excludes WebSocket, TLS, and TCP headers and does not
+prove client receipt. The codec can report completion after raw-frame acceptance;
+direct local delivery contributes its raw payload size. Manual diagnostic
+observations without a wire size do not fabricate a wire-byte measurement.
+
+`openclaw_gateway_ws_event_frame_bytes{event,le}` contains cumulative counts of
+accepted raw event frames, with byte-size upper bounds `256`, `512`, `1024`,
+`2048`, `4096`, `8192`, `16384`, `65536`, and `+Inf`. Each frame increments all
+matching bounds. This is a bounded bucket counter, not a histogram family: use
+the metric name directly with `histogram_quantile`, without a `_bucket` suffix.
+
+`openclaw_gateway_ws_presence_frames_total{mode}` and
+`openclaw_gateway_ws_presence_bytes_total{mode}` split presence traffic by
+`delta`, `reset` (full snapshots for capable clients), and `legacy` (full frames
+without delta negotiation). They count the same accepted per-socket frames and
+encoded bytes as the aggregate counters.
+
+`openclaw_gateway_ws_session_event_frames_total` and
+`openclaw_gateway_ws_session_event_bytes_total` attribute session event traffic
+using the same per-socket frames and bytes as the aggregate counters.
+
+The session counters use `event`, `reason`, and `delivery`. `event` is only
+`sessions.changed` or `session.message`. For `sessions.changed`, `reason` is the
+producer's reason (or lifecycle phase when no reason is present):
+`abort`, `activity-summary`, `agent.input.settled`, `agent.run.started`,
+`archive`, `board`, `branch-switch`, `chat.dispatch-error`, `chat.title`,
+`cleanup`, `compact`, `create`, `cron-continuation`, `delete`, `dispatch`,
+`fork`, `github-publication`, `goal`, `groups`, `involvement`, `move`, `new`,
+`owner`, `participants`, `patch`, `placement`, `plugin-patch`, `progress-card-reset`,
+`project`, `reclaim`, `recovery`, `reset`, `rewind`, `run-capacity`, `send`,
+`sharing`, `steer`, `subagent-status`, `swarm-note`, `title`, `unarchive`,
+`update`, `updated`, `worker-disk-space`, and `worker-runtime-install`.
+Lifecycle phases are `start`, `model`, `end`, `error`, and `message`.
+For `session.message`, `reason` is the message role: `user`, `assistant`, `system`,
+`developer`, `tool`, or `toolResult`; an absent role uses `message`.
+Unknown reasons, phases, and roles use `other`.
+`delivery="subscribed"` means the recipient holds an exact
+`sessions.messages.subscribe` subscription for that session, including its
+producer-resolved alias; all other recipients use `delivery="roster"`.
+This describes subscription membership, not whether a tab is visible or a peer
+acknowledged receipt. Keyless roster invalidations use `roster`.
+The counters reuse the existing encoded byte length without serializing again,
+and batch by label set within the same event-loop turn. No message content,
+IDs, or session keys enter the labels. Existing event counter labels stay unchanged.
+
 Receipt begins after the connected client's request frame passes validation.
 These timings exclude CLI startup, local diagnostics, connection/authentication
 setup, and event-loop delay before request dispatch. Histograms record completed
@@ -212,6 +337,118 @@ RPC method labels contain exact core and registered plugin method names, `other`
 for unregistered requests, or `unknown` for unrecognized dedicated worker RPCs.
 Catalog membership is checked at request receipt, so plugin registry replacement
 affects subsequent requests without a separate label cache.
+
+`openclaw_gateway_rpc_client_requests_total` attributes all RPC methods using a
+coarse handshake `client_kind`: `control-ui` (Control UI, WebChat UI, browser
+copilot), `macos`, `ios` (including watchOS), `android`, `cli` (including TUI),
+`node` (node hosts and workers), or `other`. The eighth bucket, `plugin`, is
+reserved: generic `gateway-client` connections cannot reliably identify plugins,
+and in-process plugin dispatch inherits its authenticated caller's identity.
+Pre-authentication `connect` requests and other missing identities use `other`. This is diagnostic self-identification, never authorization.
+
+The counter includes server-dispatched requests on behalf of a connection, such
+as its initial model snapshot; use the dedicated list counters' `source` label
+below to separate those from wire requests. No device IDs, display names,
+platform strings, or request values become labels. There is no generic request
+reason in the current protocol, so no `trigger` label is emitted; `cron.list`'s
+`trigger` parameter filters job types and does not identify why a client fetched.
+
+The budget is at most **8 additional samples and scrape series per method**,
+created only for observed kinds and subject to the shared 2,048-sample cap.
+Existing method-only counters and timing histograms keep their labels and bucket
+counts. To attribute polling, use:
+
+```promql
+sum by (method, client_kind) (
+  rate(openclaw_gateway_rpc_client_requests_total{method=~"cron.list|models.list"}[5m])
+)
+```
+
+`openclaw_models_list_requests_total` separately attributes catalog reads to the
+handshake's canonical client kind, such as `openclaw-control-ui`, `openclaw-macos`,
+or `gateway-client`. `source="wire"` identifies client request frames;
+`source="internal"` identifies server-dispatched requests with an adapted response,
+including the connection's initial model snapshot. `view` is `default`,
+`configured`, `provider-config`, `all`, or `other` for an invalid value. `scope`
+records parameter presence: `session`, then `auth-profile`, then `agent`, or
+`global` when none is supplied. `refresh` and `prepared_only` record whether the
+corresponding parameter is exactly `true`. Counts include later-rejected requests;
+scope does not describe the authorized result. No agent, session, profile,
+connection, user-agent, or display-name values are exported. Each observed label
+combination uses one sample in the existing shared cap. The method-only request
+counter and timing histograms retain their existing labels.
+
+`openclaw_sessions_list_requests_total` uses the same `client_kind` and `source`
+attribution for session reads. `caller_source` records the protocol's bounded
+caller tag (`sidebar`, `dashboard`, `activity`, `sessions-page`, `chat-pane`,
+`agent-roster`, `command-palette`, or `skill-workshop`); missing or unknown tags
+become `unspecified`. `row_mode` is `full` when omitted, `compact`, `dashboard`,
+`sidebar`, or `other` for an invalid value. `filter` records the first matching
+primary filter family: `search`, `children` (`spawnedBy`), `owner` (`ownerId`),
+`involving` (`involvingMe=true`, `involvingProfileId`, or `profileRelation`),
+`active` (`activeOnly=true` or `activeMinutes`), or `general` when none applies.
+Other selection and presentation options do not add labels. Counts include
+later-rejected requests and export no filter values, limits, offsets, or revision
+tokens. Each observed combination uses one sample in the existing shared cap.
+
+`openclaw_sessions_list_response_bytes_total` reuses these labels and adds
+`rows_outcome`: `unchanged` for `rowsUnchanged`, `delta` for `rowsDelta`,
+`full-no-base` for conditional replies when the request omits `ifRowsRevision`
+or supplies an empty opt-in token, or `full-with-base` when it supplies a revision.
+`full-with-base` includes
+stale or evicted bases and the rare case where every row changed.
+Non-sidebar row modes without the opt-in use `not-sidebar`. Diagnostics derives these labels from
+the request and existing response fields without changing the protocol payload.
+
+`openclaw_sessions_list_baseline_retirements_total{cause}` counts retirement
+events, not rows or the number of views cleared. Causes are `projection-revision`,
+`config`, `identity`, `selection-reset`, `view-evicted` (the 512-slot or 32 MiB
+estimated-retention limit), and
+`history-evicted` (the 32-generation limit). Only clears or evictions retaining
+conditional rows or history count, including empty row lists. Selection-only
+and non-conditional views do not count. When a read observes multiple invalidations,
+`config` takes precedence
+over `identity`, then `projection-revision`; an earlier selection reset already
+clears the cache and is counted separately at that point.
+
+`openclaw_sessions_list_base_misses_total{reason}` counts successful full conditional
+replies with a nonempty `ifRowsRevision`. `unknown-base` means no eligible history
+base was found, including after restart, eviction, or a non-delta revision token.
+`all-rows-changed` means the base was found but the delta was not smaller than the
+full row list (also possible for an empty list). The existing `full-with-base`
+byte attribution stays unchanged. These reasons follow shared serialized replies
+out-of-band; no response fields, revision tokens, or identifiers are exported.
+Both counters use the bounded asynchronous diagnostics path and exporter cap.
+Compare unknown-base misses with retirement events and process identity changes
+to distinguish cache churn from first reads after restart; misses alone cannot
+prove a restart. OpenTelemetry exports the same observations as
+`openclaw.sessions.list.baseline_retirements` and `openclaw.sessions.list.base_misses`,
+with the same `cause` and `reason` labels.
+
+`openclaw_chat_history_requests_total` counts successful `chat.history` replies;
+`openclaw_chat_history_response_bytes_total` sums their encoded response bytes.
+Both use `client_kind` and `source` as above. `shape` uses the first matching
+selector: `receipt` for `inputRunIds`, `pending` for `pendingBefore`, `older` for
+a positive `offset`, `cursor` for `cursor`, `anchor` for `messageId`, otherwise
+`tail`. `limit_bucket` is
+`<=20`, `<=80`, `<=200`, or `>200`, with an omitted limit using the handler's
+default of 200. `outcome` is the response `kind` (`delta` or `reset`), or `page`
+for a normal history page. These counters exclude rejected, failed, and unsent
+responses; `chat.startup` remains separate. The byte counters reuse the exact
+UTF-8 JSON frame size from `openclaw_gateway_rpc_response_bytes`, before transport
+framing or compression, without another serialization or per-row work. No cursor,
+offset, identifier, text, or raw limit values become labels; each observed
+combination uses one sample in the shared cap.
+
+`openclaw_cron_list_requests_total` uses the same `client_kind` and `source`
+attribution for cron reads. `scope` records parameter presence: `session` when
+`sessionKey` is supplied, then `agent` for `agentId`, otherwise `global`.
+`compact` records whether the parameter is exactly `true`; `page` is `append`
+for a positive numeric offset and `first` otherwise. Counts include
+later-rejected requests; scope does not describe the authorized result. No
+session, agent, query, or offset values are exported. Each observed combination
+uses one sample in the existing shared cap.
+
 Outcome totals aggregate by phase and outcome without a
 method dimension. Each method with all four timings, both byte histograms, and the exclusive-sample counter occupies eight aggregate
 samples in the shared 2,048-sample cap. An RPC duration histogram occupies one sample
@@ -272,6 +509,56 @@ or `threw`. `phase=total` is the complete elapsed time. Other fixed phases are
 `containerStart`. Only entered phases are recorded. Nested phases are inclusive
 and must not be summed. No paths, session identifiers, or template keys become
 metric labels.
+
+### Session diff stages
+
+`openclaw_diff_stage_seconds` records local `sessions.diff` and `checkout.diff`
+reads below the one-second slow-log threshold. Labels are limited to `method`
+(those two names), `outcome` (`cache-hit` or `cache-miss`), and six fixed stages:
+
+| Stage              | Observation                                                                 |
+| ------------------ | --------------------------------------------------------------------------- |
+| `admission`        | RPC receipt through handler admission and retained session-read preparation |
+| `checkout-resolve` | Session, repository and managed base resolution before the local diff read  |
+| `cache-validate`   | Revision validation, including waiting for a shared revision check          |
+| `worker-queue`     | Worker admission wait for revision validation and any new diff collection   |
+| `git-wall`         | Summed elapsed Git subprocess time during those worker operations           |
+| `encode`           | Synchronous response preparation, encoding and transport handoff            |
+
+`checkout.diff` records the cache and worker stages; `sessions.diff` adds request
+admission, checkout resolution and response delivery. Durations are seconds.
+Cache validation includes its worker queue and Git time, and concurrent Git
+commands can overlap: do not add the stage values to estimate request latency.
+A settled cached result is a hit; callers joining pending diff collection are
+misses. Shared work contributes to each waiting caller, while later cache hits
+never replay the cached result's old Git timings. No Git subprocesses means zero
+Git wall time, even when filesystem revision validation is expensive.
+
+`openclaw_diff_cache_misses_total` explains misses with a fixed `reason` label:
+`cold`, `evicted`, `pending`, `no-revision`, `oversized`, or
+`revision-changed-head`, `revision-changed-index`, `revision-changed-untracked-set`,
+`revision-changed-worktree-mtime`, and `revision-changed-metadata`. When several
+components change, the first in that order is reported. `pending` means the
+caller joined an existing load. Only the most recent cache-capacity count of
+evictions is remembered; older evicted keys report `cold`. Different request
+shapes have separate entries, so there is no key-mismatch reason.
+
+Diff revisions use Git's changed-file inventory and relevant file metadata.
+Ignored build output and index stat refreshes do not invalidate a result.
+Unchanged large checkouts still run one read-only Git status check per shared
+validation, but reuse diff collection. Unsupported layouts and inventories that
+exceed the bounded revision budget keep fresh diff reads.
+Small idle checkouts reuse the semantic revision while their complete filesystem
+fingerprint is unchanged, avoiding a Git subprocess on each poll. This worker-local
+memo is bounded to 64 entries and retains the existing 10,000-observation metadata
+budget; any filesystem change requires Git validation again.
+
+Only completed local cache reads have these outcomes. Remote repository reads,
+unknown sessions and failures before cache selection retain the normal RPC
+metrics. No paths, checkout IDs, session IDs or request data become labels.
+These observations use the existing bounded diagnostic queue when diagnostics
+and an interested trusted consumer are enabled. Compare each stage's count;
+this metric is attribution for waiting callers, not total host work.
 
 ### Catalog list stages
 
@@ -401,6 +688,22 @@ exporter's series cap, and process restarts can also lose observations. Watch
 the existing drop counters and the represented-duration counter when assessing
 coverage. Readiness decisions and persistent liveness-warning thresholds are unchanged.
 
+### Main-thread stall attribution
+
+`openclaw_gateway_main_thread_stall_seconds{task}` records individual main-thread
+tasks lasting at least 250 milliseconds. Its `_count` counts recorded tasks;
+`_sum` totals their elapsed seconds. Buckets are 0.25, 0.5, 1, 2.5, 5, and 10
+seconds, plus `+Inf`. The `task` label comes from code-owned work scopes and passes
+through the exporter's normal label sanitizer and series cap. It contains no
+request IDs or message content.
+
+`openclaw_gateway_main_thread_stalls_dropped_total` counts records omitted when
+the attribution buffer fills. It appears only after the first loss; the histogram
+appears only after the first recorded stall. Diagnostic queue drops and exporter
+restarts can also lose observations, so an absent histogram does not establish
+that no stalls occurred. Unlike event-loop window maxima, these observations
+attribute elapsed execution to a work scope; they do not provide CPU profiles.
+
 ### Worker request queues
 
 `openclaw_worker_queue_depth{kind}` reports requests awaiting dispatch across
@@ -443,7 +746,7 @@ retain `open`, `close`, `transcript_read`, `sessions`, `transcripts`,
 `domain_execute`, `plugin_state`, `auth_profiles`, and `cron`. Other commands use a
 fixed operation family, such as `workerInference`, `capture`, or `diagnostic`.
 Audit writer, database lifecycle, and state lease commands have finer labels such
-as `audit.writer.process`, `database.inspectIdle`, and `stateLease.renew`.
+as `audit.writer.process`, `database.walMaintenance`, and `stateLease.renew`.
 Unknown commands retain `execute`; unknown request classes become `other`.
 The allowlists bound cardinality without publishing session IDs, database paths,
 command suffixes, or caller-provided names. The exporter's shared series cap still
@@ -509,7 +812,21 @@ fresh sample, while `openclaw_worker_heap_sampled_count` counts its fresh sample
 The original unlabeled series retain the aggregate totals. Select
 `{script!=""}` when summing script series to avoid counting the aggregate again.
 `openclaw_worker_heap_used_bytes{script="..."}` sums fresh heap samples for each
-Worker script. Labels use a fixed allowlist of runtime-entrypoint, pooled, and bundled plugin Worker basenames, normalized to
+Worker script. `openclaw_worker_external_bytes` and `openclaw_worker_array_buffers_bytes`
+sum the corresponding available counters from those same samples by `script`.
+ArrayBuffer bytes are included in external memory; do not add them together.
+Native-only heap samples provide external memory but no ArrayBuffer count, so
+ArrayBuffer totals can cover fewer Workers than the heap sample count. Missing
+counters are omitted, while measured zero bytes are exported as zero.
+On Node, `openclaw_worker_heap_space_used_bytes{script="...",space="..."}` sums
+used bytes by V8 heap space for Workers serving the private memory channel. It
+shares the existing heartbeat, sample expiration, and exit cleanup. Space names
+come from V8's finite native set; labels contain no paths, account details, or
+catalog contents. Compare old, large-object, and code spaces to locate worker
+heap growth without a snapshot. Native-only fallback samples and Bun omit these
+space counters, so their coverage can be smaller than the heap sample count.
+`openclaw_heap_space_bytes` remains the main isolate's separate space breakdown.
+Labels use a fixed allowlist of runtime-entrypoint, pooled, and bundled plugin Worker basenames, normalized to
 `.js` in source and packaged runs; unknown, eval, and unwrapped third-party Workers
 use `other`. Full paths and eval source are never recorded. A script's series
 disappears when it has no live, fresh samples; its count series disappear when
@@ -528,7 +845,11 @@ separate SQLite handle retention window remains 30 minutes.
 `openclaw_worker_retired_total{script="...",reason="..."}` expose cumulative
 starts and confirmed native exits through the same heartbeat. Retirement reasons
 are `idle_timeout`, `memory_pressure`, `closed`, `rotation`, `cancelled`,
-`failure`, or `exit` when an owner did not specify a reason. A retirement request
+`failure`, `eviction`, `idle-expiry`, `dispose`, `shutdown`, `crash`, `gc-thrash`,
+or `exit` when an owner did not specify a reason. Code Mode distinguishes warm-cache
+eviction, idle expiry, explicit disposal, host shutdown, native crash, and GC-watchdog
+retirement; see [Code Mode executors](/tools/code-mode/executors).
+A retirement request
 does not count until the Worker exits; failed termination and retries do not
 double-count. Counters survive exporter restarts and reset with the process.
 Use `60 * rate(openclaw_worker_started_total[5m])` for starts per minute by
@@ -544,8 +865,9 @@ live Workers. Direct Workers contribute to `workerCount` without a pool entry.
 These are JavaScript Worker counts, not an operating-system thread census.
 
 `openclaw_child_process_spawn_total{family="...",operation="..."}` counts successful launches
-through OpenClaw's shared spawn and exec owners, including brokered launches,
-and the streaming workspace inventory runner.
+through OpenClaw's shared spawn and exec owners, including brokered and native
+PTY launches, and the streaming workspace inventory runner. Windows PTYs are
+attributed at their first output or exit after their asynchronous PID publication.
 Diagnostics must be enabled. The existing heartbeat publishes accumulated
 counts after at least one minute, with debug logs reporting counts and rates
 using the actual elapsed interval. Failed launches, direct calls bypassing
@@ -568,7 +890,15 @@ Global Git options and their values are skipped before classifying the command;
 unrecognized commands, aliases, and option layouts use `unscoped.other`.
 These labels replace `unknown` for unscoped launches, so update queries that
 select that label. Invalid explicit owners still use `unknown`.
-Other executable families use `none`.
+Other executable families use bounded owners such as `agent.exec`, `shell.snapshot`,
+and `service.relay`, or fixed fallback classifications such as
+`unscoped.shell-command`, `unscoped.shell`, `unscoped.runtime`, `unscoped.version`,
+`unscoped.gh`, and `unscoped.command`. Relays for agent exec retain `agent.exec`.
+SQLite read launches retain their `sqlite.scoped-read.broker`,
+`sqlite.scoped-read.native`, `sqlite.session.broker`, or `sqlite.session.native` labels.
+Update queries selecting `operation="none"` to select the relevant owners or
+remove the operation filter to retain the per-family view. Linux OOM-protection
+exec wrappers report the logical target family, since the broker can omit the shell.
 Arguments, repository paths, session IDs, and free-text caller names are never recorded.
 For launches per minute grouped by Git owner, use
 `60 * sum by (operation) (rate(openclaw_child_process_spawn_total{family="git"}[5m]))`.
@@ -586,7 +916,26 @@ cleanup pass. Normal result settlement still removes its own refs immediately.
 ### Garbage collection duration
 
 `openclaw_gc_duration_seconds` records elapsed garbage collection (GC) duration
-reported by Node.js for the hosting JavaScript isolate. Each observation is one
+reported by Node.js for the main isolate and instrumented workers. `kind` is
+`scavenge` (minor), `mark_sweep_compact` (major), `incremental`, or
+`weak_processing`, taken from the native GC profile's collection type. `thread` is `main`
+or an allowlisted worker script basename; unknown worker scripts use `other`.
+Native sampling reports `reason="other"`: `GCProfiler` does not expose callback
+flags. SDK producers may still supply the bounded callback-flag labels `none`,
+`forced`, `synchronous_phantom_processing`, `all_available_garbage`,
+`all_external_memory`, `schedule_idle`, or `construct_retained`. These flags are
+not V8's complete internal reason for starting a collection.
+
+Code Mode Node workers also carry a reusable `slot` label from 1 through 64.
+The worker registry holds a slot until native worker exit, including pending
+retirement, then makes it available for reuse. Concurrent workers beyond 64
+retain script-level attribution without a slot; other worker scripts also retain
+script-level attribution. Slots are not thread IDs or session identities.
+Counters accumulate across occupants of a slot, so a rate window can span more
+than one worker. Older SDK
+producers that omit attribution use `kind="unknown",reason="other",thread="main"`. SDK-provided
+unknown kinds and worker names fold into `unknown` and `other` at event emission.
+Each observation is one
 GC entry, not CPU time, allocated bytes, or a guaranteed stop-the-world pause.
 Compare its bucket counts with event-loop window maxima to investigate GC as a
 possible contributor to stalls; matching scrape intervals do not prove causality.
@@ -598,13 +947,59 @@ event loop is stalled. Entries preceding observer activation are not backfilled.
 Demand is checked when entries are delivered, so a brief consumer gap before the
 next heartbeat can still yield delayed observations. Losing the last
 consumer suppresses new exports; the observer disconnects at the next heartbeat.
-Disabling diagnostics or stopping the heartbeat disconnects it immediately.
+Disabling diagnostics or stopping the heartbeat disconnects the main observer
+immediately and sends worker disconnect requests over their existing memory
+telemetry ports. A busy worker processes the request when its event loop resumes;
+exports are suppressed in the meantime.
 
 The histogram is absent until the first observation, so absence does not prove
 zero GC. Queue drops, the series cap, observation gaps and process restarts limit
 coverage. Diagnostics disable/re-enable preserves the exporter's existing
-counters; restarting the exporter resets them as usual. No extra timer, GC
-trigger, trace attribution or application payload is collected.
+counters; restarting the exporter resets them as usual. One shared native profiler
+per isolate drains on an unreferenced one-second timer instead of scheduling
+JavaScript after each GC. Sampling does not force GC or collect application payloads.
+Worker GC batches
+reuse the memory telemetry port; port closure stops its observer. Workers without
+that port, nested workers outside this registry, and runtimes without native GC
+entries are not covered. Worker exit can lose a final undelivered batch.
+
+The histogram's `_count` and `_sum` are the collection count and total elapsed
+seconds for each label set. Existing queries that need a single total should
+aggregate the new labels; select `thread="main"` to retain main-isolate scope:
+
+```promql
+sum by (kind, thread) (rate(openclaw_gc_duration_seconds_count[5m]))
+sum by (kind, thread) (rate(openclaw_gc_duration_seconds_sum[5m]))
+```
+
+To locate a busy Code Mode isolate and compare its latest used heap with its
+actual V8 limit:
+
+```promql
+60 * sum by (slot, reason) (
+  rate(openclaw_gc_duration_seconds_count{thread="code-mode-node.worker.js",kind="mark_sweep_compact",slot!=""}[5m])
+)
+openclaw_code_mode_worker_heap_bytes{kind="used"}
+  / ignoring(kind) openclaw_code_mode_worker_heap_bytes{kind="limit"}
+```
+
+`openclaw_code_mode_worker_heap_bytes` reuses the existing memory heartbeat and
+labels samples by `slot` and `kind="used"` or `kind="limit"`. Gauges disappear at
+the next memory sample after worker exit or stale sampling; missing limits are
+omitted on runtimes without V8. The script-level worker heap metrics continue to
+include all workers, including slot overflow. No additional heap interrupt or
+sampling timer is introduced.
+
+`openclaw_code_mode_worker_memory_bytes` exposes the same slots with
+`kind="external"` and `kind="array_buffers"`, using the counters already carried
+by the memory heartbeat. Missing counters are omitted, and gauges disappear on
+the next memory sample after exit or stale sampling, just like the heap gauges.
+Slot overflow remains included in the script-level totals. These counters do
+not account for every native allocation or allocator arena.
+
+OpenTelemetry's `openclaw.gc.duration_ms` uses the corresponding
+`openclaw.gc.kind`, `openclaw.gc.thread`, and optional `openclaw.gc.worker_slot`
+attributes.
 
 ## Label policy
 
@@ -636,6 +1031,28 @@ trigger, trace attribution or application payload is collected.
 ```promql
 # Gateway RPC requests per second by method
 sum by (method) (rate(openclaw_gateway_rpc_requests_total[5m]))
+
+# Raw outbound WebSocket event bytes per second by event, including fan-out
+sum by (event) (rate(openclaw_gateway_ws_event_bytes_total[5m]))
+
+# Post-codec outbound payload bytes per second by event
+sum by (event) (rate(openclaw_gateway_ws_event_wire_bytes_total[5m]))
+
+# p50 raw event frame size by event; use 0.90 for p90
+histogram_quantile(0.50,
+  sum by (event, le) (rate(openclaw_gateway_ws_event_frame_bytes[5m])))
+
+# Model catalog calls per minute by caller and request shape over ten minutes
+60 * sum by (client_kind, source, view, scope, refresh, prepared_only)
+  (rate(openclaw_models_list_requests_total[10m]))
+
+# Session list calls per minute by caller and request shape over ten minutes
+60 * sum by (client_kind, source, caller_source, row_mode, filter)
+  (rate(openclaw_sessions_list_requests_total[10m]))
+
+# Cron list calls per minute by caller and request shape over ten minutes
+60 * sum by (client_kind, source, scope, compact, page)
+  (rate(openclaw_cron_list_requests_total[10m]))
 
 # 95th percentile first-response latency by method
 histogram_quantile(

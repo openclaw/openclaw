@@ -167,7 +167,8 @@ describe("sessions.dispatch", () => {
     {
       name: "missing workspace",
       entry: { sessionId },
-      message: "sessions.dispatch requires a session-owned worktree or repository workspace",
+      message:
+        "sessions.dispatch requires a session-owned worktree, repository workspace, or device folder",
     },
     {
       name: "archived session",
@@ -698,7 +699,7 @@ describe("sessions.dispatch", () => {
 
       expect(mocks.runCommandWithTimeout).toHaveBeenCalledWith(
         ["git", "-C", "/repo/worktree", "config", "--get", "remote.origin.url"],
-        { timeoutMs: 4_000 },
+        { timeoutMs: 4_000, env: { GIT_NO_LAZY_FETCH: "1" } },
       );
       expect(dispatch).toHaveBeenCalledWith(
         expect.objectContaining({ profileId: "mapped" }),
@@ -924,7 +925,6 @@ describe("sessions.dispatch", () => {
           });
           const context = reclaimContext(() => placement, reclaim, {
             broadcastToConnIds: vi.fn(),
-            chatAbortControllers: new Map(),
             getSessionEventSubscriberConnIds: () => new Set(["another-client"]),
           });
           const cfg = context.getRuntimeConfig();
@@ -963,5 +963,51 @@ describe("sessions.dispatch", () => {
         });
       },
     );
+  });
+});
+
+describe("device-folder placement constraints", () => {
+  beforeEach(() => {
+    mocks.resolveTarget.mockReturnValue(
+      targetWithEntry({
+        sessionId,
+        deviceFolder: { deviceId: "folder-node", path: "/existing/non-git" },
+      }),
+    );
+  });
+  it.each([{ autoDevice: true as const }, { deviceId: "other-node" }, { profileId: "test" }, {}])(
+    "rejects a non-pinned dispatch %j before provisioning",
+    async (target) => {
+      const dispatch = vi.fn();
+      const respond = await invoke(dispatchContext(dispatch), target);
+      expectDispatchError(respond, expect.stringContaining("dispatch explicitly to that device"));
+      expect(dispatch).not.toHaveBeenCalled();
+    },
+  );
+  it.each([false, true])("refuses Move/Continue on Gateway (abandon=%s)", async (abandon) => {
+    const move = vi.fn();
+    const respond = await invokeSessionMove(
+      makeContext({
+        workerPlacementDispatchService: { dispatch: vi.fn(), move },
+        workerSessionPlacementService: { getMany: () => new Map() },
+      }),
+      {
+        expected: { generation: 1, environmentId: "node-environment", ownerEpoch: 1 },
+        target: { kind: "gateway" },
+        ...(abandon ? { abandonSource: true as const } : {}),
+      },
+    );
+    expectDispatchError(respond, expect.stringContaining("cannot move or Continue on Gateway"));
+    expect(move).not.toHaveBeenCalled();
+  });
+  it("refuses recovery onto the Gateway before reclaim", async () => {
+    const reclaim = vi.fn();
+    const respond = await invokeSessionReclaim(
+      reclaimContext(reclaimActivePlacement, reclaim),
+      undefined,
+      { recoverToGateway: { expectedGeneration: 3 } },
+    );
+    expectDispatchError(respond, expect.stringContaining("recovery to Gateway is unavailable"));
+    expect(reclaim).not.toHaveBeenCalled();
   });
 });

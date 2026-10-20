@@ -331,6 +331,7 @@ Each field hint can include:
 | `advanced`     | `boolean`        | Marks the field as advanced.                                                                                      |
 | `sensitive`    | `boolean`        | Marks the field as secret or sensitive.                                                                           |
 | `placeholder`  | `string`         | Placeholder text for form inputs.                                                                                 |
+| `multiline`    | `boolean`        | Render a non-sensitive string as a vertically resizable textarea. Omitted or false keeps the single-line input.   |
 | `presentation` | `"phone-number"` | Display-only localized phone formatting for parseable international (`+...`) values; raw values remain unchanged. |
 
 Channel config sections inherit `help` for the leaves every channel shares

@@ -1,20 +1,19 @@
 import type { BoardGetParams, ProgressCardGetParams } from "@openclaw/gateway-protocol";
-import { createEffect, createMemo, createSignal, Show } from "solid-js";
-import { SessionProgressCardController } from "../../../components/session-progress-card-controller.ts";
-import { renderSessionProgressCard } from "../../../components/session-progress-card.ts";
-import {
-  defineSolidBridge,
-  LitContent,
-  type SolidBridgeElement,
-} from "../../../lit/solid-bridge.ts";
-import { useSolidControllerHost } from "../../../lit/solid-controller-host.ts";
+import { createMemo, createSignal, onSettled, Show } from "solid-js";
+import { SessionProgressCard } from "../../../components/session-progress-card-solid.tsx";
+import { projectGateway } from "../../reactive/application.ts";
 import { useOptionalApplication } from "../../reactive/context.ts";
+import { projectProgressCard } from "../../reactive/domain-keyed.ts";
 import { t } from "../../reactive/i18n.ts";
 import { projectSource } from "../../reactive/projection.ts";
-import { resolveSessionProgressCardTarget } from "../../session-progress-cards.ts";
-import { isSessionRunActive } from "../../session-run-state.ts";
+import {
+  resolveSessionProgressCardTarget,
+  sessionProgressCardsForGateway,
+} from "../../session-progress-cards.ts";
+import { isSessionRunStateActive } from "../../session-run-state.ts";
 import { parseAgentSessionKey } from "../../sessions/session-key.ts";
 import { sessionProgressTargetQuery } from "../../sessions/session-requests.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../solid-bridge.ts";
 import type { BoardWidget } from "../types.ts";
 
 type SessionProgressWidgetProps = {
@@ -39,28 +38,58 @@ function SessionProgressWidgetContent(
   host: SolidBridgeElement<SessionProgressWidgetProps>,
 ) {
   const context = useOptionalApplication();
-  const gateway = projectSource(context?.gateway, {
-    read: (owner) => owner?.snapshot,
-    subscribe: (owner, notify) => owner?.subscribe(notify) ?? (() => {}),
-    equality: "revision",
-  });
+  const gateway = context ? projectGateway(context.gateway) : undefined;
   const target = createMemo(() => resolveSessionTarget(props.widget, props.session));
   const identity = createMemo(() =>
-    resolveSessionProgressCardTarget(gateway.read() ?? {}, target()),
+    resolveSessionProgressCardTarget(gateway?.read().snapshot ?? {}, target()),
   );
-  const lifecycle = useSolidControllerHost(() => [target(), props.active, gateway.read()]);
-  const progress = new SessionProgressCardController(lifecycle.host, {
-    gateway: () =>
-      host.isConnected && props.active && target().sessionKey ? context?.gateway : undefined,
-    target,
+  const [mounted, setMounted] = createSignal(false);
+  onSettled(() => {
+    setMounted(true);
   });
-  const [sessionRevision, setSessionRevision] = createSignal(0, { ownedWrite: true });
+  const progressScope = createMemo(
+    () => {
+      const snapshot = gateway?.read().snapshot;
+      const staticTarget = target();
+      return {
+        store:
+          mounted() && props.active && staticTarget.sessionKey && context
+            ? sessionProgressCardsForGateway(context.gateway)
+            : undefined,
+        target: staticTarget,
+        client: snapshot?.client,
+        hello: snapshot?.hello,
+        options: {
+          // Read live admission facts even before the scope effect catches up.
+          admitAutomaticRead: () => {
+            const currentTarget = resolveSessionTarget(host.widget, host.session);
+            return (
+              host.isConnected &&
+              host.active &&
+              currentTarget.sessionKey === staticTarget.sessionKey &&
+              currentTarget.agentId === staticTarget.agentId &&
+              context?.gateway.snapshot.client === snapshot?.client &&
+              context?.gateway.snapshot.hello === snapshot?.hello
+            );
+          },
+        },
+      };
+    },
+    {
+      equals: (a, b) =>
+        a.store === b.store &&
+        a.client === b.client &&
+        a.hello === b.hello &&
+        a.target.sessionKey === b.target.sessionKey &&
+        a.target.agentId === b.target.agentId,
+    },
+  );
+  const progress = projectProgressCard(progressScope);
   const rosterScope = createMemo(
     () => {
-      lifecycle.revision();
       return [
         identity().agentId,
-        props.active && Boolean(target().sessionKey),
+        mounted() && props.active && Boolean(target().sessionKey),
         host.isConnected,
       ] as const;
     },
@@ -69,40 +98,40 @@ function SessionProgressWidgetContent(
         previous[0] === next[0] && previous[1] === next[1] && previous[2] === next[2],
     },
   );
-  createEffect(rosterScope, ([agentId, active, connected]) => {
-    if (!connected || !context || !active) {
-      return undefined;
-    }
-    const query = sessionProgressTargetQuery(agentId);
-    const release = context.sessions.subscribeList(query, () =>
-      setSessionRevision((value) => value + 1),
-    );
-    const snapshot = context.sessions.listSnapshot(query);
-    if (
-      !snapshot.result &&
-      !snapshot.loading &&
-      !snapshot.error &&
-      context.gateway.snapshot.phase === "connected"
-    ) {
-      void context.sessions.refreshList(query);
-    }
-    return release;
-  });
+  const roster = createMemo(() =>
+    projectSource(rosterScope(), {
+      read: ([agentId]) => context?.sessions.listSnapshot(sessionProgressTargetQuery(agentId)),
+      subscribe: ([agentId, active, connected], notify) => {
+        if (!connected || !context || !active) {
+          return () => {};
+        }
+        const query = sessionProgressTargetQuery(agentId);
+        const release = context.sessions.subscribeList(query, notify);
+        const snapshot = context.sessions.listSnapshot(query);
+        if (
+          !snapshot.result &&
+          !snapshot.loading &&
+          !snapshot.error &&
+          context.gateway.snapshot.phase === "connected"
+        ) {
+          void context.sessions.refreshList(query);
+        }
+        return release;
+      },
+      equality: "revision",
+    }),
+  );
   const row = createMemo(() => {
-    sessionRevision();
     const current = identity();
-    return context?.sessions
-      .listSnapshot(sessionProgressTargetQuery(current.agentId))
-      .result?.sessions.find(
+    return roster()
+      .read()
+      ?.result?.sessions.find(
         (entry) =>
           entry.key === current.sessionKey &&
           (entry.agentId ?? parseAgentSessionKey(entry.key)?.agentId) === current.agentId,
       );
   });
-  const state = createMemo(() => {
-    lifecycle.revision();
-    return { card: progress.card, error: progress.error, loading: progress.loading };
-  });
+  const state = createMemo(progress.read);
   const ErrorNotice = () => (
     <Show when={state().error}>
       {(error) => (
@@ -119,7 +148,15 @@ function SessionProgressWidgetContent(
             )}
           </span>
           <Show when={error() === "unavailable"}>
-            <button class="btn btn--sm" type="button" onClick={progress.retry}>
+            <button
+              class="btn btn--sm"
+              type="button"
+              onClick={() => {
+                void progressScope()
+                  .store?.load(target())
+                  .catch(() => undefined);
+              }}
+            >
               {t("common.retry")}
             </button>
           </Show>
@@ -144,18 +181,13 @@ function SessionProgressWidgetContent(
             }
           >
             {(card) => (
-              <LitContent
-                render={() =>
-                  renderSessionProgressCard(
-                    card(),
-                    "board",
-                    undefined,
-                    row()?.status,
-                    row()?.startedAt,
-                    row()?.endedAt,
-                    isSessionRunActive(row() ?? {}),
-                  )
-                }
+              <SessionProgressCard
+                card={card()}
+                placement="board"
+                sessionStatus={row()?.status}
+                startedAt={row()?.startedAt}
+                endedAt={row()?.endedAt}
+                hasActiveRun={isSessionRunStateActive(row() ?? {})}
               />
             )}
           </Show>

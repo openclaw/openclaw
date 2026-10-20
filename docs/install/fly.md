@@ -257,7 +257,7 @@ The gateway is binding to `127.0.0.1` instead of `0.0.0.0`.
 
 Fly cannot reach the gateway on the configured port, or `/startupz` is still reporting startup work.
 
-**Fix:** ensure `internal_port` matches the gateway port (`--port 3000` or `OPENCLAW_GATEWAY_PORT=3000`), then inspect `fly logs` for the pending startup step.
+**Fix:** check that `internal_port` matches the gateway port (`--port 3000` or `OPENCLAW_GATEWAY_PORT=3000`), then inspect `fly logs` for the pending startup step.
 
 ### OOM / memory issues
 
@@ -323,7 +323,7 @@ fly ssh console --command "rm /data/openclaw.json"
 
 If you lose auth profiles, channel/provider state, or sessions after a restart, the state dir is writing to the container filesystem instead of the volume.
 
-**Fix:** ensure `OPENCLAW_STATE_DIR=/data` is set in `fly.toml` and redeploy.
+**Fix:** set `OPENCLAW_STATE_DIR=/data` in `fly.toml` and redeploy.
 
 ## Updating
 

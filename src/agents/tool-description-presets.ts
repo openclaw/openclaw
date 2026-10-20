@@ -87,7 +87,7 @@ export function describeSessionsHistoryTool(options?: SessionLinkDescriptionOpti
   return [
     "Read sanitized visible-session history.",
     "Before reply/debug/resume. Use messageId for anchored history; sessionId selects its transcript and requires messageId. Omit both for the latest tail. offset pages unanchored history and is ignored with messageId. limit bounds either mode. Include tool messages with includeTools.",
-    "pendingInputs are accepted inputs outside model history; page with pendingBefore=nextBefore. Cancelled/interrupted inputs never replay automatically. Lower limit for richer pending previews.",
+    "pendingInputs are accepted inputs outside model history; page with pendingBefore=nextBefore. Cancelled inputs never replay; interrupted means saved without an active retry. Eligible durable peer sends can regain queued custody on startup. Lower limit for richer pending previews.",
     ...(options?.sessionLinkBase ? [describeSessionLinkRule(options.sessionLinkBase)] : []),
   ].join(" ");
 }
@@ -122,7 +122,7 @@ export function describeSubagentSpawnContext(threadAvailable: boolean): string {
 }
 
 export const SESSIONS_SPAWN_COLLECTOR_GUIDANCE =
-  "Default to ordinary spawn for one or a few children. Reserve `collect=true` (swarm) for large parallel fan-out (several similar children, about five or more). Collectors send no completion notification and cannot be steered; explicitly collect their results; structured result per `outputSchema`; `groupId` groups a batch.";
+  "Default to ordinary spawn for one or a few children unless you need in-turn result collection. Use `collect=true` (swarm) for that or large parallel fan-out (several similar children, about five or more). Collectors send no completion notification and cannot be steered; explicitly collect their results; structured result per `outputSchema`; `groupId` groups a batch.";
 
 /** Describes the sessions_spawn tool for model-facing instructions. */
 export function describeSessionsSpawnTool(options?: {
@@ -148,9 +148,9 @@ export function describeSessionsSpawnTool(options?: {
       ? '`mode="run"` one-shot; `mode="session"` persistent/thread-bound only on supporting requester channel.'
       : '`mode="run"` one-shot background.',
     "`agentId` targets a configured agent; `model` overrides its model; `cleanup` delete|keep hidden child session; `sandbox` inherit|require.",
-    "Execute work directly by default. Delegate a bounded, independent task only when parallel execution or an independent review provides a concrete benefit. Keep dependent steps with the same owner. Once delegation is appropriate, use a hidden subagent unless the user needs a separate, independently steerable session. This includes substantial, bounded API/service investigations that can be handed off with the needed context and capabilities. For hidden subagents, omit `visible` or set it false, and report results through the parent.",
+    "Execute work directly by default. Delegate a bounded, independent task only when parallel execution or an independent review provides a concrete benefit. Keep dependent steps with the same owner. Once delegation is appropriate, use a hidden subagent unless the user needs to revisit or steer deliberately supervised child work. This includes substantial, bounded API/service investigations that can be handed off with the needed context and capabilities. For hidden subagents, omit `visible` or set it false, and report results through the parent.",
     "Native hidden or visible children support `worktree=true` with optional `projectId`, `worktreeName`, and `worktreeBaseRef`. Hidden `projectId` requires `worktree=true`; name/base always require it. Preparation is asynchronous; the first turn waits for the managed checkout. Hidden `cleanup=delete` uses session snapshot/removal; `keep` retains it. ACP does not support managed-worktree parameters. `group`, `projectGitUrl`, and cloud profiles require `visible=true`.",
-    '`visible=true`: durable visible session. Use only when the user requests a separate session or needs to revisit and steer the work independently. Shows in web UI sidebar; works without UI: announcing runs report back, progress checkable. `group` places it in a custom sidebar group (a new name creates the group); omission or an empty string leaves it ungrouped. Subagent only; omit `mode` (`mode="run"` is also accepted), `thread`, `thinking`, and `lightContext`; `attachments=[]` and omitted/blank `attachAs.mountPath` are accepted, but nonempty attachment staging is unsupported; inherits the caller tool-policy ceiling except for configured deny-only `delegateToolsTo` grants (not tool arguments); select a registered project with `projectId` or a managed GitHub clone with `projectGitUrl` (mutually exclusive with each other and `cwd`); may check out a git worktree via `worktree`/`worktreeName`/`worktreeBaseRef`. When its accepted result includes `sessionUrl`, channel acknowledgements put the session URL on the first line and `Owner: <label>` on the second line.',
+    '`visible=true`: durable visible supervised child session. Use when the user needs to revisit or steer delegated child work; an explicit request for a new independent session is not child delegation. Shows in web UI sidebar; works without UI: announcing runs report back, progress checkable. `group` places it in a custom sidebar group (a new name creates the group); omission or an empty string leaves it ungrouped. Subagent only; omit `mode` (`mode="run"` is also accepted), `thread`, `thinking`, and `lightContext`; `attachments=[]` and omitted/blank `attachAs.mountPath` are accepted, but nonempty attachment staging is unsupported; inherits the caller tool-policy ceiling except for configured deny-only `delegateToolsTo` grants (not tool arguments); select a registered project with `projectId` or a managed GitHub clone with `projectGitUrl` (mutually exclusive with each other and `cwd`); may check out a git worktree via `worktree`/`worktreeName`/`worktreeBaseRef`. When its accepted result includes `sessionUrl`, channel acknowledgements put the session URL on the first line and `Owner: <label>` on the second line.',
     'Omit `placement` or use `{kind:"local"}` for local execution. `{kind:"profile",profileId,os?,machineClass?}` selects a configured cloud profile and requires `visible=true` and `worktree=true`. Cloud placement creates first, dispatches, then starts the task; failures retain the child for inspection, never fall back locally.',
     visibilityLine,
     ...(options?.swarmEnabled ? [SESSIONS_SPAWN_COLLECTOR_GUIDANCE] : []),
@@ -170,6 +170,7 @@ export function describeSessionStatusTool(): string {
     "Show visible-session model/usage/time/cost/tasks.",
     '`sessionKey="current"` for current; UI labels are not keys.',
     "`model` overrides; `model=default` resets. Use for active model/session questions.",
+    "`capabilities=true` lists this session's available tools and why others are missing.",
   ].join(" ");
 }
 

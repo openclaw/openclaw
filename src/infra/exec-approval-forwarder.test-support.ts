@@ -2,7 +2,9 @@
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { vi } from "vitest";
 import type { ReplyPayload } from "../auto-reply/types.js";
+import { createMessageReceiptFromOutboundResults } from "../channels/message/receipt.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
+import * as configRuntime from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
@@ -11,6 +13,26 @@ import {
 } from "./approval-native-route-coordinator.js";
 import type { ChannelApprovalKind } from "./approval-types.js";
 import { createExecApprovalForwarder } from "./exec-approval-forwarder.js";
+import {
+  resolveExecApprovalSessionTargetAsync,
+  sendDurableMessageBatchCore,
+} from "./exec-approval-forwarder.runtime.js";
+
+// mock-isolation: Approval routing observes transport calls without channel I/O or durable-store startup.
+vi.mock("./exec-approval-forwarder.runtime.js", () => ({
+  resolveExecApprovalSessionTargetAsync:
+    vi.fn<
+      typeof import("./exec-approval-forwarder.runtime.js").resolveExecApprovalSessionTargetAsync
+    >(),
+  sendDurableMessageBatchCore:
+    vi.fn<typeof import("./exec-approval-forwarder.runtime.js").sendDurableMessageBatchCore>(),
+}));
+
+type ResolveSessionTargetFixture = (
+  params: Parameters<typeof resolveExecApprovalSessionTargetAsync>[0],
+) =>
+  | Awaited<ReturnType<typeof resolveExecApprovalSessionTargetAsync>>
+  | Promise<Awaited<ReturnType<typeof resolveExecApprovalSessionTargetAsync>>>;
 
 export const baseRequest = {
   id: "req-1",
@@ -54,14 +76,14 @@ export async function stopForwarderFixtures(): Promise<void> {
   for (const coordinator of activeRouteCoordinators.splice(0)) {
     coordinator.close();
   }
+  vi.mocked(sendDurableMessageBatchCore).mockReset();
+  vi.mocked(resolveExecApprovalSessionTargetAsync).mockReset();
 }
 
 export const emptyRegistry = createTestRegistry([]);
 
 export async function flushPendingDelivery(): Promise<void> {
-  for (let index = 0; index < 10; index += 1) {
-    await Promise.resolve();
-  }
+  await vi.dynamicImportSettled();
 }
 
 function isDiscordExecApprovalClientEnabledForTest(params: {
@@ -264,31 +286,44 @@ export const TARGETS_CFG = makeTargetsCfg([{ channel: "slack", to: "U123" }]);
 
 export function createForwarder(params: {
   cfg: OpenClawConfig;
-  deliver?: ReturnType<typeof vi.fn>;
-  resolveSessionTarget?: NonNullable<
-    NonNullable<Parameters<typeof createExecApprovalForwarder>[0]>["resolveSessionTarget"]
+  deliver?: ReturnType<
+    typeof vi.fn<(delivery: Parameters<typeof sendDurableMessageBatchCore>[0]) => Promise<unknown>>
   >;
+  resolveSessionTarget?: ResolveSessionTargetFixture;
   /** Native approval handlers running in the owning Gateway when the request arrives. */
   nativeRoutes?: NativeRouteFixture[];
 }) {
-  const deliver = params.deliver ?? vi.fn().mockResolvedValue([]);
+  vi.spyOn(configRuntime, "getRuntimeConfig").mockReturnValue(params.cfg);
+  vi.spyOn(Date, "now").mockReturnValue(1000);
+  const transport = vi.mocked(sendDurableMessageBatchCore);
+  if (!transport.getMockImplementation() || params.deliver) {
+    const deliver = params.deliver;
+    transport.mockImplementation(async (delivery) => {
+      await deliver?.(delivery);
+      // Transport-shape fixture only: this suite does not write or settle durable receipts.
+      return {
+        status: "sent",
+        results: [],
+        receipt: createMessageReceiptFromOutboundResults({ results: [], sentAt: 1000 }),
+      };
+    });
+  }
+  if (params.resolveSessionTarget) {
+    const resolveSessionTarget = params.resolveSessionTarget;
+    vi.mocked(resolveExecApprovalSessionTargetAsync).mockImplementation(async (route) =>
+      resolveSessionTarget(route),
+    );
+  } else if (!vi.mocked(resolveExecApprovalSessionTargetAsync).getMockImplementation()) {
+    vi.mocked(resolveExecApprovalSessionTargetAsync).mockResolvedValue(null);
+  }
   const coordinator = createApprovalNativeRouteCoordinator();
   activeRouteCoordinators.push(coordinator);
   const nativeRoutes = (params.nativeRoutes ?? []).map((route) =>
     startNativeApprovalRoute({ coordinator, ...route }),
   );
-  const deps: NonNullable<Parameters<typeof createExecApprovalForwarder>[0]> = {
-    getConfig: () => params.cfg,
-    deliver: deliver as unknown as NonNullable<
-      NonNullable<Parameters<typeof createExecApprovalForwarder>[0]>["deliver"]
-    >,
-    nowMs: () => 1000,
+  const forwarder = createExecApprovalForwarder({
     getNativeApprovalRouteCoordinator: () => coordinator,
-  };
-  if (params.resolveSessionTarget !== undefined) {
-    deps.resolveSessionTarget = params.resolveSessionTarget;
-  }
-  const forwarder = createExecApprovalForwarder(deps);
+  });
   activeForwarders.push(forwarder);
-  return { deliver, forwarder, nativeRoutes };
+  return { deliver: params.deliver ?? transport, forwarder, nativeRoutes };
 }

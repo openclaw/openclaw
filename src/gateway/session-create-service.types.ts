@@ -146,6 +146,7 @@ export type CreateGatewaySessionParams = {
     allow: string[];
     deny: string[];
   };
+  deviceFolder?: SessionEntry["deviceFolder"];
   spawnedCwd?: string;
   sessionRoot?: string;
   /** Canonical agent default prepared by the RPC adapter, used only without a selected root. */
@@ -183,6 +184,8 @@ export type CreateGatewaySessionParams = {
   resetMainWhenUnspecified?: boolean;
   commandSource: string;
   loadGatewayModelCatalogSnapshot?: () => Promise<ModelCatalogSnapshot>;
+  /** Request-owned deadline and cancellation; shared discovery may outlive this wait. */
+  waitForModelCatalog?: <T>(operation: () => Promise<T>) => Promise<T>;
   /** Trusted in-process initializer; never populated from public Gateway params. */
   initialEntry?: TrustedInitialSessionEntry;
   /** Keep a new ordinary session unusable until afterCreate succeeds, or roll it back. */
@@ -202,6 +205,8 @@ export type CreateGatewaySessionParams = {
     actor?: SessionCreatedActor;
     /** Host-verified human requester for matching spawn-owner inheritance. */
     requesterProfileId?: string;
+    /** Host-verified request credit, independent of operator role and ownership. */
+    gitContributorProfileId?: string;
     /** Trusted owner status of the spawning invocation, never synthetic child launch authority. */
     requesterSenderIsOwner?: boolean;
     sandbox?: "required";

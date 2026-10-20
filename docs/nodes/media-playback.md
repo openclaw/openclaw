@@ -67,6 +67,11 @@ or video byte cap. Cached playback renditions use a fixed seven-day retention
 that Gateway maintenance enforces at startup and hourly, independently of
 `attachments.ttlHours`.
 
+Filesystem errors while scanning or evicting cached renditions are reported in
+Gateway logs. Missing cache entries are harmless; other errors do not count as
+successful cleanup. Check the media directory's permissions and storage health
+when cleanup fails.
+
 ## Managed attachments and access
 
 To attach a local file in an assistant reply, put `MEDIA:/absolute/path/movie.mp4`

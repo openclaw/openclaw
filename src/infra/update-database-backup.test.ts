@@ -5,23 +5,30 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { configureFsSafeNative, getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import { afterEach, expect, it, vi } from "vitest";
+import { z } from "zod";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { parseUpdateRecoveryBackupManifest } from "../commands/backup-verify-manifest.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { admitOpenClawMaintenanceLiveAuthorityReads } from "../state/openclaw-state-maintenance-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import * as durability from "./directory-durability.js";
 import * as diskSpace from "./disk-space.js";
+import { retireExpiredStandaloneDoctorCaptures } from "./doctor-capture-retention.js";
 import * as fileDescriptor from "./file-descriptor.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import * as sqliteIntegrity from "./sqlite-integrity.js";
+import * as sqliteSource from "./sqlite-snapshot-source.js";
 import * as sqliteSnapshot from "./sqlite-snapshot.js";
 import * as inspection from "./update-candidate-state.inspection.js";
 import { discoverUpdateStateSchemaInspectionInProcess } from "./update-candidate-state.js";
 import * as candidateState from "./update-candidate-state.js";
 import * as databaseSizes from "./update-candidate-state.sizes.js";
 import { resolveUpdateCaptureRoot } from "./update-capture-paths.js";
-import { createUpdateDatabaseBackupInProcess } from "./update-database-backup.js";
-import { retireExpiredStandaloneDoctorCaptures } from "./update-recovery-baseline-capture.js";
+import {
+  createUpdateDatabaseBackup,
+  createUpdateDatabaseBackupInProcess,
+} from "./update-database-backup.js";
+import * as databaseGenerations from "./update-physical-database-generations.js";
 import type { UpdateRecoveryCaptureAcquisition } from "./update-recovery-capture-acquisition.js";
 import { getUpdateRunAsync } from "./update-run-reader.js";
 
@@ -80,10 +87,28 @@ async function fixture(externalAgents = false) {
 }
 
 it.each(["legacy", "current"] as const)(
-  "captures the %s parent's database inventory",
+  "captures the %s parent's database inventory including retained custom state",
   async (dialect) => {
     const f = await fixture();
-    const inspectionPlan = structuredClone(f.inspectionPlan);
+    const customRoot = path.join(f.root, "custom-calls");
+    const custom = path.join(customRoot, "state", "openclaw.sqlite");
+    await fs.mkdir(path.dirname(custom), { recursive: true });
+    await fs.copyFile(f.shared, custom);
+    const input = {
+      ...f.input,
+      config: {
+        plugins: { enabled: false, entries: { "voice-call": { config: { store: customRoot } } } },
+      },
+    };
+    const inspectionPlan = await discoverUpdateStateSchemaInspectionInProcess(input);
+    // Released drivers parse these owners before invoking the candidate's capture code.
+    const releasedOwner = z.discriminatedUnion("role", [
+      z.object({ role: z.literal("global") }),
+      z.object({ role: z.literal("agent"), agentId: z.string().min(1) }),
+    ]);
+    for (const [, database] of inspectionPlan.files) {
+      expect(z.array(releasedOwner).optional().safeParse(database.owners).success).toBe(true);
+    }
     if (dialect === "legacy") {
       // Released parents parse only spellings and discard the candidate's optional ownership fields.
       for (const [, database] of inspectionPlan.files) {
@@ -91,9 +116,9 @@ it.each(["legacy", "current"] as const)(
       }
     }
     const before = await fs.readFile(f.shared);
-    const backup = await createUpdateDatabaseBackupInProcess({ ...f.input, inspectionPlan });
+    const backup = await createUpdateDatabaseBackupInProcess({ ...input, inspectionPlan });
     expect(backup.sourcePaths).toEqual(
-      f.inspectionPlan.files.flatMap(([, database]) => database.spellings).toSorted(),
+      inspectionPlan.files.flatMap(([, database]) => database.spellings).toSorted(),
     );
     expect(backup.databaseOwners).toEqual(
       dialect === "legacy"
@@ -107,7 +132,9 @@ it.each(["legacy", "current"] as const)(
             },
           ].toSorted((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
     );
-    expect(backup.databases).toHaveLength(1);
+    expect(backup.databases.map((entry) => entry.path).toSorted()).toEqual(
+      [custom, f.shared].toSorted(),
+    );
     const published = await fs.readFile(backup.databases[0]!.snapshotPath);
     expect(backup.databases[0]).toMatchObject({
       sha256: createHash("sha256").update(published).digest("hex"),
@@ -122,6 +149,33 @@ it.each(["legacy", "current"] as const)(
       ]);
     }
     expect(await fs.readFile(f.shared)).toEqual(before);
+  },
+);
+
+it.each([undefined, "quick", "full"] as const)(
+  "checks manual captures with requested integrity %s and keeps generic backups full",
+  async (integrityCheck) => {
+    const f = await fixture();
+    const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
+    const backup = await createUpdateDatabaseBackupInProcess({
+      ...f.input,
+      inspectionPlan: f.inspectionPlan,
+      preserveSourceArtifacts: true,
+      originalCaptureSourcePaths: [f.shared],
+      integrityCheck,
+    });
+    expect(
+      prepare.mock.calls
+        .map(([sql]) => sql)
+        .filter((sql) => /^PRAGMA (?:quick_check|integrity_check|foreign_key_check)\b/u.test(sql)),
+    ).toEqual([
+      integrityCheck === "quick" ? "PRAGMA quick_check;" : "PRAGMA integrity_check;",
+      "PRAGMA foreign_key_check;",
+    ]);
+    using retained = new DatabaseSync(backup.databases[0]!.snapshotPath, { readOnly: true });
+    expect(retained.prepare("SELECT rowid,value FROM payload").all()).toEqual([
+      { rowid: 42, value: "retained" },
+    ]);
   },
 );
 
@@ -176,6 +230,78 @@ it("preserves stopped source WAL bookkeeping during the final inventory check", 
     { value: "checkpoint pending" },
   ]);
 });
+
+it.each(["original-custody", "rollback", "ordinary", "maintenance"] as const)(
+  "preserves committed WAL during %s capture without unused generation scans",
+  async (mode) => {
+    const f = await fixture();
+    const files = [f.shared, `${f.shared}-wal`, `${f.shared}-shm`];
+    let family: Buffer[];
+    {
+      using database = new DatabaseSync(f.shared);
+      database.exec("PRAGMA journal_mode=WAL; INSERT INTO payload VALUES ('checkpoint pending');");
+      family = await Promise.all(files.map((file) => fs.readFile(file)));
+    }
+    await Promise.all(files.map((file, index) => fs.writeFile(file, family[index]!)));
+    const generations = vi.spyOn(databaseGenerations, "readUpdatePhysicalDatabaseGenerations");
+    // Observe real parent acquisitions; public discovery and backup still use real workers.
+    const parentImages = vi.spyOn(sqliteSource, "prepareSqliteReadOnlyLocationSync");
+    const scope =
+      mode === "ordinary" || mode === "maintenance"
+        ? createOpenClawDatabaseMaintenanceScope({
+            schemaMaintenance: true,
+            assertOwnerCurrent: () => {},
+            assertDatabaseAccess: () => {},
+          })
+        : undefined;
+    const input = { ...f.input, preserveSourceArtifacts: true };
+    try {
+      const backup = scope
+        ? await scope.run(() =>
+            createUpdateDatabaseBackup({
+              ...input,
+              backupRoot: path.join(f.root, "maintenance-rollback"),
+              acquisition: mode === "maintenance" ? { mode: "maintenance-owner" } : undefined,
+            }),
+          )
+        : await createUpdateDatabaseBackupInProcess({
+            ...input,
+            inspectionPlan: f.inspectionPlan,
+            originalCaptureSourcePaths: mode === "original-custody" ? [f.shared] : undefined,
+          });
+      if (scope) {
+        const parentPaths = parentImages.mock.calls.map(([file]) => file);
+        expect(parentPaths).toEqual(mode === "maintenance" ? [f.shared] : []);
+        expect(backup.originalCaptureSourcePaths).toBeUndefined();
+      } else {
+        expect(generations).toHaveBeenCalledTimes(mode === "rollback" ? 2 : 0);
+      }
+      expect(await Promise.all(files.map((file) => fs.readFile(file)))).toEqual(family);
+      expect(backup.databases).toHaveLength(1);
+      const snapshot = backup.databases[0]!;
+      const bytes = await fs.readFile(snapshot.snapshotPath);
+      expect(snapshot).toMatchObject({
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+        sizeBytes: bytes.length,
+      });
+      using retained = new DatabaseSync(snapshot.snapshotPath, { readOnly: true });
+      expect(retained.prepare("SELECT rowid,value FROM payload ORDER BY rowid").all()).toEqual([
+        { rowid: 42, value: "retained" },
+        { rowid: 43, value: "checkpoint pending" },
+      ]);
+      if (mode === "original-custody") {
+        expect(backup.sourceGenerations[f.shared]).toBeUndefined();
+      } else {
+        expect(backup.sourceGenerations[f.shared]).toBe(
+          (await databaseGenerations.readUpdatePhysicalDatabaseGenerations([f.shared]))[f.shared],
+        );
+        expect(backup.sourceGenerations[f.shared]).toEqual(expect.any(String));
+      }
+    } finally {
+      await scope?.close();
+    }
+  },
+);
 
 it("keeps the verified digest when a snapshot is replaced before backup metadata is recorded", async () => {
   const f = await fixture();
@@ -363,12 +489,29 @@ async function originalCaptureFixture(externalAgents = false) {
 
 it("seals equivalent original bytes under isolated and maintenance-owned capture", async () => {
   const f = await originalCaptureFixture(true);
+  const retainedState = path.join(f.stateDir, "voice-calls", "state", "openclaw.sqlite");
+  await fs.mkdir(path.dirname(retainedState), { recursive: true });
+  await fs.copyFile(f.pluginDatabase, retainedState);
   const externalBytes = await Promise.all(f.external.map((source) => fs.readFile(source)));
+  const hashFile = durability.sha256File;
+  let hashedBytes = 0;
+  vi.spyOn(durability, "sha256File").mockImplementation(async (...args) => {
+    const result = await hashFile(...args);
+    hashedBytes += result.bytes;
+    return result;
+  });
+  const copiedFileBytes = [...f.bytes.values()].reduce((total, bytes) => total + bytes.length, 0);
   const result = await f.captureOriginal("original");
+  // The parent hashes copied files; the backup worker already verified each database image.
+  expect(hashedBytes).toBe(copiedFileBytes);
+  hashedBytes = 0;
   const raw = await fs.readFile(result.ref.manifestPath, "utf8");
   const manifest = parseUpdateRecoveryBackupManifest(raw);
   expect(createHash("sha256").update(raw).digest("hex")).toBe(result.ref.manifestSha256);
   expect(manifest).toMatchObject({ schemaVersion: 2, generation: { kind: "baseline" } });
+  expect(manifest.databases?.filter((database) => database.role === "global")).toEqual([
+    { path: f.shared, role: "global" },
+  ]);
   const entries = new Map(manifest.entries.map((entry) => [entry.sourcePath, entry]));
   const payload = (source: string) => {
     const entry = entries.get(source);
@@ -379,7 +522,7 @@ it("seals equivalent original bytes under isolated and maintenance-owned capture
     expect(await fs.readFile(payload(source))).toEqual(bytes);
     expect(await fs.readFile(source)).toEqual(bytes);
   }
-  for (const source of [f.shared, f.pluginDatabase, ...f.external]) {
+  for (const source of [f.shared, retainedState, f.pluginDatabase, ...f.external]) {
     expect(entries.get(source)).toMatchObject({ kind: "file", sqlite: true });
     using snapshot = new DatabaseSync(payload(source), { readOnly: true });
     expect(snapshot.prepare("SELECT rowid,value FROM payload").all()).toEqual([
@@ -436,6 +579,7 @@ it("seals equivalent original bytes under isolated and maintenance-owned capture
     const maintained = await scope.run(() =>
       f.captureOriginal("maintenance-owned", { mode: "maintenance-owner" }),
     );
+    expect(hashedBytes).toBe(copiedFileBytes);
     const maintainedManifest = parseUpdateRecoveryBackupManifest(
       await fs.readFile(maintained.ref.manifestPath, "utf8"),
     );
@@ -464,7 +608,7 @@ it("seals equivalent original bytes under isolated and maintenance-owned capture
     ] as const) {
       expect(maintainedManifest[field], field).toEqual(manifest[field]);
     }
-    expect(worker).toHaveBeenCalledOnce();
+    expect(worker).toHaveBeenCalledTimes(2);
     expect(parentDiscovery).toHaveBeenCalledOnce();
     expect(parentDiscovery).toHaveBeenCalledWith(
       expect.objectContaining({ preserveSourceArtifacts: true }),
@@ -488,7 +632,12 @@ it("seals equivalent original bytes under isolated and maintenance-owned capture
     expect(maintainedManifest.entries).toContainEqual(
       expect.objectContaining({ sourcePath: f.registryOnly, kind: "file", sqlite: true }),
     );
-    expect(isolatedGenerations).not.toHaveBeenCalled();
+    // Only absent databases need metadata checks for retained journals; captured images are not reread.
+    expect(isolatedGenerations).toHaveBeenCalledOnce();
+    const generationPaths = isolatedGenerations.mock.calls[0]![0];
+    expect(generationPaths).toContain(f.missingDatabase);
+    expect(generationPaths).not.toContain(f.shared);
+    expect(generationPaths).not.toContain(f.registryOnly);
     expect(isolatedSizes).not.toHaveBeenCalled();
     expect(await Promise.all(f.familyPaths.map((file) => fs.readFile(file)))).toEqual(f.family);
     expect(await Promise.all(f.external.map((source) => fs.readFile(source)))).toEqual(
@@ -534,8 +683,10 @@ it.each(["large", "live-reads-admitted"] as const)(
         expect(worker.mock.calls.map(([request]) => request.input.mode)).toEqual([
           "discover",
           "database-backup",
+          "database-generations",
         ]);
-        expect(isolatedGenerations).not.toHaveBeenCalled();
+        expect(isolatedGenerations).toHaveBeenCalledOnce();
+        expect(isolatedGenerations.mock.calls[0]![0]).not.toContain(f.shared);
         expect(manifest.entries).toContainEqual(
           expect.objectContaining({ sourcePath: f.shared, kind: "file", sqlite: true }),
         );
@@ -706,6 +857,41 @@ it.each([
   });
   expect(after.ctimeNs).not.toBe(before.ctimeNs);
 });
+
+it.each(["-wal", "-journal"] as const)(
+  "refuses to seal an original capture when an absent database retains %s data",
+  async (suffix) => {
+    const f = await originalCaptureFixture();
+    const sidecar = `${f.missingDatabase}${suffix}`;
+    const recoveryBytes = Buffer.from("retained database recovery bytes");
+    await fs.writeFile(sidecar, recoveryBytes);
+    const scope = createOpenClawDatabaseMaintenanceScope({
+      schemaMaintenance: true,
+      assertOwnerCurrent: () => {},
+      assertDatabaseAccess: () => {},
+    });
+    const runId = `missing${suffix}`;
+    try {
+      await expect(
+        scope.run(() => f.captureOriginal(runId, { mode: "maintenance-owner" })),
+      ).rejects.toMatchObject({
+        cause: expect.objectContaining({
+          message: expect.stringContaining(
+            `Database is absent but retained journal data exists: ${f.missingDatabase}`,
+          ),
+        }),
+      });
+      const directory = path.join(`${f.stateDir}.update-captures`, runId);
+      await expect(fs.lstat(path.join(directory, "manifest.json"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      await expect(fs.lstat(f.missingDatabase)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await fs.readFile(sidecar)).toEqual(recoveryBytes);
+    } finally {
+      await scope.close();
+    }
+  },
+);
 
 it("retains an unsealed capture when the database changes after its snapshot", async () => {
   const f = await originalCaptureFixture();

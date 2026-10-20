@@ -12,7 +12,6 @@ import {
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
-import { resolveOpenAIRuntimeProvider } from "./openai-routing.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 import { buildAgentRuntimeAuthPlan } from "./runtime-plan/auth.js";
 
@@ -62,14 +61,6 @@ function resolveContractPlan(params: {
   });
   return {
     plan,
-    embeddedProvider: resolveOpenAIRuntimeProvider({
-      provider: params.provider,
-      harnessRuntime: params.harnessRuntime,
-      authProfileProvider: plan.authProfileProviderForAuth,
-      authProfileId: plan.forwardedAuthProfileId,
-      config,
-      workspaceDir,
-    }),
   };
 }
 
@@ -162,7 +153,7 @@ describe("Auth profile runtime contract - embedded OpenClaw and CLI adapter", ()
   });
 
   it("forwards an OpenAI auth profile through an explicit OpenClaw plan", () => {
-    const { embeddedProvider, plan } = resolveContractPlan({
+    const { plan } = resolveContractPlan({
       provider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
       authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
       authProfileId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProfileId,
@@ -170,7 +161,6 @@ describe("Auth profile runtime contract - embedded OpenClaw and CLI adapter", ()
       harnessRuntime: "openclaw",
     });
 
-    expect(embeddedProvider).toBe(AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider);
     expect(plan.forwardedAuthProfileId).toBe(AUTH_PROFILE_RUNTIME_CONTRACT.openAiProfileId);
   });
 

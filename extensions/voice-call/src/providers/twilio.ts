@@ -323,7 +323,6 @@ export class TwilioProvider implements VoiceCallProvider {
       return { ...baseEvent, type: "call.amd", answeredBy };
     }
 
-    // Handle speech result (from <Gather>)
     const speechResult = params.get("SpeechResult");
     if (speechResult?.trim()) {
       return {
@@ -340,7 +339,6 @@ export class TwilioProvider implements VoiceCallProvider {
       return { ...baseEvent, type: "call.dtmf", digits };
     }
 
-    // Handle call status changes
     const rawCallStatus = params.get("CallStatus");
     const callStatus = normalizeProviderStatus(rawCallStatus);
     if (callStatus === "initiated") {
@@ -591,10 +589,7 @@ export class TwilioProvider implements VoiceCallProvider {
         await this.playTtsViaStream(input.text, streamSid);
         return;
       } catch (err) {
-        console.warn(
-          `[voice-call] Telephony TTS failed:`,
-          err instanceof Error ? err.message : err,
-        );
+        console.warn(`[voice-call] Telephony TTS failed callId=${input.callId}`);
         throw err instanceof Error ? err : new Error(String(err));
       }
     }

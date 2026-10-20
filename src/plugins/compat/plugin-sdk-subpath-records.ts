@@ -30,7 +30,7 @@ const PLUGIN_SDK_SUBPATH_SEEDS = [
     code: "plugin-sdk-inbound-reply-dispatch-subpath",
     subpath: "inbound-reply-dispatch",
     owner: "channel",
-    removalGate: "next-plugin-sdk-major",
+    removalGate: "stable-deprecation-period",
     replacement: "`openclaw/plugin-sdk/channel-inbound` and `openclaw/plugin-sdk/channel-outbound`",
   },
   {

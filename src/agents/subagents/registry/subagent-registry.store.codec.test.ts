@@ -33,6 +33,40 @@ it("persists the child owner and identity independently of a redirected transcri
   });
 });
 
+it("encodes restart-safe cleanup without changing the live lease or its shared reply", () => {
+  const entry = createRun();
+  entry.cleanupHandled = true;
+  entry.completion = {
+    required: true,
+    terminalReply: { disposition: "visible", text: "[Mon 2026-09-21 12:00 UTC] reply" },
+  };
+  const completion = entry.completion;
+  const reply = completion.terminalReply;
+  const before = structuredClone(entry);
+  const row = bindSubagentRunRecord(entry);
+  expect(entry).toStrictEqual(before);
+  expect(entry.completion).toBe(completion);
+  expect(completion.terminalReply).toBe(reply);
+  expect(JSON.parse(row.payload_json)).toMatchObject({
+    cleanupHandled: false,
+    completion: { required: true, terminalReply: { disposition: "visible", text: "reply" } },
+  });
+});
+
+it.each([{ version: 2 }, { snapshot: "x".repeat(65_537) }])(
+  "keeps interrupted results when stored operator evidence is invalid",
+  (operatorRecoverySource) => {
+    const entry = createRun();
+    entry.execution.outcome = { status: "error", error: "interrupted by a Gateway restart" };
+    const row = bindSubagentRunRecord(entry);
+    row.payload_json = JSON.stringify({ ...entry, operatorRecoverySource });
+    const restored = rowToSubagentRunRecord(row);
+    expect(restored?.operatorRecoverySource).toBeUndefined();
+    expect(restored?.execution.outcome).toEqual(entry.execution.outcome);
+    expect(restored?.delivery?.status).toBe("pending");
+  },
+);
+
 it.each(["reply", "no reply", "root array", "completion array"] as const)(
   "rejects invalid encoding without mutating the run: %s",
   (kind) => {

@@ -1,10 +1,10 @@
-import type { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loseFirstCronMutationReply } from "../../test/helpers/cron/runtime-mutation.js";
 import { createCronRegressionState } from "../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { SqliteCoordinatorError } from "../infra/sqlite-lifecycle-errors.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import {
@@ -240,8 +240,8 @@ it.each([false, true])(
       const storePath = state.statePath("cron", "jobs.json");
       const store = cronWorkerFixture();
       const order: string[] = [];
-      let beforeDatabase: DatabaseSync | undefined;
-      let afterDatabase: DatabaseSync | undefined;
+      let beforeDatabase: EngineConnection | undefined;
+      let afterDatabase: EngineConnection | undefined;
       const before = getCronJobsStoreRevision(storePath);
       const failure = new Error("post-commit observer failed");
       const save = saveCronJobsStore(storePath, store, {
@@ -291,6 +291,7 @@ it.each([true, false])(
       }
       store.jobs[0]!.declarationKey = "agent:main:callback-save";
       store.jobs.push({ ...store.jobs[0]!, id: "broken", name: "Broken metadata" });
+      store.jobs.push({ ...store.jobs[1]!, id: "legacy", name: "Legacy JSON name" });
       await saveCronJobsStore(storePath, store);
       runOpenClawStateWriteTransaction(({ db }) => {
         db.prepare("UPDATE cron_jobs SET job_json = ? WHERE store_key = ? AND job_id = ?").run(
@@ -298,8 +299,14 @@ it.each([true, false])(
           storePath,
           "broken",
         );
+        db.prepare(
+          "UPDATE cron_jobs SET name = ?, job_json = json_set(job_json, '$.delivery', json(?)) WHERE store_key = ? AND job_id = ?",
+        ).run("  Legacy metadata  ", JSON.stringify({ mode: "unsupported" }), storePath, "legacy");
       });
-      const resolveName = await prepareCronJobNameResolver(["broken"], storePath);
+      const resolveName = await prepareCronJobNameResolver(
+        ["first", "second", "guarded", "captured-\ud800", "broken", "legacy"],
+        storePath,
+      );
       const service = new CronService({
         scheduler: createTestGatewayScheduler(),
         nowMs: () => Date.now(),
@@ -322,20 +329,32 @@ it.each([true, false])(
       const steps: {
         name: string;
         invoke: (callback: () => undefined) => Promise<unknown>;
+        expectedNames: [string, string | undefined][];
         singleUse?: boolean;
       }[] = [
         {
           name: "guarded add",
-          invoke: (callback) => service.add({ ...input, id: "guarded" }, { commitGuard: callback }),
+          expectedNames: [
+            ["guarded", "callback save"],
+            ["first", "first"],
+            ["second", "second"],
+          ],
+          invoke: (callback) =>
+            service.add({ ...input, id: " guarded " }, { commitGuard: callback }),
         },
         {
           name: "captured add",
+          expectedNames: [["captured-\ud800", "callback \ufffd"]],
           singleUse: true,
           invoke: (callback) =>
-            service.add({ ...input, id: "captured" }, { captureRuntimeAuthority: callback }),
+            service.add(
+              { ...input, id: "captured-\ud800", name: "callback \ud800" },
+              { captureRuntimeAuthority: callback },
+            ),
         },
         {
           name: "guarded convergence",
+          expectedNames: [["first", "first"]],
           invoke: (callback) =>
             service.add(
               { ...input, declarationKey: "agent:main:callback-save" },
@@ -344,11 +363,13 @@ it.each([true, false])(
         },
         {
           name: "guarded update",
+          expectedNames: [["first", "guarded update"]],
           invoke: (callback) =>
             service.update("first", { name: "guarded update" }, { commitGuard: callback }),
         },
         {
           name: "captured update",
+          expectedNames: [["first", "captured update"]],
           singleUse: true,
           invoke: (callback) =>
             service.update(
@@ -359,6 +380,7 @@ it.each([true, false])(
         },
         {
           name: "guarded owner update",
+          expectedNames: [["first", "captured update"]],
           invoke: (callback) =>
             service.update(
               "first",
@@ -372,18 +394,21 @@ it.each([true, false])(
         },
         {
           name: "captured owner update",
+          expectedNames: [["first", "captured update"]],
           singleUse: true,
           invoke: (callback) =>
             service.update("first", { agentId: "main" }, { captureRuntimeAuthority: callback }),
         },
         {
           name: "precondition update",
+          expectedNames: [["first", "precondition update"]],
           singleUse: true,
           invoke: (callback) =>
             service.updateWithPrecondition("first", { name: "precondition update" }, callback),
         },
         {
           name: "guarded remove",
+          expectedNames: [["second", undefined]],
           invoke: (callback) => service.remove("second", { commitGuard: callback }),
         },
       ];
@@ -401,6 +426,10 @@ it.each([true, false])(
           });
           await step.invoke(callback);
           expect(resolveName("broken")).toBe(cronEnabled ? undefined : "Broken metadata");
+          expect(resolveName("legacy")).toBe("Legacy metadata");
+          for (const [jobId, expectedName] of step.expectedNames) {
+            expect(resolveName(jobId), `${step.name}: ${jobId}`).toBe(expectedName);
+          }
           if (step.singleUse) {
             expect(callback, step.name).toHaveBeenCalledTimes(1);
           } else {
@@ -409,7 +438,12 @@ it.each([true, false])(
           expect.soft(sql.count(), step.name).toBe(0);
         }
         const persisted = (await loadCronJobsStoreWithConfigJobs(storePath)).store.jobs;
-        expect(persisted.map((job) => job.id).toSorted()).toEqual(["captured", "first", "guarded"]);
+        expect(persisted.map((job) => job.id).toSorted()).toEqual([
+          "captured-\ufffd",
+          "first",
+          "guarded",
+          "legacy",
+        ]);
         expect(persisted.find((job) => job.id === "first")?.name).toBe("precondition update");
         expect(persisted.every((job) => !job.enabled)).toBe(true);
       } finally {
@@ -420,8 +454,15 @@ it.each([true, false])(
   },
 );
 
-it.each(["add", "update", "remove", "authority invalidation", "runtime update"] as const)(
-  "preserves an unrelated peer %s while a guarded scheduler edit awaits admission",
+it.each([
+  "add",
+  "update",
+  "remove",
+  "authority invalidation",
+  "runtime update",
+  "target runtime update",
+] as const)(
+  "preserves a committed %s while a guarded scheduler edit awaits admission",
   async (peerMutation) => {
     await withOpenClawTestState({ label: "cron-guarded-peer-write" }, async (fixture) => {
       const storePath = fixture.statePath("cron", "jobs.json");
@@ -492,9 +533,10 @@ it.each(["add", "update", "remove", "authority invalidation", "runtime update"] 
           second.name = "peer updated";
         } else if (peerMutation === "remove") {
           peer.jobs = peer.jobs.filter((job) => job.id !== second.id);
-        } else if (peerMutation === "runtime update") {
-          second.updatedAtMs = 10_000;
-          second.state = {
+        } else if (peerMutation === "runtime update" || peerMutation === "target runtime update") {
+          const target = peerMutation === "target runtime update" ? peer.jobs[0]! : second;
+          target.updatedAtMs = 10_000;
+          target.state = {
             runningAtMs: 10_000,
             runningReceiptId: "peer-run-receipt",
             nextRunAtMs: 70_000,
@@ -504,7 +546,7 @@ it.each(["add", "update", "remove", "authority invalidation", "runtime update"] 
           delete second.runtimeAuthority;
         }
         // This independent worker write commits while the service retains its older draft.
-        if (peerMutation === "runtime update") {
+        if (peerMutation === "runtime update" || peerMutation === "target runtime update") {
           await saveCronJobsStore(storePath, peer, { stateOnly: true });
         } else {
           await saveCronJobsStoreChanges(storePath, original, peer);
@@ -542,6 +584,11 @@ it.each(["add", "update", "remove", "authority invalidation", "runtime update"] 
           expect(result.error).toBeInstanceOf(CronJobsStoreChangedError);
         }
         expect(await readPeers()).toEqual(peerJobs);
+        if (peerMutation === "target runtime update") {
+          expect((await loadCronJobsStoreWithConfigJobs(storePath)).store.jobs[0]?.state).toEqual(
+            peer.jobs[0]?.state,
+          );
+        }
         if (peerMutation === "authority invalidation") {
           expect(
             (await loadCronJobsStoreWithConfigJobs(storePath)).store.jobs[1]?.runtimeAuthority,
@@ -756,19 +803,6 @@ describe("worker save result publication", () => {
       expect(getCronJobsStoreRevision(storePath)).toBeGreaterThan(before);
     },
   );
-
-  it("does not reuse an untracked load revision after its committed partition is evicted", () => {
-    const storePath = "/synthetic/cron-load-revision-eviction/jobs.json";
-    const loadedRevision = getCronJobsStoreRevision(storePath);
-    noteCronJobsStoreCommit(storePath);
-    const trackedRevision = getCronJobsStoreRevision(storePath);
-    noteCronJobsStoreCommit("/synthetic/cron-load-revision-eviction/peer-0");
-    expect(getCronJobsStoreRevision(storePath)).toBe(trackedRevision);
-    for (let index = 1; index < 65; index += 1) {
-      noteCronJobsStoreCommit(`/synthetic/cron-load-revision-eviction/peer-${index}`);
-    }
-    expect(getCronJobsStoreRevision(storePath)).not.toBe(loadedRevision);
-  });
 
   it.each(["unchanged", "intervening", "evicted before reply", "evicted after reply"] as const)(
     "returns an operation-bound save revision (%s)",

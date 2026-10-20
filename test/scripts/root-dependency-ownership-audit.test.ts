@@ -175,7 +175,11 @@ describe("collectRootDependencyOwnershipCheckErrors", () => {
       repoRoot,
       "package.json",
       JSON.stringify({
-        dependencies: { "@homebridge/ciao": "^1.3.7", "playwright-core": "1.59.1" },
+        dependencies: {
+          "@homebridge/ciao": "^1.3.7",
+          "@opentelemetry/semantic-conventions": "1.43.0",
+          "playwright-core": "1.59.1",
+        },
       }),
     );
     writeRepoFile(
@@ -187,6 +191,11 @@ describe("collectRootDependencyOwnershipCheckErrors", () => {
       repoRoot,
       "extensions/bonjour/src/advertiser.ts",
       'const CIAO_MODULE_ID = "@homebridge/ciao";\nimport(CIAO_MODULE_ID);\n',
+    );
+    writeRepoFile(
+      repoRoot,
+      "extensions/diagnostics-otel/src/service.ts",
+      'import { ATTR_ERROR_TYPE } from "@opentelemetry/semantic-conventions";\n',
     );
     writeRepoFile(
       repoRoot,
@@ -213,6 +222,18 @@ describe("collectRootDependencyOwnershipCheckErrors", () => {
         sampleFiles: ["extensions/bonjour/src/advertiser.ts"],
         sections: ["extensions"],
         spec: "^1.3.7",
+      },
+      {
+        category: "root_owned_extension_runtime",
+        declaredInExtensions: [],
+        depName: "@opentelemetry/semantic-conventions",
+        fileCount: 1,
+        internalizedBundledRuntimeOwners: [],
+        recommendation:
+          "keep at root; the bundled Mistral runtime in @openclaw/ai imports these constants even though only the diagnostics plugin imports them directly in repository source",
+        sampleFiles: ["extensions/diagnostics-otel/src/service.ts"],
+        sections: ["extensions"],
+        spec: "1.43.0",
       },
       {
         category: "root_owned_extension_runtime",

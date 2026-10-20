@@ -56,6 +56,7 @@ import { linkCanonicalUserProfileEmail } from "../../state/user-profile-writes.j
 import { linkEmail, setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -324,10 +325,11 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
           expect(disconnected?.selection).toEqual({ kind: "disconnected" });
         },
       );
-      expect(warning).toHaveBeenCalledExactlyOnceWith(
-        expect.stringContaining("personal.cancelAuthorizationAsync"),
-        { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
-      );
+      const warningOptions = { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" };
+      expect(warning.mock.calls).toEqual([
+        [expect.stringContaining("personal.cancelAuthorizationAsync"), warningOptions],
+        [expect.stringContaining("personal.disconnectAsync"), warningOptions],
+      ]);
     } finally {
       unobserve();
       warning.mockRestore();
@@ -550,7 +552,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
     });
     const connected = await connect();
     expect(connected.selection).toMatchObject({ scopes: ["workflow", "repo", "repo"] });
-    const db = openOpenClawStateDatabase().db;
+    const db = requireNativeSqliteDatabase(openOpenClawStateDatabase().db);
     db.prepare(
       "UPDATE secret_store_entries SET value = ? WHERE scope_kind = 'identity' AND scope_id = ? AND name = 'github-connection'",
     ).run(
@@ -925,13 +927,13 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
       const lease = vi
         .spyOn(stateLease, "withOpenClawStateLease")
         .mockImplementation((options, run) =>
-          acquire(options, async (owned) => {
+          acquire(options, async (owned, identity) => {
             updateUserGitHubConnection(
               owner(),
               () => current,
               () => owned.assertOwned(),
             );
-            return run(owned);
+            return run(owned, identity);
           }),
         );
       try {

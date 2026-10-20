@@ -10,7 +10,7 @@ export const page = definePage({
   ...routePageSpec("terminal"),
   loader: (_context: unknown, { location }: { location: RouteLocation }) => location,
   component: () =>
-    import("./terminal-page.ts").then((module) => ({
+    import("./terminal-page.tsx").then((module) => ({
       renderSolid: (props: SolidRouteProps<RouteLocation>) =>
         createComponent(ShellLayoutBoundary, {
           traits: { terminalPage: true },

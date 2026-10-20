@@ -214,20 +214,25 @@ syncFixtureBuiltinExports();
 const { createWindowsProcessCensus, requestWindowsProcessCensus } = await import(moduleUrl);
 const failures = [];
 const owner = createWindowsProcessCensus({ root, token: "owned", onFailure: error => failures.push(String(error)) });
-let accepted = false, rejected;
+let accepted = false, rejected, reads = [];
 try {
   if (fault === "retire") await owner.close();
   await owner.ready;
   // A sibling's ingress rejection must not hide stale success from an already
   // admitted lease or stderr-fault request.
   const pids = ["lease", "query", "stderr-reply"].includes(fault) ? [101] : [101, 202];
-  const results = await Promise.all(pids.map(pid => requestWindowsProcessCensus(root, "owned", [pid], deadline)));
+  reads = pids.map(pid => requestWindowsProcessCensus(root, "owned", [pid], deadline));
+  const results = await Promise.all(reads);
   assert.deepEqual(results.map(result => [...result.values()]), pids.map(pid => [
     { pid, alive: true, creationTime: pid === 101 ? "5001" : "6002" },
   ]));
   accepted = true;
 } catch (error) { rejected = String(error); }
-finally { await owner.close(); }
+finally {
+  await owner.close();
+  // A rejected sibling does not settle the remaining client socket or its timer.
+  await Promise.allSettled(reads);
+}
 assert.equal(children.length, 1);
 assert.equal(closes.length, 1, "retirement must join actual child/stdio close");
 assert.equal(closes[0].endpoint, fault !== "startup" && fault !== "retire", "endpoint retired before sampler close");

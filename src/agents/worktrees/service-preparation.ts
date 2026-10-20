@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setImmediate as yieldTurn } from "node:timers/promises";
@@ -20,14 +20,7 @@ import {
   WorktreeRepositoryError,
 } from "./errors.js";
 import { indexWorktreePaths } from "./gc-dependencies.js";
-import {
-  commandError,
-  listGitWorktrees,
-  worktreePathExists,
-  resolveGitRepositoryPaths,
-  requireGit,
-  runGit,
-} from "./git.js";
+import { commandError, listGitWorktrees, worktreePathExists, requireGit, runGit } from "./git.js";
 import { appendNameOrdinal, validateName } from "./name.js";
 import { assertOwnerWorktreeReuse, worktreeOwnerMatches } from "./owner.js";
 import { readPendingWorktrees, releasePendingWorktree } from "./pending-slots.js";
@@ -41,7 +34,11 @@ import {
   readLiveRegistryWorktreeByOwner,
 } from "./registry-read.js";
 import { updateRegistryWorktree } from "./registry.js";
-import { resolveCheckoutRootFromRealPath } from "./repository-paths.js";
+import {
+  resolveRepository,
+  resolveRepositoryFromRealPath,
+  type ResolvedRepository,
+} from "./repository-paths.js";
 import { captureWorktreeRunEndContext, withWorktreeRunEnd } from "./run-end-lifecycle.js";
 import { acquireWorktreeRunLease } from "./run-lease.js";
 import type {
@@ -430,41 +427,6 @@ async function requireNewWorktreeBranch(repoRoot: string, branch: string): Promi
   }
 }
 
-export type ResolvedRepository = {
-  repoRoot: string;
-  sourceRoot: string;
-  commonDir: string;
-  originUrl: string;
-  fingerprint: string;
-};
-
-async function resolveRepositoryFromRealPath(
-  requested: string,
-  requestedLabel: string,
-): Promise<ResolvedRepository> {
-  const { root: sourceRoot } = await resolveCheckoutRootFromRealPath(requested, requestedLabel);
-  const { canonicalRoot, commonDir } = await resolveGitRepositoryPaths(sourceRoot);
-  const origin = await runGit(canonicalRoot, ["config", "--get", "remote.origin.url"]);
-  if (origin.termination !== "exit" || (origin.code !== 0 && origin.code !== 1)) {
-    throw commandError("git config --get remote.origin.url", origin);
-  }
-  const originUrl = origin.code === 0 ? origin.stdout.trim() : "";
-  const fingerprint = createHash("sha256")
-    .update(`${commonDir}\n${originUrl}`)
-    .digest("hex")
-    .slice(0, 16);
-  return { repoRoot: canonicalRoot, sourceRoot, commonDir, originUrl, fingerprint };
-}
-
-export async function resolveRepository(repoRoot: string): Promise<ResolvedRepository> {
-  return await timeWorktreePreparationPhase("repository", async () => {
-    const requested = await fs.realpath(repoRoot).catch(() => {
-      throw new Error(`repository does not exist: ${repoRoot}`);
-    });
-    return await resolveRepositoryFromRealPath(requested, repoRoot);
-  });
-}
-
 /** Rebind a live checkout only after its canonical repository and recorded origin agree. */
 export async function rebindLiveWorktreeRepository(
   env: NodeJS.ProcessEnv,
@@ -527,16 +489,6 @@ export async function rebindLiveWorktreeRepository(
   });
 }
 
-export async function resolveRepositoryIdentity(repoRoot: string) {
-  const resolved = await resolveRepository(repoRoot);
-  return {
-    checkoutRoot: resolved.sourceRoot,
-    repoRoot: resolved.repoRoot,
-    originUrl: resolved.originUrl,
-    fingerprint: resolved.fingerprint,
-  };
-}
-
 export async function removeFailedWorktree(
   repoRoot: string,
   worktreePath: string,
@@ -561,7 +513,6 @@ export async function createOwnedWorktree<T>(
   params: CreateManagedWorktreeParams & WorktreeAllocationGuard & WorktreeSourceCustody,
   repository: ResolvedRepository,
   env: NodeJS.ProcessEnv,
-  now: () => number,
   create: (name: string) => Promise<T>,
 ): Promise<ManagedWorktreeCreationOutcome | T> {
   if (params.ownerId) {
@@ -587,7 +538,7 @@ export async function createOwnedWorktree<T>(
         await updateRegistryWorktree(
           env,
           existing.id,
-          { removedAt: now() },
+          { removedAt: Date.now() },
           {
             workerAuthority: {
               ...current.workerAuthority,

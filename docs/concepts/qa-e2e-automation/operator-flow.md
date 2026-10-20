@@ -50,10 +50,11 @@ execution kinds plus explicit exclusions or errors. Unknown, empty explicit,
 profile-incompatible, or lane-incompatible selections are rejected instead of
 being replaced by a default suite.
 
-QA Lab shutdown drains an accepted suite before closing its bus and capture
-store, using the suite's existing execution deadlines. It does not cancel that
-suite. While the HTTP server remains reachable during the drain, new suite,
-self-check, and reset requests return HTTP 503. Unaccepted requests may disconnect
+QA Lab serializes suites and self-checks. While either is running, new suite,
+self-check, and reset requests return HTTP 409. Shutdown drains the accepted run
+before closing its bus and capture store, using its existing execution deadlines.
+It does not cancel that run. While the HTTP server remains reachable during the
+drain, new suite, self-check, and reset requests return HTTP 503. Unaccepted requests may disconnect
 at the existing HTTP shutdown deadline; a suite whose planning crosses shutdown
 cannot start.
 
@@ -136,16 +137,16 @@ Matrix live implementations live under
 `extensions/qa-lab/src/live-transports/matrix/scenarios/`.
 
 The adapter provisions a disposable Tuwunel homeserver in Docker (default image
-`ghcr.io/matrix-construct/tuwunel:v1.8.3`, pinned to its multi-architecture OCI
+`ghcr.io/matrix-construct/tuwunel:v1.9.3`, pinned to its multi-architecture OCI
 index digest; server name `matrix-qa.test`, Docker-assigned host port), registers
 temporary driver, SUT, and observer users, seeds the required rooms, and records the
 redacted request/response boundary. It then runs the real Matrix plugin inside
 a child QA gateway scoped to that transport (no `qa-channel`) and tears the
 environment down.
 
-The v1.8.3 GHCR index resolves to
-`sha256:699fa9971c174e01c884abad8d1a3cfb2fe518e1a71f1fa16ea9dedf11873d74`.
-`docker buildx imagetools inspect ghcr.io/matrix-construct/tuwunel:v1.8.3`
+The v1.9.3 GHCR index resolves to
+`sha256:678b7f5350e06a41614444497c587da9dddf66767e4068a27480402f3c1367d0`.
+`docker buildx imagetools inspect ghcr.io/matrix-construct/tuwunel:v1.9.3`
 reports manifests for `linux/arm64`, `linux/amd64`, `linux/amd64/v2`, and
 `linux/amd64/v3`.
 

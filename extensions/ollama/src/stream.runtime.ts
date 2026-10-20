@@ -12,21 +12,20 @@ import type {
 import { createAssistantMessageEventStream, transformMessages } from "openclaw/plugin-sdk/llm";
 import { asNonNegativeFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
-import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
+import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth-markers";
 import { readProviderResponseErrorText } from "openclaw/plugin-sdk/provider-http";
-import {
-  createPlainTextToolCallCompatWrapper,
-  notifyLlmRequestActivity,
-} from "openclaw/plugin-sdk/provider-stream-shared";
 import {
   buildAssistantMessage as buildStreamAssistantMessage,
   createEmptyTransportUsage,
+  createPlainTextToolCallCompatWrapper,
+  createProviderWaitObserver,
   failTransportStream,
   MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
+  notifyLlmRequestActivity,
   notifyProviderHttpResponse,
   parseTerminalToolCallArguments,
   sortPromptCacheToolsByName,
-} from "openclaw/plugin-sdk/provider-transport-runtime";
+} from "openclaw/plugin-sdk/provider-stream-shared";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   isRecord,
@@ -41,7 +40,7 @@ import {
 } from "./defaults.js";
 import { normalizeOllamaWireModelId } from "./model-id.js";
 import { applyOllamaThinkingFloor } from "./model-reasoning.js";
-import { resolveOllamaBaseUrlForRun } from "./provider-base-url.js";
+import { resolveOllamaBaseUrlForRun, resolveOllamaChatUrl } from "./provider-base-url.js";
 import { buildOllamaBaseUrlSsrFPolicy, isOllamaCloudModel } from "./provider-models.js";
 import {
   createOllamaVisibleContentSanitizer,
@@ -145,19 +144,16 @@ function resolveOllamaNativeNumCtx(model: ProviderRuntimeModel): number | undefi
     return configured;
   }
   const effective = model.contextTokens;
-  if (typeof effective !== "number" || !Number.isFinite(effective) || effective <= 0) {
-    return undefined;
-  }
-  return Math.floor(effective);
+  return effective !== undefined && effective > 0 ? Math.floor(effective) : undefined;
 }
 
 function resolveOllamaModelOptions(model: ProviderRuntimeModel): Record<string, unknown> {
-  const options = pickOllamaParams(model.params, OLLAMA_OPTION_PARAM_KEYS);
   const numCtx = resolveOllamaNativeNumCtx(model);
-  if (numCtx !== undefined) {
-    options.num_ctx = numCtx;
-  }
-  return options;
+  return {
+    num_predict: model.maxTokens,
+    ...pickOllamaParams(model.params, OLLAMA_OPTION_PARAM_KEYS),
+    ...(numCtx !== undefined ? { num_ctx: numCtx } : {}),
+  };
 }
 
 function pickOllamaParams(
@@ -165,9 +161,7 @@ function pickOllamaParams(
   keys: ReadonlySet<string>,
 ): Record<string, unknown> {
   return Object.fromEntries(
-    Object.entries(isRecord(params) ? params : {}).filter(
-      ([key, value]) => value !== undefined && keys.has(key),
-    ),
+    Object.entries(params ?? {}).filter(([key, value]) => value !== undefined && keys.has(key)),
   );
 }
 
@@ -184,12 +178,9 @@ function normalizeOllamaGreedySamplingOptions(options: Record<string, unknown>):
 }
 
 function resolveStreamingTextDelta(previousText: string, nextText: string): string {
-  if (nextText.startsWith(previousText)) {
-    return nextText.slice(previousText.length);
-  }
   // Sanitizers may rewrite previously accumulated content. Fall back to
   // re-emitting the latest complete text so downstream partial state converges.
-  return nextText;
+  return nextText.startsWith(previousText) ? nextText.slice(previousText.length) : nextText;
 }
 
 export function buildOllamaChatRequest(params: {
@@ -265,17 +256,12 @@ interface OllamaTool {
   };
 }
 
-function safeJsonLength(value: unknown): number {
-  try {
-    const serialized = JSON.stringify(value);
-    return typeof serialized === "string" ? estimateStringChars(serialized) : 0;
-  } catch {
-    return 0;
-  }
+function estimateJsonChars(value: unknown): number {
+  return estimateStringChars(JSON.stringify(value) ?? "");
 }
 
 function estimateTokensFromChars(chars: number): number {
-  if (!Number.isFinite(chars) || chars <= 0) {
+  if (chars <= 0) {
     return 0;
   }
   return Math.max(1, Math.round(chars / CHARS_PER_TOKEN_ESTIMATE));
@@ -289,11 +275,11 @@ function estimateOllamaPromptTokens(params: {
   for (const message of params.messages) {
     chars += estimateStringChars(message.content);
     chars += message.thinking ? estimateStringChars(message.thinking) : 0;
-    chars += safeJsonLength(message.images);
-    chars += safeJsonLength(message.tool_calls);
+    chars += estimateJsonChars(message.images);
+    chars += estimateJsonChars(message.tool_calls);
     chars += message.tool_name ? estimateStringChars(message.tool_name) : 0;
   }
-  chars += safeJsonLength(params.tools);
+  chars += estimateJsonChars(params.tools);
   return estimateTokensFromChars(chars);
 }
 
@@ -306,7 +292,7 @@ function estimateOllamaCompletionTokens(
     estimateStringChars(response.message.content) +
     (response.message.thinking ? estimateStringChars(response.message.thinking) : 0) +
     (response.message.reasoning ? estimateStringChars(response.message.reasoning) : 0) +
-    safeJsonLength(response.message.tool_calls);
+    estimateJsonChars(response.message.tool_calls);
   return estimateTokensFromChars(chars);
 }
 
@@ -320,37 +306,19 @@ type OllamaAssistantMessageBuildOptions = OllamaToolCallNameOptions & {
 };
 
 function buildOllamaToolNameSet(tools: Tool[] | undefined): ReadonlySet<string> | undefined {
-  if (!tools || !Array.isArray(tools)) {
-    return undefined;
-  }
-  const names = new Set<string>();
-  for (const tool of tools) {
-    if (typeof tool.name === "string" && tool.name.trim()) {
-      names.add(tool.name.trim());
-    }
-  }
+  const names = new Set(tools?.map((tool) => tool.name.trim()).filter(Boolean));
   return names.size > 0 ? names : undefined;
 }
 
 function extractOllamaTools(tools: Tool[] | undefined): OllamaTool[] {
-  if (!tools || !Array.isArray(tools)) {
-    return [];
-  }
-  const result: OllamaTool[] = [];
-  for (const tool of sortPromptCacheToolsByName(tools)) {
-    if (typeof tool.name !== "string" || !tool.name) {
-      continue;
-    }
-    result.push({
-      type: "function",
-      function: {
-        name: tool.name,
-        description: typeof tool.description === "string" ? tool.description : "",
-        parameters: normalizeOllamaToolSchema(tool.parameters, true),
-      },
-    });
-  }
-  return result;
+  return sortPromptCacheToolsByName(tools ?? []).map((tool) => ({
+    type: "function",
+    function: {
+      name: tool.name,
+      description: tool.description,
+      parameters: normalizeOllamaToolSchema(tool.parameters, true),
+    },
+  }));
 }
 
 export function buildAssistantMessage(
@@ -436,12 +404,6 @@ export function buildAssistantMessage(
   return message;
 }
 
-function resolveOllamaChatUrl(baseUrl: string): string {
-  const trimmed = baseUrl.trim().replace(/\/+$/, "");
-  const normalizedBase = trimmed.replace(/\/v1$/i, "");
-  return `${normalizedBase || OLLAMA_NATIVE_BASE_URL}/api/chat`;
-}
-
 function resolveOllamaModelHeaders(model: {
   headers?: unknown;
 }): Record<string, string> | undefined {
@@ -479,6 +441,11 @@ function createRawOllamaStreamFn(
 
   return (model, context, options?: OllamaStreamOptions) => {
     const stream = createAssistantMessageEventStream();
+    const localModel =
+      model.provider !== OLLAMA_CLOUD_PROVIDER_ID &&
+      !isOllamaCloudModel(model.id) &&
+      !isOllamaCloudOrigin(baseUrl);
+    const wait = createProviderWaitObserver(localModel ? options : undefined);
 
     const run = async () => {
       try {
@@ -487,7 +454,7 @@ function createRawOllamaStreamFn(
           ? { availableToolNames }
           : {};
         const ollamaMessages = convertToOllamaMessages(
-          transformMessages(context.messages ?? [], model),
+          transformMessages(context.messages, model),
           context.systemPrompt,
           toolCallNameOptions,
         );
@@ -527,11 +494,7 @@ function createRawOllamaStreamFn(
         const requestParams = {
           // OpenClaw owns history compaction. Ask local servers to reject overflow
           // instead of silently discarding messages or shifting the context window.
-          ...(model.provider !== OLLAMA_CLOUD_PROVIDER_ID &&
-          !isOllamaCloudModel(model.id) &&
-          !isOllamaCloudOrigin(baseUrl)
-            ? { truncate: false, shift: false }
-            : {}),
+          ...(localModel ? { truncate: false, shift: false } : {}),
           ...pickOllamaParams(model.params, OLLAMA_TOP_LEVEL_PARAM_KEYS),
           ...(think !== undefined ? { think } : {}),
           ...(responseFormat !== undefined ? { format: responseFormat } : {}),
@@ -581,6 +544,7 @@ function createRawOllamaStreamFn(
             acquisitionDeadline?.signal,
           )
           .finally(acquisitionDeadline?.cleanup);
+        wait.start();
         const guardedFetch = await fetchWithSsrFGuard({
           url: chatUrl,
           init: {
@@ -630,7 +594,7 @@ function createRawOllamaStreamFn(
             id: model.id,
             reasoning: model.reasoning,
           };
-          const shouldEmitThinking = model.reasoning ?? true;
+          const shouldEmitThinking = model.reasoning;
           const visibleContentSanitizer = createOllamaVisibleContentSanitizer(model.id);
           const cooperativeScheduler = createOllamaStreamCooperativeScheduler(options?.signal);
           let streamStarted = false;
@@ -696,12 +660,18 @@ function createRawOllamaStreamFn(
             });
           };
 
-          const flushVisibleText = (nextVisibleContent: string | undefined) => {
+          const flushVisibleText = (
+            nextVisibleContent: string | undefined,
+            knownDelta?: string,
+          ) => {
             if (nextVisibleContent === undefined) {
               return;
             }
             const previousVisibleContent = accumulatedVisibleContent;
-            const delta = resolveStreamingTextDelta(previousVisibleContent, nextVisibleContent);
+            const delta =
+              knownDelta === undefined
+                ? resolveStreamingTextDelta(previousVisibleContent, nextVisibleContent)
+                : knownDelta;
             if (!delta) {
               return;
             }
@@ -739,6 +709,7 @@ function createRawOllamaStreamFn(
           };
 
           for await (const chunk of parseNdjsonStream(reader)) {
+            wait.stop();
             throwIfOllamaStreamAborted(options?.signal);
             notifyLlmRequestActivity(options?.signal);
             if (finalResponse) {
@@ -769,7 +740,10 @@ function createRawOllamaStreamFn(
             if (chunk.message?.content) {
               const rawDelta = chunk.message.content;
               accumulatedRawContent += rawDelta;
-              flushVisibleText(resolveVisibleContent(false));
+              flushVisibleText(
+                resolveVisibleContent(false),
+                visibleContentSanitizer.preservesStreamText ? rawDelta : undefined,
+              );
             }
             if (chunk.message?.tool_calls?.length) {
               // Kimi holds short visible prefixes until a terminal boundary;
@@ -896,6 +870,7 @@ function createRawOllamaStreamFn(
           }),
         });
       } finally {
+        wait.stop();
         stream.end();
       }
     };

@@ -1,4 +1,3 @@
-// Managed gateway service lifecycle before and after an update.
 import { confirm, isCancel } from "@clack/prompts";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { stylePromptMessage } from "../../../packages/terminal-core/src/prompt-style.js";
@@ -147,6 +146,7 @@ export async function tryInstallShellCompletion(opts: {
 export async function maybeRestartService(params: {
   originalManagedServiceRuntime?: OriginalManagedServiceRuntime;
   shouldRestart: boolean;
+  observePackageReplacement?: boolean;
   result: UpdateRunResult;
   opts: UpdateCommandOptions;
   refreshServiceEnv: boolean;
@@ -225,6 +225,7 @@ export async function maybeRestartService(params: {
       return await failed();
     }
   }
+  const original = params.originalManagedServiceRuntime;
   let activation = {
     ...params,
     signal: run?.deadline?.signal,
@@ -240,6 +241,15 @@ export async function maybeRestartService(params: {
       recordServiceReconciliationWarnings(params.result, warnings, run, assertCurrent),
     onTimedStep: (step: UpdateStepResult) => recordServiceTimedStep(params.result, step, run),
   };
+  if (original && !original.definition.runtimePin) {
+    if (!original.version) {
+      throw new Error("Original service runtime or schema support was not verified.");
+    }
+    activation.refreshServiceEnv = activation.serviceRuntimeRefreshRequired = false;
+    activation.nodeRunner = original.nodeRunner;
+    activation.expectedGatewayIdentity = { version: original.version, buildId: original.buildId };
+    activation.serviceUpdateVerdict = original.service.serviceUpdateVerdict;
+  }
   const verdict = activation.serviceUpdateVerdict;
   let preserveDefinition =
     verdict?.kind === "unresolved" || (verdict?.kind === "owned" && !verdict.refreshDefinition);
@@ -444,19 +454,28 @@ export async function maybeRestartService(params: {
     return verification.ok ? ("ok" as const) : undefined;
   };
 
+  const expectedIdentity = activation.expectedGatewayIdentity ?? activation.result.after;
   if (!activation.shouldRestart) {
     if (!activation.opts.json) {
-      defaultRuntime.log("");
-      defaultRuntime.log(theme.muted("Gateway: restart skipped (--no-restart)."));
-      const doctor =
-        activation.result.mode === "npm" || activation.result.mode === "pnpm"
-          ? `\`${formatCliCommand("openclaw doctor", activation.serviceEnv)}\`, then `
-          : "";
-      defaultRuntime.log(
-        theme.muted(
-          `Tip: Run ${doctor}\`${formatCliCommand("openclaw gateway restart", activation.serviceEnv)}\` to apply updates to a running gateway.`,
-        ),
-      );
+      defaultRuntime.log(theme.muted("Gateway: updater restart skipped (--no-restart)."));
+    }
+    if (isPackageUpdate && activation.observePackageReplacement) {
+      try {
+        await verifyUpdatedGateway({
+          ...activation,
+          purpose: "package-replacement",
+          expectedVersion: normalizeOptionalString(expectedIdentity?.version),
+          expectedBuildId: normalizeOptionalString(expectedIdentity?.buildId),
+          waitForStartup: false,
+        });
+      } catch (error) {
+        assertRestartFailureCurrent(error);
+        recordServiceReconciliationWarning(
+          activation.result,
+          activation.serviceEnv,
+          `Package update installed; Gateway observation unavailable with --no-restart: ${formatErrorMessage(error)}. Run openclaw gateway status --deep after startup completes.`,
+        );
+      }
     }
     return "ok";
   }
@@ -475,7 +494,6 @@ export async function maybeRestartService(params: {
   }
 
   try {
-    const expectedIdentity = activation.expectedGatewayIdentity ?? activation.result.after;
     let expectedGatewayVersion = normalizeOptionalString(expectedIdentity?.version);
     const expectedGatewayBuildId = normalizeOptionalString(expectedIdentity?.buildId);
     const canVerifyUpdatedGatewayByVersion =
@@ -506,7 +524,6 @@ export async function maybeRestartService(params: {
             requirePluginHealth: false,
             serviceEnv: activation.serviceEnv,
             requireRunningService: true,
-            settle: { probes: 12 },
             assertCurrent,
           });
           assertCurrent();
@@ -683,12 +700,8 @@ export async function maybeRestartService(params: {
       // The installed CLI owns restart retries; observe its final health result
       // without another native mutation.
       const healthy = await verifyRestartedGateway(
-        normalizeOptionalString(
-          (activation.expectedGatewayIdentity ?? activation.result.after)?.version,
-        ),
-        normalizeOptionalString(
-          (activation.expectedGatewayIdentity ?? activation.result.after)?.buildId,
-        ),
+        normalizeOptionalString(expectedIdentity?.version),
+        normalizeOptionalString(expectedIdentity?.buildId),
         { requireRunningService: true, recoverHealth: false },
       );
       return healthy ?? (await failed("restart-health-failed"));

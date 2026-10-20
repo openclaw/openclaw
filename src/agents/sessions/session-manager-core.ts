@@ -32,7 +32,6 @@ import {
 } from "./session-manager-incognito-scope.js";
 import { prepareSessionManagerHydration } from "./session-manager-incognito.js";
 import { consumeSessionManagerReload, readSessionManagerReload } from "./session-manager-reload.js";
-import { freezeTranscriptPayloads } from "./session-manager-snapshot.js";
 import type {
   FileEntry,
   NewSessionOptions,
@@ -51,6 +50,7 @@ import type {
   SessionManagerBoundedView,
   SessionManagerTranscriptCohort,
 } from "./session-manager-view-types.js";
+import { shareSessionSystemPrompt } from "./system-prompt-pool.js";
 
 /** @internal Fresh payload adoption and metadata consumption share one history admission. */
 export const sessionManagerReloadTranscriptCohort = Symbol.for(
@@ -61,6 +61,9 @@ export const sessionManagerReloadTranscriptCohort = Symbol.for(
 export const sessionManagerOpenTranscriptCohort = Symbol.for(
   "openclaw.session-manager.open-transcript-cohort",
 );
+
+/** @internal Compaction planning retains its transcript and metadata from one read snapshot. */
+export const sessionManagerOpenCompaction = Symbol.for("openclaw.session-manager.open-compaction");
 
 export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
   migrated = false;
@@ -111,7 +114,7 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     }
   }
 
-  /** @deprecated Runtime callers should await setSessionTargetAsync; removed in a later stable release after the deprecation period. */
+  /** @deprecated Await setSessionTargetAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   setSessionTarget(target: SessionTranscriptRuntimeTarget): void {
     prepareSessionManagerSync("setSessionTarget", target, this);
     this.setSessionTargetSync(target);
@@ -281,16 +284,13 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     }
     this.persistenceHeaderPending = false;
     this.persistenceTarget = target ? captureSessionTranscriptTargetBinding(target) : undefined;
-    this.fileEntries = partitioned.fileEntries;
+    this.fileEntries = partitioned.fileEntries.map(shareSessionSystemPrompt);
     this.opaqueFileEntries = partitioned.opaqueEntries;
     this.sessionId = header?.id ?? target?.sessionId ?? createManagedSessionId();
     this.migrated = migrateToCurrentVersion(
       this.fileEntries,
       partitioned.fileEntriesByOriginalIndex,
     );
-    if (target) {
-      this.fileEntries.forEach(freezeTranscriptPayloads);
-    }
     this.buildIndex();
     if (bounded) {
       this.boundedParentIds = new Map(bounded.parents);
@@ -361,7 +361,7 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     };
   }
 
-  /** @deprecated Runtime callers should await reloadPersistedTranscriptAsync; removed in a later stable release after the deprecation period. */
+  /** @deprecated Await reloadPersistedTranscriptAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   reloadPersistedTranscript(): void {
     prepareSessionManagerSync("reloadPersistedTranscript", this.persistenceTarget, this);
     this.reloadPersistedTranscriptSync();

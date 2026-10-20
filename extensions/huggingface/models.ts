@@ -122,7 +122,7 @@ export async function discoverHuggingfaceModels(
 ): Promise<ModelDefinitionConfig[]> {
   const trimmedKey = apiKey?.trim();
   if (!trimmedKey) {
-    return HUGGINGFACE_MODEL_CATALOG.map((model) => Object.assign({}, model));
+    return HUGGINGFACE_MODEL_CATALOG;
   }
 
   const requestTimeoutMs = resolveTimerTimeoutMs(timeoutMs, HUGGINGFACE_DISCOVERY_TIMEOUT_MS);
@@ -131,9 +131,8 @@ export async function discoverHuggingfaceModels(
     providerId: "huggingface",
     endpoint: `${HUGGINGFACE_BASE_URL}/models`,
     providerConfig: { baseUrl: HUGGINGFACE_BASE_URL, api: "openai-completions" },
-    models: HUGGINGFACE_MODEL_CATALOG.map((model) => Object.assign({}, model)),
+    models: HUGGINGFACE_MODEL_CATALOG,
     discoveryApiKey: trimmedKey,
-    signal: AbortSignal.timeout(requestTimeoutMs),
     timeoutMs: requestTimeoutMs,
     ttlMs: 0,
     readRows: readHuggingfaceModelRows,

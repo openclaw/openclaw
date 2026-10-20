@@ -16,7 +16,7 @@ import {
 import { readTranscriptEventMessage } from "../config/sessions/session-accessor.sqlite-read.js";
 import { withOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
 import { persistInternalSourceReply } from "../gateway/internal-source-reply-persistence.js";
-import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
+import { beginSessionEffect } from "../sessions/session-controller.lifecycle.js";
 import {
   onInternalSessionTranscriptUpdate,
   onSessionTranscriptUpdate,
@@ -200,7 +200,7 @@ describe("publishHeartbeatSessionReply", () => {
 
   it("commits model-visible notification under its still-active admission and replays once", async () => {
     await withTarget(async ({ params, scope, events }) => {
-      const admission = await beginSessionWorkAdmission({
+      const admission = await beginSessionEffect({
         scope: scope.storePath,
         identities: [scope.sessionKey, scope.sessionId],
         assertAllowed: () => {},
@@ -286,12 +286,39 @@ describe("publishHeartbeatSessionReply", () => {
   );
 
   it.each([
-    { name: "captioned image", caption: "Attached image", source: "/tmp/reply-image.png" },
-    { name: "media-only image", caption: "", source: "/tmp/reply-image.png" },
-    { name: "silent voice", caption: "NO_REPLY", source: "/tmp/voice.opus" },
+    {
+      name: "captioned image",
+      caption: "Attached image",
+      expectedCaption: "Attached image",
+      source: "/tmp/reply-image.png",
+    },
+    {
+      name: "media-only image",
+      caption: "",
+      expectedCaption: undefined,
+      source: "/tmp/reply-image.png",
+    },
+    {
+      name: "silent voice",
+      caption: "NO_REPLY",
+      expectedCaption: undefined,
+      source: "/tmp/voice.opus",
+    },
+    {
+      name: "literal suffix voice",
+      caption: "NO_REPLY\nNO_REPLY",
+      expectedCaption: "NO_REPLY",
+      source: "/tmp/voice.opus",
+    },
+    {
+      name: "punctuated caption voice",
+      caption: "NO_REPLY.",
+      expectedCaption: "NO_REPLY.",
+      source: "/tmp/voice.opus",
+    },
   ])(
     "reconciles a producer-derived $name receipt without rewriting it",
-    async ({ caption, source }) => {
+    async ({ caption, expectedCaption, source }) => {
       await withTarget(async ({ params, scope, events }) => {
         const assistant = {
           role: "assistant" as const,
@@ -334,7 +361,7 @@ describe("publishHeartbeatSessionReply", () => {
         });
         expect(payloads).toHaveLength(1);
         const payload = payloads[0]!;
-        expect(payload.text).toBe(caption && caption !== "NO_REPLY" ? caption : undefined);
+        expect(payload.text).toBe(expectedCaption);
         expect(payload.mediaUrls).toEqual([source]);
         const before = await events();
         const updates: Array<{ messageId?: string }> = [];

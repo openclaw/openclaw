@@ -1,10 +1,14 @@
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import * as authRevisionRuntime from "../agents/auth-profiles/runtime-snapshots.js";
 import type { RuntimeAuthProfileStore } from "../agents/auth-profiles/types.js";
-import type { PreparedModelRuntimeSnapshot } from "../agents/prepared-model-runtime.js";
+import * as catalogRuntime from "../agents/prepared-model-catalog.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { publishSessionCostUsageUpdated } from "../infra/session-cost-usage-events.js";
+import {
+  getSessionCostUsageUpdatedAt,
+  publishSessionCostUsageUpdated,
+} from "../infra/session-cost-usage-events.js";
 import {
   bumpSkillsSnapshotVersion,
   getSkillsSnapshotVersion,
@@ -14,6 +18,8 @@ import {
 } from "../skills/runtime/refresh-state.js";
 import { publishOperatorRoleConfigChange } from "./operator-role-policy.js";
 import { createChatMetadataOwner } from "./server-methods/chat-metadata-runtime.test-support.js";
+import * as projectionRuntime from "./server-methods/chat-metadata-session-projection.js";
+import * as commands from "./server-methods/commands-list-result.js";
 import { createPreparedReadHandler } from "./server-methods/prepared-read.js";
 import type {
   GatewayRequestContext,
@@ -71,6 +77,8 @@ afterEach(async () => {
     await owner.stop();
   }
   sidecarOwners.clear();
+  vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 beforeEach(() => {
@@ -107,6 +115,7 @@ function createLifecycle(warn = vi.fn()) {
 it.each([false, true])(
   "publishes usage completion (failed: %s) without rebuilding metadata and retires its listener on stop",
   async (failed) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const broadcast = vi.fn();
     const { lifecycle: pending, sidecarOwner } = createLifecycle();
     const lifecycle = await pending;
@@ -115,6 +124,9 @@ it.each([false, true])(
     mocks.refresh.mockClear();
     expect(sidecarOwner.snapshot()).toHaveLength(1);
     publishSessionCostUsageUpdated("main", failed);
+    if (!failed) {
+      await vi.advanceTimersByTimeAsync(500);
+    }
     expect(broadcast).toHaveBeenCalledExactlyOnceWith(
       "chat.metadata.changed",
       {
@@ -137,6 +149,52 @@ it.each([false, true])(
     expect(broadcast).toHaveBeenCalledTimes(1);
   },
 );
+
+it("coalesces usage batches by agent without delaying failures or extending the window", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const broadcast = vi.fn();
+  const { lifecycle: pending, sidecarOwner } = createLifecycle();
+  const lifecycle = await pending;
+  await lifecycle.attachContext({ ...context, broadcast }, sidecarOwner.publish);
+  for (let index = 0; index < 112; index++) {
+    publishSessionCostUsageUpdated("main");
+    publishSessionCostUsageUpdated("other");
+  }
+  const latestOther = getSessionCostUsageUpdatedAt();
+  await vi.advanceTimersByTimeAsync(499);
+  expect(broadcast).not.toHaveBeenCalled();
+  publishSessionCostUsageUpdated("main");
+  const latestMain = getSessionCostUsageUpdatedAt();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(broadcast.mock.calls.map(([, payload]) => payload.agentId)).toEqual(["main", "other"]);
+  expect(broadcast.mock.calls.map(([, payload]) => payload.usageUpdatedAt)).toEqual([
+    latestMain,
+    latestOther,
+  ]);
+  const firstCommit = broadcast.mock.calls[0]![1].usageUpdatedAt;
+  broadcast.mockClear();
+
+  publishSessionCostUsageUpdated("other");
+  publishSessionCostUsageUpdated("main");
+  publishSessionCostUsageUpdated("main", true);
+  expect(broadcast.mock.calls.map(([, payload]) => payload.agentId)).toEqual(["main", "main"]);
+  expect(broadcast.mock.calls.map(([, payload]) => payload.usageRefreshFailed ?? false)).toEqual([
+    false,
+    true,
+  ]);
+  expect(broadcast.mock.calls[0]![1].usageUpdatedAt).toBeGreaterThan(firstCommit);
+  expect(broadcast.mock.calls[1]![1].usageUpdatedAt).toBeGreaterThan(
+    broadcast.mock.calls[0]![1].usageUpdatedAt,
+  );
+  await vi.advanceTimersByTimeAsync(499);
+  expect(broadcast).toHaveBeenCalledTimes(2);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(broadcast.mock.calls[2]![1].agentId).toBe("other");
+  publishSessionCostUsageUpdated("main");
+  await sidecarOwner.stop();
+  await vi.advanceTimersByTimeAsync(500);
+  expect(broadcast).toHaveBeenCalledTimes(3);
+});
 
 it("retires model choices at its config commit before pending metadata settles", async () => {
   const broadcast = vi.fn();
@@ -218,28 +276,25 @@ async function createRealMetadataLifecycle(
       authSnapshots.registerRuntimeAuthProfileStoreMutationListener,
     );
   }
+  vi.spyOn(catalogRuntime, "getPublishedPreparedModelCatalogOwnerSnapshot").mockImplementation(
+    () => (ownerAvailable ? owner : undefined),
+  );
+  if (!options.authStore) {
+    vi.spyOn(authRevisionRuntime, "getRuntimeAuthProfileStoreMetadataRevision").mockReturnValue(
+      revision,
+    );
+  }
+  vi.spyOn(commands, "buildCommandsListResult").mockImplementation(buildCommands);
+  vi.spyOn(projectionRuntime, "prepareChatMetadataModelProjection").mockImplementation(
+    async ({ facts }) => ({
+      modelCatalog: facts.modelCatalog.entries,
+      read: () => ({ models: facts.modelCatalog.entries }),
+      isCurrent: () => true,
+    }),
+  );
   mocks.createRuntime.mockImplementation(
     (params: Parameters<typeof actual.createGatewayChatMetadataRuntime>[0]) => {
-      const runtime = actual.createGatewayChatMetadataRuntime({
-        ...params,
-        deps: {
-          getPreparedOwner: () => (ownerAvailable ? owner : undefined),
-          ...(options.authStore
-            ? { getPreparedAuthStore: authSnapshots.getPreparedRuntimeAuthProfileStoreSnapshotCore }
-            : {
-                getPreparedAuthStore: () => ({ version: 1, profiles: {} }),
-                getAuthStoreRevision: () => revision,
-              }),
-          getSkillsVersion: options.skillsWorkspaceDir ? getSkillsSnapshotVersion : () => 0,
-          getPluginRegistryVersion: () => 0,
-          buildCommands,
-          buildProjection: async ({ facts }) => ({
-            modelCatalog: facts.modelCatalog.entries,
-            read: () => ({ models: facts.modelCatalog.entries }),
-            isCurrent: () => true,
-          }),
-        },
-      });
+      const runtime = actual.createGatewayChatMetadataRuntime(params);
       refresh.mockImplementation(() => {
         latestRefresh = runtime.refresh();
         return latestRefresh;
@@ -308,7 +363,7 @@ describe("gateway chat metadata lifecycle", () => {
       const before = await harness.lifecycle.read({ agentId: "main" });
       harness.refresh.mockClear();
       harness.broadcast.mockClear();
-      notifySkillsWatchAvailable({ workspaceDir, sourceScope: {} });
+      notifySkillsWatchAvailable({ workspaceDir });
       expect(getSkillsSnapshotVersion(workspaceDir)).toBe(version);
       expect(await harness.lifecycle.read({ agentId: "main" })).toEqual(before);
       expect(harness.refresh).not.toHaveBeenCalled();
@@ -487,30 +542,25 @@ describe("gateway chat metadata lifecycle", () => {
         throw new Error("metadata must not create live model stores");
       },
     };
-    const getPreparedOwner = vi.fn<() => PreparedModelRuntimeSnapshot | undefined>();
+    const getPreparedOwner = vi
+      .spyOn(catalogRuntime, "getPublishedPreparedModelCatalogOwnerSnapshot")
+      .mockReturnValue(undefined);
     let available = false;
     let revision = 0;
-    const buildProjection = vi.fn(async () => {
-      const projection = {
-        modelCatalog: owner.modelCatalog.entries,
-        models: [{ ...owner.modelCatalog.entries[0], available }],
-      };
-      return { read: () => projection, isCurrent: () => true };
-    });
-    mocks.createRuntime.mockImplementation((params) =>
-      actual.createGatewayChatMetadataRuntime({
-        ...params,
-        deps: {
-          getPreparedOwner,
-          getPreparedAuthStore: () => ({ version: 1, profiles: {} }),
-          getAuthStoreRevision: () => revision,
-          getSkillsVersion: () => 0,
-          getPluginRegistryVersion: () => 0,
-          buildCommands: async () => ({ commands: [] }),
-          buildProjection,
-        },
-      }),
+    vi.spyOn(projectionRuntime, "prepareChatMetadataModelProjection").mockImplementation(
+      async () => {
+        const projection = {
+          modelCatalog: owner.modelCatalog.entries,
+          models: [{ id: "model", name: "model", provider: "test", available }],
+        };
+        return { ...projection, read: () => projection, isCurrent: () => true };
+      },
     );
+    vi.spyOn(authRevisionRuntime, "getRuntimeAuthProfileStoreMetadataRevision").mockImplementation(
+      () => revision,
+    );
+    vi.spyOn(commands, "buildCommandsListResult").mockResolvedValue({ commands: [] });
+    mocks.createRuntime.mockImplementation(actual.createGatewayChatMetadataRuntime);
     const { lifecycle: pendingLifecycle, sidecarOwner } = createLifecycle();
     const lifecycle = await pendingLifecycle;
     const outcomes: unknown[] = [];
@@ -593,29 +643,24 @@ describe("gateway chat metadata lifecycle", () => {
         events.push("work settled");
       }
     };
-    const buildProjection = vi.fn(async () => {
-      await holdWork();
-      return {
-        modelCatalog: owner.modelCatalog.entries,
-        read: () => ({ models: owner.modelCatalog.entries }),
-        isCurrent: () => true,
-      };
-    });
-    mocks.createRuntime.mockImplementation(
-      (params: Parameters<typeof actual.createGatewayChatMetadataRuntime>[0]) =>
-        actual.createGatewayChatMetadataRuntime({
-          ...params,
-          deps: {
-            getPreparedOwner: () => (ownerAvailable ? owner : undefined),
-            getPreparedAuthStore: () => ({ version: 1, profiles: {} }),
-            getAuthStoreRevision: () => revision,
-            getSkillsVersion: () => 0,
-            getPluginRegistryVersion: () => 0,
-            buildCommands: async () => ({ commands: [] }),
-            buildProjection,
-          },
-        }),
+    vi.spyOn(projectionRuntime, "prepareChatMetadataModelProjection").mockImplementation(
+      async () => {
+        await holdWork();
+        return {
+          modelCatalog: owner.modelCatalog.entries,
+          read: () => ({ models: owner.modelCatalog.entries }),
+          isCurrent: () => true,
+        };
+      },
     );
+    vi.spyOn(catalogRuntime, "getPublishedPreparedModelCatalogOwnerSnapshot").mockImplementation(
+      () => (ownerAvailable ? owner : undefined),
+    );
+    vi.spyOn(authRevisionRuntime, "getRuntimeAuthProfileStoreMetadataRevision").mockImplementation(
+      () => revision,
+    );
+    vi.spyOn(commands, "buildCommandsListResult").mockResolvedValue({ commands: [] });
+    mocks.createRuntime.mockImplementation(actual.createGatewayChatMetadataRuntime);
     const { lifecycle: pendingLifecycle, sidecarOwner, warn } = createLifecycle();
     const lifecycle = await pendingLifecycle;
     const broadcast = vi.fn();

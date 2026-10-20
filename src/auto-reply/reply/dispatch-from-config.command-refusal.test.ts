@@ -1,5 +1,6 @@
 // Command turns through the real dispatcher and reply resolver: a refused command stays silent.
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { MISSING_REPLY_NOTICE_TEXT } from "../../agents/reply-completion.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   captureActivePluginRegistrySnapshot,
@@ -17,7 +18,6 @@ import {
 import type { ReplyPayload } from "../types.js";
 import type * as CommandsStatus from "./commands-status.js";
 import { dispatchReplyFromConfig } from "./dispatch-from-config.js";
-import { buildNoVisibleReplyFallbackText } from "./dispatch-from-config.payloads.js";
 import type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
 import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
 import { getReplyFromConfig } from "./get-reply.js";
@@ -152,7 +152,7 @@ it("keeps the notice when an authorized command ends without a reply", async () 
   statusReply.outcome = "empty";
   const { result, texts } = await send({ sender: "owner", body: "/status", native: true });
 
-  expect(texts).toEqual([buildNoVisibleReplyFallbackText()]);
+  expect(texts).toEqual([MISSING_REPLY_NOTICE_TEXT]);
   expect(result.noVisibleReplyFallbackDelivered).toBe(true);
 });
 

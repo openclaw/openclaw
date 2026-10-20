@@ -1,9 +1,12 @@
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { createCodexDynamicToolSpecs, projectCodexDynamicTools } from "./dynamic-tool-catalog.js";
+import { resolveCodexDynamicToolsLoadingForRuntime } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import type { CodexDynamicToolFunctionSpec, CodexDynamicToolSpec } from "./protocol.js";
 import { resolveCodexDynamicToolDirectNames } from "./run-attempt-tools.js";
+import { buildCodexThreadConfiguration } from "./thread-requests.js";
 
 function createAttemptParams(
   overrides: Partial<EmbeddedRunAttemptParams> = {},
@@ -150,3 +153,66 @@ it("keeps OpenClaw control-path tools direct when code-mode-only is enabled", ()
   expect(sessionsYield).not.toHaveProperty("namespace");
   expect(sessionsYield).not.toHaveProperty("deferLoading");
 });
+
+it("keeps session UI tools callable without native JavaScript discovery", async () => {
+  const tools = ["dashboard", "show_widget", "screen"].map(createRuntimeDynamicTool);
+  const loading = resolveCodexDynamicToolsLoadingForRuntime({}, "custom/unlisted-model", {
+    nativeToolSurfaceEnabled: false,
+  });
+  const bridge = createCodexDynamicToolBridge({
+    tools,
+    loading,
+    signal: new AbortController().signal,
+  });
+  const thread = buildCodexThreadConfiguration(
+    createAttemptParams({ config: {}, modelId: "custom/unlisted-model" }),
+    {
+      appServer: resolveCodexAppServerRuntimeOptions({}),
+      nativeCodeModeEnabled: false,
+      dynamicTools: bridge.specs,
+    },
+  );
+  expect(thread.config["features.code_mode"]).toBe(false);
+  // A model without tool_search and Code Mode receives only direct specs.
+  const callable = bridge.specs.filter((spec) => spec.type === "function");
+  expect(callable.map((spec) => spec.name)).toEqual(tools.map((tool) => tool.name));
+  expect(callable.every((spec) => spec.deferLoading !== true)).toBe(true);
+  expect(thread.developerInstructions).not.toContain("ALL_TOOLS");
+  expect(thread.developerInstructions).not.toContain("`tool_search`");
+  expect(thread.developerInstructions).not.toContain("spawn_agent");
+  for (const spec of callable) {
+    const result = await bridge.handleToolCall({
+      threadId: "dashboard-thread",
+      turnId: "dashboard-turn",
+      callId: `call-${spec.name}`,
+      namespace: null,
+      tool: spec.name,
+      arguments: {},
+    });
+    expect(result).toMatchObject({
+      success: true,
+      contentItems: [{ type: "inputText", text: `${spec.name} done` }],
+    });
+    expect(tools.find((tool) => tool.name === spec.name)?.execute).toHaveBeenCalledOnce();
+  }
+});
+
+it.each(["direct", "searchable"] as const)(
+  "preserves %s loading with native discovery",
+  (loading) => {
+    const resolved = resolveCodexDynamicToolsLoadingForRuntime(
+      { codexDynamicToolsLoading: loading },
+      "gpt-5.6-sol",
+      {
+        nativeToolSurfaceEnabled: true,
+      },
+    );
+    const bridge = createCodexDynamicToolBridge({
+      tools: [createRuntimeDynamicTool("dashboard")],
+      loading: resolved,
+      signal: new AbortController().signal,
+    });
+    expect(resolved).toBe(loading);
+    expect(bridge.specs[0]?.type).toBe(loading === "direct" ? "function" : "namespace");
+  },
+);

@@ -31,7 +31,12 @@ export type CommandSpawnOptions = Pick<
   stdin?: NativeInput;
   stdout?: NativeOutput;
   stderr?: NativeOutput;
-  stdio?: "pipe" | "ignore" | "inherit" | readonly [NativeInput, NativeOutput, NativeOutput];
+  stdio?:
+    | "pipe"
+    | "ignore"
+    | "inherit"
+    | readonly [NativeInput, NativeOutput, NativeOutput]
+    | readonly [NativeInput, NativeOutput, NativeOutput, "pipe"];
 };
 
 /** The result fields consumed by OpenClaw's command callers, independent of execa helpers. */

@@ -1,7 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import {
+  controlUiSessionSlug,
+  SESSION_UUID_SUFFIX_RE,
+} from "../../packages/session-url-contract/src/index.js";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { getRuntimeConfig } from "../config/io.js";
-import type { GatewayStoredSessionTargets } from "../config/sessions/combined-store-gateway.js";
+import type { GatewayStoredSessionTargets } from "../config/sessions/combined-store-model-sources.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -12,10 +16,12 @@ import {
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import {
   create as createSessionRow,
+  selectionRow,
   sort as sortSessionRows,
 } from "./session-row-projection-record.js";
 import { createSessionRowProjectionRevisions } from "./session-row-projection-revisions.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
+import { createSessionRowSelection } from "./session-row-selection.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import { deriveSessionTitle } from "./session-utils-core.js";
@@ -168,21 +174,36 @@ export function createSessionRowProjectionFixture(params: {
     return sortSessionRows(selected, query.sortBy);
   };
   const projection: SessionRowProjection = {
+    findUrlCandidates(selection, agentId) {
+      return [...rows.values()]
+        .filter((row) => {
+          if (agentId && row.agentId !== agentId) {
+            return false;
+          }
+          const uuid = parseAgentSessionKey(row.key)?.rest.match(SESSION_UUID_SUFFIX_RE)?.[1];
+          return "shortId" in selection
+            ? Boolean(
+                uuid?.toLowerCase().replaceAll("-", "").startsWith(selection.shortId.toLowerCase()),
+              )
+            : row.key === selection.key ||
+                Boolean(
+                  uuid &&
+                  selection.slug &&
+                  controlUiSessionSlug(resolveGatewaySessionDisplayName(row.key, row.entry)) ===
+                    selection.slug,
+                );
+        })
+        .map((row) => ({
+          agentId: row.agentId,
+          key: row.key,
+          storePath: row.storeTarget.storePath,
+        }));
+    },
     async readLookup() {
       throw new Error("Indexed lookup requires a real session row projection");
     },
     onSelectionChange: revisions.onSelectionChange,
     onFactsChange: revisions.onFactsChange,
-    observeGeneration() {
-      const observedRevision = revision;
-      let active = true;
-      return {
-        isCurrent: (row) => active && revision === observedRevision && projection.isCurrent(row),
-        dispose() {
-          active = false;
-        },
-      };
-    },
     readPreparedRowContext: () => rowContext,
     readPreparedSpawnedBy(query) {
       const row = describe(query);
@@ -202,6 +223,7 @@ export function createSessionRowProjectionFixture(params: {
           (!query.storePath || row.storeTarget.storePath === query.storePath),
       ),
     describe,
+    readPreview: () => undefined,
     readSource: () => undefined,
     readMembership: (query) => describe(query)?.membership,
     // This row-only fixture cannot certify the resident owner's complete ancestry graph.
@@ -210,7 +232,7 @@ export function createSessionRowProjectionFixture(params: {
     modelFacts: (query) => describe(query)!.materialized.source,
     withPreparedExactRows: async (queries, consume) => {
       queries(cfg);
-      return { kind: "complete", value: consume(projection) };
+      return consume(projection);
     },
     present: (record, options) => {
       const now = options?.now ?? Date.now();
@@ -294,6 +316,7 @@ export function createSessionRowProjectionFixture(params: {
     get sharingRevision() {
       return revisionToken;
     },
+    physicalPaths: (locator) => [locator],
     state: {
       get revision() {
         return revisionToken;
@@ -302,15 +325,35 @@ export function createSessionRowProjectionFixture(params: {
       policyConfig: cfg,
       modelCatalog,
       rowContext,
-      scope: (options) => ({
-        paths: new Map([...rows.values()].map((row, index) => [row.storeTarget.storePath, index])),
-        path: storePath,
-        agentId: options.agentId ? normalizeAgentId(options.agentId) : undefined,
-        configuredAgentIds: options.configuredAgentsOnly ? new Set(listAgentIds(cfg)) : undefined,
-      }),
+      physicalStorePaths: (path) => [path],
+      scope: (options) => {
+        const ownerAgentIds = new Set(listAgentIds(cfg));
+        return {
+          paths: new Map(
+            [...rows.values()].map((row, index) => [row.storeTarget.storePath, index]),
+          ),
+          path: storePath,
+          agentId: options.agentId ? normalizeAgentId(options.agentId) : undefined,
+          configuredAgentIds: options.configuredAgentsOnly ? ownerAgentIds : undefined,
+          ownerAgentIds,
+        };
+      },
     },
     isCurrent: (row) => rows.get(id(row))?.generation === row.generation,
     selectEntries,
+    async projectRecentCandidates(profileIds) {
+      const selection = createSessionRowSelection(
+        cfg,
+        projection.state.scope({}),
+        false,
+        () => rowContext,
+        true,
+      );
+      for (const row of rows.values()) {
+        selection.add(selectionRow(row)!);
+      }
+      return selection.createdEntries(profileIds);
+    },
     listCreatedActors: () =>
       selectEntries({ sortBy: null }).flatMap((row) =>
         row.entry.createdActor ? [row.entry.createdActor] : [],

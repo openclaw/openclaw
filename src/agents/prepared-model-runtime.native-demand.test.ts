@@ -2,6 +2,9 @@
 // oxfmt-ignore
 import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
 import { expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { invalidateOperatorRolePolicy } from "../gateway/operator-role-policy.js";
 import { buildModelsListResult } from "../gateway/server-methods/models-list-result.js";
@@ -13,6 +16,7 @@ import {
   readPreparedGatewayModelCatalogOwnerSnapshot,
 } from "../gateway/server-model-catalog.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import type {
   AgentHarnessModelCatalogParams,
   AgentHarnessModelCatalogResult,
@@ -27,7 +31,93 @@ import {
 const fixture = usePreparedModelRuntimeHarness({ label: "native-demand" });
 const { mocks } = fixture;
 
-function createPicker(config: OpenClawConfig) {
+it("serves published models while single-flight native discovery is pending", async ({
+  signal,
+}) => {
+  mocks.configuredAgentIds = ["pro"];
+  const config: OpenClawConfig = {
+    agents: {
+      entries: { pro: {} },
+      defaults: { model: "custom/saved-model", modelPolicy: { allow: ["custom/*"] } },
+    },
+  };
+  const saved = { provider: "custom", id: "saved-model", name: "Saved model" };
+  const discovered = { provider: "custom", id: "discovered-model", name: "Discovered model" };
+  const started = createDeferredCore();
+  const release = createDeferredCore();
+  const loadNative = vi.fn(async () => {
+    started.resolve();
+    await release.promise;
+    return [discovered];
+  });
+  mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(() => {
+    const registry = createEmptyPluginRegistry();
+    registry.agentHarnesses.push({
+      pluginId: "native-test",
+      source: "fixture",
+      harness: {
+        id: "native-test",
+        label: "Native test",
+        supports: () => ({ supported: true }),
+        runAttempt: vi.fn(),
+        loadModelCatalog: loadNative,
+      },
+    });
+    return registry;
+  });
+  mocks.runPreparedModelCatalogWorker.mockResolvedValue({
+    entries: [saved],
+    routeVariants: [saved],
+  });
+  await refreshPreparedModelRuntimeSnapshots(config, {
+    gatewayLifecycle: true,
+    catalogMode: "static",
+  });
+  const owner = getPreparedModelRuntimeSnapshot(fixture.agentInput("pro", config))!;
+  await owner.loadFullModelCatalog!({ changedOnly: true });
+  const sessionKey = "agent:pro:catalog-reader";
+  setRuntimeConfigSnapshot(config);
+  await upsertSessionEntryCore(
+    { agentId: "pro", sessionKey },
+    { sessionId: "catalog-reader", updatedAt: 1 },
+  );
+  const pick = createPicker(config, { sessionKey, view: "configured" });
+  // Freeze the foreground discovery deadline: returning on timeout is still blocking.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const requests = Array.from({ length: 3 }, () => pick());
+  try {
+    await withinTest(started.promise, signal);
+    for (const response of await withinTest(Promise.all(requests), signal)) {
+      expect(response).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          models: expect.arrayContaining([expect.objectContaining(saved)]),
+        }),
+        undefined,
+      );
+    }
+    expect(loadNative).toHaveBeenCalledOnce();
+    release.resolve();
+    await owner.loadNativeModelCatalog!();
+    expect(await pick()).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        models: expect.arrayContaining([expect.objectContaining(discovered)]),
+      }),
+      undefined,
+    );
+    expect(loadNative).toHaveBeenCalledOnce();
+  } finally {
+    release.resolve();
+    vi.useRealTimers();
+    await Promise.allSettled(requests);
+  }
+});
+
+function createPicker(
+  config: OpenClawConfig,
+  pickerParams: { sessionKey?: string; view?: "all" | "configured" } = {},
+) {
   const context = createModelsListTestContext({ agentId: "pro", cfg: config, catalog: [] });
   registerGatewayModelCatalogPrivateAccess(context.loadGatewayModelCatalogSnapshot, {
     loadDeferred: (params) =>
@@ -41,7 +131,13 @@ function createPicker(config: OpenClawConfig) {
     const respond = vi.fn();
     await modelsHandlers["models.list"]!({
       req: { type: "req", id: "native-demand", method: "models.list" },
-      params: { agentId: "pro", view: "all", includeDefaultModels: false, refresh },
+      params: {
+        agentId: "pro",
+        view: "all",
+        includeDefaultModels: false,
+        refresh,
+        ...pickerParams,
+      },
       respond,
       client: null,
       isWebchatConnect: () => false,
@@ -211,9 +307,8 @@ it.each(["discovery failure", "superseded owner", "changed authorization"])(
         undefined,
         expect.objectContaining({
           code: "UNAVAILABLE",
-          message: expect.stringContaining(
-            outcome === "superseded owner" ? "superseded" : "access changed",
-          ),
+          retryable: true,
+          retryAfterMs: 0,
         }),
       );
       return;

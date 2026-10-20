@@ -25,8 +25,10 @@ Custom plugin UI flag below controls user-installed native browser code only.
 | Codex harness    | `plugins.entries.codex.config.appServer.experimental.sandboxExecServer` | You want native Codex app-server 0.143.0 or newer to target an OpenClaw sandbox-backed exec-server instead of disabling Code Mode | [Codex harness reference](/plugins/codex-harness-reference#sandboxed-native-execution) |
 | Code Mode        | `tools.codeMode.enabled`                                                | You want compact code-orchestrated access to a hidden OpenClaw tool catalog                                                       | [Code Mode](/tools/code-mode)                                                          |
 | Cloud workers    | `cloudWorkers.desktop`                                                  | You want to watch or control desktop-capable cloud worker environments from the Control UI                                        | [Cloud Worker Desktop](/gateway/cloud-workers#desktop-interactive)                     |
+| Claws            | `gateway.controlUi.experimental.claws`                                  | You want to explore and add official ClawHub agents from the Control UI                                                           | [Claws](/cli/claws)                                                                    |
 | Custom plugin UI | `gateway.controlUi.experimental.customPlugins`                          | You want trusted user-installed plugins to add native Control UI views or replace built-in views                                  | [Feature plugins](/plugins/feature-plugins#enable-custom-plugin-ui)                    |
 | Host Desktop     | `desktop.host.enabled`                                                  | You want to watch or control the Gateway host through its VNC or Screen Sharing server                                            | [Desktop](/gateway/configuration-reference#desktop)                                    |
+| Advisor          | `plugins.entries.advisor.enabled`                                       | You want an advisor model to periodically check a conversation's agent work and give the agent one short correction               | [Advisor](#advisor)                                                                    |
 | Speech bubbles   | `gateway.controlUi.experimental.chatBubbles`                            | You want to try conversation bubbles and compact activity; Home defaults on while the lab is enabled                              | [Chat](/web/control-ui/chat)                                                           |
 | Tool Search      | `tools.toolSearch.enabled`                                              | You want to control the global Tool Search default, which is enabled                                                              | [Tool Search](/tools/tool-search)                                                      |
 
@@ -36,8 +38,8 @@ Open **Settings → Labs** to manage experiments that have a
 Control UI switch. Enabling or disabling a lab patches the saved Gateway
 config immediately without restarting the Gateway.
 
-Labs includes Speech bubbles, Decision assistance, Code Mode, Tool Search for all models, Custom
-plugin UI, Host Desktop, and Cloud Worker Desktop. Under the default reload mode, custom
+Labs includes Speech bubbles, Decision assistance, Advisor, Code Mode, Tool Search for all models,
+Claws, Custom plugin UI, Host Desktop, and Cloud Worker Desktop. Under the default reload mode, custom
 plugin views and desktop availability update in connected Control UI pages.
 Code Mode and Tool Search changes take effect for future agent runs.
 Reload browser tabs after disabling Custom plugin UI to clear plugin JavaScript
@@ -49,6 +51,13 @@ Custom plugin UI is off by default. Enabled bundled plugins, including
 Workboard, retain their native UI with the setting off. Backend APIs and
 ordinary plugins remain available, and installing or approving a plugin
 artifact does not enable the lab.
+
+Claws is off by default. Turning it on permits official starter discovery and
+Add in Agents, Gateway catalog/Add methods, and local CLI Add. Add creates an
+ordinary agent and installs its requirements; repeating Add creates another
+agent. Turning the switch off blocks new Add operations, but existing agents
+continue running. Local project authoring and inspection do not require the
+switch. An Add already admitted before the switch changes can finish safely.
 
 Code Mode remains disabled until you turn on its Labs switch or explicitly set
 `tools.codeMode` to `true` or `"auto"`. The Labs switch writes `"auto"`, so it
@@ -205,13 +214,11 @@ approvals remain action requests, while a conversational acknowledgment can omit
 optional tools on later turns. It uses the existing host tool policy, preserves
 already-required tools without granting denied tools, and keeps submitted schemas,
 discovery, and callability aligned.
-Each subsequent turn starts from its own normal tool baseline. Opt-out does not
-withdraw a restriction from an already-dispatched Decision evaluation. Changed
-model selection still prevents applying an awaited restriction and is rechecked
-at foreground primary-model dispatch after awaited preparation. That change
-withdraws only the optional restriction and restores the current permitted tool
-surface while retaining independent hook caps and required tools. No historical
-transcript is rewritten and no native thread is recreated.
+Each subsequent turn starts from its own normal tool baseline. Opt-out or a changed
+Decision model does not withdraw a restriction from an already-dispatched
+evaluation. Those settings apply to the next evaluation; live permissions still
+govern the current turn. No historical transcript is rewritten and no native
+thread is recreated.
 
 With DEBUG logging enabled for the embedded runner, a safe record at the first
 foreground primary dispatch reports decision status/reason, decision latency,
@@ -225,6 +232,62 @@ Tool-related prompt guidance is reported as unmeasured. Unknown measurements
 remain unknown, not zero. DEBUG-off avoids the extra definition serialization.
 No conversation, tool payloads, full schemas, or credentials are logged by this
 record; existing logging and trace-correlation controls apply.
+
+## Advisor
+
+Advisor is an experimental bundled plugin that is off by default. It watches
+user-directed work and steps in while the agent goes off course: repeating
+failing steps, waiting on finished work, working around a blocker it could fix,
+drifting beyond what you asked, or claiming results the tools do not show.
+
+A review forks the conversation on the session's own model and asks whether the
+agent is on track. When it is not, Advisor steers the active run with one short
+correction, which the agent sees before its next step under the run's own
+permissions. If the run already ended, the correction is dropped. When the agent
+is on track, nothing happens.
+
+Turn it on in **Settings → Agents & Tools → Labs → Advisor**. Its **Configure**
+button opens the plugin's settings page (**Settings → Plugins → Advisor**), where
+you set the options below. Or use config:
+
+```json5
+{
+  plugins: {
+    entries: {
+      advisor: {
+        enabled: true,
+        config: { everyToolCalls: 10, everyMinutes: 20 },
+      },
+    },
+  },
+}
+```
+
+- `everyToolCalls` (default `10`, range `0`–`1000`): review after this many tool
+  calls in a conversation.
+- `everyMinutes` (default `20`, range `0`–`1440`): review after this many minutes
+  of work in a run, checked when a tool starts.
+- `reviewInstructions` (optional, up to 4,000 characters): replaces the built-in
+  definition of "off course". Changes apply to the next review.
+
+Set both triggers to `0` to turn reviews off.
+
+Behavior and limits:
+
+- Only user-triggered runs are reviewed. Heartbeat, cron and other automatic
+  runs are not.
+- A due review waits until every running tool call has its result, so the fork
+  never sees a missing or synthetic tool outcome. A stalled call delays the
+  review rather than forcing it.
+- Each conversation has at most one review in flight. The run ending, a new user
+  message, session reset, plugin disable, or service stop cancels it.
+- Reviews use the session's model, context and credentials. The fork cannot run
+  tools or send replies. Corrections are labeled as advice the agent must check
+  before acting.
+- Advisor needs conversation access and prompt injection permission through
+  `plugins.entries.advisor.hooks`, which trusted plugins have by default.
+- Gateway info logs record review token usage and whether a correction steered
+  the run.
 
 ## Local model lean mode
 

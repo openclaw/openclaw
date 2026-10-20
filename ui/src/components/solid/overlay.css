@@ -1,25 +1,30 @@
-/* Shadow-hosted primitives need the same noninherited reset as document-hosted controls. */
+/* Keep shadow-hosted resets, with separate ancestors for selector fast rejection. */
 :is(.oc-overlay, .oc-modal-dialog),
-:is(.oc-overlay, .oc-modal-dialog) * {
+.oc-overlay *,
+.oc-modal-dialog * {
   box-sizing: border-box;
   scrollbar-width: thin;
 }
 
 :is(.oc-overlay, .oc-modal-dialog)::-webkit-scrollbar,
-:is(.oc-overlay, .oc-modal-dialog) ::-webkit-scrollbar {
+.oc-overlay ::-webkit-scrollbar,
+.oc-modal-dialog ::-webkit-scrollbar {
   width: var(--scrollbar-size);
   height: var(--scrollbar-size);
 }
 
 :is(.oc-overlay, .oc-modal-dialog)::-webkit-scrollbar-track,
 :is(.oc-overlay, .oc-modal-dialog)::-webkit-scrollbar-corner,
-:is(.oc-overlay, .oc-modal-dialog) ::-webkit-scrollbar-track,
-:is(.oc-overlay, .oc-modal-dialog) ::-webkit-scrollbar-corner {
+.oc-overlay ::-webkit-scrollbar-track,
+.oc-modal-dialog ::-webkit-scrollbar-track,
+.oc-overlay ::-webkit-scrollbar-corner,
+.oc-modal-dialog ::-webkit-scrollbar-corner {
   background: transparent;
 }
 
 :is(.oc-overlay, .oc-modal-dialog)::-webkit-scrollbar-thumb,
-:is(.oc-overlay, .oc-modal-dialog) ::-webkit-scrollbar-thumb {
+.oc-overlay ::-webkit-scrollbar-thumb,
+.oc-modal-dialog ::-webkit-scrollbar-thumb {
   background: var(--scrollbar-thumb);
   background-clip: content-box;
   border: var(--scrollbar-thumb-inset) solid transparent;
@@ -27,7 +32,8 @@
 }
 
 :is(.oc-overlay, .oc-modal-dialog)::-webkit-scrollbar-thumb:hover,
-:is(.oc-overlay, .oc-modal-dialog) ::-webkit-scrollbar-thumb:hover {
+.oc-overlay ::-webkit-scrollbar-thumb:hover,
+.oc-modal-dialog ::-webkit-scrollbar-thumb:hover {
   background: var(--scrollbar-thumb-hover);
   background-clip: content-box;
 }
@@ -189,6 +195,7 @@
 
 .oc-menu {
   padding: var(--menu-padding);
+  font-size: calc(13px * var(--control-ui-text-scale));
   user-select: none;
 }
 
@@ -224,6 +231,10 @@
     color var(--control-ui-transition-fast) ease;
 }
 
+a.oc-menu-item[href] {
+  cursor: pointer;
+}
+
 .oc-menu-item:is(:hover, :focus-visible, [aria-expanded="true"]):not(:disabled):not(
     [aria-disabled="true"]
   ) {
@@ -255,6 +266,10 @@
 .oc-menu-item__label {
   flex: 1 1 auto;
   min-width: 0;
+}
+
+.oc-menu-item--submenu > .oc-menu-item__label {
+  display: contents;
 }
 
 .oc-menu-item__icon,
@@ -291,6 +306,25 @@
 .oc-menu-item__submenu-icon {
   margin-inline-start: auto;
   padding-inline-start: 0.75em;
+}
+
+/* Keyboard hints share one end rail, independent of optional checks and arrows. */
+.oc-menu-item__details:has(.shortcut-kbd) {
+  padding-inline-end: 1.75em;
+}
+
+.oc-menu-item:has(.oc-menu-item__details .shortcut-kbd)
+  > :is(.oc-menu-item__check, .oc-menu-item__submenu-icon) {
+  position: absolute;
+  inset-inline-end: var(--oc-menu-item-padding-inline, 1em);
+  width: 1em;
+  margin: 0;
+  padding: 0;
+}
+
+.oc-menu-item__details .shortcut-kbd {
+  justify-content: flex-end;
+  white-space: nowrap;
 }
 
 .oc-menu-item__submenu-icon:dir(rtl) {

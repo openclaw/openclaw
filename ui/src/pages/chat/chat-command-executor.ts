@@ -2,6 +2,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
+import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import {
   isSessionDefaultDirectiveValue,
   normalizeVerboseLevel,
@@ -15,6 +16,7 @@ import type {
 } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatCommandResultsEnglish } from "../../i18n/locales/en-chat-command-results.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import {
   getSlashCommandCategoryLabel,
@@ -47,13 +49,13 @@ import { buildChatApiAttachments } from "./attachment-api.ts";
 import { normalizeChatSendAckStatus } from "./chat-send-ack.ts";
 import { patchChatCommandSessionSettings, selectedGlobalScope } from "./chat-settings-patches.ts";
 
+registerChatCommandResultsEnglish();
+
 type SlashCommandResult = {
   /** Markdown-formatted result to display in chat. */
   content?: string;
   /** Side-effect action the caller should perform after displaying the result. */
   action?: "refresh";
-  /** Model-dependent tools need refreshing after a confirmed selection. */
-  modelChanged?: boolean;
   /** When set, the caller should track this as the active run (enables Abort, blocks concurrent sends). */
   trackRunId?: string;
   /** When set, the caller should surface a visible pending item tied to the current run. */
@@ -68,6 +70,7 @@ type SlashCommandContext = {
   sessionAccessSnapshot: Pick<ApplicationGatewaySnapshot, "client" | "hello" | "phase">;
   readSessionAccessSnapshot?: () => Pick<ApplicationGatewaySnapshot, "client" | "hello" | "phase">;
   isCurrent?: () => boolean;
+  runRequest?: { runId: string; signal: AbortSignal };
   chatModelCatalog?: ModelCatalogEntry[];
   defaultAgentId?: string;
   agentId?: string;
@@ -102,7 +105,7 @@ async function patchSession(
   context: SlashCommandContext,
   sessionKey: string,
   patch: Parameters<typeof patchChatCommandSessionSettings>[2],
-  success: () => Pick<SlashCommandResult, "content" | "modelChanged">,
+  success: () => Pick<SlashCommandResult, "content">,
   failureKey: string,
   options?: Parameters<typeof patchChatCommandSessionSettings>[3],
 ): Promise<SlashCommandResult> {
@@ -258,7 +261,6 @@ async function executeModel(
     { model: requestedModel },
     () => ({
       content: t("chat.commandResults.model.set", { model: `\`${requestedModel}\`` }),
-      modelChanged: true,
     }),
     "chat.commandResults.model.setFailed",
     { ownsModelOverride: context.ownsModelOverride },
@@ -587,16 +589,24 @@ async function executeRunCommand(
       };
     }
     assertCurrentSlashCommand(context);
-    const response = await client.request<{ runId?: unknown; status?: unknown }>("chat.send", {
-      sessionKey,
-      ...selectedGlobalScope(sessionKey, context),
-      message,
-      attachments: buildChatApiAttachments(context.attachments),
-      ...(command === "steer"
-        ? { deliver: false, queueMode: "steer" }
-        : { queueMode: "interrupt" }),
-      idempotencyKey: generateUUID(),
-    });
+    const response = await client.request<{ runId?: unknown; status?: unknown }>(
+      "chat.send",
+      {
+        sessionKey,
+        ...selectedGlobalScope(sessionKey, context),
+        message,
+        attachments: buildChatApiAttachments(context.attachments),
+        ...(command === "steer"
+          ? { deliver: false, queueMode: "steer" }
+          : { queueMode: "interrupt" }),
+        idempotencyKey: context.runRequest?.runId ?? generateUUID(),
+      },
+      {
+        timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS,
+        signal: context.runRequest?.signal,
+        retainSentResultOnAbort: true,
+      },
+    );
     const ackStatus = normalizeChatSendAckStatus(response?.status);
     if (ackStatus === "timeout" || ackStatus === "error") {
       return {

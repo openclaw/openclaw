@@ -250,11 +250,13 @@ it.each([
       let revision = 0;
       const capture = async (active = actions, directory = first.remoteWorkspaceDir) => {
         const firstCapture = manifestCaptures.length;
+        const phases: string[] = [];
         const result = await active.reconcileWorkspace({
           remoteWorkspaceDir: directory,
           baseManifestRef: first.baseManifestRef,
           source: {
             kind: "repository",
+            markPhase: (phase) => phases.push(phase),
             referenceManifestRef: checkpoint?.currentManifestRef ?? first.manifestRef,
             prepareCheckpoint: async (payload) => {
               const stagingRoot = path.join(root, `checkpoint-${++revision}`);
@@ -296,6 +298,13 @@ it.each([
             },
           },
         });
+        expect(phases).toEqual([
+          "repositoryCheckpointUpload",
+          "repositoryVerification",
+          "repositoryPublicationUpload",
+          "repositoryVerification",
+          "repositoryCheckpointStage",
+        ]);
         await verifyReconciledWorkspaceFinal(result, {
           assertActive: async () => {},
           resume: async () => {},

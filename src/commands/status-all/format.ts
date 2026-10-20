@@ -154,7 +154,7 @@ function formatStatusServiceValue(params: StatusManagedService): string {
 }
 
 export function buildStatusOverviewSurfaceRows(params: {
-  cfg: Pick<OpenClawConfig, "update" | "gateway" | "telemetry">;
+  cfg: Pick<OpenClawConfig, "update" | "gateway" | "telemetry" | "database">;
   update: UpdateCheckResult;
   tailscaleMode: string;
   tailscaleDns?: string | null;

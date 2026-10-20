@@ -53,7 +53,6 @@ async function createAgentSelect(
   const element = document.createElement(AGENT_SELECT_TEST_TAG);
   element.options = options;
   element.value = "alpha";
-  element.onCreateAgent = vi.fn();
   Object.assign(element, overrides);
   document.body.append(element);
   await element.updateComplete;
@@ -72,6 +71,27 @@ it("preserves complete grapheme clusters in emoji avatar fallback", async () => 
   } finally {
     element.remove();
   }
+});
+
+it("renders named scope icons and restores the selected agent avatar", async () => {
+  const element = await createAgentSelect({
+    options: [
+      { value: "", label: "All agents", icon: "users" },
+      { value: "alpha", label: "Alpha", agent: { id: "alpha", identity: { emoji: "🦞" } } },
+    ],
+    value: "",
+  });
+
+  const trigger = element.querySelector(".agent-select__trigger")!;
+  const icon = trigger.querySelector(".agent-select__avatar--icon svg");
+  expect(icon?.namespaceURI).toBe("http://www.w3.org/2000/svg");
+  expect(icon?.childElementCount).toBeGreaterThan(0);
+  expect(trigger.textContent).not.toContain("users");
+
+  element.value = "alpha";
+  await element.updateComplete;
+  expect(trigger.querySelector(".agent-select__avatar--icon")).toBeNull();
+  expect(trigger.querySelector(".identity-avatar__text")?.getAttribute("data-avatar")).toBe("🦞");
 });
 
 it("keeps a failed avatar on its fallback until the image changes", async () => {
@@ -105,6 +125,31 @@ it("keeps a failed avatar on its fallback until the image changes", async () => 
   await element.updateComplete;
   expect(element.querySelector(".agent-select__avatar img")?.getAttribute("src")).toBe(
     replacementAvatar,
+  );
+});
+
+it("does not let a removed option's image error poison its replacement lease", async () => {
+  const avatar = "data:image/png;base64,cmV0YWluZWQ=";
+  const element = await createAgentSelect({
+    identityById: { alpha: createIdentity("alpha", { avatar }) },
+  });
+  const retired = element.querySelector<HTMLImageElement>(".agent-select__trigger img")!;
+  expect(retired.getAttribute("src")).toBe(avatar);
+  element.options = options.filter((option) => option.value === "beta");
+  element.value = "beta";
+  await element.updateComplete;
+  await waitForSolid(() => expect(element.querySelector(".agent-select__trigger img")).toBeNull());
+
+  element.options = options;
+  element.value = "alpha";
+  await element.updateComplete;
+  await waitForSolid(() =>
+    expect(element.querySelector(".agent-select__trigger img")?.getAttribute("src")).toBe(avatar),
+  );
+  retired.dispatchEvent(new Event("error"));
+  await element.updateComplete;
+  await waitForSolid(() =>
+    expect(element.querySelector(".agent-select__trigger img")?.getAttribute("src")).toBe(avatar),
   );
 });
 
@@ -147,7 +192,7 @@ it("fetches local avatars with the bearer credential when token auth is active",
     });
     expect(avatar?.classList).toContain("is-pending");
     avatar?.querySelector("img")?.dispatchEvent(new Event("load"));
-    expect(avatar?.classList).not.toContain("is-pending");
+    await waitForSolid(() => expect(avatar?.classList).not.toContain("is-pending"));
     element.accessibleLabel = "Choose an agent";
     await element.updateComplete;
     expect(avatar?.classList).not.toContain("is-pending");

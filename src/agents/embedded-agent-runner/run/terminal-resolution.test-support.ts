@@ -1,4 +1,6 @@
 import { expect, vi } from "vitest";
+import { resolveRawAssistantAnswerText } from "../../../shared/assistant-answer-text.js";
+import { prepareAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
 import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,
@@ -42,6 +44,7 @@ export function makeTerminalInput(overrides: TerminalInputOverrides = {}): Termi
     sessionId: "session:terminal-resolution",
     sessionKey: "agent:main:terminal-resolution",
     runId: "run:terminal-resolution",
+    messageChannel: "telegram",
     agentDir: "/tmp/openclaw-terminal-resolution",
     workspaceDir: "/tmp/openclaw-terminal-resolution",
     prompt: "Finish the current turn.",
@@ -111,14 +114,25 @@ export function makeTerminalInput(overrides: TerminalInputOverrides = {}): Termi
     prepared: {
       payloads: [],
       replyDeliveryState: "missing",
+      sourceReplyDeliveryState: "missing",
       timedOutDuringPrompt: false,
       hasSuccessfulFinalAssistantAfterPromptTimeout: false,
       hasPartialAssistantTextAfterPromptTimeout: false,
       finalAssistantMessageRawText: undefined,
       terminalToolFailure: undefined,
+      preparedTerminalReply:
+        attempt.preparedTerminalReply ??
+        prepareAgentRunTerminalReply({
+          rawText:
+            overrides.finalAssistantRawText ??
+            overrides.finalAssistantVisibleText ??
+            resolveRawAssistantAnswerText(resolveCurrentAttemptAssistant(attempt)),
+        }),
       ...base,
       ...overrides,
       ...overrides.prepared,
+      finalAssistantVisibleText:
+        overrides.prepared?.finalAssistantVisibleText ?? overrides.finalAssistantVisibleText ?? "",
     },
     runParams,
     sessionPromptState: { ...base.sessionPromptState, ...overrides.sessionPromptState },

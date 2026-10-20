@@ -5,7 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
-import { isSidebarSlotVisible, openSlot } from "./sidebar-layout.ts";
+import { closeSlot, isSidebarSlotVisible, openSlot } from "./sidebar-layout.ts";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -27,7 +27,7 @@ function createPane() {
     hasActiveRun: true,
   };
   const roster = { rows: [] as GatewaySessionRow[], hydrated: true, pendingChildRead: false };
-  Reflect.set(fixture.pane, "swarmHydrator", roster);
+  Reflect.set(fixture.pane.swarm, "hydrator", roster);
   fixture.state.sessionKey = parent.key;
   fixture.state.sessionsResult = {
     ts: 1,
@@ -70,7 +70,7 @@ it("preserves a manually opened panel and never reopens it after dismissal", () 
   const { pane, state, parent, child, roster } = createPane();
   parent.hasActiveSubagentRun = true;
   roster.rows = [child];
-  pane.requestSubagentsPanel("open");
+  state.updateSidebarLayout(openSlot(state.sidebarLayout, "subagents"));
   pane.render();
   expect(isSidebarSlotVisible(state.sidebarLayout, "subagents")).toBe(true);
 
@@ -80,7 +80,7 @@ it("preserves a manually opened panel and never reopens it after dismissal", () 
   pane.render();
   expect(isSidebarSlotVisible(state.sidebarLayout, "subagents")).toBe(true);
 
-  pane.requestSubagentsPanel("toggle");
+  state.updateSidebarLayout(closeSlot(state.sidebarLayout, "subagents"));
   pane.render();
   expect(isSidebarSlotVisible(state.sidebarLayout, "subagents")).toBe(false);
   child.hasActiveRun = true;

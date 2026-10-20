@@ -201,12 +201,13 @@ export class AcpTranslatorSessionUpdates {
     kind: "prompt" | "update",
     mutation: () => Promise<void>,
   ): Promise<void> {
+    if (this.stopped) {
+      return Promise.resolve();
+    }
+    // Shutdown blocks new work, but already-queued mutations must still settle.
     const ledgerSessionId = resolveLedgerSessionId(session);
     const previous = this.ledgerMutationTails.get(ledgerSessionId) ?? Promise.resolve();
     const pending = previous.then(async () => {
-      if (this.stopped) {
-        return;
-      }
       try {
         await mutation();
       } catch (err) {
@@ -227,9 +228,6 @@ export class AcpTranslatorSessionUpdates {
   }
 
   private async markLedgerIncomplete(session: AcpTranslatorSessionRef): Promise<void> {
-    if (this.stopped) {
-      return;
-    }
     try {
       await this.options.eventLedger.markIncomplete({
         sessionId: resolveLedgerSessionId(session),

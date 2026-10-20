@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { createQaRepairProgressObserver } from "./gateway-repair-progress.js";
 
-const event = (phase: string, status = "in_progress") =>
-  `[update finalize] ${JSON.stringify({ step: `finalize:${phase}`, status })}\n`;
+const event = (phase: string, status = "in_progress", fields: Record<string, unknown> = {}) =>
+  `[update finalize] ${JSON.stringify({ step: `finalize:${phase}`, status, ...fields })}\n`;
 
 describe("repair phase progress", () => {
   it("recognizes split boundaries once, including combined chunks", () => {
@@ -13,7 +13,11 @@ describe("repair phase progress", () => {
     expect(progress).not.toHaveBeenCalled();
     observe(first.subarray(12));
     observe(event("preflight", "completed") + event("doctor"));
-    expect(progress).toHaveBeenCalledTimes(3);
+    expect(progress.mock.calls).toEqual([
+      [{ phase: "preflight", status: "in_progress" }],
+      [{ phase: "preflight", status: "completed" }],
+      [{ phase: "doctor", status: "in_progress" }],
+    ]);
   });
 
   it("does not renew for repeated, backward, failed, warning or arbitrary output", () => {
@@ -45,5 +49,38 @@ describe("repair phase progress", () => {
     expect(progress).not.toHaveBeenCalled();
     observe(event("preflight"));
     expect(progress).toHaveBeenCalledOnce();
+  });
+
+  it("exposes only validated producer duration through fragmented UTF-8 diagnostics", () => {
+    const progress = vi.fn();
+    const observe = createQaRepairProgressObserver(progress);
+    const completed = Buffer.from(
+      event("doctor", "completed", {
+        startedAtMs: 100,
+        endedAtMs: 175,
+        detail: "private-🦊-credential",
+        failureFacts: [{ path: "private-path" }],
+      }),
+    );
+    for (const byte of completed) {
+      observe(Buffer.from([byte]));
+    }
+    observe(completed);
+    expect(progress.mock.calls).toEqual([
+      [{ phase: "doctor", status: "completed", durationMs: 75 }],
+    ]);
+  });
+
+  it.each([
+    {},
+    { startedAtMs: "100", endedAtMs: 200 },
+    { startedAtMs: -1, endedAtMs: 200 },
+    { startedAtMs: 100, endedAtMs: 99 },
+    { startedAtMs: 100, endedAtMs: 100.5 },
+    { startedAtMs: 100, endedAtMs: Number.MAX_SAFE_INTEGER + 1 },
+  ])("keeps forward progress without propagating invalid timing %j", (fields) => {
+    const progress = vi.fn();
+    createQaRepairProgressObserver(progress)(event("doctor", "completed", fields));
+    expect(progress.mock.calls).toEqual([[{ phase: "doctor", status: "completed" }]]);
   });
 });

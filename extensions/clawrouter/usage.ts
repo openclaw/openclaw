@@ -74,13 +74,9 @@ function buildSummary(payload: ClawRouterUsagePayload): string | undefined {
 
 async function readClawRouterUsagePayload(
   response: Response,
-  timeoutMs: number,
 ): Promise<ClawRouterUsagePayload | undefined> {
   const buffer = await readResponseWithLimit(response, CLAWROUTER_USAGE_RESPONSE_MAX_BYTES, {
-    chunkTimeoutMs: timeoutMs,
     onOverflow: ({ maxBytes }) => new Error(`ClawRouter usage response exceeds ${maxBytes} bytes`),
-    onIdleTimeout: ({ chunkTimeoutMs }) =>
-      new Error(`ClawRouter usage response stalled: no data received for ${chunkTimeoutMs}ms`),
   });
   try {
     const payload: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(buffer));
@@ -125,7 +121,7 @@ export async function fetchClawRouterUsage(params: {
       void response.body?.cancel().catch(() => undefined);
       throw new Error(`ClawRouter usage request failed (HTTP ${response.status})`);
     }
-    const payload = await readClawRouterUsagePayload(response, params.timeoutMs);
+    const payload = await readClawRouterUsagePayload(response);
     if (!payload) {
       return buildUsageErrorSnapshot("clawrouter", "Malformed usage response");
     }

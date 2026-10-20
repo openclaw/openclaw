@@ -122,9 +122,6 @@ export async function createSlackQaTransportAdapter(
   context: FactoryContext,
 ): Promise<AdapterDefinition> {
   const { createDebugProxyCaptureReaderAsync } = proxyCapture;
-  if (typeof createDebugProxyCaptureReaderAsync !== "function") {
-    throw new Error("Slack QA requires async proxy capture support. Upgrade the OpenClaw host.");
-  }
   const { createSlackWebClient, createSlackWriteClient, resolveSlackWebClientOptions } =
     loadSlackQaRuntime();
   const options = context.adapterOptions ?? {};

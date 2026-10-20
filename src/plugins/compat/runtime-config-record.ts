@@ -7,9 +7,9 @@ export const RUNTIME_CONFIG_COMPAT_RECORD = {
   introduced: "2026-04-27",
   deprecated: "2026-10-11",
   warningStarts: "2026-10-11",
-  removalGate: "stable-deprecation-period",
+  removeAfter: "2026-12-31",
   replacement:
-    "Use readRuntimeConfig for the already prepared runtime snapshot. At a cold preparation boundary, await captureRuntimeConfigAsyncReader()() first or use its returned config. The released getRuntimeConfig keeps its synchronous cold-load behavior until removal in a later stable release after deprecation ships.",
+    "Use readRuntimeConfig for the already prepared runtime snapshot. At a cold preparation boundary, await captureRuntimeConfigAsyncReader()() first or use its returned config. The released getRuntimeConfig keeps its synchronous cold-load behavior through 2026-12-31; removal ships in the first January 2027 stable release.",
   docsPath: "/plugins/sdk-migration/how-to-migrate#read-prepared-runtime-config",
   surfaces: [
     "openclaw/plugin-sdk/runtime-config-snapshot.getRuntimeConfig",

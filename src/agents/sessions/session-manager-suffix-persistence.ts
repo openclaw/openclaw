@@ -44,7 +44,7 @@ import {
 } from "./session-persistence-operation.js";
 
 export class SessionManagerSuffixPersistence extends SessionManagerPersistence {
-  /** @deprecated Use removeTrailingEntriesAsync; removed in a later stable release after the deprecation period. */
+  /** @deprecated Await removeTrailingEntriesAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   removeTrailingEntries(
     predicate: (entry: SessionEntry) => boolean,
     options?: { preserveTrailing?: (entry: SessionEntry) => boolean },

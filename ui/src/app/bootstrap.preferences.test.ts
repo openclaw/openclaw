@@ -1,6 +1,7 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { GatewayBrowserClient } from "../api/gateway.ts";
+import { captureI18nStateForTesting } from "../i18n/lib/translate.test-support.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
 import * as gatewayStore from "./gateway-store.ts";
@@ -10,6 +11,7 @@ import { loadSettings, persistSessionToken } from "./settings.ts";
 let runtime: ApplicationRuntime | undefined;
 const originalUrl = window.location.href;
 beforeEach(() => {
+  onTestFinished(captureI18nStateForTesting());
   vi.useFakeTimers();
   vi.stubGlobal("localStorage", createStorageMock());
   vi.stubGlobal("sessionStorage", createStorageMock());

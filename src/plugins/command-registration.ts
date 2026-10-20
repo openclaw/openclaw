@@ -3,7 +3,6 @@ import {
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
 import { isOperatorScope } from "../gateway/operator-scopes.js";
-import { logVerbose } from "../globals.js";
 import { isRecord } from "../utils.js";
 import { normalizeAgentPromptSurfaceKind } from "./agent-prompt-surface-kind.js";
 import { getPluginCommandExecutionCount } from "./command-execution-lock.js";
@@ -323,7 +322,6 @@ export function registerPluginCommandInRegistry(
   }
 
   const name = command.name.trim();
-  const normalizedName = normalizeLowercaseStringOrEmpty(name);
   const description = command.description.trim();
   const normalizedCommand = {
     ...command,
@@ -350,7 +348,6 @@ export function registerPluginCommandInRegistry(
       : {}),
   };
   const invocationKeys = listPluginInvocationKeys(normalizedCommand);
-  const key = `/${normalizedName}`;
 
   for (const invocationKey of invocationKeys) {
     const existing = registry.commands.find((entry) =>
@@ -374,7 +371,6 @@ export function registerPluginCommandInRegistry(
       ? { trustedOwnerStatusExposure: true as const }
       : {}),
   });
-  logVerbose(`Registered plugin command: ${key} (plugin: ${pluginId})`);
   return { ok: true };
 }
 

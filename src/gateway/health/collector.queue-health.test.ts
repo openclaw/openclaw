@@ -31,7 +31,7 @@ const [collector, pluginRuntime, degradedState] = await Promise.all([
 const pluginRegistrySnapshot = pluginRuntime.captureActivePluginRegistrySnapshot();
 const degradedPluginsSnapshot = degradedState.listActiveDegradedPlugins();
 const collectHealth = () =>
-  collector.collectGatewayHealthSnapshot({ audience: "admin", probe: false, timeoutMs: 10 });
+  collector.collectGatewayHealthSnapshot({ audience: "admin", probe: false });
 
 describe("queue health collector", () => {
   beforeEach(() => {
@@ -53,11 +53,8 @@ describe("queue health collector", () => {
     const countOutbound = vi.spyOn(deliveryQueueState, "countFailedDeliveryQueueEntries");
     const failed = [{ channelId: "telegram", accountId: "ops", count: 1 }];
     const countIngress = vi
-      .spyOn(ingressHealth, "countFailedChannelIngressQueueEntries")
-      .mockResolvedValue(failed);
-    const countPressure = vi
-      .spyOn(ingressHealth, "countChannelIngressQueuePressure")
-      .mockResolvedValue([]);
+      .spyOn(ingressHealth, "countChannelIngressQueueHealth")
+      .mockResolvedValue({ failed, pressure: [] });
     try {
       const pending = collectHealth();
       expect(capture).toHaveBeenCalledTimes(1);
@@ -72,7 +69,6 @@ describe("queue health collector", () => {
       capture.mockRestore();
       countOutbound.mockRestore();
       countIngress.mockRestore();
-      countPressure.mockRestore();
     }
   });
 

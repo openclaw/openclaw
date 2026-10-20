@@ -44,11 +44,13 @@ it.skipIf(process.platform === "win32").for([undefined, "node", "bun"])(
           },
           {
             PATH: process.env.PATH,
+            CI: "",
             HOME: home,
             TMPDIR: tmp,
             TMP: tmp,
             TEMP: tmp,
             OPENCLAW_VITEST_RUNTIME: runtime,
+            OPENCLAW_BUN_PATH: process.execPath,
             AGENT_PLUGIN_E2E_FIXTURE_DIR: controls,
             AGENT_PLUGIN_E2E_WRITE_PHASE: "runtime",
           },
@@ -62,7 +64,7 @@ it.skipIf(process.platform === "win32").for([undefined, "node", "bun"])(
       const { command, hostExecPath } = JSON.parse(
         readFileSync(path.join(controls, "gateway-command"), "utf8"),
       );
-      expect(command).toBe(runtime === "bun" ? "bun" : hostExecPath);
+      expect(command).toBe(runtime === "node" ? hostExecPath : process.execPath);
       const fixtureRoot = readFileSync(path.join(controls, "fixture-root"), "utf8");
       expect(existsSync(fixtureRoot)).toBe(false);
     });

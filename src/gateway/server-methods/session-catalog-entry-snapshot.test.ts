@@ -20,6 +20,11 @@ import * as userProfileList from "../../state/user-profile-list.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
 import { createSessionCatalogRequestEntrySnapshot } from "./session-catalog-entry-snapshot.js";
+import {
+  catalogHost,
+  catalogProvider,
+  catalogSession,
+} from "./session-catalog.fixtures.test-support.js";
 
 type TestPluginRegistry = Omit<PluginRegistry, "sessionCatalogs"> & {
   sessionCatalogs: Array<{ provider: SessionCatalogProvider }>;
@@ -39,46 +44,13 @@ vi.mock("../../plugins/runtime.js", async (importOriginal) => ({
 const { sessionCatalogHandlers } = await import("./session-catalog.js");
 let projection: ReturnType<typeof createSessionRowProjectionFixture>;
 
+const snapshot = () =>
+  createSessionCatalogRequestEntrySnapshot({ cfg: {}, fallbackAgentId: "main", projection });
+
 function setEntries(entries: Array<{ sessionKey: string; entry: Partial<SessionEntry> }>) {
   for (const { sessionKey, entry } of entries) {
     projection.setEntry(sessionKey, { sessionId: sessionKey, updatedAt: 1, ...entry });
   }
-}
-
-function provider(id: string, sessionKey: string): SessionCatalogProvider {
-  return {
-    id,
-    label: id.toUpperCase(),
-    read: vi.fn(async ({ hostId, threadId }) => ({ hostId, threadId, items: [] })),
-    list: vi.fn(async ({ sessionEntries }) => {
-      const entries = listSessionCatalogEntries({
-        config: {},
-        runtime: createPluginRuntime(),
-        sessionEntries,
-      });
-      const adopted = entries.find((candidate) => candidate.sessionKey === sessionKey);
-      return [
-        {
-          hostId: `gateway:${id}`,
-          label: `${id} host`,
-          kind: "gateway" as const,
-          connected: true,
-          sessions: adopted
-            ? [
-                {
-                  threadId: `${id}-thread`,
-                  status: "stored" as const,
-                  archived: false,
-                  sessionKey: adopted.sessionKey,
-                  canContinue: true,
-                  canArchive: false,
-                },
-              ]
-            : [],
-        },
-      ];
-    }),
-  };
 }
 
 describe("session catalog entry snapshots", () => {
@@ -116,12 +88,8 @@ describe("session catalog entry snapshots", () => {
         sender: { identity: { type: "profile" as const, id: "deleted-profile" } },
       },
     ];
-    const catalog = provider("external", "unused");
-    catalog.read = async ({ hostId, threadId }) => ({
-      hostId,
-      threadId,
-      items,
-      nextCursor: "older",
+    const catalog = catalogProvider("external", {
+      read: async ({ hostId, threadId }) => ({ hostId, threadId, items, nextCursor: "older" }),
     });
     hoisted.activeRegistry.sessionCatalogs = [{ provider: catalog }];
     const respond = vi.fn();
@@ -154,28 +122,10 @@ describe("session catalog entry snapshots", () => {
     ["invalid", undefined],
     [undefined, undefined],
   ])("projects provider color %s to its canonical wire value", (color, expected) => {
-    const snapshot = createSessionCatalogRequestEntrySnapshot({
-      cfg: {},
-      fallbackAgentId: "main",
-      projection,
-    });
-    const host = snapshot.projectHostSessions(
-      {
-        hostId: "gateway:fixture",
-        label: "Fixture",
-        kind: "gateway",
-        connected: true,
-        sessions: [
-          {
-            threadId: "color-fixture",
-            color,
-            status: "stored",
-            archived: false,
-            canContinue: true,
-            canArchive: false,
-          },
-        ],
-      },
+    const host = snapshot().projectHostSessions(
+      catalogHost({
+        sessions: [catalogSession("color-fixture", { color })],
+      }),
       new Map(),
     );
     expect(host.sessions[0]?.color).toBe(expected);
@@ -188,13 +138,25 @@ describe("session catalog entry snapshots", () => {
     const context = bindSessionRowProjection({ getRuntimeConfig: () => cfg }, () => projection);
     const revisions: Array<object | undefined> = [];
     const labels: Array<string | undefined> = [];
-    const catalog = provider("alpha", key);
-    const list = catalog.list;
-    catalog.list = async (params) => {
-      revisions.push(params.sessionEntries?.revision);
-      labels.push(params.sessionEntries?.entriesForCatalog?.()[0]?.entry.label);
-      return list(params);
-    };
+    const catalog = catalogProvider("alpha", {
+      list: vi.fn(async ({ sessionEntries }) => {
+        revisions.push(sessionEntries?.revision);
+        labels.push(sessionEntries?.entriesForCatalog?.()[0]?.entry.label);
+        const entries = listSessionCatalogEntries({
+          config: {},
+          runtime: createPluginRuntime(),
+          sessionEntries,
+        });
+        const adopted = entries.find((candidate) => candidate.sessionKey === key);
+        return [
+          catalogHost({
+            sessions: adopted
+              ? [catalogSession("alpha-thread", { sessionKey: adopted.sessionKey })]
+              : [],
+          }),
+        ];
+      }),
+    });
     hoisted.activeRegistry.sessionCatalogs.push({ provider: catalog });
     const poll = async () => {
       const respond = vi.fn();
@@ -253,29 +215,18 @@ describe("session catalog entry snapshots", () => {
     ];
     setEntries(entries);
     display.mockClear();
-    const snapshot = createSessionCatalogRequestEntrySnapshot({
-      cfg: {},
-      fallbackAgentId: "main",
-      projection,
+    const current = snapshot();
+    const host = catalogHost({
+      sessions: entries.map(({ sessionKey }) =>
+        catalogSession(sessionKey, {
+          sessionKey,
+          createdActor: { type: "human", id: "provider-spoof" },
+        }),
+      ),
     });
-    const host: Parameters<typeof snapshot.projectHostSessions>[0] = {
-      hostId: "gateway:fixture",
-      label: "Fixture",
-      kind: "gateway",
-      connected: true,
-      sessions: entries.map(({ sessionKey }) => ({
-        sessionKey,
-        threadId: sessionKey,
-        status: "stored",
-        archived: false,
-        canContinue: true,
-        canArchive: false,
-        createdActor: { type: "human", id: "provider-spoof" },
-      })),
-    };
     const instances = new Map();
-    snapshot.captureHostInstances(host, instances);
-    const projected = snapshot.projectHostSessions(host, instances);
+    current.captureHostInstances(host, instances);
+    const projected = current.projectHostSessions(host, instances);
     expect(projected.sessions.map((session) => session.createdActor)).toEqual([
       {
         type: "human",

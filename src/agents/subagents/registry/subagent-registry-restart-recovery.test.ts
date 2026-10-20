@@ -13,7 +13,7 @@ import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
-import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-admission.js";
+import { beginSessionEffect } from "../../../sessions/session-controller.lifecycle.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { restartRecoveryTestHarness } from "./subagent-registry-restart-recovery.test-support.js";
 import { createSubagentSweeperHarness } from "./subagent-registry-sweeper.test-support.js";
@@ -41,8 +41,10 @@ describe("subagent registry restart recovery", () => {
           : {}),
       });
       const before = structuredClone(entry);
-      const { sweeper, runs, finalizeInterruptedSubagentRun, resumeRequesterSettleWake } =
-        createSubagentSweeperHarness({ current: gatewayRuntime }, entry);
+      const { sweeper, runs, finalizeInterruptedSubagentRun } = createSubagentSweeperHarness(
+        { current: gatewayRuntime },
+        entry,
+      );
 
       await sweeper.recoverInterruptedRuns();
       await sweeper.sweepOnce();
@@ -50,7 +52,6 @@ describe("subagent registry restart recovery", () => {
       expect(mocks.loadSessionEntry).not.toHaveBeenCalled();
       expect(finalizeInterruptedSubagentRun).not.toHaveBeenCalled();
       expect(dispatchAgent).not.toHaveBeenCalled();
-      expect(resumeRequesterSettleWake).toHaveBeenCalledTimes(pendingWake ? 1 : 0);
       expect(runs.get(entry.runId)).toEqual(before);
     },
   );
@@ -137,6 +138,40 @@ describe("subagent registry restart recovery", () => {
     }
   });
 
+  it("keeps one recovery owner when startup and a sweep overlap", async () => {
+    const preparation = createDeferred<number | undefined>();
+    const entered = createDeferred();
+    let preparations = 0;
+    const entry = run();
+    const { sweeper, finalizeInterruptedSubagentRun } = createSubagentSweeperHarness(
+      {
+        current: {
+          ...gatewayRuntime,
+          prepareRestartRecovery: () => {
+            if (++preparations === 1) {
+              entered.resolve();
+              return preparation.promise;
+            }
+            return undefined;
+          },
+        },
+      },
+      entry,
+    );
+    const startup = sweeper.recoverInterruptedRuns([entry]);
+    try {
+      await entered.promise;
+      await sweeper.recoverInterruptedRuns([entry]);
+      await sweeper.sweepOnce();
+      expect(finalizeInterruptedSubagentRun).not.toHaveBeenCalled();
+    } finally {
+      preparation.resolve(undefined);
+      await startup;
+      await sweeper.reset();
+    }
+    expect(finalizeInterruptedSubagentRun).toHaveBeenCalledOnce();
+  });
+
   it("abandons startup settlement if the Gateway changes while the breaker is checked", async () => {
     const preparation = createDeferred<number | undefined>();
     const entered = createDeferred();
@@ -166,7 +201,7 @@ describe("subagent registry restart recovery", () => {
     expect(finalizeInterruptedSubagentRun).not.toHaveBeenCalled();
   });
 
-  it.each(["run", "admission"] as const)(
+  it.each(["run", "admission", "run after admission"] as const)(
     "recovers as soon as a retained %s releases ownership",
     async (owner) => {
       vi.useFakeTimers();
@@ -177,14 +212,14 @@ describe("subagent registry restart recovery", () => {
         entry,
       );
       const lease =
-        owner === "admission"
-          ? await beginSessionWorkAdmission({
+        owner !== "run"
+          ? await beginSessionEffect({
               scope: mocks.storePath,
               identities: [childSessionKey, "session-id"],
               assertAllowed: () => {},
             })
           : undefined;
-      if (owner === "run") {
+      if (owner !== "admission") {
         registerAgentRunContext("retained-owner", {
           sessionKey: childSessionKey,
           sessionId: "session-id",
@@ -197,6 +232,10 @@ describe("subagent registry restart recovery", () => {
         expect(mocks.loadSessionEntry).not.toHaveBeenCalled();
         expect(finalizeInterruptedSubagentRun).not.toHaveBeenCalled();
         lease?.release();
+        if (owner === "run after admission") {
+          await vi.advanceTimersByTimeAsync(1_000);
+          expect(finalizeInterruptedSubagentRun).not.toHaveBeenCalled();
+        }
         clearAgentRunContext("retained-owner");
         await vi.advanceTimersByTimeAsync(1_000);
         expect(mocks.loadSessionEntry).toHaveBeenCalled();
@@ -383,7 +422,7 @@ describe("subagent registry restart recovery", () => {
         });
         const lease =
           owner === "admission"
-            ? await beginSessionWorkAdmission({
+            ? await beginSessionEffect({
                 scope: mocks.storePath,
                 identities: [childSessionKey, "session-id"],
                 assertAllowed: () => {},
@@ -561,7 +600,6 @@ describe("interrupted requester-settle continuation ownership", () => {
       requesterAgentId: "main",
       batchRunIds: [child.runId],
       rearmGeneration: quiet ? undefined : 1,
-      sharedAttemptKey: quiet,
     });
     const worker = run({ runId, taskRunId: "original-task" });
     worker.execution.status = "interrupted";
@@ -581,35 +619,42 @@ describe("interrupted requester-settle continuation ownership", () => {
     };
   }
 
+  it("does not mark a hard-killed incoming continuation as an orphan", async () => {
+    const { worker } = cohort();
+    worker.execution.status = "running";
+    worker.execution.lifecycleGeneration = getAgentEventLifecycleGeneration();
+    Object.assign(mocks.entries[childSessionKey]!, {
+      status: undefined,
+      abortedLastRun: false,
+    });
+    rotateAgentEventLifecycleGeneration();
+
+    expect(await recover(worker)).toEqual({ status: "handled" });
+    expect(mocks.entries[childSessionKey]?.abortedLastRun).toBe(false);
+    expect(mocks.applySessionEntryExactReplacements).not.toHaveBeenCalled();
+    expect(restartRecoveryTestHarness.warn).not.toHaveBeenCalled();
+  });
+
   it.each([
-    { backoff: 0, privateCompletion: false, physicalLocator: false, quiet: false, legacy: false },
-    { backoff: 0, privateCompletion: false, physicalLocator: true, quiet: false, legacy: false },
+    { privateCompletion: false, physicalLocator: false, quiet: false, legacy: false },
+    { privateCompletion: false, physicalLocator: true, quiet: false, legacy: false },
     {
-      backoff: 120_000,
-      privateCompletion: false,
-      physicalLocator: false,
-      quiet: false,
-      legacy: false,
-    },
-    {
-      backoff: 120_000,
       privateCompletion: true,
       physicalLocator: false,
       quiet: false,
       legacy: false,
     },
-    { backoff: 0, privateCompletion: true, physicalLocator: true, quiet: true, legacy: false },
+    { privateCompletion: true, physicalLocator: true, quiet: true, legacy: false },
     {
-      backoff: 120_000,
       privateCompletion: true,
       physicalLocator: false,
       quiet: true,
       legacy: false,
     },
-    { backoff: 0, privateCompletion: false, physicalLocator: false, quiet: false, legacy: true },
+    { privateCompletion: false, physicalLocator: false, quiet: false, legacy: true },
   ])(
-    "keeps the exact saved wake owned before admission (backoff $backoff, private $privateCompletion, physical locator $physicalLocator, quiet $quiet, legacy $legacy)",
-    async ({ backoff, privateCompletion, physicalLocator, quiet, legacy }) => {
+    "keeps the exact saved wake owned before admission (private $privateCompletion, physical locator $physicalLocator, quiet $quiet, legacy $legacy)",
+    async ({ privateCompletion, physicalLocator, quiet, legacy }) => {
       const { child, worker } = cohort(quiet);
       if (legacy) {
         worker.childSessionIdentity = undefined;
@@ -617,10 +662,8 @@ describe("interrupted requester-settle continuation ownership", () => {
       if (physicalLocator) {
         mocks.storePath = child.requesterStorePath!;
       }
-      child.requesterSettleWake!.nextAttemptAt = Date.now() + backoff;
       if (privateCompletion) {
         child.completionTarget = "parent";
-        child.requesterSettleWake!.attemptCount = 2;
       }
       expect(await recover(worker)).toEqual({ status: "handled" });
       expect(worker.execution.outcome).toBeUndefined();
@@ -630,9 +673,9 @@ describe("interrupted requester-settle continuation ownership", () => {
   );
 
   it.each([
-    "different attempt",
     "non-cohort batch",
     "rearmed",
+    "superseded initial attempt",
     "unstarted",
     "consumed",
     "different session",
@@ -652,11 +695,11 @@ describe("interrupted requester-settle continuation ownership", () => {
       child.requesterSettleWake!.requesterYieldBatch = undefined;
       child.requesterSettleWake!.rearmGeneration = undefined;
     }
-    if (scenario === "different attempt") {
-      child.requesterSettleWake!.attemptCount++;
-    }
     if (scenario === "rearmed") {
       child.requesterSettleWake!.rearmGeneration!++;
+    }
+    if (scenario === "superseded initial attempt") {
+      child.requesterSettleWake!.attemptCount = 3;
     }
     if (scenario === "unstarted" || scenario === "quiet unstarted") {
       child.requesterSettleWake!.attemptCount = 0;
@@ -706,6 +749,37 @@ describe("interrupted requester-settle continuation ownership", () => {
       error: expect.stringContaining("Gateway restart"),
     });
   });
+
+  it.each(["deliverable", "yielded private", "paused private"] as const)(
+    "preserves a pre-cutover retry continuation for %s custody",
+    async (policy) => {
+      const { child, worker } = cohort();
+      child.requesterSettleWake!.attemptCount = 2;
+      if (policy !== "deliverable") {
+        child.completionTarget = "parent";
+      }
+      if (policy === "yielded private") {
+        child.requesterSettleWake!.yieldedFinalDeliverable = true;
+      }
+      if (policy === "paused private") {
+        child.pauseReason = "sessions_yield";
+        child.requesterSettleWake!.pauseNotice = { acknowledgment: "Waiting for direction" };
+      }
+      const runId =
+        policy === "paused private"
+          ? "announce:requester-settle:main:agent:main:subagent:restart-child:settled-leaf:yield-1:pause:retry-1"
+          : "announce:requester-settle:main:agent:main:subagent:restart-child:settled-leaf:yield-1:retry-1";
+      subagentRuns.delete(worker.runId);
+      const restored = run({ ...worker, runId });
+      mocks.entries[childSessionKey]!.lifecycleRunId = runId;
+      subagentRuns.set(runId, restored);
+
+      expect(await recover(restored)).toEqual({ status: "handled" });
+      expect(restored.execution.outcome).toBeUndefined();
+      expect(dispatchAgent).not.toHaveBeenCalled();
+      expect(mocks.applySessionEntryExactReplacements).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps the dispatched surviving cohort owned after a member retires", async () => {
     const { child, worker } = cohort();

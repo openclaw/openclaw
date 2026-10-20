@@ -11,10 +11,9 @@ import {
 } from "../config/config.js";
 import { ensurePluginAllowlisted } from "../config/plugins-allowlist.js";
 import { composeConfigWriteAssertions } from "../config/write-authority.js";
-import { isDefaultClawHubBaseUrl } from "../infra/clawhub-client.js";
+import { isDefaultClawHubBaseUrl, resolveClawHubBaseUrl } from "../infra/clawhub-client.js";
 import { reportClawHubPluginInstallTelemetry } from "../infra/clawhub-packages.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { markClawPackageIndependentlyOwned } from "../state/claw-package-adoption.js";
 import { withClawPackageLifecycleLease } from "../state/claw-package-lifecycle-lease.js";
 import { shortenHomePath } from "../utils.js";
 import {
@@ -128,30 +127,36 @@ export async function installManagedPlugin(
   } catch (error) {
     throw new ManagedPluginLifecycleError(formatErrorMessage(error), { cause: error });
   }
-  const { installManagedPluginSource } = await import("./management-install.js");
   const env = params.env ?? process.env;
+  const clawhubUrl = resolveClawHubBaseUrl(undefined, env);
+  const { installManagedPluginSource } = await import("./management-install.js");
   return await withManagedPluginMutation(params, async (beforePersistentApply) => {
     const performInstall = async () => {
-      const configuredClawHubUrl = env.OPENCLAW_CLAWHUB_URL ?? env.CLAWHUB_URL;
       const useHostedCatalog =
         params.request.source === "official" ||
-        (params.request.source === "clawhub" &&
-          (!configuredClawHubUrl || isDefaultClawHubBaseUrl(configuredClawHubUrl)));
+        (params.request.source === "clawhub" && isDefaultClawHubBaseUrl(clawhubUrl));
       const officialCatalog = useHostedCatalog ? await loadOfficialCatalog() : { entries: [] };
       const warnings: string[] = [];
-      const request = resolveManagedPluginInstallRequest(params.request, officialCatalog.entries);
+      const request = resolveManagedPluginInstallRequest(
+        params.request,
+        officialCatalog.entries,
+        clawhubUrl,
+      );
+      // Official installs retain catalog-owned recovery after resolving their package source.
       const planned = resolvePluginInstallRequestContext({
         source: request.source,
         rawSpec:
-          request.source === "local"
-            ? request.path
-            : request.source === "npm-pack"
-              ? `npm-pack:${request.archivePath}`
-              : request.source === "bundled"
-                ? request.bundledSource.localPath
-                : request.source === "marketplace"
-                  ? request.plugin
-                  : request.spec,
+          request.source === "official"
+            ? (request.expectedPluginId ?? request.spec)
+            : request.source === "local"
+              ? request.path
+              : request.source === "npm-pack"
+                ? `npm-pack:${request.archivePath}`
+                : request.source === "bundled"
+                  ? request.bundledSource.localPath
+                  : request.source === "marketplace"
+                    ? request.plugin
+                    : request.spec,
         ...(request.source === "marketplace" ? { marketplace: request.marketplace } : {}),
         installKind: "plugin",
       });
@@ -199,6 +204,9 @@ export async function installManagedPlugin(
           },
         },
         onCapabilityConsent: params.onCapabilityConsent,
+        requireCapabilityConsent: params.clawManaged === true,
+        requireClawHubTrust: params.clawManaged === true,
+        onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
         beforePersistentEffect: params.beforePersistentEffect,
         ...(params.request.acknowledgeCapabilities
           ? { acknowledgeCapabilities: params.request.acknowledgeCapabilities }
@@ -221,14 +229,6 @@ export async function installManagedPlugin(
       try {
         warnings.push(...(installed.warnings ?? []));
         if (params.request.source === "clawhub" && installed.clawhub) {
-          if (!params.clawManaged && installed.clawhub.version) {
-            await markClawPackageIndependentlyOwned({
-              kind: "plugin",
-              source: "clawhub",
-              ref: installed.clawhub.clawhubPackage,
-              version: installed.clawhub.version,
-            });
-          }
           await reportClawHubPluginInstallTelemetry({
             baseUrl: installed.clawhub.clawhubUrl,
             packageName: installed.clawhub.clawhubPackage,
@@ -514,7 +514,6 @@ export async function reloadManagedPlugin(
           );
         }
         const ownedPluginIds = ownership.value.pluginIds;
-        let install: { id: string; hash: string } | undefined;
         if (target.installHash !== undefined) {
           const owner = ownership.value.installOwner;
           if (
@@ -526,7 +525,6 @@ export async function reloadManagedPlugin(
               `Plugin ${pluginId} changed after the installation batch. Inspect it before reloading.`,
             );
           }
-          install = { id: owner, hash: target.installHash };
         }
         const sourceDigests = target.sourceDigests ?? {};
         if (Object.keys(sourceDigests).some((id) => !ownedPluginIds.includes(id))) {
@@ -538,7 +536,6 @@ export async function reloadManagedPlugin(
           pluginId,
           pluginIds: ownedPluginIds,
           sourceDigests,
-          install,
         };
       });
     };
@@ -573,13 +570,6 @@ export async function reloadManagedPlugin(
         reason: "reload",
         ...(params.waitForDrain ? { waitForDrain: true, drainSignal: params.signal } : {}),
         ...(expected.size ? { expectedSourceDigests: Object.fromEntries(expected) } : {}),
-        ...(resolved.every((target) => target.install !== undefined)
-          ? {
-              expectedInstallHashes: Object.fromEntries(
-                resolved.flatMap(({ install }) => (install ? [[install.id, install.hash]] : [])),
-              ),
-            }
-          : {}),
         assertInvokerOwned: beforePersistentApply,
       }),
     };

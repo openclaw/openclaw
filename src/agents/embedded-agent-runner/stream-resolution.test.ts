@@ -10,10 +10,7 @@ import * as providerTransportStream from "@openclaw/ai/transports";
 // Stream resolution tests cover how embedded runs choose provider, boundary,
 // native Codex, or custom stream functions and pass auth/cache/signal options.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import {
-  createAssistantMessageEventStream,
-  type AssistantMessageEventStream,
-} from "openclaw/plugin-sdk/llm";
+import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import type { OpenClawPluginDefinition } from "openclaw/plugin-sdk/plugin-entry";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
@@ -25,6 +22,7 @@ import { resolveProviderStreamFn } from "../../plugins/provider-runtime.js";
 import { mintSecretSentinel } from "../../secrets/sentinel.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
+import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { wrapStreamFnWithProviderPromptState } from "./provider-prompt-state.js";
 import { streamWithIdleTimeout } from "./run/llm-idle-timeout.js";
 import { resolveEmbeddedAgentStream as resolveEmbeddedAgentStreamImpl } from "./stream-resolution.js";
@@ -65,9 +63,11 @@ const llmRuntime = {
 } as LlmRuntime;
 
 function resolveEmbeddedAgentStream(
-  params: Omit<Parameters<typeof resolveEmbeddedAgentStreamImpl>[0], "llmRuntime">,
+  params: Omit<Parameters<typeof resolveEmbeddedAgentStreamImpl>[0], "llmRuntime"> & {
+    llmRuntime?: LlmRuntime;
+  },
 ) {
-  return resolveEmbeddedAgentStreamImpl({ ...params, llmRuntime });
+  return resolveEmbeddedAgentStreamImpl({ llmRuntime, ...params });
 }
 
 const overrideBoundaryAwareStreamFnOnce = (streamFn: StreamFn): void => {
@@ -85,13 +85,6 @@ function useNativeStreamFn(streamFn: StreamFn): StreamFn {
 
 const requireRecord = createRequireRecord("record", "expected-label-object");
 
-async function expectStreamResultRecord(
-  result: ReturnType<StreamFn>,
-  label: string,
-): Promise<Record<string, unknown>> {
-  return requireRecord(await result, label);
-}
-
 afterEach(() => {
   vi.useRealTimers();
   streamMocks.streamSimple.mockReset();
@@ -104,7 +97,7 @@ afterEach(() => {
 describe("resolveEmbeddedAgentStream", () => {
   it("records the selected transport for proxied Anthropic", async () => {
     const currentStreamFn = vi.fn<StreamFn>();
-    const boundaryStreamFn = vi.fn<StreamFn>();
+    const boundaryStreamFn = vi.fn<StreamFn>(() => createAssistantMessageEventStream());
     overrideBoundaryAwareStreamFnOnce(boundaryStreamFn);
     const boundaryFactory = vi.mocked(providerTransportStream.createBoundaryAwareStreamFnForModel);
     const initialCalls = boundaryFactory.mock.calls.length;
@@ -170,7 +163,7 @@ describe("resolveEmbeddedAgentStream", () => {
       const events = await streamFn(
         model,
         {
-          systemPrompt: `Stable workspace${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+          systemPrompt: `stable${SYSTEM_PROMPT_CACHE_BOUNDARY}dynamic`,
           messages: [{ role: "user", content: "Hello", timestamp: 0 }],
         },
         {
@@ -186,14 +179,10 @@ describe("resolveEmbeddedAgentStream", () => {
       const request = requireRecord(payload, "registered provider payload");
       expect(request.system).toEqual(
         providerId === "amazon-bedrock"
-          ? [
-              { text: "Stable workspace" },
-              { cachePoint: { type: "default" } },
-              { text: "Dynamic suffix" },
-            ]
+          ? [{ text: "stable" }, { cachePoint: { type: "default" } }, { text: "dynamic" }]
           : [
-              { type: "text", text: "Stable workspace", cache_control: { type: "ephemeral" } },
-              { type: "text", text: "Dynamic suffix" },
+              { type: "text", text: "stable", cache_control: { type: "ephemeral" } },
+              { type: "text", text: "dynamic" },
             ],
       );
       expect(JSON.stringify(request)).not.toContain("OPENCLAW_CACHE_BOUNDARY");
@@ -203,7 +192,7 @@ describe("resolveEmbeddedAgentStream", () => {
   it("preserves sentinels for registered provider streams", async () => {
     const secret = "plugin-stream-secret";
     const sentinel = mintSecretSentinel(secret, { label: "model-auth:plugin" });
-    const providerStreamFn = vi.fn(async (model, _context, options) => ({ model, options }));
+    const providerStreamFn = vi.fn<StreamFn>(() => createAssistantMessageEventStream());
     const model = {
       api: "plugin-api",
       provider: "plugin",
@@ -212,25 +201,23 @@ describe("resolveEmbeddedAgentStream", () => {
     } as never;
     const { streamFn } = resolveEmbeddedAgentStream({
       currentStreamFn: undefined,
-      providerStreamFn: providerStreamFn as never,
+      providerStreamFn,
       sessionId: "session-1",
       model,
       resolvedApiKey: sentinel,
     });
 
-    const result = await expectStreamResultRecord(
-      streamFn(model, {} as never, {
+    await streamFn(model, {} as never, {
+      headers: { "X-Managed": `Bearer ${sentinel}` },
+    });
+    expect(providerStreamFn).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ headers: { Authorization: `Bearer ${sentinel}` } }),
+      {},
+      expect.objectContaining({
+        apiKey: sentinel,
         headers: { "X-Managed": `Bearer ${sentinel}` },
       }),
-      "plugin stream result",
     );
-    expect(requireRecord(result.model, "plugin model").headers).toEqual({
-      Authorization: `Bearer ${sentinel}`,
-    });
-    expect(requireRecord(result.options, "plugin options").apiKey).toBe(sentinel);
-    expect(requireRecord(result.options, "plugin options").headers).toEqual({
-      "X-Managed": `Bearer ${sentinel}`,
-    });
   });
 
   it("keeps real lifecycle-owned Codex sessions on authenticated WebSocket transport", async () => {
@@ -401,11 +388,11 @@ describe("resolveEmbeddedAgentStream", () => {
       .fn<(provider: string) => Promise<string | undefined>>()
       .mockResolvedValueOnce(firstSentinel)
       .mockResolvedValueOnce(secondSentinel);
-    const currentStreamFn = vi.fn(async (_model, _context, options) => options);
-    const innerStreamFn = vi.fn(async (_model, _context, options) => options);
-    overrideBoundaryAwareStreamFnOnce(innerStreamFn as never);
+    const currentStreamFn = vi.fn<StreamFn>(() => createAssistantMessageEventStream());
+    const innerStreamFn = vi.fn<StreamFn>(() => createAssistantMessageEventStream());
+    overrideBoundaryAwareStreamFnOnce(innerStreamFn);
     const { streamFn } = resolveEmbeddedAgentStream({
-      currentStreamFn: currentStreamFn as never,
+      currentStreamFn,
       sessionId: "session-1",
       model: {
         api: "openai-responses",
@@ -416,25 +403,20 @@ describe("resolveEmbeddedAgentStream", () => {
       authStorage: { getApiKey },
     });
 
-    const firstResult = await expectStreamResultRecord(
-      streamFn({ provider: "github-copilot", id: "gpt-5.6-sol" } as never, {} as never, {}),
-      "first github copilot boundary result",
-    );
-    const secondResult = await expectStreamResultRecord(
-      streamFn({ provider: "github-copilot", id: "gpt-5.6-sol" } as never, {} as never, {}),
-      "second github copilot boundary result",
-    );
-    expect(firstResult.sessionId).toBe("session-1");
-    expect(firstResult.apiKey).toBe(firstSentinel);
-    expect(secondResult.apiKey).toBe(secondSentinel);
+    await streamFn({ provider: "github-copilot", id: "gpt-5.6-sol" } as never, {} as never, {});
+    await streamFn({ provider: "github-copilot", id: "gpt-5.6-sol" } as never, {} as never, {});
+    expect(innerStreamFn.mock.calls.map((call) => call[2])).toEqual([
+      expect.objectContaining({ sessionId: "session-1", apiKey: firstSentinel }),
+      expect.objectContaining({ sessionId: "session-1", apiKey: secondSentinel }),
+    ]);
     expect(currentStreamFn).not.toHaveBeenCalled();
     expect(innerStreamFn).toHaveBeenCalledTimes(2);
   });
 
   it("propagates prompt cache identity into custom session streams", async () => {
-    const currentStreamFn = vi.fn(async (_model, _context, options) => options);
+    const currentStreamFn = vi.fn<StreamFn>(() => createAssistantMessageEventStream());
     const { streamFn } = resolveEmbeddedAgentStream({
-      currentStreamFn: currentStreamFn as never,
+      currentStreamFn,
       sessionId: "run-session",
       promptCacheKey: "cron-cache-key",
       model: {
@@ -445,23 +427,20 @@ describe("resolveEmbeddedAgentStream", () => {
     });
 
     expect(streamFn).not.toBe(currentStreamFn);
-    const result = await expectStreamResultRecord(
-      streamFn(
-        { provider: "custom-provider", id: "custom-model" } as never,
-        {} as never,
-        { sessionId: "run-session" } as never,
-      ),
-      "custom prompt cache result",
-    );
-    expect(result.sessionId).toBe("run-session");
-    expect(result.promptCacheKey).toBe("cron-cache-key");
+    await streamFn({ provider: "custom-provider", id: "custom-model" } as never, {} as never, {
+      sessionId: "run-session",
+    });
+    expect(currentStreamFn.mock.calls[0]?.[2]).toMatchObject({
+      sessionId: "run-session",
+      promptCacheKey: "cron-cache-key",
+    });
   });
 
   it("preserves anthropic-vertex stream identity without cache or run cancellation", () => {
-    const currentStreamFn = vi.fn(async (_model, _context, options) => options);
+    const currentStreamFn = vi.fn<StreamFn>(() => createAssistantMessageEventStream());
     streamMocks.anthropicVertex.mockReturnValueOnce(currentStreamFn);
     const { streamFn } = resolveEmbeddedAgentStream({
-      currentStreamFn: currentStreamFn as never,
+      currentStreamFn,
       sessionId: "session-1",
       model: {
         api: "anthropic-messages",
@@ -472,58 +451,40 @@ describe("resolveEmbeddedAgentStream", () => {
     expect(streamFn).toBe(currentStreamFn);
   });
 
-  it("cancels anthropic-vertex streams when their run owner aborts", async () => {
-    const currentStreamFn = vi.fn(async (_model, _context, options) => options);
-    streamMocks.anthropicVertex.mockReturnValueOnce(currentStreamFn);
+  it.each([
+    { api: "anthropic-messages", provider: "anthropic-vertex", id: "custom-model" },
+    { api: "openai-chatgpt-responses", provider: "openai", id: "gpt-5.5" },
+  ])("cancels $provider streams when the run owner aborts", async (model) => {
+    const inner = vi.fn<StreamFn>(() => createAssistantMessageEventStream());
+    const vertex = model.provider === "anthropic-vertex";
+    if (vertex) {
+      streamMocks.anthropicVertex.mockReturnValueOnce(inner);
+    } else {
+      useNativeStreamFn(inner);
+    }
     const runController = new AbortController();
     const callerController = new AbortController();
-    const model = {
-      api: "anthropic-messages",
-      provider: "anthropic-vertex",
-      id: "custom-model",
-    } as never;
     const { streamFn } = resolveEmbeddedAgentStream({
-      currentStreamFn: currentStreamFn as never,
+      currentStreamFn: vertex ? inner : undefined,
       sessionId: "session-1",
       signal: runController.signal,
-      model,
+      model: model as never,
+      ...(!vertex && { resolvedApiKey: "oauth-bearer-token" }),
     });
-    const result = await expectStreamResultRecord(
-      streamFn(model, {} as never, { signal: callerController.signal }),
-      "anthropic-vertex composed signal",
+    await streamFn(
+      model as never,
+      { messages: [], systemPrompt: `intro${SYSTEM_PROMPT_CACHE_BOUNDARY}tail` },
+      { signal: callerController.signal },
     );
-    expect(result.signal).toMatchObject({ aborted: false });
+    const options = inner.mock.calls[0]?.[2];
+    if (!vertex) {
+      expect(inner.mock.calls[0]?.[1].systemPrompt).toBe("intro\ntail");
+      expect(options?.apiKey).toBe("oauth-bearer-token");
+    }
+    expect(options?.signal).toMatchObject({ aborted: false });
     const abortReason = new Error("run canceled");
     runController.abort(abortReason);
-    expect(result.signal).toMatchObject({ aborted: true, reason: abortReason });
-  });
-
-  it("cancels the authenticated OpenClaw native fallback when the run signal aborts", async () => {
-    const nativeStreamFn = vi.fn(async (_model, context, options) => ({ context, options }));
-    const runController = new AbortController();
-    const callerController = new AbortController();
-    useNativeStreamFn(nativeStreamFn as never);
-    const { streamFn } = resolveEmbeddedAgentStream({
-      currentStreamFn: undefined,
-      sessionId: "session-1",
-      signal: runController.signal,
-      model: { api: "openai-chatgpt-responses", provider: "openai", id: "gpt-5.5" } as never,
-      resolvedApiKey: "oauth-bearer-token",
-    });
-    const result = await expectStreamResultRecord(
-      streamFn(
-        { provider: "openai", id: "gpt-5.5" } as never,
-        { systemPrompt: `intro${SYSTEM_PROMPT_CACHE_BOUNDARY}tail` } as never,
-        { signal: callerController.signal },
-      ),
-      "codex explicit signal result",
-    );
-    expect(requireRecord(result.context, "codex native context").systemPrompt).toBe("intro\ntail");
-    const options = requireRecord(result.options, "codex native options");
-    expect(options.apiKey).toBe("oauth-bearer-token");
-    expect(options.signal).toMatchObject({ aborted: false });
-    runController.abort();
-    expect(options.signal).toMatchObject({ aborted: true });
+    expect(options?.signal).toMatchObject({ aborted: true, reason: abortReason });
   });
 });
 
@@ -538,7 +499,7 @@ describe("embedded provider stream activity", () => {
     providerStreamFn: Parameters<typeof resolveEmbeddedAgentStreamImpl>[0]["providerStreamFn"],
     runSignal: AbortSignal,
   ) {
-    return resolveEmbeddedAgentStreamImpl({
+    return resolveEmbeddedAgentStream({
       llmRuntime: defaultLlmRuntime,
       currentStreamFn: undefined,
       providerStreamFn,
@@ -551,11 +512,11 @@ describe("embedded provider stream activity", () => {
   it("revalidates run authority after deferred credential resolution", async () => {
     const credentials = createDeferredCore<string>();
     let current = true;
-    const providerStreamFn = vi.fn(async () => ({}));
-    const streamFn = resolveEmbeddedAgentStreamImpl({
+    const providerStreamFn = vi.fn<StreamFn>(() => createAssistantMessageEventStream());
+    const streamFn = resolveEmbeddedAgentStream({
       llmRuntime: defaultLlmRuntime,
       currentStreamFn: undefined,
-      providerStreamFn: providerStreamFn as never,
+      providerStreamFn,
       sessionId: "session-1",
       model,
       authStorage: { getApiKey: vi.fn(() => credentials.promise) },
@@ -583,23 +544,23 @@ describe("embedded provider stream activity", () => {
         requestSignals.push(options.signal);
         const stream = createAssistantMessageEventStream();
         stream.push({ type: "text_delta", contentIndex: 0, delta: "done" });
-        stream.end({
-          role: "assistant",
-          content: [{ type: "text", text: "done" }],
-          api: "openai-completions",
-          provider: "openai",
-          model: "gpt-5.4",
-          usage: {
-            input: 1,
-            output: 1,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 2,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-          },
-          stopReason: "stop",
-          timestamp: 1,
-        });
+        stream.end(
+          makeAgentAssistantMessage({
+            content: [{ type: "text", text: "done" }],
+            api: "openai-completions",
+            provider: "openai",
+            model: "gpt-5.4",
+            usage: {
+              input: 1,
+              output: 1,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 2,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            timestamp: 1,
+          }),
+        );
         return stream;
       },
     );
@@ -612,9 +573,9 @@ describe("embedded provider stream activity", () => {
 
     try {
       for (let turn = 0; turn < 2; turn += 1) {
-        const stream = streamFn(model, {} as never, {
+        const stream = await streamFn(model, {} as never, {
           signal: callerController.signal,
-        }) as AssistantMessageEventStream;
+        });
         const requestSignal = requestSignals[turn];
         expect(requestSignal).toBeDefined();
         notifyLlmRequestActivity(requestSignal, turn === 1);
@@ -660,7 +621,7 @@ describe("embedded provider stream activity", () => {
     );
     const streamFn = resolveProviderStream(providerStreamFn as never, runController.signal);
     const guarded = streamWithIdleTimeout(streamFn, 50);
-    const stream = guarded(model, {} as never, {} as never) as AssistantMessageEventStream;
+    const stream = await guarded(model, {} as never, {} as never);
     const iterator = stream[Symbol.asyncIterator]();
     const next = iterator.next();
 

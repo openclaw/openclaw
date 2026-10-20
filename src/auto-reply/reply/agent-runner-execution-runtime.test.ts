@@ -72,6 +72,7 @@ describe("executeAgentTurn: runtime selection", () => {
 
       const result = await executeAgentTurn({
         ...createMinimalRunAgentTurnParams({ followupRun }),
+        opts: { forceRestartSafeTools: true, forceCodeModeTools: true },
         getActiveSessionEntry: () => ({
           sessionId: "session",
           updatedAt: 1,
@@ -82,6 +83,8 @@ describe("executeAgentTurn: runtime selection", () => {
       expect(result.kind).toBe("success");
       expectMockCallArgFields(state.runEmbeddedAgentMock, 0, "embedded thinking params", {
         thinkLevel,
+        forceRestartSafeTools: true,
+        forceCodeModeTools: true,
         modelThinkingCapability: {
           provider,
           modelId: model,

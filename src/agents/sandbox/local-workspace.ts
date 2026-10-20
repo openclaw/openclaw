@@ -10,6 +10,7 @@ import {
   setWorktreePreparationTemplate,
   startWorktreePreparationPhase,
 } from "../worktrees/preparation-timing.js";
+import { bindSandboxInputStager, getSandboxInputStager } from "./input-staging.js";
 import type { SandboxConfig, SandboxContext } from "./types.js";
 
 /** A writable project is an exact managed projection, never a role-policy override. */
@@ -21,25 +22,60 @@ export async function prepareLocalSandboxWorkspace(params: {
   sandbox: SandboxConfig;
   signal?: AbortSignal;
   assertCurrent?: () => void;
+  assertHost?: () => void;
 }) {
-  const owner = await resolveLocalWorkspaceOwner(params);
+  params.assertCurrent?.();
+  const owner = await resolveLocalWorkspaceOwner({ ...params, assertCurrent: params.assertHost });
   if (!owner) {
+    params.assertCurrent?.();
     return undefined;
   }
+  let disposed = false;
+  let retained = 0;
+  const releaseOwner = () => {
+    if (disposed && retained === 0) {
+      owner[Symbol.dispose]();
+    }
+  };
+  const retainOwner = () => {
+    owner.assertCurrent();
+    retained++;
+    let released = false;
+    return () => {
+      if (!released) {
+        released = true;
+        retained--;
+        releaseOwner();
+      }
+    };
+  };
+  const assertCurrent = () => {
+    params.assertCurrent?.();
+    if (disposed) {
+      throw new Error("Local sandbox workspace authority changed");
+    }
+    owner.assertCurrent();
+  };
+  const executionOwner = {
+    ...owner,
+    assertCurrent,
+    workerAuthority: { ...owner.workerAuthority, assertCurrent },
+  };
   try {
+    assertCurrent();
     markManagedWorktreePreparation();
     if (params.sandbox.backend !== "docker" && params.sandbox.backend !== "podman") {
       throw new Error(
         "Managed guest projects require a local Docker or Podman sandbox; this backend cannot safely reconcile a local managed checkout",
       );
     }
-    const existing = await withLocalWorkspaceProjection(owner, (state) => state.reuse());
+    const existing = await withLocalWorkspaceProjection(executionOwner, (state) => state.reuse());
     let workspaceDir: string;
     if (existing) {
       setWorktreePreparationTemplate("reused");
       workspaceDir = existing;
     } else if (params.cfg.worktreeAcceleration === false) {
-      workspaceDir = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
+      workspaceDir = await withLocalWorkspaceProjection(executionOwner, (state) => state.prepare());
     } else {
       const allocated = startWorktreePreparationPhase("allocate");
       try {
@@ -47,13 +83,13 @@ export async function prepareLocalSandboxWorkspace(params: {
           {
             env: owner.env ?? process.env,
             signal: params.signal,
-            commitGuard: owner.assertCurrent,
-            workerAuthority: owner.workerAuthority,
+            commitGuard: assertCurrent,
+            workerAuthority: executionOwner.workerAuthority,
           },
           (allocation) => {
             allocated();
             return withLocalWorkspaceProjection(
-              { ...owner, workerAuthority: allocation.workerAuthority },
+              { ...executionOwner, workerAuthority: allocation.workerAuthority },
               (state) => state.prepare({ sandbox: params.sandbox, allocation }),
             );
           },
@@ -62,29 +98,48 @@ export async function prepareLocalSandboxWorkspace(params: {
         allocated();
       }
     }
-    owner.assertCurrent();
+    assertCurrent();
     return {
       workspaceDir,
       workspaceCwd: path.join(
         workspaceDir,
         path.relative(owner.worktree.path, params.workspaceDir ?? owner.worktree.path),
       ),
-      assertCurrent: owner.assertCurrent,
-      provision: async <T>(run: () => Promise<T>) =>
+      assertCurrent,
+      retain: () => {
+        assertCurrent();
+        return retainOwner();
+      },
+      provision: async <T>(run: () => Promise<T>, signal?: AbortSignal) =>
         await withLocalWorkspaceProjection(
-          owner,
+          executionOwner,
           async () => {
-            owner.assertCurrent();
+            assertCurrent();
             const result = await run();
-            owner.assertCurrent();
+            assertCurrent();
             return result;
           },
-          { provision: true },
+          { provision: true, signal },
         ),
+      terminate: async (run: () => Promise<void>) => {
+        // Cancellation can join a checkpoint after the exec's finalization has started.
+        const release = retainOwner();
+        try {
+          await withLocalWorkspaceProjection(owner, run, { provision: true });
+          // TERM handlers may write after an already-running final checkpoint has completed.
+          await withLocalWorkspaceProjection(owner, (state) => state.synchronize("canonical"));
+        } finally {
+          release();
+        }
+      },
       checkpoint: async () => {
+        // Stop closes execution admission; accepted output still settles under its workspace owner.
         await withLocalWorkspaceProjection(owner, (state) => state.synchronize("canonical"));
       },
-      [Symbol.dispose]: () => owner[Symbol.dispose](),
+      [Symbol.dispose]: () => {
+        disposed = true;
+        releaseOwner();
+      },
     };
   } catch (error) {
     owner[Symbol.dispose]();
@@ -105,54 +160,98 @@ export function bindLocalSandboxWorkspace(
   if (prepareCleanup) {
     backend.prepareProcessCleanup = (env) => {
       projection.assertCurrent();
-      return prepareCleanup(env);
+      const cleanup = prepareCleanup(env);
+      return {
+        env: cleanup.env,
+        terminate: () => projection.terminate(() => cleanup.terminate()),
+        interrupt: (timeoutMs) => {
+          const signal = AbortSignal.timeout(timeoutMs);
+          const deadline = performance.now() + timeoutMs;
+          return projection.provision(() => {
+            signal.throwIfAborted();
+            return cleanup.interrupt(Math.max(0, Math.ceil(deadline - performance.now())));
+          }, signal);
+        },
+      };
     };
   }
   const shell = backend.runShellCommand.bind(backend);
-  backend.runShellCommand = async (params) => {
-    // Path preparation can await host and container probes after tool entry.
-    projection.assertCurrent();
-    return await shell(params);
-  };
+  backend.runShellCommand = (params) =>
+    projection.provision(async () => {
+      // A preceding background command may still have the runtime paused for checkpointing.
+      params.signal?.throwIfAborted();
+      projection.assertCurrent();
+      return await shell(params);
+    }, params.signal);
   const build = backend.buildExecSpec.bind(backend);
   const finalize = backend.finalizeExec?.bind(backend);
+  // Accepted command cleanup keeps its workspace owner after the parent releases its context.
+  const finalizations = new Map<unknown, { token: unknown; release: () => void }>();
   backend.buildExecSpec = async (params) => {
-    projection.assertCurrent();
-    const spec = await build(params);
+    const release = projection.retain();
+    let spec: Awaited<ReturnType<typeof build>> | undefined;
     try {
-      projection.assertCurrent();
-    } catch (error) {
-      await finalize?.({
-        status: "failed",
-        exitCode: null,
-        timedOut: false,
-        token: spec.finalizeToken,
+      // Release preparation custody before the command's background lifetime begins.
+      const prepared = await projection.provision(async () => {
+        projection.assertCurrent();
+        spec = await build(params);
+        projection.assertCurrent();
+        return spec;
       });
+      const token = {};
+      finalizations.set(token, { token: prepared.finalizeToken, release });
+      const assertCurrent = prepared.assertCurrent;
+      return {
+        ...prepared,
+        finalizeToken: token,
+        assertCurrent: () => {
+          projection.assertCurrent();
+          assertCurrent?.();
+        },
+      };
+    } catch (error) {
+      try {
+        if (spec) {
+          await finalize?.({
+            status: "failed",
+            exitCode: null,
+            timedOut: false,
+            token: spec.finalizeToken,
+          });
+        }
+      } finally {
+        release();
+      }
       throw error;
     }
-    const assertCurrent = spec.assertCurrent;
-    return {
-      ...spec,
-      assertCurrent: () => {
-        projection.assertCurrent();
-        assertCurrent?.();
-      },
-    };
   };
   backend.finalizeExec = async (params) => {
-    await finalize?.(params);
-    await projection.checkpoint();
+    const pending = finalizations.get(params.token);
+    if (!pending) {
+      throw new Error("Managed workspace command finalization has no prepared owner");
+    }
+    finalizations.delete(params.token);
+    try {
+      await finalize?.({ ...params, token: pending.token });
+      await projection.checkpoint();
+    } finally {
+      pending.release();
+    }
   };
   const bridge = sandbox.fsBridge;
   if (!bridge) {
     throw new Error("Managed guest project has no filesystem bridge");
   }
   const mutate = async <T>(operation: () => Promise<T>) => {
-    projection.assertCurrent();
+    const release = projection.retain();
     try {
       return await operation();
     } finally {
-      await projection.checkpoint();
+      try {
+        await projection.checkpoint();
+      } finally {
+        release();
+      }
     }
   };
   // Decorate the actual instance. Object spreading loses prototype methods,
@@ -172,5 +271,11 @@ export function bindLocalSandboxWorkspace(
   }
   if (createFileExclusive) {
     bridge.createFileExclusive = (params) => mutate(() => createFileExclusive(params));
+  }
+  const stageInput = getSandboxInputStager(bridge);
+  if (stageInput) {
+    bindSandboxInputStager(bridge, (params) =>
+      mutate(() => projection.provision(() => stageInput(params), params.signal)),
+    );
   }
 }

@@ -5,31 +5,27 @@ import Darwin
 #endif
 
 public struct OpenClawNativeStateError: Error, LocalizedError, Sendable {
+    public enum Code: Sendable {
+        case failure
+        case busy
+    }
+
     public let message: String
+    public let code: Code
 
     public var errorDescription: String? {
         self.message
     }
 
-    public init(_ message: String) {
+    public init(_ message: String, code: Code = .failure) {
         self.message = message
-    }
-}
-
-public struct OpenClawNativeStateConfigValue: Equatable, Sendable {
-    public let value: String
-    public let updatedAtMilliseconds: Int64
-
-    public init(value: String, updatedAtMilliseconds: Int64) {
-        self.value = value
-        self.updatedAtMilliseconds = updatedAtMilliseconds
+        self.code = code
     }
 }
 
 public enum OpenClawNativeStateCanonicalTable: Sendable {
     case deviceAuthTokens
     case deviceIdentities
-    case execApprovalsConfig
     case macosPortGuardianRecords
 }
 
@@ -51,7 +47,7 @@ public enum OpenClawNativeStateSQLiteValueType: Equatable, Sendable {
 public final class OpenClawNativeStateSQLite: @unchecked Sendable {
     // Keep aligned with OPENCLAW_STATE_SCHEMA_VERSION for backend-owned native surfaces.
     // Device credentials have a separate, exact table contract. Native clients never upgrade this database.
-    private static let maximumSupportedSchemaVersion: Int64 = 22
+    private static let maximumSupportedSchemaVersion: Int64 = 29
     private static let defaultBusyTimeoutMilliseconds: Int32 = 5000
 
     private struct SchemaObject: Hashable {
@@ -173,43 +169,9 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
             IndexColumn(name: "timestamp", descending: true),
         ])
 
-    private static let execApprovalsConfig = CanonicalTable(
-        name: "exec_approvals_config",
-        indexName: nil,
-        createSQL: """
-        CREATE TABLE IF NOT EXISTS exec_approvals_config (
-          config_key TEXT NOT NULL PRIMARY KEY,
-          raw_json TEXT NOT NULL,
-          socket_path TEXT,
-          has_socket_token INTEGER NOT NULL,
-          default_security TEXT,
-          default_ask TEXT,
-          default_ask_fallback TEXT,
-          auto_allow_skills INTEGER,
-          agent_count INTEGER NOT NULL,
-          allowlist_count INTEGER NOT NULL,
-          updated_at_ms INTEGER NOT NULL
-        ) STRICT;
-        """,
-        columns: [
-            Column(name: "config_key", type: "TEXT", notNull: true, primaryKeyPosition: 1, hidden: 0),
-            Column(name: "raw_json", type: "TEXT", notNull: true, primaryKeyPosition: 0, hidden: 0),
-            Column(name: "socket_path", type: "TEXT", notNull: false, primaryKeyPosition: 0, hidden: 0),
-            Column(name: "has_socket_token", type: "INTEGER", notNull: true, primaryKeyPosition: 0, hidden: 0),
-            Column(name: "default_security", type: "TEXT", notNull: false, primaryKeyPosition: 0, hidden: 0),
-            Column(name: "default_ask", type: "TEXT", notNull: false, primaryKeyPosition: 0, hidden: 0),
-            Column(name: "default_ask_fallback", type: "TEXT", notNull: false, primaryKeyPosition: 0, hidden: 0),
-            Column(name: "auto_allow_skills", type: "INTEGER", notNull: false, primaryKeyPosition: 0, hidden: 0),
-            Column(name: "agent_count", type: "INTEGER", notNull: true, primaryKeyPosition: 0, hidden: 0),
-            Column(name: "allowlist_count", type: "INTEGER", notNull: true, primaryKeyPosition: 0, hidden: 0),
-            Column(name: "updated_at_ms", type: "INTEGER", notNull: true, primaryKeyPosition: 0, hidden: 0),
-        ],
-        indexColumns: [])
-
     private static let canonicalTables = [
         OpenClawNativeStateSQLite.deviceAuthTokens,
         OpenClawNativeStateSQLite.deviceIdentities,
-        OpenClawNativeStateSQLite.execApprovalsConfig,
         OpenClawNativeStateSQLite.macosPortGuardianRecords,
     ]
 
@@ -217,15 +179,50 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
     private let readOnly: Bool
     private let admission: OpenClawNativeStateAdmission
     private let databaseIdentity: OpenClawNativeStateAdmission.DatabaseIdentity
-    private var admittedConfigMachineStateAvailable: Bool?
     fileprivate let database: OpaquePointer
     fileprivate let connectionLock = NSRecursiveLock()
 
-    public init(
+    public convenience init(
         databaseURL: URL,
         busyTimeoutMilliseconds: Int32 = 5000,
         createIfMissing: Bool = true,
         readOnly: Bool = false) throws
+    {
+        try self.init(
+            databaseURL: databaseURL,
+            busyTimeoutMilliseconds: busyTimeoutMilliseconds,
+            createIfMissing: createIfMissing,
+            readOnly: readOnly,
+            nativeCredentialSource: false)
+    }
+
+    /// Legacy native sources are DELETE-mode only; never create WAL sidecars while importing.
+    public static func readOnlyCredentialSource(databaseURL: URL) throws -> OpenClawNativeStateSQLite {
+        let file = try FileHandle(forReadingFrom: databaseURL)
+        defer { try? file.close() }
+        guard let header = try file.read(upToCount: 100), header.count == 100,
+              header.prefix(16) == Data("SQLite format 3\0".utf8),
+              header[18] == 1, header[19] == 1,
+              header[60..<64].allSatisfy({ $0 == 0 })
+        else {
+            throw OpenClawNativeStateError(
+                "Native credentials require a version-zero DELETE-mode source; " +
+                    "export or restore it with the previous OpenClaw version before retrying")
+        }
+        return try self.init(
+            databaseURL: databaseURL,
+            busyTimeoutMilliseconds: 5000,
+            createIfMissing: false,
+            readOnly: true,
+            nativeCredentialSource: true)
+    }
+
+    private init(
+        databaseURL: URL,
+        busyTimeoutMilliseconds: Int32,
+        createIfMissing: Bool,
+        readOnly: Bool,
+        nativeCredentialSource: Bool) throws
     {
         self.databaseURL = databaseURL
         self.readOnly = readOnly
@@ -235,8 +232,10 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
         }
         var database: OpaquePointer?
         let flags = (readOnly ? SQLITE_OPEN_READONLY : SQLITE_OPEN_READWRITE) | SQLITE_OPEN_FULLMUTEX
+            | (nativeCredentialSource ? SQLITE_OPEN_NOFOLLOW : 0)
             | (createIfMissing && !readOnly ? SQLITE_OPEN_CREATE : 0)
-        let result = sqlite3_open_v2(databaseURL.path, &database, flags, nil)
+        let vfsName = readOnly && !nativeCredentialSource ? try OpenClawNativeStateReadOnlyVFS.name() : nil
+        let result = sqlite3_open_v2(databaseURL.path, &database, flags, vfsName)
         guard result == SQLITE_OK, let database else {
             let detail = database.map { String(cString: sqlite3_errmsg($0)) } ?? "unknown SQLite error"
             if let database { sqlite3_close(database) }
@@ -261,7 +260,7 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
         try self.admission.assertAvailable()
         try self.assertCurrentDatabase()
         if readOnly {
-            self.admittedConfigMachineStateAvailable = try self.admitReadOnlySchema()
+            try self.admitReadOnlySchema()
         } else {
             try Self.secureDatabaseFiles(databaseURL)
         }
@@ -313,15 +312,15 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
         try self.withConnectionLock {
             let descriptor = Self.descriptor(table)
             let userVersion = try self.scalarInt64("PRAGMA user_version")
-            let newerSchema = userVersion > Self.maximumSupportedSchemaVersion
-            let deviceCredential = switch table {
-            case .deviceIdentities, .deviceAuthTokens: true
-            case .execApprovalsConfig, .macosPortGuardianRecords: false
-            }
-            guard !newerSchema || deviceCredential else {
+            switch table {
+            case .deviceIdentities, .deviceAuthTokens:
                 throw OpenClawNativeStateError(
-                    "Native state database uses newer schema version \(userVersion); " +
-                        "this build supports \(Self.maximumSupportedSchemaVersion)")
+                    "Client credentials moved to the local credential owner; " +
+                        "use a compatible app and run openclaw doctor --fix")
+            case .macosPortGuardianRecords: break
+            }
+            guard userVersion <= Self.maximumSupportedSchemaVersion else {
+                throw OpenClawNativeStateError("The shared state database requires a newer OpenClaw app")
             }
 
             if userVersion == 0 {
@@ -342,35 +341,18 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
                 }
             }
             try self.validateCanonicalTable(table)
-            if newerSchema {
-                try self.validateDeviceCredentialContract(descriptor)
-            }
-        }
-    }
-
-    /// Uses the read-only handle's admitted schema; core remains the value writer.
-    public func configMachineStateValue(key: String) throws -> OpenClawNativeStateConfigValue? {
-        try self.withCurrentDatabase {
-            guard let available = self.admittedConfigMachineStateAvailable else {
-                throw OpenClawNativeStateError("Config machine-state reads require a read-only database handle")
-            }
-            guard available else { return nil }
-            let query = try self.prepare(
-                "SELECT value_json, updated_at_ms FROM config_machine_state WHERE state_key = ? LIMIT 1")
-            try query.bindText(key, at: 1)
-            guard try query.step() == .row else { return nil }
-            guard query.valueType(at: 1) == .integer else {
-                throw OpenClawNativeStateError("Config machine-state timestamp must be an integer")
-            }
-            return try OpenClawNativeStateConfigValue(
-                value: query.requiredText(at: 0, field: "config machine-state value"),
-                updatedAtMilliseconds: query.int64(at: 1))
         }
     }
 
     public func validateCanonicalTable(_ table: OpenClawNativeStateCanonicalTable) throws {
         try self.withConnectionLock {
-            try self.validateTableShape(Self.descriptor(table))
+            let descriptor = Self.descriptor(table)
+            try self.validateTableShape(descriptor)
+            switch table {
+            case .deviceIdentities, .deviceAuthTokens:
+                try self.validateLegacyCredentialContract(descriptor)
+            case .macosPortGuardianRecords: break
+            }
         }
     }
 
@@ -473,19 +455,18 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
         switch table {
         case .deviceAuthTokens: self.deviceAuthTokens
         case .deviceIdentities: self.deviceIdentities
-        case .execApprovalsConfig: self.execApprovalsConfig
         case .macosPortGuardianRecords: self.macosPortGuardianRecords
         }
     }
 
-    private func admitReadOnlySchema() throws -> Bool {
+    private func admitReadOnlySchema() throws {
         let version = try self.scalarInt64("PRAGMA user_version")
         guard version <= Self.maximumSupportedSchemaVersion else {
             throw OpenClawNativeStateError("The shared state database requires a newer OpenClaw app")
         }
         if version == 0 {
             try self.validateVersionZeroOwnership()
-            return false
+            return
         }
         try self.validateSharedDatabaseMetadata(userVersion: version)
         let available = try self.schemaObjectExists(type: "table", name: "config_machine_state")
@@ -493,7 +474,6 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
         guard available || (1...5).contains(version) else {
             throw OpenClawNativeStateError("The shared state database is missing config_machine_state")
         }
-        return available
     }
 
     private func validateVersionZeroOwnership() throws {
@@ -563,36 +543,27 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
         }
     }
 
-    /// Unrelated backend migrations must not prevent authenticating to a remote Gateway.
-    /// Admit only the complete credential contract, not merely matching column names:
-    /// new constraints, indexes, or triggers can change the meaning of native writes.
-    private func validateDeviceCredentialContract(_ table: CanonicalTable) throws {
-        let expected = Set(table.createSQL.split(separator: ";")
-            .map { Self.normalizedCredentialSQL(String($0)) }
-            .filter { !$0.isEmpty })
-        let query = try self.prepare("""
-        SELECT sql FROM sqlite_schema WHERE lower(tbl_name) = ? AND sql IS NOT NULL
-        """)
-        try query.bindText(table.name, at: 1)
-        var actual = Set<String>()
-        while try query.step() == .row {
-            try actual.insert(Self.normalizedCredentialSQL(query.requiredText(at: 0, field: "credential schema")))
-        }
-        guard actual == expected else {
-            throw OpenClawNativeStateError("\(table.name) has an incompatible native credential contract")
-        }
-    }
-
-    private static func normalizedCredentialSQL(_ sql: String) -> String {
-        // SQLite removes IF NOT EXISTS and quotes names after a STRICT migration's ALTER TABLE RENAME.
-        // Columns and index keys were already validated; these canonical declarations contain no literals.
-        sql.trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(
+    /// The bounded native-v0 importer accepts the complete historical contract.
+    private func validateLegacyCredentialContract(_ table: CanonicalTable) throws {
+        func normalize(_ sql: String) -> String {
+            sql.replacingOccurrences(
                 of: "(?i)^CREATE\\s+(TABLE|INDEX)\\s+IF\\s+NOT\\s+EXISTS\\s+",
                 with: "CREATE $1 ",
                 options: .regularExpression)
-            .filter { !$0.isWhitespace && $0 != "\"" }
-            .uppercased()
+                .filter { !$0.isWhitespace && $0 != "\"" && $0 != ";" }.uppercased()
+        }
+        let expected = Set(table.createSQL.split(separator: ";")
+            .map { normalize(String($0).trimmingCharacters(in: .whitespacesAndNewlines)) }.filter { !$0.isEmpty })
+        let query = try self.prepare("SELECT sql FROM sqlite_schema WHERE lower(tbl_name)=? AND sql IS NOT NULL")
+        try query.bindText(table.name, at: 1)
+        var actual = Set<String>()
+        while try query
+            .step() == .row
+        {
+            try actual.insert(normalize(query.requiredText(at: 0, field: "legacy schema")))
+        }
+        guard actual == expected
+        else { throw OpenClawNativeStateError("Native credential source has an unsupported schema") }
     }
 
     private func tableColumns(_ tableName: String) throws -> [Column] {
@@ -634,7 +605,7 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
         return keyColumns == table.indexColumns
     }
 
-    private static func secureDirectory(_ url: URL) throws {
+    static func secureDirectory(_ url: URL) throws {
         let fileManager = FileManager.default
         try fileManager.createDirectory(at: url, withIntermediateDirectories: true)
         var attributes: [FileAttributeKey: Any] = [.posixPermissions: 0o700]

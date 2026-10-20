@@ -4,8 +4,9 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
-import { getAgentDeletionDatabaseCleanup } from "../state/agent-deletion-cleanup.js";
+import { readAgentDeletionJournalStatusInWorker } from "../state/agent-deletion-journal.read.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { isAbortError } from "./abort-signal.js";
 import { observeAgentRunActivity } from "./agent-run-activity.js";
 import { formatErrorMessage } from "./errors.js";
@@ -25,6 +26,7 @@ import type {
   CostUsageSummary,
   SessionCostSummary,
   UsageCacheStatus,
+  UsageCostTranscriptFile,
   UsageDailyBucket,
 } from "./session-cost-usage.types.js";
 
@@ -39,6 +41,7 @@ type UsageCostRefreshState = {
   agentId: string;
   config?: OpenClawConfig;
   databasePath: string;
+  statePath: string;
   queueKey: string;
   env?: NodeJS.ProcessEnv;
   sessionActor?: SessionActorStorageBinding;
@@ -218,7 +221,11 @@ async function loadAggregateCostUsageSummary(
 }
 
 type SessionCostReadParams = {
-  sessions: Array<{ sessionId?: string; sessionFile: string }>;
+  sessions: Array<{
+    sessionId?: string;
+    sessionFile: string;
+    transcriptFile?: UsageCostTranscriptFile;
+  }>;
   config?: OpenClawConfig;
   agentId: string;
   startMs?: number;
@@ -227,16 +234,21 @@ type SessionCostReadParams = {
   dayBucket?: UsageDailyBucket;
   requestRefresh?: boolean;
   maxPublicationWaitMs?: number;
+  reportBudgetBytes?: number;
+  committedOnly?: boolean;
 };
 
-export async function loadSessionCostSummariesFromCache(
-  params: SessionCostReadParams,
-): Promise<{ summaries: Array<SessionCostSummary | null>; cacheStatus: UsageCacheStatus }> {
+export async function loadSessionCostSummariesFromCache(params: SessionCostReadParams): Promise<{
+  summaries: Array<SessionCostSummary | null>;
+  cacheStatus: UsageCacheStatus;
+  remainingReportBytes?: number;
+}> {
   const result = await loadSessionCostResultFromCache(params);
-  if (result.kind !== "sessions") {
-    throw new Error("Usage worker returned an invalid session summary");
-  }
-  return { summaries: result.summaries, cacheStatus: result.cacheStatus };
+  return {
+    summaries: result.summaries,
+    cacheStatus: result.cacheStatus,
+    remainingReportBytes: result.remainingReportBytes,
+  };
 }
 
 function loadSessionCostResultFromCache(params: SessionCostReadParams) {
@@ -252,11 +264,13 @@ async function loadCapturedSessionCostSummariesFromCache(
   prepared: PreparedUsageCostWorker,
 ): Promise<Extract<UsageCostWorkerResult, { kind: "sessions" }>> {
   const { databasePath, storePath } = prepared.location;
-  await flushPendingUsageCostRefresh(
-    prepared,
-    params.sessions.map((session) => session.sessionFile),
-    params.maxPublicationWaitMs,
-  );
+  if (!params.committedOnly) {
+    await flushPendingUsageCostRefresh(
+      prepared,
+      params.sessions.map((session) => session.sessionFile),
+      params.maxPublicationWaitMs,
+    );
+  }
   const pricingFingerprint = await resolveUsageCostPricingFingerprint(
     prepared.config,
     prepared.agentDir,
@@ -268,6 +282,8 @@ async function loadCapturedSessionCostSummariesFromCache(
     startMs: params.startMs,
     endMs: params.endMs,
     includeUntimestamped: params.includeUntimestamped,
+    reportBudgetBytes: params.reportBudgetBytes,
+    committedOnly: params.committedOnly,
     dayBucket: resolveUsageCostWorkerDayBucket(params.dayBucket),
   });
   if (result.kind !== "sessions") {
@@ -316,16 +332,6 @@ export function requestCostUsageCacheRefresh(params: UsageCostRefreshRequest): v
       path: params.databasePath,
       env: params.env,
     });
-  // Purge publications must not start rebuildable cache work in the retiring database.
-  if (
-    getAgentDeletionDatabaseCleanup({
-      agentId: params.agentId,
-      path: databasePath,
-      env: params.env,
-    })?.ownsDatabase
-  ) {
-    return;
-  }
   const queueKey = databasePath;
   const refreshes = usageCostRefreshes.get(scopeSignal) ?? new Map<string, UsageCostRefreshState>();
   const existing = refreshes.get(queueKey);
@@ -340,6 +346,7 @@ export function requestCostUsageCacheRefresh(params: UsageCostRefreshRequest): v
     config: params.config,
     databasePath,
     queueKey,
+    statePath: resolveOpenClawStateSqlitePath(params.env ?? process.env),
     env: params.env,
     sessionActor: params.sessionActor,
     fullRefreshRequested: false,
@@ -476,6 +483,16 @@ async function runQueuedUsageCostRefresh(
       }
       let partialBatch = false;
       try {
+        // Publications queued before deletion leave discovery before acquiring storage.
+        if (
+          (await readAgentDeletionJournalStatusInWorker(
+            state.agentId,
+            { path: state.statePath, env: state.env },
+            signal,
+          )) !== "absent"
+        ) {
+          return;
+        }
         if (state.fullRefreshRequested || state.pendingSessionFiles.size > 0) {
           const priorityFiles = [...state.readingSessionFiles.keys()];
           const fullRefreshRequested = state.fullRefreshRequested && priorityFiles.length === 0;
@@ -502,12 +519,8 @@ async function runQueuedUsageCostRefresh(
               }
             }
           }
-          const rebuildRows = fullRefreshRequested
-            ? [...state.pendingRebuildRows.values()]
-            : sessionFiles.flatMap((file) => {
-                const row = state.pendingRebuildRows.get(file);
-                return row ? [row] : [];
-              });
+          // Caller selectors can differ from canonical keys; the worker matches repair facts.
+          const rebuildRows = [...state.pendingRebuildRows.values()];
           if (fullRefreshRequested) {
             state.fullRefreshRequested = false;
           }
@@ -523,10 +536,10 @@ async function runQueuedUsageCostRefresh(
             onRemaining: (files) => {
               for (const { sessionFile, rollupId } of files) {
                 remainingRollupIds.add(rollupId);
-                state.pendingSessionFiles.set(
-                  state.pendingRebuildRows.has(rollupId) ? rollupId : sessionFile,
-                  null,
-                );
+                state.pendingSessionFiles.set(sessionFile, null);
+                if (state.pendingRebuildRows.has(rollupId)) {
+                  state.pendingSessionFiles.set(rollupId, null);
+                }
               }
             },
             rebuildRows,
@@ -551,7 +564,11 @@ async function runQueuedUsageCostRefresh(
             continue;
           }
           for (const row of rebuildRows) {
-            if (!remainingRollupIds.has(row.key) && state.pendingRebuildRows.get(row.key) === row) {
+            if (
+              (fullRefreshRequested || sessionFiles.includes(row.key)) &&
+              !remainingRollupIds.has(row.key) &&
+              state.pendingRebuildRows.get(row.key) === row
+            ) {
               state.pendingRebuildRows.delete(row.key);
             }
           }
@@ -568,7 +585,6 @@ async function runQueuedUsageCostRefresh(
         }
       } catch (error) {
         if (signal?.aborted && !(error instanceof AggregateError) && isAbortError(error)) {
-          logger.debug("background refresh cancelled during shutdown");
           return;
         }
         logger.warn(`background refresh failed: ${formatErrorMessage(error)}`, { error });

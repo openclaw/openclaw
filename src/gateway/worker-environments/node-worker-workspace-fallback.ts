@@ -83,6 +83,7 @@ async function localGit(root: string, args: string[]): Promise<string> {
       baseEnv: {
         ...process.env,
         GIT_TERMINAL_PROMPT: "0",
+        GIT_NO_LAZY_FETCH: "1",
         GIT_ASKPASS: "",
         SSH_ASKPASS: "",
       },
@@ -205,8 +206,12 @@ export function createNodeWorkerWorkspaceFallback(exec: NodeWorkerRepositoryExec
       if (result.mode === "plain") {
         return result;
       }
-      const author = await resolveWorkerWorkspaceGitAuthor(request, async (argv) =>
-        runCommandWithTimeout(argv, { timeoutMs: GIT_TIMEOUT_MS, maxOutputBytes: 1024 }),
+      const author = await resolveWorkerWorkspaceGitAuthor(request, async (argv, gitOptions) =>
+        runCommandWithTimeout(argv, {
+          timeoutMs: GIT_TIMEOUT_MS,
+          maxOutputBytes: 1024,
+          ...gitOptions,
+        }),
       );
       const origin = credentialFreeOrigin(
         await localGit(request.localPath, ["remote", "get-url", "origin"]).catch(() => ""),

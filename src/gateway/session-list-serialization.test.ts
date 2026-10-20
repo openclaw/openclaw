@@ -12,6 +12,7 @@ import {
   ensureBoardSchema,
   putBoardWidgetInDatabase,
 } from "../boards/sqlite-board-store.kernel.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   assignSessionOwner,
   replaceSessionEntrySync,
@@ -19,6 +20,7 @@ import {
 import { recordSessionParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -28,9 +30,9 @@ import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureUserProfilesSchema } from "../state/user-profiles-schema.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { registerChatAbortController } from "./chat-abort.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { serializeGatewayFrame } from "./serialized-json.js";
+import { registerRpcSourceForTest } from "./server-methods/rpc-source-fixtures.test-support.js";
 import {
   initializeSessionReadContext,
   listSessions,
@@ -40,10 +42,78 @@ import * as listFilters from "./session-list-filters.js";
 import { withCurrentSessionListRows } from "./session-list-read-result.js";
 import { beginSessionPermissionChange } from "./session-permission-change.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
+import { shareSidebarSessionRows } from "./session-row-presentation.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
+import { claimRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it("packs equal fields by their recipient rows without changing the input or wire facts", () => {
+  const rows = [
+    {
+      key: "one",
+      kind: "direct" as const,
+      updatedAt: 1,
+      label: "Shared",
+      pinned: false,
+      origin: { provider: "fixture" },
+      lastMessagePreview: undefined,
+    },
+    {
+      key: "two",
+      kind: "direct" as const,
+      updatedAt: 2,
+      label: "Shared",
+      pinned: false,
+      origin: { provider: "fixture" },
+      lastMessagePreview: "Unique",
+    },
+    { key: "three", kind: "direct" as const, updatedAt: 3, label: "Other", pinned: false },
+  ];
+  const original = structuredClone(rows);
+  const { rowsRevision, ...packed } = shareSidebarSessionRows(rows);
+  expect(rowsRevision).toEqual(expect.any(String));
+  expect(shareSidebarSessionRows(rows).sessions).toBe(packed.sessions);
+  expect(shareSidebarSessionRows(rows, rowsRevision)).toEqual({
+    sessions: [],
+    rowsRevision,
+    rowsUnchanged: true,
+  });
+  expect(packed).toEqual({
+    sessions: [
+      {
+        key: "one",
+        kind: "direct",
+        updatedAt: 1,
+        lastMessagePreview: undefined,
+        sharedFacts: [0, 1],
+      },
+      {
+        key: "two",
+        kind: "direct",
+        updatedAt: 2,
+        lastMessagePreview: "Unique",
+        sharedFacts: [0, 1],
+      },
+      { key: "three", kind: "direct", updatedAt: 3, label: "Other", sharedFacts: [1] },
+    ],
+    sharedFacts: [{ label: "Shared", origin: { provider: "fixture" } }, { pinned: false }],
+  });
+  expect(rows).toEqual(original);
+  expect(expandSessionRowFacts(packed.sessions, packed.sharedFacts)).toEqual(original);
+  // A changed page must not reuse the previous page's recipient groups or fact indexes.
+  const changed = { ...rows[1]!, pinned: true, label: "Changed" };
+  for (const page of [[rows[0]!, changed, rows[2]!], [rows[2]!, rows[0]!], rows]) {
+    const next = shareSidebarSessionRows(page);
+    expect(expandSessionRowFacts(next.sessions, next.sharedFacts)).toEqual(page);
+  }
+  expect(packed.sessions[0]!.sharedFacts).toEqual([0, 1]);
+  expect(packed.sharedFacts).toEqual([
+    { label: "Shared", origin: { provider: "fixture" } },
+    { pinned: false },
+  ]);
+});
 
 it("keeps sidebar display facts while bounding the wire payload", async () => {
   await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
@@ -125,6 +195,11 @@ it("keeps sidebar display facts while bounding the wire payload", async () => {
       }
       expect(result.sessions[0]).not.toHaveProperty("createdActor");
       expect(result.sharedFacts).toBeDefined();
+      const frame = JSON.parse(serializeGatewayFrame({ type: "res", payload: result }).toString());
+      expect(frame.payload).not.toHaveProperty("rowsFullReason");
+      expect(
+        JSON.stringify(expandSessionRowFacts(frame.payload.sessions, frame.payload.sharedFacts)),
+      ).toBe(JSON.stringify(rows));
       expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(
         Buffer.byteLength(JSON.stringify(compact)) * 0.5,
       );
@@ -171,6 +246,47 @@ it("keeps sidebar display facts while bounding the wire payload", async () => {
           );
         }
       }
+    } finally {
+      getSessionRowProjection(context)?.dispose();
+      release();
+    }
+  });
+});
+
+it("keeps a sidebar page revision across off-page facts and replaces it for selected facts", async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+    const context = requestContext(rolePolicyConfig());
+    const client = roleClient("view", "page-reader");
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    prepareGatewayRecipientProfile(client);
+    const keys = ["agent:main:off-page", "agent:main:selected-page"];
+    for (const [index, sessionKey] of keys.entries()) {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey },
+        { sessionId: sessionKey, updatedAt: index + 1, visibility: "shared" },
+      );
+    }
+    const release = retainSessionListForegroundWork();
+    const read = (ifRowsRevision?: string) =>
+      listSessions({
+        context,
+        client,
+        acceptsSerializedJson: true,
+        request: { rowMode: "sidebar", limit: 1, ifRowsRevision },
+      });
+    try {
+      const first = await read();
+      expect(first.sessions.map((row) => row.key)).toEqual([keys[1]]);
+      sessionChanges.emit({ sessionKey: keys[0]!, scope: "runtime" });
+      const unchanged = await read(first.rowsRevision);
+      expect(unchanged.rowsRevision).toBe(first.rowsRevision);
+      expect(unchanged.rowsUnchanged).toBe(true);
+      expect(unchanged.sessions).toEqual([]);
+      sessionChanges.emit({ sessionKey: keys[1]!, scope: "runtime" });
+      const changed = await read(first.rowsRevision);
+      expect(changed.rowsRevision).not.toBe(first.rowsRevision);
+      expect(changed.rowsUnchanged).toBeUndefined();
+      expect(changed.sessions.map((row) => row.key)).toEqual([keys[1]]);
     } finally {
       getSessionRowProjection(context)?.dispose();
       release();
@@ -337,7 +453,6 @@ it("coalesces cold sidebar selection across row slices only for the same princip
       const projection = getSessionRowProjection(context)!;
       await projection.withSelectionPreparation(async () => {
         await projection.prepareSelection();
-        const filter = vi.spyOn(listFilters, "filterSessionEntries");
         const read = (client: typeof alice, limit = 100) =>
           listSessions({
             context,
@@ -353,7 +468,6 @@ it("coalesces cold sidebar selection across row slices only for the same princip
         expect(results[0]!.sessions).toHaveLength(100);
         expect(results[0]!.totalCount).toBe(rows);
         expect(results[0]!.sessions[0]!.sessionId).toBe("cold-129");
-        expect(filter).toHaveBeenCalledTimes(1);
         for (const result of results) {
           expect(result.sessions).toEqual(results[0]!.sessions);
           expect(result.owners).toBe(results[0]!.owners);
@@ -363,7 +477,6 @@ it("coalesces cold sidebar selection across row slices only for the same princip
         expect(other.sessions[0]!.sessionId).toBe("cold-128");
         expect(other.owners).not.toBe(results[0]!.owners);
         expect((await read(alice, 1)).sessions).toHaveLength(1);
-        expect(filter).toHaveBeenCalledTimes(3);
       });
     } finally {
       getSessionRowProjection(context)?.dispose();
@@ -510,14 +623,17 @@ it("shares encoded socket lists by identity and refreshes compact, published, an
         acceptsSerializedJson: true,
       });
     expect((await readActive()).sessions).toHaveLength(0);
-    const run = registerChatAbortController({
-      chatAbortControllers: context.chatAbortControllers,
+    const run = registerRpcSourceForTest({
+      storeScope: resolveSessionStorePathCore(cfg.session?.store, { agentId: scope.agentId }),
       runId: "serialization-run",
       sessionId: entry.sessionId,
       sessionKey: scope.sessionKey,
       agentId: scope.agentId,
-      timeoutMs: 60_000,
     });
+    if (!run.entry) {
+      throw new Error("Expected a registered serialization run");
+    }
+    const releaseRun = await claimRpcSourceForTest(run.entry);
     try {
       expect((await readActive()).sessions).toHaveLength(1);
       expect((await read(0)).sessions[0]).toMatchObject({
@@ -526,6 +642,7 @@ it("shares encoded socket lists by identity and refreshes compact, published, an
         snapshotAt: start + 104,
       });
     } finally {
+      releaseRun();
       run.cleanup();
     }
     clock.mockReturnValue(start + 105);

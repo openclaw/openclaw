@@ -1,3 +1,5 @@
+import { listen } from "./reactive/listener.ts";
+
 type ReadErrorMessage = string | (() => string);
 
 export function readBlobAsDataUrl(
@@ -11,10 +13,12 @@ export function readBlobAsDataUrl(
     new Error(typeof message === "function" ? message() : message);
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.addEventListener("error", () => reject(reader.error ?? error(readError)), {
+    // The private reader owns these one-shot handlers for its single read.
+    listen(reader, "error", () => reject(reader.error ?? error(readError)), {
       once: true,
     });
-    reader.addEventListener(
+    listen(
+      reader,
       "load",
       () =>
         typeof reader.result === "string"

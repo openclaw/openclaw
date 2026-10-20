@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   inspectPortUsage: vi.fn(),
   issueDeviceBootstrapToken: vi.fn(),
   openUrl: vi.fn(),
+  openUrlPrivately: vi.fn(),
   readConfigFileSnapshot: vi.fn(),
   resolveControlUiLinks: vi.fn(),
   resolveGatewayPort: vi.fn(),
@@ -28,6 +29,11 @@ vi.mock("../onboard-helpers.js", () => ({
 
 vi.mock("../../infra/clipboard.js", () => ({
   copyToClipboard: mocks.copyToClipboard,
+}));
+
+vi.mock("../../infra/browser-handoff.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/browser-handoff.js")>()),
+  openUrlPrivately: mocks.openUrlPrivately,
 }));
 
 vi.mock("../../infra/device-bootstrap.js", () => ({
@@ -206,7 +212,7 @@ describe("dashboardCommand --json", () => {
     );
   });
 
-  it("prints one failure object and exits non-zero when not ready", async () => {
+  it("prints JSON and actionable stderr before exiting when not ready", async () => {
     mocks.ensureDashboardGatewayReady.mockResolvedValue({
       ready: false,
       reason: "Gateway is not running.",
@@ -233,6 +239,9 @@ describe("dashboardCommand --json", () => {
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(runtime.log).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Gateway is not running.\nRun `openclaw gateway status --deep` for details, then retry `openclaw dashboard --json`.",
+    );
     expect(mocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
   });
 

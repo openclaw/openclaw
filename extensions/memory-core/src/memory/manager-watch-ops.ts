@@ -1,13 +1,12 @@
 import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import type { MemorySyncParams } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
-import { MemoryFileWatcher } from "./file-watcher.js";
+import { LocalMemoryFileWatcher } from "./local-file-watcher.js";
 import { MemoryManagerSyncBase } from "./manager-sync-base.js";
 
 const log = createSubsystemLogger("memory");
 
 export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
-  private fileWatcher: MemoryFileWatcher | undefined;
+  private fileWatcher: LocalMemoryFileWatcher | undefined;
   protected memoryWatcherReady: Promise<void> = Promise.resolve();
   private remoteWatchRetirement: Promise<void> | undefined;
   private remoteWatchCloseFailure: { error: unknown } | undefined;
@@ -20,7 +19,7 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
   }
 
   protected ensureWatcher() {
-    if (!this.sources.has("memory") || !this.settings.sync.watch || this.closed) {
+    if (!this.sources.has("memory") || this.closed) {
       return;
     }
     if (this.memoryFiles) {
@@ -69,7 +68,7 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
     if (this.fileWatcher) {
       return;
     }
-    this.fileWatcher = new MemoryFileWatcher({
+    this.fileWatcher = new LocalMemoryFileWatcher({
       runInBackgroundContext: this.runInBackgroundContext,
       workspaceDir: this.workspaceDir,
       agentId: this.agentId,
@@ -78,6 +77,11 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
       onChange: () => {
         this.markMemoryWatchDirty();
         return this.sync({ reason: "watch" });
+      },
+      onState: ({ health }) => {
+        if (health.length && health.every((entry) => entry.state === "ready")) {
+          this.memoryWatchUnavailable = false;
+        }
       },
       onUnavailable: () => {
         this.memoryWatchUnavailable = true;
@@ -97,10 +101,6 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
     if (this.sessionWatchTimer) {
       clearTimeout(this.sessionWatchTimer);
       this.sessionWatchTimer = null;
-    }
-    if (this.intervalTimer) {
-      clearInterval(this.intervalTimer);
-      this.intervalTimer = null;
     }
     this.memoryWatchSubscription?.abort();
     this.memoryWatchSubscription = undefined;
@@ -146,19 +146,5 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
     } catch (err) {
       failed(err);
     }
-  }
-
-  protected ensureIntervalSync() {
-    const minutes = this.settings.sync.intervalMinutes;
-    if (!minutes || minutes <= 0 || this.intervalTimer) {
-      return;
-    }
-    const ms = resolveTimerTimeoutMs(minutes * 60 * 1000, 0, 0);
-    if (ms <= 0) {
-      return;
-    }
-    this.intervalTimer = setInterval(() => {
-      this.syncInBackground({ reason: "interval" });
-    }, ms);
   }
 }

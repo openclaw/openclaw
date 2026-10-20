@@ -26,7 +26,6 @@ import {
 import { renderSystemdUnavailableHints } from "../daemon/systemd-hints.js";
 import { classifySystemdUnavailableDetail } from "../daemon/systemd-unavailable.js";
 import { resolveGatewayBindHost, resolveGatewayRequiredListenHosts } from "../gateway/net.js";
-import { ensureSqliteLibrarySelected } from "../infra/bun-sqlite-library.js";
 import { NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON } from "../infra/gateway-supervision.js";
 import { formatInstallOwnerMessage, readInstallOwner } from "../infra/install-owner.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
@@ -72,14 +71,6 @@ function noteGatewayRuntime(
   const summary = formatRuntimeStatus(serviceRuntime);
   const hints = buildGatewayRuntimeHints(serviceRuntime, { platform: process.platform, env });
   const lines = summary ? [`Runtime: ${summary}`, ...hints] : hints;
-  const sqliteLibrary = ensureSqliteLibrarySelected();
-  if (sqliteLibrary.source !== "runtime") {
-    lines.push(
-      `SQLite (doctor process): ${sqliteLibrary.path} (${sqliteLibrary.version}, extension loading enabled)`,
-    );
-  } else if (sqliteLibrary.ignoredOverride) {
-    lines.push(`SQLite (doctor process): ${sqliteLibrary.ignoredOverride}; override ignored`);
-  }
   if (lines.length > 0) {
     note(lines.join("\n"), "Gateway");
   }

@@ -14,11 +14,9 @@ const MAX_SECURITY_VERDICT_BATCH_SIZE = 100;
 const OWNER_QUALIFIED_FALLBACK_CONCURRENCY = 6;
 const NON_SECURITY_VERIFY_REASONS = new Set(["card.missing", "card_missing"]);
 
-type ClawHubExactSkillSecurityTarget = {
-  slug: string;
-  ownerHandle?: string;
-  version: string;
-};
+type ClawHubExactSkillSecurityTarget = Parameters<
+  typeof fetchClawHubSkillSecurityVerdicts
+>[0]["items"][number];
 
 type FetchExactSkillSecurityParams = {
   items: ClawHubExactSkillSecurityTarget[];

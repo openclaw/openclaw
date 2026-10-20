@@ -2,68 +2,88 @@ import Foundation
 import Testing
 @testable import OpenClawNativeState
 #if canImport(Darwin)
-import Darwin
 import Darwin.membership
 #endif
 
 struct OpenClawNativeStateSQLiteTests {
-    @Test(arguments: ["device_identities", "device_auth_tokens"])
-    func `newer shared schemas admit only unchanged credential tables`(_ name: String) throws {
+    @Test(arguments: [OpenClawNativeStateCanonicalTable.deviceIdentities, .deviceAuthTokens])
+    func `shared adapter refuses credential creation`(_ table: OpenClawNativeStateCanonicalTable) throws {
         try self.withDatabase { database in
-            try database.ensureCanonicalTable(.deviceIdentities)
-            try database.ensureCanonicalTable(.deviceAuthTokens)
-            try database.ensureCanonicalTable(.execApprovalsConfig)
-            try database.ensureCanonicalTable(.macosPortGuardianRecords)
-            // STRICT migrations rename a temporary table, leaving its name quoted in sqlite_schema.
-            try database.execute("ALTER TABLE \(name) RENAME TO migration_temporary")
-            try database.execute("ALTER TABLE migration_temporary RENAME TO \"\(name)\"")
-            try self.createConfigMachineState(database)
-            try database.execute("PRAGMA user_version = 2147483647; UPDATE schema_meta SET schema_version = 2147483647")
-
-            try database.ensureCanonicalTable(.deviceIdentities)
-            try database.ensureCanonicalTable(.deviceAuthTokens)
-            #expect(throws: OpenClawNativeStateError.self) {
-                try database.ensureCanonicalTable(.execApprovalsConfig)
+            #expect {
+                try database.ensureCanonicalTable(table)
+            } throws: { error in
+                guard let error = error as? OpenClawNativeStateError else { return false }
+                return error.message.contains("local credential owner") &&
+                    error.message.contains("openclaw doctor --fix")
             }
-            #expect(throws: OpenClawNativeStateError.self) {
-                try database.ensureCanonicalTable(.macosPortGuardianRecords)
-            }
-            #expect(try database.scalarInt64("PRAGMA user_version") == 2_147_483_647)
+            let objectCount = try database
+                .scalarInt64("SELECT COUNT(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'")
+            #expect(objectCount == 0)
         }
     }
 
-    @Test(arguments: [
-        "UPDATE schema_meta SET role = 'agent'",
-        "UPDATE schema_meta SET schema_version = 1",
-        "DROP TABLE schema_meta",
-        "DROP TABLE device_auth_tokens",
-        "ALTER TABLE device_auth_tokens ADD COLUMN future_policy TEXT",
-        "DROP INDEX idx_device_auth_tokens_updated",
-        "CREATE UNIQUE INDEX future_token_constraint ON device_auth_tokens(token)",
-        """
-        CREATE TRIGGER future_token_cleanup AFTER DELETE ON device_auth_tokens
-        BEGIN DELETE FROM config_machine_state; END
-        """,
-        """
-        DROP TABLE device_auth_tokens;
-        CREATE TABLE device_auth_tokens (
-          device_id TEXT NOT NULL, role TEXT NOT NULL, token TEXT NOT NULL CHECK(length(token) > 5),
-          scopes_json TEXT NOT NULL, updated_at_ms INTEGER NOT NULL, PRIMARY KEY(device_id, role)
-        ) STRICT;
-        CREATE INDEX idx_device_auth_tokens_updated ON device_auth_tokens(updated_at_ms DESC, device_id, role)
-        """,
-    ])
-    func `newer credential admission refuses changed contracts without writing`(_ mutation: String) throws {
-        try self.withDatabaseURL { database, url in
-            try database.ensureCanonicalTable(.deviceAuthTokens)
-            try self.createConfigMachineState(database)
-            try database.execute("PRAGMA user_version = 2147483647; UPDATE schema_meta SET schema_version = 2147483647")
-            try database.execute(mutation)
+    @Test(arguments: [false, true])
+    func `current shared schema admits retained tables and fences credentials`(readOnly: Bool) throws {
+        try self.withDatabaseURL { writer, url in
+            try writer.withImmediateTransaction {
+                try writer.ensureCanonicalTable(.macosPortGuardianRecords)
+                try writer.execute("""
+                INSERT INTO macos_port_guardian_records VALUES (4242,18789,'synthetic-command','remote',10);
+                """)
+                try self.createConfigMachineState(writer)
+                try writer.execute("PRAGMA user_version = 29; UPDATE schema_meta SET schema_version = 29")
+            }
+            let original = try Data(contentsOf: url)
+            let database = try OpenClawNativeStateSQLite(
+                databaseURL: url, createIfMissing: false, readOnly: readOnly)
+
+            try database.ensureCanonicalTable(.macosPortGuardianRecords)
+            #expect(try database.scalarText("SELECT command FROM macos_port_guardian_records") == "synthetic-command")
+            for table in [OpenClawNativeStateCanonicalTable.deviceIdentities, .deviceAuthTokens] {
+                #expect {
+                    try database.ensureCanonicalTable(table)
+                } throws: { error in
+                    guard let error = error as? OpenClawNativeStateError else { return false }
+                    return error.message.contains("local credential owner") &&
+                        error.message.contains("openclaw doctor --fix")
+                }
+            }
+            #expect(try database.scalarInt64("""
+            SELECT COUNT(*) FROM sqlite_schema WHERE name IN ('device_identities','device_auth_tokens')
+            """) == 0)
+            if readOnly {
+                #expect(throws: OpenClawNativeStateError.self) {
+                    try database.execute("UPDATE macos_port_guardian_records SET command = 'changed-command'")
+                }
+                #expect(try Data(contentsOf: url) == original)
+            } else {
+                try database.withImmediateTransaction {
+                    try database.execute("UPDATE macos_port_guardian_records SET command = 'changed-command'")
+                }
+                #expect(try database.scalarText("SELECT command FROM macos_port_guardian_records") == "changed-command")
+            }
+            #expect(try database.scalarInt64("PRAGMA user_version") == 29)
+            #expect(try database.scalarInt64("SELECT schema_version FROM schema_meta") == 29)
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func `future shared schema refuses retained table admission`(readOnly: Bool) throws {
+        try self.withDatabaseURL { writer, url in
+            try writer.ensureCanonicalTable(.macosPortGuardianRecords)
+            try self.createConfigMachineState(writer)
+            try writer.execute("PRAGMA user_version = 30; UPDATE schema_meta SET schema_version = 30")
             let original = try Data(contentsOf: url)
 
-            #expect(throws: OpenClawNativeStateError.self) {
-                try database.ensureCanonicalTable(.deviceAuthTokens)
+            #expect {
+                let database = try OpenClawNativeStateSQLite(
+                    databaseURL: url, createIfMissing: false, readOnly: readOnly)
+                try database.ensureCanonicalTable(.macosPortGuardianRecords)
+            } throws: { error in
+                guard let error = error as? OpenClawNativeStateError else { return false }
+                return error.message.contains("newer OpenClaw app")
             }
+
             #expect(try Data(contentsOf: url) == original)
         }
     }
@@ -102,56 +122,56 @@ struct OpenClawNativeStateSQLiteTests {
             }
             let original = try Data(contentsOf: url)
             let reader = try OpenClawNativeStateSQLite(databaseURL: url, createIfMissing: false, readOnly: true)
-            let expected: OpenClawNativeStateConfigValue? = hasTable
-                ? .init(value: "retained-pin", updatedAtMilliseconds: 10)
-                : nil
-
-            #expect(try reader.configMachineStateValue(key: "fixture") == expected)
+            #expect(try reader.schemaObjectExists(type: "table", name: "config_machine_state") == hasTable)
+            if hasTable {
+                #expect(try reader.scalarText("SELECT value_json FROM config_machine_state") == "retained-pin")
+            }
             #expect(try Data(contentsOf: url) == original)
         }
     }
 
-    @Test func `read-only bootstrap admission records that config state is absent`() throws {
+    @Test func `read-only bootstrap admission preserves absent config state`() throws {
         try self.withDatabaseURL { writer, url in
-            try writer.ensureCanonicalTable(.deviceAuthTokens)
+            try writer.ensureCanonicalTable(.macosPortGuardianRecords)
             let original = try Data(contentsOf: url)
             let reader = try OpenClawNativeStateSQLite(databaseURL: url, createIfMissing: false, readOnly: true)
 
-            #expect(try reader.configMachineStateValue(key: "fixture") == nil)
+            #expect(try reader.scalarInt64("PRAGMA user_version") == 0)
             #expect(try Data(contentsOf: url) == original)
-            #expect(try writer.schemaObjectExists(type: "table", name: "config_machine_state") == false)
+            #expect(try reader.schemaObjectExists(type: "table", name: "config_machine_state") == false)
         }
     }
 
-    @Test func `admitted config reads observe foreign rows without replacing their handle`() throws {
-        try self.withDatabaseURL { writer, url in
+    @Test func `read-only config opens checkpointed WAL without sidecars`() throws {
+        let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["TMPDIR"] ?? NSTemporaryDirectory())
+            .appendingPathComponent("openclaw-native-wal-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("openclaw.sqlite")
+        do {
+            let writer = try OpenClawNativeStateSQLite(databaseURL: url)
             try self.createConfigMachineState(writer)
-            let reader = try OpenClawNativeStateSQLite(databaseURL: url, createIfMissing: false, readOnly: true)
-            #expect(try reader.configMachineStateValue(key: "fixture") == nil)
-
-            try writer.execute("INSERT INTO config_machine_state VALUES ('fixture', 'first', 10)")
-            #expect(try reader.configMachineStateValue(key: "fixture") == .init(
-                value: "first",
-                updatedAtMilliseconds: 10))
-            try writer.execute("UPDATE config_machine_state SET value_json = 'second', updated_at_ms = 20")
-            #expect(try reader.configMachineStateValue(key: "fixture") == .init(
-                value: "second",
-                updatedAtMilliseconds: 20))
-            try writer.execute("DELETE FROM config_machine_state")
-            #expect(try reader.configMachineStateValue(key: "fixture") == nil)
-            #expect(throws: OpenClawNativeStateError.self) { try writer.configMachineStateValue(key: "fixture") }
+            try writer.execute("PRAGMA journal_mode=WAL")
+            try writer.execute("INSERT INTO config_machine_state VALUES ('fixture', 'retained-pin', 10)")
+            try #require(writer.scalarInt64("PRAGMA wal_checkpoint(TRUNCATE)") == 0)
         }
-    }
-
-    @Test(arguments: ["NULL, 10", "'fixture', 'invalid-timestamp'"])
-    func `admitted config reads still reject malformed row values`(_ row: String) throws {
-        try self.withDatabaseURL { writer, url in
-            try self.createConfigMachineState(writer)
-            try writer.execute("INSERT INTO config_machine_state VALUES ('fixture', \(row))")
-            let reader = try OpenClawNativeStateSQLite(databaseURL: url, createIfMissing: false, readOnly: true)
-
-            #expect(throws: OpenClawNativeStateError.self) { try reader.configMachineStateValue(key: "fixture") }
+        // Node removes these on last close; Apple's writer may retain its empty WAL.
+        for suffix in ["-wal", "-shm"] {
+            if FileManager.default.fileExists(atPath: url.path + suffix) {
+                if suffix == "-wal" {
+                    try #require(FileManager.default.attributesOfItem(atPath: url.path + suffix)[.size] as? Int == 0)
+                }
+                try FileManager.default.removeItem(atPath: url.path + suffix)
+            }
+            try #require(!FileManager.default.fileExists(atPath: url.path + suffix))
         }
+        let original = try Data(contentsOf: url)
+        let reader = try OpenClawNativeStateSQLite(databaseURL: url, createIfMissing: false, readOnly: true)
+
+        #expect(try reader.scalarText("SELECT value_json FROM config_machine_state") == "retained-pin")
+        #expect(throws: OpenClawNativeStateError.self) {
+            try reader.execute("UPDATE config_machine_state SET value_json = 'unexpected'")
+        }
+        #expect(try Data(contentsOf: url) == original)
     }
 
     private func createConfigMachineState(_ database: OpenClawNativeStateSQLite) throws {
@@ -164,7 +184,7 @@ struct OpenClawNativeStateSQLiteTests {
     }
 
     @Test
-    func `version zero composes exact canonical tables`() throws {
+    func `version zero creates the exact native table`() throws {
         try self.withDatabase { database in
             try database.withImmediateTransaction {
                 try database.ensureCanonicalTable(.macosPortGuardianRecords)
@@ -172,14 +192,13 @@ struct OpenClawNativeStateSQLiteTests {
                 INSERT INTO macos_port_guardian_records (pid, port, command, mode, timestamp)
                 VALUES (4242, 18789, '/usr/bin/ssh', 'remote', 42.5)
                 """)
-                try database.ensureCanonicalTable(.deviceIdentities)
             }
 
             #expect(try database.scalarInt64("PRAGMA user_version") == 0)
             #expect(try database.scalarInt64(
                 "SELECT COUNT(*) FROM macos_port_guardian_records WHERE pid = 4242") == 1)
             #expect(try database.scalarInt64(
-                "SELECT COUNT(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'") == 4)
+                "SELECT COUNT(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'") == 2)
         }
     }
 
@@ -197,7 +216,7 @@ struct OpenClawNativeStateSQLiteTests {
             """)
 
             #expect(throws: OpenClawNativeStateError.self) {
-                try database.ensureCanonicalTable(.deviceIdentities)
+                try database.ensureCanonicalTable(.macosPortGuardianRecords)
             }
         }
     }
@@ -243,33 +262,6 @@ struct OpenClawNativeStateSQLiteTests {
         }
     }
 
-    @Test
-    func `concurrent version zero stores compose different tables`() async throws {
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let databaseURL = directory.appendingPathComponent("openclaw.sqlite", isDirectory: false)
-
-        try await withThrowingTaskGroup(of: Void.self) { group in
-            for table in [
-                OpenClawNativeStateCanonicalTable.deviceIdentities,
-                .macosPortGuardianRecords,
-            ] {
-                group.addTask {
-                    let database = try OpenClawNativeStateSQLite(databaseURL: databaseURL)
-                    try database.withImmediateTransaction {
-                        try database.ensureCanonicalTable(table)
-                    }
-                }
-            }
-            try await group.waitForAll()
-        }
-
-        let database = try OpenClawNativeStateSQLite(databaseURL: databaseURL)
-        #expect(try database.scalarInt64(
-            "SELECT COUNT(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'") == 4)
-    }
-
     @Test(arguments: [
         NSError(domain: NSCocoaErrorDomain, code: NSFileNoSuchFileError),
         NSError(domain: NSPOSIXErrorDomain, code: Int(POSIXErrorCode.ENOENT.rawValue)),
@@ -299,7 +291,8 @@ struct OpenClawNativeStateSQLiteTests {
     #if canImport(Darwin)
     @Test
     func `new private state removes inherited grants without changing ancestors`() throws {
-        let ancestor = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let ancestor = URL(fileURLWithPath: ProcessInfo.processInfo.environment["TMPDIR"] ?? NSTemporaryDirectory())
+            .appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: ancestor, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: ancestor) }
         try self.installACL(at: ancestor)
@@ -313,7 +306,7 @@ struct OpenClawNativeStateSQLiteTests {
         let database = try OpenClawNativeStateSQLite(databaseURL: databaseURL)
         try database.execute("PRAGMA journal_mode=WAL")
         try database.withImmediateTransaction {
-            try database.ensureCanonicalTable(.deviceIdentities)
+            try database.ensureCanonicalTable(.macosPortGuardianRecords)
         }
 
         try self.expectPrivateMetadata(at: parent, mode: 0o700)
@@ -329,14 +322,25 @@ struct OpenClawNativeStateSQLiteTests {
         createIfMissing: Bool,
         journalMode: String) throws
     {
-        let parent = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let parent = URL(fileURLWithPath: ProcessInfo.processInfo.environment["TMPDIR"] ?? NSTemporaryDirectory())
+            .appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: parent) }
         let databaseURL = parent.appendingPathComponent("openclaw.sqlite")
         do {
             let database = try OpenClawNativeStateSQLite(databaseURL: databaseURL)
             try database.withImmediateTransaction {
-                try database.ensureCanonicalTable(.deviceIdentities)
-                try database.ensureCanonicalTable(.deviceAuthTokens)
+                try database.execute("""
+                CREATE TABLE device_identities (
+                  identity_key TEXT NOT NULL PRIMARY KEY, device_id TEXT NOT NULL, public_key_pem TEXT NOT NULL,
+                  private_key_pem TEXT NOT NULL, created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL
+                ) STRICT;
+                CREATE INDEX idx_device_identities_device ON device_identities(device_id,updated_at_ms DESC);
+                CREATE TABLE device_auth_tokens (
+                  device_id TEXT NOT NULL, role TEXT NOT NULL, token TEXT NOT NULL, scopes_json TEXT NOT NULL,
+                  updated_at_ms INTEGER NOT NULL, PRIMARY KEY(device_id,role)
+                ) STRICT;
+                CREATE INDEX idx_device_auth_tokens_updated ON device_auth_tokens(updated_at_ms DESC,device_id,role);
+                """)
                 try database.execute("""
                 INSERT INTO device_identities VALUES ('profile', 'device', 'public', 'private', 10, 20);
                 INSERT INTO device_auth_tokens VALUES ('device', 'operator', 'token', '["read"]', 30);
@@ -387,7 +391,7 @@ struct OpenClawNativeStateSQLiteTests {
     func `mixed ACL preserves ordering and owner access`(principal: GrantPrincipal) throws {
         try self.withDatabaseURL { database, databaseURL in
             try database.withImmediateTransaction {
-                try database.ensureCanonicalTable(.deviceIdentities)
+                try database.ensureCanonicalTable(.macosPortGuardianRecords)
             }
             try self.installACL(
                 at: databaseURL,
@@ -402,10 +406,10 @@ struct OpenClawNativeStateSQLiteTests {
             #expect(try Data(contentsOf: databaseURL) == originalBytes)
             try database.withImmediateTransaction {
                 try database.execute("""
-                INSERT INTO device_identities VALUES ('profile', 'device', 'public', 'private', 10, 20)
+                INSERT INTO macos_port_guardian_records VALUES (4242,18789,'test','remote',10)
                 """)
             }
-            #expect(try database.scalarInt64("SELECT COUNT(*) FROM device_identities") == 1)
+            #expect(try database.scalarInt64("SELECT COUNT(*) FROM macos_port_guardian_records") == 1)
             #expect(try self.aclText(at: databaseURL) == originalACL)
         }
     }
@@ -564,7 +568,7 @@ struct OpenClawNativeStateSQLiteTests {
     private func withDatabaseURL(
         body: (OpenClawNativeStateSQLite, URL) throws -> Void) throws
     {
-        let directory = FileManager.default.temporaryDirectory
+        let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["TMPDIR"] ?? NSTemporaryDirectory())
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let databaseURL = directory.appendingPathComponent("openclaw.sqlite", isDirectory: false)

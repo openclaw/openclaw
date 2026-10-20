@@ -64,20 +64,6 @@ const LSP_SHUTDOWN_GRACE_MS = 500;
 const LSP_PROCESS_TREE_KILL_GRACE_MS = 1_000;
 const activeBundleLspSessions = new Set<LspSession>();
 
-function createLspSession(serverName: string, child: OwnedStdioProcess): LspSession {
-  return {
-    serverName,
-    process: child,
-    requestId: 0,
-    pendingRequests: createPendingRequestRegistry<number, unknown, undefined>(),
-    input: { buffer: Buffer.alloc(0), length: 0 },
-    initialized: false,
-    capabilities: {},
-    disposed: false,
-    forceClose: false,
-  };
-}
-
 function failLspSession(session: LspSession, error: Error): void {
   session.failure ??= error;
   session.pendingRequests.rejectAll(session.failure);
@@ -112,11 +98,8 @@ function attachLspProcessHandlers(session: LspSession): void {
     () => {},
     (chunk) => handleIncomingData(session, chunk),
   );
-  session.process.onStderr((chunk) => {
-    for (const line of chunk.split(/\r?\n/).filter(Boolean)) {
-      logDebug(`bundle-lsp:${session.serverName}: ${line.trim()}`);
-    }
-  });
+  // Drain the pipe without recording server output, which can contain file/tool content.
+  session.process.onStderr(() => {});
 }
 
 function encodeLspMessage(body: unknown): string {
@@ -551,10 +534,20 @@ export async function createBundleLspToolRuntime(params: {
       let session: LspSession | undefined;
 
       try {
-        session = createLspSession(
+        const child = await spawnLspServerProcess(launchConfig, {
+          abortSignal: params.abortSignal,
+        });
+        session = {
           serverName,
-          await spawnLspServerProcess(launchConfig, { abortSignal: params.abortSignal }),
-        );
+          process: child,
+          requestId: 0,
+          pendingRequests: createPendingRequestRegistry<number, unknown, undefined>(),
+          input: { buffer: Buffer.alloc(0), length: 0 },
+          initialized: false,
+          capabilities: {},
+          disposed: false,
+          forceClose: false,
+        };
         activeBundleLspSessions.add(session);
         attachLspProcessHandlers(session);
         throwIfLspAborted(params.abortSignal);
@@ -583,10 +576,6 @@ export async function createBundleLspToolRuntime(params: {
           });
           tools.push(tool);
         }
-
-        logDebug(
-          `bundle-lsp: started "${serverName}" (${describeStdioMcpServerLaunchConfig(launchConfig)}) with ${serverTools.length} tools`,
-        );
       } catch (error) {
         if (session) {
           await disposeSessions([session]);

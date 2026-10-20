@@ -3,20 +3,21 @@ import { For, Show, createMemo } from "solid-js";
 import { containsRedactedSentinel } from "../lib/config-form-utils.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import {
-  openCollectionDraft,
-  ConfigCollectionDraftHost,
-  type ConfigFormCollectionDraftCommit,
+  ConfigCollectionDraft,
+  type ConfigCollectionDraftHandle,
   type ConfigFormCollectionDraftProps,
 } from "./config-form-collection-draft.tsx";
 import { defaultValue, NO_SAFE_DEFAULT } from "./config-form.constraints.ts";
 import {
   configChildRenderOptions,
+  createCollectionFocus,
   getSensitiveRenderState,
   isAnySchema,
   jsonValue,
   CollectionRemoveButton,
   FieldRow,
   JsonTextareaControl,
+  type CollectionRowFocus,
   type ConfigNodeRenderer,
   type ConfigNodeRenderParams,
 } from "./config-form.node.shared.tsx";
@@ -51,7 +52,11 @@ function resolveMapContent(params: MapParams) {
 }
 
 function ConfigMapRow(
-  props: MapProps & { entry: [string, unknown]; anySchema: boolean },
+  props: MapProps & {
+    entry: [string, unknown];
+    anySchema: boolean;
+    focus: CollectionRowFocus;
+  },
 ): JSX.Element {
   const key = createMemo(() => props.entry[0]);
   const entryValue = () => props.entry[1];
@@ -123,6 +128,7 @@ function ConfigMapRow(
         </div>
         <div class="settings-row__control">
           <CollectionRemoveButton
+            focus={props.focus}
             label={t("configForm.removeEntry")}
             disabled={props.params.disabled}
             remove={() => {
@@ -160,7 +166,9 @@ function ConfigMapRow(
 }
 
 export function ConfigMapField(props: MapProps): JSX.Element {
+  let draft!: ConfigCollectionDraftHandle;
   const content = createMemo(() => resolveMapContent(props.params));
+  const focus = createCollectionFocus(() => content().visibleEntries.map(([key]) => key));
   return (
     <Show when={content().visible}>
       <div class="cfg-block cfg-map">
@@ -172,13 +180,14 @@ export function ConfigMapField(props: MapProps): JSX.Element {
           </Show>
           <div class="settings-row__control">
             <button
+              ref={focus.addRef}
               type="button"
               class="btn btn--sm"
               aria-controls={content().draftId}
               disabled={props.params.disabled}
-              onClick={(event) => {
+              onClick={() => {
                 if (content().entryDefault === NO_SAFE_DEFAULT) {
-                  openCollectionDraft(event, content().draftId);
+                  draft.openDraft();
                   return;
                 }
                 const nextValue = { ...props.params.value };
@@ -190,7 +199,7 @@ export function ConfigMapField(props: MapProps): JSX.Element {
                 }
                 nextValue[key] = content().entryDefault;
                 if (props.params.onPatch(props.params.path, nextValue) === false) {
-                  openCollectionDraft(event, content().draftId);
+                  draft.openDraft();
                 }
               }}
             >
@@ -198,25 +207,19 @@ export function ConfigMapField(props: MapProps): JSX.Element {
             </button>
           </div>
         </div>
-        <ConfigCollectionDraftHost
+        <ConfigCollectionDraft
+          {...content().draftProps}
           id={content().draftId}
-          props={content().draftProps}
-          onConfig-collection-draft-commit={(
-            event: CustomEvent<ConfigFormCollectionDraftCommit>,
-          ) => {
-            const key = event.detail.key;
-            if (
-              !key ||
-              Object.hasOwn(props.params.value, key) ||
-              props.params.reservedKeys.has(key) ||
+          ref={(handle) => (draft = handle)}
+          onCommit={({ key, value }) =>
+            Boolean(
+              key &&
               props.params.onPatch(props.params.path, {
                 ...props.params.value,
-                [key]: event.detail.value,
-              }) === false
-            ) {
-              event.preventDefault();
-            }
-          }}
+                [key]: value,
+              }) !== false,
+            )
+          }
         />
         <Show when={content().visibleEntries.length > 0}>
           <div class="settings-subrows">
@@ -227,6 +230,7 @@ export function ConfigMapField(props: MapProps): JSX.Element {
                   renderNode={props.renderNode}
                   entry={entry()}
                   anySchema={content().anySchema}
+                  focus={focus.row(() => entry()[0])}
                 />
               )}
             </For>

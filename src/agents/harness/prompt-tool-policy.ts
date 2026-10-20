@@ -40,7 +40,13 @@ export function createAgentHarnessPromptToolPolicy<T extends NamedTool>(params: 
   catalogRef?: ToolSearchCatalogRef;
   catalogEntries?: readonly ToolSearchCatalogEntry[];
   codeModeControlsEnabled: boolean;
-  catalogPrompt?: { config?: OpenClawConfig; agentId?: string; contextTokenBudget?: number };
+  catalogPrompt?: {
+    config?: OpenClawConfig;
+    agentId?: string;
+    sessionKey?: string;
+    contextTokenBudget?: number;
+    toolSearchDirectoryLean?: boolean;
+  };
 }) {
   const baselineTools = [...params.tools];
   const currentCatalog = params.catalogRef?.current;
@@ -100,8 +106,11 @@ export function createAgentHarnessPromptToolPolicy<T extends NamedTool>(params: 
                   catalog.ref.current?.entries ?? [],
                 )
               : buildToolSchemaDirectoryPrompt(
-                  { config: params.catalogPrompt.config, catalogRef: catalog.ref },
-                  { contextTokenBudget: params.catalogPrompt.contextTokenBudget },
+                  { ...params.catalogPrompt, catalogRef: catalog.ref },
+                  {
+                    contextTokenBudget: params.catalogPrompt.contextTokenBudget,
+                    toolSearchDirectoryLean: params.catalogPrompt.toolSearchDirectoryLean,
+                  },
                 )
             : undefined,
         callableToolNames: normalizeUniqueStringEntries([

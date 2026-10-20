@@ -90,23 +90,9 @@ loading before broader registry materialization:
   imports; plugins without startup metadata load only through narrower
   activation triggers
 
-The activation planner exposes both an ids-only API for existing callers and a
-plan API for diagnostics. Plan entries report why a plugin was selected,
-separating explicit `activation.*` hints from manifest-ownership fallback:
-
-| Reason (from `activation.*` hints)   | Reason (from manifest ownership)                                                             |
-| ------------------------------------ | -------------------------------------------------------------------------------------------- |
-| `activation-agent-harness-hint`      | —                                                                                            |
-| `activation-capability-hint`         | —                                                                                            |
-| `activation-channel-hint`            | `manifest-channel-owner` (`channels`)                                                        |
-| `activation-command-hint`            | `manifest-cli-command-owner` (`cliCommands`), `manifest-command-alias` (`commandAliases`)    |
-| `activation-provider-hint`           | `manifest-provider-owner` (`providers`), `manifest-setup-provider-owner` (`setup.providers`) |
-| `activation-route-hint`              | —                                                                                            |
-| — (hook trigger has no hint variant) | `manifest-hook-owner` (`hooks`), `manifest-tool-contract` (`contracts.tools`)                |
-
-That reason split is the compatibility boundary: existing plugin metadata
-keeps working, while new code can detect broad hints or fallback behavior
-without changing runtime loading semantics.
+The activation planner returns unique, sorted plugin ids selected by explicit
+`activation.*` hints or existing manifest ownership metadata. Both paths respect
+plugin policy and the caller's requested scope without importing runtime modules.
 
 Request-time runtime preloads that ask for the broad `all` scope still derive
 an explicit effective plugin id set from config, startup planning, configured
@@ -143,8 +129,15 @@ or an explicit manifest registry. Plugin scopes are in-memory projections;
 ordinary lookups, account changes, and run workspace changes do not trigger
 filesystem scanning, `stat`/`realpath` freshness polling, manifest rereads, or
 hashing. Plugin lifecycle operations prepare fresh metadata in their own cache
-generation. Account health and authentication state are not part of the
+generation. Gateway runtime work after a lifecycle commit, including config
+reload listeners and owners started by the reload, reads the published
+generation instead. Account health and authentication state are not part of the
 immutable package inventory.
+
+Gateway model admission uses the configured agent's workspace and plugin inventory,
+including its published discovery catalog. A session opened in another folder keeps
+that folder as its execution cwd without losing discovered models. Standalone hosts
+continue to scope plugin discovery to their requested workspace.
 
 Setup provider detection loads providers from the metadata snapshot that
 selected its choices. Its operation cache owns only the probe registrations and

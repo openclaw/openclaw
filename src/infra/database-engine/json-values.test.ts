@@ -1,7 +1,18 @@
+import { sql } from "kysely";
 import { expect, it } from "vitest";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../kysely-sync.js";
 import { requireNodeSqlite } from "../node-sqlite.js";
-import { jsonArrayFrom, jsonArrayValue, jsonObjectFrom, jsonOrderedArray } from "./json-values.js";
+import {
+  jsonArrayFrom,
+  jsonArrayValue,
+  jsonObjectFrom,
+  jsonOrderedArray,
+  jsonPathValue,
+  jsonPickObject,
+  jsonRemovePaths,
+  jsonSetPath,
+  jsonValid,
+} from "./json-values.js";
 
 it("preserves ordered row objects, JSON text fields, and empty projection results", () => {
   const { DatabaseSync } = requireNodeSqlite();
@@ -33,6 +44,35 @@ it("preserves ordered row objects, JSON text fields, and empty projection result
     empty: "[]",
     absent: null,
   });
+});
+
+it("projects nested JSON and reparents without changing opaque data or scalar types", () => {
+  const { DatabaseSync } = requireNodeSqlite();
+  using db = new DatabaseSync(":memory:");
+  const query = getNodeSqliteKysely<Record<string, never>>(db);
+  const event = sql.val(
+    '{"parentId":"old","data":{"text":"λ🦞","flag":true},"message":{"role":"assistant","tokens":3,"private":null}}',
+  );
+  const projected = jsonRemovePaths(db, event, [sql.lit("$.message.private")]);
+  const result = executeSqliteQuerySync(
+    db,
+    query.selectNoFrom([
+      jsonSetPath(db, projected, sql.lit("$.parentId"), sql.val(null)).as("event"),
+      jsonPathValue(db, event, sql.lit("$.message.tokens"), "number").as("tokens"),
+      jsonPathValue(db, event, sql.lit("$.message.role")).as("role"),
+      jsonPickObject(db, event, ["data", "absent"]).as("picked"),
+      jsonValid(db, sql.val("malformed")).as("valid"),
+    ]),
+  ).rows[0]!;
+  expect(JSON.parse(result.event)).toEqual({
+    parentId: null,
+    data: { text: "λ🦞", flag: true },
+    message: { role: "assistant", tokens: 3 },
+  });
+  expect(result.tokens).toBe(3);
+  expect(result.role).toBe("assistant");
+  expect(JSON.parse(result.picked)).toEqual({ data: { text: "λ🦞", flag: true } });
+  expect(result.valid).toBe(0);
 });
 
 it("aggregates typed tuples in key order without quoting nested arrays", () => {

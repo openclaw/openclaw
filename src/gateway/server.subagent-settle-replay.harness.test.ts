@@ -1,14 +1,12 @@
 // Real Gateway admission/replay and SQLite settlement with controlled agent-command execution.
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { buildRestartRecoveryTerminalDeliveryEvidence } from "../agents/agent-command-restart-recovery.js";
 import { buildAnnounceIdempotencyKey } from "../agents/announce-idempotency.js";
 import { prepareCommandSessionRecoveryEntry } from "../agents/command/session-preparation.js";
 import type { AgentCommandOpts } from "../agents/command/types.js";
-import type { AgentDeliveryEvidence } from "../agents/embedded-agent-runner/delivery-evidence.js";
-import { buildMainSessionRecoveryClearPatch } from "../agents/main-session-recovery/main-session-recovery-clear.js";
-import { recoverRestartAbortedMainSessions } from "../agents/main-session-recovery/main-session-restart-recovery.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../agents/subagents/announce/subagent-announce.requester-settle-wake.js";
 import {
   mutateRequesterCompletionBatch,
@@ -18,29 +16,27 @@ import { subagentRuns } from "../agents/subagents/registry/subagent-registry-mem
 import { loadSubagentRegistryFromSqlite } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { bindSubagentRunRecord } from "../agents/subagents/registry/subagent-registry.store.codec.js";
 import { writeSubagentRunValuesInDatabase } from "../agents/subagents/registry/subagent-registry.store.kernel.js";
+import { resetSubagentRegistryForTests } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
-import { getRuntimeConfig } from "../config/config.js";
 import { buildRestartRecoveryClaimCleanupPatch } from "../config/sessions/restart-recovery-state.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import {
-  appendTranscriptMessage,
   loadSessionEntryReadOnly,
-  loadTranscriptEventsSync,
   updateSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import * as pendingInputs from "../config/sessions/session-accessor.pending-inputs.js";
+import type { PendingInputScope } from "../config/sessions/session-pending-input-store.js";
 import { resolvePhysicalSessionStorePath } from "../config/sessions/session-store-path.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { ensureProfileForEmail } from "../state/user-profiles.js";
-import { captureAgentTurnPrincipal } from "./agent-turn/principal.js";
-import { captureGatewayAuthPolicy } from "./auth-policy.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { markTestRpcSourceExecutionStarted } from "./agent-turn/rpc-source.test-support.js";
+import { readUserTurnCompletionForTest } from "./pending-input-commit.test-support.js";
 import * as inProcessDispatch from "./server-plugin-in-process-dispatch.js";
-import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-support.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
+import { runPublicSettleRecoveryCase } from "./server.subagent-settle-replay-recovery.test-support.js";
+import { createRequesterFinalResult as finalResult } from "./server.subagent-settle-replay.test-support.js";
 import {
   agentCommandMock,
   installGatewayTestHooks,
@@ -57,6 +53,7 @@ describe("public yielded settle replay with real Gateway admission", () => {
   let sequence = 0;
   let requesterSessionKey: string;
   let requesterSessionId: string;
+  let requesterScope: PendingInputScope & { sessionKey: string; storePath: string };
   let child: SubagentRunRecord;
 
   async function start() {
@@ -86,6 +83,12 @@ describe("public yielded settle replay with real Gateway admission", () => {
       "sessions",
       "sessions.json",
     );
+    requesterScope = {
+      agentId: "main",
+      sessionId: requesterSessionId,
+      sessionKey: requesterSessionKey,
+      storePath: testState.sessionStorePath,
+    };
     await writeSessionStore({
       entries: { [requesterSessionKey]: { sessionId: requesterSessionId, updatedAt: Date.now() } },
     });
@@ -125,13 +128,13 @@ describe("public yielded settle replay with real Gateway admission", () => {
         rearmGeneration: 1,
       },
     };
-    subagentRuns.set(child.runId, child);
-    bindGatewayContextResolver(child, () => kernel.gatewayRequestContext);
+    installChild(child);
     persistChild();
   });
 
-  afterEach(() => {
-    subagentRuns.delete(child.runId);
+  afterEach(async () => {
+    // Real restart activation arms a sweeper; retire it before seeding the next synthetic cohort.
+    await resetSubagentRegistryForTests({ persist: false });
   });
 
   function persistChild(entry = child) {
@@ -142,25 +145,38 @@ describe("public yielded settle replay with real Gateway admission", () => {
     );
   }
 
-  const finalResult = (): Exclude<Awaited<ReturnType<typeof agentCommandMock>>, void> => ({
-    payloads: [{ text: "Requester synthesis is complete.", mediaUrl: null }],
-    meta: { durationMs: 1, finalAssistantVisibleText: "Requester synthesis is complete." },
-    deliveryStatus: {
-      requested: true,
-      attempted: true,
-      succeeded: true,
-      status: "sent",
-      resultCount: 1,
+  function installChild(entry: SubagentRunRecord) {
+    subagentRuns.set(entry.runId, entry);
+    bindGatewayContextResolver(entry, kernel.gatewayRequestContext.resolveGatewayContext);
+    if (entry.runId === child.runId) {
+      child = entry;
+    }
+    return entry;
+  }
+
+  function publishWake(entry: SubagentRunRecord, state: SubagentRunRecord["requesterSettleWake"]) {
+    const next = { ...entry, requesterSettleWake: state };
+    persistChild(next);
+    return installChild(next);
+  }
+
+  const settleWakeReplay = (sourceSessionKeys: string[]) => ({
+    sourceSessionKeys,
+    assertCurrent: () => {
+      if (subagentRuns.get(child.runId) !== child) {
+        throw new SubagentCompletionSourceChangedError("Synthetic cohort was replaced");
+      }
     },
   });
 
-  async function prepareVisibleRequesterCommand(command: AgentCommandOpts) {
-    const scope = {
-      agentId: "main",
-      sessionId: requesterSessionId,
-      sessionKey: requesterSessionKey,
+  const markCommandExecutionStarted = (command: AgentCommandOpts) =>
+    markTestRpcSourceExecutionStarted(command, {
       storePath: testState.sessionStorePath!,
-    };
+      resolveGatewayContext: kernel.gatewayRequestContext.resolveGatewayContext,
+    });
+
+  async function prepareVisibleRequesterCommand(command: AgentCommandOpts) {
+    const scope = requesterScope;
     await updateSessionEntry(
       scope,
       (entry) =>
@@ -193,7 +209,7 @@ describe("public yielded settle replay with real Gateway admission", () => {
           }
         },
       });
-      onCommitted?.();
+      await onCommitted?.();
     });
     return {
       completeBatch,
@@ -202,11 +218,8 @@ describe("public yielded settle replay with real Gateway admission", () => {
         requesterSessionKey,
         settledEntry,
         transitionBatch: (batch, state, onPublished) => {
-          for (const entry of batch) {
-            entry.requesterSettleWake = state;
-            persistChild(entry);
-          }
-          onPublished(batch);
+          const published = batch.map((entry) => publishWake(entry, state));
+          onPublished?.(published);
         },
         completeBatch,
       }),
@@ -218,7 +231,10 @@ describe("public yielded settle replay with real Gateway admission", () => {
     async (outcome) => {
       const entered = createDeferred();
       const release = createDeferred();
-      agentCommandMock.mockImplementationOnce(async () => {
+      agentCommandMock.mockImplementationOnce(async (input) => {
+        const command = input as AgentCommandOpts;
+        await command.userTurnTranscriptRecorder!.persistApproved();
+        await markCommandExecutionStarted(command);
         entered.resolve();
         await release.promise;
         if (outcome === "failure") {
@@ -249,7 +265,8 @@ describe("public yielded settle replay with real Gateway admission", () => {
           expectFinal: true,
           forceSyntheticClient: true,
           operatorRoleActor: { kind: "system" },
-          resolveGatewayContext: () => kernel.gatewayRequestContext,
+          resolveGatewayContext: kernel.gatewayRequestContext.resolveGatewayContext,
+          settleWakeReplay: settleWakeReplay([child.childSessionKey]),
         },
       );
       // Observe rejection immediately, including if admission itself fails.
@@ -281,15 +298,11 @@ describe("public yielded settle replay with real Gateway admission", () => {
           attemptCount: 1,
           rearmGeneration: 1,
         });
-        const replayDueAt = child.requesterSettleWake?.nextAttemptAt;
-        expect(replayDueAt).toBeGreaterThan(Date.now());
+        expect(child.requesterSettleWake?.nextAttemptAt).toBeUndefined();
         release.resolve();
         await terminal;
         expect(agentCommandMock).toHaveBeenCalledOnce();
-        // Only advance Date after original execution has settled. No Gateway
-        // timers run early and the persisted owner/deadline remain unchanged.
-        vi.useFakeTimers({ toFake: ["Date"] });
-        vi.setSystemTime(replayDueAt! + 1);
+        // The controller owns the admitted input; reconciliation needs no retry timer.
         const reconciliation = wake();
         expect(await reconciliation.result).toBe(outcome === "success");
         expect(agentCommandMock).toHaveBeenCalledOnce();
@@ -302,16 +315,30 @@ describe("public yielded settle replay with real Gateway admission", () => {
           });
           expect(persisted?.requesterSettleWake).toBeUndefined();
         } else {
-          // A known failed turn may rotate the next attempt, but cannot silently
-          // discharge the owed synthesis as delivered.
-          expect(reconciliation.completeBatch).not.toHaveBeenCalled();
-          expect(persisted?.requesterSettleWake).toMatchObject({
-            status: "pending",
-            attemptCount: 1,
-            rearmGeneration: 1,
+          // Record the failed accepted execution once; retrying it could repeat effects.
+          expect(reconciliation.completeBatch).toHaveBeenCalledOnce();
+          expect(reconciliation.completeBatch.mock.calls[0]?.[2]).toMatchObject({
+            delivered: false,
+            path: "direct",
+            error: "isolated requester provider failure",
           });
-          expect(persisted?.requesterSettleWake?.lastError).toBeTruthy();
+          expect(
+            reconciliation.completeBatch.mock.calls[0]?.[2]?.requesterVisibleFinalDelivered,
+          ).toBeUndefined();
+          expect(persisted?.requesterSettleWake).toBeUndefined();
+          expect(persisted?.delivery).toEqual({ status: "delivered" });
         }
+        expect(await readUserTurnCompletionForTest(requesterScope, runId)).toMatchObject({
+          run_id: runId,
+          outcome:
+            outcome === "success"
+              ? { status: "ok", reason: "completed" }
+              : {
+                  status: "error",
+                  reason: "failed",
+                  error: "isolated requester provider failure",
+                },
+        });
       } finally {
         vi.useRealTimers();
         release.resolve();
@@ -332,7 +359,11 @@ describe("public yielded settle replay with real Gateway admission", () => {
       child.execution.interruptionReason = "gateway-restart";
       child.execution.outcome = { status: "error", error: "Interrupted by Gateway restart" };
       child.cleanupCompletedAt = child.execution.endedAt;
-      child.completion = { required: true, resultText: `retained result ${child.runId}` };
+      child.completion = {
+        required: true,
+        terminalReply: { disposition: "visible", text: `retained result ${child.runId}` },
+        resultText: `retained result ${child.runId}`,
+      };
       if (scenario === "legacy") {
         child.completionRequesterSessionId = undefined;
         child.completionRequesterLifecycleRevision = undefined;
@@ -368,7 +399,11 @@ describe("public yielded settle replay with real Gateway admission", () => {
           runId: `${child.runId}-current`,
           childSessionKey: `${child.childSessionKey}-current`,
           completionRequesterLifecycleRevision: loadSessionEntryReadOnly(scope)?.lifecycleRevision,
-          completion: { required: true, resultText: "current child result" },
+          completion: {
+            required: true,
+            terminalReply: { disposition: "visible", text: "current child result" },
+            resultText: "current child result",
+          },
         });
       }
       const runIds = cohort.map((entry) => entry.runId).toSorted();
@@ -379,14 +414,12 @@ describe("public yielded settle replay with real Gateway admission", () => {
       }
       const reloaded = loadSubagentRegistryFromSqlite();
       for (const entry of cohort) {
-        const saved = reloaded.get(entry.runId)!;
-        subagentRuns.set(saved.runId, saved);
-        bindGatewayContextResolver(saved, () => kernel.gatewayRequestContext);
-        if (saved.runId === child.runId) {
-          child = saved;
-        }
+        installChild(reloaded.get(entry.runId)!);
       }
-      agentCommandMock.mockImplementationOnce(async () => finalResult());
+      agentCommandMock.mockImplementationOnce(async (input) => {
+        await markCommandExecutionStarted(input as AgentCommandOpts);
+        return finalResult();
+      });
       try {
         expect(await wake().result).toBe(true);
         expect(agentCommandMock).toHaveBeenCalledOnce();
@@ -420,6 +453,7 @@ describe("public yielded settle replay with real Gateway admission", () => {
     "visible completed",
     "visible unconsumed completion",
     "different sibling",
+    "private late descendant completed",
     "legacy completed",
     "legacy pending",
     "legacy pending revoked",
@@ -431,6 +465,15 @@ describe("public yielded settle replay with real Gateway admission", () => {
     const transcriptOnly = trigger.startsWith("legacy transcript");
     const retryable = pending || transcriptOnly;
     const revoked = trigger === "legacy pending revoked";
+    const lateDescendant = trigger === "private late descendant completed";
+    if (lateDescendant) {
+      const endedAt = Date.now() - 600_000;
+      child = {
+        ...child,
+        createdAt: endedAt - 20,
+        execution: { ...child.execution, startedAt: endedAt - 10, endedAt },
+      };
+    }
     const sibling: SubagentRunRecord = {
       ...child,
       runId: `${child.runId}-sibling`,
@@ -453,9 +496,24 @@ describe("public yielded settle replay with real Gateway admission", () => {
         afterRequesterYield: true,
         rearmGeneration: 1,
       };
-      subagentRuns.set(entry.runId, entry);
-      bindGatewayContextResolver(entry, () => kernel.gatewayRequestContext);
+      installChild(entry);
       persistChild(entry);
+    }
+    const descendant: SubagentRunRecord | undefined = lateDescendant
+      ? {
+          ...child,
+          runId: `${child.runId}-descendant`,
+          childSessionKey: `${child.childSessionKey}-descendant`,
+          requesterSessionKey: child.childSessionKey,
+          completionRequesterSessionId: child.childSessionIdentity!.sessionId,
+          requesterSettleWake: undefined,
+          cleanupCompletedAt: undefined,
+          delivery: { status: "pending" },
+        }
+      : undefined;
+    if (descendant) {
+      installChild(descendant);
+      persistChild(descendant);
     }
     const completion = vi.fn();
     const acceptedMessages: Parameters<typeof pendingInputs.stageSessionPendingInput>[1][] = [];
@@ -468,11 +526,10 @@ describe("public yielded settle replay with real Gateway admission", () => {
         if (revoked && acceptedMessages.length === 2) {
           // A newer yield revokes the frozen wave during asynchronous
           // Gateway preparation, before the real SQLite owner admits it.
-          child.requesterSettleWake = {
+          publishWake(child, {
             ...child.requesterSettleWake!,
             rearmGeneration: 2,
-          };
-          persistChild();
+          });
         }
         const receipt = await realStage(scope, options);
         admittedSources.push(receipt?.message.provenance?.sourceSessionKey);
@@ -491,11 +548,8 @@ describe("public yielded settle replay with real Gateway admission", () => {
         requesterSessionKey,
         settledEntry,
         transitionBatch: (members, state, onPublished) => {
-          for (const entry of members) {
-            entry.requesterSettleWake = state;
-            persistChild(entry);
-          }
-          onPublished(members);
+          const published = members.map((entry) => publishWake(entry, state));
+          onPublished?.(published);
         },
         // Model the crash window after Gateway input completion commits but
         // before lifecycle durably acknowledges the dispatching wake.
@@ -506,6 +560,11 @@ describe("public yielded settle replay with real Gateway admission", () => {
       expect(command.inputProvenance?.sourceSessionKey).toBe(
         legacy ? sibling.childSessionKey : child.childSessionKey,
       );
+      if (lateDescendant) {
+        expect(command.message).toContain(
+          "a descendant result below it was still undelivered when waiting stopped",
+        );
+      }
       if (pending) {
         throw new Error("isolated provider unavailable before input consumption");
       }
@@ -514,7 +573,7 @@ describe("public yielded settle replay with real Gateway admission", () => {
       if ((!legacy || transcriptOnly) && trigger !== "visible unconsumed completion") {
         await command.userTurnTranscriptRecorder!.persistApproved();
       }
-      command.onExecutionStarted?.();
+      await markCommandExecutionStarted(command);
       if (scope) {
         await updateSessionEntry(scope, (entry) =>
           buildRestartRecoveryClaimCleanupPatch({
@@ -568,6 +627,7 @@ describe("public yielded settle replay with real Gateway admission", () => {
           })
       : undefined;
     try {
+      const firstDispatchAt = Date.now();
       const admitted = await dispatch(sibling);
       legacyDispatch?.mockRestore();
       expect(admitted).toBe(!retryable);
@@ -575,12 +635,25 @@ describe("public yielded settle replay with real Gateway admission", () => {
         expect(completion.mock.calls[0]?.[2]).toMatchObject({ delivered: true });
       }
       expect(agentCommandMock).toHaveBeenCalledOnce();
-      expect(loadSubagentRegistryFromSqlite().get(child.runId)?.requesterSettleWake).toMatchObject({
+      const retainedWake = loadSubagentRegistryFromSqlite().get(child.runId)?.requesterSettleWake;
+      expect(retainedWake).toMatchObject({
         status: retryable ? "pending" : "dispatching",
         attemptCount: 1,
         batchRunIds,
       });
-      const replayDueAt = child.requesterSettleWake?.nextAttemptAt;
+      if (retryable) {
+        expect(retainedWake?.nextAttemptAt).toBeGreaterThanOrEqual(firstDispatchAt + 30_000);
+        expect(retainedWake?.nextAttemptAt).toBeLessThanOrEqual(Date.now() + 30_000);
+      } else {
+        expect(retainedWake?.nextAttemptAt).toBeUndefined();
+      }
+      if (descendant) {
+        // The child delivery changes between attempts, but the accepted private
+        // input remains the request whose successful receipt must be reconciled.
+        const delivered = { ...descendant, delivery: { status: "delivered" as const } };
+        installChild(delivered);
+        persistChild(delivered);
+      }
       const priorDedupe = kernel.gatewayRequestContext.dedupe;
       await harness.server.close({
         reason: "gateway restart",
@@ -591,14 +664,22 @@ describe("public yielded settle replay with real Gateway admission", () => {
       await start();
       await prepareGatewayReplyRuntimeForTest({ force: true });
       expect(kernel.gatewayRequestContext.dedupe).not.toBe(priorDedupe);
-      for (const entry of batch) {
-        bindGatewayContextResolver(entry, () => kernel.gatewayRequestContext);
-      }
-      if (replayDueAt) {
-        vi.useFakeTimers({ toFake: ["Date"] });
-        vi.setSystemTime(replayDueAt + 1);
+      // Minimal in-process Gateway startup does not replace already-loaded registry
+      // rows. Rebind the durable postimages to prove the private input crosses reload.
+      const restored = loadSubagentRegistryFromSqlite();
+      for (const previous of [...batch, ...(descendant ? [descendant] : [])]) {
+        installChild(expectDefined(restored.get(previous.runId), "Persisted subagent row"));
       }
       completion.mockClear();
+      if (retryable) {
+        const retryAt = expectDefined(retainedWake?.nextAttemptAt, "Private retry deadline");
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(retryAt - 1);
+        expect(await dispatch(child)).toBe(false);
+        expect(agentCommandMock).toHaveBeenCalledOnce();
+        expect(completion).not.toHaveBeenCalled();
+        vi.setSystemTime(retryAt);
+      }
       const replayed = await dispatch(child);
       if (visible) {
         expect(replayed, child.requesterSettleWake?.lastError ?? undefined).toBe(true);
@@ -647,319 +728,37 @@ describe("public yielded settle replay with real Gateway admission", () => {
       legacyDispatch?.mockRestore();
       observeAdmission.mockRestore();
       subagentRuns.delete(sibling.runId);
+      if (descendant) {
+        subagentRuns.delete(descendant.runId);
+      }
     }
   });
 
   it.for([
     "visible final",
+    "channel visible final",
     "progress only",
     "missing original authority",
     "unconsumed revoked cohort",
   ] as const)(
     "recovers public work once through a sibling and reconciles its %s",
     async (reply, { signal }) => {
-      const sibling = {
-        ...child,
-        runId: `${child.runId}-public-sibling`,
-        childSessionKey: `${child.childSessionKey}-public-sibling`,
-      };
-      const batchRunIds = [child.runId, sibling.runId].toSorted();
-      for (const entry of [child, sibling]) {
-        entry.cleanupCompletedAt = Date.now();
-        entry.requesterSettleWake = {
-          ...child.requesterSettleWake!,
-          status: "dispatching",
-          attemptCount: 1,
-          batchRunIds,
-        };
-        subagentRuns.set(entry.runId, entry);
-        bindGatewayContextResolver(entry, () => kernel.gatewayRequestContext);
-        persistChild(entry);
-      }
-      const working = createDeferred();
-      const interruptedRelease = createDeferred();
-      const resumed = createDeferred();
-      const resumedRelease = createDeferred();
-      let recoveryRunId: string | undefined;
-      const scope = {
-        agentId: "main",
-        sessionId: requesterSessionId,
-        sessionKey: requesterSessionKey,
-        storePath: testState.sessionStorePath!,
-      };
-      const runId = buildAnnounceIdempotencyKey(
-        `requester-settle:main:${requesterSessionKey}:${batchRunIds.join(",")}:yield-1`,
-      );
-      const release = () => {
-        interruptedRelease.resolve();
-        resumedRelease.resolve();
-      };
-      signal.addEventListener("abort", release, { once: true });
-      if (reply === "unconsumed revoked cohort") {
-        await appendTranscriptMessage(scope, {
-          cwd: process.env.OPENCLAW_STATE_DIR!,
-          message: {
-            role: "user",
-            content: "Continue the previously accepted human work.",
-            provenance: { kind: "external_user" },
-          },
-        });
-      }
-      agentCommandMock.mockImplementationOnce(async (input) => {
-        const command = input as AgentCommandOpts;
-        await prepareVisibleRequesterCommand(command);
-        if (reply !== "unconsumed revoked cohort") {
-          await command.userTurnTranscriptRecorder!.persistApproved();
-        }
-        command.onExecutionStarted?.();
-        await appendTranscriptMessage(scope, {
-          cwd: process.env.OPENCLAW_STATE_DIR!,
-          message: {
-            role: "assistant",
-            content: [{ type: "toolCall", id: "verify-work", name: "exec", arguments: {} }],
-            stopReason: "toolUse",
-          },
-        });
-        await appendTranscriptMessage(scope, {
-          cwd: process.env.OPENCLAW_STATE_DIR!,
-          message: {
-            role: "toolResult",
-            toolCallId: "verify-work",
-            toolName: "exec",
-            content: [{ type: "text", text: "Changes verified; the requested landing remains." }],
-            isError: false,
-          },
-        });
-        command.abortSignal!.addEventListener("abort", () => interruptedRelease.resolve(), {
-          once: true,
-        });
-        working.resolve();
-        await interruptedRelease.promise;
-        command.abortSignal!.throwIfAborted();
-        throw new Error("the Gateway restart must interrupt unfinished work");
+      await runPublicSettleRecoveryCase(reply, signal, {
+        child,
+        harness,
+        getKernel: () => kernel,
+        requesterSessionKey,
+        requesterSessionId,
+        requesterScope,
+        sequence,
+        installChild,
+        persistChild,
+        start,
+        wake,
+        settleWakeReplay,
+        prepareVisibleRequesterCommand,
+        markCommandExecutionStarted,
       });
-      const profile = ensureProfileForEmail(`settle-recovery-${sequence}@example.test`);
-      const client = createOperatorClient({ profileId: profile.id, scopes: ["operator.write"] });
-      client.connect.client.id = "openclaw-control-ui";
-      client.connect.client.mode = "webchat";
-      client.internal = { authenticatedOperator: true };
-      client.authPolicy = captureGatewayAuthPolicy(getRuntimeConfig(), {
-        role: "operator",
-        authMethod: "token",
-      });
-      const originalSource = await captureGatewayOperatorRunAuthority({
-        client: captureAgentTurnPrincipal(client),
-        context: kernel.gatewayRequestContext,
-        sourceAuthority: null,
-      });
-      expect(originalSource?.authority.recoverySnapshot).toBeDefined();
-      await updateSessionEntry(scope, () => ({
-        createdActor: { type: "human", source: "profile", id: profile.id },
-      }));
-      const original = inProcessDispatch
-        .withOperatorToolGatewayAuthority(
-          {
-            authenticatedUserProfile: client.authenticatedUserProfile,
-            scopes: ["operator.write"],
-            operatorRunAuthority: originalSource!.authority,
-          },
-          () =>
-            inProcessDispatch.dispatchGatewayMethodInProcess<Record<string, unknown>>(
-              "agent",
-              {
-                sessionKey: requesterSessionKey,
-                idempotencyKey: runId,
-                message:
-                  "Review the child result, finish verification, and land the requested change.",
-                deliver: false,
-                inputProvenance: {
-                  kind: "inter_session",
-                  sourceSessionKey: child.childSessionKey,
-                  sourceChannel: "internal",
-                  sourceTool: "subagent_settle",
-                },
-              },
-              {
-                expectFinal: true,
-                forceSyntheticClient: true,
-                operatorRoleActor: { kind: "system" },
-                settleWakeReplay: {
-                  sourceSessionKeys: [child.childSessionKey, sibling.childSessionKey],
-                  assertCurrent: () => {
-                    if (subagentRuns.get(child.runId) !== child) {
-                      throw new SubagentCompletionSourceChangedError(
-                        "Synthetic cohort was replaced",
-                      );
-                    }
-                  },
-                },
-                resolveGatewayContext: () => kernel.gatewayRequestContext,
-              },
-            ),
-        )
-        .then(
-          (value) => ({ value }),
-          (error: unknown) => ({ error }),
-        );
-      let recovery: ReturnType<typeof recoverRestartAbortedMainSessions> | undefined;
-      try {
-        await Promise.race([
-          working.promise,
-          original.then((result) => {
-            if ("error" in result) {
-              throw result.error;
-            }
-          }),
-        ]);
-        const priorDedupe = kernel.gatewayRequestContext.dedupe;
-        expect(priorDedupe.get(`agent:${runId}`)?.payload).toMatchObject({ status: "accepted" });
-        await harness.server.close({
-          reason: "gateway restart",
-          restartExpectedMs: 0,
-          drainTimeoutMs: 0,
-        });
-        await original;
-        expect(loadSessionEntryReadOnly(scope)).toMatchObject({
-          status: "interrupted",
-          abortedLastRun: true,
-          restartRecoveryRuns: [expect.objectContaining({ runId })],
-          restartRecoveryOperatorSource: {
-            sourceRunId: runId,
-            snapshot: { profileId: profile.id, scopes: ["operator.write"] },
-          },
-        });
-        if (reply === "missing original authority" || reply === "unconsumed revoked cohort") {
-          await updateSessionEntry(scope, () => ({ restartRecoveryOperatorSource: undefined }));
-        }
-        if (reply === "unconsumed revoked cohort") {
-          for (const entry of [child, sibling]) {
-            entry.requesterSettleWake = undefined;
-            persistChild(entry);
-          }
-        }
-        closeOpenClawAgentDatabasesForTest();
-        await start();
-        await prepareGatewayReplyRuntimeForTest({ force: true });
-        for (const entry of [child, sibling]) {
-          bindGatewayContextResolver(entry, () => kernel.gatewayRequestContext);
-        }
-        expect(kernel.gatewayRequestContext.dedupe).not.toBe(priorDedupe);
-        if (reply === "unconsumed revoked cohort") {
-          const { readMainSessionRecoveryCheckpoint } =
-            await import("../agents/main-session-recovery/main-session-restart-recovery-checkpoint.js");
-          expect(await readMainSessionRecoveryCheckpoint(scope)).toMatchObject({
-            source: "external_user",
-          });
-        }
-        agentCommandMock.mockImplementationOnce(async (input) => {
-          const command = input as AgentCommandOpts;
-          expect(command.sessionId).toBe(requesterSessionId);
-          expect(command.runId).not.toBe(runId);
-          expect(command.operatorAuthority?.profileId).toBe(profile.id);
-          expect(command.operatorAuthority?.scopes).toEqual(["operator.write"]);
-          command.operatorAuthority!.assertCurrent();
-          recoveryRunId = command.runId;
-          expect(command.message).toContain("restart");
-          expect(JSON.stringify(loadTranscriptEventsSync(scope))).toContain(
-            "Changes verified; the requested landing remains.",
-          );
-          command.onExecutionStarted?.();
-          resumed.resolve();
-          await resumedRelease.promise;
-          const rawEvidence: AgentDeliveryEvidence =
-            reply === "visible final"
-              ? finalResult()
-              : {
-                  payloads: [{ text: "Still checking the change.", isCommentary: true }],
-                };
-          // The controlled command uses the same durable final projection and
-          // claim cleanup as real command finalization; Gateway admission stays real.
-          await updateSessionEntry(scope, (entry) => ({
-            ...buildRestartRecoveryClaimCleanupPatch({
-              entry,
-              recordTerminalSource: true,
-              terminalRunId: command.runId,
-              terminalDeliveryEvidence: buildRestartRecoveryTerminalDeliveryEvidence(rawEvidence),
-            }),
-            ...buildMainSessionRecoveryClearPatch(entry),
-            status: "done",
-            endedAt: Date.now(),
-          }));
-          return reply === "visible final"
-            ? finalResult()
-            : { payloads: [], meta: { durationMs: 1 } };
-        });
-        recovery = recoverRestartAbortedMainSessions({
-          cfg: getRuntimeConfig(),
-          stateDir: process.env.OPENCLAW_STATE_DIR!,
-          gatewayRuntime: kernel.gatewayInstanceRuntime.recovery,
-        });
-        if (reply === "missing original authority" || reply === "unconsumed revoked cohort") {
-          await expect(recovery).resolves.toMatchObject({ started: 0, failed: 1 });
-          expect(agentCommandMock).toHaveBeenCalledTimes(1);
-          expect(loadSessionEntryReadOnly(scope)).toMatchObject({
-            status: "interrupted",
-            abortedLastRun: true,
-            restartRecoveryRuns: [expect.objectContaining({ runId })],
-            restartRecoveryDeliverySourceRunId: runId,
-          });
-          return;
-        }
-        await Promise.race([
-          resumed.promise,
-          recovery.then((result) => expect(result).toMatchObject({ started: 1, failed: 0 })),
-        ]);
-        expect(agentCommandMock).toHaveBeenCalledTimes(2);
-        const pendingReplay = wake(sibling);
-        expect(await pendingReplay.result).toBe(false);
-        expect(pendingReplay.completeBatch).not.toHaveBeenCalled();
-        expect(agentCommandMock).toHaveBeenCalledTimes(2);
-        // Let the real recovery owner settle its startup admission before the
-        // controlled command publishes its synthetic terminal claim cleanup.
-        await expect(recovery).resolves.toMatchObject({ started: 1, failed: 0 });
-        resumedRelease.resolve();
-        expect(recoveryRunId).toBeDefined();
-        await expect(
-          kernel.gatewayInstanceRuntime.recovery.waitForAgent({
-            runId: recoveryRunId!,
-            timeoutMs: 5_000,
-          }),
-        ).resolves.toMatchObject({ status: "ok" });
-        const nextAttemptAt = child.requesterSettleWake?.nextAttemptAt;
-        expect(nextAttemptAt).toBeGreaterThan(Date.now());
-        vi.useFakeTimers({ toFake: ["Date"] });
-        vi.setSystemTime(nextAttemptAt! + 1);
-        // Restart removed the old Gateway's dedupe cache. The already-admitted
-        // settle batch must recognize its completed successor instead of rerunning.
-        const completedReplay = wake(sibling);
-        expect(await completedReplay.result).toBe(reply === "visible final");
-        expect(agentCommandMock).toHaveBeenCalledTimes(2);
-        const persistedWake = loadSubagentRegistryFromSqlite().get(
-          child.runId,
-        )?.requesterSettleWake;
-        if (reply === "visible final") {
-          expect(completedReplay.completeBatch.mock.calls[0]?.[2]).toMatchObject({
-            delivered: true,
-            requesterVisibleFinalDelivered: true,
-          });
-          expect(persistedWake).toBeUndefined();
-        } else {
-          expect(completedReplay.completeBatch).not.toHaveBeenCalled();
-          expect(persistedWake).toMatchObject({
-            status: "pending",
-            attemptCount: 1,
-            lastError: "completion agent did not produce a visible reply",
-          });
-          expect(persistedWake?.nextAttemptAt).toBeGreaterThan(Date.now());
-        }
-      } finally {
-        vi.useRealTimers();
-        release();
-        await Promise.allSettled([original, recovery]);
-        signal.removeEventListener("abort", release);
-        originalSource?.release();
-        subagentRuns.delete(sibling.runId);
-      }
     },
   );
 });

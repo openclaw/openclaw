@@ -213,7 +213,7 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
       getRuntimeConfigSourceSnapshot()?.browser?.profiles,
       name,
     );
-    const expected = structuredClone(sourceProfile ?? runtimeProfile);
+    const expected = sourceProfile ?? runtimeProfile;
 
     let deleted = false;
     const configuredProfile = resolveProfile(resolveBrowserConfig(cfg.browser, cfg), name);

@@ -8,10 +8,20 @@ import {
   runSqliteImmediateTransactionSync,
   runSqliteReadSnapshotSync,
 } from "../sqlite-transaction.js";
-import type { DatabaseEngineInput } from "./config.js";
 import type { DatabaseEngineAdapter, DatabaseErrorKind } from "./contract.js";
 import { observeConnection } from "./observation.js";
 import { POSTGRES_LOCK_TIMEOUT_MS, POSTGRES_STATEMENT_TIMEOUT_MS } from "./policy.js";
+import {
+  postgresSchemaSql,
+  verifyAndRecordPostgresSchema,
+  readPostgresSchema,
+  verifyPostgresSchema,
+  withPostgresSearchExtensions,
+} from "./postgres-schema.js";
+import { bindStoreSearch } from "./search.js";
+import type { DatabaseEngineInput } from "./types.js";
+
+export { admitStoreSearch } from "./search-admission.js";
 
 function classifyError(error: unknown): DatabaseErrorKind {
   if (!(error instanceof Error)) {
@@ -34,8 +44,10 @@ function classifyError(error: unknown): DatabaseErrorKind {
 }
 
 export const databaseEngineAdapters: {
-  readonly sqlite: DatabaseEngineAdapter<DatabaseSync>;
-  readonly postgres: DatabaseEngineAdapter<PostgresSyncConnection>;
+  readonly sqlite: DatabaseEngineAdapter<DatabaseSync> & { search: typeof bindStoreSearch };
+  readonly postgres: DatabaseEngineAdapter<PostgresSyncConnection> & {
+    search: typeof bindStoreSearch;
+  };
 } = {
   sqlite: {
     id: "sqlite",
@@ -46,6 +58,7 @@ export const databaseEngineAdapters: {
       read: runSqliteDeferredTransactionSync,
     },
     capabilities: { fullText: "fts5", vector: "sqlite-vec" },
+    search: bindStoreSearch,
     schema: {
       // The store's existing SQLite schema/migration owner runs unchanged at open.
       bootstrap: (store) => store.openSqlite(),
@@ -66,6 +79,7 @@ export const databaseEngineAdapters: {
           store.anchor,
           store.storeId,
           {
+            reuse: store.reusePostgresConnection,
             lockTimeoutMs: POSTGRES_LOCK_TIMEOUT_MS,
             statementTimeoutMs: POSTGRES_STATEMENT_TIMEOUT_MS,
           },
@@ -91,20 +105,58 @@ export const databaseEngineAdapters: {
     kysely: getNodeSqliteKysely,
     transactions: { write: runSqliteImmediateTransactionSync, read: runSqliteReadSnapshotSync },
     capabilities: { fullText: "tsvector", vector: null },
+    search: bindStoreSearch,
     schema: {
       bootstrap: (store, db) => {
         if (!store.schema.postgres) {
           throw new Error("Store has no PostgreSQL schema");
         }
-        db.exec(store.schema.postgres);
+        db.exec(postgresSchemaSql(store.schema, store.namespace!));
         db.prepare(
           "INSERT INTO openclaw_schema_meta (store, version, store_id) VALUES (?, ?, ?)",
         ).run(store.schema.id, store.schema.version, store.storeId!);
       },
-      migrate: (store, from) => {
-        throw new Error(
-          `PostgreSQL ${store.schema.id} schema version mismatch: expected ${store.schema.version}, found ${from}; PostgreSQL migrations are not supported yet. Use a matching OpenClaw version or restore a matching backup.`,
-        );
+      migrate: (store, from, db) => {
+        if (from > store.schema.version) {
+          throw new Error(
+            `PostgreSQL ${store.schema.id} schema ${from} is newer than this build (expected ${store.schema.version}); use a compatible binary, or reverse-port with a compatible binary before downgrading.`,
+          );
+        }
+        for (let version = from + 1; version <= store.schema.version; version++) {
+          const migration = store.schema.postgresMigrations?.find(
+            (step) => step.version === version,
+          );
+          if (!migration) {
+            throw new Error(
+              `Missing PostgreSQL ${store.schema.id} migration to version ${version}; use a compatible binary or restore a matching backup.`,
+            );
+          }
+          const snapshot = readPostgresSchema(db, store.namespace!, store.schema.id);
+          const schema = withPostgresSearchExtensions(store.schema, snapshot);
+          verifyPostgresSchema(
+            db,
+            store.namespace!,
+            {
+              ...schema,
+              version: version - 1,
+              postgres: migration.fromSchema.postgres,
+              postgresFragments: migration.fromSchema.postgresFragments,
+            },
+            snapshot,
+          );
+          store.beforeMigrate?.(db, version - 1);
+          db.exec(migration.sql);
+          db.prepare("UPDATE openclaw_schema_meta SET version = ? WHERE store = ?").run(
+            version,
+            store.schema.id,
+          );
+          verifyAndRecordPostgresSchema(db, store.namespace!, {
+            ...schema,
+            version,
+            postgres: migration.schema.postgres,
+            postgresFragments: migration.schema.postgresFragments,
+          });
+        }
       },
     },
     classifyError,

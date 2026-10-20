@@ -4,8 +4,15 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig, type NormalizedPluginsConfig } from "../plugins/config-state.js";
 import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import {
+  resolvePluginOwnedProviderAuthWith,
+  resolveProviderAuthScope,
+} from "../plugins/provider-auth-scope.js";
+import { resolveLoadedProviderRuntimePlugin } from "../plugins/provider-hook-runtime.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
+import { getActiveSecretsRuntimeSnapshotRevisionState } from "../secrets/runtime-state.js";
 import {
   withCurrentReadAuthority,
   type CurrentReadAuthority,
@@ -33,6 +40,7 @@ import {
   createModelAuthAvailabilityResolver,
   type ModelAuthAvailabilityEvaluation,
 } from "./model-auth-availability.js";
+import { isAuthModeAllowedForModel } from "./model-auth-policy.js";
 import { createUnlistedClaudeCliWildcardCheck } from "./model-catalog-cli-wildcard.js";
 import { resolveCatalogDecisionRuntime } from "./model-catalog-decision-runtime.js";
 import {
@@ -261,9 +269,68 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
       : nativeEvaluator(entry, host, runtimeId);
   // Retire the captured host evaluation so its caller prepares fresh facts.
   const authValidUntil = resolveAuthStoreReadOnlyValidUntil(authStore, Date.now());
+  const isPluginAuthProvider = (provider: string) =>
+    resolveProviderAuthScope({
+      provider,
+      config: params.cfg,
+      workspaceDir,
+      pluginMetadataSnapshot: metadataSnapshot,
+    }) === "plugin";
+  const pluginAuthRevision = getActiveSecretsRuntimeSnapshotRevisionState();
+  const hasPluginAuth = snapshot.entries.some((entry) => isPluginAuthProvider(entry.provider));
   const agentDir = resolveAgentDir(params.cfg, params.agentId);
   let normalizedPlugins: NormalizedPluginsConfig | undefined;
   const authResolver = createModelAuthAvailabilityResolver({
+    evaluatePluginAuth: (provider, ref) => {
+      if (!params.pluginRegistry) {
+        return { availability: undefined, routeResolution: null, availabilityAuthoritative: true };
+      }
+      try {
+        return withPluginRuntimeGenerationScope(
+          { metadataSnapshot, pluginRegistry: params.pluginRegistry },
+          () => {
+            const auth = resolvePluginOwnedProviderAuthWith(
+              {
+                provider,
+                config: params.cfg,
+                workspaceDir,
+                pluginMetadataSnapshot: metadataSnapshot,
+                profileId: ref.requiredProfileId ?? ref.pinnedProfileId,
+                preferredProfile: ref.preferredProfileId,
+              },
+              resolveLoadedProviderRuntimePlugin,
+            );
+            // Credential and model policy must observe the same prepared owner generation.
+            const compatible =
+              isAuthModeAllowedForModel({
+                provider,
+                mode: auth.mode,
+                modelApi: ref.api ?? undefined,
+                modelBaseUrl: typeof ref.baseUrl === "string" ? ref.baseUrl : undefined,
+              }) &&
+              (!auth.nativeAuth || auth.nativeAuth.runtime === ref.runtimeId);
+            return {
+              availability: compatible,
+              selectedAuthMode: auth.mode,
+              ...(compatible && auth.nativeAuth
+                ? { runtimeAuth: { id: auth.nativeAuth.runtime, source: "native" as const } }
+                : {}),
+              evidence: "runtime" as const,
+              routeResolution: null,
+              availabilityAuthoritative: true as const,
+            };
+          },
+        );
+      } catch {
+        return {
+          availability: false,
+          unavailableReason: "missing-auth",
+          evidence: "runtime",
+          routeResolution: null,
+          availabilityAuthoritative: true,
+        };
+      }
+    },
     cfg: params.cfg,
     agentId: params.agentId,
     authStore,
@@ -339,7 +406,8 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
       entry.baseUrl,
       observedRoutes,
     ]);
-    const cached = evaluations.get(cacheKey);
+    const pluginAuth = isPluginAuthProvider(entry.provider);
+    const cached = pluginAuth ? undefined : evaluations.get(cacheKey);
     if (cached) {
       return cached;
     }
@@ -393,7 +461,9 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
           unavailableUntil: undefined,
         }
       : listed;
-    evaluations.set(cacheKey, evaluation);
+    if (!pluginAuth) {
+      evaluations.set(cacheKey, evaluation);
+    }
     return evaluation;
   };
   const missingPersonalPin = Boolean(
@@ -415,6 +485,7 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
   const accountObservations: Array<() => boolean> = [];
   const isCurrent = () =>
     Date.now() < authValidUntil &&
+    (!hasPluginAuth || getActiveSecretsRuntimeSnapshotRevisionState() === pluginAuthRevision) &&
     personalCatalog?.isCurrent() !== false &&
     (params.isCurrent?.() ?? params.observationConfig === undefined) &&
     accountObservations.every((current) => current());
@@ -614,6 +685,7 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
               provider: entry.provider,
               modelId: entry.id,
               requestedRuntime: runtimeId,
+              contextManagement: harness.contextManagement,
               modelProvider: {
                 api: route?.api ?? entry.api,
                 baseUrl: route?.baseUrl ?? entry.baseUrl,

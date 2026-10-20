@@ -1,10 +1,10 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
 import { getOpenClawStateFeatureSchemaSql } from "../../state/openclaw-state-feature-schema.js";
 import type {
@@ -32,7 +32,7 @@ type AttachmentTable = {
 type AttachmentDatabase = Pick<StateDatabase, "worker_environments"> & {
   worker_environment_session_attachments: AttachmentTable;
 };
-const query = (db: DatabaseSync) => getNodeSqliteKysely<AttachmentDatabase>(db);
+const query = (db: EngineConnection) => getNodeSqliteKysely<AttachmentDatabase>(db);
 
 export const WORKER_ENVIRONMENT_SESSION_ATTACHMENTS_SCHEMA_SQL = getOpenClawStateFeatureSchemaSql(
   "worker_environment_session_attachments",
@@ -54,7 +54,7 @@ function fromRow(row: Selectable<AttachmentTable>): WorkerEnvironmentAttachmentR
   };
 }
 
-function get(db: DatabaseSync, sessionId: string) {
+function get(db: EngineConnection, sessionId: string) {
   const row = executeSqliteQueryTakeFirstSync(
     db,
     query(db)
@@ -65,7 +65,10 @@ function get(db: DatabaseSync, sessionId: string) {
   return row ? fromRow(row) : undefined;
 }
 
-export function readWorkerEnvironmentSessionAttachments(db: DatabaseSync, ids?: readonly string[]) {
+export function readWorkerEnvironmentSessionAttachments(
+  db: EngineConnection,
+  ids?: readonly string[],
+) {
   if (ids?.length === 0) {
     return [];
   }
@@ -76,7 +79,7 @@ export function readWorkerEnvironmentSessionAttachments(db: DatabaseSync, ids?: 
 }
 
 export function hasWorkerEnvironmentSessionAttachment(
-  db: DatabaseSync,
+  db: EngineConnection,
   environmentId: string,
 ): boolean {
   return Boolean(
@@ -91,10 +94,13 @@ export function hasWorkerEnvironmentSessionAttachment(
 }
 
 export function createWorkerEnvironmentSessionAttachmentStore(options: {
-  db: DatabaseSync;
+  db: EngineConnection;
   now: () => number;
   createIntent: (input: WorkerEnvironmentIntentInput) => WorkerEnvironmentRecord;
-  getEnvironment: (db: DatabaseSync, environmentId: string) => WorkerEnvironmentRecord | undefined;
+  getEnvironment: (
+    db: EngineConnection,
+    environmentId: string,
+  ) => WorkerEnvironmentRecord | undefined;
 }) {
   const { db, now } = options;
   const assertIdentity = (

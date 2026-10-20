@@ -8,6 +8,7 @@ import {
   truncateErrorDetail,
 } from "openclaw/plugin-sdk/provider-http";
 import {
+  externalContentStamp,
   buildSearchCacheKey,
   buildUnsupportedSearchFilterResponse,
   MAX_SEARCH_COUNT,
@@ -472,12 +473,7 @@ export async function executeGeminiSearch(
     provider: "gemini",
     model,
     tookMs: Date.now() - start,
-    externalContent: {
-      untrusted: true,
-      source: "web_search",
-      provider: "gemini",
-      wrapped: true,
-    },
+    externalContent: externalContentStamp("gemini"),
     content: wrapWebContent(result.content),
     citations: result.citations,
   };

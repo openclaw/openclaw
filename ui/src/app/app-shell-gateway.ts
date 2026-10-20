@@ -1,6 +1,6 @@
 import type { UiCommandParams } from "@openclaw/gateway-protocol";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import type { GatewayBrowserClient, GatewayEventFrame } from "../api/gateway.ts";
+import type { GatewayBrowserClient, GatewayEventFrame, GatewayHelloOk } from "../api/gateway.ts";
 import type { GatewayAgentRow } from "../api/types.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
 import {
@@ -39,7 +39,7 @@ export type StoredOutboxScopeHost = {
   settings: { gatewayUrl?: string | null };
   assistantAgentId?: string | null;
   agentsList?: { defaultId?: string | null; mainKey?: string | null } | null;
-  hello?: { snapshot?: unknown } | null;
+  hello?: Pick<GatewayHelloOk, "snapshot"> | null;
 };
 
 export type OutboxStoreRuntime = ReturnType<
@@ -56,7 +56,7 @@ export interface ShellGatewayHost {
   observeDeletedSessions(sessionState: ApplicationContext["sessions"]["state"]): void;
   recoverDeletedActiveSession(): void;
   selectChatSession(sessionKey: string, agentId?: string | null): void;
-  requestUpdate(): void;
+  invalidate(): void;
 }
 
 function diffAgentRoster(
@@ -114,6 +114,7 @@ export class ShellGatewayOwner {
       synchronizeTitle();
     };
     synchronize();
+    // Deletion receipts retire handoffs and reconcile selection before the next render.
     const unsubscribe = sessions.subscribe(synchronize);
     return () => {
       active = false;
@@ -220,9 +221,9 @@ export class ShellGatewayOwner {
       });
     }
     const modelInvalidation = modelCatalogEventInvalidation(event);
-    const commandsChanged =
-      event.event !== "chat.metadata.changed" ||
-      asNullableRecord(event.payload)?.commandsChanged !== false;
+    const metadataChange =
+      event.event === "chat.metadata.changed" ? asNullableRecord(event.payload) : undefined;
+    const commandsChanged = metadataChange?.commandsChanged !== false;
     if (client && modelAuthEventInvalidates(event)) {
       invalidateModelAuthStatusRequests(client);
     }
@@ -232,7 +233,9 @@ export class ShellGatewayOwner {
     ) {
       invalidateChatMetadataStore(
         client,
-        undefined,
+        typeof metadataChange?.agentId === "string"
+          ? { agentId: metadataChange.agentId }
+          : undefined,
         undefined,
         modelInvalidation ?? "preserve",
         commandsChanged,
@@ -319,6 +322,9 @@ export class ShellGatewayOwner {
         {
           detail: {
             open: command.open,
+            ...(command.panel === "portal" && commandParams.requestId
+              ? { requestId: commandParams.requestId }
+              : {}),
             ...(command.panel === "plugin"
               ? {
                   pluginId: command.pluginId,
@@ -594,7 +600,7 @@ export class ShellGatewayOwner {
           }
           // Readiness releases the shell and private-background descendants even
           // when the profile snapshot matches the browser mirror.
-          this.host.requestUpdate();
+          this.host.invalidate();
         }
       })
       .catch(reportError);

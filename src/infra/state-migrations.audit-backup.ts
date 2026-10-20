@@ -7,6 +7,7 @@ import { CONFIG_AUDIT_SCOPE } from "../config/io.audit.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { SYSTEM_AGENT_AUDIT_SCOPE } from "../system-agent/audit.js";
 import { root as createFsSafeRoot } from "./fs-safe.js";
+import type { SqlConnection } from "./sql-connection.js";
 import {
   detectLegacyAuditLogs,
   legacyAuditSourceGenerationKey,
@@ -51,7 +52,7 @@ export class LegacyAuditBackupStateChangedError extends Error {
 
 const LEGACY_AUDIT_RAW_CHECKPOINT_SCOPE = "migration.legacy-audit-raw";
 
-export function createLegacyAuditDatabaseWitness(database: DatabaseSync): string {
+export function createLegacyAuditDatabaseWitness(database: SqlConnection): string {
   const rows = database // sqlite-allow-raw -- Exact snapshot rows define the cross-store witness.
     .prepare(
       `SELECT scope, event_key, payload_json, created_at, sequence

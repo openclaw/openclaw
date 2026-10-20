@@ -8,6 +8,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
   applyAuthProfileConfig,
+  applyProviderAuthConfigPatch,
   type AuthProfileStore,
   buildTokenProfileId,
   listProfilesForProvider,
@@ -17,6 +18,7 @@ import {
   validateAnthropicSetupToken,
 } from "openclaw/plugin-sdk/provider-auth";
 import { upsertAuthProfileWithLockOrThrow } from "openclaw/plugin-sdk/provider-auth-api-key";
+import { applyProviderDefaultModel } from "openclaw/plugin-sdk/provider-setup";
 import * as claudeCliAuth from "./cli-auth-seam.js";
 import { buildAnthropicCliMigrationResult } from "./cli-migration.js";
 
@@ -212,7 +214,7 @@ export function buildAnthropicAuthDoctorHint(params: {
 
 export async function runAnthropicCliMigration(
   ctx: Pick<ProviderAuthContext, "config" | "env">,
-): Promise<ProviderAuthResult> {
+): Promise<ReturnType<typeof buildAnthropicCliMigrationResult>> {
   const authStatus = await claudeCliAuth.probeClaudeCliAuthStatus({ env: ctx.env ?? process.env });
   if (authStatus.status !== "available") {
     const error =
@@ -238,33 +240,8 @@ export async function runAnthropicCliMigrationNonInteractive(ctx: {
   agentDir?: string;
 }): Promise<ProviderAuthContext["config"] | null> {
   const result = await runAnthropicCliMigration(ctx);
-  const currentDefaults = ctx.config.agents?.defaults;
-  const currentModel = currentDefaults?.model;
-  const currentFallbacks =
-    currentModel && typeof currentModel === "object" && "fallbacks" in currentModel
-      ? currentModel.fallbacks
-      : undefined;
-  const migratedModel = result.configPatch?.agents?.defaults?.model;
-  const migratedFallbacks =
-    migratedModel && typeof migratedModel === "object" && "fallbacks" in migratedModel
-      ? migratedModel.fallbacks
-      : undefined;
-  const nextFallbacks = Array.isArray(migratedFallbacks) ? migratedFallbacks : currentFallbacks;
-
-  return {
-    ...ctx.config,
-    ...result.configPatch,
-    agents: {
-      ...ctx.config.agents,
-      ...result.configPatch?.agents,
-      defaults: {
-        ...currentDefaults,
-        ...result.configPatch?.agents?.defaults,
-        model: {
-          ...(Array.isArray(nextFallbacks) ? { fallbacks: nextFallbacks } : {}),
-          primary: result.defaultModel,
-        },
-      },
-    },
-  };
+  return applyProviderDefaultModel(
+    applyProviderAuthConfigPatch(ctx.config, result.configPatch, result),
+    result.defaultModel,
+  );
 }

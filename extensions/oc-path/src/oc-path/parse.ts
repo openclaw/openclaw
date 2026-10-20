@@ -6,30 +6,40 @@
  * Grammar opinions (indented `##`, empty `## `, ordered lists, nested
  * sub-bullets) live in lint rules, not the parser.
  *
- * Byte-fidelity: `parseMd(raw).ast.raw === raw`.
+ * Byte-fidelity: `parseMd(raw).raw === raw`.
  *
  * @module @openclaw/oc-path/parse
  */
 
 import MarkdownIt, { type MarkdownIt as MarkdownItParser } from "markdown-it";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import type { AstBlock, AstItem, Diagnostic, FrontmatterEntry, ParseResult } from "./ast.js";
+import { isScalar, parseDocument } from "yaml";
+import type { AstBlock, AstItem, FrontmatterEntry, MdAst } from "./ast.js";
 import { slugify } from "./slug.js";
 
 type Token = ReturnType<MarkdownItParser["parse"]>[number];
 
 const FENCE = "---";
 const BOM = "﻿";
-const KV_RE = /^([^:]+?)\s*:\s*(.+)$/;
 
 const md = new MarkdownIt({ html: true });
 
-export function parseMd(raw: string): ParseResult {
-  const diagnostics: Diagnostic[] = [];
+export function parseMdItemKeyValue(text: string): AstItem["kv"] {
+  const match = /^([^:\r\n]+?)[ \t]*:\s*(.+)$/s.exec(text);
+  const value = match === null ? "" : expectDefined(match[2], "item value capture").trim();
+  return match === null || value === ""
+    ? undefined
+    : {
+        key: expectDefined(match[1], "item key capture").trim(),
+        value,
+      };
+}
+
+export function parseMd(raw: string): MdAst {
   const withoutBom = raw.startsWith(BOM) ? raw.slice(BOM.length) : raw;
   const lines = withoutBom.split(/\r?\n/);
 
-  const fm = detectFrontmatter(lines, diagnostics);
+  const fm = detectFrontmatter(lines);
   const bodyStartIdx = fm === null ? 0 : fm.endLine + 1;
   const bodyLines = lines.slice(bodyStartIdx);
   const bodyFileLine = bodyStartIdx + 1;
@@ -38,8 +48,12 @@ export function parseMd(raw: string): ParseResult {
   const { preamble, blocks } = walkBlocks(tokens, bodyLines, bodyFileLine);
 
   return {
-    ast: { kind: "md", raw, frontmatter: fm?.entries ?? [], preamble, blocks },
-    diagnostics,
+    kind: "md",
+    raw,
+    frontmatter: fm?.entries ?? [],
+    ...(fm === null ? {} : { frontmatterEndLine: fm.endLine + 1 }),
+    preamble,
+    blocks,
   };
 }
 
@@ -49,10 +63,7 @@ interface FrontmatterRange {
   readonly endLine: number;
 }
 
-function detectFrontmatter(
-  lines: readonly string[],
-  diagnostics: Diagnostic[],
-): FrontmatterRange | null {
+function detectFrontmatter(lines: readonly string[]): FrontmatterRange | null {
   if (lines.length < 2 || lines.at(0) !== FENCE) {
     return null;
   }
@@ -64,12 +75,6 @@ function detectFrontmatter(
     }
   }
   if (closeIndex === -1) {
-    diagnostics.push({
-      line: 1,
-      message: "frontmatter opens with --- but never closes",
-      severity: "warning",
-      code: "OC_FRONTMATTER_UNCLOSED",
-    });
     return null;
   }
   const entries: FrontmatterEntry[] = [];
@@ -89,6 +94,15 @@ function unquote(value: string): string {
     const f = value.charCodeAt(0);
     const l = value.charCodeAt(value.length - 1);
     if (f === l && (f === 34 || f === 39)) {
+      const doc = parseDocument(value, { prettyErrors: false });
+      if (
+        doc.errors.length === 0 &&
+        isScalar(doc.contents) &&
+        typeof doc.contents.value === "string"
+      ) {
+        return doc.contents.value;
+      }
+      // Preserve the tolerant handling of malformed, hand-authored quoted values.
       return value.slice(1, -1);
     }
   }
@@ -166,16 +180,12 @@ function extractItems(tokens: readonly Token[], bodyFileLine: number): AstItem[]
         text = x.content;
       }
     }
-    const kvMatch = KV_RE.exec(text);
-    const kvKey = kvMatch === null ? undefined : expectDefined(kvMatch[1], "item key capture");
-    const kvValue = kvMatch === null ? undefined : expectDefined(kvMatch[2], "item value capture");
+    const kv = parseMdItemKeyValue(text);
     items.push({
       text,
-      slug: kvKey === undefined ? slugify(text) : slugify(kvKey),
+      slug: slugify(kv?.key ?? text),
       line: bodyFileLine + expectDefined(t.map.at(0), "list item token map start"),
-      ...(kvKey !== undefined && kvValue !== undefined
-        ? { kv: { key: kvKey.trim(), value: kvValue.trim() } }
-        : {}),
+      ...(kv === undefined ? {} : { kv }),
     });
   }
   return items;

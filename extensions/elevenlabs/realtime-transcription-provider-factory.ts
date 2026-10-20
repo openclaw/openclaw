@@ -112,6 +112,9 @@ export function buildElevenLabsRealtimeTranscriptionProvider({
   PluginCapabilityCatalogContext,
   "createRealtimeTranscriptionWebSocketSession"
 >): RealtimeTranscriptionProviderPlugin {
+  const isConfigured: NonNullable<RealtimeTranscriptionProviderPlugin["isConfigured"]> = ({
+    providerConfig,
+  }) => Boolean(resolveElevenLabsRealtimeApiKey(normalizeProviderConfig(providerConfig)));
   return {
     id: "elevenlabs",
     label: "ElevenLabs Realtime Transcription",
@@ -119,8 +122,9 @@ export function buildElevenLabsRealtimeTranscriptionProvider({
     defaultModel: ELEVENLABS_REALTIME_DEFAULT_MODEL,
     autoSelectOrder: 40,
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
-    isConfigured: ({ providerConfig }) =>
-      Boolean(resolveElevenLabsRealtimeApiKey(normalizeProviderConfig(providerConfig))),
+    // Retained for synchronous SDK consumers through 2026-12-31.
+    isConfigured,
+    isConfiguredAsync: async (ctx) => isConfigured(ctx),
     createSession: (req) => {
       const config = normalizeProviderConfig(req.providerConfig);
       const apiKey = resolveElevenLabsRealtimeApiKey(config);
@@ -137,9 +141,7 @@ export function buildElevenLabsRealtimeTranscriptionProvider({
         providerId: "elevenlabs",
         callbacks,
         url: () => {
-          const url = new URL(
-            `${normalizeElevenLabsRealtimeBaseUrl(baseUrl)}/v1/speech-to-text/realtime`,
-          );
+          const url = new URL(`${baseUrl}/v1/speech-to-text/realtime`);
           url.searchParams.set("model_id", config.modelId ?? ELEVENLABS_REALTIME_DEFAULT_MODEL);
           url.searchParams.set(
             "audio_format",

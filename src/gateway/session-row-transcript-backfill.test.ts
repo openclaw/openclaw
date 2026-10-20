@@ -121,6 +121,7 @@ describe("session row transcript backfill", () => {
           try {
             await expect(backfillSessionRowTranscriptFields(params)).resolves.toEqual({
               lastMessagePreview: "Found the slow query",
+              lastAssistantMessage: { text: "Found the slow query", timestamp: expect.any(Number) },
             });
             for (const statement of hostSql.calls) {
               expect(statement).not.toHaveBeenCalled();
@@ -205,11 +206,20 @@ describe("session row transcript backfill", () => {
                     : storage === "current"
                       ? {
                           lastMessagePreview: "Finished with fallback",
+                          lastAssistantMessage: {
+                            text: "Finished with fallback",
+                            timestamp: expect.any(Number),
+                          },
                           fallbackModel: { provider: "unit-test", model: "fallback" },
                         }
                       : alias
-                        ? { lastMessagePreview: preview }
-                        : {},
+                        ? {
+                            lastMessagePreview: preview,
+                            lastAssistantMessage: { text: preview, timestamp: expect.any(Number) },
+                          }
+                        : storage === "unavailable" || storage === "absent"
+                          ? undefined
+                          : {},
                 );
                 for (const statement of hostSql.calls) {
                   expect(statement).not.toHaveBeenCalled();
@@ -387,6 +397,7 @@ describe("session row transcript backfill", () => {
       expect(readFacts()?.transcriptPreview).toBeUndefined();
       await expect(backfillSessionRowTranscriptFields(params)).resolves.toEqual({
         lastMessagePreview: "Found the slow query",
+        lastAssistantMessage: { text: "Found the slow query", timestamp: expect.any(Number) },
       });
 
       await withColdStore(params, async () => {
@@ -431,6 +442,8 @@ describe("session row transcript backfill", () => {
         lastMessagePreview: "Imported next",
       });
       expect(readFacts()?.transcriptPreview).toBe("Imported next");
+      // Legacy events without a message or record timestamp cannot rank an agent's reply.
+      expect(readFacts()?.transcriptAssistantMessage).toBeNull();
     });
   });
 
@@ -439,6 +452,7 @@ describe("session row transcript backfill", () => {
       async (params) => {
         expect(backfillInDatabase(params)).toMatchObject({
           lastMessagePreview: null,
+          lastAssistantMessage: null,
           terminalModel: { runId: "terminal-run", modelProvider: "unit-test", model: "fallback" },
         });
       },
@@ -461,6 +475,24 @@ describe("session row transcript backfill", () => {
           activeModel: "unit-test/fallback",
         },
       },
+    );
+  });
+
+  it("omits assistant previews outside the bounded message tail", async () => {
+    await withSession(
+      async (params) => {
+        expect(backfillInDatabase(params)).toMatchObject({
+          lastMessagePreview: "Followup 20",
+          lastAssistantMessage: null,
+        });
+      },
+      [
+        { role: "assistant", content: "Older answer", timestamp: 100 },
+        ...Array.from({ length: 21 }, (_, index) => ({
+          role: "user",
+          content: `Followup ${index}`,
+        })),
+      ],
     );
   });
 

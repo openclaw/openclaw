@@ -47,9 +47,9 @@ export const DEFAULT_MODEL_ALIASES: Readonly<Record<string, string>> = {
   "gpt-mini": "openai/gpt-5.4-mini",
   "gpt-nano": "openai/gpt-5.4-nano",
 
-  gemini: "google/gemini-3.1-pro-preview",
-  "gemini-flash": "google/gemini-3-flash-preview",
-  "gemini-flash-lite": "google/gemini-3.1-flash-lite",
+  gemini: "google/gemini-4-argon",
+  "gemini-flash": "google/gemini-3.8-flash",
+  "gemini-flash-lite": "google/gemini-3.5-flash-lite",
 };
 
 const DEFAULT_MODEL_COST: ModelDefinitionConfig["cost"] = {
@@ -123,6 +123,23 @@ export function applyMessageDefaults(cfg: OpenClawConfig): OpenClawConfig {
   return {
     ...cfg,
     messages: { ...messages, ackReactionScope: "group-mentions" },
+  };
+}
+
+/** Persist the queue default only during initial creation or an explicit Doctor repair. */
+export function applyMessageQueueDefaults(cfg: OpenClawConfig): OpenClawConfig {
+  const messages = cfg.messages;
+  const queue = messages?.queue;
+  if (
+    (messages !== undefined && !isRecord(messages)) ||
+    (queue !== undefined && !isRecord(queue)) ||
+    queue?.allowCollaborativeSteering !== undefined
+  ) {
+    return cfg;
+  }
+  return {
+    ...cfg,
+    messages: { ...messages, queue: { ...queue, allowCollaborativeSteering: false } },
   };
 }
 

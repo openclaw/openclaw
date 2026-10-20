@@ -61,11 +61,31 @@ async function withWebhookServer(
   );
 }
 
-const cfg: OpenClawConfig = { channels: { discord: { token: "Bot test-token" } } };
+const config = (mentionAliases?: Record<string, string>): OpenClawConfig => ({
+  channels: { discord: { token: "Bot test-token", mentionAliases } },
+});
+const cfg = config();
 const webhookOpts = { cfg, webhookId: "fixture", webhookToken: "fixture-token" };
 const accepted = (_content: string, index: number) => ({
   body: { id: String(index), channel_id: "thread-1" },
 });
+function sendBound(
+  text: string,
+  sendConfig = config(),
+  onDeliveryResult?: Parameters<
+    NonNullable<typeof discordOutbound.sendText>
+  >[0]["onDeliveryResult"],
+) {
+  mockDiscordBoundThreadManager(hoisted);
+  return discordOutbound.sendText?.({
+    cfg: sendConfig,
+    to: "channel:parent-1",
+    threadId: "thread-1",
+    text,
+    onDeliveryResult,
+    onPlatformSendDispatch: async () => {},
+  });
+}
 
 describe("Discord webhook delivery", () => {
   beforeEach(() => {
@@ -84,29 +104,13 @@ describe("Discord webhook delivery", () => {
     });
   });
 
-  it.each([
-    {
-      label: "mentions outside multiline and unterminated code",
-      text: "Example: `first\n@alice`\nPlease review @alice then `notify @alice",
-      expected: "Example: `first\n@alice`\nPlease review <@123456789> then `notify @alice",
-    },
-  ])("preserves $label through bound-thread persona delivery", async ({ text, expected }) => {
-    mockDiscordBoundThreadManager(hoisted);
+  it("resolves punctuated mentions outside code through bound-thread persona delivery", async () => {
+    const text = "Example: `first\n@alice.`\nPlease review @alice. then `notify @alice.";
     await withWebhookServer(accepted, async (contents) => {
-      await discordOutbound.sendText?.({
-        cfg: {
-          channels: {
-            discord: {
-              token: "Bot test-token",
-              mentionAliases: { alice: "123456789" },
-            },
-          },
-        },
-        to: "channel:parent-1",
-        threadId: "thread-1",
-        text,
-      });
-      expect(contents).toEqual([expected]);
+      await sendBound(text, config({ alice: "123456789" }));
+      expect(contents).toEqual([
+        "Example: `first\n@alice.`\nPlease review <@123456789>. then `notify @alice.",
+      ]);
       expect(hoisted.sendMessageDiscordMock).not.toHaveBeenCalled();
     });
   });
@@ -125,7 +129,7 @@ describe("Discord webhook delivery", () => {
         (content, index) =>
           content.length > 2000
             ? { status: 400, body: { code: 50035, message: "Invalid Form Body" } }
-            : { body: { id: String(index), channel_id: "thread-1" } },
+            : accepted(content, index),
         async (contents) => {
           const chunks = chunkDiscordTextWithMode(text, {
             chunkMode: "length",
@@ -136,7 +140,7 @@ describe("Discord webhook delivery", () => {
           const progress: string[] = [];
           for (const chunk of chunks) {
             const result = await realWebhookSend(chunk, {
-              cfg: { channels: { discord: { token: "Bot test-token", mentionAliases: aliases } } },
+              cfg: config(aliases),
               webhookId: "123",
               webhookToken: "test-token",
               threadId: "thread-1",
@@ -184,7 +188,6 @@ describe("Discord webhook delivery", () => {
   });
 
   it("retains an accepted chunk without replaying it when a later webhook chunk is rejected", async () => {
-    mockDiscordBoundThreadManager(hoisted);
     const onDeliveryResult = vi.fn();
     await withWebhookServer(
       (_content, index) =>
@@ -192,16 +195,9 @@ describe("Discord webhook delivery", () => {
           ? { body: { id: "accepted-1", channel_id: "thread-1" } }
           : { status: 404, body: { code: 10015, message: "Unknown Webhook" } },
       async (contents) => {
-        await expect(
-          discordOutbound.sendText?.({
-            cfg,
-            to: "channel:parent-1",
-            threadId: "thread-1",
-            text: "x".repeat(2001),
-            onDeliveryResult,
-            onPlatformSendDispatch: async () => {},
-          }),
-        ).rejects.toThrow("Unknown Webhook");
+        await expect(sendBound("x".repeat(2001), cfg, onDeliveryResult)).rejects.toThrow(
+          "Unknown Webhook",
+        );
         expect(contents.map((content) => content.length)).toEqual([2000, 1]);
         expect(onDeliveryResult).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({

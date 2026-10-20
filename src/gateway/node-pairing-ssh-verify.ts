@@ -1,4 +1,3 @@
-// SSH-verified node pairing auto-approval.
 // Proves a pending first-time node pairing by reading the device identity back
 // over SSH from the connecting host and comparing key material. Approval binds
 // to machine ownership (host key + authorized key + on-disk device identity),

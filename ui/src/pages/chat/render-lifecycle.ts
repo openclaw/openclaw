@@ -1,14 +1,11 @@
 type CancelAfterCommit = () => void;
 export type AfterCommitEffect = (complete: () => void) => CancelAfterCommit | void;
 
-/**
- * Renderer-neutral boundary for state invalidation and DOM-dependent effects.
- * `afterCommit` must request a render before waiting for its commit.
- */
+/** Renderer-neutral boundary for imperative renderers and DOM-dependent effects. */
 export interface RenderLifecycle {
   invalidate(): void;
   /**
-   * Run after the next commit. Async follow-up work returns its cleanup and
+   * Run after pending DOM work settles. Async follow-up work returns its cleanup and
    * calls `complete` when done so the lifecycle owns it through teardown.
    */
   afterCommit(effect: AfterCommitEffect, onCancel?: () => void): CancelAfterCommit;

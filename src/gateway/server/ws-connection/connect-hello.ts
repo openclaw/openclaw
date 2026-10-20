@@ -1,4 +1,5 @@
 // Gateway WebSocket connect completion sends hello-ok and commits post-handshake state.
+import { GATEWAY_CLIENT_CAPS } from "../../../../packages/gateway-protocol/src/client-info.js";
 import {
   GATEWAY_SERVER_CAPS,
   ErrorCodes,
@@ -15,6 +16,7 @@ import {
   finalizeNodePairingCleanupClaim,
   recordPairedNodeConnection,
 } from "../../../infra/device-pairing-node.js";
+import { recordPairedDeviceAccess } from "../../../infra/device-pairing.js";
 import { formatErrorMessage as formatError } from "../../../infra/errors.js";
 import { commitPresence } from "../../../infra/system-presence.js";
 import { getGatewaySuspendAdmissionPhase } from "../../../process/gateway-work-admission.js";
@@ -122,6 +124,7 @@ export async function sendGatewayHello(
       ? sha256Base64Url(JSON.stringify(recoveryScopeMaterial))
       : undefined;
   const canMigrateRecovery = role === "operator" && !authenticatedPrincipal && Boolean(deviceToken);
+  const snapshotStartedAt = performance.now();
   const sessionRowProjection = getSessionRowProjection(buildRequestContext());
   const snapshot = buildGatewaySnapshot({
     client: context.handler.getClient(),
@@ -131,10 +134,12 @@ export async function sendGatewayHello(
     sessionRowProjection,
   });
   const cachedHealth = getHealthCache();
-  if (cachedHealth) {
+  if (cachedHealth && !connectParams.caps?.includes(GATEWAY_CLIENT_CAPS.HELLO_HEALTH_ON_DEMAND)) {
     snapshot.health = cachedHealth;
     snapshot.stateVersion.health = getHealthVersion();
   }
+  context.recordAttachTiming?.("snapshotMs", snapshotStartedAt);
+  const descriptorsStartedAt = performance.now();
   const controlUiTabs = listControlUiPluginTabs(scopes, {
     requireGatewayAuthGrant: resolvedAuth.mode !== "none",
   });
@@ -177,6 +182,7 @@ export async function sendGatewayHello(
         : gatewayMethods.filter((method) => method !== "mcp.authLogin"),
       events,
       capabilities: [
+        GATEWAY_SERVER_CAPS.AGENT_SESSION_ID_CREATE,
         SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY,
         GATEWAY_SERVER_CAPS.BOARD_WIDGET_PUT_CANVAS_DOC,
         GATEWAY_SERVER_CAPS.CHAT_SEND_ROUTING_CONTRACT,
@@ -193,12 +199,14 @@ export async function sendGatewayHello(
         GATEWAY_SERVER_CAPS.CHANNELS_PAIRING_APPROVE_OWNER,
         GATEWAY_SERVER_CAPS.EXEC_APPROVALS_GET_OWNER,
         GATEWAY_SERVER_CAPS.EXEC_APPROVALS_SET_OWNER,
+        GATEWAY_SERVER_CAPS.EXEC_APPROVALS_NATIVE_COMMIT,
         GATEWAY_SERVER_CAPS.WORKTREES_REMOVE_OWNER,
         GATEWAY_SERVER_CAPS.WORKTREES_RESTORE_OWNER,
         GATEWAY_SERVER_CAPS.WORKTREES_GC_OWNER,
         GATEWAY_SERVER_CAPS.WORKTREES_RECOVER_REMOVAL_OWNER,
         GATEWAY_SERVER_CAPS.WORKTREES_RETIRE_SNAPSHOT_OWNER,
         GATEWAY_SERVER_CAPS.MODEL_CATALOG_SNAPSHOT,
+        GATEWAY_SERVER_CAPS.NODE_WORKER_DEVICE_FOLDERS,
         GATEWAY_SERVER_CAPS.NODE_PERMISSION_ERRORS,
         GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_RETENTION,
         GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_STATUS,
@@ -262,6 +270,7 @@ export async function sendGatewayHello(
       hasMultipleSessionSharingIdentities: hasMultipleResidentSessionSharingIdentities(),
     },
   };
+  context.recordAttachTiming?.("helloDescriptorsMs", descriptorsStartedAt);
   advanceHandshakePhase("hello_payload_prepared");
 
   let bootstrapHandoff: SetupHandoff | undefined;
@@ -357,6 +366,16 @@ export async function sendGatewayHello(
     return;
   }
   onHelloDelivered();
+  const metadata = context.pendingDeviceMetadata;
+  if (metadata) {
+    context.runDetachedConnectWork(
+      () => recordPairedDeviceAccess(metadata.deviceId, metadata.patch, metadata.identity),
+      (err) =>
+        logGateway.warn(
+          `device access metadata refresh failed conn=${connId}: ${formatForLog(err)}`,
+        ),
+    );
+  }
   try {
     const client = context.handler.getClient();
     if (

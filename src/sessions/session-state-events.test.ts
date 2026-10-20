@@ -21,6 +21,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { recordSessionCreated } from "./session-created.js";
 import { prepareAmbientGroupWatchTargetsRead } from "./session-state-events.ambient-read.js";
 import {
@@ -38,7 +39,7 @@ import {
   sweepSessionStateWatchNotices,
 } from "./session-state-events.js";
 import {
-  recordSessionStateEventInDatabase,
+  recordSessionStateEventsInDatabase,
   type SessionStateEventRow,
 } from "./session-state-events.kernel.js";
 import {
@@ -55,7 +56,31 @@ import { prepareSubagentTerminalState } from "./subagent-terminal-state.js";
 
 const SESSION_STATE_RETENTION_MS = 30 * 24 * 60 * 60_000;
 const group = "agent:main:telegram:group:room-1";
-const cfg = {} as OpenClawConfig;
+const cfg: OpenClawConfig = {};
+type Database = ReturnType<typeof createDatabaseOptions>;
+const drain = () =>
+  drainFormattedSystemEvents({
+    cfg,
+    agentId: "main",
+    sessionKey: watcher,
+    isMainSession: false,
+    isNewSession: false,
+  });
+async function recordEvent(database: Database, overrides: Parameters<typeof eventInput>[0]) {
+  return (await recordSessionStateEventAsync(eventInput(overrides), database))!;
+}
+function expectCursor(
+  database: Database,
+  key: string,
+  values: [number, number | undefined, number | undefined],
+) {
+  const [last_seen_sequence, notified_sequence, material_sequence] = values;
+  expect(readCursor(database, key)).toEqual({
+    last_seen_sequence,
+    notified_sequence,
+    material_sequence,
+  });
+}
 
 async function readAmbientTargets(
   sessionKey: string,
@@ -89,6 +114,50 @@ afterEach(async () => {
 });
 
 describe("session state events", () => {
+  it("publishes the inserted head and notice once, leaving replay state unchanged", () => {
+    const database = createDatabaseOptions();
+    const input = eventInput({
+      dedupeKey: "replayed-event",
+      summary: "event \ud800",
+      payload: { reason: "requested" },
+    });
+    const db = requireNativeSqliteDatabase(openOpenClawStateDatabase(database).db);
+    const record = (now: number) =>
+      runOpenClawStateWriteTransaction(
+        ({ db: writer }) => recordSessionStateEventsInDatabase(writer, [{ event: input, now }]),
+        database,
+      );
+    const reads = trackSqliteStatementExecutions(db, ["events"], (sql) =>
+      /^select\b/i.test(sql) && /\bfrom\s+"session_state_events"/i.test(sql) ? "events" : null,
+    );
+    let first: ReturnType<typeof record>;
+    try {
+      first = record(1000);
+    } finally {
+      reads.restore();
+    }
+    expect(reads.counts.events).toBe(0);
+    expect(first.rows[0]?.sequence).toBeGreaterThan(0);
+    expect(first.rows[0]).toMatchObject({
+      summary: "event \ufffd",
+      payload_json: '{"reason":"requested"}',
+      occurred_at: 1000,
+    });
+    expect(first.notices).toHaveLength(1);
+    const readHead = () =>
+      db.prepare("SELECT last_sequence, updated_at FROM session_state_heads").get();
+    const head = readHead();
+    const cursor = readCursor(database);
+    expect(head).toEqual({ last_sequence: first.rows[0]?.sequence, updated_at: 1000 });
+    expect(cursor?.material_sequence).toBe(first.rows[0]?.sequence);
+
+    const replay = record(2000);
+    expect(replay.rows[0]).toEqual(first.rows[0]);
+    expect(replay.notices).toEqual([]);
+    expect(readHead()).toEqual(head);
+    expect(readCursor(database)).toEqual(cursor);
+  });
+
   it.each(
     [
       { change: "ownership", key: child, field: "lifecycleRunId", records: false },
@@ -178,34 +247,25 @@ describe("session state events", () => {
 
   it("keeps same-keyed global sessions independent across agents", async () => {
     const database = createDatabaseOptions();
-    const mainEvent = (await recordSessionStateEventAsync(
-      eventInput({
-        sessionKey: "global",
-        agentId: "main",
-        kind: "goal_changed",
-        actorType: "human",
-        watcherSessionKeys: [],
-      }),
-      database,
-    ))!;
-    const opsEvent = (await recordSessionStateEventAsync(
-      eventInput({
-        sessionKey: "global",
-        agentId: "ops",
-        kind: "goal_changed",
-        actorType: "human",
-        watcherSessionKeys: [],
-      }),
-      database,
-    ))!;
+    const mainEvent = await recordEvent(database, {
+      sessionKey: "global",
+      agentId: "main",
+      kind: "goal_changed",
+      actorType: "human",
+      watcherSessionKeys: [],
+    });
+    const opsEvent = await recordEvent(database, {
+      sessionKey: "global",
+      agentId: "ops",
+      kind: "goal_changed",
+      actorType: "human",
+      watcherSessionKeys: [],
+    });
 
     expect(await getSessionStateVersion("global", "main", database)).toBe(mainEvent.sequence);
     expect(await getSessionStateVersion("global", "ops", database)).toBe(opsEvent.sequence);
-    expect(
-      (await listSessionStateEventsSince("global", "main", 0, 200, database)).events.map(
-        (event) => event.sequence,
-      ),
-    ).toEqual([mainEvent.sequence]);
+    const listed = await listSessionStateEventsSince("global", "main", 0, 200, database);
+    expect(listed.events.map((event) => event.sequence)).toEqual([mainEvent.sequence]);
 
     await handleSessionStateSessionDeleted("global", "ops", database);
     expect(await getSessionStateVersion("global", "ops", database)).toBe(0);
@@ -218,25 +278,13 @@ describe("session state events", () => {
     const material = (await recordSessionStateEventAsync(eventInput(), database))!;
     enqueueSystemEvent("Cron completed", { sessionKey: watcher, contextKey: "cron:job-1" });
 
-    await drainFormattedSystemEvents({
-      cfg,
-      agentId: "main",
-      sessionKey: watcher,
-      isMainSession: false,
-      isNewSession: false,
-    });
+    await drain();
     expect(readCursor(database)?.last_seen_sequence).toBe(material.sequence);
 
     await recordSessionStateEventAsync(eventInput(), database);
     resetSystemEventsForTest();
     enqueueSystemEvent("Exec completed", { sessionKey: watcher, contextKey: "exec:job-1" });
-    await drainFormattedSystemEvents({
-      cfg,
-      agentId: "main",
-      sessionKey: watcher,
-      isMainSession: false,
-      isNewSession: false,
-    });
+    await drain();
     expect(readCursor(database)?.last_seen_sequence).toBe(material.sequence);
   });
 
@@ -244,15 +292,10 @@ describe("session state events", () => {
     expect(classifySessionStateActor({})).toEqual({ actorType: "human" });
     expect(
       classifySessionStateActor({
-        inputProvenance: {
-          kind: "inter_session",
-          sourceSessionKey: "agent:main:source",
-        },
+        inputProvenance: { kind: "inter_session", sourceSessionKey: "agent:main:source" },
       }),
     ).toEqual({ actorType: "agent", actorId: "agent:main:source" });
-    expect(classifySessionStateActor({ internalEvents: [{}] })).toEqual({
-      actorType: "system",
-    });
+    expect(classifySessionStateActor({ internalEvents: [{}] })).toEqual({ actorType: "system" });
   });
 
   it("does not register a group routed into the configured main session", async () => {
@@ -277,14 +320,12 @@ describe("session state events", () => {
     const database = createDatabaseOptions();
     const dormantGroup = "agent:main:slack:channel:dormant";
     const registeredAt = 100;
-    await registerMainSessionGroupWatch(
-      { sessionKey: group, agentId: "main" },
-      { ...database, now: registeredAt },
-    );
-    await registerMainSessionGroupWatch(
-      { sessionKey: dormantGroup, agentId: "main" },
-      { ...database, now: registeredAt },
-    );
+    for (const sessionKey of [group, dormantGroup]) {
+      await registerMainSessionGroupWatch(
+        { sessionKey, agentId: "main" },
+        { ...database, now: registeredAt },
+      );
+    }
 
     const activeAt = registeredAt + SESSION_STATE_RETENTION_MS + 1;
     await recordSessionHumanDirectMessage(
@@ -384,16 +425,9 @@ describe("session state events", () => {
       actor: { type: "human" },
       summary: "goal created",
     });
-    await recordSessionCompacted({
-      sessionKey: child,
-      operationId: "compact-1",
-      sessionId: "session-child",
-    });
-    await recordSessionCompacted({
-      sessionKey: child,
-      operationId: "compact-1",
-      sessionId: "session-child",
-    });
+    const compaction = { sessionKey: child, operationId: "compact-1", sessionId: "session-child" };
+    await recordSessionCompacted(compaction);
+    await recordSessionCompacted(compaction);
 
     const events = (await listSessionStateEventsSince(child, "main", 0, 200, database)).events;
     expect(events.map((event) => event.kind)).toEqual([
@@ -421,7 +455,7 @@ describe("session state watcher cursor batches", () => {
   it("advances watcher fanout with bounded cursor reads and preserves excluded cursors", async () => {
     const database = createDatabaseOptions();
     await seedChild(database, nestedWatcher);
-    const { db } = openOpenClawStateDatabase(database);
+    const db = requireNativeSqliteDatabase(openOpenClawStateDatabase(database).db);
     const watchers = Array.from(
       { length: 1_001 },
       (_, index) => `agent:main:subagent:fanout-${index}`,
@@ -447,15 +481,16 @@ describe("session state watcher cursor batches", () => {
     try {
       event = runOpenClawStateWriteTransaction(
         ({ db: transactionDb }) =>
-          recordSessionStateEventInDatabase(
-            transactionDb,
-            eventInput({
-              actorId: actor,
-              watcherSessionKeys: [watchers[0]!, missing, watchers[0]!, actor, "global", stale],
-              watcherStorePaths: { [stale]: "/synthetic/retired-store.sqlite" },
-            }),
-            Date.now(),
-          ).row,
+          recordSessionStateEventsInDatabase(transactionDb, [
+            {
+              event: eventInput({
+                actorId: actor,
+                watcherSessionKeys: [watchers[0]!, missing, watchers[0]!, actor, "global", stale],
+                watcherStorePaths: { [stale]: "/synthetic/retired-store.sqlite" },
+              }),
+              now: Date.now(),
+            },
+          ]).rows[0],
         database,
       );
     } finally {
@@ -463,17 +498,13 @@ describe("session state watcher cursor batches", () => {
     }
     expect(event?.sequence).toBeGreaterThan(1);
     for (const [index, key] of watchers.entries()) {
-      expect(readCursor(database, key)).toEqual({
-        last_seen_sequence: index % 2,
-        notified_sequence: index % 2 === 0 ? 1 : event?.sequence,
-        material_sequence: event?.sequence,
-      });
+      expectCursor(database, key, [
+        index % 2,
+        index % 2 === 0 ? 1 : event?.sequence,
+        event?.sequence,
+      ]);
     }
-    expect(readCursor(database, missing)).toEqual({
-      last_seen_sequence: 0,
-      notified_sequence: event?.sequence,
-      material_sequence: event?.sequence,
-    });
+    expectCursor(database, missing, [0, event?.sequence, event?.sequence]);
     for (const key of [actor, "global", stale]) {
       expect(readCursor(database, key)).toEqual(staleBefore);
     }
@@ -487,20 +518,21 @@ describe("session state watcher cursor batches", () => {
     const second = "agent:main:subagent:\ud801";
     const result = runOpenClawStateWriteTransaction(
       ({ db }) =>
-        recordSessionStateEventInDatabase(
-          db,
-          eventInput({
-            watcherSessionKeys: [first, second],
-            watcherStorePaths: {
-              [first]: "/synthetic/first.sqlite",
-              [second]: "/synthetic/second.sqlite",
-            },
-          }),
-          Date.now(),
-        ),
+        recordSessionStateEventsInDatabase(db, [
+          {
+            event: eventInput({
+              watcherSessionKeys: [first, second],
+              watcherStorePaths: {
+                [first]: "/synthetic/first.sqlite",
+                [second]: "/synthetic/second.sqlite",
+              },
+            }),
+            now: Date.now(),
+          },
+        ]),
       database,
     );
-    expect(result.row?.sequence).toBeGreaterThan(0);
+    expect(result.rows[0]?.sequence).toBeGreaterThan(0);
     expect(result.notices.map((notice) => notice.watcherStorePath)).toEqual([
       "/synthetic/first.sqlite",
       null,

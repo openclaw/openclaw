@@ -73,7 +73,7 @@ export function createSessionActorMemoryTranscript(options: {
   const goals = createSessionActorMemoryGoals(options);
   const events = createSessionActorMemoryEvents(options);
   const { version, tree, rebasePrepared, appendRaw } = events;
-  const { findByKey, appendMessage } = createSessionActorMemoryMessages(options, events);
+  const { appendMessage } = createSessionActorMemoryMessages(options, events);
   const requireEntry = () => {
     if (!state.hot.entry) {
       throw new SessionTranscriptWriterClaimReboundError();
@@ -126,6 +126,7 @@ export function createSessionActorMemoryTranscript(options: {
       | ReturnType<typeof appendRaw>
       | undefined;
     let receipt: SessionPendingInputWorkerReceipt | undefined;
+    let initialModelParentId: string | null | undefined;
     if (event.type === "message" && input.message) {
       if (input.message.validateTurn && !rebasePrepared(input, event.parentId)) {
         throw new SqliteTranscriptMutationConflictError(input.scope.sessionId);
@@ -150,11 +151,21 @@ export function createSessionActorMemoryTranscript(options: {
       result = readableResult(appended.result, appended.receipt);
       receipt = appended.receipt;
     } else {
+      if (input.initialModel) {
+        const initialModel = appendRaw(input.initialModel, input.options);
+        if (!initialModel.appended) {
+          throw new Error("Initial model metadata was not persisted");
+        }
+        initialModelParentId = initialModel.effectiveParentId;
+      }
       result = appendRaw(
         event,
-        input.options,
+        input.initialModel ? { ...input.options, expectedMutationAt: undefined } : input.options,
         typeof input.event === "string" ? input.event : undefined,
       );
+      if (input.initialModel && !result.appended) {
+        throw new Error("Initial thinking metadata was not persisted");
+      }
     }
     const value: SessionMetadataOperations["session.metadata.append"]["output"] = {
       snapshot: {
@@ -166,6 +177,7 @@ export function createSessionActorMemoryTranscript(options: {
           lifecycleRevision: requireEntry().lifecycleRevision,
         },
       },
+      initialModelParentId,
       projectionNeedsReconcile: false,
       pendingInputReceipt: receipt,
     };
@@ -364,16 +376,6 @@ export function createSessionActorMemoryTranscript(options: {
           goal.id = opts.preparedGoalId;
         }
         const transactionVersion = version();
-        for (const append of opts.messages) {
-          if (!append.preparedMessage?.prepared) {
-            continue;
-          }
-          const event = findByKey(append);
-          const current = event ? { messageId: event.id, message: event.message } : undefined;
-          if (!isDeepStrictEqual(current, append.preparedMessage.expected)) {
-            throw new Error("Transcript idempotency changed while preparing the turn");
-          }
-        }
         let custody: SessionPendingInputWorkerReceipt | undefined;
         const appendedMessages: TranscriptMessageAppendResult<unknown>[] = [];
         let predicateSkipped = false;

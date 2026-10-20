@@ -120,8 +120,15 @@ describe("buildDelegationGuidanceSection", () => {
   });
 
   it.each([
-    { name: "minimal prompts", overrides: { isMinimal: true } },
-    { name: "suggest mode", overrides: { mode: "suggest" as const } },
+    {
+      name: "minimal prompts, even with session creation",
+      overrides: {
+        isMinimal: true,
+        sessionsCreateToolName: "sessions_create",
+        suggestTaskToolName: "suggest_task",
+      },
+    },
+    { name: "suggest mode without session routing tools", overrides: { mode: "suggest" as const } },
     {
       name: "no usable delegation tool",
       overrides: { hiddenDelegationTool: "", hasVisibleSessionSpawn: false },

@@ -9,6 +9,16 @@ read_when:
 Checks 0-2 cover config normalization and the legacy config key migrations,
 plus how doctor publishes shared-state schema during an update.
 
+Doctor applies known migrations before removing unrecognized config keys, including
+during updates. Repairs use the normal config backup and write flow. Inputs retained
+for a deferred plugin migration remain untouched until their owner can migrate them.
+
+Legacy `memorySearch` moves to `memory.search`, audio model lists move to
+capability-tagged `tools.media.models`, and node command restrictions move to
+`gateway.nodes.commands`. Doctor also makes legacy multi-agent ownership explicit
+and removes obsolete `meta.lastTouchedAt`, `commands.ownerDisplay`, and
+`gateway.tailscale.resetOnExit` settings.
+
 Plugin config repairs run in order on private config copies. If a repair throws,
 Doctor keeps the config from before that hook, reports the failure, and continues
 with the remaining repairs. Warning-only results stay visible without changing
@@ -17,6 +27,67 @@ config. Repair the affected plugin, then run `openclaw doctor --fix` again.
 Doctor keeps plugin repair and diagnostic contracts available through later health
 checks and service finalization. It releases its private plugin resources when
 the flow ends, including failed runs.
+
+## Group allowlist fallback
+
+For channels that support legacy DM sender fallback, Doctor copies `allowFrom`
+into an absent `groupAllowFrom`. It preserves explicit lists, including `[]`, at
+channel and account scope, and accounts keep inherited explicit channel lists.
+The migration also leaves lists absent when the effective account, channel, or
+global-default `groupPolicy` disables groups. Explicit policy overrides still
+apply. Update-time Doctor repair follows the same rules.
+
+## Collaborative steering default
+
+Doctor writes `messages.queue.allowCollaborativeSteering: false` when the setting is
+absent, creating missing parent objects. New configuration files contain the same
+explicit default. Existing `true` and `false` values, including values supplied
+through config includes, stay unchanged.
+
+The repair uses Doctor's existing backed-up, include-aware config writer. A
+supported, singly owned nested include receives the repair in
+that file. Ambiguous, shared, external, or root-level include layouts retain the
+writer's existing refusal behavior; Doctor reports the affected boundary so the
+operator can edit its owning file explicitly. Repeated repair is idempotent.
+
+Persisting this default can also update database-backed config bookkeeping.
+The existing [update rollback checks](/cli/update/how-updates-run) still apply:
+unattributed database writes prevent automatic restoration, including writes
+made during Doctor. The updater retains recovery artifacts for manual recovery.
+
+Managed package updates and source updates invoke candidate Doctor and use this
+repair. Older update drivers that request a read-only Doctor phase cannot persist
+it in that phase. Direct package-manager upgrades, manual package replacement, and
+container-image replacement can bypass Doctor entirely. These installations use
+the runtime default immediately; run `openclaw doctor --fix` to persist it.
+Ordinary configuration reads and Gateway startup do not write this setting.
+
+See [Queue steering](/concepts/queue-steering) for the opt-in authority tradeoff.
+
+## Cloud setup secret migration
+
+The Crabbox plugin retires `cloudWorkers.profiles.<id>.settings.setupEnv`.
+Run `openclaw doctor --fix` to replace each legacy environment name with a
+same-name store SecretRef under `settings.setupSecrets`. The shared-store entry
+must already be protected (`kind: "secret"`) and have explicit destination
+bindings. Doctor compares a legacy host environment value when one is present;
+a conflicting value leaves the profile unchanged. It also preserves an existing
+conflicting `setupSecrets` mapping instead of granting a different secret.
+
+Doctor reports missing protected entries, missing bindings, conflicting values,
+and unavailable store inspection without exposing secret values. It never
+creates store entries, overwrites values, or infers allowed hosts. Repair the
+store through `openclaw secrets`, then rerun Doctor. A profile migrates only when
+every selected entry is ready; unrelated profiles may migrate independently.
+Audit and dry-run inspection leave authored config untouched.
+
+The plugin returns the repaired config to Doctor's existing backed-up,
+include-aware writer. Update-time Doctor uses the same plugin health repair when
+that phase is admitted. An update that defers it records the repair warning;
+run `openclaw doctor --fix` afterward. Unrepaired `setupEnv` profiles refuse new
+provisioning, with no plaintext fallback. Existing lease inspection and cleanup
+remain available. Protected setup secrets keep snapshots enabled; old plaintext
+setup image identities are not adopted as protected images.
 
 ## Runtime config migration
 
@@ -247,34 +318,25 @@ migration/import writers can preserve null, `deliver`, or mixed-case delivery
 modes. Those cron repairs remain supported. JSON quarantine files also remain supported:
 `v2026.7.35` still writes them.
 
-Cron JSON job stores (`jobs.json`), split runtime state (`jobs-state.json`), and
-per-job `runs/*.jsonl` history were last written by stable `v2026.5.28`; the
-May 30 SQLite cutover removed those writers. Doctor refuses these files before
-repairing cron or changing config, preserving their original bytes and any
-supported quarantine sidecar. Install `2026.9.7`, run `openclaw doctor --fix`, then
-upgrade to the latest version. Candidate update admission checks the original
-live files and reports the upgrade requirement before activation, including when
-a published updater omits those files from its later rehearsal snapshot. Existing SQLite cron stores,
-including their owner and delivery repairs, keep their normal update path.
+Doctor imports pre-July cron JSON job definitions (`jobs.json`) and matching
+split runtime state (`jobs-state.json`) into current SQLite storage. Existing
+SQLite job IDs win. It archives all source bytes before removing retired files;
+`runs/*.jsonl` history remains readable in its named archive rather than being
+replayed as current task history.
 
-Doctor refuses pre-July JSON delivery queue files and leaves them unchanged.
-Upgrade through `2026.9.7` and run its `openclaw doctor --fix` before retrying.
-Current SQLite queues remain supported. Updates driven by `2026.9.7` check these
-original files before stopping the running Gateway. The same early check reports
-the existing recovery guidance for a retired `plugins/installs.json` index. See
-[state migration recovery](/gateway/doctor/state-and-sessions).
+Pre-July JSON delivery queues and plugin install indexes are archived with an
+explicit warning and recovery path. Doctor never automatically replays old
+delivery payloads, which may already have been sent. Inspect the archive and
+explicitly resend a still-needed message. Reinstall a missing plugin using its
+archived package spec. Current SQLite queues and indexes remain authoritative.
 
-Voice Wake trigger/routing JSON, plugin-binding approvals,
-current-conversation bindings, ACP replay `acp/event-ledger.json`, and
-`restart-sentinel.json` are retired. Their last writers shipped before July 1.
-A leftover `update-check.json` is only a notification cache, so Doctor and
-updates ignore it.
-Doctor and update admission preserve the files and refuse with the intermediate
-upgrade path: install `2026.9.7`, run `openclaw doctor --fix` on the original
-host, then retry. Interrupted ACP and restart-sentinel import claims are also
-preserved. Current SQLite state and the supported config-health importer remain
-unchanged. Plugin-binding approvals retain their original default-home scope;
-a custom state directory does not inspect another profile's approval file.
+Doctor imports Voice Wake trigger/routing settings, plugin-binding approvals,
+and current-conversation bindings without replacing existing SQLite values.
+It archives ACP replay ledgers, restart-sentinel files, interrupted import claims,
+and notification caches. Each archive retains the original bytes and its warning
+names the recovery path. Plugin-binding approvals retain their original default-home
+scope; a custom state directory does not inspect another profile's approval file.
+Update admission allows these files through for candidate Doctor repair.
 
 Startup leaves these retired files for Doctor. When `openclaw gateway run` or
 a local `openclaw message send` prepares that state, it continues without
@@ -293,7 +355,7 @@ Doctor also refuses these retired config inputs:
 - Agent `model.timeoutMs` and `subagents.model.timeoutMs`, including defaults.
   Timeouts on tool-model selectors remain supported.
 - `memorySearch.store.path`, including its agent and `memory.search` forms.
-- `plugins.installs`, `gateway.webchat`, `session.parentForkMaxTokens`,
+- Nonempty or malformed `plugins.installs`, `gateway.webchat`, `session.parentForkMaxTokens`,
   `browser.relayBindHost`, and `browser.ssrfPolicy.allowPrivateNetwork`.
 - Extension browser profiles with a legacy `cdpUrl`. Current extension profiles
   discover their relay endpoint automatically; the extension driver remains supported.
@@ -325,21 +387,30 @@ of stripping these settings or replacing them with a backup. For an older instal
 [upgrade through `2026.9.5`](/install/updating#upgrading-very-old-versions)
 and run its Doctor migrations before installing the latest version.
 
+An empty `plugins.installs: {}` contains no install records. `openclaw doctor --fix`
+backs up the config and removes this retired key, preserving the SQLite plugin
+index and any settings retained for pending plugin migrations. Runtime config
+validation still rejects the key until Doctor repairs it.
+
 WhatsApp's `exposeErrorText` has been ignored since April 2026. Remove it from
 the reported channel or account path before retrying; removing this no-op does
 not change error delivery. Doctor leaves the authored config unchanged, or you
 can use the intermediate release above to remove it.
 
-OAuth credential sidecars under `credentials/auth-profiles/` are retired. Their
-last writer shipped in `2026.5.16-beta.3` on May 16, 2026; `2026.5.16-beta.4`
-removed that writer. Doctor detects these files without reading credentials or
-accessing encryption keys. When a legacy `auth-profiles.json` still references
-one, upgrade through `2026.9.7` and run `openclaw doctor --fix` on the original
-host before retrying. Sidecars that no legacy profile references stay in place
-and do not block the upgrade; `2026.9.7` also keeps them, because agent
-directories outside its scan might still use them. The supported `auth.json`,
-`auth-profiles.json`, SQLite credential, and migration-recovery contracts
-remain unchanged.
+Doctor imports referenced OAuth credential sidecars under
+`credentials/auth-profiles/` using the original encryption key and the existing
+auth-profile migration owner. It also imports pre-June `credentials/oauth.json`.
+The exact source bytes are archived. Missing keys or invalid credentials produce
+a warning naming the archive and historical key files. Doctor tries both historical
+key-file locations and, in an interactive terminal, the existing macOS Keychain entry. If the original key is
+unavailable, sign in again with `openclaw models auth login --provider openai`;
+restoring archived sources does not replay a completed migration. Unreferenced sidecars remain untouched because
+agent directories outside the current scan may still reference them. Runtime
+credential readers continue to use only the current format.
+
+If a selected sidecar is missing, Doctor leaves its auth source pending instead of
+completing an empty credential import. Correct `OPENCLAW_OAUTH_DIR` or restore the
+missing file, then rerun `openclaw doctor --fix` to finish that import.
 
 ## Cron ownership before roster migration
 
@@ -492,6 +563,32 @@ owners remain independent: choosing a different system agent does not change
 which agent owns existing legacy data. Keep the original markers until Doctor
 has completed both the config and state repairs.
 
+An already converged explicit roster can leave the system agent
+(`agents.defaults.systemAgent.agentId`) without `workspace`, so its persona,
+bootstrap, and memory files resolve to its own directory while older releases
+kept them in the launch workspace. `openclaw doctor --fix` copies the agent's
+files into one of the two and records it as `agents.entries.<agentId>.workspace`:
+
+- With `agents.defaults.workspace` set, Doctor pins `<root>/<agentId>`, never
+  the shared root, which also holds the other agents' workspaces. The pin keeps
+  the root as you wrote it (`${WORKSPACE_ROOT}/<agentId>`, `~/x/<agentId>`), so
+  changing that variable moves defaults and pin together, including when
+  `agents.defaults` comes from an `$include` file.
+- Without it, Doctor pins the launch workspace, so the agent's working
+  directory does not change.
+
+Doctor copies a customized `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, or `USER.md`,
+`MEMORY.md`, and the files under `memory/` and `skills/` (a symbolic link there
+is recreated pointing at the same target). A seeded template in the pinned
+directory is replaced; a customized file there is kept, and Doctor names each
+file it kept whose other copy differs. Nothing is moved or deleted. Doctor
+skips copying from a root another agent already resolves to, and only warns
+when the roster lives in an included file.
+
+`openclaw doctor` without `--fix` only describes the copies. If you accept its
+"Apply recommended config repairs now?" prompt, Doctor makes them before the
+pin is written; if you decline, nothing is copied and no pin is written.
+
 Doctor follows the existing [include write constraints](/gateway/config-secrets-env).
 A root-level `$include`, or a repair spanning an included roster and root-owned
 roles, can require manual preparation; repeating `doctor --fix` alone does not
@@ -562,8 +659,11 @@ versions can still open their historical default port.
 
 Startup leaves config bytes unchanged. When the completion marker is the sole
 required change, startup records it in stored SQLite machine state, including
-when no config file exists yet. If endpoints or other channel settings need
-repair, startup refuses with `openclaw doctor --fix` guidance. For a read-only
+when no config file exists yet. Later starts read
+that stored completion before loading migration contracts, including when the
+inspection found no listeners to pin. A failure to save completion warns and
+retries on the next boot without blocking startup. If endpoints or other channel
+settings need repair, startup refuses with `openclaw doctor --fix` guidance. For a read-only
 external config source, update that source and its completion marker as directed
 by the startup error. Startup refuses to drop an unmigrated endpoint. A fresh
 installation needs no pins or a new config file that would interfere with
@@ -808,6 +908,22 @@ for the publication contract and the remaining risk for an old CLI stalled
 beyond the grace period.
 
 ## Native Codex recovery after Tasks removal
+
+The Codex plugin's `codex-native-assignment-repair` runs during
+`openclaw doctor --fix` and update-time Doctor, after session repair. It collapses
+proven duplicate assignments for the same child and native turn and removes
+assignments whose requester session, lifecycle, or connection is provably
+obsolete. Compatible aliases retain their receipt and recorded-result metadata;
+conflicting facts produce a recoverable warning without changing the row.
+Separate pending turns of one child are preserved. Repairs use the
+existing SQLite backup and exact-row compare-and-apply owner; no database schema
+or assignment format changes. Ordinary Gateway startup does not run this repair.
+
+Unknown or malformed ownership and bindings changed during repair are preserved
+with recoverable warnings, allowing updates to finish best effort. Retry
+`openclaw doctor --fix` after resolving those warnings. Historical retry exhaustion
+without durable evidence stays unresolved: neither the age of an assignment nor
+a child's completed execution proves its result was delivered or abandoned.
 
 The Codex plugin's `codex-native-task-assignments` Doctor migration preserves
 recoverable native child work when upgrading from the Tasks runtime. It runs
@@ -1072,7 +1188,7 @@ against the current SQLite owners before the import can rename profiles.
 
     Code Mode's runtime migration preserves an explicit QuickJS choice in global config, keyed agent entries, and legacy agent rosters. Existing `executor` values win, and activation and limits remain unchanged. Selecting the bundled QuickJS runtime works even when generic plugins are disabled or allowlisted, without enabling other plugins; an explicit deny or disabled entry for `code-mode-quickjs` still blocks it. Configurations that never selected a runtime use the new `node` default. See [Code Mode executors](/tools/code-mode/executors) before enabling Node execution; `node:vm` is not a security boundary.
 
-    Doctor removes retired `silentReply.internal` settings from agent defaults and surface overrides while preserving `silentReply.group`. This repair runs through the normal config backup and validation flow, including update-time Doctor. Direct chats and internal sessions, including subagents, require a result; only external channel groups can opt into `NO_REPLY`.
+    Doctor removes retired `silentReply.internal` settings from agent defaults and surface overrides while preserving `silentReply.group`. This repair runs through the normal config backup and validation flow, including update-time Doctor. Internal sessions, including subagents and private completions, require a result. External direct and group chats can end with explicit `NO_REPLY`; see [Silent replies](/concepts/messages#silent-replies).
 
     Doctor names the retired tuning paths it actually removes in one notice, including explicit `false` values: `Removed retired runtime tuning knobs: diagnostics.memoryPressureSnapshot; built-in defaults now apply.` Run `openclaw doctor --fix` before starting with these retired keys. Memory-pressure events remain available; use [diagnostics export or manual allocation profiling](/gateway/diagnostics) for current evidence.
 

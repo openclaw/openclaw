@@ -1,8 +1,11 @@
 // Voice Call tests cover setup-time config migration behavior.
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { describe, expect, it, vi } from "vitest";
+import setup from "../setup-api.js";
 import { migrateVoiceCallLegacyConfigInput } from "./config-migration.js";
-import { VoiceCallConfigSchema } from "./config.js";
+import { normalizeVoiceCallConfig } from "./config.js";
 
 describe("voice-call config migration", () => {
   it("declares the setup entry needed to migrate installed packages", () => {
@@ -25,6 +28,31 @@ describe("voice-call config migration", () => {
 
     expect(migration.config.provider).toBe("mock");
     expect(migration.config.fromNumber).toBe("+15550001234");
+  });
+
+  it("migrates through the setup hook without changing its input or sibling plugins", () => {
+    const registerConfigMigration = vi.fn<OpenClawPluginApi["registerConfigMigration"]>();
+    setup.register(createTestPluginApi({ registerConfigMigration }));
+    const config = {
+      plugins: {
+        entries: {
+          "voice-call": { enabled: true, config: { provider: "log" } },
+          other: { config: { nested: { keep: true } } },
+        },
+      },
+    };
+    const before = structuredClone(config);
+    const migration = registerConfigMigration.mock.calls[0]?.[0](config);
+
+    expect(config).toEqual(before);
+    expect(migration?.config).toEqual({
+      plugins: {
+        entries: {
+          "voice-call": { enabled: true, config: { provider: "mock" } },
+          other: { config: { nested: { keep: true } } },
+        },
+      },
+    });
   });
 
   it("fills only missing streaming provider fields while preserving canonical values", () => {
@@ -71,7 +99,7 @@ describe("voice-call config migration", () => {
       `Removed ${prefix}.vadThreshold (kept ${prefix}.providers.openai.vadThreshold).`,
     ]);
     expect(value).toEqual(before);
-    expect(VoiceCallConfigSchema.safeParse(migration.config).success).toBe(true);
+    expect(() => normalizeVoiceCallConfig(migration.config)).not.toThrow();
     expect(migrateVoiceCallLegacyConfigInput({ value: migration.config })).toEqual({
       config: migration.config,
       changes: [],

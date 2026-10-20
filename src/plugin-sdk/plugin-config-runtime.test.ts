@@ -1,8 +1,10 @@
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
+import * as normalization from "../plugins/config-normalization-shared.js";
 import { normalizePluginsConfig as readNormalizedPluginsConfig } from "../plugins/config-state.js";
 import type { OpenClawConfig } from "./config-contracts.js";
 import {
@@ -12,6 +14,35 @@ import {
 } from "./plugin-config-runtime.js";
 
 afterEach(() => clearRuntimeConfigSnapshot());
+
+it("reuses captured plugin policy across reads and keeps revisions independent", () => {
+  const normalize = vi.spyOn(normalization, "normalizePluginsConfigWithResolverCore");
+  try {
+    const config: OpenClawConfig = {
+      plugins: { entries: { " CODEX ": { config: { revision: 1 } } } },
+    };
+    setRuntimeConfigSnapshot(config);
+    const captured = getRuntimeConfigSnapshot({ capture: true })!;
+    const payload = captured.plugins!.entries![" CODEX "]!.config;
+    normalize.mockClear();
+    for (let i = 0; i < 10; i++) {
+      expect(resolvePluginConfigObject(captured, "codex")).toBe(payload);
+    }
+    expect(normalize).not.toHaveBeenCalled();
+
+    config.plugins!.entries![" CODEX "]!.config = { revision: 2 };
+    setRuntimeConfigSnapshot(config);
+    const next = getRuntimeConfigSnapshot({ capture: true })!;
+    clearRuntimeConfigSnapshot();
+    normalize.mockClear();
+    expect(resolvePluginConfigObject(next, "codex")).toEqual({ revision: 2 });
+    expect(resolvePluginConfigObject(captured, "codex")).toBe(payload);
+    expect(payload).toEqual({ revision: 1 });
+    expect(normalize).not.toHaveBeenCalled();
+  } finally {
+    normalize.mockRestore();
+  }
+});
 
 it("keeps public normalized policy mutable without changing the published host policy", () => {
   const pluginConfig = { enabled: false, mode: "strict" };

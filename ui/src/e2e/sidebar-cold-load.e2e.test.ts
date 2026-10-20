@@ -70,7 +70,7 @@ async function observeShape(sidebar: Locator) {
         ].map((row) => row.textContent?.trim() ?? ""),
         avatarText: [
           ...element.querySelectorAll(
-            "[data-agent-group] .sidebar-agent-roster__row .sidebar-agent-roster__avatar",
+            "[data-agent-group] .sidebar-agent-roster__header .sidebar-agent-roster__avatar",
           ),
         ].map((row) => row.querySelector("[data-avatar]")?.getAttribute("data-avatar") ?? ""),
         brand: element.querySelector(".sidebar-workspace-header__main")?.textContent?.trim() ?? "",
@@ -349,7 +349,13 @@ suite.define(() => {
               .locator(`.sidebar-pages [data-session-key="${sessions[9]!.key}"]`)
               .waitFor();
           } else {
-            await sidebar.locator(`[data-session-key="${sessions[9]!.key}"]`).waitFor();
+            await expect
+              .poll(() =>
+                sidebar
+                  .locator("[data-agent-group]")
+                  .evaluateAll((rows) => rows.map((row) => row.getAttribute("data-agent-group"))),
+              )
+              .toEqual(["main", "forge", "scout"]);
           }
           if (!baselineMode) {
             await waitForSavedSidebar(page, view);
@@ -380,9 +386,7 @@ suite.define(() => {
           expect(settled.navigation.filter((key) => key?.startsWith("session:"))).toHaveLength(
             view === "pages" ? 12 : 1,
           );
-          expect(settled.sessions).toEqual(
-            view === "pages" ? [] : sessions.slice(0, 10).map((row) => row.key),
-          );
+          expect(settled.sessions).toEqual([]);
           expect(settled.rail).toEqual(railPins);
           expect(settled.view).toBe(view);
           expect(settled.agents).toEqual(view === "pages" ? [] : ["main", "forge", "scout"]);
@@ -402,7 +406,7 @@ suite.define(() => {
             await capture(page, sidebar, "sidebar-old-before-hello.png");
             await gateway.resolveDeferred("connect");
             await sidebar.locator('[data-sidebar-entry="plugin:reports/overview"]').waitFor();
-            await sidebar.locator(`[data-session-key="${sessions[9]!.key}"]`).waitFor();
+            await sidebar.locator('[data-agent-group="scout"]').waitFor();
             await expect
               .poll(() =>
                 sidebar.locator("[data-agent-group] .sidebar-agent-roster__copy").allTextContents(),
@@ -533,7 +537,9 @@ suite.define(() => {
             message: "Synthetic plugin catalog temporarily unavailable",
           });
           await page.locator('aside.sidebar[data-snapshot-state="live"]').waitFor();
-          await sidebar.locator(".sidebar-rail button.sidebar-new-session:enabled").waitFor();
+          await sidebar
+            .locator('.sidebar-rail a.sidebar-new-session[href]:not([aria-disabled="true"])')
+            .waitFor();
           const pluginPin = sidebar.locator(
             '.sidebar-rail [data-sidebar-entry="plugin:reports/overview"]',
           );
@@ -564,7 +570,9 @@ suite.define(() => {
           });
           await gateway.resolveDeferred("connect");
           await page.locator('aside.sidebar[data-snapshot-state="live"]').waitFor();
-          await sidebar.locator(".sidebar-rail button.sidebar-new-session:enabled").waitFor();
+          await sidebar
+            .locator('.sidebar-rail a.sidebar-new-session[href]:not([aria-disabled="true"])')
+            .waitFor();
           expect(await sidebar.getAttribute("data-snapshot-saved")).toBe("false");
         },
       );

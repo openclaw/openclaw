@@ -15,6 +15,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { withMemoryWorkspaceLock } from "../memory-workspace-lock.js";
+import { resolveActiveMemoryRecallSources } from "./active-memory-session-sources.js";
 import {
   createEmbeddingProvider,
   type EmbeddingProvider,
@@ -25,6 +26,10 @@ import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { cleanupAgedMemoryReindexTempFiles, removeMemoryDatabaseFiles } from "./manager-db.js";
 import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import { withMemoryIndexGeneration } from "./manager-index-generation-lease.js";
+import {
+  publishPostgresMemoryStage,
+  withPostgresMemoryReindex,
+} from "./manager-postgres-reindex.js";
 import {
   resolveMemoryProviderLifecycle,
   resolveFallbackCurrentProviderId,
@@ -202,6 +207,18 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     const hasTargetSessionRequest = hasTargetedSessionSyncParams(params);
     let needsFullReindex = Boolean(params?.force && !hasTargetSessionRequest);
     try {
+      if (!needsFullReindex && this.sources.has("sessions")) {
+        const excluded = await resolveActiveMemoryRecallSources({
+          rows: await this.database.readSourceState({ source: "sessions" }),
+          cfg: this.cfg,
+          agentId: this.agentId,
+        });
+        // Invalid helper rows do not need an embedding provider or a forced rebuild.
+        // Reconcile them before an unrelated source can fail to embed.
+        for (const row of excluded) {
+          await this.deleteIndexedFile(row.path, "sessions", row.hash);
+        }
+      }
       // An unavailable configured provider must not replace semantic vectors
       // with FTS-only rows; fresh and already-FTS-only indexes remain safe.
       this.assertFtsOnlySyncAllowed();
@@ -236,9 +253,6 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         : null;
       const targetArchiveFiles = targetSessionSync?.targetArchiveFiles ?? null;
       const hasTargetArchiveFiles = targetArchiveFiles !== null;
-      if (hasTargetSessionRequest && !hasTargetArchiveFiles) {
-        return;
-      }
       if (params?.reason === "cli" && !params.force && !hasTargetArchiveFiles) {
         await this.markSessionStartupCatchupDirtyFiles();
       }
@@ -266,6 +280,27 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         hasIndexedChunks,
         ftsTokenizer: this.settings.store.fts.tokenizer,
       });
+      if (
+        indexIdentity.status === "valid" &&
+        syncProvider &&
+        meta?.model === syncProvider.model &&
+        meta.providerKey &&
+        syncProviderKey &&
+        meta.providerKey !== syncProviderKey
+      ) {
+        // Validate the full legacy identity before retiring its credential-dependent key.
+        const database = this.database;
+        const upgraded = await database.updateIndexStructure(
+          { type: "index.upgradeProviderKey", input: { meta, providerKey: syncProviderKey } },
+          () => this.assertDatabaseMutationCurrent(database),
+        );
+        if (!upgraded) {
+          return MEMORY_SYNC_DEFERRED;
+        }
+      }
+      if (hasTargetSessionRequest && !hasTargetArchiveFiles) {
+        return;
+      }
       if (
         indexIdentity.status === "mismatched" &&
         indexIdentity.owner === "openclaw" &&
@@ -411,7 +446,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         }
         if (!this.provider && this.fts.enabled && isMemoryEmbeddingOperationError(err)) {
           this.requestSessionIndexRetry();
-          this.syncOutcomes.recordActiveFailure(err);
+          this.syncOutcomes.recordFailure(err);
           log.warn(`memory embeddings unavailable; leaving memory index dirty: ${reason}`);
           return;
         }
@@ -471,7 +506,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       sessionsFullRetryDirty || sessionsReconcileDirty || sessionsDirtyFiles.size > 0;
     if (failure) {
       this.requestSessionIndexRetry(true);
-      this.syncOutcomes.recordActiveFailure(failure.error);
+      this.syncOutcomes.recordFailure(failure.error);
     }
     return true;
   }
@@ -561,7 +596,15 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     return true;
   }
 
-  private async runInPlaceReindex(progress?: MemorySyncProgressState): Promise<void> {
+  private async runInPlaceReindex(
+    progress?: MemorySyncProgressState,
+    postgresStage?: MemoryIndexDatabase,
+  ): Promise<void> {
+    if (this.publishedDatabase.admission?.engine === "postgres" && !postgresStage) {
+      return withPostgresMemoryReindex(this.publishedDatabase, (stage) =>
+        this.runInPlaceReindex(progress, stage),
+      );
+    }
     // Build outside the shared agent DB, then publish only memory-owned tables
     // in one short transaction so failed rebuilds leave the current index usable.
     const dbPath = resolveUserPath(this.settings.store.databasePath);
@@ -573,12 +616,13 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     const shouldRetrySessionsOnFailure = this.shouldSyncSessions(undefined, true);
     let shadowCleanup: MemoryIndexDatabase | undefined;
     try {
-      await cleanupAgedMemoryReindexTempFiles(dbPath);
+      if (!postgresStage) {
+        await cleanupAgedMemoryReindexTempFiles(dbPath);
+      }
       const originalRevision = this.database.facts.revision;
-      const shadow = await MemoryIndexDatabase.openShadow(
-        tempDbPath,
-        this.settings.store.vector.enabled,
-      );
+      const shadow =
+        postgresStage ??
+        (await MemoryIndexDatabase.openShadow(tempDbPath, this.settings.store.vector.enabled));
       shadowCleanup = shadow;
       shadow.vector.enabled = this.vector.enabled;
       shadow.vector.extensionPath = this.vector.extensionPath;
@@ -591,6 +635,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
             cacheEnabled: this.cache.enabled,
             ftsEnabled: shadow.fts.enabled,
             ftsTokenizer: this.settings.store.fts.tokenizer,
+            fresh: postgresStage ? undefined : true,
           });
 
           await this.executeSourceSync({
@@ -605,7 +650,11 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
           const syncProvider = this.syncProviderGeneration
             ? this.syncProviderGeneration.provider
             : this.provider;
-          const vectorIndexComplete = syncProvider === null || this.vector.available === true;
+          // Empty rebuilds have no missing vectors, even before the extension is needed.
+          const vectorIndexComplete =
+            syncProvider === null ||
+            !shadow.facts.hasIndexedChunks ||
+            this.vector.available === true;
           const nextMeta: MemoryIndexMeta = {
             model: syncProvider?.model ?? "fts-only",
             provider: syncProvider?.id ?? "none",
@@ -635,7 +684,6 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
           return {
             nextMeta,
             vectorIndexComplete,
-            hasVectors: shadow.facts.hasVectorTable,
           };
         } finally {
           // Escaped continuations must fail closed, never write to the live DB.
@@ -645,13 +693,31 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
 
       await withMemoryWorkspaceLock(this.workspaceDir, async () => {
         await withMemoryIndexGeneration(dbPath, "write", async () => {
+          if (postgresStage) {
+            await publishPostgresMemoryStage(
+              this.publishedDatabase,
+              postgresStage,
+              originalRevision,
+              rebuilt.vectorIndexComplete,
+              () => {
+                if (
+                  this.closed ||
+                  this.publishedDatabase !== originalDatabase ||
+                  !originalDatabase.isOpen
+                ) {
+                  throw new Error("Memory publication owner changed before reindex publication");
+                }
+              },
+            );
+            return;
+          }
           await this.publishedDatabase.publishShadow(
             {
               sourcePath: tempDbPath,
               sourceIdentity: readMemoryShadowIdentity(tempDbPath),
               metaKey: MEMORY_INDEX_META_KEY,
               expectedRevision: originalRevision,
-              sourceHasVectors: rebuilt.hasVectors,
+              sourceSchema: shadow.searchSchema,
               vectorIndexComplete: rebuilt.vectorIndexComplete,
               extensionPath: shadow.vector.extensionPath,
             },
@@ -691,7 +757,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       throw err;
     } finally {
       try {
-        if (shadowCleanup?.shadowReleased) {
+        if (!postgresStage && shadowCleanup?.shadowReleased) {
           shadowCleanup.assertShadowPath();
           await removeMemoryDatabaseFiles(tempDbPath);
         }

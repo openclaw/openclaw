@@ -111,15 +111,20 @@ async function capture(page: Page, name: string, focus: Locator) {
     name + " interaction must fit the viewport",
   ).toBe(true);
   const visibleText = (await page.locator("body").textContent()) ?? "";
+  // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- innerText separately proves rendered visible text.
+  const renderedText = await page.locator("body").innerText();
   // Synthetic content only. Never retain handoffs, fixture secrets or private fixture paths.
-  for (const secret of [
-    instance.gatewayToken,
-    instance.hookToken,
-    instance.stateDir,
-    instance.homeDir,
-    "synthetic-background-fixture-key",
-  ]) {
-    expect(visibleText.includes(secret), name + " contains private fixture data").toBe(false);
+  for (const [category, secret] of [
+    ["gatewayToken", instance.gatewayToken],
+    ["hookToken", instance.hookToken],
+    ["stateDir", instance.stateDir],
+    ["homeDir", instance.homeDir],
+    ["fixtureKey", "synthetic-background-fixture-key"],
+  ] as const) {
+    expect(
+      visibleText.includes(secret),
+      `${category}: visible-text-match=${renderedText.includes(secret)}`,
+    ).toBe(false);
   }
   expect(new URL(page.url()).hash).toBe("");
   expect(await page.locator(".community-invite-card:visible").count()).toBe(0);

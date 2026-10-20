@@ -139,15 +139,17 @@ describe("resolveCliBackendConfig", () => {
   it("preserves the plugin-owned JSONL parser through runtime resolution", () => {
     const parseJsonlEvent = vi.fn();
     const parseJsonlLifecycleEvent = vi.fn();
+    const classifyErrorCode = vi.fn();
     cliBackendsTesting.setDepsForTest({
       resolveRuntimeCliBackends: () => [
-        runtimeEntry({ parseJsonlEvent, parseJsonlLifecycleEvent }),
+        runtimeEntry({ parseJsonlEvent, parseJsonlLifecycleEvent, classifyErrorCode }),
       ],
       resolvePluginSetupCliBackend: () => undefined,
     });
 
     expect(requireBackend().parseJsonlEvent).toBe(parseJsonlEvent);
     expect(requireBackend().parseJsonlLifecycleEvent).toBe(parseJsonlLifecycleEvent);
+    expect(requireBackend().classifyErrorCode).toBe(classifyErrorCode);
   });
 
   it("normalizes the registered adapter with agent and runtime config context", () => {

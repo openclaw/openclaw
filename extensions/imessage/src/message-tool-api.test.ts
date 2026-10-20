@@ -50,70 +50,57 @@ describe("iMessage message-tool artifact", () => {
     });
   });
 
-  it("exposes lightweight discovery without loading the channel plugin", () => {
-    setCachedIMessagePrivateApiStatus("imsg", {
-      available: true,
-      v2Ready: true,
-      selectors: {
-        editMessage: true,
-        retractMessagePart: true,
-      },
-      rpcMethods: [],
-    });
-
-    const discovery = describeMessageTool({
-      cfg: {
-        channels: {
-          imessage: {
-            cliPath: "imsg",
-            actions: {
-              edit: false,
-            },
-          },
-        },
-      } as never,
+  it.each([
+    {
       chatType: "group",
-      currentChannelId: "chat_id:1",
-    });
-
-    expect(discovery?.actions).toStrictEqual([
-      "react",
-      "unsend",
-      "reply",
-      "sendWithEffect",
-      "renameGroup",
-      "setGroupIcon",
-      "addParticipant",
-      "removeParticipant",
-      "leaveGroup",
-      "upload-file",
-    ]);
-  });
-
-  it("keeps group-only actions hidden for a direct numeric current chat", () => {
-    setCachedIMessagePrivateApiStatus("imsg", {
-      available: true,
-      v2Ready: true,
-      selectors: {},
-      rpcMethods: [],
-    });
-
-    const discovery = describeMessageTool({
-      cfg: { channels: { imessage: { cliPath: "imsg" } } } as never,
-      chatType: "direct",
-      currentChannelId: "chat_id:1",
-    });
-
-    expect(discovery?.actions).not.toEqual(
-      expect.arrayContaining([
+      expectedActions: [
+        "react",
+        "unsend",
+        "reply",
+        "sendWithEffect",
         "renameGroup",
         "setGroupIcon",
         "addParticipant",
         "removeParticipant",
         "leaveGroup",
-      ]),
-    );
-  });
+        "upload-file",
+      ],
+    },
+    {
+      chatType: "direct",
+      expectedActions: ["react", "unsend", "reply", "sendWithEffect", "upload-file"],
+    },
+  ] as const)(
+    "discovers supported actions for a $chatType numeric current chat",
+    ({ chatType, expectedActions }) => {
+      setCachedIMessagePrivateApiStatus("imsg", {
+        available: true,
+        v2Ready: true,
+        selectors: {
+          editMessage: true,
+          retractMessagePart: true,
+        },
+        rpcMethods: [],
+      });
+
+      const discovery = describeMessageTool({
+        cfg: {
+          channels: {
+            imessage: {
+              cliPath: "imsg",
+              actions: {
+                edit: false,
+              },
+            },
+          },
+        } as never,
+        chatType,
+        currentChannelId: "chat_id:1",
+      });
+
+      expect(discovery?.actions).toStrictEqual(expectedActions);
+    },
+  );
 
   it("offers poll but hides poll-vote on imsg builds without the poll.vote rpc", () => {
     setCachedIMessagePrivateApiStatus("imsg", {

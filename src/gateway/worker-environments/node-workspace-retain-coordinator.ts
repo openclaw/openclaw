@@ -7,6 +7,7 @@ import {
   NODE_WORKER_BUNDLE_STATUS_VERSION,
 } from "../../infra/node-runner-inventory.js";
 import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
+import { DEVICE_FOLDER_MANIFEST_REF } from "../../worker/device-folder.js";
 import {
   NODE_WORKER_BUNDLE_RETAIN_MAX_HASHES,
   NODE_WORKER_RETAIN_REQUEST_MAX_BYTES,
@@ -19,6 +20,7 @@ import type {
   NodeWorkerSupervisorTransport,
 } from "../node-registry-private.js";
 import { parseNodeWorkerResponse } from "./node-worker-response.js";
+import { WorkerPlacementInventoryChangedError } from "./placement-inventory-changed-error.js";
 import type {
   WorkerSessionPlacementRecord,
   WorkerSessionPlacementStore,
@@ -114,9 +116,11 @@ function snapshotEntriesForNode(
             : []
           : null;
       const exactManifest =
-        additional !== null && placement?.workspaceBaseManifestRef
-          ? [...new Set([placement.workspaceBaseManifestRef, ...additional])].toSorted()
-          : null;
+        placement?.workspaceBaseManifestRef === DEVICE_FOLDER_MANIFEST_REF
+          ? []
+          : additional !== null && placement?.workspaceBaseManifestRef
+            ? [...new Set([placement.workspaceBaseManifestRef, ...additional])].toSorted()
+            : null;
       return [
         {
           environmentId: environment.environmentId,
@@ -153,7 +157,8 @@ export function createNodeWorkspaceRetainCoordinator(
   const publishPreparedSnapshot = async (
     currentTransport: NodeWorkerSupervisorTransport,
     node: NodeWorkerSupervisorNodeProof,
-    preparedPlacements: PreparedPlacementFacts,
+    preparedPlacements: Map<string, PreparedPlacement>,
+    dispatch: { started: boolean },
   ): Promise<void> => {
     // Environment-owned cloud nodes prepare under their enrollment/mode owner.
     // Persistent hosts keep the current build when installed; maintenance never installs it.
@@ -179,16 +184,25 @@ export function createNodeWorkspaceRetainCoordinator(
       (!hostBuild || !bundleRetention?.isEnvironmentOwnedNode(node.nodeId));
     const preparedManifestRefs = new Map<string, (() => readonly string[] | null) & Disposable>();
     try {
+      if (stopped) {
+        return;
+      }
       if (options.additionalManifestRefs) {
         const environmentIds = new Set(
           nodeEnvironments(options, node.nodeId).map((environment) => environment.environmentId),
         );
         for (const { placement } of preparedPlacements.values()) {
+          if (stopped) {
+            return;
+          }
           if (placement?.environmentId && environmentIds.has(placement.environmentId)) {
             const current = await options.additionalManifestRefs(placement);
             preparedManifestRefs.set(placement.sessionId, current);
           }
         }
+      }
+      if (stopped) {
+        return;
       }
       const inventory = await options.placements.prepareMaintenancePlacements();
       const placements = (() => {
@@ -305,6 +319,7 @@ export function createNodeWorkspaceRetainCoordinator(
         if (!isDispatchAuthorized()) {
           return;
         }
+        dispatch.started = true;
         const result = await currentTransport.invoke({
           node,
           command: NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
@@ -370,23 +385,39 @@ export function createNodeWorkspaceRetainCoordinator(
     currentTransport: NodeWorkerSupervisorTransport,
     node: NodeWorkerSupervisorNodeProof,
   ): Promise<void> => {
-    const prepared = new Map<string, PreparedPlacement>();
-    try {
-      const sessionIds = new Set(
-        nodeEnvironments(options, node.nodeId).flatMap((environment) =>
-          !isTerminalWorkerEnvironmentState(environment.state) &&
-          environment.attachedSessionIds.length === 1
-            ? environment.attachedSessionIds
-            : [],
-        ),
-      );
-      for (const sessionId of sessionIds) {
-        prepared.set(sessionId, await options.placements.prepareRuntimeRefresh(sessionId));
-      }
-      await publishPreparedSnapshot(currentTransport, node, prepared);
-    } finally {
-      for (const facts of prepared.values()) {
-        facts.release();
+    for (let attempt = 0; ; attempt += 1) {
+      const prepared = new Map<string, PreparedPlacement>();
+      const dispatch = { started: false };
+      try {
+        const sessionIds = new Set(
+          nodeEnvironments(options, node.nodeId).flatMap((environment) =>
+            !isTerminalWorkerEnvironmentState(environment.state) &&
+            environment.attachedSessionIds.length === 1
+              ? environment.attachedSessionIds
+              : [],
+          ),
+        );
+        for (const sessionId of sessionIds) {
+          if (stopped) {
+            return;
+          }
+          prepared.set(sessionId, await options.placements.prepareRuntimeRefresh(sessionId));
+        }
+        await publishPreparedSnapshot(currentTransport, node, prepared, dispatch);
+        return;
+      } catch (error) {
+        // Retry one stale preparation, never an invoked or partially applied pruning pass.
+        if (
+          attempt > 0 ||
+          dispatch.started ||
+          !(error instanceof WorkerPlacementInventoryChangedError)
+        ) {
+          throw error;
+        }
+      } finally {
+        for (const facts of prepared.values()) {
+          facts.release();
+        }
       }
     }
   };

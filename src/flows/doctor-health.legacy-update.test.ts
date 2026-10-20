@@ -10,6 +10,7 @@ import { runDoctorSessionSqlite } from "../commands/doctor-session-sqlite.js";
 import { loadExactSessionEntry } from "../config/sessions/session-accessor.js";
 import * as runtimePaths from "../daemon/runtime-paths.js";
 import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
+import { seedCompletedRuntimePinMigration } from "../daemon/test-helpers/service-audit-runtime-pin.js";
 import * as legacyGatewayLock from "../infra/gateway-lock-legacy.js";
 import * as packageJson from "../infra/package-json.js";
 import * as builtRuntime from "../infra/update-git-runtime.js";
@@ -140,6 +141,7 @@ describe("Doctor invoked by the published 2026.6.33 updater", () => {
       fs.mkdirSync(path.dirname(storePath), { recursive: true });
       fs.writeFileSync(storePath, JSON.stringify({ [sessionKey]: { sessionId, updatedAt: 1 } }));
       mocks.config.mockReturnValue(cfg);
+      await seedCompletedRuntimePinMigration(state.env);
       const events: string[] = [];
       const service = managedService(state, true, events);
       vi.spyOn(legacyGatewayLock, "readLegacyGatewayLockIdentity").mockImplementation(async () => {
@@ -274,6 +276,7 @@ describe("Doctor invoked by the published 2026.6.33 updater", () => {
         await state.writeConfig({});
         const resultPath = state.path("doctor-result.json");
         vi.stubEnv("OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH", resultPath);
+        await seedCompletedRuntimePinMigration(state.env);
         const events: string[] = [];
         const service = managedService(state, true, events);
         inspectStaleBuild();

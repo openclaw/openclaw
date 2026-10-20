@@ -1,4 +1,3 @@
-// Process-local logging state shared by logger, console capture, and test reset helpers.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 const LOGGING_STATE_KEY = Symbol.for("openclaw.loggingState");

@@ -1,7 +1,14 @@
+import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
+import {
+  generateConversationLabel as generateTopicLabel,
+  resolveChunkMode,
+} from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { createSubsystemLogger, danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { resolveAutoTopicLabelConfig } from "./auto-topic-label-config.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import { resolveDispatchTelegramContext } from "./bot-message-dispatch-context.js";
 import {
@@ -18,13 +25,6 @@ import {
 } from "./bot-message-dispatch-session.js";
 import { createTelegramDispatchStatus } from "./bot-message-dispatch-status.js";
 import { runTelegramDispatchTurn } from "./bot-message-dispatch-turn.js";
-import { resolveAgentDir } from "./bot-message-dispatch.agent.runtime.js";
-import {
-  generateTopicLabel,
-  getAgentScopedMediaLocalRoots,
-  resolveAutoTopicLabelConfig,
-  resolveChunkMode,
-} from "./bot-message-dispatch.runtime.js";
 import type {
   DispatchTelegramMessageParams,
   TelegramDispatchTurn,
@@ -254,16 +254,13 @@ export const dispatchTelegramMessage = async (
     runtime,
     replyToMode,
     telegramCfg,
-    telegramDeps: injectedTelegramDeps,
     retryDispatchErrors = false,
     suppressFailureFallback = false,
     turnAdoptionLifecycle,
   } = dispatchParams;
   const dispatchStartedAt = Date.now();
   const dispatchContext = await resolveDispatchTelegramContext({ context });
-  const telegramDeps =
-    injectedTelegramDeps ?? (await import("./bot-deps.js")).defaultTelegramBotDeps;
-  const loadFreshSessionEntry = createFreshTelegramSessionEntryLoader({ cfg, telegramDeps });
+  const loadFreshSessionEntry = createFreshTelegramSessionEntryLoader({ cfg });
   const isRoomEvent = dispatchContext.ctxPayload.InboundEventKind === "room_event";
   const status = createTelegramDispatchStatus({ context: dispatchContext });
   const richMessagesParams = {
@@ -304,7 +301,6 @@ export const dispatchTelegramMessage = async (
     richMessages,
     statusReactionController: status.controller,
     tableMode,
-    telegramDeps,
   };
   const draftState = createDraftState(turnConfig);
   const progressState = createProgressState(turnConfig, draftState, () => turn);

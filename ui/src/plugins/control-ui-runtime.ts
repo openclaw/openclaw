@@ -6,6 +6,11 @@ import type {
 } from "../../../packages/gateway-protocol/src/schema/plugins.js";
 import { CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS } from "../../../src/gateway/control-ui-plugin-frame-contract.js";
 import type {
+  ControlUiSettingsPlacement,
+  ControlUiChannelSettingsView,
+  ControlUiSettingsView,
+} from "../../../src/plugin-sdk/control-ui-settings.js";
+import type {
   ControlUiDisposer,
   ControlUiHost,
   ControlUiReplacement,
@@ -17,8 +22,11 @@ import { readGatewayOperatorAccess } from "../app/operator-access.ts";
 import { hasSameOriginGatewayTransport } from "../dev-gateway.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import {
   controlUiPluginAssetGrantError,
+  controlUiPluginDeliveryIdentity,
+  controlUiPluginDistribution,
   ControlUiPluginAssetPreloads,
 } from "./control-ui-assets.ts";
 import type {
@@ -26,9 +34,11 @@ import type {
   ControlUiPluginCapability,
   ControlUiRegistration,
 } from "./control-ui-capability.ts";
+import { controlUiPluginDistributions } from "./control-ui-distribution.ts";
 
 export type ControlUiPluginOwner = {
   descriptor: PluginControlUiModule;
+  deliveryIdentity?: string;
   client: GatewayBrowserClient;
   abort: AbortController;
   disposers: Set<ControlUiDisposer>;
@@ -58,6 +68,14 @@ const UI_CAPABILITY_BY_CONTRIBUTION = {
 const CONTRIBUTION_ID = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/;
 const ACTIVATION_TIMEOUT_MS = 15_000;
 
+function sameSettingsPlacement(a: ControlUiSettingsPlacement, b: ControlUiSettingsPlacement) {
+  return (
+    a.section === b.section &&
+    a.panel === b.panel &&
+    (a.section !== "channels" || (b.section === "channels" && a.channelId === b.channelId))
+  );
+}
+
 export class ControlUiPluginRuntime implements ControlUiPluginCapability {
   private readonly owners = new Map<string, ControlUiPluginOwner>();
   private readonly preloads = new ControlUiPluginAssetPreloads();
@@ -71,6 +89,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
   private connectionId: string | null = null;
   private refreshGeneration = 0;
   private disposed = false;
+  private readonly settingsLifetimes = new Set<AbortController>();
   private firstConnection = true;
   private diagnostics: PluginControlUiDiagnostic[] = [];
   private grantTimer: ReturnType<typeof setInterval> | null = null;
@@ -95,6 +114,90 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
         })),
     );
     return [...this.diagnostics, ...warnings];
+  }
+
+  loadSettingsView(
+    placement: ControlUiSettingsView["placement"],
+    signal: AbortSignal,
+  ): Promise<{ view: ControlUiSettingsView; signal: AbortSignal; dispose: () => void }>;
+  loadSettingsView(
+    placement: ControlUiChannelSettingsView["placement"],
+    signal: AbortSignal,
+  ): Promise<{ view: ControlUiChannelSettingsView; signal: AbortSignal; dispose: () => void }>;
+  async loadSettingsView(placement: ControlUiSettingsPlacement, signal: AbortSignal) {
+    if (this.disposed) {
+      throw new Error("The plugin UI runtime has ended.");
+    }
+    signal.throwIfAborted();
+    const matches = controlUiPluginDistributions.filter((entry) =>
+      entry.settingsViews?.some((item) => sameSettingsPlacement(item, placement)),
+    );
+    if (matches.length !== 1) {
+      throw new Error("Settings presentation requires one packaged owner.");
+    }
+    const distribution = matches[0]!;
+    const abort = new AbortController();
+    const lifetime = AbortSignal.any([signal, abort.signal]);
+    const disposers = new Set<() => void>();
+    let retired = false;
+    const dispose = () => {
+      if (retired) {
+        return;
+      }
+      retired = true;
+      abort.abort();
+      for (const stop of disposers) {
+        stop();
+      }
+      disposers.clear();
+      this.settingsLifetimes.delete(abort);
+    };
+    this.settingsLifetimes.add(abort);
+    disposers.add(listen(lifetime, "abort", dispose, { once: true }));
+    const styles: HTMLLinkElement[] = [];
+    try {
+      const { loadControlUiPluginAssets } = await import("./control-ui-loader.ts");
+      const module = await raceWithTimeout(
+        loadControlUiPluginAssets(
+          distribution.pluginId,
+          distribution,
+          lifetime,
+          (stop) => disposers.add(stop),
+          styles,
+        ),
+        ACTIVATION_TIMEOUT_MS,
+        () => {
+          throw new Error("Settings presentation timed out.");
+        },
+      );
+      lifetime.throwIfAborted();
+      if (
+        module.pluginId !== distribution.pluginId ||
+        !Array.isArray(module.settingsViews) ||
+        module.settingsViews.length !== distribution.settingsViews?.length
+      ) {
+        throw new Error("Settings presentation does not match its packaged owner and placements.");
+      }
+      const declared = module.settingsViews.every(
+        (view) =>
+          typeof view.mount === "function" &&
+          distribution.settingsViews?.some((item) => sameSettingsPlacement(item, view.placement)),
+      );
+      const views = module.settingsViews.filter((view) =>
+        sameSettingsPlacement(view.placement, placement),
+      );
+      const view = views[0];
+      if (!declared || views.length !== 1 || !view) {
+        throw new Error("Invalid or duplicate Settings presentation.");
+      }
+      for (const style of styles) {
+        style.media = "all";
+      }
+      return { view, signal: lifetime, dispose };
+    } catch (error) {
+      dispose();
+      throw error;
+    }
   }
 
   get hasPlugins(): boolean {
@@ -161,6 +264,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
       this.preloads.sync(context.config.current, context.resourceBasePath, (id, error) =>
         this.reportError(id, error),
       );
+    // Owner publications drive asset preloads and revoke obsolete plugin activations synchronously.
     this.stops.push(
       context.config.subscribe(preload),
       context.gateway.subscribe(() => this.syncConnection()),
@@ -229,7 +333,11 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
       const installed = new Set(catalog.plugins.map((plugin) => plugin.pluginId));
       this.loadingCatalog = installed;
       for (const [id, owner] of this.owners) {
-        if (!installed.has(id)) {
+        const next = catalog.plugins.find((descriptor) => descriptor.pluginId === id);
+        if (
+          !next ||
+          (owner.deliveryIdentity ?? "gateway") !== controlUiPluginDeliveryIdentity(next)
+        ) {
           this.owners.delete(id);
           this.disposeOwner(owner);
         }
@@ -238,28 +346,19 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
       if (catalog.plugins.length) {
         const gatewayUrl = new URL(client.gatewayUrl, window.location.href);
         gatewayUrl.protocol = gatewayUrl.protocol.replace(/^ws/u, "http");
-        if (!sameOrigin) {
-          this.loadingCatalog = null;
-          const error = new Error(
-            `Native plugin UI requires the Control UI served by the connected Gateway. Open ${gatewayUrl.origin} and reconnect there.`,
-          );
-          await Promise.all(
-            catalog.plugins.map((descriptor) => {
-              this.reportError(descriptor.pluginId, error);
-              return this.reportActivation(descriptor, client, current, "failed", error);
-            }),
-          );
-          return;
-        }
-        if (!bootstrap) {
-          throw new Error("Could not authenticate native plugin assets. Reconnect and retry.");
-        }
         for (const descriptor of catalog.plugins) {
-          const grantError = controlUiPluginAssetGrantError(
-            descriptor,
-            bootstrap,
-            this.getContext().resourceBasePath,
-          );
+          if (controlUiPluginDistribution(descriptor)) {
+            continue;
+          }
+          const grantError = !sameOrigin
+            ? `Native plugin UI requires the Control UI served by the connected Gateway. Open ${gatewayUrl.origin} and reconnect there.`
+            : !bootstrap
+              ? "Could not authenticate native plugin assets. Reconnect and retry."
+              : controlUiPluginAssetGrantError(
+                  descriptor,
+                  bootstrap,
+                  this.getContext().resourceBasePath,
+                );
           if (grantError) {
             installed.delete(descriptor.pluginId);
             const error = new Error(grantError);
@@ -270,7 +369,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
             }
           }
         }
-        if (bootstrap.pluginAssetsRequireAuth) {
+        if (bootstrap?.pluginAssetsRequireAuth) {
           this.startGrantRenewal();
         }
       }
@@ -322,6 +421,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
     const abort = new AbortController();
     const owner: Omit<ControlUiPluginOwner, "host"> = {
       descriptor,
+      deliveryIdentity: controlUiPluginDeliveryIdentity(descriptor),
       client,
       abort,
       disposers: new Set<ControlUiDisposer>(),
@@ -609,6 +709,9 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
 
   dispose(): void {
     this.disposed = true;
+    for (const owner of this.settingsLifetimes) {
+      owner.abort();
+    }
     this.preloads.dispose();
     this.retireOwners();
     for (const stop of this.stops) {

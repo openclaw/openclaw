@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
+import type { GuidedOrchestrationFixture as GuidedOnboardingDeps } from "./onboard-guided-runtime.test-support.js";
 import { setupGuidedCustodianTestSuite } from "./onboard-guided.custodian.test-support.js";
-import type { GuidedOnboardingDeps } from "./onboard-guided.js";
 
 describe("runGuidedOnboarding quick start", () => {
   const {
@@ -149,7 +149,7 @@ describe("runGuidedOnboarding quick start", () => {
 
   it("preserves external Gateway ownership and uses the existing browser handoff", async () => {
     const prompter = createWizardPrompter(undefined, { selectValues: ["quick"] });
-    const runBrowserHandoff = vi.fn(async () => ({ handedOff: true as const }));
+    const runBrowserHandoff = vi.fn(async () => true);
     const deps = setupDeps({
       prompter,
       runBrowserHandoff,

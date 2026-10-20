@@ -1,7 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as binaryDiscovery from "./crabbox-binary.js";
+import * as processRunner from "./crabbox-process.js";
 import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
 import { createCrabboxProfileSuggestionDiscovery } from "./crabbox-worker-profile-suggestion.js";
 import { parseCrabboxProfile } from "./crabbox-worker-profile.js";
+
+afterEach(() => vi.restoreAllMocks());
 
 const coordinatorConfig = {
   provider: "aws",
@@ -35,7 +39,9 @@ function fixture(config: unknown = coordinatorConfig, providers: unknown = catal
     stderr: "",
   }));
   const warn = vi.fn();
-  const dependencies = { findBinary: () => "/fixture/crabbox", runCommand, warn };
+  vi.spyOn(binaryDiscovery, "findCrabboxBinary").mockReturnValue("/fixture/crabbox");
+  vi.spyOn(processRunner, "runCrabboxProcess").mockImplementation(runCommand);
+  const dependencies = { warn };
   return {
     dependencies,
     runCommand,
@@ -58,7 +64,7 @@ describe("Crabbox suggested cloud profile", () => {
           provider: "aws",
           target: "linux",
           class: "small",
-          ttl: "8h",
+          ttl: "4h",
           idleTimeout: "45m",
           warmImage: true,
         },
@@ -124,10 +130,8 @@ describe("Crabbox suggested cloud profile", () => {
 
   it("does not install or execute a missing CLI", async () => {
     const { dependencies, runCommand } = fixture();
-    const discover = createCrabboxProfileSuggestionDiscovery({
-      ...dependencies,
-      findBinary: () => undefined,
-    });
+    vi.spyOn(binaryDiscovery, "findCrabboxBinary").mockReturnValue(undefined);
+    const discover = createCrabboxProfileSuggestionDiscovery(dependencies);
     expect(await discover({})).toBeUndefined();
     expect(runCommand).not.toHaveBeenCalled();
   });

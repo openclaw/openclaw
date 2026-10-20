@@ -1,4 +1,3 @@
-/** Runtime API exports for Canvas presenter routes and CLI registration. */
 export {
   canvasConfigSchema,
   isCanvasHostEnabled,

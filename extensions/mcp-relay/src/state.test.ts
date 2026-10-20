@@ -1,4 +1,3 @@
-import { createPrivateKey } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { CLIENT, createStateFixture } from "./relay.test-helpers.js";
 
@@ -80,14 +79,12 @@ describe("MCP relay persisted state", () => {
   it("keeps its Ed25519 identity across restart and refuses a different relay", async () => {
     const f = createStateFixture();
     const identity = await f.open().initialize();
-    expect(
-      createPrivateKey({
-        key: Buffer.from(identity.privateKey, "base64url"),
-        type: "pkcs8",
-        format: "der",
-      }).asymmetricKeyType,
-    ).toBe("ed25519");
-    await expect(f.open().initialize()).resolves.toEqual(identity);
+    const restarted = await f.open().initialize();
+    expect(restarted.publicKey).toBe(identity.publicKey);
+    expect(restarted.gatewayId).toBe(identity.gatewayId);
+    expect(restarted.signChallenge("challenge", "mcp.openclaw.ai")).toBe(
+      identity.signChallenge("challenge", "mcp.openclaw.ai"),
+    );
     const saved = f.persisted();
     await expect(f.open("https://other.example").initialize()).rejects.toThrow("bound to");
     expect(f.persisted()).toBe(saved);

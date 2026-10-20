@@ -85,11 +85,10 @@ export async function withWorktreeGitConfig<T>(
       await requireGit(cwd, ["rev-parse", "--git-common-dir"], configOptions),
     ),
   );
-  const head = await requireGit(cwd, ["rev-parse", "--verify", "HEAD^{commit}"], configOptions);
-  if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(head)) {
+  const format = await requireGit(cwd, ["rev-parse", "--show-object-format"], configOptions);
+  if (format !== "sha1" && format !== "sha256") {
     throw new Error("Unsupported Git object format");
   }
-  const format = head.length === 64 ? "sha256" : "sha1";
   const storage = await runGit(
     cwd,
     ["config", "--local", "--get", "extensions.refStorage"],

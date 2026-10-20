@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import type { GitHubPublicationDeferral } from "../state/github-publication-worker.types.js";
 import {
   listGitHubPublicationsForClaimInDatabase,
@@ -13,7 +13,7 @@ import { listPendingWorkerWorkspaceResultsInDatabase } from "./worker-environmen
 
 /** Selection shares the destination transaction with deferral, including pending-result custody. */
 export function selectGitHubPublicationDeferralsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   kind: "shared" | "repository",
   selection: GitHubPublicationDeferral,
 ): string[] {

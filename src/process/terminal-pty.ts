@@ -7,6 +7,7 @@ import {
 } from "../plugin-sdk/windows-spawn.js";
 import { signalPtySessionTree } from "./kill-tree.js";
 import { resolvePtyTerminalName, setPtyTerminalName } from "./pty-terminal-name.js";
+import { prepareChildProcessSpawnRecorder } from "./spawn-diagnostics.js";
 import type { SpawnInitiation } from "./spawn-initiation.js";
 import {
   buildWindowsCmdExeCommandLine,
@@ -109,10 +110,15 @@ export async function spawnTerminalPty(
     }
   };
   if (process.versions.bun && process.platform !== "win32" && !bunTerminalHasFlowControl()) {
+    const recordSpawn = prepareChildProcessSpawnRecorder(params.file, params.args);
     // Stock Bun lacks read backpressure; the fork shipping pause also fixes macOS wait4 deadlocks.
     const { spawnNodeTerminalPty } = await import("./terminal-pty-node.js");
     assertCurrent();
-    return await spawnNodeTerminalPty(params, assertCurrent, lifecycle?.initiateSpawn);
+    const pty = await spawnNodeTerminalPty(params, assertCurrent, lifecycle?.initiateSpawn);
+    if (pty.pid > 0) {
+      recordSpawn?.();
+    }
+    return pty;
   }
   const launch = await prepareTerminalPty(params);
   assertCurrent();
@@ -123,6 +129,7 @@ export async function spawnTerminalPty(
 export async function prepareTerminalPty(
   params: TerminalPtySpawnParams,
 ): Promise<() => TerminalPtyHandle> {
+  const recordSpawn = prepareChildProcessSpawnRecorder(params.file, params.args);
   const env = params.env ? { ...params.env } : undefined;
   // Ambient TERM=dumb describes the gateway/node host, not this real PTY.
   // Passing it through makes interactive CLIs refuse to start in the web terminal.
@@ -138,7 +145,13 @@ export async function prepareTerminalPty(
     const bunEnv = env ?? inheritedTerminalEnv(terminalName);
     // node-pty always exports the child's working directory as PWD.
     bunEnv.PWD = params.cwd ?? process.cwd();
-    return () => spawnBunTerminalPty({ ...params, env: bunEnv, name: terminalName });
+    return () => {
+      const pty = spawnBunTerminalPty({ ...params, env: bunEnv, name: terminalName });
+      if (pty.pid > 0) {
+        recordSpawn?.();
+      }
+      return pty;
+    };
   }
   const { spawn } = await import("@lydell/node-pty");
   const invocation = resolveTerminalPtyInvocation({
@@ -154,6 +167,26 @@ export async function prepareTerminalPty(
       cwd: params.cwd,
       env,
     });
+    if (pty.pid > 0) {
+      recordSpawn?.();
+    } else if (recordSpawn && process.platform === "win32") {
+      // ConPTY assigns its PID asynchronously. Silent open terminals are attributed
+      // at their first data or exit; telemetry never delays the admitted handle.
+      let settled = false;
+      const observe = (exited = false) => {
+        if (settled || (pty.pid <= 0 && !exited)) {
+          return;
+        }
+        settled = true;
+        if (pty.pid > 0) {
+          recordSpawn();
+        }
+        dataSubscription.dispose();
+        exitSubscription.dispose();
+      };
+      const dataSubscription = pty.onData(() => observe());
+      const exitSubscription = pty.onExit(() => observe(true));
+    }
     return {
       get pid() {
         return pty.pid;

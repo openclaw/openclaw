@@ -1,5 +1,4 @@
 import { expectDefined } from "@openclaw/normalization-core";
-/** Normalizes provider auth input metadata collected from plugin setup flows. */
 import {
   normalizeOptionalLowercaseString,
   normalizeStringifiedOptionalString,

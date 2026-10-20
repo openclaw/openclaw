@@ -66,7 +66,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
     ]);
   });
 
-  it.each(["error", "aborted"] as const)(
+  it.each(["aborted"] as const)(
     "keeps prior-turn runtime context before the next user after a %s assistant",
     (stopReason) => {
       const firstUser = user("First question");

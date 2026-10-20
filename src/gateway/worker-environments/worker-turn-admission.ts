@@ -1,11 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { createSessionPlacementSettlementClosedAbortError } from "../../agents/run-termination.js";
-import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
+import type {
+  SessionPlacementAdmissionProvider,
+  SessionPlacementTurnParams,
+} from "../../agents/session-placement-admission.js";
 import type {
   LocalTurnPlacementClaim,
   RequiredSessionPlacementAdmission,
 } from "../../agents/session-placement-admission.types.js";
 import { withSessionPlacementForcedTerminalSettlement } from "../../agents/session-placement-forced-terminal-settlement.js";
+import { withSessionPlacementTurnInput } from "../../agents/session-placement-turn-input.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { assertRequiredWorkerLocalExecution } from "../../config/required-worker-profile.js";
@@ -20,8 +24,9 @@ import { composeSessionSourceAssertion } from "../../config/sessions/session-sou
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { createAbortError, racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
+import { withSessionTurn } from "../../sessions/session-controller.admission.js";
+import { SESSION_CONTROLLER_DRAIN_TIMEOUT_MS } from "../../sessions/session-controller.lifecycle.js";
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
-import { SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS } from "../../sessions/session-lifecycle-admission.js";
 import { WORKER_ADMISSION_DEADLINE_MS } from "../../worker/worker-connection-contract.js";
 import { workerInferencePlacement } from "./inference-placement.js";
 import { placementTurnOwner, projectWorkerSessionTurnClaim } from "./placement-record.js";
@@ -59,6 +64,50 @@ export type WorkerTurnAdmissionOptions = {
   }) => Promise<void>;
   withRequiredSession?: RequiredSessionPlacementAdmission;
 };
+
+/** Standalone placement callers reserve the same controller turn as Gateway ingress. */
+export async function admitWorkerTurn(
+  params: {
+    placements: WorkerSessionPlacementStore;
+    claim: LocalTurnPlacementClaim;
+    turn: SessionPlacementTurnParams;
+    runLocal: Parameters<SessionPlacementAdmissionProvider["executeTurn"]>[2];
+    onAdmitted: Parameters<SessionPlacementAdmissionProvider["executeTurn"]>[3];
+    assertCurrent: Parameters<SessionPlacementAdmissionProvider["executeTurn"]>[4];
+  },
+  execute: SessionPlacementAdmissionProvider["executeTurn"],
+) {
+  const { placements, claim, turn, runLocal, onAdmitted, assertCurrent } = params;
+  const current =
+    claim.agentId === undefined || claim.sessionKey === undefined
+      ? await placements.getAsync(claim.sessionId)
+      : undefined;
+  turn.abortSignal?.throwIfAborted();
+  assertCurrent?.();
+  const identity = resolvePlacementIdentity(claim, current);
+  return await withSessionTurn(
+    {
+      ...identity,
+      storePath: turn.sessionTarget?.storePath ?? resolveSessionStorePathForScope(identity),
+      abortSignal: turn.abortSignal,
+    },
+    async (operation, signal) => {
+      const admitted = { ...turn, replyOperation: operation, abortSignal: signal };
+      return await execute(
+        { ...claim, ...identity },
+        admitted,
+        () => {
+          if (!operation) {
+            throw new Error("Worker turn session id is required");
+          }
+          return withSessionPlacementTurnInput(turn, admitted, runLocal);
+        },
+        onAdmitted,
+        assertCurrent,
+      );
+    },
+  );
+}
 
 /** Required policy uses current placement facts at the existing turn-admission boundary. */
 export function createRequiredWorkerTurnAdmission(options: WorkerTurnAdmissionOptions) {
@@ -425,7 +474,15 @@ export async function executeLocalTurn<T>(params: {
         );
     identity = resolvePlacementIdentity(params.claim, current);
     claimSessionKey = current?.sessionKey ?? identity.sessionKey;
-    const assertLocalWorkspace = (repositoryWorkspaceId: string | undefined) => {
+    const assertLocalWorkspace = (
+      entry: { repositoryWorkspaceId?: string; deviceFolder?: { deviceId: string } } | undefined,
+    ) => {
+      if (entry?.deviceFolder) {
+        throw new Error(
+          `This session uses a folder on device ${entry.deviceFolder.deviceId}. Dispatch it to that device before sending a turn; it cannot run on the Gateway.`,
+        );
+      }
+      const repositoryWorkspaceId = entry?.repositoryWorkspaceId;
       if (repositoryWorkspaceId) {
         throw new Error(
           "This repository session needs a cloud worker. Choose a cloud environment and retry.",
@@ -443,22 +500,17 @@ export async function executeLocalTurn<T>(params: {
     });
     if (memory) {
       assertPreflightCurrent();
-      assertLocalWorkspace(
-        readCapturedSessionActorEntry(memory, scope.sessionKey)?.repositoryWorkspaceId,
-      );
+      assertLocalWorkspace(readCapturedSessionActorEntry(memory, scope.sessionKey));
     } else if (reader) {
       const key = assertSessionEntryCohortScope(reader, scope);
       await reader.withRead(
         { sessionKeys: [key], snapshotFields: [] },
         assertPreflightCurrent,
-        (read) =>
-          assertLocalWorkspace(
-            read.entries.find((row) => row.sessionKey === key)?.entry.repositoryWorkspaceId,
-          ),
+        (read) => assertLocalWorkspace(read.entries.find((row) => row.sessionKey === key)?.entry),
       );
     } else {
       const entry = await readSessionEntryReadOnlyInWorker(scope, assertPreflightCurrent);
-      assertLocalWorkspace(entry?.repositoryWorkspaceId);
+      assertLocalWorkspace(entry);
     }
   } finally {
     // The claim transaction rechecks placement predicates and publishes its own observation.
@@ -570,7 +622,7 @@ export async function claimWorkerTurn(params: {
     }
   }
   await params.placements.waitForTurnClaimRelease(params.identity.sessionId, {
-    timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+    timeoutMs: SESSION_CONTROLLER_DRAIN_TIMEOUT_MS,
     ...(params.signal ? { signal: params.signal } : {}),
   });
   const refreshed = await params.placements.getAsync(params.identity.sessionId);

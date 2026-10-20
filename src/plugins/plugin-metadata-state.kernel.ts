@@ -1,5 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import type { ConfigMachineStateDatabase } from "../state/config-machine-state-row.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 
@@ -12,7 +12,7 @@ export type PluginMetadataStateKey =
 export type PluginMetadataStateRow = { state_key: string; value_json: string };
 
 export function readPluginMetadataStateRowsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   stateKeys: readonly PluginMetadataStateKey[],
 ): PluginMetadataStateRow[] {
   if (!tableExists(db, "config_machine_state")) {

@@ -17,6 +17,7 @@ import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-ma
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import type { PluginCatalogItem } from "../../lib/plugins/index.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import { memoryAddonPresentations } from "./memory-addon-presentation.ts";
 import {
   selectedEngineId,
   DEFAULT_MEMORY_ENGINE_ID,
@@ -31,12 +32,7 @@ registerEnglishCatalog(registerPluginManagementEnglish);
 registerEnglishCatalog(registerMemoryImportEnglish);
 
 /** One installed plugin that can claim the exclusive `plugins.slots.memory` slot. */
-type MemoryEngineOption = {
-  id: string;
-  label: string;
-  /** False when config names an engine absent from the current plugin catalog. */
-  available: boolean;
-};
+type MemoryEngineOption = ReturnType<typeof buildMemoryEngineOptions>[number];
 
 /**
  * Enablement as the page actually knows it, shared by the engine row and the
@@ -53,7 +49,7 @@ export type MemoryCatalogState =
 export function buildMemoryEngineOptions(
   catalog: MemoryCatalogState,
   selection: MemoryEngineSelection,
-): MemoryEngineOption[] {
+) {
   if (catalog.kind !== "ready") {
     return [];
   }
@@ -114,20 +110,7 @@ export function findMemoryCatalogPlugin(catalog: MemoryCatalogState, pluginId: s
 }
 
 /** Additive memory plugin: no `kind`, so it layers on top of whichever engine wins the slot. */
-type MemoryAddonRow = {
-  id: string;
-  label: string;
-  description: string;
-  state: MemoryPluginState;
-  busy: boolean;
-  error: string | null;
-  notice: string | null;
-};
-
-const MEMORY_ADDON_PLUGINS = [
-  { id: "active-memory", labelKey: "memoryPage.addons.activeMemory.title" },
-  { id: "memory-wiki", labelKey: "memoryPage.addons.memoryWiki.title" },
-] as const;
+type MemoryAddonRow = ReturnType<typeof buildMemoryAddonRows>[number];
 
 export function buildMemoryAddonRows(
   catalog: MemoryCatalogState,
@@ -137,8 +120,8 @@ export function buildMemoryAddonRows(
     notices: ReadonlyMap<string, { message: string }>;
     refreshWarnings: ReadonlyMap<string, string>;
   },
-): MemoryAddonRow[] {
-  return MEMORY_ADDON_PLUGINS.map((addon) => {
+) {
+  return memoryAddonPresentations.map((addon) => {
     const entry = findMemoryCatalogPlugin(catalog, addon.id);
     return {
       id: addon.id,
@@ -237,18 +220,11 @@ function EngineSection(props: MemoryViewProps) {
         <SettingsRow
           title={t("memoryPage.engine.rowTitle")}
           description={
-            available() ? (
-              <>
-                {" "}
-                {t(engineHintKey(props.engineSelection))} {defaultDescription}{" "}
-              </>
-            ) : (
-              <>
-                {" "}
-                {t("memoryPage.engine.catalogUnavailable")}
-                {t(engineHintKey(props.engineSelection))} {defaultDescription}{" "}
-              </>
-            )
+            <>
+              {" "}
+              {!available() && t("memoryPage.engine.catalogUnavailable")}
+              {t(engineHintKey(props.engineSelection))} {defaultDescription}{" "}
+            </>
           }
           stacked={available()}
           control={

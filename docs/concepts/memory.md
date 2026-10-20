@@ -149,6 +149,27 @@ Use [scheduled tasks](/automation/cron-jobs) for exact reminders, timed checks,
 and recurring work. Memory can still summarize the durable context around that
 work.
 
+## PostgreSQL memory search
+
+The built-in `memory-core` plugin can index and search a PostgreSQL agent database.
+SQLite remains the default. PostgreSQL memory search is supported on the
+[qualified runtime](/gateway/postgresql#support-matrix). Text ranking is
+engine-local, so result ordering and scores can differ from SQLite. Hybrid
+search retains the same vector/text weights.
+
+Install `unaccent` in the selected PostgreSQL database for full text, `pg_trgm`
+when using the trigram tokenizer, and `vector` for semantic search. For keyword-only
+search, explicitly set `memory.search.provider: "none"` (or the agent override).
+This mode needs no `vector` extension and appears in memory status as provider
+`none`, search mode `fts-only`. A vector request without the capability fails with
+`DATABASE_SEARCH_CAPABILITY_UNAVAILABLE` and an actionable next step.
+
+Forgetting removes indexed text and vectors together with their source rows.
+`openclaw memory reset` clears derived memory data while preserving memory files,
+sessions, and the admitted search schema; run `openclaw memory index` to rebuild.
+See [Database engines](/reference/database-engines#search-on-postgresql) for setup,
+permissions, storage diagnostics, and PostgreSQL limitations.
+
 ## Memory tools
 
 The agent has three tools for working with memory:
@@ -160,6 +181,11 @@ The agent has three tools for working with memory:
   standing intents. Time-based reminders continue to use scheduled tasks.
 
 All three tools are provided by the active memory plugin (default: `memory-core`).
+
+The agent can answer directly when the conversation, bootstrap files, or supplied
+recall fully answers the question. It uses memory tools to retrieve missing facts
+when that context is absent or only answers part of the question. Partial, stale,
+or unavailable recall still requires disclosure.
 
 When session indexing is enabled, `memory_search` can also return session
 transcript hits. Their `sessions/...jsonl` paths are search references, not files

@@ -1,11 +1,12 @@
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
-import { isSessionRunActive } from "../lib/session-run-state.ts";
+import { listen } from "../lib/reactive/listener.ts";
+import { isSessionRunStateActive } from "../lib/session-run-state.ts";
 import { normalizeAgentId, parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import {
   CHAT_PANE_LIFECYCLE_CHANGED_EVENT,
   CHAT_RUN_ACTIVITY_CHANGED_EVENT,
 } from "../pages/chat/chat-history-events.ts";
-import type { ChatPaneBase } from "../pages/chat/chat-pane-base.ts";
+import type { ChatPaneElement } from "../pages/chat/chat-pane.tsx";
 import type { ChatRunUiStatus } from "../pages/chat/run-lifecycle.ts";
 import type { ApplicationContext } from "./context.ts";
 import {
@@ -28,6 +29,7 @@ export function connectControlUiFavicon(
   shell: HTMLElement,
   context: Parameters<typeof connectControlUiFaviconArtwork>[0] &
     Pick<ApplicationContext, "sessions" | "overlays">,
+  readPanes: () => readonly Pick<ChatPaneElement, "runActivity">[],
   startedAt = Date.now(),
 ): () => void {
   invalidateControlUiFaviconPalette();
@@ -69,7 +71,8 @@ export function connectControlUiFavicon(
     synchronizeScope();
     const snapshot = context.gateway.snapshot;
     let working = false;
-    for (const pane of shell.querySelectorAll<ChatPaneBase>("openclaw-chat-pane")) {
+    // Chat owns these live panes; the favicon adapter aggregates their reported run activity.
+    for (const pane of readPanes()) {
       const activity = pane.runActivity;
       const completion = activity?.completion;
       const unseen = completion && !seenCompletions.has(completion);
@@ -103,8 +106,8 @@ export function connectControlUiFavicon(
         if (rowAgent !== agentId) {
           continue;
         }
-        if (isSessionRunActive(row)) {
-          working = true;
+        if (isSessionRunStateActive(row)) {
+          working ||= context.sessions.isRunVisuallyActive(row);
           nextActive.set(row.key, row.sessionId);
         } else if (
           row.status === "done" &&
@@ -163,12 +166,16 @@ export function connectControlUiFavicon(
     synchronize();
   }
 
+  // Track completion transitions and write the document favicon outside Solid rendering.
   const stops = [
     context.gateway.subscribe(synchronizeGateway),
     context.gateway.subscribeEvents((event) => handleQuestionPromptEvent(questions, event)),
     context.overlays.subscribe(synchronize),
     context.agentSelection.subscribe(synchronize),
     context.sessions.subscribe(synchronize),
+    listen(document, "visibilitychange", synchronize),
+    listen(shell, CHAT_RUN_ACTIVITY_CHANGED_EVENT, synchronize),
+    listen(shell, CHAT_PANE_LIFECYCLE_CHANGED_EVENT, synchronize),
   ];
   const palette = new MutationObserver(() => {
     invalidateControlUiFaviconPalette();
@@ -178,9 +185,6 @@ export function connectControlUiFavicon(
     attributes: true,
     attributeFilter: ["style", "data-theme", "data-theme-mode", "data-theme-mascot"],
   });
-  document.addEventListener("visibilitychange", synchronize);
-  shell.addEventListener(CHAT_RUN_ACTIVITY_CHANGED_EVENT, synchronize);
-  shell.addEventListener(CHAT_PANE_LIFECYCLE_CHANGED_EVENT, synchronize);
   synchronizeGateway();
   const stopArtwork = connectControlUiFaviconArtwork(context);
   return () => {
@@ -188,9 +192,6 @@ export function connectControlUiFavicon(
     disposed = true;
     stops.forEach((stop) => stop());
     palette.disconnect();
-    document.removeEventListener("visibilitychange", synchronize);
-    shell.removeEventListener(CHAT_RUN_ACTIVITY_CHANGED_EVENT, synchronize);
-    shell.removeEventListener(CHAT_PANE_LIFECYCLE_CHANGED_EVENT, synchronize);
     disposeQuestionPromptState(questions);
     applyControlUiFaviconStatus("idle");
   };

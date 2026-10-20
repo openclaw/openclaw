@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
+import { BOARD_GRID_GAP, BOARD_GRID_ROW_HEIGHT } from "../../lib/board/grid.ts";
 import "../../lib/toast-host.ts";
+import "../mcp-app-view-registration.ts";
 // Side-effect import: registers the custom elements mount() depends on
 // without relying on transitive fixture imports.
 import "./board-view.ts";
@@ -24,6 +26,22 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
+
+function frameMessage(frame: HTMLIFrameElement, data: object, ports: MessagePort[] = []) {
+  window.dispatchEvent(
+    new MessageEvent("message", {
+      source: frame.contentWindow,
+      origin: new URL(frame.src).origin,
+      data,
+      ports,
+    }),
+  );
+}
+function keyDown(target: EventTarget | undefined, key: string, altKey = false) {
+  target?.dispatchEvent(
+    new KeyboardEvent("keydown", { key, altKey, bubbles: true, cancelable: true }),
+  );
+}
 
 function stubBoardDocumentFetch(read: () => Promise<Response>): void {
   const originalFetch = globalThis.fetch;
@@ -65,14 +83,7 @@ describe("openclaw-board-view", () => {
         ready.resolve(message.params);
       }
     });
-    const receive = (data: object) =>
-      window.dispatchEvent(
-        new MessageEvent("message", {
-          source: frame.contentWindow,
-          origin: new URL(frame.src).origin,
-          data,
-        }),
-      );
+    const receive = (data: object) => frameMessage(frame, data);
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(view.querySelectorAll("openclaw-panel-loading-skeleton")).toHaveLength(1);
     expect(view.querySelector("openclaw-panel-loading-skeleton")).toBe(skeleton);
@@ -93,7 +104,7 @@ describe("openclaw-board-view", () => {
   it("paces a stalled proxy retry without spending the authorization refresh budget", async () => {
     vi.useFakeTimers();
     const fetchMock = vi.fn(async () => new Response("<!doctype html><p>Ready document</p>"));
-    vi.stubGlobal("fetch", fetchMock);
+    stubBoardDocumentFetch(fetchMock);
     const frameLoadFailed = vi.fn(async () => undefined);
     const view = await mount({
       context: gatewayContext(null),
@@ -119,13 +130,10 @@ describe("openclaw-board-view", () => {
     expect(reload).toHaveBeenCalledExactlyOnceWith(source);
     expect(frameLoadFailed).not.toHaveBeenCalled();
     expect(view.querySelector("iframe")).toBe(frame);
-    window.dispatchEvent(
-      new MessageEvent("message", {
-        source: frame.contentWindow,
-        origin: new URL(source).origin,
-        data: { method: "ui/notifications/sandbox-proxy-ready", params: { sandboxUrl: source } },
-      }),
-    );
+    frameMessage(frame, {
+      method: "ui/notifications/sandbox-proxy-ready",
+      params: { sandboxUrl: source },
+    });
     await vi.advanceTimersByTimeAsync(0);
     await settleCells(view);
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -156,15 +164,7 @@ describe("openclaw-board-view", () => {
     });
     const cell = view.querySelector("openclaw-board-widget-cell")!;
     const frame = cell.querySelector("iframe")!;
-    const send = (data: unknown, ports: MessagePort[] = []) =>
-      window.dispatchEvent(
-        new MessageEvent("message", {
-          source: frame.contentWindow,
-          origin: new URL(frame.src).origin,
-          data,
-          ports,
-        }),
-      );
+    const send = (data: object, ports: MessagePort[] = []) => frameMessage(frame, data, ports);
     send({ method: "ui/notifications/sandbox-proxy-ready", params: { sandboxUrl: frame.src } });
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
     const bridgeChannel = new MessageChannel();
@@ -462,9 +462,8 @@ describe("openclaw-board-view", () => {
       viewId: "mcp-app-renewed",
       expiresAtMs: 71_000,
     }));
-    const source = snapshot({ widgets: [boardWidget({ contentKind: "mcp-app" })] });
     const view = await mount({
-      snapshot: source,
+      snapshot: snapshot({ widgets: [boardWidget({ contentKind: "mcp-app" })] }),
       callbacks: callbacks({ widgetAppView, refreshWidgetAppView }),
     });
     expect(widgetAppView).toHaveBeenCalledWith("alpha", 1);
@@ -477,9 +476,6 @@ describe("openclaw-board-view", () => {
   });
 
   it("shows stale MCP Apps with retry and delete without breaking the board", async () => {
-    if (!customElements.get("mcp-app-view")) {
-      customElements.define("mcp-app-view", class extends HTMLElement {});
-    }
     const widgetAppView = vi.fn(async () => ({
       status: "stale" as const,
       error: "origin transcript pruned",
@@ -490,10 +486,10 @@ describe("openclaw-board-view", () => {
       expiresAtMs: Date.now() + 60_000,
     }));
     const applyOps = vi.fn(async () => undefined);
-    const source = snapshot({ widgets: [boardWidget({ contentKind: "mcp-app" })] });
     const view = await mount({
-      snapshot: source,
+      snapshot: snapshot({ widgets: [boardWidget({ contentKind: "mcp-app" })] }),
       callbacks: callbacks({ applyOps, widgetAppView, refreshWidgetAppView }),
+      context: gatewayContext(null),
     });
 
     await vi.waitFor(() =>
@@ -513,6 +509,7 @@ describe("openclaw-board-view", () => {
         "mcp-app-retried",
       ),
     );
+    expect(view.querySelector("mcp-app-view .mount")).not.toBeNull();
     expect(refreshWidgetAppView).toHaveBeenCalledWith("alpha", 1);
   });
 
@@ -564,8 +561,10 @@ describe("openclaw-board-view", () => {
           finishGrant = resolve;
         }),
     );
-    const source = snapshot({ widgets: [boardWidget({ grantState: "pending" })] });
-    const view = await mount({ snapshot: source, callbacks: callbacks({ grant }) });
+    const view = await mount({
+      snapshot: snapshot({ widgets: [boardWidget({ grantState: "pending" })] }),
+      callbacks: callbacks({ grant }),
+    });
     const allow = view.querySelector<HTMLButtonElement>('[data-test-id="board-grant-allow"]');
     const reject = view.querySelector<HTMLButtonElement>('[data-test-id="board-grant-reject"]');
     expect(view.querySelector("iframe")).toBeNull();
@@ -616,8 +615,10 @@ describe("openclaw-board-view", () => {
 
   it("keeps a rejected widget inert and removable", async () => {
     const applyOps = vi.fn(async () => undefined);
-    const source = snapshot({ widgets: [boardWidget({ grantState: "rejected" })] });
-    const view = await mount({ snapshot: source, callbacks: callbacks({ applyOps }) });
+    const view = await mount({
+      snapshot: snapshot({ widgets: [boardWidget({ grantState: "rejected" })] }),
+      callbacks: callbacks({ applyOps }),
+    });
     expect(view.querySelector('[data-test-id="board-rejected"]')).not.toBeNull();
     expect(view.querySelector("iframe")).toBeNull();
     view.querySelector<HTMLButtonElement>('[data-test-id="board-rejected"] button')?.click();
@@ -664,13 +665,7 @@ describe("openclaw-board-view", () => {
     }
 
     cells[0]?.focus();
-    cells[0]?.dispatchEvent(
-      new KeyboardEvent("keydown", {
-        key: "ArrowRight",
-        bubbles: true,
-        cancelable: true,
-      }),
-    );
+    keyDown(cells[0], "ArrowRight");
     await vi.waitFor(() => expect(document.activeElement).toBe(cells[1]));
     await vi.waitFor(() => expect(cells[1]?.getAttribute("tabindex")).toBe("0"));
   });
@@ -679,14 +674,7 @@ describe("openclaw-board-view", () => {
     const applyOps = vi.fn(async () => undefined);
     const view = await mount({ callbacks: callbacks({ applyOps }) });
     const secondCell = view.querySelectorAll<HTMLElement>('[data-test-id="board-widget"]')[1];
-    secondCell?.dispatchEvent(
-      new KeyboardEvent("keydown", {
-        key: "ArrowLeft",
-        altKey: true,
-        bubbles: true,
-        cancelable: true,
-      }),
-    );
+    keyDown(secondCell, "ArrowLeft", true);
     await vi.waitFor(() =>
       expect(applyOps).toHaveBeenCalledWith([{ kind: "widget_move", name: "beta", position: 0 }]),
     );
@@ -700,17 +688,29 @@ describe("openclaw-board-view", () => {
     const view = await mount({ callbacks: callbacks({ applyOps }) });
     const menuButton = view.querySelector<HTMLButtonElement>(".board-widget__menu-trigger");
     menuButton?.focus();
-    menuButton?.dispatchEvent(
-      new KeyboardEvent("keydown", {
-        key: "ArrowRight",
-        altKey: true,
-        bubbles: true,
-        cancelable: true,
-      }),
-    );
+    keyDown(menuButton ?? undefined, "ArrowRight", true);
     await Promise.resolve();
     expect(document.activeElement).toBe(menuButton);
     expect(applyOps).not.toHaveBeenCalled();
+  });
+
+  it("settles a same-turn resize from the pointer-up position", async () => {
+    const applyOps = vi.fn(async () => undefined);
+    const view = await mount({ callbacks: callbacks({ applyOps }) });
+    const handle = view.querySelector<HTMLElement>(".board-widget__resize-handle")!;
+    const pointer = (target: EventTarget, type: string, clientY: number) => {
+      const event = new MouseEvent(type, { button: 0, clientX: 100, clientY, bubbles: true });
+      Object.defineProperty(event, "pointerId", { value: 7 });
+      target.dispatchEvent(event);
+    };
+    pointer(handle, "pointerdown", 100);
+    pointer(window, "pointerup", 100 + 2 * (BOARD_GRID_ROW_HEIGHT + BOARD_GRID_GAP));
+    expect(applyOps).toHaveBeenCalledExactlyOnceWith([
+      { kind: "widget_resize", name: "alpha", sizeW: 6, sizeH: 6, heightMode: "fixed" },
+    ]);
+    await settleCells(view);
+    expect(view.querySelector(".board-widget--dragging")).toBeNull();
+    expect(view.querySelector(".board-announcer")?.textContent).toContain("Resized Alpha status");
   });
 
   it("cancels an in-progress gesture when the board becomes inactive", async () => {

@@ -90,6 +90,12 @@ describe("worker preparation identity", () => {
   it("uses the provider disk fingerprint independently of lease and runtime policy", () => {
     const target = { ...input.target, profileKey: "7".repeat(64) };
     const original = createWorkerPreparationIdentity({ ...input, target });
+    // Changing this value invalidates every user's warm images on update; change deliberately and explain why in the PR.
+    expect(original.key).toBe("cbdf7035128e74fcf4571c1d9c8f5a0b11e1c8e00bd516556c755bd5b495c559");
+    // Changing this value invalidates every user's warm images on update; change deliberately and explain why in the PR.
+    expect(original.cacheKey).toBe(
+      "5aa1bd824e0e251412000829f6a7932ef884b12223a29d19611c17a769abc474",
+    );
     const changed = createWorkerPreparationIdentity({
       ...input,
       target,

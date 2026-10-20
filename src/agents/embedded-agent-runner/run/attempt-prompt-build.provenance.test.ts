@@ -1,27 +1,30 @@
 // #143821: prompt-build hook context must carry the turn's typed input provenance so
 // plugins can distinguish inter-session deliveries from human messages.
+import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../../config/runtime-snapshot.js";
+import * as decisionDiagnostics from "../../../decisions/diagnostics.js";
 import type { PluginHookBeforePromptBuildResult } from "../../../plugins/hook-before-agent-start.types.js";
 import type { PluginHookAgentContext } from "../../../plugins/hook-types.js";
 import { createHookRunner } from "../../../plugins/hooks.js";
 import { matchesTranscriptEvent } from "../../../sessions/transcript-visible-record.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
-import { buildAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
+import { prepareAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
 import { forgetPromptBuildDrainCacheForRun } from "../../plugin-turn-context.js";
 import {
   createTestSession,
   registerAgentSessionLoopTestLifecycle,
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
-import {
-  createSubagentRunRecord,
-  markPendingFinalDelivery,
-} from "../../subagent-test-fixtures.test-helpers.js";
+import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { testing as announceTesting } from "../../subagents/announce/subagent-announce-output.test-support.js";
+import {
+  ensureDeliveryState,
+  loadPendingFinalDeliveryPayload,
+} from "../../subagents/registry/subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_COMPLETE } from "../../subagents/registry/subagent-lifecycle-events.js";
 import {
   createLifecycleControllerFixture,
@@ -83,7 +86,17 @@ async function assembleWithCapturedHookCtx(
 ) {
   const config = attemptOverrides?.config ?? {};
   setRuntimeConfigSnapshot(config);
-  const { session, sessionManager, modelRegistry } = await createTestSession();
+  const { session, sessionManager, modelRegistry } = await createTestSession({
+    customTools: [
+      {
+        name: "read",
+        label: "Read",
+        description: "Read a fixture file",
+        parameters: Type.Object({}),
+        execute: async () => ({ content: [{ type: "text", text: "fixture" }], details: {} }),
+      },
+    ],
+  });
   const admission = prepareSystemAgentRunAdmission(config, runId, "main", "provenance-hook-test");
   onTestFinished(() => {
     admission.close();
@@ -144,6 +157,7 @@ async function assembleWithCapturedHookCtx(
     runtimeModel: testModel.id,
     systemPromptText: "Base system prompt",
     runAbortSignal: new AbortController().signal,
+    hasBaselineTools: () => session.getActiveToolNames().length > 0,
     applyPromptBuildToolsAllow: promptPolicy.applyPromptBuildToolsAllow ?? (() => []),
     prepareSystemPrompt: promptPolicy.prepareSystemPrompt,
     setActiveSessionSystemPrompt: setSystemPrompt,
@@ -154,7 +168,20 @@ async function assembleWithCapturedHookCtx(
 }
 
 describe("prompt-build hook context input provenance", () => {
+  it("bounds plugin system context using the resolved attempt budget before assembly", async () => {
+    const { setSystemPrompt } = await assembleWithCapturedHookCtx(
+      "bounded-plugin-system-context",
+      { contextTokenBudget: 32_000 },
+      { hookResult: { prependSystemContext: "x".repeat(824_170) } },
+    );
+    const finalPrompt = setSystemPrompt.mock.calls.at(-1)?.[0] ?? "";
+    expect(finalPrompt).toContain("[Plugin system context truncated to fit the model budget.]");
+    expect(finalPrompt).toContain("Base system prompt");
+    expect(finalPrompt.length).toBeLessThan(33_000);
+  });
+
   it("prepares the restricted prompt once before composing the original hook additions", async () => {
+    const observeDecision = vi.spyOn(decisionDiagnostics, "logDecisionToolPrefilter");
     const order: string[] = [];
     const applyPolicy = vi.fn((names: string[] | undefined) => {
       order.push("policy");
@@ -180,6 +207,7 @@ describe("prompt-build hook context input provenance", () => {
       },
     );
     expect(order).toEqual(["policy", "prompt"]);
+    expect(observeDecision).toHaveBeenCalledExactlyOnceWith({ effect: "skipped" });
     expect(captured).toHaveLength(1);
     expect(prepareSystemPrompt).toHaveBeenCalledOnce();
     const finalPrompt = setSystemPrompt.mock.calls.at(-1)?.[0] ?? "";
@@ -304,7 +332,7 @@ it("injects complete lifecycle results into requester prompts and acknowledges o
       outcome: { status: "ok" },
       reason: SUBAGENT_ENDED_REASON_COMPLETE,
       triggerCleanup: false,
-      terminalReply: buildAgentRunTerminalReplySnapshot({ visibleText: answer }),
+      terminalReply: prepareAgentRunTerminalReply({ rawText: answer }).terminalReply,
     });
     await mutateSubagentRuns(
       [child.runId],
@@ -314,7 +342,10 @@ it("injects complete lifecycle results into requester prompts and acknowledges o
           throw new Error("expected completed child");
         }
         const draft = structuredClone(current);
-        markPendingFinalDelivery({ entry: draft });
+        Object.assign(ensureDeliveryState(draft), {
+          status: "pending",
+          payload: loadPendingFinalDeliveryPayload(draft),
+        });
         return { value: undefined, postimages: new Map([[draft.runId, draft]]) };
       },
       { runs },
@@ -329,7 +360,11 @@ it("injects complete lifecycle results into requester prompts and acknowledges o
   if (!first || !second) {
     throw new Error("expected two completed children for requester queue delivery");
   }
-  expect(runs.get(first.runId)?.completion?.resultText).toHaveLength(4_096);
+  const boundedReply = runs.get(first.runId)?.completion?.terminalReply;
+  if (boundedReply?.disposition !== "visible") {
+    throw new Error("expected visible terminal evidence");
+  }
+  expect(boundedReply.text).toHaveLength(4_096);
   const storedCompletion = structuredClone(runs.get(first.runId)?.completion);
   announceTesting.setDepsForTest({
     findTranscriptEvent: async ({ sessionId }, match) => {

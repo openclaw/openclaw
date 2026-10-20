@@ -1,4 +1,5 @@
 // Handles fast version output before the full CLI graph loads.
+import { formatErrorStackWithMessage } from "@openclaw/normalization-core/error-coercion";
 import { isRootVersionInvocation } from "./cli/argv.js";
 import { resolveCliContainerTarget } from "./cli/container-target.js";
 
@@ -10,14 +11,14 @@ export function tryHandleRootVersionFastPath(argv: string[]): boolean {
     return false;
   }
   const onError = async (error: unknown) => {
-    const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
+    const detail = error instanceof Error ? formatErrorStackWithMessage(error) : String(error);
     const message = `[openclaw] Failed to resolve version: ${detail}\n`;
     try {
       const [{ loadCliDotEnv }, { formatConsoleDiagnosticBlock }] = await Promise.all([
         import("./cli/dotenv.js"),
         import("./logging/json-console-line.js"),
       ]);
-      loadCliDotEnv({ quiet: true });
+      loadCliDotEnv();
       process.stderr.write(formatConsoleDiagnosticBlock({ level: "error", message }));
     } catch {
       process.stderr.write(message);

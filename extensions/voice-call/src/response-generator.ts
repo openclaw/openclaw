@@ -1,6 +1,5 @@
 import crypto from "node:crypto";
 import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
-import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   applyModelOverrideWithAuthProfileCompatibility,
@@ -23,7 +22,6 @@ type VoiceResponseParams = {
   voiceConfig: VoiceCallConfig;
   coreConfig: OpenClawConfig;
   agentRuntime: OpenClawPluginApi["runtime"]["agent"];
-  /** Call ID for session tracking */
   callId: string;
   /** Persisted call session key */
   sessionKey?: string;
@@ -258,7 +256,6 @@ export async function generateVoiceResponse(
     explicitSessionKey: sessionKey,
     coreSession: cfg.session,
   });
-  const toolsAllow = resolveAgentConfig(cfg, agentId)?.tools?.allow;
 
   const storePath = agentRuntime.session.resolveStorePath(cfg.session?.store, { agentId });
   try {
@@ -398,7 +395,6 @@ export async function generateVoiceResponse(
           extraSystemPrompt,
           agentDir,
           senderIsOwner,
-          toolsAllow,
           abortSignal,
           blockReplyBreak: "text_end",
           resolveReplyDelivery: async (minimumAssistantMessageIndex = 0) =>

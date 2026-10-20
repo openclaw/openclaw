@@ -76,9 +76,20 @@ ACPX, Agents API, Codex, and Copilot), ordering is: drain queued injections →
 
 For multiple registrations, the first defined provider/model/fallback override and
 `systemPrompt` win. Context additions concatenate in priority order, and tool
-restrictions intersect. A nested ordinary `before_prompt_build` dispatch on
-the same runner is skipped while its outer dispatch is active; other hook
-families and independent turns remain available.
+restrictions intersect. Recursive `before_prompt_build` contributions on the
+same runner are unsupported; handlers must avoid dispatching themselves.
+
+Each plugin hook's `prependSystemContext` and `appendSystemContext` is separately
+limited to 25% of the resolved model context window, using the shared character
+token estimate (including CJK weighting). When a runtime has no resolved window,
+the default context window is used. Oversized blocks retain their prefix and end
+with `[Plugin system context truncated to fit the model budget.]`; smaller blocks
+are unchanged. The host warns once per plugin and session in its bounded
+process-local warning cache, naming the plugin and original/kept character counts.
+This is a per-contribution limit, not a total prompt budget: multiple plugins,
+workspace instructions, and tool definitions still share the model's window.
+Keep system context small and stable; put turn-specific material in `prependContext`
+or `appendContext` instead.
 
 Message-consuming prompt hooks receive a detached model-context snapshot. Mutating nested messages does not change the caller's history, including when a handler retains its input after returning. Registrations within one dispatch share that snapshot in priority order; prepare, ordinary prompt-build, authorized enrichment, and subsequent prompt rebuilds receive separate snapshots. Storage-only native prompt text and tool-result details are excluded from these snapshots.
 
@@ -366,13 +377,21 @@ legacy and qualified identity prevents the drain from consuming another
 conversation's queue. Reading or consuming a legacy alias does not rename its
 stored session key.
 
-Use `api.session.workflow.steerActiveRun({ sessionKey, text, idempotencyKey? })`
+Use `api.session.workflow.steerActiveRun({ sessionKey, text, displayText?, idempotencyKey? })`
 to deliver guidance to the session's active run without starting a new turn.
 It returns `{ steered: true, runId? }` when the run accepts the text, or
 `{ steered: false, reason }` when no run is active, the run is not accepting
 steering, or the runtime rejects it. Acceptance does not wait for transcript
-commitment. The optional `idempotencyKey` is carried by the transcript recorder
-for duplicate correlation.
+commitment. Repeating an `idempotencyKey` within the same active run reuses the
+original accepted result without queueing another model input, including when
+calls overlap. A key already stored in the session also prevents delivery to a
+later run: the host returns the original `runId` when its steering receipt is
+available, or `{ steered: false, reason: "duplicate" }` otherwise. A duplicate is
+a terminal no-op; do not enqueue fallback guidance for it. A rejected attempt
+does not reserve the key, so it can be retried.
+Internal Codex guidance is appended to the transcript only after native
+acceptance. A pre-dispatch rejection leaves no guidance in later model context
+and does not prevent retrying the key.
 
 Active steering requires a guarded (V2) runtime, such as the built-in OpenClaw
 runtime or Codex. Legacy V1 runtimes, including Copilot, return
@@ -386,9 +405,22 @@ injection returns `steered: false`; an expired plugin instance cannot dispatch.
 The host and guarded runtime recheck the plugin instance before dispatch,
 including after transcript persistence. Disabling or disposing the plugin while
 guidance is pending rejects the steer rather than silently dropping it.
-The input is hidden, plugin-authored internal context, with provenance
+The input remains hidden, plugin-authored internal context, with provenance
 `{ kind: "internal_system", sourceTool: "plugin:<id>" }`. It carries no sender or
-owner authority and never answers a pending user question.
+owner authority and never answers a pending user question. The Control UI alone
+shows it as a collapsed **Plugin name guidance** notice with its timestamp;
+expanding the notice reveals the guidance without starting a new chat turn.
+The notice confirms recorded guidance, not delivery: a runtime can reject steering
+after its transcript row has been persisted.
+Steering notes are not sent to chat channels or shown in native clients or the TUI.
+
+Use optional `displayText` for an operator-facing note when `text` includes
+model-only delivery instructions. The model still receives the original `text`;
+only the Control UI notice uses `displayText`. Omit it to display `text` unchanged.
+The host records the plugin's display name with the note. Next-turn injections
+remain part of the next user message's model prompt, not separate steering notices.
+Their captured `modelPromptProjection` is private replay state and is omitted from
+all display history and message events; the visible user message stays unchanged.
 
 If the guidance should survive until another turn, fall back to the durable
 injection queue when steering is unavailable:
@@ -396,7 +428,7 @@ injection queue when steering is unavailable:
 ```typescript
 const guidance = { sessionKey, text, idempotencyKey: "review-1" };
 const result = await api.session.workflow.steerActiveRun(guidance);
-if (!result.steered) {
+if (!result.steered && result.reason !== "duplicate") {
   await api.session.workflow.enqueueNextTurnInjection({
     ...guidance,
     ttlMs: 24 * 60 * 60 * 1000,

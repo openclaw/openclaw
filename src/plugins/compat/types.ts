@@ -1,4 +1,3 @@
-// Plugin compatibility types describe lifecycle status for plugin migration and deprecation checks.
 type PluginCompatStatus = "active" | "deprecated" | "removal-pending" | "removed";
 
 type PluginCompatOwner =
@@ -19,7 +18,7 @@ export type PluginCompatRecord<Code extends string = string> = {
   deprecated?: string;
   warningStarts?: string;
   removeAfter?: string;
-  removalGate?: "next-plugin-sdk-major" | "stable-deprecation-period";
+  removalGate?: "stable-deprecation-period";
   replacement?: string;
   docsPath: string;
   surfaces: readonly string[];

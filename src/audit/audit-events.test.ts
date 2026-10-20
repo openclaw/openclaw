@@ -13,6 +13,10 @@ import {
 } from "../state/openclaw-state-db.js";
 import { createAgentEventAuditRecorder } from "./agent-event-audit.js";
 import {
+  assertAuditOverflowRetention,
+  assertAuditRetentionCountDrift,
+} from "./audit-event-retention.test-support.js";
+import {
   listAuditEvents,
   pruneExpiredAuditEventsInDatabase,
   recordAuditEventInDatabase,
@@ -21,7 +25,6 @@ import type { AuditEventInput, ToolActionAuditEventInput } from "./audit-event-t
 import type { AuditEventWriter } from "./audit-event-writer.js";
 
 const tempDirs: string[] = [];
-const AUDIT_EVENT_MAX_ROWS_CONTRACT = 100_000;
 const AUDIT_EVENT_PRUNE_BATCH_ROWS_CONTRACT = 1_024;
 const AUDIT_EVENT_RETENTION_MS_CONTRACT = 30 * 24 * 60 * 60_000;
 let auditTestRunSequence = 0;
@@ -226,19 +229,21 @@ describe("audit event persistence", () => {
     });
   });
 
-  it("deduplicates replayed source events", async () => {
+  it.each(["source", "event"])("deduplicates replayed %s identities", async (identity) => {
     const database = createDatabaseOptions();
     const input = auditInput();
-    const first = recordAuditEventInDatabase(input, {
-      ...database,
-      database: openOpenClawStateDatabase(database),
-    });
+    const first = recordAuditEventInDatabase(
+      input,
+      { ...database, database: openOpenClawStateDatabase(database) },
+      "replayed-event",
+    );
     expect(first?.sequence).toBe(1);
     expect(
-      recordAuditEventInDatabase(input, {
-        ...database,
-        database: openOpenClawStateDatabase(database),
-      }),
+      recordAuditEventInDatabase(
+        { ...input, ...(identity === "event" ? { sourceId: "another-source" } : {}) },
+        { ...database, database: openOpenClawStateDatabase(database) },
+        identity === "event" ? "replayed-event" : "another-event",
+      ),
     ).toBeUndefined();
     const next = recordAuditEventInDatabase(
       auditInput({ sourceId: "after-replay", sourceSequence: 2 }),
@@ -248,38 +253,12 @@ describe("audit event persistence", () => {
     expect((await listAuditEvents({ database, limit: 10 })).events).toEqual([next, first]);
   });
 
-  it("prunes row overflow in batches instead of scanning the full cap per insert", () => {
-    const database = createDatabaseOptions();
-    const { db } = openOpenClawStateDatabase(database);
-    const occurredAt = Date.now();
-    db.prepare(
-      `WITH digits(d) AS (VALUES (0),(1),(2),(3),(4),(5),(6),(7),(8),(9)),
-            numbers(n) AS (
-              SELECT 1 + a.d + 10*b.d + 100*c.d + 1000*d.d + 10000*e.d + 100000*f.d
-              FROM digits a, digits b, digits c, digits d, digits e, digits f
-            )
-       INSERT INTO audit_events (
-         event_id, source_id, source_sequence, occurred_at, kind, action, status,
-         actor_type, actor_id, agent_id, run_id
-       )
-       SELECT 'event-' || n, 'source-' || n, n, ? + n, 'agent_run',
-              'agent.run.started', 'started', 'agent', 'main', 'main', 'run-' || n
-       FROM numbers
-       WHERE n <= ?`,
-    ).run(occurredAt, AUDIT_EVENT_MAX_ROWS_CONTRACT + 1);
+  it("repairs retention count drift once without repeated pruning reads", () => {
+    assertAuditRetentionCountDrift(openOpenClawStateDatabase(createDatabaseOptions()));
+  });
 
-    expect(
-      recordAuditEventInDatabase(
-        auditInput({
-          sourceSequence: AUDIT_EVENT_MAX_ROWS_CONTRACT + 2,
-          occurredAt: occurredAt + AUDIT_EVENT_MAX_ROWS_CONTRACT + 2,
-        }),
-        { ...database, database: openOpenClawStateDatabase(database) },
-      ),
-    ).toBeDefined();
-    expect(db.prepare("SELECT COUNT(*) AS count FROM audit_events").get()).toEqual({
-      count: AUDIT_EVENT_MAX_ROWS_CONTRACT - AUDIT_EVENT_PRUNE_BATCH_ROWS_CONTRACT,
-    });
+  it("prunes overflow in one statement and keeps the retained sequence window", () => {
+    assertAuditOverflowRetention(openOpenClawStateDatabase(createDatabaseOptions()));
   });
 
   it("rehydrates the sequence after an enclosing transaction rolls back", async () => {
@@ -470,26 +449,27 @@ describe("audit event persistence", () => {
     }
     const expiredAt = occurredAt + AUDIT_EVENT_RETENTION_MS_CONTRACT + 1;
 
+    const prune = () =>
+      pruneExpiredAuditEventsInDatabase({
+        database: { ...database, database: openOpenClawStateDatabase(database) },
+        now: expiredAt,
+      });
+    const rollback = new Error("fixture outer rollback");
+    expect(() =>
+      runOpenClawStateWriteTransaction(() => {
+        expect(prune()).toBe(AUDIT_EVENT_PRUNE_BATCH_ROWS_CONTRACT);
+        throw rollback;
+      }, database),
+    ).toThrow(rollback);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM audit_events").get()).toEqual({
+      count: AUDIT_EVENT_PRUNE_BATCH_ROWS_CONTRACT + 1,
+    });
+
     expect((await listAuditEvents({ database, limit: 10, now: expiredAt })).events).toEqual([]);
-    expect(
-      pruneExpiredAuditEventsInDatabase({
-        database: { ...database, database: openOpenClawStateDatabase(database) },
-        now: expiredAt,
-      }),
-    ).toBe(AUDIT_EVENT_PRUNE_BATCH_ROWS_CONTRACT);
+    expect(prune()).toBe(AUDIT_EVENT_PRUNE_BATCH_ROWS_CONTRACT);
     expect(db.prepare("SELECT COUNT(*) AS count FROM audit_events").get()).toEqual({ count: 1 });
-    expect(
-      pruneExpiredAuditEventsInDatabase({
-        database: { ...database, database: openOpenClawStateDatabase(database) },
-        now: expiredAt,
-      }),
-    ).toBe(1);
-    expect(
-      pruneExpiredAuditEventsInDatabase({
-        database: { ...database, database: openOpenClawStateDatabase(database) },
-        now: expiredAt,
-      }),
-    ).toBe(0);
+    expect(prune()).toBe(1);
+    expect(prune()).toBe(0);
   });
 });
 

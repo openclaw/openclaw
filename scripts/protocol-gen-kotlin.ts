@@ -349,16 +349,10 @@ function emitGatewayCatalogEnum(name: string, values: readonly string[]): string
 
 export async function generateKotlinProtocol(repoRoot: string): Promise<Record<string, string>> {
   const gatewayEventSource = await fs.readFile(
-    path.join(repoRoot, "src/gateway/server-methods-list.ts"),
-    "utf8",
-  );
-  const gatewayEventConstants = await fs.readFile(
     path.join(repoRoot, "src/gateway/events.ts"),
     "utf8",
   );
-  const gatewayEvents = Array.from(
-    extractGatewayEventNames(gatewayEventSource, gatewayEventConstants),
-  );
+  const gatewayEvents = extractGatewayEventNames(gatewayEventSource);
   const gatewayMethods = listCoreGatewayMethodNames();
 
   const gatewayContent = [

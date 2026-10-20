@@ -1,8 +1,8 @@
-import { addAbortListener } from "node:events";
 import path from "node:path";
 import { NODE_WORKER_IDLE_RETENTION_PROTOCOL_FEATURE } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { resolveStateDir } from "../config/paths.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { throwCollectedErrors } from "../infra/error-graph-internal.js";
 import { withTimeout } from "../infra/fs-safe.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { WorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
@@ -23,7 +23,6 @@ import {
   type WorkerConnectionEndpoint,
 } from "../worker/worker-connection-endpoint.js";
 import type { NodeWorkerProcessInput } from "../worker/worker-process-observation.js";
-import { throwNodeHostCleanupErrors } from "./cleanup-errors.js";
 import { NodeWorkerCapacity } from "./node-worker-capacity.js";
 import { NodeWorkerChildLifecycle } from "./node-worker-child-lifecycle.js";
 import { NodeWorkerContainerLifecycle } from "./node-worker-container-lifecycle.js";
@@ -92,7 +91,6 @@ class NodeWorkerSupervisor {
     this.containerLifecycle = options.containerEngine
       ? new NodeWorkerContainerLifecycle(options.containerEngine, bundleRoot, this.store)
       : undefined;
-    const containerImage = options.containerImage;
     this.workspace =
       options.workspace ??
       new NodeWorkerWorkspaceRuntime({ root: bundleRoot, env: this.workerEnv });
@@ -105,6 +103,7 @@ class NodeWorkerSupervisor {
       isRecoveryActive: () => !this.closed,
     });
     this.children = new NodeWorkerChildLifecycle({
+      onProcessesChanged: options.onProcessesChanged,
       bundleRoot,
       ...startup,
       store: this.store,
@@ -112,7 +111,7 @@ class NodeWorkerSupervisor {
       capacity: this.capacity,
       containerEngine,
       containerLifecycle: this.containerLifecycle,
-      containerImage,
+      containerImage: options.containerImage,
       starting: this.starting,
       initialize: () => this.initialize(),
       isClosed: () => this.closed,
@@ -126,9 +125,7 @@ class NodeWorkerSupervisor {
       return this.initializationPromise;
     }
     const initialization = (async () => {
-      if (this.containerLifecycle) {
-        await this.containerLifecycle.initialize();
-      }
+      await this.containerLifecycle?.initialize();
       await this.capacity.initialize(async (receipt) => {
         await this.recoverRunning(receipt, false);
       });
@@ -224,6 +221,7 @@ class NodeWorkerSupervisor {
           admissionSignal,
           workspace?.homeDir,
           idleRetention,
+          workspace?.assertCurrent,
         );
       } finally {
         workspace?.release();
@@ -251,6 +249,7 @@ class NodeWorkerSupervisor {
     signal: AbortSignal,
     homeDir?: string,
     idleRetention?: boolean,
+    assertWorkspaceCurrent?: () => void,
   ): Promise<NodeWorkerLaunchReceipt> {
     await this.initialize();
     const supervisor = (this.supervisorIdentity ??= requireNodeWorkerProcessIdentity(process.pid));
@@ -282,13 +281,7 @@ class NodeWorkerSupervisor {
       signal.throwIfAborted();
       if (owner.retiring) {
         // Shutdown must abort admission before stopping its retiring physical owner.
-        const aborted = createDeferredCore();
-        const listener = addAbortListener(signal, () => aborted.resolve());
-        try {
-          await Promise.race([owner.done, aborted.promise]);
-        } finally {
-          listener[Symbol.dispose]();
-        }
+        await racePromiseWithAbortSignal(owner.done, signal, (aborted) => aborted.reason);
       }
       signal.throwIfAborted();
       if (this.children.active.get(owner.launchId) !== owner) {
@@ -315,7 +308,14 @@ class NodeWorkerSupervisor {
         signal.throwIfAborted();
         continue;
       }
-      return await this.children.startTurn(owner, descriptor, claimInput, signal, idleRetention);
+      return await this.children.startTurn(
+        owner,
+        descriptor,
+        claimInput,
+        signal,
+        idleRetention,
+        assertWorkspaceCurrent,
+      );
     }
     const claim = await this.capacity.claim(claimInput, supervisor, signal, () =>
       this.children.reclaimIdle(),
@@ -329,9 +329,15 @@ class NodeWorkerSupervisor {
       throw new Error("node worker turn receipt expired; request a fresh turn");
     }
     try {
+      assertWorkspaceCurrent?.();
       await this.turns.claim(
         { claim: claimInput, ownerLaunchId: input.launchId, supervisor },
-        { assertCurrent: () => signal.throwIfAborted() },
+        {
+          assertCurrent: () => {
+            signal.throwIfAborted();
+            assertWorkspaceCurrent?.();
+          },
+        },
       );
     } catch (error) {
       await this.capacity.finish({
@@ -353,12 +359,14 @@ class NodeWorkerSupervisor {
     signal?.addEventListener("abort", cancelClaimed, { once: true });
     const startup = this.children.startChild({
       workerEnv: homeDir ? snapshotNodeWorkerEnv(this.workerEnv, homeDir) : this.workerEnv,
+      homeDir,
       input,
       descriptor,
       supervisor,
       signal,
       claim: claimInput,
       idleRetention,
+      assertWorkspaceCurrent,
     });
     this.starting.set(input.launchId, startup);
     if (signal?.aborted) {
@@ -557,7 +565,7 @@ class NodeWorkerSupervisor {
           result.status === "rejected" ? [result.reason] : [],
         ),
       );
-      throwNodeHostCleanupErrors(errors, "node worker environment cleanup failed");
+      throwCollectedErrors(errors, "node worker environment cleanup failed");
     });
   }
 
@@ -703,7 +711,7 @@ class NodeWorkerSupervisor {
     await this.journal
       .drain({ close: errors.length === 0 })
       .catch((error: unknown) => errors.push(error));
-    throwNodeHostCleanupErrors(errors, "node worker terminal reconciliation failed");
+    throwCollectedErrors(errors, "node worker terminal reconciliation failed");
   }
 }
 

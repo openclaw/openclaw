@@ -35,6 +35,7 @@ OpenTelemetry metrics or change Prometheus metric labels.
   - `openclaw.model_call.prompt.input_messages_count`, `openclaw.model_call.prompt.input_messages_chars`, `openclaw.model_call.prompt.system_prompt_chars`, `openclaw.model_call.prompt.tool_definitions_count`, `openclaw.model_call.prompt.tool_definitions_chars`, `openclaw.model_call.prompt.total_chars` (safe component sizes only, no prompt text)
   - `openclaw.model_call.usage.*` and `gen_ai.usage.*` when the result carries usage for that request or aggregate turn
   - Span event `openclaw.provider.request` with attribute `openclaw.upstreamRequestIdHash` (bounded, hash-based) when the upstream provider result exposes a request id; raw ids are never exported
+  - Codex turn span event `openclaw.model.response.observed` with `openclaw.upstreamRequestIdHash`, `openclaw.model_response.timestamp_source = receipt`, `openclaw.model_response.usage_source = native-normalized`, `openclaw.model_response.usage_scope = response`, and known `openclaw.model_call.usage.*` / `gen_ai.usage.*` fields. It records an untimed native response observation and does not increment usage metrics.
   - With `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental`, request spans use the latest GenAI inference span name `{gen_ai.operation.name} {gen_ai.request.model}`. Turn spans use `invoke_agent` because OpenClaw does not claim a native agent name from the opaque CLI boundary. Both use `CLIENT` span kind instead of `openclaw.model.call`.
 - `openclaw.harness.run`
   - `openclaw.harness.id`, `openclaw.harness.plugin`, `openclaw.outcome`, `openclaw.provider`, `openclaw.model`, `openclaw.channel`, optional `openclaw.agent`
@@ -113,6 +114,9 @@ the diagnostics-otel plugin does not export them as standalone OTLP signals.
 Event kinds and `run.execution_phase.phase` values are additive. TypeScript
 consumers should keep default branches instead of assuming either union is
 permanently exhaustive.
+
+Events with no interested subscriber or tracing exporter are discarded before
+payload enrichment and queuing; they are not buffered for future subscribers.
 
 `agent.commentary` records completed preambles, not text deltas. It carries the
 original agent-event sequence and timestamp and attaches to the active harness

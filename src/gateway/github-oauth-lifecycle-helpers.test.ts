@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GitHubToolIdentityConfig } from "../config/types.tools.js";
-import { configuredOAuthIdentities } from "./github-oauth-lifecycle-helpers.js";
+import {
+  configuredOAuthIdentities,
+  captureGitHubOAuthAuthorizationIdentity,
+} from "./github-oauth-lifecycle-helpers.js";
 import {
   identity,
   NEW_PROFILE,
@@ -47,4 +50,36 @@ describe("GitHub OAuth maintenance inventory", () => {
       { scope: "agent", agentId: "agent-064", identity: system },
     ]);
   });
+});
+
+it("never captures a GitHub App signing key in OAuth device authorization state", () => {
+  const config: OpenClawConfig = {
+    tools: {
+      github: {
+        kind: "app-installation",
+        profileId: OLD_PROFILE,
+        app: {
+          appId: 1,
+          installationId: 2,
+          accountId: 3,
+          repositories: [{ id: 4, fullName: "example/project" }],
+          permissions: { contents: "read" },
+          privateKey: "synthetic-signing-key",
+          keyVersion: "synthetic-v1",
+        },
+      },
+    },
+  };
+  expect(() =>
+    captureGitHubOAuthAuthorizationIdentity(config, { scope: "system", agentId: "main" }),
+  ).toThrow("before connecting an OAuth identity");
+  const oauth = identity(OLD_PROFILE, { oauth: true });
+  config.tools = { github: oauth };
+  const captured = captureGitHubOAuthAuthorizationIdentity(config, {
+    scope: "system",
+    agentId: "main",
+  });
+  expect(captured).toEqual(oauth);
+  oauth.profileId = NEW_PROFILE;
+  expect(captured?.profileId).toBe(OLD_PROFILE);
 });

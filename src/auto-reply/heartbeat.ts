@@ -1,7 +1,6 @@
-/** Heartbeat prompt defaults, scratch detection, and acknowledgment handling. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { escapeRegExp } from "../shared/regexp.js";
-import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN, isSilentReplyPayloadText } from "./tokens.js";
+import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "./tokens.js";
 
 // Default heartbeat prompt (used when config.agents.defaults.heartbeat.prompt is unset).
 // Keep it tight and avoid encouraging the model to invent/rehash "open loops" from prior chat context.
@@ -96,6 +95,15 @@ export function resolveHeartbeatPromptForResponseTool(raw?: string): string {
 
 type StripHeartbeatMode = "heartbeat" | "message";
 const HEARTBEAT_TRAILING_TOKEN_RE = new RegExp(`${escapeRegExp(HEARTBEAT_TOKEN)}[^\\w]{0,4}$`);
+/** Heartbeats accept only strict token prefixes with at least four characters. */
+function isTruncatedSilentReplyText(text: string | undefined): boolean {
+  const candidate = text?.trim().toUpperCase() ?? "";
+  return (
+    candidate.length >= 4 &&
+    candidate.length < SILENT_REPLY_TOKEN.length &&
+    SILENT_REPLY_TOKEN.startsWith(candidate)
+  );
+}
 
 function stripTokenAtEdges(raw: string): { text: string; didStrip: boolean } {
   let text = raw.trim();
@@ -138,25 +146,30 @@ function stripTokenAtEdges(raw: string): { text: string; didStrip: boolean } {
 /** Strips HEARTBEAT_OK acknowledgements and decides whether visible notification is needed. */
 export function stripHeartbeatToken(
   raw?: string,
-  opts: { mode?: StripHeartbeatMode; maxAckChars?: number } = {},
+  opts: { mode?: StripHeartbeatMode; maxAckChars?: number; allowTruncated?: boolean } = {},
 ) {
   const trimmed = raw?.trim();
   if (!trimmed) {
     return { shouldSkip: true, text: "", didStrip: false };
+  }
+  const mode: StripHeartbeatMode = opts.mode ?? "message";
+  if (
+    mode === "heartbeat" &&
+    opts.allowTruncated !== false &&
+    isTruncatedSilentReplyText(trimmed)
+  ) {
+    return { shouldSkip: true, text: "", didStrip: true };
   }
   // Markup cleanup inserts spaces or removes edge wrappers; it cannot create this token.
   if (!trimmed.includes(HEARTBEAT_TOKEN)) {
     return { shouldSkip: false, text: trimmed, didStrip: false };
   }
 
-  const mode: StripHeartbeatMode = opts.mode ?? "message";
   const maxAckCharsRaw = opts.maxAckChars;
-  const parsedAckChars =
-    typeof maxAckCharsRaw === "string" ? Number(maxAckCharsRaw) : maxAckCharsRaw;
   const maxAckChars = Math.max(
     0,
-    typeof parsedAckChars === "number" && Number.isFinite(parsedAckChars)
-      ? parsedAckChars
+    maxAckCharsRaw !== undefined && Number.isFinite(maxAckCharsRaw)
+      ? maxAckCharsRaw
       : DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   );
 
@@ -184,13 +197,11 @@ export function stripHeartbeatToken(
   return { shouldSkip, text: shouldSkip ? "" : rest, didStrip: true };
 }
 
-/** Recognizes canonical silent replies and backwards-compatible heartbeat acknowledgements. */
+/** Truncated acknowledgements require established heartbeat context. */
 export function isHeartbeatAcknowledgementText(
   text: string | undefined,
   maxAckChars = DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
+  allowTruncated = false,
 ): boolean {
-  return (
-    isSilentReplyPayloadText(text) ||
-    stripHeartbeatToken(text, { mode: "heartbeat", maxAckChars }).shouldSkip
-  );
+  return stripHeartbeatToken(text, { mode: "heartbeat", maxAckChars, allowTruncated }).shouldSkip;
 }

@@ -37,7 +37,7 @@ function collectAppendedEvents(
   return events;
 }
 
-/** Project the exact phase result and complete postimage into one backend-independent receipt. */
+/** Assemble a receipt; the backend owns capturing its postimage before publication. */
 export function createSessionActorCommittedOutcome<
   Value extends SessionActorPhaseResults[SessionActorPhase],
 >(params: {
@@ -47,6 +47,7 @@ export function createSessionActorCommittedOutcome<
   after: SessionActorHotState;
   payloads?: ReadonlyMap<number, { event: unknown; serializedBytes: number }>;
   transcriptAuthority?: SessionActorReceipt["transcript"]["authorityReceipts"];
+  conversationPublication?: SessionActorReceipt["conversationPublication"];
   applied: {
     value: Value;
     pendingInputMutationReceipt?: PendingInputMutationReceipt;
@@ -92,11 +93,12 @@ export function createSessionActorCommittedOutcome<
           Boolean(append?.header?.projectionNeedsReconcile) ||
           Boolean(value && "projectionNeedsReconcile" in value && value.projectionNeedsReconcile),
       },
+      conversationPublication: params.conversationPublication,
       pendingInputReceipt: turn?.custody ?? append?.value.pendingInputReceipt,
       pendingInputMutationReceipt: applied.pendingInputMutationReceipt,
       pendingFinalDelivery: structuredClone(after.entry?.pendingFinalDelivery),
       reducers: applied.reducers,
-      postimage: structuredClone(after),
+      postimage: after,
     },
   };
 }

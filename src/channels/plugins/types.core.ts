@@ -226,6 +226,14 @@ export type ChannelGroupContext = {
   senderE164?: string | null;
 };
 
+/** Authenticated direct-conversation facts evaluated against an admitted config snapshot. */
+export type ChannelDirectToolPolicyContext = Omit<
+  ChannelGroupContext,
+  "groupId" | "groupChannel" | "groupSpace"
+> & {
+  conversationId: string;
+};
+
 export type ChannelTtsVoiceDeliveryCapabilities = {
   synthesisTarget: "audio-file" | "voice-note";
   transcodesAudio?: boolean;
@@ -639,6 +647,8 @@ export type ChannelMessagingAdapter = {
 };
 
 export type ChannelAgentPromptAdapter = {
+  /** Native controls that can present and resolve structured user questions. */
+  questionInputMode?: "buttons";
   /** The channel supplies its own inline-button guidance through messageToolHints. */
   customInlineButtonHint?: boolean;
   messageToolHints?: (params: { cfg: OpenClawConfig; accountId?: string | null }) => string[];

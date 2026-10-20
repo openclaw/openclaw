@@ -1,8 +1,3 @@
-/**
- * Process-control tool factory.
- * Lists, polls, logs, writes to, sends keys to, pastes into, kills, clears,
- * and removes background exec sessions.
- */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Static } from "typebox";
 import { getAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
@@ -10,6 +5,7 @@ import { createAbortError as createNamedAbortError } from "../infra/abort-signal
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { getDiagnosticSessionState } from "../logging/diagnostic-session-state.js";
 import type { ManagedRunStdin } from "../process/supervisor/types.js";
+import { sleep } from "../utils/sleep.js";
 import {
   captureAgentToolSourceExecutionGuard,
   runWithAgentToolSourceExecutionScope,
@@ -35,7 +31,6 @@ import {
   renderExecExitLabel,
 } from "./bash-tools.exec-output.js";
 import { ProcessToolOutputSchema } from "./bash-tools.process-schema.js";
-import { handleProcessSendKeys, writeProcessStdin } from "./bash-tools.process-send-keys.js";
 import { processSchema } from "./bash-tools.schemas.js";
 import {
   clampWithDefault,
@@ -45,14 +40,13 @@ import {
   truncateMiddle,
 } from "./bash-tools.shared.js";
 import { recordCommandPoll, resetCommandPollCount } from "./command-poll-backoff.js";
-import { encodePaste } from "./pty-keys.js";
+import { encodeKeySequence, encodePaste, hasCursorModeSensitiveKeys } from "./pty-keys.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { attachInternalToolResultAcknowledgement } from "./runtime/internal-hooks.js";
 import { PROCESS_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import { ToolInputError, type AgentToolWithMeta } from "./tools/common.js";
-import { textResult } from "./tools/tool-results.js";
+import { failText, textResult } from "./tools/tool-results.js";
 
-/** Defaults injected by tests, agent scopes, and scoped process registries. */
 export type ProcessToolDefaults = {
   hasCronTool?: boolean;
   inputWaitIdleMs?: number;
@@ -120,6 +114,18 @@ function isWritableStdin(stdin: ManagedRunStdin | undefined): stdin is ManagedRu
   return true;
 }
 
+async function writeProcessStdin(stdin: ManagedRunStdin, data: string | Buffer) {
+  await new Promise<void>((resolve, reject) => {
+    stdin.write(data, (err) => {
+      if (err) {
+        reject(err);
+      } else {
+        resolve();
+      }
+    });
+  });
+}
+
 function resolvePollWaitMs(value: unknown) {
   if (typeof value === "number" && Number.isFinite(value)) {
     return Math.max(0, Math.min(MAX_POLL_WAIT_MS, Math.floor(value)));
@@ -133,15 +139,12 @@ function resolvePollWaitMs(value: unknown) {
   return 0;
 }
 
-function failText(text: string): AgentToolResult<unknown> {
-  return textResult(text, { status: "failed", error: text });
-}
-
 function recordPollRetrySuggestion(sessionId: string, hasNewOutput: boolean): number | undefined {
   try {
     const sessionState = getDiagnosticSessionState({ sessionId });
     return recordCommandPoll(sessionState, sessionId, hasNewOutput);
   } catch {
+    // Optional retry hints must not prevent observing the process result.
     return undefined;
   }
 }
@@ -223,26 +226,10 @@ function createAbortError(reason: unknown): Error {
   return createNamedAbortError(typeof reason === "string" ? reason : "Aborted");
 }
 
-async function sleepPollInterval(ms: number, signal?: AbortSignal): Promise<void> {
-  if (signal?.aborted) {
-    throw createAbortError(signal.reason);
-  }
-  await new Promise<void>((resolve, reject) => {
-    const cleanup = () => {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", onAbort);
-    };
-    const onResolve = () => {
-      cleanup();
-      resolve();
-    };
-    const onAbort = () => {
-      cleanup();
-      reject(createAbortError(signal?.reason));
-    };
-    // An active poll must outlive the child's last handle so one-shot callers receive its result.
-    const timer = setTimeout(onResolve, ms);
-    signal?.addEventListener("abort", onAbort, { once: true });
+function sleepPollInterval(ms: number, signal?: AbortSignal): Promise<void> {
+  // Shared sleeps retain their timer so one-shot callers still receive the child's result.
+  return sleep(ms, signal).catch((error: unknown) => {
+    throw signal?.aborted ? createAbortError(signal.reason) : error;
   });
 }
 
@@ -253,7 +240,6 @@ function assertSupportedProcessParams(args: unknown): void {
   }
 }
 
-/** Build the process-control tool with optional scope and input-idle defaults. */
 export function createProcessTool(
   defaults?: ProcessToolDefaults,
 ): AgentToolWithMeta<typeof processSchema, unknown> {
@@ -380,30 +366,6 @@ export function createProcessTool(
           : candidate.finalizing
             ? `Session ${sessionId} is finalizing.`
             : undefined;
-      const resolveBackgroundedWritableStdin = () => {
-        if (!scopedSession) {
-          return {
-            ok: false as const,
-            result: failText(`No active session found for ${sessionId}`),
-          };
-        }
-        const controlError = sessionControlError(scopedSession);
-        if (controlError) {
-          return {
-            ok: false as const,
-            result: failText(controlError),
-          };
-        }
-        const stdin = scopedSession.stdin;
-        if (!isWritableStdin(stdin)) {
-          return {
-            ok: false as const,
-            result: failText(`Session ${sessionId} stdin is not writable.`),
-          };
-        }
-        return { ok: true as const, session: scopedSession, stdin };
-      };
-
       const runningSessionResult = (
         sessionLocal: ProcessSession,
         text: string,
@@ -435,16 +397,21 @@ export function createProcessTool(
             if (signal?.aborted) {
               throw createAbortError(signal.reason);
             }
-            const deadline = Date.now() + pollWaitMs;
+            // The wait budget is elapsed time, so a wall-clock step cannot end it early
+            // or stretch it past the requested timeout.
+            const deadline = performance.now() + pollWaitMs;
             // Interactive children cannot progress until their pending prompt reaches the model.
             while (
               !scopedSession.exited &&
               !hasPendingPollDelivery(scopedSession) &&
               scopedSession.pendingOutput.length === 0 &&
               !scopedSession.pendingOutputDropped &&
-              Date.now() < deadline
+              performance.now() < deadline
             ) {
-              await sleepPollInterval(Math.max(0, Math.min(250, deadline - Date.now())), signal);
+              await sleepPollInterval(
+                Math.max(0, Math.min(250, deadline - performance.now())),
+                signal,
+              );
             }
           }
           return await runWithAgentToolSourceExecutionScope(assertSourceCurrent, async () => {
@@ -543,19 +510,44 @@ export function createProcessTool(
           return await runWithAgentToolSourceExecutionScope(assertSourceCurrent, async () => {
             assertCurrent();
             const inputAction = params.action;
-            const resolved = resolveBackgroundedWritableStdin();
-            if (!resolved.ok) {
-              return resolved.result;
+            if (!scopedSession) {
+              return failText(`No active session found for ${sessionId}`);
+            }
+            const controlError = sessionControlError(scopedSession);
+            if (controlError) {
+              return failText(controlError);
+            }
+            const stdin = scopedSession.stdin;
+            if (!isWritableStdin(stdin)) {
+              return failText(`Session ${sessionId} stdin is not writable.`);
             }
             if (inputAction === "send-keys") {
-              return await handleProcessSendKeys({
-                sessionId,
-                session: resolved.session,
-                stdin: resolved.stdin,
+              const request = {
                 keys: params.keys,
                 hex: params.hex,
                 literal: params.literal,
-              });
+              };
+              if (
+                scopedSession.cursorKeyMode === "unknown" &&
+                hasCursorModeSensitiveKeys(request)
+              ) {
+                // Arrow/keypad encodings depend on cursor key mode. Wait for startup output
+                // to identify the mode before sending potentially wrong bytes.
+                return failText(
+                  `Session ${sessionId} cursor key mode is not known yet. Poll or log until startup output appears, then retry send-keys.`,
+                );
+              }
+              const cursorKeyMode =
+                scopedSession.cursorKeyMode === "unknown" ? undefined : scopedSession.cursorKeyMode;
+              const { data, warnings } = encodeKeySequence(request, cursorKeyMode);
+              if (data.length === 0) {
+                return failText("No key data provided.");
+              }
+              await writeProcessStdin(stdin, data);
+              const text =
+                `Sent ${data.length} bytes to session ${sessionId}.` +
+                (warnings.length ? `\nWarnings:\n- ${warnings.join("\n- ")}` : "");
+              return runningSessionResult(scopedSession, text);
             }
             const payload =
               inputAction === "paste"
@@ -566,10 +558,10 @@ export function createProcessTool(
             if (inputAction === "paste" && !payload) {
               return failText("No paste text provided.");
             }
-            await writeProcessStdin(resolved.stdin, payload);
+            await writeProcessStdin(stdin, payload);
             if (inputAction === "write" && params.eof) {
               assertCurrent();
-              resolved.stdin.end();
+              stdin.end();
             }
             const text =
               inputAction === "paste"
@@ -579,7 +571,7 @@ export function createProcessTool(
                   : `Wrote ${Buffer.byteLength(params.data ?? "", "utf8")} bytes to session ${sessionId}${
                       params.eof ? " (stdin closed)" : ""
                     }.`;
-            return runningSessionResult(resolved.session, text);
+            return runningSessionResult(scopedSession, text);
           });
         }
 
@@ -599,6 +591,7 @@ export function createProcessTool(
                   `Unable to ${removing ? "remove" : "terminate"} session ${sessionId}: no active supervisor cancellation handle. Use process poll to check whether it is already exiting.`,
                 );
               }
+              await scopedSession.clearExitNotification?.();
               if (removing) {
                 // Hide the record now; the supervisor still owns process settlement.
                 scopedSession.backgrounded = false;
@@ -617,6 +610,7 @@ export function createProcessTool(
             }
             if (scopedFinished) {
               resetPollRetrySuggestion(sessionId);
+              await scopedFinished.clearExitNotification?.();
               deleteSession(sessionId);
               return textResult(
                 `${params.action === "clear" ? "Cleared" : "Removed"} session ${sessionId}.`,
@@ -635,5 +629,4 @@ export function createProcessTool(
   };
 }
 
-/** Shared process-control tool instance used by the default Bash tool barrel. */
 export const processTool = createProcessTool();

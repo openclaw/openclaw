@@ -3,12 +3,8 @@ import {
   resolveThemeBranding,
 } from "../../../packages/gateway-protocol/src/theme.ts";
 import { registerListener } from "../../../src/shared/listeners.js";
-import type {
-  ApplicationGateway,
-  ApplicationTheme,
-  ApplicationThemePalette,
-  ApplicationThemeServerSelection,
-} from "./context.ts";
+import { listen } from "../lib/reactive/listener.ts";
+import type { ApplicationGateway, ApplicationTheme, ApplicationThemePalette } from "./context.ts";
 import { applyControlUiAccent, syncControlUiSystemChrome } from "./control-ui-presentation.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
 import { backgroundPreferenceStorageKey } from "./settings-background.ts";
@@ -20,6 +16,7 @@ import {
   type UiPreferences,
   type UiSettings,
 } from "./settings.ts";
+import { syncThemeBackgroundArtwork } from "./theme-background-artwork.ts";
 import { currentThemeBranding, setCurrentThemeBranding } from "./theme-branding.ts";
 import type { CatalogTheme, createThemeCatalog, ThemeCatalogSnapshot } from "./theme-catalog.ts";
 import { resolveTheme, syncThemePaletteStylesheet, type ThemeMode } from "./theme.ts";
@@ -41,16 +38,7 @@ function subscribeMediaQuery(query: string, onChange: () => void): (() => void) 
   if (typeof globalThis.matchMedia !== "function") {
     return undefined;
   }
-  const mediaQuery = globalThis.matchMedia(query);
-  if (typeof mediaQuery.addEventListener === "function") {
-    mediaQuery.addEventListener("change", onChange);
-    return () => mediaQuery.removeEventListener("change", onChange);
-  }
-  if (typeof mediaQuery.addListener === "function") {
-    mediaQuery.addListener(onChange);
-    return () => mediaQuery.removeListener(onChange);
-  }
-  return undefined;
+  return listen(globalThis.matchMedia(query), "change", onChange);
 }
 
 function applyThemePresentation(settings: UiPreferences, catalogTheme?: CatalogTheme): void {
@@ -62,10 +50,12 @@ function applyThemePresentation(settings: UiPreferences, catalogTheme?: CatalogT
   const effectiveTheme = dynamic && !catalogTheme ? "claw" : settings.theme;
   const mode = catalogTheme?.mode ?? settings.themeMode;
   const resolvedTheme = resolveTheme(effectiveTheme, mode);
+  const resolvedMode = resolvedTheme.endsWith("light") ? "light" : "dark";
   root.dataset.themeId = effectiveTheme;
   root.dataset.theme = resolvedTheme;
-  root.dataset.themeMode = resolvedTheme.endsWith("light") ? "light" : "dark";
+  root.dataset.themeMode = resolvedMode;
   const branding = themeBranding(settings, catalogTheme);
+  syncThemeBackgroundArtwork(root, branding, resolvedMode, settings.background?.visibility);
   root.dataset.themeMascot = branding.mascot;
   if (branding.avatarHat) {
     root.dataset.themeAvatarHat = branding.avatarHat;
@@ -75,8 +65,6 @@ function applyThemePresentation(settings: UiPreferences, catalogTheme?: CatalogT
   // Plugin semantic styles select on [data-theme-resolved]; keep it in lockstep
   // with data-theme-mode before their lazy stylesheet loads.
   root.dataset.themeResolved = root.dataset.themeMode;
-  root.classList.toggle("wa-light", root.dataset.themeMode === "light");
-  root.classList.toggle("wa-dark", root.dataset.themeMode === "dark");
   root.style.colorScheme = root.dataset.themeMode;
   root.style.setProperty("--control-ui-text-scale", `${(settings.textScale ?? 100) / 100}`);
   const typefaces = resolveTypefaces(effectiveTheme, settings.fontUi, settings.fontChat);
@@ -107,7 +95,6 @@ export function createApplicationTheme(
 ): ApplicationTheme & { dispose: () => void } {
   const { token: _token, ...initialPreferences } = initialSettings;
   let settings: UiPreferences = initialPreferences;
-  let serverSelection: ApplicationThemeServerSelection | null = null;
   let appliedPalette: ApplicationThemePalette | null = null;
   let systemThemeCleanup: (() => void) | undefined;
   const listeners = new Set<() => void>();
@@ -247,7 +234,11 @@ export function createApplicationTheme(
       refresh();
     }
   };
-  globalThis.addEventListener?.("storage", onStorage);
+  const stopStorage =
+    typeof globalThis.addEventListener === "function"
+      ? listen(globalThis, "storage", onStorage)
+      : undefined;
+  // Connection changes refresh scoped preferences and the document's theme owner.
   const stopGateway = gateway.subscribe(() => {
     void loadCatalog();
     if (settings.gatewayUrl !== gateway.connection.gatewayUrl) {
@@ -279,16 +270,10 @@ export function createApplicationTheme(
       const mode = catalog?.theme(settings.theme)?.mode ?? settings.themeMode;
       return resolveTheme(settings.theme, mode).endsWith("light") ? "light" : "dark";
     },
-    get serverSelection() {
-      return serverSelection;
-    },
     get appliedPalette() {
       return appliedPalette;
     },
-    recordServerSelection(theme, scope) {
-      serverSelection = { revision: (serverSelection?.revision ?? 0) + 1, scope, theme };
-      publish();
-    },
+    recordServerSelection: publish,
     setMode(mode: ThemeMode) {
       patchSettings({ themeMode: mode });
     },
@@ -301,7 +286,7 @@ export function createApplicationTheme(
       disposed = true;
       catalog?.dispose();
       stopPreferences();
-      globalThis.removeEventListener?.("storage", onStorage);
+      stopStorage?.();
       stopGateway();
       presentationGeneration += 1;
       detachSystemThemeListener();

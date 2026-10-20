@@ -261,9 +261,6 @@ export function resolveNewSessionSubmitBlock(
   if (place.suggestedCloudProfile.pending) {
     return { gate: "cloud", reason: t("newSession.placementNotReady") };
   }
-  if (place.folderSubmissionBlocked()) {
-    return { gate: "folder", reason: t("newSession.checkingPlace") };
-  }
   if (pendingPlacementActive) {
     const retryReady = Boolean(
       draft.pendingPlacement.retryAllowed &&
@@ -278,6 +275,24 @@ export function resolveNewSessionSubmitBlock(
     return retryReady
       ? emptyDraftBlock(draft, kind, pendingPlacementActive)
       : { gate: "placement-recovery", reason: t("newSession.placementNotReady") };
+  }
+  if (place.folderSubmissionBlocked()) {
+    return {
+      gate: "folder",
+      reason:
+        (place.deviceFolder && place.deviceFolderRuntimeUnsupportedReason) ||
+        place.currentCheckoutUnavailableReason ||
+        t(
+          place.deviceFolder
+            ? place.deviceFolderAvailable
+              ? "newSession.deviceFolderPathRequired"
+              : "newSession.deviceFolderUnavailable"
+            : "newSession.checkingPlace",
+        ),
+    };
+  }
+  if (place.deviceFolder && draft.attachmentDraft.attachments.length > 0) {
+    return { gate: "folder", reason: t("newSession.deviceFolderAttachmentsUnsupported") };
   }
   if (!agents?.agentsList) {
     return rosterBlock();

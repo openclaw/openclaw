@@ -1,5 +1,6 @@
 import { formatCliJsonFailure } from "../cli/failure-output.js";
 import { readConfigFileSnapshot } from "../config/config.js";
+import { openUrlPrivately } from "../infra/browser-handoff.js";
 import { copyToClipboard } from "../infra/clipboard.js";
 import { isRemoteEnvironment } from "../infra/remote-env.js";
 import { defaultRuntime, ExitError, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
@@ -10,7 +11,7 @@ import {
   waitForControlUiDocument,
 } from "./control-ui-handoff.js";
 import { ensureDashboardGatewayReady } from "./gateway-readiness.js";
-import { detectBrowserOpenSupport, formatControlUiSshHint, openUrl } from "./onboard-helpers.js";
+import { detectBrowserOpenSupport, formatControlUiSshHint } from "./onboard-helpers.js";
 
 type DashboardOptions = {
   json?: boolean;
@@ -54,7 +55,11 @@ async function ensureDashboardTargetReady(params: {
 }
 
 function dashboardJsonFailure(runtime: RuntimeEnv, reason: string): void {
-  writeRuntimeJson(runtime, { ...formatCliJsonFailure(reason), reason }, 0);
+  const failure = formatCliJsonFailure(reason);
+  writeRuntimeJson(runtime, { ...failure, reason }, 0);
+  runtime.error(
+    `${failure.error.message}\nRun \`openclaw gateway status --deep\` for details, then retry \`openclaw dashboard --json\`.`,
+  );
   runtime.exit(1);
 }
 
@@ -197,7 +202,11 @@ export async function dashboardCommand(
   if (!options.noOpen) {
     const browserSupport = await detectBrowserOpenSupport();
     if (browserSupport.ok) {
-      opened = await openUrl(browserUrl);
+      // The handoff URL carries the one-time pairing credential in its
+      // fragment. Open it through a private file handoff so the credential
+      // never appears in a browser-opener process argument, where another
+      // OS user could read it from /proc on default procfs hosts.
+      opened = await openUrlPrivately(browserUrl);
     }
     if (!browserSupport.ok || (!opened && !copied && isRemoteEnvironment())) {
       hint = formatControlUiSshHint({

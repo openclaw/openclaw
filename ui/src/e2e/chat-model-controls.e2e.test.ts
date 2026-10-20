@@ -28,10 +28,8 @@ suite.define(() => {
       const composer = page.locator(".agent-chat__input").first();
       const picker = composer.locator(".chat-controls__model-picker");
       const trigger = picker.locator("[data-chat-model-select]");
-      await expect
-        .poll(() => picker.locator("[data-chat-model-option]").count())
-        .toBe(models.length);
       await expect.poll(() => trigger.getAttribute("aria-disabled")).toBe("false");
+      expect(await picker.locator("[data-chat-model-option]").count()).toBe(0);
       const textarea = composer.locator("textarea").first();
       const cdp = await page.context().newCDPSession(page);
       await cdp.send("Performance.enable");
@@ -64,6 +62,9 @@ suite.define(() => {
       };
       console.log(JSON.stringify({ proof: "model-catalog-typing", ...timings }));
       await trigger.click();
+      await expect
+        .poll(() => picker.locator("[data-chat-model-option]").count())
+        .toBe(models.length);
       expect(await picker.locator("[data-chat-model-catalog-state]").count()).toBe(0);
       const refresh = picker.locator(".chat-controls__model-search-wrap [data-chat-model-refresh]");
       expect(await refresh.textContent()).toContain("Refreshing models for Example…");
@@ -88,8 +89,7 @@ suite.define(() => {
       await refreshDetails.waitFor({ state: "visible" });
       // The popup's opening scale animation can move this small target away
       // from a stationary pointer before the tooltip's hover delay completes.
-      await picker.locator("wa-popup[data-anchored-overlay]").evaluate(async (popup) => {
-        const surface = popup.shadowRoot!.querySelector<HTMLElement>('[part="popup"]')!;
+      await picker.locator("[data-anchored-overlay]").evaluate(async (surface) => {
         await Promise.all(surface.getAnimations().map((animation) => animation.finished));
       });
       await refreshDetails.hover();
@@ -549,11 +549,11 @@ suite.define(() => {
 
   it.each(
     ["chat", "new"].flatMap((route) =>
-      [false, true].map((tooltipOpen) => ({ route, tooltipOpen })),
+      [false, true].map((hoverEffort) => ({ route, hoverEffort })),
     ),
   )(
-    "keeps independent model and effort controls within the $route composer (tooltip open: $tooltipOpen)",
-    async ({ route, tooltipOpen }) => {
+    "keeps independent model and effort controls within the $route composer (hover effort: $hoverEffort)",
+    async ({ route, hoverEffort }) => {
       await suite.withPage({ viewport: { width: 393, height: 852 } }, async ({ page }) => {
         const longName =
           "Long catalog display name for a model with a very large context window and detailed reasoning capabilities";
@@ -684,7 +684,7 @@ suite.define(() => {
             : undefined;
           if (artifactDir && [320, 393, 560, 1280].includes(width)) {
             await page.screenshot({
-              path: `${artifactDir}/${route}-model-effort-${width}-tooltip-${tooltipOpen}.png`,
+              path: `${artifactDir}/${route}-model-effort-${width}-tooltip-${hoverEffort}.png`,
               animations: "disabled",
             });
           }
@@ -725,19 +725,13 @@ suite.define(() => {
         await slider.press("End");
         await expect.poll(() => effort.getAttribute("data-chat-thinking-value")).toBe("high");
         expect(await needleAngle()).toBe(120);
-        // The pointer can remain over the changing effort label during slider input.
-        // Establish whether the hover hint or the picker owns this Escape.
+        // The expanded picker suppresses its trigger hint while owning Escape.
         await slider.hover();
         const openTooltips = page.locator("openclaw-tooltip[open]");
         await expect.poll(() => openTooltips.count()).toBe(0);
         expect(await slider.evaluate((node) => node === document.activeElement)).toBe(true);
-        if (tooltipOpen) {
+        if (hoverEffort) {
           await effort.hover();
-          await expect.poll(() => openTooltips.count()).toBe(1);
-          await expect
-            .poll(() => openTooltips.locator(".tooltip-content").textContent())
-            .toBe("High");
-          await page.keyboard.press("Escape");
           await expect.poll(() => openTooltips.count()).toBe(0);
           expect(await slider.isVisible()).toBe(true);
           expect(await slider.inputValue()).toBe("1");
@@ -787,7 +781,7 @@ suite.define(() => {
             : undefined;
           if (artifactDir) {
             await page.screenshot({
-              path: `${artifactDir}/chat-model-effort-split-tooltip-${tooltipOpen}.png`,
+              path: `${artifactDir}/chat-model-effort-split-tooltip-${hoverEffort}.png`,
               animations: "disabled",
             });
           }
@@ -808,6 +802,7 @@ suite.define(() => {
         } else {
           await expect.poll(() => effort.count()).toBe(1);
           await expect.poll(() => effort.getAttribute("aria-label")).toBe("Speed: Standard");
+          await effort.click();
           await expect
             .poll(() =>
               composer.locator('[data-chat-speed-option="on"]').getAttribute("aria-checked"),
@@ -940,9 +935,9 @@ suite.define(() => {
         const composer = page.locator(".agent-chat__input").first();
         const picker = composer.locator(".chat-controls__model-picker");
         const trigger = picker.locator('[data-chat-model-select="true"]');
-        await expect.poll(() => picker.locator("[data-chat-model-option]").count()).toBe(2);
         await expect.poll(() => trigger.getAttribute("aria-disabled")).toBe("false");
         await trigger.click();
+        await expect.poll(() => picker.locator("[data-chat-model-option]").count()).toBe(2);
         await revealChatModelOption(picker.locator('[data-chat-model-option="openai/gpt-5.5"]'));
         await revealChatModelOption(
           picker.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]'),

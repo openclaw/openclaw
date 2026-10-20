@@ -35,8 +35,10 @@ import {
   type ToolExecutionEndEvent,
 } from "./embedded-agent-subscribe.handlers.tools.test-support.js";
 import type { ToolHandlerContext } from "./embedded-agent-subscribe.handlers.types.js";
+import * as questionDispatch from "./harness/gateway-question-dispatch.js";
 import { claimPendingAgentQuestionAnswer } from "./harness/gateway-question.js";
 import { normalizeAskUserParams, reserveAskUserPromptDelivery } from "./tools/ask-user-tool.js";
+import * as gatewayTransport from "./tools/gateway.js";
 import { createSecretsTool } from "./tools/secrets-tool.js";
 import { markCoreTtsToolResult } from "./tools/tts-tool-result-provenance.js";
 
@@ -360,14 +362,19 @@ describe("handleToolExecutionStart read path checks", () => {
         }
         throw new Error(`unexpected method ${method}`);
       });
+      await startTool(ctx, { toolName: "secrets", toolCallId: "secret-call-1", args });
+      const storeTransportSpy = vi
+        .spyOn(gatewayTransport, "callGatewayTool")
+        .mockImplementation(gatewayCall);
+      const questionResolverSpy = vi
+        .spyOn(questionDispatch, "resolveAgentQuestionGatewayCall")
+        .mockReturnValue(gatewayCall);
       const tool = createSecretsTool({
         agentId: ctx.params.agentId,
         sessionKey: ctx.params.sessionKey,
         runId: ctx.params.runId,
-        gatewayCall,
       });
 
-      await startTool(ctx, { toolName: "secrets", toolCallId: "secret-call-1", args });
       // Attach rejection handling before any assertion, and always retire both waits.
       const outcome = tool.execute("secret-call-1", args).then(
         (result) => ({ result }),
@@ -439,10 +446,15 @@ describe("handleToolExecutionStart read path checks", () => {
           );
         }
       } finally {
-        delivered.resolve();
-        answer.resolve({ status: "cancelled" });
-        await outcome;
-        vi.useRealTimers();
+        try {
+          delivered.resolve();
+          answer.resolve({ status: "cancelled" });
+          await outcome;
+        } finally {
+          questionResolverSpy.mockRestore();
+          storeTransportSpy.mockRestore();
+          vi.useRealTimers();
+        }
       }
     },
   );
@@ -551,9 +563,7 @@ describe("handleToolExecutionStart read path checks", () => {
   });
 
   it("warns for a missing read path and accepts the corrected file_path alias", async () => {
-    const { ctx, warn, trace, isEnabled, onBlockReplyFlush, onExecutionPhase } =
-      createTestContext();
-    isEnabled.mockImplementation((level: string) => level === "trace");
+    const { ctx, warn, onBlockReplyFlush, onExecutionPhase } = createTestContext();
 
     const evt: ToolExecutionStartEvent = {
       toolName: "read",
@@ -590,8 +600,6 @@ describe("handleToolExecutionStart read path checks", () => {
       args: { file_path: "/tmp/example.txt" },
     });
     expect(warn).toHaveBeenCalledOnce();
-    expect(trace).toHaveBeenCalledTimes(2);
-    expect(trace.mock.calls[1]?.[1]).not.toHaveProperty("requiredParamsMissing");
     expect(onBlockReplyFlush).toHaveBeenCalledTimes(2);
     expect(onBlockReplyFlush).toHaveBeenCalledWith({
       reason: "tool_start",
@@ -605,24 +613,16 @@ describe("handleToolExecutionStart read path checks", () => {
     });
   });
 
-  it.each([
-    ["marks astral-only previews as truncated", "😀".repeat(101), `${"😀".repeat(100)}…`],
-    ["does not scan beyond the raw warning bound", `${" ".repeat(200)}hidden`, undefined],
-  ])("read warning %s", async (_name, args, expected) => {
+  it("does not include malformed read payloads in warnings", async () => {
     const { ctx, warn } = createTestContext();
+    const args = "private-read-payload";
     await startTool(ctx, { toolName: "read", toolCallId: "tool-bounded-args", args });
 
     const warnMeta = warn.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
-    if (expected === undefined) {
-      expect(warnMeta).not.toHaveProperty("argsPreview");
-    } else {
-      const argsPreview = warnMeta?.argsPreview;
-      expect(typeof argsPreview).toBe("string");
-      expect(argsPreview).toBe(expected);
-      expect(argsPreview).not.toMatch(
-        /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
-      );
-    }
+    expect(warn).toHaveBeenCalledOnce();
+    expect(warnMeta?.argsType).toBe("string");
+    expect(warnMeta).not.toHaveProperty("argsPreview");
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(args);
   });
 
   it("keeps tool state when phase callbacks throw and event callbacks reject", async () => {
@@ -1767,17 +1767,21 @@ describe("handleToolExecutionEnd derived tool events", () => {
     resetAgentEventsForTest();
   });
 
-  it.each(["hideFromChannelProgress"] as const)(
-    "keeps exec %s changes timely while bounding its unchanged output lifecycle",
-    async (field) => {
+  it.each([false, true])(
+    "keeps exec visibility changes timely with bounded output (text content: %s)",
+    async (withTextContent) => {
+      const field = "hideFromChannelProgress";
       resetAgentEventsForTest();
       const events: Array<{ stream?: string; ts?: number; data?: Record<string, unknown> }> = [];
       const unsubscribe = registerAgentEventListener((event) => events.push(event));
       const { ctx, onAgentEvent } = createTestContext();
+      const onAgentToolResult = vi.fn();
+      ctx.params.onAgentToolResult = onAgentToolResult;
       const toolCallId = "exec-lifecycle";
       const output =
-        'OPENROUTER_API_KEY=sk-or-v1-abcdef0123456789\napiKey: "ghp_abcdefghij1234567890"\n' +
+        '  OPENROUTER_API_KEY=sk-or-v1-abcdef0123456789\napiKey: "ghp_abcdefghij1234567890"\n' +
         "x".repeat(9000);
+      const content = withTextContent ? { content: [{ type: "text", text: output }] } : {};
       const clock = vi.spyOn(Date, "now").mockReturnValue(1000);
       try {
         await startTool(ctx, {
@@ -1788,7 +1792,7 @@ describe("handleToolExecutionEnd derived tool events", () => {
         const update: ToolExecutionUpdateEvent = {
           toolName: "exec",
           toolCallId,
-          partialResult: { details: { status: "running", aggregated: output } },
+          partialResult: { ...content, details: { status: "running", aggregated: output } },
         };
         updateTool(ctx, update);
         update.hideFromChannelProgress = true;
@@ -1799,13 +1803,16 @@ describe("handleToolExecutionEnd derived tool events", () => {
         await endTool(ctx, {
           toolName: "exec",
           toolCallId,
-          result: resultWithDetails({
-            status: "completed",
-            aggregated: output,
-            exitCode: 0,
-            durationMs: 12,
-            cwd: "/tmp/work",
-          }),
+          result: {
+            ...content,
+            details: {
+              status: "completed",
+              aggregated: output,
+              exitCode: 0,
+              durationMs: 12,
+              cwd: "/tmp/work",
+            },
+          },
         });
         const itemUpdates = events.filter(
           (event) => event.stream === "item" && event.data?.phase === "update",
@@ -1817,33 +1824,39 @@ describe("handleToolExecutionEnd derived tool events", () => {
           (event) => event.stream === "tool" && event.data?.phase === "update",
         );
         expect(updates.map((event) => event.ts)).toEqual([1000, 1250]);
-        const liveOutput = requireNestedRecord(updates[0]?.data, "update", [
-          "partialResult",
-          "details",
-        ]).aggregated;
+        const liveResult = requireNestedRecord(updates[0]?.data, "update", ["partialResult"]);
         const resultEvent = requireEvent(
           events,
           (event) => event.stream === "tool" && event.data?.phase === "result",
           "result",
         );
-        const finalOutput = requireNestedRecord(resultEvent.data, "result", [
-          "result",
-          "details",
-        ]).aggregated;
+        const finalResult = requireNestedRecord(resultEvent.data, "result", ["result"]);
+        for (const result of [liveResult, finalResult]) {
+          if (withTextContent) {
+            expect(result.details).not.toHaveProperty("aggregated");
+            expect(result.content).toEqual([
+              { type: "text", text: `${output.slice(0, 8000)}\n…(truncated)…` },
+            ]);
+          } else {
+            expect(result.details).toHaveProperty(
+              "aggregated",
+              `${output.slice(0, 8000)}\n...(live output truncated)...`,
+            );
+          }
+        }
+        expect(onAgentToolResult).toHaveBeenCalledWith({
+          toolName: "exec",
+          result: expect.objectContaining({
+            details: expect.objectContaining({ aggregated: output }),
+          }),
+          isError: false,
+        });
         const commandEvents = onAgentEvent.mock.calls
           .map(([event]) => event)
           .filter((event) => event.stream === "command_output");
         expect(commandEvents.map((event) => event.data.phase)).toEqual(["delta", "delta", "end"]);
-        for (const text of [
-          liveOutput,
-          finalOutput,
-          ...commandEvents.map((event) => event.data.output),
-        ]) {
-          expect(text).toContain("...(live output truncated)...");
-          expect(requireString(text, "bounded output").length).toBeLessThan(output.length);
-          expect(text).toContain("sk-or-v1-abcdef0123456789");
-          expect(text).toContain("ghp_abcdefghij1234567890");
-          expect(text).toContain("OPENROUTER_API_KEY=");
+        for (const text of commandEvents.map((event) => event.data.output)) {
+          expect(text).toBe(`${output.slice(0, 8000)}\n...(live output truncated)...`);
         }
         expect(commandEvents.at(-1)?.data).toMatchObject({
           itemId: "command:exec-lifecycle",

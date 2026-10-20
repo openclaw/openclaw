@@ -113,9 +113,6 @@ export const whatsappDeliveryScenarios = {
           observedAfter: context.requestStartedAt,
           timeoutMs: 60_000,
         });
-        for (const reaction of reactions) {
-          context.recordObservedMessage(reaction);
-        }
         return `status reaction lifecycle observed ${reactions
           .map((reaction) => reaction.reaction?.emoji ?? "<unknown>")
           .join(" -> ")}`;

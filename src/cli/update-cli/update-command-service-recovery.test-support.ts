@@ -6,6 +6,7 @@ import { expect, it, vi, type Mock } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/config.js";
 import { stampConfigWriteMetadata } from "../../config/io.meta.js";
 import { resolveConfigPath } from "../../config/paths.js";
+import { withDaemonRuntimePinMigration } from "../../daemon/runtime-pin-state.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
 import * as gatewayNamespace from "../../infra/gateway-lock-payload.js";
@@ -167,6 +168,14 @@ export async function createServiceActivationFixture() {
     `import ${JSON.stringify(pathToFileURL(path.resolve(worker)).href)};\n`,
   );
   await writeRecoveryConfig(configPath, VERSION);
+  const platform = process.platform;
+  mockProcessPlatform(hostPlatform);
+  try {
+    // Installed-service fixtures enter after migration, before publishing a live Gateway owner.
+    await withDaemonRuntimePinMigration(process.env, () => undefined);
+  } finally {
+    mockProcessPlatform(platform);
+  }
   return { root, configPath, envSnapshot, servingOwner: createServingOwnerFixture() };
 }
 
@@ -196,7 +205,13 @@ export function serviceUpdateResult(
 export async function writeRecoveryConfig(configPath: string, version: string) {
   await fs.writeFile(
     configPath,
-    JSON.stringify(stampConfigWriteMetadata({ gateway: { port: 19001 } }, version)),
+    // Native service transport uses a shared token; paired-device auth has socket-level proof.
+    JSON.stringify(
+      stampConfigWriteMetadata(
+        { gateway: { port: 19001, auth: { mode: "token", token: "fixture-service-token" } } },
+        version,
+      ),
+    ),
   );
   clearConfigCache();
   clearRuntimeConfigSnapshot();
@@ -304,7 +319,7 @@ export function registerRecoveryTests(params: {
         timeoutMs: 1_000,
       });
 
-      const pending = startup === "slow" || startup === "unready";
+      const pending = startup === "unready";
       expect(activated).toBe(pending ? "readiness-pending" : "ok");
       if (pending) {
         const run = params.run();
@@ -338,10 +353,8 @@ export function registerRecoveryTests(params: {
         pending ? "health: still-starting" : "health: healthy",
       ]);
       expect(mocks.restart).not.toHaveBeenCalled();
-      if (startup === "unready" || startup === "slow") {
-        expect(healthResults[0]?.elapsedMs).toBe(6_500);
-      } else if (!needsRecovery) {
-        expect(nowMs).toBeGreaterThanOrEqual(readyAfterMs + 5_500);
+      if (pending) {
+        expect(healthResults[0]?.elapsedMs).toBe(1_000);
       }
     },
   );

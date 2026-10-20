@@ -60,6 +60,22 @@ export function isMainRestartRecoveryCandidate(
   );
 }
 
+/** A final intent can acknowledge only its admitted source on the same captured route. */
+export function getRestartRecoveryPendingFinalSourceRunId(
+  entry: SessionEntry,
+  context: DeliveryContext | undefined,
+): string | undefined {
+  const sourceRunId = normalizeRunId(entry.restartRecoveryDeliverySourceRunId);
+  const original = normalizeDeliveryContext(entry.restartRecoveryDeliveryContext);
+  return normalizeRunId(entry.restartRecoveryDeliveryRunId) &&
+    sourceRunId &&
+    original?.channel &&
+    original.to &&
+    isDeepStrictEqual(original, normalizeDeliveryContext(context))
+    ? sourceRunId
+    : undefined;
+}
+
 type RestartRecoveryChannelAuthority = {
   deliveryContext: DeliveryContext & { channel: string; to: string };
   sourceTurnId: string;
@@ -332,7 +348,12 @@ function normalizeRestartRecoveryTerminalDeliveryEvidence(
       continue;
     }
     const previousIndex = evidence.findIndex((entry) => entry.runId === runId);
+    // Queue receipts are immutable facts. Later terminal cleanup can carry an
+    // older capture, but cannot erase a send or reassign it to another route.
     if (previousIndex >= 0) {
+      if (evidence[previousIndex]?.durableFinalReceipt) {
+        continue;
+      }
       evidence.splice(previousIndex, 1);
     }
     const transcriptRunId = normalizeRunId(item.transcriptRunId);
@@ -357,8 +378,14 @@ function normalizeRestartRecoveryTerminalDeliveryEvidence(
       runId,
       ...result,
       ...(transcriptRunId ? { transcriptRunId } : {}),
-      ...(harnessCompletion?.sourceRunId === runId ? { harnessCompletion, deliveryContext } : {}),
-      ...(harnessCompletion?.sourceRunId === runId && intentId && deliveryId && platformMessageId
+      ...(harnessCompletion?.sourceRunId === runId ? { harnessCompletion } : {}),
+      ...(deliveryContext ? { deliveryContext } : {}),
+      ...((item.harnessCompletion === undefined || harnessCompletion?.sourceRunId === runId) &&
+      deliveryContext?.channel &&
+      deliveryContext.to &&
+      intentId &&
+      deliveryId &&
+      platformMessageId
         ? { durableFinalReceipt: { intentId, deliveryId, platformMessageId } }
         : {}),
     });
@@ -573,6 +600,25 @@ export function hasMainSessionRecoveryClaim(entry: InternalSessionEntry | undefi
   );
 }
 
+export function hasOrphanedMainSessionWork(
+  entry: InternalSessionEntry,
+  sessionKey: string,
+): boolean {
+  const settledInterruption =
+    entry.abortedLastRun === false &&
+    !entry.lifecycleRunId &&
+    !entry.activeWriterRunId &&
+    entry.lastRunId !== undefined &&
+    hasRestartRecoveryTerminalRun(entry, entry.lastRunId);
+  return (
+    entry.archivedAt === undefined &&
+    isMainRestartRecoveryCandidate(entry, sessionKey) &&
+    (hasMainSessionRecoveryClaim(entry) ||
+      entry.abortedLastRun === true ||
+      (entry.status === "interrupted" && !settledInterruption))
+  );
+}
+
 /** Matches durable source ownership regardless of the surrounding run status. */
 export function hasRestartRecoverySourceClaim(
   entry: SessionEntry | null | undefined,
@@ -637,6 +683,7 @@ export function buildRestartRecoveryClaimCleanupPatch(params: {
     restartRecoveryDeliveryRunId: undefined,
     restartRecoveryDeliverySourceRunId: undefined,
     restartRecoveryOperatorSource: undefined,
+    restartRecoveryRequesterSource: undefined,
     restartRecoveryHarnessCompletion: undefined,
     restartRecoveryRequesterAccountId: undefined,
     restartRecoveryRequesterSenderId: undefined,

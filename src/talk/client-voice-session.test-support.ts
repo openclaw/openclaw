@@ -5,17 +5,10 @@ type ClientVoiceSessionTestApi = {
   readRecord(agentId: string, voiceSessionId: string): ClientVoiceSessionRecord | undefined;
   digestDeliveryPolicy: {
     maxRetainedIntents: number;
-    maxRetainedIdentityBytes: number;
     maxConcurrentAttempts: number;
     maxAttemptFailures: number;
     attemptAbortAfterMs: number;
     failureRetentionMs: number;
-  };
-  digestDeliverySnapshot(): {
-    active: number;
-    pending: number;
-    retained: number;
-    retainedIdentityBytes: number;
   };
   reset(): void;
 };
@@ -28,9 +21,6 @@ function getTestApi(): ClientVoiceSessionTestApi {
 
 export const clientVoiceSessionTesting = {
   digestDeliveryPolicy: getTestApi().digestDeliveryPolicy,
-  digestDeliverySnapshot(): ReturnType<ClientVoiceSessionTestApi["digestDeliverySnapshot"]> {
-    return getTestApi().digestDeliverySnapshot();
-  },
   readRecord(agentId: string, voiceSessionId: string): ClientVoiceSessionRecord | undefined {
     return getTestApi().readRecord(agentId, voiceSessionId);
   },

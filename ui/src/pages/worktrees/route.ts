@@ -11,7 +11,6 @@ export const page = definePage({
       renderSolid: () =>
         createComponent(ShellLayoutBoundary, {
           traits: {
-            toolbarHeader: true,
             settingsPage: true,
             settingsWide: true,
             settingsWorkspace: true,

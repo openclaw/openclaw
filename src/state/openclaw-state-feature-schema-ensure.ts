@@ -1,5 +1,7 @@
-import type { DatabaseSync } from "node:sqlite";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
+import { ensureStatePostgresFragment } from "./openclaw-state-db-engine.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -25,15 +27,19 @@ export function createOpenClawStateSchemaEnsurer(params: {
     tables: [params.table, ...(params.additionalTables ?? [])],
     indexes: params.indexes,
   });
-  const ensuredDatabases = new WeakSet<DatabaseSync>();
+  const ensuredDatabases = new WeakSet<EngineConnection>();
   return (options = {}) => {
     const database = openOpenClawStateDatabase(options);
-    if (ensuredDatabases.has(database.db)) {
+    if (!isPostgresSqlConnection(database.db) && ensuredDatabases.has(database.db)) {
       return;
     }
     runOpenClawStateWriteTransaction(
       ({ db }) => {
-        ensure(db);
+        if (isPostgresSqlConnection(db)) {
+          ensureStatePostgresFragment(db, params.table);
+        } else {
+          ensure(db);
+        }
       },
       options,
       { operationLabel: params.operationLabel },

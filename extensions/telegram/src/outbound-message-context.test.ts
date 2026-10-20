@@ -15,15 +15,26 @@ import {
 
 let cfg: OpenClawConfig;
 let testState: OpenClawTestState;
+const account = { accountId: "default", name: "Configured Agent" };
+type RecordParams = Omit<Parameters<typeof recordOutboundMessageForPromptContext>[0], "cfg">;
+function providerMessage(messageId: number, overrides: Partial<RecordParams["message"]> = {}) {
+  return {
+    chat: { id: -1001, type: "supergroup", title: "QA" },
+    date: 1_736_380_700,
+    from: { id: 999, is_bot: true, first_name: "OpenClaw" },
+    message_id: messageId,
+    text: "Bot just replied",
+    ...overrides,
+  };
+}
 
-async function recordAndRead(
-  params: Omit<Parameters<typeof recordOutboundMessageForPromptContext>[0], "cfg">,
-) {
-  await recordOutboundMessageForPromptContext({ cfg, ...params });
+async function recordAndRead(params: Partial<RecordParams> & Pick<RecordParams, "messageId">) {
+  const input = { account, chatId: 42, message: { message_id: params.messageId }, ...params };
+  await recordOutboundMessageForPromptContext({ cfg, ...input });
   const cache = createPromptContextCache();
   return await cache.get({
-    accountId: params.account.accountId,
-    chatId: params.chatId,
+    accountId: input.account.accountId,
+    chatId: input.chatId,
     messageId: String(params.messageId),
   });
 }
@@ -92,37 +103,23 @@ describe("recordOutboundMessageForPromptContext", () => {
 
   it("binds topics only when the successful provider response identifies the thread", async () => {
     const common = {
-      account: { accountId: "default", name: "Configured Agent" },
       chatId: -1001,
       messageId: 700,
       text: "Bot just replied",
       messageThreadId: 77,
-    } as const;
-    const callerOnlyThread = await recordAndRead({
-      ...common,
       successfulSendThread: { id: 77, scope: "forum" },
-      message: {
-        chat: { id: -1001, type: "supergroup", title: "QA" },
-        date: 1_736_380_700,
-        from: { id: 999, is_bot: true, first_name: "OpenClaw" },
-        message_id: 700,
-        text: "Bot just replied",
-      },
-    });
+    } as const;
+    const callerOnlyThread = await recordAndRead({ ...common, message: providerMessage(700) });
     expect(hasProviderObservedTelegramThreadBinding(callerOnlyThread, 77)).toBe(false);
 
     const providerThread = await recordAndRead({
       ...common,
       messageId: 701,
-      successfulSendThread: { id: 77, scope: "forum" },
-      message: {
-        chat: { id: -1001, type: "supergroup", title: "QA" },
+      message: providerMessage(701, {
         date: 1_736_380_701,
-        from: { id: 999, is_bot: true, first_name: "OpenClaw" },
-        message_id: 701,
         message_thread_id: 77,
         text: "Bot replied in the topic",
-      },
+      }),
     });
     expect(hasProviderObservedTelegramThreadBinding(providerThread, 77)).toBe(true);
   });
@@ -161,7 +158,7 @@ describe("recordOutboundMessageForPromptContext", () => {
     ] as const) {
       await recordOutboundMessageForPromptContext({
         cfg,
-        account: { accountId: "default", name: "Configured Agent" },
+        account,
         chatId,
         messageId,
         messageThreadId: 77,
@@ -208,15 +205,10 @@ describe("recordOutboundMessageForPromptContext", () => {
 
   it("does not infer a General-topic binding for DM thread context", async () => {
     const cached = await recordAndRead({
-      account: { accountId: "default", name: "Configured Agent" },
-      chatId: 42,
-      message: {
+      message: providerMessage(703, {
         chat: { id: 42, type: "private" },
-        date: 1_736_380_700,
-        from: { id: 999, is_bot: true, first_name: "OpenClaw" },
-        message_id: 703,
         text: "Bot replied in a DM topic",
-      },
+      }),
       messageId: 703,
       messageThreadId: 1,
       successfulSendThread: { id: 1, scope: "dm" },
@@ -228,19 +220,10 @@ describe("recordOutboundMessageForPromptContext", () => {
   it("falls back to the Telegram bot name when no configured name exists", async () => {
     const cached = await recordAndRead({
       account: { accountId: "default", name: "" },
-      chatId: 42,
-      message: {
+      message: providerMessage(701, {
         chat: { id: 42, type: "private" },
-        date: 1_736_380_700,
-        from: {
-          id: 999,
-          is_bot: true,
-          first_name: "Atlas",
-          username: "atlas_bot",
-        },
-        message_id: 701,
-        text: "Bot just replied",
-      },
+        from: { id: 999, is_bot: true, first_name: "Atlas", username: "atlas_bot" },
+      }),
       messageId: 701,
       text: "Bot just replied",
     });
@@ -291,8 +274,6 @@ describe("recordOutboundMessageForPromptContext", () => {
   it("uses the synthetic sender identity for a finalized streamed message without from", async () => {
     const initial = await recordAndRead({
       account: { accountId: "default", name: "StreamBot" },
-      chatId: 42,
-      message: { message_id: 1497 },
       messageId: 1497,
       text: "Final streamed reply",
     });
@@ -300,25 +281,21 @@ describe("recordOutboundMessageForPromptContext", () => {
     expect(initial).toMatchObject({
       sender: "StreamBot (you)",
       senderId: "0",
-      sourceMessage: {
-        from: {
-          id: 0,
-          is_bot: true,
-          first_name: "StreamBot (you)",
-        },
-      },
+      sourceMessage: { from: { id: 0, is_bot: true, first_name: "StreamBot (you)" } },
     });
   });
 
   it("ignores Telegram's fake sender identity across channel post echoes", async () => {
+    const echo = {
+      message_id: 1498,
+      from: { id: 777_000, is_bot: false, first_name: "Telegram" },
+      sender_chat: { id: -1001, title: "Announcements" },
+      text: "Channel announcement",
+    };
     const initial = await recordAndRead({
       account: { accountId: "default" },
       chatId: -1001,
-      message: {
-        message_id: 1498,
-        from: { id: 777_000, is_bot: false, first_name: "Telegram" },
-        sender_chat: { id: -1001, title: "Announcements" },
-      },
+      message: { message_id: echo.message_id, from: echo.from, sender_chat: echo.sender_chat },
       messageId: 1498,
       text: "Channel announcement",
     });
@@ -329,20 +306,14 @@ describe("recordOutboundMessageForPromptContext", () => {
       accountId: "default",
       chatId: -1001,
       msg: {
-        message_id: 1498,
+        ...echo,
         date: 1_736_380_900,
         chat: { id: -1001, type: "supergroup", title: "Announcements" },
-        from: { id: 777_000, is_bot: false, first_name: "Telegram" },
         sender_chat: { id: -1001, type: "channel", title: "Announcements" },
-        text: "Channel announcement",
       },
     });
 
-    const merged = await cache.get({
-      accountId: "default",
-      chatId: -1001,
-      messageId: "1498",
-    });
+    const merged = await cache.get({ accountId: "default", chatId: -1001, messageId: "1498" });
     expect(merged).toMatchObject({
       sender: "OpenClaw (you)",
       senderId: "0",

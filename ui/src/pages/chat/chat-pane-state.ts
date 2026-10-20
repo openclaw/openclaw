@@ -11,7 +11,7 @@ import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { chatSendPendingReason } from "./chat-send-support.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import type { ChatProps } from "./chat-view.ts";
+import type { ChatProps } from "./chat-view.tsx";
 
 export function createChatPaneRunRecoveryActions(
   state: Pick<
@@ -20,12 +20,10 @@ export function createChatPaneRunRecoveryActions(
   >,
   options: {
     canSend: boolean;
-    canChangeModel: boolean;
     isCurrent: () => boolean;
     latestFailedRunId: () => string | undefined;
-    openModelPicker: () => void;
   },
-): Pick<ChatProps, "onRetryRun" | "onChangeFailureModel"> {
+): Pick<ChatProps, "onRetryRun"> {
   const sessionKey = state.sessionKey;
   const ownsFailure = (runId: string) =>
     options.isCurrent() &&
@@ -41,13 +39,6 @@ export function createChatPaneRunRecoveryActions(
             // Continue with the existing history, rather than replaying a prompt
             // whose tools may already have completed side effects.
             void state.handleSendChat(t("chat.recovery.continuePrompt"));
-          }
-        }
-      : undefined,
-    onChangeFailureModel: options.canChangeModel
-      ? (runId) => {
-          if (ownsFailure(runId)) {
-            options.openModelPicker();
           }
         }
       : undefined,
@@ -183,10 +174,6 @@ export function chatSubmitState(
     submitPending: pendingReason !== null || (unavailable && historyLoad.phase !== "failed"),
     onDraftChange: (...args: Parameters<ChatPageHost["handleChatDraftChange"]>) => {
       state.handleChatDraftChange(...args);
-      // Nonempty draft edits can skip a pane render, but this gate depends on command intent.
-      if (pendingReason && controlCommand !== isChatControlCommand(state.chatMessage)) {
-        state.requestUpdate?.();
-      }
     },
   };
 }
@@ -205,35 +192,4 @@ export function resolveChatPaneFollowUpMode(
       sessionMode: state.chatQueueModeOverride,
     }),
   );
-}
-
-// Catalog panes have no live run; stable empty inputs preserve their transcript cache.
-const emptyTranscriptItems: [] = [];
-
-export function projectChatPaneTranscript(
-  state: Pick<
-    ChatPageHost,
-    | "chatMessages"
-    | "chatToolMessages"
-    | "guardianNotices"
-    | "chatStreamSegments"
-    | "chatStream"
-    | "chatReasoning"
-    | "chatStreamStartedAt"
-    | "chatRunUsageById"
-  >,
-  catalogMessages: unknown[] | null,
-  runId: string | null,
-) {
-  return {
-    messages: catalogMessages ?? state.chatMessages,
-    toolMessages: catalogMessages ? emptyTranscriptItems : state.chatToolMessages,
-    guardianNotices: catalogMessages ? emptyTranscriptItems : state.guardianNotices,
-    streamSegments: catalogMessages ? emptyTranscriptItems : state.chatStreamSegments,
-    stream: catalogMessages ? null : state.chatStream,
-    reasoning: catalogMessages ? null : state.chatReasoning,
-    streamStartedAt: catalogMessages ? null : state.chatStreamStartedAt,
-    runId: catalogMessages ? null : runId,
-    runUsageById: catalogMessages ? undefined : state.chatRunUsageById,
-  };
 }

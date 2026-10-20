@@ -116,23 +116,12 @@ struct ChatMediaAudioAttachment: View {
     }
 
     private var unavailableRow: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "waveform.badge.exclamationmark")
-            Text(String(localized: "Audio unavailable"))
-                .font(OpenClawChatTypography.footnote)
-            Spacer()
-            Button {
-                self.retryGeneration &+= 1
-            } label: {
-                Text(String(localized: "Retry"))
-                    .font(OpenClawChatTypography.footnote)
-            }
-            .buttonStyle(.plain)
+        ChatMediaUnavailableRow(
+            systemImage: "waveform.badge.exclamationmark",
+            message: String(localized: "Audio unavailable"))
+        {
+            self.retryGeneration &+= 1
         }
-        .foregroundStyle(.secondary)
-        .padding(10)
-        .background(Color.black.opacity(0.04))
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     private func playbackPositionLabel(_ player: ChatMediaAudioPlayer) -> String {

@@ -110,8 +110,7 @@ export async function reviewSecuritySensitiveChanges(prepared) {
   const { api, owner, repo, issuePath, files, pullRequest } = guard;
   const { collectSecuritySensitiveChanges } = loadSecurityReviewPolicy();
   const changes = collectSecuritySensitiveChanges(files);
-  const comments = await api.paginate(`${issuePath}/comments`);
-  const labels = await api.paginate(`${issuePath}/labels`);
+  const { comments, labelNames } = await guard.readIssueNotices();
   const existing = comments.find(
     (comment) => comment.user?.login === "github-actions[bot]" && comment.body?.startsWith(marker),
   );
@@ -120,7 +119,7 @@ export async function reviewSecuritySensitiveChanges(prepared) {
     owner,
     repo,
     issuePath,
-    labelNames: new Set(labels.map((label) => label.name)),
+    labelNames,
     recoverCommentWrites: true,
   });
   const allowed = await finishGuard(

@@ -28,6 +28,9 @@ function prepareYield(
     trigger?: Parameters<typeof prepareEmbeddedRunTerminal>[0]["runParams"]["trigger"];
     terminalState?: EmbeddedRunTerminalState;
     lastToolError?: NonNullable<Parameters<typeof makeEmbeddedRunnerAttempt>[0]>["lastToolError"];
+    sourceReplyDelivered?: NonNullable<
+      Parameters<typeof makeEmbeddedRunnerAttempt>[0]
+    >["sourceReplyDelivered"];
   } = {},
 ) {
   const assistant = buildEmbeddedRunnerAssistant({
@@ -48,6 +51,7 @@ function prepareYield(
     codeModeEngaged: input.codeModeEngaged,
     lastToolError: input.lastToolError ?? { toolName: "exec", error: "Command exited with code 1" },
     toolMetas: [{ toolName: "exec", isError: true }],
+    sourceReplyDelivered: input.sourceReplyDelivered,
   });
   const terminal = makeTerminalInput({
     attempt,
@@ -73,6 +77,13 @@ function prepareYield(
   });
   return { attempt, terminal, prepared };
 }
+
+describe("terminal delivery facts", () => {
+  it("records producer source delivery without an extracted messaging target", () => {
+    const { prepared } = prepareYield({ sourceReplyDelivered: true });
+    expect(prepared.agentMeta.terminalReceipt?.sourceReplyDelivered).toBe(true);
+  });
+});
 
 describe("yielded terminal payloads after an earlier tool failure", () => {
   it.each([

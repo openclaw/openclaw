@@ -1,6 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
 import { getRuntimeConfig } from "../config/config.js";
 import { retainPreparedSessionEntryPredicate } from "../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
+import { readPreparedSessionEntryChange } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
+import { projectSessionEntryPredicateChange } from "../config/sessions/session-accessor.sqlite-sharing-acquisition.js";
 import {
   acquireSessionActorStorage,
   captureSessionActorStorageOwner,
@@ -20,8 +22,8 @@ import { captureSessionTranscriptTargetBinding } from "../config/sessions/transc
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
-import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
-import { sessionChanges } from "../sessions/session-row-changes.js";
+import { beginSessionEffect } from "../sessions/session-controller.lifecycle.js";
+import { sessionChanges, type SessionRowFacts } from "../sessions/session-row-changes.js";
 import {
   prepareSessionRowPublicationScope,
   sessionChangeAffectsStoredRow,
@@ -123,9 +125,10 @@ export async function withGatewayWorkerSessionAdmission<T>(
         }
         return current;
       };
-      let admission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+      let admission: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
       try {
-        admission = await beginSessionWorkAdmission({
+        admission = await beginSessionEffect({
+          agentId: scope.agentId,
           scope: memory.path,
           identities: [scope.sessionKey, scope.sessionId, ...(params.target?.storeKeys ?? [])],
           onInterrupt: (reason) => controller.abort(reason),
@@ -168,6 +171,7 @@ export async function withGatewayWorkerSessionAdmission<T>(
     ? AbortSignal.any([params.signal, controller.signal])
     : controller.signal;
   let changed = false;
+  const acquiringChanges: Array<{ entry?: SessionEntry; facts?: SessionRowFacts }> = [];
   let acceptOwnPublication = false;
   const stopPublication = sessionChanges.subscribeFacts((change) => {
     if (
@@ -178,6 +182,10 @@ export async function withGatewayWorkerSessionAdmission<T>(
         ignoreStoreTopology: true,
       })
     ) {
+      const facts = "facts" in change ? change.facts : undefined;
+      if ("sessionKey" in change && change.scope === "transcript" && facts?.kind === "unchanged") {
+        return;
+      }
       if (retained) {
         if (!retained.isCurrent()) {
           controller.abort(
@@ -190,6 +198,18 @@ export async function withGatewayWorkerSessionAdmission<T>(
         acceptOwnPublication = false;
       } else {
         changed = true;
+        const prepared = readPreparedSessionEntryChange(change, scope.sessionKey);
+        const lifecycleChanged =
+          (facts?.kind === "replacement" || facts?.kind === "entry") && facts.lifecycleChanged;
+        acquiringChanges.push(
+          lifecycleChanged
+            ? {}
+            : {
+                entry: prepared?.entry,
+                // A withheld complete postimage is not a partial publication.
+                facts: prepared ? undefined : facts,
+              },
+        );
       }
     }
   });
@@ -207,13 +227,13 @@ export async function withGatewayWorkerSessionAdmission<T>(
     params.authorize?.();
     assertRouteCurrent();
   };
-  let admission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+  let admission: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
   const acquiring = new AbortController();
   const abortAcquisition = () => acquiring.abort(signal.reason);
   signal.addEventListener("abort", abortAcquisition, { once: true });
   try {
     // Reserve before asynchronous source acquisition so Stop can retire queued ingress.
-    admission = await beginSessionWorkAdmission({
+    admission = await beginSessionEffect({
       agentId: scope.agentId,
       scope: configuredPath,
       identities: [scope.sessionKey, scope.sessionId, ...(params.target?.storeKeys ?? [])],
@@ -246,8 +266,7 @@ export async function withGatewayWorkerSessionAdmission<T>(
               entry.archivedAt !== undefined ||
               (params.expectedEntry &&
                 (entry.sessionId !== params.expectedEntry.sessionId ||
-                  entry.lifecycleRevision !== params.expectedEntry.lifecycleRevision)) ||
-              changed
+                  entry.lifecycleRevision !== params.expectedEntry.lifecycleRevision))
             ) {
               throw new WorkerPlacementAdmissionTargetError(
                 "Worker session source is unavailable or changed during admission; retry.",
@@ -274,6 +293,26 @@ export async function withGatewayWorkerSessionAdmission<T>(
             const matches = (current: SessionEntry | undefined) =>
               current !== undefined &&
               fields.every((field) => isDeepStrictEqual(current[field], expected[field]));
+            // UI navigation can publish title/participant metadata while the initial read
+            // is in flight. Reconcile its committed postimages against the same fields we
+            // retain after acquisition; an unknown change or changed authority still refuses.
+            if (
+              acquiringChanges.some(
+                (change) =>
+                  !matches(
+                    change.entry ??
+                      (change.facts
+                        ? projectSessionEntryPredicateChange({ entry }, change.facts)
+                        : undefined),
+                  ),
+              )
+            ) {
+              throw new WorkerPlacementAdmissionTargetError(
+                "Worker session source is unavailable or changed during admission; retry.",
+              );
+            }
+            changed = false;
+            acquiringChanges.length = 0;
             retained =
               source.kind === "file"
                 ? retainPreparedSessionEntryPredicate({

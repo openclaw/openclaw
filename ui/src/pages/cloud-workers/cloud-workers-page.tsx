@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, createSignal, createStore, Show, For } from "solid-js";
+import { createMemo, createSignal, createStore, onCleanup, onSettled, Show, For } from "solid-js";
 import type { EnvironmentsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import {
@@ -21,7 +21,6 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { CloudWorkerConfigSave } from "./cloud-worker-config-save.ts";
 import {
   buildCloudWorkerDeletePatch,
@@ -38,16 +37,8 @@ registerEnglishCatalog(registerSettingsEnglish);
 const CLOUD_WORKERS_DOCS_URL = "https://docs.openclaw.ai/gateway/cloud-workers";
 type ProfileSummary = NonNullable<EnvironmentsListResult["profiles"]>[number];
 type EditorState = { kind: "add" } | { kind: "edit"; profileId: string } | null;
-function formControlValue(event: Event): string {
-  const target = event.currentTarget;
-  return target instanceof HTMLInputElement ||
-    target instanceof HTMLTextAreaElement ||
-    target instanceof HTMLSelectElement
-    ? target.value
-    : "";
-}
 
-function CloudWorkersContent() {
+export function CloudWorkersPage() {
   const context = useApplication();
   const [view, setView] = createStore<{ editor: EditorState; draft: CloudWorkerProfileDraft }>({
     editor: null,
@@ -65,25 +56,50 @@ function CloudWorkersContent() {
     value?: Map<string, ProfileSummary>;
     error?: string;
   }>({ pending: false });
+  let previousCatalogReceipt: ReturnType<typeof catalogReceipt> | undefined;
+  let catalogRequest: AbortController | undefined;
+  function clearPresentation() {
+    setView((state) => {
+      state.editor = null;
+      state.draft = createCloudWorkerDraft();
+    });
+    setCatalog({ pending: false });
+  }
   const gateway = useGatewayPage({
     getGateway: () => context.gateway,
+    onIdentityChange: clearPresentation,
+    onSnapshot: ({ snapshot }) => {
+      if (
+        snapshot.phase === "connected" &&
+        !canCallGatewayMethod(snapshot, "config.patch", "operator.admin")
+      ) {
+        gateway.invalidate();
+        configSave.update({ busy: false, error: null, notice: null });
+        clearPresentation();
+      }
+      refreshCatalog();
+    },
     invalidateRequests: () => configSave.update({ busy: false }),
   });
   void context.runtimeConfig.ensureLoaded();
-  const catalogKey = createMemo(
-    () => {
-      return [
-        gateway.snapshot?.client,
-        gateway.snapshot?.phase,
-        gateway.epoch,
-        configProjection.read().state.configSnapshot?.appliedConfigHash,
-      ] as const;
-    },
-    { equals: (previous, next) => previous.every((value, index) => value === next[index]) },
-  );
-  createEffect(catalogKey, (key) => {
+  function catalogReceipt() {
+    const snapshot = context.gateway.snapshot;
+    return [
+      snapshot.client,
+      snapshot.phase,
+      gateway.readEpoch(),
+      context.runtimeConfig.state.configSnapshot?.appliedConfigHash,
+    ] as const;
+  }
+  function refreshCatalog() {
+    const key = catalogReceipt();
+    if (previousCatalogReceipt?.every((value, index) => value === key[index])) {
+      return;
+    }
+    previousCatalogReceipt = key;
+    catalogRequest?.abort();
     const appliedHash = key[3];
-    const controller = new AbortController();
+    const controller = (catalogRequest = new AbortController());
     // A nested bridge can flush effects while its parent is still rendering.
     queueMicrotask(() => {
       if (controller.signal.aborted) {
@@ -94,10 +110,14 @@ function CloudWorkersContent() {
         !scope ||
         !canCallGatewayMethod(gateway.snapshot, "environments.list", "operator.admin")
       ) {
-        setCatalog({ pending: false });
+        if (gateway.connected) {
+          setCatalog({ pending: false });
+        } else {
+          setCatalog((previous) => ({ ...previous, pending: false }));
+        }
         return;
       }
-      setCatalog({ pending: true });
+      setCatalog((previous) => ({ ...previous, pending: true }));
       void scope.client
         .request<EnvironmentsListResult>(
           "environments.list",
@@ -119,24 +139,28 @@ function CloudWorkersContent() {
           },
           (error: unknown) => {
             if (!controller.signal.aborted && gateway.isCurrent(scope)) {
-              setCatalog({ pending: false, error: formatUiError(error) });
+              setCatalog((previous) => ({
+                ...previous,
+                pending: false,
+                error: formatUiError(error),
+              }));
             }
           },
         );
     });
-    return () => controller.abort();
-  });
-  function advertisedProfiles() {
-    return catalog().value;
   }
-
+  onSettled(() => {
+    // Applied-config receipts abort the prior catalog request before refreshing profiles.
+    const stop = configProjection.subscribe(refreshCatalog);
+    refreshCatalog();
+    return stop;
+  });
+  onCleanup(() => catalogRequest?.abort());
   function editableConfig(): Record<string, unknown> | null {
     return resolveEditableSnapshotConfig(configProjection.read().state.configSnapshot);
   }
 
-  function profiles(): ConfiguredCloudWorkerProfile[] {
-    return readCloudWorkerProfiles(editableConfig());
-  }
+  const profiles = createMemo(() => readCloudWorkerProfiles(editableConfig()));
 
   function hasManageAccess(): boolean {
     return canCallGatewayMethod(gateway.snapshot, "config.patch", "operator.admin");
@@ -146,7 +170,7 @@ function CloudWorkersContent() {
     const configState = configProjection.read().state;
     return Boolean(
       hasManageAccess() &&
-      configState?.configSnapshot?.hash &&
+      configState.configSnapshot?.hash &&
       !configState.configLoading &&
       !configState.configSaving &&
       !saveState().busy,
@@ -163,8 +187,6 @@ function CloudWorkersContent() {
     }
     setView((state) => {
       state.editor = profile ? { kind: "edit", profileId: profile.id } : { kind: "add" };
-    });
-    setView((state) => {
       state.draft = createCloudWorkerDraft(profile);
     });
     configSave.update({ error: null, notice: null });
@@ -195,7 +217,9 @@ function CloudWorkersContent() {
     if (!scope || !view.editor || !config || !canManage()) {
       return;
     }
-    const currentProfiles = Object.fromEntries(profiles().map((profile) => [profile.id, true]));
+    const currentProfiles = Object.fromEntries(
+      readCloudWorkerProfiles(config).map((profile) => [profile.id, true]),
+    );
     const validationError = validateCloudWorkerDraft(draft, currentProfiles, editingId);
     if (validationError) {
       configSave.update({ error: t(`cloudWorkersPage.errors.${validationError}`) });
@@ -275,8 +299,8 @@ function CloudWorkersContent() {
         ? [
             t("cloudWorkersPage.operatingSystemFact", {
               value:
-                advertisedProfiles()
-                  ?.get(profile.id)
+                catalog()
+                  .value?.get(profile.id)
                   ?.operatingSystems?.find((system) => system.id === profile.target)?.label ??
                 profile.target,
             }),
@@ -292,9 +316,9 @@ function CloudWorkersContent() {
 
   function renderProfile(profile: ConfiguredCloudWorkerProfile) {
     const statusControl = () =>
-      catalog().pending ? (
+      catalog().pending && !catalog().value ? (
         <SettingsStatus kind={"muted"} label={t("common.loading")} />
-      ) : advertisedProfiles()?.has(profile.id) ? (
+      ) : catalog().value?.has(profile.id) ? (
         <SettingsStatus kind={"ok"} label={t("cloudWorkersPage.advertised")} />
       ) : (
         <SettingsStatus kind={"warn"} label={t("cloudWorkersPage.unavailable")} />
@@ -302,11 +326,7 @@ function CloudWorkersContent() {
 
     return (
       <SettingsRow
-        title={
-          <>
-            <code>{profile.id}</code>
-          </>
-        }
+        title={<code>{profile.id}</code>}
         description={profileDescription(profile)}
         control={
           <>
@@ -358,21 +378,19 @@ function CloudWorkersContent() {
         title={t(`cloudWorkersPage.fields.${label}`)}
         description={options.description ?? t(`cloudWorkersPage.fields.${label}Help`)}
         control={
-          <>
-            <input
-              class="settings-input mono"
-              aria-label={t(`cloudWorkersPage.fields.${label}`)}
-              placeholder={options.placeholder ?? undefined}
-              type={options.type ?? undefined}
-              min={field === "readyWorkers" ? "0" : undefined}
-              step={field === "readyWorkers" ? "1" : undefined}
-              autocomplete="off"
-              spellcheck="false"
-              value={view.draft[field]}
-              disabled={saveState().busy}
-              onInput={(event: Event) => patchDraft({ [field]: formControlValue(event) })}
-            />
-          </>
+          <input
+            class="settings-input mono"
+            aria-label={t(`cloudWorkersPage.fields.${label}`)}
+            placeholder={options.placeholder}
+            type={options.type}
+            min={field === "readyWorkers" ? "0" : undefined}
+            step={field === "readyWorkers" ? "1" : undefined}
+            autocomplete="off"
+            spellcheck="false"
+            value={view.draft[field]}
+            disabled={saveState().busy}
+            onInput={(event) => patchDraft({ [field]: event.currentTarget.value })}
+          />
         }
       />
     );
@@ -381,7 +399,7 @@ function CloudWorkersContent() {
   function Editor() {
     const editing = () => view.editor?.kind === "edit";
     const systems = () =>
-      editing() ? (advertisedProfiles()?.get(view.draft.id)?.operatingSystems ?? []) : [];
+      editing() ? (catalog().value?.get(view.draft.id)?.operatingSystems ?? []) : [];
     const unadvertised = () =>
       Boolean(view.draft.target && !systems().some((system) => system.id === view.draft.target));
     return (
@@ -540,7 +558,7 @@ function CloudWorkersContent() {
   }
 
   return (
-    <>
+    <openclaw-cloud-workers-page>
       <SettingsPageHeader title={t("tabs.cloudWorkers")} />
       <SettingsWorkspace>
         <CloudWorkerEnvironments
@@ -591,12 +609,6 @@ function CloudWorkersContent() {
           )}
         />
       </SettingsWorkspace>
-    </>
+    </openclaw-cloud-workers-page>
   );
 }
-
-export const CloudWorkersPage = defineSolidBridge(
-  "openclaw-cloud-workers-page",
-  CloudWorkersContent,
-  { properties: {} },
-);

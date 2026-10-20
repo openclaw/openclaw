@@ -1,3 +1,4 @@
+import { withTimeout } from "@openclaw/fs-safe/advanced";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { PluginPageElement } from "../pages/plugin/plugin-page.tsx";
@@ -189,12 +190,49 @@ suite.define(() => {
           await sidebar
             .getByRole("menuitem", { name: `Color mode: ${currentMode}`, exact: true })
             .click();
-          await sidebar
-            .getByRole("menuitem", {
-              name: `Color mode: ${currentMode === "System" ? "Light" : "Dark"}`,
-              exact: true,
-            })
-            .waitFor();
+          try {
+            await sidebar
+              .getByRole("menuitem", {
+                name: `Color mode: ${currentMode === "System" ? "Light" : "Dark"}`,
+                exact: true,
+              })
+              .waitFor();
+          } catch (error) {
+            try {
+              const state = await withTimeout(
+                evaluateControlUiContext(page, (context) => {
+                  const browserSidebar = document.querySelector("openclaw-app-sidebar");
+                  const toggle = browserSidebar?.querySelector("openclaw-theme-mode-toggle");
+                  const button = toggle?.querySelector(".theme-mode-toggle");
+                  const menu = browserSidebar?.querySelector<HTMLElement>(".sidebar-identity-menu");
+                  const trigger = browserSidebar?.querySelector(".sidebar-identity-card");
+                  return {
+                    mode: context.theme.mode,
+                    resolvedMode: context.theme.resolvedMode,
+                    documentMode: document.documentElement.dataset.themeMode ?? null,
+                    toggleMode: toggle?.mode ?? null,
+                    toggleMenuItem: toggle?.menuItem ?? null,
+                    buttonLabel: button?.getAttribute("aria-label") ?? null,
+                    buttonRole: button?.getAttribute("role") ?? null,
+                    menuPresent: Boolean(menu),
+                    menuOpen: menu?.matches(":popover-open") ?? null,
+                    menuVisible: menu?.checkVisibility({ checkVisibilityCSS: true }) ?? null,
+                    menuFocusWithin: menu?.matches(":focus-within") ?? null,
+                    triggerExpanded: trigger?.getAttribute("aria-expanded") ?? null,
+                  };
+                }),
+                5_000,
+                "plugin color mode failure diagnostics",
+              );
+              console.error(
+                "[plugin-tab-slugs] color mode label did not advance",
+                JSON.stringify({ currentMode, ...state }),
+              );
+            } catch {
+              console.error("[plugin-tab-slugs] color mode diagnostics unavailable");
+            }
+            throw error;
+          }
         }
         await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("dark");
         await expect

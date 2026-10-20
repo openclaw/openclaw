@@ -80,7 +80,7 @@ suite.define(() => {
           });
           const status = (sha: string, behind: number) => ({
             updateAvailable: {
-              channel: "dev" as const,
+              channel: "beta" as const,
               currentVersion: "1.0.0",
               latestVersion: "1.0.0",
               currentSha: "a".repeat(40),
@@ -88,7 +88,7 @@ suite.define(() => {
               commitsBehind: behind,
             },
             schedule: {
-              channel: "dev" as const,
+              channel: "beta" as const,
               autoEnabled: false,
               target: {
                 kind: "git" as const,
@@ -238,7 +238,7 @@ suite.define(() => {
             activeRun: null,
             lastRun: run,
             updateAvailable: {
-              channel: "dev" as const,
+              channel: "beta" as const,
               currentVersion: "1.0.0",
               latestVersion: "1.0.0",
               currentSha: "a".repeat(40),
@@ -247,7 +247,7 @@ suite.define(() => {
               commitsBehind: behind,
             },
             schedule: {
-              channel: "dev" as const,
+              channel: "beta" as const,
               autoEnabled: false,
               target: {
                 kind: "git" as const,
@@ -288,9 +288,33 @@ suite.define(() => {
               });
             });
             await page.getByRole("button", { name: "Retry update", exact: true }).click();
-            await page
-              .getByRole("button", { name: "Update Mac app and restart", exact: true })
-              .waitFor();
+            try {
+              await page
+                .getByRole("button", { name: "Update Mac app and restart", exact: true })
+                .waitFor();
+            } catch (error) {
+              const state = await page
+                .evaluate(() => ({
+                  dialogs: Array.from(
+                    document.querySelectorAll("openclaw-modal-dialog"),
+                    (dialog) => ({
+                      label: dialog.getAttribute("label"),
+                      buttons: Array.from(dialog.querySelectorAll("button"), (button) => ({
+                        text: button.textContent,
+                        disabled: button.disabled,
+                      })),
+                      alerts: Array.from(
+                        dialog.querySelectorAll('[role="alert"]'),
+                        (alert) => alert.textContent,
+                      ),
+                    }),
+                  ),
+                  nativeUpdatePosted: document.documentElement.dataset.nativeUpdatePosted ?? null,
+                }))
+                .catch(() => null);
+              console.error("[update-confirmation-e2e] native retry state", state);
+              throw error;
+            }
             expect(await gateway.getRequests("update.run")).toHaveLength(0);
             expect(
               await gateway.getRequests("update.status", { refreshCheckout: true }),
@@ -344,12 +368,12 @@ suite.define(() => {
     },
   );
 
-  it("refreshes the Dev target when opening the update card and again before confirmation", async () => {
+  it("refreshes the Git release target when opening the update card and again before confirmation", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
       async ({ page }) => {
         const available = (sha: string, behind: number): UpdateAvailable => ({
-          channel: "dev",
+          channel: "beta",
           currentVersion: "1.0.0",
           latestVersion: "1.0.0",
           currentSha: "a".repeat(40),
@@ -364,7 +388,7 @@ suite.define(() => {
         ): { updateAvailable: UpdateAvailable; schedule: UpdateScheduleState } => ({
           updateAvailable: available(sha, behind),
           schedule: {
-            channel: "dev",
+            channel: "beta",
             autoEnabled: false,
             target: {
               kind: "git",
@@ -427,7 +451,7 @@ suite.define(() => {
         expect((await page.goto(`${suite.server.baseUrl}chat`))?.status()).toBe(200);
         await gateway.waitForRequest("chat.startup");
 
-        // The Inbox is the sole update surface; the badge carries the attention.
+        // The Inbox badge carries dismissible attention; the menu keeps release availability.
         const inboxBadge = page.locator(".sidebar-issues-button__count");
         await inboxBadge.waitFor();
         expect(
@@ -439,9 +463,9 @@ suite.define(() => {
                 .filter((className) => typeof className === "string" && className.length > 0),
             ),
         ).toEqual(["sr-only", "sidebar-issues-button"]);
-        await page.locator(".sidebar-shell__footer").screenshot({
+        await page.locator(".sidebar-issues-button").screenshot({
           animations: "disabled",
-          path: path.join(PROOF_DIR, "00-footer-inbox-badge.png"),
+          path: path.join(PROOF_DIR, "00-inbox-badge.png"),
         });
 
         await page.locator(".sidebar-issues-button").click();
@@ -456,7 +480,13 @@ suite.define(() => {
         await inboxBadge.waitFor({ state: "detached" });
 
         await page.locator(".sidebar-identity-card").click();
-        await page.getByText("Update available", { exact: true }).waitFor();
+        await page
+          .getByRole("menuitem", { name: "Updates. Update available", exact: true })
+          .waitFor();
+        await page
+          .locator(".sidebar-identity-menu__update-badge")
+          .getByText("Available", { exact: true })
+          .waitFor();
         await page.keyboard.press("Escape");
 
         await page.reload();
@@ -471,7 +501,7 @@ suite.define(() => {
     );
   });
 
-  it("keeps Inbox snoozes and the account-menu update chip with their authenticated account", async () => {
+  it("keeps Inbox snoozes account-scoped without hiding release availability", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
       async ({ page }) => {
@@ -525,9 +555,9 @@ suite.define(() => {
           await page.locator(".sidebar-identity-menu").waitFor({ state: "visible" });
           await expect
             .poll(() =>
-              page.locator(".sidebar-identity-menu .sidebar-footer-build__update").count(),
+              page.locator(".sidebar-identity-menu .sidebar-identity-menu__update-badge").count(),
             )
-            .toBe(snoozed ? 1 : 0);
+            .toBe(1);
           await page.keyboard.press("Escape");
           await page.locator(".sidebar-identity-menu").waitFor({ state: "detached" });
         }

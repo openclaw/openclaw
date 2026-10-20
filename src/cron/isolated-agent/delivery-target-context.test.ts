@@ -5,6 +5,43 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { readCronDeliveryTargetContexts } from "./delivery-target-context.js";
 
+it("reads 146 delivery previews without overflowing the session worker", async () => {
+  await withOpenClawTestState({ layout: "home" }, async (state) => {
+    const storePath = path.join(state.sessionsDir(), "sessions.json");
+    const cfg = { session: { store: storePath } };
+    replaceSessionEntrySync(
+      { agentId: "main", storePath, sessionKey: "agent:main:main" },
+      {
+        sessionId: "main",
+        updatedAt: 1,
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "telegram", to: "main-recipient", accountId: "work" },
+        }),
+      },
+    );
+    const requests = Array.from({ length: 146 }, (_, index) => ({
+      agentId: "main",
+      sessionKey: `agent:main:preview-${index}`,
+    }));
+    await readCronDeliveryTargetContexts(cfg, requests.slice(0, 1));
+
+    const results = await readCronDeliveryTargetContexts(cfg, requests);
+
+    expect(results).toHaveLength(requests.length);
+    expect(results.flatMap((result) => (result.ok ? [] : [String(result.error)]))).toEqual([]);
+    for (const [index, result] of results.entries()) {
+      expect(result).toMatchObject({
+        ok: true,
+        value: {
+          rawSessionKey: requests[index]?.sessionKey,
+          usedSharedMainFallback: true,
+          main: { delivery: { context: { to: "main-recipient" } } },
+        },
+      });
+    }
+  });
+});
+
 it("reads current delivery facts without decoding unrelated session payloads", async () => {
   await withOpenClawTestState({ layout: "home" }, async (state) => {
     const storePath = path.join(state.sessionsDir(), "sessions.json");

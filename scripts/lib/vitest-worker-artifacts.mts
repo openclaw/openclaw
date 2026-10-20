@@ -5,7 +5,6 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { vitestWorkerDeclarationEntries } from "./vitest-worker-declarations.mts";
 
-export type VitestWorkerDescriptor = { directory: string };
 export type VitestWorkerManifest = {
   identity: string;
   inputs: Record<string, string>;

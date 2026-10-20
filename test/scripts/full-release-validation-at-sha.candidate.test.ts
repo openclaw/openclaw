@@ -28,37 +28,6 @@ function readRequestRecord(fixture: ReturnType<typeof createDispatchFixture>) {
 }
 
 describe("candidate-owned full release dispatch entry point", () => {
-  it("refuses a candidate without its data-owned support floor before npm or dispatch", () => {
-    const f = createDispatchFixture({
-      candidateOwned: true,
-      targetSource: {
-        "scripts/lib/upgrade-survivor-scenarios.json": "{}",
-      },
-    });
-    try {
-      const result = f.run();
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain("missing its data-owned upgrade baseline policy");
-      expect(f.readCalls(f.npmCallsPath)).toEqual([]);
-      expect(dispatches(f)).toEqual([]);
-    } finally {
-      f.cleanup();
-    }
-  });
-
-  it("does not replace an unavailable predecessor with a future registry release", () => {
-    const f = createDispatchFixture({ candidateOwned: true });
-    try {
-      writeFileSync(f.publishedVersionsPath, JSON.stringify(["2027.1.1"]));
-      const result = f.run();
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain("no published stable OpenClaw baseline predates candidate");
-      expect(f.readCalls(f.npmCallsPath)).toEqual([npmVersionsArgs]);
-      expect(dispatches(f)).toEqual([]);
-    } finally {
-      f.cleanup();
-    }
-  });
   it.each(["main", "protected"])("rejects fresh %s publication before remote mutation", (route) => {
     const f = createDispatchFixture();
     try {

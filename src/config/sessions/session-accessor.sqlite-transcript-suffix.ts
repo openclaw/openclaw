@@ -15,13 +15,13 @@ import {
   type SqliteTranscriptStorageRow,
 } from "./session-accessor.sqlite-read.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
+import { insertTranscriptRowsWithoutProjectionInTransaction } from "./session-accessor.sqlite-transcript-batch.js";
 import {
   pruneTranscriptReactionsInTransaction,
   readTranscriptMutationStateInTransaction,
   rotateTranscriptGenerationInTransaction,
   touchTranscriptMutationInTransaction,
 } from "./session-accessor.sqlite-transcript-state.js";
-import { insertTranscriptRowsWithoutProjectionInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { prepareIncrementalSuffixIdempotencyMutation } from "./session-accessor.sqlite-transcript-suffix-idempotency.js";
 import {
   markSessionTranscriptIndexDirtyInTransaction,
@@ -80,6 +80,7 @@ function readTranscriptSuffixStorageRows(
       .select([
         "created_at",
         projectTranscriptRetainedDataSql(
+          database.db,
           transcriptEventJsonSql(database.db),
           retainedCustomDataIds,
         ).as("event_json"),
@@ -439,15 +440,6 @@ export function replaceSqliteTranscriptSuffixInTransaction(
     executeSqliteQuerySync(
       database.db,
       db
-        .deleteFrom("transcript_event_identities")
-        .where("session_id", "=", resolved.sessionId)
-        .where("seq", ">=", plan.startSeq),
-    ),
-  );
-  withSqliteDatabaseWriteScope(database.db, [sqliteSessionIdWriteScope(resolved.sessionId)], () =>
-    executeSqliteQuerySync(
-      database.db,
-      db
         .deleteFrom("transcript_events")
         .where("session_id", "=", resolved.sessionId)
         .where("seq", ">=", plan.startSeq)
@@ -512,7 +504,10 @@ export function replaceSqliteTranscriptSuffixInTransaction(
             .onRef("event.session_id", "=", "identity.session_id")
             .onRef("event.seq", "=", "identity.seq"),
         )
-        .select([transcriptEventNavigationSql("event").as("event_json"), "identity.event_id"])
+        .select([
+          transcriptEventNavigationSql(database.db, "event").as("event_json"),
+          "identity.event_id",
+        ])
         .where("identity.session_id", "=", resolved.sessionId)
         .where("identity.seq", "<", plan.startSeq)
         .where("identity.message_idempotency_key", "is", null)
@@ -527,32 +522,28 @@ export function replaceSqliteTranscriptSuffixInTransaction(
       }
     }
   }
-  for (const key of removedIdempotencyKeys) {
-    const currentOwner = executeSqliteQueryTakeFirstSync(
-      database.db,
-      db
-        .selectFrom("transcript_event_identities")
-        .select("event_id")
-        .where("session_id", "=", resolved.sessionId)
-        .where("message_idempotency_key", "=", key)
-        .limit(1),
-    );
-    const replacementEventId = replacementByIdempotencyKey.get(key);
-    if (!currentOwner && replacementEventId) {
-      withSqliteDatabaseWriteScope(
+  for (const [key, replacementEventId] of replacementByIdempotencyKey) {
+    withSqliteDatabaseWriteScope(database.db, [sqliteSessionIdWriteScope(resolved.sessionId)], () =>
+      executeSqliteQuerySync(
         database.db,
-        [sqliteSessionIdWriteScope(resolved.sessionId)],
-        () =>
-          executeSqliteQuerySync(
-            database.db,
-            db
-              .updateTable("transcript_event_identities")
-              .set({ message_idempotency_key: key })
-              .where("session_id", "=", resolved.sessionId)
-              .where("event_id", "=", replacementEventId),
+        db
+          .updateTable("transcript_event_identities")
+          .set({ message_idempotency_key: key })
+          .where("session_id", "=", resolved.sessionId)
+          .where("event_id", "=", replacementEventId)
+          .where((eb) =>
+            eb.not(
+              eb.exists(
+                eb
+                  .selectFrom("transcript_event_identities as owner")
+                  .select("owner.event_id")
+                  .where("owner.session_id", "=", resolved.sessionId)
+                  .where("owner.message_idempotency_key", "=", key),
+              ),
+            ),
           ),
-      );
-    }
+      ),
+    );
   }
 
   // Destructive suffix rewrites may reuse removed sequence positions. Rotate the raw and visible

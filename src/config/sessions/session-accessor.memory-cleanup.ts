@@ -151,11 +151,11 @@ export function applyMemorySessionEntryCleanup(
                   settlement = capture(
                     deletedEntries.filter(({ sessionKey }) => removed.has(sessionKey)),
                   );
-                  settlement.beforeCommit();
+                  return settlement.beforeCommit();
                 },
+                settled: (settledOutcome) => settlement?.settle(settledOutcome.kind),
               },
             );
-            settlement?.settle(outcome.kind);
             if (outcome.kind === "committed") {
               params.onLifecycleCommitted?.();
             }

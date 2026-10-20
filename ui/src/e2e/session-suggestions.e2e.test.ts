@@ -363,9 +363,11 @@ suite.define(() => {
       await ownerTyping();
       await expect(typingRow.locator(".agent-chat__typing-bubble > span")).toHaveCount(3);
       await expect(previewBubble).toHaveCount(0);
-      await expect(
-        typingRow.locator(".chat-message-avatar-anchor > :is(.chat-avatar, .chat-avatar-slot)"),
-      ).toBeVisible();
+      const typingAvatar = typingRow.locator(
+        ".chat-message-avatar-anchor > :is(.chat-avatar, .chat-avatar-slot)",
+      );
+      await expect(typingAvatar).toBeVisible();
+      await expect(typingAvatar).toHaveCSS("position", "absolute");
       await screenshot(page, "typing-dots-before.png");
 
       const draft = "yea, cool. Live drafts stream into the bubble now.";

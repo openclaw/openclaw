@@ -1,12 +1,23 @@
+import { createHash } from "node:crypto";
 // Doctor-only import for the retired device-auth JSON store.
 import fs from "node:fs";
 import path from "node:path";
 import { root } from "@openclaw/fs-safe";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeDeviceAuthRole, normalizeDeviceAuthScopes } from "../shared/device-auth.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
-import { resetLegacyDeviceAuthPresenceCache } from "./device-auth-store.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { importClientCredentialLegacy } from "./client-credential-legacy.js";
+import {
+  writeClientCredentialReceipt,
+  assertClientCredentialStoreReady,
+  readClientCredentialReceipt,
+} from "./client-credential-readiness.js";
+import {
+  emptyClientCredentialReceipt,
+  readClientCredentialFileIdentity,
+} from "./client-credential-receipt.js";
+import type { ClientCredentialDatabase } from "./client-credential-schema.js";
+import { openClientCredentialCustody } from "./client-credential-store.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -16,7 +27,7 @@ import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import type { LegacyStateDetection, MigrationMessages } from "./state-migrations.types.js";
 
 const LEGACY_PATH = "identity/device-auth.json";
-type DeviceAuthMigrationDatabase = Pick<OpenClawStateKyselyDatabase, "device_auth_tokens">;
+type DeviceAuthMigrationDatabase = Pick<ClientCredentialDatabase, "device_auth_tokens">;
 
 /** Detect the retired device-auth store only when an explicit Doctor flow opts in. */
 export function detectLegacyDeviceAuth(params: {
@@ -93,63 +104,99 @@ export async function migrateLegacyDeviceAuth(params: {
     releaseLabel: "Device-auth",
     errorLabel: "Failed migrating legacy device auth",
     run: async (env) => {
-      const stateRoot = await root(params.stateDir, {
-        hardlinks: "reject",
-        maxBytes: 256 * 1024,
-        symlinks: "reject",
-      });
-      const source = await stateRoot.read(LEGACY_PATH, {
-        hardlinks: "reject",
-        maxBytes: 256 * 1024,
-        symlinks: "reject",
-      });
-      const store = parseStore(JSON.parse(source.buffer.toString("utf8")));
-      const counts = runOpenClawStateWriteTransaction(
-        ({ db }) => {
+      const owner = openClientCredentialCustody(env, { createIfMissing: true, migration: true });
+      if (!owner) {
+        throw new Error("Local client credentials are unavailable.");
+      }
+      let counts: { imported: number; preserved: number };
+      try {
+        const prior = readClientCredentialReceipt(owner.database);
+        if (prior) {
+          owner.transaction(() => assertClientCredentialStoreReady(owner.database, env, false));
+          if (prior.receipt.legacyImports["auth:primary"]) {
+            return {
+              changes: [],
+              warnings: [],
+              notices: [
+                "Retained legacy device-auth JSON is already consumed; local credentials remain authoritative.",
+              ],
+            };
+          }
+        }
+        const stateRoot = await root(params.stateDir, {
+          hardlinks: "reject",
+          maxBytes: 256 * 1024,
+          symlinks: "reject",
+        });
+        const source = await stateRoot.read(LEGACY_PATH, {
+          hardlinks: "reject",
+          maxBytes: 256 * 1024,
+          symlinks: "reject",
+        });
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(source.buffer.toString("utf8"));
+        } catch {
+          throw new Error("Legacy device-auth store is invalid or unsupported.");
+        }
+        const store = parseStore(parsed);
+        counts = owner.transaction(() => {
+          const db = owner.database;
+          if (!readClientCredentialReceipt(db)) {
+            if (readClientCredentialFileIdentity(resolveOpenClawStateSqlitePath(env))) {
+              throw new Error(
+                "Prepare the shared credential migration before importing legacy tokens.",
+              );
+            }
+            writeClientCredentialReceipt(db, emptyClientCredentialReceipt(), "complete");
+          }
+          assertClientCredentialStoreReady(db, env, false);
+          if (readClientCredentialReceipt(db)?.receipt.legacyImports["auth:primary"]) {
+            return { imported: 0, preserved: store.entries.length };
+          }
           const stateDb = getNodeSqliteKysely<DeviceAuthMigrationDatabase>(db);
           let imported = 0;
           let preserved = 0;
           for (const entry of store.entries) {
-            const query = stateDb
-              .selectFrom("device_auth_tokens")
-              .select(["scopes_json", "updated_at_ms"])
-              .where("device_id", "=", store.deviceId)
-              .where("role", "=", entry.role);
-            const existing = executeSqliteQueryTakeFirstSync(db, query);
-            if (existing && rowIsCanonical(existing)) {
-              preserved += 1;
-              continue;
-            }
-            executeSqliteQuerySync(
+            const existing = executeSqliteQueryTakeFirstSync(
               db,
               stateDb
-                .insertInto("device_auth_tokens")
-                .values({
-                  device_id: store.deviceId,
-                  role: entry.role,
-                  token: entry.token,
-                  scopes_json: JSON.stringify(entry.scopes),
-                  updated_at_ms: entry.updatedAtMs,
-                })
-                .onConflict((conflict) =>
-                  conflict.columns(["device_id", "role"]).doUpdateSet({
-                    token: entry.token,
-                    scopes_json: JSON.stringify(entry.scopes),
-                    updated_at_ms: entry.updatedAtMs,
-                  }),
-                ),
+                .selectFrom("device_auth_tokens")
+                .select(["scopes_json", "updated_at_ms"])
+                .where("device_id", "=", store.deviceId)
+                .where("role", "=", entry.role),
             );
-            if (!executeSqliteQueryTakeFirstSync(db, query)) {
-              throw new Error("SQLite verification failed for a device-auth token");
+            if (existing && rowIsCanonical(existing)) {
+              preserved += 1;
+            } else {
+              if (existing) {
+                executeSqliteQuerySync(
+                  db,
+                  stateDb
+                    .deleteFrom("device_auth_tokens")
+                    .where("device_id", "=", store.deviceId)
+                    .where("role", "=", entry.role),
+                );
+              }
+              imported += 1;
             }
-            imported += 1;
           }
+          importClientCredentialLegacy(owner, {
+            key: "auth:primary",
+            sha256: createHash("sha256").update(source.buffer).digest("hex"),
+            tokens: store.entries.map((entry) => ({
+              device_id: store.deviceId,
+              role: entry.role,
+              token: entry.token,
+              scopes_json: JSON.stringify(entry.scopes),
+              updated_at_ms: entry.updatedAtMs,
+            })),
+          });
           return { imported, preserved };
-        },
-        { env },
-      );
-      await stateRoot.remove(LEGACY_PATH);
-      resetLegacyDeviceAuthPresenceCache(env);
+        });
+      } finally {
+        owner.close();
+      }
       return {
         changes: [
           `Migrated ${counts.imported} device-auth token${counts.imported === 1 ? "" : "s"} to SQLite.`,
@@ -161,7 +208,7 @@ export async function migrateLegacyDeviceAuth(params: {
                 `Preserved ${counts.preserved} canonical SQLite device-auth token${counts.preserved === 1 ? "" : "s"}.`,
               ]
             : []),
-          "Removed retired device-auth JSON after verified SQLite import.",
+          "Legacy device-auth JSON was retained unchanged; its durable local claim prevents reimport.",
         ],
       };
     },

@@ -1,4 +1,5 @@
-import { resolveCurrentDiagnosticRunId } from "./diagnostic-embedded-run-index.js";
+import type { SessionControllerWatchdogAttempt } from "../sessions/session-controller.watchdog.js";
+import { resolveCurrentDiagnosticRun } from "./diagnostic-embedded-run-index.js";
 
 // A semantic-stall clock remains continuous across short model/tool handoffs,
 // but later model progress wins once no churn observation refreshes this lease.
@@ -23,6 +24,7 @@ export function recordDiagnosticActivityProgress(activity: DiagnosticArgumentChu
 }
 
 export type DiagnosticArgumentChurnObservationParams = {
+  watchdogAttempt?: SessionControllerWatchdogAttempt;
   sessionId?: string;
   sessionKey?: string;
   runId?: string;
@@ -164,7 +166,7 @@ export function applyArgumentChurnObservation<T extends { runId: string; sequenc
 ): void {
   const now = params.now ?? Date.now();
   const runId = params.runId?.trim() || undefined;
-  const currentOwnerRunId = resolveCurrentDiagnosticRunId(owners);
+  const currentOwnerRunId = resolveCurrentDiagnosticRun(owners)?.runId;
   if (currentOwnerRunId !== undefined && currentOwnerRunId !== runId) {
     return;
   }

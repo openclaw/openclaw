@@ -1,6 +1,6 @@
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import {
-  ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
   externalCliDiscoveryForProviderAuth,
   resolveAuthProfileDisplayLabel,
   resolveAuthStatePathForDisplay,
@@ -9,6 +9,10 @@ import {
   type ProfileUsageStats,
 } from "../../agents/auth-profiles.js";
 import { buildAuthProfileUnusableHint } from "../../agents/auth-profiles/oauth-refresh-failure.js";
+import {
+  isActiveUnusableWindow,
+  readAuthProfileUsageStats,
+} from "../../agents/auth-profiles/usage-state.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { shortenHomePath } from "../../utils.js";
@@ -24,6 +28,12 @@ function summarizeProfile(params: {
 }) {
   const expiresAt =
     params.profile.type === "api_key" ? undefined : timestampMsToIsoString(params.profile.expires);
+  const blockedActive = isActiveUnusableWindow(params.usage?.blockedUntil, Date.now());
+  const blockedUntil = blockedActive
+    ? timestampMsToIsoString(params.usage?.blockedUntil)
+    : undefined;
+  const blockedModel =
+    params.usage?.blockedScope === "model" ? params.usage.blockedModel : undefined;
   const cooldownUntil = timestampMsToIsoString(params.usage?.cooldownUntil);
   const disabledUntil = timestampMsToIsoString(params.usage?.disabledUntil);
   const disabledActive = Boolean(disabledUntil);
@@ -53,6 +63,15 @@ function summarizeProfile(params: {
     ...(params.profile.email ? { email: params.profile.email } : {}),
     ...(params.profile.displayName ? { displayName: params.profile.displayName } : {}),
     ...(expiresAt ? { expiresAt } : {}),
+    ...(blockedUntil
+      ? {
+          blockedUntil,
+          ...(params.usage?.blockedReason ? { blockedReason: params.usage.blockedReason } : {}),
+          ...(params.usage?.blockedSource ? { blockedSource: params.usage.blockedSource } : {}),
+          blockedScope: blockedModel ? "model" : "profile",
+          ...(blockedModel ? { blockedModel } : {}),
+        }
+      : {}),
     ...(cooldownUntil ? { cooldownUntil } : {}),
     ...(disabledUntil ? { disabledUntil } : {}),
     ...(params.usage?.cooldownReason ? { cooldownReason: params.usage.cooldownReason } : {}),
@@ -68,6 +87,15 @@ function formatProfileLine(profile: ReturnType<typeof summarizeProfile>): string
   const details = [`${profile.provider}/${profile.type}`];
   if (profile.expiresAt) {
     details.push(`expires ${profile.expiresAt}`);
+  }
+  if (profile.blockedUntil) {
+    const reason = profile.blockedReason ? `:${profile.blockedReason}` : "";
+    const source = profile.blockedSource ? ` via ${profile.blockedSource}` : "";
+    const scope =
+      profile.blockedScope === "model"
+        ? ` for model${profile.blockedModel ? ` ${profile.blockedModel}` : ""}`
+        : " for profile";
+    details.push(`blocked${reason}${source}${scope} until ${profile.blockedUntil}`);
   }
   if (profile.cooldownUntil) {
     const diagnostic = profile.cooldownClassification ?? profile.cooldownReason;
@@ -88,7 +116,7 @@ export async function modelsAuthListCommand(
   const cfg = await loadModelsConfig({ commandName: "models auth list", runtime });
   const { agentId, agentDir } = resolveModelsTargetAgent(cfg, opts.agent, { kind: "read" });
   const provider = opts.provider?.trim() ? resolveProviderIdForAuth(opts.provider) : undefined;
-  const store = ensureAuthProfileStore(
+  const store = await ensureAuthProfileStoreAsync(
     agentDir,
     provider
       ? {
@@ -106,7 +134,7 @@ export async function modelsAuthListCommand(
         store,
         profileId,
         profile,
-        usage: store.usageStats?.[profileId],
+        usage: readAuthProfileUsageStats(store, profileId),
       }),
     )
     .filter((profile) => !provider || profile.provider === provider)

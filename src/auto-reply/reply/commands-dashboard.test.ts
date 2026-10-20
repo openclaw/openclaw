@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import type { SkillCommandSpec } from "../../skills/types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
+import { normalizeCommandBody } from "../commands-registry-normalize.js";
 import { handleDashboardCommand } from "./commands-dashboard.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
@@ -90,6 +91,21 @@ describe("dashboard command", () => {
     expect(prompt).toContain("Create a dashboard for this session.");
     expect(params.command.commandBodyNormalized).toBe(prompt);
   });
+
+  it.each([" ", "\n"])(
+    "preserves multiline requirements through normalization and skill expansion after %j",
+    async (separator) => {
+      const requirements = "Show these panels:\n- CPU\n  - per agent\n\n- open approvals";
+      const params = buildParams(normalizeCommandBody(`/dashboard${separator}${requirements}`));
+
+      const result = await handleDashboardCommand(params, true);
+
+      expect(result?.explicitSkillSelections).toEqual([
+        { name: "control-ui", path: "/bundled/skills/control-ui/SKILL.md" },
+      ]);
+      expect(params.ctx.BodyForAgent).toContain(`Dashboard requirements:\n${requirements}`);
+    },
+  );
 
   it("preserves additional explicit skills used by dashboard requirements", async () => {
     const params = buildParams("/dashboard include $release_notes", [

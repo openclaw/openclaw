@@ -1,6 +1,6 @@
 import type { UsersMentionableResult } from "@openclaw/gateway-protocol";
-import { nothing, render } from "lit";
-import { onTestFinished, vi } from "vitest";
+import { expect, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
 import {
@@ -9,7 +9,10 @@ import {
 } from "../../test-helpers/gateway-client.ts";
 import { NewSessionAttachmentDraft } from "../new-session/attachment-draft.ts";
 /* @vitest-environment jsdom */
-import { NewSessionComposerTextareaController } from "../new-session/composer-controller.ts";
+import {
+  createNewSessionComposerTextarea,
+  type NewSessionComposerTextarea,
+} from "../new-session/composer-textarea.ts";
 import { composerContext, mountNewSessionComposer } from "../new-session/composer.test-support.ts";
 import type { NewSessionComposerOptions } from "../new-session/composer.tsx";
 import { NewSessionModelControl } from "../new-session/model-control.ts";
@@ -17,8 +20,9 @@ import {
   createComposerContainer,
   createComposerProps,
   resetComposerFixture,
+  disposeComposer,
+  renderComposerInto,
 } from "./chat-composer.test-support.ts";
-import { renderChatComposer } from "./components/chat-composer.tsx";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 
 export const people: UsersMentionableResult = {
@@ -28,10 +32,15 @@ export const people: UsersMentionableResult = {
   ],
   truncated: false,
 };
-const controllers: NewSessionComposerTextareaController[] = [];
+export const mention = (profileId: string, start = 0, end = 5): HumanMention => ({
+  profileId,
+  start,
+  end,
+});
+const composerTextareas: NewSessionComposerTextarea[] = [];
 
 export async function resetMentionComposerFixture() {
-  controllers.splice(0).forEach((controller) => controller.disconnect());
+  composerTextareas.splice(0).forEach((composerTextarea) => composerTextarea.disconnect());
   await resetComposerFixture();
 }
 
@@ -52,8 +61,8 @@ export function composerFixture(
   const client = createTestGatewayClient((method, params, options) =>
     method === "commands.list" ? { commands: [] } : request(method, params, options),
   );
-  const controller = new NewSessionComposerTextareaController();
-  controllers.push(controller);
+  const composerTextarea = createNewSessionComposerTextarea();
+  composerTextareas.push(composerTextarea);
   const context = composerContext({
     client,
     phase: "connected",
@@ -70,7 +79,7 @@ export function composerFixture(
     if (native) {
       native.unmount();
     } else {
-      render(nothing, container);
+      disposeComposer(container);
     }
     container.remove();
   });
@@ -96,25 +105,21 @@ export function composerFixture(
       params: kind === "chat" ? { sessionKey: "agent:main:chat" } : { agentId: "main" },
     };
     if (kind === "chat") {
-      render(
-        renderChatComposer({
-          ...props,
-          submitDisabledReason,
-          draft,
-          mentions,
-          getDraft: () => draft,
-          getMentions: () => mentions,
-          mentionDirectory: unsupported ? undefined : directory,
-          mentionsUnsupported: unsupported,
-          onDraftChange: onInput,
-          onRequestUpdate: renderCurrent,
-          onSlashCommand: slashCommand,
-          canAbort: true,
-          onAbort: abort,
-          onSend: () => send({ draft, mentions }),
-        }),
-        container,
-      );
+      renderComposerInto(container, {
+        ...props,
+        submitDisabledReason,
+        draft,
+        mentions,
+        getDraft: () => draft,
+        getMentions: () => mentions,
+        mentionDirectory: unsupported ? undefined : directory,
+        mentionsUnsupported: unsupported,
+        onDraftChange: onInput,
+        onSlashCommand: slashCommand,
+        canAbort: true,
+        onAbort: abort,
+        onSend: () => send({ draft, mentions }),
+      });
     } else {
       nativeOptions = {
         agentId: "main",
@@ -128,9 +133,8 @@ export function composerFixture(
         getMentions: () => mentions,
         canSubmit: true,
         requiresModifier: false,
-        requestUpdate: renderCurrent,
+        onChange: renderCurrent,
         submitting: false,
-        textareaController: controller,
         onInput: (next, selected) => {
           onInput(next, selected);
           renderCurrent();
@@ -140,7 +144,7 @@ export function composerFixture(
       if (native) {
         native.rerender();
       } else {
-        native = mountNewSessionComposer(() => nativeOptions, container);
+        native = mountNewSessionComposer(() => nativeOptions, composerTextarea, container);
       }
     }
   };
@@ -180,12 +184,28 @@ export function composerFixture(
   return {
     container,
     request,
+    defer: () => {
+      const response = createDeferred<UsersMentionableResult>();
+      request.mockReturnValueOnce(response.promise);
+      return async (result = people) => {
+        response.resolve(result);
+        await vi.advanceTimersByTimeAsync(0);
+      };
+    },
     edit,
+    query: container.querySelector.bind(container),
+    options: () => container.querySelectorAll('[role="option"]'),
+    search: async (text: string, options?: Parameters<typeof edit>[1]) => {
+      edit(text, options);
+      await vi.advanceTimersByTimeAsync(150);
+    },
     key: pressKey,
     send,
     abort,
     slashCommand,
     value: () => ({ draft, mentions }),
+    expectValue: (expectedDraft: string, expectedMentions: readonly HumanMention[] = []) =>
+      expect({ draft, mentions }).toEqual({ draft: expectedDraft, mentions: expectedMentions }),
     replaceOwner: () => {
       ownerKey = "sender-two";
       renderCurrent();

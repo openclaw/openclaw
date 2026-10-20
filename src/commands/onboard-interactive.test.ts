@@ -111,9 +111,8 @@ describe("runConversationalOnboarding", () => {
     };
     metadata = createSystemAgentPluginMetadataTestSnapshot(config);
     const fixture = await metadata.run(() => createSystemAgentVerifiedInferenceTestFixture(config));
-    // Keep the handoff's actual registry lookup and artifact validation; the binding
-    // factory's validator override is only for constructing synthetic probe evidence.
-    const { validateAgentHarnessRuntimeArtifact: _fixtureValidator, ...ownerDeps } = fixture.deps;
+    // The handoff must use the actual registered harness and artifact validator.
+    fixture.harnessMock.mockRestore();
     mocks.readConfigFileSnapshot.mockImplementation(async () =>
       createConfigFileSnapshot({
         path: path.join(home.home, "openclaw.json"),
@@ -128,10 +127,8 @@ describe("runConversationalOnboarding", () => {
         legacyIssues: [],
       }),
     );
-    const fingerprintPluginRuntimeArtifact = vi.fn(ownerDeps.fingerprintPluginRuntimeArtifact);
+    const fingerprintPluginRuntimeArtifact = fixture.fingerprintPluginRuntimeArtifact;
     const deps = {
-      ...ownerDeps,
-      fingerprintPluginRuntimeArtifact,
       readConfigFileSnapshot: mocks.readConfigFileSnapshot,
     };
     let artifactCurrent = true;
@@ -296,6 +293,9 @@ function makeRuntime(): RuntimeEnv {
 
 describe("runInteractiveSetup", () => {
   afterEach(() => {
+    expect(mocks.restoreTerminalState).toHaveBeenCalledWith("setup finish", {
+      resumeStdinIfPaused: false,
+    });
     vi.clearAllMocks();
   });
 
@@ -305,28 +305,19 @@ describe("runInteractiveSetup", () => {
     await runInteractiveSetup({} as never, runtime);
 
     expect(mocks.runSetupWizard).toHaveBeenCalledOnce();
-    expect(mocks.restoreTerminalState).toHaveBeenCalledWith("setup finish", {
-      resumeStdinIfPaused: false,
-    });
   });
 
   it("restores terminal state without resuming stdin on cancel", async () => {
     const exitError = new Error("exit");
-    const runtime: RuntimeEnv = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(() => {
-        throw exitError;
-      }) as unknown as RuntimeEnv["exit"],
-    };
+    const runtime = makeRuntime();
+    vi.mocked(runtime.exit).mockImplementation(() => {
+      throw exitError;
+    });
     mocks.runSetupWizard.mockRejectedValueOnce(new WizardCancelledError("cancelled"));
 
     await expect(runInteractiveSetup({} as never, runtime)).rejects.toBe(exitError);
 
     expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(mocks.restoreTerminalState).toHaveBeenCalledWith("setup finish", {
-      resumeStdinIfPaused: false,
-    });
     const restoreOrder =
       mocks.restoreTerminalState.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER;
     const exitOrder =
@@ -343,8 +334,5 @@ describe("runInteractiveSetup", () => {
     await expect(runInteractiveSetup({} as never, runtime)).rejects.toThrow("boom");
 
     expect(runtime.exit).not.toHaveBeenCalled();
-    expect(mocks.restoreTerminalState).toHaveBeenCalledWith("setup finish", {
-      resumeStdinIfPaused: false,
-    });
   });
 });

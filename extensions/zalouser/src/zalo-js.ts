@@ -1,14 +1,13 @@
 import { randomUUID } from "node:crypto";
+import type { ChannelMessageSendResult } from "openclaw/plugin-sdk/channel-outbound";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   asDateTimestampMs,
   asFiniteNumberInRange,
-  isFutureDateTimestampMs,
   parseStrictFiniteNumber,
   parseStrictNonNegativeInteger,
-  resolveExpiresAtMsFromDurationMs,
   resolveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/security-runtime";
@@ -44,7 +43,6 @@ import type {
   ZaloInboundMessage,
   ZaloSendOptions,
   ZaloSendHandoff,
-  ZaloSendResult,
   ZcaFriend,
   ZcaUserInfo,
 } from "./types.js";
@@ -169,7 +167,6 @@ function normalizeMessageContent(content: unknown): string {
 }
 
 function resolveInboundTimestamp(rawTs: unknown): number {
-  const fallbackTimestamp = () => asDateTimestampMs(Date.now()) ?? 0;
   const parsed =
     typeof rawTs === "number"
       ? rawTs
@@ -182,15 +179,15 @@ function resolveInboundTimestamp(rawTs: unknown): number {
     max: Number.MAX_SAFE_INTEGER,
   });
   if (timestamp === undefined) {
-    return fallbackTimestamp();
+    return Date.now();
   }
   if (timestamp > ZALO_TIMESTAMP_MS_THRESHOLD) {
-    return asDateTimestampMs(Math.trunc(timestamp)) ?? fallbackTimestamp();
+    return asDateTimestampMs(Math.trunc(timestamp)) ?? Date.now();
   }
   if (timestamp > MAX_SAFE_ZALO_TIMESTAMP_SECONDS) {
-    return fallbackTimestamp();
+    return Date.now();
   }
-  return asDateTimestampMs(Math.trunc(timestamp * 1000)) ?? fallbackTimestamp();
+  return asDateTimestampMs(Math.trunc(timestamp * 1000)) ?? Date.now();
 }
 
 function extractMentionIds(rawMentions: unknown): string[] {
@@ -440,7 +437,6 @@ async function withZaloApi<T>(
   operation: (api: API) => Promise<T>,
   options: {
     timeoutMs?: number;
-    shouldPersist?: (result: T) => boolean;
     credentialPersistence?: CredentialPersistenceMode;
     handoff?: ZaloSendHandoff;
   } = {},
@@ -454,7 +450,7 @@ async function withZaloApi<T>(
   const result = options.handoff
     ? await withZaloSendContext(options.handoff, () => operation(api))
     : await operation(api);
-  if (credentialPersistence === "persist" && (options.shouldPersist?.(result) ?? true)) {
+  if (credentialPersistence === "persist") {
     await credentials.persistApiCredentialsIfChanged(profile, api);
   }
   return result;
@@ -509,7 +505,7 @@ function readCachedGroupContext(profile: string, groupId: string): ZaloGroupCont
   if (!cached) {
     return null;
   }
-  if (!isFutureDateTimestampMs(cached.expiresAt)) {
+  if (cached.expiresAt <= Date.now()) {
     groupContextCache.delete(key);
     return null;
   }
@@ -521,7 +517,7 @@ function readCachedGroupContext(profile: string, groupId: string): ZaloGroupCont
 
 function trimGroupContextCache(now: number): void {
   for (const [key, value] of groupContextCache) {
-    if (isFutureDateTimestampMs(value.expiresAt, { nowMs: now })) {
+    if (value.expiresAt > now) {
       continue;
     }
     groupContextCache.delete(key);
@@ -535,13 +531,9 @@ function writeCachedGroupContext(profile: string, context: ZaloGroupContext): vo
   if (groupContextCache.has(key)) {
     groupContextCache.delete(key);
   }
-  const expiresAt = resolveExpiresAtMsFromDurationMs(GROUP_CONTEXT_CACHE_TTL_MS, { nowMs: now });
-  if (expiresAt === undefined) {
-    return;
-  }
   groupContextCache.set(key, {
     value: context,
-    expiresAt,
+    expiresAt: now + GROUP_CONTEXT_CACHE_TTL_MS,
   });
   trimGroupContextCache(now);
 }
@@ -848,21 +840,17 @@ export async function sendZaloTextMessage(
   threadId: string,
   text: string,
   options: ZaloSendOptions = {},
-  onDeliveryResult?: (result: ZaloSendResult) => Promise<void> | void,
-): Promise<ZaloSendResult> {
+  onDeliveryResult?: (result: ChannelMessageSendResult) => Promise<void> | void,
+): Promise<ChannelMessageSendResult> {
   const trimmedThreadId = threadId.trim();
   if (!trimmedThreadId) {
-    return {
-      ok: false,
-      error: "No threadId provided",
-      receipt: createZalouserSendReceipt({ threadId, kind: "unknown" }),
-    };
+    throw new Error("No threadId provided");
   }
 
   return await withZaloApi(
     options.profile,
     (api) => sendZaloTextWithApi(api, trimmedThreadId, text, options, onDeliveryResult),
-    { shouldPersist: (result) => result.ok, handoff: options },
+    { handoff: options },
   );
 }
 
@@ -880,31 +868,8 @@ export async function sendZaloTypingEvent(
   });
 }
 
-async function resolveOwnUserId(api: API): Promise<string> {
-  try {
-    const info = await api.fetchAccountInfo();
-    const resolved = toNumberId(normalizeAccountInfoUser(info)?.userId);
-    if (resolved) {
-      return resolved;
-    }
-  } catch {
-    // Fall back to getOwnId when account info shape changes.
-  }
-
-  try {
-    const ownId = toNumberId(api.getOwnId());
-    if (ownId) {
-      return ownId;
-    }
-  } catch {
-    // Ignore fallback probe failures and keep mention detection conservative.
-  }
-
-  return "";
-}
-
 export async function resolveZaloOwnUserId(profileInput?: string | null): Promise<string> {
-  return await withZaloApi(profileInput, resolveOwnUserId);
+  return await withZaloApi(profileInput, async (api) => toNumberId(api.getOwnId()));
 }
 
 export async function sendZaloReaction(params: {
@@ -915,33 +880,24 @@ export async function sendZaloReaction(params: {
   cliMsgId: string;
   emoji: string;
   remove?: boolean;
-}): Promise<{ ok: boolean; error?: string }> {
+}): Promise<void> {
   const threadId = params.threadId.trim();
   const msgId = toStringValue(params.msgId);
   const cliMsgId = toStringValue(params.cliMsgId);
   if (!threadId || !msgId || !cliMsgId) {
-    return { ok: false, error: "threadId, msgId, and cliMsgId are required" };
+    throw new Error("threadId, msgId, and cliMsgId are required");
   }
-  try {
-    return await withZaloApi(
-      params.profile,
-      async (api) => {
-        const type = params.isGroup ? ThreadType.Group : ThreadType.User;
-        const icon = params.remove
-          ? { rType: -1, source: 6, icon: "" }
-          : normalizeZaloReactionIcon(params.emoji);
-        await api.addReaction(icon, {
-          data: { msgId, cliMsgId },
-          threadId,
-          type,
-        });
-        return { ok: true };
-      },
-      { shouldPersist: (result) => result.ok },
-    );
-  } catch (error) {
-    return { ok: false, error: formatErrorMessage(error) };
-  }
+  await withZaloApi(params.profile, async (api) => {
+    const type = params.isGroup ? ThreadType.Group : ThreadType.User;
+    const icon = params.remove
+      ? { rType: -1, source: 6, icon: "" }
+      : normalizeZaloReactionIcon(params.emoji);
+    await api.addReaction(icon, {
+      data: { msgId, cliMsgId },
+      threadId,
+      type,
+    });
+  });
 }
 
 export async function sendZaloDeliveredEvent(params: {
@@ -970,54 +926,37 @@ export async function sendZaloLink(
   threadId: string,
   url: string,
   options: ZaloSendOptions = {},
-): Promise<ZaloSendResult> {
+): Promise<ChannelMessageSendResult> {
   const trimmedThreadId = threadId.trim();
   const trimmedUrl = url.trim();
   if (!trimmedThreadId) {
-    return {
-      ok: false,
-      error: "No threadId provided",
-      receipt: createZalouserSendReceipt({ threadId, kind: "unknown" }),
-    };
+    throw new Error("No threadId provided");
   }
   if (!trimmedUrl) {
-    return {
-      ok: false,
-      error: "No URL provided",
-      receipt: createZalouserSendReceipt({ threadId: trimmedThreadId, kind: "card" }),
-    };
+    throw new Error("No URL provided");
   }
 
-  try {
-    return await withZaloApi(
-      options.profile,
-      async (api) => {
-        const type = options.isGroup ? ThreadType.Group : ThreadType.User;
-        const response = await api.sendLink(
-          { link: trimmedUrl, msg: options.caption },
-          trimmedThreadId,
-          type,
-        );
-        const messageId = String(response.msgId);
-        return {
-          ok: true,
+  return await withZaloApi(
+    options.profile,
+    async (api) => {
+      const type = options.isGroup ? ThreadType.Group : ThreadType.User;
+      const response = await api.sendLink(
+        { link: trimmedUrl, msg: options.caption },
+        trimmedThreadId,
+        type,
+      );
+      const messageId = String(response.msgId);
+      return {
+        messageId,
+        receipt: createZalouserSendReceipt({
           messageId,
-          receipt: createZalouserSendReceipt({
-            messageId,
-            threadId: trimmedThreadId,
-            kind: "card",
-          }),
-        };
-      },
-      { shouldPersist: (result) => result.ok, handoff: options },
-    );
-  } catch (error) {
-    return {
-      ok: false,
-      error: formatErrorMessage(error),
-      receipt: createZalouserSendReceipt({ threadId: trimmedThreadId, kind: "card" }),
-    };
-  }
+          threadId: trimmedThreadId,
+          kind: "card",
+        }),
+      };
+    },
+    { handoff: options },
+  );
 }
 
 export async function startZaloQrLogin(params: {
@@ -1155,12 +1094,7 @@ export async function startZaloQrLogin(params: {
         assertCurrent();
         await login.beforeCredentialPersistence?.();
         assertCurrent();
-        await credentials.writeApiCredentials(
-          profile,
-          api,
-          assertCurrent,
-          capturedCredentials ?? undefined,
-        );
+        await credentials.writeApiCredentials(profile, api, assertCurrent, capturedCredentials);
         assertCurrent();
         invalidateApi(profile);
         apiByProfile.set(profile, api);

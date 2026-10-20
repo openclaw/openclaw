@@ -4,6 +4,7 @@ import { getReplySystemEventContext } from "../auto-reply/reply/system-event-ses
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import type { HeartbeatConfig } from "./heartbeat-config.js";
+import { bindHeartbeatReply, bindHeartbeatSend } from "./heartbeat-runner.boundary-test-support.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import {
   type HeartbeatReplySpy,
@@ -51,12 +52,13 @@ function routingFixture(
   const sendTelegram = vi
     .fn()
     .mockResolvedValue({ messageId: "delivered", chatId: "-100155462274" });
+  bindHeartbeatReply(replySpy);
+  bindHeartbeatSend("telegram", sendTelegram);
   const run = (opts: Omit<Parameters<typeof runHeartbeatOnce>[0], "cfg"> = {}) =>
     runHeartbeatOnce({
       cfg,
       agentId: "main",
       ...opts,
-      deps: { getReplyFromConfig: replySpy, telegram: sendTelegram, ...opts.deps },
     });
   return { cfg, storePath, replySpy, baseKey, isolatedKey, sendTelegram, run };
 }
@@ -79,5 +81,6 @@ export function formatQueuedEvents(
     isNewSession: false,
     events: event?.events ?? [],
     deferredEventIds: event?.deferredEventIds,
+    onEventsAdmitted: event?.onEventsAdmitted,
   });
 }

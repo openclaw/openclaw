@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { createSignal, flush } from "solid-js";
+import { flush } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayBrowserClient, GatewayRequestError } from "../api/gateway.ts";
@@ -7,7 +7,100 @@ import type { WizardNextResult } from "../api/types.ts";
 import * as uuid from "../lib/uuid.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
-import { WizardLogin, WizardLoginController } from "./wizard-login-controller.tsx";
+import {
+  createWizardLogin,
+  WizardLogin,
+  type WizardLoginState,
+} from "./wizard-login-controller.tsx";
+
+it("retires an active sign-in when its owner is removed without publishing during teardown", async () => {
+  const sessionId = "00000000-0000-4000-8000-000000000003";
+  const generateUUID = vi.spyOn(uuid, "generateUUID").mockReturnValue(sessionId);
+  const next = createDeferred<WizardNextResult>();
+  const nextRequested = createDeferred<AbortSignal>();
+  const cancellation = createDeferred<{ status: "cancelled" }>();
+  const cancelled = createDeferred();
+  const client = new GatewayBrowserClient({ url: "ws://gateway.example.test" });
+  let nextRequests = 0;
+  const request = vi
+    .spyOn(client, "request")
+    .mockImplementation(async (method, params, options) => {
+      if (method === "models.authLogin") {
+        return { sessionId, done: false, status: "running" };
+      }
+      if (method === "wizard.next") {
+        if (++nextRequests === 1) {
+          return {
+            done: false,
+            status: "running",
+            step: {
+              id: "credentials",
+              type: "progress",
+              executor: "gateway",
+              message: "Waiting for credentials",
+            },
+          };
+        }
+        nextRequested.resolve(expectDefined(options?.signal, "sign-in request signal"));
+        return await next.promise;
+      }
+      if (method === "wizard.cancel") {
+        expect(params).toEqual({ sessionId, closeInput: true });
+        cancelled.resolve();
+        return await cancellation.promise;
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+  const container = document.createElement("div");
+  document.body.append(container);
+  let signIn: Promise<unknown> | undefined;
+  const view = mountSolid(
+    () => {
+      const login = createWizardLogin({
+        getClient: () => client,
+        getAgentId: () => "main",
+        onClose: () => login.reset(),
+        requestFailedMessage: () => "failed",
+        sessionExpiredMessage: () => "expired",
+      });
+      return (
+        <>
+          <button
+            onClick={() => {
+              login.runner.prepareSignIn("secret", "provider");
+              signIn = login.runner.start("provider", "models.authLogin");
+            }}
+          >
+            Sign in
+          </button>
+          <WizardLogin controller={login} options={{ doneMessage: "Authentication saved" }} />
+        </>
+      );
+    },
+    { container },
+  );
+  try {
+    container.querySelector("button")!.click();
+    const signal = await nextRequested.promise;
+    flush();
+    expect(container.textContent).toContain("Waiting for credentials");
+    expect(() => view.unmount()).not.toThrow();
+    expect(signal.aborted).toBe(true);
+    await cancelled.promise;
+    next.resolve({ done: true, status: "done" });
+    cancellation.resolve({ status: "cancelled" });
+    await signIn;
+    flush();
+    expect(container.textContent).toBe("");
+  } finally {
+    next.resolve({ done: true, status: "cancelled" });
+    cancellation.resolve({ status: "cancelled" });
+    view.unmount();
+    container.remove();
+    request.mockRestore();
+    generateUUID.mockRestore();
+  }
+});
 
 it.each([
   ["mcp.authLogin", "terminal during status", "cancelled"],
@@ -94,23 +187,20 @@ it.each([
         ),
         `${label} control`,
       ).click();
-    const [revision, setRevision] = createSignal(0);
-    const host = { requestUpdate: () => setRevision((value) => value + 1) };
-    const controller = new WizardLoginController(host, {
-      getClient: () => client,
-      getAgentId: () => "main",
-      onClose: () => controller.reset(),
-      requestFailedMessage: () => "failed",
-      sessionExpiredMessage: () => "expired",
-    });
+    let controller!: WizardLoginState;
     const view = mountSolid(
-      () => (
-        <WizardLogin
-          controller={controller}
-          revision={revision}
-          options={{ doneMessage: "Authentication saved" }}
-        />
-      ),
+      () => {
+        controller = createWizardLogin({
+          getClient: () => client,
+          getAgentId: () => "main",
+          onClose: () => controller.reset(),
+          requestFailedMessage: () => "failed",
+          sessionExpiredMessage: () => "expired",
+        });
+        return (
+          <WizardLogin controller={controller} options={{ doneMessage: "Authentication saved" }} />
+        );
+      },
       { container },
     );
     const start = () => {

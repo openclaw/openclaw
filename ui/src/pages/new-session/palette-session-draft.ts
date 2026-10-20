@@ -1,18 +1,14 @@
 import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
+import { closeMenusWithin } from "../../components/solid/menu.tsx";
 import { t } from "../../i18n/index.ts";
 import { registerCommandPaletteEnglish } from "../../i18n/locales/en-command-palette.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
 import { showToast } from "../../lib/toast.ts";
-import {
-  SubscriptionsController,
-  type ControllerHost,
-} from "../../lit/subscriptions-controller.ts";
 import { resolveChatAttachmentLimits } from "../chat/components/chat-attachment-admission.ts";
 import type { ChatAttachmentControlsProps } from "../chat/components/chat-attachment-controls.types.ts";
-import "../../components/web-awesome-popover.ts";
 import "../../styles/new-session.css";
 import "../../styles/chat/composer.css";
 import {
@@ -20,12 +16,10 @@ import {
   handleChatAttachmentPaste,
 } from "../chat/components/chat-attachments.ts";
 import { ConnectMachineSetupState } from "./connect-machine-dialog.ts";
-import { NewSessionDraftController } from "./draft-controller.ts";
+import { NewSessionDraft } from "./draft.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { resolveNewSessionMentionDirectory } from "./mention-directory.ts";
-import { closeSessionMenus } from "./new-session-runtime.ts";
 import { PaletteSessionPreferences } from "./palette-session-preferences.ts";
-import { PaletteSessionSettings } from "./palette-session-settings.ts";
 import type { PaletteSessionPreference } from "./preferences.ts";
 import { captureSessionNoticeOwner, openSessionNoticeTarget } from "./session-notice-owner.ts";
 
@@ -33,28 +27,31 @@ registerCommandPaletteEnglish();
 
 /** Launcher-local prompt and selections; never binds the full page's durable draft or handoff. */
 export class PaletteSessionDraft {
-  private draft: NewSessionDraftController | undefined;
+  private draft: NewSessionDraft | undefined;
   private data: NewSessionRouteData | undefined;
   private presentationScope: ReturnType<typeof gatewayPresentationScope> | undefined;
   private agentPickerOpen = false;
   private readonly preferences: PaletteSessionPreferences;
-  private readonly settings: PaletteSessionSettings;
+  private closeSettings: (() => void) | undefined;
+  private readonly registerSettingsClose = (close: () => void) => {
+    this.closeSettings = close;
+    return () => {
+      this.closeSettings = undefined;
+    };
+  };
   private rejectedOpen: (() => void) | undefined;
   private coldSubmit: { readSignal?: AbortSignal } | undefined;
   private owner: { gateway: ApplicationContext["gateway"]; url: string; scope: string } | undefined;
   private readonly connectMachine: ConnectMachineSetupState;
-  private readonly subscriptions: SubscriptionsController;
   private static nextId = 0;
   private readonly idPrefix = `palette-session-${++PaletteSessionDraft.nextId}`;
 
   constructor(
-    private readonly host: Pick<
-      ControllerHost,
-      "addController" | "removeController" | "requestUpdate" | "updateComplete"
-    > &
-      Pick<HTMLElement, "isConnected" | "ownerDocument" | "querySelector" | "querySelectorAll">,
+    private readonly element: Pick<HTMLElement, "isConnected" | "ownerDocument" | "contains">,
     private readonly read: () => { context: ApplicationContext | undefined; open: boolean },
     private readonly callbacks: {
+      changed: () => void;
+      updateComplete: () => Promise<unknown>;
       onClose: () => void;
       onMessageChange?: (message: string) => void;
     },
@@ -62,25 +59,15 @@ export class PaletteSessionDraft {
     this.preferences = new PaletteSessionPreferences(
       () => ({ draft: this.draft, context: this.read().context }),
       (preference) => this.restoreSettings(preference),
-      () => host.requestUpdate(),
+      callbacks.changed,
     );
-    this.settings = new PaletteSessionSettings(host, this.idPrefix);
     this.connectMachine = new ConnectMachineSetupState(
       () => ({
         client: this.draft?.gateway.client ?? null,
         connected: this.draft?.gateway.connected ?? false,
       }),
-      () => host.requestUpdate(),
+      callbacks.changed,
     );
-    this.subscriptions = new SubscriptionsController(host)
-      .watchStore(() => this.draft && this.read().context?.agents)
-      .watchStore(() => this.draft && this.read().context?.agentIdentity)
-      .watchStore(() => this.draft && this.read().context?.sessions)
-      .watch(
-        () => this.draft && this.read().context?.config,
-        (config, notify) => config.subscribe(() => notify()),
-      );
-    host.addController(this);
   }
 
   get message(): string {
@@ -216,27 +203,24 @@ export class PaletteSessionDraft {
       startTerminal: false,
     };
     if (!this.draft) {
-      this.draft = new NewSessionDraftController(
-        this.host,
+      this.draft = new NewSessionDraft(
         () => ({
           context: this.read().context,
           data: this.data,
           // A closed launcher still owns its submitted transaction until acceptance or failure.
-          isConnected: this.host.isConnected,
+          isConnected: this.element.isConnected,
         }),
         {
-          requestUpdate: () => this.host.requestUpdate(),
+          changed: this.callbacks.changed,
+          updateComplete: this.callbacks.updateComplete,
           onMessageChange: (message) => this.callbacks.onMessageChange?.(message),
-          querySelector: (selector) => this.host.querySelector(selector),
-          activeElement: () => this.host.ownerDocument.activeElement,
-          body: () => this.host.ownerDocument.body,
-          pickerIdPrefix: this.idPrefix,
+          activeElement: () => this.element.ownerDocument.activeElement,
           preferenceScope: "palette",
           readPalettePreference: () => this.preferences.selection,
           closeTransientUi: () => {
             this.draft?.browser.close();
-            this.settings.close();
-            closeSessionMenus(this.host);
+            this.closeSettings?.();
+            closeMenusWithin(this.element);
           },
           onInvalidate: () => this.connectMachine.close(),
           onRecoveryReady: (url, scope) => this.bindOwner(url, scope),
@@ -245,14 +229,15 @@ export class PaletteSessionDraft {
         },
       );
     }
+    this.draft.connect();
     this.rejectedOpen = undefined;
     this.coldSubmit = undefined;
     this.draft.place.resetDraft();
     this.draft.submission.resetDraft();
-    this.draft.place.setAgentsHydrated(this.draft.agentsReady());
+    this.draft.place.agentsHydrated = this.draft.agentsReady();
     this.preferences.begin();
     this.draft.place.adoptAgentDefaults();
-    this.host.requestUpdate();
+    this.callbacks.changed();
   }
 
   close() {
@@ -271,10 +256,10 @@ export class PaletteSessionDraft {
     } else {
       submission?.attachmentDraft.reads.abortReads();
     }
-    this.settings.close();
+    this.closeSettings?.();
     this.draft?.browser.close();
     this.connectMachine.close();
-    closeSessionMenus(this.host);
+    closeMenusWithin(this.element);
   }
 
   async submit(): Promise<void> {
@@ -287,11 +272,16 @@ export class PaletteSessionDraft {
 
   submitCold(readSignal?: AbortSignal) {
     this.coldSubmit = { readSignal };
-    this.host.requestUpdate();
+    this.callbacks.changed();
   }
 
-  hostUpdate() {
+  connect() {
+    this.draft?.connect();
+  }
+
+  synchronize() {
     this.synchronizePresentationScope();
+    this.draft?.synchronize();
   }
 
   private synchronizePresentationScope() {
@@ -314,7 +304,7 @@ export class PaletteSessionDraft {
     this.callbacks.onMessageChange?.("");
   }
 
-  hostUpdated() {
+  settled() {
     const draft = this.draft;
     if (!draft) {
       return;
@@ -341,7 +331,7 @@ export class PaletteSessionDraft {
             .some((entry) => entry.state === "error"));
       if (failed || draft.gateway.placementPolicyReady) {
         this.coldSubmit = undefined;
-        this.host.requestUpdate();
+        this.callbacks.changed();
         if (!failed) {
           void this.submit();
         }
@@ -356,13 +346,8 @@ export class PaletteSessionDraft {
     }
   }
 
-  hostDisconnected() {
-    this.disconnect();
-  }
-
   disconnect() {
     this.close();
-    this.subscriptions.clear();
     this.draft?.disconnect();
   }
 
@@ -371,23 +356,27 @@ export class PaletteSessionDraft {
     if (!draft) {
       return undefined;
     }
-    return this.settings.view({
-      draft,
-      context: this.read().context,
-      preferences: this.preferences,
-      onAgentPickerOpen: (open) => {
-        this.agentPickerOpen = open;
-        this.host.requestUpdate();
+    return {
+      id: this.idPrefix,
+      registerClose: this.registerSettingsClose,
+      options: {
+        draft,
+        context: this.read().context,
+        preferences: this.preferences,
+        onAgentPickerOpen: (open: boolean) => {
+          this.agentPickerOpen = open;
+          this.callbacks.changed();
+        },
+        onChange: () => this.preferences.changed(),
+        onConnectMachine: () => {
+          if (draft.place.isAdmin()) {
+            this.closeSettings?.();
+            draft.browser.close();
+            this.connectMachine.start();
+          }
+        },
       },
-      onChange: () => this.preferences.changed(),
-      onConnectMachine: () => {
-        if (draft.place.isAdmin()) {
-          this.settings.close();
-          draft.browser.close();
-          this.connectMachine.start();
-        }
-      },
-    });
+    };
   }
 
   private restoreSettings(preference: PaletteSessionPreference | null) {
@@ -398,7 +387,7 @@ export class PaletteSessionDraft {
     const agentId = preference?.agentId ?? defaultAgent;
     this.data = { ...this.data, agentId, requestedAgentId: agentId };
     this.draft.place.resetDraft();
-    this.draft.place.setAgentsHydrated(this.draft.agentsReady());
+    this.draft.place.agentsHydrated = this.draft.agentsReady();
     this.draft.place.adoptAgentDefaults();
     this.draft.place.restorePreferenceSelections();
   }
@@ -466,7 +455,7 @@ export class PaletteSessionDraft {
     });
     if (result.initialRun.status === "rejected") {
       this.rejectedOpen = openSession;
-      this.host.requestUpdate();
+      this.callbacks.changed();
     } else {
       this.callbacks.onClose();
     }

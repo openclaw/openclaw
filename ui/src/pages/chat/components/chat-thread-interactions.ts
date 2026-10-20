@@ -1,30 +1,18 @@
-// Pane-local search, context menus, selection actions, and presentation resets.
-import { html, nothing, type TemplateResult } from "lit";
-import { ref } from "lit/directives/ref.js";
 import type { MessageReactionSummary } from "../../../../../packages/gateway-protocol/src/index.js";
 import type { ChatPendingInputsPage } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { ThemeBranding } from "../../../../../packages/gateway-protocol/src/theme.ts";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
-import type {
-  AgentsListResult,
-  GatewaySessionRow,
-  SessionsListResult,
-} from "../../../api/types.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../../../api/types.ts";
 import type { ApplicationContext } from "../../../app/context.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import type { BrowserTabSelection } from "../../../components/browser/browser-target.ts";
-import { copyMarkdownLabel, handleCopyButton } from "../../../components/copy-button.ts";
-import { icons } from "../../../components/icons.ts";
-import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
+import { copyMarkdownLabel, handleCopyButton } from "../../../components/copy-button-state.ts";
 import type { MarkdownFileLinkTarget } from "../../../components/markdown-file-links.ts";
-import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
 import type { SessionLinkTarget } from "../../../components/markdown-session-links.ts";
 import { releaseMarkdownTables } from "../../../components/markdown-tables.ts";
 import type { PersonActivityRouting } from "../../../components/person-activity-link.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
-import type { BoardProvider } from "../../../lib/board/provider.ts";
-import "../../../components/tooltip.ts";
 import type {
   ChatAttachment,
   ChatGuardianNotice,
@@ -32,58 +20,49 @@ import type {
   ChatSelectionSource,
   ChatStreamSegment,
 } from "../../../lib/chat/chat-types.ts";
-import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
-import type { UiSessionDefaultsHost } from "../../../lib/sessions/session-key.ts";
-import type { PresentationValue } from "../../../lit/presentation-binding.ts";
+import type { PresentationValue } from "../../../lib/presentation.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
+// Pane-local search, context menus, selection actions, and presentation resets.
 import type { TurnRecapWatch } from "../chat-progress.ts";
 import type { SubagentRoster } from "../chat-spawned-subagent.ts";
 import { resetChatThreadState } from "../chat-thread.ts";
-import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
+import type { ChatTranscriptMetadata } from "../chat-transcript-metadata.ts";
 import type { ChatTypingActorView, ChatTypingOverflow } from "../chat-typing-presence.ts";
-import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
-import type { ChatTranscriptMetadata } from "../session-message-cache.ts";
 import type { RealtimeTalkConversationEntry } from "../talk/conversation.ts";
 import type { CompactionStatus, RunOutputUsage } from "../tool-stream-contract.ts";
-import type { AsyncQuestionDraft, AsyncQuestionPresentation } from "./chat-async-question.types.ts";
+import type { createAsyncQuestionPresentation } from "./chat-async-question.ts";
+import type { ChatCommentPinsHandle } from "./chat-comment-pins.tsx";
 import { resolveChatContextCopy, usesNativeContextMenu } from "./chat-context-copy.ts";
-import type { ChatHistoryBoundaryProps } from "./chat-history-boundary.ts";
+import type { ChatHistoryBoundaryProps } from "./chat-history-boundary.tsx";
+import { getMessageActionElements } from "./chat-message-action-elements.ts";
+import type { MessageRenderOptions } from "./chat-message-bubble-options.ts";
 import {
   dismissConfirmedActionPopovers,
   isConfirmedActionPopoverFocused,
   openChatRewindConfirmation,
-} from "./chat-message-confirmation.ts";
+} from "./chat-message-confirmation-view.tsx";
 import type { MessageActionDetails, MessageReplyTarget } from "./chat-message-markdown.types.ts";
-import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
-import type { ChatSendStatusActions } from "./chat-message-send-status.ts";
+import type { ChatSendStatusActions } from "./chat-message-send-status-view.tsx";
 import type { ReplyMessageStatus } from "./chat-reply-preview.ts";
 import {
   handleChatSelectionPointerUp,
   isChatSelectionPopupFocused,
   removeChatSelectionPopup,
-} from "./chat-selection-popup.ts";
+} from "./chat-selection-popup.tsx";
 import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar-content-types.ts";
+import { mountThreadMenu, type ThreadMenuAction } from "./chat-thread-menu.tsx";
+import { TranscriptSearchState } from "./chat-transcript-search-state.ts";
+import type { ChatWelcomeIdentityProps } from "./chat-welcome.tsx";
 
 registerChatMessageMetadataEnglish();
 
-export type ChatThreadState = {
-  asyncQuestionDrafts: Map<string, AsyncQuestionDraft>;
-  asyncQuestionSessions?: Map<
-    string,
-    import("./chat-async-question-draft.ts").AsyncQuestionDraftSession
-  >;
-  asyncQuestionRevision: number;
-  asyncQuestionScope?: string;
-  asyncQuestionGeneration?: number;
-  asyncQuestionPresentation?: AsyncQuestionPresentation;
+export type ChatThreadState = Parameters<typeof createAsyncQuestionPresentation>[0] & {
+  threadElement?: HTMLElement;
+  commentPins?: ChatCommentPinsHandle;
   turnRecapWatch: TurnRecapWatch | null;
-  searchOpen: boolean;
-  searchQuery: string;
-  searchFocusPending: boolean;
-  searchReturnFocusTarget: HTMLElement | null;
-  searchReturnFocusOwner: HTMLElement | null;
+  search: TranscriptSearchState;
   transcriptRenderDependencies: readonly unknown[];
   transcriptRenderContext: {
-    onRequestUpdate?: () => void;
     turnVideoMessages?: ReadonlyMap<
       string,
       readonly import("./chat-turn-video-gallery.ts").TurnVideoMessage[]
@@ -91,11 +70,6 @@ export type ChatThreadState = {
     onSetReply?: (target: MessageReplyTarget) => void;
     onOpenReply?: (replyToId: string) => void;
     onAsyncQuestionDiscard?: (item: ChatQueueItem) => void;
-    onAsyncQuestionSubmit?: (
-      message: string,
-      itemId?: string,
-      sourceMessageId?: string,
-    ) => Promise<boolean>;
   };
 };
 
@@ -108,7 +82,19 @@ type ReplyMessageAccess = {
   open: (messageId: string) => void;
 };
 
-export type ChatThreadProps = ChatSendStatusActions &
+export type ChatThreadProps = Omit<
+  MessageRenderOptions,
+  | "onOpenReply"
+  | "replyNavigationId"
+  | "sessionKey"
+  | "presented"
+  | "agentId"
+  | "mediaPolicyKey"
+  | "getTurnVideoMessages"
+  | "onOpenWorkspaceFile"
+> &
+  ChatWelcomeIdentityProps &
+  ChatSendStatusActions &
   SubagentRoster & {
     applicationContext?: ApplicationContext;
     messageReactions?: ReadonlyMap<string, MessageReactionSummary[]>;
@@ -125,8 +111,6 @@ export type ChatThreadProps = ChatSendStatusActions &
     gatewayClient?: GatewayBrowserClient | null;
     selectedSession: GatewaySessionRow | undefined;
     transcriptMetadata?: ChatTranscriptMetadata;
-    boardProvider?: BoardProvider;
-    widgetLayout?: import("../session-message-cache.ts").ChatWidgetLayout;
     announceTranscript?: boolean;
     loading: boolean;
     routeLoadingSkeleton?: boolean;
@@ -150,47 +134,27 @@ export type ChatThreadProps = ChatSendStatusActions &
     showThinking: boolean;
     showToolCalls: boolean;
     persistCommentary?: boolean;
-    runActive?: boolean;
     runWorking?: boolean;
+    runFinalizing?: boolean;
     startupLabel?: string;
     retryAt?: number;
     onRetryRun?: (runId: string) => void;
-    onChangeFailureModel?: (runId: string) => void;
     failureActionsRunId?: string;
     waitingApproval?: boolean;
     questionPrompts?: readonly QuestionPrompt[];
-    asyncQuestions?: AsyncQuestionPresentation;
     sessions: SessionsListResult | null;
-    /** Host context resolving global-alias session keys (scope=global fleets). */
-    sessionHost?: UiSessionDefaultsHost | null;
-    assistantName: string;
-    assistantAvatar: string | null;
     senderAgentAvatars?: ReadonlyMap<string, string | null>;
-    agents?: AgentsListResult["agents"];
     /** Configured main-session key; an agent's main source labels as the agent. */
     mainKey?: string;
-    currentAgentId?: string;
-    assistantAvatarUrl?: string | null;
     userId?: string | null;
     userName?: string | null;
     userAvatar?: string | null;
     channelAvatar?: import("../../../lib/chat/channel-sender-avatar.ts").ChannelSenderAvatarSource;
     basePath?: string;
     sessionPublicOrigin?: string;
-    resourceBasePath?: string;
     fullMessageAgentId?: string;
     loadFullAssistantMessage?: SidebarFullMessageLoader | null;
     mediaPolicyEpoch?: number;
-    connectionEpoch?: number;
-    assistantAttachmentAuthToken?: string | null;
-    resolveArtifactDownload?: ArtifactDownloadResolver;
-    canvasPluginSurfaceUrl?: string | null;
-    embedSandboxMode?: EmbedSandboxMode;
-    allowExternalEmbedUrls?: boolean;
-    fetchLinkFavicon?: LinkFaviconFetcher;
-    pluginToolIcons?: PluginToolIcons;
-    githubRepo?: MarkdownRenderOptions["githubRepo"];
-    githubRepositories?: MarkdownRenderOptions["githubRepositories"];
     autoExpandToolCalls?: boolean;
     realtimeTalkConversation?: RealtimeTalkConversationEntry[];
     typingActors?: readonly ChatTypingActorView[];
@@ -199,15 +163,10 @@ export type ChatThreadProps = ChatSendStatusActions &
     onOpenWorkspaceFile?: (target: MarkdownFileLinkTarget) => void;
     onOpenSessionLink?: (target: SessionLinkTarget) => void;
     onNavigate?: (routeId: "cron", options: { search: string }) => void;
-    onRequestOpenImage?: () => number;
-    onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
-    onAssistantAttachmentLoaded?: () => void;
-    onRequestUpdate?: () => void;
     onChatScroll?: (event: Event) => void;
     onHistoryIntent?: (event: Event) => void;
-    onDraftChange: (next: string) => void;
-    onSend: () => void;
-    onPermissionRetry?: (message: string) => void;
+    onHistorySentinelRef?: (element: HTMLElement) => void | (() => void);
+    onTranscriptAnnouncementRef?: (element: HTMLElement) => void | (() => void);
     onSetReply?: (target: MessageReplyTarget) => void;
     replyMessageAccess?: ReplyMessageAccess;
     onRewindMessage?: (entryId: string) => Promise<boolean> | boolean;
@@ -217,13 +176,10 @@ export type ChatThreadProps = ChatSendStatusActions &
     commentsDisabled?: boolean;
     onAddToChat?: (selection: ChatSelectionSource, anchorRect: DOMRect) => void;
     onCompanionSelection?: (selection: ChatSelectionSource, anchorRect: DOMRect) => void;
-    onOpenSession?: (sessionKey: string) => void;
     /** Shows one of the session's subagents. */
     onOpenSubagent?: (sessionKey: string) => void;
     /** Shows the session's subagents; absent where the pane has no list of them to show. */
     onOpenSubagents?: (focus?: boolean) => void;
-    modelSetupRequired?: boolean;
-    onModelSetup?: () => void;
   };
 
 type TranscriptInteractionProps = Pick<
@@ -240,13 +196,6 @@ type TranscriptInteractionProps = Pick<
 >;
 
 const transcriptStates = new Map<string, ChatThreadState>();
-const transcriptSearchDefaults = {
-  searchOpen: false,
-  searchQuery: "",
-  searchFocusPending: false,
-  searchReturnFocusTarget: null,
-  searchReturnFocusOwner: null,
-};
 
 export function getTranscriptState(paneId: string): ChatThreadState {
   const existing = transcriptStates.get(paneId);
@@ -257,12 +206,22 @@ export function getTranscriptState(paneId: string): ChatThreadState {
     asyncQuestionDrafts: new Map(),
     asyncQuestionRevision: 0,
     turnRecapWatch: null,
-    ...transcriptSearchDefaults,
+    search: new TranscriptSearchState(),
     transcriptRenderDependencies: [],
     transcriptRenderContext: {},
   };
   transcriptStates.set(paneId, state);
   return state;
+}
+
+export function registerTranscriptElement(paneId: string, element: HTMLElement): () => void {
+  const state = getTranscriptState(paneId);
+  state.threadElement = element;
+  return () => {
+    if (state.threadElement === element) {
+      state.threadElement = undefined;
+    }
+  };
 }
 
 export function isThreadPresentationFocused(paneId: string, owner: HTMLElement): boolean {
@@ -290,14 +249,16 @@ export function dismissThreadPortals(paneId?: string, owner?: ParentNode): void 
 export function resetTranscriptSession(paneId: string, owner?: ParentNode): void {
   dismissThreadPortals(paneId, owner);
   // Retained panes keep their DOM, so their native table modals need explicit retirement.
-  owner?.querySelectorAll<HTMLElement>(".chat-thread").forEach(releaseMarkdownTables);
   const state = transcriptStates.get(paneId);
+  if (state?.threadElement) {
+    releaseMarkdownTables(state.threadElement);
+  }
   if (state) {
     state.asyncQuestionDrafts = new Map();
     // Parked rows must commit fresh bindings on return even when visible props match.
     state.transcriptRenderDependencies = [];
     // Search input belongs to the outgoing transcript; pane preferences survive.
-    Object.assign(state, transcriptSearchDefaults);
+    state.search.reset();
   }
 }
 
@@ -320,111 +281,20 @@ export function resetThreadPresentation(paneId?: string, owner?: ParentNode) {
   resetChatThreadState(paneId);
 }
 
-export function renderTranscriptSearch(
-  paneId: string,
-  requestUpdate: () => void,
-): TemplateResult | typeof nothing {
-  const state = getTranscriptState(paneId);
-  if (!state.searchOpen) {
-    return nothing;
-  }
-  return html`
-    <div
-      class="agent-chat__search-bar"
-      @keydown=${(event: KeyboardEvent) => {
-        if (
-          event.key !== "Escape" ||
-          event.defaultPrevented ||
-          event.isComposing ||
-          event.keyCode === 229
-        ) {
-          return;
-        }
-        event.preventDefault();
-        event.stopPropagation();
-        closeTranscriptSearch(state, requestUpdate);
-      }}
-    >
-      ${icons.search}
-      <input
-        type="text"
-        placeholder=${t("chat.thread.searchPlaceholder")}
-        aria-label=${t("chat.thread.search")}
-        .value=${state.searchQuery}
-        ${
-          state.searchFocusPending
-            ? ref((element) => {
-                if (element instanceof HTMLInputElement) {
-                  state.searchFocusPending = false;
-                  queueMicrotask(() => {
-                    if (element.isConnected) {
-                      element.focus({ preventScroll: true });
-                    }
-                  });
-                }
-              })
-            : nothing
-        }
-        @input=${(event: Event) => {
-          state.searchQuery = (event.target as HTMLInputElement).value;
-          requestUpdate();
-        }}
-      />
-      <openclaw-tooltip .content=${t("chat.thread.closeSearch")}>
-        <button
-          class="btn btn--ghost"
-          aria-label=${t("chat.thread.closeSearch")}
-          @click=${() => closeTranscriptSearch(state, requestUpdate)}
-        >
-          ${icons.x}
-        </button>
-      </openclaw-tooltip>
-    </div>
-  `;
-}
-
-export function closeTranscriptSearch(state: ChatThreadState, requestUpdate: () => void): void {
-  const returnFocusTarget = state.searchReturnFocusTarget;
-  const returnFocusOwner = state.searchReturnFocusOwner;
-  Object.assign(state, transcriptSearchDefaults);
-  requestUpdate();
-  queueMicrotask(() => {
-    const target = returnFocusTarget?.isConnected
-      ? returnFocusTarget
-      : returnFocusOwner?.querySelector<HTMLTextAreaElement>(
-          ".agent-chat__composer-combobox > textarea",
-        );
-    target?.focus({ preventScroll: true });
-  });
-}
-
 /** Toggles transcript search and retains the shortcut origin for focus restoration. */
 export function toggleTranscriptSearch(
   paneId: string,
-  requestUpdate: () => void,
   triggerEvent?: Event,
+  restoreFocus?: () => void,
 ): void {
-  const state = getTranscriptState(paneId);
-  if (state.searchOpen) {
-    closeTranscriptSearch(state, requestUpdate);
-    return;
-  }
-
-  state.searchOpen = true;
-  state.searchFocusPending = true;
-  const returnFocusTarget = triggerEvent?.target;
-  const returnFocusOwner = triggerEvent?.currentTarget;
-  const connectedElement = (target: EventTarget | null | undefined) =>
-    target instanceof HTMLElement && target.isConnected ? target : null;
-  state.searchReturnFocusTarget = connectedElement(returnFocusTarget);
-  state.searchReturnFocusOwner = connectedElement(returnFocusOwner);
-  requestUpdate();
+  getTranscriptState(paneId).search.toggle(triggerEvent, restoreFocus);
 }
 
 let activeReplyContextMenu: {
   element: HTMLElement;
   paneId: string;
   listeners: AbortController;
+  dispose: () => void;
 } | null = null;
 
 function removeReplyContextMenu(paneId?: string) {
@@ -432,20 +302,17 @@ function removeReplyContextMenu(paneId?: string) {
   if (paneId && paneId !== owner?.paneId) {
     return;
   }
+  activeReplyContextMenu = null;
   if (owner) {
     dismissConfirmedActionPopovers(owner.element);
-    owner.element.remove();
+    owner.listeners.abort();
+    owner.dispose();
   }
-  activeReplyContextMenu = null;
-  const fallbackMenu = document.querySelector<HTMLElement>(".chat-reply-context-menu");
-  if (fallbackMenu) {
-    dismissConfirmedActionPopovers(fallbackMenu);
-    fallbackMenu.remove();
-  }
-  owner?.listeners.abort();
 }
 
-function toggleTouchMessageMeta(event: PointerEvent): void {
+const revealedMessages = new WeakMap<HTMLElement, { group: HTMLElement; bubble: Element | null }>();
+
+function toggleTouchMessageMeta(event: PointerEvent, messageElements: Iterable<HTMLElement>): void {
   const transcript = event.currentTarget;
   const target = event.target;
   if (
@@ -472,28 +339,36 @@ function toggleTouchMessageMeta(event: PointerEvent): void {
   const bubble = group.classList.contains("chat-group--peer")
     ? (target.closest(".chat-bubble") ??
       // Tapping beside an image must reveal its actions without opening the image.
-      [...group.querySelectorAll(".chat-bubble")].find((candidate) => {
+      [...messageElements].find((candidate) => {
+        if (!group.contains(candidate)) {
+          return false;
+        }
         const bounds = candidate.getBoundingClientRect();
         return event.clientY >= bounds.top && event.clientY <= bounds.bottom;
-      }))
+      }) ??
+      null)
     : null;
   const reveal = bubble
     ? !bubble.classList.contains("chat-bubble--actions-revealed")
     : !group.classList.contains("chat-group--meta-revealed");
-  for (const revealed of transcript.querySelectorAll(".chat-group--meta-revealed")) {
-    revealed.classList.remove("chat-group--meta-revealed");
-  }
+  const previous = revealedMessages.get(transcript);
+  previous?.group.classList.remove("chat-group--meta-revealed");
+  previous?.bubble?.classList.remove("chat-bubble--actions-revealed");
   group.classList.toggle("chat-group--meta-revealed", reveal);
-  for (const revealed of transcript.querySelectorAll(".chat-bubble--actions-revealed")) {
-    revealed.classList.remove("chat-bubble--actions-revealed");
-  }
+  bubble?.classList.toggle("chat-bubble--actions-revealed", reveal);
   if (reveal) {
-    bubble?.classList.add("chat-bubble--actions-revealed");
+    revealedMessages.set(transcript, { group, bubble });
+  } else {
+    revealedMessages.delete(transcript);
   }
 }
 
-export function handleTranscriptPointerUp(event: PointerEvent, props: TranscriptInteractionProps) {
-  toggleTouchMessageMeta(event);
+export function handleTranscriptPointerUp(
+  event: PointerEvent,
+  props: TranscriptInteractionProps,
+  messageElements: Iterable<HTMLElement> = [],
+) {
+  toggleTouchMessageMeta(event, messageElements);
   if (event.button !== 0 || event.ctrlKey || typeof props.onCompanionSelection !== "function") {
     return;
   }
@@ -516,7 +391,11 @@ function selectionIntersectsElement(selection: Selection | null, element: Elemen
   return false;
 }
 
-export function handleTranscriptContextMenu(event: MouseEvent, props: TranscriptInteractionProps) {
+export function handleTranscriptContextMenu(
+  event: MouseEvent,
+  props: TranscriptInteractionProps,
+  messageElements: Iterable<HTMLElement> = [],
+) {
   if (event.defaultPrevented || usesNativeContextMenu(event.composedPath())) {
     return;
   }
@@ -528,7 +407,14 @@ export function handleTranscriptContextMenu(event: MouseEvent, props: Transcript
     ".chat-bubble",
   );
   const group = bubble?.closest<HTMLElement>(".chat-group");
-  if (group?.querySelector(".chat-reading-indicator, .chat-bubble.streaming")) {
+  if (
+    group?.dataset.chatStreaming === "true" ||
+    bubble?.classList.contains("streaming") ||
+    (group &&
+      [...messageElements].some(
+        (element) => group.contains(element) && element.classList.contains("streaming"),
+      ))
+  ) {
     return;
   }
   const contentCopy = resolveChatContextCopy(target);
@@ -543,11 +429,9 @@ export function handleTranscriptContextMenu(event: MouseEvent, props: Transcript
   const isUserMessage = group?.classList.contains("user") && Boolean(entryId);
   // Grouped rows can contain several bubbles. Match the clicked bubble to its
   // own action owner so copy never targets a sibling message.
-  const actionOwner = [
-    ...(group?.querySelectorAll<HTMLElement>("[data-message-actions-for]") ?? []),
-  ].find((element) => element.dataset.messageActionsFor === messageId);
-  const copyButton = actionOwner?.querySelector<HTMLButtonElement>(".chat-copy-btn");
-  const readAloudButton = actionOwner?.querySelector<HTMLButtonElement>(".chat-read-aloud-btn");
+  const actionOwner = group && getMessageActionElements(group, messageId);
+  const copyButton = actionOwner?.copy;
+  const readAloudButton = actionOwner?.readAloud;
   const ownsRunFrame = group?.dataset.chatRowKey?.startsWith("agent-run:") === true;
   const canReply = Boolean(replyTarget && props.onSetReply && (!ownsRunFrame || actionOwner));
   const canRewind = isUserMessage && typeof props.onRewindMessage === "function";
@@ -561,48 +445,16 @@ export function handleTranscriptContextMenu(event: MouseEvent, props: Transcript
   event.preventDefault();
   event.stopPropagation();
   removeReplyContextMenu();
-  const menu = document.createElement("div");
-  menu.className = "chat-reply-context-menu";
-  menu.setAttribute("role", "menu");
-  menu.setAttribute("aria-label", t("chat.messages.actions"));
-  menu.style.left = `${event.clientX}px`;
-  menu.style.top = `${event.clientY}px`;
-  const focusCandidates: HTMLButtonElement[] = [];
-  const appendAction = (params: {
-    label: string;
-    disabled?: boolean;
-    tooltip: string;
-    className?: string;
-    onClick: (event: Event) => void;
-  }) => {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.disabled = params.disabled ?? false;
-    button.setAttribute("role", "menuitem");
-    button.addEventListener("click", params.onClick);
-    const label = document.createElement("span");
-    label.dataset.copyLabel = "";
-    label.textContent = params.label;
-    button.append(label);
-    const tooltip = document.createElement("openclaw-tooltip");
-    tooltip.content = params.tooltip;
-    tooltip.append(button);
-    if (params.className) {
-      tooltip.className = params.className;
-    }
-    menu.append(tooltip);
-    focusCandidates.push(button);
-    return button;
-  };
+  const actions: ThreadMenuAction[] = [];
   const appendCopyAction = (label: string, text: string) => {
     if (!text) {
       return;
     }
-    appendAction({
+    actions.push({
       label,
       tooltip: label,
-      onClick: (copyEvent) => {
-        void handleCopyButton(copyEvent, text, label).then((copied) => {
+      onClick: (copyEvent, labelElement) => {
+        void handleCopyButton(copyEvent, text, label, { label: labelElement }).then((copied) => {
           if (copied && activeReplyContextMenu?.element === menu) {
             removeReplyContextMenu(props.paneId);
           }
@@ -617,28 +469,26 @@ export function handleTranscriptContextMenu(event: MouseEvent, props: Transcript
     appendCopyAction(contentCopy.label, contentCopy.text);
   }
   if (canReply && replyTarget) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.setAttribute("role", "menuitem");
-    button.setAttribute("aria-label", t("chat.messages.replyToMessage"));
-    button.textContent = t("chat.messages.reply");
-    button.addEventListener("click", () => {
-      props.onSetReply?.(replyTarget);
-      removeReplyContextMenu();
-      props.onFocusComposer?.();
+    actions.push({
+      label: t("chat.messages.reply"),
+      ariaLabel: t("chat.messages.replyToMessage"),
+      onClick: () => {
+        props.onSetReply?.(replyTarget);
+        removeReplyContextMenu();
+        props.onFocusComposer?.();
+      },
     });
-    menu.append(button);
-    focusCandidates.push(button);
   }
   const working = Boolean(props.runActive || props.runWorking);
   if (canRewind) {
-    const button = appendAction({
+    actions.push({
       label: t("chat.messages.rewindToHere"),
       disabled: working,
       tooltip: working ? t("chat.messages.rewindUnavailable") : t("chat.messages.rewindToHere"),
       className: "chat-confirm-wrap chat-rewind-wrap",
-      onClick: () => {
-        openChatRewindConfirmation(button, () => {
+      onClick: (rewindEvent) => {
+        // SAFETY: Menu actions bind directly to their native button.
+        openChatRewindConfirmation(rewindEvent.currentTarget as HTMLButtonElement, () => {
           removeReplyContextMenu();
           void Promise.resolve(props.onRewindMessage?.(entryId)).then((rewound) => {
             if (rewound) {
@@ -652,7 +502,7 @@ export function handleTranscriptContextMenu(event: MouseEvent, props: Transcript
   if (copyMarkdown && !copyButton) {
     appendCopyAction(copyMarkdownLabel(), copyMarkdown);
   } else if (copyButton) {
-    appendAction({
+    actions.push({
       label: copyMarkdownLabel(),
       tooltip: copyMarkdownLabel(),
       onClick: () => {
@@ -663,7 +513,7 @@ export function handleTranscriptContextMenu(event: MouseEvent, props: Transcript
   }
   if (readAloudButton) {
     const label = readAloudButton.getAttribute("aria-label") ?? t("chat.messages.readAloud");
-    appendAction({
+    actions.push({
       label,
       tooltip: label,
       onClick: () => {
@@ -673,7 +523,7 @@ export function handleTranscriptContextMenu(event: MouseEvent, props: Transcript
     });
   }
   if (canFork) {
-    appendAction({
+    actions.push({
       label: t("chat.messages.forkFromHere"),
       disabled: working,
       tooltip: working ? t("chat.messages.forkUnavailable") : t("chat.messages.forkFromHere"),
@@ -685,8 +535,15 @@ export function handleTranscriptContextMenu(event: MouseEvent, props: Transcript
   }
   // Expanded tables live in a native modal. Its context menu must stay inside
   // that top layer, otherwise the browser makes the body portal inert.
-  (target.closest("openclaw-modal-dialog, dialog") ?? document.body).appendChild(menu);
-  const owner = { element: menu, paneId: props.paneId, listeners: new AbortController() };
+  const mounted = mountThreadMenu(
+    actions,
+    target.closest("openclaw-modal-dialog, dialog") ?? document.body,
+    event.clientX,
+    event.clientY,
+  );
+  const menu = mounted.element;
+  const { dispose } = mounted;
+  const owner = { element: menu, paneId: props.paneId, listeners: new AbortController(), dispose };
   activeReplyContextMenu = owner;
 
   const menuRect = menu.getBoundingClientRect();
@@ -700,7 +557,7 @@ export function handleTranscriptContextMenu(event: MouseEvent, props: Transcript
   }
   menu.style.left = `${Math.max(0, left)}px`;
   menu.style.top = `${Math.max(0, top)}px`;
-  focusCandidates.find((button) => !button.disabled)?.focus();
+  mounted.firstButton?.focus();
   requestAnimationFrame(() => {
     if (!menu.isConnected || activeReplyContextMenu !== owner) {
       return;
@@ -719,9 +576,9 @@ export function handleTranscriptContextMenu(event: MouseEvent, props: Transcript
       }
     };
     const { signal } = owner.listeners;
-    document.addEventListener("click", handleOutsideEvent, { signal });
+    listen(document, "click", handleOutsideEvent, { signal });
     // Capture closes this owner even when the next menu stops event propagation.
-    document.addEventListener("contextmenu", handleOutsideEvent, { capture: true, signal });
-    document.addEventListener("keydown", handleKeydown, { signal });
+    listen(document, "contextmenu", handleOutsideEvent, { capture: true, signal });
+    listen(document, "keydown", handleKeydown, { signal });
   });
 }

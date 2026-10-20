@@ -36,7 +36,9 @@ export function registerServiceCollectionTests() {
           pids: new Set([process.pid, process.ppid, 1]),
           complete: true,
         });
-        vi.spyOn(maintenance, "prepareSystemdGatewayMaintenance").mockResolvedValue(false);
+        vi.spyOn(maintenance, "prepareSystemdGatewayMaintenance").mockResolvedValue({
+          kind: "unchanged",
+        });
         vi.spyOn(drain, "withGatewayMaintenanceDrain").mockImplementation(
           async ({ assertCurrent }, stop) =>
             stop({

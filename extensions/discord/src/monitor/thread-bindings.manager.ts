@@ -15,6 +15,7 @@ import {
   normalizeOptionalStringifiedId,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { registerSessionBindingAdapterV2 } from "openclaw/plugin-sdk/thread-bindings-runtime";
+import { warnPluginSdkDeprecation } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 import { createDiscordRestClient } from "../client.js";
 import { getChannel } from "../internal/discord.js";
 import {
@@ -309,6 +310,11 @@ function createLoadedThreadBindingManager(
     listBindings: () =>
       [...BINDINGS_BY_THREAD_ID.values()].filter((entry) => entry.accountId === accountId),
     touchThreadSync: (input) => {
+      warnPluginSdkDeprecation({
+        family: "conversation-bindings",
+        method: "ThreadBindingManager.touchThreadSync",
+        replacement: "ThreadBindingManager.touchThread",
+      });
       assertManagerCurrent();
       if (stopping) {
         throw new Error("Discord thread binding manager is stopping");

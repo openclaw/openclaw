@@ -114,7 +114,7 @@ describe("resolveSidebarSessionSubtitle", () => {
         attention: { kind: "approval", requests: [] },
         agentStatusNote: "Waiting for deployment",
       }),
-    ).toBe("Waiting for approval");
+    ).toBeUndefined();
   });
 
   it("hides error details and ambient text when previews are hidden", () => {

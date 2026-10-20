@@ -246,7 +246,11 @@ export async function listBrowserTabs(client: BrowserRequestClient) {
   const tabs = Array.isArray(result?.tabs)
     ? result.tabs.flatMap((tab) => normalizeTab(tab) ?? [])
     : [];
-  return { running: result?.running === true, tabs };
+  return {
+    running: result?.running === true,
+    tabs,
+    canAutoResizeViewport: result?.canAutoResizeViewport === true,
+  };
 }
 
 export async function startBrowser(client: BrowserRequestClient): Promise<void> {
@@ -304,21 +308,15 @@ export async function downloadBrowserDocument(
 export async function navigateBrowser(
   client: BrowserRequestClient,
   params: { url: string; targetId?: string },
-): Promise<{ targetId: string; url: string }> {
-  const result = asRecord(
-    await browserRequest(client, { method: "POST", path: "/navigate", body: params }),
-  );
-  return {
-    targetId: stringOrEmpty(result?.targetId) || params.targetId || "",
-    url: stringOrEmpty(result?.url) || params.url,
-  };
+): Promise<void> {
+  await browserRequest(client, { method: "POST", path: "/navigate", body: params });
 }
 
 export async function requestBrowserScreencast(
   client: BrowserRequestClient,
   params: { targetId: string; maxWidth: number; maxHeight: number },
   options?: GatewayClientRequestOptions,
-): Promise<{ token: string; wsPath: string; targetId: string; url: string }> {
+): Promise<string> {
   const result = asRecord(
     await browserRequest(client, { method: "POST", path: "/screencast", body: params }, options),
   );
@@ -327,12 +325,7 @@ export async function requestBrowserScreencast(
   if (!token || !wsPath) {
     throw new Error("browser screencast response is malformed");
   }
-  return {
-    token,
-    wsPath,
-    targetId: stringOrEmpty(result?.targetId),
-    url: stringOrEmpty(result?.url),
-  };
+  return wsPath;
 }
 
 export function isBrowserScreencastUnsupportedError(error: unknown): boolean {
@@ -359,7 +352,6 @@ export async function captureBrowserScreenshot(client: BrowserRequestClient, tar
   }
   return {
     path,
-    targetId: stringOrEmpty(result?.targetId) || targetId,
     url: stringOrEmpty(result?.url),
   };
 }
@@ -450,11 +442,15 @@ export async function scrollBrowserBy(
   const scrolls = (value) => value === "auto" || value === "scroll" || value === "overlay";
   const canScroll = (el) => {
     const style = getComputedStyle(el);
+    const flexDirection = style.display.endsWith("flex") ? style.flexDirection : "";
+    const maxY = el.scrollHeight - el.clientHeight;
+    const reversedY = flexDirection === "column-reverse";
     const y = dy !== 0 && scrolls(style.overflowY) &&
-      (dy > 0 ? el.scrollTop + el.clientHeight < el.scrollHeight : el.scrollTop > 0);
+      (dy > 0 ? el.scrollTop < (reversedY ? 0 : maxY) : el.scrollTop > (reversedY ? -maxY : 0));
     const maxX = el.scrollWidth - el.clientWidth;
-    const minLeft = style.direction === "rtl" ? -maxX : 0;
-    const maxLeft = style.direction === "rtl" ? 0 : maxX;
+    const reversedX = (style.direction === "rtl") !== (flexDirection === "row-reverse");
+    const minLeft = reversedX ? -maxX : 0;
+    const maxLeft = reversedX ? 0 : maxX;
     const x = dx !== 0 && scrolls(style.overflowX) &&
       (dx > 0 ? el.scrollLeft < maxLeft : el.scrollLeft > minLeft);
     return x || y;

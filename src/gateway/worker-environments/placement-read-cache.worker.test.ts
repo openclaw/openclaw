@@ -43,11 +43,29 @@ describe("worker placement read cache", () => {
     expect(await writer.readRecoveryCandidates()).toEqual([]);
     expect(recoveryReadCount()).toBe(1);
 
-    const remote = await writer.startDispatch({
-      sessionId: "recovery-remote",
+    const local = {
+      sessionId: "recovery-local",
       agentId: "main",
-      sessionKey: "agent:main:recovery-remote",
+      sessionKey: "agent:main:recovery-local",
+    };
+    const claim = await writer.claimTurn({
+      ...local,
+      owner: { kind: "local" },
+      claimId: "local-claim",
+      runId: "local-run",
     });
+    expect(await reader.readRecoveryCandidates()).toEqual([]);
+    await writer.releaseTurnIfOwned(claim);
+    expect(await reader.readRecoveryCandidates()).toEqual([]);
+    await writer.retireSessionPlacementAsync({
+      sessionId: local.sessionId,
+      expectedState: "local",
+      expectedGeneration: claim.placementGeneration,
+    });
+    expect(await reader.readRecoveryCandidates()).toEqual([]);
+    expect(recoveryReadCount()).toBe(1);
+
+    const remote = await writer.startDispatch(local);
     const expected = [{ sessionId: remote.sessionId, environmentId: null, state: "requested" }];
     expect(await reader.readRecoveryCandidates()).toEqual(expected);
     expect(await reader.readRecoveryCandidates()).toEqual(expected);
@@ -211,13 +229,31 @@ describe("worker placement read cache", () => {
       });
       const claimed = await reader.readProjection([identity.sessionId]);
       expect(claimed.placements.get(identity.sessionId)?.turnClaim?.claimId).toBe("claim");
+      // Borrowed owner facts reject both placement and nested claim mutation.
+      const warm = await reader.readProjection([identity.sessionId]);
+      expect(Reflect.set(warm.placements.get(identity.sessionId)!, "state", "requested")).toBe(
+        false,
+      );
+      expect(
+        Reflect.set(
+          warm.placements.get(identity.sessionId)!.turnClaim!,
+          "claimId",
+          "caller-change",
+        ),
+      ).toBe(false);
+      expect(
+        (await writer.readProjection([identity.sessionId])).placements.get(identity.sessionId),
+      ).toMatchObject({ state: "local", turnClaim: { claimId: "claim" } });
       await writer.releaseTurnIfOwned(claim);
       expect(
         (await reader.readProjection([identity.sessionId])).placements.get(identity.sessionId),
       ).toMatchObject({ state: "local", turnClaim: null });
       expect(reads).toHaveBeenCalledTimes(preloaded ? 0 : 1);
-      // Returned snapshots cannot mutate the next reader's facts.
-      claimed.placements.get(identity.sessionId)!.state = "requested";
+      // A committed replacement leaves the earlier snapshot intact.
+      expect(claimed.placements.get(identity.sessionId)?.turnClaim?.claimId).toBe("claim");
+      expect(Reflect.set(claimed.placements.get(identity.sessionId)!, "state", "requested")).toBe(
+        false,
+      );
       expect(
         (await reader.readProjection([identity.sessionId])).placements.get(identity.sessionId)
           ?.state,

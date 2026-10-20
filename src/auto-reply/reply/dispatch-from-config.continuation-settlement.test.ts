@@ -12,6 +12,7 @@ import {
 } from "./dispatch-from-config.shared.test-harness.js";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
+import { resolveReplyCompletion } from "../../agents/reply-completion.js";
 import {
   OutboundDeliveryError,
   PlatformMessageNotDispatchedError,
@@ -26,11 +27,12 @@ import {
   dispatchMemorySessionScope,
 } from "./dispatch-memory-session.test-support.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
+import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { assertSessionWriterDeliveryAuthorized } from "./session-writer-delivery-authority.js";
 
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
-let resetReplyRunRegistry: typeof import("./reply-run-registry.test-support.js").testing.resetReplyRunRegistry;
+let resetSessionControllerForTest: typeof import("../../sessions/session-controller.test-support.js").testing.resetSessionControllerForTest;
 
 const progressDraft = { push: () => undefined, retire: () => undefined };
 function pendingFinalDelivery(text: string, intentId = "intent-1") {
@@ -61,13 +63,13 @@ beforeAll(async () => {
   ({ dispatchReplyFromConfig } = await import("./dispatch-from-config.js"));
   ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
   ({
-    testing: { resetReplyRunRegistry },
-  } = await import("./reply-run-registry.test-support.js"));
+    testing: { resetSessionControllerForTest },
+  } = await import("../../sessions/session-controller.test-support.js"));
 });
 
 beforeEach(() => {
   clearAgentHarnesses();
-  resetReplyRunRegistry();
+  resetSessionControllerForTest();
   resetInboundDedupe();
   setDiscordTestRegistry();
   resetPluginTtsAndThreadMocks();
@@ -84,7 +86,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  resetReplyRunRegistry();
+  resetSessionControllerForTest();
   resetInboundDedupe();
   clearAgentHarnesses();
 });
@@ -425,26 +427,34 @@ describe("accepted continuation status delivery", () => {
     },
   );
 
-  it("releases an accepted continuation when its status was removed from the batch", async () => {
-    const settle = vi.fn(async () => {});
-    const dispatcher = createReplyDispatcher({ deliver: vi.fn() });
+  it.each(["empty", "silent", "pending"] as const)(
+    "settles an accepted continuation after a %s final without a status",
+    async (outcome) => {
+      const settle = vi.fn(async () => {});
+      const dispatcher = createReplyDispatcher({ deliver: vi.fn() });
 
-    await withReplyDispatcher({
-      dispatcher,
-      run: () =>
-        dispatchReplyFromConfig({
-          ctx: createHookCtx(),
-          cfg: emptyConfig,
-          dispatcher,
-          replyResolver: async (_ctx, opts) => {
-            opts?.onPendingContinuation?.({ settle });
-            return undefined;
-          },
-        }),
-    });
+      await withReplyDispatcher({
+        dispatcher,
+        run: () =>
+          dispatchReplyFromConfig({
+            ctx: createHookCtx(),
+            cfg: emptyConfig,
+            dispatcher,
+            replyResolver: async (_ctx, opts) => {
+              const runState = resolveReplyOperationRunState(opts);
+              if (!runState) {
+                throw new Error("expected reply operation run state");
+              }
+              runState.replyCompletion = resolveReplyCompletion("required", outcome);
+              opts?.onPendingContinuation?.({ settle });
+              return undefined;
+            },
+          }),
+      });
 
-    expect(settle).toHaveBeenCalledExactlyOnceWith(false);
-  });
+      expect(settle).toHaveBeenCalledExactlyOnceWith(outcome !== "empty");
+    },
+  );
 
   it.each(["resolver", "session metadata"])(
     "releases an accepted continuation when %s fails before finalization",

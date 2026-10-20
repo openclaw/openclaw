@@ -1,12 +1,22 @@
 {
   "name": "openclaw",
-  "version": "2026.10.3",
+  "version": "2026.10.5",
   "openclaw": {
     "updateAdmissionProtocol": 1,
-    "databaseEngines": ["sqlite", "postgres"],
+    "databaseEngines": [
+      "sqlite",
+      "postgres"
+    ],
+    "postgresFamilies": [
+      "state",
+      "agent",
+      "workboard",
+      "logbook",
+      "team-reports"
+    ],
     "schemaVersions": {
-      "state": 22,
-      "agent": 26
+      "state": 29,
+      "agent": 31
     }
   },
   "description": "Multi-channel AI gateway with extensible messaging integrations",
@@ -40,6 +50,8 @@
   "files": [
     "CHANGELOG.md",
     "LICENSE",
+    "cli-invocation.mjs",
+    "cli-parent-lifetime.mjs",
     "cli-root-options.mjs",
     "gateway-run-argv.mjs",
     "gateway-shutdown-budget.mjs",
@@ -327,6 +339,7 @@
     "!dist/extensions/irc/**",
     "!dist/extensions/kilocode/**",
     "!dist/extensions/kimi-coding/**",
+    "!dist/extensions/levanto/**",
     "!dist/extensions/line/**",
     "!dist/extensions/llama-cpp/**",
     "!dist/extensions/lobster/**",
@@ -361,6 +374,7 @@
     "!dist/extensions/slack-huddles/**",
     "!dist/extensions/sms/**",
     "!dist/extensions/stepfun/**",
+    "!dist/extensions/subq/**",
     "!dist/extensions/synthetic/**",
     "!dist/extensions/synology-chat/**",
     "!dist/extensions/tavily/**",
@@ -462,7 +476,15 @@
     "!dist/plugin-sdk/compiled-subprocess-testing.d.ts",
     "!dist/plugin-sdk/compiled-subprocess-testing.js",
     "!dist/plugin-sdk/memory-host-search.d.ts",
-    "!dist/plugin-sdk/codex-client-version-runtime.d.ts"
+    "!dist/plugin-sdk/codex-client-version-runtime.d.ts",
+    "!dist/plugin-sdk/realtime-transcription-provider.d.ts",
+    "!dist/plugin-sdk/meeting-config.d.ts",
+    "!dist/plugin-sdk/collection-input-runtime.d.ts",
+    "!dist/plugin-sdk/http-response-runtime.d.ts",
+    "!dist/plugin-sdk/node-crypto-runtime.d.ts",
+    "!dist/plugin-sdk/path-existence-runtime.d.ts",
+    "!dist/plugin-sdk/provider-auth-markers.d.ts",
+    "!dist/plugin-sdk/terminal-safe-text.d.ts"
   ],
   "type": "module",
   "main": "dist/index.js",
@@ -471,6 +493,9 @@
     "./plugin-sdk/core": {
       "types": "./dist/plugin-sdk/core.d.ts",
       "default": "./dist/plugin-sdk/core.js"
+    },
+    "./plugin-sdk/collection-input-runtime": {
+      "default": "./dist/plugin-sdk/collection-input-runtime.js"
     },
     "./plugin-sdk/code-mode-executor-runtime": {
       "types": "./dist/plugin-sdk/code-mode-executor-runtime.d.ts",
@@ -709,11 +734,20 @@
     "./plugin-sdk/file-access-runtime": {
       "default": "./dist/plugin-sdk/file-access-runtime.js"
     },
+    "./plugin-sdk/path-existence-runtime": {
+      "default": "./dist/plugin-sdk/path-existence-runtime.js"
+    },
+    "./plugin-sdk/node-crypto-runtime": {
+      "default": "./dist/plugin-sdk/node-crypto-runtime.js"
+    },
     "./plugin-sdk/node-selection-runtime": {
       "default": "./dist/plugin-sdk/node-selection-runtime.js"
     },
     "./plugin-sdk/heartbeat-runtime": {
       "default": "./dist/plugin-sdk/heartbeat-runtime.js"
+    },
+    "./plugin-sdk/http-response-runtime": {
+      "default": "./dist/plugin-sdk/http-response-runtime.js"
     },
     "./plugin-sdk/expect-runtime": {
       "default": "./dist/plugin-sdk/expect-runtime.js"
@@ -812,6 +846,9 @@
     "./plugin-sdk/text-chunking": {
       "types": "./dist/plugin-sdk/text-chunking.d.ts",
       "default": "./dist/plugin-sdk/text-chunking.js"
+    },
+    "./plugin-sdk/terminal-safe-text": {
+      "default": "./dist/plugin-sdk/terminal-safe-text.js"
     },
     "./plugin-sdk/agent-scope-runtime": {
       "types": "./dist/plugin-sdk/agent-scope-runtime.d.ts",
@@ -1245,6 +1282,10 @@
     "./plugin-sdk/session-transcript-runtime": {
       "default": "./dist/plugin-sdk/session-transcript-runtime.js"
     },
+    "./plugin-sdk/context-engine-transcript-runtime": {
+      "types": "./dist/plugin-sdk/context-engine-transcript-runtime.d.ts",
+      "default": "./dist/plugin-sdk/context-engine-transcript-runtime.js"
+    },
     "./plugin-sdk/sqlite-runtime": {
       "default": "./dist/plugin-sdk/sqlite-runtime.js"
     },
@@ -1310,6 +1351,9 @@
     "./plugin-sdk/realtime-transcription": {
       "default": "./dist/plugin-sdk/realtime-transcription.js"
     },
+    "./plugin-sdk/realtime-transcription-provider": {
+      "default": "./dist/plugin-sdk/realtime-transcription-provider.js"
+    },
     "./plugin-sdk/realtime-transcription-session": {
       "default": "./dist/plugin-sdk/realtime-transcription-session.js"
     },
@@ -1333,6 +1377,9 @@
     },
     "./plugin-sdk/meeting-page-script-runtime": {
       "default": "./dist/plugin-sdk/meeting-page-script-runtime.js"
+    },
+    "./plugin-sdk/meeting-config": {
+      "default": "./dist/plugin-sdk/meeting-config.js"
     },
     "./plugin-sdk/meeting-runtime": {
       "types": "./dist/plugin-sdk/meeting-runtime.d.ts",
@@ -1455,6 +1502,9 @@
     "./plugin-sdk/provider-auth": {
       "types": "./dist/plugin-sdk/provider-auth.d.ts",
       "default": "./dist/plugin-sdk/provider-auth.js"
+    },
+    "./plugin-sdk/provider-auth-markers": {
+      "default": "./dist/plugin-sdk/provider-auth-markers.js"
     },
     "./plugin-sdk/provider-auth-aliases": {
       "default": "./dist/plugin-sdk/provider-auth-aliases.js"
@@ -1693,6 +1743,7 @@
     "android:release:signing:sync:pull": "bash -lc 'source ./scripts/lib/android-fastlane.sh && cd apps/android && run_android_fastlane android signing_sync_pull'",
     "android:release:signing:sync:push": "bash -lc 'source ./scripts/lib/android-fastlane.sh && cd apps/android && run_android_fastlane android signing_sync_push'",
     "android:release:upload": "node scripts/mobile-release.mjs run --platform android",
+    "android:release:validate": "node --import ./scripts/tsx.mjs scripts/android-release-e2e.ts",
     "android:screenshots": "bash scripts/android-screenshots.sh",
     "android:test": "node --import ./scripts/tsx.mjs scripts/run-android-gradle.mts :app:testPlayDebugUnitTest :wear:testDebugUnitTest :wear-shared:testDebugUnitTest",
     "android:test:integration": "node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_ANDROID_NODE=1 -- node scripts/run-vitest.mjs run --config test/vitest/vitest.live.config.ts src/gateway/android-node.capabilities.live.test.ts",
@@ -1719,6 +1770,7 @@
     "channels:catalog:gen": "node scripts/write-official-channel-catalog.mjs --write",
     "changed:lanes": "node scripts/changed-lanes.mjs",
     "check": "node --import ./scripts/tsx.mjs scripts/check.mts",
+    "check:agents-md-size": "node --import ./scripts/tsx.mjs scripts/check-agents-md-size.mts",
     "check:architecture": "pnpm check:import-cycles && pnpm check:madge-import-cycles && pnpm check:deprecated-api-usage && pnpm check:wrapper-shadowing && pnpm check:deprecated-jsdoc && pnpm db:kysely:check && pnpm db:postgres:check && pnpm lint:kysely && pnpm check:database-first-legacy-stores",
     "check:assertion-safety": "node --import ./scripts/tsx.mjs scripts/check-assertion-safety-ratchet.mts",
     "check:base-config-schema": "node --import ./scripts/tsx.mjs scripts/generate-base-config-schema.ts --check",
@@ -1726,7 +1778,7 @@
     "check:changed": "node scripts/check-changed.mjs",
     "check:changelog-attributions": "node --import ./scripts/tsx.mjs scripts/check-changelog-attributions.mts",
     "check:coercion-helpers": "node --import ./scripts/tsx.mjs scripts/check-coercion-helper-declarations.mts",
-    "check:control-ui-lit-ratchet": "node --import ./scripts/tsx.mjs scripts/check-control-ui-lit-ratchet.mts",
+    "check:control-ui-controllers": "node --import ./scripts/tsx.mjs scripts/check-control-ui-controllers.mts",
     "check:database-first-legacy-stores": "node --import ./scripts/tsx.mjs scripts/check-database-first-legacy-stores.mts",
     "check:database-dialect-ratchet": "node --import ./scripts/tsx.mjs scripts/check-database-dialect-ratchet.mts",
     "check:database-worker-ratchet": "node --max-old-space-size=4096 --import ./scripts/tsx.mjs scripts/check-database-worker-ratchet.mts",
@@ -1787,8 +1839,8 @@
     "crabbox:warmup": "node scripts/crabbox-wrapper.mjs warmup",
     "deadcode:dependencies": "pnpm deadcode:full",
     "deadcode:exports": "node --import ./scripts/tsx.mjs scripts/check-deadcode-exports.mts",
-    "deadcode:full": "pnpm dlx --package knip@6.32.2 knip --config config/knip.config.ts --production --no-progress --reporter compact --no-config-hints --exclude duplicates && pnpm dlx --package knip@6.32.2 knip --config config/knip.all-exports.config.ts --no-progress --reporter compact --no-config-hints --exports --exclude duplicates",
-    "deadcode:knip": "pnpm dlx --package knip@6.32.2 knip --config config/knip.config.ts --production --no-progress --reporter compact --files --dependencies",
+    "deadcode:full": "pnpm dlx --package knip@6.40.0 knip --config config/knip.config.ts --production --no-progress --reporter compact --no-config-hints --exclude duplicates && pnpm dlx --package knip@6.40.0 knip --config config/knip.all-exports.config.ts --no-progress --reporter compact --no-config-hints --exports --exclude duplicates",
+    "deadcode:knip": "pnpm dlx --package knip@6.40.0 knip --config config/knip.config.ts --production --no-progress --reporter compact --files --dependencies",
     "deadcode:report": "pnpm deadcode:full && pnpm deadcode:exports",
     "deadcode:unused-files": "node --import ./scripts/tsx.mjs scripts/check-deadcode-unused-files.mts",
     "deps:root-ownership": "node --import ./scripts/tsx.mjs scripts/root-dependency-ownership-audit.mts",
@@ -1805,7 +1857,7 @@
     "deps:vuln:gate": "node --import ./scripts/tsx.mjs scripts/dependency-vulnerability-gate.mts",
     "db:kysely:check": "node scripts/run-vitest.mjs test/scripts/generate-kysely-types.test.ts && node scripts/generate-kysely-types.mts --verify",
     "db:kysely:gen": "node scripts/generate-kysely-types.mts",
-    "db:postgres:check": "node scripts/run-vitest.mjs test/scripts/generate-postgres-schema.test.ts && node --import ./scripts/tsx.mjs scripts/generate-postgres-schema.mts --target canonical --verify && node --import ./scripts/tsx.mjs scripts/generate-postgres-schema.mts --target workboard --verify",
+    "db:postgres:check": "node scripts/run-vitest.mjs test/scripts/generate-postgres-schema.test.ts test/scripts/sqlite-schema-catalog-equivalence.test.ts && node --import ./scripts/tsx.mjs scripts/generate-postgres-schema.mts --target canonical --verify && node --import ./scripts/tsx.mjs scripts/generate-postgres-schema.mts --target workboard --verify && node --import ./scripts/tsx.mjs scripts/generate-postgres-schema.mts --target logbook --verify",
     "db:postgres:gen": "node --import ./scripts/tsx.mjs scripts/generate-postgres-schema.mts",
     "db:worker-inventory:check": "node --max-old-space-size=4096 scripts/database-worker-inventory.mjs --check",
     "db:worker-inventory:gen": "node --max-old-space-size=4096 scripts/database-worker-inventory.mjs --write",
@@ -1826,13 +1878,13 @@
     "dup:check": "node scripts/check-duplicates.mjs",
     "dup:check:coverage": "node scripts/check-duplicates.mjs --coverage",
     "dup:check:json": "node scripts/check-duplicates.mjs --json",
-    "format": "oxfmt --write --threads=1",
+    "format": "node scripts/run-format.mts --write",
     "format:all": "pnpm format && pnpm format:swift",
-    "format:check": "oxfmt --check",
-    "format:diff": "oxfmt --write --threads=1 && git --no-pager diff",
+    "format:check": "node scripts/run-format.mts --check",
+    "format:diff": "pnpm format && git --no-pager diff",
     "format:docs": "node --import ./scripts/tsx.mjs scripts/format-docs.mts",
     "format:docs:check": "node --import ./scripts/tsx.mjs scripts/format-docs.mts --check",
-    "format:fix": "oxfmt --write --threads=1",
+    "format:fix": "pnpm format",
     "format:swift": "./scripts/format-swift.sh",
     "gateway:dev": "node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_SKIP_CHANNELS=1 -- node scripts/run-node.mjs --dev gateway",
     "gateway:dev:reset": "node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_SKIP_CHANNELS=1 -- node scripts/run-node.mjs --dev gateway --reset",
@@ -1891,8 +1943,8 @@
     "lint:plugins:no-monolithic-plugin-sdk-entry-imports": "node --import ./scripts/tsx.mjs scripts/check-no-monolithic-plugin-sdk-entry-imports.ts",
     "lint:plugins:no-register-http-handler": "node scripts/run-oxlint.mjs --openclaw-focused-config --config config/oxlint/boundary-guards.json src extensions",
     "lint:plugins:plugin-sdk-subpaths-exported": "node --import ./scripts/tsx.mjs scripts/check-plugin-sdk-subpath-exports.mts",
-    "lint:no-chained-type-assertions": "node scripts/run-oxlint.mjs --openclaw-focused-config --config config/oxlint/boundary-guards.json src extensions packages ui/src cli-root-options.mjs docker-entrypoint.mjs gateway-prewarm.mjs gateway-run-argv.mjs gateway-shutdown-budget.mjs node-compile-cache.mjs node-host-launcher.mjs node-runtime-env.mjs node-runtime-recovery.mjs node-runtime-update.mjs node-sqlite.mjs node-version.mjs openclaw.mjs worker-heap-flag.mjs scripts/openclaw-immutable-launcher.mjs scripts/freebsd-service-inspect.mjs",
-    "lint:no-widen-then-assert": "node scripts/run-oxlint.mjs --openclaw-focused-config --config config/oxlint/boundary-guards.json src extensions packages ui/src cli-root-options.mjs docker-entrypoint.mjs gateway-prewarm.mjs gateway-run-argv.mjs gateway-shutdown-budget.mjs node-compile-cache.mjs node-host-launcher.mjs node-runtime-env.mjs node-runtime-recovery.mjs node-runtime-update.mjs node-sqlite.mjs node-version.mjs openclaw.mjs worker-heap-flag.mjs scripts/openclaw-immutable-launcher.mjs scripts/freebsd-service-inspect.mjs",
+    "lint:no-chained-type-assertions": "node scripts/run-oxlint.mjs --openclaw-focused-config --config config/oxlint/boundary-guards.json src extensions packages ui/src cli-invocation.mjs cli-parent-lifetime.mjs cli-root-options.mjs docker-entrypoint.mjs gateway-prewarm.mjs gateway-run-argv.mjs gateway-shutdown-budget.mjs node-compile-cache.mjs node-host-launcher.mjs node-runtime-env.mjs node-runtime-recovery.mjs node-runtime-update.mjs node-sqlite.mjs node-version.mjs openclaw.mjs worker-heap-flag.mjs scripts/openclaw-immutable-launcher.mjs scripts/freebsd-service-inspect.mjs",
+    "lint:no-widen-then-assert": "node scripts/run-oxlint.mjs --openclaw-focused-config --config config/oxlint/boundary-guards.json src extensions packages ui/src cli-invocation.mjs cli-parent-lifetime.mjs cli-root-options.mjs docker-entrypoint.mjs gateway-prewarm.mjs gateway-run-argv.mjs gateway-shutdown-budget.mjs node-compile-cache.mjs node-host-launcher.mjs node-runtime-env.mjs node-runtime-recovery.mjs node-runtime-update.mjs node-sqlite.mjs node-version.mjs openclaw.mjs worker-heap-flag.mjs scripts/openclaw-immutable-launcher.mjs scripts/freebsd-service-inspect.mjs",
     "lint:scripts": "pnpm lint:docker-e2e && pnpm lint:tmp:no-raw-http2-imports && node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.scripts.json scripts",
     "lint:swift": "./scripts/lint-swift.sh",
     "lint:tmp:channel-agnostic-boundaries": "node --import ./scripts/tsx.mjs scripts/check-channel-agnostic-boundaries.mts",
@@ -1903,13 +1955,11 @@
     "lint:tmp:no-raw-http2-imports": "node --import ./scripts/tsx.mjs scripts/check-no-raw-http2-imports.mts",
     "lint:tmp:session-accessor-boundary": "node --import ./scripts/tsx.mjs scripts/check-session-accessor-boundary.mts",
     "lint:tmp:session-accessor-boundary:gen": "node --import ./scripts/tsx.mjs scripts/check-session-accessor-boundary.mts --update-debt-baseline",
-    "lint:tmp:session-transcript-reader-boundary": "node --import ./scripts/tsx.mjs scripts/check-session-transcript-reader-boundary.mts",
     "lint:tmp:sqlite-transaction-boundary": "node --import ./scripts/tsx.mjs scripts/check-sqlite-transaction-boundary.mts",
     "lint:tmp:tsgo-core-boundary": "node --import ./scripts/tsx.mjs scripts/check-tsgo-core-boundary.mts",
     "lint:ui:i18n": "pnpm ui:i18n:verify",
-    "lint:ui:lit": "lit-analyzer \"ui/src/**/*.ts\" --quiet",
     "lint:ui:no-raw-window-open": "node scripts/run-oxlint.mjs --openclaw-focused-config --config config/oxlint/boundary-guards.json ui/src",
-    "lint:ui:styles": "stylelint --config config/stylelint.config.mjs \"ui/src/**/*.css\" \"ui/src/**/*.{ts,tsx}\" \"ui/public/themes/*.css\"",
+    "lint:ui:styles": "stylelint --config config/stylelint.config.mjs \"ui/src/**/*.css\" \"ui/public/themes/*.css\"",
     "lint:web-fetch-provider-boundaries": "node --import ./scripts/tsx.mjs scripts/check-web-fetch-provider-boundaries.mts",
     "lint:webhook:no-low-level-body-read": "node --import ./scripts/tsx.mjs scripts/check-webhook-auth-body-order.mts",
     "mac:open": "open dist/OpenClaw.app",
@@ -2077,6 +2127,7 @@
     "test:docker:local:all": "node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_DOCKER_ALL_LIVE_MODE=skip -- node scripts/test-docker-all.mjs",
     "test:docker:cli-installer-distribution": "bash scripts/e2e/cli-installer-distribution-docker.sh",
     "test:docker:mcp-channels": "bash scripts/e2e/mcp-channels-docker.sh",
+    "test:docker:mcp-docker-custody": "bash scripts/e2e/mcp-docker-custody-docker.sh",
     "test:docker:mcp-code-mode-gateway": "bash scripts/e2e/mcp-code-mode-gateway-docker.sh",
     "test:docker:multi-node-update": "bash scripts/e2e/multi-node-update-docker.sh",
     "test:docker:codex-on-demand": "bash scripts/e2e/codex-on-demand-docker.sh",
@@ -2100,6 +2151,7 @@
     "test:docker:plugin-update": "bash scripts/e2e/plugin-update-unchanged-docker.sh",
     "test:docker:plugins": "bash scripts/e2e/plugins-docker.sh",
     "test:docker:published-driver-lifecycle": "node scripts/e2e/published-driver-lifecycle-docker.mjs",
+    "test:docker:published-driver-scoped-restore": "env OPENCLAW_PUBLISHED_DRIVER_SCOPED_RESTORE=1 bash scripts/e2e/published-driver-update-docker.sh",
     "test:docker:published-driver-update": "bash scripts/e2e/published-driver-update-docker.sh",
     "test:docker:published-upgrade-survivor": "node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_DOCKER_ALL_LANES=published-upgrade-survivor -- node scripts/test-docker-all.mjs",
     "test:docker:qr": "bash scripts/e2e/qr-import-docker.sh",
@@ -2157,10 +2209,9 @@
     "test:live:media:music": "node --import ./scripts/tsx.mjs test/e2e/qa-lab/media/hosted-media-provider-live.ts music",
     "test:live:media:video": "node --import ./scripts/tsx.mjs test/e2e/qa-lab/media/hosted-media-provider-live.ts video",
     "test:live:models-profiles": "node --import ./scripts/tsx.mjs scripts/test-live.mts -- src/agents/models.profiles.live.test.ts",
-    "test:macos:ci": "pnpm test:macos:ci:1 && pnpm test:macos:ci:2 && pnpm test:macos:ci:3",
-    "test:macos:ci:1": "node scripts/test-projects.mts test/scripts/mac-elevation-host.test.ts",
-    "test:macos:ci:2": "node scripts/test-projects.mts test/scripts/vitest-process-group.test.ts test/scripts/package-mac-app.test.ts test/scripts/generate-gateway-protocol-plugin.test.ts test/scripts/stage-cloudflared-macos.test.ts test/scripts/stage-openclaw-bun.test.ts test/scripts/build-mac-sqlite.test.ts test/scripts/restart-mac.test.ts test/scripts/mac-runtime.test.ts test/scripts/package-mac-dist.test.ts test/scripts/codesign-mac-app.test.ts test/scripts/notarize-mac-artifact.test.ts test/scripts/mac-elevation-artifact.test.ts",
-    "test:macos:ci:3": "node scripts/test-projects.mts test/scripts/ci-platform-checkout.test.ts test/scripts/macos-native-test-launch.test.ts src/daemon/launchd.test.ts src/daemon/runtime-paths.test.ts src/daemon/runtime-binary.test.ts src/gateway/worker-environments/workspace-rsync-path.test.ts src/infra/brew.test.ts src/infra/stable-node-path.test.ts src/process/supervisor/adapters/child.service-lifecycle.test.ts test/scripts/verify-mac-runtime-fs.test.ts test/scripts/create-dmg.test.ts src/skills/runtime/discovery.integration.test.ts src/skills/runtime/refresh.workspace.test.ts",
+    "test:macos:ci": "pnpm test:macos:ci:1 && pnpm test:macos:ci:2",
+    "test:macos:ci:1": "node scripts/test-projects.mts test/scripts/mac-elevation-host.test.ts src/skills/runtime/discovery.integration.test.ts src/skills/runtime/refresh.workspace.test.ts src/daemon/launchd.test.ts src/daemon/runtime-paths.test.ts src/daemon/runtime-binary.test.ts src/gateway/worker-environments/workspace-rsync-path.test.ts src/infra/brew.test.ts src/infra/stable-node-path.test.ts src/process/supervisor/adapters/child.service-lifecycle.test.ts",
+    "test:macos:ci:2": "node scripts/test-projects.mts test/scripts/vitest-process-group.test.ts test/scripts/package-mac-app.test.ts test/scripts/generate-gateway-protocol-plugin.test.ts test/scripts/stage-cloudflared-macos.test.ts test/scripts/stage-openclaw-bun.test.ts test/scripts/build-mac-sqlite.test.ts test/scripts/restart-mac.test.ts test/scripts/mac-runtime.test.ts test/scripts/package-mac-dist.test.ts test/scripts/codesign-mac-app.test.ts test/scripts/notarize-mac-artifact.test.ts test/scripts/mac-elevation-artifact.test.ts test/scripts/ci-platform-checkout.test.ts test/scripts/macos-native-test-launch.test.ts test/scripts/verify-mac-runtime-fs.test.ts test/scripts/create-dmg.test.ts",
     "test:max": "node scripts/test-projects-max.mts",
     "test:parallels:linux": "/bin/bash scripts/e2e/parallels-linux-smoke.sh",
     "test:parallels:macos": "/bin/bash scripts/e2e/parallels-macos-smoke.sh",
@@ -2209,8 +2260,8 @@
     "test:voicecall:closedloop": "node --import ./scripts/tsx.mjs scripts/test-voicecall-closedloop.mts",
     "test:watch": "node scripts/test-projects.mts --watch",
     "test:windows:ci": "pnpm test:windows:ci:1 && pnpm test:windows:ci:2",
-    "test:windows:ci:1": "node scripts/test-projects.mts extensions/acpx/src/runtime-argv.process.test.ts src/state/openclaw-state-ownership.test.ts src/snapshot/local-repository.windows.test.ts src/state/openclaw-database-paths.windows.test.ts src/infra/update-candidate-state.namespaced-paths.test.ts src/infra/update-candidate-state.budget.test.ts src/infra/update-candidate-state.cleanup.test.ts src/infra/update-candidate-state.online-backup.process.test.ts src/node-host/invoke-system-run-allowlist.test.ts src/node-host/invoke-agent-cli-claude.test.ts src/node-host/node-worker-transfer-client.test.ts packages/terminal-core/src/display-string.test.ts src/config/sessions/session-accessor.sqlite-archive.worker.test.ts src/cron/isolated-agent/session.preparation.storage-env.test.ts src/commands/doctor-gateway-auth-token.windows.test.ts src/commands/doctor-lint.state-isolation.test.ts src/flows/doctor-health-contributions.windows-cloud-state.test.ts src/infra/state-migrations.audit-logs.windows.test.ts src/infra/state-migrations.workspace-setup.windows.test.ts src/commands/backup-verify.test.ts src/commands/agents.commands.list.test.ts src/gateway/gateway-cron-process-identity.windows.test.ts src/node-host/node-worker-bundle-installer.test.ts test/scripts/check-openclaw-package-tarball.test.ts test/scripts/check-openclaw-package-tarball.bundled-mcp.test.ts test/scripts/direct-run-entrypoints.test.ts test/scripts/format-generated-module.test.ts test/scripts/openclaw-cross-os-installer.windows.test.ts test/scripts/openclaw-cross-os-release-workflow.test.ts test/scripts/pnpm-runner.test.ts test/scripts/run-with-env.test.ts test/scripts/ui.test.ts test/helpers/temp-dir.test.ts test/scripts/vitest-process-cache.test.ts test/scripts/vitest-process-group.test.ts test/scripts/vitest-worker-artifacts.test.ts src/agents/tools/media-tool-file-url.windows.test.ts extensions/memory-core/src/memory-extra-file-path.windows.test.ts src/daemon/schtasks.startup-fallback.test.ts src/daemon/schtasks.startup-launch.test.ts src/daemon/schtasks.settlement.test.ts src/daemon/schtasks-runtime-probe.windows.test.ts src/cli/update-cli/update-command-readiness.windows.test.ts src/infra/update-candidate-canary.cleanup.test.ts src/daemon/schtasks.env-case.real.test.ts test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts extensions/lobster/src/lobster-runner.test.ts src/gateway/worker-environments/workspace-quiescence.windows.test.ts src/infra/git-exec.test.ts src/gateway/worker-environments/workspace-result-ref-mutation.test.ts extensions/memory-wiki/src/obsidian.discovery.test.ts src/infra/sqlite-private-directory.windows.test.ts src/skills/runtime/discovery.integration.test.ts src/skills/runtime/refresh.workspace.test.ts src/infra/sqlite-snapshot.test.ts src/infra/sqlite-snapshot-staging.cancellation.test.ts src/infra/sqlite-snapshot-retirement.test.ts src/infra/ports.test.ts src/infra/diagnostic-process-siblings.env.test.ts src/infra/windows-diagnostic-env.test.ts src/infra/windows-encoding.test.ts src/infra/windows-process-start.test.ts src/infra/windows-process-start.native.test.ts src/infra/advertised-lan-host.windows.test.ts src/infra/update-managed-service-handoff-database-publication.test.ts src/infra/update-managed-service-handoff-command.test.ts src/infra/update-managed-service-handoff-lifecycle.test.ts src/infra/executable-path.test.ts src/config/io.write-effects.windows.test.ts src/infra/fs-safe.test.ts src/infra/fs-safe-remove.test.ts src/infra/state-migrations.legacy-session-store.test.ts src/infra/windows-install-roots.test.ts src/infra/openclaw-cli-shim.windows.test.ts src/media/local-media-path.windows.test.ts src/media/web-media.file-url.windows.test.ts src/cli/completion-runtime.windows.test.ts src/cli/update-cli/update-command-migrated-windows.test.ts src/cli/daemon-cli/status.print.test.ts src/cli/mcp-cli.path-case.windows.test.ts src/config/io.snapshot.test.ts src/commands/doctor-config-preflight.state-migration.test.ts src/infra/windows-process-census.test.ts src/infra/windows-process-census.native.test.ts src/infra/openclaw-process-census.test.ts src/plugins/plugin-generation-artifact.native-reference.test.ts src/cli/update-cli/update-repair-handoff.test.ts src/infra/update-managed-service-handoff-recovery.test.ts src/infra/update-managed-service-handoff-recovery-database.test.ts src/infra/update-managed-service-handoff-cleanup-repair.test.ts src/config/sessions/session-creation-publication.windows-path.test.ts src/config/sessions/session-accessor.sqlite-creation-worker.test.ts src/infra/sqlite-worker-identity.test.ts",
-    "test:windows:ci:2": "node scripts/test-projects.mts src/shared/pid-alive.env.test.ts src/agents/cli-executable-identity.test.ts src/plugin-sdk/windows-spawn.test.ts src/infra/fs-safe-pinned-write-errno.test.ts src/infra/package-update-swap.windows.test.ts src/plugin-sdk/fs-safe-compat.test.ts src/infra/ssh-client.windows.test.ts src/infra/exec-allowlist-pattern.test.ts src/infra/process-env.test.ts src/agents/sessions/windows-git-bash-path.test.ts test/scripts/npm-runner.test.ts test/scripts/ts-topology.test.ts test/scripts/vitest-worker-artifacts.transforms.test.ts test/scripts/ci-platform-checkout.test.ts test/scripts/install-ps1.test.ts test/scripts/windows-blacksmith-testbox.test.ts test/scripts/write-plugin-sdk-entry-dts.test.ts test/scripts/write-unified-entry-dts.test.ts test/scripts/tsdown-declaration-resolution.test.ts src/test-utils/openclaw-test-state.test.ts test/helpers/openclaw-test-instance.test.ts test/scripts/managed-child-process.windows.test.ts test/scripts/managed-windows-job.test.ts src/agents/mcp-stdio-transport.windows.test.ts test/scripts/worker-deploy-build-plugin.test.ts src/process/owned-stdio.real.test.ts src/process/owned-stdio.windows.test.ts test/scripts/managed-child-process.output.test.ts src/utils.test.ts src/process/exec.windows.test.ts src/process/exec.windows.integration.test.ts src/agents/sessions/exec.real.test.ts src/process/windows-command.test.ts src/process/terminal-pty.test.ts src/process/supervisor/supervisor.anchored-shell.real.test.ts src/tui/tui.resolve-codex-bin.test.ts src/media-understanding/attachments.file-url.windows.test.ts src/cli/runtime-cleanup-scope.windows.process.test.ts src/auto-reply/usage-bar/template.windows.test.ts src/auto-reply/reply.triggers.trigger-handling.stages-inbound-media-into-sandbox-workspace.test.ts src/agents/provider-local-service.env-case.test.ts src/agents/provider-local-service.shutdown.test.ts src/agents/provider-local-service.settlement.test.ts src/agents/bash-tools.exec.script-preflight.test.ts src/agents/agent-tools.read.windows.test.ts src/agents/agent-tools.read.workspace-mutations.test.ts src/agents/apply-patch.test.ts src/agents/sandbox/fs-paths.test.ts src/agents/sessions/tools/render-utils.test.ts src/agents/sessions/tools/path-utils.test.ts extensions/msteams/src/media-helpers.test.ts extensions/msteams/src/messenger.test.ts extensions/mxc/test/mxc-backend.test.ts extensions/mxc/test/fs-bridge.test.ts extensions/mxc/test/path-comparison.test.ts extensions/mxc/test/sandbox-policy-loader.test.ts src/shared/runtime-import.test.ts src/shared/worker-bundle-archive.test.ts src/daemon/schtasks-state-probe.windows.test.ts src/daemon/service-audit-schtasks.windows.test.ts src/plugin-sdk/node-host.test.ts src/agents/worktrees/git.test.ts src/agents/worktrees/filesystem-refs.test.ts src/agents/worktrees/service.removal-recovery.windows.test.ts extensions/browser/src/browser/chrome.executable-probe.windows.test.ts src/process/supervisor/service-child-group-ownership.test.ts",
+    "test:windows:ci:1": "node scripts/test-projects.mts extensions/acpx/src/runtime-argv.process.test.ts src/state/openclaw-state-ownership.test.ts src/snapshot/local-repository.windows.test.ts src/state/openclaw-database-paths.windows.test.ts src/infra/update-candidate-state.namespaced-paths.test.ts src/infra/update-candidate-state.budget.test.ts src/infra/update-candidate-state.cleanup.test.ts src/infra/update-candidate-state.online-backup.process.test.ts src/node-host/invoke-system-run-allowlist.test.ts src/node-host/invoke-agent-cli-claude.test.ts src/node-host/node-worker-transfer-client.test.ts packages/terminal-core/src/display-string.test.ts src/config/sessions/session-accessor.sqlite-archive.worker.test.ts src/cron/isolated-agent/session.preparation.storage-env.test.ts src/commands/doctor-gateway-auth-token.windows.test.ts src/commands/doctor-lint.state-isolation.test.ts src/flows/doctor-health-contributions.windows-cloud-state.test.ts src/infra/state-migrations.audit-logs.windows.test.ts src/infra/state-migrations.workspace-setup.windows.test.ts src/commands/backup-verify.test.ts src/commands/agents.commands.list.test.ts src/gateway/gateway-cron-process-identity.windows.test.ts src/node-host/node-worker-bundle-installer.test.ts test/scripts/check-openclaw-package-tarball.test.ts test/scripts/check-openclaw-package-tarball.bundled-mcp.test.ts test/scripts/direct-run-entrypoints.test.ts test/scripts/format-generated-module.test.ts test/scripts/openclaw-cross-os-installer.windows.test.ts test/scripts/openclaw-cross-os-release-workflow.test.ts test/scripts/pnpm-runner.test.ts test/scripts/run-with-env.test.ts test/scripts/ui.test.ts test/helpers/temp-dir.test.ts test/scripts/vitest-process-cache.test.ts test/scripts/vitest-process-group.test.ts test/scripts/vitest-worker-artifacts.test.ts src/agents/tools/media-tool-file-url.windows.test.ts extensions/memory-core/src/memory-extra-file-path.windows.test.ts src/daemon/schtasks.startup-fallback.test.ts src/daemon/schtasks.startup-launch.test.ts src/daemon/schtasks.settlement.test.ts src/daemon/schtasks-runtime-probe.windows.test.ts src/cli/update-cli/update-command-readiness.windows.test.ts src/infra/update-candidate-canary.cleanup.test.ts src/daemon/schtasks.env-case.real.test.ts test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts extensions/lobster/src/lobster-runner.test.ts src/gateway/worker-environments/workspace-quiescence.windows.test.ts src/infra/git-exec.test.ts src/gateway/worker-environments/workspace-result-ref-mutation.test.ts extensions/memory-wiki/src/obsidian.discovery.test.ts src/infra/sqlite-private-directory.windows.test.ts src/skills/runtime/discovery.integration.test.ts src/skills/runtime/refresh.workspace.test.ts src/infra/sqlite-snapshot.test.ts src/infra/sqlite-snapshot-staging.cancellation.test.ts src/infra/sqlite-snapshot-retirement.test.ts src/infra/ports.test.ts src/infra/diagnostic-process-siblings.env.test.ts src/infra/windows-diagnostic-env.test.ts src/infra/windows-encoding.test.ts src/infra/windows-process-start.test.ts src/infra/windows-process-start.native.test.ts src/infra/advertised-lan-host.windows.test.ts src/infra/update-managed-service-handoff-database-publication.test.ts src/infra/update-managed-service-handoff-command.test.ts src/infra/update-managed-service-handoff-lifecycle.test.ts src/infra/executable-path.test.ts src/config/io.write-effects.windows.test.ts src/infra/fs-safe.test.ts src/infra/fs-safe-remove.test.ts src/infra/state-migrations.legacy-session-store.test.ts src/infra/windows-install-roots.test.ts src/infra/openclaw-cli-shim.windows.test.ts src/media/local-media-path.windows.test.ts src/media/web-media.file-url.windows.test.ts src/cli/completion-runtime.windows.test.ts src/cli/update-cli/update-command-migrated-windows.test.ts src/cli/daemon-cli/status.print.test.ts src/cli/mcp-cli.path-case.windows.test.ts src/config/io.snapshot.test.ts src/commands/doctor-config-preflight.state-migration.test.ts src/infra/windows-process-census.test.ts src/infra/windows-process-census.native.test.ts src/infra/openclaw-process-census.test.ts src/plugins/plugin-generation-artifact.native-reference.test.ts src/plugins/plugin-source-capture-path.test.ts src/cli/update-cli/update-repair-handoff.test.ts src/infra/update-managed-service-handoff-recovery.test.ts src/infra/update-managed-service-handoff-recovery-database.test.ts src/infra/update-managed-service-handoff-cleanup-repair.test.ts src/config/sessions/session-creation-publication.windows-path.test.ts src/config/sessions/session-accessor.sqlite-creation-worker.test.ts src/infra/sqlite-worker-identity.test.ts",
+    "test:windows:ci:2": "node scripts/test-projects.mts src/shared/pid-alive.env.test.ts src/agents/cli-executable-identity.test.ts src/plugin-sdk/windows-spawn.test.ts src/infra/fs-safe-pinned-write-errno.test.ts src/infra/package-update-swap.windows.test.ts src/plugin-sdk/fs-safe-compat.test.ts src/infra/ssh-client.windows.test.ts src/infra/exec-allowlist-pattern.test.ts src/infra/process-env.test.ts src/agents/sessions/windows-git-bash-path.test.ts test/scripts/npm-runner.test.ts test/scripts/ts-topology.test.ts test/scripts/vitest-worker-artifacts.transforms.test.ts test/scripts/ci-platform-checkout.test.ts test/scripts/install-ps1.test.ts test/scripts/windows-blacksmith-testbox.test.ts test/scripts/write-plugin-sdk-entry-dts.test.ts test/scripts/write-unified-entry-dts.test.ts test/scripts/tsdown-declaration-resolution.test.ts src/test-utils/openclaw-test-state.test.ts test/helpers/openclaw-test-instance.test.ts test/scripts/managed-child-process.windows.test.ts test/scripts/managed-windows-job.test.ts src/agents/mcp-stdio-transport.windows.test.ts test/scripts/worker-deploy-build-plugin.test.ts test/scripts/managed-handoff-build-config.test.ts src/process/owned-stdio.real.test.ts src/process/owned-stdio.windows.test.ts test/scripts/managed-child-process.output.test.ts src/utils.test.ts src/process/exec.windows.test.ts src/process/exec.windows.integration.test.ts src/agents/sessions/exec.real.test.ts src/process/windows-command.test.ts src/process/terminal-pty.test.ts src/process/supervisor/supervisor.anchored-shell.real.test.ts src/tui/tui.resolve-codex-bin.test.ts src/media-understanding/attachments.file-url.windows.test.ts src/cli/runtime-cleanup-scope.windows.process.test.ts src/auto-reply/usage-bar/template.windows.test.ts src/auto-reply/reply.triggers.trigger-handling.stages-inbound-media-into-sandbox-workspace.test.ts src/agents/provider-local-service.env-case.test.ts src/agents/provider-local-service.shutdown.test.ts src/agents/provider-local-service.settlement.test.ts src/agents/bash-tools.exec.script-preflight.test.ts src/agents/agent-tools.read.windows.test.ts src/agents/agent-tools.read.workspace-mutations.test.ts src/agents/apply-patch.test.ts src/agents/sandbox/fs-paths.test.ts src/agents/sessions/tools/render-utils.test.ts src/agents/sessions/tools/path-utils.test.ts extensions/msteams/src/media-helpers.test.ts extensions/msteams/src/messenger.test.ts extensions/mxc/test/mxc-backend.test.ts extensions/mxc/test/fs-bridge.test.ts extensions/mxc/test/path-comparison.test.ts extensions/mxc/test/sandbox-policy-loader.test.ts src/shared/runtime-import.test.ts src/shared/worker-bundle-archive.test.ts src/daemon/schtasks-state-probe.windows.test.ts src/daemon/service-audit-schtasks.windows.test.ts src/plugin-sdk/node-host.test.ts src/agents/worktrees/git.test.ts src/agents/worktrees/filesystem-refs.test.ts src/agents/worktrees/service.removal-recovery.windows.test.ts extensions/browser/src/browser/chrome.executable-probe.windows.test.ts src/process/supervisor/service-child-group-ownership.test.ts",
     "test:windows:schtasks:integration": "node --import ./scripts/tsx.mjs scripts/run-with-env.mts CI_WINDOWS_SCHTASKS_INTEGRATION=1 OPENCLAW_E2E_SKIP_BUILD=1 OPENCLAW_E2E_VERBOSE=1 OPENCLAW_VITEST_MAX_WORKERS=1 -- node scripts/run-vitest.mjs src/daemon/schtasks.integration.e2e.test.ts",
     "tool-display:check": "node --import ./scripts/tsx.mjs scripts/tool-display.ts --check",
     "tool-display:write": "node --import ./scripts/tsx.mjs scripts/tool-display.ts --write",
@@ -2244,6 +2295,8 @@
     "ui:solid:inventory": "node --import ./scripts/tsx.mjs scripts/control-ui-solid-inventory.mts",
     "ui:build": "node scripts/ui.js build",
     "ui:parity": "node --import ./scripts/tsx.mjs scripts/control-ui-parity/index.mts",
+    "ui:validators:gen": "node --import ./scripts/tsx.mjs scripts/generate-control-ui-validators.mts",
+    "ui:validators:check": "node --import ./scripts/tsx.mjs scripts/generate-control-ui-validators.mts --check",
     "ui:check-performance": "node --import ./scripts/tsx.mjs scripts/check-control-ui-performance.mts",
     "ui:check-performance:base": "node --import ./scripts/tsx.mjs scripts/check-control-ui-performance-base.mts",
     "ui:dev": "node scripts/ui.js dev",
@@ -2278,28 +2331,32 @@
     "chrome-devtools-mcp"
   ],
   "dependencies": {
-    "@agentclientprotocol/sdk": "1.7.0",
-    "@anthropic-ai/sdk": "0.131.0",
+    "@agentclientprotocol/sdk": "1.8.0",
+    "@anthropic-ai/sdk": "0.133.0",
     "@babel/generator": "8.0.6",
-    "@babel/parser": "8.0.6",
-    "@babel/traverse": "8.0.6",
+    "@babel/parser": "8.0.7",
+    "@babel/traverse": "8.0.7",
     "@clack/core": "1.5.1",
     "@clack/prompts": "1.8.1",
-    "@earendil-works/pi-tui": "1.0.3",
-    "@google/genai": "2.27.0",
+    "@earendil-works/pi-tui": "1.1.0",
+    "@google/genai": "2.28.0",
     "@grammyjs/transformer-throttler": "1.2.1",
     "@homebridge/ciao": "1.3.12",
     "@lydell/node-pty": "1.2.0-beta.15",
-    "@mistralai/mistralai": "2.7.0",
+    "@modelcontextprotocol/client": "2.3.1",
+    "@modelcontextprotocol/core": "2.3.1",
+    "@modelcontextprotocol/node": "2.1.1",
     "@modelcontextprotocol/sdk": "1.32.1",
+    "@modelcontextprotocol/server": "2.3.1",
     "@mozilla/readability": "0.6.0",
     "@openclaw/ai": "workspace:*",
-    "@openclaw/fs-safe": "0.26.3",
-    "@openclaw/proc-safe": "0.2.0",
+    "@openclaw/fs-safe": "0.26.8",
+    "@openclaw/proc-safe": "0.4.2",
     "@openclaw/proxyline": "0.4.0",
+    "@opentelemetry/semantic-conventions": "1.43.0",
     "@resvg/resvg-js": "2.6.2",
     "@silvia-odwyer/photon-node": "0.3.4",
-    "@trycua/cua-driver": "0.33.4",
+    "@trycua/cua-driver": "0.34.1",
     "acorn": "8.19.0",
     "chalk": "6.0.1",
     "chrome-devtools-mcp": "1.10.1",
@@ -2307,11 +2364,12 @@
     "commander": "15.0.0",
     "croner": "10.0.1",
     "diff": "9.0.0",
-    "dotenv": "18.0.5",
+    "dotenv": "18.0.7",
     "entities": "8.1.0",
     "esbuild": "0.28.2",
-    "execa": "10.0.1",
-    "express": "5.2.1",
+    "execa": "10.1.0",
+    "express": "5.3.0",
+    "fast-uri": "4.2.2",
     "file-type": "22.1.1",
     "grammy": "1.46.0",
     "highlight.js": "11.12.0",
@@ -2326,39 +2384,39 @@
     "kysely": "0.29.6",
     "linkedom": "0.18.13",
     "minimatch": "10.2.6",
-    "node-edge-tts": "1.2.10",
+    "node-edge-tts": "1.2.11",
     "npm": "12.2.0",
-    "openai": "7.28.0",
+    "openai": "7.32.0",
     "p-limit": "7.3.3",
-    "p-map": "7.0.8",
+    "p-map": "7.1.1",
+    "parse5": "8.0.1",
     "partial-json": "0.1.7",
     "pg": "8.23.1",
-    "playwright-core": "1.63.0",
+    "playwright-core": "1.64.0",
     "qrcode": "1.5.4",
     "rastermill": "0.4.0",
     "semver": "7.8.5",
     "tar": "7.5.22",
     "tslog": "5.2.0",
-    "typebox": "1.3.35",
+    "typebox": "1.3.36",
     "undici": "8.11.2",
     "web-push": "3.6.7",
-    "web-tree-sitter": "0.27.0",
+    "web-tree-sitter": "0.27.1",
     "ws": "8.22.0",
     "yaml": "2.9.1",
-    "zod": "4.6.5"
+    "zod": "4.6.6",
+    "zod-to-json-schema": "3.25.2"
   },
   "devDependencies": {
-    "@a2ui/lit": "0.12.0",
-    "@a2ui/web_core": "0.12.0",
+    "@a2ui/lit": "0.13.0",
+    "@a2ui/web_core": "0.13.0",
     "@babel/types": "8.0.6",
-    "@copilotkit/aimock": "1.43.0",
-    "@lit-labs/signals": "0.3.0",
-    "@lit/context": "1.1.6",
-    "@lit/task": "1.0.3",
+    "@copilotkit/aimock": "1.45.0",
     "@mdx-js/mdx": "3.1.1",
+    "@mistralai/mistralai": "2.7.0",
     "@openclaw/crabline": "0.1.29",
     "@openclaw/session-url-contract": "workspace:*",
-    "@opentelemetry/sdk-node": "0.222.0",
+    "@opentelemetry/sdk-node": "0.223.0",
     "@pnpm/parse-overrides": "1001.0.4",
     "@shikijs/core": "4.5.0",
     "@shikijs/engine-javascript": "4.5.0",
@@ -2369,33 +2427,30 @@
     "@types/jsdom": "30.0.0",
     "@types/markdown-it": "14.2.0",
     "@types/mdast": "4.0.4",
-    "@types/node": "26.6.4",
+    "@types/node": "26.6.5",
     "@types/pg": "8.23.1",
     "@types/semver": "7.8.0",
     "@types/web-push": "3.6.4",
     "@types/ws": "8.18.2",
-    "@vitest/browser-playwright": "5.0.1",
-    "@vitest/coverage-v8": "5.0.1",
+    "@vitest/browser-playwright": "5.0.3",
+    "@vitest/coverage-v8": "5.0.3",
     "acpx": "0.19.4",
     "apache-arrow": "21.2.0",
     "baileys": "7.0.0-rc14",
     "ipaddr.js": "2.5.0",
-    "jscpd": "5.4.0",
-    "jsdom": "30.1.1",
-    "lit": "3.3.3",
-    "lit-analyzer": "2.0.3",
+    "jscpd": "5.4.1",
+    "jsdom": "30.1.2",
     "markdown-it": "15.0.2",
     "markdown-it-anchor": "10.0.0",
     "marked": "18.1.0",
     "minipass": "7.1.3",
     "nostr-tools": "2.25.2",
-    "oxfmt": "0.71.0",
-    "oxlint": "1.85.0",
-    "oxlint-tsgolint": "7.0.2003",
+    "oxfmt": "0.72.0",
+    "oxlint": "1.87.0",
+    "oxlint-tsgolint": "7.0.2004",
     "pako": "3.0.2",
-    "playwright": "1.63.0",
+    "playwright": "1.64.0",
     "postcss": "8.5.29",
-    "postcss-lit": "1.4.1",
     "postcss-selector-parser": "7.1.6",
     "shiki": "4.5.0",
     "signal-utils": "0.21.1",
@@ -2405,12 +2460,13 @@
     "stylelint-config-recommended": "18.0.0",
     "tinyglobby": "0.2.17",
     "tree-sitter-bash": "0.25.1",
-    "tsdown": "0.23.0",
+    "tsdown": "0.23.1",
+    "tsrs": "0.16.0-ts7.1.0-dev.20260929",
     "tsx": "4.23.15",
-    "typescript": "7.1.0-dev.20260922.1",
+    "typescript": "7.1.0-dev.20261011.1",
     "unrun": "0.3.1",
-    "vite": "8.3.2",
-    "vitest": "5.0.1"
+    "vite": "8.3.4",
+    "vitest": "5.0.3"
   },
   "optionalDependencies": {
     "sqlite-vec": "0.1.9"
@@ -2418,5 +2474,5 @@
   "engines": {
     "node": ">=24.16.0 <25 || >=26.1.0"
   },
-  "packageManager": "pnpm@12.9.0+sha512.8f64efa0b792986ca98ae568791bcd7722807e274c4f0c1d9853c62116495c584119db98762a2a5343b1684d361b9ae26fdd16d551666d7635346d3fae830ddd"
+  "packageManager": "pnpm@12.12.1+sha512.b7f98934c0b1f29a65f5da52f2d7f994e7faad573ffdddea1497fb4dcb5aec051590ee7c7d95a38172b4bfae103a5b83edf2ee866e11731c2cafa96063610ac5"
 }

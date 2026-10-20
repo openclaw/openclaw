@@ -41,14 +41,13 @@ const capacityCases = [
 
 it.each(capacityCases)(
   "reclaims outbound $dimension after repeated proven no-dispatch abandonment",
-  async ({ payload, count }) => {
+  ({ payload, count }) => {
     const { claims, capture, transmit } = fixture();
     for (let id = 1; id <= 3; id++) {
       const lease = capture(id);
-      const deliveries: Array<ReturnType<typeof lease.ownerMessage>> = [];
       try {
         for (let message = 0; message < count; message++) {
-          deliveries.push(lease.ownerMessage(payload));
+          lease.ownerMessage(payload);
         }
         expect(() => lease.ownerMessage(payload)).toThrow(/delivery capacity exceeded/);
         expect(claims.size).toBe(1);
@@ -59,9 +58,6 @@ it.each(capacityCases)(
       }
       expect(claims.size).toBe(0);
       expect(claims.hasOpenClaims).toBe(false);
-      for (const delivery of deliveries) {
-        await expect(delivery.result).rejects.toThrow(/never dispatched/);
-      }
     }
     expect(transmit).not.toHaveBeenCalled();
   },
@@ -87,7 +83,9 @@ it.each([
     const lease = capture(1);
     lease.receive({ type: "resource-ready", id: 1, pid: 42, generation: 1 });
     lease.receive({ type: "resource-created", id: 1 });
-    const deliveries = Array.from({ length: count }, () => lease.ownerMessage(payload));
+    for (let message = 0; message < count; message++) {
+      lease.ownerMessage(payload);
+    }
     const sibling = source === "resource" ? capture(2) : undefined;
     const failure = new Error(
       source === "resource" ? "resource operation failed" : "broker transport lost",
@@ -111,9 +109,6 @@ it.each([
         expect(callbacks.failed).toHaveBeenCalledExactlyOnceWith(failure);
         expect(reported).toBe(failure);
       }
-      for (const delivery of deliveries) {
-        await expect(delivery.result).rejects.toBe(reported);
-      }
       expect(claims.size).toBe(sibling ? 2 : 1);
       expect(claims.hasOpenClaims).toBe(true);
       expect(() => lease.release()).toThrow(/must close before release/);
@@ -123,24 +118,55 @@ it.each([
       }
       lease.receive({ type: "resource-closed", id: 1, requestId: 0 });
       expect(claims.hasOpenClaims).toBe(Boolean(sibling));
-      for (const delivery of deliveries) {
-        await expect(delivery.result).rejects.toBe(reported);
-      }
       lease.release();
       if (sibling) {
-        const next = sibling.ownerMessage(payload);
+        sibling.ownerMessage(payload);
         sibling.abandonUnattached();
-        await expect(next.result).rejects.toThrow(/never dispatched/);
       }
       expect(claims.size).toBe(0);
     } finally {
       lease.receive({ type: "resource-closed", id: 1, requestId: 0 });
       lease.release();
       sibling?.abandonUnattached();
-      await Promise.allSettled(deliveries.map((delivery) => delivery.result));
     }
   },
 );
+
+it("keeps pending cleanup when an earlier resource failure arrives through parent IPC", async () => {
+  const { claims, capture, transmit, callbacks } = fixture();
+  const lease = capture(1);
+  lease.receive({ type: "resource-ready", id: 1, pid: 42, generation: 1 });
+  const closing = lease.close();
+  const settled = vi.fn();
+  void closing.then(settled, settled);
+  try {
+    await Promise.resolve();
+    const close = transmit.mock.calls
+      .map(([request]) => request)
+      .find((request) => request.type === "resource-close");
+    expect(close).toBeDefined();
+    if (!close || close.type !== "resource-close") {
+      throw new Error("Expected the actual resource close request");
+    }
+    const failure = new Error("original resource import failure");
+    // The socket already observed this failure; parent IPC can arrive after close starts.
+    lease.receive({ type: "resource-failed", id: 1, error: encodeNativeWorkerFailure(failure) });
+    await Promise.resolve();
+    expect(callbacks.failed).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ message: failure.message }),
+    );
+    expect(settled).not.toHaveBeenCalled();
+    expect(claims.hasOpenClaims).toBe(true);
+    expect(() => lease.release()).toThrow(/must close before release/);
+    lease.receive({ type: "resource-closed", id: 1, requestId: close.requestId });
+    await expect(closing).resolves.toBeUndefined();
+  } finally {
+    lease.receive({ type: "resource-closed", id: 1, requestId: 0 });
+    await closing.catch(() => {});
+    lease.release();
+  }
+  expect(claims.size).toBe(0);
+});
 
 it("settles owner receipts independently and preserves rejection through cleanup and close", async () => {
   const { claims, capture, transmit, callbacks } = fixture();
@@ -177,20 +203,14 @@ it("settles owner receipts independently and preserves rejection through cleanup
       code: "OWNER_CALLBACK_REFUSED",
       cause: { message: "original callback cause", code: "SQLITE_BUSY" },
     });
-    await expect(delivery.result).rejects.toBe(reported);
     expect(claims.hasOpenClaims).toBe(true);
     expect(claims.size).toBe(1);
     expect(() => lease.release()).toThrow(/must close before release/);
     lease.receive(receipt);
     expect(callbacks.failed).toHaveBeenCalledOnce();
-    await expect(delivery.result).rejects.toBe(reported);
 
     const cleanupValue = { command: "dispose", padding: "y".repeat(700) };
     const cleanup = lease.ownerMessage(cleanupValue);
-    let cleanupDelivered = false;
-    void cleanup.result.then(() => {
-      cleanupDelivered = true;
-    });
     await Promise.resolve();
     expect(transmit).toHaveBeenLastCalledWith({
       type: "resource-owner",
@@ -198,21 +218,19 @@ it("settles owner receipts independently and preserves rejection through cleanup
       sequence: cleanup.sequence,
       value: cleanupValue,
     });
-    expect(cleanupDelivered).toBe(false);
+    expect(() => lease.ownerMessage(cleanupValue)).toThrow(/delivery capacity exceeded/);
     lease.receive({ type: "resource-owner-received", id: 1, sequence: cleanup.sequence + 1 });
     await Promise.resolve();
-    expect(cleanupDelivered).toBe(false);
+    expect(() => lease.ownerMessage(cleanupValue)).toThrow(/delivery capacity exceeded/);
     lease.receive(receipt);
     await Promise.resolve();
-    expect(cleanupDelivered).toBe(false);
+    expect(() => lease.ownerMessage(cleanupValue)).toThrow(/delivery capacity exceeded/);
     expect(callbacks.failed).toHaveBeenCalledOnce();
     lease.receive({ type: "resource-owner-received", id: 1, sequence: cleanup.sequence });
     await Promise.resolve();
-    expect(cleanupDelivered).toBe(true);
-    await cleanup.result;
+    expect(lease.ownerMessage(cleanupValue).sequence).toBe(cleanup.sequence + 1);
     expect(claims.hasOpenClaims).toBe(true);
     expect(claims.size).toBe(1);
-    await expect(delivery.result).rejects.toBe(reported);
     const closing = lease.close();
     await Promise.resolve();
     const close = transmit.mock.calls
@@ -231,15 +249,15 @@ it("settles owner receipts independently and preserves rejection through cleanup
   expect(claims.size).toBe(0);
 });
 
-it("rejects unsent owner delivery when native close precedes its acknowledgment", async () => {
+it("drops unsent owner delivery when native close precedes its acknowledgment", async () => {
   const { claims, capture, transmit } = fixture();
   const lease = capture(1);
-  const delivery = lease.ownerMessage("x".repeat(700));
+  lease.ownerMessage("x".repeat(700));
   lease.receive({ type: "resource-ready", id: 1, pid: 42, generation: 1 });
   // Ready schedules the sender; native close arrives before that continuation can transmit.
   lease.receive({ type: "resource-closed", id: 1, requestId: 0 });
   try {
-    await expect(delivery.result).rejects.toThrow(/closed before owner delivery was acknowledged/);
+    await Promise.resolve();
     expect(transmit).not.toHaveBeenCalled();
     expect(claims.hasOpenClaims).toBe(false);
     expect(claims.size).toBe(1);
@@ -249,9 +267,8 @@ it("rejects unsent owner delivery when native close precedes its acknowledgment"
     // Closing frees packet credit even while the closed claim is awaiting release.
     const sibling = capture(2);
     try {
-      const next = sibling.ownerMessage("y".repeat(700));
+      sibling.ownerMessage("y".repeat(700));
       sibling.abandonUnattached();
-      await expect(next.result).rejects.toThrow(/never dispatched/);
     } finally {
       sibling.abandonUnattached();
     }

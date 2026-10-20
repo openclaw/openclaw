@@ -31,8 +31,8 @@ import {
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { readTranscriptMessageByScopedIdempotencyKey } from "./session-accessor.sqlite-transcript-identity.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
-import { readTranscriptMessageByScopedIdempotencyKey } from "./session-accessor.sqlite-transcript-store.js";
 import {
   captureSessionActorStorageOwner,
   getSessionActorStorageBinding,
@@ -181,7 +181,8 @@ async function appendPreparedSessionTranscriptTurn(
       }
       return !append.workerPreparation || (!append.predicate && !repeated);
     });
-  const inputActor = !nativeReservation && (await getSessionInputActor(resolved));
+  const inputActor =
+    !nativeReservation && (await getSessionInputActor(resolved, options.resolveRuntimeTarget));
   if (
     !nativeReservation &&
     independentPreparation &&
@@ -408,7 +409,6 @@ async function appendPreparedSessionTranscriptTurn(
           result = committed.result;
           if (
             !stageSqliteTransactionState(transactionDb.db, {
-              stage: () => undefined,
               commit: () => {
                 try {
                   completion = completeSessionTranscriptCommit(
@@ -421,7 +421,6 @@ async function appendPreparedSessionTranscriptTurn(
                   failures.push(error);
                 }
               },
-              rollback: () => undefined,
             })
           ) {
             throw new Error("Transcript completion requires managed commit settlement");
@@ -437,7 +436,6 @@ async function appendPreparedSessionTranscriptTurn(
             const entry = result.sessionEntry;
             if (
               !stageSqliteTransactionState(transactionDb.db, {
-                stage: () => undefined,
                 commit: () => {
                   try {
                     options.onCommittedSource?.(source, entry);
@@ -445,7 +443,6 @@ async function appendPreparedSessionTranscriptTurn(
                     failures.push(error);
                   }
                 },
-                rollback: () => undefined,
               })
             ) {
               throw new Error("Transcript source publication requires managed commit settlement");

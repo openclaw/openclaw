@@ -149,7 +149,7 @@ OpenClaw renders smaller system prompts for sub-agents. The runtime sets a `prom
 
 Under `promptMode=minimal`, extra injected prompts are labeled **Subagent Context** instead of **Group Chat Context**.
 
-The **Silent Replies** section applies only to sessions connected to external message channels. Subagents, the Control UI, and other internal sessions never receive silent-token guidance: they must return a result or continue unfinished work. For channel auto-reply runs, OpenClaw omits the generic section when direct, group, or message-tool-only context already owns the visible-reply contract. Automatic group/channel contexts show `NO_REPLY` guidance only when the operator explicitly [allows group silence](/concepts/messages#silent-replies); direct chats and message-tool-only replies skip silent-token guidance.
+The **Silent Replies** section applies to external message channels, including message-tool-only replies; direct-message prompts omit it. A token-only `NO_REPLY` still ends an external turn silently even when an answer was required. The guidance explains that `NO_REPLY` discards unsent text, so send confirmations first. Subagents, private completions, the Control UI, and other internal sessions receive no silent-token guidance: they must return a result or continue unfinished work. See [Silent replies](/concepts/messages#silent-replies).
 
 ## Prompt snapshots
 
@@ -248,7 +248,9 @@ The runtime excerpt budget covers `memory_get`, live tool results, and post-comp
 
 ## Documentation
 
-The **Documentation** section points to local docs when available (`docs/` in a Git checkout or the bundled npm package docs), falling back to [https://docs.openclaw.ai](https://docs.openclaw.ai) otherwise. It also lists the OpenClaw source location: Git checkouts expose the local source root, package installs get the GitHub source URL with instructions to review source there when docs are incomplete or stale.
+The **Documentation** section points to local docs when available (`docs/` in a Git checkout or the bundled npm package docs), falling back to [https://docs.openclaw.ai](https://docs.openclaw.ai) otherwise. It also lists the OpenClaw source location: Git checkouts expose the local source root, package installs get the GitHub source URL with instructions to review source there when docs are incomplete or stale. It also tells the agent that a missing tool or failed call reflects the current session, not OpenClaw, and to check [`session_status`](/concepts/session-tool#status-and-orchestration-helpers) with `capabilities: true` and the docs index (`https://docs.openclaw.ai/llms.txt`) before saying OpenClaw cannot do something. Each check is named only when the session can use it.
+
+Sandboxed runs receive local references only through their existing mounts, using paths inside the sandbox (such as `/workspace/docs` or `/agent/docs`). Host-only paths fall back to the public URLs; OpenClaw does not add mounts for documentation. When neither local docs nor a web tool is available, the prompt tells the model to acknowledge that it could not check the docs and mark recalled behavior as unverified.
 
 The prompt frames docs as the authority for OpenClaw self-knowledge before the model understands how OpenClaw works (memory/daily notes, sessions, tools, Gateway, config, commands, project context), and tells the model to treat `AGENTS.md`, project context, workspace/profile/memory notes, and `memory_search` as instruction context or user memory rather than OpenClaw design/implementation knowledge. If docs are silent or stale, the model should say so and inspect source. It also tells the model to run `openclaw status` itself when possible, asking the user only when it lacks access.
 

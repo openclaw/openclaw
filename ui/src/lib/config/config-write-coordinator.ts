@@ -1,5 +1,6 @@
 import { createDeferredCore, type Deferred } from "../../../../src/shared/deferred.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { createConfigDraftDiscard } from "./config-draft-discard.ts";
 import {
@@ -118,7 +119,7 @@ export function createConfigWriteCoordinator({
       }
     }
   };
-  // Stale bases and previous connections require explicit recovery, including teardown.
+  // A retained draft needs a fresh, unchanged base before autosave can resume.
   const canAutoSaveDraft = () =>
     state.configAutoSaveStatus !== "conflict" &&
     state.configRecoveryError === null &&
@@ -157,7 +158,7 @@ export function createConfigWriteCoordinator({
   };
   const invalidateConfigLoad = () => {
     resetConfigLoad();
-    nextRequestVersion(state, "config");
+    nextRequestVersion(state);
     state.configLoading = false;
   };
   const trackWrite = <T>(
@@ -364,29 +365,42 @@ export function createConfigWriteCoordinator({
     publish,
     reconcileDraft: reconcileAutoSaveDraftConnection,
   });
+  let pluginGeneration = gateway.snapshot.pluginCapabilities?.generation;
+  let canRead = hasOperatorReadAccess(gateway.snapshot.hello?.auth ?? null);
+  // Transport and authorization changes retire requests even when the client is reused.
   const stopGateway = gateway.subscribe((snapshot) => {
     const clientChanged = state.client !== snapshot.client;
     const connectionChanged = state.connected !== (snapshot.phase === "connected");
+    const nextCanRead = hasOperatorReadAccess(snapshot.hello?.auth ?? null);
+    const accessLost = snapshot.phase === "connected" && canRead && !nextCanRead;
+    if (snapshot.phase === "connected") {
+      canRead = nextCanRead;
+    }
+    const nextPluginGeneration = snapshot.pluginCapabilities?.generation;
+    const pluginsChanged =
+      nextPluginGeneration !== undefined && nextPluginGeneration !== pluginGeneration;
+    pluginGeneration = nextPluginGeneration;
     state.client = snapshot.client;
     state.connected = snapshot.phase === "connected";
     state.applySessionKey = snapshot.sessionKey;
-    if (clientChanged || connectionChanged) {
+    if (clientChanged || connectionChanged || accessLost) {
       const unacknowledged = unacknowledgedDraftWrite();
       fieldDiscard.invalidate();
       reconciliation.retireConnection();
       patches.clear();
       const draftBelongsToPreviousConnection =
         state.configFormDirty || inFlight !== null || unacknowledged !== null;
+      if (clientChanged || inFlight !== null || unacknowledged !== null) {
+        autoSaveDraftConnection = null;
+      }
       resetLoads();
       // A retired flight cannot hold the replacement connection's FIFO.
       explicitOpQueue = null;
-      // Reconnect can reuse the client object; the epoch must still advance.
       invalidateConfigConnection(state);
       cancelScheduledAutoSave();
       appliedRefresh.cancel();
       if (draftBelongsToPreviousConnection) {
-        // Retain the draft, visibly paused until Save/Apply or reload binds it
-        // to the new connection; silent suspension would make later edits look saved.
+        // Keep the pause visible until the reconnect read proves autosave safe.
         pauseAutoSaveDraftConnection();
       }
       if (inFlight !== null || unacknowledged !== null) {
@@ -406,13 +420,46 @@ export function createConfigWriteCoordinator({
       if (state.configAutoSaveStatus === "saving") {
         state.configAutoSaveStatus = "idle";
       }
-      if (state.connected && state.client) {
+      if (state.connected && state.client && !accessLost) {
         if (reconciliation.interrupted) {
           reconciliation.refreshInterrupted();
         } else if (state.configSnapshot || state.configFormDirty || !state.bootstrapConfig) {
-          void refreshDraft(state, refreshConnectionState, publish, appliedRefresh.reconcile);
+          const draftConnection = autoSaveDraftConnection;
+          const draftBaseHash = state.configDraftBaseHash ?? state.configSnapshot?.hash ?? null;
+          const client = state.client;
+          const epoch = currentConfigConnectionEpoch(state);
+          void refreshDraft(
+            state,
+            async () => {
+              const loaded = await refreshConnectionState();
+              if (
+                loaded &&
+                isCurrentConfigConnection(state, client, epoch) &&
+                draftConnection !== null &&
+                autoSaveDraftConnection === draftConnection
+              ) {
+                if (
+                  draftConnection.client === client &&
+                  draftBaseHash !== null &&
+                  draftBaseHash === state.configSnapshot?.hash
+                ) {
+                  captureAutoSaveDraftConnection(true);
+                  scheduleAutoSave();
+                  publish();
+                } else {
+                  autoSaveDraftConnection = null;
+                }
+              }
+              return loaded;
+            },
+            publish,
+            appliedRefresh.reconcile,
+          );
         }
       }
+    } else if (pluginsChanged && state.connected && state.configSnapshot) {
+      // Plugin activation changes config validation and schema even without a config write.
+      void refreshDraft(state, refreshConnectionState, publish, appliedRefresh.reconcile);
     }
     publish();
   });

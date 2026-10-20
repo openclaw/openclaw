@@ -24,10 +24,7 @@ import {
 } from "../../../gateway/server-methods/chat-abort-authorization.js";
 import { handleChatAbortRequestWithLifecycle } from "../../../gateway/server-methods/chat-abort-handler.js";
 import { requireLastRespondCall } from "../../../gateway/server-methods/chat.abort-authorization.test-helpers.js";
-import {
-  createChatAbortContext,
-  invokeChatAbortHandler,
-} from "../../../gateway/server-methods/chat.abort.test-helpers.js";
+import { invokeChatAbortHandler } from "../../../gateway/server-methods/chat.abort.test-helpers.js";
 import { createSyntheticPluginRuntimeClient } from "../../../gateway/server-plugin-runtime-client.js";
 import {
   captureExecRequestOwners,
@@ -47,6 +44,7 @@ import {
   peekSystemEventEntries,
 } from "../../../infra/system-events.js";
 import { getProcessSupervisor } from "../../../process/supervisor/index.js";
+import { getRpcSource } from "../../../sessions/session-controller.rpc-sources.js";
 import { isPidDefinitelyDead } from "../../../shared/pid-alive.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { normalizeAcceptedSessionSpawnResult } from "../../accepted-session-spawn.js";
@@ -69,9 +67,11 @@ import {
 import * as nativeSession from "../registry/subagent-control-session.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "../registry/subagent-registry-publication.js";
+import { prepareSubagentRunsByRunIds } from "../registry/subagent-registry.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import {
   createBoundSpawnInvocation,
+  recordSpawnBoundaryFinal,
   type RequestCustodySpawnCaseOptions,
 } from "./subagent-spawn.production-boundary.test-support.js";
 
@@ -236,12 +236,17 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
           }
           commandReady.resolve(command);
           await completeModel.promise;
+          await recordSpawnBoundaryFinal({
+            storePath: bound.storePath,
+            sessionKey,
+            runId: run.runId,
+            text: "Completed child result",
+          });
           return {
             payloads: [{ text: "Completed child result" }],
             meta: {
               durationMs: 1,
-              finalAssistantVisibleText: "Completed child result",
-              finalAssistantRawText: "Completed child result",
+              terminalReply: { disposition: "visible", text: "Completed child result" },
             },
           };
         });
@@ -301,7 +306,7 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
         bound.admission.close();
         bound.parent.cleanup();
         expect(captureExecRequestCancellation(original).owners).toEqual(owners);
-        const context = createChatAbortContext({ getRuntimeConfig: () => bound.cfg });
+        const context = bound.context;
         const stop = (connId: string, exact: boolean) =>
           invokeChatAbortHandler({
             handler: (request) =>
@@ -429,15 +434,22 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
                 storePath: bound.storePath,
                 lifecycleRevision: "original-request-generation",
               },
-              acceptsRequest: (identity) => canRequesterAbortChatRun(identity, requester),
+              acceptsRequest: (identity) =>
+                canRequesterAbortChatRun(
+                  {
+                    ...identity,
+                    requester: {
+                      connectionId: identity.ownerConnId,
+                      deviceId: identity.ownerDeviceId,
+                    },
+                  },
+                  requester,
+                ),
             },
           });
           expect(requestSelection.runs.map((entry) => entry.runId)).toEqual([childRunId]);
-          const active = expectDefined(
-            bound.context.chatAbortControllers.get(childRunId),
-            "active native child",
-          );
-          active.controller.signal.addEventListener(
+          const active = expectDefined(getRpcSource(childRunId), "active native child");
+          active.input.abortSignal.addEventListener(
             "abort",
             () => {
               source.abort(new Error("Requester revoked after native acceptance"));
@@ -573,7 +585,12 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
             true,
           );
         }
-        const after = expectDefined(subagentRuns.get(childRunId), "native child after Stop");
+        const prepared = await prepareSubagentRunsByRunIds([accepted.runId]);
+        const selected = prepared.consume((runs) => runs.get(accepted.runId));
+        if (!selected.ready) {
+          throw new Error("Native child changed while reading its retained receipt");
+        }
+        const after = expectDefined(selected.value, "native child after Stop");
         if (mode === "consumed-active-revoked") {
           expect(after).toMatchObject({
             execution: { status: "terminal" },

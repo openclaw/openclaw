@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { page } from "vitest/browser";
 import type { ApplicationContext } from "../../app/context.ts";
 import { REDACTED_SENTINEL, type JsonSchema } from "../../lib/config-form-utils.ts";
-import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
+import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import { ControlUiPluginRuntime } from "../../plugins/control-ui-runtime.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
@@ -155,6 +155,49 @@ describe("grouped plugin settings", () => {
       expect(input.value).toBe(text);
       expect(onPatch).toHaveBeenLastCalledWith(["plugins", "label"], text);
     }
+  });
+  it("retains an optional config draft across refreshes and a rejected atomic save", async () => {
+    const onConfigPatch = vi.fn(() => false);
+    const { editor, model, update } = await mount({
+      configValue: { plugins: { entries: { fixture: {} } } },
+      configHints: {},
+      configSchema: {
+        ...objectSchema({
+          host: { type: "string", title: "Host", minLength: 1 },
+          port: { type: "integer", title: "Port", minimum: 1 },
+        }),
+        required: ["host", "port"],
+      },
+      onConfigPatch,
+    });
+    const host = editor.querySelector<HTMLInputElement>('input[aria-label="Host"]')!;
+    host.focus();
+    host.value = "gateway.local";
+    host.dispatchEvent(new Event("input", { bubbles: true }));
+    host.blur();
+    await settle();
+    expect(onConfigPatch).not.toHaveBeenCalled();
+
+    await update({ model: { ...model } });
+    expect(editor.querySelector<HTMLInputElement>('input[aria-label="Host"]')?.value).toBe(
+      "gateway.local",
+    );
+    const port = editor.querySelector<HTMLInputElement>('input[aria-label="Port"]')!;
+    port.focus();
+    port.value = "18789";
+    port.dispatchEvent(new Event("input", { bubbles: true }));
+    port.blur();
+    await settle();
+    expect(onConfigPatch).toHaveBeenCalledExactlyOnceWith(
+      ["plugins", "entries", "fixture", "config"],
+      { host: "gateway.local", port: 18789 },
+    );
+    expect(
+      editor.querySelector('.cfg-structured-draft__error [role="alert"]')?.textContent,
+    ).toContain("draft is still here");
+    expect(editor.querySelector<HTMLInputElement>('input[aria-label="Host"]')?.value).toBe(
+      "gateway.local",
+    );
   });
   it("navigates authored sections without hiding settings and omits the rail for flat schemas", async () => {
     const { editor, model, update } = await mount();
@@ -423,7 +466,7 @@ describe("grouped plugin settings", () => {
         connected: true,
         capture: () => scope,
         isCurrent: (candidate: unknown) => candidate === scope,
-      } as unknown as GatewayPageController;
+      } as unknown as GatewayPageBinding;
       await update({
         resolveCredential: (field) =>
           field.path.at(-1) === "apiKey"

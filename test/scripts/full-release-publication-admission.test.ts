@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   constants as fsConstants,
   cpSync,
@@ -366,6 +366,7 @@ async function fixture(
   processFixture: CommandFixture,
   check: TestContext["expect"],
   requestedOptions: {
+    nearLimitPack?: boolean;
     version?: string;
     targetContextRef?: string;
     purpose?: string;
@@ -483,6 +484,16 @@ async function fixture(
     }
   };
   writePlugins(target);
+  if (options.nearLimitPack) {
+    // Binary README data stays inert; reserve raw space for trees and other metadata.
+    for (let index = 0; index < 4; index += 1) {
+      write(
+        target,
+        `extensions/pack-boundary-${index}/README.md`,
+        randomBytes(16 * 1024 * 1024 - (index === 3 ? 8192 : 0)),
+      );
+    }
+  }
   if (options.fault === "unselected") {
     const other = writePublishablePluginFixture(target, {
       extensionId: "other-plugin",
@@ -594,12 +605,19 @@ const { basename } = await import("node:path");
 const record = (value) => appendFileSync(${JSON.stringify(registryCalls)}, JSON.stringify(value) + "\\n");
 const worker = basename(process.argv[1] ?? "") === "full-release-publication-observations.mts";
 const sizeFault = ${JSON.stringify(options.fault)};
-if (sizeFault?.startsWith("size-")) {
+if (sizeFault?.startsWith("size-") || ${JSON.stringify(options.nearLimitPack ?? false)}) {
   const childProcess = (await import("node:child_process")).default;
   const original = childProcess.execFileSync;
   childProcess.execFileSync = (file, args, ...rest) => {
     if (file === "git" && args.includes("pack-objects")) record({ kind: "source-pack" });
     const output = original(file, args, ...rest);
+    if (${JSON.stringify(options.nearLimitPack ?? false)} && file === "git") {
+      if (args.includes("pack-objects")) record({ kind: "packed-source", bytes: output.length });
+      if (args.includes("index-pack")) record({ kind: "indexed-source" });
+      if (args.includes("--batch-check=%(objectname) %(objectsize)")) {
+        record({ kind: "raw-source", bytes: output.toString().trim().split(String.fromCharCode(10)).reduce((total, row) => total + Number(row.split(" ")[1]), 0) });
+      }
+    }
     if (file !== "git" || !args.includes("--batch-check=%(objectname) %(objectsize)")) return output;
     record({ kind: "object-size-batch" });
     const rows = output.toString().split("\\n");
@@ -1018,7 +1036,7 @@ process.stdout.write(${JSON.stringify(
       continue;
     }
     if (step.name === "Upload immutable publication observations") {
-      check(step.uses).toBe("actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a");
+      check(step.uses).toBe("actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9");
       check(step.with).toEqual({
         name: "full-release-publication-observations-${{ github.run_id }}-${{ github.run_attempt }}",
         path: "${{ runner.temp }}/publication-observations.json",
@@ -1226,6 +1244,7 @@ globalThis.Date = class extends OriginalDate {
           (line) =>
             JSON.parse(line) as {
               kind: string;
+              bytes?: number;
               origin?: string;
               path?: string;
               worker?: boolean;
@@ -1934,6 +1953,32 @@ describe("FRV publication source admission", () => {
       }),
   );
 
+  publicationIt.concurrent(
+    "indexes an admitted near-limit incompressible source pack",
+    async ({ command: processFixture, expect: check }) =>
+      processFixture.lifetime.run(async () => {
+        const result = await fixture(processFixture, check, {
+          nearLimitPack: true,
+          registry: "healthy",
+        });
+        check(result.status, result.stderr).toBe(0);
+        const raw = expectDefined(
+          result.registryCalls.find((entry) => entry.kind === "raw-source")?.bytes,
+          "raw source bytes",
+        );
+        check(raw).toBeGreaterThan(64 * 1024 * 1024 - 8192);
+        check(raw).toBeLessThanOrEqual(64 * 1024 * 1024);
+        check(
+          result.registryCalls.find((entry) => entry.kind === "packed-source")?.bytes,
+        ).toBeGreaterThan(64 * 1024 * 1024);
+        check(result.registryCalls.filter((entry) => entry.kind === "indexed-source")).toHaveLength(
+          2,
+        );
+        check(result.fact?.status).toBe("source-admitted");
+        check(result.registryCalls.filter((entry) => entry.kind === "request")).toHaveLength(6);
+      }),
+    30_000,
+  );
   publicationIt.concurrent.for([
     ["size-missing", "invalid publication source object-size response"],
     ["size-wrong-oid", "invalid publication source object-size response"],

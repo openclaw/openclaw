@@ -88,7 +88,7 @@ openclaw-chat-session-rail {
   color: var(--text);
 }
 
-/* strokeIcon already inlines fill/stroke/stroke-width on the svg. */
+/* Icons inline fill, stroke, and stroke-width on the SVG. */
 .chat-session-rail__starter svg {
   width: 12px;
   height: 12px;
@@ -145,28 +145,7 @@ openclaw-chat-session-rail {
   justify-self: start;
 }
 
-.chat-session-rail__exchange--pending .chat-session-rail__hint {
-  animation: chat-session-rail-pending-pulse 1.4s ease-in-out infinite;
-}
-
-@keyframes chat-session-rail-pending-pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-
-  50% {
-    opacity: 0.45;
-  }
-}
-
 .chat-session-rail__prompt {
   min-width: 0;
   flex: 1 1 auto;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .chat-session-rail__exchange--pending .chat-session-rail__hint {
-    animation: none;
-  }
 }

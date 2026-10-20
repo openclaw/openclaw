@@ -8,8 +8,7 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 import {
   mergeScopedSearchConfig,
-  readConfiguredSecretString,
-  readProviderEnvValue,
+  readWebSearchApiKey,
   resolveProviderWebSearchPluginConfig,
   type SearchConfigRecord,
   withTrustedWebSearchEndpoint,
@@ -42,15 +41,6 @@ type ParallelConfig = {
   apiKey?: string;
   baseUrl?: string;
 };
-
-function resolveParallelApiKey(parallel?: ParallelConfig): string | undefined {
-  return (
-    readConfiguredSecretString(
-      parallel?.apiKey,
-      "plugins.entries.parallel.config.webSearch.apiKey",
-    ) ?? readProviderEnvValue(["PARALLEL_API_KEY"])
-  );
-}
 
 function invalidBaseUrlPayload(value: string) {
   return {
@@ -99,7 +89,11 @@ export async function executeParallelWebSearchProviderTool(
     resolveProviderWebSearchPluginConfig(ctx.config, "parallel"),
   ) as SearchConfigRecord | undefined;
   const parallelConfig = asOptionalRecord(searchConfig?.parallel);
-  const apiKey = resolveParallelApiKey(parallelConfig);
+  const apiKey = readWebSearchApiKey(
+    parallelConfig?.apiKey,
+    "plugins.entries.parallel.config.webSearch.apiKey",
+    ["PARALLEL_API_KEY"],
+  );
   if (!apiKey) {
     return {
       error: "missing_parallel_api_key",
@@ -119,10 +113,9 @@ export async function executeParallelWebSearchProviderTool(
     endpoint,
     args,
     searchConfig,
-    signal,
     search: async (request, timeoutSeconds): Promise<ParallelSearchResponse> => {
       const body: Record<string, unknown> = {
-        search_queries: [...request.searchQueries],
+        search_queries: request.searchQueries,
         advanced_settings: { max_results: request.count },
       };
       if (request.objective) {

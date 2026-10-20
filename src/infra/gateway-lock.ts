@@ -45,6 +45,7 @@ import {
   type GatewayOwnerLease,
 } from "./gateway-owner-lease.js";
 import { classifyOpenClawArgv } from "./gateway-process-argv.js";
+import { captureStalledGatewayStartup } from "./gateway-startup-owner.js";
 import {
   acquireGatewayStateOwner,
   createGatewayStateProjection,
@@ -394,19 +395,8 @@ async function readVerifiedGatewayLockIdentity(
 async function assertHistoricalGatewayOwnerStopped(
   paths: ReturnType<typeof resolveGatewayLockPaths>,
   opts: GatewayLockOptions,
-  ownedProjection?: GatewayStateProjection,
 ): Promise<void> {
   for (const lockPath of [paths.stateLockPath, paths.configLockPath]) {
-    if (lockPath === paths.stateLockPath && ownedProjection) {
-      if (
-        !ownedProjection.verifyStillHeld() ||
-        resolveIdentityPathViaExistingAncestorSync(ownedProjection.lockPath) !==
-          resolveIdentityPathViaExistingAncestorSync(lockPath)
-      ) {
-        throw new GatewayLockError("Relocated maintenance projection is no longer current");
-      }
-      continue;
-    }
     const payload = await readLockPayload(lockPath, true);
     if (!payload) {
       continue;
@@ -427,6 +417,7 @@ async function assertHistoricalGatewayOwnerStopped(
         path.join(paths.stateDir, "state", "openclaw.sqlite"),
         undefined,
         describeGatewayLockHolder(payload, lockPath, owner === "alive" ? "live" : "unknown"),
+        { pid: payload.pid, role: payload.role },
       );
     }
   }
@@ -439,20 +430,10 @@ export async function acquireGatewayLock(
   if (opts.allowInTests !== true && (env.VITEST || env.NODE_ENV === "test")) {
     return null;
   }
-  const role = opts.role ?? "gateway";
+  // Ordinary process roles admit database access directly; config repair needs the maintenance guard.
+  const role = opts.databaseAccess === "none" ? "sqlite-maintenance" : (opts.role ?? "gateway");
   const paths = resolveGatewayLockPaths(env, opts.lockDir);
   const databasePath = path.join(paths.stateDir, "state", "openclaw.sqlite");
-  const previousOwner = opts.relocatedMaintenanceOwner;
-  if (previousOwner) {
-    previousOwner.assertCurrent();
-    if (
-      role !== "sqlite-maintenance" ||
-      resolveIdentityPathViaExistingAncestorSync(previousOwner.stateDir) !== paths.stateDir ||
-      previousOwner.lockPath === paths.ownerLockPath
-    ) {
-      throw new GatewayLockError("Maintenance ownership transfer requires its relocated root");
-    }
-  }
   const now = opts.now ?? performance.now.bind(performance);
   const startedAt = now();
   const heartbeatWaitMs = GATEWAY_OWNER_HEARTBEAT_STALE_MS + 5_000;
@@ -480,6 +461,7 @@ export async function acquireGatewayLock(
     pid: process.pid,
     ownerId: randomUUID(),
     createdAt: resolveTimestampMsToIsoString(Date.now()),
+    ...(role === "gateway" ? { startupPhase: "starting" as const } : {}),
     configPath: paths.configPath,
     stateDir: paths.stateDir,
     role,
@@ -508,11 +490,11 @@ export async function acquireGatewayLock(
       (await acquireWithWait({
         deadlineMs,
         pollIntervalMs: resolvePositiveTimerTimeoutMs(opts.pollIntervalMs, 250),
-        maxPollIntervalMs: 2000,
         now,
         sleep: opts.sleep,
         acquire: async () => {
           opts.assertCurrent?.();
+          payload.createdAt = resolveTimestampMsToIsoString(Date.now());
           const owner = acquireGatewayStateOwner({
             databasePath,
             payload,
@@ -521,31 +503,21 @@ export async function acquireGatewayLock(
           });
           try {
             if (opts.databasePortRecovery) {
-              if (role !== "agent-embedded") {
+              if (role !== "agent-embedded" && role !== "sqlite-maintenance") {
                 throw new Error("Database port recovery requires exclusive offline ownership");
               }
               assertDatabasePortRecoveryAllowed(paths.stateDir, opts.databasePortRecovery);
             } else {
               assertDatabasePortStartupAllowed(paths.stateDir);
             }
-            if (previousOwner) {
-              projection = previousOwner.retainProjection();
-            }
-            await assertHistoricalGatewayOwnerStopped(paths, opts, projection);
-            if (!opts.databasePortRecovery) {
+            await assertHistoricalGatewayOwnerStopped(paths, opts);
+            if (!opts.databasePortRecovery && opts.databaseAccess !== "none") {
               await owner.run(() =>
                 assertGatewayOwnerLeaseStopped(env, owner, role === "sqlite-maintenance"),
               );
             }
-            if (previousOwner) {
-              // Policy reads borrow the newly acquired custody before releasing the old root.
-              owner.run(() => opts.assertCurrent?.());
-              await previousOwner.release();
-            }
             return owner;
           } catch (error) {
-            projection?.release();
-            projection = undefined;
             owner.release();
             throw error;
           }
@@ -587,7 +559,7 @@ export async function acquireGatewayLock(
     const message = `failed to acquire gateway state ownership${waited ? `; waited ${Math.round(now() - startedAt)}ms for Gateway state ownership` : ""}`;
     const detail =
       error instanceof GatewayStateOwnerContentionError
-        ? `${message}: ${error.message}. Stop the Gateway or wait for the current OpenClaw operation to finish, then retry.`
+        ? `${message}: ${error.message}. ${captureStalledGatewayStartup(env)?.description ?? "Stop the Gateway or wait for the current OpenClaw operation to finish"}. Run \`openclaw gateway stop\`, then retry.`
         : error instanceof GatewayLockNamespaceError
           ? error.message
           : error instanceof DatabasePortRecoveryError
@@ -614,6 +586,9 @@ export async function acquireGatewayLock(
   };
   const assertDatabaseAccess = (requestedPath: string) => {
     assertStateOwnerCurrent();
+    if (opts.databaseAccess === "none") {
+      throw new Error("Config-only ownership does not admit database access");
+    }
     stateOwner.assertDatabaseAccess(requestedPath);
   };
   const resources =
@@ -639,7 +614,7 @@ export async function acquireGatewayLock(
         readProcessCmdline: opts.readProcessCmdline,
         readProcessStartTime: opts.readProcessStartTime,
       });
-    if (!borrowedOwner && !projection) {
+    if (!borrowedOwner) {
       projection = createGatewayStateProjection(
         acquireFileLockSync(paths.stateLockPath, {
           lockPath: paths.stateLockPath,
@@ -672,18 +647,6 @@ export async function acquireGatewayLock(
     stateOwner.release();
     throw new GatewayLockError("failed to acquire gateway state ownership", error);
   }
-  let drained: Promise<void> | undefined;
-  const releaseInTree = () =>
-    (drained ??= Promise.resolve()
-      .then(async () => {
-        await resources?.close();
-        projection?.release();
-        projection = undefined;
-      })
-      .catch((error: unknown) => {
-        drained = undefined;
-        throw error;
-      }));
   let released: Promise<void> | undefined;
   return {
     lockPath: stateOwner.path,
@@ -691,6 +654,15 @@ export async function acquireGatewayLock(
     stateDir: paths.stateDir,
     assertCurrent: assertStateOwnerCurrent,
     assertDatabaseAccess,
+    markListening: () => {
+      assertStateOwnerCurrent();
+      try {
+        ownerLease?.markListening();
+      } catch {
+        assertStateOwnerCurrent();
+        log.warn("Gateway listener bound, but startup readiness could not be recorded");
+      }
+    },
     run: (operation) => {
       if (resources) {
         // Reenter held custody before policy reads inspect this scope's database handles.
@@ -699,18 +671,12 @@ export async function acquireGatewayLock(
       assertStateOwnerCurrent();
       return operation();
     },
-    retainProjection: () => {
-      assertStateOwnerCurrent();
-      if (!projection) {
-        throw new GatewayLockError("Maintenance ownership has no transferable projection");
-      }
-      return projection.retain();
-    },
-    releaseInTree,
     release: () =>
       (released ??= (async () => {
         await ownerLease?.release();
-        await releaseInTree();
+        await resources?.close();
+        projection?.release();
+        projection = undefined;
         stateOwner.release();
       })().catch((error: unknown) => {
         released = undefined;

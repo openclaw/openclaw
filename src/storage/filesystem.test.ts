@@ -149,6 +149,11 @@ describe("filesystem storage provider", () => {
       await expect(backend.putObject("next.bin", bytes("no"), {})).rejects.toThrow();
       await expect(backend.probe()).rejects.toThrow();
       await expect(fs.readdir(storageRoot)).resolves.toEqual([]);
+      await fs.writeFile(path.join(storageRoot, "replacement.bin"), "preserved");
+      await expect(backend.deleteObject("replacement.bin")).rejects.toThrow();
+      await expect(fs.readFile(path.join(storageRoot, "replacement.bin"), "utf8")).resolves.toBe(
+        "preserved",
+      );
     });
   });
 

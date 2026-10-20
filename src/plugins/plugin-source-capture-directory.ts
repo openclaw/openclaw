@@ -4,7 +4,7 @@ import fsPromises from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { registerSignalExitFinalizer } from "../cli/signal-exit-barrier.js";
-import { hasErrnoCode } from "../infra/errno.js";
+import { hasErrnoCode, ignoreMissingPath } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayScheduler, GatewaySchedulerScope } from "../infra/gateway-scheduler.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
@@ -28,6 +28,7 @@ import {
 } from "./plugin-source-capture-native-loads.js";
 import {
   isLegacyPluginSourceCaptureName,
+  mkdtempPluginCaptureSync,
   PLUGIN_SOURCE_CAPTURE_PREFIX,
   resolvePluginSourceCaptureFallbackPrefix,
   resolvePluginSourceCapturesDirectory,
@@ -102,9 +103,7 @@ function retireInstance(key: string, instance: Instance): string | undefined {
   try {
     instance.token?.(true);
   } catch (error) {
-    if (!hasErrnoCode(error, "ENOENT")) {
-      throw error;
-    }
+    ignoreMissingPath(error);
     // Enclosing state can disappear before deferred disposal. Missing ownership
     // permits closing our handle, never deleting residual or replacement files.
     instance.token?.();
@@ -153,22 +152,14 @@ async function reclaimInstances(
   try {
     entries = await fsPromises.readdir(root, { withFileTypes: true });
   } catch (error) {
-    if (!hasErrnoCode(error, "ENOENT")) {
-      throw error;
-    }
+    ignoreMissingPath(error);
     return;
   }
   if (entries.length === 0) {
     return;
   }
   const cutoff = Date.now() - CAPTURE_GRACE_MS;
-  const lstatIfPresent = (file: string) =>
-    fsPromises.lstat(file).catch((error: unknown) => {
-      if (!hasErrnoCode(error, "ENOENT")) {
-        throw error;
-      }
-      return undefined;
-    });
+  const lstatIfPresent = (file: string) => fsPromises.lstat(file).catch(ignoreMissingPath);
   for (const entry of entries) {
     if (
       !entry.isDirectory() ||
@@ -239,9 +230,7 @@ export async function hasPluginNativeCaptureCleanupCandidates(stateDir: string):
     try {
       entries = await fsPromises.readdir(root, { withFileTypes: true });
     } catch (error) {
-      if (!hasErrnoCode(error, "ENOENT")) {
-        throw error;
-      }
+      ignoreMissingPath(error);
       continue;
     }
     for (const entry of entries) {
@@ -253,9 +242,7 @@ export async function hasPluginNativeCaptureCleanupCandidates(stateDir: string):
           return true;
         }
       } catch (error) {
-        if (!hasErrnoCode(error, "ENOENT")) {
-          throw error;
-        }
+        ignoreMissingPath(error);
       }
     }
   }
@@ -349,14 +336,12 @@ function createCaptureDirectory(instance: Instance, prefix: string, kind = "capt
   if (instance.root) {
     const captures = path.join(instance.root, kind);
     try {
-      return fs.mkdtempSync(path.join(captures, prefix));
+      return mkdtempPluginCaptureSync(path.join(captures, prefix));
     } catch (error) {
-      if (!hasErrnoCode(error, "ENOENT")) {
-        throw error;
-      }
+      ignoreMissingPath(error);
       // Repair only the payload directory; recreating its parent would lose native custody.
       fs.mkdirSync(captures, { mode: 0o700 });
-      return fs.mkdtempSync(path.join(captures, prefix));
+      return mkdtempPluginCaptureSync(path.join(captures, prefix));
     }
   }
   const prepare = (fallback: boolean): string => {
@@ -364,22 +349,24 @@ function createCaptureDirectory(instance: Instance, prefix: string, kind = "capt
     let token: SqliteStagingToken | undefined;
     try {
       if (fallback) {
-        directory = fs.mkdtempSync(
+        directory = mkdtempPluginCaptureSync(
           path.join(tmpdir(), resolvePluginSourceCaptureFallbackPrefix(stateDir)),
         );
       } else {
         const parent = resolvePluginSourceCapturesDirectory(stateDir);
         fs.mkdirSync(parent, { recursive: true, mode: 0o700 });
-        instance.managedRoot = fs.realpathSync(parent);
+        // Native spelling expands Windows 8.3 names, matching fs-safe copy admission
+        // and the fs.promises.realpath reclaim scan.
+        instance.managedRoot = fs.realpathSync.native(parent);
         const candidate = path.join(instance.managedRoot, randomUUID());
         fs.mkdirSync(candidate, { mode: 0o700 });
         directory = candidate;
       }
-      const canonical = fs.realpathSync(directory);
+      const canonical = fs.realpathSync.native(directory);
       token = acquireSqliteStagingToken(canonical, "create");
       const captures = path.join(canonical, kind);
       fs.mkdirSync(captures, { mode: 0o700 });
-      const capture = fs.mkdtempSync(path.join(captures, prefix));
+      const capture = mkdtempPluginCaptureSync(path.join(captures, prefix));
       instance.root = canonical;
       instance.token = token;
       ownedRoots.add(canonical);
@@ -562,9 +549,7 @@ export function retainPluginSourceCaptureInstance(
           const native = await fsPromises
             .readdir(path.join(root, "native"))
             .catch((error: unknown) => {
-              if (!hasErrnoCode(error, "ENOENT")) {
-                throw error;
-              }
+              ignoreMissingPath(error);
               return [];
             });
           if (native.length === 0) {
@@ -623,8 +608,12 @@ export function createPluginNativeCaptureRoot(
 }
 
 /** The producer retains this root until its worker has confirmed exit. */
-export function createPluginSourceCaptureRoot(stateDir: string, prefix: string) {
-  const instance = retainPluginSourceCaptureInstance(stateDir);
+export function createPluginSourceCaptureRoot(
+  stateDir: string,
+  prefix: string,
+  placement?: PluginSourceCaptureStorage["placement"],
+) {
+  const instance = retainPluginSourceCaptureInstance(stateDir, placement);
   try {
     const directory = instance.createDirectory(prefix);
     return {

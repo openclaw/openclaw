@@ -1,8 +1,17 @@
+import { performance } from "node:perf_hooks";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runWithGatewayDetachedWorkContinuation } from "../process/gateway-work-admission.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { racePromiseWithAbortSignal } from "./abort-signal.js";
+import {
+  addDiffReadDurations,
+  startDiffReadTiming,
+  type DiffReadCacheMissReason,
+  type DiffReadTiming,
+} from "./diff-read-timing.js";
 import type { GitReadOperation, GitReadOperations } from "./git-read-operations.js";
+import type { GitWorkerOperations } from "./git-worker-contract.js";
 import { runGitWorkerOperation } from "./git-worker.js";
 import { pruneMapToMaxSize } from "./map-size.js";
 
@@ -13,6 +22,7 @@ export type GitReadOptions = {
   /** Refresh unversioned layouts; known revisions are always revalidated. */
   refresh?: boolean;
   signal?: AbortSignal;
+  diffTiming?: DiffReadTiming;
 };
 
 type ReadEntry<T> = {
@@ -20,60 +30,70 @@ type ReadEntry<T> = {
   expiresAt: number;
   promise: Promise<T>;
   controller: AbortController;
-  subscribers: number;
   pending: boolean;
+  timing?: DiffReadTiming;
   value?: T;
 };
 
-function subscribe<T>(
-  entry: ReadEntry<T>,
-  clone: (value: T) => T,
-  signal?: AbortSignal,
-): Promise<T> {
-  entry.subscribers += 1;
-  return new Promise<T>((resolve, reject) => {
-    let settled = false;
-    const finish = (complete: () => void) => {
-      if (settled) {
-        return;
+function gitEnvironmentKey(input: unknown): string {
+  return JSON.stringify([
+    input,
+    Object.entries(process.env)
+      .filter(([key]) => /^(GIT_|HOME$|XDG_CONFIG_HOME$|PATH$|SUDO_UID$)/i.test(key))
+      .toSorted(([left], [right]) => left.localeCompare(right)),
+  ]);
+}
+
+function diffRevisionMissReason(previous: string, current: string): DiffReadCacheMissReason {
+  try {
+    const previousKey: [unknown, string | null] = JSON.parse(previous);
+    const currentKey: [unknown, string | null] = JSON.parse(current);
+    const before: Record<string, unknown> | null = JSON.parse(previousKey[1] ?? "null");
+    const after: Record<string, unknown> | null = JSON.parse(currentKey[1] ?? "null");
+    if (before && after) {
+      for (const [component, reason] of [
+        ["head", "revision-changed-head"],
+        ["index", "revision-changed-index"],
+        ["untrackedSet", "revision-changed-untracked-set"],
+        ["worktreeMtime", "revision-changed-worktree-mtime"],
+      ] as const) {
+        if (before[component] !== after[component]) {
+          return reason;
+        }
       }
-      settled = true;
-      signal?.removeEventListener("abort", abort);
-      entry.subscribers -= 1;
-      if (entry.pending && entry.subscribers === 0) {
-        entry.expiresAt = 0;
-        entry.controller.abort();
-        // Final cancellation remains joined to the owner's process teardown.
-        void entry.promise.then(complete, complete);
-        return;
-      }
-      complete();
-    };
-    const abort = () => finish(() => reject(toErrorObject(signal?.reason, "Git read aborted")));
-    signal?.addEventListener("abort", abort, { once: true });
-    entry.promise.then(
-      (value) => finish(() => resolve(clone(value))),
-      (error: unknown) => finish(() => reject(toErrorObject(error, "Git read failed"))),
-    );
-    if (signal?.aborted) {
-      abort();
     }
-  });
+  } catch {
+    // Non-component revisions still invalidate normally and use the bounded fallback.
+  }
+  return "revision-changed-metadata";
 }
 
 function createReadCache<Input, Output>(
-  load: (input: Input, signal: AbortSignal) => Promise<Output>,
-  freshnessMs: number,
-  clone: (value: Output) => Output = structuredClone,
-  revision?: (input: Input, signal: AbortSignal) => Promise<string | null>,
+  load: (input: Input, signal: AbortSignal, timing?: DiffReadTiming) => Promise<Output>,
+  freshness: number | { milliseconds: number; joinPending?: true; versionedMilliseconds?: number },
+  revision?: (
+    input: Input,
+    signal: AbortSignal,
+    timing?: DiffReadTiming,
+    previous?: Output,
+  ) => Promise<string | null>,
   keyOf: (input: Input) => string = JSON.stringify,
   snapshot?: { empty: () => Output },
+  retain: (value: Output) => boolean = () => true,
+  maxEntries = MAX_CACHED_CHECKOUTS,
 ) {
+  const freshnessMs = typeof freshness === "number" ? freshness : freshness.milliseconds;
+  const joinPending = typeof freshness !== "number" && freshness.joinPending;
   // Versioned reads retain only the current inputs/revision per checkout. LRU
   // eviction and Gateway shutdown own their lifetime, independently of viewers.
   const entries = new Map<string, ReadEntry<Output>>();
+  // Retain only the most recent capacity evictions; older misses become cold again.
+  const evicted = new Map<string, true>();
   const pending = new Set<ReadEntry<Output>>();
-  const revisions = new Map<AbortController, Promise<string | null>>();
+  const revisions = new Map<
+    string,
+    { controller: AbortController; promise: Promise<string | null>; timing?: DiffReadTiming }
+  >();
   let refreshTail: Promise<unknown> = Promise.resolve();
   let closed = false;
   const remove = (key: string, entry: ReadEntry<Output>) => {
@@ -84,49 +104,79 @@ function createReadCache<Input, Output>(
   return {
     async read(input: Input, options: GitReadOptions = {}): Promise<Output> {
       options.signal?.throwIfAborted();
-      const prepared = structuredClone(input);
-      const key = keyOf(prepared);
+      const timing = options.diffTiming;
+      const validationStarted = timing ? performance.now() : 0;
+      const key = keyOf(input);
       let currentRevision: string | null | undefined;
       if (revision) {
-        const controller = new AbortController();
-        const check = revision(
-          prepared,
-          options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal,
+        // Share only overlapping checks of identical inputs, never a settled revision.
+        const revisionInput = gitEnvironmentKey(input);
+        let check = revisions.get(revisionInput);
+        if (!check) {
+          const controller = new AbortController();
+          const revisionTiming = timing ? { durations: {} } : undefined;
+          const promise = revision(
+            input,
+            controller.signal,
+            revisionTiming,
+            entries.get(key)?.value,
+          ).finally(() => {
+            revisions.delete(revisionInput);
+          });
+          check = { controller, promise, timing: revisionTiming };
+          revisions.set(revisionInput, check);
+        }
+        currentRevision = await racePromiseWithAbortSignal(
+          check.promise,
+          options.signal,
+          (signal) => toErrorObject(signal.reason, "Git read aborted"),
         );
-        revisions.set(controller, check);
-        try {
-          currentRevision = await check;
-        } finally {
-          revisions.delete(controller);
+        if (timing && check.timing) {
+          addDiffReadDurations(timing, check.timing);
+          timing.revisionUnavailableReason = check.timing.revisionUnavailableReason;
         }
       }
-      const revisionKey = JSON.stringify([prepared, currentRevision]);
+      if (timing) {
+        timing.durations["cache-validate"] = performance.now() - validationStarted;
+      }
+      const retainedFreshnessMs =
+        typeof freshness !== "number" && typeof currentRevision === "string"
+          ? (freshness.versionedMilliseconds ?? freshnessMs)
+          : freshnessMs;
+      const revisionKey = JSON.stringify([input, currentRevision]);
       options.signal?.throwIfAborted();
       if (closed) {
         throw new Error("Git reads are unavailable while the Gateway is restarting");
       }
       let entry = entries.get(key);
+      const previous = entry;
+      const wasEvicted = evicted.delete(key);
+      let cacheHit = !entry?.pending;
       if (
         (options.refresh && currentRevision === null) ||
         !entry ||
         entry.revision !== revisionKey ||
-        (entry.expiresAt <= Date.now() && (!snapshot || !entry.pending))
+        (entry.expiresAt <= Date.now() && (!(snapshot || joinPending) || !entry.pending))
       ) {
         if (snapshot && pending.size >= MAX_CACHED_CHECKOUTS) {
-          return clone(entry?.value ?? snapshot.empty());
+          return entry?.value ?? snapshot.empty();
         }
+        cacheHit = false;
+        const loadTiming = timing ? { durations: {} } : undefined;
         const previousRefresh = refreshTail;
         const controller = new AbortController();
         const next: ReadEntry<Output> = {
           revision: revisionKey,
           expiresAt:
-            freshnessMs === 0
+            retainedFreshnessMs === 0
               ? Number.POSITIVE_INFINITY
               : Date.now() +
-                (currentRevision === null ? Math.min(freshnessMs, 75_000) : freshnessMs),
+                (currentRevision === null
+                  ? Math.min(retainedFreshnessMs, 75_000)
+                  : retainedFreshnessMs),
           controller,
-          subscribers: 0,
           pending: true,
+          timing: loadTiming,
           value: entry?.value,
           promise: Promise.resolve().then(() =>
             snapshot
@@ -134,9 +184,9 @@ function createReadCache<Input, Output>(
                   // Serialize display batches; the worker probes four checkouts concurrently.
                   await previousRefresh;
                   controller.signal.throwIfAborted();
-                  return load(prepared, controller.signal);
+                  return load(input, controller.signal, loadTiming);
                 }, "runtime:project-discovery")
-              : load(prepared, controller.signal),
+              : load(input, controller.signal, loadTiming),
           ),
         };
         pending.add(next);
@@ -145,11 +195,11 @@ function createReadCache<Input, Output>(
             next.pending = false;
             pending.delete(next);
             controller.signal.throwIfAborted();
+            next.value = value;
             if (snapshot) {
-              next.value = value;
               next.expiresAt = Date.now() + freshnessMs;
             }
-            if (freshnessMs === 0) {
+            if (retainedFreshnessMs === 0 || !retain(value)) {
               remove(key, next);
             }
             return value;
@@ -180,14 +230,42 @@ function createReadCache<Input, Output>(
       }
       entries.delete(key);
       entries.set(key, entry);
-      pruneMapToMaxSize(entries, MAX_CACHED_CHECKOUTS);
-      return snapshot
-        ? clone(entry.value ?? snapshot.empty())
-        : subscribe(entry, clone, options.signal);
+      for (const oldest of entries.keys()) {
+        if (entries.size <= maxEntries) {
+          break;
+        }
+        entries.delete(oldest);
+        evicted.set(oldest, true);
+      }
+      pruneMapToMaxSize(evicted, maxEntries);
+      // Viewer cancellation stops waiting, not the shared bounded read.
+      const value = snapshot
+        ? (entry.value ?? snapshot.empty())
+        : await racePromiseWithAbortSignal(entry.promise, options.signal, (signal) =>
+            toErrorObject(signal.reason, "Git read aborted"),
+          );
+      if (timing) {
+        timing.outcome = cacheHit ? "cache-hit" : "cache-miss";
+        timing.missReason = cacheHit
+          ? undefined
+          : currentRevision === null
+            ? (timing.revisionUnavailableReason ?? "no-revision")
+            : !previous
+              ? wasEvicted
+                ? "evicted"
+                : "cold"
+              : previous.revision !== revisionKey
+                ? diffRevisionMissReason(previous.revision, revisionKey)
+                : "pending";
+        if (!cacheHit && entry.timing) {
+          addDiffReadDurations(timing, entry.timing);
+        }
+      }
+      return value;
     },
     async close(): Promise<void> {
       closed = true;
-      for (const controller of revisions.keys()) {
+      for (const { controller } of revisions.values()) {
         controller.abort();
       }
       const retiring = [...pending];
@@ -196,13 +274,35 @@ function createReadCache<Input, Output>(
         entry.controller.abort();
       }
       entries.clear();
-      await Promise.allSettled([...revisions.values(), ...retiring.map((entry) => entry.promise)]);
+      evicted.clear();
+      await Promise.allSettled([
+        ...Array.from(revisions.values(), (check) => check.promise),
+        ...retiring.map((entry) => entry.promise),
+      ]);
     },
   };
 }
 
 function createReadCaches() {
+  const comparisons = createReadCache<
+    GitWorkerOperations["pull-request.branch-comparison"]["input"],
+    GitWorkerOperations["pull-request.branch-comparison"]["output"]
+  >(
+    (input, signal) =>
+      runGitWorkerOperation({ type: "pull-request.branch-comparison", input }, { signal }),
+    Number.POSITIVE_INFINITY,
+    (input, signal) =>
+      runGitWorkerOperation(
+        { type: "checkout.revision", input: { ...input, scope: "refs" } },
+        { signal },
+      ),
+    (input) => input.root,
+    undefined,
+    // Missing objects can arrive without moving refs; retry incomplete comparisons.
+    (value) => value.complete,
+  );
   return {
+    comparisons,
     identities: createReadCache(
       (input: GitReadOperations["repository.identities"]["input"], signal) =>
         runGitWorkerOperation({ type: "repository.identities", input }, { signal }),
@@ -210,56 +310,102 @@ function createReadCaches() {
       // External Git config/relocations have no complete revision: refresh in the background
       // after one minute; checkout-set/environment changes select an independent snapshot.
       60_000,
-      structuredClone,
       undefined,
-      (input) =>
-        JSON.stringify([
-          input,
-          Object.entries(process.env)
-            .filter(([key]) => /^(GIT_|HOME$|XDG_CONFIG_HOME$|PATH$|SUDO_UID$)/i.test(key))
-            .toSorted(([left], [right]) => left.localeCompare(right)),
-        ]),
+      gitEnvironmentKey,
       { empty: () => [] },
     ),
     context: createReadCache(
       (input: GitReadOperations["checkout.context"]["input"], signal) =>
         runGitWorkerOperation({ type: "checkout.context", input }, { signal }),
       Number.POSITIVE_INFINITY,
-      structuredClone,
       (input, signal) =>
         runGitWorkerOperation(
-          { type: "checkout.revision", input: { root: input.root, includeIndex: false } },
+          { type: "checkout.revision", input: { root: input.root, scope: "context" } },
           { signal },
         ),
       (input) => input.root,
     ),
     branchFacts: createReadCache(
-      (input: GitReadOperations["pull-request.branch-facts"]["input"], signal) =>
-        runGitWorkerOperation({ type: "pull-request.branch-facts", input }, { signal }),
+      async (input: GitReadOperations["pull-request.branch-facts"]["input"], signal) => {
+        try {
+          const { refreshIndex: _, ...comparisonInput } = input;
+          const comparison = await comparisons.read(comparisonInput, { signal, refresh: true });
+          return await runGitWorkerOperation(
+            { type: "pull-request.branch-facts", input: { ...input, comparison } },
+            { signal },
+          );
+        } catch {
+          signal.throwIfAborted();
+          log.warn(
+            "PR comparison unavailable; fetch repository history and retry. Dependent comparisons skipped.",
+          );
+          return { creatable: false, stats: null };
+        }
+      },
       // Unstaged edits do not advance the ref/index revision.
       5 * 60_000,
-      structuredClone,
       (input, signal) =>
         runGitWorkerOperation(
           {
             type: "checkout.revision",
-            input: { ...input, includeIndex: true },
+            input: { ...input, scope: "worktree" },
           },
           { signal },
         ),
       (input) => input.root,
     ),
     diff: createReadCache(
-      (input: GitReadOperations["checkout.diff"]["input"], signal) =>
-        runGitWorkerOperation({ type: "checkout.diff", input }, { signal }),
-      0,
-      // Callers mutate transport fields; immutable patch strings can stay shared.
-      (diff) => ({
-        ...diff,
-        files: diff.files.map((file) => ({ ...file })),
-        ...(diff.commits ? { commits: diff.commits.map((commit) => ({ ...commit })) } : {}),
-        ...(diff.mergeBase ? { mergeBase: { ...diff.mergeBase } } : {}),
-      }),
+      (input: GitReadOperations["checkout.diff"]["input"], signal, diffTiming) =>
+        runGitWorkerOperation({ type: "checkout.diff", input }, { signal, diffTiming }),
+      { milliseconds: 0, versionedMilliseconds: Number.POSITIVE_INFINITY },
+      (input, signal, diffTiming, previous) =>
+        runGitWorkerOperation(
+          {
+            type: "checkout.revision",
+            input: {
+              root: input.cwd,
+              scope: "diff",
+              summaryOnly: input.summaryOnly,
+              paths: previous?.files.flatMap((file) =>
+                file.oldPath ? [file.path, file.oldPath] : [file.path],
+              ),
+            },
+          },
+          { signal, diffTiming },
+        ),
+      undefined,
+      undefined,
+      (value) => !value.unavailableReason,
+      // Full results may retain 1.5 MB of patches each.
+      32,
+    ),
+    diffSummary: createReadCache(
+      (input: GitReadOperations["checkout.diff"]["input"], signal, diffTiming) =>
+        runGitWorkerOperation({ type: "checkout.diff", input }, { signal, diffTiming }),
+      // Visible clients share this short-lived summary; never duplicate a slow scan.
+      {
+        milliseconds: 10_000,
+        joinPending: true,
+        versionedMilliseconds: Number.POSITIVE_INFINITY,
+      },
+      (input, signal, diffTiming, previous) =>
+        runGitWorkerOperation(
+          {
+            type: "checkout.revision",
+            input: {
+              root: input.cwd,
+              scope: "diff",
+              summaryOnly: input.summaryOnly,
+              paths: previous?.files.flatMap((file) =>
+                file.oldPath ? [file.path, file.oldPath] : [file.path],
+              ),
+            },
+          },
+          { signal, diffTiming },
+        ),
+      undefined,
+      undefined,
+      (value) => !value.unavailableReason,
     ),
     branches: createReadCache(
       (input: GitReadOperations["repository.branches"]["input"], signal) =>
@@ -306,8 +452,8 @@ export function runGitReadOperation(operation: GitReadOperation, options?: GitRe
   if (state.closing) {
     return Promise.reject(new Error("Git reads are unavailable while the Gateway is restarting"));
   }
-  const { context, branchFacts, diff, branches, baseline, identities } = (state.caches ??=
-    createReadCaches());
+  const caches = (state.caches ??= createReadCaches());
+  const { context, branchFacts, branches, baseline, identities } = caches;
   switch (operation.type) {
     case "repository.identities":
       return identities.read(operation.input, options);
@@ -318,11 +464,39 @@ export function runGitReadOperation(operation: GitReadOperation, options?: GitRe
     case "pull-request.branch-facts":
       return branchFacts.read(operation.input, options);
     case "checkout.diff":
-      return diff.read(operation.input, options);
+      return readDiff(
+        operation.input.summaryOnly ? caches.diffSummary : caches.diff,
+        operation.input,
+        options,
+      );
     case "repository.branches":
       return branches.read(operation.input, options);
     case "checkout.baseline":
       return baseline.read(operation.input, options);
   }
   throw new Error("Unsupported Git read operation");
+}
+
+async function readDiff(
+  cache: ReturnType<typeof createReadCaches>["diff"],
+  input: GitReadOperations["checkout.diff"]["input"],
+  options?: GitReadOptions,
+) {
+  using timing = startDiffReadTiming("checkout.diff");
+  const value = await cache.read(input, {
+    ...options,
+    diffTiming: timing,
+  });
+  if (timing && options?.diffTiming) {
+    addDiffReadDurations(options.diffTiming, timing);
+    options.diffTiming.outcome = timing.outcome;
+    options.diffTiming.missReason = timing.missReason;
+  }
+  // Transport truncation mutates these envelopes, not the shared patch strings.
+  return {
+    ...value,
+    files: value.files.map((file) => ({ ...file })),
+    ...(value.commits ? { commits: value.commits.map((commit) => ({ ...commit })) } : {}),
+    ...(value.mergeBase ? { mergeBase: { ...value.mergeBase } } : {}),
+  };
 }

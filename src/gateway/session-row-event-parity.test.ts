@@ -2,18 +2,22 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import type { InternalSessionEntry } from "../config/sessions/types.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
+import { createActiveRpcSourceForTest } from "./server-methods/rpc-source-fixtures.test-support.js";
 import { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
 import {
   initializeSessionReadContext,
   listSessions,
   requestContext,
 } from "./server-methods/sessions-read-cache.test-support.js";
-import { createLifecycleEventBroadcastHandler } from "./server-session-events.js";
+import { createLifecycleEventBroadcastHandler } from "./server-session-lifecycle-events.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
 import { beginSessionPermissionChange } from "./session-permission-change.js";
 import { createSessionRowEventPeer } from "./session-row-event.test-support.js";
@@ -44,59 +48,52 @@ it("delivers nested event rows identical to the full list for each viewer and cl
     const controller = "agent:main:unloaded-controller";
     const navigationParent = "agent:main:unloaded-navigation";
     const creator = { type: "human" as const, source: "profile" as const, id: profiles[0]!.id };
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey: key },
-      {
-        sessionId: "parent-session",
-        updatedAt: now - 100,
-        status: "done",
-        visibility: "shared",
-        createdActor: creator,
-        agentHarnessId: "codex",
-        modelProvider: "openai",
-        model: "gpt-5.4",
-        label: "Parent",
-        startedAt: now - 100,
-      },
-    );
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey: childKey },
-      {
-        sessionId: "child-session",
-        updatedAt: now - 50,
-        visibility: "draft",
-        createdActor: creator,
-        parentSessionKey: key,
-      },
-    );
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey: lineageKey },
-      {
-        sessionId: "lineage-session",
-        updatedAt: now - 100,
-        endedAt: now - 100,
-        status: "done",
-        visibility: "shared",
-        createdActor: creator,
-        spawnedBy: controller,
-        parentSessionKey: navigationParent,
-      },
-    );
+    const writeRow = (
+      sessionKey: string,
+      sessionId: string,
+      fields: Partial<InternalSessionEntry>,
+    ) =>
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey },
+        { sessionId, updatedAt: now - 100, createdActor: creator, visibility: "shared", ...fields },
+      );
+    writeRow(key, "parent-session", {
+      status: "done",
+      agentHarnessId: "codex",
+      modelProvider: "openai",
+      model: "gpt-5.4",
+      label: "Parent",
+      startedAt: now - 100,
+    });
+    writeRow(childKey, "child-session", {
+      updatedAt: now - 50,
+      visibility: "draft",
+      parentSessionKey: key,
+    });
+    writeRow(lineageKey, "lineage-session", {
+      endedAt: now - 100,
+      status: "done",
+      spawnedBy: controller,
+      parentSessionKey: navigationParent,
+    });
     const connection = createGatewayConnectionState({
       scheduler: createTestGatewayScheduler(),
       bootId: "row-parity",
       cfg,
     });
     const context = requestContext(cfg);
-    context.chatAbortControllers = connection.chatAbortControllers;
-    connection.chatAbortControllers.set("current-run", {
-      controller: new AbortController(),
-      sessionKey: key,
-      sessionId: "parent-session",
-      agentId: "main",
-      startedAtMs: now - 100,
-      expiresAtMs: now + 1000,
-    });
+    rpcSourceTesting.set(
+      "current-run",
+      await createActiveRpcSourceForTest(
+        {},
+        {
+          sessionKey: key,
+          sessionId: "parent-session",
+          agentId: "main",
+          storeScope: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+        },
+      ),
+    );
     subagentRuns.set("row-parity-child", {
       runId: "row-parity-child",
       childSessionKey: childKey,
@@ -137,11 +134,7 @@ it("delivers nested event rows identical to the full list for each viewer and cl
       const exec = vi.spyOn(DatabaseSync.prototype, "exec");
       const expected = await Promise.all(
         peers.map(async ({ client }) => {
-          const result = await listSessions({
-            client,
-            context,
-            request,
-          });
+          const result = await listSessions({ client, context, request });
           return result.sessions.find((row) => row.key === key)!;
         }),
       );
@@ -320,7 +313,6 @@ it("delivers nested event rows identical to the full list for each viewer and cl
         );
       const publication = prepareSessionRowPublication(projection, now);
       const projectRun = createVisibleActiveSessionRunProjector(
-        connection,
         projection.state.rowContext.projectedAgentRuns,
       );
       const present = (index: number) =>

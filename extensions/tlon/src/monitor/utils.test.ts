@@ -1,5 +1,6 @@
+import { marked } from "marked";
 import { describe, expect, it } from "vitest";
-import { formatModelName, formatSummarizationHistoryText } from "./utils.js";
+import { extractMessageText, formatModelName, formatSummarizationHistoryText } from "./utils.js";
 
 describe("formatModelName", () => {
   it.each([
@@ -9,6 +10,27 @@ describe("formatModelName", () => {
     ["toString", "ToString"],
   ])("formats %s as %s", (model, expected) => {
     expect(formatModelName(model)).toBe(expected);
+  });
+});
+
+describe("extractMessageText code blocks", () => {
+  it.each([
+    { name: "ordinary code", code: "const answer = 42;", lang: "javascript" },
+    {
+      name: "nested triple-backtick fences",
+      code: "Before\n```markdown\n# literal heading\n```\nAfter",
+      lang: "markdown",
+    },
+    {
+      name: "longer backtick fences",
+      code: "Before\n`````text\n- literal\n`````\nAfter",
+      lang: "markdown",
+    },
+    { name: "empty code without a language", code: "", lang: "" },
+  ])("preserves $name as one Markdown code block", ({ code, lang }) => {
+    const text = extractMessageText([{ block: { code: { code, lang } } }]);
+    const tokens = marked.lexer(text).filter((token) => token.type !== "space");
+    expect(tokens).toMatchObject([{ type: "code", lang, text: code }]);
   });
 });
 

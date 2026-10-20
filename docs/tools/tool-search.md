@@ -27,7 +27,8 @@ optional tools. Set `tools.toolSearch: false` to restore direct schemas. Engaged
 This automatic default does not rewrite the configuration file.
 
 Embedded runs with a local model on the native Ollama transport keep
-policy-approved `web_search` and `web_fetch` schemas directly visible by default.
+policy-approved `web_search`, `web_fetch`, `memory_search`, and `memory_get`
+schemas directly visible by default.
 Other optional tools still use Tool Search. Any explicit `tools.toolSearch` value
 keeps its configured behavior, including `true`, an object, or `false`. Known
 hosted Ollama routes and the OpenAI-compatible transport keep the general default.
@@ -41,8 +42,12 @@ surface. Direct-only tools remain visible alongside the controls.
 The directory scales with the active model's context window. When space is tight,
 descriptions shorten before tool names are omitted; every authorized catalog
 entry remains searchable and callable. Invalid arguments for OpenClaw-owned
-tools include a bounded expected input signature when one can be rendered, so
-the model can correct the call without another schema lookup.
+tools include a bounded expected input signature when one can be rendered,
+plus the received type at the rejected field. Short scalar previews can show
+serialization mistakes such as `"10"` instead of `10`. Sensitive fields and
+registered secrets are redacted; arbitrary text and container contents are
+withheld. Diagnostics are bounded, and invalid arguments still fail before
+the target tool executes.
 If a call mistakes an admitted skill name for a tool ID, the error points back
 to the skill’s complete instructions instead of sending the model through tool search.
 
@@ -203,11 +208,12 @@ tool declares one.
 ### Call
 
 `dispatch_action` accepts a tool `id` and its target `args`, calls the selected tool
-through OpenClaw, and returns the `{ tool, result }` envelope. JSON-returning tools normally place their value in
-`result.details`. OpenClaw validates a trusted core or plugin tool's declared
-input schema before execution. Missing required arguments, incorrect types,
-and forbidden properties return actionable tool errors instead of executing
-the tool; misspelled properties include a suggested parameter when available.
+through OpenClaw, and returns the `{ tool, result }` envelope. The model-facing
+`result` contains the target's content and model-relevant status fields.
+OpenClaw validates a trusted core or plugin tool's declared input schema before
+execution. Missing required arguments, incorrect types, and forbidden
+properties return actionable tool errors instead of executing the tool;
+misspelled properties include a suggested parameter when available.
 If a trusted tool also declares `outputSchema`, OpenClaw compiles that schema
 before execution and validates final `details` after normal tool hooks before
 returning the catalog call. MCP and client-owned schemas remain deferred to
@@ -225,9 +231,10 @@ ambiguous tool selectors instead of calling the wrong tool. Nest target
 arguments under `args` when a target field matches another cataloged tool.
 
 The structured control's model-facing text includes only the tool's `id`,
-`name`, and `source` alongside the unchanged target `result`; it does not repeat
-the description and input signature. Its structured `details` retain the full
-call envelope for runtime consumers. Use `tool_describe` for full tool metadata.
+`name`, and `source` alongside the target's model-visible content and status; it
+does not repeat the target's structured `details`, description, or input
+signature. The control's own structured `details` retain the full call envelope
+for runtime consumers. Use `tool_describe` for full tool metadata.
 
 ```json
 {

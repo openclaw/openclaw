@@ -2,7 +2,7 @@ import { createMemo } from "solid-js";
 import type { GatewaySessionRow, SessionRunStatus } from "../../api/types.ts";
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
-import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 
 const SESSION_RUN_STATUS_LABELS = {
   queued: "sessionsView.statusQueued",
@@ -15,7 +15,7 @@ const SESSION_RUN_STATUS_LABELS = {
 } as const satisfies Record<SessionRunStatus, string>;
 
 export function SessionStatusBadge(props: { row: GatewaySessionRow }) {
-  const active = createMemo(() => isSessionRunActive(props.row));
+  const active = createMemo(() => isSessionRunStateActive(props.row));
   const idle = createMemo(
     () => props.row.hasActiveRun === false && (!props.row.status || props.row.status === "running"),
   );

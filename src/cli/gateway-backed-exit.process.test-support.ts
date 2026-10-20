@@ -8,7 +8,10 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { seedOriginDeviceToken } from "../infra/device-auth-store.test-support.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
 import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
 import { closeActiveGatewayServers } from "./gateway-backed-exit.test-helpers.js";
@@ -30,7 +33,7 @@ export async function prepareGatewayCliFixture(
   return { stateDir, configPath };
 }
 
-// Establish SQLite coordination files before asserting byte-for-byte RPC non-mutation.
+// Establish SQLite coordination files before asserting persistent RPC non-mutation.
 export function prepareSharedStateReadArtifacts(stateDir: string): void {
   const database = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"), {
     readOnly: true,
@@ -54,6 +57,9 @@ export async function snapshotDirectoryContents(root: string): Promise<Record<st
         await visit(absolutePath);
       } else if (stat.isSymbolicLink()) {
         snapshot[relativePath] = `symlink:${await fs.readlink(absolutePath)}`;
+      } else if (name === "openclaw.sqlite-shm") {
+        // Read-only SQLite connections may update SHM read marks, but not its size or presence.
+        snapshot[relativePath] = `file:sqlite-shared-memory:${stat.size}`;
       } else {
         snapshot[relativePath] = `file:${createHash("sha256")
           .update(await fs.readFile(absolutePath))
@@ -96,6 +102,7 @@ export async function prepareUnreachableGatewayCliFixture(params: {
       OPENCLAW_HOME: root,
       OPENCLAW_STATE_DIR: stateDir,
     };
+    openOpenClawStateDatabase({ env: stateEnv });
     const identity = loadOrCreateDeviceIdentity({ env: stateEnv });
     seedOriginDeviceToken({
       gatewayScope: gatewayOriginScope(UNREACHABLE_GATEWAY_URL),

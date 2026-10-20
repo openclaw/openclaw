@@ -8,13 +8,21 @@ const BUILT = "1623683f478b1e4a2e3d5632585f006ea142e08c";
 const HEAD = "5034f2ab174b5c76b0f2a7703ddb332572916e02";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-async function makeCheckout(options: { built?: string; head?: string }): Promise<string> {
+async function makeCheckout(options: {
+  built?: string;
+  head?: string;
+  immutableBuild?: unknown;
+}): Promise<string> {
   const root = tempDirs.make("openclaw-stale-build-");
   if (options.built) {
     await fs.mkdir(path.join(root, "dist"), { recursive: true });
     await fs.writeFile(
       path.join(root, "dist", "build-info.json"),
-      JSON.stringify({ version: "2026.8.1", commit: options.built }),
+      JSON.stringify({
+        version: "2026.8.1",
+        commit: options.built,
+        immutableBuild: options.immutableBuild,
+      }),
     );
   }
   if (options.head) {
@@ -74,4 +82,29 @@ describe("collectStaleRuntimeBuildFindings", () => {
 
     await expect(collectStaleRuntimeBuildFindings({ root, env: {} })).resolves.toEqual([]);
   });
+
+  it.each([
+    [{ builtBy: "operator", isolation: "none" }, true],
+    [{ builtBy: "operator", isolation: "none", account: "fixture", uid: 1002, gid: 1002 }, true],
+    [{ builtBy: "isolated-account", isolation: "none" }, false],
+    [{ builtBy: "operator", isolation: "systemd" }, false],
+  ])(
+    "reports only recorded operator builds without account isolation (%j)",
+    async (immutableBuild, warns) => {
+      const root = await makeCheckout({ built: BUILT, head: BUILT, immutableBuild });
+      const findings = await collectStaleRuntimeBuildFindings({ root, env: {} });
+      if (!warns) {
+        expect(findings).toEqual([]);
+        return;
+      }
+      expect(findings).toEqual([
+        expect.objectContaining({
+          severity: "warning",
+          message: expect.stringContaining("without an isolated build account"),
+          details: immutableBuild,
+          fixHint: expect.stringContaining("https://docs.openclaw.ai/cli/update"),
+        }),
+      ]);
+    },
+  );
 });

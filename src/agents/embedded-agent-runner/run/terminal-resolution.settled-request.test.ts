@@ -13,10 +13,12 @@ import {
 } from "./terminal-resolution.js";
 
 const SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
-  "The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step: it is a text-only pass, so reply with plain text and do not attempt any tool call.";
+  "Your turn ended without a final reply. If the user still needs a reply, write it now. If your completed actions already answered the request, answer exactly NO_REPLY. Continue from the current transcript. Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step: it is a text-only pass, so reply with plain text and do not attempt any tool call.";
+const REQUIRED_RESULT_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
+  "Your turn ended without a final result. Continue from the current transcript and produce the required result now. NO_REPLY is not allowed. Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step: it is a text-only pass, so reply with plain text and do not attempt any tool call.";
 
 describe("resolveSettledTurnFinalizationRequest", () => {
-  it("requests isolated finalization only for a required settled-tool turn", () => {
+  it("requests isolated finalization only when empty settled-tool turns owe a result", () => {
     const assistant = buildEmbeddedRunnerAssistant({ content: [{ type: "text", text: "" }] });
     const attempt = makeEmbeddedRunnerAttempt({
       assistantTexts: [],
@@ -27,7 +29,7 @@ describe("resolveSettledTurnFinalizationRequest", () => {
       currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
     });
     const terminalState = resolveEmbeddedRunAttemptTerminalState({ attempt, assistant });
-    const request = (terminalReplyExpectation: "required" | "optional") =>
+    const request = (terminalReplyExpectation: "required" | "optional" | "result-required") =>
       resolveSettledTurnFinalizationRequest({
         runParams: {
           sessionId: "session:settled",
@@ -46,6 +48,7 @@ describe("resolveSettledTurnFinalizationRequest", () => {
 
     expect(request("required")).toBe(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
     expect(request("optional")).toBeNull();
+    expect(request("result-required")).toBe(REQUIRED_RESULT_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
     expect(
       resolveSettledTurnFinalizationRequest({
         runParams: {
@@ -62,7 +65,7 @@ describe("resolveSettledTurnFinalizationRequest", () => {
         terminalState,
         settledTurnFinalizationAvailable: true,
       }),
-    ).toBeNull();
+    ).toBe(REQUIRED_RESULT_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
   });
 
   it("requires an available finalizer and no visible structured error", () => {
@@ -167,7 +170,7 @@ describe("resolveSettledTurnFinalizationRequest", () => {
       itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
       lastToolError: { toolName: "dispatch_action", error: "Required argument missing" },
     });
-    const request = (terminalReplyExpectation: "required" | "optional") =>
+    const request = (terminalReplyExpectation: "required" | "optional" | "result-required") =>
       resolveSettledTurnFinalizationRequest({
         runParams: {
           sessionId: "session:rejected-silent",
@@ -195,8 +198,11 @@ describe("resolveSettledTurnFinalizationRequest", () => {
         settledTurnFinalizationAvailable: true,
       });
 
-    expect(request("required")).toContain(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
+    expect(request("required")).toBeNull();
     expect(request("optional")).toBeNull();
+    expect(request("result-required")).toContain(
+      REQUIRED_RESULT_TOOL_TERMINAL_CONTINUATION_INSTRUCTION,
+    );
   });
 
   it("finalizes after successful tools despite pre-tool progress and a stale error (#132762)", () => {

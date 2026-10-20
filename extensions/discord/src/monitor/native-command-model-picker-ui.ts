@@ -1,3 +1,4 @@
+import { ComponentType, type APIContainerComponent } from "discord-api-types/v10";
 import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
 import {
   resolveEffectiveAgentRuntime,
@@ -18,12 +19,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  Container,
-  TextDisplay,
-  type BaseComponentInteraction,
-  type CommandInteraction,
-} from "../internal/discord.js";
+import type { BaseComponentInteraction, CommandInteraction } from "../internal/discord.js";
 import { splitDiscordModelRef } from "./model-picker-preference-primitives.js";
 import {
   readDiscordModelPickerRecentModels,
@@ -94,14 +90,21 @@ export function resolveDiscordModelPickerPreferenceScope(params: {
 }): DiscordModelPickerPreferenceScope {
   return {
     accountId: params.accountId,
-    guildId: params.interaction.guild?.id ?? undefined,
+    guildId: params.interaction.guild?.id,
     userId: params.userId,
   };
 }
 
-export function buildDiscordModelPickerNoticePayload(message: string): { components: Container[] } {
+export function buildDiscordModelPickerNoticePayload(message: string): {
+  components: APIContainerComponent[];
+} {
   return {
-    components: [new Container([new TextDisplay(message)])],
+    components: [
+      {
+        type: ComponentType.Container,
+        components: [{ type: ComponentType.TextDisplay, content: message }],
+      },
+    ],
   };
 }
 
@@ -112,26 +115,12 @@ export async function resolveDiscordModelPickerRoute(params: {
   threadBindings: ThreadBindingManager;
 }) {
   const { interaction, cfg, accountId } = params;
-  const { isDirectMessage, isGroupDm, isThreadChannel, rawChannelId, threadParentId } =
-    await resolveDiscordNativeInteractionChannelContext(interaction, "unknown");
-  const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
-    ? interaction.rawData.member.roles.slice()
-    : [];
-
-  const threadBinding = isThreadChannel
-    ? params.threadBindings.getByThreadId(rawChannelId)
-    : undefined;
   return resolveDiscordNativeInteractionRouteState({
     cfg,
     accountId,
-    guildId: interaction.guild?.id ?? undefined,
-    memberRoleIds,
-    isDirectMessage,
-    isGroupDm,
-    directUserId: interaction.user?.id ?? rawChannelId,
-    conversationId: rawChannelId,
-    parentConversationId: threadParentId,
-    threadBinding,
+    interaction,
+    channelContext: await resolveDiscordNativeInteractionChannelContext(interaction, "unknown"),
+    threadBindings: params.threadBindings,
   }).effectiveRoute;
 }
 

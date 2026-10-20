@@ -10,6 +10,8 @@ import { ChatEffortPicker } from "./chat-effort-picker.tsx";
 const host = document.createElement("div");
 
 it("keeps Ultrafast selectable while showing and clearing a provider downgrade", () => {
+  document.body.append(host);
+  onTestFinished(() => host.remove());
   const onFastModeSelect = vi.fn(async () => undefined);
   const model: ModelCatalogEntry = {
     id: "model",
@@ -33,16 +35,13 @@ it("keeps Ultrafast selectable while showing and clearing a provider downgrade",
       sessionsResult: null,
     }),
     fastMode: resolveChatFastModeSelectState({
-      activeRunId: null,
       catalog: [{ ...model, serviceTierObservation }],
       connected: true,
       currentModelOverride: "openai/model",
       fastModeTarget: { model: "model", modelProvider: "openai", fastMode },
       gatewayAvailable: true,
       loading: false,
-      sending: false,
       sessionsResult: null,
-      stream: null,
     }),
     onFastModeSelect,
     onThinkingSelect: vi.fn(async () => undefined),
@@ -64,6 +63,8 @@ it("keeps Ultrafast selectable while showing and clearing a provider downgrade",
     { container: host },
   );
   const observation = { requestedTier: "ultrafast", responseTier: "priority" };
+  host.querySelector<HTMLElement>("summary")!.click();
+  flush();
   const ultrafast = show("ultrafast", observation);
   expect(ultrafast.disabled).toBe(false);
   expect(ultrafast.getAttribute("aria-checked")).toBe("true");
@@ -104,6 +105,7 @@ it("keeps an uncommitted reasoning preview when other picker props refresh", () 
     fastMode: {
       active,
       currentOverride: active ? "on" : "off",
+      persistedOverride: active ? "on" : "off",
       disabled: false,
       label: active ? "On" : "Off",
       nextValue: active ? "off" : "on",
@@ -125,6 +127,8 @@ it("keeps an uncommitted reasoning preview when other picker props refresh", () 
     { container: host },
   );
   paint(false);
+  host.querySelector<HTMLElement>("summary")!.click();
+  flush();
   const slider = host.querySelector<HTMLInputElement>("[data-chat-thinking-slider]")!;
   slider.value = "2";
   slider.dispatchEvent(new Event("input", { bubbles: true }));

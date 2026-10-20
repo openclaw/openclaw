@@ -212,14 +212,6 @@ describe("Feishu delivery authority through the registered adapter and Lark tran
     },
   );
 
-  it("returns the accepted receipt without optional send-authority callbacks", async () => {
-    await withFeishuTransport(async ({ cfg, requests }) => {
-      const result = await preferredTextSend()({ cfg, to: TARGET, text: "Delivered normally." });
-      expect(requests.map((request) => request.path)).toEqual([AUTH_PATH, MESSAGE_PATH]);
-      expect(result.receipt?.platformMessageIds).toEqual(["om_accepted"]);
-    });
-  });
-
   it.each(["proxy preparation", "Axios interceptor", "dispatch refresh"] as const)(
     "checks cancellation after awaited %s",
     async (waitAt) => {

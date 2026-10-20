@@ -7,7 +7,7 @@ export const WORKSPACE_MUTATION_GUARD_COMPAT_RECORD = {
   introduced: "2026-10-02",
   deprecated: "2026-10-02",
   warningStarts: "2026-10-02",
-  removalGate: "stable-deprecation-period",
+  removeAfter: "2026-12-31",
   replacement:
     "Await database preparation before ensureAgentWorkspace and use SQL-free guard.assertHost for live authority. Internal recovery predicates run on the worker transaction connection.",
   docsPath: "/plugins/sdk-migration/how-to-migrate#workspace-mutation-guards",
@@ -18,5 +18,5 @@ export const WORKSPACE_MUTATION_GUARD_COMPAT_RECORD = {
   ],
   tests: ["src/plugins/runtime/runtime-agent.test.ts", "src/plugins/compat/registry.test.ts"],
   releaseNote:
-    "Released callbacks and their synchronous OpenClaw DB access remain supported. The legacy check runs once before worker dispatch, outside admission grants; use the typed guard for live revocation at commit. Removal requires an announced later stable release.",
+    "Released callbacks and their synchronous OpenClaw DB access remain supported. The legacy check runs once before worker dispatch, outside admission grants; use the typed guard for live revocation at commit. Removal ships in the first January 2027 stable release after the final compatibility day, 2026-12-31.",
 } as const satisfies PluginCompatRecord;

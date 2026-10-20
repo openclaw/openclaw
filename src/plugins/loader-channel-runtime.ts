@@ -35,7 +35,7 @@ export function loadSetupRuntimeChannelCandidate(params: {
   runtimeCandidateEntry: { source: string; rootDir: string };
   safeSource: string;
   rejectHardlinks: boolean;
-  loadPluginModule: PluginModuleLoader;
+  loadPluginModule: (...args: Parameters<PluginModuleLoader>) => ReturnType<PluginModuleLoader>;
   registryBuilder: PluginRegistryBuilder;
   cfg: OpenClawConfig;
   entry: NormalizedPluginsConfig["entries"][string] | undefined;
@@ -185,18 +185,6 @@ export function loadSetupRuntimeChannelCandidate(params: {
         setupRegistration.plugin,
       );
     }
-  }
-  if (
-    !channelPluginIdBelongsToManifest({
-      channelId: mergedSetupPlugin.id,
-      pluginId: record.id,
-      manifestChannels: manifestRecord.channels,
-    })
-  ) {
-    params.pushPluginLoadError(
-      `plugin id mismatch (config uses "${record.id}", setup export uses "${mergedSetupPlugin.id}")`,
-    );
-    return true;
   }
   if (registrationPlan.mode === "setup-runtime" && setupRegistration.registerSetupRuntime) {
     try {

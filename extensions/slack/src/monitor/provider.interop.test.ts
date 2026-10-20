@@ -24,10 +24,7 @@ const socketOptions = {
 
 async function createSocketApp(clientOptions: Record<string, unknown> = {}) {
   const slackBoltModule = await import("@slack/bolt");
-  const interop = resolveSlackBoltInterop({
-    defaultImport: slackBoltModule.default,
-    namespaceImport: slackBoltModule,
-  });
+  const interop = resolveSlackBoltInterop(slackBoltModule);
   const result = createSlackBoltApp({ ...socketOptions, interop, clientOptions });
   if (!(result.receiver instanceof interop.SocketModeReceiver)) {
     throw new Error("expected a Socket Mode receiver");
@@ -59,7 +56,7 @@ async function stopSocketServer({
   const disconnected = new Promise<void>((resolve) => {
     receiver.client.once("disconnected", resolve);
   });
-  await Promise.all([gracefulStopSlackApp(app), disconnected]);
+  await Promise.all([gracefulStopSlackApp(app, receiver.client), disconnected]);
   for (const socket of socketServer.clients) {
     socket.terminate();
   }
@@ -82,11 +79,9 @@ describe("resolveSlackBoltInterop", () => {
   it("resolves the App constructor with namespace receivers", () => {
     expect(
       resolveSlackBoltInterop({
-        defaultImport: FakeApp,
-        namespaceImport: {
-          HTTPReceiver: FakeHTTPReceiver,
-          SocketModeReceiver: FakeSocketModeReceiver,
-        },
+        default: FakeApp,
+        HTTPReceiver: FakeHTTPReceiver,
+        SocketModeReceiver: FakeSocketModeReceiver,
       }),
     ).toEqual(moduleExports);
   });
@@ -264,12 +259,12 @@ describe("createSlackBoltApp", () => {
       }
 
       void delayReconnectAttempt.call(client, start);
-      await gracefulStopSlackApp(app);
+      await gracefulStopSlackApp(app, client);
       await app.start();
       await vi.advanceTimersByTimeAsync(15_000);
 
       expect(start).toHaveBeenCalledTimes(1);
-      await gracefulStopSlackApp(app);
+      await gracefulStopSlackApp(app, client);
     } finally {
       vi.useRealTimers();
     }
@@ -292,6 +287,7 @@ describe("createSlackBoltApp", () => {
     const abortController = new AbortController();
     const lifecycle = startSlackSocketAndWaitForDisconnect({
       app,
+      socketClient: client,
       abortSignal: abortController.signal,
     });
     let lifecycleSettled = false;
@@ -430,7 +426,7 @@ describe("slack socket reconnect helpers", () => {
     const client = new EventEmitter();
     const onSharedConnection = vi.fn();
     const unregister = registerSlackSocketModeConnectionDiagnostics({
-      app: { receiver: { client } },
+      client,
       onSharedConnection,
     });
 
@@ -460,7 +456,6 @@ describe("slack socket reconnect helpers", () => {
   it("installs the disconnect waiter before socket start completes", async () => {
     const client = new EventEmitter();
     const app = {
-      receiver: { client },
       start: vi.fn().mockImplementation(async () => {
         client.emit("disconnected");
       }),
@@ -470,6 +465,7 @@ describe("slack socket reconnect helpers", () => {
     await expect(
       startSlackSocketAndWaitForDisconnect({
         app,
+        socketClient: client,
         onStarted,
       }),
     ).resolves.toEqual({ event: "disconnect" });
@@ -481,7 +477,6 @@ describe("slack socket reconnect helpers", () => {
   it("cancels the disconnect waiter when onStarted throws", async () => {
     const client = new EventEmitter();
     const app = {
-      receiver: { client },
       start: vi.fn().mockResolvedValue(undefined),
     };
     const err = new Error("status sink failed");
@@ -489,6 +484,7 @@ describe("slack socket reconnect helpers", () => {
     await expect(
       startSlackSocketAndWaitForDisconnect({
         app,
+        socketClient: client,
         onStarted: () => {
           throw err;
         },
@@ -504,14 +500,15 @@ describe("slack socket reconnect helpers", () => {
     const client = new EventEmitter();
     const err = new Error("missing_scope");
     const app = {
-      receiver: { client },
       start: vi.fn().mockImplementation(() => {
         client.emit("unable_to_socket_mode_start", err);
         throw new Error();
       }),
     };
 
-    await expect(startSlackSocketAndWaitForDisconnect({ app })).rejects.toThrow("missing_scope");
+    await expect(
+      startSlackSocketAndWaitForDisconnect({ app, socketClient: client }),
+    ).rejects.toThrow("missing_scope");
 
     expect(client.listenerCount("disconnected")).toBe(0);
     expect(client.listenerCount("unable_to_socket_mode_start")).toBe(0);
@@ -526,7 +523,7 @@ describe("slack socket reconnect helpers", () => {
       }),
     };
 
-    await gracefulStopSlackApp(app);
+    await gracefulStopSlackApp(app, app.receiver.client);
 
     expect(app.stop).toHaveBeenCalledTimes(1);
     expect(app.receiver.client.shuttingDown).toBe(true);

@@ -1,4 +1,3 @@
-// Builds approval prompt view models from request and resolution events.
 import { summarizeApprovalScope } from "./approval-scope.js";
 import {
   normalizeApprovalRequest,

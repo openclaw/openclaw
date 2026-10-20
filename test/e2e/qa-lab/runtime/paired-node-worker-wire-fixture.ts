@@ -117,6 +117,7 @@ export function createWireWorkspaceSettlementWaiter() {
 }
 export type WireNodeRead = {
   nodeId: string;
+  commands?: string[];
   approvalState?: string;
   connected?: boolean;
   paired?: boolean;
@@ -214,10 +215,7 @@ export async function connectWireClient(params: {
   timeoutMs?: number;
   nodeManifest?: { caps: string[]; commands: string[] };
 }): Promise<GatewayClient> {
-  const [{ prepareGatewayClientDeviceAuth }, { acquireGatewayTestClient }] = await Promise.all([
-    import("../../../../src/gateway/client.js"),
-    import("../../../helpers/gateway-client.js"),
-  ]);
+  const { acquireGatewayTestClient } = await import("../../../helpers/gateway-client.js");
   const node = params.role === "node";
   const connectionOptions = {
     url: params.gateway.wsUrl,
@@ -225,8 +223,6 @@ export async function connectWireClient(params: {
     env: params.gateway.runtimeEnv,
     deviceIdentity: params.identity,
   };
-  // Source QA must prepare the auth worker before starting the handshake budget.
-  await prepareGatewayClientDeviceAuth(connectionOptions);
   return await acquireGatewayTestClient(
     {
       ...connectionOptions,
@@ -311,6 +307,7 @@ async function ensureNodeApproved(operator: GatewayClient, nodeId: string): Prom
 async function waitForApprovedWireNode(
   operator: GatewayClient,
   nodeId: string,
+  requiredCommands: readonly string[],
 ): Promise<WireNodeRead> {
   return await waitUntil(async () => {
     const result = await operator.request<{ nodes?: WireNodeRead[] }>("node.list", {});
@@ -318,7 +315,8 @@ async function waitForApprovedWireNode(
     return approved?.approvalState === "approved" &&
       approved.connected === true &&
       approved.paired === true &&
-      approved.sessionHost === true
+      approved.sessionHost === true &&
+      requiredCommands.every((command) => approved.commands?.includes(command))
       ? approved
       : undefined;
   });
@@ -421,9 +419,7 @@ export async function createPairedNodeWorkerHost(
   const invokeErrors: unknown[] = [];
   const commands: string[] = [];
   const frames: NodeInvokeRequestPayload[] = [];
-  const identity = loadOrCreateDeviceIdentity({
-    path: path.join(options.root, `${label}-identity.sqlite`),
-  });
+  const identity = loadOrCreateDeviceIdentity({ env: nodeEnv });
 
   const inventory = () => ({
     protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
@@ -680,7 +676,11 @@ export async function createPairedNodeWorkerHost(
 
   await supervisor.initialize();
   await connect();
-  await waitForApprovedWireNode(options.operator, identity.deviceId);
+  await waitForApprovedWireNode(
+    options.operator,
+    identity.deviceId,
+    options.pluginRuntime?.manifest.commands ?? [],
+  );
   return host;
 }
 

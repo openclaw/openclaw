@@ -21,6 +21,7 @@ import {
   type AnthropicInlineImageBudget,
 } from "../internal/anthropic-inline-images.js";
 import { isImageWithMediaPayload } from "../media-payload.js";
+import { preparedRequestSuffix } from "../provider-options.js";
 import type { AnthropicOptions, AnthropicThinkingDisplay } from "../provider-options.js";
 import { transformProviderMessages } from "../provider-transcript-transform.js";
 import {
@@ -164,6 +165,7 @@ async function convertAnthropicMessages(
     replayThinkingEnabled?: boolean;
     allowEmptySignature?: boolean;
     profile: "provider" | "transport";
+    context: Context;
     /** Emitted indexes of transient carriers that cannot anchor the cached prefix. */
     cacheBreakpointOptOutMessageIndexes?: Set<number>;
   },
@@ -354,7 +356,13 @@ async function convertAnthropicMessages(
         }
         toolResults.push({
           type: "tool_result",
-          tool_use_id: nextMsg.toolCallId,
+          tool_use_id: preparedRequestSuffix.has(options.context)
+            ? preparedRequestSuffix.toolCallId(
+                options.context,
+                nextMsg.toolCallId,
+                normalizeAnthropicToolCallId(nextMsg.toolCallId),
+              )
+            : nextMsg.toolCallId,
           content: await convertContentBlocks(
             nextMsg.content,
             model,
@@ -532,11 +540,12 @@ export async function buildAnthropicRequest(
         replayPlan.messages,
         model,
         normalizeAnthropicToolCallId,
-        undefined,
+        { preserveUnframedToolResults: preparedRequestSuffix.has(context) },
       )
     : transformProviderMessages(replayPlan.messages, model, normalizeAnthropicToolCallId);
   const messages = await convertAnthropicMessages(transformed, model, isOAuthToken, {
     profile,
+    context,
     allowReasoningContentReplay:
       managed && resolveProviderEndpoint(model).endpointClass === "xiaomi-native",
     allowEmptySignature: model.compat?.allowEmptySignature,

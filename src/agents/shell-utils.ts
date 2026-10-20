@@ -1,8 +1,3 @@
-/**
- * Shell execution helpers.
- *
- * Resolves platform shell commands and sanitizes binary output.
- */
 import fs from "node:fs";
 import path from "node:path";
 import { AnsiSequenceStripper } from "../../packages/terminal-core/src/ansi-sequences.js";

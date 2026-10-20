@@ -105,6 +105,30 @@ export function roleConfig(others: "none" | "view" | "suggest" | "write"): OpenC
   };
 }
 
+export function setReaction(
+  messageId: string,
+  params: Record<string, unknown> = {},
+  requestClient?: GatewayClient | null,
+  requestContext?: GatewayRequestContext,
+  hasCurrentClientAuthority?: () => boolean,
+) {
+  return call(
+    "session.reactions.set",
+    { sessionKey, messageId, emoji: "👍", ...params },
+    requestClient,
+    requestContext,
+    hasCurrentClientAuthority,
+  );
+}
+
+export function listReactions(
+  requestClient?: GatewayClient | null,
+  requestContext?: GatewayRequestContext,
+  key = sessionKey,
+) {
+  return call("session.reactions.list", { sessionKey: key }, requestClient, requestContext);
+}
+
 export async function seedSession(overrides: Partial<SessionEntry> = {}, key = sessionKey) {
   const entry = {
     sessionId,

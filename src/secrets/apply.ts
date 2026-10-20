@@ -163,7 +163,7 @@ function applyProviderPlanMutations(params: {
     if (isDeepStrictEqual(previous, providerConfig)) {
       continue;
     }
-    currentProviders[providerAlias] = structuredClone(providerConfig);
+    currentProviders[providerAlias] = providerConfig;
     changed = true;
   }
 
@@ -205,7 +205,7 @@ function applyProviderPlanMutations(params: {
       continue;
     }
     params.config.plugins.entries[pluginId] = {
-      ...(isRecord(previousEntry) ? previousEntry : {}),
+      ...previousEntry,
       enabled: true,
     };
     changed = true;
@@ -668,14 +668,18 @@ function captureFileSnapshot(pathname: string): FileSnapshot {
   };
 }
 
-function restoreFileSnapshot(pathname: string, snapshot: FileSnapshot): void {
+function restoreFileSnapshot(
+  pathname: string,
+  snapshot: FileSnapshot,
+  env: NodeJS.ProcessEnv,
+): void {
   if (!snapshot.existed) {
     if (fs.existsSync(pathname)) {
       fs.rmSync(pathname, { force: true });
     }
     return;
   }
-  writeTextFileAtomic(pathname, snapshot.content, snapshot.mode || 0o600);
+  writeTextFileAtomic(pathname, snapshot.content, snapshot.mode || 0o600, env);
 }
 
 /** Applies a normalized secrets plan, or reports file/auth-store changes in dry-run mode. */
@@ -747,7 +751,7 @@ export async function runSecretsApply(params: {
       afterWrite: { mode: "auto" },
     });
     for (const [pathname, raw] of projected.envRawByPath.entries()) {
-      writeTextFileAtomic(pathname, raw, 0o600);
+      writeTextFileAtomic(pathname, raw, 0o600, env);
     }
     for (const [pathname, { store: value, target }] of projected.authStores) {
       const store = coercePersistedAuthProfileStore(value);
@@ -775,7 +779,7 @@ export async function runSecretsApply(params: {
     // config/auth/env stores out of sync when a later write fails.
     for (const [pathname, snapshot] of snapshots.entries()) {
       try {
-        restoreFileSnapshot(pathname, snapshot);
+        restoreFileSnapshot(pathname, snapshot, env);
       } catch {
         // Best effort only; preserve original error.
       }

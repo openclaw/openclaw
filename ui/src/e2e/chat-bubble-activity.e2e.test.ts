@@ -241,10 +241,7 @@ suite.define(() => {
         latency,
         "ms (not provider first-token latency)",
       );
-      await browserExpect(chat.locator(".chat-bubble-dots--working")).toHaveCount(1);
-      const working = chat.locator(".chat-bubble-activity--working");
-      await working.locator("summary").click();
-      await browserExpect(working).toHaveAttribute("open", "");
+      await browserExpect(chat.locator(".chat-bubble-dots--working")).toHaveCount(0);
       // The producer retires the live text tail when its keyed preamble is published.
       // First-fragment visibility above deliberately precedes this boundary.
       await gateway.emitGatewayEvent("chat", {
@@ -278,6 +275,10 @@ suite.define(() => {
           args: { path: "layout.css" },
         },
       });
+      await browserExpect(chat.locator(".chat-bubble-dots--working")).toHaveCount(1);
+      const working = chat.locator(".chat-bubble-activity--working");
+      await working.locator("summary").click();
+      await browserExpect(working).toHaveAttribute("open", "");
       await browserExpect(
         chat.locator(".chat-text").getByText("I’ll", { exact: true }),
       ).toBeVisible();

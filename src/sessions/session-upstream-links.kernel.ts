@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { safeParseJson } from "@openclaw/normalization-core";
 import type { Selectable } from "kysely";
@@ -9,6 +8,12 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { sqlPublicationAnchor } from "../infra/sql-connection.js";
+import {
+  publishSqliteDatabaseAdmission,
+  type SqliteDatabaseAdmissionKey,
+} from "../infra/sqlite-database-admission.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import {
   getSqliteReadOperationRevision,
@@ -20,6 +25,10 @@ import type {
 } from "../plugins/session-catalog-upstream.types.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
+import {
+  sessionUpstreamPresenceKey,
+  sessionUpstreamPresencePublication,
+} from "./session-upstream-links-publication.js";
 
 type SessionUpstreamLinkRow = Selectable<OpenClawStateKyselyDatabase["session_upstream_links"]>;
 
@@ -69,9 +78,18 @@ export const sessionUpstreamReadOperations = {
     type: "sessionUpstream.read" as const,
     link: readSessionUpstreamLinkInDatabase(db, input.sessionKey, input.agentId),
   }),
-} satisfies WorkerOperationHandlers<DatabaseSync>;
+} satisfies WorkerOperationHandlers<EngineConnection>;
 
-export function listWatchedSessionUpstreamLinksInDatabase(db: DatabaseSync): SessionUpstreamLink[] {
+export const emptyWatchedSessionUpstreamLinksAdmission: SqliteDatabaseAdmissionKey<
+  true | undefined
+> = {
+  name: "state.empty-watched-session-upstream-links",
+  read: (value) => (value === true ? true : undefined),
+};
+
+export function listWatchedSessionUpstreamLinksInDatabase(
+  db: EngineConnection,
+): SessionUpstreamLink[] {
   // Watch cursors own demand. Their key-only lookup relies on one owning agent per
   // adopted session key, not one agent per native thread. Agent-qualified keys
   // keep separate adoptions of the same thread distinct.
@@ -93,6 +111,11 @@ export function listWatchedSessionUpstreamLinksInDatabase(db: DatabaseSync): Ses
       .orderBy("links.catalog_id", "asc")
       .orderBy("links.session_key", "asc"),
   ).rows;
+  publishSqliteDatabaseAdmission(
+    db,
+    emptyWatchedSessionUpstreamLinksAdmission,
+    rows.length === 0 ? true : undefined,
+  );
   return rows.map(rowToSessionUpstreamLink);
 }
 
@@ -101,17 +124,17 @@ export type SessionUpstreamLinkInput = Omit<
   "lastScannedAt" | "createdAt" | "updatedAt"
 >;
 
-function getSessionUpstreamKysely(db: DatabaseSync) {
+function getSessionUpstreamKysely(db: EngineConnection) {
   return getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "session_upstream_links">>(db);
 }
 
 // Retain one exact result, including absence, only at the connection owner's admitted revision.
-const upstreamLinkQuery = createSqliteQueryCache((db) => {
+const upstreamLinkQuery = createSqliteQueryCache((db: EngineConnection) => {
   type Key = { sessionKey: string; agentId: string };
   let retained:
     | (Key & { revision: SqliteReadOperationRevision; row: SessionUpstreamLinkRow | undefined })
     | undefined;
-  registerNodeSqliteDisposeCallback(db, () => {
+  registerNodeSqliteDisposeCallback(sqlPublicationAnchor(db), () => {
     retained = undefined;
   });
   return (key: Key): SessionUpstreamLinkRow | undefined => {
@@ -141,7 +164,7 @@ const upstreamLinkQuery = createSqliteQueryCache((db) => {
 });
 
 export function readSessionUpstreamLinkInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   sessionKey: string,
   agentId: string,
 ): SessionUpstreamLink | undefined {
@@ -150,12 +173,12 @@ export function readSessionUpstreamLinkInDatabase(
 }
 
 export function upsertSessionUpstreamLinkInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: SessionUpstreamLinkInput,
   now: number,
   ifAbsent?: true,
 ): boolean {
-  return (
+  const changed =
     executeSqliteQuerySync(
       db,
       getSessionUpstreamKysely(db)
@@ -218,12 +241,18 @@ export function upsertSessionUpstreamLinkInDatabase(
                 };
               }),
         ),
-    ).numAffectedRows === 1n
-  );
+    ).numAffectedRows === 1n;
+  if (changed) {
+    publishSqliteDatabaseAdmission(db, emptyWatchedSessionUpstreamLinksAdmission, undefined);
+    sessionUpstreamPresencePublication.stagePostimages(db, [
+      [sessionUpstreamPresenceKey(input.sessionKey, input.agentId), true],
+    ]);
+  }
+  return changed;
 }
 
 export function deleteSessionUpstreamLinkInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   sessionKey: string,
   agentId: string,
   expected?: SessionUpstreamLink,
@@ -244,6 +273,9 @@ export function deleteSessionUpstreamLinkInDatabase(
       .where("session_key", "=", sessionKey)
       .where("agent_id", "=", agentId),
   );
+  sessionUpstreamPresencePublication.stageDeletions(db, [
+    sessionUpstreamPresenceKey(sessionKey, agentId),
+  ]);
   return "deleted";
 }
 

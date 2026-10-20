@@ -130,7 +130,7 @@ Claude CLI reuse (`claude -p`) is a sanctioned OpenClaw integration path. Anthro
 - Auth: `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`)
 - Zen runtime provider: `opencode`
 - Go runtime provider: `opencode-go`
-- Example models: `opencode/claude-opus-4-6`, `opencode-go/kimi-k2.6`
+- Example models: `opencode/claude-opus-4-6`, `opencode-go/kimi-k2.7-code`
 - CLI: `openclaw onboard --auth-choice opencode-zen` or `openclaw onboard --auth-choice opencode-go`
 
 ```json5
@@ -144,7 +144,8 @@ Claude CLI reuse (`claude -p`) is a sanctioned OpenClaw integration path. Anthro
 - Provider: `google`
 - Auth: `GEMINI_API_KEY`
 - Optional rotation: `GEMINI_API_KEYS`, `GEMINI_API_KEY_1`, `GEMINI_API_KEY_2`, `GOOGLE_API_KEY` fallback, and `OPENCLAW_LIVE_GEMINI_KEY` (single override)
-- Example models: `google/gemini-3.1-pro-preview`, `google/gemini-3.5-flash`
+- Default model: `google/gemini-4-argon`
+- Other bundled models include `google/gemini-3.8-flash` and `google/gemini-3.5-flash-lite`
 - Compatibility: legacy OpenClaw config using `google/gemini-3.1-flash-preview` is normalized to `google/gemini-3-flash-preview`
 - Alias: `google/gemini-3.1-pro` is accepted and normalized to Google's live Gemini API id, `google/gemini-3.1-pro-preview`
 - CLI: `openclaw onboard --auth-choice gemini-api-key`
@@ -197,7 +198,7 @@ messages and normalizes `stats.cached` into `cacheRead`; legacy
 | --------------------------------------- | -------------------------------- | ---------------------------------------------- | ---------------------------------------------------------- |
 | [Arcee](/providers/arcee)               | `arcee`                          | `ARCEEAI_API_KEY` or `OPENROUTER_API_KEY`      | `arcee/trinity-large-thinking`                             |
 | BytePlus                                | `byteplus` / `byteplus-plan`     | `BYTEPLUS_API_KEY`                             | `byteplus-plan/ark-code-latest`                            |
-| Cerebras                                | `cerebras`                       | `CEREBRAS_API_KEY`                             | `cerebras/zai-glm-4.7`                                     |
+| Cerebras                                | `cerebras`                       | `CEREBRAS_API_KEY`                             | `cerebras/gpt-oss-120b`                                    |
 | Chutes                                  | `chutes`                         | `CHUTES_API_KEY` or `CHUTES_OAUTH_TOKEN`       | `chutes/zai-org/GLM-5-TEE`                                 |
 | ClawRouter                              | `clawrouter`                     | `CLAWROUTER_API_KEY`                           | `clawrouter/anthropic/claude-sonnet-4-6`                   |
 | Cohere                                  | `cohere`                         | `COHERE_API_KEY`                               | `cohere/command-a-plus-05-2026`                            |
@@ -206,7 +207,7 @@ messages and normalizes `stats.cached` into `cacheRead`; legacy
 | Featherless AI                          | `featherless`                    | `FEATHERLESS_API_KEY`                          | `featherless/Qwen/Qwen3-32B`                               |
 | GitHub Copilot                          | `github-copilot`                 | `COPILOT_GITHUB_TOKEN`                         | -                                                          |
 | GMI Cloud                               | `gmi`                            | `GMI_API_KEY`                                  | `gmi/google/gemini-3.1-flash-lite`                         |
-| Groq                                    | `groq`                           | `GROQ_API_KEY`                                 | `groq/llama-3.3-70b-versatile`                             |
+| Groq                                    | `groq`                           | `GROQ_API_KEY`                                 | `groq/openai/gpt-oss-120b`                                 |
 | Hugging Face Inference                  | `huggingface`                    | `HUGGINGFACE_HUB_TOKEN` or `HF_TOKEN`          | `huggingface/deepseek-ai/DeepSeek-R1`                      |
 | MiniMax                                 | `minimax` / `minimax-portal`     | `MINIMAX_API_KEY` / `MINIMAX_OAUTH_TOKEN`      | `minimax/MiniMax-M3`                                       |
 | Mistral                                 | `mistral`                        | `MISTRAL_API_KEY`                              | `mistral/mistral-large-latest`                             |

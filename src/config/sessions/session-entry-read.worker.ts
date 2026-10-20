@@ -8,7 +8,7 @@ import {
 } from "../../infra/kysely-sync.js";
 import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import {
   assertOpenClawAgentDatabaseIdentity,
   isOpenClawAgentDatabasePathCurrent,
@@ -34,16 +34,12 @@ import {
   readExactSessionEntryRow,
   readSessionChildEntriesInDatabase,
   readSessionEntryByIdInDatabase,
-  readSessionEntryRow,
 } from "./session-accessor.sqlite-entry-read.js";
 import { participantRecordsBySessionKey } from "./session-accessor.sqlite-participant-projection.js";
 import { readSessionEntryReplacementState } from "./session-accessor.sqlite-replacement-read.js";
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
 import { resolveSqliteScope } from "./session-accessor.sqlite-scope.js";
-import {
-  readLatestAssistantTextFromDatabase,
-  readTranscriptHeaderFromDatabase,
-} from "./session-accessor.sqlite-transcript-metadata-read.js";
+import { readTranscriptHeaderFromDatabase } from "./session-accessor.sqlite-transcript-metadata-read.js";
 import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
 import { readSessionWorktreeOwnerFactsInDatabase } from "./session-accessor.sqlite-worktree-owner.js";
 import {
@@ -52,7 +48,6 @@ import {
 } from "./session-canonical-key.js";
 import { prepareSessionColdSourceGuard } from "./session-cold-storage-source-guard.worker.js";
 import { readSessionColdTranscript } from "./session-cold-storage-state.js";
-import { boundSessionDiagnosticText } from "./session-diagnostic-text.js";
 import { createSessionEntryReadScope } from "./session-entry-cohort.worker.js";
 import { captureSessionEntryReadSource } from "./session-entry-read-source.js";
 import type {
@@ -68,10 +63,8 @@ import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js"
 import { readSessionSourceChecks } from "./session-source-predicate.worker.js";
 import type { SessionStoreProjectionWorkerInput } from "./session-store-projection.types.js";
 import { readSessionEntryTranscriptFacts } from "./session-transcript-anchor-read.kernel.js";
-import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import {
   MAX_SESSION_ROW_FACTS_KEYS,
-  type SessionDiagnosticTextWorkerInput,
   type SessionRowFactsWorkerInput,
   type SessionRowFactsWorkerResult,
   type SessionTranscriptWorkerValues,
@@ -164,43 +157,6 @@ export async function readSessionEntryWorkerRequest(
   // Keep the exact-read owner off the lazy reader import graph.
   const { readSessionEntryResult } = await import("./session-entry-read-result.worker.js");
   return readSessionEntryResult(request);
-}
-
-/** Current identity and assistant bytes come from one existing-only read snapshot. */
-export function readSessionDiagnosticText(request: SessionDiagnosticTextWorkerInput) {
-  const result = withOpenClawAgentDatabaseReadOnly(
-    (database) =>
-      readWithCanonicalSessionReaderContinuation(database, request.continuation, () =>
-        runSqliteDeferredTransactionSync(database.db, () => {
-          const source = captureSessionEntryReadSource(
-            database,
-            undefined,
-            "Session diagnostic read requires its current durable owner",
-          );
-          const scope = {
-            agentId: request.scope.agentId,
-            sessionKey: resolveSqliteSessionKey(request.scope.sessionKey, request.scope.agentId),
-            sessionId: request.scope.sessionId,
-          };
-          const entry = readSessionEntryRow(database, scope.sessionKey, "list")?.entry;
-          if (entry?.sessionId !== scope.sessionId || entry.incognito === true) {
-            return { text: undefined, source };
-          }
-          const latest = runWithSessionTranscriptReadFence(request.admission, () =>
-            readLatestAssistantTextFromDatabase(database, scope),
-          );
-          return { text: latest ? boundSessionDiagnosticText(latest.text) : undefined, source };
-        }),
-      ),
-    { ...request.database, env: request.scope.env },
-  );
-  if (!result.found && result.reason !== "database-missing") {
-    throw new SessionMetadataUnavailableError(result.reason);
-  }
-  return {
-    kind: "session-diagnostic-text" as const,
-    ...(result.found ? result.value : { text: undefined }),
-  };
 }
 
 function selectsChildEntries(
@@ -642,7 +598,7 @@ export function readSessionRowDatabaseFacts(
               const { entry } = selected;
               const storedTranscript =
                 selected.row.row_transcript_window_id === null
-                  ? { lastMessagePreview: null, terminalModel: null }
+                  ? { lastMessagePreview: null, lastAssistantMessage: null, terminalModel: null }
                   : readStoredSessionRowTranscriptProjection({
                       json: selected.row.row_transcript_json,
                       updatedAt: selected.row.row_transcript_updated_at,
@@ -655,6 +611,9 @@ export function readSessionRowDatabaseFacts(
                 hasBoard:
                   selected.row.session_key === sessionKey && selected.row.board_present === 1,
                 transcriptPreview: storedTranscript?.lastMessagePreview,
+                transcriptAssistantMessage: storedTranscript
+                  ? storedTranscript.lastAssistantMessage
+                  : "unknown",
                 transcriptTerminalModel: storedTranscript?.terminalModel,
               };
               if (readSessionActivitySummary(entry)) {
@@ -668,7 +627,7 @@ export function readSessionRowDatabaseFacts(
           };
         };
         return withSqlitePostCommitPublications(sqlPublicationAnchor(database.db), () =>
-          database.db.isTransaction ? read() : runSqliteDeferredTransactionSync(database.db, read),
+          database.db.isTransaction ? read() : runSqliteReadSnapshotSync(database.db, read),
         );
       }),
     { ...request.database, env: request.env },

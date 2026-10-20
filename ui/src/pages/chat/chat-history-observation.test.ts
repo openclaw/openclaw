@@ -4,7 +4,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { createRouter, definePage } from "@openclaw/uirouter";
 import { IDBFactory } from "fake-indexeddb";
-import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
@@ -38,7 +37,7 @@ import {
   retireChatMetadataRequests,
 } from "./chat-state-refresh.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
-import { renderChat } from "./chat-view.ts";
+import { disposeChatView, renderChatPropsInto } from "./chat-view.test-helpers.ts";
 import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
 import {
   installTranscriptDomMocks,
@@ -146,7 +145,7 @@ async function fixture(primary = initial, observeManaged = true, models: ModelCa
   const makeState = (owner = sessions) => {
     const state = createPageState(
       { ...context, sessions: owner },
-      { invalidate: vi.fn(), afterCommit: () => () => {} },
+      { afterCommit: () => () => {} },
       document.createElement("div"),
     );
     state.client = client;
@@ -493,16 +492,13 @@ it.each([false, true])(
     document.body.append(container);
     const renderCurrent = () => {
       pane.render();
-      render(
-        renderChat({
-          ...expectDefined(pane.chatProps, "Rendered chat props"),
-          historyState: state,
-        }),
-        container,
-      );
+      renderChatPropsInto(container, {
+        ...expectDefined(pane.chatProps, "Rendered chat props"),
+        historyState: state,
+      });
     };
     onTestFinished(async () => {
-      render(nothing, container);
+      disposeChatView(container);
       container.remove();
       retireChatMetadataRequests(state);
       await vi.dynamicImportSettled();

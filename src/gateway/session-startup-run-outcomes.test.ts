@@ -124,7 +124,7 @@ it("settles legacy liveness once before startup returns, preserving recovery cla
         history.set(fixture.sessionKey, await loadTranscriptEvents(scope));
       }
       const database = openOpenClawAgentDatabase(databaseOptions);
-      // Model a previous release's bytes; canonical writers accept outcomes only.
+      // Retain legacy bytes alongside certification; current writers accept outcomes only.
       const update = database.db.prepare(
         "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.status', ?) WHERE session_key = ?",
       );
@@ -133,7 +133,7 @@ it("settles legacy liveness once before startup returns, preserving recovery cla
       );
       for (const fixture of legacy) {
         update.run(fixture.status, fixture.sessionKey);
-        // The previous release's canonical writer certified these rows; raw fixture edits revoke it.
+        // Preserve row certification so startup must discover the legacy outcomes itself.
         certify.run(fixture.sessionKey);
       }
       await closeOpenClawAgentDatabasesAsync(stateDir);

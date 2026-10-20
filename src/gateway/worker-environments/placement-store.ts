@@ -2,10 +2,7 @@ import { randomUUID } from "node:crypto";
 import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { sessionChanges, type SessionRowChange } from "../../sessions/session-row-changes.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
-import {
-  openOpenClawStateDatabase,
-  type OpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
+import type { OpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { subscribePlacementChanges } from "./placement-authority-owner.js";
 import { createPlacementLifecycleWorkerOps } from "./placement-lifecycle-store.js";
@@ -62,9 +59,11 @@ export type { WorkerSessionPlacementRecord, WorkerSessionTurnClaim } from "./pla
 export function createWorkerSessionPlacementStore(
   options: { database?: OpenClawStateDatabase; now?: () => number } = {},
 ) {
-  const path = (options.database ?? openOpenClawStateDatabase()).path;
+  const context = captureOpenClawStateWorkerContext(
+    options.database ? { path: options.database.path } : {},
+  );
+  const path = context.admission.databasePath;
   const now = options.now ?? Date.now;
-  const context = captureOpenClawStateWorkerContext({ path });
   const runtime = { path, instanceId: randomUUID(), now };
   const workspaceResultConflicts = new Map<
     string,
@@ -190,10 +189,13 @@ export function createWorkerSessionPlacementStore(
         sessionId,
         () => store.readProjection([sessionId], { current: true }),
       );
+      const placement: WorkerSessionPlacementRecord | undefined = structuredClone(
+        projection.placements.get(sessionId),
+      );
       return {
-        placement: projection.placements.get(sessionId),
-        move: projection.moves.get(sessionId),
-        pendingResult: projection.pendingResults.get(sessionId),
+        placement,
+        move: structuredClone(projection.moves.get(sessionId)),
+        pendingResult: structuredClone(projection.pendingResults.get(sessionId)),
         ...observation,
       };
     },
@@ -210,7 +212,7 @@ export function createWorkerSessionPlacementStore(
           { type: "workers.placementPreservation" },
           { current: true },
         );
-        if (!result || !result.ok || result.type !== "workers.placementPreservation") {
+        if (!result) {
           throw new Error("Worker placement preservation source is unavailable");
         }
         return result.placements;
@@ -221,8 +223,8 @@ export function createWorkerSessionPlacementStore(
       sessionIds: readonly string[],
       readOptions: { current?: boolean } = {},
     ): Promise<WorkerSessionPlacementProjection> {
-      const requestedIds = new Map(sessionIds.map((id) => [id, required(id, "session id")]));
-      const ids = [...new Set(requestedIds.values())];
+      const normalizedIds = sessionIds.map((id) => required(id, "session id"));
+      const ids = [...new Set(normalizedIds)];
       const conflicts = new Map(
         ids.flatMap((id) => {
           const conflict = workspaceResultConflicts.get(id);
@@ -248,7 +250,7 @@ export function createWorkerSessionPlacementStore(
           },
           readOptions,
         );
-        if (!result || !result.ok || result.type !== "workers.placementProjection") {
+        if (!result) {
           throw new Error("Worker placement projection source is unavailable");
         }
         publish(result.result.projection.placements.values(), ids);
@@ -259,13 +261,21 @@ export function createWorkerSessionPlacementStore(
         singleSessionId !== undefined && conflicts.size === 0
           ? await readPlacementProjection(path, singleSessionId, loadProjection)
           : await loadProjection();
-      const placements = new Map(projection.placements);
+      let placements: Map<string, WorkerSessionPlacementRecord> | undefined;
       for (const [id, captured] of conflicts) {
-        const record = placements.get(id);
+        const record = projection.placements.get(id);
         if (record && conflictSessionIds.has(id) && workspaceResultConflicts.get(id) === captured) {
-          placements.set(id, { ...record, workspaceResultConflict: captured.conflict });
+          (placements ??= new Map(projection.placements)).set(id, {
+            ...record,
+            workspaceResultConflict: captured.conflict,
+          });
         }
       }
+      if (sessionIds.every((id, index) => id === normalizedIds[index])) {
+        return placements ? { ...projection, placements } : projection;
+      }
+      // Stored session entries can retain whitespace even though placement keys are normalized.
+      const requestedIds = new Map(sessionIds.map((id, index) => [id, normalizedIds[index]!]));
       const byRequestedId = <T>(records: ReadonlyMap<string, T>) => {
         const requested = new Map<string, T>();
         for (const [original, normalized] of requestedIds) {
@@ -284,7 +294,7 @@ export function createWorkerSessionPlacementStore(
         );
       return {
         ...projection,
-        placements: byRequestedId(placements),
+        placements: byRequestedId(placements ?? projection.placements),
         moves: byRequestedId(projection.moves),
         pendingResults: byRequestedId(projection.pendingResults),
         workspaceJournalOwnerSessionIds: byRequestedSet(projection.workspaceJournalOwnerSessionIds),
@@ -311,16 +321,16 @@ export function createWorkerSessionPlacementStore(
       }
     },
 
-    async readEnvironmentOwner(environmentId: string) {
+    async readEnvironmentOwner(environmentId: string, signal?: AbortSignal) {
       const result = await executeExistingOpenClawStateRead(
         { path },
         {
           type: "workers.placementEnvironmentOwner",
           environmentId: required(environmentId, "environment id"),
         },
-        { current: true },
+        { current: true, signal },
       );
-      if (!result || !result.ok || result.type !== "workers.placementEnvironmentOwner") {
+      if (!result) {
         throw new Error("Worker placement environment owner source is unavailable");
       }
       return result.placement;
@@ -333,7 +343,7 @@ export function createWorkerSessionPlacementStore(
           { type: "workers.placementRecoveryCandidates" },
           { current: true },
         );
-        if (!result || !result.ok || result.type !== "workers.placementRecoveryCandidates") {
+        if (!result) {
           throw new Error("Worker placement recovery candidates source is unavailable");
         }
         return result.candidates;
@@ -462,7 +472,7 @@ export function createWorkerSessionPlacementStore(
         },
         { current: true },
       );
-      if (!reply || !reply.ok || reply.type !== "workerPlacements.changeSnapshot") {
+      if (!reply) {
         throw new Error("Worker placement change snapshot is unavailable");
       }
       return reply.placements;

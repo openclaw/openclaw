@@ -2,15 +2,13 @@ import { beforeAll, expect, it, vi } from "vitest";
 import { runCiGitStep } from "./ci-git-owner.test-support.js";
 import type { PerformanceFixtureOptions } from "./openclaw-performance-workflow.test-support.js";
 
-// Each case owns its checkout and process trees. Overlap their real timeout and
-// drain waits while keeping subprocess pressure bounded.
+// Each case owns its checkout; bound simultaneous process trees.
 beforeAll(() => {
   vi.setConfig({ maxConcurrency: 2 });
   return () => vi.resetConfig();
 });
 
-// Performance jobs run on Ubuntu. Exercise their POSIX bodies here; the shared
-// ci-platform-checkout suite owns native Windows Job Object proof.
+// Native Windows Job Object proof belongs to ci-platform-checkout.
 const posixIt = it.skipIf(process.platform === "win32").concurrent;
 
 const steps = {
@@ -39,9 +37,20 @@ function performanceRun(
   });
 }
 
-// The previous semantic tests used short-lived stubs or replayed Git by hand.
-// These actual workflow bodies must drain real parent/child/grandchild writers
-// before every command, output, consumer and exit, while a sentinel stays alive.
+function expectReport(
+  report: Awaited<ReturnType<typeof performanceRun>>,
+  code: number,
+  counts: Partial<Record<"pushes" | "fetches" | "checkouts" | "readyAttempts", number>>,
+) {
+  expect(report.code, report.output).toBe(code);
+  for (const key of ["pushes", "fetches", "checkouts", "readyAttempts"] as const) {
+    if (counts[key] !== undefined) {
+      expect(report[key]).toHaveLength(counts[key]);
+    }
+  }
+}
+
+// Real workflow bodies must drain writers while an unrelated sentinel stays alive.
 posixIt.for(Object.keys(steps) as PerformanceFixtureOptions["mode"][])(
   "Performance %s drains Git trees before every continuation",
   { timeout: 55_000 },
@@ -83,59 +92,71 @@ posixIt.for(["absent", "invalid", "trailing-newline"] as const)(
     const report = await performanceRun(signal, "baseline", {
       performance: { mode: "baseline", baseline },
     });
-    expect(report.code, report.output).toBe(0);
+    expectReport(report, 0, { checkouts: 0 });
     expect(report.githubSummary).toContain(
       baseline === "absent"
         ? "No previous source performance baseline exists"
         : "Previous source performance baseline pointer is invalid.",
     );
     expect(report.githubEnv).toBe("");
-    expect(report.checkouts).toHaveLength(0);
   },
 );
 
-posixIt.for(["ls-tree", "show"])(
-  "baseline %s failure never becomes absence or invalid JSON",
+posixIt.for([
+  ["baseline", "ls-tree", 128],
+  ["baseline", "show", 128],
+  ["prepare", "ls-tree", 128],
+  ["prepare", "ls-tree", 125],
+  ["publish", "ls-tree", 125],
+  ["publish", "ls-tree", 128],
+] as const)(
+  "%s %s failure %s is terminal, never absence",
   { timeout: 55_000 },
-  async (operation, { signal }) => {
-    const report = await performanceRun(signal, "baseline", {
-      gitFault: { match: `^${operation} `, code: 128 },
+  async ([mode, operation, code], { signal }) => {
+    const report = await performanceRun(signal, mode, {
+      gitFault: { match: `^${operation} `, code },
+      ...(mode === "publish" ? { pushResults: [23] } : {}),
     });
-    expect(report.code, report.output).toBe(128);
-    expect(report.githubSummary).toBe("");
-    expect(report.githubEnv).toBe("");
+    expect(report, report.output).toMatchObject({
+      code,
+      ...(mode === "baseline" ? { githubSummary: "", githubEnv: "" } : {}),
+      ...(mode === "prepare" ? { githubOutput: "ready=false\n" } : {}),
+      ...(mode === "publish" ? { githubSummary: "", checkouts: [] } : {}),
+    });
     expect(report.commands.at(-1)?.args[0]).toBe(operation);
   },
 );
 
 const terminalCases = [
-  ...["rev-parse"].map((operation) => ({ mode: "target" as const, operation })),
-  { mode: "record" as const, operation: "rev-parse" },
-  { mode: "tested" as const, operation: "rev-parse" },
-  ...["fetch", "checkout"].map((operation) => ({ mode: "kova" as const, operation })),
-  ...["fetch", "ls-tree", "show", "sparse-checkout init", "sparse-checkout set", "checkout"].map(
-    (operation) => ({ mode: "baseline" as const, operation }),
-  ),
-  ...["fetch", "ls-tree", "diff"].map((operation) => ({ mode: "prepare" as const, operation })),
-  ...[
-    "config",
-    "push",
-    "fetch",
-    "ls-tree",
-    "checkout",
-    "cherry-pick -X",
-    "cherry-pick --abort",
-    "rev-parse",
-  ].map((operation) => ({ mode: "publish" as const, operation })),
-];
+  ["target", ["rev-parse"]],
+  ["record", ["rev-parse"]],
+  ["tested", ["rev-parse"]],
+  ["kova", ["fetch", "checkout"]],
+  [
+    "baseline",
+    ["fetch", "ls-tree", "show", "sparse-checkout init", "sparse-checkout set", "checkout"],
+  ],
+  ["prepare", ["fetch", "ls-tree", "diff"]],
+  [
+    "publish",
+    [
+      "config",
+      "push",
+      "fetch",
+      "ls-tree",
+      "checkout",
+      "cherry-pick -X",
+      "cherry-pick --abort",
+      "rev-parse",
+    ],
+  ],
+] as const;
 // Every injected lifecycle failure must stop at its command, before later policy actions.
 posixIt.for(
-  terminalCases.flatMap((entry) =>
-    (["cleanup-failure", "cancel"] as const).map((code) => ({
-      mode: entry.mode,
-      operation: entry.operation,
-      code,
-    })),
+  terminalCases.flatMap(([mode, operations]) =>
+    operations.flatMap((operation) =>
+      (["cleanup-failure", "cancel"] as const).map((code) => ({ mode, operation, code })),
+    ),
   ),
 )(
   "$mode $operation $code fences every later action",
@@ -173,10 +194,8 @@ posixIt.for(["hang", 23, 125] as const)(
     const report = await performanceRun(signal, "prepare", {
       fetchResults: [failure, failure, failure],
     });
-    expect(report.code, report.output).toBe(1);
-    expect(report.fetches).toHaveLength(3);
+    expectReport(report, 1, { fetches: 3, checkouts: 0 });
     expect(report.fetches.every(({ args }) => args.includes("--depth=1"))).toBe(true);
-    expect(report.checkouts).toHaveLength(0);
     expect(report.commands.at(-1)?.args[0]).toBe("fetch");
     expect(report.githubOutput).toBe("ready=false\n");
     expect(report.githubSummary).toBe("");
@@ -189,13 +208,11 @@ posixIt(
     const report = await performanceRun(signal, "prepare", {
       performance: { mode: "prepare", duplicate: true },
     });
-    expect(report.code, report.output).toBe(0);
-    expect(report.readyAttempts).toHaveLength(0);
+    expectReport(report, 0, { readyAttempts: 0, pushes: 0 });
     expect(report.githubOutput).toContain("already_published=true\n");
     expect(report.githubOutput).toContain("ready=true\n");
     expect(report.githubOutput).not.toContain("report_commit=");
     expect(report.githubSummary).toContain("### Clawgrit report already published");
-    expect(report.pushes).toHaveLength(0);
     expect(report.commands.some(({ args }) => args[0] === "commit")).toBe(false);
     expect(
       report.commands.every(
@@ -205,19 +222,6 @@ posixIt(
     ).toBe(true);
   },
   55_000,
-);
-
-posixIt.for([128, 125])(
-  "prepare duplicate inspection %s is terminal",
-  { timeout: 55_000 },
-  async (code, { signal }) => {
-    const report = await performanceRun(signal, "prepare", {
-      gitFault: { match: "^ls-tree ", code },
-    });
-    expect(report.code, report.output).toBe(code);
-    expect(report.githubOutput).toBe("ready=false\n");
-    expect(report.commands.at(-1)?.args[0]).toBe("ls-tree");
-  },
 );
 
 posixIt.for([0, 1, 125])(
@@ -240,10 +244,7 @@ posixIt.for([125, "hang"] as const)(
   { timeout: 55_000 },
   async (code, { signal }) => {
     const report = await performanceRun(signal, "publish", { pushResults: [code] });
-    expect(report.code, report.output).toBe(0);
-    expect(report.pushes).toHaveLength(2);
-    expect(report.fetches).toHaveLength(1);
-    expect(report.checkouts).toHaveLength(1);
+    expectReport(report, 0, { pushes: 2, fetches: 1, checkouts: 1 });
     expect(report.output.match(/fixture backoff: \d+/gu)).toEqual(["fixture backoff: 2"]);
     expect(report.githubSummary).toContain("### Clawgrit report published");
     expect(report.performance?.config).not.toContain("AUTHORIZATION");
@@ -281,8 +282,7 @@ posixIt.for([false, true])(
       pushResults: [23, 23, 23, 23, 23],
       fetchResults: fetchFails ? [23, 23, 23, 23, 23] : [],
     });
-    expect(report.code, report.output).toBe(1);
-    expect(report.pushes).toHaveLength(5);
+    expectReport(report, 1, { pushes: 5, checkouts: fetchFails ? 0 : 4 });
     expect(report.boundaries.filter(({ name }) => name === "backoff")).toHaveLength(5);
     expect(report.fetches.map(({ args }) => args)).toEqual(
       Array.from({ length: 5 }, () => ["fetch", "--depth=1", "origin", "main"]),
@@ -290,7 +290,6 @@ posixIt.for([false, true])(
     expect(report.output.match(/fixture backoff: \d+/gu)).toEqual(
       [2, 4, 6, 8, 10].map((seconds) => `fixture backoff: ${seconds}`),
     );
-    expect(report.checkouts).toHaveLength(fetchFails ? 0 : 4);
     expect(report.commands.filter(({ args }) => args[0] === "cherry-pick")).toHaveLength(
       fetchFails ? 0 : 4,
     );
@@ -310,10 +309,7 @@ posixIt.for([1, 5])(
       performance: { mode: "publish", remoteDuplicateAttempt: attempt },
       pushResults: Array.from({ length: attempt }, () => 124),
     });
-    expect(report.code, report.output).toBe(0);
-    expect(report.pushes).toHaveLength(attempt);
-    expect(report.fetches).toHaveLength(attempt);
-    expect(report.checkouts).toHaveLength(attempt - 1);
+    expectReport(report, 0, { pushes: attempt, fetches: attempt, checkouts: attempt - 1 });
     expect(report.githubSummary).toContain("### Clawgrit report published");
   },
 );
@@ -329,9 +325,8 @@ posixIt.for([23, 125])(
         { match: "^cherry-pick --abort$", code },
       ],
     });
-    expect(report.code, report.output).toBe(1);
+    expectReport(report, 1, { pushes: 1 });
     expect(report.commands.at(-1)?.args).toEqual(["cherry-pick", "--abort"]);
-    expect(report.pushes).toHaveLength(1);
     expect(report.output).toContain(
       "::error::Unable to replay the clawgrit report after a concurrent publish.",
     );
@@ -358,26 +353,8 @@ posixIt.for([125, "hang"] as const)(
       pushResults: [23],
       fetchResults: [code],
     });
-    expect(report.code, report.output).toBe(0);
-    expect(report.pushes).toHaveLength(2);
-    expect(report.fetches).toHaveLength(1);
-    expect(report.checkouts).toHaveLength(0);
+    expectReport(report, 0, { pushes: 2, fetches: 1, checkouts: 0 });
     expect(report.output.match(/::warning::Unable to refresh/gu)).toHaveLength(1);
-  },
-);
-
-posixIt.for([125, 128])(
-  "remote duplicate read %s is terminal, never absence",
-  { timeout: 55_000 },
-  async (code, { signal }) => {
-    const report = await performanceRun(signal, "publish", {
-      pushResults: [23],
-      gitFault: { match: "^ls-tree ", code },
-    });
-    expect(report.code, report.output).toBe(code);
-    expect(report.commands.at(-1)?.args[0]).toBe("ls-tree");
-    expect(report.githubSummary).toBe("");
-    expect(report.checkouts).toHaveLength(0);
   },
 );
 
@@ -408,9 +385,7 @@ posixIt(
       cooperativeTrees: true,
       cancelDuringBackoff: true,
     });
-    expect(report.code, report.output).toBe(143);
-    expect(report.pushes).toHaveLength(1);
-    expect(report.fetches).toHaveLength(0);
+    expectReport(report, 143, { pushes: 1, fetches: 0 });
     expect(report.githubSummary).toBe("");
     expect(report.boundaries.some(({ name }) => name === "backoff-cancel")).toBe(true);
   },

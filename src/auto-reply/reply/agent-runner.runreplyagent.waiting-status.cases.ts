@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { assert, expect, it, onTestFinished, vi, type Mock } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { prepareAgentRunTerminalReply } from "../../agents/agent-run-terminal-reply.js";
 import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
+import { hasPendingGeneratedMediaTaskForSessionKey } from "../../agents/media-generation-activity.js";
 import {
   admitMediaHandle,
   resetGeneratedMediaTaskActivityForTests,
@@ -28,6 +30,8 @@ type WaitingStatusFixture = {
     opts?: InternalGetReplyOptions;
     currentInboundEventKind?: "room_event";
     runtimePolicySessionKey?: string;
+    sessionCtx?: { Provider: string; Surface: string };
+    runOverrides?: { messageProvider: string };
   }) => {
     run: () => Promise<ReplyPayload | ReplyPayload[] | undefined>;
   };
@@ -74,6 +78,46 @@ export function registerWaitingStatusCases({
   createMinimalRun,
   runEmbeddedAgentMock,
 }: WaitingStatusFixture): void {
+  it("retains pending media ownership for an explicit external NO_REPLY turn", async () => {
+    onTestFinished(resetGeneratedMediaTaskActivityForTests);
+    let handle: MediaGenerationTaskHandle | undefined;
+    runEmbeddedAgentMock.mockImplementationOnce(async (params: RunEmbeddedAgentInternalParams) => {
+      assert(params.preparedRunAdmission);
+      assert(params.sessionKey);
+      await params.preparedRunAdmission.admit("embedded");
+      handle = admitMediaHandle({
+        taskId: "webchat-waiting-image",
+        runId: `tool:image_generate:${randomUUID()}`,
+        requesterSessionKey: params.sandboxSessionKey ?? params.sessionKey,
+        requesterAgentId: params.agentId,
+        taskLabel: "waiting image",
+      });
+      return {
+        payloads: [],
+        meta: {
+          durationMs: 0,
+          continuationPending: true,
+          terminalReply: prepareAgentRunTerminalReply({ rawText: "NO_REPLY" }).terminalReply,
+        },
+      };
+    });
+    const { run } = createMinimalRun({
+      sessionCtx: { Provider: "whatsapp", Surface: "whatsapp" },
+      runOverrides: { messageProvider: "whatsapp" },
+    });
+
+    const result = await run();
+
+    assert(handle);
+    expect(
+      hasPendingGeneratedMediaTaskForSessionKey(
+        handle.requesterSessionKey,
+        handle.requesterAgentId,
+      ),
+    ).toBe(true);
+    expect(result).toBeUndefined();
+  });
+
   it.each([
     {
       label: "implicit continuation",
@@ -84,7 +128,15 @@ export function registerWaitingStatusCases({
       label: "explicit acknowledgment",
       meta: { yielded: true, yieldAcknowledgment: "Research started; results will follow." },
     },
-  ])("delivers one waiting status for $label", async ({ meta }) => {
+    {
+      label: "silent yield with an unsent acknowledgment",
+      meta: {
+        yielded: true,
+        yieldAcknowledgment: "Unsent confirmation",
+        terminalReply: { disposition: "silent" as const },
+      },
+    },
+  ])("delivers only a model-authored waiting acknowledgment for $label", async ({ meta }) => {
     await mockAcceptedWaitingStatusRun(runEmbeddedAgentMock, {
       payloads: [],
       meta: { durationMs: 0, ...meta },
@@ -93,19 +145,20 @@ export function registerWaitingStatusCases({
     const { run } = createMinimalRun({ opts: { onPendingContinuation } });
 
     const result = await run();
-    expect(result).toMatchObject({
-      text:
-        meta.yieldAcknowledgment ??
-        "I’m continuing this work and will send the result when it is ready.",
-      replyToId: "msg",
-    });
     expect(onPendingContinuation).toHaveBeenCalledOnce();
-    assert(result && !Array.isArray(result));
-    const metadata = getReplyPayloadMetadata(result);
-    expect(metadata).toMatchObject({
-      continuationStatus: true,
-      deliverDespiteSourceReplySuppression: true,
-    });
+    if ("terminalReply" in meta || !("yieldAcknowledgment" in meta)) {
+      expect(result).toBeUndefined();
+    } else {
+      expect(result).toMatchObject({
+        text: meta.yieldAcknowledgment,
+        replyToId: "msg",
+      });
+      assert(result && !Array.isArray(result));
+      expect(getReplyPayloadMetadata(result)).toMatchObject({
+        continuationStatus: true,
+        deliverDespiteSourceReplySuppression: true,
+      });
+    }
   });
 
   it.each([
@@ -324,7 +377,7 @@ export function registerWaitingStatusCases({
   );
 
   it.each([
-    { label: "default status" },
+    { label: "no acknowledgment", warning: true },
     { label: "explicit status", acknowledgment: "Research started; results will follow." },
     {
       label: "room event",
@@ -347,10 +400,7 @@ export function registerWaitingStatusCases({
     });
 
     await expect(run()).resolves.toMatchObject({
-      text: testCase.warning
-        ? "⚠️ Bash failed"
-        : (testCase.acknowledgment ??
-          "I’m continuing this work and will send the result when it is ready."),
+      text: testCase.warning ? "⚠️ Bash failed" : testCase.acknowledgment,
       ...(testCase.warning ? { isError: true } : {}),
       replyToId: "msg",
     });

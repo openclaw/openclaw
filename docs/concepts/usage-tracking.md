@@ -37,9 +37,16 @@ cold cache has any usage data, the page shows a loading placeholder instead of
 zero totals. Available partial totals stay visible; if a refresh fails, select
 **Refresh** to try again.
 
+Session reports have a 15-second data-read budget. If it expires, completed
+batches remain visible as a partial report, with a hint to narrow the date
+range or select a session. Partial totals are not complete billing totals.
+Disconnecting still cancels the request without publishing a response.
+
 Session reports preserve agent attribution when agents share a session store. A
 background usage refresh does not invalidate a selected report when its session
 store is unchanged.
+Retained SQLite transcripts with legacy colon-containing IDs remain included in
+usage totals and do not interrupt background refresh.
 
 Usage opens with the last 30 calendar days selected. **Today**, **7d**, **30d**,
 **90d**, **1y**, **All**, or the date inputs change the reporting range. Historical
@@ -66,14 +73,19 @@ change chart totals. Selecting sessions narrows the charts while retaining the
 comparison table. JSON export loads the full matching report.
 
 The overview uses a rebuildable usage projection maintained after committed
-transcript changes. Background refresh waits for 30 seconds without new usage
+transcript changes. A refresh that overlaps agent database creation joins that
+database's preparation before writing its projection. An empty store stays absent
+until a transcript needs a rollup. Background refresh waits for 30 seconds without new usage
 or an active agent turn. After five minutes of pending work, it can start in the
 next idle gap without another quiet period. Explicit cost and overview reads
 flush and await pending updates, so a completed turn does not need to wait for
 that timer. This display batching does not delay Goal budgets or provider billing
 limits. A restart or pricing change can require background backfill;
 the page shows partial totals while it advances. Sessions without a cached
-projection remain pending without waiting for transcript statistics. Transcripts
+projection remain pending without waiting for transcript statistics. Background
+backfill yields between completed transcripts after ten seconds of scanning or
+50 transcripts, whichever comes first. One large transcript or the initial
+inventory can take longer. Transcripts
 remain the source of truth. Detailed reports retain exact timestamp boundaries and the recorded
 order of floating-point cost additions.
 
@@ -99,6 +111,12 @@ Subscription quota and API billing are different provider surfaces:
 - OpenAI ChatGPT/Codex OAuth continues to show plan, quota windows, and credit balance. Set `OPENAI_ADMIN_KEY` to show organization cost and completions-usage history instead; optionally set `OPENAI_PROJECT_ID` to scope it to one project. OpenClaw never sends inference credentials from `OPENAI_API_KEY`, provider config, or auth profiles to organization APIs because those keys may belong to custom endpoints.
 
 Admin credentials take precedence because they provide actual organization billing. OpenClaw does not combine these provider-reported totals with its local session estimates; the two sections intentionally answer different questions.
+
+OpenAI Admin token totals include text, audio, and images. The input breakdown
+separates uncached input, cache reads, and cache writes; both 30-minute and
+12-hour cache writes appear in the cache-write category. Audio and other
+modality breakdowns are already included in the totals and are not added again.
+See the [OpenAI Completions Usage API](https://developers.openai.com/api/reference/resources/admin/subresources/organization/subresources/usage/methods/completions).
 
 ## Default usage footer mode
 
@@ -419,6 +437,9 @@ provider-neutral for CLI, app, and Control UI consumers.
   (`XIAOMI_API_KEY`); the Token Plan uses a separate key (`XIAOMI_TOKEN_PLAN_API_KEY`).
   Neither currently reports quota windows.
 - **z.ai**: API key via env/config/auth store (`ZAI_API_KEY` or `Z_AI_API_KEY`).
+  Shows provider-reported token periods, including weekly windows, and monthly
+  tool quotas. Reset countdowns accept epoch milliseconds or date strings;
+  missing or invalid resets leave the quota visible without a countdown.
 
 ## Related
 

@@ -73,6 +73,8 @@ Sessions are owned by the gateway, not by clients.
 
 Multiple devices/channels can map to the same session, but history is not fully synced back to every client. Use one primary device for long conversations to avoid divergent context. The Control UI and TUI always show the gateway-backed session transcript, so they are the source of truth.
 
+If publishing a live transcript update fails after an agent message is saved, OpenClaw keeps the saved message and logs a warning. Reload the session to refresh its transcript; the failed notification is not replayed automatically.
+
 If a run fails or times out before an assistant reply is saved, its transcript receives one visible failure notice. Nested runs retain their own failure notices even after the requesting turn has ended.
 
 Failure notices remain in chat history without becoming user instructions in later model requests. This also applies to notices saved by earlier versions; stored transcript bytes remain unchanged.
@@ -189,6 +191,11 @@ appears in session history and live updates; it does not mirror to an inherited
 external channel. External reactions still require the normal channel routing and
 external message ID.
 
+Runs without a current prompt, such as heartbeats and internal events, cannot add
+prompt reactions. A prompt-targeted attempt fails locally rather than asking you
+to configure an external channel. To react externally, pass an explicit
+`channel`, `target`, and `messageId`.
+
 Queued turns bind the reaction to their own committed prompt when execution
 begins. Steering updates the current prompt only after the new input is committed
 and consumed by the running agent; pending or rejected input does not retarget a
@@ -203,21 +210,35 @@ still apply, and the current-prompt capability expires with its admitted turn.
 
 ## Silent replies
 
-The silent token `NO_REPLY` (case-insensitive, so `no_reply` also matches) is reserved for sessions connected to external message channels and is never delivered as user-visible text. Subagents, the Control UI, and other internal sessions must return a result or continue unfinished work; a silent token cannot complete their task. When a turn also has pending tool media, such as generated TTS audio, OpenClaw strips the silent text but still delivers the media attachment.
+The silent token `NO_REPLY` is reserved for sessions connected to external message channels. Only a completed final whose entire text is `NO_REPLY`, ignoring casing and surrounding whitespace, requests silence. It intentionally ends a turn without another reply, including after a cross-chat send, a reaction, group chatter, or a deliberate yield, even when the admitted turn normally requires a reply. Subagents, private completions, the Control UI, and other internal sessions still must return a result or continue unfinished work.
 
-Token-only uppercase fragments from `NO_` through `NO_REPL` are also suppressed if a model stops before completing `NO_REPLY`. A final `NO`, mixed-case text such as `No`, and longer replies such as `NO_R alert` remain visible. Streaming previews hold shorter prefixes until the text diverges from the token or the final reply arrives.
+Direct-message prompts omit silent-reply guidance. An exact `NO_REPLY` emitted by the model still follows this protocol; omitting the prompt guidance does not force an additional answer.
 
-Silence policy resolves by conversation type:
+A truncated response or an unfinished tool turn is not a successful silent ending, even if its partial text is `NO_REPLY`. A completed final result already delivered to the current WebChat transcript satisfies the result requirement; a later `NO_REPLY` does not invalidate that delivered answer. Progress updates do not satisfy that requirement. Direct system-agent chat in the Control UI also requires a result: `NO_REPLY` or empty output follows the existing recovery or failure path, rather than silently completing the request.
 
-- Direct conversations never receive `NO_REPLY` prompt guidance. An undelivered required answer still needs recovery; the token cannot waive that obligation.
-- Accepted group/channel requests require a reply by default, including unmentioned messages admitted with `requireMention: false`. Mention and access gates still decide which messages reach the agent. To allow unaddressed requests to finish silently, explicitly set `silentReply.group: "allow"` at one of the configuration scopes below; explicit mentions and authorized commands still require a response. Slack follow-ups admitted only through a reply to the bot or its participation in the thread can finish silently under that policy.
-- [Ambient room events](/channels/ambient-room-events) can remain silent. In `message_tool` visible-reply mode, an optional turn stays silent by not calling `message(action=send)`. Private subagent completions record the parent's reviewed outcome internally; they do not need a silent token to keep that result private.
+An explicit reply expectation selected by trusted input handling takes precedence over these session defaults. For example, a late peer result can be optional even in WebChat, so consuming it does not demand another acknowledgment or repeat an answer already delivered.
+
+`NO_REPLY` discards anything written this turn that was not sent, so send confirmations before ending silently. It does not retract delivered messages or cancel pending work. A leading `NO_REPLY\n` removes that one control line and delivers the remaining text unchanged; the remainder stays visible even if it is another `NO_REPLY`. Otherwise, a standalone `NO_REPLY` on the last non-empty line is removed and the preceding answer is delivered. Casing and whitespace around that final line are ignored; punctuated tokens are ordinary text. Pending tool media, such as generated TTS audio, still delivers after the silent model text is removed.
+
+The terminal producer prepares the reply once and records whether it is visible or silent. Delivery and clients consume that fact and the full prepared payload without interpreting the text again; an explicit visible fact stays visible even when its text is `NO_REPLY`. `NO_REPLY.`, `"NO_REPLY"`, `{"action":"NO_REPLY"}`, and tokens attached to or trailing ordinary prose on the same line are visible text, not silent endings. Stored assistant history uses existing display and final-result facts first, then the same exact check on raw assistant text; user text is never treated as a silence instruction.
+
+Conversation policy still controls admission and default reply expectations:
+
+- Direct and accepted group/channel requests normally receive answers. An explicit token-only `NO_REPLY` can end either silently.
+- Mention and access gates still decide which messages reach the agent. `silentReply.group: "allow"` permits optional handling of unaddressed group requests; it is not needed to honor an explicit `NO_REPLY`.
+- [Ambient room events](/channels/ambient-room-events) can remain silent. In `message_tool` visible-reply mode, visible output uses `message(action=send)`. Private subagent completions record the parent's reviewed outcome internally.
 
 Defaults live under `agents.defaults.silentReply.group`; `surfaces.<id>.silentReply.group` can override group policy per surface. Doctor removes the retired `internal` setting during config migration.
 
 Generic internal runner failures stay quiet for optional turns that have not shown visible output, including groups explicitly configured to allow silence. Required turns still receive an error. Classified recovery guidance, such as missing-auth, rate-limit, or overload notices, remains deliverable, and visible progress receives a failure outcome rather than being left unfinished. Direct chats show compact failure copy by default; raw runner details show only when `/verbose full` is enabled.
 
-Reply requirements come from admission, not model control tokens. Confirmed delivery or still-owned delivery prevents duplicate recovery; see [Reply shaping](/concepts/agent-loop#reply-shaping).
+Optional turns owe no result: an empty final ends quietly without recovery or notice, and remains classified as empty rather than `NO_REPLY`. Model fallback skips an empty result only when the completed turn is explicitly optional; an empty result without that policy still needs recovery.
+
+When a result is owed, an empty final is not intentional silence. OpenClaw keeps its bounded recovery path without repeating completed actions. If recovery still returns no answer, the run fails. An admitted user request receives at most one short system notice: "No answer was returned. Ask again if you still need one." When model fallback is available, that notice appears only after the fallback chain is exhausted, not once per candidate. It is not saved or classified as an assistant answer. Heartbeat, cron, and other background or internal failures remain recorded without posting a missing-answer notice to chat. Existing classified failure guidance and alert paths still apply; a silent recovery cannot turn a provider failure into success. Confirmed delivery or still-owned delivery prevents duplicate recovery; see [Reply shaping](/concepts/agent-loop#reply-shaping).
+
+Pending work without an authored acknowledgment retains its existing waiting status so supported channels can keep the live progress card until the result arrives. An explicit `NO_REPLY` still ends silently without canceling that work. Failed delegated tasks use the same short missing-answer copy; their existing delivery and requester-history mirroring are unchanged.
+
+Pending WebChat and Control UI work retains progress cards and waiting status while a result is still owed.
 
 ## Related
 

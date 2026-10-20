@@ -5,14 +5,19 @@ import {
   areDiagnosticsEnabledForProcess,
   emitInternalDiagnosticEvent,
 } from "../infra/diagnostic-events.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  isPowerShellInlineFileCommandFlag,
+  POSIX_INLINE_COMMAND_FLAGS,
+  resolveInlineCommandMatch,
+  resolvePowerShellInlineCommandMatch,
+} from "../infra/shell-inline-command.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { resolveOomScoreWrappedCommand } from "./linux-oom-score.js";
 
 const spawnCounts = resolveGlobalSingleton(Symbol.for("openclaw.childProcessSpawnCounts"), () => ({
   counts: new Map<string, { family: string; operation: string; count: number }>(),
   sampledAt: performance.now(),
 }));
-let spawnLog: ReturnType<typeof createSubsystemLogger> | undefined;
 const COMMAND_FAMILIES =
   /^(node|bun|git|ps|pgrep|lsof|sh|bash|zsh|cmd|powershell|pwsh|npm|pnpm|python|python3|uv|ssh|openclaw)$/;
 const GIT_OPERATIONS = [
@@ -48,6 +53,71 @@ const gitOperation = resolveGlobalSingleton(
   Symbol.for("openclaw.gitSpawnOperation"),
   () => new AsyncLocalStorage<GitProcessOperation | "unknown">(),
 );
+const CHILD_OPERATIONS = [
+  "agent.exec",
+  "agent.cli",
+  "agent.file-read",
+  "shell.snapshot",
+  "service.relay",
+  "service.manager",
+  "worktree.filesystem",
+  "worktree.cleanup",
+  "worktree.maintenance",
+] as const;
+type ChildProcessOperation = (typeof CHILD_OPERATIONS)[number];
+const childOperations: ReadonlySet<string> = new Set(CHILD_OPERATIONS);
+const childOperation = resolveGlobalSingleton(
+  Symbol.for("openclaw.childSpawnOperation"),
+  () => new AsyncLocalStorage<ChildProcessOperation | "unknown">(),
+);
+
+/** Attribute asynchronous launch preparation to a bounded owner, without command content. */
+export function withChildProcessOperation<T>(
+  operation: ChildProcessOperation,
+  run: () => T,
+  mode: "override" | "default" = "override",
+): T {
+  return mode === "default" && childOperation.getStore() !== undefined
+    ? run()
+    : childOperation.run(childOperations.has(operation) ? operation : "unknown", run);
+}
+
+function unscopedProcessOperation(family: string, name: string, args: readonly string[]): string {
+  if (
+    args[0] === "--version" ||
+    (args[0] === "-v" && (family === "node" || family === "bun" || name === "gh"))
+  ) {
+    return "unscoped.version";
+  }
+  if (family === "powershell" || family === "pwsh") {
+    const argv = [name, ...args];
+    const { command, valueTokenIndex } = resolvePowerShellInlineCommandMatch(argv);
+    return command !== null &&
+      valueTokenIndex !== null &&
+      !isPowerShellInlineFileCommandFlag(argv[valueTokenIndex - 1] ?? "")
+      ? "unscoped.shell-command"
+      : "unscoped.shell";
+  }
+  if (/^(sh|bash|zsh)$/.test(family)) {
+    return resolveInlineCommandMatch([name, ...args], POSIX_INLINE_COMMAND_FLAGS, {
+      allowCombinedC: true,
+    }).command !== null
+      ? "unscoped.shell-command"
+      : "unscoped.shell";
+  }
+  if (family === "cmd") {
+    return args.some((arg) => /^-[a-z]*c$/.test(arg) || /^\/(?:c|k)$/i.test(arg))
+      ? "unscoped.shell-command"
+      : "unscoped.shell";
+  }
+  if (family === "node" || family === "bun") {
+    return "unscoped.runtime";
+  }
+  if (family === "other" && /^(gh|docker|podman|which|uname|sw_vers|sysctl|curl|tar)$/.test(name)) {
+    return `unscoped.${name}`;
+  }
+  return "unscoped.command";
+}
 
 // Unscoped callers remain visible without exporting aliases, arguments, or repository paths.
 function unscopedGitOperation(args: readonly string[]): string {
@@ -93,32 +163,50 @@ export function withGitProcessOperation<T>(
     : gitOperation.run(gitOperations.has(operation) ? operation : "unknown", run);
 }
 
-/** Count admitted local and broker launches, without recording paths or arguments. */
+/** Capture attribution before native preparation; record only after a successful launch. */
+export function prepareChildProcessSpawnRecorder(
+  command: string,
+  args: readonly string[] = [],
+  sqliteOperation?: `sqlite.${"scoped-read" | "session"}.${"broker" | "native"}`,
+): (() => void) | undefined {
+  if (!areDiagnosticsEnabledForProcess()) {
+    return undefined;
+  }
+  // Like nice+git, an owner-prepared OOM shim execs the target in the same process;
+  // the broker can omit that shell entirely. Report its logical command, not the shim.
+  const wrappedCommand = resolveOomScoreWrappedCommand(command, args);
+  const commandArgs = wrappedCommand ? args.slice(3) : args;
+  const name = path.win32
+    .basename(wrappedCommand ?? command)
+    .toLowerCase()
+    .replace(/\.(exe|cmd)$/, "");
+  const family = COMMAND_FAMILIES.test(name) ? name : "other";
+  const operation =
+    family === "git"
+      ? (gitOperation.getStore() ?? childOperation.getStore() ?? unscopedGitOperation(commandArgs))
+      : (sqliteOperation ??
+        childOperation.getStore() ??
+        unscopedProcessOperation(family, name, commandArgs));
+  const key = `${family}:${operation}`;
+  return () => {
+    if (areDiagnosticsEnabledForProcess()) {
+      const previous = spawnCounts.counts.get(key);
+      spawnCounts.counts.set(key, { family, operation, count: (previous?.count ?? 0) + 1 });
+    }
+  };
+}
+
+/** Count admitted local and broker launches, excluding failed spawn attempts. */
 export function recordChildProcessSpawn(
   command: string,
   child: ChildProcess,
   sqliteOperation?: `sqlite.${"scoped-read" | "session"}.${"broker" | "native"}`,
   args: readonly string[] = [],
 ): void {
-  if (!areDiagnosticsEnabledForProcess()) {
-    return;
+  const record = prepareChildProcessSpawnRecorder(command, args, sqliteOperation);
+  if (record) {
+    child.once("spawn", record);
   }
-  const name = path.win32
-    .basename(command)
-    .toLowerCase()
-    .replace(/\.(exe|cmd)$/, "");
-  const family = COMMAND_FAMILIES.test(name) ? name : "other";
-  const operation =
-    family === "git"
-      ? (gitOperation.getStore() ?? unscopedGitOperation(args))
-      : (sqliteOperation ?? "none");
-  const key = `${family}:${operation}`;
-  child.once("spawn", () => {
-    if (areDiagnosticsEnabledForProcess()) {
-      const previous = spawnCounts.counts.get(key);
-      spawnCounts.counts.set(key, { family, operation, count: (previous?.count ?? 0) + 1 });
-    }
-  });
 }
 
 /** The existing diagnostics heartbeat owns sampling; rates use actual elapsed time. */
@@ -141,9 +229,6 @@ export function emitChildProcessSpawnSample(): void {
       count,
       intervalMs,
     });
-    (spawnLog ??= createSubsystemLogger("gateway/diagnostics/process")).debug(
-      `child process spawns: family=${family} operation=${operation} count=${count} ratePerMinute=${((count * 60_000) / intervalMs).toFixed(2)}`,
-    );
   }
   spawnCounts.counts.clear();
   spawnCounts.sampledAt = now;

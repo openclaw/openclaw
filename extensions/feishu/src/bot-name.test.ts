@@ -47,18 +47,20 @@ describe("resolveFeishuBotName", () => {
   });
 
   it.each([
-    ["does not open the breaker for repeated missing-scope responses", true],
-    ["does not open the breaker for resolved missing-scope envelopes", false],
-  ] as const)("%s", async (_name, rejects) => {
+    ["rejected missing-scope requests", true, 99991672],
+    ["resolved missing-scope envelopes", false, 99991672],
+    ["rejected provider failures", true, 999],
+    ["resolved provider failures", false, 999],
+  ] as const)("recovers after a short cooldown for repeated %s", async (_name, rejects, code) => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
     if (rejects) {
-      const scopeError = Object.assign(new Error("scope missing"), {
-        response: { data: { code: 99991672 } },
+      const error = Object.assign(new Error("lookup unavailable"), {
+        response: { data: { code } },
       });
-      requestMock.mockRejectedValue(scopeError);
+      requestMock.mockRejectedValue(error);
     } else {
-      requestMock.mockResolvedValue({ code: 99991672, msg: "permission denied" });
+      requestMock.mockResolvedValue({ code, msg: "lookup unavailable" });
     }
 
     for (let index = 0; index < 10; index += 1) {

@@ -80,8 +80,7 @@ export default definePluginEntry({
   configSchema: memoryWikiConfigSchema,
   register(api) {
     const config = resolveMemoryWikiConfig(api.pluginConfig);
-    const getAppConfig = () =>
-      (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig | undefined;
+    const getAppConfig = () => api.runtime.config.current() as OpenClawConfig;
     const resolveConfig: MemoryWikiConfigResolver = (agentId, appConfig = getAppConfig()) =>
       resolveMemoryWikiAgentConfig({ config, appConfig, agentId });
     const resolveToolContext = (agentId?: string) => {
@@ -181,7 +180,6 @@ export default definePluginEntry({
     registerMemoryWikiGatewayMethods({
       api,
       config,
-      appConfig: api.config,
       getAppConfig,
       resolveConfig,
       resolveSourceSyncSignal: () => sourceSyncAbortController?.signal,

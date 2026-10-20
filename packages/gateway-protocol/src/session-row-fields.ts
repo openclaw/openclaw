@@ -1,5 +1,8 @@
 import type { SessionRow } from "./schema/sessions-row.js";
 
+/** Older Gateways treat this optional conditional token as a revision miss. */
+export const SESSION_ROWS_DELTA_PREFIX = "delta:";
+
 /** Compact list omissions are unknown detail facts, never deletion receipts. */
 export const SESSION_ROW_DETAIL_FIELDS = [
   "contextWindows",
@@ -25,8 +28,10 @@ export const SESSION_DASHBOARD_ROW_FIELDS: ReadonlySet<string> = new Set([
   "agentId",
   "label",
   "displayName",
+  "titlePending",
   "derivedTitle",
   "lastMessagePreview",
+  "lastAssistantMessage",
   "accountId",
   "updatedAt",
   "snapshotAt",
@@ -94,8 +99,10 @@ export const SESSION_SIDEBAR_ROW_FIELDS: ReadonlySet<string> = new Set([
   "agentStatus",
   "observerDigest",
   "lastRunError",
+  "suppressErrorNotice",
   "abortedLastRun",
   "restartRecoveryStatus",
+  "restartRecoveryCycleId",
   "startedAt",
   "endedAt",
   "runtimeMs",
@@ -112,59 +119,6 @@ export const SESSION_SIDEBAR_ROW_FIELDS: ReadonlySet<string> = new Set([
   "subagentControlScope",
   "swarmGroupId",
 ]);
-
-/** Response-local facts: no cross-request catalog or invalidation protocol. */
-export function shareSessionRowFacts<T extends SessionRow>(sessions: T[]) {
-  type SharedFact = { fact: Partial<T>; fields: string[]; rows: { index: number; row: T }[] };
-  const candidates = new Map<string, SharedFact>();
-  const rows = sessions.map((row) => ({ ...row }));
-  rows.forEach((row, index) => {
-    for (const [field, value] of Object.entries(row)) {
-      // Keep required fields and the projection marker readable without expanding the table.
-      if (
-        value === undefined ||
-        ["key", "kind", "updatedAt", "sessionId", "rowMode"].includes(field)
-      ) {
-        continue;
-      }
-      const fact: Partial<T> = {};
-      Object.assign(fact, { [field]: value });
-      const key = JSON.stringify(fact);
-      const candidate = candidates.get(key);
-      if (candidate) {
-        candidate.rows.push({ index, row });
-      } else {
-        candidates.set(key, { fact, fields: [field], rows: [{ index, row }] });
-      }
-    }
-  });
-  // Facts with the same recipients share one reference, including common scalar defaults.
-  const groups = new Map<string, SharedFact>();
-  for (const candidate of candidates.values()) {
-    if (candidate.rows.length < 2) {
-      continue;
-    }
-    const key = candidate.rows.map(({ index }) => index).join(",");
-    const group = groups.get(key);
-    if (group) {
-      Object.assign(group.fact, candidate.fact);
-      group.fields.push(...candidate.fields);
-    } else {
-      groups.set(key, candidate);
-    }
-  }
-  const sharedFacts: Partial<T>[] = [];
-  for (const group of groups.values()) {
-    const reference = sharedFacts.push(group.fact) - 1;
-    for (const { row } of group.rows) {
-      for (const field of group.fields) {
-        Reflect.deleteProperty(row, field);
-      }
-      (row.sharedFacts ??= []).push(reference);
-    }
-  }
-  return { sessions: rows, sharedFacts };
-}
 
 /** Expand before any list reconciliation so the renderer only consumes normal rows. */
 export function expandSessionRowFacts<T extends SessionRow>(

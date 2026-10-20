@@ -75,6 +75,33 @@ it.each(["config", "environment", "capture signal"])(
   },
 );
 
+it("expires a negative capture so a recovered login is observed", async () => {
+  vi.useFakeTimers();
+  const input = { config: {}, env: {}, provider: "claude-cli" };
+  probeClaudeCliAuthStatus
+    .mockResolvedValueOnce({ status: "missing" })
+    .mockResolvedValueOnce({ status: "available" });
+  expect(await provider.prepareSyntheticAuth!(input)).toBeUndefined();
+  expect(await provider.prepareSyntheticAuth!(input)).toBeUndefined();
+  expect(probeClaudeCliAuthStatus).toHaveBeenCalledOnce();
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(await provider.prepareSyntheticAuth!(input)).toMatchObject({ mode: "oauth" });
+  expect(probeClaudeCliAuthStatus).toHaveBeenCalledTimes(2);
+});
+
+it.each(["timeout", "unreadable", "missing"])(
+  "admits an inconclusive %s probe but blocks an explicit missing login",
+  async (status) => {
+    probeClaudeCliAuthStatus.mockResolvedValue({ status });
+    const auth = await provider.prepareSyntheticAuth!({
+      config: {},
+      env: {},
+      provider: "claude-cli",
+    });
+    expect(Boolean(auth?.apiKey)).toBe(status !== "missing");
+  },
+);
+
 it("joins one probe per cancellation scope and preserves a surviving capture", async () => {
   const config = {};
   const env = {};

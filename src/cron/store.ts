@@ -1,7 +1,7 @@
 /** Public cron store load/save API backed entirely by shared SQLite state. */
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import type { SqliteWorkerStore } from "../infra/sqlite-worker-store.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
@@ -29,6 +29,7 @@ import type {
 } from "./store/save-worker.types.js";
 import {
   isCronRuntimeOnlySave,
+  loadCronStoreForChanges,
   prepareCronStoreChanges,
   saveCronStoreChangesInDatabase,
   saveCronStoreInDatabase,
@@ -112,7 +113,7 @@ export async function loadCronJobsStoreWithConfigJobs(
 }
 
 export function assertCronJobsStoreUnchanged(
-  db: DatabaseSync,
+  db: EngineConnection,
   storePath: string,
   expectedJobsFingerprint: string,
 ): undefined {
@@ -281,7 +282,15 @@ function saveCronJobsStoreChangesNative(
   return commitCronStoreNative(
     storeKey,
     ({ db }, admittedHooks) =>
-      saveCronStoreChangesInDatabase(db, storeKey, storeKey, prepared, options, admittedHooks),
+      saveCronStoreChangesInDatabase(
+        db,
+        storeKey,
+        storeKey,
+        prepared,
+        loadCronStoreForChanges(db, storeKey),
+        options,
+        admittedHooks,
+      ),
     transactionHooks,
     "cron.config-mutation",
   ).value;
@@ -362,7 +371,7 @@ export async function saveCronJobsStore(
 }
 
 // Public plugin SDK seam; core callers use the SQLite-backed cron-jobs names above.
-/** @deprecated Await resolveCronStorePathAsync. Removal is planned for a later stable release. */
+/** @deprecated Await resolveCronStorePathAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function resolveCronStorePath(storePath?: string) {
   warnPluginSdkDeprecation({
     family: "cron-store-path",

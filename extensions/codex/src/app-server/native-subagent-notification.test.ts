@@ -1,8 +1,14 @@
 // Codex tests cover native subagent notification plugin behavior.
 import { describe, expect, it } from "vitest";
-import { codexNativeSubagentNotifications } from "./native-subagent-notification.js";
+import { readCodexNativeSubagentNotification } from "./native-subagent-notification.js";
+import type { CodexServerNotification } from "./protocol.js";
 
-const extractCodexNativeSubagentCompletions = codexNativeSubagentNotifications.fromNotification;
+const extractCodexNativeSubagentCompletions = (notification: CodexServerNotification) =>
+  readCodexNativeSubagentNotification(notification).completions;
+const codexNativeSubagentNotifications = {
+  deliveredAgentPaths: (notification: CodexServerNotification) =>
+    readCodexNativeSubagentNotification(notification).receipts.map((receipt) => receipt.agentPath),
+};
 type ContextualNotificationItem = {
   type: string;
   role: string;

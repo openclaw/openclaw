@@ -1,5 +1,5 @@
 import { ImapFlow, type FetchMessageObject } from "imapflow";
-import { simpleParser } from "mailparser";
+import { simpleParser, type ParsedMail } from "mailparser";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
   OpenClawPluginApi,
@@ -8,11 +8,13 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { ImapAccountConfig } from "./config.js";
 import { renderImapPrompt } from "./prompt.js";
-import { evaluateImapSender, type MailAuthenticator } from "./sender-gate.js";
+import { evaluateImapSender } from "./sender-gate.js";
 import {
   advanceImapCursor,
   countImapSkip,
   initializeImapCursor,
+  isImapUid,
+  MAX_IMAP_UID,
   recordImapAttempt,
   rememberImapMessage,
   type ImapWatcherState,
@@ -29,7 +31,6 @@ type ImapWatcherOptions = {
   runtime: OpenClawPluginApi["runtime"];
   state: ImapWatcherState;
   context: OpenClawPluginServiceContextV2;
-  authenticator?: MailAuthenticator;
   reconnectBaseMs?: number;
 };
 
@@ -129,13 +130,35 @@ export class ImapAccountWatcher {
       return;
     }
     const mailbox = await client.mailboxOpen(account.mailbox, { readOnly: true });
+    const isActive = () => !this.scheduler.signal.aborted && this.client === client;
+    if (!isActive()) {
+      return;
+    }
     const initialized = await initializeImapCursor(
       this.options.state,
       this.options.accountId,
-      mailbox.uidValidity.toString(),
-      mailbox.uidNext,
+      mailbox.uidValidity?.toString() ?? "",
+      async () => {
+        if (isImapUid(mailbox.uidNext)) {
+          return mailbox.uidNext - 1;
+        }
+        if (mailbox.exists === 0) {
+          return 0;
+        }
+        // This establishes a watermark at the metadata fetch, not a predicted
+        // UIDNEXT or a snapshot at EXAMINE. Arrivals observed before it can join
+        // the baseline; ImapFlow resolves "*" from the current EXISTS count.
+        const last = await client.fetchOne("*", { uid: true });
+        if (!last || !isImapUid(last.uid)) {
+          // An expunge can race the fetch. Reconnect rather than treating a
+          // missing result as proof of an empty mailbox and replaying old mail.
+          throw new Error("imap: could not establish baseline UID from the last message");
+        }
+        return last.uid;
+      },
+      isActive,
     );
-    if (this.scheduler.signal.aborted || this.client !== client) {
+    if (!initialized || !isActive()) {
       return;
     }
     if (initialized.kind !== "resume") {
@@ -262,7 +285,12 @@ export class ImapAccountWatcher {
 
   private async sweep(client: ImapFlow): Promise<void> {
     const cursor = await this.options.state.cursors.lookup(this.options.accountId);
-    if (!cursor || this.scheduler.signal.aborted || this.client !== client) {
+    if (
+      !cursor ||
+      this.scheduler.signal.aborted ||
+      this.client !== client ||
+      cursor.lastSeenUid === MAX_IMAP_UID
+    ) {
       return;
     }
 
@@ -331,14 +359,21 @@ export class ImapAccountWatcher {
       await this.recordSkip(message.uid, undefined, "message-source-missing");
       return true;
     }
-    // Only consume plain text; avoid generating unused HTML and scanning untrusted links.
-    const mail = await simpleParser(message.source, { skipImageLinks: true, skipTextToHtml: true });
+    let mail: ParsedMail;
+    try {
+      // Only consume plain text; avoid generating unused HTML and scanning untrusted links.
+      mail = await simpleParser(message.source, { skipImageLinks: true, skipTextToHtml: true });
+    } catch {
+      // Parsing runs before sender admission and fails identically on every retry of
+      // the same bytes, so skip it instead of stalling every later UID behind it.
+      await this.recordSkip(message.uid, undefined, "message-parse-failed");
+      return true;
+    }
     const verdict = await evaluateImapSender({
       mail,
       raw: message.source,
       internalDate: messageDate(message),
       account,
-      ...(this.options.authenticator ? { authenticator: this.options.authenticator } : {}),
     });
     if (!verdict.accepted) {
       if (

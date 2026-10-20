@@ -3,20 +3,28 @@ import type { SkillStatusEntry } from "../../api/types.ts";
 import { installBrowserHistoryIsolation } from "../../test-helpers/browser-history.ts";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { createSkill } from "../skills/view.test-support.ts";
+import { createAgentViewTestProps } from "./agents-view.test-helpers.ts";
 import { AgentSkills } from "./panels-skills.tsx";
 
 installBrowserHistoryIsolation();
 
-type Params = Parameters<typeof AgentSkills>[0];
+type Params = Parameters<typeof AgentSkills>[0] &
+  Pick<
+    ReturnType<Parameters<typeof AgentSkills>[0]["readData"]>,
+    "agentSkillsReport" | "agentSkillsLoading" | "agentSkillsError" | "agentSkillsAgentId"
+  >;
 function skillsParams(skills: SkillStatusEntry[], overrides: Partial<Params> = {}): Params {
   return {
+    readData() {
+      return { ...createAgentViewTestProps().readData(), ...this };
+    },
     agentId: "main",
     canPatchConfig: true,
     canUpdateConfig: true,
-    report: { workspaceDir: "/tmp/workspace", managedSkillsDir: "/tmp/skills", skills },
-    loading: false,
-    error: null,
-    activeAgentId: "main",
+    agentSkillsReport: { workspaceDir: "/tmp/workspace", managedSkillsDir: "/tmp/skills", skills },
+    agentSkillsLoading: false,
+    agentSkillsError: null,
+    agentSkillsAgentId: "main",
     configForm: { agents: { entries: { main: {} } } },
     configLoading: false,
     configSaving: false,
@@ -24,9 +32,9 @@ function skillsParams(skills: SkillStatusEntry[], overrides: Partial<Params> = {
     filter: "",
     onFilterChange: () => undefined,
     onRefresh: () => undefined,
-    onToggle: () => undefined,
+    onToggle: () => false,
     onClear: () => undefined,
-    onDisableAll: () => undefined,
+    onDisableAll: () => false,
     onConfigReload: () => undefined,
     onConfigSave: () => undefined,
     ...overrides,

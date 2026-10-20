@@ -94,7 +94,7 @@ function renderTelegramHtml(ir: MarkdownIR, wrapFileRefs = true): string {
 
 function shouldPreserveTelegramListBoundarySpacing(previous: string, next: string): boolean {
   const previousIndent = /^([ \t]*)[•*+-][ \t]+\S/.exec(previous)?.[1];
-  const nextIndent = /^([ \t]*)(?:\d+\.|#{1,6})[ \t]+\S/.exec(next)?.[1];
+  const nextIndent = /^([ \t]*)(?:\d+[.)]|#{1,6})[ \t]+\S/.exec(next)?.[1];
   return (
     previousIndent !== undefined &&
     nextIndent !== undefined &&
@@ -387,7 +387,7 @@ function downgradeRichBlockTags(text: string, markdown: boolean): string {
         break;
       case "input": {
         const attrs = parseHtmlAttrs(tag.raw);
-        if (!tag.closing && attrs.get("type") === "checkbox") {
+        if (!tag.closing && attrs.get("type")?.toLowerCase() === "checkbox") {
           const marker = attrs.has("checked") ? "[x] " : "[ ] ";
           const item = items.at(-1);
           if (item !== undefined) {

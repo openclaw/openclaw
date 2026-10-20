@@ -1,5 +1,4 @@
-// Session-state notice parsing and coalesced producer handoff.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { SessionEventOutcome } from "../auto-reply/reply/session-event-contract.js";
 import type {
@@ -21,26 +20,17 @@ const mocks = vi.hoisted(() => ({
     sessionId: "original",
     generation: "current",
   })),
-  enqueue: vi.fn<typeof enqueueSessionEventForHost>(() => ({
-    id: "notice-turn",
-    accepted: Promise.resolve({ ok: true }),
-    cancel: () => true,
-    settled: Promise.resolve({ status: "completed", executionStarted: true, delivered: false }),
-  })),
+  enqueue: vi.fn<typeof enqueueSessionEventForHost>(() => receipt("notice-turn")),
   acknowledge: vi.fn(async () => {}),
 }));
 // A shared worker may retain an earlier module's owner and its different queue/handoff bindings.
 vi.mock("../shared/global-singleton.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../shared/global-singleton.js")>();
+  const resolve = actual.resolveGlobalSingleton;
   return {
     ...actual,
-    resolveGlobalSingleton: (...args: Parameters<typeof actual.resolveGlobalSingleton>) => {
-      const [key, ...rest] = args;
-      return actual.resolveGlobalSingleton(
-        key === Symbol.for("openclaw.sessionStateNotices") ? mocks.ownerKey : key,
-        ...rest,
-      );
-    },
+    resolveGlobalSingleton: (...[key, ...rest]: Parameters<typeof resolve>) =>
+      resolve(key === Symbol.for("openclaw.sessionStateNotices") ? mocks.ownerKey : key, ...rest),
   };
 });
 
@@ -80,187 +70,130 @@ afterEach(async () => {
   }
 });
 
-function encodeTarget(sessionKey: string): string {
-  return `session-state:${Buffer.from(sessionKey, "utf8").toString("hex")}`;
+type Notice = Parameters<typeof enqueueSessionStateNotice>[0];
+function enqueue(targetSessionKey: string, options: Partial<Notice> = {}) {
+  enqueueSessionStateNotice({
+    watcherSessionKey: "agent:main:main",
+    targetSessionKey,
+    lastSeenSequence: 1,
+    ...options,
+  });
 }
 
-describe("decodeSessionStateNoticeContextKey", () => {
-  it("round-trips a session key with a leading U+FEFF unchanged", () => {
-    const sessionKey = "﻿agent:main";
-    expect(decodeSessionStateNoticeContextKey(encodeTarget(sessionKey))).toBe(sessionKey);
-  });
+const done: SessionEventOutcome = { status: "completed", executionStarted: true, delivered: false };
+function receipt(id: string, settled = Promise.resolve(done)) {
+  return { id, accepted: Promise.resolve({ ok: true as const }), cancel: () => true, settled };
+}
 
-  it("rejects a context key whose hex payload is not valid UTF-8", () => {
-    // 0xFF is not valid UTF-8; a forgiving decode would return U+FFFD and let a
-    // corrupt context key collide with an unrelated watcher cursor.
-    expect(decodeSessionStateNoticeContextKey("session-state:ff")).toBeUndefined();
-  });
-
-  it("rejects malformed prefixes and hex payloads", () => {
-    expect(decodeSessionStateNoticeContextKey("other:ff")).toBeUndefined();
-    expect(decodeSessionStateNoticeContextKey("session-state:")).toBeUndefined();
-    expect(decodeSessionStateNoticeContextKey("session-state:abc")).toBeUndefined();
-    expect(decodeSessionStateNoticeContextKey("session-state:zz")).toBeUndefined();
-  });
+it.each([
+  ["session-state:efbbbf6167656e743a6d61696e", "\uFEFFagent:main"],
+  ["session-state:ff", undefined], // Strict UTF-8 prevents corrupt watcher-cursor collisions.
+  ["other:ff", undefined],
+  ...["", "abc", "zz"].map((hex) => [`session-state:${hex}`, undefined] as const),
+] as const)("decodes only valid session-state context keys: %s", (key, expected) => {
+  expect(decodeSessionStateNoticeContextKey(key)).toBe(expected);
 });
 
-describe("enqueueSessionStateNotice", () => {
-  it("cancels a newer watcher buffer when an older queued batch starts during close", async () => {
-    const firstSettled = createDeferred<SessionEventOutcome>();
-    const secondSettled = createDeferred<SessionEventOutcome>();
-    const secondEnqueued = createDeferred();
-    mocks.enqueue
-      .mockImplementationOnce(() => ({
-        id: "first-batch",
-        accepted: Promise.resolve({ ok: true }),
-        cancel: () => true,
-        settled: firstSettled.promise,
-      }))
-      .mockImplementationOnce(() => {
-        secondEnqueued.resolve();
-        return {
-          id: "second-batch",
-          accepted: Promise.resolve({ ok: true }),
-          cancel: () => true,
-          settled: secondSettled.promise,
-        };
-      });
-    const enqueue = (targetSessionKey: string) =>
-      enqueueSessionStateNotice({
-        watcherSessionKey: "agent:main:main",
-        targetSessionKey,
-        lastSeenSequence: 1,
-      });
-    try {
-      enqueue("agent:main:first");
-      await vi.advanceTimersByTimeAsync(20_000);
-      enqueue("agent:main:second");
-      await vi.advanceTimersByTimeAsync(20_000);
-      enqueue("agent:main:third");
-      await vi.advanceTimersByTimeAsync(0);
-      expect(mocks.enqueue).toHaveBeenCalledOnce();
-      await mocks.enqueue.mock.calls[0]![1].onAdopted?.();
-      await secondEnqueued.promise;
-      firstSettled.resolve({ status: "completed", executionStarted: true, delivered: false });
-      secondSettled.resolve({ status: "completed", executionStarted: true, delivered: false });
-      await drainGlobalSingletonLifecycleState("restart");
-      expect(mocks.enqueue).toHaveBeenCalledTimes(2);
-    } finally {
-      firstSettled.resolve({ status: "cancelled", executionStarted: false, delivered: false });
-      secondSettled.resolve({ status: "cancelled", executionStarted: false, delivered: false });
-      await drainGlobalSingletonLifecycleState("restart");
-    }
-  });
-
-  it("keeps the first notice's 20-second deadline when another watched session changes", async () => {
-    const watcherSessionKey = "agent:main:main";
-    enqueueSessionStateNotice({
-      watcherSessionKey,
-      targetSessionKey: "agent:main:first",
-      lastSeenSequence: 1,
+it("cancels a newer watcher buffer when an older queued batch starts during close", async () => {
+  const firstSettled = createDeferred<SessionEventOutcome>();
+  const secondSettled = createDeferred<SessionEventOutcome>();
+  const secondEnqueued = createDeferred();
+  mocks.enqueue
+    .mockImplementationOnce(() => receipt("first-batch", firstSettled.promise))
+    .mockImplementationOnce(() => {
+      secondEnqueued.resolve();
+      return receipt("second-batch", secondSettled.promise);
     });
-    await vi.advanceTimersByTimeAsync(10_000);
-    enqueueSessionStateNotice({
-      watcherSessionKey,
-      targetSessionKey: "agent:main:second",
-      lastSeenSequence: 2,
-    });
-    await vi.advanceTimersByTimeAsync(9_999);
-    expect(mocks.enqueue).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
+  try {
+    enqueue("agent:main:first");
+    await vi.advanceTimersByTimeAsync(20_000);
+    enqueue("agent:main:second");
+    await vi.advanceTimersByTimeAsync(20_000);
+    enqueue("agent:main:third");
+    await vi.advanceTimersByTimeAsync(0);
     expect(mocks.enqueue).toHaveBeenCalledOnce();
-    expect(mocks.enqueue.mock.calls[0]?.[1].occurrences).toHaveLength(2);
-    expect(mocks.acknowledge).not.toHaveBeenCalled();
-  });
-
-  it("keeps different captured delivery routes in separate watcher batches", async () => {
-    mocks.capture
-      .mockResolvedValueOnce({
-        sessionId: "original",
-        generation: "current",
-        deliveryContext: { channel: "slack", to: "first" },
-      })
-      .mockResolvedValueOnce({
-        sessionId: "original",
-        generation: "current",
-        deliveryContext: { channel: "slack", to: "second" },
-      });
-    for (const targetSessionKey of ["agent:main:first", "agent:main:second"]) {
-      enqueueSessionStateNotice({
-        watcherSessionKey: "agent:main:main",
-        targetSessionKey,
-        lastSeenSequence: 1,
-      });
-    }
-    await vi.advanceTimersByTimeAsync(20_000);
+    await mocks.enqueue.mock.calls[0]![1].onAdopted?.();
+    await secondEnqueued.promise;
+    firstSettled.resolve(done);
+    secondSettled.resolve(done);
+    await drainGlobalSingletonLifecycleState("restart");
     expect(mocks.enqueue).toHaveBeenCalledTimes(2);
-    expect(
-      mocks.enqueue.mock.calls.map(([, options]) => options.expectedTarget?.deliveryContext?.to),
-    ).toEqual(["first", "second"]);
-    expect(mocks.enqueue.mock.calls.map(([, options]) => options.occurrences?.length)).toEqual([
-      1, 1,
-    ]);
-  });
+  } finally {
+    firstSettled.resolve({ status: "cancelled", executionStarted: false, delivered: false });
+    secondSettled.resolve({ status: "cancelled", executionStarted: false, delivered: false });
+    await drainGlobalSingletonLifecycleState("restart");
+  }
+});
 
-  it.each(["/synthetic/store.sqlite"])(
-    "coalesces for 20 seconds and acknowledges store %s only upon adoption",
-    async (watcherStorePath) => {
-      const notice = {
-        watcherSessionKey: "agent:main:main",
-        watcherStorePath,
-        targetSessionKey: "agent:main:slack:channel:C01234567",
-        lastSeenSequence: 42,
-      };
-      enqueueSessionStateNotice(notice);
-      await vi.advanceTimersByTimeAsync(19_999);
-      expect(mocks.enqueue).not.toHaveBeenCalled();
-      expect(mocks.acknowledge).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(1);
-      expect(mocks.enqueue).toHaveBeenCalledTimes(1);
-      const options = mocks.enqueue.mock.calls[0]![1];
-      expect(options).toMatchObject({
-        source: "session",
-        sessionKey: notice.watcherSessionKey,
-        expectedTarget: { sessionId: "original", generation: "current" },
-        occurrences: [{ sessionStorePath: watcherStorePath ?? null }],
-      });
-      expect(mocks.acknowledge).not.toHaveBeenCalled();
-      await options.onAdopted?.();
-      expect(mocks.acknowledge).toHaveBeenCalledWith(
-        notice.watcherSessionKey,
-        [{ targetSessionKey: notice.targetSessionKey, watcherStorePath: watcherStorePath ?? null }],
-        expect.any(Function),
-        expect.objectContaining({ assertCurrent: expect.any(Function) }),
-      );
-    },
+it("keeps different captured delivery routes in separate watcher batches", async () => {
+  for (const to of ["first", "second"]) {
+    mocks.capture.mockResolvedValueOnce({
+      sessionId: "original",
+      generation: "current",
+      deliveryContext: { channel: "slack", to },
+    });
+  }
+  for (const targetSessionKey of ["agent:main:first", "agent:main:second"]) {
+    enqueue(targetSessionKey);
+  }
+  await vi.advanceTimersByTimeAsync(20_000);
+  expect(
+    mocks.enqueue.mock.calls.map(([, options]) => [
+      options.expectedTarget?.deliveryContext?.to,
+      options.occurrences?.length,
+    ]),
+  ).toEqual([
+    ["first", 1],
+    ["second", 1],
+  ]);
+});
+
+it("keeps the first deadline and acknowledges coalesced store notices only upon adoption", async () => {
+  const watcherStorePath = "/synthetic/store.sqlite";
+  const watcherSessionKey = "agent:main:main";
+  const targets = ["agent:main:slack:channel:C01234567", "agent:main:second"] as const;
+  enqueue(targets[0], { watcherStorePath, lastSeenSequence: 42 });
+  await vi.advanceTimersByTimeAsync(10_000);
+  enqueue(targets[1], { watcherStorePath, lastSeenSequence: 2 });
+  await vi.advanceTimersByTimeAsync(9_999);
+  expect(mocks.enqueue).not.toHaveBeenCalled();
+  expect(mocks.acknowledge).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(mocks.enqueue).toHaveBeenCalledTimes(1);
+  const options = mocks.enqueue.mock.calls[0]![1];
+  expect(options).toMatchObject({
+    source: "session",
+    sessionKey: watcherSessionKey,
+    expectedTarget: { sessionId: "original", generation: "current" },
+    occurrences: targets.map(() => ({ sessionStorePath: watcherStorePath })),
+  });
+  expect(mocks.acknowledge).not.toHaveBeenCalled();
+  await options.onAdopted?.();
+  expect(mocks.acknowledge).toHaveBeenCalledWith(
+    watcherSessionKey,
+    targets.map((targetSessionKey) => ({ targetSessionKey, watcherStorePath })),
+    expect.any(Function),
+    expect.objectContaining({ assertCurrent: expect.any(Function) }),
   );
+});
 
-  it.each([
-    { watcherSessionKey: "agent:main:main", queueOnly: true },
-    { watcherSessionKey: "agent:main:subagent:child", queueOnly: false },
-  ])("keeps ambient notices passive for $watcherSessionKey", async (options) => {
-    enqueueSessionStateNotice({
-      ...options,
-      targetSessionKey: "agent:main:group:watched",
-      lastSeenSequence: 42,
-    });
-    await vi.advanceTimersByTimeAsync(20_000);
-    expect(mocks.pending).toHaveLength(1);
-    expect(mocks.capture).not.toHaveBeenCalled();
-    expect(mocks.enqueue).not.toHaveBeenCalled();
-    expect(mocks.acknowledge).not.toHaveBeenCalled();
-  });
+it.each([
+  { watcherSessionKey: "agent:main:main", queueOnly: true },
+  { watcherSessionKey: "agent:main:subagent:child", queueOnly: false },
+])("keeps ambient notices passive for $watcherSessionKey", async (options) => {
+  enqueue("agent:main:group:watched", { ...options, lastSeenSequence: 42 });
+  await vi.advanceTimersByTimeAsync(20_000);
+  expect(mocks.pending).toHaveLength(1);
+  expect(mocks.capture).not.toHaveBeenCalled();
+  expect(mocks.enqueue).not.toHaveBeenCalled();
+  expect(mocks.acknowledge).not.toHaveBeenCalled();
+});
 
-  it("does not adopt a notice consumed during coalescing", async () => {
-    enqueueSessionStateNotice({
-      watcherSessionKey: "agent:main:main",
-      targetSessionKey: "agent:main:group:watched",
-      lastSeenSequence: 42,
-    });
-    await vi.advanceTimersByTimeAsync(1);
-    mocks.pending.length = 0;
-    await vi.advanceTimersByTimeAsync(19_999);
-    expect(mocks.enqueue).not.toHaveBeenCalled();
-    expect(mocks.acknowledge).not.toHaveBeenCalled();
-  });
+it("does not adopt a notice consumed during coalescing", async () => {
+  enqueue("agent:main:group:watched", { lastSeenSequence: 42 });
+  await vi.advanceTimersByTimeAsync(1);
+  mocks.pending.length = 0;
+  await vi.advanceTimersByTimeAsync(19_999);
+  expect(mocks.enqueue).not.toHaveBeenCalled();
+  expect(mocks.acknowledge).not.toHaveBeenCalled();
 });

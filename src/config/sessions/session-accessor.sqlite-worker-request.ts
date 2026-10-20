@@ -8,6 +8,7 @@ import {
 } from "../../infra/gateway-state-owner.js";
 import { retainSqliteWriteAdmissionService } from "../../infra/sqlite-transaction.js";
 import { createSqliteDatabaseAdmissionRelay } from "../../infra/sqlite-worker-operation-admission.js";
+import { recordWorkerMessage } from "../../infra/worker-message-metrics.js";
 import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-lifecycle.js";
 import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-db-readonly.js";
@@ -73,11 +74,10 @@ export function withSqliteMutationWorkerLifetime<T>(
   let unregisterState: () => void;
   try {
     unregisterState = registerOpenClawStateDatabaseAsyncResource({
-      close: async (identity) => {
-        if (!identity || identity.key === state.identity.key) {
-          revoke();
-          await completion.promise;
-        }
+      admission: state,
+      close: async () => {
+        revoke();
+        await completion.promise;
       },
     });
   } catch (error) {
@@ -391,6 +391,9 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
                 },
                 metadata ? [metadata.port] : [],
               );
+              if (transport.kind === "pooled") {
+                recordWorkerMessage("admission", "to_worker");
+              }
               // Refusal holds the FIFO until exit. The owner publishes successful results
               // before returning this writer section; preliminary admissions release separately.
               await requested.released.promise;
@@ -410,6 +413,9 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
             if (!completed) {
               try {
                 worker.postMessage({ type: "admission", operationId, allowed: false }, []);
+                if (transport.kind === "pooled") {
+                  recordWorkerMessage("admission", "to_worker");
+                }
               } catch (dispatchError) {
                 fail(
                   new AggregateError(
@@ -424,7 +430,7 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
         admissionTasks.push(task);
       } else if (message.type === "admission-release") {
         if (admission) {
-          admission.diagnostics.releaseCause = "worker-release";
+          admission.diagnostics.releaseCause = "preliminary-release";
           admission.released.resolve();
           admission = undefined;
         }

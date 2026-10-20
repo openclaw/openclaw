@@ -71,7 +71,7 @@ import {
   createGetGoalTool,
   createUpdateGoalTool,
 } from "./tools/goal-tools.js";
-import { createHeartbeatResponseTool } from "./tools/heartbeat-response-tool.js";
+import { resolveHeartbeatResponseTool } from "./tools/heartbeat-response-tool.js";
 import { createImageGenerateTool } from "./tools/image-generate-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
 import { callAgentToolGatewayRequest } from "./tools/in-process-gateway.js";
@@ -87,10 +87,11 @@ import { createChannelQuestionPromptDelivery } from "./tools/question-prompt-sen
 import { createScreenTool } from "./tools/screen-tool.js";
 import { createSecretsTool } from "./tools/secrets-tool.js";
 import { createSessionStatusTool } from "./tools/session-status-tool.js";
+import { createSessionsCreateTool } from "./tools/sessions-create-tool.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
+import { hasSessionControlAuthority } from "./tools/sessions-operator-authority.js";
 import { createSessionsSearchTool } from "./tools/sessions-search-tool.js";
-import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSessionsTool } from "./tools/sessions-tool.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
@@ -282,7 +283,6 @@ function* createOpenClawToolsSteps(
           agentId: sessionAgentId,
           workspaceDir,
           sandbox,
-          deferAutoModelResolution: true,
         })
       : null;
   options?.recordToolPrepStage?.("openclaw-tools:image-tool");
@@ -292,7 +292,7 @@ function* createOpenClawToolsSteps(
     agentSessionKey: mediaGenerationAgentSessionKey,
     requesterRunSessionKey: trimmedRunSessionKey,
     requesterAgentId: sessionAgentId,
-    requesterOrigin: widgetPresentation.deliveryContext ?? undefined,
+    requesterOrigin: widgetPresentation.deliveryContext,
     workspaceDir,
     sandbox,
   };
@@ -323,7 +323,6 @@ function* createOpenClawToolsSteps(
                   supportsImages: options.modelHasVision === true,
                 }
               : undefined,
-          deferAutoModelResolution: true,
         })
       : null;
   options?.recordToolPrepStage?.("openclaw-tools:pdf-tool");
@@ -385,7 +384,7 @@ function* createOpenClawToolsSteps(
           workspaceDir,
         },
       })[0] ?? null);
-  const heartbeatTool = options?.enableHeartbeatTool ? createHeartbeatResponseTool() : null;
+  const heartbeatTool = resolveHeartbeatResponseTool(options);
   options?.recordToolPrepStage?.("openclaw-tools:message-tool");
   const nodesToolBase = createNodesTool({
     ...options,
@@ -450,6 +449,7 @@ function* createOpenClawToolsSteps(
       })
     : null;
   const transcriptsTool = resolveTranscriptsTool(resolvedConfig, sessionAgentId, options);
+  const githubActionsAvailable = hasSessionControlAuthority(options?.sessionControlAuthority);
   const tools: AnyAgentTool[] = [
     ...createInstalledSkillTools(options?.installedSkills ?? []),
     createDashboardTool({
@@ -483,6 +483,7 @@ function* createOpenClawToolsSteps(
             creatorAuthorityUnavailableReason: options?.cronCreatorAuthorityUnavailableReason,
             selfRemoveOnlyJobId: options?.cronSelfRemoveOnlyJobId,
           }),
+          createSessionsCreateTool({ sessionControlAuthority: options?.sessionControlAuthority }),
           createSessionsTool({
             ...options,
             stopAllowed: options?.swarmCollector !== true,
@@ -533,7 +534,14 @@ function* createOpenClawToolsSteps(
     createDecisionTool(sessionAgentId, options),
     createTtsTool({ ...options, agentId: sessionAgentId }),
     options?.githubPublicationAvailable !== undefined ? createGitHubIdentityStatusTool() : null,
-    options?.githubPublicationAvailable === true ? createGitHubPublishTool() : null,
+    options?.githubPublicationAvailable === true ||
+    (options?.githubPublicationAvailable === false && githubActionsAvailable)
+      ? createGitHubPublishTool({
+          publicationAvailable: options.githubPublicationAvailable,
+          actionsAvailable: githubActionsAvailable,
+          sandbox: options.sandbox,
+        })
+      : null,
     transcriptsTool,
     imageGenerateTool,
     musicGenerateTool,
@@ -606,28 +614,7 @@ function* createOpenClawToolsSteps(
       agentId: sessionAgentId,
       sessionReadScopeKey: options?.sessionReadScopeKey,
     }),
-    ...(embedded
-      ? []
-      : [
-          ...createHostedConversationTools(options, sessionAgentId),
-          // Keep the in-process caller so materialized agent roots retain their creation stamp.
-          createSessionsSendTool({
-            ...options,
-            requesterTurnRunId: options?.runId,
-            agentId: sessionAgentId,
-            // Match sessions_spawn: spawned children record the durable run
-            // session as spawnedBy, so the parent check must use the same key.
-            agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
-            agentSessionId: options?.sessionId,
-            requesterOrigin: {
-              channel: options?.agentChannel,
-              accountId: options?.agentAccountId,
-              to: options?.currentMessagingTarget ?? options?.currentChannelId ?? options?.agentTo,
-              threadId: options?.currentThreadTs ?? options?.agentThreadId,
-            },
-            config: sessionConfig,
-          }),
-        ]),
+    ...(embedded ? [] : createHostedConversationTools(options, sessionAgentId, sessionConfig)),
     !embedded || options?.allowGatewaySubagentBinding === true
       ? createSessionsSpawnTool({
           ...options,
@@ -660,10 +647,6 @@ function* createOpenClawToolsSteps(
       // callers (e.g. Telegram DM with a policy key distinct from the durable run key) still
       // see their spawned runs in the active/recent list. Mirrors createSessionsSpawnTool above.
       agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
-      // Retained task rows created before the durable-key alignment still carry the policy
-      // key in owner_key; let the listing/cancel tool match both so those rows stay reachable
-      // for split-key callers instead of disappearing with "Task outside session tree".
-      callerPolicySessionKey: options?.agentSessionKey,
       agentId: sessionAgentId,
       config: sessionConfig,
     }),

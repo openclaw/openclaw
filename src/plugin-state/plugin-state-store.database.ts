@@ -76,8 +76,10 @@ function openPluginStateDatabase(
 export function isMissingPluginStateTableError(error: unknown): boolean {
   return (
     error instanceof Error &&
-    hasErrnoCode(error, "ERR_SQLITE_ERROR") &&
-    error.message === "no such table: plugin_state_entries"
+    ((hasErrnoCode(error, "ERR_SQLITE_ERROR") &&
+      error.message === "no such table: plugin_state_entries") ||
+      (hasErrnoCode(error, "42P01") &&
+        error.message === 'relation "plugin_state_entries" does not exist'))
   );
 }
 
@@ -130,7 +132,7 @@ export function runWriteTransaction<T>(
   }
   return runOpenClawStateWriteTransaction(
     (store) => {
-      const identity = readTrackedStateDatabaseIdentity(store.db)?.key;
+      const identity = readTrackedStateDatabaseIdentity(sqlPublicationAnchor(store.db))?.key;
       if (!identity) {
         throw new Error("Plugin state writer has no admitted source");
       }

@@ -2,31 +2,21 @@
 import { expect, it, vi, type Mock } from "vitest";
 import * as runtimePaths from "../daemon/runtime-paths.js";
 import type { GatewayService } from "../daemon/service-types.js";
-import * as sqliteLibrary from "../infra/bun-sqlite-library.js";
 import { buildGatewayInstallPlan } from "./daemon-install-helpers.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
 import { resolveGatewayInstallToken } from "./gateway-install-token.js";
-
-export const doctorSqliteDiagnostic =
-  "SQLite (doctor process): /fixture/libsqlite3.dylib (3.53.4, extension loading enabled)";
 
 export function mockDoctorRuntimeFacts(runExec: Mock<typeof import("../process/exec.js").runExec>) {
   runExec.mockReset().mockImplementation(async (executable: string) => ({
     stdout: JSON.stringify({
       nodeVersion: "26.8.1",
-      bunVersion: /(?:^|[/\\])bun(?:\.exe)?$/i.test(executable) ? "1.4.2" : null,
+      bunVersion: /(?:^|[/\\])bun(?:\.exe)?$/i.test(executable) ? "1.4.3" : null,
       sqliteVersion: "3.53.4",
       sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
     }),
     stderr: "",
   }));
   vi.spyOn(runtimePaths, "resolvePreferredNodePath").mockResolvedValue("/opt/available/bin/node");
-  vi.spyOn(sqliteLibrary, "ensureSqliteLibrarySelected").mockReturnValue({
-    source: "env",
-    path: "/fixture/libsqlite3.dylib",
-    version: "3.53.4",
-    extensionLoadingSupported: true,
-  });
 }
 
 export function createPrompter(confirmImpl: (message: string) => boolean) {
@@ -68,13 +58,13 @@ export function registerRunningBunFallbackTest({
 }) {
   it("uses running Bun for the non-interactive runtime fallback on a Bun-only host", async () => {
     const bunVersion = Object.getOwnPropertyDescriptor(process.versions, "bun");
-    Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.2" });
+    Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.3" });
     const discoverNode = vi
       .spyOn(runtimePaths, "resolvePreferredNodePath")
       .mockResolvedValue(undefined);
     const probeBun = vi.spyOn(runtimePaths, "resolveBunRuntimeInfo").mockResolvedValue({
       status: "supported",
-      version: "1.4.2",
+      version: "1.4.3",
       sqliteVersion: "3.53.4",
       sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
       nodeSharedSqlite: false,

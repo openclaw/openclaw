@@ -1,4 +1,3 @@
-// Imessage plugin module resolves and authorizes action message references.
 import type { IMessageChatContext } from "./chat-context.js";
 import type { authorizeIMessageResourceReference } from "./message-resource.js";
 

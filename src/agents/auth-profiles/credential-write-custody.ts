@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isMainThread } from "node:worker_threads";
 import {
   acquireStateDatabaseSchemaLease,
@@ -6,7 +5,7 @@ import {
   getStateDatabaseSchemaLease,
   type StateDatabaseSchemaLease,
 } from "../../infra/gateway-state-owner.js";
-import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
+import { sqlPublicationAnchor, type EngineConnection } from "../../infra/sql-connection.js";
 import { getSqliteDatabaseAdmissionIdentityForPath } from "../../infra/sqlite-database-admission.js";
 import { runWithSqliteCleanup } from "../../infra/sqlite-lifecycle-errors.js";
 import {
@@ -24,14 +23,14 @@ import { getWorkerAuthProfileWrites } from "./runtime-scope.js";
 
 const retainedTransactions = resolveGlobalSingleton(
   Symbol.for("openclaw.authProfileCredentialWriteCustody"),
-  () => new WeakMap<DatabaseSync, { lease: StateDatabaseSchemaLease; unknown: boolean }>(),
+  () => new WeakMap<EngineConnection, { lease: StateDatabaseSchemaLease; unknown: boolean }>(),
 );
 
 /** Reuse native custody; standalone SDK callers take the existing exclusive offline lease. */
 export function withAuthProfileCredentialOwner<T>(
   databasePath: string,
-  operation: (retainTransaction?: (database: DatabaseSync) => void) => T,
-  database?: DatabaseSync,
+  operation: (retainTransaction?: (database: EngineConnection) => void) => T,
+  database?: EngineConnection,
 ): T {
   const retained = database && retainedTransactions.get(sqlPublicationAnchor(database));
   if (retained) {
@@ -74,7 +73,7 @@ export function withAuthProfileCredentialOwner<T>(
   }
   const lease = acquireStateDatabaseSchemaLease(databasePath);
   let transactionOwnsLease = false;
-  const retainTransaction = (db: DatabaseSync) => {
+  const retainTransaction = (db: EngineConnection) => {
     if (!hasSqlitePostCommitScope(sqlPublicationAnchor(db))) {
       return;
     }
@@ -110,7 +109,7 @@ export function withAuthProfileCredentialOwner<T>(
 
 /** The native opener captures the shared root, including agents outside the state directory. */
 export function withAuthProfileCredentialWriteCustody<T>(
-  database: DatabaseSync,
+  database: EngineConnection,
   operation: () => T,
 ): T {
   if (database.isTransaction && !hasSqlitePostCommitScope(sqlPublicationAnchor(database))) {

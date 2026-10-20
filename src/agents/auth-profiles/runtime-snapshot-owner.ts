@@ -400,11 +400,14 @@ export function pruneAuthProfileStoreReferences(
   store.order = store.order
     ? Object.fromEntries(
         Object.entries(store.order)
-          .map(([provider, profileIds]) => [
-            provider,
-            profileIds.filter((profileId) => keptOrderProfileIds.has(profileId)),
-          ])
-          .filter(([, profileIds]) => Array.isArray(profileIds) && profileIds.length > 0),
+          .map(
+            ([provider, profileIds]) =>
+              [
+                provider,
+                profileIds.filter((profileId) => keptOrderProfileIds.has(profileId)),
+              ] as const,
+          )
+          .filter(([, profileIds]) => profileIds.length > 0),
       )
     : undefined;
   store.lastGood = store.lastGood

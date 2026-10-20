@@ -340,7 +340,7 @@ describe("loginOpenAICodexDeviceCode", () => {
       expect(credentials.access.length).toBeGreaterThan(0);
       expect(credentials.refresh).toBe("refresh-token-123");
       expect(credentials).not.toHaveProperty("accountId");
-      expect(credentials.expires).toBeGreaterThan(Date.now());
+      expect(credentials.expires).toBe(Date.now() + 600_000);
     } finally {
       vi.useRealTimers();
       vi.unstubAllEnvs();
@@ -674,4 +674,66 @@ describe("loginOpenAICodexDeviceCode", () => {
       "OpenAI device authorization failed: authorization_declined spoofed (Denied next line)",
     );
   });
+
+  it.each([
+    { clockStepMs: -30 * 60_000, response: "blocked headers" },
+    { clockStepMs: 30 * 60_000, response: "blocked headers" },
+    { clockStepMs: -30 * 60_000, response: "pending authorization" },
+    { clockStepMs: 30 * 60_000, response: "pending authorization" },
+  ])(
+    "keeps the 15-minute boundary after a $clockStepMs ms clock step with $response",
+    async ({ clockStepMs, response }) => {
+      // setSystemTime changes Date, independently of the fake monotonic clock and timers.
+      vi.useFakeTimers();
+      vi.setSystemTime(0);
+      const controller = new AbortController();
+      const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        if (url.endsWith("/api/accounts/deviceauth/usercode")) {
+          return createDeviceCodeResponse();
+        }
+        return response === "blocked headers"
+          ? waitForFetchAbort(init)
+          : new Response(null, { status: 404 });
+      });
+      let settled = false;
+      const observing = loginOpenAICodexDeviceCode({
+        fetchFn: fetchMock,
+        signal: controller.signal,
+        onVerification: async () => {},
+      }).then(
+        (value) => {
+          settled = true;
+          return { value };
+        },
+        (error: unknown) => {
+          settled = true;
+          return { error };
+        },
+      );
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        vi.setSystemTime(clockStepMs);
+        await vi.advanceTimersByTimeAsync(15 * 60_000 - 1);
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(settled).toBe(true);
+        expect(await observing).toEqual({
+          error: expect.objectContaining({
+            message: "OpenAI device authorization timed out after 15 minutes.",
+          }),
+        });
+        const completedRequests = fetchMock.mock.calls.length;
+        await vi.advanceTimersByTimeAsync(30_000);
+        expect(fetchMock).toHaveBeenCalledTimes(completedRequests);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        controller.abort(new Error("test cleanup"));
+        await observing;
+        vi.useRealTimers();
+      }
+    },
+  );
 });

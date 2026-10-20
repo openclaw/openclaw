@@ -663,6 +663,39 @@ cli note
     expect(callGatewayFromCliMock).not.toHaveBeenCalled();
   });
 
+  it.each([false, true])(
+    "rejects malformed UTF-8 ChatGPT exports (envelope: %s)",
+    async (envelope) => {
+      const { rootDir, config } = await createCliVault({ initialize: true });
+      const exportDir = await createChatGptExport(rootDir);
+      const exportPath = path.join(exportDir, "conversations.json");
+      const conversations = JSON.parse(await fs.readFile(exportPath, "utf8")) as Array<{
+        title: string;
+      }>;
+      expectDefined(conversations[0], "export conversation").title = "Café 🤖 �";
+      await fs.writeFile(exportPath, JSON.stringify(envelope ? { conversations } : conversations));
+      const args = ["chatgpt", "import", "--export", exportDir, "--json"];
+      const seed = JSON.parse(await runRegisteredWikiCommand(config, args)) as {
+        createdCount: number;
+      };
+      expect(seed.createdCount).toBe(1);
+      const sourcePath = path.join(rootDir, "sources", await findImportedSourceFile(rootDir));
+      const before = await fs.readFile(sourcePath, "utf8");
+      expect(before).toContain("Café 🤖 �");
+      const raw = Buffer.from(JSON.stringify(envelope ? { conversations } : conversations));
+      raw[raw.indexOf(Buffer.from("Café"))] = 0xff;
+      await fs.writeFile(exportPath, raw);
+      const inboxPath = path.join(rootDir, "inbox.md");
+      await fs.unlink(inboxPath);
+      await expect(runRegisteredWikiCommand(config, args)).rejects.toThrow(
+        `ChatGPT conversations export must be valid UTF-8: ${exportPath}. Download a fresh ChatGPT export and retry the import.`,
+      );
+      expect(await fs.readFile(sourcePath, "utf8")).toBe(before);
+      expect(await fs.readFile(exportPath)).toEqual(raw);
+      await expect(fs.access(inboxPath)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
   it("imports ChatGPT exports with dry-run, apply, and rollback", async () => {
     const { rootDir, config } = await createCliVault({ initialize: true });
     const exportDir = await createChatGptExport(rootDir);
@@ -729,6 +762,23 @@ cli note
         .then((entries) => entries.filter((entry) => entry !== "index.md")),
     ).resolves.toStrictEqual([]);
   });
+
+  it.each(["compile", "lint"])(
+    "runs one compile cycle when `wiki %s` finds indexes missing after its source import",
+    async (command) => {
+      const { rootDir, config } = await createCliVault({ initialize: true });
+      await fs.rm(path.join(rootDir, "index.md"), { force: true });
+
+      const output = await runRegisteredWikiCommand(config, [command, "--json"]);
+
+      const log = await fs.readFile(path.join(rootDir, ".openclaw-wiki", "log.jsonl"), "utf8");
+      const cycles = log.split("\n").filter((line) => line.includes('"pageCounts"')).length;
+      expect(cycles).toBe(1);
+      if (command === "compile") {
+        expect(JSON.parse(output).updatedFiles).toContain(path.join(rootDir, "index.md"));
+      }
+    },
+  );
 
   it("preserves a user save after compile before the import run record is written", async () => {
     const { rootDir, config } = await createCliVault({ initialize: true });

@@ -280,16 +280,12 @@ export async function executeRegisteredPluginCommand(
       };
     }
     const result = execution.value;
-    logVerbose(
-      `Plugin command /${command.name} executed successfully for ${senderId || "unknown"}`,
-    );
     if (!result || typeof result !== "object") {
-      logVerbose(`Plugin command /${command.name} returned no reply payload`);
       return {};
     }
     return result;
-  } catch (error) {
-    logVerbose(`Plugin command /${command.name} error: ${(error as Error).message}`);
+  } catch {
+    logVerbose(`Plugin command /${command.name} execution failed (plugin=${command.pluginId})`);
     return { text: "⚠️ Command failed. Please try again later." };
   } finally {
     commandInvocationAbort.abort("command invocation closed");

@@ -7,6 +7,7 @@ import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text
 import { assertConfigWriteAllowedInCurrentMode } from "../config/config-write-guard.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
+import { withTimeout } from "../infra/fs-safe.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { normalizeUpdateChannel, resolveRegistryUpdateChannel } from "../infra/update-channels.js";
@@ -52,7 +53,6 @@ import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { invalidatePluginRuntimeDiscoveryAfterConfigMutation } from "../plugins/registry-refresh.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { withTimeout } from "../utils/with-timeout.js";
 import { VERSION } from "../version.js";
 import { t } from "../wizard/i18n/index.js";
 import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capability-consent.js";
@@ -205,33 +205,14 @@ function resolveLocalPath(params: {
   if (!raw) {
     return null;
   }
-  const candidates = new Set<string>();
-  const bases = resolveLocalPluginRoots(params.workspaceDir);
+  const bases = resolveLocalPluginRoots(params.workspaceDir)
+    .map(resolveRealDirectory)
+    .filter((base): base is string => base !== null);
   for (const base of bases) {
-    const realBase = resolveRealDirectory(base);
-    if (!realBase) {
-      continue;
-    }
-    candidates.add(path.resolve(realBase, raw));
-  }
-  for (const candidate of candidates) {
-    try {
-      const resolved = fs.realpathSync(candidate);
-      // Local plugin paths must stay inside the current repo/workspace roots so
-      // catalog metadata cannot point setup at arbitrary filesystem locations.
-      if (
-        !bases.some((base) => {
-          const realBase = resolveRealDirectory(base);
-          return realBase ? isPathInside(realBase, resolved) : false;
-        })
-      ) {
-        continue;
-      }
-      if (fs.statSync(resolved).isDirectory()) {
-        return resolved;
-      }
-    } catch {
-      continue;
+    const resolved = resolveRealDirectory(path.resolve(base, raw));
+    // Catalog metadata cannot escape the current repo/workspace through symlinks.
+    if (resolved && bases.some((root) => isPathInside(root, resolved))) {
+      return resolved;
     }
   }
   return null;

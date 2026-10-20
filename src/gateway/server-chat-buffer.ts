@@ -14,6 +14,8 @@ export type ChatRunBufferState = {
     string | symbol | undefined,
     {
       committed?: true;
+      /** False while saved history has not taken over this live occurrence. */
+      published?: boolean;
       start?: number;
       end?: number | null;
       scope?: number;
@@ -47,7 +49,8 @@ export const bufferVisibleText = (record: ChatRunBufferState) => {
   const items = [...(record.assistantItems?.values() ?? [])]
     .filter((item) => typeof item.end === "number" && item.end > offset)
     .toSorted((a, b) => (a.start ?? 0) - (b.start ?? 0));
-  if (!items.some((item) => item.committed)) {
+  const retired = (item: (typeof items)[number]) => item.committed && item.published !== false;
+  if (!items.some(retired)) {
     return text;
   }
   let visible = "";
@@ -61,7 +64,7 @@ export const bufferVisibleText = (record: ChatRunBufferState) => {
     const start = Math.max(offset, item.start ?? 0);
     gap += text.slice(cursor - offset, start - offset);
     cursor = Math.max(cursor, item.end);
-    if (item.committed) {
+    if (retired(item)) {
       continue;
     }
     let part = text.slice(start - offset, item.end - offset);
@@ -158,6 +161,15 @@ export const updateBuffer = (
     commonEnd = previousEnd;
   } else {
     const limit = Math.min(previousEnd, end);
+    // Compare cumulative prefixes natively; corrections still need the full walk.
+    // Recheck the last code unit because an append can complete a surrogate pair.
+    if (
+      previous &&
+      end >= previousEnd &&
+      snapshot.text.slice(retainedOffset - sourceOffset, previousEnd - sourceOffset) === previous
+    ) {
+      commonEnd = previousEnd - 1;
+    }
     while (commonEnd < limit) {
       const point = previous.codePointAt(commonEnd - retainedOffset);
       if (point !== snapshot.text.codePointAt(commonEnd - sourceOffset)) {

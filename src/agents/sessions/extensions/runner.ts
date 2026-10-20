@@ -11,6 +11,7 @@ import type { KeybindingsConfig } from "../keybindings.js";
 import type { ModelRegistry } from "../model-registry.js";
 import { SessionMetadataCommittedError } from "../session-manager-metadata-error.js";
 import type { SessionManager } from "../session-manager.js";
+import { warnSessionPersistenceDeprecation } from "../session-persistence-deprecation.js";
 import type { BuildSystemPromptOptions } from "../system-prompt-metadata.js";
 import {
   bindExtensionMetadataActions,
@@ -254,11 +255,11 @@ export class ExtensionRunner {
     contextActions: ExtensionContextActions,
     providerActions?: Parameters<ExtensionRunner["bindCore"]>[2],
   ): void {
-    this.bindCore(actions, contextActions, providerActions);
+    this.bindCoreActions(actions, contextActions, providerActions);
     bindExtensionPersistenceActions(this.sessionManager, this.runtime, actions);
   }
 
-  /** @deprecated Use bindCoreAsync with ExtensionActionsV2; removal follows a stable deprecation period. */
+  /** @deprecated Use bindCoreAsync with ExtensionActionsV2. Supported through 2026-12-31; removal ships in the first January 2027 stable release. */
   bindCore(
     actions: ExtensionActions,
     contextActions: ExtensionContextActions,
@@ -266,6 +267,18 @@ export class ExtensionRunner {
       registerProvider?: (name: string, config: ProviderConfig) => void;
       unregisterProvider?: (name: string) => void;
     },
+  ): void {
+    warnSessionPersistenceDeprecation(
+      "ExtensionRunner.bindCore",
+      "bindCoreAsync with ExtensionActionsV2",
+    );
+    this.bindCoreActions(actions, contextActions, providerActions);
+  }
+
+  private bindCoreActions(
+    actions: ExtensionActions,
+    contextActions: ExtensionContextActions,
+    providerActions: Parameters<ExtensionRunner["bindCore"]>[2],
   ): void {
     // Copy actions into the shared runtime (all extension APIs reference this)
     this.runtime.sendMessage = actions.sendMessage;

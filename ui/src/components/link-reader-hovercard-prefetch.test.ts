@@ -94,7 +94,6 @@ describe("GitHub hovercard prefetch subscriptions", () => {
   it.each([
     { phase: "pending", change: "connection" },
     { phase: "pending", change: "principal" },
-    { phase: "cached", change: "connection" },
     { phase: "cached", change: "principal" },
   ])("retires $phase inline state after $change changes", async ({ phase, change }) => {
     const { provider, anchor, request } = createIssueLink();
@@ -225,7 +224,7 @@ describe("GitHub hovercard prefetch subscriptions", () => {
       if (change === "agent") {
         provider.agentId = "other";
       } else if (change === "client") {
-        provider.client = { request } as unknown as GatewayBrowserClient;
+        provider.client = { request, connected: true } as unknown as GatewayBrowserClient;
       } else {
         provider.remove();
         await Promise.resolve();

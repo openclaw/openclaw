@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync, writeFileSync } from "node:fs";
+import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import {
   CHROMIUM_FULL_VERSION,
@@ -16,20 +17,34 @@ import {
   asOptionalRecord,
   filterStringRecord,
   normalizeOptionalString as trimToUndefined,
+  normalizeLowercaseStringOrEmpty,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { edgeTTS, inferEdgeExtension } from "./tts.js";
 
 const DEFAULT_EDGE_VOICE = "en-US-MichelleNeural";
 const DEFAULT_EDGE_LANG = "en-US";
 const DEFAULT_EDGE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
 const DEFAULT_MICROSOFT_VOICE_LIST_TIMEOUT_MS = 30_000;
 
+function inferEdgeExtension(outputFormat: string): string {
+  const normalized = normalizeLowercaseStringOrEmpty(outputFormat);
+  if (normalized.includes("webm")) {
+    return ".webm";
+  }
+  if (normalized.includes("ogg")) {
+    return ".ogg";
+  }
+  if (normalized.includes("opus")) {
+    return ".opus";
+  }
+  if (normalized.includes("wav") || normalized.includes("riff") || normalized.includes("pcm")) {
+    return ".wav";
+  }
+  return ".mp3";
+}
+
 function normalizeMicrosoftProviderConfig(rawConfig: Record<string, unknown>) {
   const providers = asOptionalRecord(rawConfig.providers);
-  const rawEdge = asOptionalRecord(rawConfig.edge);
-  const rawMicrosoft = asOptionalRecord(rawConfig.microsoft);
-  const rawProviderMicrosoft = asOptionalRecord(providers?.microsoft);
-  const raw = { ...rawEdge, ...rawMicrosoft, ...rawProviderMicrosoft };
+  const raw = asOptionalRecord(providers?.microsoft) ?? {};
   return readMicrosoftProviderConfig({
     ...raw,
     outputFormatConfigured: Boolean(trimToUndefined(raw.outputFormat)),
@@ -101,9 +116,6 @@ async function listMicrosoftVoices(
   const { assertOkOrThrowProviderError, readProviderJsonResponse } =
     await import("openclaw/plugin-sdk/provider-http");
   const proxyCaptureSdk = await import("openclaw/plugin-sdk/proxy-capture");
-  // The shipped 2026.9.6 host lacks async diagnostics; remove optionality when the minimum advances.
-  const captureHost: Partial<Pick<typeof proxyCaptureSdk, "captureHttpExchangeAsync">> =
-    proxyCaptureSdk;
   const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =
     await import("openclaw/plugin-sdk/ssrf-runtime");
   const url =
@@ -122,8 +134,8 @@ async function listMicrosoftVoices(
   try {
     if (!proxyCaptureSdk.isDebugProxyGlobalFetchPatchInstalled()) {
       // Finalization retains capture failures; observe the Promise returned by the SDK view.
-      void captureHost
-        .captureHttpExchangeAsync?.({
+      void proxyCaptureSdk
+        .captureHttpExchangeAsync({
           url,
           method: "GET",
           requestHeaders: headers,
@@ -167,6 +179,8 @@ async function listMicrosoftVoices(
 }
 
 export function buildMicrosoftSpeechProvider(): SpeechProviderPlugin {
+  const isConfigured: NonNullable<SpeechProviderPlugin["isConfigured"]> = ({ providerConfig }) =>
+    readMicrosoftProviderConfig(providerConfig).enabled;
   return {
     id: "microsoft",
     label: "Microsoft",
@@ -201,7 +215,9 @@ export function buildMicrosoftSpeechProvider(): SpeechProviderPlugin {
       const config = readMicrosoftProviderConfig(req.providerConfig ?? {});
       return await listMicrosoftVoices(config.timeoutMs ?? req.timeoutMs);
     },
-    isConfigured: ({ providerConfig }) => readMicrosoftProviderConfig(providerConfig).enabled,
+    // Retained for synchronous SDK consumers through 2026-12-31.
+    isConfigured,
+    isConfiguredAsync: async (ctx) => isConfigured(ctx),
     synthesize: async (req) => {
       const config = readMicrosoftProviderConfig(req.providerConfig);
       const { isVoiceMessageCompatibleAudio } = await import("openclaw/plugin-sdk/media-runtime");
@@ -229,24 +245,44 @@ export function buildMicrosoftSpeechProvider(): SpeechProviderPlugin {
         const runEdge = async (format: string) => {
           const fileExtension = inferEdgeExtension(format);
           const outputPath = path.join(tempDir, `speech${fileExtension}`);
-          await edgeTTS({
-            text: req.text,
-            outputPath,
-            config: {
-              ...config,
-              voice,
-              lang,
-              outputFormat: format,
-            },
-            timeoutMs: req.timeoutMs,
-          });
-          const audioBuffer = readFileSync(outputPath);
-          return {
-            audioBuffer,
+          if (req.text.trim().length === 0) {
+            throw new Error("Microsoft TTS text cannot be empty");
+          }
+          const { writeExternalFileWithinRoot } =
+            await import("openclaw/plugin-sdk/security-runtime");
+          const tts = new (await import("node-edge-tts")).EdgeTTS({
+            voice,
+            lang,
             outputFormat: format,
-            fileExtension,
-            voiceCompatible: isVoiceMessageCompatibleAudio({ fileName: outputPath }),
-          };
+            saveSubtitles: config.saveSubtitles,
+            proxy: config.proxy,
+            rate: config.rate,
+            pitch: config.pitch,
+            volume: config.volume,
+            timeout: config.timeoutMs ?? req.timeoutMs,
+          });
+          await mkdir(path.dirname(outputPath), { recursive: true });
+          for (let attempt = 0; attempt < 2; attempt += 1) {
+            let outputSize = 0;
+            await writeExternalFileWithinRoot({
+              rootDir: path.dirname(outputPath),
+              path: path.basename(outputPath),
+              write: async (tempPath) => {
+                writeFileSync(tempPath, "");
+                await tts.ttsPromise(req.text, tempPath);
+                outputSize = statSync(tempPath).size;
+              },
+            });
+            if (outputSize > 0) {
+              return {
+                audioBuffer: readFileSync(outputPath),
+                outputFormat: format,
+                fileExtension,
+                voiceCompatible: isVoiceMessageCompatibleAudio({ fileName: outputPath }),
+              };
+            }
+          }
+          throw new Error("Edge TTS produced empty audio file after retry");
         };
 
         try {

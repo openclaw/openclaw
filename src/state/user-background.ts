@@ -93,8 +93,6 @@ async function mutateBackground(
   options: UserBackgroundOptions,
 ): Promise<UsersBackgroundResult> {
   const context = captureOpenClawStateWorkerContext(options);
-  // Capture caller-owned CAS inputs before the first worker/decoder yield.
-  const expected = structuredClone(input);
   const { reply } = await readBackground(
     context,
     { type: "userBackground.snapshot", profileId },
@@ -115,7 +113,7 @@ async function mutateBackground(
   options.assertCurrent?.();
   const finishMutation = beginUserPreferenceMutation(context.admission);
   try {
-    const mutation: UserBackgroundWriteInput = { profileId, expected, image };
+    const mutation: UserBackgroundWriteInput = { profileId, expected: input, image };
     return await runOpenClawStateWorkerOperation(
       context,
       (scope) => scope.execute({ type: "userBackground.write", input: mutation }),

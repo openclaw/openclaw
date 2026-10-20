@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { coerceErrorMessage, extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -16,6 +17,9 @@ export type GatewayStorageFailure = (typeof STORAGE_ERRORS)[number][0];
 export function classifyGatewayStorageFailure(error: unknown): GatewayStorageFailure | undefined {
   const fields = typeof error === "string" ? { message: error } : isRecord(error) ? error : {};
   const code = fields.errorCode ?? fields.code;
+  if (code === "ENOSPC") {
+    return "SQLITE_FULL";
+  }
   const nativeCode = fields.errcode;
   const primaryCode =
     typeof nativeCode === "number" && Number.isInteger(nativeCode) && nativeCode >= 0
@@ -50,6 +54,33 @@ const nativeOpenFailures = resolveGlobalSingleton(
   Symbol.for("openclaw.sqliteNativeOpenFailures"),
   () => new WeakSet<object>(),
 );
+
+type SqliteSnapshotFailureScope = { failure?: { error: unknown } };
+const snapshotFailureScopes = resolveGlobalSingleton(
+  Symbol.for("openclaw.sqliteSnapshotFailureScopes"),
+  () => new AsyncLocalStorage<SqliteSnapshotFailureScope>(),
+);
+
+/** A failed native request stays an inspection failure if an optional consumer catches it. */
+export async function withSqliteSnapshotFailureScope<T>(operation: () => Promise<T>): Promise<T> {
+  if (snapshotFailureScopes.getStore()) {
+    return operation();
+  }
+  const scope: SqliteSnapshotFailureScope = {};
+  const result = await snapshotFailureScopes.run(scope, operation);
+  if (scope.failure) {
+    throw scope.failure.error;
+  }
+  return result;
+}
+
+/** Call after request cleanup settles, with the final error and its native cause intact. */
+export function recordSqliteSnapshotFailure(error: unknown): void {
+  const scope = snapshotFailureScopes.getStore();
+  if (scope) {
+    scope.failure ??= { error };
+  }
+}
 
 export function markSqliteNativeOpenFailure(error: unknown): void {
   if (error !== null && typeof error === "object") {

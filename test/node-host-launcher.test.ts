@@ -5,6 +5,8 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { build as esbuild } from "esbuild";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { resolveNodeProgramArguments } from "../src/daemon/program-args.js";
+import { buildSystemdUnit, parseSystemdExecStart } from "../src/daemon/systemd-unit.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
@@ -21,11 +23,19 @@ beforeAll(async () => {
       format: "esm",
       platform: "node",
       target: "node24",
+      metafile: true,
       banner: {
         js: 'import { createRequire } from "node:module"; const require = createRequire(import.meta.url);',
       },
       write: false,
     });
+    expect(
+      Object.keys(built.metafile!.inputs).filter(
+        (file) =>
+          /(?:^|\/)src\/(?:agents|gateway|tui|cron)\//u.test(file) ||
+          file.endsWith("src/cli/program/subcli-descriptors.ts"),
+      ),
+    ).toEqual([]);
     const output = built.outputFiles[0];
     if (!output) {
       throw new Error(`The ${entry} fixture did not compile.`);
@@ -61,12 +71,14 @@ async function writePackage(root: string, version: string, body: string, schema 
   );
   for (const name of [
     "openclaw.mjs",
+    "cli-invocation.mjs",
     "node-host-launcher.mjs",
     "node-compile-cache.mjs",
     "node-version.mjs",
     "node-sqlite.mjs",
     "node-runtime-update.mjs",
     "node-runtime-recovery.mjs",
+    "cli-parent-lifetime.mjs",
     "node-runtime-env.mjs",
     "cli-root-options.mjs",
     "gateway-run-argv.mjs",
@@ -89,6 +101,7 @@ async function writePackage(root: string, version: string, body: string, schema 
 import fs from 'node:fs';
 import {
   getManagedNodeHostStatePath,
+  isNodeHostLauncherChild,
   notifyNodeHostLauncherReady,
   requestNodeHostLauncherBootstrap,
   requestNodeHostLauncherRestart,
@@ -132,10 +145,30 @@ function run(
   extraEnv: NodeJS.ProcessEnv = {},
   execArgv: readonly string[] = [],
 ) {
-  const child = spawn(process.execPath, [...execArgv, path.join(base, "openclaw.mjs"), ...args], {
+  return runProgram(
+    base,
+    stateDir,
+    [process.execPath, ...execArgv, path.join(base, "openclaw.mjs"), ...args],
+    extraEnv,
+  );
+}
+
+function runProgram(
+  base: string,
+  stateDir: string,
+  programArguments: string[],
+  extraEnv: NodeJS.ProcessEnv = {},
+) {
+  const [command, ...args] = programArguments;
+  if (!command) {
+    throw new Error("The service definition did not contain an executable.");
+  }
+  const child = spawn(command, args, {
     cwd: base,
     env: {
       ...process.env,
+      HOME: path.join(stateDir, "home"),
+      OPENCLAW_CONFIG_PATH: undefined,
       OPENCLAW_CONTAINER: undefined,
       OPENCLAW_HOME: undefined,
       OPENCLAW_PROFILE: undefined,
@@ -209,6 +242,39 @@ syncBuiltinESMExports();
 }
 
 describe("managed node launcher", () => {
+  it("runs the stored node service command through a live launcher parent", async () => {
+    const f = await fixture(`
+await ready();
+report({pid: process.pid, parentPid: process.ppid, launcherChild: isNodeHostLauncherChild(), argv: process.argv.slice(2)});
+process.exit(0);
+`);
+    const legacyEntrypoint = path.join(f.base, "dist", "index.js");
+    await fs.writeFile(legacyEntrypoint, "await import('./entry.js');\n");
+    const command = await resolveNodeProgramArguments({
+      cliEntrypoint: legacyEntrypoint,
+      host: "127.0.0.1",
+      port: 18789,
+      runtime: "node",
+      runtimePath: process.execPath,
+    });
+    const definitionPath = path.join(f.root, "openclaw-node.service");
+    await fs.writeFile(definitionPath, buildSystemdUnit(command));
+    const definition = await fs.readFile(definitionPath, "utf8");
+    const execStart = definition.split("\n").find((line) => line.startsWith("ExecStart="));
+    expect(execStart).toBeDefined();
+    const storedArguments = parseSystemdExecStart(execStart!.slice("ExecStart=".length));
+    const service = runProgram(f.base, f.stateDir, storedArguments);
+    const result = await service.done;
+    expect(result.code, result.stderr).toBe(0);
+    const child = JSON.parse(result.stdout.trim());
+    expect(child).toMatchObject({
+      parentPid: service.child.pid,
+      launcherChild: true,
+      argv: ["node", "run", "--host", "127.0.0.1", "--port", "18789"],
+    });
+    expect(child.pid).not.toBe(service.child.pid);
+  });
+
   it("rejects private managed-child arguments without supervisor IPC", async () => {
     const f = await fixture("throw new Error('private arguments must not reach the entry point');");
     const result = await run(f.base, f.stateDir, [

@@ -56,12 +56,22 @@ describe("stopTelegramIngressWorker", () => {
     workerHarness.entries.length = 0;
   });
 
-  it("starts from an existing source entry with a TypeScript preload", () => {
-    createWorker();
+  it("starts from an existing source entry with runtime-appropriate TypeScript support", () => {
+    const { handle, worker } = createWorker();
 
     const entry = workerHarness.entries.at(-1)!;
     expect(existsSync(entry.url)).toBe(true);
-    expect(entry.options.execArgv).toEqual(["--import", expect.stringContaining("tsx")]);
+    expect(entry.options.execArgv).toEqual(
+      process.versions.bun ? ["--no-install"] : ["--import", expect.stringContaining("tsx")],
+    );
+    const onMessage = vi.fn();
+    const message = { type: "spooled", updateId: 42, queued: 1 };
+    handle.onMessage = onMessage;
+    worker.emit("message", message);
+    expect(onMessage).toHaveBeenCalledExactlyOnceWith(message);
+    handle.onMessage = undefined;
+    worker.emit("message", message);
+    expect(onMessage).toHaveBeenCalledOnce();
   });
 
   it("preserves cooperative worker shutdown", async () => {

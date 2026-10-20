@@ -1,4 +1,3 @@
-// Hermes provider config collection and migration planning.
 import { createMigrationManualItem } from "openclaw/plugin-sdk/migration";
 import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";
 import {
@@ -90,46 +89,29 @@ export function collectHermesProviders(
     );
   }
 
-  const model = config.model;
-  if (isRecord(model)) {
-    const rawProvider = normalizeOptionalString(model.provider);
-    const resolvedBaseUrl = readProviderBaseUrl(model, env);
-    const envBaseUrl = resolveHermesProviderBaseUrlEnv(rawProvider, env);
-    const baseUrl =
-      resolvedBaseUrl.baseUrl ?? envBaseUrl ?? resolveHermesImplicitBaseUrl(rawProvider);
-    const api = resolveProviderApi(baseUrl ? { ...model, base_url: baseUrl } : model, rawProvider);
-    if (baseUrl && api) {
-      const headerConfig = readProviderHeaders(model, env, includeSecrets);
-      upsert({
-        id: rawProvider ? resolveHermesConfiguredProviderId(config, rawProvider, env) : "custom",
-        baseUrl,
-        api,
-        apiKeyEnv:
-          readProviderApiKeyEnv(model) ??
-          resolveHermesProviderApiKeyEnv(rawProvider) ??
-          resolveHermesEndpointApiKeyEnv(baseUrl),
-        headers: headerConfig.headers,
-        models: collectProviderModels(model),
-        sensitive: resolvedBaseUrl.sensitive || Boolean(envBaseUrl) || headerConfig.sensitive,
-      });
-    }
-  } else {
-    const rawProvider = normalizeOptionalString(config.provider);
-    const baseUrl =
-      resolveHermesProviderBaseUrlEnv(rawProvider, env) ??
-      resolveHermesImplicitBaseUrl(rawProvider);
-    const api = resolveProviderApi(baseUrl ? { base_url: baseUrl } : {}, rawProvider);
-    if (rawProvider && baseUrl && api) {
-      upsert({
-        id: resolveHermesConfiguredProviderId(config, rawProvider, env),
-        baseUrl,
-        api,
-        apiKeyEnv:
-          resolveHermesProviderApiKeyEnv(rawProvider) ?? resolveHermesEndpointApiKeyEnv(baseUrl),
-        models: [],
-        sensitive: true,
-      });
-    }
+  const model = isRecord(config.model) ? config.model : undefined;
+  const rawProvider = normalizeOptionalString(model ? model.provider : config.provider);
+  const raw = model ?? {};
+  const resolvedBaseUrl = readProviderBaseUrl(raw, env);
+  const envBaseUrl = resolveHermesProviderBaseUrlEnv(rawProvider, env);
+  const baseUrl =
+    resolvedBaseUrl.baseUrl ?? envBaseUrl ?? resolveHermesImplicitBaseUrl(rawProvider);
+  const api = resolveProviderApi(baseUrl ? { ...raw, base_url: baseUrl } : raw, rawProvider);
+  if ((model || rawProvider) && baseUrl && api) {
+    const headerConfig = readProviderHeaders(raw, env, includeSecrets);
+    upsert({
+      id: rawProvider ? resolveHermesConfiguredProviderId(config, rawProvider, env) : "custom",
+      baseUrl,
+      api,
+      apiKeyEnv:
+        readProviderApiKeyEnv(raw) ??
+        resolveHermesProviderApiKeyEnv(rawProvider) ??
+        resolveHermesEndpointApiKeyEnv(baseUrl),
+      ...(model ? { headers: headerConfig.headers } : {}),
+      models: collectProviderModels(raw),
+      sensitive:
+        !model || resolvedBaseUrl.sensitive || Boolean(envBaseUrl) || headerConfig.sensitive,
+    });
   }
   return collected;
 }

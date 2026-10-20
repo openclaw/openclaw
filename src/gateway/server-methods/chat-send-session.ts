@@ -44,6 +44,7 @@ import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-har
 import { assertPreparedSkillLibrarySelection } from "../../skills/library/selection.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { isBrowserOperatorUiClient } from "../../utils/message-channel.js";
+import { readChatInputRecoveryAdmission } from "../chat-input-recovery-source.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
 import { pendingChatSendDedupeKey } from "../server-shared.js";
@@ -73,6 +74,8 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 // These inputs prepare model/runtime selection, native restrictions, command/retry
 // semantics, and creator defaults. Sharing authorization rechecks live policy;
 // unrelated logging and UI publications do not invalidate a prepared send.
+// Plugin-owned settings belong to the admitted runtime generation; core plugin
+// admission policy still affects preparation and must remain current.
 function chatSendPreparationConfig(
   cfg: OpenClawConfig,
   agentId: string,
@@ -137,7 +140,6 @@ function chatSendPreparationConfig(
     runtime: agent?.runtime,
     models: { mode: cfg.models?.mode, providers },
     auth: cfg.auth,
-    plugins: cfg.plugins,
     workspace: agent?.workspace ?? defaults?.workspace,
     agentDir: agent?.agentDir,
     timeoutSeconds: defaults?.timeoutSeconds,
@@ -145,6 +147,18 @@ function chatSendPreparationConfig(
     agentSandbox: agent?.sandbox,
     tools: cfg.tools,
     agentTools: agent?.tools,
+    plugins: {
+      enabled: cfg.plugins?.enabled,
+      allow: cfg.plugins?.allow,
+      deny: cfg.plugins?.deny,
+      load: cfg.plugins?.load,
+      slots: cfg.plugins?.slots,
+      entries: Object.fromEntries(
+        Object.entries(cfg.plugins?.entries ?? {}).map(
+          ([id, { enabled, hooks, subagent, llm }]) => [id, { enabled, hooks, subagent, llm }],
+        ),
+      ),
+    },
     channels: {
       defaults: cfg.channels?.defaults,
       selected: Object.fromEntries(channels.map((channel) => [channel, cfg.channels?.[channel]])),
@@ -373,6 +387,7 @@ export async function prepareChatSendSession(params: {
     goalRequestFingerprint: request.goalOperation?.requestFingerprint,
     cfg,
     eligible:
+      !readChatInputRecoveryAdmission(p.idempotencyKey) &&
       (isBrowserOperatorUiClient(request.clientInfo) || params.isDirectExternalUser === true) &&
       turnKind === "main" &&
       normalizedAttachments.length === 0 &&
@@ -452,7 +467,8 @@ function assertCurrentChatSendSession(
   if (
     latest.agentId !== session.sessionTarget.agentId ||
     (latest.legacyKey ?? latest.canonicalKey) !== session.sessionTarget.storeKey ||
-    !isDeepStrictEqual(latest.capturedReadSource, session.sessionTarget.readSource)
+    (session.sessionTarget.readSource &&
+      !isDeepStrictEqual(latest.capturedReadSource, session.sessionTarget.readSource))
   ) {
     throw new Error("Session storage changed while starting work. Retry.");
   }

@@ -11,7 +11,7 @@ export async function drainGatewayCron(params: {
   settlements: readonly Promise<unknown>[];
   logger: Pick<ReturnType<typeof getChildLogger>, "warn">;
 }): Promise<void> {
-  const abortedRuns = abortActiveCronTaskRuns("Gateway shutting down.");
+  const abortedRuns = abortActiveCronTaskRuns();
   // Payload cleanup precedes durable finalization; both retain the old state owner.
   const [activeRunDrain, activeJobDrain, settlements] = await Promise.all([
     waitForActiveCronTaskRuns(CRON_ACTIVE_RUN_SHUTDOWN_DRAIN_MS),

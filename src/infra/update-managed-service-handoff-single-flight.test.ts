@@ -93,16 +93,12 @@ beforeEach(async () => {
   vi.spyOn(processIdentity, "getFileLockProcessStartTime").mockImplementation((targetPid) =>
     targetPid === process.pid ? parentStartIdentity : liveChildren.has(targetPid) ? 17 : null,
   );
-  const kill = process.kill.bind(process);
-  vi.spyOn(process, "kill").mockImplementation((targetPid, signal) => {
-    if (signal !== 0 || targetPid === process.pid) {
-      return kill(targetPid, signal);
-    }
-    if (liveChildren.has(targetPid)) {
-      return true;
-    }
-    throw Object.assign(new Error("fixture process is absent"), { code: "ESRCH" });
-  });
+  vi.spyOn(processIdentity, "isPidAlive").mockImplementation(
+    (targetPid) => targetPid === process.pid || liveChildren.has(targetPid),
+  );
+  vi.spyOn(processIdentity, "isPidDefinitelyDead").mockImplementation(
+    (targetPid) => targetPid !== process.pid && !liveChildren.has(targetPid),
+  );
   forceKillChildProcessTreeMock.mockReset();
   forceKillChildProcessTreeMock.mockImplementation((child: ReturnType<typeof createReadyChild>) => {
     child.stdout.destroy();
@@ -219,75 +215,68 @@ describe("managed service update handoff single-flight", () => {
     expect(claimManagedServiceUpdateHandoff(identity)).toBe(false);
   });
 
-  it.each(["system", "dueling"] as const)(
-    "rejects an unwritable %s install before spawning or reserving ownership",
-    async (kind) => {
-      const system = {
-        scope: "system" as const,
-        unitName: "openclaw-gateway.service",
-        unitPath: "/etc/systemd/system/openclaw-gateway.service",
-      };
-      findSystemdGatewayInstallationMock.mockResolvedValue(
-        kind === "dueling"
-          ? {
-              kind,
-              system,
-              user: {
-                scope: "user",
-                unitName: system.unitName,
-                unitPath: "/fixture/user/" + system.unitName,
-              },
-            }
-          : { kind, system },
-      );
-      const { claimManagedServiceUpdateHandoff, startManagedServiceUpdateHandoff } =
-        await import("./update-managed-service-handoff.js");
-      const root = await fs.realpath(tempRoots.make("openclaw-system-scope-"));
-      const access = fs.access.bind(fs);
-      const permission = vi.spyOn(fs, "access").mockImplementation(async (file, mode) => {
-        if (String(file) === root && mode === (fs.constants.W_OK | fs.constants.X_OK)) {
-          throw Object.assign(new Error("permission denied"), { code: "EACCES" });
-        }
-        return access(file, mode);
-      });
+  it("rejects an unwritable dueling install before spawning or reserving ownership", async () => {
+    const system = {
+      scope: "system" as const,
+      unitName: "openclaw-gateway.service",
+      unitPath: "/etc/systemd/system/openclaw-gateway.service",
+    };
+    findSystemdGatewayInstallationMock.mockResolvedValue({
+      kind: "dueling",
+      system,
+      user: {
+        scope: "user",
+        unitName: system.unitName,
+        unitPath: "/fixture/user/" + system.unitName,
+      },
+    });
+    const { claimManagedServiceUpdateHandoff, startManagedServiceUpdateHandoff } =
+      await import("./update-managed-service-handoff.js");
+    const root = await fs.realpath(tempRoots.make("openclaw-system-scope-"));
+    const access = fs.access.bind(fs);
+    const permission = vi.spyOn(fs, "access").mockImplementation(async (file, mode) => {
+      if (String(file) === root && mode === (fs.constants.W_OK | fs.constants.X_OK)) {
+        throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+      }
+      return access(file, mode);
+    });
 
-      await expect(
-        startManagedServiceUpdateHandoff({
-          ...baseParams,
-          root,
-          handoffId: "system-handoff",
-          supervisor: "systemd",
-          env: { OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service" },
-          meta: {},
-        }),
-      ).rejects.toMatchObject({
-        reason: "managed-service-handoff-failed",
-        message: expect.stringContaining("sudo systemctl restart openclaw-gateway.service"),
-      });
-      expect(spawnMock).not.toHaveBeenCalled();
-      expect(
-        claimManagedServiceUpdateHandoff({
-          kind: "managed-update-handoff",
-          handoffId: "system-handoff",
-          installRoot: root,
-        }),
-      ).toBe(false);
+    await expect(
+      startManagedServiceUpdateHandoff({
+        ...baseParams,
+        root,
+        handoffId: "system-handoff",
+        supervisor: "systemd",
+        env: { OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service" },
+        meta: {},
+      }),
+    ).rejects.toMatchObject({
+      reason: "managed-service-handoff-failed",
+      message: expect.stringContaining("sudo systemctl restart openclaw-gateway.service"),
+    });
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(
+      claimManagedServiceUpdateHandoff({
+        kind: "managed-update-handoff",
+        handoffId: "system-handoff",
+        installRoot: root,
+      }),
+    ).toBe(false);
 
-      permission.mockRestore();
-      await expect(
-        startManagedServiceUpdateHandoff({
-          ...baseParams,
-          root,
-          supervisor: "systemd",
-          env: { OPENCLAW_STATE_DIR: root },
-          meta: {},
-        }),
-      ).resolves.toMatchObject({ status: "started" });
-      expect(spawnMock).toHaveBeenCalledOnce();
-      const owner = spawnMock.mock.results[0]?.value as ReturnType<typeof createReadyChild>;
-      owner.emit("exit", 0, null);
-    },
-  );
+    permission.mockRestore();
+    await expect(
+      startManagedServiceUpdateHandoff({
+        ...baseParams,
+        root,
+        supervisor: "systemd",
+        env: { OPENCLAW_STATE_DIR: root },
+        meta: {},
+      }),
+    ).resolves.toMatchObject({ status: "started" });
+    expect(spawnMock).toHaveBeenCalledOnce();
+    const owner = spawnMock.mock.results[0]?.value as ReturnType<typeof createReadyChild>;
+    owner.emit("exit", 0, null);
+  });
 
   it("shares one same-root helper until its lifecycle ends", async () => {
     const { startManagedServiceUpdateHandoff } =

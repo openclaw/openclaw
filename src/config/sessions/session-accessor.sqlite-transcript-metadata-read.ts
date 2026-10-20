@@ -3,7 +3,7 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { isTranscriptOnlyOpenClawAssistantModel } from "../../shared/transcript-only-openclaw-assistant.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
@@ -52,7 +52,7 @@ export function hasSessionTranscriptMessageInDatabase(
       database.db,
       db
         .selectFrom("transcript_events")
-        .select(transcriptEventNavigationSql().as("event_json"))
+        .select(transcriptEventNavigationSql(database.db).as("event_json"))
         .where("session_id", "=", sessionId)
         .where("seq", "not in", classified)
         .orderBy("seq", "desc"),
@@ -111,7 +111,7 @@ export function readLatestAssistantTextFromDatabase(
   database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">,
   scope: Pick<ResolvedTranscriptReadScope, "agentId" | "sessionId" | "sessionKey">,
 ): LatestTranscriptAssistantText | undefined {
-  return runSqliteDeferredTransactionSync(
+  return runSqliteReadSnapshotSync(
     database.db,
     () => {
       assertSessionTranscriptHot(database.db, scope.sessionId);

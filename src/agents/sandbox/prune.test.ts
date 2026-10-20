@@ -1,5 +1,3 @@
-// Sandbox prune tests cover runtime removal ordering and registry cleanup
-// behavior for stale sandbox entries.
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
@@ -66,18 +64,18 @@ vi.mock("./registry.js", () => ({
   removeRegistryEntry: registryMocks.removeRegistryEntry,
   removeSandboxRegistryGeneration: (
     _kind: string,
-    entry: SandboxRegistryEntry,
+    current: SandboxRegistryEntry,
     assertCurrent?: () => void,
   ) => {
     assertCurrent?.();
-    return registryMocks.removeBrowserRegistryEntry(entry.containerName);
+    return registryMocks.removeBrowserRegistryEntry(current.containerName);
   },
   removeSandboxRegistryRuntime: async (
-    entry: SandboxRegistryEntry,
+    current: SandboxRegistryEntry,
     removeRuntime: (current: SandboxRegistryEntry) => Promise<void>,
   ) => {
-    await removeRuntime(entry);
-    await registryMocks.removeRegistryEntry(entry.containerName);
+    await removeRuntime(current);
+    await registryMocks.removeRegistryEntry(current.containerName);
   },
   withSandboxRegistryEntryLock: async (
     _entry: SandboxRegistryEntry,
@@ -89,55 +87,46 @@ vi.mock("../../plugin-sdk/browser-bridge.js", () => ({
   stopBrowserBridgeServer: bridgeMocks.stopBrowserBridgeServer,
 }));
 
-function buildPruneConfig(): OpenClawConfig {
+const prunePolicy = { idleHours: 1, maxAgeDays: 0 };
+const pruneConfig: OpenClawConfig = {
+  agents: { defaults: { sandbox: { mode: "all", prune: prunePolicy } } },
+};
+function entry(
+  containerName: string,
+  agentId = "main",
+  overrides: Partial<SandboxRegistryEntry> = {},
+) {
   return {
-    agents: {
-      defaults: {
-        sandbox: {
-          mode: "all",
-          prune: { idleHours: 1, maxAgeDays: 0 },
-        },
-      },
-    },
+    containerName,
+    backendId: "docker",
+    sessionKey: `agent:${agentId}:main`,
+    createdAtMs: Date.now() - 4 * 60 * 60 * 1000,
+    lastUsedAtMs: Date.now() - 2 * 60 * 60 * 1000,
+    image: "openclaw-sandbox:trixie-slim",
+    ...overrides,
   };
 }
 
 describe("maybePruneSandboxes", () => {
   beforeEach(async () => {
     vi.resetModules();
-    configMocks.getRuntimeConfig.mockReset();
-    registryMocks.assertSandboxBrowserRegistryEntryCurrent.mockReset();
+    for (const mock of [configMocks, registryMocks, runtimeMocks, bridgeMocks]) {
+      Object.values(mock).forEach((fn) => fn.mockReset());
+    }
     backendMocks.getSandboxBackendManager.mockReset().mockReturnValue(backendMocks);
-    backendMocks.removeRuntime.mockReset();
-    registryMocks.readBrowserRegistry.mockReset();
-    registryMocks.readRegistry.mockReset();
-    registryMocks.removeBrowserRegistryEntry.mockReset();
-    registryMocks.removeRegistryEntry.mockReset();
-    runtimeMocks.error.mockReset();
-    bridgeMocks.stopBrowserBridgeServer.mockReset().mockResolvedValue(undefined);
+    backendMocks.removeRuntime.mockReset().mockResolvedValue(undefined);
+    bridgeMocks.stopBrowserBridgeServer.mockResolvedValue(undefined);
 
     configMocks.getRuntimeConfig.mockReturnValue({});
     registryMocks.readBrowserRegistry.mockResolvedValue({ entries: [] });
-    registryMocks.readRegistry.mockResolvedValue({
-      entries: [
-        {
-          containerName: "sandbox-1",
-          backendId: "docker",
-          sessionKey: "agent:main:main",
-          createdAtMs: Date.now() - 4 * 60 * 60 * 1000,
-          lastUsedAtMs: Date.now() - 2 * 60 * 60 * 1000,
-          image: "openclaw-sandbox:bookworm-slim",
-        },
-      ],
-    });
-    backendMocks.removeRuntime.mockResolvedValue(undefined);
+    registryMocks.readRegistry.mockResolvedValue({ entries: [entry("sandbox-1")] });
     ({ BROWSER_BRIDGES } = await import("./browser-bridges.js"));
     BROWSER_BRIDGES.clear();
     ({ maybePruneSandboxes } = await import("./prune.js"));
   });
 
   it("removes the registry entry after runtime removal succeeds", async () => {
-    await maybePruneSandboxes(buildPruneConfig());
+    await maybePruneSandboxes(pruneConfig);
 
     expect(backendMocks.removeRuntime).toHaveBeenCalledTimes(1);
     expect(registryMocks.removeRegistryEntry).toHaveBeenCalledWith("sandbox-1");
@@ -164,7 +153,7 @@ describe("maybePruneSandboxes", () => {
         await resume.promise;
         return staleRegistry;
       });
-      const pruning = maybePruneSandboxes(buildPruneConfig(), assertCurrent);
+      const pruning = maybePruneSandboxes(pruneConfig, assertCurrent);
       try {
         await awaitGateBeforeSettlement(
           entered.promise,
@@ -190,21 +179,11 @@ describe("maybePruneSandboxes", () => {
     vi.spyOn(Date, "now").mockReturnValue(now);
     configMocks.getRuntimeConfig.mockReturnValue({
       agents: {
-        defaults: {
-          sandbox: { mode: "all", prune: { idleHours: 1, maxAgeDays: 0 } },
-        },
+        defaults: pruneConfig.agents?.defaults,
         entries: {
           work: { sandbox: { prune: { idleHours: 24, maxAgeDays: 0 } } },
         },
       },
-    });
-    const entry = (containerName: string, agentId: string) => ({
-      containerName,
-      backendId: "docker",
-      sessionKey: `agent:${agentId}:main`,
-      createdAtMs: now - 4 * 60 * 60 * 1000,
-      lastUsedAtMs: now - 2 * 60 * 60 * 1000,
-      image: "openclaw-sandbox:bookworm-slim",
     });
     registryMocks.readRegistry.mockResolvedValue({
       entries: [entry("main-container", "main"), entry("work-container", "work")],
@@ -250,7 +229,7 @@ describe("maybePruneSandboxes", () => {
           sessionKey: "shared",
           createdAtMs: now - 4 * 60 * 60 * 1000,
           lastUsedAtMs: now - 2 * 60 * 60 * 1000,
-          image: "openclaw-sandbox:bookworm-slim",
+          image: "openclaw-sandbox:trixie-slim",
         },
       ],
     });
@@ -266,7 +245,7 @@ describe("maybePruneSandboxes", () => {
     // runtime was removed.
     backendMocks.removeRuntime.mockRejectedValueOnce(new Error("docker rm failed"));
 
-    await maybePruneSandboxes(buildPruneConfig());
+    await maybePruneSandboxes(pruneConfig);
 
     expect(registryMocks.removeRegistryEntry).not.toHaveBeenCalled();
     expect(runtimeMocks.error).toHaveBeenCalledWith(
@@ -277,19 +256,10 @@ describe("maybePruneSandboxes", () => {
   it("keeps the registry entry when its sandbox backend plugin is unavailable", async () => {
     backendMocks.getSandboxBackendManager.mockReturnValueOnce(null);
     registryMocks.readRegistry.mockResolvedValueOnce({
-      entries: [
-        {
-          containerName: "openshell-1",
-          backendId: "openshell",
-          sessionKey: "agent:main:main",
-          createdAtMs: Date.now() - 4 * 60 * 60 * 1000,
-          lastUsedAtMs: Date.now() - 2 * 60 * 60 * 1000,
-          image: "openclaw",
-        },
-      ],
+      entries: [entry("openshell-1", "main", { backendId: "openshell", image: "openclaw" })],
     });
 
-    await maybePruneSandboxes(buildPruneConfig());
+    await maybePruneSandboxes(pruneConfig);
 
     expect(registryMocks.removeRegistryEntry).not.toHaveBeenCalled();
     expect(runtimeMocks.error).toHaveBeenCalledWith(
@@ -300,18 +270,14 @@ describe("maybePruneSandboxes", () => {
   it("prunes entries with out-of-range registry timestamps", async () => {
     registryMocks.readRegistry.mockResolvedValueOnce({
       entries: [
-        {
-          containerName: "sandbox-out-of-range",
-          backendId: "docker",
-          sessionKey: "agent:main:main",
+        entry("sandbox-out-of-range", "main", {
           createdAtMs: Date.now(),
           lastUsedAtMs: Number.MAX_SAFE_INTEGER,
-          image: "openclaw-sandbox:bookworm-slim",
-        },
+        }),
       ],
     });
 
-    await maybePruneSandboxes(buildPruneConfig());
+    await maybePruneSandboxes(pruneConfig);
 
     expect(backendMocks.removeRuntime).toHaveBeenCalledTimes(1);
     expect(registryMocks.removeRegistryEntry).toHaveBeenCalledWith("sandbox-out-of-range");
@@ -324,11 +290,9 @@ describe("maybePruneSandboxes", () => {
     registryMocks.readBrowserRegistry.mockResolvedValue({
       entries: [
         {
-          containerName: "browser-1",
-          sessionKey: "agent:coder:main",
-          createdAtMs: now - 4 * 60 * 60 * 1000,
-          lastUsedAtMs: now - 2 * 60 * 60 * 1000,
-          image: "openclaw-sandbox-browser:bookworm-slim",
+          ...entry("browser-1", "coder"),
+          backendId: undefined,
+          image: "openclaw-sandbox-browser:trixie-slim",
           cdpPort: 9222,
         },
       ],
@@ -337,7 +301,7 @@ describe("maybePruneSandboxes", () => {
     BROWSER_BRIDGES.set("agent:coder:main", cached);
     bridgeMocks.stopBrowserBridgeServer.mockRejectedValueOnce(new Error("bridge cleanup failed"));
 
-    await maybePruneSandboxes(buildPruneConfig());
+    await maybePruneSandboxes(pruneConfig);
 
     expect(BROWSER_BRIDGES.get("agent:coder:main")).toBe(cached);
     expect(backendMocks.removeRuntime).not.toHaveBeenCalled();
@@ -358,7 +322,7 @@ describe("maybePruneSandboxes", () => {
     });
     nowSpy.mockReturnValue(now + 6 * 60 * 1000);
 
-    await maybePruneSandboxes(buildPruneConfig());
+    await maybePruneSandboxes(pruneConfig);
 
     expect(order).toEqual(["bridge", "runtime", "registry"]);
     expect(BROWSER_BRIDGES.has("agent:coder:main")).toBe(false);

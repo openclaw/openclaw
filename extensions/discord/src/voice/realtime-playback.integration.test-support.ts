@@ -89,7 +89,7 @@ export function createRealtimePlaybackFixture(
     audioInputBudget: { enabled: false },
     ttsStreamFallbackWarned: false,
     capture: new Map(),
-    realtimeLifecycle: { status: "inactive", generation: 0 },
+    realtimeLifecycle: { status: "inactive" },
     receiveRecovery: {
       decryptFailureCount: 0,
       lastDecryptFailureAt: 0,
@@ -133,7 +133,6 @@ export function createRealtimePlaybackFixture(
       player: roomPlayer,
       harness,
       markProviderGenerationObserved: () => {},
-      mode: "agent-proxy",
       onTerminalError,
       providerId: () => "openai",
       realtimeConfig: () =>

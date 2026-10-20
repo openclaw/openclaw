@@ -1,7 +1,7 @@
 // Static method policy avoids storage; prepared shutdown avoids runtime session dependencies.
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { afterAll, describe, expect, it } from "vitest";
 import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 
@@ -109,5 +109,15 @@ describe("gateway startup import boundaries", () => {
     expect([...graph.keys()].map((filePath) => path.relative(repoRoot, filePath))).not.toContain(
       "src/gateway/session-reset-service.ts",
     );
+  });
+
+  it("keeps agent execution out of the session creation import graph", () => {
+    const graph = collectStaticValueImportGraph("src/gateway/server-methods/sessions-create.ts");
+    const modules = [...graph.keys()].map((filePath) => path.relative(repoRoot, filePath));
+
+    expect(modules).not.toContain("src/gateway/server-methods/chat-send-external-entry.ts");
+    expect(modules).not.toContain("src/gateway/server-methods/chat-send-handler.ts");
+    expect(modules).not.toContain("src/agents/embedded-agent-runner/run.ts");
+    expect(modules).not.toContain("src/agents/embedded-agent-runner/compact.queued.ts");
   });
 });

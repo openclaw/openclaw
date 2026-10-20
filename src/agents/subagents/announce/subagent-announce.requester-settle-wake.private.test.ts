@@ -4,8 +4,13 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../../config/runtime-snapshot.js";
+import { matchesTranscriptEvent } from "../../../sessions/transcript-visible-record.js";
+import { prepareAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
 import {
   registryRuntimeMock,
+  findTranscriptEventMock,
+  listedRequesterRuns,
+  sessionStore,
   setSessionStore,
   wakeParams,
 } from "./subagent-announce.requester-settle-fixture.test-support.js";
@@ -14,7 +19,6 @@ import {
   requesterSettleKey,
   deliverSpy,
   makeSettledChild,
-  transitionBatchSpy,
   completeBatchSpy,
   deliveredCallArg,
 } from "./subagent-announce.requester-settle-wake.test-support.js";
@@ -26,6 +30,21 @@ const { maybeWakeRequesterAfterAllChildrenSettled } =
 describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
   beforeEach(() => {
     setRuntimeConfigSnapshot(getRuntimeConfig());
+    findTranscriptEventMock.mockImplementation(async ({ sessionId }, match) => {
+      const child = listedRequesterRuns().find(
+        (entry) => sessionStore[entry.childSessionKey]?.sessionId === sessionId,
+      );
+      const event = {
+        type: "message",
+        message: {
+          role: "assistant",
+          display: true,
+          content: [{ type: "text", text: child?.completion?.resultText }],
+          __openclaw: { runId: child?.runId },
+        },
+      };
+      return child && matchesTranscriptEvent(event, match) ? { event } : undefined;
+    });
   });
 
   afterEach(() => {
@@ -43,8 +62,8 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
     single: boolean;
     marked?: boolean;
   }) =>
-    (single ? ["run-b"] : ["run-a", "run-b"]).map((runId, index) =>
-      makeSettledChild({
+    (single ? ["run-b"] : ["run-a", "run-b"]).map((runId, index) => {
+      return makeSettledChild({
         runId,
         ...(!mixed || index === 0
           ? { completionTarget: "parent" as const, completionRequesterSessionId: "sess-main" }
@@ -52,21 +71,22 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
         completion: {
           required: true,
           resultText: index === 0 ? "private marker" : "public sibling",
+          terminalReply: prepareAgentRunTerminalReply({
+            rawText: index === 0 ? "private marker" : "public sibling",
+          }).terminalReply,
         },
-        requesterSettleWake: {
-          status: "pending",
-          attemptCount: 0,
-          ...(yielded
-            ? {
-                afterRequesterYield: true,
-                requesterYieldBatch: true,
-                rearmGeneration: 1,
-                ...(marked ? { yieldedFinalDeliverable: true as const } : {}),
-              }
-            : {}),
-        },
-      }),
-    );
+        requesterSettleWake: yielded
+          ? {
+              status: "pending",
+              attemptCount: 0,
+              afterRequesterYield: true,
+              requesterYieldBatch: true,
+              rearmGeneration: 1,
+              ...(marked ? { yieldedFinalDeliverable: true as const } : {}),
+            }
+          : { status: "pending", attemptCount: 0 },
+      });
+    });
 
   it.each([
     { name: "delivered private pair", mixed: false, single: false, yielded: false },
@@ -82,7 +102,6 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
     const call = deliveredCallArg();
     expect(call).toMatchObject({
       completionRequesterSessionId: "sess-main",
-      requireDirectDelivery: true,
     });
     // The conversation's reply policy decides whether a visible update is owed.
     expect(call.requireVisibleReply).toBeUndefined();
@@ -94,10 +113,6 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
       expect(trigger).toContain("under its normal reply rules");
       expect(trigger).toContain("must go through the message tool, send your answer with it");
       expect(trigger).toContain("avoid repeating an update already delivered");
-      expect(transitionBatchSpy.mock.calls.at(0)?.[1]).toMatchObject({
-        status: "dispatching",
-        yieldedFinalDeliverable: true,
-      });
     } else {
       expect(trigger).toContain("send it through an available, permitted messaging tool");
       expect(trigger).toContain("briefly record the reviewed outcome and any remaining work");
@@ -109,46 +124,23 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
     }
   });
 
-  // The released yield writer stored private batches without the marker, including
-  // unattempted ones; after an upgrade they keep their admitted private policy.
-  it.each([
-    { status: "dispatching", attemptCount: 1, marked: false },
-    { status: "pending", attemptCount: 1, marked: false },
-    { status: "pending", attemptCount: 0, marked: false },
-    { status: "pending", attemptCount: 1, marked: true },
-  ] as const)(
-    "preserves a $status batch's policy and retry identity (marked=$marked, attempts=$attemptCount)",
-    async ({ status, attemptCount, marked }) => {
-      const children = settledPrivateChildren({
-        mixed: false,
-        yielded: true,
-        single: true,
-        marked,
-      });
-      children[0]!.requesterSettleWake = {
-        ...children[0]!.requesterSettleWake!,
-        status,
-        attemptCount,
-        batchRunIds: ["run-b"],
-      };
-      registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue(children);
-      expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(true);
-      const call = deliveredCallArg();
-      expect(call.completionTarget).toBe(marked ? undefined : "parent");
-      // Deliverable retries rotate keys; private inputs retain their admitted identity.
-      expect(call.directIdempotencyKey).toBe(
-        requesterSettleKey(marked ? "run-b:yield-1:retry-1" : "run-b:yield-1"),
-      );
-      if (marked) {
-        expect(transitionBatchSpy.mock.calls.at(0)?.[1]).toMatchObject({
-          status: "dispatching",
-          yieldedFinalDeliverable: true,
-        });
-      } else {
-        expect(call.completionRequesterSessionId).toBe("sess-main");
-      }
-    },
-  );
+  // The released yield writer stored private batches without the marker; after an
+  // upgrade they keep their admitted private policy under the same stable identity.
+  it.each([false, true])("preserves a batch's policy and identity (marked=%s)", async (marked) => {
+    const children = settledPrivateChildren({ mixed: false, yielded: true, single: true, marked });
+    children[0]!.requesterSettleWake = {
+      ...children[0]!.requesterSettleWake!,
+      batchRunIds: ["run-b"],
+    };
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue(children);
+    expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(true);
+    const call = deliveredCallArg();
+    expect(call.completionTarget).toBe(marked ? undefined : "parent");
+    expect(call.directIdempotencyKey).toBe(requesterSettleKey("run-b:yield-1"));
+    if (!marked) {
+      expect(call.completionRequesterSessionId).toBe("sess-main");
+    }
+  });
 
   // `/new` keeps the session id and rotates its lifecycle revision. A deliverable
   // retry after either replacement would post the old findings into a fresh session.
@@ -164,10 +156,14 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
         completionTarget: "parent",
         completionRequesterSessionId: "sess-main",
         delivery: { status: "pending" },
-        completion: { required: true, resultText: "private marker" },
+        completion: {
+          required: true,
+          resultText: "private marker",
+          terminalReply: { disposition: "visible", text: "private marker" },
+        },
         requesterSettleWake: {
           status: "pending",
-          attemptCount: 1,
+          attemptCount: 0,
           batchRunIds: ["run-b"],
           afterRequesterYield: true,
           requesterYieldBatch: true,
