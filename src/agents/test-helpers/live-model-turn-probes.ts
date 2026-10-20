@@ -1,17 +1,8 @@
-/**
- * Prompt/context builders for live model turn probes.
- *
- * Live profile tests use these fixtures to verify text, file-label, and image
- * turn behavior without coupling probe construction to the large live suite.
- */
-import type { Context, Model } from "../../llm/types.js";
+import type { Context, Model, UserMessage } from "../../llm/types.js";
 
-/** Stable token embedded in file-style live probe prompts. */
 export const LIVE_MODEL_FILE_PROBE_TOKEN = "opal";
 
-/** Environment toggle for live file-label probes. */
 export const LIVE_MODEL_FILE_PROBE_ENV = "OPENCLAW_LIVE_MODEL_FILE_PROBE";
-/** Environment toggle for live image probes. */
 export const LIVE_MODEL_IMAGE_PROBE_ENV = "OPENCLAW_LIVE_MODEL_IMAGE_PROBE";
 
 const PROBE_PNG_BASE64 =
@@ -62,17 +53,14 @@ export function isLiveModelProbeEnabled(
   return !["0", "false", "no", "off"].includes(raw);
 }
 
-/** Returns whether model metadata advertises image input support. */
 export function modelSupportsImageInput(model: Pick<Model, "input">): boolean {
   return model.input.includes("image");
 }
 
-/** Returns whether extra probes should skip known empty-response models. */
 export function shouldSkipLiveModelExtraProbes(model: Pick<Model, "id" | "provider">): boolean {
   return KNOWN_EMPTY_EXTRA_PROBE_MODELS.has(modelKey(model));
 }
 
-/** Returns whether file-label probes should skip known empty-response models. */
 export function shouldSkipLiveModelFileProbe(model: Pick<Model, "id" | "provider">): boolean {
   if (model.provider === "opencode-go") {
     return true;
@@ -80,74 +68,44 @@ export function shouldSkipLiveModelFileProbe(model: Pick<Model, "id" | "provider
   return KNOWN_EMPTY_FILE_PROBE_MODELS.has(modelKey(model));
 }
 
-/** Returns whether image probes should skip known empty-response models. */
 export function shouldSkipLiveModelImageProbe(model: Pick<Model, "id" | "provider">): boolean {
   return KNOWN_EMPTY_IMAGE_PROBE_MODELS.has(modelKey(model));
 }
 
-/** Builds the primary file-label probe context. */
+function probeContext(systemPrompt: string | undefined, content: UserMessage["content"]): Context {
+  return { systemPrompt, messages: [{ role: "user", content, timestamp: Date.now() }] };
+}
+
 export function buildLiveModelFileProbeContext(params: { systemPrompt?: string }): Context {
-  return {
-    systemPrompt: params.systemPrompt,
-    messages: [
-      {
-        role: "user",
-        content:
-          "Read this visible label and reply with only the value after LIVE_LABEL.\n\n" +
-          `LIVE_LABEL=${LIVE_MODEL_FILE_PROBE_TOKEN}`,
-        timestamp: Date.now(),
-      },
-    ],
-  };
+  return probeContext(
+    params.systemPrompt,
+    "Read this visible label and reply with only the value after LIVE_LABEL.\n\n" +
+      `LIVE_LABEL=${LIVE_MODEL_FILE_PROBE_TOKEN}`,
+  );
 }
 
 /** Builds the fallback file-label prompt when the primary file probe is ambiguous. */
 export function buildLiveModelFileProbeRetryContext(params: { systemPrompt?: string }): Context {
-  return {
-    systemPrompt: params.systemPrompt,
-    messages: [
-      {
-        role: "user",
-        content:
-          "The visible label value is:\n\n" +
-          `${LIVE_MODEL_FILE_PROBE_TOKEN}\n\n` +
-          `Reply with exactly ${LIVE_MODEL_FILE_PROBE_TOKEN}.`,
-        timestamp: Date.now(),
-      },
-    ],
-  };
+  return probeContext(
+    params.systemPrompt,
+    "The visible label value is:\n\n" +
+      `${LIVE_MODEL_FILE_PROBE_TOKEN}\n\n` +
+      `Reply with exactly ${LIVE_MODEL_FILE_PROBE_TOKEN}.`,
+  );
 }
 
 /** Builds the image probe context with a tiny stable PNG fixture. */
 export function buildLiveModelImageProbeContext(params: { systemPrompt?: string }): Context {
-  return {
-    systemPrompt: params.systemPrompt,
-    messages: [
-      {
-        role: "user",
-        content: [
-          {
-            type: "text",
-            text: "Reply with exactly OK.",
-          },
-          {
-            type: "image",
-            data: PROBE_PNG_BASE64,
-            mimeType: "image/png",
-          },
-        ],
-        timestamp: Date.now(),
-      },
-    ],
-  };
+  return probeContext(params.systemPrompt, [
+    { type: "text", text: "Reply with exactly OK." },
+    { type: "image", data: PROBE_PNG_BASE64, mimeType: "image/png" },
+  ]);
 }
 
-/** Returns whether file probe output contains the expected token. */
 export function fileProbeTextMatches(text: string): boolean {
   return text.toLowerCase().includes(LIVE_MODEL_FILE_PROBE_TOKEN.toLowerCase());
 }
 
-/** Returns whether image probe output contains an OK acknowledgement. */
 function imageProbeTextMatches(text: string): boolean {
   return /\bok\b/i.test(text);
 }

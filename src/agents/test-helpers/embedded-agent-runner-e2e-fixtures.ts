@@ -1,8 +1,3 @@
-/**
- * Embedded runner E2E fixture helpers.
- *
- * Creates temporary agent/workspace directories and OpenAI-compatible mock config.
- */
 import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -36,12 +31,23 @@ export async function cleanupEmbeddedAgentRunnerTestWorkspace(
   if (!workspace) {
     return;
   }
-  // Message fixtures stay runtime-free; workspace teardown still joins SQLite owners
-  // before removing their files.
+  // Join SQLite owners before removing their files without eagerly loading the runtime.
   const { closeOpenClawAgentDatabasesAsync } =
     await import("../../state/openclaw-agent-db-lifecycle.js");
   await closeOpenClawAgentDatabasesAsync(workspace.tempRoot);
   await fs.rm(workspace.tempRoot, { recursive: true, force: true });
+}
+
+function mockModel(id: string, name: string) {
+  return {
+    id,
+    name,
+    reasoning: false,
+    input: ["text" as const],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 16_000,
+    maxTokens: 2048,
+  };
 }
 
 export function createEmbeddedAgentRunnerOpenAiConfig(modelIds: string[]): OpenClawConfig {
@@ -55,15 +61,7 @@ export function createEmbeddedAgentRunnerOpenAiConfig(modelIds: string[]): OpenC
           api: "openai-responses",
           apiKey: "sk-test",
           baseUrl: "https://example.com",
-          models: modelIds.map((id) => ({
-            id,
-            name: `Mock ${id}`,
-            reasoning: false,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 16_000,
-            maxTokens: 2048,
-          })),
+          models: modelIds.map((id) => mockModel(id, `Mock ${id}`)),
         },
       },
     },
@@ -81,13 +79,7 @@ export function createMockUsage(input: number, output: number) {
     cacheRead: 0,
     cacheWrite: 0,
     totalTokens: input + output,
-    cost: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      total: 0,
-    },
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };
 }
 
@@ -157,21 +149,13 @@ export function createResolvedEmbeddedRunnerModel(
   return {
     logicalRef: { provider, model: modelId },
     model: {
-      id: modelId,
-      name: modelId,
+      ...mockModel(modelId, modelId),
       api: "openai-responses",
       provider,
       baseUrl: options?.baseUrl ?? `https://example.com/${provider}`,
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 16_000,
-      maxTokens: 2048,
     },
     error: undefined,
-    authStorage: {
-      setRuntimeApiKey: () => undefined,
-    },
+    authStorage: { setRuntimeApiKey: () => undefined },
     modelRegistry: {},
   };
 }

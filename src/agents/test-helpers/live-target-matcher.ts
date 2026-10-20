@@ -1,8 +1,3 @@
-/**
- * Builds provider/model filters for live test lanes. Provider matches can
- * follow plugin ownership aliases so scoped live runs include equivalent
- * provider IDs.
- */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeGooglePreviewModelId } from "@openclaw/model-catalog-core/provider-model-id-normalize";
 import {
@@ -31,14 +26,7 @@ function normalizeCsvSet(values: Set<string> | null): Set<string> | null {
   if (!values) {
     return null;
   }
-  const normalized = new Set<string>();
-  for (const value of values) {
-    const trimmed = value.trim();
-    if (!trimmed) {
-      continue;
-    }
-    normalized.add(trimmed);
-  }
+  const normalized = new Set([...values].map((value) => value.trim()).filter(Boolean));
   return normalized.size > 0 ? normalized : null;
 }
 
@@ -61,11 +49,7 @@ function parseModelTarget(raw: string): ModelTarget | null {
   if (!provider || !modelId) {
     return null;
   }
-  return {
-    raw: trimmed,
-    provider,
-    modelId,
-  };
+  return { raw: trimmed, provider, modelId };
 }
 
 /** Creates provider/model predicates for live test target filters. */
@@ -81,6 +65,14 @@ export function createLiveTargetMatcher(params: {
     .map((value) => parseModelTarget(value))
     .filter((value): value is ModelTarget => value !== null);
   const ownerCache = new Map<string, readonly string[]>();
+  const sameProvider = (left: string, right: string) =>
+    left === right ||
+    liveProvidersShareOwningPlugin(left, right, {
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      ownerCache,
+    });
 
   return {
     matchesProvider(provider: string): boolean {
@@ -88,23 +80,9 @@ export function createLiveTargetMatcher(params: {
         return true;
       }
       const normalizedProvider = normalizeProviderId(provider);
-      for (const requested of providerFilter) {
-        const normalizedRequested = normalizeProviderId(requested);
-        if (normalizedRequested === normalizedProvider) {
-          return true;
-        }
-        if (
-          liveProvidersShareOwningPlugin(normalizedRequested, normalizedProvider, {
-            config: params.config,
-            workspaceDir: params.workspaceDir,
-            env: params.env,
-            ownerCache,
-          })
-        ) {
-          return true;
-        }
-      }
-      return false;
+      return [...providerFilter].some((requested) =>
+        sameProvider(normalizeProviderId(requested), normalizedProvider),
+      );
     },
     matchesModel(provider: string, modelId: string): boolean {
       if (modelTargets.length === 0) {
@@ -123,20 +101,7 @@ export function createLiveTargetMatcher(params: {
         if (target.modelId !== normalizedModelId) {
           continue;
         }
-        if (!target.provider) {
-          return true;
-        }
-        if (target.provider === normalizedProvider) {
-          return true;
-        }
-        if (
-          liveProvidersShareOwningPlugin(target.provider, normalizedProvider, {
-            config: params.config,
-            workspaceDir: params.workspaceDir,
-            env: params.env,
-            ownerCache,
-          })
-        ) {
+        if (!target.provider || sameProvider(target.provider, normalizedProvider)) {
           return true;
         }
       }

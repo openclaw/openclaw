@@ -1,8 +1,3 @@
-/**
- * Host-backed sandbox filesystem bridge fixtures.
- *
- * Adapts a path resolver into the sandbox fs bridge contract for local tests.
- */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveSandboxPath } from "../sandbox-paths.js";
@@ -13,6 +8,20 @@ export function createSandboxFsBridgeFromResolver(
   resolvePath: (filePath: string, cwd?: string) => SandboxResolvedPath,
   pathMappings?: SandboxFsBridge["pathMappings"],
 ): SandboxFsBridge {
+  const hostPath = (filePath: string, cwd?: string) => {
+    const target = resolvePath(filePath, cwd);
+    if (!target.hostPath) {
+      throw new Error(`Expected hostPath for ${target.containerPath}`);
+    }
+    return target.hostPath;
+  };
+  const prepareWrite = async (filePath: string, cwd: string | undefined, mkdir: boolean) => {
+    const target = hostPath(filePath, cwd);
+    if (mkdir) {
+      await fs.mkdir(path.dirname(target), { recursive: true });
+    }
+    return target;
+  };
   return {
     ...(pathMappings === undefined ? {} : { pathMappings }),
     resolvePath: ({ filePath, cwd }) => resolvePath(filePath, cwd),
@@ -29,35 +38,17 @@ export function createSandboxFsBridgeFromResolver(
       }
       await fs.copyFile(source.hostPath, destination.hostPath);
     },
-    readFile: async ({ filePath, cwd }) => {
-      const target = resolvePath(filePath, cwd);
-      if (!target.hostPath) {
-        throw new Error(`Expected hostPath for ${target.containerPath}`);
-      }
-      return fs.readFile(target.hostPath);
-    },
+    readFile: async ({ filePath, cwd }) => fs.readFile(hostPath(filePath, cwd)),
     writeFile: async ({ filePath, cwd, data, mkdir = true }) => {
-      const target = resolvePath(filePath, cwd);
-      if (!target.hostPath) {
-        throw new Error(`Expected hostPath for ${target.containerPath}`);
-      }
-      if (mkdir) {
-        await fs.mkdir(path.dirname(target.hostPath), { recursive: true });
-      }
+      const target = await prepareWrite(filePath, cwd, mkdir);
       const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
-      await fs.writeFile(target.hostPath, buffer);
+      await fs.writeFile(target, buffer);
     },
     createFileExclusive: async ({ filePath, cwd, data, mkdir = true }) => {
-      const target = resolvePath(filePath, cwd);
-      if (!target.hostPath) {
-        throw new Error(`Expected hostPath for ${target.containerPath}`);
-      }
-      if (mkdir) {
-        await fs.mkdir(path.dirname(target.hostPath), { recursive: true });
-      }
+      const target = await prepareWrite(filePath, cwd, mkdir);
       const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
       try {
-        await fs.writeFile(target.hostPath, buffer, { flag: "wx" });
+        await fs.writeFile(target, buffer, { flag: "wx" });
         return "created";
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "EEXIST") {
@@ -67,18 +58,10 @@ export function createSandboxFsBridgeFromResolver(
       }
     },
     mkdirp: async ({ filePath, cwd }) => {
-      const target = resolvePath(filePath, cwd);
-      if (!target.hostPath) {
-        throw new Error(`Expected hostPath for ${target.containerPath}`);
-      }
-      await fs.mkdir(target.hostPath, { recursive: true });
+      await fs.mkdir(hostPath(filePath, cwd), { recursive: true });
     },
     remove: async ({ filePath, cwd, recursive, force }) => {
-      const target = resolvePath(filePath, cwd);
-      if (!target.hostPath) {
-        throw new Error(`Expected hostPath for ${target.containerPath}`);
-      }
-      await fs.rm(target.hostPath, {
+      await fs.rm(hostPath(filePath, cwd), {
         recursive: recursive ?? false,
         force: force ?? false,
       });
@@ -96,11 +79,7 @@ export function createSandboxFsBridgeFromResolver(
     },
     stat: async ({ filePath, cwd }) => {
       try {
-        const target = resolvePath(filePath, cwd);
-        if (!target.hostPath) {
-          throw new Error(`Expected hostPath for ${target.containerPath}`);
-        }
-        const stats = await fs.stat(target.hostPath);
+        const stats = await fs.stat(hostPath(filePath, cwd));
         return {
           type: stats.isDirectory() ? "directory" : stats.isFile() ? "file" : "other",
           size: stats.size,

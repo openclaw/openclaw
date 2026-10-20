@@ -1,8 +1,3 @@
-/**
- * Fast embedded-runner E2E mocks.
- *
- * Installs targeted Vitest module mocks for tests that do not need live plugin/runtime boot.
- */
 import { vi } from "vitest";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createEmptyPluginMetadataSnapshot } from "../../plugins/plugin-metadata-empty.test-support.js";
@@ -61,25 +56,21 @@ function createEmptyPreparedModelRuntimeSnapshot(
   };
 }
 
-/** Installs baseline mocks for hook runner, context engine, and runtime plugin loading. */
 export function installEmbeddedRunnerBaseE2eMocks(options?: {
   hookRunner?: "minimal" | "full";
   pluginRegistry?: PreparedModelRuntimeSnapshot["pluginRegistry"];
 }): void {
-  vi.doMock("../../plugins/hook-runner-global.js", () =>
-    options?.hookRunner === "full"
+  vi.doMock("../../plugins/hook-runner-global.js", () => ({
+    getGlobalHookRunner: vi.fn(() => undefined),
+    initializeGlobalHookRunner: vi.fn(),
+    ...(options?.hookRunner === "full"
       ? {
-          getGlobalHookRunner: vi.fn(() => undefined),
           getGlobalPluginRegistry: vi.fn(() => null),
           hasGlobalHooks: vi.fn(() => false),
-          initializeGlobalHookRunner: vi.fn(),
           resetGlobalHookRunner: vi.fn(),
         }
-      : {
-          getGlobalHookRunner: vi.fn(() => undefined),
-          initializeGlobalHookRunner: vi.fn(),
-        },
-  );
+      : {}),
+  }));
   vi.doMock("../../context-engine/init.js", () => ({
     ensureContextEnginesInitialized: vi.fn(),
   }));
@@ -156,7 +147,6 @@ export function installEmbeddedRunnerBaseE2eMocks(options?: {
   }));
 }
 
-/** Installs mocks that route embedded attempts through a caller-provided fast run function. */
 export function installEmbeddedRunnerFastRunE2eMocks(
   options: EmbeddedRunnerFastRunMockOptions,
 ): void {
@@ -190,62 +180,62 @@ export function installEmbeddedRunnerFastRunE2eMocks(
         modelApi?: string | null;
         harnessId?: string;
         sessionAuthProfileId?: string;
-      }) => ({
-        resolvedRef: {
+      }) => {
+        const resolvedRef = {
           provider: params.provider,
           modelId: params.modelId,
           ...(params.modelApi ? { modelApi: params.modelApi } : {}),
           ...(params.harnessId ? { harnessId: params.harnessId } : {}),
-        },
-        auth: {
-          providerForAuth: params.provider,
-          authProfileProviderForAuth: params.sessionAuthProfileId?.split(":", 1)[0] ?? "",
-          forwardedAuthProfileId: params.sessionAuthProfileId,
-        },
-        prompt: {
-          provider: params.provider,
-          modelId: params.modelId,
-          resolveSystemPromptContribution: vi.fn(() => undefined),
-          transformSystemPrompt: vi.fn((context) => context.systemPrompt),
-        },
-        tools: {
-          normalize: vi.fn((tools: unknown[]) => tools),
-          logDiagnostics: vi.fn(),
-        },
-        transcript: {
-          policy: {
-            sanitizeMode: "full",
-            sanitizeToolCallIds: true,
-            preserveNativeAnthropicToolUseIds: false,
-            repairToolUseResultPairing: true,
-            preserveSignatures: false,
-            dropThinkingBlocks: false,
-            applyGoogleTurnOrdering: false,
-            validateGeminiTurns: false,
-            validateAnthropicTurns: false,
-            allowSyntheticToolResults: true,
+        };
+        return {
+          resolvedRef,
+          auth: {
+            providerForAuth: params.provider,
+            authProfileProviderForAuth: params.sessionAuthProfileId?.split(":", 1)[0] ?? "",
+            forwardedAuthProfileId: params.sessionAuthProfileId,
           },
-          resolvePolicy: vi.fn(() => undefined),
-        },
-        delivery: {
-          resolveFollowupRoute: vi.fn(() => undefined),
-        },
-        outcome: {
-          classifyRunResult: vi.fn(() => undefined),
-        },
-        transport: {
-          extraParams: {},
-          resolveExtraParams: vi.fn(() => ({})),
-        },
-        observability: {
-          resolvedRef: `${params.provider}/${params.modelId}`,
-          provider: params.provider,
-          modelId: params.modelId,
-          ...(params.modelApi ? { modelApi: params.modelApi } : {}),
-          ...(params.harnessId ? { harnessId: params.harnessId } : {}),
-          ...(params.sessionAuthProfileId ? { authProfileId: params.sessionAuthProfileId } : {}),
-        },
-      }),
+          prompt: {
+            provider: params.provider,
+            modelId: params.modelId,
+            resolveSystemPromptContribution: vi.fn(() => undefined),
+            transformSystemPrompt: vi.fn((context) => context.systemPrompt),
+          },
+          tools: {
+            normalize: vi.fn((tools: unknown[]) => tools),
+            logDiagnostics: vi.fn(),
+          },
+          transcript: {
+            policy: {
+              sanitizeMode: "full",
+              sanitizeToolCallIds: true,
+              preserveNativeAnthropicToolUseIds: false,
+              repairToolUseResultPairing: true,
+              preserveSignatures: false,
+              dropThinkingBlocks: false,
+              applyGoogleTurnOrdering: false,
+              validateGeminiTurns: false,
+              validateAnthropicTurns: false,
+              allowSyntheticToolResults: true,
+            },
+            resolvePolicy: vi.fn(() => undefined),
+          },
+          delivery: {
+            resolveFollowupRoute: vi.fn(() => undefined),
+          },
+          outcome: {
+            classifyRunResult: vi.fn(() => undefined),
+          },
+          transport: {
+            extraParams: {},
+            resolveExtraParams: vi.fn(() => ({})),
+          },
+          observability: {
+            resolvedRef: `${params.provider}/${params.modelId}`,
+            ...resolvedRef,
+            ...(params.sessionAuthProfileId ? { authProfileId: params.sessionAuthProfileId } : {}),
+          },
+        };
+      },
     ),
   }));
   vi.doMock("../runtime-plan/prepare-auth.js", async () => {
@@ -370,7 +360,6 @@ function resolveMockHarnessId(params: {
     : "openclaw";
 }
 
-/** Installs deterministic backoff mocks for retry/timeout E2E tests. */
 export function installEmbeddedRunnerBackoffE2eMocks(
   options: EmbeddedRunnerBackoffMockOptions,
 ): void {

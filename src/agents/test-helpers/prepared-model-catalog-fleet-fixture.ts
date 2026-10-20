@@ -134,24 +134,8 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
     }
     onBeforePublication?.(fixture);
     const snapshots: PreparedModelRuntimeSnapshot[] = [];
-    if (options.publication === "individual") {
-      // Fleet refresh deliberately renews every credentialed provider after publication.
-      // Cold scoped tests use the individual lifecycle publisher and one loader workspace.
-      for (const agentId of agentIds) {
-        snapshots.push(
-          await publishPreparedModelRuntimeSnapshot(
-            {
-              agentId,
-              agentDir: entries[agentId]!.agentDir,
-              workspaceDir: entries[agentId]!.workspace,
-              config,
-              allowGatewaySubagentBinding: true,
-            },
-            { provenance: "configured", catalogMode: "static" },
-          ),
-        );
-      }
-    } else {
+    // Cold scoped tests publish individually; fleet refresh renews all credentialed providers.
+    if (options.publication !== "individual") {
       await refreshPreparedModelRuntimeSnapshots(config, {
         gatewayLifecycle: true,
         allowGatewaySubagentBinding: true,
@@ -162,15 +146,21 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
           workspaceDir: fixture.workspaceDir,
         }),
       });
-      for (const agentId of agentIds) {
-        snapshots.push(
-          getPreparedModelRuntimeSnapshot({
-            agentId,
-            agentDir: entries[agentId]!.agentDir,
-            config,
-          })!,
-        );
-      }
+    }
+    for (const agentId of agentIds) {
+      const input = { agentId, agentDir: entries[agentId]!.agentDir, config };
+      snapshots.push(
+        options.publication === "individual"
+          ? await publishPreparedModelRuntimeSnapshot(
+              {
+                ...input,
+                workspaceDir: entries[agentId]!.workspace,
+                allowGatewaySubagentBinding: true,
+              },
+              { provenance: "configured", catalogMode: "static" },
+            )
+          : getPreparedModelRuntimeSnapshot(input)!,
+      );
     }
     return { ...fixture, config, entries, snapshots, agentIds };
   };
