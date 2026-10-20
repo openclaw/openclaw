@@ -1,4 +1,3 @@
-// Classifies acceptable live-provider drift for optional validation lanes.
 import { describe, expect, it } from "vitest";
 import { shouldSkipLiveProviderDrift } from "./live-test-provider-drift.js";
 import {
@@ -50,53 +49,30 @@ describe("live test provider drift", () => {
   });
 
   it("classifies transient provider availability drift", () => {
-    expect(
-      isLiveProviderUnavailableDrift(
-        "521 <!DOCTYPE html><html><head><title>Web server is down</title></head><body>Cloudflare</body></html>",
-      ),
-    ).toBe(true);
-    expect(
-      isLiveProviderUnavailableDrift(
-        "Error: <html><head><title>Service Unavailable</title></head><body>try again</body></html>",
-      ),
-    ).toBe(true);
-    expect(
-      isLiveProviderUnavailableDrift(
-        "Error: <html><head><title>500 Internal Server Error</title></head><body>try again</body></html>",
-      ),
-    ).toBe(true);
-    expect(
-      isLiveProviderUnavailableDrift("provider returned error: 502 Internal Server Error"),
-    ).toBe(true);
-    expect(
-      isLiveProviderUnavailableDrift(
-        "Service temporarily unavailable. The model is at capacity and currently cannot serve this request.",
-      ),
-    ).toBe(true);
-    expect(
-      isLiveProviderUnavailableDrift(
-        "Error Code unknown: Service temporarily unavailable. The model's availability is currently degraded.",
-      ),
-    ).toBe(true);
-    expect(
-      isLiveProviderUnavailableDrift(
-        "400 Error from provider (Console Go): Upstream request failed: Model is unavailable.",
-      ),
-    ).toBe(true);
+    for (const sample of [
+      "521 <!DOCTYPE html><html><head><title>Web server is down</title></head><body>Cloudflare</body></html>",
+      "Error: <html><head><title>Service Unavailable</title></head><body>try again</body></html>",
+      "Error: <html><head><title>500 Internal Server Error</title></head><body>try again</body></html>",
+      "provider returned error: 502 Internal Server Error",
+      "Service temporarily unavailable. The model is at capacity and currently cannot serve this request.",
+      "Error Code unknown: Service temporarily unavailable. The model's availability is currently degraded.",
+      "400 Error from provider (Console Go): Upstream request failed: Model is unavailable.",
+    ]) {
+      expect(isLiveProviderUnavailableDrift(sample), sample).toBe(true);
+    }
   });
 
   it("returns explicit skip labels only for enabled drift classes", () => {
-    // Drift classification is opt-in per lane; matching an auth error should
-    // not skip the test unless that lane explicitly allows auth drift.
+    const authError = '401 {"error":{"message":"The API key you provided is invalid."}}';
     expect(
       shouldSkipLiveProviderDrift({
-        error: '401 {"error":{"message":"The API key you provided is invalid."}}',
+        error: authError,
         allowAuth: true,
       }),
     ).toEqual({ reason: "auth", label: "auth drift" });
     expect(
       shouldSkipLiveProviderDrift({
-        error: '401 {"error":{"message":"The API key you provided is invalid."}}',
+        error: authError,
         allowBilling: true,
       }),
     ).toBeUndefined();

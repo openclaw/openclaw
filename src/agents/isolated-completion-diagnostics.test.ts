@@ -55,6 +55,16 @@ async function drain() {
   await waitForDiagnosticEventsDrained();
 }
 
+const reply = (text = "done") => ({
+  assistant: isolatedAssistant([{ type: "text", text }]),
+});
+const run = (request = isolatedRequest()) => work.run(() => runIsolatedCompletion(request));
+function expectPhase(expected: unknown) {
+  expect(events).toHaveLength(1);
+  expect(events[0]).toMatchObject(expected);
+  expect(JSON.stringify(events)).not.toContain("private");
+}
+
 it.each(["cli", "v1", "v2"] as const)(
   "records one phase after %s preparation, dispatch, and release",
   async (runtime) => {
@@ -73,7 +83,7 @@ it.each(["cli", "v1", "v2"] as const)(
     });
     const complete = async () => {
       clock += 30;
-      return { assistant: isolatedAssistant([{ type: "text", text: "done" }]) };
+      return reply();
     };
     if (runtime === "cli") {
       mocks.isCliRuntimeAliasForProvider.mockReturnValue(true);
@@ -88,13 +98,10 @@ it.each(["cli", "v1", "v2"] as const)(
           : { runIsolatedCompletionV2: complete },
       );
     }
-    await work.run(() =>
-      runIsolatedCompletion({ ...isolatedRequest(), purpose: "conversation-label" }),
-    );
+    await run({ ...isolatedRequest(), purpose: "conversation-label" });
     await drain();
     const initialPreparationMs = runtime === "cli" ? 10 : 30;
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({
+    expectPhase({
       name: "isolated-completion",
       durationMs: initialPreparationMs + 70,
       details: {
@@ -128,13 +135,11 @@ it.each(["completed", "aborted"] as const)(
           controller.abort(failure);
           throw failure;
         }
-        return { assistant: isolatedAssistant([{ type: "text", text: "private reply" }]) };
+        return reply("private reply");
       },
     });
     try {
-      const pending = work.run(() =>
-        runIsolatedCompletion({ ...isolatedRequest(), abortSignal: controller.signal }),
-      );
+      const pending = run({ ...isolatedRequest(), abortSignal: controller.signal });
       if (outcome === "aborted") {
         await expect(pending).rejects.toBe(failure);
       } else {
@@ -147,8 +152,7 @@ it.each(["completed", "aborted"] as const)(
       clock = 85;
       tail.resolve();
       await drain();
-      expect(events).toHaveLength(1);
-      expect(events[0]).toMatchObject({
+      expectPhase({
         durationMs: 85,
         details: {
           outcome,
@@ -157,7 +161,6 @@ it.each(["completed", "aborted"] as const)(
           settlementDurationMs: 60,
         },
       });
-      expect(JSON.stringify(events)).not.toContain("private");
     } finally {
       tail.resolve();
     }
@@ -173,14 +176,13 @@ it("joins work from failed acquisition before emitting a preparation-only phase"
     throw failure;
   });
   try {
-    await expect(work.run(() => runIsolatedCompletion(isolatedRequest()))).rejects.toBe(failure);
+    await expect(run()).rejects.toBe(failure);
     await waitForDiagnosticEventsDrained();
     expect(events).toEqual([]);
     clock = 55;
     tail.resolve();
     await drain();
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({
+    expectPhase({
       durationMs: 55,
       details: {
         outcome: "error",
@@ -193,7 +195,6 @@ it("joins work from failed acquisition before emitting a preparation-only phase"
       },
     });
     expect(events[0]?.details).not.toHaveProperty("runtimeKind");
-    expect(JSON.stringify(events)).not.toContain("private");
   } finally {
     tail.resolve();
   }
@@ -201,33 +202,23 @@ it("joins work from failed acquisition before emitting a preparation-only phase"
 
 it("does not emit phases when the admitted config disables diagnostics", async () => {
   Object.assign(preparedModelRuntime, { config: { diagnostics: { enabled: false } } });
-  registerIsolatedHarness({
-    runIsolatedCompletionV2: async () => ({
-      assistant: isolatedAssistant([{ type: "text", text: "done" }]),
-    }),
-  });
-  await work.run(() => runIsolatedCompletion(isolatedRequest()));
+  registerIsolatedHarness({ runIsolatedCompletionV2: async () => reply() });
+  await run();
   await drain();
   expect(events).toEqual([]);
 });
 
 it("records release failure separately without changing the completed result", async () => {
   releaseRuntimeLease.mockRejectedValue(new Error("private cleanup failure"));
-  registerIsolatedHarness({
-    runIsolatedCompletionV2: async () => ({
-      assistant: isolatedAssistant([{ type: "text", text: "done" }]),
-    }),
-  });
-  await expect(work.run(() => runIsolatedCompletion(isolatedRequest()))).resolves.toMatchObject({
-    text: "done",
-  });
+  registerIsolatedHarness({ runIsolatedCompletionV2: async () => reply() });
+  await expect(run()).resolves.toMatchObject({ text: "done" });
   await drain();
-  expect(events).toHaveLength(1);
-  expect(events[0]?.details).toMatchObject({
-    outcome: "completed",
-    settlementOutcome: "error",
+  expectPhase({
+    details: {
+      outcome: "completed",
+      settlementOutcome: "error",
+    },
   });
-  expect(JSON.stringify(events)).not.toContain("private");
 });
 
 it("aggregates profile attempts into one phase without duplicate completion observations", async () => {
@@ -259,16 +250,17 @@ it("aggregates profile attempts into one phase without duplicate completion obse
           },
         };
       }
-      return { assistant: isolatedAssistant([{ type: "text", text: "done" }]) };
+      return reply();
     },
   });
-  await work.run(() => runIsolatedCompletion(isolatedRequest()));
+  await run();
   await drain();
-  expect(events).toHaveLength(1);
-  expect(events[0]?.details).toMatchObject({
-    outcome: "completed",
-    attempts: 2,
-    runtimeDurationMs: 40,
-    resultDurationMs: 40,
+  expectPhase({
+    details: {
+      outcome: "completed",
+      attempts: 2,
+      runtimeDurationMs: 40,
+      resultDurationMs: 40,
+    },
   });
 });
