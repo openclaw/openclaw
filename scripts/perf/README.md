@@ -657,7 +657,8 @@ internal operation aggregates without starting CPU or heap profiling. List
 samples also retain the response ID, client index, round, start/end timestamps,
 and duration; `p99Request` identifies the nearest-rank round p99. For a multi-round
 pair, sort all `sessionsList.requests` by duration to identify its pooled p99.
-These records contain timing and identity only, never RPC payloads. Gateway
+These timing records contain no RPC payloads; `--capture-responses` separately
+opts into representative response payloads, as described below. Gateway
 metrics cover its main isolate, not worker isolates. Capture adds overhead, so
 compare equally instrumented pairs and keep earlier uncaptured runs distinct.
 
@@ -1292,6 +1293,39 @@ and uncompressed wire response bytes. Handler and worker queue timings remain in
 Gateway diagnostics. Whole-window CPU/allocation divided by source-event or
 socket-delivery counts is a workload-normalized cost, not isolated encode/send
 cost. Use CPU profiles when attributing broadcast work.
+
+Add `--workload-cpu-profile` to capture the full measured workload in the Gateway
+main isolate. Each sample's `workloadCpuProfile` includes the full
+`workload-<round>.cpuprofile` path, sampling duration/count, diagnostics, the 40
+hottest functions, and sampled time under `broadcastInternal`. This differs from
+`--cpu-profile`, which captures stream admission/release and optional recap
+phases; the two flags cannot be combined.
+
+Run full CPU attribution in a separate matched pass, replacing `--allocations`
+with `--workload-cpu-profile`. The new mode rejects `--allocations`,
+`--stream-start-allocations`, and retained heap capture; for `memory-soak`, set
+`--retained-profile-ms 0`. Serializing and writing CPU profiles allocates enough
+memory to contaminate simultaneous allocation, promotion, and GC measurements.
+Keep the allocation/GC pairs and full CPU pairs separate with matching workloads.
+
+Event/RPC counting starts after the CPU-start acknowledgment and ends when the
+workload, event drain, and outstanding polls finish. The CPU profile then stops.
+CPU samples include the small start-acknowledgment and stop-request edges,
+including stop bookkeeping before V8 stops sampling; event counts exclude those
+edges. Existing whole-window CPU counters include profiler setup, stopping, and
+profile serialization. No new 25 ms priming wait is added; if
+`--stream-start-diagnostics` is also enabled, its existing 25 ms waits occur inside
+the full-workload capture. Keep these attribution runs separate from unprofiled
+acceptance timing, and compare equally instrumented pairs.
+
+Add `--capture-responses` to retain the first successful measured response payload
+per method per round at `samples[].rpc[method].representativeResponse.payload`.
+Capture is opt-in and happens in the controller; serialization into the report
+happens after measurement. The sample preserves parsed payload content, not the
+original wire encoding or response envelope. Use it for offline content and
+serialized-payload comparison, accounting explicitly for expected dynamic fields
+such as timestamps and IDs. Exact uncompressed response-frame byte totals remain
+in the RPC metrics. Neither option changes defaults or generates additional RPCs.
 
 Turn scenarios use `--runs` (forced
 to one for `chat.send`); `--chunks` controls streamed answer size. `plugins.reload`
