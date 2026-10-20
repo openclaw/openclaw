@@ -549,7 +549,7 @@ describe("openai-compatible generic embedding provider", () => {
     const { provider, client } = await createProvider(
       createOptions({
         model: "text-embedding-bge-m3",
-        dimensions: 1024,
+        dimensions: 3,
         remote: {
           baseUrl: `  ${server.baseUrl}/  `,
           apiKey: `  ${token}  `,
@@ -563,7 +563,7 @@ describe("openai-compatible generic embedding provider", () => {
     expect(provider).toMatchObject({
       id: "openai-compatible",
       model: "text-embedding-bge-m3",
-      dimensions: 1024,
+      dimensions: 3,
     });
     expect(client.baseUrl).toBe(server.baseUrl);
     expect(server.requests).toHaveLength(0);
@@ -586,7 +586,7 @@ describe("openai-compatible generic embedding provider", () => {
       body: {
         model: "text-embedding-bge-m3",
         input: ["hello"],
-        dimensions: 1024,
+        dimensions: 3,
       },
     });
     expect(server.requests[0]?.body).not.toHaveProperty("encoding_format");
@@ -599,7 +599,96 @@ describe("openai-compatible generic embedding provider", () => {
     expect(server.requests[1]?.body).toEqual({
       model: "text-embedding-bge-m3",
       input: ["a", "abcd"],
-      dimensions: 1024,
+      dimensions: 3,
+    });
+  });
+
+  it("returns endpoint vectors unchanged when dimensions are not configured", async () => {
+    const server = await startEmbeddingServer({
+      respond: () => ({
+        object: "list",
+        data: [
+          { object: "embedding", embedding: [0.1, 0.2, 0.3], index: 0 },
+          { object: "embedding", embedding: [0.4, 0.5], index: 1 },
+        ],
+      }),
+    });
+    const result = await openAICompatibleEmbeddingProviderAdapter.create(
+      createOptions({ remote: { baseUrl: server.baseUrl } }),
+    );
+
+    expect(result.provider).not.toHaveProperty("dimensions");
+    expect(result.runtime?.cacheKeyData).not.toHaveProperty("dimensions");
+    await expect(result.provider?.embedBatch(["a", "b"])).resolves.toEqual([
+      [0.1, 0.2, 0.3],
+      [0.4, 0.5],
+    ]);
+    expect(server.requests[0]?.body).not.toHaveProperty("dimensions");
+  });
+
+  it("rejects vectors that do not match the requested dimensions", async () => {
+    // Simulate a server that ignores `dimensions` and returns the model's native size.
+    const native = await startEmbeddingServer({ respond: (request) => textEmbeddings(request) });
+    const { provider } = await createProvider(
+      createOptions({ dimensions: 2, remote: { baseUrl: native.baseUrl } }),
+    );
+
+    await expect(provider.embed("hello", { inputType: "query" })).rejects.toMatchObject({
+      code: "INVALID_EMBEDDING_RESPONSE",
+      expectedDimensions: 2,
+      actualDimensions: 3,
+      message:
+        "openai-compatible embeddings failed (model: text-embedding-bge-m3, batch size: 1): expected 2 dimensions, got 3 at index 0; the endpoint did not honor the requested dimensions. Remove memory.search.outputDimensionality or request dimensions, or use a server that supports them.",
+    });
+    await expect(provider.embedBatch(["a", "b"], { inputType: "document" })).rejects.toMatchObject({
+      code: "INVALID_EMBEDDING_RESPONSE",
+      message:
+        "openai-compatible embeddings failed (model: text-embedding-bge-m3, batch size: 2): expected 2 dimensions, got 3 at index 0; the endpoint did not honor the requested dimensions. Remove memory.search.outputDimensionality or request dimensions, or use a server that supports them.",
+    });
+
+    const { provider: wider } = await createProvider(
+      createOptions({ dimensions: 4, remote: { baseUrl: native.baseUrl } }),
+    );
+    await expect(wider.embed("hello")).rejects.toThrow(
+      "expected 4 dimensions, got 3 at index 0; the endpoint did not honor the requested dimensions. Remove memory.search.outputDimensionality or request dimensions, or use a server that supports them.",
+    );
+    expect(native.requests.map((request) => request.body.dimensions)).toEqual([2, 2, 4]);
+  });
+
+  it("keeps malformed response errors distinct from dimension mismatches", async () => {
+    const server = await startEmbeddingServer({ respond: () => ({ data: [{}] }) });
+    const { provider } = await createProvider(
+      createOptions({ dimensions: 2, remote: { baseUrl: server.baseUrl } }),
+    );
+    const error = await provider.embed("query").catch((cause: unknown) => cause);
+    expect(error).toMatchObject({
+      code: "INVALID_EMBEDDING_RESPONSE",
+      message: expect.stringContaining("missing embedding array at position 0"),
+    });
+    expect(error).not.toHaveProperty("expectedDimensions");
+    expect(error).not.toHaveProperty("actualDimensions");
+    expect(server.requests).toHaveLength(1);
+  });
+
+  it("rejects a batch when any vector differs from the requested dimensions", async () => {
+    const server = await startEmbeddingServer({
+      respond: () => ({
+        object: "list",
+        data: [
+          { object: "embedding", embedding: [0, 0.6, 0.8], index: 2 },
+          { object: "embedding", embedding: [0.6, 0.8], index: 1 },
+          { object: "embedding", embedding: [1, 0], index: 0 },
+        ],
+      }),
+    });
+    const { provider } = await createProvider(
+      createOptions({ dimensions: 2, remote: { baseUrl: server.baseUrl } }),
+    );
+
+    await expect(provider.embedBatch(["a", "b", "c"])).rejects.toMatchObject({
+      code: "INVALID_EMBEDDING_RESPONSE",
+      message:
+        "openai-compatible embeddings failed (model: text-embedding-bge-m3, batch size: 3): expected 2 dimensions, got 3 at index 2; the endpoint did not honor the requested dimensions. Remove memory.search.outputDimensionality or request dimensions, or use a server that supports them.",
     });
   });
 

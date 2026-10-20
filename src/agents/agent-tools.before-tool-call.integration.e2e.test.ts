@@ -37,14 +37,13 @@ import {
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
 import {
-  adjustedParamsByToolCallId,
   buildAdjustedParamsKey,
   consumeTrackedToolExecutionStarted,
   resetAdjustedParamsByToolCallIdForTests,
   structuredReplaySafeToolCallIds,
 } from "./agent-tools.before-tool-call.state.js";
 import { runWithToolExecutionValidation } from "./agent-tools.execution-validation.js";
-import { normalizeToolParameters } from "./agent-tools.schema.js";
+import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { CODE_MODE_EXEC_TOOL_NAME, createCodeModeTools } from "./code-mode.js";
 import { getInternalToolExecutionPreparer } from "./runtime/internal-hooks.js";
@@ -56,12 +55,6 @@ import { setToolTerminalPresentation } from "./tool-terminal-presentation.js";
 
 type BeforeToolCallHandlerMock = ReturnType<typeof vi.fn>;
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-client-tool-policy-");
-
-const beforeToolCallTesting = {
-  adjustedParamsByToolCallId,
-  buildAdjustedParamsKey,
-  structuredReplaySafeToolCallIds,
-};
 
 function asAgentTool(tool: {
   description?: string;
@@ -188,16 +181,16 @@ describe("before_tool_call hook integration", () => {
     );
 
     expect(
-      beforeToolCallTesting.structuredReplaySafeToolCallIds.has(
-        beforeToolCallTesting.buildAdjustedParamsKey({
+      structuredReplaySafeToolCallIds.has(
+        buildAdjustedParamsKey({
           runId: "run-core",
           toolCallId: "call-core",
         }),
       ),
     ).toBe(true);
     expect(
-      beforeToolCallTesting.structuredReplaySafeToolCallIds.has(
-        beforeToolCallTesting.buildAdjustedParamsKey({
+      structuredReplaySafeToolCallIds.has(
+        buildAdjustedParamsKey({
           runId: "run-plugin",
           toolCallId: "call-plugin",
         }),
@@ -385,8 +378,8 @@ describe("before_tool_call hook deduplication (#15502)", () => {
 
     expect(result.details).toEqual({ answer: 42 });
     expect(
-      beforeToolCallTesting.structuredReplaySafeToolCallIds.has(
-        beforeToolCallTesting.buildAdjustedParamsKey({
+      structuredReplaySafeToolCallIds.has(
+        buildAdjustedParamsKey({
           runId,
           toolCallId: "call-private-preparer-adapter",
         }),
@@ -1078,15 +1071,16 @@ describe("before_tool_call hook deduplication (#15502)", () => {
       },
     );
     const tool = expectDefined(
-      wrapToolWithBeforeToolCallHook(
-        normalizeToolParameters(sourceTool, { modelProvider: "openai" }),
-        {
+      finalizeAgentTools({
+        tools: [sourceTool],
+        modelProvider: "openai",
+        hookContext: {
           sessionId: "session-terminal-presentation",
           runId: "run-terminal-presentation",
           onToolOutcome,
         },
-      ),
-      "wrapToolWithBeforeToolCallHook( normalizeToolParameters(sourceTool, {... test invariant",
+      })[0],
+      "wrapped finalized source tool",
     );
     await tool.execute("call-terminal-presentation", {
       request: { url: "https://example.com" },

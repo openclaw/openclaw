@@ -30,7 +30,12 @@ import {
 import { seedCompletedRuntimePinMigration } from "./test-helpers/service-audit-runtime-pin.js";
 
 const native = vi.hoisted(() => ({ task: vi.fn() }));
-vi.mock("./schtasks-exec.js", () => ({ execSchtasks: native.task }));
+// mock-isolation: Definition facts come from the synthetic scheduler, not host task mutations.
+vi.mock("./schtasks-exec.js", () => ({
+  execSchtasks: native.task,
+  execScheduledTaskEnabledChange: (taskName: string, enabled: boolean) =>
+    native.task(["/Change", "/TN", taskName, enabled ? "/ENABLE" : "/DISABLE"]),
+}));
 vi.mock("../process/exec.js", async (original) => ({
   ...(await original<typeof import("../process/exec.js")>()),
   runExec: vi.fn(async (_command: string, args: string[], options: { input: Uint8Array }) =>

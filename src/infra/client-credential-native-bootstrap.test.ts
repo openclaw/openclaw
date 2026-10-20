@@ -31,6 +31,32 @@ const auth = CLIENT_CREDENTIAL_SCHEMA_SQL.slice(
   CLIENT_CREDENTIAL_SCHEMA_SQL.indexOf("CREATE TABLE device_auth_tokens"),
   CLIENT_CREDENTIAL_SCHEMA_SQL.indexOf("CREATE TABLE gateway_origin_device_tokens"),
 );
+// Shipped macOS PortGuardian DDL, independent of the credential schema contract.
+const portGuardian = `
+CREATE TABLE macos_port_guardian_records (
+  pid INTEGER NOT NULL PRIMARY KEY,
+  port INTEGER NOT NULL,
+  command TEXT NOT NULL,
+  mode TEXT NOT NULL,
+  timestamp REAL NOT NULL
+) STRICT;
+CREATE INDEX idx_macos_port_guardian_records_port
+  ON macos_port_guardian_records(port, timestamp DESC);
+`;
+const guardianRecord = {
+  pid: 4242,
+  port: 18789,
+  command: "/synthetic/ssh",
+  mode: "remote",
+  timestamp: 42.5,
+};
+
+function addPortGuardianRecord(database: ReturnType<typeof openNodeSqliteDatabase>) {
+  database.exec(portGuardian);
+  database
+    .prepare("INSERT INTO macos_port_guardian_records VALUES (?,?,?,?,?)")
+    .run(...Object.values(guardianRecord));
+}
 
 it.each([
   {
@@ -74,6 +100,8 @@ it.each([
   `${identity} CREATE VIEW exposed AS SELECT private_key_pem FROM device_identities`,
   `${identity} CREATE TRIGGER changed AFTER INSERT ON device_identities BEGIN SELECT 1; END`,
   `${identity} CREATE INDEX extra ON device_identities(created_at_ms)`,
+  `${identity + portGuardian} CREATE TABLE unrelated(value TEXT)`,
+  `${identity + portGuardian} CREATE TABLE exec_approvals_config(raw_json TEXT)`,
 ])(
   "does not classify empty, versioned or other application data as native credentials",
   (schema) => {
@@ -87,6 +115,27 @@ it("refuses names with a different credential schema", () => {
   using database = openNodeSqliteDatabase(":memory:");
   database.exec(identity.replace("private_key_pem TEXT NOT NULL", "private_key_pem BLOB NOT NULL"));
   expect(() => isNativeClientCredentialBootstrap(database)).toThrow();
+});
+
+it.each([
+  portGuardian.replace("timestamp REAL NOT NULL", "timestamp TEXT NOT NULL"),
+  portGuardian.replace(") STRICT;", ");"),
+  portGuardian.slice(0, portGuardian.indexOf("CREATE INDEX")),
+  portGuardian.replace("CREATE INDEX", "CREATE UNIQUE INDEX"),
+  portGuardian.replace("port, timestamp DESC", "port, timestamp"),
+  portGuardian.replace("timestamp DESC);", "timestamp DESC) WHERE port > 0;"),
+  "CREATE INDEX idx_macos_port_guardian_records_port ON device_identities(created_at_ms);",
+])("refuses malformed PortGuardian companions without changing the source", (schema) => {
+  const pathname = path.join(directories.make("native-invalid-companion-"), "native.sqlite");
+  {
+    using source = openNodeSqliteDatabase(pathname);
+    source.exec(identity + auth + schema);
+  }
+  const before = fs.readFileSync(pathname);
+  expect(() => readIndependentClientCredentialSource(pathname)).toThrow(
+    /Native PortGuardian companion/,
+  );
+  expect(fs.readFileSync(pathname)).toEqual(before);
 });
 
 it.each(["", identity + auth])(
@@ -125,14 +174,28 @@ it.each(["", identity + auth])(
   },
 );
 
-it.each([false, true])(
-  "opens independent sources without changing bytes, mode or directory (WAL=%s)",
-  (wal) => {
+it.each([
+  { wal: false, credentials: true, companion: false },
+  { wal: true, credentials: true, companion: false },
+  { wal: false, credentials: true, companion: true },
+  { wal: true, credentials: true, companion: true },
+  { wal: false, credentials: false, companion: true },
+])(
+  "reads only credentials beside PortGuardian without changing bytes, mode or directory (WAL=$wal, credentials=$credentials, companion=$companion)",
+  ({ wal, credentials, companion }) => {
     const root = directories.make("independent-readonly-");
     const pathname = path.join(root, "native.sqlite");
     {
       using source = openNodeSqliteDatabase(pathname);
-      source.exec(identity + auth);
+      if (credentials) {
+        source.exec(identity + auth);
+        source
+          .prepare("INSERT INTO device_auth_tokens VALUES (?,?,?,?,?)")
+          .run("device", "operator", "synthetic-token", '["operator.read"]', 10);
+      }
+      if (companion) {
+        addPortGuardianRecord(source);
+      }
       if (wal) {
         source.exec("PRAGMA journal_mode=WAL");
       }
@@ -144,7 +207,28 @@ it.each([false, true])(
     if (wal) {
       expect(() => readIndependentClientCredentialSource(pathname)).toThrow(/DELETE journal mode/);
     } else {
-      expect(readIndependentClientCredentialSource(pathname).rows.identities).toEqual([]);
+      expect(readIndependentClientCredentialSource(pathname).rows).toEqual({
+        identities: [],
+        tokens: credentials
+          ? [
+              {
+                device_id: "device",
+                role: "operator",
+                token: "synthetic-token",
+                scopes_json: '["operator.read"]',
+                updated_at_ms: 10,
+              },
+            ]
+          : [],
+        origins: [],
+        approvals: [],
+      });
+      if (companion) {
+        using source = openNodeSqliteDatabase(pathname, { readOnly: true });
+        expect(source.prepare("SELECT * FROM macos_port_guardian_records").all()).toEqual([
+          guardianRecord,
+        ]);
+      }
     }
     expect(fs.readFileSync(pathname)).toEqual(before);
     expect(fs.statSync(pathname).mode).toBe(mode);
@@ -153,7 +237,7 @@ it.each([false, true])(
 );
 
 it.each([false, true])(
-  "keeps refreshed credentials for unchanged native sources and rebuilds changed sources without reviving JSON (initial auth table: %s)",
+  "keeps refreshed credentials across PortGuardian changes and rebuilds changed native credentials (initial auth table: %s)",
   async (authTablePresent) => {
     const root = directories.make("independent-admission-");
     const env = { ...process.env, OPENCLAW_STATE_DIR: root };
@@ -162,6 +246,7 @@ it.each([false, true])(
     {
       using source = openNodeSqliteDatabase(pathname);
       source.exec(identity + (authTablePresent ? auth : ""));
+      addPortGuardianRecord(source);
       if (authTablePresent) {
         source
           .prepare("INSERT INTO device_auth_tokens VALUES (?,?,?,?,?)")
@@ -199,6 +284,12 @@ it.each([false, true])(
         kind: "token.read",
         key: { device_id: "device", role: "operator" },
       });
+    {
+      using source = openNodeSqliteDatabase(pathname);
+      source
+        .prepare("UPDATE macos_port_guardian_records SET command = ? WHERE pid = ?")
+        .run("/synthetic/ssh-refreshed", guardianRecord.pid);
+    }
     expect(read()).toMatchObject({ kind: "token", token: { token: "refreshed" } });
     const beforeInode = fs.statSync(pathname).ino;
     {
@@ -237,5 +328,10 @@ it.each([false, true])(
     expect(
       readClientCredentialReceipt(local.database)?.receipt.legacyImports["auth:primary"],
     ).toEqual({ sha256: "a".repeat(64) });
+    expect(
+      local.database
+        .prepare("SELECT name FROM sqlite_schema WHERE name = 'macos_port_guardian_records'")
+        .get(),
+    ).toBeUndefined();
   },
 );

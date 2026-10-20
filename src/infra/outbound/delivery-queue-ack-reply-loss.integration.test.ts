@@ -9,12 +9,15 @@ import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.test-support.js";
 import {
   drainMatrixReconnect,
   matrixOutboundForQueueTest,
 } from "./deliver.queue-integration.test-support.js";
+import {
+  awaitCustodyReply,
+  installCustodyMatrixPlugin,
+} from "./delivery-queue-custody.test-support.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-namespaces.js";
 import * as queueStorage from "./delivery-queue-storage.js";
 import { holdAcknowledgementReply } from "./delivery-queue-worker-reply.test-support.js";
@@ -46,18 +49,7 @@ describe("outbound ACK reply loss", () => {
       );
       await fs.mkdir(path.dirname(artifact), { recursive: true });
       await fs.writeFile(artifact, "synthetic queued audio");
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "matrix",
-            source: "test",
-            plugin: createOutboundTestPlugin({
-              id: "matrix",
-              outbound: matrixOutboundForQueueTest,
-            }),
-          },
-        ]),
-      );
+      installCustodyMatrixPlugin(matrixOutboundForQueueTest);
       if (phase === "pre-send fallback") {
         vi.spyOn(queueStorage, "markDeliveryPlatformSendAttemptStarted").mockRejectedValueOnce(
           new Error("synthetic marker failure"),
@@ -81,25 +73,11 @@ describe("outbound ACK reply loss", () => {
         (results) => ({ results }),
         (error: unknown) => ({ error }),
       );
-      const { id, reply } = await Promise.race([
-        queued.promise,
-        outcome.then((result) => {
-          throw "error" in result
-            ? result.error
-            : new Error("Delivery settled before queue custody");
-        }),
-      ]);
+      const { id, reply } = await awaitCustodyReply(queued.promise, outcome);
       let failure: unknown;
       let committedArtifact = "";
       try {
-        const committedPaths = await Promise.race([
-          reply.held,
-          outcome.then((result) => {
-            throw "error" in result
-              ? result.error
-              : new Error("Delivery settled before committed ACK reply");
-          }),
-        ]);
+        const committedPaths = await awaitCustodyReply(reply.held, outcome);
         expect(committedPaths).toHaveLength(1);
         committedArtifact = committedPaths[0]!;
         expect(path.dirname(committedArtifact)).toBe(path.join(stateDir, "delivery-queue-media"));

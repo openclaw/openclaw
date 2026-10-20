@@ -36,6 +36,7 @@ const { values } = parseArgs({
     "poll-ms": { type: "string", default: "0" },
     "churn-ms": { type: "string", default: "0" },
     "nested-cwd": { type: "boolean" },
+    "missing-cwd": { type: "boolean" },
     "nested-repository": { type: "boolean" },
     "excludes-file": { type: "boolean" },
     "start-at": { type: "string" },
@@ -61,6 +62,8 @@ checkout. The RPC boundary starts an isolated loopback Gateway on --port >=40000
 Use --tracked 267000 at seed time for an unchanged large tracked inventory. Files
 are empty and written sequentially; Linux Dirty memory is checked every 1,000 files.
 Use --nested-cwd to launch sessions from the existing new/ subdirectory.
+Use --missing-cwd to remove that subdirectory after session creation and verify
+negative-result reuse, then recreate it and verify recovery after polling.
 At seed time, --nested-repository replaces one untracked file with an opaque
 agent-created Git checkout. --excludes-file adds an external core.excludesFile
 and an ignored file in a >64 KiB branch config; RPC measurement verifies an
@@ -101,6 +104,11 @@ const tracked = integer(values.tracked, "--tracked");
 assert(tracked <= 500_000, "--tracked must not exceed 500000 files");
 const pollMs = integer(values["poll-ms"], "--poll-ms");
 const churnMs = integer(values["churn-ms"], "--churn-ms");
+assert(
+  !values["missing-cwd"] ||
+    (values.boundary === "rpc" && !values.mutate && !churnMs && !values["poll-state-dir"]?.length),
+  "--missing-cwd requires RPC polling without mutation or extra fixtures",
+);
 assert(!churnMs || values.boundary === "rpc", "--churn-ms requires --boundary rpc");
 assert(!churnMs || !values["poll-state-dir"]?.length, "--churn-ms requires one owned checkout");
 const gitEnv = {
@@ -549,7 +557,7 @@ async function measureRpc(fixture: object) {
       await ready.promise;
     }
     const targets = checkoutRoots.map((cwd, checkout) => ({
-      cwd: values["nested-cwd"] ? path.join(cwd, "new") : cwd,
+      cwd: values["nested-cwd"] || values["missing-cwd"] ? path.join(cwd, "new") : cwd,
       params: {
         sessionKey: `agent:main:synthetic-diff-contention${checkout ? `-${checkout}` : ""}`,
         scope: "all",
@@ -562,6 +570,9 @@ async function measureRpc(fixture: object) {
         cwd: target.cwd,
         visibility: "shared",
       });
+    }
+    if (values["missing-cwd"]) {
+      await fs.rename(path.join(repo, "new"), path.join(repo, "missing-cwd-saved"));
     }
     const warmupStarted = performance.now();
     const responseHash = (
@@ -579,6 +590,7 @@ async function measureRpc(fixture: object) {
     );
     const warmupHashes = warmupResults.map(responseHash);
     for (const [index, result] of warmupResults.entries()) {
+      assert.equal(result.unavailableReason, values["missing-cwd"] ? "not_git" : undefined);
       const currentFixture = index === 0 ? fixture : extraFixtures[index - 1]!;
       if ("nestedRepository" in currentFixture && currentFixture.nestedRepository === true) {
         const nested = result.files.find((file) => file.path === "agent-clone/");
@@ -630,6 +642,7 @@ async function measureRpc(fixture: object) {
       }
     };
     measured = true;
+    const cpuStarted = process.cpuUsage();
     const started = performance.now();
     deadline = started + durationMs;
     await Promise.all([
@@ -706,7 +719,10 @@ async function measureRpc(fixture: object) {
                 const result = await peer.request<
                   import("../../packages/gateway-protocol/src/index.js").SessionsDiffResult
                 >("sessions.diff", target.params);
-                assert.equal(result.unavailableReason, undefined);
+                assert.equal(
+                  result.unavailableReason,
+                  values["missing-cwd"] ? "not_git" : undefined,
+                );
                 if (values.mutate) {
                   const modified = result.files.find((file) => file.path === "modified.txt");
                   assert(modified, "mutated file must reach RPC response");
@@ -740,8 +756,30 @@ async function measureRpc(fixture: object) {
       })(),
     ]);
     const elapsedMs = performance.now() - started;
+    const cpuUsed = process.cpuUsage(cpuStarted);
+    const processCpuMs = (cpuUsed.user + cpuUsed.system) / 1_000;
     await waitForDiagnosticEventsDrained();
     measured = false;
+    let missingRecoveryMs: number | null = null;
+    if (values["missing-cwd"]) {
+      await fs.rename(path.join(repo, "missing-cwd-saved"), path.join(repo, "new"));
+      const recoveryStarted = performance.now();
+      for (;;) {
+        const result = await peers[0]!.request<
+          import("../../packages/gateway-protocol/src/index.js").SessionsDiffResult
+        >("sessions.diff", targets[0]!.params);
+        const recoveryMs = performance.now() - recoveryStarted;
+        assert(recoveryMs < 2_000, "recreated cwd must recover within two seconds");
+        if (
+          !result.unavailableReason &&
+          result.files.some((file) => file.path === "modified.txt")
+        ) {
+          missingRecoveryMs = recoveryMs;
+          break;
+        }
+        await delay(50);
+      }
+    }
     let editControlVerified = false;
     let editFirstPollVisible: boolean[] = [];
     let editVisibilityMs: number[] = [];
@@ -871,6 +909,8 @@ async function measureRpc(fixture: object) {
       agents,
       maintenance,
       churnMs,
+      missingCwd: values["missing-cwd"] === true,
+      missingRecoveryMs,
       completedChurn: churnTimings.length,
       churnLatencyMs: churnTimings.length ? summarize(churnTimings) : null,
       editControlVerified,
@@ -891,6 +931,8 @@ async function measureRpc(fixture: object) {
       pollMs,
       node: process.version,
       elapsedMs,
+      processCpuMs,
+      processCpuMsPerRpc: processCpuMs / rpcSamples.length,
       rpcLatencyMs: summarize(rpcSamples.map((sample) => sample.elapsedMs)),
       rpcRoundLatencyMs: summarize([...roundMaxMs.values()]),
       heavyContentMs: heavyMs.length ? summarize(heavyMs) : null,
@@ -963,6 +1005,15 @@ async function measureRpc(fixture: object) {
     }
     assert(excludesFileControlVerified !== false, "an external ignore edit must reach every tab");
   } finally {
+    if (values["missing-cwd"]) {
+      await fs
+        .rename(path.join(repo, "missing-cwd-saved"), path.join(repo, "new"))
+        .catch((error: unknown) => {
+          if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
+            throw error;
+          }
+        });
+    }
     stopPhases();
     operationChannel.unsubscribe(observe);
     for (const peer of peers) {

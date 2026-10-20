@@ -72,6 +72,7 @@ type ChatHistoryPaneRequests = {
 };
 
 export type InitialChatSnapshotHydration = {
+  titlePending?: boolean;
   sessionKey: string;
   connected: boolean;
   promise: Promise<void>;
