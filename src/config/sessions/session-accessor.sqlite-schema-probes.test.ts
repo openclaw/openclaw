@@ -50,6 +50,12 @@ import {
 } from "./session-canonical-key.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const noProbes = { admitted: true, schemaVersion: 0, userVersion: 0, dataVersion: 0 };
+const cronKeys = [
+  "agent:main:cron:job:run:old",
+  "agent:main:cron:job:run:recent",
+  "agent:other:cron:job:run:old",
+];
 afterEach(async () => {
   vi.restoreAllMocks();
   await closeOpenClawAgentDatabasesAsync();
@@ -80,6 +86,7 @@ it("refreshes admitted session readers after worker commits without schema or fr
     if (!worker) {
       throw new Error("Session probe worker is unavailable");
     }
+    const mainKey = () => worker.execute({ type: "mainKey", input: undefined });
     const lookupDatabase = openOpenClawAgentDatabase({
       ...options,
       path: path.join(path.dirname(writer.path), "lookup-traffic.sqlite"),
@@ -107,7 +114,7 @@ it("refreshes admitted session readers after worker commits without schema or fr
         }),
       }),
     );
-    const afterRace = await worker.execute({ type: "mainKey", input: undefined });
+    const afterRace = await mainKey();
     expect({ raced, afterRace }).toEqual({
       raced: { mainKey: "configured-during-read", statements: 1 },
       afterRace: { mainKey: "configured-during-read", statements: 0 },
@@ -127,12 +134,8 @@ it("refreshes admitted session readers after worker commits without schema or fr
       borrowed: borrowed.value,
       worker: await worker.execute({ type: "read", input: undefined }),
     };
-    console.log(JSON.stringify(results));
     for (const result of Object.values(results).flatMap(Object.values)) {
-      expect(result.admitted).toBe(true);
-      expect(result.schemaVersion).toBe(0);
-      expect(result.userVersion).toBe(0);
-      expect(result.dataVersion).toBe(0);
+      expect(result).toMatchObject(noProbes);
     }
     const writes = observeHostDataSql();
     try {
@@ -152,15 +155,10 @@ it("refreshes admitted session readers after worker commits without schema or fr
       await worker.execute({ type: "read", input: { label: "worker-committed" } }),
     ];
     for (const result of refreshed.flatMap(Object.values)) {
-      expect(result).toMatchObject({
-        admitted: true,
-        schemaVersion: 0,
-        userVersion: 0,
-        dataVersion: 0,
-      });
+      expect(result).toMatchObject(noProbes);
     }
     expect(readCanonicalSessionMainKey(writer)).toBe("main");
-    expect(await worker.execute({ type: "mainKey", input: undefined })).toEqual({
+    expect(await mainKey()).toEqual({
       mainKey: "main",
       statements: 0,
     });
@@ -199,7 +197,7 @@ it("refreshes admitted session readers after worker commits without schema or fr
     await configured;
     expect(fixtureWriteStarted).toBe(true);
     expect(readCanonicalSessionMainKey(reader.database)).toBe("configured");
-    expect(await worker.execute({ type: "mainKey", input: undefined })).toEqual({
+    expect(await mainKey()).toEqual({
       mainKey: "configured",
       statements: 0,
     });
@@ -216,10 +214,8 @@ it("refreshes admitted session readers after worker commits without schema or fr
       },
       requireNativeSqliteDatabase(writer.db),
     );
-    expect((await worker.execute({ type: "mainKey", input: undefined })).mainKey).toBe(
-      "configured",
-    );
-    expect(await worker.execute({ type: "mainKey", input: undefined })).toEqual({
+    expect((await mainKey()).mainKey).toBe("configured");
+    expect(await mainKey()).toEqual({
       mainKey: "configured",
       statements: 0,
     });
@@ -302,47 +298,25 @@ it("refreshes admitted session readers after worker commits without schema or fr
   }
 });
 
-it.each<{
-  scope: SessionEntryListScope;
-  fullKeys: string[];
-}>(
-  (
-    [
-      { cronRetention: { limit: 32 } },
-      { cronRetention: { limit: 1, afterSessionKey: "agent:main:cron:job:run:old" } },
-      { expiredCronRuns: { agentId: "main", updatedBefore: 2 } },
-      { expiredCronRuns: { agentId: "main", updatedBefore: 0 } },
-    ] satisfies SessionEntryListScope[]
-  ).map((scope) => ({
-    scope,
-    fullKeys:
-      scope.cronRetention?.limit === 1
-        ? ["agent:main:cron:job:run:recent"]
-        : scope.cronRetention
-          ? [
-              "agent:main:cron:job:run:old",
-              "agent:main:cron:job:run:recent",
-              "agent:other:cron:job:run:old",
-            ]
-          : scope.expiredCronRuns?.updatedBefore === 2
-            ? ["agent:main:cron:job:run:old"]
-            : [],
-  })),
-)(
+it.each<{ scope: SessionEntryListScope; fullKeys: string[] }>([
+  { scope: { cronRetention: { limit: 32 } }, fullKeys: cronKeys },
+  {
+    scope: { cronRetention: { limit: 1, afterSessionKey: cronKeys[0] } },
+    fullKeys: [cronKeys[1]!],
+  },
+  { scope: { expiredCronRuns: { agentId: "main", updatedBefore: 2 } }, fullKeys: [cronKeys[0]!] },
+  { scope: { expiredCronRuns: { agentId: "main", updatedBefore: 0 } }, fullKeys: [] },
+])(
   "loads only selected cold snapshots outside the retention transaction: $scope",
   ({ scope, fullKeys }) => {
-    const { database, options, read } = fixture(listSessionEntriesReadOnly);
+    const { database, options, read, select } = fixture(listSessionEntriesReadOnly);
     const saved = { prompt: "cron saved snapshot", skills: [] };
     const usageFamilySessionIds = Array.from({ length: 1024 }, (_, i) => `previous-run-${i}`);
     runOpenClawAgentWriteTransaction((db) => {
-      for (const [sessionKey, updatedAt] of [
-        ["agent:main:cron:job:run:old", 1],
-        ["agent:main:cron:job:run:recent", 2],
-        ["agent:other:cron:job:run:old", 1],
-      ] as const) {
+      for (const [index, sessionKey] of cronKeys.entries()) {
         writeSessionEntry(db, sessionKey, {
           sessionId: sessionKey,
-          updatedAt,
+          updatedAt: index === 1 ? 2 : 1,
           skillsSnapshot: saved,
           usageFamilySessionIds,
         });
@@ -388,12 +362,7 @@ it.each<{
       }
       return parse(text, reviver);
     });
-    const entries = listSessionEntriesReadOnly({
-      agentId: "main",
-      storePath: options.path,
-      env: options.env,
-      ...scope,
-    });
+    const entries = select(scope);
     expect(materialized.toSorted()).toEqual(fullKeys);
     expect(decodedInTransaction).toEqual(fullKeys.map(() => false));
     expect(
@@ -431,26 +400,16 @@ function fixture(list: typeof listSessionEntriesReadOnly) {
     }
     writeSessionEntry(db, hidden.sessionKey, { sessionId: hidden.sessionId, updatedAt: 1 });
   }, options);
-  const read = (sessionKeys?: readonly string[]) =>
-    list({
-      agentId: options.agentId,
-      env: options.env,
-      storePath: options.path,
-      projection: "list",
-      sessionKeys,
-    });
-  return { database, hidden, options, read };
+  const scope = { agentId: options.agentId, env: options.env, storePath: options.path };
+  const select = (selection: SessionEntryListScope) => list({ ...scope, ...selection });
+  const read = (sessionKeys?: readonly string[]) => select({ projection: "list", sessionKeys });
+  return { database, hidden, options, scope, read, select };
 }
 
 it("reads cron participants only after expiry selection and includes committed changes", () => {
-  const { database, options } = fixture(listSessionEntriesReadOnly);
+  const { database, options, scope: baseScope, select } = fixture(listSessionEntriesReadOnly);
   const sessionKey = "agent:main:cron:job:run:selected";
-  const scope = {
-    agentId: options.agentId,
-    storePath: options.path,
-    env: options.env,
-    sessionKey,
-  };
+  const scope = { ...baseScope, sessionKey };
   const entry = {
     sessionId: "selected",
     updatedAt: 2,
@@ -459,10 +418,7 @@ it("reads cron participants only after expiry selection and includes committed c
   runOpenClawAgentWriteTransaction((db) => writeSessionEntry(db, sessionKey, entry), options);
   recordSessionParticipant(scope, { identity: { type: "agent", id: "before" }, promptedAt: 1 });
   const readExpired = () =>
-    listSessionEntriesReadOnly({
-      ...scope,
-      expiredCronRuns: { agentId: "main", updatedBefore: 2 },
-    });
+    select({ ...scope, expiredCronRuns: { agentId: "main", updatedBefore: 2 } });
   const statements = trackSqliteStatementExecutions(
     requireNativeSqliteDatabase(database.db),
     ["participants"],
@@ -497,7 +453,7 @@ it("reads cron participants only after expiry selection and includes committed c
 });
 
 it("retains unsplit snapshots on selected cron rows", () => {
-  const { database, options, read } = fixture(listSessionEntriesReadOnly);
+  const { database, options, read, select } = fixture(listSessionEntriesReadOnly);
   const sessionKey = "agent:main:cron:job:run:legacy";
   const entry = { sessionId: "legacy", updatedAt: 1 };
   runOpenClawAgentWriteTransaction((db) => writeSessionEntry(db, sessionKey, entry), options);
@@ -506,14 +462,9 @@ it("retains unsplit snapshots on selected cron rows", () => {
   database.db
     .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
     .run(JSON.stringify(retained), sessionKey);
-  expect(
-    listSessionEntriesReadOnly({
-      agentId: "main",
-      storePath: options.path,
-      env: options.env,
-      expiredCronRuns: { agentId: "main", updatedBefore: 2 },
-    }),
-  ).toEqual([{ sessionKey, entry: retained }]);
+  expect(select({ expiredCronRuns: { agentId: "main", updatedBefore: 2 } })).toEqual([
+    { sessionKey, entry: retained },
+  ]);
 });
 
 describe.each([

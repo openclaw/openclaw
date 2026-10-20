@@ -7,10 +7,47 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { loadSessionEntry, patchSessionEntryCore } from "./session-accessor.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import * as targetWorker from "./session-transcript-read-worker-runtime.js";
+
+function sharedStore(state: OpenClawTestState, key: string, sessionId: string) {
+  const storePath = state.statePath("shared.sqlite");
+  const database = { agentId: "main", env: state.env, path: storePath };
+  openOpenClawAgentDatabase(database);
+  const scope = {
+    env: state.env,
+    storePath,
+    agentId: "secondary",
+    sessionKey: `agent:secondary:${key}`,
+  };
+  replaceSessionEntrySync(scope, { sessionId, updatedAt: 1 });
+  return { storePath, database, scope };
+}
+
+function pauseDiscovery(
+  entered: ReturnType<typeof createDeferred<void>>,
+  release: ReturnType<typeof createDeferred<void>>,
+  once = true,
+) {
+  const resolve = targetWorker.resolveSessionSqliteTargetInWorker;
+  let first = true;
+  return vi
+    .spyOn(targetWorker, "resolveSessionSqliteTargetInWorker")
+    .mockImplementation(async (...args) => {
+      const result = await resolve(...args);
+      if (first || !once) {
+        first = false;
+        entered.resolve();
+        await release.promise;
+      }
+      return result;
+    });
+}
 
 it.each([false, true])(
   "retains shared-store patch order while discovering the physical owner (source guard=%s)",
@@ -18,37 +55,17 @@ it.each([false, true])(
     await withOpenClawTestState(
       { label: "session-shared-write-order", scenario: "minimal" },
       async (state) => {
-        const storePath = state.statePath("shared.sqlite");
-        openOpenClawAgentDatabase({ agentId: "main", env: state.env, path: storePath });
-        const scope = {
-          env: state.env,
-          storePath,
-          agentId: "secondary",
-          sessionKey: "agent:secondary:fifo",
-        };
+        const { storePath, scope } = sharedStore(state, "fifo", "shared");
         const pending: Promise<unknown>[] = [];
         const own = <T>(promise: Promise<T>): Promise<T> => {
           pending.push(promise);
           void promise.catch(() => {});
           return promise;
         };
-        replaceSessionEntrySync(scope, { sessionId: "shared", updatedAt: 1 });
         const firstEntered = createDeferred();
         const releaseFirst = createDeferred();
         const secondQueued = createDeferred();
-        const resolve = targetWorker.resolveSessionSqliteTargetInWorker;
-        let firstResolution = true;
-        const observation = vi
-          .spyOn(targetWorker, "resolveSessionSqliteTargetInWorker")
-          .mockImplementation(async (...args) => {
-            const result = await resolve(...args);
-            if (firstResolution) {
-              firstResolution = false;
-              firstEntered.resolve();
-              await releaseFirst.promise;
-            }
-            return result;
-          });
+        const observation = pauseDiscovery(firstEntered, releaseFirst);
         let watchSecond = false;
         const realQueued = writerQueue.runQueuedStoreWrite;
         const queued = vi
@@ -108,16 +125,7 @@ it("completes a shared-store patch inside its existing foreground writer", async
   await withOpenClawTestState(
     { label: "session-shared-write-reentry", scenario: "minimal" },
     async (state) => {
-      const storePath = state.statePath("shared.sqlite");
-      const database = { agentId: "main", env: state.env, path: storePath };
-      openOpenClawAgentDatabase(database);
-      const scope = {
-        env: state.env,
-        storePath,
-        agentId: "secondary",
-        sessionKey: "agent:secondary:nested",
-      };
-      replaceSessionEntrySync(scope, { sessionId: "nested", updatedAt: 1 });
+      const { storePath, database, scope } = sharedStore(state, "nested", "nested");
       const started = createDeferred();
       const submitted = createDeferred();
       const realQueued = writerQueue.runQueuedStoreWrite;
@@ -172,27 +180,11 @@ it("rejects a shared-store replacement during discovery before invoking the upda
   await withOpenClawTestState(
     { label: "session-shared-write-replacement", scenario: "minimal" },
     async (state) => {
-      const storePath = state.statePath("shared.sqlite");
-      openOpenClawAgentDatabase({ agentId: "main", env: state.env, path: storePath });
-      const scope = {
-        env: state.env,
-        storePath,
-        agentId: "secondary",
-        sessionKey: "agent:secondary:replaced",
-      };
-      replaceSessionEntrySync(scope, { sessionId: "original", updatedAt: 1 });
+      const { storePath, scope } = sharedStore(state, "replaced", "original");
       await closeOpenClawAgentDatabaseByPathAsync(storePath);
       const entered = createDeferred();
       const release = createDeferred();
-      const resolve = targetWorker.resolveSessionSqliteTargetInWorker;
-      const observation = vi
-        .spyOn(targetWorker, "resolveSessionSqliteTargetInWorker")
-        .mockImplementation(async (...args) => {
-          const result = await resolve(...args);
-          entered.resolve();
-          await release.promise;
-          return result;
-        });
+      const observation = pauseDiscovery(entered, release, false);
       const update = vi.fn(() => ({ label: "must not commit" }));
       const pending = patchSessionEntryCore(scope, update, { skipMaintenance: true });
       void pending.catch(() => {});

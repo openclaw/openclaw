@@ -237,12 +237,7 @@ it.for(["transcript backfill", "usage rollup", "new entry", "protection removal"
         });
         kickSessionEntryMaintenanceAfterWrite(request);
         const initial = await withinTest(first.promise, signal);
-        if (overlap === "new entry") {
-          expect(await withinTest(scheduled.promise, signal)).toBe(1_000);
-          const final = await withinTest(settled.promise, signal);
-          expect(final.value.archived).toBe(1);
-          expect(loadSessionEntry({ storePath, sessionKey: newKey })?.archivedAt).toBeDefined();
-        } else if (irrelevant) {
+        if (irrelevant) {
           expect(initial.kind).toBe("maintenance-plan");
           if (initial.kind !== "maintenance-plan") {
             throw new Error("Unrelated writes invalidated maintenance planning");
@@ -253,17 +248,15 @@ it.for(["transcript backfill", "usage rollup", "new entry", "protection removal"
           expect(await withinTest(scheduled.promise, signal)).toBeGreaterThan(1_000);
           expect(completedPlans).toBe(1);
         } else {
-          if (initial.kind === "maintenance-plan") {
+          if (overlap === "protection removal" && initial.kind === "maintenance-plan") {
             expect(initial.value).toMatchObject({ archived: 0, durableNoCandidates: true });
           }
           expect(await withinTest(scheduled.promise, signal)).toBe(1_000);
           const final = await withinTest(settled.promise, signal);
           expect(final.value.archived).toBe(1);
+          const archivedKey = overlap === "new entry" ? newKey : lockedKey;
           expect(
-            loadSessionEntry({
-              storePath,
-              sessionKey: lockedKey,
-            })?.archivedAt,
+            loadSessionEntry({ storePath, sessionKey: archivedKey })?.archivedAt,
           ).toBeDefined();
         }
         for (const key of overlap === "protection removal"
