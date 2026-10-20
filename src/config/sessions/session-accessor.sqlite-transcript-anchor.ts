@@ -26,7 +26,7 @@ import {
 import { selectSessionTranscriptIndexStatus } from "./session-transcript-index.js";
 import { SessionTranscriptReadFenceError } from "./session-transcript-read-fence-error.js";
 import {
-  sameTranscriptEntryAnchor,
+  transcriptEntryAnchorMismatch,
   type TranscriptEntryAnchor,
 } from "./transcript-entry-anchor.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
@@ -123,8 +123,11 @@ export function assertSessionTranscriptContextAnchorInDatabase(
   } else {
     current = readActiveTranscriptEntryAnchorInTransaction(params);
   }
-  if (!sameTranscriptEntryAnchor(through, current)) {
-    throw new SessionTranscriptReadFenceError("Completed-turn transcript anchor changed");
+  const mismatch = transcriptEntryAnchorMismatch(through, current);
+  if (mismatch) {
+    throw new SessionTranscriptReadFenceError(
+      `Completed-turn transcript anchor changed (${mismatch})`,
+    );
   }
 }
 

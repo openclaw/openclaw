@@ -141,6 +141,13 @@ it.each([
       `skill experience review ${level === "debug" ? "cancelled" : "failed"}:`,
     ),
   );
+  expect(log[level]).toHaveBeenCalledWith(
+    expect.stringContaining(
+      "source=08704289cffb1011742d56f052672a0fb6a3bc81c7e26ecabfa82c54d2e8fc2d",
+    ),
+  );
+  expect(log[level].mock.calls[0]?.[0]).not.toContain(source.sessionKey);
+  expect(log[level].mock.calls[0]?.[0]).not.toContain(source.storePath);
   expect(log[level === "debug" ? "warn" : "debug"]).not.toHaveBeenCalled();
 });
 
