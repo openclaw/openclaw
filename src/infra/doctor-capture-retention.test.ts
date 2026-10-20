@@ -1,12 +1,15 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
+import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { parseUpdateRecoveryBackupManifest } from "../commands/backup-verify-manifest.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   collectStandaloneDoctorCaptures,
   retireExpiredStandaloneDoctorCaptures,
@@ -22,6 +25,7 @@ import {
   storeRetainedUpdateRecovery,
 } from "./update-retained-recovery.test-support.js";
 import { createUpdateRun } from "./update-run-ledger.js";
+import { getUpdateRunAsync } from "./update-run-reader.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeOpenClawStateDatabaseForTest());
@@ -150,4 +154,79 @@ it("expires captures after thirty days but always keeps the newest sealed captur
   });
   expect(result).toEqual({ retired: [expired], warnings: [] });
   expect(fs.existsSync(newest)).toBe(true);
+});
+
+it("retires only expired sealed standalone Doctor captures and preserves incomplete or linked copies", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const day = 24 * 60 * 60_000;
+    const store = resolveUpdateCaptureRoot(state.stateDir);
+    const sealed = async (runId: string, ageDays: number, directory = path.join(store, runId)) => {
+      const manifest = {
+        schemaVersion: 2,
+        kind: "update-recovery",
+        generation: { kind: "baseline" },
+        databases: [],
+        runId,
+        installRoot: state.root,
+        stateDir: state.stateDir,
+        configPath: state.configPath,
+        configPaths: [state.configPath],
+        creator: { host: "fixture", pid: 1, startIdentity: "1" },
+        drivers: [],
+        createdAt: new Date(now - ageDays * day).toISOString(),
+        roots: [state.configPath],
+        excludedRoots: [],
+        protectedPaths: [state.configPath],
+        entries: [
+          { kind: "missing", sourcePath: state.configPath, sqlite: false, directory: false },
+        ],
+      };
+      const raw = JSON.stringify(manifest);
+      parseUpdateRecoveryBackupManifest(raw);
+      await fsPromises.mkdir(directory, { recursive: true });
+      await fsPromises.writeFile(path.join(directory, "manifest.json"), raw);
+      expect(await getUpdateRunAsync(runId)).toBeUndefined();
+      return directory;
+    };
+    const expired = await sealed(`doctor-${randomUUID()}`, 31);
+    const recent = await sealed(`doctor-${randomUUID()}`, 1);
+    const incomplete = path.join(store, `doctor-${randomUUID()}`);
+    await fsPromises.mkdir(incomplete);
+    const update = await sealed(randomUUID(), 40);
+    const linkedId = `doctor-${randomUUID()}`;
+    const linkedTarget = await sealed(linkedId, 31, state.path("linked-capture"));
+    const linked = path.join(store, linkedId);
+    await fsPromises.symlink(linkedTarget, linked, "dir");
+    const interrupted: string[] = [];
+    for (const kind of ["linked", "copied", "conflicting"]) {
+      const retained = await sealed(`doctor-${randomUUID()}`, 31);
+      const finalPath = path.join(retained, "manifest.json");
+      const partialPath = `${finalPath}.partial`;
+      if (kind === "linked") {
+        await fsPromises.link(finalPath, partialPath);
+      } else if (kind === "copied") {
+        await fsPromises.copyFile(finalPath, partialPath);
+      } else {
+        await fsPromises.writeFile(partialPath, "different, unverified bytes");
+      }
+      interrupted.push(retained);
+    }
+    const assertCurrent = vi.fn();
+
+    const result = await retireExpiredStandaloneDoctorCaptures({
+      stateDir: state.stateDir,
+      keepRunId: path.basename(recent),
+      now,
+      assertCurrent,
+    });
+
+    expect(result).toEqual({ retired: [expired], warnings: [] });
+    expect(assertCurrent).toHaveBeenCalled();
+    await expect(fsPromises.lstat(expired)).rejects.toMatchObject({ code: "ENOENT" });
+    for (const retained of [recent, incomplete, update, linkedTarget, ...interrupted]) {
+      expect((await fsPromises.lstat(retained)).isDirectory()).toBe(true);
+    }
+    expect((await fsPromises.lstat(linked)).isSymbolicLink()).toBe(true);
+    expect(await fsPromises.readlink(linked)).toBe(linkedTarget);
+  });
 });
