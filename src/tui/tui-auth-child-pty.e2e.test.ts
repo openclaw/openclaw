@@ -55,6 +55,14 @@ async function waitForProcessExit(pid: number, timeoutMs: number): Promise<void>
   throw new Error(`auth child ${String(pid)} remained alive`);
 }
 
+async function startAuth(exitMs?: number, exitCode = 0) {
+  const auth = await createCodexFixture(exitMs, exitCode);
+  const fixture = await startTuiFixture({ env: { PATH: auth.pathEnv } });
+  await fixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
+  await fixture.run.write("/auth openai\r", { delay: false });
+  return fixture.run;
+}
+
 describe("TUI auth child lifecycle", { concurrent: false }, () => {
   afterEach(async () => {
     await disposeActiveTuiFixtures();
@@ -66,22 +74,15 @@ describe("TUI auth child lifecycle", { concurrent: false }, () => {
   it.skipIf(process.platform === "win32")(
     "terminates the foreground auth child when SIGTERM exits the TUI",
     async () => {
-      const auth = await createCodexFixture();
-      const fixture = await startTuiFixture({
-        env: {
-          PATH: auth.pathEnv,
-        },
-      });
-      await fixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
-      await fixture.run.write("/auth openai\r", { delay: false });
-      await fixture.run.waitForOutput("AUTH_CHILD_STARTED:", STARTUP_TIMEOUT_MS);
-      const pidMatch = fixture.run.visibleOutput().match(/AUTH_CHILD_STARTED:(\d+)/u);
+      const run = await startAuth();
+      await run.waitForOutput("AUTH_CHILD_STARTED:", STARTUP_TIMEOUT_MS);
+      const pidMatch = run.visibleOutput().match(/AUTH_CHILD_STARTED:(\d+)/u);
       expect(pidMatch).not.toBeNull();
       const authPid = Number(pidMatch?.[1]);
 
-      process.kill(fixture.run.pid, "SIGTERM");
+      process.kill(run.pid, "SIGTERM");
 
-      await expect(fixture.run.waitForExit(EXIT_TIMEOUT_MS)).resolves.toBeDefined();
+      await expect(run.waitForExit(EXIT_TIMEOUT_MS)).resolves.toBeDefined();
       await expect(waitForProcessExit(authPid, 750)).resolves.toBeUndefined();
     },
     STARTUP_TIMEOUT_MS + EXIT_TIMEOUT_MS,
@@ -90,17 +91,10 @@ describe("TUI auth child lifecycle", { concurrent: false }, () => {
   it(
     "resumes the TUI after normal auth completion",
     async () => {
-      const auth = await createCodexFixture(50);
-      const fixture = await startTuiFixture({
-        env: {
-          PATH: auth.pathEnv,
-        },
-      });
-      await fixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
-      await fixture.run.write("/auth openai\r", { delay: false });
-      await fixture.run.waitForOutput("auth flow finished for openai", STARTUP_TIMEOUT_MS);
-      await fixture.run.write("/gateway-status\r", { delay: false });
-      await fixture.run.waitForOutput("fixture gateway ok", STARTUP_TIMEOUT_MS);
+      const run = await startAuth(50);
+      await run.waitForOutput("auth flow finished for openai", STARTUP_TIMEOUT_MS);
+      await run.write("/gateway-status\r", { delay: false });
+      await run.waitForOutput("fixture gateway ok", STARTUP_TIMEOUT_MS);
     },
     STARTUP_TIMEOUT_MS * 2,
   );
@@ -108,19 +102,9 @@ describe("TUI auth child lifecycle", { concurrent: false }, () => {
   it(
     "keeps a failed auth command visible after the TUI resumes",
     async () => {
-      const auth = await createCodexFixture(50, 1);
-      const fixture = await startTuiFixture({
-        env: {
-          PATH: auth.pathEnv,
-        },
-      });
-      await fixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
-      await fixture.run.write("/auth openai\r", { delay: false });
-      await fixture.run.waitForOutput("auth flow failed (exit 1)", STARTUP_TIMEOUT_MS);
-      await fixture.run.waitForOutput(
-        "in a regular terminal to see its output",
-        STARTUP_TIMEOUT_MS,
-      );
+      const run = await startAuth(50, 1);
+      await run.waitForOutput("auth flow failed (exit 1)", STARTUP_TIMEOUT_MS);
+      await run.waitForOutput("in a regular terminal to see its output", STARTUP_TIMEOUT_MS);
     },
     STARTUP_TIMEOUT_MS * 2,
   );

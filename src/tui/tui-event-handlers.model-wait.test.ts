@@ -5,23 +5,13 @@ import {
   createMockChatLog,
   makeTuiState,
 } from "./tui-event-test-support.js";
+import type { ChatEvent } from "./tui-types.js";
 
 afterEach(() => vi.useRealTimers());
+const cancellationNotice = "Cancellation requested; the local model may still be finishing.";
 
 it("renders local model waits with verbosity off and clears each wait", () => {
-  vi.useFakeTimers();
-  const state = makeTuiState({ activeChatRunId: "run-1", sessionInfo: { verboseLevel: "off" } });
-  const setActivityStatus = vi.fn();
-  const handlers = createEventHandlers({
-    state,
-    setActivityStatus,
-    chatLog: createMockChatLog(),
-    btw: createMockBtwPresenter(),
-    tui: { requestRender: vi.fn() },
-    updateFooter: vi.fn(),
-    loadHistory: async () => ({ loaded: true, runOutcome: { state: "completed" } }),
-  });
-  onTestFinished(handlers.dispose);
+  const { setActivityStatus, handlers, chat } = createCancellationHarness(undefined, true);
   const status = (phase: string, reason?: "slot" | "response") =>
     handlers.handleAgentEvent({
       runId: "run-1",
@@ -34,27 +24,29 @@ it("renders local model waits with verbosity off and clears each wait", () => {
   expect(setActivityStatus).toHaveBeenLastCalledWith("running");
   status("waiting_for_model", "response");
   expect(setActivityStatus).toHaveBeenLastCalledWith("Waiting for the local model to respond");
-  handlers.handleChatEvent({
-    runId: "run-1",
-    sessionKey: state.currentSessionKey,
+  chat({
     state: "delta",
     message: { role: "assistant", content: "First response" },
   });
   expect(setActivityStatus).toHaveBeenLastCalledWith("streaming");
   status("waiting_for_model", "slot");
-  handlers.handleChatEvent({
-    runId: "run-1",
-    sessionKey: state.currentSessionKey,
-    state: "aborted",
-  });
+  chat({ state: "aborted" });
   expect(setActivityStatus).toHaveBeenLastCalledWith("aborted");
 });
 
-function createCancellationHarness(isLocalBtwRunId?: (runId: string) => boolean) {
+function createCancellationHarness(
+  isLocalBtwRunId?: (runId: string) => boolean,
+  modelWait = false,
+) {
   vi.useFakeTimers();
-  const state = makeTuiState({ activeChatRunId: "run-1" });
+  const state = makeTuiState({
+    activeChatRunId: "run-1",
+    ...(modelWait ? { sessionInfo: { verboseLevel: "off" } } : {}),
+  });
   const setActivityStatus = vi.fn((status: string) => {
-    state.activityStatus = status;
+    if (!modelWait) {
+      state.activityStatus = status;
+    }
   });
   const chatLog = createMockChatLog();
   const handlers = createEventHandlers({
@@ -64,26 +56,27 @@ function createCancellationHarness(isLocalBtwRunId?: (runId: string) => boolean)
     btw: createMockBtwPresenter(),
     tui: { requestRender: vi.fn() },
     updateFooter: vi.fn(),
-    loadHistory: async () => ({ loaded: false }),
+    loadHistory: async () =>
+      modelWait ? { loaded: true, runOutcome: { state: "completed" } } : { loaded: false },
     isLocalBtwRunId,
   });
   onTestFinished(handlers.dispose);
+  const chat = (event: Omit<ChatEvent, "runId" | "sessionKey"> & { runId?: string }) =>
+    handlers.handleChatEvent({ runId: "run-1", sessionKey: state.currentSessionKey, ...event });
   const aborted = {
     runId: "run-1",
     sessionKey: state.currentSessionKey,
     state: "aborted",
     localModelMayStillBeFinishing: true,
   };
-  return { state, setActivityStatus, chatLog, handlers, aborted };
+  return { state, setActivityStatus, chatLog, handlers, aborted, chat };
 }
 
 it("bounds the terminal cancellation caveat without rearming it on replay", () => {
   const { state, setActivityStatus, chatLog, handlers, aborted } = createCancellationHarness();
   handlers.handleChatEvent(aborted);
   expect(state.activeChatRunId).toBeNull();
-  expect(setActivityStatus).toHaveBeenLastCalledWith(
-    "Cancellation requested; the local model may still be finishing.",
-  );
+  expect(setActivityStatus).toHaveBeenLastCalledWith(cancellationNotice);
   expect(chatLog.addSystem).toHaveBeenCalledExactlyOnceWith("run aborted");
   vi.advanceTimersByTime(4_000);
   handlers.handleChatEvent(aborted);
@@ -92,17 +85,13 @@ it("bounds the terminal cancellation caveat without rearming it on replay", () =
 });
 
 it("preserves the cancellation caveat while a surviving side question completes", () => {
-  const { state, handlers, aborted } = createCancellationHarness((runId) => runId === "side-run");
+  const { state, handlers, aborted, chat } = createCancellationHarness(
+    (runId) => runId === "side-run",
+  );
   handlers.handleChatEvent(aborted);
   vi.advanceTimersByTime(4_000);
-  handlers.handleChatEvent({
-    runId: "side-run",
-    sessionKey: state.currentSessionKey,
-    state: "final",
-  });
-  expect(state.activityStatus).toBe(
-    "Cancellation requested; the local model may still be finishing.",
-  );
+  chat({ runId: "side-run", state: "final" });
+  expect(state.activityStatus).toBe(cancellationNotice);
   vi.advanceTimersByTime(1_000);
   expect(state.activityStatus).toBe("aborted");
 });
@@ -126,12 +115,8 @@ it("preserves the terminal caveat when the cancelled session reports idle", () =
     reason: "agent.input.settled",
     activeRunIds: [],
   });
-  expect(setActivityStatus).toHaveBeenLastCalledWith(
-    "Cancellation requested; the local model may still be finishing.",
-  );
-  expect(state.activityStatus).toBe(
-    "Cancellation requested; the local model may still be finishing.",
-  );
+  expect(setActivityStatus).toHaveBeenLastCalledWith(cancellationNotice);
+  expect(state.activityStatus).toBe(cancellationNotice);
   vi.advanceTimersByTime(5_000);
   expect(setActivityStatus).toHaveBeenLastCalledWith("aborted");
 });
@@ -139,12 +124,11 @@ it("preserves the terminal caveat when the cancelled session reports idle", () =
 it.each(["new run", "pending run", "session change", "dispose"] as const)(
   "clears the cancellation notice on %s without overwriting later activity",
   (change) => {
-    const { state, setActivityStatus, handlers, aborted } = createCancellationHarness();
+    const { state, setActivityStatus, handlers, aborted, chat } = createCancellationHarness();
     handlers.handleChatEvent(aborted);
     if (change === "new run") {
-      handlers.handleChatEvent({
+      chat({
         runId: "run-2",
-        sessionKey: state.currentSessionKey,
         state: "delta",
         message: { role: "assistant", content: "New answer" },
       });

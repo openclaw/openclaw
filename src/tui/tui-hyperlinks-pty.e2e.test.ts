@@ -22,6 +22,13 @@ function linkedText(output: string) {
   return spans;
 }
 
+function linkText(links: ReturnType<typeof linkedText>, target: string) {
+  return links
+    .filter((span) => span.target === target)
+    .map((span) => span.text)
+    .join("");
+}
+
 it.for([
   { label: "VS Code", termProgram: "vscode", cols: 100, labelPath: "label" },
   {
@@ -67,30 +74,15 @@ it.for([
       const response = raw.slice(raw.lastIndexOf("PTY_RESPONSE:"));
       const links = linkedText(response);
       console.log(
-        `[behavior-evidence] ${JSON.stringify({
-          label,
-          columns: cols,
-          links,
-          terminal: "real PTY",
-        })}`,
+        `[behavior-evidence] ${JSON.stringify({ label, columns: cols, links, terminal: "real PTY" })}`,
       );
       if (termProgram) {
         expect(links.filter((span) => span.target === visibleUrl)).toEqual([]);
         if (visibleUrl.length > cols) {
           expect(links.filter((span) => span.target === target).length).toBeGreaterThan(1);
         }
-        expect(
-          links
-            .filter((span) => span.target === target)
-            .map((span) => span.text)
-            .join(""),
-        ).toContain(visibleUrl);
-        expect(
-          links
-            .filter((span) => span.target === plainTarget)
-            .map((span) => span.text)
-            .join(""),
-        ).toContain("Documentation");
+        expect(linkText(links, target)).toContain(visibleUrl);
+        expect(linkText(links, plainTarget)).toContain("Documentation");
       } else {
         expect(links.some((span) => span.target === target)).toBe(true);
         expect(links.some((span) => span.target === plainTarget)).toBe(true);

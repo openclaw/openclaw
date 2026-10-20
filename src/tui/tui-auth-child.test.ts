@@ -28,6 +28,17 @@ function emitExit(
   child.emit("exit", exitCode, signal);
 }
 
+function startChild(pid: number) {
+  const owner = createTuiAuthChildOwner();
+  const child = createChild(pid);
+  return { owner, child, result: owner.spawnAndWait(() => child) };
+}
+function expectSignals(...signals: Array<[number, NodeJS.Signals]>) {
+  expect(killTreeMocks.signalProcessTree.mock.calls).toEqual(
+    signals.map(([pid, signal]) => [pid, signal, { detached: false }]),
+  );
+}
+
 describe("TUI auth child owner", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -44,9 +55,7 @@ describe("TUI auth child owner", () => {
   });
 
   it("waits for normal completion and releases the exact child", async () => {
-    const owner = createTuiAuthChildOwner();
-    const child = createChild(102);
-    const result = owner.spawnAndWait(() => child);
+    const { owner, child, result } = startChild(102);
     const secondSpawn = vi.fn(() => createChild(202));
     await expect(owner.spawnAndWait(secondSpawn)).rejects.toThrow("already running");
     expect(secondSpawn).not.toHaveBeenCalled();
@@ -64,9 +73,7 @@ describe("TUI auth child owner", () => {
 
   it("cancels gracefully, then force-kills only the still-active child", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const owner = createTuiAuthChildOwner();
-    const child = createChild(103);
-    const result = owner.spawnAndWait(() => child);
+    const { owner, child, result } = startChild(103);
 
     let closed = false;
     const closing = owner.close().then(() => {
@@ -76,20 +83,11 @@ describe("TUI auth child owner", () => {
     await Promise.resolve();
     expect(closed).toBe(false);
 
-    expect(killTreeMocks.signalProcessTree).toHaveBeenCalledTimes(1);
-    expect(killTreeMocks.signalProcessTree).toHaveBeenCalledWith(103, "SIGTERM", {
-      detached: false,
-    });
+    expectSignals([103, "SIGTERM"]);
     vi.advanceTimersByTime(999);
-    expect(killTreeMocks.signalProcessTree).toHaveBeenCalledTimes(1);
-    expect(killTreeMocks.signalProcessTree).not.toHaveBeenCalledWith(103, "SIGKILL", {
-      detached: false,
-    });
+    expectSignals([103, "SIGTERM"]);
     vi.advanceTimersByTime(1);
-    expect(killTreeMocks.signalProcessTree).toHaveBeenCalledTimes(2);
-    expect(killTreeMocks.signalProcessTree).toHaveBeenNthCalledWith(2, 103, "SIGKILL", {
-      detached: false,
-    });
+    expectSignals([103, "SIGTERM"], [103, "SIGKILL"]);
 
     emitExit(child, null, "SIGKILL");
     await expect(result).resolves.toEqual({ exitCode: null, signal: "SIGKILL" });
@@ -99,18 +97,13 @@ describe("TUI auth child owner", () => {
 
   it("clears force escalation when the owned child exits", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const owner = createTuiAuthChildOwner();
-    const child = createChild(104);
-    const result = owner.spawnAndWait(() => child);
+    const { owner, child, result } = startChild(104);
     const closing = owner.close();
     emitExit(child, null, "SIGTERM");
 
     await expect(result).resolves.toEqual({ exitCode: null, signal: "SIGTERM" });
     await closing;
     vi.advanceTimersByTime(1_001);
-    expect(killTreeMocks.signalProcessTree).toHaveBeenCalledTimes(1);
-    expect(killTreeMocks.signalProcessTree).toHaveBeenCalledWith(104, "SIGTERM", {
-      detached: false,
-    });
+    expectSignals([104, "SIGTERM"]);
   });
 });

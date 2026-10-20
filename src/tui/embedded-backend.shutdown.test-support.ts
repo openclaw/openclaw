@@ -24,6 +24,32 @@ export function registerEmbeddedBackendShutdownTests({
   originalRuntimeLog: typeof defaultRuntime.log;
   originalRuntimeError: typeof defaultRuntime.error;
 }) {
+  function endRun(runId: string, withText = true) {
+    if (withText) {
+      getRegisteredListener()?.({
+        runId,
+        stream: "assistant",
+        data: { text: "done", delta: "done" },
+      });
+    }
+    getRegisteredListener()?.({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "end", stopReason: "stop" },
+    });
+  }
+
+  function pendingTurn() {
+    const pending = deferred<EmbeddedAgentResult>();
+    const abortListener = vi.fn();
+    agentCommandFromIngressMock.mockImplementationOnce((opts: { abortSignal?: AbortSignal }) => {
+      opts.abortSignal?.addEventListener("abort", abortListener);
+      return pending.promise;
+    });
+    const backend = createBackend();
+    return { pending, abortListener, backend };
+  }
+
   it("waits for local post-turn maintenance before emitting chat final", async () => {
     const pending = deferred<EmbeddedAgentResult>();
     agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
@@ -34,33 +60,18 @@ export function registerEmbeddedBackendShutdownTests({
     backend.start();
     await sendMainChat(backend, "compact after final", "run-local-maintenance");
 
-    getRegisteredListener()?.({
-      runId: "run-local-maintenance",
-      stream: "assistant",
-      data: { text: "done", delta: "done" },
-    });
-    getRegisteredListener()?.({
-      runId: "run-local-maintenance",
-      stream: "lifecycle",
-      data: { phase: "end", stopReason: "stop" },
-    });
+    endRun("run-local-maintenance");
     await flushMicrotasks();
-
-    expect(
-      events.some(
-        (entry) =>
-          entry.event === "chat" && (entry.payload as { state?: string }).state === "final",
-      ),
-    ).toBe(false);
+    const chatStates = () =>
+      events
+        .filter((entry) => entry.event === "chat")
+        .map((entry) => (entry.payload as { state?: string }).state);
+    expect(chatStates()).not.toContain("final");
 
     pending.resolve({ payloads: [{ text: "done" }], meta: {} });
     await flushMicrotasks();
 
-    expect(
-      events
-        .filter((entry) => entry.event === "chat")
-        .map((entry) => (entry.payload as { state?: string }).state),
-    ).toEqual(["delta", "final"]);
+    expect(chatStates()).toEqual(["delta", "final"]);
   });
 
   it("rejects a send paused in session lookup when shutdown begins", async () => {
@@ -101,14 +112,7 @@ export function registerEmbeddedBackendShutdownTests({
   });
 
   it("waits for local post-turn maintenance during stop", async () => {
-    const pending = deferred<EmbeddedAgentResult>();
-    const abortListener = vi.fn();
-    agentCommandFromIngressMock.mockImplementationOnce((opts: { abortSignal?: AbortSignal }) => {
-      opts.abortSignal?.addEventListener("abort", abortListener);
-      return pending.promise;
-    });
-
-    const backend = createBackend();
+    const { pending, abortListener, backend } = pendingTurn();
     captureBackendEvents(backend);
     backend.start();
     expect(isEmbeddedMode()).toBe(true);
@@ -116,16 +120,7 @@ export function registerEmbeddedBackendShutdownTests({
     expect(defaultRuntime.error).not.toBe(originalRuntimeError);
     await sendMainChat(backend, "compact before shutdown", "run-local-stop-maintenance");
 
-    getRegisteredListener()?.({
-      runId: "run-local-stop-maintenance",
-      stream: "assistant",
-      data: { text: "done", delta: "done" },
-    });
-    getRegisteredListener()?.({
-      runId: "run-local-stop-maintenance",
-      stream: "lifecycle",
-      data: { phase: "end", stopReason: "stop" },
-    });
+    endRun("run-local-stop-maintenance");
 
     let stopped = false;
     const stopPromise = backend.stop().then(() => {
@@ -149,22 +144,11 @@ export function registerEmbeddedBackendShutdownTests({
 
   it("aborts local post-turn maintenance when stop grace elapses", async () => {
     await withEnvAsync({ OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: "5" }, async () => {
-      const pending = deferred<EmbeddedAgentResult>();
-      const abortListener = vi.fn();
-      agentCommandFromIngressMock.mockImplementationOnce((opts: { abortSignal?: AbortSignal }) => {
-        opts.abortSignal?.addEventListener("abort", abortListener);
-        return pending.promise;
-      });
-
-      const backend = createBackend();
+      const { pending, abortListener, backend } = pendingTurn();
       backend.start();
       await sendMainChat(backend, "compact before shutdown", "run-local-stop-timeout");
 
-      getRegisteredListener()?.({
-        runId: "run-local-stop-timeout",
-        stream: "lifecycle",
-        data: { phase: "end", stopReason: "stop" },
-      });
+      endRun("run-local-stop-timeout", false);
 
       let stopped = false;
       const stopPromise = backend.stop().then(() => {

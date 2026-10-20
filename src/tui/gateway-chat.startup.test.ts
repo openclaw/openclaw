@@ -27,6 +27,10 @@ type ProtocolHarness = {
 };
 
 const clients: GatewayChatClient[] = [];
+const legacyCreationError = {
+  code: "INVALID_REQUEST",
+  message: "invalid sessions.create params: unexpected property 'succeedsParent'",
+};
 
 function createFixture(delayWrites = false) {
   const replies: Array<(error?: { code: string; message: string }) => void> = [];
@@ -134,6 +138,10 @@ function createFixture(delayWrites = false) {
     writes,
     actions,
     commands,
+    submit: (action: "new" | "send") =>
+      action === "new"
+        ? commands.handleCommand("/new")
+        : commands.sendMessage("Synthetic startup request"),
     ready: () => {
       ready = true;
     },
@@ -155,10 +163,7 @@ describe("TUI startup admission", () => {
     async (action, stopCommand) => {
       const fixture = createFixture(true);
       fixture.ready();
-      const submit = () =>
-        action === "new"
-          ? fixture.commands.handleCommand("/new")
-          : fixture.commands.sendMessage("Synthetic retained request");
+      const submit = () => fixture.submit(action);
       let settled = false;
       const operation = submit().then(() => {
         settled = true;
@@ -202,10 +207,7 @@ describe("TUI startup admission", () => {
     const operation = fixture.commands.handleCommand("/new");
     expect(fixture.writes).toHaveLength(1);
     await fixture.commands.handleCommand("/abort");
-    fixture.finishWrite({
-      code: "INVALID_REQUEST",
-      message: "invalid sessions.create params: unexpected property 'succeedsParent'",
-    });
+    fixture.finishWrite(legacyCreationError);
     await vi.advanceTimersByTimeAsync(0);
     expect(fixture.writes).toHaveLength(1);
     await operation;
@@ -221,10 +223,7 @@ describe("TUI startup admission", () => {
       settled = true;
     });
     await vi.advanceTimersByTimeAsync(240_000);
-    fixture.finishWrite({
-      code: "INVALID_REQUEST",
-      message: "invalid sessions.create params: unexpected property 'succeedsParent'",
-    });
+    fixture.finishWrite(legacyCreationError);
     await vi.advanceTimersByTimeAsync(0);
     expect(fixture.writes).toHaveLength(2);
     const firstWrite = fixture.writes[0];
@@ -248,10 +247,7 @@ describe("TUI startup admission", () => {
     async (action, preparationMs) => {
       const fixture = createFixture();
       let settled = false;
-      const operation =
-        action === "send"
-          ? fixture.commands.sendMessage("Synthetic startup request")
-          : fixture.commands.handleCommand("/new");
+      const operation = fixture.submit(action);
       void operation.then(() => {
         settled = true;
       });
@@ -273,10 +269,7 @@ describe("TUI startup admission", () => {
     ["new", "/abort"],
   ] as const)("%s is canceled by %s before startup becomes ready", async (action, stopCommand) => {
     const fixture = createFixture();
-    const operation =
-      action === "send"
-        ? fixture.commands.sendMessage("Synthetic canceled request")
-        : fixture.commands.handleCommand("/new");
+    const operation = fixture.submit(action);
     await vi.advanceTimersByTimeAsync(35_000);
     await fixture.commands.handleCommand(stopCommand);
     fixture.ready();
@@ -290,10 +283,7 @@ describe("TUI startup admission", () => {
     "navigation cancels a pending %s on the old session",
     async (action) => {
       const fixture = createFixture();
-      const operation =
-        action === "send"
-          ? fixture.commands.sendMessage("Synthetic navigation request")
-          : fixture.commands.handleCommand("/new");
+      const operation = fixture.submit(action);
       await vi.advanceTimersByTimeAsync(35_000);
       await fixture.actions.setSession("agent:main:other");
       await operation;
