@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import { prepareChatHistoryFixture } from "../test-helpers/chat-activity-fixtures.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { waitForChatScrollIdle } from "./chat-flow.test-support.ts";
+import { chatMessage, waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -44,12 +44,7 @@ suite.define(() => {
         methodResponses: {
           "chat.history": prepareChatHistoryFixture([
             { role: "user", content: "Watch the queue.", timestamp: 1_000, runId: "reply-run" },
-            {
-              role: "assistant",
-              content: [{ type: "text", text: "Watching." }],
-              timestamp: 2_000,
-              runId: "reply-run",
-            },
+            chatMessage("assistant", "Watching.", { timestamp: 2_000, runId: "reply-run" }),
             ...Array.from({ length: wakeCount }, (_, index) => heartbeatWake(index + 1)).flat(),
           ]),
         },

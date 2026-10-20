@@ -50,23 +50,16 @@ suite.define(() => {
     "requires upward input after one empty automatic page through a $name",
     async ({ messages, height }) => {
       await suite.withPage({ viewport: { width: 1280, height } }, async ({ page }) => {
-        const historyPages = [
-          {
-            match: { offset: 80 },
-            response: historyPage([], 160),
-          },
-          {
-            match: { offset: 160 },
-            response: historyPage(olderMessages),
-          },
-        ];
         const gateway = await installMockGateway(page, {
           sessions: [sessionInfo],
           methodResponses: {
             "config.get": { config: { ui: { prefs: { chatShowToolCalls: false } } } },
             "chat.startup": historyPage(messages, 80),
             "chat.history": {
-              cases: historyPages,
+              cases: [
+                { match: { offset: 80 }, response: historyPage([], 160) },
+                { match: { offset: 160 }, response: historyPage(olderMessages) },
+              ],
             },
           },
         });
@@ -81,14 +74,9 @@ suite.define(() => {
         ]);
         await thread.hover();
         await page.mouse.wheel(0, -100);
-        const reply = page
-          .locator(".chat-text")
-          .getByText("The report is ready for review.", { exact: true });
-        await reply.waitFor();
-        await page
-          .locator(".chat-text")
-          .getByText("Can you check the report?", { exact: true })
-          .waitFor();
+        for (const { content } of olderMessages) {
+          await page.locator(".chat-text").getByText(content, { exact: true }).waitFor();
+        }
         expect(await page.locator(".agent-chat__welcome").count()).toBe(0);
         expect(await gateway.getRequests("chat.history")).toMatchObject([
           { params: { offset: 80 } },
