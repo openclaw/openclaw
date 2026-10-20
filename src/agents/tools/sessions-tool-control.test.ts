@@ -23,38 +23,54 @@ it.each(["current", "replaced target", "retired Gateway"] as const)(
       await upsertSessionEntryCore(target, { sessionId: "parent-session", updatedAt: 1 });
       const entered = createDeferredCore();
       const resume = createDeferredCore();
-      let cancelled = false;
+      const observed: {
+        cancelled: boolean;
+        result?: Awaited<ReturnType<typeof stopSessionTool>>;
+        failure?: unknown;
+      } = { cancelled: false, failure: undefined };
+      const abort = async (options: GatewayRequestHandlerOptions) => {
+        entered.resolve();
+        await resume.promise;
+        readGatewayRequestMutationAuthority(options).assertCurrent();
+        observed.cancelled = true;
+        options.respond(true, { ok: true, status: "aborted", abortedRunId: "parent-run" });
+      };
       const context = createContext(
-        [
-          [
-            "sessions.abort",
-            "operator.write",
-            "sessions",
-            async (options: GatewayRequestHandlerOptions) => {
-              entered.resolve();
-              await resume.promise;
-              readGatewayRequestMutationAuthority(options).assertCurrent();
-              cancelled = true;
-              options.respond(true, { ok: true, status: "aborted", abortedRunId: "parent-run" });
-            },
-          ],
-        ],
+        [["sessions.abort", "operator.write", "sessions", abort]],
         () => cfg,
       );
-      const executions: Promise<unknown>[] = [];
-      const trackExecution = context.trackExecution;
-      context.trackExecution = (run) => {
-        const execution = trackExecution(run);
-        executions.push(execution);
-        return execution;
-      };
+      const executions = vi.spyOn(context, "trackExecution");
+      const settleExecutions = () =>
+        Promise.allSettled(executions.mock.results.map(({ value }) => value));
       let gatewayCurrent = true;
       context.resolveGatewayContext = () => (gatewayCurrent ? context : undefined);
       let callerCurrent = true;
       const callerSignal = new AbortController();
-      let result: Awaited<ReturnType<typeof stopSessionTool>> | undefined;
-      let failure: unknown;
-      let stop: Promise<void> | undefined;
+      const caller = {
+        agentId: "main",
+        sessionKey: "agent:main:caller",
+        operationalRunInstance: createOperationalRunInstanceRef("stop-caller"),
+        receiptAuthority: () => callerCurrent,
+        gatewayContextResolver: context.resolveGatewayContext,
+      };
+      const stopTarget: Parameters<typeof stopSessionTool>[0] = {
+        cfg,
+        agentId: target.agentId,
+        key: target.sessionKey,
+        expectedSessionId: "parent-session",
+        operation: "stop",
+        restricted: false,
+        isRequesterSession: false,
+      };
+      const invokeStop = () =>
+        stopSessionTool(
+          stopTarget,
+          {},
+          callAgentToolGatewayRequest,
+          captureSessionStopCaller(),
+          callerSignal.signal,
+        );
+      let stop: Promise<unknown> | undefined;
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       try {
         stop = withPluginRuntimeGatewayRequestScope(
@@ -67,45 +83,21 @@ it.each(["current", "replaced target", "retired Gateway"] as const)(
             }),
             isWebchatConnect: () => false,
           },
-          () =>
-            withGatewayToolCallerIdentity(
-              {
-                agentId: "main",
-                sessionKey: "agent:main:caller",
-                operationalRunInstance: createOperationalRunInstanceRef("stop-caller"),
-                receiptAuthority: () => callerCurrent,
-                gatewayContextResolver: context.resolveGatewayContext,
-              },
-              () =>
-                stopSessionTool(
-                  {
-                    cfg,
-                    agentId: target.agentId,
-                    key: target.sessionKey,
-                    expectedSessionId: "parent-session",
-                    operation: "stop",
-                    restricted: false,
-                    isRequesterSession: false,
-                  },
-                  {},
-                  callAgentToolGatewayRequest,
-                  captureSessionStopCaller(),
-                  callerSignal.signal,
-                ),
-            ),
+          () => withGatewayToolCallerIdentity(caller, invokeStop),
         ).then(
-          (value) => {
-            result = value;
-          },
-          (error: unknown) => {
-            failure = error;
-          },
+          (result) => Object.assign(observed, { result }),
+          (failure: unknown) => Object.assign(observed, { failure }),
         );
-        await Promise.race([entered.promise, stop.then(() => expect(failure).toBeUndefined())]);
+        await Promise.race([
+          entered.promise,
+          stop.then(() => expect(observed.failure).toBeUndefined()),
+        ]);
         await vi.advanceTimersByTimeAsync(5_000);
-        expect(failure).toBeUndefined();
-        expect(result?.details).toMatchObject({ status: "settling", abortedRunId: null });
-        expect(cancelled).toBe(false);
+        expect(observed).toMatchObject({
+          failure: undefined,
+          result: { details: { status: "settling", abortedRunId: null } },
+          cancelled: false,
+        });
         callerCurrent = false;
         callerSignal.abort(new Error("Calling turn finished"));
         // Cross the former in-process deadline before allowing the Gateway effect.
@@ -116,12 +108,13 @@ it.each(["current", "replaced target", "retired Gateway"] as const)(
           gatewayCurrent = false;
         }
         resume.resolve();
-        await Promise.allSettled(executions);
-        expect(cancelled).toBe(boundary === "current");
+        await settleExecutions();
+        expect(observed.cancelled).toBe(boundary === "current");
       } finally {
         resume.resolve();
         await stop;
-        await Promise.allSettled(executions);
+        await settleExecutions();
+        executions.mockRestore();
         await vi.advanceTimersByTimeAsync(0);
         vi.useRealTimers();
       }

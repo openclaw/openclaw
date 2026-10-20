@@ -13,9 +13,7 @@ vi.mock("../../gateway/call.js", async (importOriginal) => ({
   callGateway: gatewayMocks.callGateway,
 }));
 
-beforeEach(() => {
-  gatewayMocks.callGateway.mockReset();
-});
+beforeEach(() => gatewayMocks.callGateway.mockReset());
 
 function createTool(options: Partial<Parameters<typeof createSessionsTool>[0]> = {}) {
   return createSessionsTool({
@@ -64,32 +62,29 @@ describe("sessions tool responses", () => {
   it.each([
     { name: "fitting", resolved: adversarialResolved, omitted: false },
     { name: "oversized", resolved: escapeHeavyResolved, omitted: true },
-  ])(
-    "preserves identifiers or omits metadata for $name resolved payloads",
-    async ({ resolved, omitted }) => {
-      gatewayMocks.callGateway.mockResolvedValue({
-        ok: true,
-        path: `/sessions/${"p".repeat(10_000)}`,
-        key: "agent:main:main",
-        entry: { skillsSnapshot: "s".repeat(47_469) },
-        resolved,
-      });
-      const result = await createTool().execute("patch-model-thinking", {
-        action: "patch",
-        model: "openai/luna",
-        thinkingLevel: "med",
-      });
+  ])("bounds $name resolved metadata", async ({ resolved, omitted }) => {
+    gatewayMocks.callGateway.mockResolvedValue({
+      ok: true,
+      path: `/sessions/${"p".repeat(10_000)}`,
+      key: "agent:main:main",
+      entry: { skillsSnapshot: "s".repeat(47_469) },
+      resolved,
+    });
+    const result = await createTool().execute("patch-model-thinking", {
+      action: "patch",
+      model: "openai/luna",
+      thinkingLevel: "med",
+    });
 
-      expect(result.details).toMatchObject({
-        status: "updated",
-        sessionKey: "agent:main:main",
-        updated: ["model", "thinkingLevel"],
-      });
-      if (omitted) {
-        expectOmittedResolvedAcknowledgement(result);
-      } else {
-        expectExactResolvedAcknowledgement(result, resolved);
-      }
-    },
-  );
+    expect(result.details).toMatchObject({
+      status: "updated",
+      sessionKey: "agent:main:main",
+      updated: ["model", "thinkingLevel"],
+    });
+    if (omitted) {
+      expectOmittedResolvedAcknowledgement(result);
+    } else {
+      expectExactResolvedAcknowledgement(result, resolved);
+    }
+  });
 });
