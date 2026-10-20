@@ -45,7 +45,10 @@ function launch(
 }
 
 it("streams an expanded plan without changing its canonical command or using oversized argv", () => {
-  const targets = Array.from({ length: 12_000 }, (_, index) => `src/${index}.test.ts`);
+  const targets = Array.from(
+    { length: 12_000 },
+    (_, index) => `src/features/feature-${String(index).padStart(5, "0")}.test.ts`,
+  );
   const command = buildCrabboxGateCommand(
     {
       baseSha: "c".repeat(40),
