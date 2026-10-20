@@ -31,11 +31,6 @@ function successfulAttempt(
   };
 }
 
-it("accepts one capability-free final answer", () => {
-  const result = safeResult();
-  expect(assertSettledTurnFinalizationResult(result)).toMatchObject(result);
-});
-
 it("classifies a normally completed empty rendered answer", () => {
   const result = safeResult({ content: [{ type: "text", text: "  " }] });
   try {

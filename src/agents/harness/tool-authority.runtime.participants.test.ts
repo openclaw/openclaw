@@ -178,12 +178,7 @@ it("isolates overlapping participant sessions", async ({ onTestFinished }) => {
 });
 
 it("preserves requester ownership across reconnect and release", async () => {
-  const ownerReleases: ReturnType<typeof vi.fn>[] = [];
-  const retainOwner = vi.fn(() => {
-    const release = vi.fn();
-    ownerReleases.push(release);
-    return release;
-  });
+  const retainOwner = vi.fn(() => vi.fn());
   const retainOtherRequester = vi.fn(() => vi.fn());
   const ownerAuthority = (profileId: string) =>
     authority(profileId, profileId === "alice" ? retainOwner : retainOtherRequester);
@@ -229,8 +224,8 @@ it("preserves requester ownership across reconnect and release", async () => {
           "alice",
         );
         expect(retainOtherRequester).not.toHaveBeenCalled();
-        expect(ownerReleases.length).toBeGreaterThan(0);
-        for (const release of ownerReleases) {
+        expect(retainOwner.mock.results.length).toBeGreaterThan(0);
+        for (const { value: release } of retainOwner.mock.results) {
           expect(release).not.toHaveBeenCalled();
         }
         pending = await inject({
@@ -266,7 +261,7 @@ it("preserves requester ownership across reconnect and release", async () => {
     ownerAuthority("alice"),
   );
   expect(retainOtherRequester).not.toHaveBeenCalled();
-  for (const release of ownerReleases) {
+  for (const { value: release } of retainOwner.mock.results) {
     expect(release).toHaveBeenCalledOnce();
   }
   const closed = await withGatewayToolCallerIdentity(retained, () => dispatch("alice"));

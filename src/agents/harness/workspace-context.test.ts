@@ -39,23 +39,13 @@ it("budgets root instructions independently of turn context", async () => {
 });
 
 it("orders personal instructions in a remapped workspace", async () => {
-  const personalFiles = (profile?: string, root = workspaceDir): BootstrapFile[] =>
-    profile
-      ? [
-          {
-            ...bootstrapFile(
-              "USER.md",
-              `${profile} preferences.`,
-              `users/${profile}/USER.md`,
-              root,
-            ),
-            personalUser: true,
-          },
-        ]
-      : [];
+  const personalFile = (profile: string, root = workspaceDir): BootstrapFile => ({
+    ...bootstrapFile("USER.md", `${profile} preferences.`, `users/${profile}/USER.md`, root),
+    personalUser: true,
+  });
   vi.spyOn(bootstrapRuntime, "resolveBootstrapFilesForRun").mockImplementation(async (params) => [
     bootstrapFile("USER.md", "Shared preferences."),
-    ...personalFiles(params.bootstrapUserProfileId),
+    ...(params.bootstrapUserProfileId ? [personalFile(params.bootstrapUserProfileId)] : []),
     bootstrapFile("IDENTITY.md", "Agent identity."),
     bootstrapFile("SOUL.md", "Agent voice."),
   ]);
@@ -86,7 +76,7 @@ it("orders personal instructions in a remapped workspace", async () => {
       { path: path.join(projectedWorkspace, "SOUL.md"), content: "Agent voice." },
       { path: path.join(projectedWorkspace, "IDENTITY.md"), content: "Agent identity." },
       { path: path.join(projectedWorkspace, "USER.md"), content: "Shared preferences." },
-      ...personalFiles(profile, projectedWorkspace).map(contextFile),
+      ...(profile ? [contextFile(personalFile(profile, projectedWorkspace))] : []),
     ]);
     if (profile) {
       expect(turn.indexOf("Shared preferences.")).toBeLessThan(

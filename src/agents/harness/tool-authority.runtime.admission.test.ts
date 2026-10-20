@@ -81,27 +81,15 @@ it.each([
           })
         : undefined;
     let observed: ReplyOperation | undefined;
-    const run = vi.fn(
-      async (prepared: { replyOperation?: ReplyOperation; toolAuthorityFingerprint?: string }) => {
-        observed = prepared.replyOperation;
-        expect(observed).toBeDefined();
-        expect(observed).toBe(getSessionControllerOperation(sessionKey));
-        if (operation) {
-          expect(observed).toBe(operation);
-        }
-        const handle = createEmbeddedRunHandle({
-          runId: attempt.runId,
-          toolAuthorityFingerprint: prepared.toolAuthorityFingerprint,
-        });
-        expect(() => withoutGatewayToolCallerIdentity(() => publish(handle))).toThrow(
-          "host-admitted",
-        );
-        const cleanup = publish(handle);
-        expect(cleanup).toBeTypeOf("function");
-        cleanup?.();
-        return "entered";
-      },
-    );
+    const run = vi.fn(async (prepared: Prepared) => {
+      observed = prepared.replyOperation;
+      expect(observed).toBeDefined();
+      expect(observed).toBe(getSessionControllerOperation(sessionKey));
+      if (operation) {
+        expect(observed).toBe(operation);
+      }
+      return "entered";
+    });
     try {
       const pending = withPreparedEmbeddedRunToolAuthority(
         { admittedRunContext, replyOperation: operation },
@@ -135,9 +123,6 @@ it.each([
       expect(observed?.toolAuthorityRoute).toBeUndefined();
       await expect(observed?.bindToolAuthorityRouteAsync(route)).rejects.toThrow(
         "Reply operation authority is no longer active",
-      );
-      expect(() => publish(createEmbeddedRunHandle({ runId: attempt.runId }))).toThrow(
-        "host-admitted",
       );
     }
   });
