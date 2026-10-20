@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { getQueriesForElement } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
@@ -60,39 +61,29 @@ function renderInto(
 }
 
 const numberInput = (container: HTMLElement, label: string) =>
-  expectDefined(
-    container.querySelector<HTMLInputElement>(`input.settings-input[aria-label="${label}"]`),
-  );
+  getQueriesForElement(container).getAllByLabelText<HTMLInputElement>(label)[0]!;
 
 function editNumber(input: HTMLInputElement, value: string, bubbles = false) {
   input.value = value;
   input.dispatchEvent(new Event("change", { bubbles }));
 }
 
-function rowFor(container: HTMLElement, title: string): HTMLElement {
-  return expectDefined(
-    [...container.querySelectorAll<HTMLElement>(".settings-row")].find(
-      (candidate) => candidate.querySelector(".settings-row__title")?.textContent?.trim() === title,
-    ),
-    `no row titled ${title}`,
+const rowFor = (container: HTMLElement, title: string) =>
+  expectDefined(
+    getQueriesForElement(container)
+      .getAllByText(title, { selector: ".settings-row__title" })[0]!
+      .closest<HTMLElement>(".settings-row"),
   );
-}
 
-function selectedSegment(container: HTMLElement): string | null {
-  return (
-    container.querySelector<HTMLInputElement>(".settings-segmented__input:checked")?.value ?? null
-  );
-}
+const selectedSegment = (container: HTMLElement) =>
+  container.querySelector<HTMLInputElement>(".settings-segmented__input:checked")?.value ?? null;
 
 it("defaults phases on unless explicitly disabled", () => {
   const container = renderInto({ enabled: true, phases: { deep: { enabled: false } } });
-  const sections = [...container.querySelectorAll(".settings-section")];
+  const { getByText } = getQueriesForElement(container);
   const checked = (title: string) =>
-    sections
-      .find(
-        (section) =>
-          section.querySelector(".settings-section__heading")?.textContent?.trim() === title,
-      )
+    getByText(title, { selector: ".settings-section__heading" })
+      .closest(".settings-section")
       ?.querySelector<HTMLInputElement>(".settings-toggle__input")?.checked;
   expect(["Light phase", "Deep phase", "REM phase"].map(checked)).toEqual([true, false, true]);
 });
@@ -110,13 +101,8 @@ it("renders the runtime storage-mode default when the config omits it", () => {
 
 it("shows the advanced execution model as the inherited model default", async () => {
   const onPatch = vi.fn();
-  const container = renderInto(
-    {
-      model: "anthropic/claude-sonnet",
-      execution: { defaults: { model: "openai/gpt-5.6" } },
-    },
-    onPatch,
-  );
+  const execution = { defaults: { model: "openai/gpt-5.6" } };
+  const container = renderInto({ model: "anthropic/claude-sonnet", execution }, onPatch);
   const row = rowFor(container, "Dreaming model");
   await openPicker(row.querySelector("openclaw-select-picker")!);
 
@@ -129,7 +115,7 @@ it("shows the advanced execution model as the inherited model default", async ()
   editNumber(custom, "", true);
   expect(onPatch).toHaveBeenCalledWith(["model"], undefined);
 
-  const inherited = renderInto({ execution: { defaults: { model: "openai/gpt-5.6" } } });
+  const inherited = renderInto({ execution });
   const inheritedRow = rowFor(inherited, "Dreaming model");
   expect(inheritedRow.textContent).not.toContain("Using default:");
   await openPicker(inheritedRow.querySelector("openclaw-select-picker")!);

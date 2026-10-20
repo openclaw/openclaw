@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { setPluginEnabled } from "../../lib/plugins/index.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { mountConfigPage } from "./config-page.test-support.ts";
@@ -19,11 +19,7 @@ function createRoute(params: Partial<Parameters<typeof createMemoryPage>[0]> = {
   return {
     ...fixture,
     routeData,
-    mount() {
-      const view = mountConfigPage(fixture.context, { pageId: "memory", routeData });
-      onTestFinished(view.dispose);
-      return view;
-    },
+    mount: () => mountConfigPage(fixture.context, { pageId: "memory", routeData }),
   };
 }
 

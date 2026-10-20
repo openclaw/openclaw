@@ -83,8 +83,7 @@ it("locks every curated picker when config mutation is unavailable", async () =>
   const provider = container.querySelector<HTMLInputElement>(".settings-segmented__input");
   expect(provider?.disabled).toBe(true);
   const voice = [...container.querySelectorAll<HTMLSelectElement>("select")];
-  expect(voice).toHaveLength(1);
-  expect(voice.every((select) => select.disabled)).toBe(true);
+  expect(voice).toMatchObject([{ disabled: true }]);
   expect(modelPicker(container).querySelector<HTMLButtonElement>("button")?.disabled).toBe(true);
 });
 
@@ -118,28 +117,23 @@ it.each([
   }
 });
 
-it.each<[Partial<TalkProps["selection"]>, Partial<TalkRealtimeProviderOption>, string[]]>([
-  [
-    { model: "gpt-live-1-codex", speakerVoice: "spruce" },
-    { voicesByModel: { "gpt-live-1-codex": ["arbor", "spruce"] } },
-    ["", "arbor", "spruce"],
-  ],
-  [
-    { provider: "other", model: "gpt-live-private-example" },
-    {
-      id: "other",
-      voices: ["other-voice"],
-      activeVoices: ["active-only"],
-      modelFamilySettings: undefined,
-    },
-    ["", "other-voice"],
-  ],
-])("resolves the model/provider voice catalog for %j", (selection, provider, voices) => {
-  const container = renderFixture({ selection, provider });
-  const options = [...container.querySelectorAll<HTMLOptionElement>("select option")];
-  expect(options.map((option) => option.value)).toEqual(voices);
-  expect(options.map((option) => option.getAttribute("value") ?? "")).toEqual(voices);
-  if (selection.provider === "other") {
-    expect(container.textContent).not.toContain(t("talkPage.gptLive.hint"));
-  }
-});
+it.each([
+  ["model", "gpt-live-1-codex", "spruce", ["arbor", "spruce"]],
+  ["provider", "gpt-live-private-example", null, ["other-voice"]],
+] satisfies [string, string, string | null, string[]][])(
+  "resolves the %s voice catalog",
+  (kind, model, speakerVoice, voices) => {
+    const selection = { model, speakerVoice, provider: kind === "model" ? "openai" : "other" };
+    const provider: Partial<TalkRealtimeProviderOption> =
+      kind === "model"
+        ? { voicesByModel: { [model]: voices } }
+        : { id: "other", voices, activeVoices: ["active-only"], modelFamilySettings: undefined };
+    const container = renderFixture({ selection, provider });
+    const options = [...container.querySelectorAll<HTMLOptionElement>("select option")];
+    expect(options.map((option) => option.value)).toEqual(["", ...voices]);
+    expect(options.map((option) => option.getAttribute("value") ?? "")).toEqual(["", ...voices]);
+    if (selection.provider === "other") {
+      expect(container.textContent).not.toContain(t("talkPage.gptLive.hint"));
+    }
+  },
+);
