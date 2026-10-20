@@ -91,6 +91,8 @@ function isDownloadableLineMessageType(
 interface LineHandlerContext {
   cfg: OpenClawConfig;
   account: ResolvedLineAccount;
+  /** The receiving bot's user id, from the webhook's `destination`. */
+  botUserId?: string;
   runtime: RuntimeEnv;
   buildContext?: typeof buildChannelInboundEventContext;
   mediaMaxBytes: number;
@@ -297,7 +299,11 @@ async function resolveLineEventAdmission(
       hasAnyMention: hasAnyLineMention(event.message),
       implicitMentionKinds: implicitMentionKindWhen(
         "quoted_bot",
-        quotesLineBotMessage(account.accountId, resolveLineQuotedMessageId(event.message)),
+        await quotesLineBotMessage({
+          accountId: account.accountId,
+          botUserId: context.botUserId,
+          quotedMessageId: resolveLineQuotedMessageId(event.message),
+        }),
       ),
     };
     access = await resolveAccess();

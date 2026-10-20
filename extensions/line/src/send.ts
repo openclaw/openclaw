@@ -260,13 +260,13 @@ export function createLocationMessage(location: LineLocation): LocationMessage |
   };
 }
 
-function recordLineOutboundActivity(
+async function recordLineOutboundActivity(
   accountId: string,
   delivery: { messageIds: string[]; receipt?: LineSendResult["receipt"] },
-): void {
+): Promise<void> {
   // Every LINE send funnels through here, so this is where the ids a later quote
   // can point at become known.
-  recordLineSentMessages(accountId, delivery.messageIds);
+  await recordLineSentMessages(accountId, delivery.messageIds);
   try {
     recordChannelActivity({
       channel: "line",
@@ -342,7 +342,7 @@ async function pushLineMessages(
     }),
   };
 
-  recordLineOutboundActivity(account.accountId, { messageIds, receipt: result.receipt });
+  await recordLineOutboundActivity(account.accountId, { messageIds, receipt: result.receipt });
 
   return result;
 }
@@ -396,7 +396,7 @@ export async function replyMessageLine(
     opts.assertDirectAdapterHandoff,
   );
   const { messageIds } = resolveLineProviderMessageIds(response, "reply");
-  recordLineOutboundActivity(account.accountId, { messageIds });
+  await recordLineOutboundActivity(account.accountId, { messageIds });
 }
 
 export async function pushMessagesLine(
