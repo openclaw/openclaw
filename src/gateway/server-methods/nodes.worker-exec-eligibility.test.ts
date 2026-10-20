@@ -79,6 +79,8 @@ it("scopes an outdated v6 host to OpenClaw and refreshes eligibility from curren
   const isPlacementCurrent = createDevicePlacementAuthority(
     () => runtime.nodeWorkerSupervisorTransport,
   );
+  const openclawRequirement = { requiredNodeCommands: [], consumesWorkerSlot: true };
+  const codexRequirement = { requiredNodeCommands: [CODEX_COMMAND], consumesWorkerSlot: false };
   const publish = async (capturedExecPolicy = false) => {
     const respond = vi.fn();
     await nodeHandlers["node.runnerInventory.update"]!({
@@ -108,6 +110,8 @@ it("scopes an outdated v6 host to OpenClaw and refreshes eligibility from curren
     expect(respond).toHaveBeenCalledWith(true, expect.anything(), undefined);
     return (respond.mock.calls[0]![1] as { environments: EnvironmentSummary[] }).environments;
   };
+  const node = async (runtimeId?: string) =>
+    (await inventory(runtimeId)).find((row) => row.id === "node:node-1");
   const select = async (runtimeId: string) =>
     await selectDevicePlacementCandidates({
       environments: await inventory(runtimeId),
@@ -116,15 +120,11 @@ it("scopes an outdated v6 host to OpenClaw and refreshes eligibility from curren
       runtimeId,
       executionMode: runtimeId === "openclaw" ? "worker-turn" : "remote-exec",
       config,
-      requirement:
-        runtimeId === "openclaw"
-          ? { requiredNodeCommands: [], consumesWorkerSlot: true }
-          : { requiredNodeCommands: [CODEX_COMMAND], consumesWorkerSlot: false },
+      requirement: runtimeId === "openclaw" ? openclawRequirement : codexRequirement,
     });
   try {
     await publish();
-    const outdated = (await inventory("openclaw")).find((row) => row.id === "node:node-1");
-    expect(outdated).toMatchObject({
+    expect(await node("openclaw")).toMatchObject({
       status: "available",
       sessionHost: true,
       issues: [NODE_RUNNER_UPDATE_REQUIRED_ISSUE],
@@ -138,20 +138,18 @@ it("scopes an outdated v6 host to OpenClaw and refreshes eligibility from curren
         environmentService,
         deviceId: "node-1",
         executionMode: "worker-turn",
-        requirement: { requiredNodeCommands: [], consumesWorkerSlot: true },
+        requirement: openclawRequirement,
         config,
       }),
     ).toMatchObject({ ok: false, error: expect.stringContaining("openclaw update") });
     for (const runtimeId of [undefined, "codex"]) {
-      expect(
-        (await inventory(runtimeId)).find((row) => row.id === "node:node-1"),
-      ).not.toHaveProperty("issues");
+      expect(await node(runtimeId)).not.toHaveProperty("issues");
     }
     expect(await select("codex")).toEqual({
       ok: true,
       candidates: [{ deviceId: "node-1", availableSlots: 2 }],
     });
-    expect((await inventory("codex")).find((row) => row.id === "node:node-1")).toMatchObject({
+    expect(await node("codex")).toMatchObject({
       requiredNodeCommand: { command: CODEX_COMMAND, state: "invocable" },
     });
 
@@ -162,9 +160,7 @@ it("scopes an outdated v6 host to OpenClaw and refreshes eligibility from curren
     );
     const admittedRequirement = { requiredNodeCommands: [], consumesWorkerSlot: false };
     expect(isPlacementCurrent(admitted, admittedRequirement, "worker-turn")).toBe(true);
-    expect(
-      (await inventory("openclaw")).find((row) => row.id === "node:node-1"),
-    ).not.toHaveProperty("issues");
+    expect(await node("openclaw")).not.toHaveProperty("issues");
     expect(await select("openclaw")).toEqual({
       ok: true,
       candidates: [{ deviceId: "node-1", availableSlots: 2 }],

@@ -21,6 +21,13 @@ const { default: plugin } = await loadBundledPluginFacade<{
   default: OpenClawPluginDefinition;
 }>({ pluginId: "agentsapi", artifactBasename: "index.js" });
 const modelId = "fixture-hosted-model";
+const route = {
+  provider: "openai",
+  id: modelId,
+  name: "Hosted fixture",
+  api: "openai-responses" as const,
+  baseUrl: "https://api.openai.com/v1",
+};
 function configuration(): OpenClawConfig {
   return {
     agents: {
@@ -53,9 +60,9 @@ function configuration(): OpenClawConfig {
           baseUrl: "https://api.openai.com/v1",
           models: [
             {
-              id: modelId,
-              name: "Hosted fixture",
-              api: "openai-responses",
+              id: route.id,
+              name: route.name,
+              api: route.api,
               reasoning: true,
               input: ["text"],
               contextWindow: 1000000,
@@ -106,15 +113,7 @@ describe("Agents API picker and execution compatibility", () => {
             agentDir: state.agentDir(),
             workspaceDir: state.workspaceDir,
             pluginRegistry: registry,
-            catalog: [
-              {
-                provider: "openai",
-                id: modelId,
-                name: "Hosted fixture",
-                api: "openai-responses",
-                baseUrl: "https://api.openai.com/v1",
-              },
-            ],
+            catalog: [route],
             preparedAuthStore: {
               version: 1,
               profiles: {
@@ -134,18 +133,15 @@ describe("Agents API picker and execution compatibility", () => {
               }),
             ]),
           );
-          expect(
-            resolveAgentHarnessSelectionDecision({ config: cfg, provider: "openai", modelId })
-              .selectedHarnessId,
-          ).toBe("openclaw");
-          expect(
+          const select = (agentHarnessRuntimeOverride?: string) =>
             resolveAgentHarnessSelectionDecision({
               config: cfg,
               provider: "openai",
               modelId,
-              agentHarnessRuntimeOverride: "agentsapi",
-            }).selectedHarnessId,
-          ).toBe("agentsapi");
+              agentHarnessRuntimeOverride,
+            }).selectedHarnessId;
+          expect(select()).toBe("openclaw");
+          expect(select("agentsapi")).toBe("agentsapi");
           const selectPrepared = (
             config: OpenClawConfig,
             requestTransportOverrides: "none" | "present" = "none",

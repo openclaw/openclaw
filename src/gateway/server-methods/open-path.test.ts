@@ -26,6 +26,10 @@ function fakeChild(result: Promise<unknown>) {
   };
 }
 
+const linuxCommand = { command: "xdg-open", args: ["/tmp/workspace"] };
+const headlessError = (error: Error, path = "/tmp/workspace") =>
+  isHeadlessOpenPathError(error, resolveOpenPathCommand(path, "linux"), "linux");
+
 afterEach(() => {
   vi.useRealTimers();
   vi.clearAllMocks();
@@ -55,10 +59,7 @@ describe("resolveOpenPathCommand", () => {
 describe("execOpenPath", () => {
   it("bounds the non-Linux launcher wait", async () => {
     runExecMock.mockResolvedValue({ stdout: "", stderr: "" });
-    const command = {
-      command: "open",
-      args: ["/tmp/workspace"],
-    };
+    const command = { command: "open", args: ["/tmp/workspace"] };
 
     await execOpenPath(command, "darwin");
 
@@ -75,11 +76,9 @@ describe("execOpenPath", () => {
     spawnCommandMock.mockReturnValue(spawned.child);
     let settled = false;
 
-    const execution = execOpenPath({ command: "xdg-open", args: ["/tmp/workspace"] }, "linux").then(
-      () => {
-        settled = true;
-      },
-    );
+    const execution = execOpenPath(linuxCommand, "linux").then(() => {
+      settled = true;
+    });
 
     await vi.advanceTimersByTimeAsync(4_999);
     expect(settled).toBe(false);
@@ -104,29 +103,17 @@ describe("execOpenPath", () => {
   });
 
   it("keeps xdg-open stderr truncation surrogate-safe", async () => {
-    let rejectChild: (error: Error) => void = () => {};
-    const spawned = fakeChild(
-      new Promise((_, reject) => {
-        rejectChild = reject;
-      }),
-    );
+    const { promise, reject } = createDeferred<unknown>();
+    const spawned = fakeChild(promise);
     spawnCommandMock.mockReturnValue(spawned.child);
 
-    const execution = execOpenPath({ command: "xdg-open", args: ["/tmp/workspace"] }, "linux");
+    const execution = execOpenPath(linuxCommand, "linux");
     // 4095 ASCII chars plus one emoji: a plain slice for the final slot would
     // keep only the emoji's high surrogate half.
     spawned.stderr.write(`${"x".repeat(4095)}🤖`);
-    rejectChild(new Error("Command failed with exit code 3: xdg-open"));
-
-    const message = await execution.then(
-      () => {
-        throw new Error("expected rejection");
-      },
-      (error: unknown) => (error instanceof Error ? error.message : String(error)),
-    );
+    reject(new Error("Command failed with exit code 3: xdg-open"));
     const expectedMessage = `Command failed with exit code 3: xdg-open: ${"x".repeat(4_095)}`;
-    expect(message).toBe(expectedMessage);
-    expect(message).toHaveLength(expectedMessage.length);
+    await expect(execution).rejects.toHaveProperty("message", expectedMessage);
   });
 });
 
@@ -145,20 +132,15 @@ describe("isHeadlessOpenPathError", () => {
 
   it("preserves the installed xdg-open handlerless diagnostic", () => {
     expect(
-      isHeadlessOpenPathError(
-        new Error("xdg-open: no method available for opening '/tmp/workspace'"),
-        resolveOpenPathCommand("/tmp/workspace", "linux"),
-        "linux",
-      ),
+      headlessError(new Error("xdg-open: no method available for opening '/tmp/workspace'")),
     ).toBe(true);
   });
 
   it("does not classify a handler diagnostic containing ENOENT as a missing launcher", () => {
     expect(
-      isHeadlessOpenPathError(
+      headlessError(
         new Error("Command failed with exit code 1: xdg-open /tmp/ENOENT-workspace"),
-        resolveOpenPathCommand("/tmp/ENOENT-workspace", "linux"),
-        "linux",
+        "/tmp/ENOENT-workspace",
       ),
     ).toBe(false);
   });

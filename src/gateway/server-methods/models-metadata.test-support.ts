@@ -7,11 +7,22 @@ export async function createModelPluginMetadataSnapshot() {
   const { makeEmptyPluginMetadataOwners } =
     await import("../../plugins/current-plugin-metadata.test-support.js");
   const { buildDeclaredProviderOwnerIndex } = await import("../../plugins/provider-owner-index.js");
+  const bundled = (id: string) => ({
+    id,
+    channels: [],
+    providers: [id],
+    cliBackends: [],
+    syntheticAuthRefs: [],
+    skills: [],
+    hooks: [],
+    origin: "bundled" as const,
+    rootDir: `/test/${id}`,
+    source: `/test/${id}/index.js`,
+    manifestPath: `/test/${id}/openclaw.plugin.json`,
+  });
   const plugins: PluginMetadataSnapshot["manifestRegistry"]["plugins"] = [
     {
-      id: "anthropic",
-      channels: [],
-      providers: ["anthropic"],
+      ...bundled("anthropic"),
       cliBackends: ["claude-cli"],
       syntheticAuthRefs: ["claude-cli"],
       providerAuthChoices: [
@@ -25,36 +36,18 @@ export async function createModelPluginMetadataSnapshot() {
         { provider: "anthropic", method: "api-key", choiceId: "apiKey" },
       ],
       modelSupport: { modelPrefixes: ["claude-"] },
-      skills: [],
-      hooks: [],
-      origin: "bundled",
       enabledByDefault: true,
-      rootDir: "/test/anthropic",
-      source: "/test/anthropic/index.js",
-      manifestPath: "/test/anthropic/openclaw.plugin.json",
     },
     {
-      id: "byteplus",
-      channels: [],
+      ...bundled("byteplus"),
       providers: ["byteplus", "byteplus-plan"],
-      syntheticAuthRefs: [],
       providerAuthAliases: { "byteplus-plan": "byteplus" },
       providerAuthChoices: [
         { provider: "byteplus", method: "api-key", choiceId: "byteplus-api-key" },
       ],
-      cliBackends: [],
-      skills: [],
-      hooks: [],
-      origin: "bundled",
-      rootDir: "/test/byteplus",
-      source: "/test/byteplus/index.js",
-      manifestPath: "/test/byteplus/openclaw.plugin.json",
     },
     {
-      id: "github-copilot",
-      channels: [],
-      providers: ["github-copilot"],
-      syntheticAuthRefs: [],
+      ...bundled("github-copilot"),
       providerAuthChoices: [
         { provider: "github-copilot", method: "device", choiceId: "github-copilot" },
         {
@@ -63,13 +56,6 @@ export async function createModelPluginMetadataSnapshot() {
           choiceId: "github-copilot-enterprise",
         },
       ],
-      cliBackends: [],
-      skills: [],
-      hooks: [],
-      origin: "bundled",
-      rootDir: "/test/github-copilot",
-      source: "/test/github-copilot/index.js",
-      manifestPath: "/test/github-copilot/openclaw.plugin.json",
     },
   ];
   const index: PluginMetadataSnapshot["index"] = {

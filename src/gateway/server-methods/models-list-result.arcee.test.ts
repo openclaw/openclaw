@@ -6,9 +6,41 @@ import {
 } from "../../agents/embedded-agent-runner/model.js";
 import { resolveModelProviderAuthConfig } from "../../agents/model-auth-provider-route.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { listModels } from "./models-list-result.openai-routes.test-support.js";
+
+const authoredRow: ModelDefinitionConfig = {
+  id: "arcee-ai/trinity-large-thinking",
+  name: "Authored default",
+  reasoning: false,
+  input: ["text"],
+  contextWindow: 32768,
+  maxTokens: 2048,
+  cost: { input: 7, output: 9, cacheRead: 1, cacheWrite: 2 },
+};
+function configuration(row: ModelDefinitionConfig, aliasId?: string): OpenClawConfig {
+  return {
+    plugins: { allow: ["arcee"] },
+    agents: {
+      defaults: {
+        model: { primary: "arcee/trinity-large-thinking" },
+        ...(aliasId ? { models: { [`arcee/${aliasId}`]: { alias: "Work account model" } } } : {}),
+      },
+    },
+    models: {
+      mode: "replace",
+      providers: {
+        arcee: {
+          baseUrl: "https://openrouter.ai/api/v1",
+          api: "openai-completions",
+          models: [row],
+        },
+      },
+    },
+  };
+}
 
 it.each([
   { configuredId: "arcee-ai/trinity-large-thinking", aliasId: "trinity-large-thinking" },
@@ -28,35 +60,7 @@ it.each([
           contextWindow: 32768,
           reasoning: false,
         };
-        const cfg: OpenClawConfig = {
-          plugins: { allow: ["arcee"] },
-          agents: {
-            defaults: {
-              model: { primary: "arcee/trinity-large-thinking" },
-              models: { [`arcee/${aliasId}`]: { alias: "Work account model" } },
-            },
-          },
-          models: {
-            mode: "replace",
-            providers: {
-              arcee: {
-                baseUrl: "https://openrouter.ai/api/v1",
-                api: "openai-completions",
-                models: [
-                  {
-                    id: configuredId,
-                    name: "Authored default",
-                    contextWindow: 32768,
-                    reasoning: false,
-                    input: ["text"],
-                    maxTokens: 2048,
-                    cost: { input: 7, output: 9, cacheRead: 1, cacheWrite: 2 },
-                  },
-                ],
-              },
-            },
-          },
-        };
+        const cfg = configuration({ ...authoredRow, id: configuredId }, aliasId);
         await state.writeConfig(cfg);
         const result = await listModels({
           cfg,
@@ -94,31 +98,14 @@ it("materializes a catalog selection from its authored provider wire row", async
     { layout: "state-only", prefix: "arcee-picker-roundtrip-" },
     async (state) => {
       const row = {
-        id: "arcee-ai/trinity-large-thinking",
+        ...authoredRow,
         name: "Authored route",
         api: "openai-completions" as const,
         baseUrl: "https://api.arcee.ai/api/v1",
         headers: { "X-Authored-Row": "preserved" },
-        reasoning: false,
-        input: ["text" as const],
-        contextWindow: 32768,
-        maxTokens: 2048,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       };
-      const cfg: OpenClawConfig = {
-        plugins: { allow: ["arcee"] },
-        agents: { defaults: { model: { primary: "arcee/trinity-large-thinking" } } },
-        models: {
-          mode: "replace",
-          providers: {
-            arcee: {
-              baseUrl: "https://openrouter.ai/api/v1",
-              api: "openai-completions",
-              models: [row],
-            },
-          },
-        },
-      };
+      const cfg = configuration(row);
       await state.writeConfig(cfg);
       const listed = await listModels({
         cfg,
