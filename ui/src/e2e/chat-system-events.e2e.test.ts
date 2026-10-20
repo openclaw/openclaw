@@ -11,6 +11,12 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
 });
 const timestamp = Date.UTC(2026, 9, 16, 10);
+const promptText = "Please prepare a short launch checklist.";
+const answerText =
+  "The checklist is ready: confirm the release, review the rollout, and share the announcement.";
+const warningText =
+  "Two progress updates could not be delivered. Review the retained updates before continuing.";
+const connectedText = "The workspace connection is available again.";
 function message(role: string, content: string, id: string) {
   return { role, content, timestamp, __openclaw: { id } };
 }
@@ -20,47 +26,33 @@ function recovery(id: string, text: string) {
     provenance: { kind: "internal_system", sourceTool: "restart-sentinel" },
   };
 }
+function fallback(id: string, restored = false) {
+  return {
+    ...message("assistant", "", id),
+    openclawDeliveryMirror: {
+      kind: "model-fallback",
+      runId: "demo-run",
+      fromModel: restored ? "Backup" : "Primary",
+      toModel: restored ? "Primary" : "Backup",
+      ...(restored ? { phase: "restored" } : { reason: "capacity" }),
+    },
+  };
+}
 const events = [
   recovery("recovery-1", "Gateway restarted. The conversation has been restored."),
+  fallback("fallback-1"),
   {
-    ...message("assistant", "", "fallback-1"),
-    openclawDeliveryMirror: {
-      kind: "model-fallback",
-      runId: "demo-run",
-      fromModel: "Primary",
-      toModel: "Backup",
-      reason: "capacity",
-    },
-  },
-  {
-    ...message(
-      "custom",
-      "Two progress updates could not be delivered. Review the retained updates before continuing.",
-      "delivery-1",
-    ),
+    ...message("custom", warningText, "delivery-1"),
     customType: "session-send-recovery-blocked",
   },
-  recovery("recovery-2", "The workspace connection is available again."),
-  {
-    ...message("assistant", "", "fallback-2"),
-    openclawDeliveryMirror: {
-      kind: "model-fallback",
-      runId: "demo-run",
-      phase: "restored",
-      fromModel: "Backup",
-      toModel: "Primary",
-    },
-  },
+  recovery("recovery-2", connectedText),
+  fallback("fallback-2", true),
   recovery("recovery-3", "Recovery checks finished. Your conversation is ready."),
 ];
 const history = [
-  message("user", "Please prepare a short launch checklist.", "user-1"),
+  message("user", promptText, "user-1"),
   ...events,
-  message(
-    "assistant",
-    "The checklist is ready: confirm the release, review the rollout, and share the announcement.",
-    "assistant-1",
-  ),
+  message("assistant", answerText, "assistant-1"),
 ];
 
 suite.define(() => {
@@ -72,7 +64,7 @@ suite.define(() => {
         const gateway = await installMockGateway(page, { historyMessages: initial });
         await page.goto(suite.server.baseUrl + "chat");
         const thread = page.locator(".chat-thread");
-        const prompt = page.getByText("Please prepare a short launch checklist.", { exact: true });
+        const prompt = page.getByText(promptText, { exact: true });
         await prompt.waitFor();
         // Capture before the assertion so the same regression retains the old UI as evidence.
         const dir = createControlUiE2eArtifactDir("single-system-event");
@@ -83,17 +75,14 @@ suite.define(() => {
         writeFileSync(path.join(dir, "single-event.png"), frame.elements[0]!.png);
         const disclosure = thread.locator(".chat-system-events");
         expect(await disclosure.count()).toBe(0);
-        const warning = thread.getByText(
-          "Two progress updates could not be delivered. Review the retained updates before continuing.",
-          { exact: true },
-        );
+        const warning = thread.getByText(warningText, { exact: true });
         await warning.waitFor();
         expect(await warning.isVisible()).toBe(true);
         await page.reload();
         await warning.waitFor();
         expect(await disclosure.count()).toBe(0);
 
-        const appended = recovery("recovery-next", "The workspace connection is available again.");
+        const appended = recovery("recovery-next", connectedText);
         await gateway.setHistoryMessages([...initial, appended]);
         await gateway.emitGatewayEvent("session.message", {
           sessionKey: "agent:main:main",
@@ -130,11 +119,8 @@ suite.define(() => {
         expect(await disclosure.getAttribute("open")).toBeNull();
         expect(await disclosure.locator(".chat-notice").count()).toBe(0);
         const surface = page.locator(".chat-thread");
-        const prompt = page.getByText("Please prepare a short launch checklist.", { exact: true });
-        const answer = page.getByText(
-          "The checklist is ready: confirm the release, review the rollout, and share the announcement.",
-          { exact: true },
-        );
+        const prompt = page.getByText(promptText, { exact: true });
+        const answer = page.getByText(answerText, { exact: true });
         await answer.waitFor();
         expect(await prompt.isVisible()).toBe(true);
         const expectCenteredSummary = async () => {
@@ -174,7 +160,7 @@ suite.define(() => {
         expect(contents.map((text) => text.replace(/\s+/gu, " ").trim())).toEqual([
           "System · gateway restartedGateway restarted. The conversation has been restored.",
           "Model fallback: Primary → BackupReason: capacity",
-          "Two progress updates could not be delivered. Review the retained updates before continuing.",
+          warningText,
           "System · gateway restartedThe workspace connection is available again.",
           "Returned to selected model: Backup → Primary",
           "System · gateway restartedRecovery checks finished. Your conversation is ready.",
@@ -228,11 +214,7 @@ suite.define(() => {
       const search = page.getByRole("textbox", { name: "Search messages", exact: true });
       await search.fill("workspace connection");
       await expect.poll(() => disclosure.count()).toBe(0);
-      expect(
-        await page
-          .getByText("The workspace connection is available again.", { exact: true })
-          .isVisible(),
-      ).toBe(true);
+      expect(await page.getByText(connectedText, { exact: true }).isVisible()).toBe(true);
     });
   });
 });

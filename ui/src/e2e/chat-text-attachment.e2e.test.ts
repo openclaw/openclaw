@@ -26,6 +26,10 @@ suite.define(() => {
         viewport: { width, height: 900 },
       });
       const page = await context.newPage();
+      const capture = (suffix = "") =>
+        page.screenshot({
+          path: path.join(suite.artifactDir, `${extension}-preview-${width}${suffix}.png`),
+        });
       const filename = `pasted-notes.${extension}`;
       const mediaUrl = `/__openclaw__/assistant-media?source=${filename}&mediaTicket=text-preview`;
       let reads = 0;
@@ -75,9 +79,7 @@ suite.define(() => {
         await panel.locator("a[download]").waitFor();
         const reader = panel.locator(extension === "md" ? "article" : "pre");
         await reader.waitFor();
-        await page.screenshot({
-          path: path.join(suite.artifactDir, `${extension}-preview-${width}.png`),
-        });
+        await capture();
         const scroller = panel.locator(".sidebar-content");
         expect(
           await scroller.evaluate((element) => element.clientHeight < element.scrollHeight),
@@ -97,27 +99,22 @@ suite.define(() => {
             return bottom <= viewport.bottom && bottom > viewport.top;
           }),
         ).toBe(true);
-        await page.screenshot({
-          path: path.join(suite.artifactDir, `${extension}-preview-${width}-bottom.png`),
-        });
+        await capture("-bottom");
         if (extension === "md") {
           await scroller.evaluate((element) => {
             element.scrollTop = 0;
           });
           await panel.getByRole("button", { name: "View Raw Text", exact: true }).click();
         }
-        expect(await panel.locator("pre").textContent()).toBe(text);
+        const raw = panel.locator("pre");
+        expect(await raw.textContent()).toBe(text);
         expect(await panel.locator("script, iframe").count()).toBe(0);
         expect(downloads).toBe(0);
         expect(reads).toBe(1);
-        expect(
-          await panel
-            .locator("pre")
-            .evaluate((element) => element.scrollWidth <= element.clientWidth),
-        ).toBe(true);
-        await page.screenshot({
-          path: path.join(suite.artifactDir, `${extension}-preview-${width}-readable.png`),
-        });
+        expect(await raw.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
+          true,
+        );
+        await capture("-readable");
         const [download] = await Promise.all([
           page.waitForEvent("download"),
           panel.locator("a[download]").click(),

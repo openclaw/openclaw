@@ -18,32 +18,31 @@ suite.define(() => {
       const parentKey = "agent:main:swarm-describe-parent";
       const groupId = `swarm:${parentKey}:run`;
       const startedAt = Date.now();
-      let children: SwarmSessionRow[] = Array.from({ length: 4 }, (_, index) => ({
-        key: `agent:main:subagent:describe-worker-${index}`,
-        sessionId: `describe-worker-${index}`,
+      const active = {
         kind: "direct",
         agentId: "main",
+        status: "running",
+        hasActiveRun: true,
+        archived: false,
+      };
+      const clock = (step = 0) => ({ updatedAt: startedAt + step, snapshotAt: startedAt + step });
+      let children: SwarmSessionRow[] = Array.from({ length: 4 }, (_, index) => ({
+        ...active,
+        ...clock(),
+        key: `agent:main:subagent:describe-worker-${index}`,
+        sessionId: `describe-worker-${index}`,
         label: `Worker ${index + 1}`,
         spawnedBy: parentKey,
         parentSessionKey: parentKey,
         swarmGroupId: groupId,
-        status: "running",
-        hasActiveRun: true,
-        archived: false,
-        updatedAt: startedAt,
-        snapshotAt: startedAt,
       }));
-      const parentRow = (clock: number): SwarmSessionRow => ({
+      const parentRow = (time: number): SwarmSessionRow => ({
+        ...active,
         key: parentKey,
         sessionId: "describe-parent",
-        agentId: "main",
-        kind: "direct",
         label: "Swarm request volume",
-        status: "running",
-        hasActiveRun: true,
-        archived: false,
-        updatedAt: clock,
-        snapshotAt: clock,
+        updatedAt: time,
+        snapshotAt: time,
         childSessions: children.map((child) => child.key),
         swarm: {
           groups: [
@@ -107,8 +106,7 @@ suite.define(() => {
           label: `Worker ${index + 1}, update ${step}`,
           status,
           hasActiveRun: status === "running",
-          updatedAt: startedAt + step,
-          snapshotAt: startedAt + step,
+          ...clock(step),
         } satisfies GatewaySessionRow;
         children = children.map((entry, offset) => (offset === index ? child : entry));
         await publish(child, step, "run");
@@ -128,8 +126,7 @@ suite.define(() => {
         label: "Worker 5, newly launched",
         status: "running",
         hasActiveRun: true,
-        updatedAt: startedAt + 13,
-        snapshotAt: startedAt + 13,
+        ...clock(13),
       } satisfies GatewaySessionRow;
       children = [...children, added];
       const beforeMember = (await gateway.getRequests("sessions.describe")).length;
@@ -143,13 +140,6 @@ suite.define(() => {
       ).toEqual(
         children.map((child) => child.label).toSorted((left, right) => left.localeCompare(right)),
       );
-      console.info("swarm-describe-churn", {
-        events: 12,
-        initialDescribes,
-        updateDescribes,
-        membershipEvents: 1,
-        memberDescribes,
-      });
     });
   });
 });

@@ -2,12 +2,13 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
-import {
-  controlUiBundledSettingsStorageKey,
-  controlUiSessionUrl,
-  installMockGateway,
-} from "../test-helpers/control-ui-e2e.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { chatSessionListResponse } from "./chat-flow.test-support.ts";
+import {
+  seedChatSettings,
+  sessionResponseCase,
+  splitColumns,
+} from "./chat-layout-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Swarm history freshness" });
@@ -54,28 +55,9 @@ suite.define(() => {
         },
       };
       const other = { key: otherKey, kind: "direct", label: "Notes", updatedAt: 3 };
-      await page.addInitScript(
-        ({ storageKey, keys }) => {
-          localStorage.setItem(
-            storageKey,
-            JSON.stringify({
-              chatSplitLayout: {
-                activePaneId: "p1",
-                columnWeights: [0.5, 0.5],
-                columns: keys.map((sessionKey, index) => ({
-                  id: `c${index + 1}`,
-                  paneWeights: [1],
-                  panes: [{ id: `p${index + 1}`, sessionKey }],
-                })),
-              },
-            }),
-          );
-        },
-        {
-          storageKey: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
-          keys: [parentKey, otherKey],
-        },
-      );
+      await seedChatSettings(page, suite.server.baseUrl, {
+        chatSplitLayout: splitColumns([parent, other], 0),
+      });
       const gateway = await installMockGateway(page, {
         sessionKey: parentKey,
         sessions: [parent, other, child],
@@ -120,18 +102,17 @@ suite.define(() => {
         },
         parentKey,
       );
-      await gateway.setMethodResponse("chat.history", {
-        cases: [
+      await gateway.setMethodResponse(
+        "chat.history",
+        sessionResponseCase(
+          { sessionKey: parentKey },
           {
-            match: { sessionKey: parentKey },
-            response: {
-              sessionId: parent.sessionId,
-              messages: [{ role: "assistant", content: "Refreshed research results." }],
-              sessionInfo: { ...parent, updatedAt: 2, status: "running", hasActiveRun: true },
-            },
+            sessionId: parent.sessionId,
+            messages: [{ role: "assistant", content: "Refreshed research results." }],
+            sessionInfo: { ...parent, updatedAt: 2, status: "running", hasActiveRun: true },
           },
-        ],
-      });
+        ),
+      );
       await gateway.resolveDeferred("sessions.compact", { ok: true, compacted: true });
       await research.getByText("Refreshed research results.", { exact: true }).waitFor();
       await page.screenshot({ path: path.join(proofDir, "refreshed.png"), animations: "disabled" });

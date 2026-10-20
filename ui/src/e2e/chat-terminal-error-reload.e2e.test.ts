@@ -6,13 +6,68 @@ import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Terminal failure after active-run reload" });
+const sessionKey = "agent:main:main";
+function activeSession(sessionId: string, runId: string, updatedAt: number) {
+  return {
+    key: sessionKey,
+    sessionId,
+    kind: "direct",
+    updatedAt,
+    status: "running",
+    hasActiveRun: true,
+    activeRunIds: [runId],
+  };
+}
+function failedSession(active: ReturnType<typeof activeSession>, summary: string) {
+  return {
+    ...active,
+    status: "failed",
+    hasActiveRun: false,
+    activeRunIds: [],
+    lastRunId: active.activeRunIds[0]!,
+    lastRunError: summary,
+    endedAt: active.updatedAt + 1,
+    updatedAt: active.updatedAt + 1,
+  };
+}
+async function settle(
+  gateway: Awaited<ReturnType<typeof installMockGateway>>,
+  failed: ReturnType<typeof failedSession> & { suppressErrorNotice?: boolean },
+  messages: unknown[],
+) {
+  const { lastRunId: runId, lastRunError: summary, suppressErrorNotice } = failed;
+  const history = { sessionId: failed.sessionId, sessionInfo: failed, messages };
+  await gateway.setMethodResponse("chat.history", history);
+  await gateway.setMethodResponse("chat.startup", history);
+  await gateway.setSessionsListResponse({
+    sessions: [failed],
+    count: 1,
+    path: "",
+    ts: failed.updatedAt,
+  });
+  // Custom receipts persist before chat.error and the session snapshot; no session.message follows.
+  await gateway.emitGatewayEvent("chat", {
+    sessionKey,
+    runId,
+    state: "error",
+    errorMessage: summary,
+    ...(suppressErrorNotice === undefined ? {} : { suppressErrorNotice }),
+  });
+  await gateway.emitGatewayEvent("sessions.changed", {
+    sessionKey,
+    runId,
+    phase: "error",
+    ts: failed.updatedAt,
+    session: failed,
+    ...failed,
+  });
+}
 
 suite.define(() => {
   it.each([false, true])(
     "honors internal-result notice policy live and after reload (suppressed=%s)",
     async (suppressed) => {
       await suite.withPage({ viewport: { width: 1160, height: 850 } }, async ({ page }) => {
-        const sessionKey = "agent:main:main";
         const runId = "followup-run";
         const now = Date.now();
         const messages = [
@@ -30,15 +85,7 @@ suite.define(() => {
           },
         ];
         const summary = "No answer was returned. Ask again if you still need one.";
-        const active = {
-          key: sessionKey,
-          sessionId: "notice-policy-session",
-          kind: "direct",
-          updatedAt: now,
-          status: "running",
-          hasActiveRun: true,
-          activeRunIds: [runId],
-        };
+        const active = activeSession("notice-policy-session", runId, now);
         const gateway = await installMockGateway(page, {
           sessionKey,
           sessions: [active],
@@ -54,15 +101,8 @@ suite.define(() => {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         await page.getByRole("button", { name: "Stop generating" }).waitFor();
         const failed = {
-          ...active,
-          status: "failed",
-          hasActiveRun: false,
-          activeRunIds: [],
-          lastRunId: runId,
-          lastRunError: summary,
+          ...failedSession(active, summary),
           suppressErrorNotice: suppressed,
-          endedAt: now + 1,
-          updatedAt: now + 1,
         };
         const notice = {
           role: "custom",
@@ -74,49 +114,24 @@ suite.define(() => {
           ...(!suppressed ? { openclawRunError: { runId, summary } } : {}),
           __openclaw: { id: "failure", seq: 3, runId },
         };
-        const settled = {
-          sessionId: active.sessionId,
-          sessionInfo: failed,
-          // chat.history serves display-projected messages, not raw stored reports.
-          messages: suppressed ? messages : [...messages, notice],
+        // chat.history serves display-projected messages, not raw stored reports.
+        await settle(gateway, failed, suppressed ? messages : [...messages, notice]);
+        const expectNotice = async () => {
+          await expect
+            .poll(() => page.locator(".chat-run-failure").count())
+            .toBe(suppressed ? 0 : 1);
+          if (suppressed) {
+            expect(await page.getByText(summary, { exact: false }).count()).toBe(0);
+          }
         };
-        await gateway.setMethodResponse("chat.history", settled);
-        await gateway.setMethodResponse("chat.startup", settled);
-        await gateway.setSessionsListResponse({
-          sessions: [failed],
-          count: 1,
-          path: "",
-          ts: now + 1,
-        });
-        await gateway.emitGatewayEvent("chat", {
-          sessionKey,
-          runId,
-          state: "error",
-          errorMessage: summary,
-          suppressErrorNotice: suppressed,
-        });
-        await gateway.emitGatewayEvent("sessions.changed", {
-          sessionKey,
-          runId,
-          phase: "error",
-          ts: now + 1,
-          session: failed,
-          ...failed,
-        });
         await expect
           .poll(() => page.getByRole("button", { name: "Stop generating" }).count())
           .toBe(0);
-        await expect.poll(() => page.locator(".chat-run-failure").count()).toBe(suppressed ? 0 : 1);
-        if (suppressed) {
-          expect(await page.getByText(summary, { exact: false }).count()).toBe(0);
-        }
+        await expectNotice();
         await page.reload();
         const answer = page.getByText("The fix is published and verified.", { exact: true });
         await answer.waitFor();
-        await expect.poll(() => page.locator(".chat-run-failure").count()).toBe(suppressed ? 0 : 1);
-        if (suppressed) {
-          expect(await page.getByText(summary, { exact: false }).count()).toBe(0);
-        }
+        await expectNotice();
         if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
           const thread = page.locator(".chat-thread");
           const frame = await takeControlUiScreenshotFrame(page, thread, [answer], {
@@ -134,7 +149,6 @@ suite.define(() => {
 
   it("loads the durable failure notice after reloading an active run", async () => {
     await suite.withPage({ viewport: { width: 1160, height: 850 } }, async ({ page }) => {
-      const sessionKey = "agent:main:main";
       const runId = "reloaded-run";
       const now = Date.now();
       const prompt = {
@@ -143,15 +157,7 @@ suite.define(() => {
         timestamp: now - 2,
         __openclaw: { id: "input", seq: 1, runId, idempotencyKey: runId + ":user" },
       };
-      const active = {
-        key: sessionKey,
-        sessionId: "reloaded-session",
-        kind: "direct",
-        updatedAt: now,
-        status: "running",
-        hasActiveRun: true,
-        activeRunIds: [runId],
-      };
+      const active = activeSession("reloaded-session", runId, now);
       const history = {
         sessionId: active.sessionId,
         sessionInfo: active,
@@ -182,45 +188,7 @@ suite.define(() => {
         openclawRunError: { runId, summary },
         __openclaw: { id: "failure", seq: 2, runId },
       };
-      const failed = {
-        ...active,
-        status: "failed",
-        hasActiveRun: false,
-        activeRunIds: [],
-        lastRunId: runId,
-        lastRunError: summary,
-        endedAt: now + 1,
-        updatedAt: now + 1,
-      };
-      const settled = {
-        sessionId: active.sessionId,
-        sessionInfo: failed,
-        messages: [prompt, notice],
-      };
-      await gateway.setMethodResponse("chat.history", settled);
-      await gateway.setMethodResponse("chat.startup", settled);
-      await gateway.setSessionsListResponse({
-        sessions: [failed],
-        count: 1,
-        path: "",
-        ts: now + 1,
-      });
-      // The Gateway persists a custom receipt, then emits chat.error and its session snapshot.
-      // Custom reports do not emit session.message.
-      await gateway.emitGatewayEvent("chat", {
-        sessionKey,
-        runId,
-        state: "error",
-        errorMessage: summary,
-      });
-      await gateway.emitGatewayEvent("sessions.changed", {
-        sessionKey,
-        runId,
-        phase: "error",
-        ts: now + 1,
-        session: failed,
-        ...failed,
-      });
+      await settle(gateway, failedSession(active, summary), [prompt, notice]);
       await expect
         .poll(() => page.getByRole("button", { name: "Stop generating" }).count())
         .toBe(0);

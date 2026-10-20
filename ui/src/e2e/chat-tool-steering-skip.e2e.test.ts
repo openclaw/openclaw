@@ -47,43 +47,20 @@ suite.define(() => {
         timestamp,
       };
       const args = { path: "/workspace/operation.json", content: '{"phase":"testing"}' };
-      await gateway.emitGatewayEvent("agent", {
-        runId,
-        sessionKey: "main",
-        seq: 1,
-        stream: "tool",
-        ts: timestamp,
-        data: { name: "write", toolCallId: skipped.toolCallId, phase: "start", args },
-      });
-      await gateway.emitGatewayEvent("agent", {
-        runId,
-        sessionKey: "main",
-        seq: 2,
-        stream: "tool",
-        ts: timestamp,
-        data: {
-          name: "write",
-          toolCallId: skipped.toolCallId,
-          phase: "result",
-          isError: true,
-          result: skipped,
-        },
-      });
-      await gateway.emitGatewayEvent("agent", {
-        runId,
-        sessionKey: "main",
-        seq: 3,
-        stream: "item",
-        ts: timestamp,
-        data: projectAgentToolActivity({
-          name: "write",
-          toolCallId: skipped.toolCallId,
-          phase: "result",
-          args,
-          isError: true,
-          result: skipped,
-        }),
-      });
+      const emit = (seq: number, stream: string, data: unknown) =>
+        gateway.emitGatewayEvent("agent", {
+          runId,
+          sessionKey: "main",
+          seq,
+          stream,
+          ts: timestamp,
+          data,
+        });
+      const tool = { name: "write", toolCallId: skipped.toolCallId };
+      const result = { ...tool, phase: "result" as const, isError: true, result: skipped };
+      await emit(1, "tool", { ...tool, phase: "start", args });
+      await emit(2, "tool", result);
+      await emit(3, "item", projectAgentToolActivity({ ...result, args }));
       const row = page.locator(".chat-tool-msg-summary").filter({ hasText: "operation.json" });
       await row.waitFor();
       await row.click({ position: { x: 4, y: 4 } });
