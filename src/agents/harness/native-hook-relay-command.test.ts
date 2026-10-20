@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -35,16 +35,9 @@ function buildCommand(overrides: Partial<Parameters<typeof buildNativeHookRelayC
 function expectedCommand(argv: string[]): string {
   const command = shellQuoteArgs([
     ...argv,
-    "hooks",
-    "relay",
-    "--provider",
-    "codex",
-    "--relay-id",
-    "relay-1",
-    "--event",
-    "post_tool_use",
-    "--timeout",
-    "5000",
+    ..."hooks relay --provider codex --relay-id relay-1 --event post_tool_use --timeout 5000".split(
+      " ",
+    ),
   ]);
   return process.platform === "win32" ? command : `exec ${command}`;
 }
@@ -100,8 +93,6 @@ describe("native hook relay executable resolution", () => {
     async ({ source, relative }) => {
       await withTempDir("openclaw-relay-standalone-", async (root) => {
         const executable = path.join(root, "renamed-cli");
-        await mkdir(path.join(root, "runtime"));
-        await writeFile(executable, "");
         await writeFile(
           path.join(root, "manifest.json"),
           JSON.stringify({

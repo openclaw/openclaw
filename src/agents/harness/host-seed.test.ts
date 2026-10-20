@@ -16,7 +16,10 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { compactEmbeddedAgentSessionDirect } from "../embedded-agent-runner/compact.js";
 import { readCompactionAccountingRecorder } from "../embedded-agent-runner/run/compaction-accounting-bridge.js";
 import {
@@ -35,9 +38,46 @@ vi.mock("../embedded-agent-runner/compact.js", () => ({
   compactEmbeddedAgentSessionDirect: vi.fn(),
 }));
 
-function seedTarget(storePath: string, sessionId: string) {
-  return { agentId: "main", sessionId, sessionKey: `agent:main:${sessionId}`, storePath };
+async function seedFixture(
+  state: OpenClawTestState,
+  sessionId: string,
+  entry: Parameters<typeof upsertSessionEntryCore>[1] = {},
+) {
+  setRuntimeConfigSnapshot({});
+  const target = {
+    agentId: "main",
+    sessionId,
+    sessionKey: `agent:main:${sessionId}`,
+    storePath: state.statePath("sessions.sqlite"),
+  };
+  await upsertSessionEntryCore(target, { sessionId, updatedAt: 1, ...entry });
+  return {
+    target,
+    open: () => SessionManager.openAsync(target, state.workspaceDir),
+    recorder: (text: string, timestamp: number, idempotencyKey: string) =>
+      createUserTurnTranscriptRecorder({
+        message: { ...makeUserMessage(text, timestamp), idempotencyKey },
+        target: { ...target, sessionEntry: loadSessionEntry(target), cwd: state.workspaceDir },
+      }),
+    bind: (
+      input: Parameters<typeof bindBoundedSeed>[0],
+      signal?: AbortSignal,
+      media?: Parameters<typeof bindBoundedSeed>[4],
+    ) =>
+      bindBoundedSeed(
+        { sessionTarget: target, workspaceDir: state.workspaceDir, ...input },
+        () => {},
+        async (run) => run(),
+        signal,
+        media,
+      ),
+  };
 }
+
+const assistant = (text: string) =>
+  makeAssistantMessageFixture({ content: [{ type: "text", text }] });
+const appendUser = async (manager: SessionManager, text: string, timestamp: number) =>
+  expectDefined(await manager.appendMessageAsync(makeUserMessage(text, timestamp)), "seed turn");
 
 const allowance = {
   oldBytes: 1000,
@@ -95,31 +135,18 @@ it.each<SeedCase>([
     oversizedTail,
   }) => {
     await withOpenClawTestState({ label: "native-seed" }, async (state) => {
-      setRuntimeConfigSnapshot({});
-      const target = seedTarget(state.statePath("sessions.sqlite"), "seed");
-      await upsertSessionEntryCore(target, {
-        sessionId: target.sessionId,
-        updatedAt: 1,
+      const fixture = await seedFixture(state, "seed", {
         agentHarnessId: "codex",
         modelSelectionLocked: true,
         activeWriterRunId: "seed-writer",
         transcriptByteCompactionLatch: { activeBytes: 4096, maxBytes: 1024, sessionId: "seed" },
       });
-      let manager = await SessionManager.openAsync(target, state.workspaceDir);
-      const old = expectDefined(
-        await manager.appendMessageAsync(makeUserMessage("old".repeat(oldBytes), 1)),
-        "old seed turn",
-      );
-      const recent = expectDefined(
-        await manager.appendMessageAsync(makeUserMessage("recent request", 2)),
-        "recent seed turn",
-      );
+      const { target } = fixture;
+      let manager = await fixture.open();
+      const old = await appendUser(manager, "old".repeat(oldBytes), 1);
+      const recent = await appendUser(manager, "recent request", 2);
       if (oversizedTail) {
-        await manager.appendMessageAsync(
-          makeAssistantMessageFixture({
-            content: [{ type: "text", text: `TAIL_EVIDENCE ${"tail".repeat(50_000)}` }],
-          }),
-        );
+        await manager.appendMessageAsync(assistant(`TAIL_EVIDENCE ${"tail".repeat(50_000)}`));
       }
       if (summary) {
         await manager.appendCompactionAsync(
@@ -128,16 +155,12 @@ it.each<SeedCase>([
           2048,
         );
       }
-      const recorder = createUserTurnTranscriptRecorder({
-        message: { ...makeUserMessage("pending", 3), idempotencyKey: "seed:pending" },
-        target: { ...target, sessionEntry: loadSessionEntry(target), cwd: state.workspaceDir },
-      });
+      const recorder = fixture.recorder("pending", 3, "seed:pending");
       await recorder.persistApproved();
-      manager = await SessionManager.openAsync(target, state.workspaceDir);
+      manager = await fixture.open();
       const originalEvents = loadTranscriptEventsSync(target);
       const assertCurrent = vi.fn();
-      const compact = vi.mocked(compactEmbeddedAgentSessionDirect);
-      compact.mockReset();
+      const compact = vi.mocked(compactEmbeddedAgentSessionDirect).mockReset();
       compact.mockImplementationOnce(async (params, persist) => {
         if (decline) {
           return { ok: false, compacted: false, reason: "fixture declines compaction" };
@@ -171,11 +194,8 @@ it.each<SeedCase>([
         );
         const prepared = expectDefined(result.ok ? result.value : undefined, "prepared compaction");
         expect(
-          JSON.stringify([
-            ...prepared.messagesToSummarize,
-            ...prepared.turnPrefixMessages,
-          ]).includes(oversizedTail ? "TAIL_EVIDENCE" : "recent request"),
-        ).toBe(true);
+          JSON.stringify([...prepared.messagesToSummarize, ...prepared.turnPrefixMessages]),
+        ).toContain(oversizedTail ? "TAIL_EVIDENCE" : "recent request");
         await withSessionCompactionPersistenceAsync(manager, persist, () =>
           manager.appendCompactionAsync(
             oversizedSummary ? "generated".repeat(1000) : generatedSummary,
@@ -185,17 +205,12 @@ it.each<SeedCase>([
         );
         return { ok: true, compacted: true };
       });
-      const maybePrepare = bindBoundedSeed(
-        {
-          sessionTarget: { ...target, expectedWriterRunId: "seed-writer" },
-          workspaceDir: state.workspaceDir,
-          contextTokenBudget: contextTokens,
-          config: { agents: { defaults: { compaction: { maxActiveTranscriptBytes: maxBytes } } } },
-          userTurnTranscriptRecorder: recorder,
-        },
-        () => {},
-        async (run) => run(),
-      )?.prepareBoundedSeed;
+      const maybePrepare = fixture.bind({
+        sessionTarget: { ...target, expectedWriterRunId: "seed-writer" },
+        contextTokenBudget: contextTokens,
+        config: { agents: { defaults: { compaction: { maxActiveTranscriptBytes: maxBytes } } } },
+        userTurnTranscriptRecorder: recorder,
+      })?.prepareBoundedSeed;
       const prepare = expectDefined(maybePrepare, "missing seed capability");
       const result = prepare({ assertCurrent, tokenBudget: requestTokens });
       if (revoke || replaceWriter) {
@@ -214,10 +229,7 @@ it.each<SeedCase>([
             expect(seed.some((message) => message.role === "compactionSummary")).toBe(false);
           } else {
             expect(seed).toContainEqual(
-              expect.objectContaining({
-                role: "compactionSummary",
-                summary: generatedSummary,
-              }),
+              expect.objectContaining({ role: "compactionSummary", summary: generatedSummary }),
             );
           }
           expect(loadSessionEntry(target)?.compactionCount).toBe(1);
@@ -241,42 +253,24 @@ it.each([false, true])(
   "preserves the admitted task only for a refresh seed (%s)",
   async (refresh) => {
     await withOpenClawTestState({ label: "native-refresh-seed" }, async (state) => {
-      setRuntimeConfigSnapshot({});
-      const target = seedTarget(state.statePath("sessions.sqlite"), "refresh");
-      await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-      const manager = await SessionManager.openAsync(target, state.workspaceDir);
+      const fixture = await seedFixture(state, "refresh");
+      const manager = await fixture.open();
       await manager.appendMessageAsync(makeUserMessage("Earlier history".repeat(600), 1));
-      const recorder = createUserTurnTranscriptRecorder({
-        message: {
-          ...makeUserMessage("ORIGINAL_ADMITTED_TASK", 2),
-          idempotencyKey: "refresh:user",
-        },
-        target: { ...target, sessionEntry: loadSessionEntry(target), cwd: state.workspaceDir },
-      });
+      const recorder = fixture.recorder("ORIGINAL_ADMITTED_TASK", 2, "refresh:user");
       const persisted = expectDefined(await recorder.persistApproved(), "persisted original task");
-      const stale = makeAssistantMessageFixture({
-        content: [{ type: "text", text: "stale persisted tail" }],
-      });
-      const current = makeAssistantMessageFixture({
-        content: [{ type: "text", text: "authoritative refresh handoff".repeat(600) }],
-      });
-      const afterAdmission = await SessionManager.openAsync(target, state.workspaceDir);
+      const stale = assistant("stale persisted tail");
+      const current = assistant("authoritative refresh handoff".repeat(600));
+      const afterAdmission = await fixture.open();
       await afterAdmission.appendMessageAsync(stale);
-      const maybePrepare = bindBoundedSeed(
-        {
-          sessionTarget: target,
-          workspaceDir: state.workspaceDir,
-          config: {
-            agents: {
-              defaults: { compaction: { enabled: false, maxActiveTranscriptBytes: 8192 } },
-            },
+      const maybePrepare = fixture.bind({
+        config: {
+          agents: {
+            defaults: { compaction: { enabled: false, maxActiveTranscriptBytes: 8192 } },
           },
-          userTurnTranscriptRecorder: recorder,
-          ...(refresh ? { pluginRuntimeRefreshMessages: [persisted.message, current] } : {}),
         },
-        () => {},
-        async (run) => run(),
-      )?.prepareBoundedSeed;
+        userTurnTranscriptRecorder: recorder,
+        ...(refresh ? { pluginRuntimeRefreshMessages: [persisted.message, current] } : {}),
+      })?.prepareBoundedSeed;
       const prepare = expectDefined(maybePrepare, "fixture has no seed capability");
       const seed = await prepare({ assertCurrent: () => {} });
       expect(JSON.stringify(seed)).toContain("Older history outside that window is omitted");
@@ -300,9 +294,7 @@ it.each([1, 2])(
   "bounds restored images and reuses their prepared snapshot (%s)",
   async (imageCount) => {
     await withOpenClawTestState({ label: "native-media-seed" }, async (state) => {
-      setRuntimeConfigSnapshot({});
-      const target = seedTarget(state.statePath("sessions.sqlite"), "media");
-      await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+      const fixture = await seedFixture(state, "media");
       const paths = Array.from({ length: imageCount }, (_, index) =>
         path.join(state.workspaceDir, `image-${index}.png`),
       );
@@ -311,7 +303,7 @@ it.each([1, 2])(
         "base64",
       );
       await Promise.all(paths.map((file) => writeFile(file, png)));
-      const manager = await SessionManager.openAsync(target, state.workspaceDir);
+      const manager = await fixture.open();
       const imageTurn: PersistedUserTurnMessage = {
         ...makeUserMessage("Stored image question", 1),
         __openclaw: {
@@ -319,10 +311,7 @@ it.each([1, 2])(
         },
       };
       await manager.appendMessageAsync(imageTurn);
-      const recent = expectDefined(
-        await manager.appendMessageAsync(makeUserMessage("Recent text", 2)),
-        "recent media turn",
-      );
+      const recent = await appendUser(manager, "Recent text", 2);
       const compact = vi.mocked(compactEmbeddedAgentSessionDirect).mockReset();
       compact.mockImplementationOnce(async (_params, persist) => {
         await withSessionCompactionPersistenceAsync(manager, persist, () =>
@@ -340,15 +329,11 @@ it.each([1, 2])(
       );
       const media = { capabilities: { prepareContextMedia: restore } };
       const source = new AbortController();
-      const bound = bindBoundedSeed(
+      const bound = fixture.bind(
         {
-          sessionTarget: target,
-          workspaceDir: state.workspaceDir,
           contextTokenBudget: 8192,
           config: { agents: { defaults: { compaction: { maxActiveTranscriptBytes: "20mb" } } } },
         },
-        () => {},
-        async (run) => run(),
         source.signal,
         media,
       );

@@ -32,25 +32,24 @@ export function createHarnessCompactionFixture(
     params: Parameters<typeof maybeCompactAgentHarnessSessionImpl>[0],
     options: Partial<Parameters<typeof maybeCompactAgentHarnessSessionImpl>[1]> = {},
   ) {
-    const fixture = readFixture();
+    const { state, admittedRunContext } = readFixture();
     const preparedModelRuntime = options.preparedModelRuntime ?? {
       ...createModelGenerationFixture({
-        agentDir: fixture.state.agentDir(),
-        workspaceDir: fixture.state.workspaceDir,
+        agentDir: state.agentDir(),
+        workspaceDir: state.workspaceDir,
         config: params.config ?? {},
         createStores: () => ({ authStorage: {} as never, modelRegistry: {} as never }),
         label: "harness-test",
       }).preparedModelRuntime,
       pluginRegistry: getPluginRegistryForContext() ?? undefined,
     };
-    const sourceAdmission = fixture.admittedRunContext;
     return maybeCompactAgentHarnessSessionImpl(params, {
       ...options,
       preparedModelRuntime,
       sourceAuthority: options.sourceAuthority ?? {
         operatorAuthority: undefined,
         assertActive: () => {
-          if (!getAdmittedRunDelegatedAuthority(sourceAdmission)) {
+          if (!getAdmittedRunDelegatedAuthority(admittedRunContext)) {
             throw new Error("Harness selection fixture admission is closed");
           }
         },

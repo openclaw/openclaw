@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:https";
 import os from "node:os";
 import path from "node:path";
+import { buffer } from "node:stream/consumers";
 import tls from "node:tls";
 import { promisify } from "node:util";
 import { expect, it } from "vitest";
@@ -16,15 +17,7 @@ it("verifies TLS and sends only the relay capability; refuses redirects and boun
   let mode = "ok";
   let status = 200;
   await promisify(execFile)("openssl", [
-    "req",
-    "-x509",
-    "-newkey",
-    "rsa:2048",
-    "-nodes",
-    "-days",
-    "1",
-    "-subj",
-    "/CN=localhost",
+    ..."req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=localhost".split(" "),
     "-addext",
     "subjectAltName=IP:127.0.0.1",
     "-keyout",
@@ -38,13 +31,11 @@ it("verifies TLS and sends only the relay capability; refuses redirects and boun
     (req, res) => {
       const request = (async () => {
         received++;
-        expect(req.headers.authorization).toBe("Bearer synthetic-relay-capability");
-        expect(req.url).toBe("/__openclaw__/native-hook/relay");
-        const chunks = [];
-        for await (const chunk of req) {
-          chunks.push(chunk);
-        }
-        expect(JSON.parse(Buffer.concat(chunks).toString())).toMatchObject({
+        expect(req).toMatchObject({
+          headers: { authorization: "Bearer synthetic-relay-capability" },
+          url: "/__openclaw__/native-hook/relay",
+        });
+        expect(JSON.parse((await buffer(req)).toString())).toMatchObject({
           generation: "current",
           relayId: "relay",
         });

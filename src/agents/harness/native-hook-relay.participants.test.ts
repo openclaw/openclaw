@@ -5,8 +5,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import {
   createAdmittedRunOperatorAuthority,
-  createOperationalRunInstanceRef,
-  prepareAgentRunAdmission,
+  prepareSystemAgentRunAdmission,
 } from "../admitted-run-context.js";
 import { prepareOperatorModelPolicy } from "../operator-model-policy.js";
 import { getGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
@@ -70,16 +69,14 @@ it("keeps collaborative native spawn under the incumbent and refuses an ended pa
     modelPolicy: prepareOperatorModelPolicy({ cfg: {}, policy: {} }),
     assertCurrent() {},
   });
-  const admission = prepareAgentRunAdmission({
-    cfg: {},
-    facts: {
-      runId: "personal-tool-run",
-      agentId: "main",
-      ingress: { kind: "system", state: "present", boundary: "native-spawn-test" },
-    },
-    operationalRunInstance: createOperationalRunInstanceRef("personal-tool-run"),
+  const admission = prepareSystemAgentRunAdmission(
+    {},
+    "personal-tool-run",
+    "main",
+    "native-spawn-test",
+    undefined,
     operatorAuthority,
-  });
+  );
   const admittedRunContext = await admission.admit("plugin-harness", "codex");
   // Production creates the host before the prepared turn scope publishes participants.
   const host = createAgentHarnessHostCapabilities({
@@ -127,18 +124,12 @@ it("keeps collaborative native spawn under the incumbent and refuses an ended pa
               ),
             ).resolves.toMatchObject({ status: "accepted" });
             expect(turn.operation.personalToolParticipants?.resolve("bob")?.profileId).toBe("bob");
-            for (const name of ["Agent", "spawn_agent", "crewspawn_agent"]) {
-              await expect(invoke(name, `single-${name}`)).resolves.toEqual({
-                stdout: "",
-                stderr: "",
-                exitCode: 0,
-              });
+            const names = ["Agent", "spawn_agent", "crewspawn_agent"];
+            const success = { stdout: "", stderr: "", exitCode: 0 };
+            for (const name of names) {
+              await expect(invoke(name, `single-${name}`)).resolves.toEqual(success);
             }
-            expect(admittedCalls).toEqual([
-              "single-Agent",
-              "single-spawn_agent",
-              "single-crewspawn_agent",
-            ]);
+            expect(admittedCalls).toEqual(names.map((name) => `single-${name}`));
             const pending = invoke("Agent", "pending-spawn");
             await Promise.race([
               entered.promise,
@@ -148,20 +139,19 @@ it("keeps collaborative native spawn under the incumbent and refuses an ended pa
             ]);
             await turn.complete();
             resume.resolve();
-            const ended = /turn has ended/;
-            const expectDenied = (response: Awaited<ReturnType<typeof invoke>>, reason: RegExp) => {
+            const expectDenied = (response: Awaited<ReturnType<typeof invoke>>) => {
               expect(JSON.parse(response.stdout)).toMatchObject({
                 hookSpecificOutput: {
                   hookEventName: "PreToolUse",
                   permissionDecision: "deny",
-                  permissionDecisionReason: expect.stringMatching(reason),
+                  permissionDecisionReason: expect.stringMatching(/turn has ended/),
                 },
               });
               expect(response.exitCode).toBe(0);
             };
-            expectDenied(await pending, ended);
-            for (const name of ["Agent", "spawn_agent", "crewspawn_agent"]) {
-              expectDenied(await invoke(name, `ended-${name}`), ended);
+            expectDenied(await pending);
+            for (const name of names) {
+              expectDenied(await invoke(name, `ended-${name}`));
             }
           } finally {
             resume.resolve();

@@ -1,3 +1,4 @@
+import { setImmediate } from "node:timers/promises";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import {
   onTrustedInternalDiagnosticEvent,
@@ -41,20 +42,11 @@ export function createAttemptParams(): AgentHarnessAttemptParamsV2 {
 }
 
 export function createFinalizationParams(): AgentHarnessSettledTurnFinalizationAttemptParams<AgentHarnessAttemptParamsV2> {
-  const {
-    hostCapabilities: _hostCapabilities,
-    onSettledTurn: _onSettledTurn,
-    ...params
-  } = createAttemptParams();
-  return params;
+  return createAttemptParams();
 }
 
 export function createDiagnosticTrace(): DiagnosticTraceContext {
-  return {
-    traceId: "11111111111111111111111111111111",
-    spanId: "2222222222222222",
-    traceFlags: "01",
-  };
+  return { traceId: "1".repeat(32), spanId: "2".repeat(16), traceFlags: "01" };
 }
 
 export function createFinalAssistant(): NonNullable<EmbeddedRunAttemptResult["lastAssistant"]> {
@@ -90,9 +82,7 @@ export function createAttemptResult(): EmbeddedRunAttemptResult {
 }
 
 export async function flushDiagnosticEvents(): Promise<void> {
-  await new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
+  await setImmediate();
 }
 
 export function captureDiagnosticEvents(
