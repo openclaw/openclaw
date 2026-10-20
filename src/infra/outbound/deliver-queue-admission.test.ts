@@ -28,7 +28,6 @@ function preparation(id: string, preparationLeaseExpiresAt: number): StableDeliv
     id,
     ...counters,
     preparationState: "prepared",
-    preparationOwnerId: "owner-1",
     preparationLeaseExpiresAt,
   };
 }
@@ -52,13 +51,12 @@ describe("stageAndEnqueueOutboundDelivery", () => {
   });
 
   it("restores first custody including absence of a generation binding", () => {
-    const originalPayloads = [{ text: "original result" }];
     const entry = {
       id: "shared-intent",
       ...counters,
       channel: "matrix" as const,
       to: "!original:example",
-      preparedBatch: createUnmodifiedPreparedOutboundBatch(originalPayloads),
+      preparedBatch: createUnmodifiedPreparedOutboundBatch(payloads),
     };
     const generation = {
       agentId: "main",
@@ -76,7 +74,7 @@ describe("stageAndEnqueueOutboundDelivery", () => {
     };
     expect(restoreQueuedDeliveryCustody(params, entry)).toMatchObject({
       to: entry.to,
-      payloads: originalPayloads,
+      payloads,
       sessionGeneration: undefined,
     });
     expect(
@@ -84,7 +82,7 @@ describe("stageAndEnqueueOutboundDelivery", () => {
         { ...params, sessionGeneration: undefined },
         { ...entry, sessionGeneration: generation },
       ),
-    ).toMatchObject({ to: entry.to, payloads: originalPayloads, sessionGeneration: generation });
+    ).toMatchObject({ to: entry.to, payloads, sessionGeneration: generation });
   });
 
   it.each(["checkpoint", "staging"])(

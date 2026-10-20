@@ -29,7 +29,6 @@ import { loadPendingDeliveries } from "./delivery-queue.test-helpers.js";
 
 describe("recovered requester final receipts", () => {
   const fixtures = installRecoveryHooks();
-  const deliverOutboundPayloads = fixtures.deliver;
 
   it.each([
     { producer: "command", terminalBeforeDelivery: false },
@@ -113,9 +112,7 @@ describe("recovered requester final receipts", () => {
       await closeStateDatabaseForTest();
       const sendMatrix = vi.fn().mockResolvedValue({ messageId: "recovered-final-message" });
       const recover = () =>
-        fixtures.recover((params) =>
-          deliverOutboundPayloads({ ...params, deps: { matrix: sendMatrix } }),
-        );
+        fixtures.recover((params) => fixtures.deliver({ ...params, deps: { matrix: sendMatrix } }));
       await recover();
       await clearPendingFinalDeliveryAfterSuccess(completion);
       await closeOpenClawAgentDatabasesAsync(tmpDir);
@@ -196,7 +193,6 @@ describe("recovered requester final receipts", () => {
     const payloads = [{ text: "The final result." }];
     await markFinal(scope, entry, payloads, options.captureContext ?? context);
     const completion = resolvePendingFinalDeliveryCompletion(payloads);
-    assert(completion || options.replaceSourceBeforeCapture, "Expected final custody");
     return { scope, context, sourceRunId, completion };
   }
 

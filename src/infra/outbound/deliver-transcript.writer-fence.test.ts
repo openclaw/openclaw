@@ -23,6 +23,7 @@ vi.mock("../../config/sessions/transcript.runtime.js", async (importOriginal) =>
 
 const RUNNING_SESSION_KEY = "agent:wolf:discord:channel:1497965766035640391";
 const OTHER_SESSION_KEY = "agent:arthur:discord:channel:1538510183024689305";
+const fence = { expectedWriterRunId: "run-running", expectedLifecycleRevision: "rev-7" };
 
 async function mirrorInto(sessionKey: string, deferToSessionLane = false): Promise<void> {
   await mirrorDeliveredPayloads({
@@ -45,8 +46,7 @@ async function withRunningSession(run: () => Promise<void>): Promise<void> {
         agentId: "wolf",
         sessionKey: RUNNING_SESSION_KEY,
         storePath: "/state/agents/wolf/openclaw-agent.sqlite",
-        expectedLifecycleRevision: "rev-7",
-        expectedWriterRunId: "run-running",
+        ...fence,
       },
       withTranscriptWrite: async (operation) => await operation(),
     },
@@ -56,8 +56,7 @@ async function withRunningSession(run: () => Promise<void>): Promise<void> {
 
 describe("outbound delivery mirror writer fence", () => {
   beforeEach(() => {
-    append.mockClear();
-    append.mockResolvedValue({ ok: true } as const);
+    append.mockClear().mockResolvedValue({ ok: true } as const);
   });
 
   it.each([
@@ -70,10 +69,7 @@ describe("outbound delivery mirror writer fence", () => {
     const args = append.mock.calls[0]?.[0];
     expect(args).toMatchObject({ sessionKey });
     if (owned && sessionKey === RUNNING_SESSION_KEY) {
-      expect(args).toMatchObject({
-        expectedWriterRunId: "run-running",
-        expectedLifecycleRevision: "rev-7",
-      });
+      expect(args).toMatchObject(fence);
     } else {
       expect(args).not.toHaveProperty("expectedWriterRunId");
       expect(args).not.toHaveProperty("expectedLifecycleRevision");
@@ -101,15 +97,11 @@ describe("outbound delivery mirror writer fence", () => {
     });
     try {
       await withinTest(entered.promise, signal);
+      const mirror = () => mirrorInto(RUNNING_SESSION_KEY, true);
+      const independent = () =>
+        runWithGatewayIndependentRootWorkAdmission(mirror, "direct-delivery");
       await withinTest(
-        withRunningSession(() =>
-          work.track(() =>
-            runWithGatewayIndependentRootWorkAdmission(
-              () => mirrorInto(RUNNING_SESSION_KEY, true),
-              "direct-delivery",
-            ),
-          ),
-        ),
+        withRunningSession(() => work.track(independent)),
         signal,
       );
       await work.drain();

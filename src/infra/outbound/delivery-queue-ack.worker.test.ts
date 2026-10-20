@@ -64,10 +64,9 @@ describe("outbound acknowledgement worker", () => {
     });
     expect(claimId).toEqual(expect.any(String));
     await closeOpenClawStateDatabaseAsync();
-    const context = captureDeliveryQueueStateContext(stateDir);
     const owner = createQueuedDeliveryOwner(
       { queueId: id, expectedPlatformSendAttemptId: claimId },
-      context,
+      captureDeliveryQueueStateContext(stateDir),
     );
     const sql = observeHostDataSql();
     try {
@@ -84,15 +83,15 @@ describe("outbound acknowledgement worker", () => {
   it("preserves an explicit undefined owner check across worker transfer", async () => {
     const { stateDir, id, claimId } = await claimedDelivery();
     const options = { expectedPlatformSendAttemptId: undefined };
-    await expect(ackDelivery(id, stateDir, options)).rejects.toThrow(
-      `Delivery platform claim was lost: ${id}`,
-    );
+    const expectLostClaim = () =>
+      expect(ackDelivery(id, stateDir, options)).rejects.toThrow(
+        `Delivery platform claim was lost: ${id}`,
+      );
+    await expectLostClaim();
     expect(await loadPendingDelivery(id, stateDir)).toMatchObject({ producerClaimId: claimId });
     await ackDelivery(id, stateDir, { expectedPlatformSendAttemptId: claimId });
     expect(await loadPendingDelivery(id, stateDir)).toBeNull();
-    await expect(ackDelivery(id, stateDir, options)).rejects.toThrow(
-      `Delivery platform claim was lost: ${id}`,
-    );
+    await expectLostClaim();
     await expect(ackDelivery(id, stateDir)).resolves.toBeUndefined();
   });
   it("captures ACK facts before admission and settles an expired exact owner before media cleanup", async () => {
