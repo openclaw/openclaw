@@ -160,6 +160,7 @@ export function createPluginModuleLoader(options: {
     rootDir: owner.rootDir,
     standalone: owner.standalone,
     expectedSourceDigest: captured.expectedSourceDigests?.[owner.record.id],
+    inspectionRegistry: getPluginRegistryInspectionResources(owner.registry) !== undefined,
     devSourceRoot: captured.devSourceRoot,
     pluginSdkResolution: captured.pluginSdkResolution,
     createHostModuleLoader: () => createLoaderForModule(modulePath),
@@ -191,6 +192,7 @@ export function createPluginModuleLoader(options: {
           origin: owner.record.origin,
           source: modulePath,
           expectedSourceDigest: captured.expectedSourceDigests?.[owner.record.id],
+          inspectionRegistry: getPluginRegistryInspectionResources(owner.registry) !== undefined,
           registry: owner.registry,
         });
       if (

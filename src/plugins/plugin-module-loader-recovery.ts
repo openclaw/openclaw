@@ -24,6 +24,8 @@ export type PluginInstanceModuleLoaderParams = {
   createHostModuleLoader?: () => PluginModuleLoader;
   recoverySourceMap?: (source: string) => string;
   nativeRecovery?: PluginNativeRecovery;
+  /** The owner registry is an uncached inspection, so an unchanged install may share code. */
+  inspectionRegistry?: boolean;
   preparedArtifact?: {
     artifact: PluginGenerationArtifact;
     attachModuleSource: (resolve: (filename: string) => string) => void;

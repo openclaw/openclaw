@@ -39,7 +39,6 @@ import {
 import { inspectPluginTypeScriptExecutionFacts } from "./plugin-source-references.js";
 import { captureBundledPluginStateOperationModules } from "./plugin-state-operation-module-loader.js";
 import { bindPluginStateOperationModuleSource } from "./plugin-state-operation-source.js";
-import { getPluginRegistryInspectionResources } from "./registry-inspection-resources.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { getPluginRuntimeLoadContextState } from "./runtime/load-context-state.js";
 import { preparePluginLoaderAliases, isPluginSdkAliasSpecifier } from "./sdk-alias.js";
@@ -61,7 +60,12 @@ const retainedNativeEsmModules = resolveGlobalMap<string, RetainedNativeEsm>(
 
 type RetainedNativeEsmTarget = Pick<
   PluginInstanceModuleLoaderParams,
-  "origin" | "source" | "expectedSourceDigest" | "nativeRecovery" | "recoverySourceMap"
+  | "origin"
+  | "source"
+  | "expectedSourceDigest"
+  | "nativeRecovery"
+  | "recoverySourceMap"
+  | "inspectionRegistry"
 > & { registry: PluginRegistry | undefined };
 
 function isCatalogWorkerThread(): boolean {
@@ -84,9 +88,9 @@ function retainedNativeEsmKey(target: RetainedNativeEsmTarget): string | undefin
   // workspace and config-path plugins keep their own evaluation.
   const inspection =
     isMainThread &&
+    target.inspectionRegistry === true &&
     target.origin === "global" &&
-    target.registry !== undefined &&
-    getPluginRegistryInspectionResources(target.registry) !== undefined;
+    target.registry !== undefined;
   if (!inspection && !isCatalogWorkerThread()) {
     return undefined;
   }
