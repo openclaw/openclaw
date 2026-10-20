@@ -2,7 +2,7 @@ import { createServer } from "node:http";
 import { afterEach, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
-import { replaceSessionEntry, loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { setCanonicalUserProfileRole } from "../../state/user-profile-writes.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -12,6 +12,7 @@ import { clearArtifactDownloads } from "../artifact-download-grants.js";
 import { captureGatewayAuthPolicy } from "../auth-policy.js";
 import { prepareGatewayRecipientProfile } from "../expected-profile.js";
 import { handleManagedOutgoingMediaHttpRequest } from "../managed-image-attachments.js";
+import * as managedMedia from "../managed-image-attachments.js";
 import { createFixture } from "../managed-image-attachments.test-support.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { handleGatewayRequest } from "../server-methods.js";
@@ -44,7 +45,6 @@ it("admits session-only artifact readers with current session visibility and pre
     await replaceSessionEntry(scope, entry);
     const data = Buffer.alloc(912, "x").toString("base64");
     await writeArtifactTranscript(scope, [{ type: "file", title: "result.txt", data }]);
-    expect(loadSessionEntry(scope)?.visibility).toBe("shared");
     const context = await createHistoryReadContext();
     let client = identifiedClient("viewer");
     client.connect.scopes = ["operator.sessions.read"];
@@ -300,6 +300,38 @@ it("keeps disconnected managed reads current for session visibility and profile 
           }
           if (change === "visibility") {
             await replaceSessionEntry(scope, { ...entry, visibility: "draft", updatedAt: 3 });
+            const readers = [
+              vi.spyOn(artifactReads, "readSessionArtifacts"),
+              vi.spyOn(managedMedia, "resolveManagedOutgoingMediaArtifactDownload"),
+              vi.spyOn(managedMedia, "resolveManagedOutgoingMediaUrlDownload"),
+            ];
+            const denied = await invokeArtifact(
+              "artifacts.download",
+              {
+                sessionKey: scope.sessionKey,
+                artifactId: `artifact_managed_image_${fixture.attachmentId}`,
+              },
+              {
+                context,
+                client: identifiedClient(viewer.id),
+                dispatch: artifactsHandlers["artifacts.download"]!,
+              },
+            );
+            expect(denied.mock.calls).toEqual([
+              [
+                false,
+                undefined,
+                {
+                  code: "INVALID_REQUEST",
+                  message: "no session found for artifact query",
+                  details: { type: "artifact_scope_not_found" },
+                },
+              ],
+            ]);
+            for (const reader of readers) {
+              expect(reader).not.toHaveBeenCalled();
+              reader.mockRestore();
+            }
           } else {
             await setCanonicalUserProfileRole(viewer.id, "denied", {
               onCommitted: (profileId) => {

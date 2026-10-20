@@ -55,14 +55,11 @@ async function makeStoreUnavailable() {
 }
 
 function expectStorageFailure(operation: "request" | "resolve") {
-  expect(respond).toHaveBeenCalledWith(
-    false,
-    undefined,
-    expect.objectContaining({
-      code: "UNAVAILABLE",
-      message: `approval ${operation} unavailable`,
-    }),
-  );
+  const error = expect.objectContaining({
+    code: "UNAVAILABLE",
+    message: `approval ${operation} unavailable`,
+  });
+  expect(respond).toHaveBeenCalledWith(false, undefined, error);
   expect(JSON.stringify(respond.mock.calls)).not.toContain(databasePath);
   expect(logError).toHaveBeenCalledTimes(1);
 }

@@ -5,12 +5,8 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import * as attachmentFrameBudget from "../../shared/chat-attachment-frame-budget.js";
-import { ensureProfileForEmail } from "../../state/user-profiles.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { sharingPolicyClient } from "../session-sharing.test-utils.js";
 import { artifactsHandlers } from "./artifacts.js";
 import {
   assistantFileMessage,
@@ -29,7 +25,6 @@ import type { GatewayClient, GatewayRequestContext } from "./types.js";
 afterEach(() => clearRuntimeConfigSnapshot());
 
 const hoisted = vi.hoisted(() => ({
-  realSessionFacts: false,
   resolveManagedArtifactDownload: vi.fn(),
   resolveManagedUrlDownload: vi.fn(),
   visitSessionMessagesAsync: vi.fn(),
@@ -43,10 +38,7 @@ vi.mock("../session-sharing-preparation.js", async (importOriginal) => {
     ...actual,
     prepareSessionMutationFacts: async (
       params: Parameters<typeof actual.prepareSessionMutationFacts>[0],
-    ) =>
-      hoisted.realSessionFacts
-        ? actual.prepareSessionMutationFacts(params)
-        : artifactFixtureSessionFacts(params),
+    ) => artifactFixtureSessionFacts(params),
   };
 });
 
@@ -136,7 +128,6 @@ function mockArtifactBlock(
 beforeEach(() => {
   vi.clearAllMocks();
   setRuntimeConfigSnapshot(artifactConfig);
-  hoisted.realSessionFacts = false;
   hoisted.resolveSessionForRun.mockReset();
   hoisted.resolveManagedArtifactDownload.mockResolvedValue(null);
   hoisted.resolveManagedUrlDownload.mockResolvedValue(null);
@@ -171,97 +162,94 @@ it("translates run lookup selection-required into INVALID_REQUEST", async () => 
 });
 
 it.each([
-  {
-    type: "file",
-    source: { data: "", media_type: "application/octet-stream", sizeBytes: 0 },
-    title: "source.bin",
+  [
+    {
+      type: "file",
+      source: { data: "", media_type: "application/octet-stream", sizeBytes: 0 },
+      title: "source.bin",
+    },
+    "",
+    0,
+  ],
+  [
+    {
+      type: "file",
+      data: " data:application/octet-stream;base64, ",
+      sizeBytes: 0,
+      title: "data-url.bin",
+    },
+    "",
+    0,
+  ],
+  [{ data: "", sizeBytes: 0, title: "untyped.bin" }, "", 0],
+  [{ type: "file", data: "JVBERi0", title: "report.pdf" }, "JVBERi0=", 5],
+  [{ type: "file", data: " \t-_\r\n8=\n", title: "report.pdf" }, "+/8=", 2],
+] as const)(
+  "lists, gets, and normalizes downloadable artifact %j",
+  async (block, data, sizeBytes) => {
+    mockArtifactBlock(2, block);
+    const artifact = (await listArtifacts()).artifacts?.[0];
+    const artifactId = requireNonEmptyString(artifact?.id, "expected artifact id");
+    const expected = { id: artifactId, title: block.title, sizeBytes, download: { mode: "bytes" } };
+    expect(artifact).toMatchObject(expected);
+    expect(artifact?.download).toEqual({ mode: "bytes" });
+    expect(artifact).not.toHaveProperty("data");
+    const get = await getArtifact({ sessionKey: "agent:main:main", artifactId });
+    const getPayload = expectOkPayload(get.calls) as { artifact?: Record<string, unknown> };
+    expect(getPayload.artifact).toMatchObject(expected);
+    expect(getPayload.artifact).not.toHaveProperty("data");
+    const download = await downloadArtifact({ artifactId });
+    const payload = expectOkPayload(download.calls) as { artifact?: Record<string, unknown> };
+    expectFields(payload, { encoding: "base64", data });
+    expect(payload.artifact).toMatchObject(expected);
   },
-  {
-    type: "file",
-    data: " data:application/octet-stream;base64, ",
-    sizeBytes: 0,
-    title: "data-url.bin",
-  },
-  { data: "", sizeBytes: 0, title: "untyped.bin" },
-])("lists, gets, and downloads the zero-byte $title artifact", async (block) => {
-  mockArtifactBlock(2, block);
-  const artifact = (await listArtifacts()).artifacts?.[0];
-  const artifactId = requireNonEmptyString(artifact?.id, "expected zero-byte artifact id");
-  const expected = { id: artifactId, sizeBytes: 0, download: { mode: "bytes" } };
-  expect(artifact).toMatchObject(expected);
-  expect(artifact).not.toHaveProperty("data");
-  const get = await getArtifact({ sessionKey: "agent:main:main", artifactId });
-  const getPayload = expectOkPayload(get.calls) as { artifact?: Record<string, unknown> };
-  expect(getPayload.artifact).toMatchObject(expected);
-  expect(getPayload.artifact).not.toHaveProperty("data");
-  const download = await downloadArtifact({ artifactId });
-  const payload = expectOkPayload(download.calls) as { artifact?: Record<string, unknown> };
-  expectFields(payload, { encoding: "base64", data: "" });
-  expect(payload.artifact).toMatchObject(expected);
-});
+);
 it("does not discover untyped non-string data as an artifact", async () => {
   mockArtifactBlock(2, { data: {} });
   expect(await listArtifacts()).toEqual({ artifacts: [] });
 });
 
-it("treats transcript non-base64 data URLs as unsupported downloads", async () => {
-  mockArtifactBlock(
-    4,
-    { type: "input_image", image_url: "data:text/plain,hello", alt: "uploaded.txt" },
-    "user",
-  );
-
-  const artifacts = (await listArtifacts()).artifacts;
-  expect(artifacts).toHaveLength(1);
-  expectFields(artifacts?.[0], {
-    type: "image",
-    title: "uploaded.txt",
-  });
-  expectFields(artifacts?.[0]?.download, { mode: "unsupported" });
-  expect(artifacts?.[0]?.download).not.toHaveProperty("encoding", "base64");
+type UnsupportedArtifact = {
+  block: Record<string, unknown>;
+  fields: Record<string, unknown>;
+  hidden: string;
+  role?: string;
+};
+const malformedFile = (data: string): UnsupportedArtifact => ({
+  block: { type: "file", data, title: "bad.txt" },
+  fields: { title: "bad.txt" },
+  hidden: "data",
 });
-
-it.each([
-  { type: "file", data: "not-base64!", title: "bad.txt" },
-  { type: "file", data: "AA=A", title: "bad.txt" },
-  { type: "file", data: "A", title: "bad.txt" },
-])("treats malformed artifact data as unsupported downloads: %j", async (block) => {
-  mockArtifactBlock(6, block);
-
-  const artifacts = (await listArtifacts()).artifacts;
-  expect(artifacts).toHaveLength(1);
-  expectFields(artifacts?.[0], {
-    title: "bad.txt",
-  });
-  expectFields(artifacts?.[0]?.download, { mode: "unsupported" });
-  expect(artifacts?.[0]).not.toHaveProperty("data");
-});
-
-it.each([
-  { data: "JVBERi0", expected: "JVBERi0=", sizeBytes: 5 },
-  { data: " \t-_\r\n8=\n", expected: "+/8=", sizeBytes: 2 },
-])("normalizes downloadable artifact base64: %j", async ({ data, expected, sizeBytes }) => {
-  mockArtifactBlock(7, { type: "file", data, title: "report.pdf" });
-
-  const artifact = (await listArtifacts()).artifacts?.[0];
-  const artifactId = requireNonEmptyString(artifact?.id, "expected listed artifact id");
-  expectFields(artifact, { title: "report.pdf", sizeBytes, download: { mode: "bytes" } });
-
-  const download = await downloadArtifact({ artifactId });
-  const downloadPayload = expectOkPayload(download.calls) as Record<string, unknown>;
-  expectFields(downloadPayload, { encoding: "base64", data: expected });
-});
-
-it("treats unsafe artifact URLs as unsupported downloads", async () => {
-  mockArtifactBlock(4, { type: "file", title: "secret.txt", url: "file:///etc/passwd" });
-
-  const artifacts = (await listArtifacts()).artifacts;
-  expectFields(artifacts?.[0], {
-    title: "secret.txt",
-  });
-  expectFields(artifacts?.[0]?.download, { mode: "unsupported" });
-  expect(artifacts?.[0]).not.toHaveProperty("url");
-});
+it.each<UnsupportedArtifact>([
+  {
+    block: { type: "input_image", image_url: "data:text/plain,hello", alt: "uploaded.txt" },
+    fields: { type: "image", title: "uploaded.txt" },
+    hidden: "encoding",
+    role: "user",
+  },
+  malformedFile("not-base64!"),
+  malformedFile("AA=A"),
+  malformedFile("A"),
+  {
+    block: { type: "file", title: "secret.txt", url: "file:///etc/passwd" },
+    fields: { title: "secret.txt" },
+    hidden: "url",
+  },
+])(
+  "lists unsupported artifact %j without leaking its payload",
+  async ({ block, fields, hidden, role }) => {
+    mockArtifactBlock(2, block, role);
+    const artifacts = (await listArtifacts()).artifacts;
+    expect(artifacts).toHaveLength(1);
+    expectFields(artifacts?.[0], fields);
+    expectFields(artifacts?.[0]?.download, { mode: "unsupported" });
+    if (hidden === "encoding") {
+      expect(artifacts?.[0]?.download).not.toHaveProperty("encoding", "base64");
+    } else {
+      expect(artifacts?.[0]).not.toHaveProperty(hidden);
+    }
+  },
+);
 
 it("returns typed errors for missing query scope and missing artifacts", async () => {
   const missingScope = await invokeArtifactHandler("artifacts.list", {}, { id: "5" });
@@ -283,64 +271,6 @@ function mockManagedImage() {
     url: "/api/chat/media/outgoing/agent%3Amain%3Amain/22222222-2222-4222-8222-222222222222/full",
   });
 }
-
-it("rechecks managed download after a shared session becomes draft", async () => {
-  mockManagedImage();
-  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
-    setRuntimeConfigSnapshot({});
-    hoisted.realSessionFacts = true;
-    const owner = ensureProfileForEmail("artifact-owner@example.test");
-    const viewer = ensureProfileForEmail("artifact-viewer@example.test");
-    const sessionKey = "agent:main:artifact-visibility";
-    const scope = { agentId: "main", sessionKey };
-    const entry = {
-      sessionId: "session-artifact-visibility",
-      updatedAt: 1,
-      createdActor: { type: "human" as const, source: "profile" as const, id: owner.id },
-    };
-    await upsertSessionEntryCore(scope, { ...entry, visibility: "shared" });
-    using connection = createSessionFileDownloadClient();
-    const client = {
-      ...sharingPolicyClient({ user: viewer.id, scopes: ["operator.read"] }),
-      connId: connection.client.connId,
-      connectionSignal: connection.client.connectionSignal,
-    };
-    const artifactId = "artifact_managed_image_11111111-1111-4111-8111-111111111111";
-    const invoke = () =>
-      downloadArtifact({ sessionKey, artifactId }, { client, context: runtimeContext({}) });
-    const url = "/api/chat/media/outgoing/fixture/id/full";
-    hoisted.resolveManagedArtifactDownload.mockResolvedValue({
-      artifactId,
-      sessionKey,
-      type: "image",
-      title: "result.png",
-      url,
-      expiresAt: "2026-07-28T05:00:00.000Z",
-    });
-    const baseline = await invoke();
-    expect(baseline.calls).toHaveLength(1);
-    expectFields(expectOkPayload(baseline.calls), {
-      url: expect.stringContaining(`${url}?mediaTicket=`),
-    });
-    await upsertSessionEntryCore(scope, { ...entry, updatedAt: 2, visibility: "draft" });
-    vi.clearAllMocks();
-    const denied = await invoke();
-    expect(denied.calls).toEqual([
-      {
-        ok: false,
-        payload: undefined,
-        error: {
-          code: "INVALID_REQUEST",
-          message: "no session found for artifact query",
-          details: { type: "artifact_scope_not_found" },
-        },
-      },
-    ]);
-    expect(hoisted.visitSessionMessagesAsync).not.toHaveBeenCalled();
-    expect(hoisted.resolveManagedArtifactDownload).not.toHaveBeenCalled();
-    expect(hoisted.resolveManagedUrlDownload).not.toHaveBeenCalled();
-  });
-});
 
 it("does not retarget a stale managed artifact id through a different block URL", async () => {
   mockManagedImage();
@@ -472,39 +402,34 @@ it("requires filtered transcript membership before issuing a managed download ti
   expect(hoisted.resolveManagedUrlDownload).not.toHaveBeenCalled();
 });
 it("bounds inline base64 downloads and directs oversized artifacts to HTTP", async () => {
-  const budget = vi
-    .spyOn(attachmentFrameBudget, "resolveChatAttachmentFrameBudgetBytes")
-    .mockReturnValue(3);
-  try {
-    mockedMessages([
-      assistantFileMessage({ title: "boundary.txt", data: "YQ==" }),
-      assistantFileMessage({ title: "too-large.txt", data: "aGVsbG8=" }),
-      resultImageMessage(),
-    ]);
-    const sessionKey = "agent:main:main";
-    const artifacts = (await listArtifacts({ sessionKey })).artifacts!;
-    const allowed = await downloadArtifact({ sessionKey, artifactId: artifacts[0]!.id });
-    expectFields(expectOkPayload(allowed.calls), { encoding: "base64", data: "YQ==" });
+  using budget = vi.spyOn(attachmentFrameBudget, "resolveChatAttachmentFrameBudgetBytes");
+  budget.mockReturnValue(3);
+  mockedMessages([
+    assistantFileMessage({ title: "boundary.txt", data: "YQ==" }),
+    assistantFileMessage({ title: "too-large.txt", data: "aGVsbG8=" }),
+    resultImageMessage(),
+  ]);
+  const sessionKey = "agent:main:main";
+  const artifacts = (await listArtifacts({ sessionKey })).artifacts!;
+  const allowed = await downloadArtifact({ sessionKey, artifactId: artifacts[0]!.id });
+  expectFields(expectOkPayload(allowed.calls), { encoding: "base64", data: "YQ==" });
 
-    for (const artifact of artifacts.slice(1)) {
-      const rejected = await downloadArtifact({ sessionKey, artifactId: artifact.id });
-      expect(rejected.calls).toEqual([
-        {
-          ok: false,
-          payload: undefined,
-          error: expect.objectContaining({
-            code: "INVALID_REQUEST",
-            message: expect.stringContaining('transport: "http"'),
-            details: {
-              type: "artifact_download_unsupported",
-              artifactId: artifact.id,
-            },
-          }),
-        },
-      ]);
-    }
-  } finally {
-    budget.mockRestore();
+  for (const artifact of artifacts.slice(1)) {
+    const rejected = await downloadArtifact({ sessionKey, artifactId: artifact.id });
+    expect(rejected.calls).toEqual([
+      {
+        ok: false,
+        payload: undefined,
+        error: expect.objectContaining({
+          code: "INVALID_REQUEST",
+          message: expect.stringContaining('transport: "http"'),
+          details: {
+            type: "artifact_download_unsupported",
+            artifactId: artifact.id,
+          },
+        }),
+      },
+    ]);
   }
 });
 

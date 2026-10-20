@@ -37,10 +37,7 @@ beforeEach(() => {
   loadSessionEntryMock.mockReset();
   loadSessionEntryMock.mockReturnValue({ entry: undefined });
 });
-afterEach(async () => {
-  // attach.grant lazily starts the loopback singleton; close it so it doesn't leak across files.
-  await closeMcpLoopbackServer();
-});
+afterEach(closeMcpLoopbackServer);
 
 it("attach.grant mints a session-bound grant and returns loopback config + token env", async () => {
   const [ok, payload] = await request({ sessionKey: "agent:main:attach-method" });
@@ -54,8 +51,7 @@ it("attach.grant mints a session-bound grant and returns loopback config + token
   expect(body.sessionKey).toBe("agent:main:attach-method");
   expect(body.token).toMatch(/^[0-9a-f]{64}$/);
   expect(body.mcpConfig).toBeTruthy();
-  expect(body.env.OPENCLAW_MCP_TOKEN).toBe(body.token);
-  expect(Object.keys(body.env)).toEqual(["OPENCLAW_MCP_TOKEN"]);
+  expect(body.env).toEqual({ OPENCLAW_MCP_TOKEN: body.token });
   const placeholders = [...JSON.stringify(body.mcpConfig).matchAll(/\$\{([A-Z0-9_]+)\}/gu)].map(
     (match) => match[1],
   );

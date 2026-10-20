@@ -114,26 +114,17 @@ export function expectOkPayload(calls: ResponderCalls): unknown {
   return calls[0]?.payload;
 }
 
-export function expectArtifactList(calls: ResponderCalls): ArtifactListPayload {
-  return expectOkPayload(calls) as ArtifactListPayload;
-}
+export const expectArtifactList = (calls: ResponderCalls) =>
+  expectOkPayload(calls) as ArtifactListPayload;
 
 export function expectErrorDetails(calls: ResponderCalls): Record<string, unknown> | undefined {
   expect(calls[0]?.ok).toBe(false);
   return calls[0] ? (calls[0].error as { details?: Record<string, unknown> }).details : undefined;
 }
 
-export function assistantFileMessage({
-  data = "aGVsbG8=",
-  title,
-  seq = 2,
-  runId,
-}: {
-  data?: string;
-  title: string;
-  seq?: number;
-  runId?: string;
-}) {
+type FileMessageParams = { data?: string; title: string; seq?: number; runId?: string };
+export function assistantFileMessage(params: FileMessageParams) {
+  const { data = "aGVsbG8=", title, seq = 2, runId } = params;
   return {
     role: "assistant",
     content: [{ type: "file", data, mimeType: "text/plain", title }],
@@ -141,16 +132,14 @@ export function assistantFileMessage({
   };
 }
 
-export function resultImageMessage() {
-  return {
-    role: "assistant",
-    content: [
-      { type: "text", text: "see attached" },
-      { type: "image", data: "aGVsbG8=", mimeType: "image/png", alt: "result.png" },
-    ],
-    __openclaw: { seq: 2 },
-  };
-}
+export const resultImageMessage = () => ({
+  role: "assistant",
+  content: [
+    { type: "text", text: "see attached" },
+    { type: "image", data: "aGVsbG8=", mimeType: "image/png", alt: "result.png" },
+  ],
+  __openclaw: { seq: 2 },
+});
 
 export function requireNonEmptyString(value: unknown, message: string): string {
   if (typeof value !== "string" || value.length === 0) {

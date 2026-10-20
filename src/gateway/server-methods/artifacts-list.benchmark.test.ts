@@ -55,20 +55,14 @@ it.each(["default", "custom", "configured alias", "selected alias"] as const)(
       expect(first).toMatchObject({
         artifacts: [{ title: "result.txt", sizeBytes: 5, sessionKey: scope.sessionKey }],
       });
-      const close = vi.spyOn(historyLane.pool, "closeResources");
-      try {
+      {
+        using close = vi.spyOn(historyLane.pool, "closeResources");
         expect(await read()).toEqual(first);
         expect(close).not.toHaveBeenCalled();
-      } finally {
-        close.mockRestore();
       }
       const claimSoleCustody = () => {
-        const raw = new DatabaseSync(physicalPath);
-        try {
-          raw.exec("PRAGMA busy_timeout=0; PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE; COMMIT");
-        } finally {
-          raw.close();
-        }
+        using raw = new DatabaseSync(physicalPath);
+        raw.exec("PRAGMA busy_timeout=0; PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE; COMMIT");
       };
       expect(claimSoleCustody).toThrow(/database is locked/);
       await closeOpenClawAgentDatabaseByPathAsync(

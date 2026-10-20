@@ -1,5 +1,8 @@
 import { expect } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement as awaitGate,
+  createDeferred,
+} from "../../../test/helpers/promise.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 type ApprovalClientLookup = NonNullable<GatewayRequestContext["getApprovalClientConnIds"]>;
@@ -59,11 +62,7 @@ export async function waitForApprovalRequested<T>(
   }
   try {
     const pending = start();
-    const payload = await awaitGateBeforeSettlement(
-      observed.promise,
-      pending,
-      "Approval request completed before the expected RPC event",
-    );
+    const payload = await awaitGate(observed.promise, pending, "Approval ended before event");
     return { pending, payload };
   } finally {
     context.broadcast = broadcast;
@@ -83,10 +82,10 @@ export async function waitForApprovalAccepted<T>(
     respond(...response);
     firstResponse.resolve(response);
   });
-  const response = await awaitGateBeforeSettlement(
+  const response = await awaitGate(
     firstResponse.promise,
     pending,
-    "Approval request ended before acceptance",
+    "Approval ended before acceptance",
   );
   expect(response[0]).toBe(true);
   expect(response[1]).toMatchObject({ status: "accepted", id: expect.any(String) });
