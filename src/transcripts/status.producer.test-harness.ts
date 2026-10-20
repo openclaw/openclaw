@@ -56,6 +56,7 @@ export function useTranscriptStatusFixture() {
     selectCurrentPluginMetadataCache(previousCache);
     await retirePluginCache(cache);
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   return function fixture(
@@ -66,6 +67,7 @@ export function useTranscriptStatusFixture() {
       { config },
     );
     const stateDir = tempDirs.make("transcript-status-producer-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const store = new TranscriptsStore(path.join(stateDir, "transcripts"), {
       env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
     });
@@ -96,7 +98,11 @@ export function useTranscriptStatusFixture() {
     setProviders([provider]);
     setActivePluginRegistry(registry);
     const ctx = { config, stateDir, agentId: "main", logger: { warn: vi.fn() } };
-    const tool = createTranscriptsTool({ ...ctx, caller: { kind: "operator", source: "local" } });
+    const tool = createTranscriptsTool({
+      config,
+      agentId: "main",
+      caller: { kind: "operator", source: "local" },
+    });
     return {
       ctx,
       store,

@@ -14,7 +14,7 @@ export type { AcpEventLedger, AcpEventLedgerReplay } from "./event-ledger.types.
 export function createSqliteAcpEventLedger(
   params: OpenClawStateDatabaseOptions & AcpLedgerOptions = {},
 ): AcpEventLedger {
-  const { now, ...limits } = normalizeAcpLedgerOptions(params);
+  const limits = normalizeAcpLedgerOptions(params);
   const execute = <Key extends keyof AcpReplayWorkerOperations>(
     type: Key,
     input: AcpReplayWorkerOperations[Key]["input"],
@@ -23,24 +23,24 @@ export function createSqliteAcpEventLedger(
     return runOpenClawStateWorkerOperation(context, (scope) => scope.execute({ type, input }));
   };
   return {
-    startSession: (session) => execute("acpReplay.start", { session, limits, now: now() }),
+    startSession: (session) => execute("acpReplay.start", { session, limits, now: Date.now() }),
     recordUserPrompt: ({ prompt, ...session }) =>
       execute("acpReplay.append", {
         session,
         limits,
         events: createAcpPromptUpdates(prompt).map((update) => ({
           update,
-          createdAt: now(),
-          at: now(),
+          createdAt: Date.now(),
+          at: Date.now(),
         })),
       }),
     recordUpdate: ({ update, ...session }) =>
       execute("acpReplay.append", {
         session,
         limits,
-        events: [{ update: structuredClone(update), createdAt: now(), at: now() }],
+        events: [{ update: structuredClone(update), createdAt: Date.now(), at: Date.now() }],
       }),
-    markIncomplete: (session) => execute("acpReplay.incomplete", { ...session, now: now() }),
+    markIncomplete: (session) => execute("acpReplay.incomplete", { ...session, now: Date.now() }),
     readReplay: ({ sessionId, sessionKey }) =>
       execute("acpReplay.read", { kind: "bound", sessionId, sessionKey }),
     readReplayBySessionId: ({ sessionId }) => execute("acpReplay.read", { kind: "id", sessionId }),
