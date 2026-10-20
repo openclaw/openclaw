@@ -1,4 +1,3 @@
-// Verifies ClawHub package metadata, security, and artifact resolver APIs.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   fetchClawHubPackageArtifact,
@@ -8,6 +7,7 @@ import {
 } from "./clawhub-packages.js";
 
 const packageSelector = { name: "@openclaw/diagnostics-otel", version: "2026.3.22" };
+const versionPath = "/api/v1/packages/%40openclaw%2Fdiagnostics-otel/versions/2026.3.22";
 const securityReport = {
   package: { name: packageSelector.name, displayName: "Diagnostics", family: "code-plugin" },
   release: {
@@ -31,32 +31,27 @@ const securityReport = {
   },
 };
 
-function jsonResponse(body: unknown) {
-  return new Response(JSON.stringify(body), {
-    status: 200,
-    headers: { "content-type": "application/json" },
+function mockResponse(body: unknown) {
+  let requestedUrl = "";
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    requestedUrl = input instanceof Request ? input.url : String(input);
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
   });
+  return () => new URL(requestedUrl);
 }
 
 afterEach(() => vi.restoreAllMocks());
 
 describe("clawhub packages", () => {
   it("requests official search results before ClawHub applies the result cap", async () => {
-    let requestedUrl = "";
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-      requestedUrl = input instanceof Request ? input.url : String(input);
-      return jsonResponse({ results: [] });
-    });
-    await expect(
-      searchClawHubPackages({
-        query: " research ",
-        family: "claw",
-        isOfficial: true,
-        limit: 1,
-      }),
-    ).resolves.toEqual([]);
-    expect(new URL(requestedUrl).pathname).toBe("/api/v1/packages/search");
-    expect(Object.fromEntries(new URL(requestedUrl).searchParams)).toEqual({
+    const requestedUrl = mockResponse({ results: [] });
+    const query = { query: " research ", family: "claw", isOfficial: true, limit: 1 } as const;
+    await expect(searchClawHubPackages(query)).resolves.toEqual([]);
+    expect(requestedUrl().pathname).toBe("/api/v1/packages/search");
+    expect(Object.fromEntries(requestedUrl().searchParams)).toEqual({
       q: "research",
       family: "claw",
       isOfficial: "true",
@@ -93,69 +88,35 @@ describe("clawhub packages", () => {
         npmShasum: "abc",
       },
     };
-    let requestedUrl = "";
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-      requestedUrl = input instanceof Request ? input.url : String(input);
-      return jsonResponse(report);
-    });
-    await expect(
-      fetchClawHubPackageArtifact({
-        ...packageSelector,
-      }),
-    ).resolves.toEqual(report);
-    expect(new URL(requestedUrl).pathname).toBe(
-      "/api/v1/packages/%40openclaw%2Fdiagnostics-otel/versions/2026.3.22/artifact",
-    );
+    const requestedUrl = mockResponse(report);
+    await expect(fetchClawHubPackageArtifact(packageSelector)).resolves.toEqual(report);
+    expect(requestedUrl().pathname).toBe(`${versionPath}/artifact`);
   });
 
   it("fetches typed package security reports", async () => {
-    let requestedUrl = "";
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-      requestedUrl = input instanceof Request ? input.url : String(input);
-      return jsonResponse(securityReport);
-    });
-    await expect(
-      fetchClawHubPackageSecurity({
-        ...packageSelector,
-      }),
-    ).resolves.toEqual({
+    const requestedUrl = mockResponse(securityReport);
+    const { releaseId, ...release } = securityReport.release;
+    await expect(fetchClawHubPackageSecurity(packageSelector)).resolves.toEqual({
       ...securityReport,
-      release: {
-        id: "rel_demo",
-        version: "2026.3.22",
-        artifactKind: "npm-pack",
-        artifactSha256: "a".repeat(64),
-        npmIntegrity: "sha512-proof",
-        npmShasum: "abc",
-      },
+      release: { ...release, id: releaseId },
     });
-    expect(new URL(requestedUrl).pathname).toBe(
-      "/api/v1/packages/%40openclaw%2Fdiagnostics-otel/versions/2026.3.22/security",
-    );
+    expect(requestedUrl().pathname).toBe(`${versionPath}/security`);
   });
 
   it("rejects malformed package security reports", async () => {
-    vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
-      jsonResponse({ trust: { ...securityReport.trust, reasons: "clean", stale: false } }),
+    mockResponse({ trust: { ...securityReport.trust, reasons: "clean", stale: false } });
+    await expect(fetchClawHubPackageSecurity(packageSelector)).rejects.toThrow(
+      "expected reasons to be a string array",
     );
-    await expect(
-      fetchClawHubPackageSecurity({
-        ...packageSelector,
-      }),
-    ).rejects.toThrow("expected reasons to be a string array");
   });
 
   it("rejects package security reports without their audit overview", async () => {
-    vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
-      jsonResponse({
-        securityAuditUrl: securityReport.securityAuditUrl,
-        trust: { blockedFromDownload: false, reasons: [], pending: false, stale: false },
-      }),
+    mockResponse({
+      securityAuditUrl: securityReport.securityAuditUrl,
+      trust: { blockedFromDownload: false, reasons: [], pending: false, stale: false },
+    });
+    await expect(fetchClawHubPackageSecurity(packageSelector)).rejects.toThrow(
+      "expected overview to be a non-empty string",
     );
-    await expect(
-      fetchClawHubPackageSecurity({
-        ...packageSelector,
-      }),
-    ).rejects.toThrow("expected overview to be a non-empty string");
   });
 });

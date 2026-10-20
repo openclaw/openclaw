@@ -1,4 +1,3 @@
-// Tests channel runtime context assembly and hook inputs.
 import { describe, expect, it, vi } from "vitest";
 import { createRuntimeChannel } from "../plugins/runtime/runtime-channel.js";
 import {
@@ -13,24 +12,9 @@ const matrix = { ...slack, channelId: "matrix" };
 
 describe("channel runtime context helpers", () => {
   it("returns inert helpers when no channel runtime exists", () => {
-    expect(
-      registerChannelRuntimeContext({
-        ...slack,
-        context: { ok: true },
-      }),
-    ).toBeNull();
-    expect(
-      getChannelRuntimeContext({
-        ...slack,
-      }),
-    ).toBeUndefined();
-    expect(
-      watchChannelRuntimeContexts({
-        ...slack,
-        onEvent: vi.fn(),
-      }),
-    ).toBeNull();
-
+    expect(registerChannelRuntimeContext({ ...slack, context: { ok: true } })).toBeNull();
+    expect(getChannelRuntimeContext(slack)).toBeUndefined();
+    expect(watchChannelRuntimeContexts({ ...slack, onEvent: vi.fn() })).toBeNull();
     const scoped = createTaskScopedChannelRuntime({});
     expect(scoped.channelRuntime).toBeUndefined();
     expect(scoped.dispose()).toBeUndefined();
@@ -87,47 +71,17 @@ describe("channel runtime context helpers", () => {
       context: { app: "slack" },
     });
 
-    expect(
-      getChannelRuntimeContext({
-        channelRuntime,
-        ...slack,
-      }),
-    ).toEqual({ app: "slack" });
-    expect(
-      getChannelRuntimeContext({
-        channelRuntime,
-        ...matrix,
-      }),
-    ).toEqual({ client: "matrix" });
+    const get = (key: typeof slack) => getChannelRuntimeContext({ channelRuntime, ...key });
+    expect(get(slack)).toEqual({ app: "slack" });
+    expect(get(matrix)).toEqual({ client: "matrix" });
 
     scoped.dispose();
 
-    expect(
-      getChannelRuntimeContext({
-        channelRuntime,
-        ...slack,
-      }),
-    ).toBeUndefined();
-    expect(
-      getChannelRuntimeContext({
-        channelRuntime,
-        ...matrix,
-      }),
-    ).toEqual({ client: "matrix" });
+    expect(get(slack)).toBeUndefined();
+    expect(get(matrix)).toEqual({ client: "matrix" });
     expect(onEvent.mock.calls).toEqual([
-      [
-        {
-          type: "registered",
-          key: slack,
-          context: { app: "slack" },
-        },
-      ],
-      [
-        {
-          type: "unregistered",
-          key: slack,
-        },
-      ],
+      [{ type: "registered", key: slack, context: { app: "slack" } }],
+      [{ type: "unregistered", key: slack }],
     ]);
 
     persistentLease?.dispose();

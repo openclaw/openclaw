@@ -1,6 +1,9 @@
-// Covers channel plugin status issue collection.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ChannelPlugin, ChannelStatusIssue } from "../channels/plugins/types.public.js";
+import type {
+  ChannelAccountSnapshot,
+  ChannelPlugin,
+  ChannelStatusIssue,
+} from "../channels/plugins/types.public.js";
 
 const mocks = vi.hoisted(() => ({
   listChannelPlugins: vi.fn(),
@@ -22,6 +25,29 @@ function createPlugin(
   } as ChannelPlugin;
 }
 
+function account(overrides: Partial<ChannelAccountSnapshot> = {}): ChannelAccountSnapshot {
+  return {
+    accountId: "default",
+    enabled: true,
+    configured: true,
+    running: true,
+    connected: true,
+    ...overrides,
+  };
+}
+
+function collect(channel: string, accounts: ChannelAccountSnapshot[]) {
+  return collectChannelStatusIssues({ channelAccounts: { [channel]: accounts } });
+}
+
+function issue(
+  channel: string,
+  kind: ChannelStatusIssue["kind"],
+  message: string,
+): ChannelStatusIssue {
+  return { channel, accountId: "default", kind, message };
+}
+
 describe("collectChannelStatusIssues", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -29,14 +55,7 @@ describe("collectChannelStatusIssues", () => {
   });
 
   it("returns no issues when payload accounts are missing or not arrays", () => {
-    const collectTelegramIssues = vi.fn((): ChannelStatusIssue[] => [
-      {
-        channel: "telegram",
-        accountId: "default",
-        kind: "runtime",
-        message: "telegram down",
-      },
-    ]);
+    const collectTelegramIssues = vi.fn(() => [issue("telegram", "runtime", "telegram down")]);
     mocks.listChannelPlugins.mockReturnValue([createPlugin("telegram", collectTelegramIssues)]);
 
     expect(collectChannelStatusIssues({})).toStrictEqual([]);
@@ -63,22 +82,7 @@ describe("collectChannelStatusIssues", () => {
   it("reports blocked lifecycle through the generic runtime path", () => {
     mocks.listChannelPlugins.mockReturnValue([createPlugin("slack")]);
 
-    expect(
-      collectChannelStatusIssues({
-        channelAccounts: {
-          slack: [
-            {
-              accountId: "default",
-              enabled: true,
-              configured: true,
-              running: true,
-              connected: true,
-              lifecycle: "blocked",
-            },
-          ],
-        },
-      }),
-    ).toContainEqual({
+    expect(collect("slack", [account({ lifecycle: "blocked" })])).toContainEqual({
       channel: "slack",
       accountId: "default",
       kind: "runtime",
@@ -91,16 +95,12 @@ describe("collectChannelStatusIssues", () => {
     mocks.listChannelPlugins.mockReturnValue([createPlugin("discord")]);
 
     expect(
-      collectChannelStatusIssues({
-        channelAccounts: {
-          discord: [
-            { accountId: "stopped", enabled: true, configured: true, running: false },
-            { accountId: "unknown", enabled: true, configured: true },
-            { accountId: "disabled", enabled: false, configured: true, running: false },
-            { accountId: "unconfigured", enabled: true, configured: false, running: false },
-          ],
-        },
-      }),
+      collect("discord", [
+        { accountId: "stopped", enabled: true, configured: true, running: false },
+        { accountId: "unknown", enabled: true, configured: true },
+        { accountId: "disabled", enabled: false, configured: true, running: false },
+        { accountId: "unconfigured", enabled: true, configured: false, running: false },
+      ]),
     ).toEqual([
       {
         channel: "discord",
@@ -115,21 +115,7 @@ describe("collectChannelStatusIssues", () => {
   it("reports dead ingress even while a restart is pending", () => {
     mocks.listChannelPlugins.mockReturnValue([createPlugin("slack")]);
 
-    const issues = collectChannelStatusIssues({
-      channelAccounts: {
-        slack: [
-          {
-            accountId: "default",
-            enabled: true,
-            configured: true,
-            running: true,
-            connected: true,
-            restartPending: true,
-            ingressUnavailable: true,
-          },
-        ],
-      },
-    });
+    const issues = collect("slack", [account({ restartPending: true, ingressUnavailable: true })]);
 
     expect(issues).toEqual([
       {
@@ -147,30 +133,10 @@ describe("collectChannelStatusIssues", () => {
     const now = Date.now();
     vi.useFakeTimers();
     vi.setSystemTime(now);
-    mocks.listChannelPlugins.mockReturnValue([
-      createPlugin("signal", () => [
-        {
-          channel: "signal",
-          accountId: "default",
-          kind: "auth",
-          message: "Linked device credentials are invalid.",
-        },
-      ]),
-    ]);
+    const authIssue = issue("signal", "auth", "Linked device credentials are invalid.");
+    mocks.listChannelPlugins.mockReturnValue([createPlugin("signal", () => [authIssue])]);
 
-    const issues = collectChannelStatusIssues({
-      channelAccounts: {
-        signal: [
-          {
-            accountId: "default",
-            enabled: true,
-            configured: true,
-            running: true,
-            connected: false,
-          },
-        ],
-      },
-    });
+    const issues = collect("signal", [account({ connected: false })]);
 
     expect(issues).toEqual([
       {
@@ -180,12 +146,7 @@ describe("collectChannelStatusIssues", () => {
         message: "Channel reports running, but the runtime is disconnected.",
         fix: "restart the channel or gateway",
       },
-      {
-        channel: "signal",
-        accountId: "default",
-        kind: "auth",
-        message: "Linked device credentials are invalid.",
-      },
+      authIssue,
     ]);
   });
 });

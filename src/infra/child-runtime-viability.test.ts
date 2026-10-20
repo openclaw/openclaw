@@ -25,6 +25,14 @@ const log = vi.hoisted(() => ({ error: vi.fn() }));
 vi.mock("../logging/subsystem.js", () => ({ createSubsystemLogger: () => log }));
 
 const removedCellarPath = "/opt/homebrew/Cellar/node@24/24.20.0/bin/node";
+const abortedProbe = {
+  pid: 123,
+  output: [null, "", ""],
+  stdout: "",
+  stderr: "",
+  status: null,
+  signal: "SIGABRT",
+} as const;
 
 describe("child runtime viability", () => {
   it.each([
@@ -77,14 +85,7 @@ it("records a permanent loader failure once and does not confuse a post-handshak
 });
 
 it("does not latch an unchanged runtime when both worker and diagnostic probe abort", () => {
-  vi.mocked(spawnSync).mockReturnValueOnce({
-    pid: 123,
-    output: [null, "", ""],
-    stdout: "",
-    stderr: "",
-    status: null,
-    signal: "SIGABRT",
-  });
+  vi.mocked(spawnSync).mockReturnValueOnce({ ...abortedProbe, output: [...abortedProbe.output] });
   expect(classifyChildRuntimeFailure({ signal: "SIGABRT" })).toBeUndefined();
   expect(readChildRuntimeViability().available).toBe(true);
 });
@@ -96,8 +97,8 @@ it.each([false, true])(
     const execPath = path.join(directory, "node");
     writeFileSync(execPath, "fixture", { mode: 0o700 });
     vi.mocked(spawnSync).mockReturnValueOnce({
-      pid: 123,
-      output: [null, "", ""],
+      ...abortedProbe,
+      output: [...abortedProbe.output],
       stdout: broken ? "" : "v26.12.0",
       stderr: broken ? "node: error while loading shared libraries: libnode.so" : "",
       status: broken ? 127 : 0,
@@ -122,14 +123,7 @@ it.each([false, true])(
 );
 
 it("classifies an executable changed since startup when its bare runtime also aborts", () => {
-  vi.mocked(spawnSync).mockReturnValueOnce({
-    pid: 123,
-    output: [null, "", ""],
-    stdout: "",
-    stderr: "",
-    status: null,
-    signal: "SIGABRT",
-  });
+  vi.mocked(spawnSync).mockReturnValueOnce({ ...abortedProbe, output: [...abortedProbe.output] });
   expect(
     classifyChildRuntimeFailure({
       execPath: "/fixture/replaced-node",
