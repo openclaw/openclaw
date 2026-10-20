@@ -112,10 +112,7 @@ export async function fixture(
     },
     async (state) => {
       const source = state.statePath("plugins", "workboard", "workboard.sqlite");
-      await state.writeText(
-        "plugins.json",
-        JSON.stringify({ entries: { workboard: { enabled: false } } }),
-      );
+      await state.writeText("plugins.json", '{"entries":{"workboard":{"enabled":false}}}');
       await state.writeConfig(portConfig);
       const { admit } = await workboardPortProvider.loadDescriptor();
       assert(admit);

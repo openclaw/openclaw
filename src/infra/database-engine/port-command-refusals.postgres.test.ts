@@ -2,18 +2,15 @@ import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { getEnvironmentData } from "node:worker_threads";
 import { Client } from "pg";
 import { afterEach, expect, it } from "vitest";
 import "./database-suite-workers.test-support.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { seedPortSqlite } from "./port-command.integration.test-support.js";
+import { connection, seedPortSqlite } from "./port-command.integration.test-support.js";
 import { runDatabasePortTask, type DatabasePortTask } from "./port-command.worker.js";
 import metadata from "./workboard-port.generated.json" with { type: "json" };
 
-const configured = getEnvironmentData("openclaw.test.workboard.connection");
-const connection = typeof configured === "string" ? configured : undefined;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const hash = async (file: string) =>
   createHash("sha256")
@@ -50,6 +47,7 @@ it.skipIf(!connection)(
     const identity = { storeId, namespace, config };
     const run = <T extends DatabasePortTask>(task: T) =>
       runDatabasePortTask(task, { assertCurrent() {} });
+    const preflight = (probe: boolean) => run({ operation: "preflight", config, probe });
     const inspect = () =>
       run({ operation: "inspect", sourcePath: targetPath, config, to: "sqlite" });
     seedPortSqlite(
@@ -61,12 +59,8 @@ it.skipIf(!connection)(
     const original = await hash(sourcePath);
     await client.query(`CREATE ROLE "${role}" LOGIN PASSWORD 'synthetic-port-fixture'`);
     try {
-      expect(await run({ operation: "preflight", config, probe: false })).toMatchObject({
-        privilegesChecked: false,
-      });
-      await expect(run({ operation: "preflight", config, probe: true })).rejects.toThrow(
-        "namespace privilege probe",
-      );
+      expect(await preflight(false)).toMatchObject({ privilegesChecked: false });
+      await expect(preflight(true)).rejects.toThrow("namespace privilege probe");
       const stage = {
         ...identity,
         operation: "stage" as const,
@@ -74,14 +68,14 @@ it.skipIf(!connection)(
         targetPath,
         to: "postgres" as const,
       };
+      const stageAt = (name: string, resume = false) =>
+        run({ ...stage, targetPath: path.join(directory, name), resume });
       await expect(run(stage)).rejects.toThrow("stage:");
       await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
       await client.query(`GRANT CREATE ON DATABASE "${database}" TO "${role}"`);
       const copied = await run(stage);
       const anchor = await hash(targetPath);
-      await expect(
-        run({ ...stage, targetPath: path.join(directory, "occupied.sqlite") }),
-      ).rejects.toThrow("occupied target namespace");
+      await expect(stageAt("occupied.sqlite")).rejects.toThrow("occupied target namespace");
       await client.query(`ALTER SCHEMA "${namespace}" OWNER TO CURRENT_USER`);
       await expect(inspect()).rejects.toThrow("different owner");
       await client.query(
@@ -116,11 +110,7 @@ it.skipIf(!connection)(
       ).rejects.toThrow("database validation");
       await client.query(`DROP INDEX "${namespace}".workboard_cards_session_idx`);
       await client.query(originalIndex);
-      const resumed = await run({
-        ...stage,
-        targetPath: path.join(directory, "resumed.sqlite"),
-        resume: true,
-      });
+      const resumed = await stageAt("resumed.sqlite", true);
       expect(resumed.verification).toEqual(copied.verification);
       expect(await run({ ...stage, resume: true })).toEqual(copied);
       expect(await hash(sourcePath)).toBe(original);

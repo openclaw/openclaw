@@ -153,9 +153,7 @@ describe.skipIf(!fixtures.connection)("family-scoped database port", () => {
     expect(hash(workboard)).toBe(unrelated);
     using db = openNodeSqliteDatabase(agent, { readOnly: true });
     const row = db.prepare("SELECT value_json FROM cache_entries WHERE scope = 'retained'").get();
-    expect(row).toEqual({
-      value_json: '"agent-data"',
-    });
+    expect(row).toEqual({ value_json: '"agent-data"' });
   }, 120_000);
 
   describe("interrupted scoped publication", () => {

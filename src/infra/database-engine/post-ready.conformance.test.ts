@@ -59,8 +59,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
           state: "local",
           turnClaim: { claimId: "projection-claim", runId: "projection-run" },
         });
-        expect(projection.environments.size).toBe(0);
-        expect(projection.pendingResults.size).toBe(0);
+        expect([projection.environments.size, projection.pendingResults.size]).toEqual([0, 0]);
       } finally {
         await store.releaseTurn(claim);
       }
@@ -88,23 +87,23 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
 
     it("persists cron authority and recovery on the first authority write", async () => {
       const storePath = path.join(fixture.root, "cron", "authority.json");
-      const captured = makeStore("captured-authority", false);
-      captured.jobs[0].sessionTarget = "isolated";
-      captured.jobs[0].payload = { kind: "agentTurn", message: "synthetic scheduled turn" };
+      const isolated = {
+        ...makeStore("captured-authority", false).jobs[0],
+        sessionTarget: "isolated" as const,
+        payload: { kind: "agentTurn" as const, message: "synthetic scheduled turn" },
+      };
       const runtimeAuthority: CronRuntimeAuthority = {
         version: 1,
         runtimeId: "codex",
         namespace: "codex.apps",
         payload: { apps: [{ id: "calendar" }] },
       };
-      captured.jobs[0].runtimeAuthority = structuredClone(runtimeAuthority);
-      const recovery = makeStore("authority-recovery", false);
-      recovery.jobs[0].sessionTarget = "isolated";
-      recovery.jobs[0].payload = { kind: "agentTurn", message: "synthetic recovery turn" };
-      recovery.jobs[0].runtimeAuthorityRecoveryRequired = true;
       await saveCronJobsStore(storePath, {
         version: 1,
-        jobs: [...captured.jobs, ...recovery.jobs],
+        jobs: [
+          { ...isolated, runtimeAuthority: structuredClone(runtimeAuthority) },
+          { ...isolated, id: "authority-recovery", runtimeAuthorityRecoveryRequired: true },
+        ],
       });
       const loaded = await loadCronJobsStore(storePath);
       const find = (id: string) => loaded.jobs.find((job) => job.id === id);

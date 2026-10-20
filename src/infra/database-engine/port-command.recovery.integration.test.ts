@@ -1,7 +1,7 @@
 import "./port-command-worker.test-support.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { doctorDatabasePort } from "../../commands/doctor-database-port.js";
 import * as configIo from "../../config/io.js";
 import { readBackupEngine } from "../../snapshot/database-backup.js";
@@ -11,8 +11,6 @@ import * as sourceSnapshots from "../sqlite-snapshot-source.js";
 import * as snapshots from "../sqlite-snapshot.js";
 import * as fixtures from "./port-command.integration.test-support.js";
 import * as tasks from "./port-command.worker.js";
-
-afterEach(() => vi.restoreAllMocks());
 
 describe.skipIf(!fixtures.connection)("database port command PostgreSQL conformance", () => {
   it("round-trips canonical cells, IDs, cursors and allocation facts through the command", async () => {

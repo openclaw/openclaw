@@ -37,13 +37,11 @@ export function openPortStore(
   anchor: DatabaseSync,
   schema: Parameters<typeof openEngineStore>[0]["schema"],
   input: Parameters<typeof openEngineStore>[0]["input"],
-  existingOnly = false,
 ) {
   return openEngineStore({
     anchor,
     schema,
     input,
-    existingOnly,
     prepareAnchor() {},
     openSqlite() {
       throw new Error("Ported PostgreSQL store must not open SQLite data");
