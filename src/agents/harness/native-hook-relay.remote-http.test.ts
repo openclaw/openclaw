@@ -37,13 +37,16 @@ it("requires a current relay capability and preserves policy denial over HTTP", 
   const admitExecution = vi.fn();
   const requestApproval = vi.fn(async () => "allow" as const);
   testing.setNativeHookRelayPermissionApprovalRequesterForTests(requestApproval);
-  const relay = registerOwnedNativeHookRelay({
+  const identity = {
     provider: "codex",
     sessionId: "session-1",
     runId: "run-1",
     relayId: "remote-relay",
-    allowedEvents: ["pre_tool_use"],
     preToolUseLoopDetection: false,
+  } as const;
+  const relay = registerOwnedNativeHookRelay({
+    ...identity,
+    allowedEvents: ["pre_tool_use"],
     generationMismatchGraceMs: 30_000,
     executionAdmission: { toolNames: ["exec"], admit: admitExecution },
   });
@@ -70,13 +73,10 @@ it("requires a current relay capability and preserves policy denial over HTTP", 
     expect(accepted.status).toBe(200);
     expect(await accepted.json()).toMatchObject({ ok: true, result: { exitCode: 0 } });
     // Transport authentication grants access to policy evaluation, not permission to execute.
-    const beforeToolCall = vi.fn(async () => ({
-      block: true,
-      blockReason: "remote policy denied",
-    }));
+    const deny = vi.fn(async () => ({ block: true, blockReason: "remote policy denied" }));
     initializeGlobalHookRunner(
       createMockPluginRegistry([
-        { hookName: "before_tool_call", handler: beforeToolCall, matcher: ["exec"] },
+        { hookName: "before_tool_call", handler: deny, matcher: ["exec"] },
       ]),
     );
     const denied = await post(token, {
@@ -97,7 +97,7 @@ it("requires a current relay capability and preserves policy denial over HTTP", 
         permissionDecisionReason: "remote policy denied",
       },
     });
-    expect(beforeToolCall).toHaveBeenCalledOnce();
+    expect(deny).toHaveBeenCalledOnce();
     expect(admitExecution).not.toHaveBeenCalled();
     expect(requestApproval).not.toHaveBeenCalled();
     expect((await post(token, { relayId: "another-relay" })).status).toBe(403);
@@ -106,13 +106,7 @@ it("requires a current relay capability and preserves policy denial over HTTP", 
     expect((await post(token, { event: "post_tool_use" })).status).toBe(500);
     expect((await post(token, {}, relay.relayId, "GET")).status).toBe(404);
     expect((await post(token, {}, relay.relayId + "?token=ignored")).status).toBe(404);
-    const replacement = registerOwnedNativeHookRelay({
-      provider: "codex",
-      sessionId: "session-1",
-      runId: "run-1",
-      relayId: relay.relayId,
-      preToolUseLoopDetection: false,
-    });
+    const replacement = registerOwnedNativeHookRelay(identity);
     await replacement.ready;
     const next = replacement.enableRemoteCallback();
     expect((await post(token, { generation: replacement.generation })).status).toBe(403);
@@ -124,10 +118,6 @@ it("requires a current relay capability and preserves policy denial over HTTP", 
   } finally {
     relay.unregister();
     server.closeAllConnections();
-    try {
-      await releaseListener();
-    } finally {
-      await claim.release();
-    }
+    await releaseListener().finally(() => claim.release());
   }
 });

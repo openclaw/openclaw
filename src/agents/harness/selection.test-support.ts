@@ -9,43 +9,40 @@ import {
 import { createModelGenerationFixture } from "../embedded-agent-runner/model.generation-scope.test-support.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import { retainPreparedPluginRegistry } from "../prepared-model-runtime.plugin-lifetime.js";
-import { maybeCompactAgentHarnessSession as maybeCompactAgentHarnessSessionImpl } from "./compaction.js";
+import { maybeCompactAgentHarnessSession as compactSession } from "./compaction.js";
 import { createBaseAttemptParams } from "./lifecycle.test-support.js";
 
-export function createHarnessAttemptParams(
+export const createHarnessAttemptParams = (
   admittedRunContext: AdmittedRunContext,
   config?: OpenClawConfig,
-): EmbeddedRunAttemptParams {
-  return {
+): EmbeddedRunAttemptParams =>
+  ({
     ...createBaseAttemptParams(),
     admittedRunContext,
     agentId: "main",
     runId: admittedRunContext.operationalRunInstance.runId,
     config,
-  } as EmbeddedRunAttemptParams;
-}
+  }) as EmbeddedRunAttemptParams;
 
-export function createHarnessCompactionFixture(
-  readFixture: () => { state: OpenClawTestState; admittedRunContext: AdmittedRunContext },
-) {
-  return function maybeCompactAgentHarnessSession(
-    params: Parameters<typeof maybeCompactAgentHarnessSessionImpl>[0],
-    options: Partial<Parameters<typeof maybeCompactAgentHarnessSessionImpl>[1]> = {},
-  ) {
+export const createHarnessCompactionFixture =
+  (readFixture: () => { state: OpenClawTestState; admittedRunContext: AdmittedRunContext }) =>
+  (
+    params: Parameters<typeof compactSession>[0],
+    options: Partial<Parameters<typeof compactSession>[1]> = {},
+  ) => {
     const { state, admittedRunContext } = readFixture();
-    const preparedModelRuntime = options.preparedModelRuntime ?? {
-      ...createModelGenerationFixture({
-        agentDir: state.agentDir(),
-        workspaceDir: state.workspaceDir,
-        config: params.config ?? {},
-        createStores: () => ({ authStorage: {} as never, modelRegistry: {} as never }),
-        label: "harness-test",
-      }).preparedModelRuntime,
-      pluginRegistry: getPluginRegistryForContext() ?? undefined,
-    };
-    return maybeCompactAgentHarnessSessionImpl(params, {
+    return compactSession(params, {
       ...options,
-      preparedModelRuntime,
+      preparedModelRuntime: options.preparedModelRuntime ?? {
+        ...createModelGenerationFixture({
+          agentDir: state.agentDir(),
+          workspaceDir: state.workspaceDir,
+          config: params.config ?? {},
+          createStores: () => ({ authStorage: {} as never, modelRegistry: {} as never }),
+          label: "harness-test",
+        }).preparedModelRuntime,
+        pluginRegistry: getPluginRegistryForContext() ?? undefined,
+      },
       sourceAuthority: options.sourceAuthority ?? {
         operatorAuthority: undefined,
         assertActive: () => {
@@ -56,7 +53,6 @@ export function createHarnessCompactionFixture(
       },
     });
   };
-}
 
 export async function withOwnedHarnessGeneration<Registered, Result>(
   generation: ReturnType<typeof createModelGenerationFixture>,

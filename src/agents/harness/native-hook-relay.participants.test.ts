@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, vi } from "vitest";
 import { withPersonalToolTurn } from "../../auto-reply/reply/personal-tool-turn.test-support.js";
 import * as relayRuntime from "../../plugin-sdk/native-hook-relay-runtime.js";
@@ -37,10 +38,7 @@ it("keeps collaborative native spawn under the incumbent and refuses an ended pa
   const register = relayRuntime.registerNativeHookRelayForBundledRuntime;
   vi.spyOn(relayRuntime, "registerNativeHookRelayForBundledRuntime").mockImplementation(
     (params) => {
-      const admission = params.executionAdmission;
-      if (!admission) {
-        return register(params);
-      }
+      const admission = expectDefined(params.executionAdmission, "native spawn admission");
       return register({
         ...params,
         executionAdmission: {
