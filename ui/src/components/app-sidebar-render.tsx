@@ -212,12 +212,7 @@ export function renderSidebarAgentCard(host: AppSidebarRenderHost): SolidJSX.Ele
       when={host.sidebarAgentsMode !== "roster" && (cardAgent() || cached())}
       fallback={renderSidebarWorkspaceHeader(host)}
     >
-      <openclaw-tooltip
-        prop:content={cardName()}
-        prop:descriptionTarget={() => menuTrigger ?? null}
-      >
-        <AgentCard />
-      </openclaw-tooltip>
+      <AgentCard />
     </Show>
   );
 }
@@ -274,70 +269,68 @@ function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost): SolidJSX.Elem
   const name = () => brand().name;
   const menuOpen = () => host.sidebarMenus.agentMenuPosition !== null;
   return (
-    <openclaw-tooltip prop:content={name()} prop:descriptionTarget={() => button ?? null}>
-      <div class="sidebar-workspace-header sidebar-workspace-header--rail">
-        <button
-          type="button"
-          class="sidebar-workspace-header__main"
-          ref={(element) => {
-            button = element;
-            host.sidebarMenus.focusAgentRoster = focusHeader;
-          }}
-          aria-haspopup="menu"
-          aria-expanded={menuOpen() ? "true" : "false"}
-          aria-label={`${name()} · ${t("agentChip.workspaceMenuLabel")}`}
-          onPointerMove={(event) => {
-            host.sidebarMenus.scheduleAgentMenuHoverOpen(event.currentTarget, event);
-          }}
-          onPointerLeave={() => host.sidebarMenus.handleAgentMenuTriggerPointerLeave()}
-          onPointerDown={(event: PointerEvent) => event.stopPropagation()}
-          onClick={(event) => {
-            event.stopPropagation();
+    <div class="sidebar-workspace-header sidebar-workspace-header--rail">
+      <button
+        type="button"
+        class="sidebar-workspace-header__main"
+        ref={(element) => {
+          button = element;
+          host.sidebarMenus.focusAgentRoster = focusHeader;
+        }}
+        aria-haspopup="menu"
+        aria-expanded={menuOpen() ? "true" : "false"}
+        aria-label={`${name()} · ${t("agentChip.workspaceMenuLabel")}`}
+        onPointerMove={(event) => {
+          host.sidebarMenus.scheduleAgentMenuHoverOpen(event.currentTarget, event);
+        }}
+        onPointerLeave={() => host.sidebarMenus.handleAgentMenuTriggerPointerLeave()}
+        onPointerDown={(event: PointerEvent) => event.stopPropagation()}
+        onClick={(event) => {
+          event.stopPropagation();
+          host.sidebarMenus.toggleAgentMenu(event.currentTarget);
+        }}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          if (!menuOpen()) {
             host.sidebarMenus.toggleAgentMenu(event.currentTarget);
-          }}
-          onContextMenu={(event) => {
-            event.preventDefault();
-            if (!menuOpen()) {
-              host.sidebarMenus.toggleAgentMenu(event.currentTarget);
-            }
-          }}
-        >
-          {branding().brandIcon !== "claw" ? (
-            <span
-              class="sidebar-workspace-header__mark sidebar-workspace-header__mark--neutral"
-              aria-hidden="true"
-            >
-              {branding().brandIcon === "mark" ? (
-                <Icon name="mark" />
-              ) : (
-                <ThemeBrandIcon branding={branding()} aria-hidden="true" />
-              )}
-            </span>
-          ) : (
-            <span class="sidebar-workspace-header__mark" aria-hidden="true">
-              <Icon name="lobster" />
-            </span>
-          )}
-          <span class="sidebar-agent-card__text">
-            <span class="sidebar-agent-card__name">
-              <HoverMarquee
-                content={name()}
-                class="sidebar-agent-card__name-text"
-                options={{ loop: true, delay: 300, speed: 35 }}
-              />
-              <span class="sidebar-agent-card__chevron" aria-hidden="true">
-                <Icon name="chevronsUpDown" />
-              </span>
-            </span>
-            {host.sessionDataContext?.config.current.environment ? (
-              <span class="control-ui-environment-pill">
-                {host.sessionDataContext.config.current.environment.label}
-              </span>
-            ) : undefined}
+          }
+        }}
+      >
+        {branding().brandIcon !== "claw" ? (
+          <span
+            class="sidebar-workspace-header__mark sidebar-workspace-header__mark--neutral"
+            aria-hidden="true"
+          >
+            {branding().brandIcon === "mark" ? (
+              <Icon name="mark" />
+            ) : (
+              <ThemeBrandIcon branding={branding()} aria-hidden="true" />
+            )}
           </span>
-        </button>
-      </div>
-    </openclaw-tooltip>
+        ) : (
+          <span class="sidebar-workspace-header__mark" aria-hidden="true">
+            <Icon name="lobster" />
+          </span>
+        )}
+        <span class="sidebar-agent-card__text">
+          <span class="sidebar-agent-card__name">
+            <HoverMarquee
+              content={name()}
+              class="sidebar-agent-card__name-text"
+              options={{ loop: true, delay: 300, speed: 35 }}
+            />
+            <span class="sidebar-agent-card__chevron" aria-hidden="true">
+              <Icon name="chevronsUpDown" />
+            </span>
+          </span>
+          {host.sessionDataContext?.config.current.environment ? (
+            <span class="control-ui-environment-pill">
+              {host.sessionDataContext.config.current.environment.label}
+            </span>
+          ) : undefined}
+        </span>
+      </button>
+    </div>
   );
 }
 

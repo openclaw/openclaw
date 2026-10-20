@@ -95,6 +95,7 @@ async function snapshotCandidateState(): Promise<unknown> {
       return snapshotUpdateCandidateState({
         ...input,
         includeLocalStoreVersions: input.includeLocalStoreVersions === true,
+        includeClientCredentialStoreVersion: input.includeClientCredentialStoreVersion === true,
         onProgress: createUpdateStateInspectionReporter(!input.streamProgress),
       });
     case "discover":
@@ -106,6 +107,7 @@ async function snapshotCandidateState(): Promise<unknown> {
       return readUpdateStateSchemaVersionsInProcess({
         ...input,
         includeLocalStoreVersions: input.includeLocalStoreVersions === true,
+        includeClientCredentialStoreVersion: input.includeClientCredentialStoreVersion === true,
         onProgress: createUpdateStateInspectionReporter(!input.inspectionPlan),
       });
     default:

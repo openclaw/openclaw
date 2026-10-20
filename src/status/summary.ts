@@ -30,6 +30,7 @@ import { hasResolvableHeartbeatOwnerRoute } from "../infra/outbound/targets.js";
 import { readStartupMigrationWarning } from "../infra/state-migrations.messages.js";
 import { resolveSystemEventQueueKey } from "../infra/system-event-ownership.js";
 import { peekSystemEvents } from "../infra/system-events.js";
+import { readModelReasoningWarning } from "../logging/diagnostic-session-state.js";
 import {
   listActiveDegradedPlugins,
   toPublicPluginVerificationDiagnostic,
@@ -53,6 +54,7 @@ import {
   type PreparedStatusSessionStores,
 } from "./session-stores.js";
 import type { HeartbeatStatus, SessionStatus } from "./types.js";
+import { collectUtilityModelWarnings } from "./utility-model-warnings.js";
 
 const channelSummaryModuleLoader = createLazyImportLoader(
   () => import("../infra/channel-summary.js"),
@@ -472,6 +474,7 @@ export async function prepareStatusSummary(
         await import("../infra/database-engine/admitted-diagnostics.js")
       ).describeAdmittedDatabaseStores(cfg)
     : undefined;
+  const utilityModelWarnings = collectUtilityModelWarnings(cfg);
   return {
     publish() {
       const publishedStores = sessionStores.publish();
@@ -546,7 +549,21 @@ export async function prepareStatusSummary(
           queuedSystemEvents,
           startupMigrationWarning: readStartupMigrationWarning(includeSensitive),
           startupRecoveryWarning: readStartupRecoveryWarning(includeSensitive),
+          modelReasoningWarning: readModelReasoningWarning(includeSensitive),
           installationReplacementWarning: getGatewayInstallationReplacement()?.message,
+          ...(utilityModelWarnings.length
+            ? {
+                utilityModelWarnings: includeSensitive
+                  ? utilityModelWarnings
+                  : [
+                      {
+                        path: "utilityModel",
+                        message:
+                          "A configured utility model cannot enforce tool-free utility work. Choose a capable utility model or add capable utilityModel fallbacks.",
+                      },
+                    ],
+              }
+            : {}),
           secretEgressProxy,
           degradedSecretOwners: listActiveDegradedSecretOwners().map(
             ({ ownerKind, ownerId, state, degradationState, paths, reason }) => ({

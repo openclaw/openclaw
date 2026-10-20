@@ -1,6 +1,5 @@
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
-import type { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { channelReadyPatch, channelStoppedPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import {
@@ -21,12 +20,7 @@ import {
 } from "./http-client.js";
 import { handleClickClackInbound } from "./inbound.js";
 import { resolveWorkspaceId } from "./resolve.js";
-import type {
-  ClickClackEvent,
-  ClickClackMessage,
-  CoreConfig,
-  ResolvedClickClackAccount,
-} from "./types.js";
+import type { ClickClackEvent, ClickClackMessage, ResolvedClickClackAccount } from "./types.js";
 
 const CLICKCLACK_EVENT_PAGE_LIMIT = 500;
 
@@ -130,103 +124,6 @@ function parseSocketEvent(data: RawData): ClickClackEvent | null {
   }
 }
 
-async function processEvent(params: {
-  abortSignal: AbortSignal;
-  account: ResolvedClickClackAccount;
-  config: CoreConfig;
-  client: ReturnType<typeof createClickClackClient>;
-  event: ClickClackEvent;
-  botUserId: string;
-  buildContext?: typeof buildChannelInboundEventContext;
-  log?: { info: (message: string) => void; warn?: (message: string) => void };
-}) {
-  if (params.event.type !== "message.created" && params.event.type !== "thread.reply_created") {
-    return;
-  }
-  if (params.abortSignal.aborted || payloadString(params.event, "author_id") === params.botUserId) {
-    return;
-  }
-  const correlationId = normalizeClickClackCorrelationId(params.event.payload?.correlation_id);
-  // The event body is only a routing hint. Re-fetch the authoritative message
-  // under the same safe correlation id before dispatching any model work.
-  const messageClient = correlationId
-    ? createClickClackClient({
-        baseUrl: params.account.apiEndpoint,
-        token: params.account.token,
-        correlationId,
-      })
-    : params.client;
-  const message = await resolveEventMessage({ client: messageClient, event: params.event });
-  if (!message) {
-    params.log?.warn?.(
-      `[${params.account.accountId}] skipped unreadable ClickClack message before agent dispatch: ` +
-        `type=${params.event.type} messageId=${payloadString(params.event, "message_id") || "unknown"}`,
-    );
-    return;
-  }
-  if (params.abortSignal.aborted || message.author_id === params.botUserId) {
-    return;
-  }
-  const access = await resolveClickClackInboundAccess({
-    account: params.account,
-    config: params.config,
-    message,
-  });
-  // Account shutdown can race either awaited lookup; retired generations must never start a turn.
-  if (params.abortSignal.aborted) {
-    return;
-  }
-  if (!access.shouldDispatch) {
-    params.log?.info(
-      `[${params.account.accountId}] skipped ClickClack message before agent dispatch: ` +
-        `kind=${message.direct_conversation_id ? "dm" : "group"} ` +
-        `requireMention=${access.requireMention ?? "unknown"} ` +
-        `wasMentioned=${access.mentionFacts.wasMentioned} ` +
-        `hasAnyMention=${access.mentionFacts.hasAnyMention ?? "unknown"} ` +
-        `commandAuthorized=${access.commandAuthorized}`,
-    );
-    return;
-  }
-  await handleClickClackInbound({
-    account: params.account,
-    config: params.config,
-    message,
-    access,
-    buildContext: params.buildContext,
-    ...(correlationId ? { correlationId } : {}),
-  });
-}
-
-async function drainEventBacklog(params: {
-  client: ReturnType<typeof createClickClackClient>;
-  workspaceId: string;
-  afterCursor: string;
-  abortSignal: AbortSignal;
-  onEvent: (event: ClickClackEvent) => Promise<void>;
-}): Promise<string> {
-  let afterCursor = params.afterCursor;
-  while (!params.abortSignal.aborted) {
-    const page = await params.client.eventPage(params.workspaceId, {
-      afterCursor,
-      limit: CLICKCLACK_EVENT_PAGE_LIMIT,
-    });
-    for (const event of page.events) {
-      if (params.abortSignal.aborted) {
-        return afterCursor;
-      }
-      if (!event.cursor || event.cursor === afterCursor) {
-        throw new Error("ClickClack event backlog returned a non-advancing cursor");
-      }
-      await params.onEvent(event);
-      afterCursor = event.cursor;
-    }
-    if (page.events.length === 0) {
-      return afterCursor;
-    }
-  }
-  return afterCursor;
-}
-
 export async function startClickClackGatewayAccount(
   ctx: ChannelGatewayContext<ResolvedClickClackAccount>,
 ) {
@@ -249,18 +146,67 @@ export async function startClickClackGatewayAccount(
     botUserId: configuredAccount.botUserId ?? me.id,
     botHandle: me.handle,
   };
-  const processIncomingEvent = (event: ClickClackEvent) =>
-    processEvent({
-      abortSignal: ctx.abortSignal,
+  const processIncomingEvent = async (event: ClickClackEvent) => {
+    const { abortSignal, cfg: config, log } = ctx;
+    const botUserId = account.botUserId;
+    const buildContext = (ctx.channelRuntime as PluginRuntime["channel"] | undefined)?.inbound
+      .buildContext;
+    if (event.type !== "message.created" && event.type !== "thread.reply_created") {
+      return;
+    }
+    if (abortSignal.aborted || payloadString(event, "author_id") === botUserId) {
+      return;
+    }
+    const correlationId = normalizeClickClackCorrelationId(event.payload?.correlation_id);
+    // The event body is only a routing hint. Re-fetch the authoritative message
+    // under the same safe correlation id before dispatching any model work.
+    const messageClient = correlationId
+      ? createClickClackClient({
+          baseUrl: account.apiEndpoint,
+          token: account.token,
+          correlationId,
+        })
+      : client;
+    const message = await resolveEventMessage({ client: messageClient, event });
+    if (!message) {
+      log?.warn?.(
+        `[${account.accountId}] skipped unreadable ClickClack message before agent dispatch: ` +
+          `type=${event.type} messageId=${payloadString(event, "message_id") || "unknown"}`,
+      );
+      return;
+    }
+    if (abortSignal.aborted || message.author_id === botUserId) {
+      return;
+    }
+    const access = await resolveClickClackInboundAccess({
       account,
-      config: ctx.cfg,
-      client,
-      event,
-      botUserId: account.botUserId,
-      buildContext: (ctx.channelRuntime as PluginRuntime["channel"] | undefined)?.inbound
-        .buildContext,
-      log: ctx.log,
+      config,
+      message,
     });
+    // Account shutdown can race either awaited lookup; retired generations must never start a turn.
+    if (abortSignal.aborted) {
+      return;
+    }
+    if (!access.shouldDispatch) {
+      log?.info(
+        `[${account.accountId}] skipped ClickClack message before agent dispatch: ` +
+          `kind=${message.direct_conversation_id ? "dm" : "group"} ` +
+          `requireMention=${access.requireMention ?? "unknown"} ` +
+          `wasMentioned=${access.mentionFacts.wasMentioned} ` +
+          `hasAnyMention=${access.mentionFacts.hasAnyMention ?? "unknown"} ` +
+          `commandAuthorized=${access.commandAuthorized}`,
+      );
+      return;
+    }
+    await handleClickClackInbound({
+      account,
+      config,
+      message,
+      access,
+      buildContext,
+      ...(correlationId ? { correlationId } : {}),
+    });
+  };
   if (account.commandMenu) {
     try {
       const specs = listNativeCommandSpecsForConfig(ctx.cfg, { provider: "clickclack" });
@@ -309,13 +255,25 @@ export async function startClickClackGatewayAccount(
         }
         initialized = true;
       } else {
-        afterCursor = await drainEventBacklog({
-          client,
-          workspaceId,
-          afterCursor,
-          abortSignal: ctx.abortSignal,
-          onEvent: processIncomingEvent,
-        });
+        while (!ctx.abortSignal.aborted) {
+          const page = await client.eventPage(workspaceId, {
+            afterCursor,
+            limit: CLICKCLACK_EVENT_PAGE_LIMIT,
+          });
+          for (const event of page.events) {
+            if (ctx.abortSignal.aborted) {
+              break;
+            }
+            if (!event.cursor || event.cursor === afterCursor) {
+              throw new Error("ClickClack event backlog returned a non-advancing cursor");
+            }
+            await processIncomingEvent(event);
+            afterCursor = event.cursor;
+          }
+          if (page.events.length === 0) {
+            break;
+          }
+        }
       }
       if (ctx.abortSignal.aborted) {
         break;

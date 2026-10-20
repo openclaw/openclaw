@@ -61,9 +61,7 @@ ui/src/pages/chat/components/chat-message-bubble-view.tsx	1
 ui/src/pages/chat/components/chat-model-picker.tsx	1
 ui/src/pages/chat/components/chat-pull-request-checks.tsx	1
 ui/src/pages/chat/components/chat-question-answer-controls.tsx	1
-ui/src/pages/chat/components/chat-question-panel.tsx	1
 ui/src/pages/chat/components/chat-read-aloud.tsx	1
-ui/src/pages/chat/components/chat-session-rail-composer.tsx	1
 ui/src/pages/chat/solid-render-lifecycle.ts	1
 ui/src/pages/config/config-page-state.ts	1
 ui/src/pages/cron/cron-page.tsx	1

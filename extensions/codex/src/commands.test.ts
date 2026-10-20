@@ -3190,6 +3190,28 @@ describe("codex command", () => {
     });
   });
 
+  it.each([
+    { label: "trailing space", input: "/tmp/job " },
+    { label: "leading space", input: " /tmp/job" },
+    { label: "both sides", input: " /tmp/job " },
+  ])(
+    "preserves significant whitespace in bind --cwd ($label) through command dispatch",
+    async ({ input }) => {
+      let requestedData: Record<string, unknown> | undefined;
+      const requestConversationBinding = vi.fn(
+        async (request?: { data?: Record<string, unknown> }) => {
+          requestedData = request?.data;
+          return { status: "bound" as const, binding: publicConversationBinding() };
+        },
+      );
+
+      await runCommand(`bind --cwd "${input}"`, {}, { requestConversationBinding });
+
+      expect(requestConversationBinding).toHaveBeenCalledTimes(1);
+      expect(requestedData?.workspaceDir).toBe(input);
+    },
+  );
+
   it("reuses the existing owner for a lazy Codex rebind", async () => {
     await writeTestBinding(
       { kind: "conversation", bindingId: "binding-data-1" },

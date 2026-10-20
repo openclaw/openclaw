@@ -2,10 +2,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import type { CronJob } from "../api/types.ts";
-import {
-  takeControlUiElementScreenshot,
-  takeControlUiViewportScreenshot,
-} from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -55,29 +52,6 @@ export async function captureSidebarUiProof(
   await page.screenshot({
     animations: "disabled",
     fullPage: true,
-    path: path.join(owner.artifactDir, fileName),
-  });
-}
-
-export async function captureSettingsSidebarUiProof(
-  owner: { readonly artifactDir: string },
-  sidebar: Locator,
-  fileName: string,
-): Promise<void> {
-  if (process.env.OPENCLAW_CAPTURE_UI_PROOF !== "1") {
-    return;
-  }
-  if (sidebar.page().video()) {
-    await writeFile(
-      path.join(owner.artifactDir, fileName),
-      await takeControlUiElementScreenshot(sidebar.page(), sidebar, [
-        sidebar.getByRole("searchbox", { name: "Search settings" }),
-      ]),
-    );
-    return;
-  }
-  await sidebar.screenshot({
-    animations: "disabled",
     path: path.join(owner.artifactDir, fileName),
   });
 }

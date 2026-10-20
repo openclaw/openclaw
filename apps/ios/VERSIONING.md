@@ -167,6 +167,14 @@ An already running simulator stops the command before capture; shut it down
 when it is no longer in use and rerun. This changes only the screenshot
 environment, not the app's rendered states.
 
+Immediately before Watch capture, the shared lane resolves the runtime and creates
+its simulator. CI can repair a missing or unavailable Watch runtime once, including
+when it disappears during the phone or tablet captures. The repair replaces only
+the selected Watch runtime's registered image, or installs it if absent, and logs
+runtime availability, image state, and mounted-path existence without filesystem
+paths. Local runs leave runtime installation to the operator. Boot and capture
+failures still stop the lane without retrying screenshots.
+
 The screenshot-only job enables `OPENCLAW_SNAPSHOT_DIAGNOSTICS=1`. To collect the
 same diagnostics locally:
 
@@ -174,8 +182,10 @@ same diagnostics locally:
 OPENCLAW_SNAPSHOT_DIAGNOSTICS=1 pnpm ios:screenshots
 ```
 
-Sanitized startup, resource, and crash facts are recorded in
-`apps/ios/build/screenshot-diagnostics.json`. The separate
+Phase timings, simulator counts, and sanitized startup and crash facts are recorded in
+`apps/ios/build/screenshot-diagnostics.json`. Resource observations come from the
+separate [background timeline](fastlane/SETUP.md#temporary-resource-investigation),
+without blocking screenshot phases on native resource probes. The separate
 `capture-attempts.json` ledger keeps its existing schema for release evidence.
 GitHub retains both files and fixture PNGs in
 `ios-screenshots-<run-id>-<run-attempt>`. Raw Xcode logs and XCTest result bundles

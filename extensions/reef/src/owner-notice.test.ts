@@ -162,12 +162,12 @@ describe("ReefReceiptNotifier", () => {
     const notify = vi.fn(consumeNotice);
     const onError = vi.fn();
     const clock = { now: 10_000 };
+    vi.spyOn(Date, "now").mockImplementation(() => clock.now);
     const start = (sink = notify) => {
       const scheduler = createTestPluginServiceScheduler();
       schedulers.push(scheduler);
       const notifier = new ReefReceiptNotifier(sink, notices.store, {
         scheduler,
-        now: () => clock.now,
         onError,
       });
       return { notifier, scheduler };

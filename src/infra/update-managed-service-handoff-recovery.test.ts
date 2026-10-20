@@ -219,6 +219,8 @@ it.each(["installation repair", "settlement receipt"] as const)(
 );
 
 it("settles a dead original's cancelled family with its retained service root", async () => {
+  // Redact all sibling roots so host temp-path length cannot truncate this receipt.
+  env = { ...env, HOME: path.dirname(fixture.root) };
   const keys = fixture.seedCancellation();
   const family = fixture.rows();
   expect(nextUpdate()).toBe("busy");
@@ -230,12 +232,15 @@ it("settles a dead original's cancelled family with its retained service root", 
   repair.complete(run.runId);
   const detail = settlement(run.runId)?.detail ?? "";
   expect(detail).toContain(`cancelled update custody settled: updater PID ${keys.updater.pid}`);
-  // History shortens paths under the fixture home; sibling roots stay verbatim.
+  // History shortens every family key under the fixture home.
   const settled = /Settled keys: (.*)\. Current-installation/.exec(detail)?.[1]?.split(", ");
   expect(settled).toHaveLength(family.length);
   expect(settled).toEqual(
     expect.arrayContaining(
-      [keys.slot, keys.service].flatMap((key) => [key, `${key}${keys.lineage}`]),
+      [keys.slot, keys.service].flatMap((key) => {
+        const shortened = `~/${path.basename(key)}`;
+        return [shortened, `${shortened}${keys.lineage}`];
+      }),
     ),
   );
   expect(fixture.rows()).toEqual([]);
@@ -249,7 +254,12 @@ it.each([
   ["recent custody", /recovery grace ends at/],
   ["recent retained service root", /recovery grace ends at/],
   ["process referencing the retained service root", /PID 81236/],
-  ["surviving process group of the cancelled updater", /descendants remain live or unverified/],
+  [
+    "surviving descendants of the cancelled updater",
+    process.platform === "win32"
+      ? /descendants remain alive or unverified: PID 81237/
+      : /descendants remain live or unverified/,
+  ],
   ["unverified candidate", /live or unverified: PID 1000004/],
   ["alias outside the family", /unsupported custody at .*-other\/\.openclaw-update-child-/],
 ] as const)("retains cancelled custody unchanged for %s", async (reason, expected) => {
@@ -264,11 +274,16 @@ it.each([
     // The run's own facts name other paths; every retired family key is censused too.
     fixture.pathCensus.set(keys.service, [81236]);
   }
-  if (reason === "surviving process group of the cancelled updater") {
-    const groupAlive = childTree.isChildProcessTreeAlive;
-    vi.spyOn(childTree, "isChildProcessTreeAlive").mockImplementation((child) =>
-      child.pid === keys.updater.pid ? true : groupAlive(child),
-    );
+  if (reason === "surviving descendants of the cancelled updater") {
+    // Windows descendants are observed by the host census, not a POSIX process group.
+    if (process.platform === "win32") {
+      fixture.processCensus.matchingPids.push(81237);
+    } else {
+      const groupAlive = childTree.isChildProcessTreeAlive;
+      vi.spyOn(childTree, "isChildProcessTreeAlive").mockImplementation((child) =>
+        child.pid === keys.updater.pid ? true : groupAlive(child),
+      );
+    }
   }
   if (reason === "unverified candidate") {
     fixture.births.set(fixture.candidate.pid, null);

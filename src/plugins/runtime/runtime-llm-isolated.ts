@@ -10,6 +10,7 @@ import {
   createLlmCompleteError as completionError,
   createLlmOperatorAuthorizationError,
   isLlmOperatorAuthorizationError,
+  isLlmRuntimeLifecycleFailure,
 } from "./runtime-llm-error.js";
 import type {
   LlmCompleteErrorCode,
@@ -186,6 +187,9 @@ export async function runIsolatedAgentRuntimeCompletion(params: {
       params.operatorAuthority?.assertCurrent();
     } catch (authorizationError) {
       throw createLlmOperatorAuthorizationError(authorizationError);
+    }
+    if (isLlmRuntimeLifecycleFailure(error)) {
+      throw error;
     }
     if (error === timeoutError) {
       throw completionError(
