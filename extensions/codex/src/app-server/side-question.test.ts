@@ -1980,9 +1980,7 @@ describe("runCodexAppServerSideQuestion", () => {
           ...(written && !interruptFails ? ["thread/backgroundTerminals/list"] : []),
           ...(!interruptFails ? ["thread/unsubscribe"] : []),
         ]);
-        expect(harness.stdinDestroyed).toBe(
-          Boolean((interruptFails && !peerRetained) || unsubscribeFails),
-        );
+        expect(harness.stdinDestroyed).toBe((interruptFails && !peerRetained) || unsubscribeFails);
         if (peerRetained) {
           expect(retireClient).toHaveBeenCalledExactlyOnceWith(harness.client);
         }
