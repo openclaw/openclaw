@@ -22,10 +22,9 @@ vi.mock("openclaw/plugin-sdk/conversation-binding-inspection-runtime", async (im
     >();
   return {
     ...actual,
-    inspectConversationBinding: (
-      conversation: Parameters<typeof actual.inspectConversationBinding>[0],
-    ) => createConversationInspection(conversation, readBinding()?.bindingId),
-  };
+    inspectConversationBinding: (conversation) =>
+      createConversationInspection(conversation, readBinding()?.bindingId),
+  } satisfies typeof actual;
 });
 
 // This boundary consumes prepared policy; policy selection has its own owner tests.
@@ -47,25 +46,10 @@ it.each(["unchanged", "detached", "replaced", "policy-refused"])(
   "revalidates a queued node binding that is %s",
   async (bindingState) => {
     const bindingStore = createCodexTestBindingStore();
-    const { conversationClaimContext } = createConversationClaimFixtures(
-      () => "/synthetic/codex",
-      bindingStore,
-    );
-    const nodeSession = {
-      nodeId: "mb-m5",
-      sessionId: "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd",
-      agentId: "main",
-      cwd: "/repo",
-    };
-    const firstTurn = createDeferred<void>();
-    const resumeCodexCliSessionOnNode = vi.fn(async () => {
-      await firstTurn.promise;
-      return {
-        ok: true as const,
-        sessionId: nodeSession.sessionId,
-        text: "done",
-      };
-    });
+    const claims = createConversationClaimFixtures(() => "/codex", bindingStore);
+    const nodeSession = { nodeId: "mb-m5", sessionId: "node-1", agentId: "main", cwd: "/repo" };
+    const firstTurn = createDeferred<{ ok: true; sessionId: string; text: string }>();
+    const resumeCodexCliSessionOnNode = vi.fn(() => firstTurn.promise);
 
     const claim = () =>
       handleCodexConversationInboundClaim(
@@ -74,7 +58,7 @@ it.each(["unchanged", "detached", "replaced", "policy-refused"])(
           channel: "webchat",
           sessionKey: "node-session",
         }),
-        conversationClaimContext(
+        claims.conversationClaimContext(
           { kind: "codex-cli-node-session", version: 1, ...nodeSession },
           "node-session",
           { channel: "webchat", conversationId: "node-session" },
@@ -97,7 +81,7 @@ it.each(["unchanged", "detached", "replaced", "policy-refused"])(
         bindingState === "detached" ? null : { bindingId: "replacement-binding" },
       );
     }
-    firstTurn.resolve();
+    firstTurn.resolve({ ok: true, sessionId: nodeSession.sessionId, text: "done" });
     await expect(running).resolves.toEqual({ handled: true, reply: { text: "done" } });
     const failure =
       bindingState === "policy-refused"

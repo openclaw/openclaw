@@ -1,51 +1,45 @@
 import { beforeEach, expect, it, vi } from "vitest";
-import type { v2 } from "./app-server/protocol.js";
 import { splitArgs } from "./command-handler-args.js";
 import { handleCodexPluginsSubcommand } from "./command-plugins-management.js";
 import {
   buttonCommands,
   fakeCtx,
   inMemoryIO,
+  pluginCatalog,
   pluginRuntime,
   pluginSummary,
 } from "./command-plugins-management.test-support.js";
 
 function catalogRuntime(description = "Review project notes") {
-  const listed: v2.PluginListResponse = {
-    marketplaces: [
-      {
-        name: "company-tools",
-        path: "/repo/company/marketplace.json",
-        plugins: [
-          ...Array.from({ length: 35 }, (_, index) =>
-            pluginSummary(`catalog-${String(index).padStart(2, "0")}`, "company-tools", {
-              interface: { shortDescription: description },
-            }),
-          ),
-          pluginSummary("github", "company-tools", {
-            installed: true,
-            enabled: true,
-            interface: {
-              displayName: "Repository Companion",
-              developerName: "Example Labs",
-              shortDescription: "Read pull requests",
-            },
-          }),
-        ],
-      },
-      {
-        name: "openai-curated-remote",
-        plugins: [
-          pluginSummary("github", "openai-curated-remote", {
-            availability: "DISABLED_BY_ADMIN",
-            interface: { longDescription: "Inspect issues" },
-          }),
-        ],
-      },
+  const listed = pluginCatalog(
+    [
+      ...Array.from({ length: 35 }, (_, index) =>
+        pluginSummary(`catalog-${String(index).padStart(2, "0")}`, "company-tools", {
+          interface: { shortDescription: description },
+        }),
+      ),
+      pluginSummary("github", "company-tools", {
+        installed: true,
+        enabled: true,
+        interface: {
+          displayName: "Repository Companion",
+          developerName: "Example Labs",
+          shortDescription: "Read pull requests",
+        },
+      }),
     ],
-    marketplaceLoadErrors: [],
-    featuredPluginIds: [],
-  };
+    "company-tools",
+    "/repo/company/marketplace.json",
+  );
+  listed.marketplaces.push({
+    name: "openai-curated-remote",
+    plugins: [
+      pluginSummary("github", "openai-curated-remote", {
+        availability: "DISABLED_BY_ADMIN",
+        interface: { longDescription: "Inspect issues" },
+      }),
+    ],
+  });
   return {
     ...pluginRuntime(),
     list: vi.fn(async () => listed),
