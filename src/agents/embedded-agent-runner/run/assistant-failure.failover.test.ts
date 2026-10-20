@@ -75,6 +75,10 @@ describe("assistant failure recovery", () => {
 
   it.each([
     { errorMessage: "Pending input is no longer active in its admitted transcript" },
+    {
+      errorMessage:
+        'Transcript idempotency key "channel-user:v1:f47ac10b58cc" conflicts with the admitted message.',
+    },
     { errorMessage: "400 malformed input item", errorType: "invalid_request_error" },
     { errorMessage: "Request rejected by content policy", errorType: "invalid_request_error" },
     {
