@@ -19,14 +19,17 @@ const denial = Object.freeze({
 vi.mock("./backend.js", () => ({
   resolveRuntimeModelAttempt: vi.fn(),
 }));
+// mock-isolation: finalization fixtures must not load or invoke the live agent harness.
 vi.mock("../../harness/selection.js", () => ({
   runAgentHarnessSettledTurnFinalization: mocks.finalize,
 }));
+// mock-isolation: record synthetic mirror writes without loading transcript persistence.
 vi.mock("../../../plugin-sdk/session-transcript-runtime.js", () => ({
   appendAssistantMirrorMessageByIdentity: mocks.append,
 }));
 // This suite stubs persistence; resolve its synthetic paths without opening a
 // host database. The runner boundary suite uses the real resolver and SQLite.
+// mock-isolation: synthetic session targets must not open the host session database.
 vi.mock("../../run-session-target.js", () => ({
   resolveAgentRunSessionTarget: vi.fn(
     async (

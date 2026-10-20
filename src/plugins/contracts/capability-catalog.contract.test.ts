@@ -7,13 +7,21 @@ import type * as Catalog from "../capability-catalog-context.types.js";
 const rejectRuntimeImport = vi.hoisted(() => () => {
   throw new Error("cold catalog imported host runtime/auth");
 });
+// mock-isolation: cold catalogs must fail if they import the plugin runtime loader.
 vi.mock("../loader-runtime-load.js", rejectRuntimeImport);
+// mock-isolation: cold catalogs must fail if they import provider runtime state.
 vi.mock("../capability-provider-runtime.js", rejectRuntimeImport);
+// mock-isolation: cold catalogs must fail if they import provider authentication.
 vi.mock("../../plugin-sdk/provider-auth.js", rejectRuntimeImport);
+// mock-isolation: cold catalogs must fail if they import transcription transport.
 vi.mock("../../realtime-transcription/websocket-session.js", rejectRuntimeImport);
+// mock-isolation: cold catalogs must fail if they import live request configuration.
 vi.mock("../../agents/provider-request-config.js", rejectRuntimeImport);
+// mock-isolation: cold catalogs must fail if they import proxy capture runtime state.
 vi.mock("../../proxy-capture/runtime.js", rejectRuntimeImport);
+// mock-isolation: cold catalogs must fail if they import HTTP response handling.
 vi.mock("../../infra/http-body.js", rejectRuntimeImport);
+// mock-isolation: cold catalogs must fail if they import host logging/redaction state.
 vi.mock("../../logging/redact.js", rejectRuntimeImport);
 
 const extensions = fileURLToPath(new URL("../../../extensions/", import.meta.url));

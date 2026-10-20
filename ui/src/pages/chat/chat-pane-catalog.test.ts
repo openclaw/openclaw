@@ -290,14 +290,13 @@ describe("chat pane catalog", () => {
       const request = vi.fn().mockResolvedValue({ sessionKey: destination });
       const { key, pane, state } = createCatalogContinuationPane(request);
       const attachment = {
-        id: "att-2",
         mimeType: "image/png",
         fileName: "only.png",
         dataUrl: "data:image/png;base64,BBBB",
       };
       if (attachmentOnly) {
         state.chatMessage = "";
-        state.chatAttachments = [attachment];
+        state.chatAttachments = [{ id: "att-2", ...attachment }];
       } else {
         pane.history.catalogSession = {
           ...pane.history.catalogSession!,

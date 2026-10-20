@@ -9,7 +9,9 @@ import { prepareWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import { createFixtureSkillEntry } from "../test-support/test-helpers.js";
 import { installSkill } from "./install.js";
 
+// mock-isolation: use only fixture recipes without loading host skill discovery or caches.
 vi.mock("../loading/workspace-skill-loader.js", () => ({ prepareWorkspaceSkills: vi.fn() }));
+// mock-isolation: emulate bootstrap and recipe commands without spawning package installers.
 vi.mock("../../process/exec.js", () => ({ runCommandWithTimeout: vi.fn() }));
 
 vi.mock("../../plugins/install-security-scan.js", () => ({

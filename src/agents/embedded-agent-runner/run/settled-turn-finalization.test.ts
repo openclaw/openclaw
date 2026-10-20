@@ -50,9 +50,11 @@ const transcriptMocks = vi.hoisted(() => ({
 vi.mock("./backend.js", () => ({
   resolveRuntimeModelAttempt: backendMocks.resolveRuntimeModelAttempt,
 }));
+// mock-isolation: finalization fixtures must not load or invoke the live agent harness.
 vi.mock("../../harness/selection.js", () => ({
   runAgentHarnessSettledTurnFinalization: backendMocks.finalize,
 }));
+// mock-isolation: record synthetic mirror writes without loading transcript persistence.
 vi.mock("../../../plugin-sdk/session-transcript-runtime.js", () => ({
   appendAssistantMirrorMessageByIdentity: transcriptMocks.append,
 }));
