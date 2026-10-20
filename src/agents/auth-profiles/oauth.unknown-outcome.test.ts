@@ -25,16 +25,13 @@ vi.mock("../../llm/oauth.js", () => ({
   getOAuthProviders: () => [{ id: "openai" }],
 }));
 
-beforeEach(async () => {
+function reset() {
   resetFileLockStateForTest();
   resetOAuthProviderRuntimeMocks(mocks);
   clearRuntimeAuthProfileStoreSnapshots();
-});
-afterEach(() => {
-  resetFileLockStateForTest();
-  resetOAuthProviderRuntimeMocks(mocks);
-  clearRuntimeAuthProfileStoreSnapshots();
-});
+}
+beforeEach(reset);
+afterEach(reset);
 
 it.each(["peer fence", "owner commit"] as const)(
   "does not replay an uncertain %s after the provider consumes the generation",

@@ -6,50 +6,45 @@ import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-d
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { captureMcpAuthProfileAuthorization } from "../mcp-auth-profile-authorization.js";
-import { enrollAuthProfileAuthorizationInDatabase } from "./authorization-enrollment.js";
-import { readAuthProfileAuthorizationLifetimes } from "./authorization-lifetime.js";
+import { enrollAuthProfileAuthorizationInDatabase as enroll } from "./authorization-enrollment.js";
+import { readAuthProfileAuthorizationLifetimes as lifetimes } from "./authorization-lifetime.js";
 import {
   removeAuthProfilesAcrossOwnerStores,
-  upsertAuthProfileWithLockOrThrow,
+  upsertAuthProfileWithLockOrThrow as upsert,
 } from "./profiles.js";
 import {
-  inspectPersistedAuthProfileStoreRaw,
-  readPersistedAuthProfileStoreRaw,
-  runAuthProfileWriteTransaction,
-  writePersistedAuthProfileStoreRaw,
+  inspectPersistedAuthProfileStoreRaw as inspectStore,
+  readPersistedAuthProfileStoreRaw as readStore,
+  runAuthProfileWriteTransaction as withTransaction,
+  writePersistedAuthProfileStoreRaw as writeStore,
 } from "./sqlite.js";
 import { createAuthOwnerTestFixtures } from "./store-state-owner.test-support.js";
 
 const { seedRoot, apiKey } = createAuthOwnerTestFixtures();
+async function withRoot(run: (root: Awaited<ReturnType<typeof seedRoot>>) => Promise<void>) {
+  const root = await seedRoot("before");
+  await withEnvAsync(root.env, () => run(root));
+}
 
 describe("auth-profile writer publication", () => {
   it("refuses stale worker enrollment without changing a newer credential", async () => {
-    const root = await seedRoot("before");
-    await withEnvAsync(root.env, async () => {
-      const expected = inspectPersistedAuthProfileStoreRaw(root.agentDir);
-      await upsertAuthProfileWithLockOrThrow({
-        agentDir: root.agentDir,
-        profileId: "local",
-        credential: apiKey("after"),
-      });
-      const before = readPersistedAuthProfileStoreRaw(root.agentDir);
+    await withRoot(async (root) => {
+      const expected = inspectStore(root.agentDir);
+      await upsert({ agentDir: root.agentDir, profileId: "local", credential: apiKey("after") });
+      const before = readStore(root.agentDir);
       expect(() =>
-        runAuthProfileWriteTransaction(root.agentDir, (database) =>
-          enrollAuthProfileAuthorizationInDatabase(database.db, "agent", {
-            profileId: "local",
-            expected,
-          }),
+        withTransaction(root.agentDir, (database) =>
+          enroll(database.db, "agent", { profileId: "local", expected }),
         ),
       ).toThrow("changed before authorization enrollment");
-      expect(readPersistedAuthProfileStoreRaw(root.agentDir)).toEqual(before);
+      expect(readStore(root.agentDir)).toEqual(before);
     });
   });
 
   it.each(["commit", "rollback", "unknown", "autocommit"] as const)(
     "settles raw credential writes through their native owner (%s)",
     async (outcome) => {
-      const root = await seedRoot("before");
-      await withEnvAsync(root.env, async () => {
+      await withRoot(async (root) => {
         // Unknown settlement retains offline custody until restart; this matrix exercises
         // the Gateway-owned writer, with its owner retained through database cleanup.
         const ownerLease = acquireGatewayStateOwner({
@@ -70,11 +65,11 @@ describe("auth-profile writer publication", () => {
             assertCurrent() {},
           });
           disposeAuthority = authority.dispose;
-          const before = readPersistedAuthProfileStoreRaw(root.agentDir);
-          const database = runAuthProfileWriteTransaction(root.agentDir, (owner) => owner);
+          const before = readStore(root.agentDir);
+          const database = withTransaction(root.agentDir, (owner) => owner);
           const payload = { version: 1, profiles: { local: apiKey("replacement") } };
           const failure = new Error("fixture native settlement failed");
-          const write = () => writePersistedAuthProfileStoreRaw(payload, root.agentDir, database);
+          const write = () => writeStore(payload, root.agentDir, database);
           const transaction = () =>
             runSqliteImmediateTransactionSync(
               database.db,
@@ -103,7 +98,7 @@ describe("auth-profile writer publication", () => {
             transaction();
           }
           if (outcome === "rollback") {
-            expect(readPersistedAuthProfileStoreRaw(root.agentDir)).toEqual(before);
+            expect(readStore(root.agentDir)).toEqual(before);
             expect(authority.assertCurrent).not.toThrow();
             await authority.revalidate();
           } else if (outcome === "unknown") {
@@ -112,12 +107,12 @@ describe("auth-profile writer publication", () => {
               expect.objectContaining({ code: "MCP_AUTHORIZATION_UNAVAILABLE" }),
             );
             // The commit really happened; reading its rows cannot certify the lost outcome.
-            expect(readPersistedAuthProfileStoreRaw(root.agentDir)).toMatchObject(payload);
+            expect(readStore(root.agentDir)).toMatchObject(payload);
             await expect(authority.revalidate()).rejects.toMatchObject({
               code: "MCP_AUTHORIZATION_UNAVAILABLE",
             });
           } else {
-            expect(readPersistedAuthProfileStoreRaw(root.agentDir)).toMatchObject(payload);
+            expect(readStore(root.agentDir)).toMatchObject(payload);
             expect(authority.assertCurrent).toThrow(
               expect.objectContaining({ code: "MCP_AUTHORIZATION_RETIRED" }),
             );
@@ -133,19 +128,17 @@ describe("auth-profile writer publication", () => {
   );
 
   it("retains enrollment tombstones through canonical removal and ignores replayed metadata", async () => {
-    const root = await seedRoot("before");
-    await withEnvAsync(root.env, async () => {
-      const raw = runAuthProfileWriteTransaction(
+    await withRoot(async (root) => {
+      const lifetime = () => lifetimes(readStore(root.agentDir)).local;
+      const raw = withTransaction(
         root.agentDir,
         (database) =>
-          enrollAuthProfileAuthorizationInDatabase(database.db, "agent", {
+          enroll(database.db, "agent", {
             profileId: "local",
-            expected: inspectPersistedAuthProfileStoreRaw(root.agentDir, database),
+            expected: inspectStore(root.agentDir, database),
           }).raw,
       );
-      const before = readAuthProfileAuthorizationLifetimes(
-        readPersistedAuthProfileStoreRaw(root.agentDir),
-      ).local;
+      const before = lifetime();
       expect(before).toBeTruthy();
       expect(
         await removeAuthProfilesAcrossOwnerStores({
@@ -153,26 +146,19 @@ describe("auth-profile writer publication", () => {
           profileIds: ["local"],
         }),
       ).toBe(true);
-      const removed = readAuthProfileAuthorizationLifetimes(
-        readPersistedAuthProfileStoreRaw(root.agentDir),
-      ).local;
+      const removed = lifetime();
       expect(removed).toBeTruthy();
       expect(removed).not.toBe(before);
-      await upsertAuthProfileWithLockOrThrow({
+      await upsert({
         agentDir: root.agentDir,
         profileId: "local",
         credential: apiKey("before-local"),
       });
-      const restored = readAuthProfileAuthorizationLifetimes(
-        readPersistedAuthProfileStoreRaw(root.agentDir),
-      ).local;
+      const restored = lifetime();
       expect(restored).not.toBe(before);
       expect(restored).not.toBe(removed);
-      writePersistedAuthProfileStoreRaw(raw, root.agentDir);
-      expect(
-        readAuthProfileAuthorizationLifetimes(readPersistedAuthProfileStoreRaw(root.agentDir))
-          .local,
-      ).toBe(restored);
+      writeStore(raw, root.agentDir);
+      expect(lifetime()).toBe(restored);
     });
   });
 });

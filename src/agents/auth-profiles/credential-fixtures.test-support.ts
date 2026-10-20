@@ -1,22 +1,16 @@
 import { createHash } from "node:crypto";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
-export function createApiKeyCredential(
-  provider: string,
-  key: string,
-): { type: "api_key"; provider: string; key: string } {
-  return { type: "api_key", provider, key };
+export function createApiKeyCredential(provider: string, key: string) {
+  return { type: "api_key" as const, provider, key };
 }
 
-/** Build an OAuth credential fixture. */
-export function oauthCred(params: {
-  provider: string;
-  access: string;
-  refresh: string;
-  expires: number;
-  accountId?: string;
-  email?: string;
-}): OAuthCredential {
+export function oauthCred(
+  params: Pick<
+    OAuthCredential,
+    "provider" | "access" | "refresh" | "expires" | "accountId" | "email"
+  >,
+): OAuthCredential {
   return { type: "oauth", ...params };
 }
 
@@ -30,18 +24,17 @@ export function createAuthProfileUsageStore(
   return {
     version: 1,
     profiles: {
-      "anthropic:default": { type: "api_key", provider: "anthropic", key: "sk-test" },
-      "openai:api-key": { type: "api_key", provider: "openai", key: "sk-test-2" },
-      "openai:default": {
-        type: "oauth",
+      "anthropic:default": createApiKeyCredential("anthropic", "sk-test"),
+      "openai:api-key": createApiKeyCredential("openai", "sk-test-2"),
+      "openai:default": oauthCred({
         provider: "openai",
         access: "codex-access-token",
         refresh: "codex-refresh-token",
         expires: 4_102_444_800_000,
         accountId: "acct_test_123",
-      },
-      "openrouter:default": { type: "api_key", provider: "openrouter", key: "sk-or-test" },
-      "kilocode:default": { type: "api_key", provider: "kilocode", key: "sk-kc-test" },
+      }),
+      "openrouter:default": createApiKeyCredential("openrouter", "sk-or-test"),
+      "kilocode:default": createApiKeyCredential("kilocode", "sk-kc-test"),
     },
     usageStats,
   };
@@ -73,6 +66,13 @@ export function createOAuthRefreshCredential(
 }
 
 export function oauthRefreshReplacementCases() {
+  const oidc = (kind: string, sameIdentity: boolean, coldObserver: boolean) => ({
+    kind,
+    identity: oidcIdentity(),
+    replacementIdentity: oidcIdentity(sameIdentity ? {} : { sub: "subject-b" }),
+    sameIdentity,
+    coldObserver,
+  });
   return [
     {
       kind: "account mismatch",
@@ -81,60 +81,33 @@ export function oauthRefreshReplacementCases() {
       sameIdentity: false,
       coldObserver: false,
     },
-    {
-      kind: "OIDC match",
-      identity: oidcIdentity(),
-      replacementIdentity: oidcIdentity(),
-      sameIdentity: true,
-      coldObserver: false,
-    },
-    {
-      kind: "OIDC cold mismatch",
-      identity: oidcIdentity(),
-      replacementIdentity: oidcIdentity({ sub: "subject-b" }),
-      sameIdentity: false,
-      coldObserver: true,
-    },
-    {
-      kind: "OIDC cold observer",
-      identity: oidcIdentity(),
-      replacementIdentity: oidcIdentity(),
-      sameIdentity: true,
-      coldObserver: true,
-    },
+    oidc("OIDC match", true, false),
+    oidc("OIDC cold mismatch", false, true),
+    oidc("OIDC cold observer", true, true),
   ];
 }
 
 export function oauthRefreshFailureFallbackCases() {
+  const candidate = (access: string, refresh: string) => ({
+    access,
+    refresh,
+    expires: Date.now() + 600_000,
+    accountId: "acct-123",
+  });
   return [
     {
       name: "rejects refresh-only changes",
-      candidate: {
-        access: "failed-access",
-        refresh: "new-refresh",
-        expires: Date.now() + 600_000,
-        accountId: "acct-123",
-      },
+      candidate: candidate("failed-access", "new-refresh"),
       expectedApiKey: undefined,
     },
     {
       name: "adopts access-token changes",
-      candidate: {
-        access: "new-access",
-        refresh: "failed-refresh",
-        expires: Date.now() + 600_000,
-        accountId: "acct-123",
-      },
+      candidate: candidate("new-access", "failed-refresh"),
       expectedApiKey: "new-access",
     },
     {
       name: "preserves the refresh error when adopted-key construction fails",
-      candidate: {
-        access: "new-access",
-        refresh: "failed-refresh",
-        expires: Date.now() + 600_000,
-        accountId: "acct-123",
-      },
+      candidate: candidate("new-access", "failed-refresh"),
       expectedApiKey: undefined,
       buildError: "fallback key construction failed",
     },
