@@ -19,6 +19,7 @@ import { parseAgentSessionKey } from "../../../lib/sessions/session-key.ts";
 import { sessionWorkspaceFileKey } from "../../../lib/sessions/workspace.ts";
 import {
   hasUniformLineEndings,
+  readWorkspaceFileText,
   unsupportedFileSidebarContent,
 } from "./chat-session-workspace-file-content.ts";
 import { openWorkspaceItem } from "./chat-session-workspace-preview.ts";
@@ -49,7 +50,6 @@ registerFilePreviewEnglish();
 export { retireSessionWorkspaceCheckout } from "./chat-session-workspace-state.ts";
 export type { SessionWorkspaceHost } from "./chat-session-workspace-types.ts";
 
-
 function workspaceBrowserFilePath(root: string | undefined, filePath: string): string {
   if (!root) {
     return filePath;
@@ -58,14 +58,6 @@ function workspaceBrowserFilePath(root: string | undefined, filePath: string): s
   const base = root.replace(/[\\/]+$/, "");
   const relative = filePath.replace(/^[\\/]+/, "").replaceAll(/[\\/]/g, separator);
   return base ? `${base}${separator}${relative}` : `${separator}${relative}`;
-}
-
-function readWorkspaceFileText(file: SessionWorkspaceGetResult["file"] | undefined): string | null {
-  return file?.previewKind === "text" &&
-    file.contentEncoding === "utf8" &&
-    typeof file.content === "string"
-    ? file.content
-    : null;
 }
 
 async function loadArtifactSidebarContent(
