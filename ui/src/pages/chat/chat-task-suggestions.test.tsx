@@ -37,60 +37,46 @@ function renderSuggestion(overrides: Partial<ChatTaskSuggestionTrayProps> = {}) 
     ...overrides,
   };
   mountSolid(() => <ChatTaskSuggestionTray view={view} />, { container });
-  return { container, onAccept, onDismiss, onCopyPrompt };
+  const query = <T extends HTMLElement = HTMLElement>(part: string) =>
+    container.querySelector<T>(`.task-suggestion__${part}`);
+  return { container, query, onAccept, onDismiss, onCopyPrompt };
 }
 
 describe("chat task suggestions", () => {
   it("starts a new session from the primary action", () => {
-    const { container, onAccept, onDismiss } = renderSuggestion();
-
-    expect(container.querySelector(".task-suggestion__start")?.textContent).toContain(
-      "Start in a new session",
-    );
-
-    expect(container.querySelector(".task-suggestion__eyebrow")?.textContent).toContain(
-      "Suggested task · in project",
-    );
-    expect(container.querySelector(".task-suggestion__eyebrow")?.getAttribute("title")).toBe(
-      "/repo/project",
-    );
-    expect(container.querySelector(".task-suggestion__title")?.textContent).toContain(
-      "Remove stale adapter",
-    );
-    expect(container.querySelector(".task-suggestion__summary")?.textContent).toContain(
-      "The adapter is unreachable",
-    );
-
-    const details = container.querySelector<HTMLDetailsElement>(".task-suggestion__instructions");
+    const { query, onAccept, onDismiss } = renderSuggestion();
+    expect(query("start")?.textContent).toContain("Start in a new session");
+    expect(query("eyebrow")?.textContent).toContain("Suggested task · in project");
+    expect(query("eyebrow")?.getAttribute("title")).toBe("/repo/project");
+    expect(query("title")?.textContent).toContain("Remove stale adapter");
+    expect(query("summary")?.textContent).toContain("The adapter is unreachable");
+    const details = query<HTMLDetailsElement>("instructions");
     expect(details?.open).toBe(false);
     details?.querySelector("summary")?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(details?.open).toBe(true);
     expect(details?.textContent).toContain("Delete the stale adapter and update tests.");
 
-    container.querySelector<HTMLButtonElement>(".task-suggestion__start")?.click();
-    container.querySelector<HTMLButtonElement>(".task-suggestion__dismiss")?.click();
+    query<HTMLButtonElement>("start")?.click();
+    query<HTMLButtonElement>("dismiss")?.click();
     expect(onAccept).toHaveBeenCalledWith(suggestion, "local", undefined);
     expect(onDismiss).toHaveBeenCalledWith(suggestion);
   });
 
   it("shows copied feedback while the suggestion id is marked copied", () => {
-    const { container } = renderSuggestion({
+    const { query } = renderSuggestion({
       taskSuggestionCopiedIds: new Set([suggestion.id]),
     });
-    const copy = container.querySelector(".task-suggestion__copy");
-    expect(copy?.getAttribute("aria-label")).toBe("Copied");
+    expect(query("copy")?.getAttribute("aria-label")).toBe("Copied");
   });
 
   it("keeps copy prompt available when acceptance and dismissal are unavailable", () => {
-    const { container, onAccept, onCopyPrompt } = renderSuggestion({
+    const { query, onAccept, onCopyPrompt } = renderSuggestion({
       canAcceptTaskSuggestions: false,
       canDismissTaskSuggestions: false,
     });
-    expect(container.querySelector(".task-suggestion__dismiss")).toBeNull();
-    expect(container.querySelector<HTMLButtonElement>(".task-suggestion__start")?.disabled).toBe(
-      true,
-    );
-    const copy = container.querySelector<HTMLButtonElement>(".task-suggestion__copy");
+    expect(query("dismiss")).toBeNull();
+    expect(query<HTMLButtonElement>("start")?.disabled).toBe(true);
+    const copy = query<HTMLButtonElement>("copy");
     expect(copy?.disabled).toBe(false);
     copy?.click();
     expect(onCopyPrompt).toHaveBeenCalledWith(suggestion);
@@ -132,14 +118,18 @@ describe("chat task suggestions", () => {
     draw();
     flush();
 
-    let cards = [...container.querySelectorAll<HTMLElement>(".task-suggestion")];
+    const readCards = () => [...container.querySelectorAll<HTMLElement>(".task-suggestion")];
+    const navigate = async (index: number, button = "next") => {
+      readCards()[index]?.querySelector<HTMLButtonElement>(`[data-task-${button}]`)?.click();
+      await Promise.resolve();
+      flush();
+      return readCards();
+    };
+    let cards = readCards();
     expect(cards.map((card) => card.hidden)).toEqual([false, true]);
     expect(cards[0]?.querySelector(".task-suggestion__position")?.textContent).toContain("1 / 2");
 
-    cards[0]?.querySelector<HTMLButtonElement>("[data-task-next]")?.click();
-    await Promise.resolve();
-    flush();
-    cards = [...container.querySelectorAll<HTMLElement>(".task-suggestion")];
+    cards = await navigate(0);
     expect(cards.map((card) => card.hidden)).toEqual([true, false]);
     expect(cards[1]?.dataset.swapDirection).toBe("next");
     expect(document.activeElement).toBe(cards[1]?.querySelector("[data-task-next]"));
@@ -150,40 +140,28 @@ describe("chat task suggestions", () => {
     // An unrelated update keeps the selected card and its manually opened disclosure.
     draw();
     flush();
-    cards = [...container.querySelectorAll<HTMLElement>(".task-suggestion")];
+    cards = readCards();
     expect(cards.map((card) => card.hidden)).toEqual([true, false]);
     expect(cards[1]).toBe(retainedCard);
     expect(details.open).toBe(true);
 
-    cards[1]?.querySelector<HTMLButtonElement>("[data-task-next]")?.click();
-    await Promise.resolve();
-    flush();
-    cards = [...container.querySelectorAll<HTMLElement>(".task-suggestion")];
+    cards = await navigate(1);
     expect(cards.map((card) => card.hidden)).toEqual([false, true]);
     expect(cards[0]?.dataset.swapDirection).toBe("next");
     const firstVisit = cards[0];
 
-    cards[0]?.querySelector<HTMLButtonElement>("[data-task-next]")?.click();
-    await Promise.resolve();
-    flush();
-    cards = [...container.querySelectorAll<HTMLElement>(".task-suggestion")];
-    cards[1]?.querySelector<HTMLButtonElement>("[data-task-next]")?.click();
-    await Promise.resolve();
-    flush();
-    cards = [...container.querySelectorAll<HTMLElement>(".task-suggestion")];
+    await navigate(0);
+    cards = await navigate(1);
     expect(cards[0]).not.toBe(firstVisit);
     expect(cards[0]?.dataset.swapDirection).toBe("next");
 
-    cards[0]?.querySelector<HTMLButtonElement>("[data-task-prev]")?.click();
-    await Promise.resolve();
-    flush();
-    cards = [...container.querySelectorAll<HTMLElement>(".task-suggestion")];
+    cards = await navigate(0, "prev");
     expect(document.activeElement).toBe(cards[1]?.querySelector("[data-task-prev]"));
     container.remove();
   });
 
   it("strips bidi controls from every displayed field", () => {
-    const { container } = renderSuggestion({
+    const { container, query } = renderSuggestion({
       taskSuggestions: [
         {
           ...suggestion,
@@ -200,8 +178,6 @@ describe("chat task suggestions", () => {
     expect(container.textContent).toContain("/repo/project");
     expect(container.textContent).toContain("run exactly");
     expect(container.textContent).not.toMatch(/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u);
-    expect(container.querySelector(".task-suggestion__eyebrow")?.getAttribute("title")).toBe(
-      "/repo/project",
-    );
+    expect(query("eyebrow")?.getAttribute("title")).toBe("/repo/project");
   });
 });

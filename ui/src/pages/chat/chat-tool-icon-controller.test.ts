@@ -21,6 +21,19 @@ const plugins: PluginListResult = {
   diagnostics: [],
   mutationAllowed: false,
 };
+function tool(
+  id: string,
+  pluginId?: string,
+): ToolsEffectiveResult["groups"][number]["tools"][number] {
+  return {
+    id,
+    pluginId,
+    source: pluginId ? "plugin" : "core",
+    label: id,
+    description: "",
+    rawDescription: "",
+  };
+}
 const catalog: ToolsEffectiveResult = {
   agentId: "main",
   profile: "full",
@@ -30,22 +43,18 @@ const catalog: ToolsEffectiveResult = {
       label: "Tools",
       source: "plugin",
       tools: [
-        { id: "meeting_status", pluginId: "meetings", source: "plugin" },
-        { id: "meeting_list", pluginId: "meetings", source: "plugin" },
-        { id: "other", pluginId: "iconless", source: "plugin" },
-        { id: "unseen_status", pluginId: "unused", source: "plugin" },
-        { id: "read", source: "core" },
-      ].map((tool) =>
-        Object.assign({}, tool, {
-          source: tool.source as "plugin" | "core",
-          label: tool.id,
-          description: "",
-          rawDescription: "",
-        }),
-      ),
+        tool("meeting_status", "meetings"),
+        tool("meeting_list", "meetings"),
+        tool("other", "iconless"),
+        tool("unseen_status", "unused"),
+        tool("read"),
+      ],
     },
   ],
 };
+const withTools = (
+  tools: ToolsEffectiveResult["groups"][number]["tools"],
+): ToolsEffectiveResult => ({ ...catalog, groups: [{ ...catalog.groups[0]!, tools }] });
 
 function setup() {
   const client = new GatewayBrowserClient({ url: window.location.origin.replace(/^http/u, "ws") });
@@ -166,24 +175,10 @@ describe("chat tool icon ownership", () => {
     request.mockImplementation(async (method) =>
       method === "plugins.list"
         ? plugins
-        : {
-            ...catalog,
-            groups: catalog.groups.map((group) =>
-              Object.assign({}, group, {
-                tools: [
-                  ...group.tools,
-                  ...["meeting_join", "meeting_leave"].map((id) => ({
-                    id,
-                    label: id,
-                    description: "",
-                    rawDescription: "",
-                    source: "plugin",
-                    pluginId: "meetings",
-                  })),
-                ],
-              }),
-            ),
-          },
+        : withTools([
+            ...catalog.groups[0]!.tools,
+            ...["meeting_join", "meeting_leave"].map((id) => tool(id, "meetings")),
+          ]),
     );
     expect(icon("meeting_join")).toBeUndefined();
     expect(icon("meeting_leave")).toBeUndefined();
@@ -217,49 +212,38 @@ describe("chat tool icon ownership", () => {
     expect(revoke).toHaveBeenCalledWith("blob:plugin-icon");
   });
 
-  it.each([true])(
-    "uses exact per-tool overrides with default availability %s",
-    async (defaultAvailable) => {
-      const { icon, update, request, fetch } = setup();
-      const names = ["mcp__meetings__browser", "mcp__meetings__list", "mcp__meetings__cancel"];
-      request.mockImplementation(async (method) =>
-        method === "plugins.list"
-          ? {
-              ...plugins,
-              plugins: plugins.plugins.map((plugin) =>
-                Object.assign({}, plugin, {
-                  hasActivityIcon: defaultAvailable,
-                  activityIconTools: [names[2]!, "browser"],
-                }),
-              ),
-            }
-          : {
-              ...catalog,
-              groups: [
-                {
-                  ...catalog.groups[0]!,
-                  tools: names.map((id) => Object.assign({}, catalog.groups[0]!.tools[0]!, { id })),
-                },
-              ],
-            },
-      );
-      fetch.mockImplementation(async ({ tool }) =>
-        tool ? "blob:cancel-glyph" : "blob:default-glyph",
-      );
-      update();
-      for (const name of names) {
-        icon(name);
-      }
-      await vi.waitFor(() => expect(icon(names[2]!)?.url).toBe("blob:cancel-glyph"));
-      expect(icon(names[0]!)?.url).toBe(defaultAvailable ? "blob:default-glyph" : undefined);
-      expect(icon(names[1]!)?.url).toBe(defaultAvailable ? "blob:default-glyph" : undefined);
-      expect(fetch.mock.calls.map(([params]) => [params.pluginId, params.tool])).toEqual([
-        ...(defaultAvailable ? [["meetings", undefined]] : []),
-        ["meetings", names[2]],
-      ]);
-      expect(request).toHaveBeenCalledTimes(2);
-    },
-  );
+  it("uses exact per-tool overrides with default artwork available", async () => {
+    const { icon, update, request, fetch } = setup();
+    const names = ["mcp__meetings__browser", "mcp__meetings__list", "mcp__meetings__cancel"];
+    request.mockImplementation(async (method) =>
+      method === "plugins.list"
+        ? {
+            ...plugins,
+            plugins: plugins.plugins.map((plugin) =>
+              Object.assign({}, plugin, {
+                hasActivityIcon: true,
+                activityIconTools: [names[2]!, "browser"],
+              }),
+            ),
+          }
+        : withTools(names.map((id) => tool(id, "meetings"))),
+    );
+    fetch.mockImplementation(async ({ tool: override }) =>
+      override ? "blob:cancel-glyph" : "blob:default-glyph",
+    );
+    update();
+    for (const name of names) {
+      icon(name);
+    }
+    await vi.waitFor(() => expect(icon(names[2]!)?.url).toBe("blob:cancel-glyph"));
+    expect(icon(names[0]!)?.url).toBe("blob:default-glyph");
+    expect(icon(names[1]!)?.url).toBe("blob:default-glyph");
+    expect(fetch.mock.calls.map(([params]) => [params.pluginId, params.tool])).toEqual([
+      ["meetings", undefined],
+      ["meetings", names[2]],
+    ]);
+    expect(request).toHaveBeenCalledTimes(2);
+  });
 
   it("keeps unavailable activity artwork on the neutral fallback without fetching the package logo", async () => {
     const { icon, update, fetch } = setup();
@@ -290,15 +274,7 @@ describe("chat tool icon ownership", () => {
       setSession(change === "agent" ? "global" : "second", "second");
       update();
       await vi.waitFor(() => expect(icon("meeting_status")).toBeDefined());
-      pending.resolve({
-        ...catalog,
-        groups: [
-          {
-            ...catalog.groups[0]!,
-            tools: [{ ...catalog.groups[0]!.tools[0]!, id: "retired_tool" }],
-          },
-        ],
-      });
+      pending.resolve(withTools([tool("retired_tool", "meetings")]));
       await pending.promise;
       await Promise.resolve();
       expect(icon("retired_tool")).toBeUndefined();
