@@ -11,31 +11,21 @@ export function identityPreferences(
   initialEntries?: Record<string, unknown>,
   profileId = "person-a",
 ) {
+  const preference = (workspace: string, worktreeName: string) => ({
+    workspace,
+    folder: workspace,
+    worktree: true,
+    baseRef: "main",
+    worktreeName,
+  });
+  const mainPreference = preference("/repo", "first-task");
   let entries: Record<string, unknown> = initialEntries ?? {
     "new-session.migration.v1": true,
-    "new-session.v1:work": {
-      workspace: "/work",
-      folder: "/work",
-      worktree: true,
-      baseRef: "main",
-      worktreeName: "work-task",
-    },
-    "new-session.v1:main": {
-      workspace: "/repo",
-      folder: "/repo",
-      worktree: true,
-      baseRef: "main",
-      worktreeName: "first-task",
-    },
+    "new-session.v1:work": preference("/work", "work-task"),
+    "new-session.v1:main": mainPreference,
   };
   if (!identified) {
-    replaceBrowserPreference("ws://gateway.example", "main", {
-      workspace: "/repo",
-      folder: "/repo",
-      worktree: true,
-      baseRef: "main",
-      worktreeName: "first-task",
-    });
+    replaceBrowserPreference("ws://gateway.example", "main", preference("/repo", "first-task"));
   }
   const beforeSave = vi.fn(async (_params: UsersPrefsSetParams) => {});
   const beforeRead = vi.fn(async () => {});
@@ -44,20 +34,17 @@ export function identityPreferences(
     ...(identified ? { selfUser: { id: profileId } } : {}),
     scopes: ["operator.admin", "operator.read", "operator.write"],
     methods: ["sessions.create", "sessions.dispatch", "users.prefs.get", "users.prefs.set"],
-    agents: [
-      {
-        id: "work",
-        workspace: "/work",
-        workspaceGit: true,
-        model: { primary: "openai/gpt-5.6-luna" },
-      },
-      {
-        id: "main",
-        workspace: "/repo",
-        workspaceGit: true,
-        model: { primary: "openai/gpt-5.6-luna" },
-      },
-    ],
+    agents: (
+      [
+        ["work", "/work"],
+        ["main", "/repo"],
+      ] as const
+    ).map(([id, workspace]) => ({
+      id,
+      workspace,
+      workspaceGit: true,
+      model: { primary: "openai/gpt-5.6-luna" },
+    })),
     request: async (method: string, params?: unknown) => {
       if (method === "users.prefs.get") {
         const snapshot = structuredClone(entries);

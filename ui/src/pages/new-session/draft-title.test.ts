@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { createDraftTitleFixture } from "./draft-title.test-support.ts";
 
 beforeEach(() => vi.useFakeTimers());
@@ -10,41 +11,41 @@ afterEach(() => {
 
 function fixture() {
   const prepare = vi.fn().mockResolvedValue({ title: "Repair sidebar naming" });
-  return { ...createDraftTitleFixture(prepare), prepare };
+  const draft = createDraftTitleFixture(prepare);
+  const edit = (message = "repair the sidebar naming") => {
+    draft.flow.setMessage(message);
+    draft.synchronizeTitles();
+  };
+  return { ...draft, prepare, edit };
+}
+
+async function pendingTitle() {
+  const draft = fixture();
+  const pending = createDeferred<{ title: string }>();
+  draft.prepare.mockImplementationOnce(() => pending.promise);
+  draft.edit();
+  await vi.advanceTimersByTimeAsync(1_000);
+  return { ...draft, finish: pending.resolve };
 }
 
 describe("creation draft title preparation", () => {
   it("coalesces idle edits and reuses unchanged text without polling", async () => {
-    const { flow, prepare, titles, synchronizeTitles } = fixture();
-    flow.setMessage("repair the sidebar naming");
-    synchronizeTitles();
+    const { edit, prepare, titles } = fixture();
+    edit();
     await vi.advanceTimersByTimeAsync(900);
-    flow.setMessage("repair sidebar naming and previews");
-    synchronizeTitles();
+    edit("repair sidebar naming and previews");
     await vi.advanceTimersByTimeAsync(900);
     expect(prepare).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(100);
-    flow.setMessage(" repair sidebar naming and previews ");
-    synchronizeTitles();
+    edit(" repair sidebar naming and previews ");
     await vi.advanceTimersByTimeAsync(30_000);
     expect(prepare).toHaveBeenCalledOnce();
     expect(titles.takePreparedTitle()).toBe("Repair sidebar naming");
   });
 
   it("serializes edits behind an active request and discards the stale result", async () => {
-    const { flow, prepare, titles, synchronizeTitles } = fixture();
-    let finish!: (value: { title: string }) => void;
-    prepare.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          finish = resolve;
-        }),
-    );
-    flow.setMessage("repair the sidebar naming");
-    synchronizeTitles();
-    await vi.advanceTimersByTimeAsync(1_000);
-    flow.setMessage("change the topic to reconnect recovery");
-    synchronizeTitles();
+    const { edit, prepare, titles, finish } = await pendingTitle();
+    edit("change the topic to reconnect recovery");
     await vi.advanceTimersByTimeAsync(2_000);
     expect(prepare).toHaveBeenCalledOnce();
     finish({ title: "Old draft" });
@@ -54,17 +55,7 @@ describe("creation draft title preparation", () => {
   });
 
   it("retires pending results when the draft owner closes", async () => {
-    const { flow, prepare, titles, synchronizeTitles, disposeTitles } = fixture();
-    let finish!: (value: { title: string }) => void;
-    prepare.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          finish = resolve;
-        }),
-    );
-    flow.setMessage("repair the sidebar naming");
-    synchronizeTitles();
-    await vi.advanceTimersByTimeAsync(1_000);
+    const { prepare, titles, disposeTitles, finish } = await pendingTitle();
     disposeTitles();
     finish({ title: "Must not apply" });
     await vi.advanceTimersByTimeAsync(5_000);
@@ -73,9 +64,8 @@ describe("creation draft title preparation", () => {
   });
 
   it("synchronously pauses and restarts preparation around composition", async () => {
-    const { flow, prepare, titles, synchronizeTitles } = fixture();
-    flow.setMessage("repair the sidebar naming");
-    synchronizeTitles();
+    const { edit, prepare, titles } = fixture();
+    edit();
     await vi.advanceTimersByTimeAsync(900);
     titles.setComposing(true);
     await vi.advanceTimersByTimeAsync(2_000);
@@ -87,10 +77,9 @@ describe("creation draft title preparation", () => {
   });
 
   it("does not retry failures until the draft changes", async () => {
-    const { flow, prepare, titles, synchronizeTitles } = fixture();
+    const { edit, prepare, titles, synchronizeTitles } = fixture();
     prepare.mockRejectedValueOnce(new Error("provider unavailable"));
-    flow.setMessage("repair the sidebar naming");
-    synchronizeTitles();
+    edit();
     await vi.advanceTimersByTimeAsync(1_000);
     synchronizeTitles();
     await vi.advanceTimersByTimeAsync(30_000);
