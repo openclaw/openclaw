@@ -10,7 +10,6 @@ import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-u
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
-  buildProductionControlUiE2e,
   createControlUiMockBootstrapConfig,
   canRunPlaywrightChromium,
   captureControlUiE2eFailureDiagnostics,
@@ -53,7 +52,18 @@ let buildBPromise: Promise<void> | undefined;
 
 async function stageBuildB(destination: string): Promise<void> {
   const pristineDir = `${outDir}-build-b`;
-  buildBPromise ??= buildProductionControlUiE2e(pristineDir, buildB);
+  buildBPromise ??= (async () => {
+    const { refreshControlUiBuildOutput, resolveControlUiBuildInfo } =
+      await import("../../vite.config.ts");
+    // This deployment changes identity, not source; keep the real build-owned worker and manifest.
+    await cp(outDir, pristineDir, { recursive: true, dereference: true });
+    await refreshControlUiBuildOutput(
+      pristineDir,
+      resolveControlUiBuildInfo({
+        env: { ...process.env, OPENCLAW_CONTROL_UI_BUILD_ID: buildB },
+      }),
+    );
+  })();
   await buildBPromise;
   await rm(destination, { force: true, recursive: true });
   try {
