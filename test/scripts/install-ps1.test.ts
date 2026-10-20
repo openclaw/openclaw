@@ -77,6 +77,48 @@ const harness = createScriptTestHarness();
 const powershell = process.platform === "win32" ? "powershell" : "pwsh";
 const probe = spawnSync(powershell, ["-NoLogo", "-NoProfile", "-Command", "exit 0"]);
 const runWithPowerShell = probe.status === 0 ? it : it.skip;
+runWithPowerShell.each([0, 2, 42])(
+  "preserves installer completion exit %s and offers support only on failure",
+  (code) => {
+    const result = spawnSync(
+      powershell,
+      [
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `function Complete-Install {\n${body("Complete-Install")}\n}\n$script:InstallExitCode=${code}\n$PSCommandPath='fixture.ps1'\nComplete-Install\nWrite-Output 'completed'`,
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(code);
+    expect(result.stdout.replace(/\r\n/g, "\n")).toBe(
+      code === 0 ? "completed\n" : "Support: https://community.openclaw.ai/\n",
+    );
+  },
+);
+runWithPowerShell(
+  "offers support and self-service in Windows installer help without installing",
+  () => {
+    const result = spawnSync(
+      powershell,
+      [
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        SCRIPT_PATH,
+        "-Help",
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain("Support: https://community.openclaw.ai/");
+    expect(result.stdout).toContain("FAQ: https://docs.openclaw.ai/start/faq");
+  },
+);
 runWithPowerShell.each(["valid", "missing-head", "broken-gitfile", "subdirectory"])(
   "preserves real Git checkout boundaries before package setup: %s",
   (scenario) => {

@@ -15,6 +15,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { isSupportedOpenClawNodeVersion } from "../../node-version.mjs";
 import { readStandaloneInstaller } from "../../scripts/lib/standalone-installers.mjs";
@@ -78,6 +79,32 @@ describe("install.sh", () => {
     prefix: false,
     createTempDir: (prefix: string) => tempDirs.make(prefix),
   };
+
+  it.each([false, true])("offers support in human footer and errors with gum=%s", (withGum) => {
+    const result = runInstallShell(
+      `source "${SCRIPT_PATH}"
+      ${withGum ? 'gum_fixture() { printf "%s\\n" "$*"; }; GUM=gum_fixture' : 'GUM=""'}
+      show_footer_links
+      parse_args --install-method`,
+    );
+    expect(result.status).toBe(2);
+    expect(result.stderr).toBe("");
+    const output = stripVTControlCharacters(result.stdout);
+    expect(output).toContain("FAQ: https://docs.openclaw.ai/start/faq");
+    expect(output).toContain("Missing value for --install-method");
+    expect(output.match(/Support: https:\/\/community\.openclaw\.ai\//g)).toHaveLength(2);
+  });
+
+  it("keeps npm-version diagnostics on stderr alongside support", () => {
+    const result = runInstallShell(
+      `source "${SCRIPT_PATH}"\ninstaller_npm_version_error fixture-npm`,
+    );
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe(
+      "Unable to determine npm version from fixture-npm; no package changes were made.\nSupport: https://community.openclaw.ai/\n",
+    );
+  });
 
   it("re-execs a streamed installer on Darwin Bash 5.3+ without leaving a temp file", (context) => {
     const bash = findDarwinReexecBash();

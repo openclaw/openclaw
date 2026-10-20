@@ -383,6 +383,20 @@ fi
     ]);
   });
 
+  it.each([false, true])(
+    "keeps failure status and JSON bytes while offering human support (json=%s)",
+    (json) => {
+      const result = runInstallCliShell(`JSON=${json ? 1 : 0}\nfail "Synthetic install failure"`);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toBe("");
+      expect(result.stdout).toBe(
+        json
+          ? '{"event":"error","message":"Synthetic install failure"}\n'
+          : "ERROR: Synthetic install failure\nSupport: https://community.openclaw.ai/\n",
+      );
+    },
+  );
+
   it("round-trips dynamic installer values through independent NDJSON records", () => {
     const root = tempDirs.make("openclaw-install-cli-json-events-");
     const dynamicValue = `quote"\\café项目lobster🦞${String.fromCharCode(

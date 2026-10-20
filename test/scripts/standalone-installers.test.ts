@@ -107,6 +107,8 @@ describe("standalone shell installers", () => {
         });
         expect(result.status, result.stdout + result.stderr).toBe(0);
         expect(result.stdout).toContain("--install-method");
+        expect(result.stdout).toContain("Support: https://community.openclaw.ai/");
+        expect(result.stdout).toContain("FAQ: https://docs.openclaw.ai/start/faq");
       }
       writeFileSync(path.join(root, ".npmrc"), "min-release-age=7\n");
       const policy = spawnSync(
