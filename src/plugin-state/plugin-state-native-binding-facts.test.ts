@@ -1,12 +1,12 @@
-import { afterEach, expect, vi } from "vitest";
-import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { afterEach, assert, expect, vi } from "vitest";
+import { holdForeignWriter } from "../infra/sqlite-worker-shared-state-admission.test-support.js";
 import { preparePluginStateRead } from "../plugin-sdk/plugin-state-runtime.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { stateTest } from "./plugin-state-fixtures.test-support.js";
 import { pluginStatePublication } from "./plugin-state-publication.js";
 import {
@@ -30,9 +30,7 @@ function openStore<T>(env: NodeJS.ProcessEnv, overrides: Partial<OpenKeyedStoreO
 
 async function prepareGuard<T>(store: ReturnType<typeof openStore<T>>, key = "session") {
   const guard = await preparePluginStateRead(store, key);
-  if (!guard) {
-    throw new Error("Expected a prepared binding reader");
-  }
+  assert(guard, "Expected a prepared binding reader");
   cleanups.push(() => guard.release());
   return guard;
 }
@@ -54,8 +52,7 @@ it.for(["reject-new", "evict-oldest"] as const)(
     await store.register("b-\ufffd", "original");
     const a = await prepareGuard(store, "a");
     const b = await prepareGuard(store, "b-\ufffd");
-    const foreign = openNodeSqliteDatabase(resolveOpenClawStateSqlitePath(env));
-    foreign.exec("BEGIN IMMEDIATE");
+    const foreign = holdForeignWriter(captureOpenClawStateWorkerContext({ env }));
     // A real SQLite writer lock prevents the sibling write from settling.
     const writing = store.register("b-\ud800", "replacement");
     try {
@@ -73,7 +70,6 @@ it.for(["reject-new", "evict-oldest"] as const)(
         expect(() => a.read()).toThrow("authority is unavailable");
       }
     } finally {
-      foreign.exec("ROLLBACK");
       foreign.close();
       await writing;
     }
