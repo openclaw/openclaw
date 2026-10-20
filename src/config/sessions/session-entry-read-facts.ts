@@ -155,9 +155,6 @@ export function readRetainedSessionEntryFacts(
   if (!eligible(request)) {
     return undefined;
   }
-  if (!readSqliteDatabaseWriteTokenForPath(database.path)) {
-    return undefined;
-  }
   nativeOwner?.assertCurrent();
   const projection = request.projection === "sharing" ? [] : (request.snapshotFields ?? "full");
   const entries: SessionEntryCohortResult["entries"] = [];

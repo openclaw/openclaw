@@ -3,7 +3,6 @@ import { heartbeatRunnerTelegramPlugin } from "../../test/helpers/infra/heartbea
 import { runEmbeddedAgent } from "../agents/embedded-agent.js";
 import { createMessageTool } from "../agents/tools/message-tool-execution.js";
 import { withFullRuntimeReplyConfig } from "../auto-reply/reply/get-reply-fast-path.js";
-import { getReplyFromConfig } from "../auto-reply/reply/get-reply.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { AnyChannelPlugin as ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ChannelOutboundAdapter } from "../channels/plugins/types.public.js";
@@ -16,6 +15,7 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { buildConversationRef, normalizeConversationPeerId } from "../routing/conversation-ref.js";
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { bindHeartbeatSend } from "./heartbeat-runner.boundary-test-support.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import {
   heartbeatTestConfig,
@@ -315,6 +315,7 @@ it.each([
         const text = `Delivery is unconfirmed: ${JSON.stringify(toolReceipt)}. No resend attempted.`;
         return { payloads: [{ text }], meta: { durationMs: 1 } };
       });
+      bindHeartbeatSend("telegram", send);
       const result = await runHeartbeatOnce({
         cfg,
         agentId: "main",
@@ -322,7 +323,6 @@ it.each([
         source: "exec-event",
         intent: "event",
         reason: "exec-event",
-        deps: { getReplyFromConfig, telegram: send },
       });
       if (denial) {
         expect(privateInputs.every((input) => !input.includes(marker))).toBe(true);

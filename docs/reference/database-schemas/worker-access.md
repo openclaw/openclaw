@@ -3249,6 +3249,17 @@ released after all attempts and cleanup settle. Failed native generations still
 retire, and integrity admission remains mandatory when a new generation opens.
 
 Idle maintenance retains its normal cadence while avoiding unrelated work.
+Cron session retention treats deletion/registry snapshot invalidation as a deferred
+read, not a startup failure. The existing maintenance scheduler reacquires current
+facts within 60 seconds (or earlier on a topology receipt); it never replays an
+already-entered snapshot consumer. Each target retains its current-snapshot guard,
+and running jobs and deleted/held stores remain protected. Unknown failures still
+produce the normal failure diagnostic.
+The `cron/maintenance` deferred/skipped warning includes its reason, `retryAtMs`,
+and `lastSuccessAtMs`. A completed sweep logs its completion time, next deadline,
+pruned count, and skipped-store count. Last success is process-local, resets when
+maintenance starts, and means the sweep completed, not that every store was eligible.
+No new persistent state, startup barrier, or retention policy is introduced.
 Setup-completion pruning does not read or republish paired-device authority,
 and uses its first expiry read to skip empty write transactions. Due deletions use
 the admitted handle and retain transaction and commit authorization; zero-row

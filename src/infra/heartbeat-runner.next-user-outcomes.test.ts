@@ -9,6 +9,7 @@ import {
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { claimHeartbeatOutcomeForRun } from "./heartbeat-outcome-store.js";
+import { bindHeartbeatReply, bindHeartbeatSend } from "./heartbeat-runner.boundary-test-support.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import { withTempTelegramHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
@@ -29,6 +30,7 @@ describe("heartbeat next-user outcomes", () => {
     "retains the next-user outcome in the owning agent store: $runKey",
     async ({ sessionKey, runKey, isolatedSession }) => {
       await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+        bindHeartbeatReply(replySpy);
         const scope = { agentId: "ops", storePath, sessionKey };
         const mainScope = { agentId: "main", storePath };
         const readEntry = (key: string) =>
@@ -75,12 +77,12 @@ describe("heartbeat next-user outcomes", () => {
           createHeartbeatToolResponsePayload({ outcome: "done", notify: false, summary }),
         );
         const sendTelegram = vi.fn();
+        bindHeartbeatSend("telegram", sendTelegram);
         expect(
           await runHeartbeatOnce({
             cfg,
             agentId: "ops",
             sessionKey,
-            deps: { getReplyFromConfig: replySpy, telegram: sendTelegram },
           }),
         ).toMatchObject({ status: "ran" });
         expect(sendTelegram).not.toHaveBeenCalled();

@@ -40,9 +40,7 @@ type SystemCaWarmupMessage = { ok: true; certificateCount: number } | { ok: fals
 let macOSSystemCaWarmupPromise: Promise<void> | undefined;
 
 /** Warm Node's effective default CA set without blocking the gateway event loop on macOS. */
-export async function warmMacOSSystemCaOffMainThread(
-  options: SystemCaWarmupOptions = {},
-): Promise<void> {
+async function warmMacOSSystemCaOffMainThread(options: SystemCaWarmupOptions = {}): Promise<void> {
   const env = options.env ?? process.env;
   const platform = options.platform ?? process.platform;
   if (
