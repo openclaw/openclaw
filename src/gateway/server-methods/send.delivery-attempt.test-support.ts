@@ -56,38 +56,33 @@ export function registerSendDeliveryAttemptTests({
         },
       });
       const platformSend = vi.fn();
-      mockDeliverySuccess("unexpected-delivery");
+      const delivered = { messageId: "unexpected-delivery" };
+      mockDeliverySuccess(delivered.messageId);
       if (failure === "delivery-authority") {
-        const handoff = async (params: { assertDirectAdapterHandoff?: () => void }) => {
-          await Promise.resolve();
-          deliveryCurrent = false;
-          params.assertDirectAdapterHandoff?.();
-          platformSend();
-        };
+        const handoff =
+          <T>(result: T) =>
+          async (params: { assertDirectAdapterHandoff?: () => void }) => {
+            await Promise.resolve();
+            deliveryCurrent = false;
+            params.assertDirectAdapterHandoff?.();
+            platformSend();
+            return result;
+          };
         if (method === "message.action") {
-          mocks.dispatchChannelMessageAction.mockImplementationOnce(async (params) => {
-            await handoff(params);
-            return jsonResult({ ok: true, messageId: "unexpected-delivery" });
-          });
+          mocks.dispatchChannelMessageAction.mockImplementationOnce(
+            handoff(jsonResult({ ok: true, ...delivered })),
+          );
         } else if (method === "send") {
-          mocks.deliverOutboundPayloads.mockImplementationOnce(async (params) => {
-            await handoff(params);
-            return [{ channel: "slack", messageId: "unexpected-delivery" }];
-          });
+          mocks.deliverOutboundPayloads.mockImplementationOnce(
+            handoff([{ channel: "slack" as const, ...delivered }]),
+          );
         } else {
-          mocks.sendPoll.mockImplementationOnce(async (params) => {
-            await handoff(params);
-            return { messageId: "unexpected-delivery" };
-          });
+          mocks.sendPoll.mockImplementationOnce(handoff(delivered));
         }
       }
       try {
-        const request = {
-          channel: "slack",
-          ...(method === "poll" ? {} : { sessionKey }),
-          idempotencyKey: `scheduled-fence-${method}`,
-        };
         const respond = vi.fn();
+        const message = { to: "C1", message: "report" };
         await runWithOperatorToolGatewayAuthority(
           {
             scopes: ["operator.write"],
@@ -102,11 +97,13 @@ export function registerSendDeliveryAttemptTests({
               context,
               respond,
               request: {
-                ...request,
+                channel: "slack",
+                ...(method === "poll" ? {} : { sessionKey }),
+                idempotencyKey: `scheduled-fence-${method}`,
                 ...(method === "message.action"
-                  ? { action: "send", params: { to: "C1", message: "report" } }
+                  ? { action: "send", params: message }
                   : method === "send"
-                    ? { to: "C1", message: "report" }
+                    ? message
                     : { to: "C1", question: "Ship?", options: ["Yes", "No"] }),
               },
             }),

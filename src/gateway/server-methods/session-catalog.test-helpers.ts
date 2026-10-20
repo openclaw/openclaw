@@ -109,16 +109,10 @@ export function createSessionCatalogTestContext(
   );
 }
 
-export async function call(
-  method: keyof typeof sessionCatalogHandlers,
-  params: unknown,
-  config: Record<string, unknown> = {},
-  client?: { connect?: { scopes?: string[] }; connId?: string; connectionSignal?: AbortSignal },
-  contextOverrides: Record<string, unknown> = {},
-) {
-  const pending = startCall(method, params, config, client, contextOverrides);
-  await pending.completion;
-  return pending.respond;
+export async function call(...args: Parameters<typeof startCall>) {
+  const { completion, respond } = startCall(...args);
+  await completion;
+  return respond;
 }
 
 export function startCall(

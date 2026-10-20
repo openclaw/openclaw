@@ -104,17 +104,14 @@ describe("session catalog provider diagnostics", () => {
     }
   });
 
-  it.each(["sync"])("preserves a %s failure when its diagnostic sink throws", async (mode) => {
+  it("preserves a synchronous failure when its diagnostic sink throws", async () => {
     const failure = new Error(privateText);
     vi.mocked(catalogLog.warn).mockImplementation(() => {
       throw new Error("synthetic sink failure");
     });
     const list = () => {
       clock = 1_500;
-      if (mode === "sync") {
-        throw failure;
-      }
-      return Promise.reject(failure);
+      throw failure;
     };
     await expect(listSessionCatalogProvider(provider("failed-catalog", list), {})).rejects.toBe(
       failure,

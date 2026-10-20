@@ -3,6 +3,10 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, vi } from "vitest";
 import {
+  listenLoopback,
+  readRequestText,
+} from "../../../test/helpers/gateway-integration-fixtures.js";
+import {
   awaitGateBeforeSettlement,
   createDeferred,
   withinTest,
@@ -84,16 +88,13 @@ it("keeps an accepted QA reply pending after a lost HTTP response and refuses a 
           incoming.once("error", (error) => upstream.destroy(error));
           incoming.pipe(upstream);
         });
-        const chunks: Buffer[] = [];
-        for await (const chunk of response) {
-          chunks.push(Buffer.from(chunk));
-        }
+        const body = await readRequestText(response);
         expect(response.statusCode).toBe(200);
         expect(response.complete).toBe(true);
         const messages = busState.getSnapshot().messages;
         expect(messages).toHaveLength(1);
         expect(messages[0]).toMatchObject({ direction: "outbound", text });
-        expect(JSON.parse(Buffer.concat(chunks).toString("utf8"))).toMatchObject({
+        expect(JSON.parse(body)).toMatchObject({
           message: { id: messages[0]!.id, text },
         });
         // The bus committed a business message, but the caller receives no HTTP response.
@@ -111,17 +112,7 @@ it("keeps an accepted QA reply pending after a lost HTTP response and refuses a 
     let authority: ReturnType<typeof claimAgentRunDelegatedAuthority> | undefined;
     let actor: ReturnType<typeof createReplyRecoveryActorFixture> | undefined;
     try {
-      await new Promise<void>((resolve, reject) => {
-        proxy.once("error", reject);
-        proxy.listen(0, "127.0.0.1", () => {
-          proxy.off("error", reject);
-          resolve();
-        });
-      });
-      const address = proxy.address();
-      if (!address || typeof address === "string") {
-        throw new Error("QA response proxy did not bind a TCP port");
-      }
+      const baseUrl = await listenLoopback(proxy);
       const identity = {
         agentId: "main",
         runId: "qa-reply-run",
@@ -137,7 +128,7 @@ it("keeps an accepted QA reply pending after a lost HTTP response and refuses a 
         agents: { defaults: { workspace: state.workspaceDir } },
         session: { store: scope.storePath },
         channels: {
-          "qa-channel": { enabled: true, baseUrl: `http://127.0.0.1:${address.port}` },
+          "qa-channel": { enabled: true, baseUrl },
         },
       };
       await state.writeConfig(cfg);

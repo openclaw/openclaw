@@ -24,85 +24,59 @@ describe("session create filesystem root", () => {
         defaults: { sandbox: { mode: "all" } },
         entries: { main: { workspace }, other: { workspace: state.path("outside") } },
       },
-      session: { store: state.statePath("agents", "{agentId}", "sessions", "sessions.json") },
     };
   });
 
-  afterEach(async () => {
-    await state?.cleanup();
-  });
+  afterEach(() => state?.cleanup());
 
-  it.each([
-    ["configured workspace alias", "workspace-alias", "workspace/project", "workspace/project"],
-  ])("admits %s and returns the canonical root", (_name, configured, cwd, expected) => {
-    cfg.agents!.entries!.main!.workspace = state.path(configured);
-    expect(
-      prepareSessionCreateFilesystemRoot({
-        cfg,
-        targetAgentId: "main",
-        enforceSandboxContainment: true,
-        sessionCwd: state.path(cwd),
-      }),
-    ).toEqual({
+  function prepare(
+    options: Partial<Parameters<typeof prepareSessionCreateFilesystemRoot>[0]> = {},
+  ) {
+    return prepareSessionCreateFilesystemRoot({
+      cfg,
+      targetAgentId: "main",
+      enforceSandboxContainment: true,
+      ...options,
+    });
+  }
+
+  it("admits a configured workspace alias and returns the canonical root", () => {
+    cfg.agents!.entries!.main!.workspace = state.path("workspace-alias");
+    const project = path.join(workspace, "project");
+    expect(prepare({ sessionCwd: project })).toEqual({
       ok: true,
-      value: { sessionRoot: state.path(expected), sessionCwd: state.path(expected) },
+      value: { sessionRoot: project, sessionCwd: project },
     });
   });
 
-  it.each([["leaf symlink escape", "workspace/escape"]])(
-    "rejects %s against only the selected agent",
-    (_name, cwd) => {
-      expect(
-        prepareSessionCreateFilesystemRoot({
-          cfg,
-          targetAgentId: "main",
-          enforceSandboxContainment: true,
-          sessionCwd: state.path(cwd),
-        }),
-      ).toMatchObject({
-        ok: false,
-        error: {
-          code: "INVALID_REQUEST",
-          message: "sessions.create cwd is outside the sandboxed agent workspace",
-        },
-      });
-    },
-  );
+  it("rejects a leaf symlink escape against only the selected agent", () => {
+    expect(prepare({ sessionCwd: path.join(workspace, "escape") })).toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "sessions.create cwd is outside the sandboxed agent workspace",
+      },
+    });
+  });
 
-  it.each([["missing workspace", "missing-workspace", "workspace/project"]])(
-    "fails closed for %s without creating the missing path",
-    async (_name, configured, cwd) => {
-      cfg.agents!.entries!.main!.workspace = state.path(configured);
-      expect(
-        prepareSessionCreateFilesystemRoot({
-          cfg,
-          targetAgentId: "main",
-          enforceSandboxContainment: true,
-          sessionCwd: state.path(cwd),
-        }),
-      ).toMatchObject({
-        ok: false,
-        error: { code: "INVALID_REQUEST", message: expect.stringContaining("cwd is unavailable:") },
-      });
-      await expect(fs.stat(path.join(workspace, "missing"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
-      await expect(fs.stat(state.path("missing-workspace"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
-    },
-  );
+  it("fails closed for a missing workspace without creating the missing path", async () => {
+    cfg.agents!.entries!.main!.workspace = state.path("missing-workspace");
+    expect(prepare({ sessionCwd: path.join(workspace, "project") })).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST", message: expect.stringContaining("cwd is unavailable:") },
+    });
+    await expect(fs.stat(path.join(workspace, "missing"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(fs.stat(state.path("missing-workspace"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
 
   it("creates an omitted workspace through its alias and leaves cwd unset", async () => {
     const missing = state.path("workspace-alias", "new-workspace");
     cfg.agents!.entries!.main!.workspace = missing;
-    expect(
-      prepareSessionCreateFilesystemRoot({
-        cfg,
-        targetAgentId: "main",
-        enforceSandboxContainment: true,
-      }),
-    ).toEqual({
+    expect(prepare()).toEqual({
       ok: true,
       value: { sessionRoot: path.join(workspace, "new-workspace"), sessionCwd: undefined },
     });
@@ -111,14 +85,9 @@ describe("session create filesystem root", () => {
 
   it("does not resolve remote node paths on the Gateway", () => {
     const sessionCwd = "C:\\remote\\missing";
-    expect(
-      prepareSessionCreateFilesystemRoot({
-        cfg,
-        targetAgentId: "main",
-        enforceSandboxContainment: true,
-        requestedExecNode: "remote",
-        sessionCwd,
-      }),
-    ).toEqual({ ok: true, value: { sessionCwd } });
+    expect(prepare({ requestedExecNode: "remote", sessionCwd })).toEqual({
+      ok: true,
+      value: { sessionCwd },
+    });
   });
 });

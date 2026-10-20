@@ -5,7 +5,10 @@ import type { PluginRegistry } from "../../plugins/registry-types.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
-import { catalogProvider as provider } from "./session-catalog.fixtures.test-support.js";
+import {
+  catalogProvider as provider,
+  expectCatalog,
+} from "./session-catalog.fixtures.test-support.js";
 
 type TestPluginRegistry = Omit<PluginRegistry, "sessionCatalogs"> & {
   sessionCatalogs: Array<{ provider: SessionCatalogProvider }>;
@@ -43,7 +46,8 @@ vi.mock("../../state/user-profile-list.js", async (importOriginal) => ({
 const { sessionCatalogHandlers } = await import("./session-catalog.js");
 let projection: ReturnType<typeof createSessionRowProjectionFixture>;
 
-async function listCatalogs(params: unknown = {}) {
+async function listCatalogs(providers: SessionCatalogProvider[], params: unknown = {}) {
+  hoisted.activeRegistry.sessionCatalogs = providers.map((entry) => ({ provider: entry }));
   const respond = vi.fn();
   await sessionCatalogHandlers["sessions.catalog.list"]?.({
     params,
@@ -63,35 +67,26 @@ describe("session catalog share routes", () => {
   afterEach(() => projection.dispose());
 
   it("projects uniquely owned routes and suppresses collisions", async () => {
-    hoisted.activeRegistry.sessionCatalogs.push({
-      provider: provider("external", { shareRoute: SHARE_ROUTE }),
-    });
-    let catalogs = (
-      (await listCatalogs({ catalogId: "external" })).mock.calls[0]![1] as {
-        catalogs: Array<{ shareRoute?: unknown }>;
-      }
-    ).catalogs;
-    expect(catalogs[0]?.shareRoute).toEqual(SHARE_ROUTE);
-
-    hoisted.activeRegistry.sessionCatalogs = [
-      { provider: provider("first", { shareRoute: SHARE_ROUTE }) },
-      { provider: provider("second", { shareRoute: SHARE_ROUTE }) },
-    ];
-    catalogs = ((await listCatalogs()).mock.calls[0]![1] as { catalogs: typeof catalogs }).catalogs;
+    expectCatalog(
+      await listCatalogs([provider("external", { shareRoute: SHARE_ROUTE })], {
+        catalogId: "external",
+      }),
+      { shareRoute: SHARE_ROUTE },
+    );
+    const collisions = await listCatalogs(
+      ["first", "second"].map((id) => provider(id, { shareRoute: SHARE_ROUTE })),
+    );
+    const { catalogs } = collisions.mock.calls[0]![1] as {
+      catalogs: Array<{ shareRoute?: unknown }>;
+    };
     expect(catalogs.every((catalog) => catalog.shareRoute === undefined)).toBe(true);
   });
 
   it("does not project a reserved route", async () => {
-    hoisted.activeRegistry.sessionCatalogs = [
-      {
-        provider: provider("external", {
-          shareRoute: { ...SHARE_ROUTE, routeSegment: "chat" },
-        }),
-      },
-    ];
-
-    const respond = await listCatalogs({ catalogId: "external" });
-
+    const respond = await listCatalogs(
+      [provider("external", { shareRoute: { ...SHARE_ROUTE, routeSegment: "chat" } })],
+      { catalogId: "external" },
+    );
     expect(respond).toHaveBeenCalledWith(true, {
       catalogs: [expect.not.objectContaining({ shareRoute: expect.anything() })],
     });
