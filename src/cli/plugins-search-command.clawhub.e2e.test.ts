@@ -8,23 +8,15 @@ import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promis
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { searchSkillsFromClawHub } from "../skills/lifecycle/clawhub.js";
-import { captureEnv } from "../test-utils/env.js";
 import { runPluginsSearchCommand } from "./plugins-search-command.js";
 
-const SCRIPT_PATH = "scripts/e2e/lib/clawhub-fixture-server.cjs";
 type FixtureServer = { child: ChildProcess; closed: Promise<void> };
 const servers: FixtureServer[] = [];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const previousEnv = captureEnv([
-  "OPENCLAW_CLAWHUB_URL",
-  "CLAWHUB_CONFIG_PATH",
-  "CLAWHUB_TOKEN",
-  "CLAWHUB_AUTH_TOKEN",
-]);
 
 afterEach(async () => {
   await Promise.all(servers.splice(0).map(stopServer));
-  previousEnv.restore();
+  vi.unstubAllEnvs();
 });
 
 async function stopServer({ child, closed }: FixtureServer) {
@@ -41,12 +33,11 @@ async function stopServer({ child, closed }: FixtureServer) {
 
 async function startFixtureServer(signal: AbortSignal) {
   const root = tempDirs.make("clawhub-search-e2e-");
-  const portFile = path.join(root, "port");
-  const child = spawn(process.execPath, [SCRIPT_PATH, "catalog-search", portFile], {
-    cwd: process.cwd(),
-    env: { ...process.env },
-    stdio: ["ignore", "pipe", "pipe", "ipc"],
-  });
+  const child = spawn(
+    process.execPath,
+    ["scripts/e2e/lib/clawhub-fixture-server.cjs", "catalog-search", path.join(root, "port")],
+    { stdio: ["ignore", "pipe", "pipe", "ipc"] },
+  );
   const closed = once(child, "close").then(() => {});
   servers.push({ child, closed });
   // Node's IPC overload does not retain the configured stdio tuple types.
@@ -58,16 +49,12 @@ async function startFixtureServer(signal: AbortSignal) {
   });
 
   const listening = once(child, "message").then(([message]: unknown[]) => {
-    if (
-      typeof message !== "object" ||
-      message === null ||
-      !("port" in message) ||
-      typeof message.port !== "number" ||
-      !Number.isInteger(message.port) ||
-      message.port <= 0
-    ) {
-      throw new Error(`fixture server did not write a port: ${stderr}`);
-    }
+    const error = `fixture server did not write a port: ${stderr}`;
+    assert(typeof message === "object" && message !== null && "port" in message, error);
+    assert(
+      typeof message.port === "number" && Number.isInteger(message.port) && message.port > 0,
+      error,
+    );
     return message.port;
   });
   const port = await withinTest(
@@ -83,15 +70,17 @@ async function startFixtureServer(signal: AbortSignal) {
   return { baseUrl: `http://127.0.0.1:${port}`, root };
 }
 
-function createRuntime() {
-  return {
+async function search(query: string, json = false) {
+  const runtime = {
     log: vi.fn<RuntimeEnv["log"]>(),
     error: vi.fn<RuntimeEnv["error"]>(),
     exit: vi.fn<RuntimeEnv["exit"]>(),
   };
+  await runPluginsSearchCommand(query, { limit: 5, json }, runtime);
+  return runtime;
 }
 
-function output(runtime: ReturnType<typeof createRuntime>, stream: "log" | "error" = "log") {
+function output(runtime: Awaited<ReturnType<typeof search>>, stream: "log" | "error" = "log") {
   return runtime[stream].mock.calls.map((args) => args.map(String).join(" ")).join("\n");
 }
 
@@ -99,24 +88,20 @@ it("keeps plugin discovery separate from skills and surfaces empty and failed lo
   signal,
 }) => {
   const { baseUrl, root } = await startFixtureServer(signal);
-  process.env.OPENCLAW_CLAWHUB_URL = baseUrl;
-  process.env.CLAWHUB_CONFIG_PATH = path.join(root, "missing-config.json");
-  delete process.env.CLAWHUB_TOKEN;
-  delete process.env.CLAWHUB_AUTH_TOKEN;
+  vi.stubEnv("OPENCLAW_CLAWHUB_URL", baseUrl);
+  vi.stubEnv("CLAWHUB_CONFIG_PATH", path.join(root, "missing-config.json"));
+  vi.stubEnv("CLAWHUB_TOKEN", undefined);
+  vi.stubEnv("CLAWHUB_AUTH_TOKEN", undefined);
 
-  const terminal = createRuntime();
-  await runPluginsSearchCommand("calendar", { limit: 5 }, terminal);
+  const terminal = await search("calendar");
   const terminalOutput = output(terminal);
   expect(terminal.exit).not.toHaveBeenCalled();
-  expect(
-    terminalOutput.split("\n").filter((line) => line.startsWith("@acme/calendar  ")),
-  ).toHaveLength(1);
+  expect(terminalOutput.match(/^@acme\/calendar {2}/gm)).toHaveLength(1);
   expect(terminalOutput).toContain("bundle-plugin | official | v3.0.0");
   expect(terminalOutput).toContain("Install: openclaw plugins install @acme/calendar");
   expect(terminalOutput).not.toContain("calendar-skill");
 
-  const json = createRuntime();
-  await runPluginsSearchCommand("calendar", { json: true, limit: 5 }, json);
+  const json = await search("calendar", true);
   const jsonOutput = JSON.parse(output(json)) as {
     results: Array<{ score: number; package: { name: string; family: string } }>;
   };
@@ -131,13 +116,11 @@ it("keeps plugin discovery separate from skills and surfaces empty and failed lo
   const skills = await searchSkillsFromClawHub({ query: "calendar", limit: 5, baseUrl });
   expect(skills).toEqual([expect.objectContaining({ score: 99, slug: "calendar-skill" })]);
 
-  const empty = createRuntime();
-  await runPluginsSearchCommand("empty", { limit: 5 }, empty);
+  const empty = await search("empty");
   expect(empty.exit).not.toHaveBeenCalled();
   expect(empty.log.mock.calls).toEqual([["No ClawHub plugins found."]]);
 
-  const unavailable = createRuntime();
-  await runPluginsSearchCommand("unavailable", { limit: 5 }, unavailable);
+  const unavailable = await search("unavailable");
   expect(unavailable.exit).toHaveBeenLastCalledWith(1);
   expect(output(unavailable, "error")).toContain("catalog unavailable");
 

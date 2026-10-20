@@ -55,7 +55,7 @@ it.each([false, true])(
   async (afterDeadline) => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const pending = createDeferredCore();
-    const events: string[] = [];
+    const next = vi.fn(async () => {});
     const cleanup = runCliDisposer("failed-resource", async () => {
       await pending.promise;
       throw new Error("resource close failed");
@@ -67,104 +67,83 @@ it.each([false, true])(
     pending.resolve();
     await cleanup;
     await waitForPendingCliDisposers();
-    await runCliDisposer("next-resource", async () => {
-      events.push("next-resource");
-    });
+    await runCliDisposer("next-resource", next);
     expect(console.error).toHaveBeenCalledWith(
       "CLI cleanup failed: failed-resource: resource close failed",
     );
     expect(console.error).toHaveBeenCalledTimes(afterDeadline ? 2 : 1);
-    expect(events).toEqual(["next-resource"]);
+    expect(next).toHaveBeenCalledOnce();
   },
 );
 
-it("continues later cleanup when a harness disposer never settles", async () => {
-  const gate = createDeferredCore();
-  const entered = createDeferredCore();
-  const dispose = async () => {
-    entered.resolve();
-    await gate.promise;
-  };
-  const harness: AgentHarness = {
-    id: "stalled-fixture",
-    label: "Stalled fixture",
-    supports: () => ({ supported: true }),
-    runAttempt: async () => {
-      throw new Error("cleanup-only fixture");
-    },
-    dispose,
-  };
-  const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
-  const closing = closeCliResources({
-    scheduler: createTestGatewayScheduler(),
-    harnesses: new Map([[harness, dispose]]),
-    registries: new Set(),
-    closeSkillsWatchers: skillsClosed,
-  });
-  try {
-    await entered.promise;
-    await vi.advanceTimersByTimeAsync(5_000);
-    await closing;
-    expect(skillsClosed).toHaveBeenCalledOnce();
-    expect(memoryClosed).toHaveBeenCalledOnce();
-    expect(databasesClosed).toHaveBeenCalledOnce();
-    expect(getPendingCliDisposers()).toEqual(["agent-harness/stalled-fixture"]);
-    expect(stderr).toHaveBeenCalledWith(expect.stringContaining("agent-harness/stalled-fixture"));
-  } finally {
-    gate.resolve();
-    await closing;
-    await vi.advanceTimersByTimeAsync(0);
+function expectResourcesClosed(count: number) {
+  for (const close of [skillsClosed, memoryClosed, databasesClosed]) {
+    expect(close).toHaveBeenCalledTimes(count);
   }
-  expect(getPendingCliDisposers()).toEqual([]);
-});
+}
 
-it("stops scheduling and joins admitted callbacks before dependent CLI resources", async () => {
-  const clock = createGatewaySchedulerClock();
-  const scheduler = createTestGatewayScheduler(clock.clock);
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
-  const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
-  scheduler.schedule({
-    id: "cli-work",
-    atMs: 0,
-    everyMs: 1_000,
-    run: async () => {
+it.each(["agent-harness/stalled-fixture", "scheduled-work"])(
+  "preserves cleanup ordering when %s stalls",
+  async (resource) => {
+    const scheduled = resource === "scheduled-work";
+    const clock = createGatewaySchedulerClock();
+    const scheduler = createTestGatewayScheduler(clock.clock);
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const dispose = async () => {
       entered.resolve();
       await release.promise;
-      expect(memoryClosed).not.toHaveBeenCalled();
-      expect(databasesClosed).not.toHaveBeenCalled();
-    },
-  });
-  const running = clock.advanceBy(0);
-  await entered.promise;
-  const closing = closeCliResources({
-    scheduler,
-    harnesses: new Map(),
-    registries: new Set(),
-    closeSkillsWatchers: skillsClosed,
-  });
-  try {
-    expect(scheduler.signal.aborted).toBe(true);
-    expect(scheduler.nextWakeAtMs).toBeNull();
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(stderr).toHaveBeenCalledWith(expect.stringContaining("scheduled-work"));
-    expect(memoryClosed).not.toHaveBeenCalled();
-    expect(databasesClosed).not.toHaveBeenCalled();
-    release.resolve();
-    await Promise.all([running, closing]);
-    expect(skillsClosed).toHaveBeenCalledOnce();
-    expect(memoryClosed).toHaveBeenCalledOnce();
-    expect(databasesClosed).toHaveBeenCalledOnce();
-  } finally {
-    release.resolve();
-    await Promise.all([running, closing, scheduler.stop()]);
-  }
-});
-
-it("leaves watcher retirement to an embedded caller without process ownership", async () => {
-  await closeCliResources();
-  expect(skillsClosed).not.toHaveBeenCalled();
-});
+      if (scheduled) {
+        expectResourcesClosed(0);
+      }
+    };
+    const harness: AgentHarness = {
+      id: "stalled-fixture",
+      label: "Stalled fixture",
+      supports: () => ({ supported: true }),
+      runAttempt: async () => {
+        throw new Error("cleanup-only fixture");
+      },
+      dispose,
+    };
+    const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
+    if (scheduled) {
+      scheduler.schedule({ id: "cli-work", atMs: 0, everyMs: 1_000, run: dispose });
+    }
+    const running = scheduled ? clock.advanceBy(0) : Promise.resolve();
+    if (scheduled) {
+      await entered.promise;
+    }
+    const closing = closeCliResources({
+      scheduler,
+      harnesses: new Map(scheduled ? [] : [[harness, dispose]]),
+      registries: new Set(),
+      closeSkillsWatchers: skillsClosed,
+    });
+    try {
+      await entered.promise;
+      if (scheduled) {
+        expect(scheduler).toMatchObject({ signal: { aborted: true }, nextWakeAtMs: null });
+      }
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(stderr).toHaveBeenCalledWith(expect.stringContaining(resource));
+      if (scheduled) {
+        expectResourcesClosed(0);
+        release.resolve();
+        await Promise.all([running, closing]);
+      } else {
+        await closing;
+        expect(getPendingCliDisposers()).toEqual([resource]);
+      }
+      expectResourcesClosed(1);
+    } finally {
+      release.resolve();
+      await Promise.all([running, closing, scheduler.stop()]);
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    expect(getPendingCliDisposers()).toEqual([]);
+  },
+);
 
 it("retires provider session resources after a one-shot command", async () => {
   const expired = vi.fn();
@@ -172,6 +151,7 @@ it("retires provider session resources after a one-shot command", async () => {
   const unregister = registerSessionResourceCleanup(() => clearTimeout(retainedSocketTimer));
   try {
     await closeCliResources();
+    expect(skillsClosed).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(60_000);
     expect(expired).not.toHaveBeenCalled();
   } finally {

@@ -40,27 +40,19 @@ describe("waitForPortBindable", () => {
     expect(fakeServer.listen).toHaveBeenNthCalledWith(1, 9999, "127.0.0.1", expect.any(Function));
   });
 
-  it("propagates EACCES rejection immediately without retrying", async () => {
+  it.each([
+    ["EACCES", 80, undefined],
+    ["EADDRNOTAVAIL", 9999, "192.0.2.1"],
+    ["EINVAL", 9999, "192.0.2.1"],
+  ] as const)("propagates non-retryable %s bind errors immediately", async (code, port, host) => {
     mockCreateServer.mockClear();
-    mockCreateServer.mockReturnValue(makeServer("EACCES"));
+    mockCreateServer.mockReturnValue(makeServer(code));
+
     await expect(
-      waitForPortBindable(80, { timeoutMs: 5000, intervalMs: 50 }),
-    ).rejects.toMatchObject({ code: "EACCES" });
+      waitForPortBindable(port, { timeoutMs: 5000, intervalMs: 50, host }),
+    ).rejects.toMatchObject({ code });
     expect(mockCreateServer).toHaveBeenCalledTimes(1);
   });
-
-  it.each(["EADDRNOTAVAIL", "EINVAL"])(
-    "propagates non-retryable %s bind errors immediately",
-    async (code) => {
-      mockCreateServer.mockClear();
-      mockCreateServer.mockReturnValue(makeServer(code));
-
-      await expect(
-        waitForPortBindable(9999, { timeoutMs: 5000, intervalMs: 50, host: "192.0.2.1" }),
-      ).rejects.toMatchObject({ code });
-      expect(mockCreateServer).toHaveBeenCalledTimes(1);
-    },
-  );
 
   it("bounds oversized bindability intervals by the remaining timeout", async () => {
     mockCreateServer.mockReturnValue(makeServer("EADDRINUSE"));
