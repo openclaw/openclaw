@@ -47,9 +47,7 @@ it("returns a visible repair notice without sending workspace paths to the chann
   expect(reply).toMatchObject({ text: expect.stringContaining("openclaw doctor") });
   const text = [reply].flat()[0]?.text;
   expect(text).toContain("⚠️");
-  expect(text).not.toContain("/home/user");
-  expect(text).not.toContain("/srv/data");
-  expect(text).not.toMatch(/(^|[\s(])\/[A-Za-z0-9_.-]+\//u);
+  expect(text).not.toMatch(/\/home\/user|\/srv\/data|(^|[\s(])\/[A-Za-z0-9_.-]+\//u);
 });
 
 it("turns a vanished workspace into a visible terminal reply", async () => {
@@ -72,20 +70,19 @@ it("rejects queued reply preparation after abort or operator revocation without 
   signal,
 }) => {
   vi.stubEnv("OPENCLAW_TEST_FAST", "0");
+  const waitForGate = (gate: PromiseLike<void>, work: PromiseLike<unknown>, message: string) =>
+    withinTest(awaitGateBeforeSettlement(gate, work, message), signal);
   for (const authority of ["abort", "operator"] as const) {
     const state = await createOpenClawTestState({
       layout: "state-only",
       prefix: "reply-workspace-authority-",
     });
     const held = holdWorkspacePreparationSnapshot(state.workspaceDir);
-    const leader = actualWorkspace.ensureAgentWorkspace({ dir: state.workspaceDir });
-    void leader.catch(() => undefined);
-    let preparing: ReturnType<typeof getReplyFromConfig> | undefined;
+    const leader = held.run(() =>
+      actualWorkspace.ensureAgentWorkspace({ dir: state.workspaceDir }),
+    );
     try {
-      await withinTest(
-        awaitGateBeforeSettlement(held.entered, leader, "Workspace leader did not enter"),
-        signal,
-      );
+      await held.ready(leader, signal);
       const queued = createDeferred();
       vi.mocked(ensureAgentWorkspace).mockImplementationOnce((params) => {
         const pending = actualWorkspace.ensureAgentWorkspace(params);
@@ -110,18 +107,12 @@ it("rejects queued reply preparation after abort or operator revocation without 
       mocks.initSessionState.mockClear();
       mocks.resolveReplyDirectives.mockClear();
       vi.mocked(runPreparedReply).mockClear();
-      preparing = getReplyFromConfig(buildGetReplyCtx(), options, {
-        agents: { defaults: { workspace: state.workspaceDir } },
-      });
-      void preparing.catch(() => undefined);
-      await withinTest(
-        awaitGateBeforeSettlement(
-          queued.promise,
-          preparing,
-          "Reply did not queue workspace preparation",
-        ),
-        signal,
+      const preparing = held.run(() =>
+        getReplyFromConfig(buildGetReplyCtx(), options, {
+          agents: { defaults: { workspace: state.workspaceDir } },
+        }),
       );
+      await waitForGate(queued.promise, preparing, "Reply did not queue workspace preparation");
       controller.abort(reason);
       held.release();
       await leader;
@@ -140,7 +131,7 @@ it("rejects queued reply preparation after abort or operator revocation without 
       expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
       expect(runPreparedReply).not.toHaveBeenCalled();
     } finally {
-      await held.dispose([leader, preparing]);
+      await held.dispose();
       await state.cleanup();
     }
   }
