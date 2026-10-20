@@ -233,6 +233,80 @@ describe("runConfigureWizard", () => {
     );
   });
 
+  it("asks an explicit fleet before writing a shared model setup", async () => {
+    const config: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "alpha" } },
+        entries: { alpha: {}, beta: {} },
+      },
+    };
+    setupBaseWizardState(config);
+    queueWizardPrompts({ select: ["defaults"], confirm: [] });
+    await runConfigureWizard({ sections: ["model"] });
+    expect(mocks.promptAuthConfig).toHaveBeenCalledOnce();
+    expect(mocks.promptAuthConfig.mock.calls[0]?.[3]).toMatchObject({ agentId: "alpha" });
+    expect(mocks.promptAuthConfig.mock.calls[0]?.[4]).toEqual({ modelWriteTarget: "defaults" });
+    expect(mocks.clackSelect.mock.calls.map(([params]) => params.message)).toEqual([
+      "Where should this model setup apply?",
+    ]);
+    expect(mocks.clackSelect.mock.calls[0]?.[0].initialValue).toBe("agent");
+  });
+
+  it("names the setup agent when a fleet without a system agent picks shared defaults", async () => {
+    setupBaseWizardState({
+      agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } },
+    });
+    queueWizardPrompts({ select: ["defaults", "beta"], confirm: [] });
+    await runConfigureWizard({ sections: ["model"] });
+    expect(mocks.promptAuthConfig).toHaveBeenCalledOnce();
+    expect(mocks.promptAuthConfig.mock.calls[0]?.[3]).toMatchObject({ agentId: "beta" });
+    expect(mocks.promptAuthConfig.mock.calls[0]?.[4]).toEqual({ modelWriteTarget: "defaults" });
+    expect(mocks.clackSelect.mock.calls.map(([params]) => params.message)).toEqual([
+      "Where should this model setup apply?",
+      "Which agent do you want to configure?",
+    ]);
+  });
+
+  it("writes model policy to the agent an explicit fleet chooses", async () => {
+    const config: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "alpha" } },
+        entries: { alpha: {}, beta: {} },
+      },
+    };
+    setupBaseWizardState(config);
+    queueWizardPrompts({ select: ["agent", "beta"], confirm: [] });
+    await runConfigureWizard({ sections: ["model"] });
+    expect(mocks.promptAuthConfig).toHaveBeenCalledOnce();
+    expect(mocks.promptAuthConfig.mock.calls[0]?.[3]).toMatchObject({ agentId: "beta" });
+    expect(mocks.promptAuthConfig.mock.calls[0]?.[4]).toEqual({ modelWriteTarget: "agent" });
+    expect(mocks.clackSelect.mock.calls.map(([params]) => params.message)).toEqual([
+      "Where should this model setup apply?",
+      "Which agent should receive this model policy?",
+    ]);
+    expect(mocks.clackSelect.mock.calls[1]?.[0]).toMatchObject({
+      initialValue: "alpha",
+      options: [
+        { value: "alpha", label: "alpha (system agent)" },
+        { value: "beta", label: "beta" },
+      ],
+    });
+  });
+
+  it("keeps a single-agent model setup on that agent", async () => {
+    setupBaseWizardState({
+      agents: { ownership: "explicit", entries: { alpha: {} } },
+    });
+    queueWizardPrompts({ select: [], confirm: [] });
+    await runConfigureWizard({ sections: ["model"] });
+    expect(mocks.promptAuthConfig).toHaveBeenCalledOnce();
+    expect(mocks.promptAuthConfig.mock.calls[0]?.[3]).toMatchObject({ agentId: "alpha" });
+    expect(mocks.promptAuthConfig.mock.calls[0]?.[4]).toBeUndefined();
+    expect(mocks.clackSelect).not.toHaveBeenCalled();
+  });
+
   it("does not persist an unprovisionable workspace", async () => {
     agentConfig({ agents: { entries: { ops: { workspace: "/tmp/ops" } } } });
     mocks.ensureWorkspaceAndSessions.mockRejectedValueOnce(new Error("workspace is unwritable"));

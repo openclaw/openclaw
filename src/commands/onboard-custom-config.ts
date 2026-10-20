@@ -17,7 +17,11 @@ import { applyPrimaryModel } from "../plugins/provider-model-primary.js";
 import { materializeSecretInput } from "../secrets/resolve-secret-input-string.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { normalizeAlias } from "./models/alias-name.js";
-import { applyAgentModelDefaults, type OnboardingAgentTarget } from "./onboard-agent-target.js";
+import {
+  applyAgentModelDefaults,
+  type ModelWriteTarget,
+  type OnboardingAgentTarget,
+} from "./onboard-agent-target.js";
 
 /**
  * Wizard default for non-Azure custom APIs when context length is unknown.
@@ -148,6 +152,8 @@ type ApplyCustomApiConfigParams = {
   /** Keep authored catalog fields when importing discovered model IDs. */
   preserveExistingModelMetadata?: boolean;
   target?: OnboardingAgentTarget;
+  /** Shared catalog writes stay on agents.defaults even when credentials use target. */
+  modelWriteTarget?: ModelWriteTarget;
   setAsPrimary?: boolean;
   manifestPlugins?: readonly CustomAliasManifestPlugin[];
 };
@@ -738,7 +744,9 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams) {
 
   return {
     config:
-      params.target && params.config.agents?.ownership === "explicit"
+      params.modelWriteTarget !== "defaults" &&
+      params.target &&
+      params.config.agents?.ownership === "explicit"
         ? applyAgentModelDefaults(config, params.target, applyModelDefaults)
         : applyModelDefaults(config),
     providerId,

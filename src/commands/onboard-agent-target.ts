@@ -27,6 +27,9 @@ import { ensureWorkspaceAndSessions } from "./onboard-helpers.js";
 
 export type OnboardingAgentTarget = ReturnType<typeof resolveOnboardingAgentTarget>;
 
+/** Where configure writes model policy: the target agent entry or shared agents.defaults. */
+export type ModelWriteTarget = "agent" | "defaults";
+
 function splitAgentModelDefaults<
   T extends Pick<AgentEntryConfig, "model" | "utilityModel" | "models" | "modelPolicy">,
 >({ model, utilityModel, models, modelPolicy, ...rest }: T) {

@@ -31,6 +31,7 @@ import {
   type GatewayHealthCheckOutcome,
 } from "./configure.gateway-health.js";
 import { promptGatewayConfig } from "./configure.gateway.js";
+import { resolveConfigureModelWrite } from "./configure.model-scope.js";
 import { configurePrompts as prompts } from "./configure.prompts.js";
 import type { WizardSection } from "./configure.shared.js";
 import { CONFIGURE_SECTION_OPTIONS, intro, outro } from "./configure.shared.js";
@@ -384,8 +385,9 @@ export async function runConfigureWizard(opts: { sections?: WizardSection[] }) {
       };
     }
     let setupAgentId: string | undefined;
-    const resolveSetupTarget = async () => {
+    const resolveSetupTarget = async (chosenAgentId?: string) => {
       // Only agent-scoped steps choose an owner; keep that choice across sections.
+      setupAgentId = chosenAgentId ?? setupAgentId;
       setupAgentId ??=
         nextConfig.agents?.ownership === "explicit"
           ? tryResolveAmbientOwnerAgentId(nextConfig)
@@ -497,11 +499,17 @@ export async function runConfigureWizard(opts: { sections?: WizardSection[] }) {
     const sectionActions = {
       workspace: configureWorkspace,
       model: async () => {
+        const resolved = await resolveConfigureModelWrite({
+          config: nextConfig,
+          setupAgentId,
+          resolveSetupTarget,
+        });
         nextConfig = await promptAuthConfig(
           nextConfig,
           runtime,
           prompter,
-          await resolveSetupTarget(),
+          resolved.target,
+          resolved.modelWriteTarget ? { modelWriteTarget: resolved.modelWriteTarget } : undefined,
         );
       },
       web: async () => {

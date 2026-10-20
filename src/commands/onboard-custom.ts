@@ -10,7 +10,7 @@ import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import type { OnboardingAgentTarget } from "./onboard-agent-target.js";
+import type { ModelWriteTarget, OnboardingAgentTarget } from "./onboard-agent-target.js";
 import {
   applyCustomApiConfig,
   buildAnthropicVerificationProbeRequest,
@@ -114,6 +114,7 @@ async function promptBaseUrlAndKey(params: {
   config: OpenClawConfig;
   secretInputMode?: SecretInputMode;
   initialBaseUrl?: string;
+  workspaceDir?: string;
 }): Promise<{ baseUrl: string; apiKey?: SecretInput; resolvedApiKey: string; noAuth: boolean }> {
   const baseUrlInput = await params.prompter.text({
     message: t("wizard.customProvider.apiBaseUrl"),
@@ -139,6 +140,7 @@ async function promptBaseUrlAndKey(params: {
         validate: () => undefined,
         prompter: params.prompter,
         secretInputMode: params.secretInputMode,
+        ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
         setCredential: async (apiKey) => {
           apiKeyInput = apiKey;
         },
@@ -211,6 +213,8 @@ export async function promptCustomApiConfig(params: {
   runtime: RuntimeEnv;
   config: OpenClawConfig;
   target?: OnboardingAgentTarget;
+  /** Shared catalog writes stay on agents.defaults even when credentials use target. */
+  modelWriteTarget?: ModelWriteTarget;
   secretInputMode?: SecretInputMode;
   setAsPrimary?: boolean;
   /** Setup owns its single confirmation turn after saving the credential. */
@@ -227,6 +231,7 @@ export async function promptCustomApiConfig(params: {
     prompter,
     config,
     secretInputMode: params.secretInputMode,
+    ...(params.target?.workspaceDir ? { workspaceDir: params.target.workspaceDir } : {}),
   });
 
   const compatibilityChoice = await prompter.select({
@@ -403,6 +408,7 @@ export async function promptCustomApiConfig(params: {
         value.trim() ? undefined : t("wizard.customProvider.noAuthCompatKeyRequired"),
       prompter,
       secretInputMode: params.secretInputMode,
+      ...(params.target?.workspaceDir ? { workspaceDir: params.target.workspaceDir } : {}),
       setCredential: async (key) => {
         compatKeyInput = key;
       },
@@ -421,6 +427,7 @@ export async function promptCustomApiConfig(params: {
     manifestPlugins,
     supportsImageInput,
     ...(params.target ? { target: params.target } : {}),
+    ...(params.modelWriteTarget ? { modelWriteTarget: params.modelWriteTarget } : {}),
     ...(params.setAsPrimary === false ? { setAsPrimary: false } : {}),
   });
 
