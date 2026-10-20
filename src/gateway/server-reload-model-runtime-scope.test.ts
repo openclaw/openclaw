@@ -7,6 +7,10 @@ import { doesReloadAffectProviderAuth } from "./config-reload-recovery.js";
 import { createHotTailPlan } from "./server-reload-handlers.config.test-support.js";
 import { createGatewayModelRuntimeReload } from "./server-reload-model-runtime-scope.js";
 
+const agentConfig = (model?: string): OpenClawConfig => ({
+  agents: { entries: { main: {}, other: model ? { model } : {} } },
+});
+
 describe("prepared model runtime reload scope", () => {
   it.each<[paths: string[], agentIds: string[] | undefined]>([
     [["agents.entries.Alpha.model", "agents.entries.beta.name"], ["alpha"]],
@@ -16,16 +20,9 @@ describe("prepared model runtime reload scope", () => {
     [["agents.entries"], undefined],
     [["agents.entries.alpha.model", "models.providers.openai.api"], undefined],
   ])("resolves the bounded agent scope for %j", (paths, agentIds) => {
-    const result = createGatewayModelRuntimeReload().prepare(
-      createHotTailPlan({ changedPaths: paths }),
-      {},
-      {},
-    ).agentIds;
-    if (agentIds) {
-      expect(result).toEqual(new Set(agentIds));
-    } else {
-      expect(result).toBeUndefined();
-    }
+    const plan = createHotTailPlan({ changedPaths: paths });
+    const { agentIds: result } = createGatewayModelRuntimeReload().prepare(plan, {}, {});
+    expect(result).toEqual(agentIds ? new Set(agentIds) : undefined);
   });
 
   it.each<[string, Pick<OpenClawConfig, "bindings" | "hooks">]>([
@@ -52,18 +49,11 @@ describe("prepared model runtime reload scope", () => {
   });
 
   it("keeps pending recovery scoped when a successor reverts the agent edit", () => {
-    const initial: OpenClawConfig = { agents: { entries: { main: {}, other: {} } } };
-    const changed: OpenClawConfig = {
-      agents: { entries: { main: {}, other: { model: "openai/gpt-5.5" } } },
-    };
+    const initial = agentConfig();
+    const changed = agentConfig("openai/gpt-5.5");
     const reload = createGatewayModelRuntimeReload();
-    reload
-      .prepare(
-        createHotTailPlan({ changedPaths: ["agents.entries.other.model"] }),
-        initial,
-        changed,
-      )
-      .defer();
+    const plan = createHotTailPlan({ changedPaths: ["agents.entries.other.model"] });
+    reload.prepare(plan, initial, changed).defer();
     const successor = reload.prepare(createHotTailPlan({ changedPaths: [] }), changed, initial);
 
     expect(successor.required).toBe(true);
@@ -73,9 +63,9 @@ describe("prepared model runtime reload scope", () => {
   it.each(["plugin replacement", "channel activation"] as const)(
     "retains a full scope for %s alongside an agent edit",
     (change) => {
-      const previous: OpenClawConfig = { agents: { entries: { main: {}, other: {} } } };
+      const previous = agentConfig();
       const next: OpenClawConfig = {
-        agents: { entries: { main: {}, other: { model: "openai/gpt-5.5" } } },
+        ...agentConfig("openai/gpt-5.5"),
         ...(change === "channel activation" ? { channels: { slack: { enabled: true } } } : {}),
       };
       const plan = createHotTailPlan({

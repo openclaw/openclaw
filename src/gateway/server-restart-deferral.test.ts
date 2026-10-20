@@ -1,5 +1,3 @@
-// Restart deferral tests protect queue-depth checks that delay gateway restart
-// until in-flight reply deliveries and command work have drained.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
@@ -10,6 +8,20 @@ async function flushMicrotasks(count = 10): Promise<void> {
   for (let i = 0; i < count; i += 1) {
     await Promise.resolve();
   }
+}
+
+function holdDelivery() {
+  const deliveryStarted = createDeferred();
+  const allowDelivery = createDeferred();
+  const deliveredReplies: string[] = [];
+  const dispatcher = createReplyDispatcher({
+    deliver: async (payload) => {
+      deliveryStarted.resolve();
+      await allowDelivery.promise;
+      deliveredReplies.push(payload.text ?? "");
+    },
+  });
+  return { dispatcher, deliveryStarted, allowDelivery, deliveredReplies };
 }
 
 describe("gateway restart deferral", () => {
@@ -26,26 +38,13 @@ describe("gateway restart deferral", () => {
   });
 
   it("defers restart while reply delivery is in flight", async () => {
-    const deliveredReplies: string[] = [];
-    const deliveryStarted = createDeferred();
-    const allowDelivery = createDeferred();
-
-    // Hold delivery open so restart checks run while reply is in-flight.
-    const dispatcher = createReplyDispatcher({
-      deliver: async (payload) => {
-        deliveryStarted.resolve();
-        await allowDelivery.promise;
-        deliveredReplies.push(payload.text ?? "");
-      },
-    });
-
+    const { dispatcher, deliveryStarted, allowDelivery, deliveredReplies } = holdDelivery();
     // Completing the producer must retain its in-flight delivery reservation.
     dispatcher.sendFinalReply({ text: "Configuration updated!" });
     dispatcher.markComplete();
     await deliveryStarted.promise;
     await flushMicrotasks();
 
-    // At this point: delivery is in flight; pending > 0 prevents restart.
     expect(getTotalPendingReplies()).toBeGreaterThan(0);
 
     allowDelivery.resolve();
@@ -56,14 +55,7 @@ describe("gateway restart deferral", () => {
   });
 
   it("keeps pending > 0 until the reply is actually enqueued", async () => {
-    const allowDelivery = createDeferred();
-
-    const dispatcher = createReplyDispatcher({
-      deliver: async () => {
-        await allowDelivery.promise;
-      },
-    });
-
+    const { dispatcher, allowDelivery } = holdDelivery();
     expect(getTotalPendingReplies()).toBe(1);
 
     await Promise.resolve();
@@ -81,13 +73,8 @@ describe("gateway restart deferral", () => {
   });
 
   it("clears dispatcher reservation when no replies were sent", async () => {
-    let deliverCalled = false;
-    const dispatcher = createReplyDispatcher({
-      deliver: async () => {
-        deliverCalled = true;
-      },
-    });
-
+    const deliver = vi.fn(async () => {});
+    const dispatcher = createReplyDispatcher({ deliver });
     expect(getTotalPendingReplies()).toBe(1);
 
     dispatcher.markComplete();
@@ -96,7 +83,7 @@ describe("gateway restart deferral", () => {
     expect(getTotalPendingReplies()).toBe(0);
     await dispatcher.waitForIdle();
 
-    expect(deliverCalled).toBe(false);
+    expect(deliver).not.toHaveBeenCalled();
     expect(getTotalPendingReplies()).toBe(0);
   });
 });

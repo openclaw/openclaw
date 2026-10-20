@@ -1,10 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import type {
-  GatewayInstanceAgentDispatchOptions,
-  GatewayRecoveryRuntime,
-} from "./server-instance-runtime.types.js";
-import type { AgentRunRequest } from "./server-methods/agent-request-types.js";
+import type { GatewayRecoveryRuntime } from "./server-instance-runtime.types.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
   dispatchGatewayLifecycleMethod,
@@ -14,11 +10,7 @@ import {
 
 function createRecoveryRuntime(result: string) {
   const dispatchAgent = vi.fn(
-    async (
-      _params: AgentRunRequest,
-      _timeoutMs?: number,
-      _options?: GatewayInstanceAgentDispatchOptions,
-    ) => result,
+    async (..._args: Parameters<GatewayRecoveryRuntime["dispatchAgent"]>) => result,
   );
   const runtime: GatewayRecoveryRuntime = {
     prepareRestartRecovery: () => undefined,
@@ -27,10 +19,8 @@ function createRecoveryRuntime(result: string) {
     },
     dispatchSessionMethod: vi.fn(),
     dispatchAgent: async <T = unknown>(
-      params: AgentRunRequest,
-      timeoutMs?: number,
-      options?: GatewayInstanceAgentDispatchOptions,
-    ) => (await dispatchAgent(params, timeoutMs, options)) as T,
+      ...args: Parameters<GatewayRecoveryRuntime["dispatchAgent"]>
+    ) => (await dispatchAgent(...args)) as T,
     waitForAgent: vi.fn(),
     sendRecoveryNotice: vi.fn(),
   };
@@ -38,6 +28,14 @@ function createRecoveryRuntime(result: string) {
 }
 
 describe("dispatchGatewayLifecycleMethod", () => {
+  let active: ReturnType<typeof createRecoveryRuntime>;
+  let releaseActive: () => void;
+  beforeEach(() => {
+    active = createRecoveryRuntime("active");
+    releaseActive = registerGatewayRecoveryRuntime(active.runtime);
+  });
+  afterEach(() => releaseActive());
+
   it.each(["before", "during"] as const)(
     "keeps a wait observation retryable when its Gateway retires %s dispatch",
     async (when) => {
@@ -66,49 +64,30 @@ describe("dispatchGatewayLifecycleMethod", () => {
   );
 
   it("uses the exact resolved Gateway recovery runtime instead of the active global runtime", async () => {
-    const active = createRecoveryRuntime("active");
     const exact = createRecoveryRuntime("exact");
-    const releaseActive = registerGatewayRecoveryRuntime(active.runtime);
-
-    try {
-      const result = await dispatchGatewayLifecycleMethod(
-        "agent",
-        { message: "completion", idempotencyKey: "completion-1" },
-        {
-          expectFinal: true,
-          timeoutMs: 1_000,
-          resolveGatewayContext: () =>
-            ({ recoveryRuntime: exact.runtime }) as GatewayRequestContext,
-        },
-      );
-
-      expect(result).toBe("exact");
-      expect(active.dispatchAgent).not.toHaveBeenCalled();
-      expect(exact.dispatchAgent).toHaveBeenCalledWith(
-        { message: "completion", idempotencyKey: "completion-1" },
-        1_000,
-        { expectFinal: true },
-      );
-    } finally {
-      releaseActive();
-    }
+    const params = { message: "completion", idempotencyKey: "completion-1" };
+    const result = await dispatchGatewayLifecycleMethod("agent", params, {
+      expectFinal: true,
+      timeoutMs: 1_000,
+      resolveGatewayContext: () => ({ recoveryRuntime: exact.runtime }) as GatewayRequestContext,
+    });
+    expect(result).toBe("exact");
+    expect(active.dispatchAgent).not.toHaveBeenCalled();
+    expect(exact.dispatchAgent).toHaveBeenCalledWith(
+      { message: "completion", idempotencyKey: "completion-1" },
+      1_000,
+      { expectFinal: true },
+    );
   });
 
   it("fails closed when an explicit Gateway context resolver is stale", async () => {
-    const active = createRecoveryRuntime("active");
-    const releaseActive = registerGatewayRecoveryRuntime(active.runtime);
-
-    try {
-      await expect(
-        dispatchGatewayLifecycleMethod(
-          "agent",
-          { message: "completion", idempotencyKey: "completion-2" },
-          { resolveGatewayContext: () => undefined },
-        ),
-      ).rejects.toThrow("Gateway instance lifecycle dispatch unavailable for agent");
-      expect(active.dispatchAgent).not.toHaveBeenCalled();
-    } finally {
-      releaseActive();
-    }
+    await expect(
+      dispatchGatewayLifecycleMethod(
+        "agent",
+        { message: "completion", idempotencyKey: "completion-2" },
+        { resolveGatewayContext: () => undefined },
+      ),
+    ).rejects.toThrow("Gateway instance lifecycle dispatch unavailable for agent");
+    expect(active.dispatchAgent).not.toHaveBeenCalled();
   });
 });

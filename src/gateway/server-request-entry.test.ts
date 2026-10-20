@@ -45,10 +45,55 @@ vi.mock("./server/ws-connection/request-start.js", async (importOriginal) => {
   };
 });
 
+function createEntryBarrier() {
+  const held = createDeferredCore();
+  const reached = createDeferredCore();
+  const pause = async () => {
+    reached.resolve();
+    await held.promise;
+  };
+  return { held, reached, pause };
+}
+
+function profileSync(
+  client: ReturnType<typeof createOperatorWsClient>,
+  pause: () => Promise<void>,
+) {
+  return async () => {
+    await pause();
+    client.authenticatedUserProfile = {
+      profileId: "entry-profile",
+      displayName: "Entry",
+      avatarRevision: "entry-avatar",
+      hasAvatar: false,
+      updatedAt: 1,
+    };
+    return { profileId: "entry-profile", updatedAt: 1 };
+  };
+}
+
+function entryMethods(name: string, handler: GatewayRequestHandler) {
+  return createGatewayMethodRegistry([
+    { name, owner: { kind: "aux", area: "entry-test" }, scope: "operator.admin", handler },
+  ]);
+}
+
 describe("Gateway request entry lifetime", { concurrent: false }, () => {
   let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
   let kernel: Awaited<ReturnType<typeof createGatewayKernel>>;
   let port: number;
+  const startKernel = () =>
+    createGatewayKernel(port, {
+      auth: { mode: "token", token: "request-entry-test" },
+      bind: "loopback",
+      controlUiEnabled: false,
+      sidecarStartup: "defer",
+    });
+  const createHarness = (options: Parameters<typeof createDispatchTestHarness>[0]) =>
+    createDispatchTestHarness({
+      buildRequestContext: () => kernel.gatewayRequestContext,
+      ...options,
+    });
 
   beforeAll(async () => {
     state = await createOpenClawTestState({
@@ -80,12 +125,7 @@ describe("Gateway request entry lifetime", { concurrent: false }, () => {
   beforeEach(async () => {
     boundaries.router.mockReset();
     boundaries.start.mockReset();
-    kernel = await createGatewayKernel(port, {
-      auth: { mode: "token", token: "request-entry-test" },
-      bind: "loopback",
-      controlUiEnabled: false,
-      sidecarStartup: "defer",
-    });
+    kernel = await startKernel();
     kernel.kernel.setDispatchReady(true);
   });
   afterEach(async () => {
@@ -98,12 +138,7 @@ describe("Gateway request entry lifetime", { concurrent: false }, () => {
   it.each(["router", "start", "profile", "family", "family rejection", "nested family"] as const)(
     "joins %s preparation and rejects handler entry before close returns",
     async (boundary) => {
-      const held = createDeferredCore();
-      const reached = createDeferredCore();
-      const pause = async () => {
-        reached.resolve();
-        await held.promise;
-      };
+      const { held, reached, pause } = createEntryBarrier();
       const handler = vi.fn<GatewayRequestHandler>(({ respond }) =>
         respond(true, { entered: true }),
       );
@@ -132,22 +167,9 @@ describe("Gateway request entry lifetime", { concurrent: false }, () => {
       if (boundary === "router" || boundary === "start") {
         boundaries[boundary].mockImplementation(pause);
       } else if (boundary === "profile") {
-        client.authenticatedGitHubIdentitySync = async () => {
-          await pause();
-          client.authenticatedUserProfile = {
-            profileId: "entry-profile",
-            displayName: "Entry",
-            avatarRevision: "entry-avatar",
-            hasAvatar: false,
-            updatedAt: 1,
-          };
-          return { profileId: "entry-profile", updatedAt: 1 };
-        };
+        client.authenticatedGitHubIdentitySync = profileSync(client, pause);
       }
-      const harness = createDispatchTestHarness({
-        buildRequestContext: () => kernel.gatewayRequestContext,
-        extraHandlers: lazy,
-      });
+      const harness = createHarness({ extraHandlers: lazy });
       let closeSettled = false;
       let closing: Promise<void> | undefined;
       let dispatch: Promise<void> | undefined;
@@ -204,14 +226,12 @@ describe("Gateway request entry lifetime", { concurrent: false }, () => {
   it.each(["test.entry", "device.token.rotate"])(
     "refuses credential-barrier waiter %s before joining close without draining its predecessor",
     async (method) => {
-      const held = createDeferredCore();
-      const reached = createDeferredCore();
+      const { held, reached, pause } = createEntryBarrier();
       const finished = createDeferredCore();
       let mutationFinished = false;
       const mutation = vi.fn<GatewayRequestHandler>(async ({ respond }) => {
-        reached.resolve();
         try {
-          await held.promise;
+          await pause();
           respond(true, { mutated: true });
         } finally {
           mutationFinished = true;
@@ -220,8 +240,7 @@ describe("Gateway request entry lifetime", { concurrent: false }, () => {
       });
       const waiter = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true));
       const client = createOperatorWsClient();
-      const harness = createDispatchTestHarness({
-        buildRequestContext: () => kernel.gatewayRequestContext,
+      const harness = createHarness({
         extraHandlers: { "device.token.revoke": mutation, [method]: waiter },
       });
       const events: string[] = [];
@@ -275,18 +294,13 @@ describe("Gateway request entry lifetime", { concurrent: false }, () => {
   );
 
   it("permits ordinary entry after disconnect while its Gateway is live", async () => {
-    const held = createDeferredCore();
-    const reached = createDeferredCore();
-    boundaries.start.mockImplementation(async () => {
-      reached.resolve();
-      await held.promise;
-    });
+    const { held, reached, pause } = createEntryBarrier();
+    boundaries.start.mockImplementation(pause);
     const socket = new EventEmitter();
     const client = createOperatorWsClient({ socket });
     let disconnected = false;
     const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { entered: true }));
-    const harness = createDispatchTestHarness({
-      buildRequestContext: () => kernel.gatewayRequestContext,
+    const harness = createHarness({
       extraHandlers: { "test.entry": handler },
       isClosed: () => disconnected,
     });
@@ -316,17 +330,10 @@ describe("Gateway request entry lifetime", { concurrent: false }, () => {
       {
         context: kernel.gatewayRequestContext,
         client: createOperatorWsClient(),
-        methodRegistry: createGatewayMethodRegistry([
-          {
-            name: "test.close",
-            owner: { kind: "aux", area: "entry-test" },
-            scope: "operator.admin",
-            handler: async ({ respond }: Parameters<GatewayRequestHandler>[0]) => {
-              await kernel.prepareClose();
-              respond(true, { closed: true });
-            },
-          },
-        ]),
+        methodRegistry: entryMethods("test.close", async ({ respond }) => {
+          await kernel.prepareClose();
+          respond(true, { closed: true });
+        }),
       },
     );
     expect(result).toMatchObject({ ok: true, payload: { closed: true } });
@@ -388,21 +395,9 @@ describe("Gateway request entry lifetime", { concurrent: false }, () => {
   it("keeps a retired context closed when a replacement Gateway starts", async () => {
     const retired = kernel.gatewayRequestContext;
     await kernel.closeOnStartupFailure();
-    kernel = await createGatewayKernel(port, {
-      auth: { mode: "token", token: "request-entry-test" },
-      bind: "loopback",
-      controlUiEnabled: false,
-      sidecarStartup: "defer",
-    });
+    kernel = await startKernel();
     const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { entered: true }));
-    const methodRegistry = createGatewayMethodRegistry([
-      {
-        name: "test.entry",
-        owner: { kind: "aux", area: "entry-test" },
-        scope: "operator.admin",
-        handler,
-      },
-    ]);
+    const methodRegistry = entryMethods("test.entry", handler);
     const options = { client: createOperatorWsClient(), methodRegistry };
     await expect(
       dispatchGatewayRequestInProcessRaw("test.entry", {}, { ...options, context: retired }),
@@ -418,21 +413,9 @@ describe("Gateway request entry lifetime", { concurrent: false }, () => {
   });
 
   it("joins typed authorization before allowing its service to start", async () => {
-    const held = createDeferredCore();
-    const reached = createDeferredCore();
+    const { held, reached, pause } = createEntryBarrier();
     const client = createOperatorWsClient();
-    client.authenticatedGitHubIdentitySync = async () => {
-      reached.resolve();
-      await held.promise;
-      client.authenticatedUserProfile = {
-        profileId: "typed-profile",
-        displayName: "Typed",
-        avatarRevision: "typed-avatar",
-        hasAvatar: false,
-        updatedAt: 1,
-      };
-      return { profileId: "typed-profile", updatedAt: 1 };
-    };
+    client.authenticatedGitHubIdentitySync = profileSync(client, pause);
     const facade = createInternalAgentTurnFacade({
       client,
       getContext: () => kernel.gatewayRequestContext,

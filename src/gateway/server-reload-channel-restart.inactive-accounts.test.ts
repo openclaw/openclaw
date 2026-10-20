@@ -22,19 +22,17 @@ describe("hot channel restart with inactive account SecretRefs", () => {
     { name: "enabled unresolved", initiallyRunning: false, disabled: false },
   ])("preserves lifecycle and credential policy for a $name account", async (scenario) => {
     const unresolvedRef = { source: "file", provider: "local", id: "/audit-token" } as const;
-    let config: OpenClawConfig = {
+    const accountConfig = (enabled: boolean, resolved = false): OpenClawConfig => ({
       channels: {
         telegram: {
           accounts: {
             default: { botToken: "test-default-token" },
-            audit: {
-              enabled: scenario.initiallyRunning,
-              botToken: scenario.initiallyRunning ? "test-audit-token" : unresolvedRef,
-            },
+            audit: { enabled, botToken: resolved ? "test-audit-token" : unresolvedRef },
           },
         },
       },
-    };
+    });
+    let config = accountConfig(scenario.initiallyRunning, scenario.initiallyRunning);
     const firstStart = createDeferred();
     const restarted = createDeferred();
     const started: string[] = [];
@@ -78,16 +76,7 @@ describe("hot channel restart with inactive account SecretRefs", () => {
     try {
       await manager.startChannels();
       await firstStart.promise;
-      config = {
-        channels: {
-          telegram: {
-            accounts: {
-              default: { botToken: "test-default-token" },
-              audit: { enabled: !scenario.disabled, botToken: unresolvedRef },
-            },
-          },
-        },
-      };
+      config = accountConfig(!scenario.disabled);
       await restartGatewayChannels({
         params: { ...manager, getPluginRegistry: () => registry, logChannels },
         nextConfig: config,
