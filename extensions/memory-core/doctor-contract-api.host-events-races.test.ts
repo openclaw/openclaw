@@ -3,12 +3,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it } from "vitest";
-import {
-  createDoctorContext,
-  resetDoctorPluginState,
-  type RawLegacyDoctorConfig,
-} from "./doctor-contract-api.test-support.js";
+import { afterEach, expect, it } from "vitest";
+import { createDoctorContext, resetDoctorPluginState } from "./doctor-contract-api.test-support.js";
 import { hostEventsStateMigration } from "./src/migration/doctor-host-events.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -40,9 +36,6 @@ async function fixture(stage: "claim" | "archive" | "restore") {
   await fs.writeFile(active, contents);
   const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
   const context = createDoctorContext(env);
-  const config: RawLegacyDoctorConfig = {
-    agents: { list: [{ id: "main", workspace: workspaceDir }] },
-  };
   const source = stage === "claim" ? active : claim;
   const target = stage === "claim" ? claim : stage === "archive" ? archive : active;
   let swapped = false;
@@ -75,7 +68,7 @@ async function fixture(stage: "claim" | "archive" | "restore") {
     },
     apply: () =>
       hostEventsStateMigration.migrateLegacyState({
-        config,
+        config: { agents: { list: [{ id: "main", workspace: workspaceDir }] } },
         env,
         stateDir: env.OPENCLAW_STATE_DIR,
         oauthDir: path.join(root, "oauth"),
@@ -88,49 +81,39 @@ async function expectMissing(filePath: string) {
   await expect(fs.access(filePath)).rejects.toMatchObject({ code: "ENOENT" });
 }
 
-describe("host-event migration file-only moves", () => {
-  it("does not claim a discovered event file replaced by a directory", async () => {
-    const { claim, apply, expectPreserved } = await fixture("claim");
-
-    await expect(apply()).rejects.toThrow();
-
+it.each(["claim", "archive", "restore"] as const)(
+  "host-event migration rejects directory replacement during %s",
+  async (stage) => {
+    const { active, claim, archive, context, apply, expectPreserved } = await fixture(stage);
+    if (stage === "claim") {
+      await expect(apply()).rejects.toThrow();
+    } else {
+      const result = await apply();
+      if (stage === "archive") {
+        expect(result).toMatchObject({
+          changes: [],
+          warnings: [
+            expect.stringContaining("Failed archiving Memory Core host events"),
+            expect.stringContaining("Failed restoring claimed Memory Core host events"),
+          ],
+        });
+        await expectMissing(archive);
+        await expect(
+          context
+            .openPluginStateKeyedStore({
+              namespace: "memory-host.event-migration-checkpoints",
+              maxEntries: 10_000,
+              overflowPolicy: "reject-new",
+            })
+            .entries(),
+        ).resolves.toEqual([]);
+      } else {
+        expect(result.warnings).toContainEqual(
+          expect.stringContaining("Failed restoring claimed Memory Core host events"),
+        );
+      }
+    }
+    await expectMissing(stage === "claim" ? claim : active);
     await expectPreserved();
-    await expectMissing(claim);
-  });
-
-  it("does not archive a claim replaced by a directory after SQLite import", async () => {
-    const { active, archive, context, apply, expectPreserved } = await fixture("archive");
-
-    const result = await apply();
-
-    expect(result.changes).toEqual([]);
-    expect(result.warnings).toEqual([
-      expect.stringContaining("Failed archiving Memory Core host events"),
-      expect.stringContaining("Failed restoring claimed Memory Core host events"),
-    ]);
-    await expectMissing(archive);
-    await expectMissing(active);
-    await expectPreserved();
-    await expect(
-      context
-        .openPluginStateKeyedStore({
-          namespace: "memory-host.event-migration-checkpoints",
-          maxEntries: 10_000,
-          overflowPolicy: "reject-new",
-        })
-        .entries(),
-    ).resolves.toEqual([]);
-  });
-
-  it("does not restore a claim replaced by a directory after a blocked import", async () => {
-    const { active, apply, expectPreserved } = await fixture("restore");
-
-    const result = await apply();
-
-    expect(result.warnings).toContainEqual(
-      expect.stringContaining("Failed restoring claimed Memory Core host events"),
-    );
-    await expectMissing(active);
-    await expectPreserved();
-  });
-});
+  },
+);
