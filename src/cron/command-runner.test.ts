@@ -48,6 +48,18 @@ function makeCommandJob(payload: Extract<CronJob["payload"], { kind: "command" }
   };
 }
 
+function makeSpawnResult(overrides: Partial<SpawnResult> = {}): SpawnResult {
+  return {
+    code: 0,
+    signal: null,
+    killed: false,
+    stdout: "",
+    stderr: "",
+    termination: "exit",
+    ...overrides,
+  };
+}
+
 describe("runCronCommandJob", () => {
   let receipts: FixtureReceiptChannel;
   beforeAll(async () => {
@@ -86,26 +98,19 @@ describe("runCronCommandJob", () => {
         expect(readLifecycleWriteCustody()).toEqual(
           ownsBackup ? [{ phase: "backup", count: 1 }] : [],
         );
-        settled.resolve({
-          code: null,
-          signal: "SIGTERM",
-          killed: true,
-          stdout: "",
-          stderr: "",
-          termination: "timeout",
-          cleanup: "forced",
-        });
+        settled.resolve(
+          makeSpawnResult({
+            code: null,
+            signal: "SIGTERM",
+            killed: true,
+            termination: "timeout",
+            cleanup: "forced",
+          }),
+        );
         expect((await running).status).toBe("error");
         expect(readLifecycleWriteCustody()).toEqual([]);
       } finally {
-        settled.resolve({
-          code: 0,
-          signal: null,
-          killed: false,
-          stdout: "",
-          stderr: "",
-          termination: "exit",
-        });
+        settled.resolve(makeSpawnResult());
         await running;
         runCommand.mockRestore();
       }
@@ -124,15 +129,15 @@ describe("runCronCommandJob", () => {
           return releaseCustody;
         });
       const cleanup = createDeferred<SpawnResult["cleanup"]>();
-      const response = Promise.resolve<SpawnResult>({
-        code: null,
-        signal: "SIGTERM",
-        killed: true,
-        stdout: "",
-        stderr: "",
-        termination: "signal",
-        cleanup: "uncertain",
-      });
+      const response = Promise.resolve(
+        makeSpawnResult({
+          code: null,
+          signal: "SIGTERM",
+          killed: true,
+          termination: "signal",
+          cleanup: "uncertain",
+        }),
+      );
       const runCommand = vi
         .spyOn(processExecution, "runCommandWithTimeout")
         .mockImplementation(() => {
@@ -185,34 +190,19 @@ describe("runCronCommandJob", () => {
     },
   );
 
-  it.each([
-    { output: "NO_REPLY\n", summary: undefined, outputMaxBytes: undefined, truncated: false },
-    {
-      output: "NO_REPLY\nNO_REPLY",
-      summary: "NO_REPLY",
-      outputMaxBytes: undefined,
-      truncated: false,
-    },
-    { output: "NO_REPLY.", summary: "NO_REPLY.", outputMaxBytes: undefined, truncated: false },
-    {
-      output: '{"action":"NO_REPLY"}',
-      summary: '{"action":"NO_REPLY"}',
-      outputMaxBytes: undefined,
-      truncated: false,
-    },
-    { output: '"NO_REPLY"', summary: '"NO_REPLY"', outputMaxBytes: undefined, truncated: false },
-    {
-      output: "No channel reply.",
-      summary: "No channel reply.",
-      outputMaxBytes: undefined,
-      truncated: false,
-    },
-    {
-      output: " NO_REPLY\nReport",
-      summary: "NO_REPLY\nReport",
-      outputMaxBytes: undefined,
-      truncated: false,
-    },
+  it.each<{
+    output: string;
+    summary?: string;
+    outputMaxBytes?: number;
+    truncated?: boolean;
+  }>([
+    { output: "NO_REPLY\n", summary: undefined },
+    { output: "NO_REPLY\nNO_REPLY", summary: "NO_REPLY" },
+    { output: "NO_REPLY.", summary: "NO_REPLY." },
+    { output: '{"action":"NO_REPLY"}', summary: '{"action":"NO_REPLY"}' },
+    { output: '"NO_REPLY"', summary: '"NO_REPLY"' },
+    { output: "No channel reply.", summary: "No channel reply." },
+    { output: " NO_REPLY\nReport", summary: "NO_REPLY\nReport" },
     {
       output: `Visit https://example.com/device and enter code ABCD-EFGH\n${"x".repeat(200)}`,
       summary: `action-required output preserved:\nVisit https://example.com/device and enter code ABCD-EFGH\n\n${"x".repeat(24)}`,
@@ -221,7 +211,7 @@ describe("runCronCommandJob", () => {
     },
   ])(
     "preserves deliverable command output %#",
-    async ({ output, summary, outputMaxBytes, truncated }) => {
+    async ({ output, summary, outputMaxBytes, truncated = false }) => {
       const result = await runCronCommandJob({
         job: makeCommandJob({
           kind: "command",
@@ -416,14 +406,11 @@ describe("runCronCommandJob", () => {
   ) {
     return vi.spyOn(processExecution, "runCommandWithTimeout").mockImplementation(async () => {
       execSpawn.retainCommandProcessCleanup(Promise.resolve("uncertain"));
-      return {
-        signal: null,
+      return makeSpawnResult({
         killed: result.termination === "timeout",
-        stdout: "",
-        stderr: "",
         cleanup: "uncertain",
         ...result,
-      };
+      });
     });
   }
 

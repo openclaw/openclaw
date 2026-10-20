@@ -6,8 +6,9 @@ import { loadCronStore, saveCronStore } from "./store.js";
 import type { CronJob } from "./types.js";
 
 const { makeStorePath } = setupCronServiceSuite({ prefix: "cron-config-revision-" });
+const message = "Summarize the day";
 
-function makeJob(): CronJob {
+function makeJob(overrides: Partial<CronJob> = {}): CronJob {
   return {
     id: "job-1",
     name: "daily report",
@@ -17,33 +18,30 @@ function makeJob(): CronJob {
     schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
     sessionTarget: "isolated",
     wakeMode: "next-heartbeat",
-    payload: { kind: "agentTurn", message: "Summarize the day" },
+    payload: { kind: "agentTurn", message },
     delivery: { mode: "announce", channel: "telegram", to: "chat-1" },
     state: {},
+    ...overrides,
   };
 }
 
 describe("resolveCronJobConfigRevision", () => {
   it("is stable across the SQLite store round-trip", async () => {
     const { storePath } = await makeStorePath();
-    const job: CronJob = {
-      ...makeJob(),
+    const job = makeJob({
       agentId: undefined,
       description: undefined,
       payload: {
         kind: "agentTurn",
-        message: "Summarize the day",
+        message,
         toolsAllow: ["read"],
         toolsAllowIsDefault: false,
       },
       delivery: {
         mode: "announce",
-        failureDestination: {
-          channel: undefined,
-          accountId: undefined,
-        },
+        failureDestination: { channel: undefined, accountId: undefined },
       },
-    };
+    });
 
     await saveCronStore(storePath, { version: 1, jobs: [job] });
     const reloaded = (await loadCronStore(storePath)).jobs[0];
@@ -57,54 +55,41 @@ describe("resolveCronJobConfigRevision", () => {
   it("matches SQLite normalization across schedule, payload, trigger, and alert variants", async () => {
     const { storePath } = await makeStorePath();
     const jobs: CronJob[] = [
-      {
-        ...makeJob(),
+      makeJob({
         id: "command-empty-env",
         schedule: { kind: "every", everyMs: MAX_DATE_TIMESTAMP_MS, anchorMs: 0 },
         payload: { kind: "command", argv: ["true"], env: {}, input: "" },
         failureAlert: false,
-      },
-      {
-        ...makeJob(),
+      }),
+      makeJob({
         id: "default-tools-without-list",
         schedule: { kind: "cron", expr: "0 9 * * *", tz: "" },
-        payload: {
-          kind: "agentTurn",
-          message: "Summarize the day",
-          toolsAllowIsDefault: true,
-        },
+        payload: { kind: "agentTurn", message, toolsAllowIsDefault: true },
         failureAlert: {},
         trigger: { script: "json({ fire: true })", once: true },
-      },
-      {
-        ...makeJob(),
+      }),
+      makeJob({
         id: "windows-env-key-order",
-        payload: {
-          kind: "command",
-          argv: ["printenv"],
-          env: { Path: "first", PATH: "second" },
-        },
-      },
-      {
-        ...makeJob(),
+        payload: { kind: "command", argv: ["printenv"], env: { Path: "first", PATH: "second" } },
+      }),
+      makeJob({
         id: "default-empty-tools",
         schedule: { kind: "at", at: "2027-01-01T00:00:00.000Z" },
         payload: {
           kind: "agentTurn",
-          message: "Summarize the day",
+          message,
           toolsAllow: [],
           toolsAllowIsDefault: true,
         },
-      },
-      {
-        ...makeJob(),
+      }),
+      makeJob({
         id: "on-exit-system-event",
         schedule: { kind: "on-exit", command: "true", cwd: "/tmp" },
         sessionTarget: "main",
         payload: { kind: "systemEvent", text: "Process exited" },
         delivery: undefined,
         failureAlert: { after: 2, cooldownMs: 0, includeSkipped: false },
-      },
+      }),
     ];
 
     await saveCronStore(storePath, { version: 1, jobs });

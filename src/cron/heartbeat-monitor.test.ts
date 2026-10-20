@@ -4,13 +4,22 @@ import { resolveHeartbeatMonitorPlan } from "./heartbeat-monitor.js";
 import type { CronJob, CronJobCreate } from "./types.js";
 
 function monitorJob(input: CronJobCreate, id = `job-${input.agentId}`): CronJob {
-  return {
-    ...input,
-    id,
-    createdAtMs: 1,
-    updatedAtMs: 1,
-    state: {},
-  } as CronJob;
+  return { ...input, id, createdAtMs: 1, updatedAtMs: 1, state: {} } as CronJob;
+}
+
+const options = { schedulerSeed: "test-seed" };
+const defaultConfig = {
+  agents: { defaults: { heartbeat: { every: "15m" } } },
+} satisfies OpenClawConfig;
+
+function plannedInput(cfg: OpenClawConfig = defaultConfig, agentId = "main") {
+  const input = resolveHeartbeatMonitorPlan(cfg, [], options).specs.find(
+    (spec) => spec.agentId === agentId,
+  )?.input;
+  if (!input) {
+    throw new Error("expected configured heartbeat monitor spec");
+  }
+  return input;
 }
 
 describe("heartbeat monitor desired-state planning", () => {
@@ -19,7 +28,7 @@ describe("heartbeat monitor desired-state planning", () => {
       agents: { ownership: "explicit", entries: { main: {}, ops: {} } },
     } as OpenClawConfig;
 
-    expect(resolveHeartbeatMonitorPlan(cfg, [], { schedulerSeed: "test-seed" }).specs).toEqual([]);
+    expect(resolveHeartbeatMonitorPlan(cfg, [], options).specs).toEqual([]);
   });
 
   it("plans changed monitors once without adopting colliding user jobs", () => {
@@ -29,19 +38,14 @@ describe("heartbeat monitor desired-state planning", () => {
         entries: { main: {}, ops: {}, new: {} },
       },
     } as OpenClawConfig;
-    const options = { schedulerSeed: "test-seed" };
-    const initial = resolveHeartbeatMonitorPlan(cfg, [], options).specs;
-    const main = initial.find((spec) => spec.agentId === "main");
-    const ops = initial.find((spec) => spec.agentId === "ops");
-    if (!main || !ops) {
-      throw new Error("expected configured heartbeat monitor specs");
-    }
+    const main = plannedInput(cfg);
+    const ops = plannedInput(cfg, "ops");
     const jobs = [
-      monitorJob(main.input),
-      monitorJob({ ...ops.input, enabled: false }),
-      monitorJob({ ...main.input, agentId: "stale", declarationKey: "heartbeat:stale" }),
+      monitorJob(main),
+      monitorJob({ ...ops, enabled: false }),
+      monitorJob({ ...main, agentId: "stale", declarationKey: "heartbeat:stale" }),
       monitorJob({
-        ...main.input,
+        ...main,
         agentId: "collider",
         declarationKey: "heartbeat:collider",
         payload: { kind: "systemEvent", text: "user-owned" },
@@ -61,18 +65,14 @@ describe("heartbeat monitor desired-state planning", () => {
     const cfg = {
       agents: { defaults: { heartbeat: { every: "0m" } } },
     } as OpenClawConfig;
-    const input = resolveHeartbeatMonitorPlan(cfg, [], { schedulerSeed: "test-seed" }).specs[0]
-      ?.input;
-    if (!input) {
-      throw new Error("expected a disabled heartbeat monitor");
-    }
+    const input = plannedInput(cfg);
     const existing = monitorJob({
       ...input,
       enabled: true,
       schedule: { kind: "every", everyMs: 60_000 },
     });
 
-    const plan = resolveHeartbeatMonitorPlan(cfg, [existing], { schedulerSeed: "test-seed" });
+    const plan = resolveHeartbeatMonitorPlan(cfg, [existing], options);
 
     expect(plan.changes).toEqual([
       expect.objectContaining({
@@ -87,19 +87,10 @@ describe("heartbeat monitor desired-state planning", () => {
   });
 
   it("removes duplicate monitors before updating the retained row", () => {
-    const cfg = {
-      agents: { defaults: { heartbeat: { every: "15m" } } },
-    } as OpenClawConfig;
-    const options = { schedulerSeed: "test-seed" };
-    const input = resolveHeartbeatMonitorPlan(cfg, [], options).specs[0]?.input;
-    if (!input) {
-      throw new Error("expected configured heartbeat monitor spec");
-    }
-    const older = { ...monitorJob(input, "older"), updatedAtMs: 1 };
-    const newer = {
-      ...monitorJob({ ...input, enabled: false }, "newer"),
-      updatedAtMs: 2,
-    };
+    const cfg = defaultConfig;
+    const input = plannedInput(cfg);
+    const older = monitorJob(input, "older");
+    const newer = { ...monitorJob({ ...input, enabled: false }, "newer"), updatedAtMs: 2 };
 
     const plan = resolveHeartbeatMonitorPlan(cfg, [older, newer], options);
 
@@ -116,14 +107,8 @@ describe("heartbeat monitor desired-state planning", () => {
     { field: "wakeMode", value: "now", changes: ["update"] },
     { field: "declarationKey", value: "heartbeat:stale", changes: ["create", "remove"] },
   ] as const)("repairs a monitor with drifted $field", ({ field, value, changes }) => {
-    const cfg = {
-      agents: { defaults: { heartbeat: { every: "15m" } } },
-    } as OpenClawConfig;
-    const options = { schedulerSeed: "test-seed" };
-    const input = resolveHeartbeatMonitorPlan(cfg, [], options).specs[0]?.input;
-    if (!input) {
-      throw new Error("expected configured heartbeat monitor spec");
-    }
+    const cfg = defaultConfig;
+    const input = plannedInput(cfg);
 
     const plan = resolveHeartbeatMonitorPlan(
       cfg,

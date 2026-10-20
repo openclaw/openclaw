@@ -5,7 +5,10 @@ import type { AgentHarness } from "../agents/harness/types.js";
 import type { Model } from "../llm/types.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 
 const harness: AgentHarness = {
   id: "openclaw",
@@ -29,6 +32,45 @@ const model: Model = {
 };
 afterEach(() => vi.restoreAllMocks());
 
+function prepareAuth(
+  state: OpenClawTestState,
+  stores: ReturnType<typeof modelRuntime.createEmptyAgentDiscoveryStores>,
+  runParams: Parameters<typeof prepareEmbeddedRunAuthPlan>[0]["runParams"],
+  selectedModel = model,
+  nativeModelOwned = false,
+) {
+  return withPluginRuntimeGenerationScope(
+    { metadataSnapshot: createPluginMetadataSnapshotFixture() },
+    () =>
+      prepareEmbeddedRunAuthPlan({
+        assertCurrent() {},
+        runParams,
+        provider: selectedModel.provider,
+        modelId: selectedModel.id,
+        model: selectedModel,
+        agentDir: state.agentDir(),
+        workspaceDir: state.workspaceDir,
+        nativeModelOwned,
+        ...(nativeModelOwned
+          ? {
+              nativeSessionRuntime: {
+                auth: "native" as const,
+                harness,
+                assertCurrent: async () => {},
+              },
+            }
+          : {}),
+        ...stores,
+        getAgentHarness: () => harness,
+        setAgentHarness() {},
+        getRuntimeModel: () => selectedModel,
+        getEffectiveModel: () => selectedModel,
+        applyResolvedRuntimeModel() {},
+        selectHarnessForPreparedAttempts: () => harness,
+      }),
+  );
+}
+
 it.each(["cron", "event"] as const)(
   "keeps a configured direct credential on the %s auth boundary",
   async (trigger) => {
@@ -42,46 +84,26 @@ it.each(["cron", "event"] as const)(
           model,
           logicalRef: { provider: model.provider, model: model.id },
         });
-        const prepared = await withPluginRuntimeGenerationScope(
-          { metadataSnapshot: createPluginMetadataSnapshotFixture() },
-          () =>
-            prepareEmbeddedRunAuthPlan({
-              assertCurrent() {},
-              runParams: {
-                sessionId: "immediate-event",
-                runId: "immediate-event",
-                workspaceDir: state.workspaceDir,
-                prompt: "Synthetic immediate event",
-                timeoutMs: 1_000,
-                trigger,
-                config: {
-                  models: {
-                    providers: {
-                      openai: {
-                        api: "openai-responses",
-                        apiKey: "synthetic-configured-event-key",
-                        baseUrl: model.baseUrl,
-                        models: [],
-                      },
-                    },
-                  },
+        const prepared = await prepareAuth(state, stores, {
+          sessionId: "immediate-event",
+          runId: "immediate-event",
+          workspaceDir: state.workspaceDir,
+          prompt: "Synthetic immediate event",
+          timeoutMs: 1_000,
+          trigger,
+          config: {
+            models: {
+              providers: {
+                openai: {
+                  api: "openai-responses",
+                  apiKey: "synthetic-configured-event-key",
+                  baseUrl: model.baseUrl,
+                  models: [],
                 },
               },
-              provider: model.provider,
-              modelId: model.id,
-              model,
-              agentDir: state.agentDir(),
-              workspaceDir: state.workspaceDir,
-              nativeModelOwned: false,
-              ...stores,
-              getAgentHarness: () => harness,
-              setAgentHarness() {},
-              getRuntimeModel: () => model,
-              getEffectiveModel: () => model,
-              applyResolvedRuntimeModel() {},
-              selectHarnessForPreparedAttempts: () => harness,
-            }),
-        );
+            },
+          },
+        });
         expect(prepared.preparedAuthAttempts).toMatchObject([
           {
             kind: "direct",
@@ -142,34 +164,19 @@ it.each([
       const materialize = vi.spyOn(modelRuntime, "resolveModelAsync");
       const stores = modelRuntime.createEmptyAgentDiscoveryStores();
       await expect(
-        withPluginRuntimeGenerationScope(
-          { metadataSnapshot: createPluginMetadataSnapshotFixture() },
-          () =>
-            prepareEmbeddedRunAuthPlan({
-              assertCurrent() {},
-              runParams: {
-                sessionId: "fresh-legacy-fire",
-                runId: "legacy-fire",
-                workspaceDir: state.workspaceDir,
-                prompt: "Synthetic scheduled work",
-                timeoutMs: 1_000,
-                trigger: "cron",
-                config: testCase.config,
-              },
-              provider: testCase.model.provider,
-              modelId: testCase.model.id,
-              model: testCase.model,
-              agentDir: state.agentDir(),
-              workspaceDir: state.workspaceDir,
-              nativeModelOwned: false,
-              ...stores,
-              getAgentHarness: () => harness,
-              setAgentHarness() {},
-              getRuntimeModel: () => testCase.model,
-              getEffectiveModel: () => testCase.model,
-              applyResolvedRuntimeModel() {},
-              selectHarnessForPreparedAttempts: () => harness,
-            }),
+        prepareAuth(
+          state,
+          stores,
+          {
+            sessionId: "fresh-legacy-fire",
+            runId: "legacy-fire",
+            workspaceDir: state.workspaceDir,
+            prompt: "Synthetic scheduled work",
+            timeoutMs: 1_000,
+            trigger: "cron",
+            config: testCase.config,
+          },
+          testCase.model,
         ),
       ).rejects.toThrow("Automation has no recorded inference account");
       expect(materialize).not.toHaveBeenCalled();
@@ -194,57 +201,34 @@ it.each(["native", "credentialless", "synthetic-marker"] as const)(
           model: selectedModel,
           logicalRef: { provider: selectedModel.provider, model: selectedModel.id },
         });
-        const prepared = await withPluginRuntimeGenerationScope(
-          { metadataSnapshot: createPluginMetadataSnapshotFixture() },
-          () =>
-            prepareEmbeddedRunAuthPlan({
-              assertCurrent() {},
-              runParams: {
-                sessionId: "native-fire",
-                runId: "native-fire",
-                workspaceDir: state.workspaceDir,
-                prompt: "Synthetic native work",
-                timeoutMs: 1_000,
-                trigger: "cron",
-                config:
-                  kind === "synthetic-marker"
-                    ? {
-                        models: {
-                          providers: {
-                            ollama: {
-                              api: "ollama",
-                              apiKey: "ollama-local",
-                              baseUrl: selectedModel.baseUrl,
-                              models: [],
-                            },
-                          },
-                        },
-                      }
-                    : {},
-              },
-              provider: selectedModel.provider,
-              modelId: selectedModel.id,
-              model: selectedModel,
-              agentDir: state.agentDir(),
-              workspaceDir: state.workspaceDir,
-              nativeModelOwned: kind === "native",
-              ...(kind === "native"
+        const prepared = await prepareAuth(
+          state,
+          stores,
+          {
+            sessionId: "native-fire",
+            runId: "native-fire",
+            workspaceDir: state.workspaceDir,
+            prompt: "Synthetic native work",
+            timeoutMs: 1_000,
+            trigger: "cron",
+            config:
+              kind === "synthetic-marker"
                 ? {
-                    nativeSessionRuntime: {
-                      auth: "native" as const,
-                      harness,
-                      assertCurrent: async () => {},
+                    models: {
+                      providers: {
+                        ollama: {
+                          api: "ollama",
+                          apiKey: "ollama-local",
+                          baseUrl: selectedModel.baseUrl,
+                          models: [],
+                        },
+                      },
                     },
                   }
-                : {}),
-              ...stores,
-              getAgentHarness: () => harness,
-              setAgentHarness() {},
-              getRuntimeModel: () => selectedModel,
-              getEffectiveModel: () => selectedModel,
-              applyResolvedRuntimeModel() {},
-              selectHarnessForPreparedAttempts: () => harness,
-            }),
+                : {},
+          },
+          selectedModel,
+          kind === "native",
         );
         expect(prepared.preparedAuthAttempts).toMatchObject(
           kind === "synthetic-marker"
