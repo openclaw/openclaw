@@ -1,5 +1,6 @@
 import type { IncomingMessage } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { AgentSelectionRequiredError } from "../agents/agent-scope.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -13,6 +14,9 @@ import {
 import { CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
 
 const sessionEntries = vi.hoisted(() => new Map<string, Record<string, unknown>>());
+const runtimeConfig = vi.hoisted(() => ({
+  value: {} as Record<string, unknown>,
+}));
 
 vi.mock("../config/sessions/session-accessor.entry.js", async (importOriginal) => {
   const actual =
@@ -23,6 +27,11 @@ vi.mock("../config/sessions/session-accessor.entry.js", async (importOriginal) =
       sessionEntries.get(params.sessionKey),
   };
 });
+
+vi.mock("../config/io.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/io.js")>()),
+  getRuntimeConfig: () => runtimeConfig.value,
+}));
 
 function createReq(headers: Record<string, string> = {}): IncomingMessage {
   return { headers } as IncomingMessage;
@@ -37,7 +46,10 @@ const requestContext = (sessionKey: string) =>
     sessionPrefix: "openai",
   });
 
-beforeEach(() => sessionEntries.clear());
+beforeEach(() => {
+  sessionEntries.clear();
+  runtimeConfig.value = {};
+});
 
 describe("resolveGatewayRequestContext", () => {
   beforeEach(() => setRuntimeConfigSnapshot({}));
@@ -99,6 +111,38 @@ describe("resolveGatewayRequestContext", () => {
     );
   });
 
+  it("lets a valid agent header win over an unknown agent-specific model", async () => {
+    runtimeConfig.value = {
+      agents: {
+        list: [{ id: "main", default: true }, { id: "scripts" }],
+      },
+    };
+
+    const result = await resolveGatewayRequestContext({
+      req: createReq({ "x-openclaw-agent-id": "scripts" }),
+      model: "openclaw/missing-agent",
+      sessionPrefix: "openai",
+    });
+
+    expect(result.agentId).toBe("scripts");
+  });
+
+  it("rejects an unknown agent-specific model before a known session-key owner", async () => {
+    runtimeConfig.value = {
+      agents: {
+        list: [{ id: "main", default: true }, { id: "scripts" }],
+      },
+    };
+
+    await expect(
+      resolveGatewayRequestContext({
+        req: createReq({ "x-openclaw-session-key": "agent:scripts:foobar" }),
+        model: "openclaw/missing-agent",
+        sessionPrefix: "openai",
+      }),
+    ).rejects.toThrow(/Unknown agent/);
+  });
+
   it("does not build session state for explicit unknown agent ids", async () => {
     await expect(
       resolveGatewayRequestContext({
@@ -133,6 +177,130 @@ describe("resolveGatewayRequestContext", () => {
         sessionPrefix: "openai",
       }),
     ).rejects.toThrow("Invalid `model`. Use `openclaw` or `openclaw/<agentId>`.");
+  });
+
+  it("infers the owner from an agent-prefixed session key in an explicit multi-agent fleet", async () => {
+    runtimeConfig.value = {
+      agents: {
+        ownership: "explicit",
+        list: [{ id: "main" }, { id: "scripts" }],
+      },
+    };
+
+    const result = await resolveGatewayRequestContext({
+      req: createReq({ "x-openclaw-session-key": "agent:scripts:foobar" }),
+      model: "openclaw",
+      sessionPrefix: "openai",
+    });
+
+    expect(result.agentId).toBe("scripts");
+    expect(result.sessionKey).toBe("agent:scripts:foobar");
+  });
+
+  it("selects the owner from x-openclaw-agent-id in an explicit multi-agent fleet", async () => {
+    runtimeConfig.value = {
+      agents: {
+        ownership: "explicit",
+        list: [{ id: "main" }, { id: "scripts" }],
+      },
+    };
+
+    const result = await resolveGatewayRequestContext({
+      req: createReq({ "x-openclaw-agent-id": "scripts" }),
+      model: "openclaw",
+      sessionPrefix: "openai",
+    });
+
+    expect(result.agentId).toBe("scripts");
+    expect(result.sessionKey).toMatch(/^agent:scripts:/);
+  });
+
+  it("keeps the session key owner over a default agent for a generic model", async () => {
+    runtimeConfig.value = {
+      agents: {
+        list: [{ id: "main", default: true }, { id: "scripts" }],
+      },
+    };
+
+    const result = await resolveGatewayRequestContext({
+      req: createReq({ "x-openclaw-session-key": "agent:scripts:foobar" }),
+      model: "openclaw",
+      sessionPrefix: "openai",
+    });
+
+    expect(result.agentId).toBe("scripts");
+  });
+
+  it("rejects an agent header that conflicts with the session key owner", async () => {
+    runtimeConfig.value = {
+      agents: {
+        list: [{ id: "main", default: true }, { id: "scripts" }],
+      },
+    };
+
+    await expect(
+      resolveGatewayRequestContext({
+        req: createReq({
+          "x-openclaw-agent-id": "main",
+          "x-openclaw-session-key": "agent:scripts:foobar",
+        }),
+        model: "openclaw",
+        sessionPrefix: "openai",
+      }),
+    ).rejects.toThrow("Selected agent 'main' does not match the agent in `x-openclaw-session-key`");
+  });
+
+  it("rejects an agent-specific model that conflicts with the session key owner", async () => {
+    runtimeConfig.value = {
+      agents: {
+        list: [{ id: "main", default: true }, { id: "scripts" }],
+      },
+    };
+
+    await expect(
+      resolveGatewayRequestContext({
+        req: createReq({ "x-openclaw-session-key": "agent:scripts:foobar" }),
+        model: "openclaw/main",
+        sessionPrefix: "openai",
+      }),
+    ).rejects.toThrow("Selected agent 'main' does not match the agent in `x-openclaw-session-key`");
+  });
+
+  it("accepts a selector that agrees with the session key owner", async () => {
+    runtimeConfig.value = {
+      agents: {
+        list: [{ id: "main", default: true }, { id: "scripts" }],
+      },
+    };
+
+    const result = await resolveGatewayRequestContext({
+      req: createReq({
+        "x-openclaw-agent-id": "scripts",
+        "x-openclaw-session-key": "agent:scripts:foobar",
+      }),
+      model: "openclaw",
+      sessionPrefix: "openai",
+    });
+
+    expect(result.agentId).toBe("scripts");
+    expect(result.sessionKey).toBe("agent:scripts:foobar");
+  });
+
+  it("still requires an explicit owner when a multi-agent fleet request has no session key or agent header", async () => {
+    runtimeConfig.value = {
+      agents: {
+        ownership: "explicit",
+        list: [{ id: "main" }, { id: "scripts" }],
+      },
+    };
+
+    await expect(
+      resolveGatewayRequestContext({
+        req: createReq(),
+        model: "openclaw",
+        sessionPrefix: "openai",
+      }),
+    ).rejects.toThrow(AgentSelectionRequiredError);
   });
 });
 

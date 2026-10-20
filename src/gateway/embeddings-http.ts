@@ -32,10 +32,12 @@ import {
   getHeader,
   isAgentSelectionRequiredError,
   isOpenClawAgentModelId,
+  isGatewayAgentSelectionConflictError,
   isUnknownGatewayAgentError,
   resolveAgentIdForRequest,
 } from "./http-utils.js";
 import { resolveOpenAiCompatError } from "./openai-compat-errors.js";
+import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
 
 type OpenAiEmbeddingsHttpOptions = GatewayHttpRequestAuthOptions & {
   maxBodyBytes?: number;
@@ -216,11 +218,31 @@ export async function handleOpenAiEmbeddingsHttpRequest(
   try {
     agentId = resolveAgentIdForRequest({ req, model: requestModel });
   } catch (err) {
-    if (isAgentSelectionRequiredError(err) || isUnknownGatewayAgentError(err)) {
+    if (
+      isAgentSelectionRequiredError(err) ||
+      isUnknownGatewayAgentError(err) ||
+      isGatewayAgentSelectionConflictError(err)
+    ) {
       sendInvalidRequest(res, err.message);
       return true;
     }
     throw err;
+  }
+  // Chat and Responses already apply this ceiling after the shared selector.
+  // Embeddings uses that same owner, including a session-key owner, so a role
+  // that cannot run the agent must fail before any embedding provider I/O.
+  const creationAuth = authorizeGatewaySessionCreation({
+    cfg: getRuntimeConfig(),
+    ...(handled.requestAuth.operatorRoleActor
+      ? { actor: handled.requestAuth.operatorRoleActor }
+      : { profileId: handled.requestAuth.authenticatedUserProfile?.profileId }),
+    agentId,
+  });
+  if (creationAuth) {
+    sendJson(res, 403, {
+      error: { message: creationAuth.message, type: "forbidden" },
+    });
+    return true;
   }
   const agentDir = resolveAgentDir(cfg, agentId);
   const memorySearch = resolveMemorySearchConfig(cfg, agentId);

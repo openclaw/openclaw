@@ -56,6 +56,7 @@ function createOperatorRunFixture() {
   };
   const params: Parameters<typeof runOpenAiCompatibleAgentCommand>[0] = {
     message: "Continue my work",
+    agentId: "main",
     sessionKey: "agent:main:visitor-work",
     runId: "compat-request",
     messageChannel: "webchat",
@@ -358,6 +359,7 @@ describe("OpenAI-compatible command admission", () => {
       });
       const pending = runOpenAiCompatibleAgentCommand({
         message: "probe",
+        agentId: "main",
         sessionKey: "agent:main:main",
         runId: "http-run",
         messageChannel: "webchat",
