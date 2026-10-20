@@ -1,6 +1,3 @@
-/**
- * Tests gateway stability helpers for cleanup and repeated startup cycles.
- */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   emitDiagnosticEvent,
@@ -20,12 +17,10 @@ const SYNTHETIC_SESSION_COUNT = 8;
 const STABILITY_REASON = "stability_probe";
 
 function memoryUsageForBatch(index: number): DiagnosticMemoryUsage {
-  const rssBytes = 180 * MB + index * 64 * 1024;
-  const heapUsedBytes = 70 * MB + (index % 12) * 256 * 1024;
   return {
-    rssBytes,
+    rssBytes: 180 * MB + index * 64 * 1024,
     heapTotalBytes: 96 * MB,
-    heapUsedBytes,
+    heapUsedBytes: 70 * MB + (index % 12) * 256 * 1024,
     externalBytes: 8 * MB,
     arrayBuffersBytes: 2 * MB,
   };
@@ -36,22 +31,21 @@ function emitSyntheticGatewayStabilityLoad(): number {
   let maxRssBytes = 0;
   for (let index = 0; index < SYNTHETIC_BATCH_COUNT; index += 1) {
     const sessionIndex = index % SYNTHETIC_SESSION_COUNT;
-    const sessionKey = `agent:main:stability-${sessionIndex}`;
-    const sessionId = `session-${sessionIndex}`;
+    const session = {
+      sessionKey: `agent:main:stability-${sessionIndex}`,
+      sessionId: `session-${sessionIndex}`,
+    };
+    const sessionState = { ...session, type: "session.state" as const, reason: STABILITY_REASON };
     emitDiagnosticEvent({
       type: "message.queued",
-      sessionKey,
-      sessionId,
+      ...session,
       channel: "gateway",
       source: "stability-probe",
       queueDepth: 1,
     });
     emitDiagnosticEvent({
-      type: "session.state",
-      sessionKey,
-      sessionId,
+      ...sessionState,
       state: "processing",
-      reason: STABILITY_REASON,
       queueDepth: 1,
     });
 
@@ -77,18 +71,14 @@ function emitSyntheticGatewayStabilityLoad(): number {
     }
 
     emitDiagnosticEvent({
-      type: "session.state",
-      sessionKey,
-      sessionId,
+      ...sessionState,
       state: "idle",
-      reason: STABILITY_REASON,
       queueDepth: 0,
     });
     emitDiagnosticEvent({
       type: "message.processed",
       channel: "gateway",
-      sessionKey,
-      sessionId,
+      ...session,
       outcome: "completed",
       durationMs: 5,
       reason: STABILITY_REASON,
@@ -117,8 +107,7 @@ describe("gateway stability lane", () => {
     const maxSyntheticRssBytes = emitSyntheticGatewayStabilityLoad();
     const snapshot = getDiagnosticStabilitySnapshot({ limit: 1000 });
 
-    expect(snapshot.capacity).toBe(1000);
-    expect(snapshot.count).toBe(1000);
+    expect(snapshot).toMatchObject({ capacity: 1000, count: 1000 });
     expect(snapshot.events).toHaveLength(1000);
     expect(snapshot.dropped).toBeGreaterThan(0);
     const firstSeq = snapshot.firstSeq ?? 0;
@@ -138,15 +127,12 @@ describe("gateway stability lane", () => {
     for (const event of sessionEvents) {
       expect(event).not.toHaveProperty("sessionId");
       expect(event).not.toHaveProperty("sessionKey");
+      expect(event.reason).toBe(STABILITY_REASON);
     }
     const idleDrainedEvents = sessionEvents.filter(
       (event) => event.outcome === "idle" && event.queueDepth === 0,
     );
     expect(idleDrainedEvents.length).toBeGreaterThan(0);
-    const unexpectedReasons = sessionEvents
-      .map((event) => event.reason)
-      .filter((reason) => reason !== STABILITY_REASON);
-    expect(unexpectedReasons).toStrictEqual([]);
 
     stopDiagnosticStabilityRecorder();
     emitDiagnosticEvent({

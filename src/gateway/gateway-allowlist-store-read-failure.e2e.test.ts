@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
@@ -10,20 +10,6 @@ import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
-
-const ENV_KEYS = [
-  "HOME",
-  "OPENCLAW_STATE_DIR",
-  "OPENCLAW_CONFIG_PATH",
-  "OPENCLAW_SKIP_CHANNELS",
-  "OPENCLAW_SKIP_GMAIL_WATCHER",
-  "OPENCLAW_SKIP_CRON",
-  "OPENCLAW_SKIP_CANVAS_HOST",
-  "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
-  "OPENCLAW_SKIP_PROVIDERS",
-  "OPENCLAW_BUNDLED_PLUGINS_DIR",
-  "OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR",
-] as const;
 
 type ChatFinalPayload = {
   runId?: string;
@@ -35,36 +21,35 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("Gateway allowlist command", () => {
   it("surfaces a pairing-store read failure through chat.send", { timeout: 90_000 }, async () => {
-    const envSnapshot = captureEnv([...ENV_KEYS]);
+    const home = tempDirs.make("openclaw-allowlist-gateway-");
+    const stateDir = path.join(home, ".openclaw");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const workspaceDir = path.join(home, "workspace");
+    const env = {
+      HOME: home,
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_SKIP_CHANNELS: "1",
+      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+      OPENCLAW_SKIP_CRON: "1",
+      OPENCLAW_SKIP_CANVAS_HOST: "1",
+      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+      OPENCLAW_SKIP_PROVIDERS: "1",
+      OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(process.cwd(), "extensions"),
+      OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+    };
+    const envSnapshot = captureEnv(Object.keys(env));
     const originalRead = stateReads.executeExistingOpenClawStateRead;
     const read = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
     let faultArmed = false;
     let faultObserved = false;
     let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
-    let finalTimeout: ReturnType<typeof setTimeout> | undefined;
-
     try {
-      const home = tempDirs.make("openclaw-allowlist-gateway-");
-      const stateDir = path.join(home, ".openclaw");
-      const configPath = path.join(stateDir, "openclaw.json");
-      const workspaceDir = path.join(home, "workspace");
       await Promise.all([
         fs.mkdir(stateDir, { recursive: true }),
         fs.mkdir(workspaceDir, { recursive: true }),
       ]);
-      for (const [key, value] of Object.entries({
-        HOME: home,
-        OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_CONFIG_PATH: configPath,
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_SKIP_PROVIDERS: "1",
-        OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(process.cwd(), "extensions"),
-        OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
-      })) {
+      for (const [key, value] of Object.entries(env)) {
         setTestEnvValue(key, value);
       }
 
@@ -128,22 +113,17 @@ describe("Gateway allowlist command", () => {
         deliver: false,
         idempotencyKey: runId,
       });
-      const timeout = new Promise<never>((_resolve, reject) => {
-        finalTimeout = setTimeout(
-          () => reject(new Error("timed out waiting for allowlist command reply")),
-          30_000,
-        );
-      });
-      const payload = await Promise.race([final, timeout]);
+      const payload = await withTestTimeout(
+        final,
+        30_000,
+        "timed out waiting for allowlist command reply",
+      );
 
       expect(faultObserved).toBe(true);
       expect(extractFirstTextBlock(payload.message)).toContain(
         "Paired allowFrom (store): unavailable (read failed). Retry this command; if it still fails, run openclaw doctor.",
       );
     } finally {
-      if (finalTimeout) {
-        clearTimeout(finalTimeout);
-      }
       read.mockRestore();
       if (gateway) {
         await disconnectGatewayClient(gateway.client).catch(() => undefined);
