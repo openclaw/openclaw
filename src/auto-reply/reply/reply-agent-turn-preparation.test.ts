@@ -1,4 +1,4 @@
-import { assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { assert, beforeEach, expect, it, vi } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { resolvePreparedSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
@@ -55,9 +55,7 @@ vi.mock("./agent-runner-auto-fallback.js", async (importOriginal) => ({
 }));
 
 // mock-isolation: The fixture controls preflight rotation and failure without running compaction or session writes.
-vi.mock("./reply-turn-preflight.js", () => ({
-  prepareReplyTurnContext: state.preflight,
-}));
+vi.mock("./reply-turn-preflight.js", () => ({ prepareReplyTurnContext: state.preflight }));
 
 vi.mock("./agent-runner-utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./agent-runner-utils.js")>()),
@@ -66,9 +64,7 @@ vi.mock("./agent-runner-utils.js", async (importOriginal) => ({
 }));
 
 // mock-isolation: Preparation cases supply an owned or rejected turn without admitting a second real controller operation.
-vi.mock("./reply-turn-admission.js", () => ({
-  admitReplyTurn: state.admitReply,
-}));
+vi.mock("./reply-turn-admission.js", () => ({ admitReplyTurn: state.admitReply }));
 
 // mock-isolation: Admission fixtures supply session changes directly without starting a database worker.
 vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
@@ -182,6 +178,12 @@ function prepare(
   });
 }
 
+async function admitted(result: ReturnType<typeof prepare>) {
+  const prepared = await result;
+  assert(prepared.kind === "admitted");
+  return prepared.turn;
+}
+
 function admit(
   ownedOperation: ReplyOperation | ReturnType<typeof createOperation>,
   preparedEntry?: SessionEntry,
@@ -209,9 +211,10 @@ function sessionFixture(
     sessionStore,
     start: (
       defaults: Parameters<typeof prepare>[1] = {},
-      options: Parameters<typeof prepare>[2] = {},
       queued = createRun(),
-    ) => prepare(queued, { sessionEntry: initialEntry, sessionStore, ...defaults }, options),
+      options: Parameters<typeof prepare>[2] = {},
+    ) =>
+      admitted(prepare(queued, { sessionEntry: initialEntry, sessionStore, ...defaults }, options)),
   };
 }
 
@@ -231,6 +234,7 @@ function compactionFixture(stored = false) {
     start: (defaults: Parameters<typeof prepare>[1] = {}) =>
       session.start(
         { sessionStore: stored ? session.sessionStore : undefined, ...defaults },
+        createRun(),
         { onCompactionNotice },
       ),
   };
@@ -266,566 +270,495 @@ function createActiveGoalEntry(): SessionEntry {
   };
 }
 
-describe("prepareReplyAgentTurn", () => {
-  it("retains an undefined preflight rejection as an executable failure", async () => {
-    state.preflight.mockRejectedValueOnce(undefined);
+it("retains an undefined preflight rejection as an executable failure", async () => {
+  state.preflight.mockRejectedValueOnce(undefined);
 
-    const result = await prepare();
+  const { preflightError } = await admitted(prepare());
+  expect(preflightError).toBeInstanceOf(Error);
+  expect(preflightError).toMatchObject({ message: "Reply preparation failed", cause: undefined });
+});
 
-    assert(result.kind === "admitted");
-    expect(result.turn.preflightError).toBeInstanceOf(Error);
-    expect(result.turn.preflightError).toMatchObject({
-      message: "Reply preparation failed",
-      cause: undefined,
-    });
+it("reports a queued event's admission refusal to its source before consuming it", async () => {
+  const error = new SessionWorkStartError("archived", "Restore this session before retrying.");
+  state.admitReply.mockResolvedValue({ status: "skipped", reason: "lifecycle-invalidated", error });
+  const queued = createRun();
+  const onFailed = vi.fn();
+  queued.run.internalEventExecution = { onStarted: vi.fn(), onTerminal: vi.fn(), onFailed };
+
+  await expect(prepare(queued)).resolves.toEqual({
+    kind: "skipped",
+    reason: "lifecycle-invalidated",
   });
+  expect(onFailed).toHaveBeenCalledExactlyOnceWith(error);
+  expect(state.preflight).not.toHaveBeenCalled();
+});
 
-  it("reports a queued event's admission refusal to its source before consuming it", async () => {
-    const error = new SessionWorkStartError("archived", "Restore this session before retrying.");
-    state.admitReply.mockResolvedValue({
-      status: "skipped",
-      reason: "lifecycle-invalidated",
-      error,
-    });
+it.each([
+  { match: "sender-id", enqueuedOwner: false },
+  { match: "sender-id", enqueuedOwner: true },
+  { match: "sender-e164", enqueuedOwner: false },
+  { match: "sender-e164", enqueuedOwner: true },
+] as const)(
+  "resolves $match owner privileges at the admission fence after enqueue owner=$enqueuedOwner",
+  async ({ match, enqueuedOwner }) => {
     const queued = createRun();
-    const onFailed = vi.fn();
-    queued.run.internalEventExecution = {
-      onStarted: vi.fn(),
-      onTerminal: vi.fn(),
-      onFailed,
+    const channel = match === "sender-e164" ? "whatsapp" : "telegram";
+    const senderId = match === "sender-e164" ? "123456789@lid" : "alice";
+    const senderE164 = match === "sender-e164" ? "+15555550123" : undefined;
+    const configuredOwner = `${channel}:${senderE164 ?? senderId}`;
+    const otherOwner = `${channel}:other`;
+    const originalConfig = {
+      commands: { ownerAllowFrom: [enqueuedOwner ? configuredOwner : otherOwner] },
     };
-
-    await expect(prepare(queued)).resolves.toEqual({
-      kind: "skipped",
-      reason: "lifecycle-invalidated",
+    const admittedOwner = !enqueuedOwner;
+    const admittedConfig = {
+      commands: { ownerAllowFrom: [admittedOwner ? configuredOwner : otherOwner] },
+    };
+    const laterConfig = { ...admittedConfig, tools: { deny: ["message"] } };
+    const durableOwnerRead = vi
+      .spyOn(configuredOwners, "prepareConfiguredCommandOwnerAuthority")
+      .mockResolvedValue(undefined);
+    setRuntimeConfigSnapshot(originalConfig, originalConfig);
+    queued.run.config = originalConfig;
+    queued.readAdmissionConfig = createRuntimeConfigReader(originalConfig);
+    queued.run.requesterOrigin = {
+      sessionKey: `agent:original:${channel}:direct:${senderId}`,
+      messageProvider: channel,
+      accountId: "work",
+      senderId,
+      senderE164,
+    };
+    queued.run.senderId = "receiver";
+    queued.run.senderIsOwner = enqueuedOwner;
+    queued.run.traceAuthorized = enqueuedOwner;
+    bindCommandOwnerAuthority(queued.run, { isCurrent: () => enqueuedOwner });
+    state.admitReply.mockImplementation(async ({ captureRunSelection }) => {
+      // The actual admission owner invokes this fence again after waiting for a direct command.
+      setRuntimeConfigSnapshot(admittedConfig, admittedConfig);
+      captureRunSelection();
+      setRuntimeConfigSnapshot(laterConfig, laterConfig);
+      return { status: "owned", operation };
     });
-    expect(onFailed).toHaveBeenCalledExactlyOnceWith(error);
-    expect(state.preflight).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { match: "sender-id", enqueuedOwner: false },
-    { match: "sender-id", enqueuedOwner: true },
-    { match: "sender-e164", enqueuedOwner: false },
-    { match: "sender-e164", enqueuedOwner: true },
-  ] as const)(
-    "resolves $match owner privileges at the admission fence after enqueue owner=$enqueuedOwner",
-    async ({ match, enqueuedOwner }) => {
-      const queued = createRun();
-      const channel = match === "sender-e164" ? "whatsapp" : "telegram";
-      const senderId = match === "sender-e164" ? "123456789@lid" : "alice";
-      const senderE164 = match === "sender-e164" ? "+15555550123" : undefined;
-      const configuredOwner = `${channel}:${senderE164 ?? senderId}`;
-      const otherOwner = `${channel}:other`;
-      const originalConfig = {
-        commands: { ownerAllowFrom: [enqueuedOwner ? configuredOwner : otherOwner] },
-      };
-      const admittedOwner = !enqueuedOwner;
-      const admittedConfig = {
-        commands: { ownerAllowFrom: [admittedOwner ? configuredOwner : otherOwner] },
-      };
-      const laterConfig = { ...admittedConfig, tools: { deny: ["message"] } };
-      const durableOwnerRead = vi
-        .spyOn(configuredOwners, "prepareConfiguredCommandOwnerAuthority")
-        .mockResolvedValue(undefined);
-      setRuntimeConfigSnapshot(originalConfig, originalConfig);
-      queued.run.config = originalConfig;
-      queued.readAdmissionConfig = createRuntimeConfigReader(originalConfig);
-      queued.run.requesterOrigin = {
-        sessionKey: `agent:original:${channel}:direct:${senderId}`,
-        messageProvider: channel,
-        accountId: "work",
-        senderId,
-        senderE164,
-      };
-      queued.run.senderId = "receiver";
-      queued.run.senderIsOwner = enqueuedOwner;
-      queued.run.traceAuthorized = enqueuedOwner;
-      bindCommandOwnerAuthority(queued.run, { isCurrent: () => enqueuedOwner });
-      state.admitReply.mockImplementation(async ({ captureRunSelection }) => {
-        // The actual admission owner invokes this fence again after waiting for a direct command.
-        setRuntimeConfigSnapshot(admittedConfig, admittedConfig);
-        captureRunSelection();
-        setRuntimeConfigSnapshot(laterConfig, laterConfig);
-        return { status: "owned", operation };
+    try {
+      const turn = await admitted(prepare(queued));
+      const execution = turn.queued;
+      expect(execution.run).toMatchObject({
+        config: admittedConfig,
+        requesterOrigin: { senderId, senderE164 },
+        senderIsOwner: admittedOwner,
+        traceAuthorized: admittedOwner,
       });
-      try {
-        const result = await prepare(queued);
-        assert(
-          result.kind === "admitted",
-          "Expected the original input to receive a new execution",
-        );
-        const execution = result.turn.queued;
-        expect(execution.run.config).toEqual(admittedConfig);
-        expect(execution.run.requesterOrigin?.senderId).toBe(senderId);
-        expect(execution.run.requesterOrigin?.senderE164).toBe(senderE164);
-        expect(execution.run.senderIsOwner).toBe(admittedOwner);
-        expect(execution.run.traceAuthorized).toBe(admittedOwner);
-        expect(resolveAdmittedToolAuthority(result.turn).capabilityProfile.sender.isOwner).toBe(
-          admittedOwner,
-        );
-        const assertOwner = captureCommandOwnerAssertion(execution.run);
-        if (admittedOwner) {
-          expect(assertOwner).toBeDefined();
-          expect(assertOwner).not.toThrow();
-          setRuntimeConfigSnapshot({ commands: { ownerAllowFrom: [] } });
-        }
-        expect(assertOwner).toThrow("Channel operator authority changed");
-        expect(queued.run.requesterOrigin?.senderId).toBe(senderId);
-        expect(queued.run.requesterOrigin?.senderE164).toBe(senderE164);
-        expect(queued.run.senderIsOwner).toBe(enqueuedOwner);
-        expect(queued.run.config).toBe(originalConfig);
-      } finally {
-        durableOwnerRead.mockRestore();
-        clearRuntimeConfigSnapshot();
+      expect(execution.run.config).toEqual(admittedConfig);
+      expect(resolveAdmittedToolAuthority(turn).capabilityProfile.sender.isOwner).toBe(
+        admittedOwner,
+      );
+      const assertOwner = captureCommandOwnerAssertion(execution.run);
+      if (admittedOwner) {
+        expect(assertOwner).toBeDefined();
+        expect(assertOwner).not.toThrow();
+        setRuntimeConfigSnapshot({ commands: { ownerAllowFrom: [] } });
       }
-    },
-  );
+      expect(assertOwner).toThrow("Channel operator authority changed");
+      expect(queued.run).toMatchObject({
+        requesterOrigin: { senderId, senderE164 },
+        senderIsOwner: enqueuedOwner,
+      });
+      expect(queued.run.config).toBe(originalConfig);
+    } finally {
+      durableOwnerRead.mockRestore();
+      clearRuntimeConfigSnapshot();
+    }
+  },
+);
 
-  it("does not refresh queued owner policy past revoked operator custody", async () => {
+it.each([false, true])(
+  "preserves operator precedence only while custody is live, revoked=%s",
+  async (revoked) => {
     const queued = createRun();
     const controller = new AbortController();
+    const assertCurrent = vi.fn(() => controller.signal.throwIfAborted());
     queued.operatorAuthority = createAdmittedRunOperatorAuthority({
-      profileId: "alice",
+      profileId: revoked ? "alice" : "alice-profile",
       scopes: ["operator.admin"],
-      assertCurrent: () => controller.signal.throwIfAborted(),
+      assertCurrent,
       signal: controller.signal,
     });
     queued.run.requesterOrigin = {
-      sessionKey: "main",
+      sessionKey: revoked ? "main" : "agent:original:telegram:direct:alice",
       messageProvider: "telegram",
       senderId: "alice",
+      ...(!revoked && { operatorProfileId: "alice-profile" }),
     };
     queued.run.senderIsOwner = true;
-    state.resolveConfig.mockImplementation(async (config) => {
-      controller.abort(new Error("operator source retired"));
-      return config;
-    });
-    await expect(prepare(queued)).rejects.toThrow("operator source retired");
-    expect(state.admitReply).toHaveBeenCalledOnce();
-    expect(operation.complete).toHaveBeenCalledOnce();
-    expect(state.preflight).not.toHaveBeenCalled();
-  });
-
-  it("retains live operator admin precedence over external channel owner policy", async () => {
-    const queued = createRun();
-    const assertCurrent = vi.fn();
-    queued.operatorAuthority = createAdmittedRunOperatorAuthority({
-      profileId: "alice-profile",
-      scopes: ["operator.admin"],
-      assertCurrent,
-    });
-    queued.run.requesterOrigin = {
-      sessionKey: "agent:original:telegram:direct:alice",
-      messageProvider: "telegram",
-      senderId: "alice",
-      operatorProfileId: "alice-profile",
-    };
-    queued.run.config = { commands: { ownerAllowFrom: ["telegram:other"] } };
-    queued.run.senderIsOwner = true;
-    queued.run.traceAuthorized = true;
-    using durableOwnerRead = vi
-      .spyOn(configuredOwners, "prepareConfiguredCommandOwnerAuthority")
-      .mockResolvedValue(undefined);
-    const result = await prepare(queued);
-    assert(result.kind === "admitted", "Expected operator input admission");
-    expect(result.turn.queued.run.senderIsOwner).toBe(true);
-    expect(result.turn.queued.run.traceAuthorized).toBe(true);
-    expect(resolveAdmittedToolAuthority(result.turn).capabilityProfile.sender.isOwner).toBe(true);
-    expect(assertCurrent).toHaveBeenCalled();
-    expect(durableOwnerRead).not.toHaveBeenCalled();
-  });
-  it.each([
-    "paused",
-    "blocked",
-    "complete",
-    "budget_limited",
-    "usage_limited",
-    "replaced",
-    "cleared",
-    "new input",
-    "paused during preflight",
-  ] as const)("drops an automatic Goal nudge when admission observes %s", async (change) => {
-    const original = createActiveGoalEntry();
-    const onQueuedFollowupAdmitted = vi.fn(async () => {});
-    const onQueuedFollowupSettled = vi.fn(async () => {});
-    let current = change === "paused during preflight" ? original : structuredClone(original);
-    if (change === "replaced") {
-      current.goal!.id = "replacement";
-    } else if (change === "cleared") {
-      current.goal = undefined;
-    } else if (change === "new input") {
-      state.queueDepth.mockReturnValue(1);
-    } else if (change === "paused during preflight") {
-      state.preflight.mockImplementation(async () => {
-        current = {
-          ...original,
-          updatedAt: 2,
-          goal: { ...original.goal!, status: "paused", updatedAt: 2 },
-        };
-        return original;
+    if (revoked) {
+      state.resolveConfig.mockImplementation(async (config) => {
+        controller.abort(new Error("operator source retired"));
+        return config;
       });
-    } else {
-      current.goal!.status = change;
-    }
-    admit(operation, change === "paused during preflight" ? original : current);
-    state.loadEntry.mockImplementation(() => current);
-    const result = await prepare(
-      createRun({
-        goalContinuation: { sessionId: "queued-session", goalId: "goal" },
-      }),
-      {
-        sessionEntry: original,
-        storePath: "/fixture/sessions.json",
-        opts: { onQueuedFollowupAdmitted, onQueuedFollowupSettled },
-      },
-    );
-    expect(result).toMatchObject({ kind: "skipped", reason: "goal-inactive", operation });
-    expect(onQueuedFollowupAdmitted).toHaveBeenCalledOnce();
-    expect(onQueuedFollowupSettled).toHaveBeenCalledOnce();
-    expect(operation.complete).not.toHaveBeenCalled();
-    if (change === "paused during preflight") {
-      expect(state.preflight).toHaveBeenCalledOnce();
-    } else {
+      await expect(prepare(queued)).rejects.toThrow("operator source retired");
+      expect(state.admitReply).toHaveBeenCalledOnce();
+      expect(operation.complete).toHaveBeenCalledOnce();
       expect(state.preflight).not.toHaveBeenCalled();
+    } else {
+      queued.run.config = { commands: { ownerAllowFrom: ["telegram:other"] } };
+      queued.run.traceAuthorized = true;
+      using durableOwnerRead = vi
+        .spyOn(configuredOwners, "prepareConfiguredCommandOwnerAuthority")
+        .mockResolvedValue(undefined);
+      const turn = await admitted(prepare(queued));
+      expect(turn.queued.run).toMatchObject({ senderIsOwner: true, traceAuthorized: true });
+      expect(resolveAdmittedToolAuthority(turn).capabilityProfile.sender.isOwner).toBe(true);
+      expect(assertCurrent).toHaveBeenCalled();
+      expect(durableOwnerRead).not.toHaveBeenCalled();
     }
-  });
-
-  it("preserves the admitted legacy transcript target", async () => {
-    const queued = createRun();
-    queued.run.sessionKey = undefined;
-    queued.run.sessionFile = "legacy-target";
-    admit(createOperation("admitted-session"));
-
-    const result = await prepare(queued, { sessionKey: undefined });
-
-    assert(result.kind === "admitted");
-    expect(result.turn.queued.run.sessionFile).toBe("legacy-target");
-  });
-
-  it("retires a selected source refused by reply admission without adopting it", async () => {
-    state.admitReply.mockResolvedValue({ status: "skipped", reason: "active-run" });
-    const onAdopted = vi.fn();
-    const queued = createRun({ turnAdoptionLifecycle: { onAdopted } });
-
-    await expect(prepare(queued)).resolves.toEqual({
-      kind: "skipped",
-      reason: "lifecycle-invalidated",
+  },
+);
+it.each([
+  "paused",
+  "blocked",
+  "complete",
+  "budget_limited",
+  "usage_limited",
+  "replaced",
+  "cleared",
+  "new input",
+  "paused during preflight",
+] as const)("drops an automatic Goal nudge when admission observes %s", async (change) => {
+  const original = createActiveGoalEntry();
+  const onQueuedFollowupAdmitted = vi.fn(async () => {});
+  const onQueuedFollowupSettled = vi.fn(async () => {});
+  let current = change === "paused during preflight" ? original : structuredClone(original);
+  if (change === "replaced") {
+    current.goal!.id = "replacement";
+  } else if (change === "cleared") {
+    current.goal = undefined;
+  } else if (change === "new input") {
+    state.queueDepth.mockReturnValue(1);
+  } else if (change === "paused during preflight") {
+    state.preflight.mockImplementation(async () => {
+      current = {
+        ...original,
+        updatedAt: 2,
+        goal: { ...original.goal!, status: "paused", updatedAt: 2 },
+      };
+      return original;
     });
-    expect(releaseSessionControllerClaim).toHaveBeenCalledOnce();
-    expect(onAdopted).not.toHaveBeenCalled();
+  } else {
+    current.goal!.status = change;
+  }
+  admit(operation, change === "paused during preflight" ? original : current);
+  state.loadEntry.mockImplementation(() => current);
+  const result = await prepare(
+    createRun({ goalContinuation: { sessionId: "queued-session", goalId: "goal" } }),
+    {
+      sessionEntry: original,
+      storePath: "/fixture/sessions.json",
+      opts: { onQueuedFollowupAdmitted, onQueuedFollowupSettled },
+    },
+  );
+  expect(result).toMatchObject({ kind: "skipped", reason: "goal-inactive", operation });
+  expect(onQueuedFollowupAdmitted).toHaveBeenCalledOnce();
+  expect(onQueuedFollowupSettled).toHaveBeenCalledOnce();
+  expect(operation.complete).not.toHaveBeenCalled();
+  expect(state.preflight).toHaveBeenCalledTimes(change === "paused during preflight" ? 1 : 0);
+});
+
+it("preserves the admitted legacy transcript target", async () => {
+  const queued = createRun();
+  queued.run.sessionKey = undefined;
+  queued.run.sessionFile = "legacy-target";
+  admit(createOperation("admitted-session"));
+
+  const turn = await admitted(prepare(queued, { sessionKey: undefined }));
+  expect(turn.queued.run.sessionFile).toBe("legacy-target");
+});
+
+it("retires a selected source refused by reply admission without adopting it", async () => {
+  state.admitReply.mockResolvedValue({ status: "skipped", reason: "active-run" });
+  const onAdopted = vi.fn();
+  const queued = createRun({ turnAdoptionLifecycle: { onAdopted } });
+
+  await expect(prepare(queued)).resolves.toEqual({
+    kind: "skipped",
+    reason: "lifecycle-invalidated",
+  });
+  expect(releaseSessionControllerClaim).toHaveBeenCalledOnce();
+  expect(onAdopted).not.toHaveBeenCalled();
+});
+
+it("stops when reply admission aborts the queued source", async () => {
+  const controller = new AbortController();
+  state.admitReply.mockImplementation(async () => {
+    controller.abort();
+    return { status: "owned", operation };
   });
 
-  it("stops when reply admission aborts the queued source", async () => {
-    const controller = new AbortController();
-    state.admitReply.mockImplementation(async () => {
-      controller.abort();
-      return { status: "owned", operation };
-    });
-
-    await expect(
-      prepare(createRun({ queueAbortSignal: controller.signal })),
-    ).resolves.toMatchObject({ kind: "skipped", reason: "aborted", operation });
-    expect(state.preflight).not.toHaveBeenCalled();
+  await expect(prepare(createRun({ queueAbortSignal: controller.signal }))).resolves.toMatchObject({
+    kind: "skipped",
+    reason: "aborted",
+    operation,
   });
+  expect(state.preflight).not.toHaveBeenCalled();
+});
 
-  it("keeps ingress retryable when queued preparation fails before input acceptance", async () => {
-    vi.useFakeTimers();
-    try {
-      await withTempState(async (stateDir) => {
-        const queue = createTestIngressQueue(stateDir);
-        const failure = new Error("ENOSPC: queued turn preparation failed");
-        await queue.enqueue("queued-input", { text: "Please answer this message" });
-        const drain = createChannelIngressDrain({
-          queue,
-          dispatchClaimedEvent: async (_event, lifecycle) => {
-            await prepare(createRun(bindIngressLifecycleToReplyOptions(lifecycle)), {
-              opts: {
-                onQueuedFollowupAdmitted: async () => {
-                  throw failure;
-                },
+it("keeps ingress retryable when queued preparation fails before input acceptance", async () => {
+  vi.useFakeTimers();
+  try {
+    await withTempState(async (stateDir) => {
+      const queue = createTestIngressQueue(stateDir);
+      const failure = new Error("ENOSPC: queued turn preparation failed");
+      await queue.enqueue("queued-input", { text: "Please answer this message" });
+      const drain = createChannelIngressDrain({
+        queue,
+        dispatchClaimedEvent: async (_event, lifecycle) => {
+          await prepare(createRun(bindIngressLifecycleToReplyOptions(lifecycle)), {
+            opts: {
+              onQueuedFollowupAdmitted: async () => {
+                throw failure;
               },
-            });
-          },
-        });
-        try {
-          await drain.drainOnce();
-          await drain.waitForIdle();
-          expect(await queue.listPending()).toMatchObject([
-            { id: "queued-input", attempts: 1, lastError: failure.message },
-          ]);
-          expect((await queue.enqueue("queued-input", { text: "duplicate" })).kind).toBe("pending");
-        } finally {
-          drain.dispose();
-        }
-      });
-    } finally {
-      vi.clearAllTimers();
-      vi.useRealTimers();
-    }
-  });
-
-  it("uses admission-time session generation, model lock, policy, and goal context", async () => {
-    operation = createOperation("admitted-session");
-    const admittedEntry = makeEntry({
-      sessionId: "admitted-session",
-      modelSelectionLocked: true,
-      updatedAt: 2,
-    });
-    const { start } = sessionFixture(makeEntry(), admittedEntry);
-    const onQueuedFollowupAdmitted = vi.fn(async () => {});
-    state.loadEntry.mockReturnValue(admittedEntry);
-    state.sendPolicy = "deny";
-    state.refreshGoal.mockReturnValue({ text: "fresh goal" });
-
-    const result = await start(
-      {
-        storePath: "/tmp/sessions.json",
-        opts: { onQueuedFollowupAdmitted },
-      },
-      {},
-      createRun({ currentInboundContext: { text: "stale goal" }, originatingChatType: "group" }),
-    );
-
-    assert(result.kind === "admitted");
-    expect(result.turn.queued.run).toMatchObject({
-      sessionId: "admitted-session",
-      sessionFile: "main",
-      modelSelectionLocked: true,
-    });
-    expect(result.turn.queued.currentInboundContext).toEqual({ text: "fresh goal" });
-    expect(result.turn.sendPolicy).toBe("deny");
-    expect(result.turn.session.current()).toBe(admittedEntry);
-    expect(onQueuedFollowupAdmitted).toHaveBeenCalledOnce();
-    expect(state.resolveSendPolicy).toHaveBeenCalledWith(
-      expect.objectContaining({ chatType: "group" }),
-    );
-  });
-
-  it("settles presentation and releases the reply operation when dispatcher setup fails", async () => {
-    const failure = new Error("dispatcher reset failed");
-    const onQueuedFollowupSettled = vi.fn(async () => {});
-
-    await expect(
-      prepare(createRun(), {
-        opts: {
-          onQueuedFollowupAdmitted: vi.fn().mockRejectedValue(failure),
-          onQueuedFollowupSettled,
+            },
+          });
         },
-      }),
-    ).rejects.toBe(failure);
-    expect(onQueuedFollowupSettled).toHaveBeenCalledOnce();
-    expect(operation.complete).toHaveBeenCalledOnce();
+      });
+      try {
+        await drain.drainOnce();
+        await drain.waitForIdle();
+        expect(await queue.listPending()).toMatchObject([
+          { id: "queued-input", attempts: 1, lastError: failure.message },
+        ]);
+        expect((await queue.enqueue("queued-input", { text: "duplicate" })).kind).toBe("pending");
+      } finally {
+        drain.dispose();
+      }
+    });
+  } finally {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  }
+});
+
+it("uses admission-time session generation, model lock, policy, and goal context", async () => {
+  operation = createOperation("admitted-session");
+  const entry = makeEntry({
+    sessionId: operation.sessionId,
+    modelSelectionLocked: true,
+    updatedAt: 2,
+  });
+  const { start } = sessionFixture(makeEntry(), entry);
+  const onQueuedFollowupAdmitted = vi.fn(async () => {});
+  const queued = createRun({
+    currentInboundContext: { text: "stale goal" },
+    originatingChatType: "group",
+  });
+  state.loadEntry.mockReturnValue(entry);
+  state.sendPolicy = "deny";
+  state.refreshGoal.mockReturnValue({ text: "fresh goal" });
+  const turn = await start(
+    { storePath: "/tmp/sessions.json", opts: { onQueuedFollowupAdmitted } },
+    queued,
+  );
+  expect(turn.queued.run).toMatchObject({
+    sessionId: "admitted-session",
+    sessionFile: "main",
+    modelSelectionLocked: true,
+  });
+  expect(turn.queued.currentInboundContext).toEqual({ text: "fresh goal" });
+  expect(turn.sendPolicy).toBe("deny");
+  expect(turn.session.current()).toBe(entry);
+  expect(onQueuedFollowupAdmitted).toHaveBeenCalledOnce();
+  expect(state.resolveSendPolicy).toHaveBeenCalledWith(
+    expect.objectContaining({ chatType: "group" }),
+  );
+});
+
+it("clears queued generation facts when only the lifecycle revision advances", async () => {
+  const initial = makeEntry({ lifecycleRevision: "queued-revision" });
+  const entry = makeEntry({ lifecycleRevision: "admitted-revision", updatedAt: 2 });
+  const { start } = sessionFixture(initial, entry);
+  state.loadEntry.mockReturnValue(entry);
+  const queued = createRun();
+  queued.run.cliSessionBindingFacts = { provider: "claude-cli" } as never;
+  queued.run.autoFallbackPrimaryProbe = { provider: "anthropic", model: "claude" } as never;
+  const turn = await start({}, queued);
+  expect(turn.queued.run).toMatchObject({
+    cliSessionBindingFacts: undefined,
+    autoFallbackPrimaryProbe: undefined,
+  });
+});
+
+it("does not pass stale enqueue-time state into a rotated session generation", async () => {
+  operation = createOperation("rotated-session");
+  const { start } = sessionFixture(makeEntry({ modelSelectionLocked: true }), null);
+  state.loadEntry.mockReturnValue(undefined);
+  const turn = await start();
+  expect(turn.queued.run.modelSelectionLocked).toBe(false);
+  expect(state.preflight).toHaveBeenCalledWith(
+    expect.objectContaining({ sessionEntry: undefined }),
+  );
+  const preflightParams: { sessionStore?: Record<string, SessionEntry> } =
+    state.preflight.mock.calls[0]?.[0];
+  expect(preflightParams.sessionStore?.main).toBeUndefined();
+  expect(state.refreshGoal).toHaveBeenCalledWith(undefined, undefined);
+});
+
+it("settles presentation and releases the reply operation when dispatcher setup fails", async () => {
+  const failure = new Error("dispatcher reset failed");
+  const onQueuedFollowupSettled = vi.fn(async () => {});
+
+  await expect(
+    prepare(createRun(), {
+      opts: {
+        onQueuedFollowupAdmitted: vi.fn().mockRejectedValue(failure),
+        onQueuedFollowupSettled,
+      },
+    }),
+  ).rejects.toBe(failure);
+  expect(onQueuedFollowupSettled).toHaveBeenCalledOnce();
+  expect(operation.complete).toHaveBeenCalledOnce();
+});
+
+it("keeps the model selected at admission when preferences change during source adoption", async () => {
+  const queued = createRun();
+  state.admitReply.mockImplementation(async ({ captureRunSelection }) => {
+    queued.run.model = "selected-at-admission";
+    captureRunSelection();
+    return { status: "owned", operation: createOperation() };
   });
 
-  it("keeps the model selected at admission when preferences change during source adoption", async () => {
-    const queued = createRun();
-    state.admitReply.mockImplementation(async ({ captureRunSelection }) => {
-      queued.run.model = "selected-at-admission";
-      captureRunSelection();
-      return { status: "owned", operation: createOperation() };
-    });
-
-    const result = await prepare(queued, {
+  const turn = await admitted(
+    prepare(queued, {
       opts: {
         onQueuedFollowupAdmitted: async () => {
           queued.run.model = "next-turn-model";
         },
       },
-    });
+    }),
+  );
+  expect(turn.queued.run.model).toBe("selected-at-admission");
+  expect(queued.run.model).toBe("next-turn-model");
+});
 
-    assert(result.kind === "admitted");
-    expect(result.turn.queued.run.model).toBe("selected-at-admission");
-    expect(queued.run.model).toBe("next-turn-model");
+it("refreshes send policy and goal context after preflight rotates the generation", async () => {
+  const { initialEntry, start } = sessionFixture();
+  const rotatedEntry = makeEntry({ sessionId: "compacted-session", updatedAt: 2 });
+  state.loadEntry.mockReturnValue(initialEntry);
+  state.refreshGoal.mockImplementation((_context, entry) => ({ text: entry?.sessionId }));
+  state.preflight.mockImplementation(async () => {
+    state.sendPolicy = "deny";
+    return rotatedEntry;
   });
 
-  it("clears queued generation facts when only the lifecycle revision advances", async () => {
-    const queuedEntry = makeEntry({ lifecycleRevision: "queued-revision" });
-    const admittedEntry: SessionEntry = {
-      ...queuedEntry,
-      lifecycleRevision: "admitted-revision",
-      updatedAt: 2,
-    };
-    const { start } = sessionFixture(queuedEntry, admittedEntry);
-    state.loadEntry.mockReturnValue(admittedEntry);
-    const queued = createRun();
-    queued.run.cliSessionBindingFacts = { provider: "claude-cli" } as never;
-    queued.run.autoFallbackPrimaryProbe = { provider: "anthropic", model: "claude" } as never;
-
-    const result = await start({}, {}, queued);
-
-    assert(result.kind === "admitted");
-    expect(result.turn.queued.run.cliSessionBindingFacts).toBeUndefined();
-    expect(result.turn.queued.run.autoFallbackPrimaryProbe).toBeUndefined();
+  const turn = await start({}, createRun({ currentInboundContext: { text: "stale" } }));
+  expect(turn).toMatchObject({
+    sendPolicy: "deny",
+    queued: { currentInboundContext: { text: "compacted-session" } },
   });
+});
 
-  it("does not pass stale enqueue-time state into a rotated session generation", async () => {
-    operation = createOperation("rotated-session");
-    const { start } = sessionFixture(makeEntry({ modelSelectionLocked: true }), null);
-    state.loadEntry.mockReturnValue(undefined);
+it("rechecks send policy before an in-preflight compaction notice", async () => {
+  const { initialEntry, onCompactionNotice, start } = compactionFixture();
+  const deniedEntry: SessionEntry = { ...initialEntry, updatedAt: 2 };
+  state.loadEntry.mockReturnValue(deniedEntry);
+  state.resolveSendPolicy.mockImplementation(({ entry }) =>
+    entry === deniedEntry ? "deny" : "allow",
+  );
+  emitNotices(deniedEntry);
 
-    const result = await start();
+  await start({ storePath: "/tmp/sessions.json" });
 
-    assert(result.kind === "admitted");
-    expect(result.turn.queued.run.modelSelectionLocked).toBe(false);
-    expect(state.preflight).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionEntry: undefined }),
-    );
-    const preflightParams = state.preflight.mock.calls[0]?.[0] as {
-      sessionStore?: Record<string, SessionEntry>;
-    };
-    expect(preflightParams.sessionStore?.main).toBeUndefined();
-    expect(state.refreshGoal).toHaveBeenCalledWith(undefined, undefined);
-  });
+  expect(onCompactionNotice).not.toHaveBeenCalled();
+  expect(state.resolveSendPolicy).toHaveBeenLastCalledWith(
+    expect.objectContaining({ entry: deniedEntry }),
+  );
+});
 
-  it("refreshes send policy and goal context after preflight rotates the generation", async () => {
-    const { initialEntry, start } = sessionFixture();
-    const rotatedEntry = makeEntry({ sessionId: "compacted-session", updatedAt: 2 });
-    state.loadEntry.mockReturnValue(initialEntry);
-    state.refreshGoal.mockImplementation((_context, entry) => ({ text: entry?.sessionId }));
-    state.preflight.mockImplementation(async () => {
-      state.sendPolicy = "deny";
-      return rotatedEntry;
-    });
-
-    const result = await start({}, {}, createRun({ currentInboundContext: { text: "stale" } }));
-
-    expect(result).toMatchObject({
-      kind: "admitted",
-      turn: {
-        sendPolicy: "deny",
-        queued: { currentInboundContext: { text: "compacted-session" } },
-      },
-    });
-  });
-
-  it("rechecks send policy before an in-preflight compaction notice", async () => {
-    const { initialEntry, onCompactionNotice, start } = compactionFixture();
-    const deniedEntry: SessionEntry = { ...initialEntry, updatedAt: 2 };
-    state.loadEntry.mockReturnValue(deniedEntry);
-    state.resolveSendPolicy.mockImplementation(({ entry }) =>
-      entry === deniedEntry ? "deny" : "allow",
-    );
-    emitNotices(deniedEntry);
-
-    await start({ storePath: "/tmp/sessions.json" });
-
-    expect(onCompactionNotice).not.toHaveBeenCalled();
-    expect(state.resolveSendPolicy).toHaveBeenLastCalledWith(
-      expect.objectContaining({ entry: deniedEntry }),
-    );
-  });
-
-  it("delivers a terminal compaction notice after adopting its rotated generation", async () => {
+it.each([false, true])(
+  "adopts a preflight rotation before completion, failure=%s",
+  async (fails) => {
     const { rotatedEntry, sessionStore, onCompactionNotice, start } = compactionFixture(true);
-    state.preflight.mockImplementation(async ({ onCompactionNotice: emitCompactionNotice }) => {
-      sessionStore.main = rotatedEntry;
-      await emitCompactionNotice?.("end");
-      return rotatedEntry;
-    });
-
-    const result = await start();
-
-    expect(result).toMatchObject({ kind: "admitted" });
-    expect(onCompactionNotice).toHaveBeenCalledWith(
-      "end",
-      undefined,
-      expect.objectContaining({
-        sendPolicy: "allow",
-        queued: expect.objectContaining({
-          run: expect.objectContaining({ sessionId: "compacted-session" }),
-        }),
-      }),
-    );
-  });
-
-  it("releases the admitted operation when deferred terminal notice delivery fails", async () => {
-    const { initialEntry, onCompactionNotice, start } = compactionFixture();
-    const failure = new Error("notice delivery failed");
-    emitNotices(initialEntry);
-    onCompactionNotice.mockRejectedValue(failure);
-
-    await expect(start()).rejects.toBe(failure);
-    expect(operation.complete).toHaveBeenCalledOnce();
-  });
-
-  it("delivers an incomplete terminal notice after ordinary preflight failure", async () => {
-    const { initialEntry, onCompactionNotice, start } = compactionFixture();
-    emitNotices(initialEntry, ["start", "incomplete"], new Error("preflight failed"));
-
-    const result = await start();
-
-    expect(result).toMatchObject({ kind: "admitted", turn: { preflightFailurePayload: {} } });
-    expect(onCompactionNotice.mock.calls).toEqual([
-      ["start", undefined, expect.anything()],
-      ["incomplete", undefined, expect.anything()],
-    ]);
-  });
-
-  it("keeps an owned preflight rotation when preflight later fails", async () => {
-    const { start } = sessionFixture(makeEntry({ lifecycleRevision: "initial" }));
-    const rotatedEntry = makeEntry({
-      sessionId: "compacted-session",
-      lifecycleRevision: "compacted",
-      updatedAt: 2,
-    });
     state.preflight.mockImplementation(
-      async ({ sessionStore: ownedStore }: { sessionStore: Record<string, SessionEntry> }) => {
-        ownedStore.main = rotatedEntry;
-        throw new Error("preflight failed after rotation");
+      async ({ onCompactionNotice: emitCompactionNotice, sessionStore: ownedStore }) => {
+        if (fails) {
+          ownedStore.main = rotatedEntry;
+          throw new Error("preflight failed after rotation");
+        }
+        sessionStore.main = rotatedEntry;
+        await emitCompactionNotice?.("end");
+        return rotatedEntry;
       },
     );
-
-    const result = await start();
-
-    expect(result).toMatchObject({
-      kind: "admitted",
-      turn: {
+    const turn = await start();
+    if (fails) {
+      expect(turn).toMatchObject({
         queued: { run: { sessionId: "compacted-session" } },
         preflightFailurePayload: {},
-      },
-    });
-    expect(operation.updateSessionId).toHaveBeenCalledWith("compacted-session");
-  });
-
-  it("keeps preflight failure cancellation live while refreshing send policy", async () => {
-    const upstreamAbort = new AbortController();
-    const replyOperation = createReplyOperation({
-      sessionKey: "agent:main:queued-preflight-cancel",
-      sessionId: "queued-session",
-      resetTriggered: false,
-      upstreamAbortSignal: upstreamAbort.signal,
-    });
-    const { start } = sessionFixture(makeEntry(), undefined, replyOperation);
-    state.preflight.mockImplementation(async () => {
-      state.sendPolicy = "deny";
-      throw new Error("preflight failed");
-    });
-
-    try {
-      const result = await start();
-      expect(result).toMatchObject({
-        kind: "admitted",
-        turn: { sendPolicy: "deny", preflightFailurePayload: { text: "preflight failed" } },
       });
-      upstreamAbort.abort(new Error("source canceled before input acceptance"));
-      expect(replyOperation.abortSignal.aborted).toBe(true);
-    } finally {
-      replyOperation.complete();
+      expect(operation.updateSessionId).toHaveBeenCalledWith("compacted-session");
+    } else {
+      const noticeTurn = {
+        sendPolicy: "allow",
+        queued: { run: { sessionId: "compacted-session" } },
+      };
+      expect(onCompactionNotice.mock.calls[0]).toMatchObject(["end", undefined, noticeTurn]);
     }
+  },
+);
+
+it("releases the admitted operation when deferred terminal notice delivery fails", async () => {
+  const { initialEntry, onCompactionNotice, start } = compactionFixture();
+  const failure = new Error("notice delivery failed");
+  emitNotices(initialEntry);
+  onCompactionNotice.mockRejectedValue(failure);
+
+  await expect(start()).rejects.toBe(failure);
+  expect(operation.complete).toHaveBeenCalledOnce();
+});
+
+it("delivers an incomplete terminal notice after ordinary preflight failure", async () => {
+  const { initialEntry, onCompactionNotice, start } = compactionFixture();
+  emitNotices(initialEntry, ["start", "incomplete"], new Error("preflight failed"));
+
+  const turn = await start();
+  expect(turn).toMatchObject({ preflightFailurePayload: {} });
+  expect(onCompactionNotice.mock.calls).toEqual([
+    ["start", undefined, expect.anything()],
+    ["incomplete", undefined, expect.anything()],
+  ]);
+});
+
+it("keeps preflight failure cancellation live while refreshing send policy", async () => {
+  const upstreamAbort = new AbortController();
+  const replyOperation = createReplyOperation({
+    sessionKey: "agent:main:queued-preflight-cancel",
+    sessionId: "queued-session",
+    resetTriggered: false,
+    upstreamAbortSignal: upstreamAbort.signal,
+  });
+  const { start } = sessionFixture(makeEntry(), undefined, replyOperation);
+  state.preflight.mockImplementation(async () => {
+    state.sendPolicy = "deny";
+    throw new Error("preflight failed");
   });
 
-  it("retains the preflight owner's public recovery guidance for a queued turn", async () => {
-    const userMessage = "The saved history exceeds its limit. Use /new, then resend your message.";
-    state.preflight.mockRejectedValue(
-      new AgentHarnessPreflightError("private diagnostic", { userMessage }),
-    );
-    const result = await prepare();
-
-    expect(result).toMatchObject({
-      kind: "admitted",
-      turn: { preflightFailurePayload: { text: userMessage } },
+  try {
+    const turn = await start();
+    expect(turn).toMatchObject({
+      sendPolicy: "deny",
+      preflightFailurePayload: { text: "preflight failed" },
     });
-    expect(state.buildPreflightFailureText).not.toHaveBeenCalled();
-  });
+    upstreamAbort.abort(new Error("source canceled before input acceptance"));
+    expect(replyOperation.abortSignal.aborted).toBe(true);
+  } finally {
+    replyOperation.complete();
+  }
+});
+
+it("retains the preflight owner's public recovery guidance for a queued turn", async () => {
+  const userMessage = "The saved history exceeds its limit. Use /new, then resend your message.";
+  state.preflight.mockRejectedValue(
+    new AgentHarnessPreflightError("private diagnostic", { userMessage }),
+  );
+  const turn = await admitted(prepare());
+  expect(turn).toMatchObject({ preflightFailurePayload: { text: userMessage } });
+  expect(state.buildPreflightFailureText).not.toHaveBeenCalled();
 });

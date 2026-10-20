@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../tokens.js";
 import {
@@ -15,13 +15,11 @@ function dispatchFixture(options: Partial<Parameters<typeof createReplyDispatche
   return { deliver, dispatcher: createReplyDispatcher({ ...options, deliver }) };
 }
 
-function deliveredText(deliver: ReturnType<typeof dispatchFixture>["deliver"], index = 0) {
-  return deliver.mock.calls[index]?.[0].text;
+function deliveredTexts(deliver: ReturnType<typeof dispatchFixture>["deliver"]) {
+  return deliver.mock.calls.map(([payload]) => payload.text);
 }
 
-afterEach(() => {
-  vi.useRealTimers();
-});
+afterEach(() => vi.useRealTimers());
 
 function delayedSuffix(suffix: string, timeoutMs: number) {
   return async (payload: DeliverPayload) => {
@@ -43,25 +41,18 @@ describe("createReplyDispatcher", () => {
     expect(dispatcher.sendFinalReply({ text: `interject.${SILENT_REPLY_TOKEN}` })).toBe(true);
 
     await dispatcher.waitForIdle();
-    expect(deliver).toHaveBeenCalledTimes(3);
-    expect(deliveredText(deliver)).toBe(SILENT_REPLY_TOKEN);
-    expect(deliveredText(deliver, 1)).toBe(`${SILENT_REPLY_TOKEN} -- nope`);
-    expect(deliveredText(deliver, 2)).toBe(`interject.${SILENT_REPLY_TOKEN}`);
+    expect(deliveredTexts(deliver)).toEqual([
+      SILENT_REPLY_TOKEN,
+      `${SILENT_REPLY_TOKEN} -- nope`,
+      `interject.${SILENT_REPLY_TOKEN}`,
+    ]);
   });
 
   it("keeps recorded silence off transport without recording delivery", async () => {
-    const { deliver, dispatcher } = dispatchFixture({
-      silentReplyContext: {
-        sessionKey: "agent:main:telegram:direct:123",
-        surface: "telegram",
-      },
-    });
+    const { deliver, dispatcher } = dispatchFixture();
 
-    expect(
-      dispatcher.sendFinalReply(
-        setReplyPayloadMetadata({ text: SILENT_REPLY_TOKEN }, { silentReply: true }),
-      ),
-    ).toBe(false);
+    const payload = setReplyPayloadMetadata({ text: SILENT_REPLY_TOKEN }, { silentReply: true });
+    expect(dispatcher.sendFinalReply(payload)).toBe(false);
 
     const receipt = await dispatcher.waitForIdle();
     expect(deliver).not.toHaveBeenCalled();
@@ -82,8 +73,7 @@ describe("createReplyDispatcher", () => {
     expect(dispatcher.sendToolResult({ text: `${HEARTBEAT_TOKEN} hello` })).toBe(true);
     await dispatcher.waitForIdle();
 
-    expect(deliver).toHaveBeenCalledTimes(1);
-    expect(deliveredText(deliver)).toBe("PFX hello");
+    expect(deliveredTexts(deliver)).toEqual(["PFX hello"]);
     expect(onHeartbeatStrip).toHaveBeenCalledTimes(2);
   });
 
@@ -138,8 +128,7 @@ describe("createReplyDispatcher", () => {
     const { dispatcher, deliver } = dispatchFixture({
       onError,
       beforeDeliver: (payload) => {
-        hookCalls += 1;
-        if (hookCalls === 1) {
+        if (++hookCalls === 1) {
           hookStarted.resolve();
           return new Promise<never>(() => {});
         }
@@ -154,8 +143,7 @@ describe("createReplyDispatcher", () => {
     await vi.advanceTimersByTimeAsync(15_000);
     await dispatcher.waitForIdle();
 
-    expect(deliveredText(deliver)).toBe("follow-up final");
-    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(deliveredTexts(deliver)).toEqual(["follow-up final"]);
     expect(
       onError.mock.calls.map(([error]) => (error instanceof Error ? error.message : String(error))),
     ).toEqual(["beforeDeliver timed out after 15000ms"]);
@@ -163,30 +151,32 @@ describe("createReplyDispatcher", () => {
   });
 
   it("rejects non-positive and non-finite beforeDeliver budgets", () => {
+    const error = "beforeDeliver timeoutMs must be a positive finite number";
+    const { dispatcher } = dispatchFixture();
     for (const timeoutMs of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
       expect(() =>
-        createReplyDispatcher({
-          deliver: async () => {},
+        dispatchFixture({
           beforeDeliver: (payload) => payload,
           beforeDeliverOptions: { timeoutMs },
         }),
-      ).toThrow("beforeDeliver timeoutMs must be a positive finite number");
-
-      const dispatcher = createReplyDispatcher({ deliver: async () => {} });
+      ).toThrow(error);
       expect(() => dispatcher.appendBeforeDeliver?.((payload) => payload, { timeoutMs })).toThrow(
-        "beforeDeliver timeoutMs must be a positive finite number",
+        error,
       );
     }
   });
 
-  it.each(["appended", "composed"] as const)(
+  it.each([
+    ["appended", [15_000, 1_000, 15_000], 1_000],
+    ["composed", [20_000], 6_000],
+  ] as const)(
     "honors per-stage budgets without imposing a whole-chain deadline (%s)",
-    async (mode) => {
+    async (mode, checkpoints, remainingMs) => {
       vi.useFakeTimers();
       const appended = mode === "appended";
       const onError = vi.fn();
-      const first = delayedSuffix(appended ? "constructor" : "owner", 16_000);
-      const second = delayedSuffix(appended ? "appended" : "plugin", appended ? 16_000 : 10_000);
+      const first = delayedSuffix("first", 16_000);
+      const second = delayedSuffix("second", appended ? 16_000 : 10_000);
       const { dispatcher, deliver } = dispatchFixture({
         beforeDeliver: appended
           ? first
@@ -202,18 +192,13 @@ describe("createReplyDispatcher", () => {
       }
       dispatcher.sendFinalReply({ text: "final" });
       dispatcher.markComplete();
-      await vi.advanceTimersByTimeAsync(appended ? 15_000 : 20_000);
-      expect(deliver).not.toHaveBeenCalled();
-      if (appended) {
-        await vi.advanceTimersByTimeAsync(1_000);
-        await vi.advanceTimersByTimeAsync(15_000);
+      for (const elapsedMs of checkpoints) {
+        await vi.advanceTimersByTimeAsync(elapsedMs);
         expect(deliver).not.toHaveBeenCalled();
       }
-      await vi.advanceTimersByTimeAsync(appended ? 1_000 : 6_000);
+      await vi.advanceTimersByTimeAsync(remainingMs);
       await dispatcher.waitForIdle();
-      expect(deliver.mock.calls.map(([payload]) => payload.text)).toEqual([
-        appended ? "final:constructor:appended" : "final:owner:plugin",
-      ]);
+      expect(deliveredTexts(deliver)).toEqual(["final:first:second"]);
       if (appended) {
         expect(onError).not.toHaveBeenCalled();
       }
@@ -229,7 +214,7 @@ describe("createReplyDispatcher", () => {
     dispatcher.markComplete();
     await dispatcher.waitForIdle();
 
-    expect(deliveredText(deliver)).toBe("appended");
+    expect(deliveredTexts(deliver)).toEqual(["appended"]);
   });
 
   it.each(["onIdle", "onSettled"] as const)(
@@ -239,21 +224,14 @@ describe("createReplyDispatcher", () => {
       const { promise: finalization, resolve: finalize } = createDeferred<{
         visibleReplySent: true;
       }>();
-      const settle = () => finalize({ visibleReplySent: true });
       const { dispatcher } = createReplyDispatcherWithTyping({
         deliver: async () => ({ visibleReplySent: false, finalization }),
-        ...(settleHook === "onIdle" ? { onIdle: settle } : { onSettled: settle }),
+        [settleHook]: () => finalize({ visibleReplySent: true }),
       });
 
       dispatcher.sendFinalReply({ text: "final" });
       dispatcher.markComplete();
-      const receipt = dispatcher.waitForIdle();
-      const bounded = Promise.race([
-        receipt,
-        new Promise<"timed-out">((resolve) => {
-          setTimeout(() => resolve("timed-out"), 100);
-        }),
-      ]);
+      const bounded = withTestTimeout(dispatcher.waitForIdle(), 100, "finalization timed out");
       await vi.advanceTimersByTimeAsync(100);
 
       await expect(bounded).resolves.toMatchObject({
@@ -299,9 +277,7 @@ describe("createReplyDispatcher", () => {
     dispatcher.markComplete();
 
     await dispatcher.waitForIdle();
-    expect(onDeliverySettled).toHaveBeenCalledTimes(2);
-    expect(onDeliverySettled).toHaveBeenNthCalledWith(1, { kind: "tool" });
-    expect(onDeliverySettled).toHaveBeenNthCalledWith(2, { kind: "final" });
+    expect(onDeliverySettled.mock.calls).toEqual([[{ kind: "tool" }], [{ kind: "final" }]]);
   });
 
   it.each([
@@ -331,23 +307,21 @@ describe("createReplyDispatcher", () => {
   );
 });
 
-describe("waitForReplyDispatcherIdle", () => {
-  it("returns when the abort signal fires before the dispatcher becomes idle", async () => {
-    const controller = new AbortController();
-    const waitForIdle = vi.fn(() => new Promise<void>(() => {}));
+it("returns when the abort signal fires before the dispatcher becomes idle", async () => {
+  const controller = new AbortController();
+  const waitForIdle = vi.fn(() => new Promise<void>(() => {}));
 
-    let settled = false;
-    const waitPromise = waitForReplyDispatcherIdle({ waitForIdle }, controller.signal).then(() => {
-      settled = true;
-    });
-
-    await Promise.resolve();
-    expect(settled).toBe(false);
-
-    controller.abort();
-    await waitPromise;
-
-    expect(settled).toBe(true);
-    expect(waitForIdle).toHaveBeenCalledTimes(1);
+  let settled = false;
+  const waitPromise = waitForReplyDispatcherIdle({ waitForIdle }, controller.signal).then(() => {
+    settled = true;
   });
+
+  await Promise.resolve();
+  expect(settled).toBe(false);
+
+  controller.abort();
+  await waitPromise;
+
+  expect(settled).toBe(true);
+  expect(waitForIdle).toHaveBeenCalledTimes(1);
 });

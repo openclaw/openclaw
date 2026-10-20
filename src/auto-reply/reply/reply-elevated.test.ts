@@ -3,8 +3,6 @@ import type { MsgContext } from "../templating.js";
 import { resolveElevatedPermissions } from "./reply-elevated.js";
 
 const sender: MsgContext = {
-  Provider: "whatsapp",
-  Surface: "whatsapp",
   SenderId: "+15550001111",
   From: "whatsapp:+15550001111",
   SenderE164: "+15550001111",
@@ -32,7 +30,6 @@ it.each<PermissionCase>([
     true,
     {
       ChatType: "direct",
-      From: "whatsapp:+15550001111",
       SenderId: undefined,
       SenderE164: undefined,
     },

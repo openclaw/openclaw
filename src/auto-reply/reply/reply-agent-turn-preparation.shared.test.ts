@@ -78,7 +78,6 @@ it("prepares immediate and queued turns through the same model and memory prefli
     expect(result.kind).toBe("admitted");
   }
   expect(state.resolveConfig).toHaveBeenCalledTimes(2);
-  expect(state.preflight).toHaveBeenCalledTimes(2);
   expect(signalRunStart).toHaveBeenCalledTimes(2);
   expect(state.preflight.mock.calls.map(([params]) => params.defaultModel)).toEqual([
     "default-model",
