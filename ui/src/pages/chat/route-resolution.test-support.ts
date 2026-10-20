@@ -119,7 +119,7 @@ export function installShortSessionResolver(
     ? { ok: true, key: rows[0].key }
     : { ok: false },
 ) {
-  const request = vi.fn(async (method: string, _params: Record<string, unknown>) => {
+  const request = vi.fn(async (method: string, _params?: unknown) => {
     if (method === "sessions.resolve") {
       const present = ({ key }: { key: string }) => {
         const session = rows.find((candidate) => candidate.key === key);
