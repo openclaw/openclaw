@@ -26,7 +26,7 @@ vi.mock("../../config/config.js", () => {
         context: { snapshot: { path: string }; previousHash: string; attempt: number },
       ) => unknown;
     }) => {
-      const draft = structuredClone(loadedConfig) as OpenClawConfig;
+      const draft = structuredClone(loadedConfig);
       const snapshot = { path: "/tmp/openclaw/config.json" };
       const result = await params.mutate(draft, {
         snapshot,
@@ -34,17 +34,7 @@ vi.mock("../../config/config.js", () => {
         attempt: 0,
       });
       writtenConfig = draft;
-      return {
-        path: snapshot.path,
-        previousHash: "test-hash",
-        persistedHash: "persisted-hash",
-        snapshot,
-        nextConfig: draft,
-        result,
-        attempts: 1,
-        afterWrite: { mode: "auto" },
-        followUp: { action: "none" },
-      };
+      return { result };
     },
   };
 });

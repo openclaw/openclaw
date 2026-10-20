@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -13,6 +12,7 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { skillsUploadHandlers } from "./skills-upload.js";
+import { callGatewayHandler } from "./skills.test-helpers.js";
 
 let state: OpenClawTestState;
 let config: OpenClawConfig;
@@ -27,30 +27,15 @@ function setEnabled(enabled: boolean) {
     skills: { install: { allowUploadedArchives: true } },
   };
 }
-async function call(stage: string, params: Record<string, unknown>) {
-  const method = "skills.upload." + stage;
-  const respond = vi.fn();
-  await expectDefined(
-    skillsUploadHandlers[method],
-    method,
-  )({
-    req: { type: "req", id: String(++serial), method, params },
-    params,
-    context,
-    respond,
-    client: null,
-    isWebchatConnect: () => false,
-  });
-  return respond;
+function call(stage: string, params: Record<string, unknown>) {
+  return callGatewayHandler(skillsUploadHandlers, `skills.upload.${stage}`, params, { context });
 }
-function expectDisabled(respond: Awaited<ReturnType<typeof call>>) {
-  expect
-    .soft(respond)
-    .toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "FORBIDDEN", details: { code: "UPLOADS_DISABLED" } }),
-    );
+function expectDisabled(result: Awaited<ReturnType<typeof call>>) {
+  expect.soft(result).toMatchObject({
+    ok: false,
+    response: undefined,
+    error: expect.objectContaining({ code: "FORBIDDEN", details: { code: "UPLOADS_DISABLED" } }),
+  });
 }
 function snapshot() {
   const { db } = openOpenClawStateDatabase();
@@ -65,12 +50,12 @@ async function prepare(stage: string) {
     return params;
   }
   const begun = await call("begin", params);
-  expect(begun).toHaveBeenCalledWith(
-    true,
-    expect.objectContaining({ uploadId: expect.any(String) }),
-    undefined,
-  );
-  const payload: unknown = expectDefined(begun.mock.calls[0], "begin response")[1];
+  expect(begun).toMatchObject({
+    ok: true,
+    response: { uploadId: expect.any(String) },
+    error: undefined,
+  });
+  const payload = begun.response;
   if (!isRecord(payload) || typeof payload.uploadId !== "string") {
     throw new Error("missing upload ID");
   }
@@ -78,11 +63,11 @@ async function prepare(stage: string) {
   if (stage === "chunk") {
     return { uploadId, offset: 0, dataBase64: "AQID" };
   }
-  expect(await call("chunk", { uploadId, offset: 0, dataBase64: "AQID" })).toHaveBeenCalledWith(
-    true,
-    expect.anything(),
-    undefined,
-  );
+  expect(await call("chunk", { uploadId, offset: 0, dataBase64: "AQID" })).toMatchObject({
+    ok: true,
+    response: expect.anything(),
+    error: undefined,
+  });
   return { uploadId };
 }
 beforeAll(async () => {
