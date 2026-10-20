@@ -24,6 +24,19 @@ import type { ModelFallbackCandidate } from "./model-fallback.types.js";
 import { createModelFallbackConfig } from "./test-helpers/model-fallback-config-fixture.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
+type ChainOptions = Omit<
+  Parameters<typeof resolveModelCandidateChain>[0],
+  "cfg" | "provider" | "model"
+>;
+function chain(
+  cfg: OpenClawConfig | undefined,
+  provider: string,
+  model: string,
+  options: ChainOptions = {},
+) {
+  return resolveModelCandidateChain({ cfg, provider, model, ...options });
+}
+
 function candidate(
   provider: string,
   model: string,
@@ -73,12 +86,7 @@ describe("fallback candidates across provider generations", () => {
     const builder = createTestPluginRegistry();
     const record = createPluginRecord({ id: provider });
     const resolve = () =>
-      resolveModelCandidateChain({
-        cfg,
-        provider,
-        model: "preview",
-        fallbacksOverride: [],
-      }).map(({ model }) => model);
+      chain(cfg, provider, "preview", { fallbacksOverride: [] }).map(({ model }) => model);
 
     withPluginMetadataSnapshotScope(
       metadataSnapshot,
@@ -114,11 +122,8 @@ describe("fallback candidates across provider generations", () => {
     };
     const metadataSnapshot = createPluginMetadataSnapshotFixture({ plugins: [] });
     const resolve = () =>
-      resolveModelCandidateChain({
-        cfg,
+      chain(cfg, "native", "primary", {
         agentId: "worker",
-        provider: "native",
-        model: "primary",
         allowPluginNormalization: false,
       }).map(({ provider, model }) => `${provider}/${model}`);
     withPluginRuntimeGenerationScope({ metadataSnapshot }, () => {
@@ -134,20 +139,13 @@ describe("fallback candidates across provider generations", () => {
     const provider = "utility-cache-agent";
     const cfg: OpenClawConfig = {
       agents: { defaults: {}, entries: { worker: {} } },
-      models: {
-        providers: {
-          [provider]: configuredModels(provider, ["small", "large"]),
-        },
-      },
+      models: { providers: { [provider]: configuredModels(provider, ["small", "large"]) } },
     };
     const metadataSnapshot = createPluginMetadataSnapshotFixture({ plugins: [] });
     const owner = expectDefined(cfg.agents?.entries?.worker, "utility config owner");
     const resolve = () =>
-      resolveModelCandidateChain({
-        cfg,
+      chain(cfg, "ordinary", "requested", {
         agentId: "worker",
-        provider: "ordinary",
-        model: "requested",
         requestedRouteResolution: "resolved",
         allowPluginNormalization: false,
       });
@@ -161,28 +159,14 @@ describe("fallback candidates across provider generations", () => {
       ] as const) {
         owner.utilityModel = utilityModel;
         cfg.meta = utilityModelSeparation ? { migrations: { utilityModelSeparation } } : undefined;
-        expect(
-          resolve().map(({ provider: selectedProvider, model, routeOrigin }) => ({
-            provider: selectedProvider,
-            model,
-            routeOrigin,
-          })),
-        ).toEqual([
-          { provider: "ordinary", model: "requested", routeOrigin: "requested" },
-          { provider, model: primaryModel, routeOrigin: "configured-primary" },
+        expect(resolve()).toEqual([
+          candidate("ordinary", "requested"),
+          candidate(provider, primaryModel, "configured-primary"),
         ]);
       }
       owner.utilityModel = `${provider}/small`;
       owner.model = { fallbacks: [`${provider}/small`] };
-      expect(resolve()).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            provider,
-            model: "small",
-            routeOrigin: "configured-fallback",
-          }),
-        ]),
-      );
+      expect(resolve()).toContainEqual(candidate(provider, "small", "configured-fallback"));
     });
   });
 
@@ -194,10 +178,7 @@ describe("fallback candidates across provider generations", () => {
     };
     const createMetadata = () => makeMetadata(provider, { entry: "middle", middle: "final" });
     const resolveRequested = (model = "entry", requestedRouteResolution?: "raw" | "resolved") =>
-      resolveModelCandidateChain({
-        cfg,
-        provider,
-        model,
+      chain(cfg, provider, model, {
         requestedRouteResolution,
         fallbacksOverride: [],
       });
@@ -233,12 +214,7 @@ describe("fallback candidates across provider generations", () => {
         config: cfg,
         compatibleConfigs: [cfg],
       });
-      const candidates = resolveModelCandidateChain({
-        cfg: undefined,
-        provider,
-        model: "entry",
-        fallbacksOverride: [],
-      });
+      const candidates = chain(undefined, provider, "entry", { fallbacksOverride: [] });
       const selected = expectDefined(candidates[0], "ordinary metadata candidate");
       expect(selected).toEqual(candidate(provider, "entry", "requested", "raw"));
       withPluginRuntimeGenerationScope({ metadataSnapshot: metadata }, () => {
@@ -278,17 +254,10 @@ describe("fallback candidates across provider generations", () => {
       const active = createGeneration("model-active");
       setActivePluginRegistry(active.pluginRegistry, "fallback-generation-fixture");
       const resolve = () => {
-        const candidates = resolveModelCandidateChain({
-          cfg,
-          provider,
-          model: requestedModel,
-        });
+        const candidates = chain(cfg, provider, requestedModel);
         for (const resolved of candidates) {
           expect(
-            resolveModelCandidateChain({
-              cfg,
-              provider,
-              model: resolved.model,
+            chain(cfg, provider, resolved.model, {
               requestedRouteResolution: resolved.routeResolution,
               fallbacksOverride: [],
             }),
@@ -339,10 +308,7 @@ describe("fallback candidates across provider generations", () => {
       throw new Error("guarded primary entered runtime normalization");
     });
     const candidates = withPluginRuntimeGenerationScope({ metadataSnapshot, pluginRegistry }, () =>
-      resolveModelCandidateChain({
-        cfg,
-        provider,
-        model: "other",
+      chain(cfg, provider, "other", {
         requestedRouteResolution: "resolved",
         allowPluginNormalization: true,
       }),

@@ -12,6 +12,7 @@ const opus: ModelCatalogEntry = {
   api: "anthropic-messages",
   baseUrl: "https://api.anthropic.com",
 };
+const sonnet = { ...opus, id: "claude-sonnet-5" };
 const available = { availability: true, routeResolution: null, selectedAuthMode: "api_key" };
 function metadata(providers: string[]) {
   return createPluginMetadataSnapshotFixture({
@@ -62,56 +63,37 @@ describe("private selected Fast metadata", () => {
       catalog,
       metadataSnapshot: metadata(["openai", "xai", "minimax"]),
     });
-    expect(catalog.map((entry) => resolve(entry, available, "openclaw"))).toEqual([
-      true,
-      true,
-      true,
-    ]);
-    expect(catalog.map((entry) => resolve(entry, available, "codex"))).toEqual([
-      undefined,
-      undefined,
-      undefined,
-    ]);
+    const expected = [true, undefined];
+    expect(
+      catalog.map((entry) => [
+        resolve(entry, available, "openclaw"),
+        resolve(entry, available, "codex"),
+      ]),
+    ).toEqual([expected, expected, expected]);
   });
   it("loads the provider's light policy for the exact model and auth facts", () => {
     const resolve = resolver();
-    expect(resolve({ ...opus, id: "claude-sonnet-5" }, available)).toBe(false);
+    expect(resolve(sonnet, available)).toBe(false);
     expect(resolve(opus, available)).toBe(true);
     expect(resolve(opus, { availability: undefined, routeResolution: null })).toBeUndefined();
-    expect(
-      resolve(
-        { ...opus, id: "claude-sonnet-5" },
-        { availability: true, routeResolution: null },
-        "codex",
-      ),
-    ).toBeUndefined();
+    expect(resolve(sonnet, { availability: true, routeResolution: null }, "codex")).toBeUndefined();
   });
   it("uses the same model/agent parameter order as request construction", () => {
-    const resolve = resolver({
-      agents: {
-        defaults: { params: { serviceTier: "auto" } },
-        entries: { main: { params: { serviceTier: "invalid" } } },
-      },
-    });
-    expect(resolve(opus, available)).toBe(true);
-    const explicit = resolver({
-      agents: {
-        defaults: {
-          models: { "anthropic/claude-opus-5": { params: { serviceTier: "standard_only" } } },
+    const models = { "anthropic/claude-opus-5": { params: { serviceTier: "standard_only" } } };
+    const cases: [OpenClawConfig["agents"], boolean][] = [
+      [
+        {
+          defaults: { params: { serviceTier: "auto" } },
+          entries: { main: { params: { serviceTier: "invalid" } } },
         },
-      },
-    });
-    expect(explicit(opus, available)).toBe(false);
-    const agentModel = resolver({
-      agents: {
-        entries: {
-          main: {
-            models: { "anthropic/claude-opus-5": { params: { serviceTier: "standard_only" } } },
-          },
-        },
-      },
-    });
-    expect(agentModel(opus, available)).toBe(false);
+        true,
+      ],
+      [{ defaults: { models } }, false],
+      [{ entries: { main: { models } } }, false],
+    ];
+    for (const [agents, expected] of cases) {
+      expect(resolver({ agents })(opus, available)).toBe(expected);
+    }
   });
   it("does not replace unresolved route ownership with catalog provenance", () => {
     expect(

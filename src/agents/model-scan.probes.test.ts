@@ -20,9 +20,21 @@ const probeOptions = {
   temperature: 0,
   signal: expect.any(AbortSignal),
 };
-function userMessage(content: unknown) {
-  return { role: "user", content, timestamp: expect.any(Number) };
+function probeCall(model: unknown, content: unknown, options: object, tools?: object[]) {
+  return [
+    model,
+    {
+      messages: [{ role: "user", content, timestamp: expect.any(Number) }],
+      ...(tools ? { tools } : {}),
+    },
+    { ...probeOptions, ...options },
+  ];
 }
+const ping = {
+  name: "ping",
+  description: "Return OK.",
+  parameters: { type: "object", properties: {} },
+};
 
 describe("OpenRouter model probes", () => {
   beforeEach(() => {
@@ -41,40 +53,27 @@ describe("OpenRouter model probes", () => {
       { ok: true, latencyMs },
       { ok: true, latencyMs },
     ]);
-    expect(complete).toHaveBeenCalledTimes(2);
-    const [toolModel, toolContext, toolOptions] = expectDefined(
-      complete.mock.calls[0],
-      "tool probe call",
-    );
-    const [imageModel, imageContext, imageOptions] = expectDefined(
-      complete.mock.calls[1],
-      "image probe call",
-    );
-    expect(imageModel).toEqual(toolModel);
-    expect(toolContext).toEqual({
-      messages: [userMessage("Call the ping tool with {} and nothing else.")],
-      tools: [
-        { name: "ping", description: "Return OK.", parameters: { type: "object", properties: {} } },
-      ],
-    });
-    expect(imageContext).toEqual({
-      messages: [
-        userMessage([
+    const [model] = expectDefined(complete.mock.calls[0], "tool probe call");
+    expect(complete.mock.calls).toEqual([
+      probeCall(
+        model,
+        "Call the ping tool with {} and nothing else.",
+        { maxTokens: 256, toolChoice: "required" },
+        [ping],
+      ),
+      probeCall(
+        model,
+        [
           { type: "text", text: "Reply with OK." },
           {
             type: "image",
             data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+X3mIAAAAASUVORK5CYII=",
             mimeType: "image/png",
           },
-        ]),
-      ],
-    });
-    expect(toolOptions).toEqual({
-      ...probeOptions,
-      maxTokens: 256,
-      toolChoice: "required",
-    });
-    expect(imageOptions).toEqual({ ...probeOptions, maxTokens: 16 });
+        ],
+        { maxTokens: 16 },
+      ),
+    ]);
   });
 
   it("continues to image probing after a missing tool call and reports image errors", async () => {
