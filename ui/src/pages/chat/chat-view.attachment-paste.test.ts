@@ -23,8 +23,8 @@ import {
   createChatProps,
   createPasteEvent,
   disposeChatView,
+  getComposerTextarea,
   renderChatPropsInto,
-  requireElement,
 } from "./chat-view.test-helpers.ts";
 import type { ChatProps } from "./chat-view.tsx";
 import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
@@ -56,12 +56,28 @@ function renderChatView(overrides: Partial<ChatProps>) {
   return container;
 }
 
-function getComposerTextarea(container: Element) {
-  return expectDefined(
-    container.querySelector<HTMLTextAreaElement>(".agent-chat__composer-combobox > textarea"),
-    "composer textarea",
-  );
+const find = <T extends Element = HTMLElement>(container: Element, selector: string) =>
+  expectDefined(container.querySelector<T>(selector), selector);
+const click = (container: Element, selector: string) =>
+  find(container, selector).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+function finishRead(reader: FileReader, value: string, configurable = false) {
+  Object.defineProperty(reader, "result", { configurable, value });
+  reader.dispatchEvent(new ProgressEvent("load"));
 }
+function readingProps(reads: ChatAttachmentReadLifecycle) {
+  const readSignal = reads.readSignal;
+  return {
+    attachmentReads: reads,
+    readSignal,
+    pendingAttachmentReads: reads.pendingReads,
+    getPendingAttachmentReads: () => reads.pendingReads,
+    onPendingReadsChange: (delta: 1 | -1) => reads.updatePending(readSignal, delta),
+  };
+}
+const sendState = (button: HTMLButtonElement) => [
+  button.disabled,
+  button.getAttribute("aria-busy"),
+];
 
 function deferFileReaders() {
   const readers: FileReader[] = [];
@@ -79,16 +95,13 @@ function attachFile(container: Element, file: File, entry: "clipboard" | "file p
     });
     getComposerTextarea(container).dispatchEvent(paste);
   } else if (entry === "file picker") {
-    const input = expectDefined(
-      container.querySelector<HTMLInputElement>(".agent-chat__file-input"),
-      "attachment file input",
-    );
+    const input = find<HTMLInputElement>(container, ".agent-chat__file-input");
     Object.defineProperty(input, "files", { configurable: true, value: [file] });
     input.dispatchEvent(new Event("change", { bubbles: true }));
   } else {
     const drop = new Event("drop", { bubbles: true, cancelable: true });
     Object.defineProperty(drop, "dataTransfer", { value: { files: [file], types: ["Files"] } });
-    expectDefined(container.querySelector("section.chat"), "chat drop target").dispatchEvent(drop);
+    find(container, "section.chat").dispatchEvent(drop);
   }
 }
 
@@ -177,14 +190,8 @@ describe("chat attachment paste", () => {
       "First words from a remounted p…",
     );
     expect(attachments[0]?.origin).toBe("paste");
-    requireElement(remounted, ".chat-attachment-file__open", "pasted text excerpt").dispatchEvent(
-      new MouseEvent("click", { bubbles: true }),
-    );
-    requireElement(
-      sidebar.container,
-      ".chat-attachment-text-action",
-      "show pasted text button",
-    ).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    click(remounted, ".chat-attachment-file__open");
+    click(sidebar.container, ".chat-attachment-text-action");
 
     expect(onAttachmentsChange).toHaveBeenCalledWith([]);
     expect(onDraftChange).toHaveBeenCalledWith(`intro\n\n${pastedText}`);
@@ -226,11 +233,7 @@ describe("chat attachment reading", () => {
         uploadConfig,
         sessionKey: "agent:main:session-a",
         draft: "Keep this file with the message",
-        attachmentReads: reads,
-        readSignal,
-        pendingAttachmentReads: reads.pendingReads,
-        getPendingAttachmentReads: () => reads.pendingReads,
-        onPendingReadsChange: (delta: 1 | -1) => reads.updatePending(readSignal, delta),
+        ...readingProps(reads),
         onAttachmentsChange,
       };
       const container = renderChatView(props);
@@ -253,9 +256,10 @@ describe("chat attachment reading", () => {
         expect(reads.readSignal).not.toBe(readSignal);
       } else {
         uploadConfig.current.uploadsEnabled = false;
-        const reader = expectDefined(readers[0], "pending attachment reader");
-        Object.defineProperty(reader, "result", { value: "data:image/png;base64,YWJj" });
-        reader.dispatchEvent(new ProgressEvent("load"));
+        finishRead(
+          expectDefined(readers[0], "pending attachment reader"),
+          "data:image/png;base64,YWJj",
+        );
         await Promise.resolve();
         const failed = renderChatView(props);
         expect(failed.querySelectorAll(".chat-attachment-thumb--error")).toHaveLength(1);
@@ -279,7 +283,6 @@ describe("chat attachment reading", () => {
       expect(attachments.map((attachment) => attachment.fileName)).toEqual(["proof.png"]);
     });
     const redraw = () => {
-      const readSignal = reads.readSignal;
       renderChatPropsInto(
         container,
         createChatProps({
@@ -287,15 +290,11 @@ describe("chat attachment reading", () => {
           draft,
           getAttachments: () => attachments,
           getDraft: () => draft,
-          getPendingAttachmentReads: () => reads.pendingReads,
           onAttachmentsChange: (next) => {
             attachments = next;
           },
-          onPendingReadsChange: (delta) => reads.updatePending(readSignal, delta),
           onSend,
-          attachmentReads: reads,
-          pendingAttachmentReads: reads.pendingReads,
-          readSignal,
+          ...readingProps(reads),
         }),
       );
     };
@@ -319,12 +318,10 @@ describe("chat attachment reading", () => {
     expect(status?.getAttribute("role")).toBe("status");
     expect(status?.classList.contains("sr-only")).toBe(true);
     expect(getComposerTextarea(container).disabled).toBe(false);
-    const send = expectDefined(
-      container.querySelector<HTMLButtonElement>('button[aria-label="Send message"]'),
-      "send button",
-    );
-    expect(send.disabled).toBe(true);
-    expect(send.getAttribute("aria-busy")).toBe("true");
+    const sendButton = () =>
+      find<HTMLButtonElement>(container, 'button[aria-label="Send message"]');
+    const send = sendButton();
+    expect(sendState(send)).toEqual([true, "true"]);
     expect(send.closest("openclaw-tooltip")?.content).toBe("Preparing attachments…");
     getComposerTextarea(container).dispatchEvent(
       new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" }),
@@ -339,11 +336,7 @@ describe("chat attachment reading", () => {
     expect(
       pendingTile?.querySelector<HTMLElement>(".chat-attachment-loading > span")?.style.transform,
     ).toBe("scaleX(0.5)");
-    Object.defineProperty(reader, "result", {
-      configurable: true,
-      value: `data:image/png;base64,${btoa("attachment proof")}`,
-    });
-    reader.dispatchEvent(new ProgressEvent("load"));
+    finishRead(reader, `data:image/png;base64,${btoa("attachment proof")}`, true);
 
     await waitForFast(() => {
       expect(reads.pendingReads).toBe(0);
@@ -351,12 +344,8 @@ describe("chat attachment reading", () => {
     });
     expect(container.querySelector(".chat-attachment-thumb")).toBe(pendingTile);
     expect(pendingTile?.getAttribute("aria-busy")).toBe("false");
-    const readySend = expectDefined(
-      container.querySelector<HTMLButtonElement>('button[aria-label="Send message"]'),
-      "ready send button",
-    );
-    expect(readySend.disabled).toBe(false);
-    expect(readySend.getAttribute("aria-busy")).toBe("false");
+    const readySend = sendButton();
+    expect(sendState(readySend)).toEqual([false, "false"]);
     expect(container.querySelector(".chat-attachments-status")?.textContent?.trim()).toBe("");
     readySend.click();
     expect(onSend).toHaveBeenCalledOnce();
