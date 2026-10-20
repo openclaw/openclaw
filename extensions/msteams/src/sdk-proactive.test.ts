@@ -17,15 +17,31 @@ function fromServiceUrl({ serviceUrl }: { serviceUrl: string }) {
     serviceUrl,
     conversations: {
       activities: (conversationId: string) => ({
-        create: (activity: unknown) =>
-          clientState.create({
-            conversationId,
-            activity,
-          }),
+        create: (activity: unknown) => clientState.create({ conversationId, activity }),
       }),
     },
   };
 }
+
+const conversation = Object.freeze({
+  id: "19:conversation@thread.tacv2",
+  conversationType: "personal",
+  tenantId: "tenant-1",
+});
+const reference = (
+  overrides: Partial<Parameters<typeof sendMSTeamsActivityWithReference>[1]> = {},
+) => ({
+  serviceUrl: "https://smba.trafficmanager.net/amer/",
+  user: { id: "29:user" },
+  conversation,
+  channelId: "msteams",
+  ...overrides,
+});
+const activity = { type: "message", text: "hello" } as const;
+const mockApp = () =>
+  ({
+    api: { serviceUrl: "https://smba.trafficmanager.net/teams", fromServiceUrl },
+  }) as unknown as MSTeamsApp;
 
 describe("sendMSTeamsActivityWithReference", () => {
   beforeEach(() => {
@@ -38,12 +54,11 @@ describe("sendMSTeamsActivityWithReference", () => {
   });
 
   it("records a channel root only for the sending account and bot", async () => {
-    const serviceUrl = "https://smba.trafficmanager.net/amer/";
     const app = createMockApp({ createFn: async () => ({ id: "account-owned-root" }) });
     await sendMSTeamsActivityWithReference(
       app,
       {
-        serviceUrl,
+        serviceUrl: "https://smba.trafficmanager.net/amer/",
         agent: { id: "support-bot" },
         conversation: { id: "19:account-scope@thread.tacv2", conversationType: "channel" },
       },
@@ -73,24 +88,10 @@ describe("sendMSTeamsActivityWithReference", () => {
 
   it("sends a legacy bot-only imported reference instead of rejecting it", async () => {
     vi.stubEnv("SERVICE_URL", "https://bot.example.com/api/messages");
-    const app = {
-      api: { serviceUrl: "https://smba.trafficmanager.net/teams", fromServiceUrl },
-    } as unknown as MSTeamsApp;
-
     const result = await sendMSTeamsActivityWithReference(
-      app,
-      {
-        serviceUrl: "https://smba.trafficmanager.net/amer/",
-        bot: { id: "28:legacy-bot", name: "OpenClaw" },
-        user: { id: "29:user" },
-        conversation: {
-          id: "19:conversation@thread.tacv2",
-          conversationType: "personal",
-          tenantId: "tenant-1",
-        },
-        channelId: "msteams",
-      },
-      { type: "message", text: "hello" },
+      mockApp(),
+      reference({ bot: { id: "28:legacy-bot", name: "OpenClaw" } }),
+      activity,
     );
 
     expect(result).toMatchObject({ id: "activity-1" });
@@ -115,38 +116,23 @@ describe("sendMSTeamsActivityWithReference", () => {
 
     const result = await sendMSTeamsActivityWithReference(
       app,
-      {
-        serviceUrl: "https://smba.trafficmanager.net/amer/",
+      reference({
         agent: { id: "28:bot", name: "OpenClaw", role: "bot" },
         user: { id: "29:user", aadObjectId: "aad-user" },
-        conversation: {
-          id: "19:conversation@thread.tacv2",
-          conversationType: "personal",
-          tenantId: "tenant-1",
-        },
-        channelId: "msteams",
-      },
-      { type: "message", text: "hello" },
+      }),
+      activity,
       { serviceUrlBoundary: { cloud: "Public" } },
     );
 
     expect(result).toMatchObject({ id: "activity-1" });
-    expect(clientState.created).toEqual([
-      {
-        serviceUrl: "https://smba.trafficmanager.net/amer",
-      },
-    ]);
+    expect(clientState.created).toEqual([{ serviceUrl: "https://smba.trafficmanager.net/amer" }]);
     expect(clientState.create).toHaveBeenCalledWith({
       conversationId: "19:conversation@thread.tacv2",
       activity: expect.objectContaining({
         type: "message",
         text: "hello",
         from: { id: "28:bot", name: "OpenClaw", role: "bot" },
-        conversation: {
-          id: "19:conversation@thread.tacv2",
-          conversationType: "personal",
-          tenantId: "tenant-1",
-        },
+        conversation,
         channelData: { tenant: { id: "tenant-1" } },
       }),
     });
@@ -182,7 +168,7 @@ describe("stored serviceUrl SDK admission", () => {
       sendMSTeamsActivityWithReference(
         app,
         { agent, serviceUrl, conversation: { id: "19:conversation@thread.tacv2" } },
-        { type: "message", text: "hello" },
+        activity,
         { serviceUrlBoundary: { cloud: "Public" } },
       ),
     ).rejects.toThrow(new Error(message));
