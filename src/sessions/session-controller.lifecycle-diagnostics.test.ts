@@ -67,15 +67,8 @@ async function records(kind: RecordKind): Promise<Record<string, unknown>[]> {
       const fields = Object.values(record).find(
         (value): value is Record<string, unknown> => isRecord(value) && "diagnosticEpoch" in value,
       );
-      return [
-        {
-          ...fields,
-          traceId: record.traceId,
-          spanId: record.spanId,
-          parentSpanId: record.parentSpanId,
-          traceFlags: record.traceFlags,
-        },
-      ];
+      const { traceId, spanId, parentSpanId, traceFlags } = record;
+      return [{ ...fields, traceId, spanId, parentSpanId, traceFlags }];
     });
 }
 
@@ -85,8 +78,7 @@ async function advance(ms: number) {
 }
 
 function gate(onEnter?: () => void) {
-  const entered = createDeferred();
-  const release = createDeferred();
+  const [entered, release] = [createDeferred(), createDeferred()];
   return {
     entered: entered.promise,
     release: release.resolve,
@@ -186,15 +178,9 @@ it("reports the current holder after turnover and preserves the waiter's trace a
   const order: string[] = [];
   const firstGate = gate(() => order.push("first"));
   const secondGate = gate(() => order.push("second"));
-  const first = mutate(target, traces.first, {
-    diagnosticLabel: "create",
-    run: firstGate.run,
-  });
+  const first = mutate(target, traces.first, { diagnosticLabel: "create", run: firstGate.run });
   await firstGate.entered;
-  const second = mutate(target, traces.second, {
-    diagnosticLabel: "delete",
-    run: secondGate.run,
-  });
+  const second = mutate(target, traces.second, { diagnosticLabel: "delete", run: secondGate.run });
   const waiter = mutate(target, traces.waiter, {
     diagnosticLabel: "sharing",
     run: async () => {
@@ -233,18 +219,14 @@ it("reports the current holder after turnover and preserves the waiter's trace a
     await Promise.allSettled([first, second, waiter]);
   }
   expect(order).toEqual(["first", "second", "waiter"]);
-  const completed = await expectRecords("slow", [
-    {
-      mutationKind: "delete",
+  const completed = await expectRecords(
+    "slow",
+    ["delete", "sharing"].map((mutationKind) => ({
+      mutationKind,
       sessionScopeHash: expect.stringMatching(/^[0-9a-f]{64}$/),
       identityCount: 1,
-    },
-    {
-      mutationKind: "sharing",
-      sessionScopeHash: expect.stringMatching(/^[0-9a-f]{64}$/),
-      identityCount: 1,
-    },
-  ]);
+    })),
+  );
   expectPrivate(completed, target);
 });
 
@@ -328,11 +310,9 @@ it.each([true, false])(
   "preserves an outer holder through reentry when initially enabled=%s",
   async (initiallyEnabled) => {
     const target = { scope: `reentry-store-${initiallyEnabled}`, identities: ["reentry-session"] };
-    const outerStarted = createDeferred();
-    const beginNested = createDeferred();
+    const [outerStarted, beginNested] = [createDeferred(), createDeferred()];
     const nested = gate();
-    const nestedDone = createDeferred();
-    const releaseOuter = createDeferred();
+    const [nestedDone, releaseOuter] = [createDeferred(), createDeferred()];
     setDiagnostics(initiallyEnabled);
     const outer = mutate(target, traces.first, {
       diagnosticLabel: "create",
@@ -375,8 +355,7 @@ it.each([true, false])(
 
 it("measures prepare and finalize separately while successors wait for real finalization", async () => {
   const target = { scope: "phase-store", identities: ["phase-session"] };
-  const prepare = gate();
-  const finalize = gate();
+  const [prepare, finalize] = [gate(), gate()];
   const first = mutate(target, traces.first, {
     diagnosticLabel: "create",
     prepare: prepare.run,
@@ -629,8 +608,7 @@ it("preserves operation errors and queue release when the native logging sink th
   });
   transport.write = failedSink;
   const lifecycle = await import("./session-controller.lifecycle.js");
-  const started = createDeferred();
-  const release = createDeferred();
+  const [started, release] = [createDeferred(), createDeferred()];
   const operationError = new Error("original operation failure");
   const target = { scope: "failed-sink-store", identities: ["failed-sink-session"] };
   const first = lifecycle.runSessionMutation({

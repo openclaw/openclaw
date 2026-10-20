@@ -41,6 +41,9 @@ import {
   captureCurrentReplyMessageInjectionTarget,
 } from "./session-controller.message-injection.js";
 
+type Receipt = PilotEvent & { type: "receipt" };
+const deliverySettlement = [{ type: "complete" }, { type: "delivery-settled" }] as const;
+
 function reserve(key: string, options: Parameters<typeof reserveSessionControllerSource>[1] = {}) {
   return reserveSessionControllerSource(key, { policy: { mode: "followup" }, ...options });
 }
@@ -69,10 +72,7 @@ async function replay(events: readonly PilotEvent[], label: string) {
   let injectionAvailable = true;
   let writer = true;
   const key = "agent:main:controller-pilot";
-  const gates = new Map<
-    string,
-    ReturnType<typeof createDeferredCore<PilotEvent & { type: "receipt" }>>
-  >();
+  const gates = new Map<string, ReturnType<typeof createDeferredCore<Receipt>>>();
   const attempts = new Map<string, ReplyMessageInjectionAttempt>();
   const custody = new Map<string, PilotCustody>();
   const effects: string[] = [];
@@ -105,7 +105,7 @@ async function replay(events: readonly PilotEvent[], label: string) {
             throw new Error("Missing input identity");
           }
           effects.push("inject:" + id);
-          const gate = createDeferredCore<PilotEvent & { type: "receipt" }>();
+          const gate = createDeferredCore<Receipt>();
           gates.set(id, gate);
           const receipt = await gate.promise;
           assertCurrent();
@@ -255,10 +255,11 @@ const joinOnlyRecoveryRuntime: GatewayRecoveryRuntime = {
 
 /** A foreground claim selected first, then a startup resend reserved behind it and joined. */
 function startForegroundBeforeResend(
-  key: string,
-  reservationId: string,
+  cycle: number,
   beforeJoin: (resend: SessionControllerInput) => void = () => {},
 ) {
+  const key = `agent:main:recovery-join-model:${cycle}`;
+  const reservationId = `main-session-recovery:recovery-session:cycle:${cycle}`;
   const foregroundAbort = new AbortController();
   const foreground = reserve(key, {
     adapter: { signal: foregroundAbort.signal },
@@ -350,16 +351,11 @@ describe("session controller executable pilot", () => {
   });
 
   it("lets a foreground claim join the startup resend that won the durable claim", async () => {
-    const key = "agent:main:recovery-join-model";
     const turns: string[] = [];
     let resendTurn: Promise<SessionControllerMailboxClaim> | undefined;
-    const { foreground, foregroundClaim, joined } = startForegroundBeforeResend(
-      key,
-      "main-session-recovery:recovery-session:cycle:1",
-      (resend) => {
-        resendTurn = recordClaim(resend, turns, "resend");
-      },
-    );
+    const { foreground, foregroundClaim, joined } = startForegroundBeforeResend(1, (resend) => {
+      resendTurn = recordClaim(resend, turns, "resend");
+    });
     try {
       const resendClaim = await resendTurn!;
       expect(foreground.mailbox.claim).toBe(resendClaim);
@@ -373,11 +369,7 @@ describe("session controller executable pilot", () => {
   });
 
   it("never lets a joining foreground retire the resend it did not create (R5)", async () => {
-    const key = "agent:main:recovery-join-retire-model";
-    const { foregroundAbort, foregroundClaim, resend, joined } = startForegroundBeforeResend(
-      key,
-      "main-session-recovery:recovery-session:cycle:2",
-    );
+    const { foregroundAbort, foregroundClaim, resend, joined } = startForegroundBeforeResend(2);
     foregroundAbort.abort(new Error("foreground stopped while its predecessor waits"));
     await expect(joined).resolves.toBeUndefined();
     expect(resend.retirementRequested).toBeUndefined();
@@ -413,8 +405,7 @@ describe("session controller executable pilot", () => {
         { type: "injection-available", available: false },
         { type: "offer", input: { id: "closed", authority: "alice-policy" } },
         { type: "stop" },
-        { type: "complete" },
-        { type: "delivery-settled" },
+        ...deliverySettlement,
       ],
     },
     {
@@ -427,8 +418,7 @@ describe("session controller executable pilot", () => {
         { type: "receipt", id: "uncertain", outcome: "indeterminate" },
         { type: "revoke" },
         { type: "stop" },
-        { type: "complete" },
-        { type: "delivery-settled" },
+        ...deliverySettlement,
       ],
     },
     {
@@ -436,13 +426,11 @@ describe("session controller executable pilot", () => {
       events: [
         { type: "run" },
         { type: "offer", input: { id: "old-input", authority: "alice-policy" } },
-        { type: "complete" },
-        { type: "delivery-settled" },
+        ...deliverySettlement,
         { type: "replace" },
         { type: "run" },
         { type: "receipt", id: "old-input", outcome: "accepted" },
-        { type: "complete" },
-        { type: "delivery-settled" },
+        ...deliverySettlement,
       ],
     },
   ])("$name", async ({ name, events }) => replay(events, name));

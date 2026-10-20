@@ -111,8 +111,7 @@ it("relays caller cancellation through a borrowed ambient turn", async () => {
     sessionId: "borrowed-cancellation-session",
   };
   const caller = new AbortController();
-  const callbackStarted = createDeferred();
-  const releaseCallback = createDeferred();
+  const [callbackStarted, releaseCallback] = [createDeferred(), createDeferred()];
   let borrowedSignal: AbortSignal | undefined;
   await withSessionTurn(params, async (operation) => {
     const borrowed = withSessionTurn(
@@ -204,8 +203,7 @@ it.each(turnKinds)(
   async (kind) => {
     const sessionId = "cleanup-session";
     const target = targetFor(`consumed-admission-${kind}`, sessionId);
-    const cleanupStarted = createDeferred();
-    const cleanup = createDeferred();
+    const [cleanupStarted, cleanup] = [createDeferred(), createDeferred()];
     const input = reserve(target, {
       adapter: {
         onSettled: async () => {
