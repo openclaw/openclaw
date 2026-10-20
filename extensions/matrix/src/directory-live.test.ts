@@ -2,8 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { listMatrixDirectoryGroupsLive, listMatrixDirectoryPeersLive } from "./directory-live.js";
 import { resolveMatrixAuth } from "./matrix/client.js";
 
-const { matrixAuthedHttpClientCtorMock, requestJsonMock } = vi.hoisted(() => ({
-  matrixAuthedHttpClientCtorMock: vi.fn(),
+const { requestJsonMock } = vi.hoisted(() => ({
   requestJsonMock: vi.fn(),
 }));
 
@@ -13,10 +12,6 @@ vi.mock("./matrix/client.js", () => ({
 
 vi.mock("./matrix/sdk/http-client.js", () => ({
   MatrixAuthedHttpClient: class {
-    constructor(params: unknown) {
-      matrixAuthedHttpClientCtorMock(params);
-    }
-
     requestJson(params: unknown) {
       return requestJsonMock(params);
     }
@@ -34,7 +29,6 @@ describe("matrix directory live", () => {
       userId: "@bot:example.org",
       accessToken: "test-token",
     });
-    matrixAuthedHttpClientCtorMock.mockReset();
     requestJsonMock.mockReset();
     requestJsonMock.mockResolvedValue({ results: [] });
   });
@@ -68,32 +62,39 @@ describe("matrix directory live", () => {
     });
   });
 
-  it("accepts prefixed fully qualified user ids without hitting Matrix", async () => {
-    expect(
-      await listMatrixDirectoryPeersLive({ cfg, query: "matrix:user:@Alice:Example.org" }),
-    ).toEqual([{ kind: "user", id: "@Alice:Example.org" }]);
-    expect(requestJsonMock).not.toHaveBeenCalled();
-  });
+  it.each([
+    [
+      "user",
+      listMatrixDirectoryPeersLive,
+      "matrix:user:@Alice:Example.org",
+      { kind: "user", id: "@Alice:Example.org" },
+    ],
+    [
+      "room",
+      listMatrixDirectoryGroupsLive,
+      "matrix:room:!team:example.org",
+      { kind: "group", id: "!team:example.org", name: "!team:example.org" },
+    ],
+  ] as const)(
+    "accepts a prefixed %s id without Matrix lookups",
+    async (_kind, list, query, expected) => {
+      expect(await list({ cfg, query })).toEqual([expected]);
+      expect(requestJsonMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("resolves prefixed room aliases through the hardened Matrix HTTP client", async () => {
-    requestJsonMock.mockResolvedValueOnce({
-      room_id: "!team:example.org",
-    });
+    const id = "!team:example.org",
+      alias = "#Team:Example.org";
+    requestJsonMock.mockResolvedValueOnce({ room_id: id });
 
     const results = await listMatrixDirectoryGroupsLive({
       cfg,
       accountId: "assistant",
-      query: "channel:#Team:Example.org",
+      query: `channel:${alias}`,
     });
 
-    expect(results).toEqual([
-      {
-        kind: "group",
-        id: "!team:example.org",
-        name: "#Team:Example.org",
-        handle: "#Team:Example.org",
-      },
-    ]);
+    expect(results).toEqual([{ kind: "group", id, name: alias, handle: alias }]);
     expect(resolveMatrixAuth).toHaveBeenCalledWith({ cfg, accountId: "assistant" });
     expect(requestJsonMock).toHaveBeenCalledWith({
       method: "GET",
@@ -101,13 +102,6 @@ describe("matrix directory live", () => {
       timeoutMs: 10_000,
       body: undefined,
     });
-  });
-
-  it("accepts prefixed room ids without additional Matrix lookups", async () => {
-    expect(
-      await listMatrixDirectoryGroupsLive({ cfg, query: "matrix:room:!team:example.org" }),
-    ).toEqual([{ kind: "group", id: "!team:example.org", name: "!team:example.org" }]);
-    expect(requestJsonMock).not.toHaveBeenCalled();
   });
 
   it("rejects a non-object joined-rooms response instead of returning no groups", async () => {

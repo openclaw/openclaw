@@ -1,22 +1,18 @@
 import { DatabaseSync, StatementSync } from "node:sqlite";
-import {
-  createPluginStateSyncKeyedStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import * as state from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { matrixPlugin } from "./channel.js";
-import { getMatrixScopedEnvVarNames } from "./env-vars.js";
 import { installMatrixTestRuntime } from "./test-runtime.js";
-import type { CoreConfig, MatrixConfig } from "./types.js";
+import type { MatrixConfig } from "./types.js";
 
 describe("Matrix config directory storage", () => {
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     afterEach(() => {
       vi.restoreAllMocks();
       vi.unstubAllEnvs();
-      resetPluginStateStoreForTests();
+      state.resetPluginStateStoreForTests();
       cleanup();
     }),
   );
@@ -27,7 +23,7 @@ describe("Matrix config directory storage", () => {
     const stateDir = tempDirs.make("openclaw-matrix-directory-");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     installMatrixTestRuntime({ stateDir });
-    const credentials = createPluginStateSyncKeyedStoreForTests("matrix", {
+    const credentials = state.createPluginStateSyncKeyedStoreForTests("matrix", {
       namespace: "credentials",
       maxEntries: 256,
       overflowPolicy: "reject-new",
@@ -40,59 +36,41 @@ describe("Matrix config directory storage", () => {
       accessToken: "synthetic-directory-token",
       createdAt: "2026-09-01T00:00:00.000Z",
     });
-    resetPluginStateStoreForTests();
+    state.resetPluginStateStoreForTests();
   });
 
-  const scopedEnv = getMatrixScopedEnvVarNames("team-ops");
-  const cases: {
-    name: string;
-    config?: MatrixConfig;
-    accountId?: string;
-    env?: NodeJS.ProcessEnv;
-    selected: string;
-  }[] = [
-    {
-      name: "the configured named default",
-      config: { defaultAccount: "Team Ops", accounts: { other: {}, "Team Ops": {} } },
-      selected: "team-ops",
-    },
-    {
-      name: "a scoped environment account",
-      env: {
-        [scopedEnv.homeserver]: "https://matrix.example.org",
-        [scopedEnv.accessToken]: "synthetic-scoped-token",
-      },
-      selected: "team-ops",
-    },
-    {
-      name: "global environment auth ahead of a sole named account",
-      config: { accounts: { "Team Ops": {} } },
-      env: {
-        MATRIX_HOMESERVER: "https://matrix.example.org",
-        MATRIX_ACCESS_TOKEN: "synthetic-global-token",
-      },
-      selected: "default",
-    },
+  function authEnv(prefix: string): NodeJS.ProcessEnv {
+    return {
+      [`${prefix}_HOMESERVER`]: "https://matrix.example.org",
+      [`${prefix}_ACCESS_TOKEN`]: "synthetic-token",
+    };
+  }
+  const named = { accounts: { "Team Ops": {} } };
+  const namedDefault = {
+    ...named,
+    defaultAccount: "Team Ops",
+    accounts: { ...named.accounts, other: {} },
+  };
+  const cases: [string, MatrixConfig, NodeJS.ProcessEnv, string][] = [
+    ["named default", namedDefault, {}, "team-ops"],
+    ["scoped environment", {}, authEnv("MATRIX_TEAM_X2D_OPS"), "team-ops"],
+    ["global environment before sole named account", named, authEnv("MATRIX"), "default"],
   ];
 
-  it.each(cases)("lists $name without host SQLite", async (scenario) => {
-    for (const [key, value] of Object.entries(scenario.env ?? {})) {
+  it.each(cases)("lists %s without host SQLite", async (_name, config, env, selected) => {
+    for (const [key, value] of Object.entries(env)) {
       vi.stubEnv(key, value);
     }
-    const cfg: CoreConfig = {
-      channels: {
-        matrix: {
-          ...scenario.config,
-          dm: { allowFrom: ["matrix:@shared:example.org"] },
-          groups: {
-            "!shared:example.org": { users: ["@shared:example.org"] },
-            "!default:example.org": { account: "default", users: ["@default:example.org"] },
-            "!team-ops:example.org": { account: "team-ops", users: ["@team-ops:example.org"] },
-          },
-        },
+    const matrix: MatrixConfig = {
+      ...config,
+      dm: { allowFrom: ["matrix:@shared:example.org"] },
+      groups: {
+        "!shared:example.org": { users: ["@shared:example.org"] },
+        "!default:example.org": { account: "default", users: ["@default:example.org"] },
+        "!team-ops:example.org": { account: "team-ops", users: ["@team-ops:example.org"] },
       },
     };
-    const params = { cfg, accountId: scenario.accountId, runtime: createRuntimeEnv() };
+    const params = { cfg: { channels: { matrix } }, runtime: createRuntimeEnv() };
     const sql = [
       vi.spyOn(DatabaseSync.prototype, "prepare"),
       vi.spyOn(DatabaseSync.prototype, "exec"),
@@ -106,11 +84,11 @@ describe("Matrix config directory storage", () => {
     }
     expect(await directory.listPeers(params)).toEqual([
       { kind: "user", id: "user:@shared:example.org" },
-      { kind: "user", id: `user:@${scenario.selected}:example.org` },
+      { kind: "user", id: `user:@${selected}:example.org` },
     ]);
     expect(await directory.listGroups(params)).toEqual([
       { kind: "group", id: "room:!shared:example.org" },
-      { kind: "group", id: `room:!${scenario.selected}:example.org` },
+      { kind: "group", id: `room:!${selected}:example.org` },
     ]);
     for (const method of sql) {
       expect(method).not.toHaveBeenCalled();

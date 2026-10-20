@@ -8,16 +8,16 @@ if (!MatrixConfigSchema) {
 
 describe("MatrixConfigSchema SecretInput", () => {
   it("preserves root and account join-introduction overrides without materializing defaults", () => {
-    const result = MatrixConfigSchema.safeParse({
+    const input = {
       joinIntro: false,
-      accounts: { work: { joinIntro: true, customField: 1 }, inherited: {} },
-    });
-    expect(result.success).toBe(true);
+      accounts: {
+        work: { joinIntro: true, streaming: { mode: "progress" }, customField: 1 },
+        inherited: {},
+      },
+    };
+    const result = MatrixConfigSchema.safeParse(input);
+    expect(result).toMatchObject({ success: true, data: input });
     if (result.success) {
-      expect(result.data).toMatchObject({
-        joinIntro: false,
-        accounts: { work: { joinIntro: true, customField: 1 }, inherited: {} },
-      });
       expect(result.data).not.toHaveProperty("accounts.inherited.joinIntro");
     }
   });
@@ -40,15 +40,6 @@ describe("MatrixConfigSchema SecretInput", () => {
     if (!result.success) {
       expect(JSON.stringify(result.issues)).toContain("doctor --fix");
     }
-  });
-
-  it("keeps schema-open account entries with nested streaming objects", () => {
-    const result = MatrixConfigSchema.safeParse({
-      homeserver: "https://matrix.example.org",
-      accessToken: "token",
-      accounts: { work: { streaming: { mode: "progress" }, customField: 1 } },
-    });
-    expect(result.success).toBe(true);
   });
 });
 

@@ -60,11 +60,11 @@ describe("matrixMessageActions", () => {
     });
 
     const resolved = await discovery;
-    expect(resolved?.actions).toEqual(
-      expect.arrayContaining(["send", "react", "set-profile", "permissions"]),
-    );
-    expect(resolved?.capabilities).toEqual(["presentation"]);
-    expect(resolved?.mediaSourceParams).toEqual({ "set-profile": ["avatarUrl", "avatarPath"] });
+    expect(resolved).toMatchObject({
+      actions: expect.arrayContaining(["send", "react", "set-profile", "permissions"]),
+      capabilities: ["presentation"],
+      mediaSourceParams: { "set-profile": ["avatarUrl", "avatarPath"] },
+    });
     const schemas = listSchemas(resolved?.schema);
     expect(
       schemas.find((schema) => schema?.actions?.includes("set-profile"))?.properties,
@@ -96,16 +96,12 @@ describe("matrixMessageActions", () => {
     const enabled = discover();
     const readDisabled = discover({ actions: { messages: false } });
 
+    const cursor = expect.objectContaining({
+      description: expect.stringContaining("nextBatch/prevBatch, not an event id"),
+    });
     expect(listSchemas(enabled?.schema)).toContainEqual({
       actions: [],
-      properties: {
-        before: expect.objectContaining({
-          description: expect.stringContaining("nextBatch/prevBatch, not an event id"),
-        }),
-        after: expect.objectContaining({
-          description: expect.stringContaining("nextBatch/prevBatch, not an event id"),
-        }),
-      },
+      properties: { before: cursor, after: cursor },
     });
     expect(readDisabled?.actions).not.toContain("read");
     expect(listSchemas(readDisabled?.schema).some((schema) => "before" in schema.properties)).toBe(
@@ -118,7 +114,6 @@ describe("matrixMessageActions", () => {
     const discovery = matrixMessageActions.describeMessageTool({
       cfg: { channels: { matrix: { accounts: { assistant: account, ops: account } } } },
     } as never);
-    expect(discovery?.actions).toStrictEqual([]);
-    expect(discovery?.capabilities).toStrictEqual([]);
+    expect(discovery).toStrictEqual({ actions: [], capabilities: [] });
   });
 });

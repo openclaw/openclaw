@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import type { CoreConfig } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -34,124 +34,102 @@ function config(ops = account): CoreConfig {
 }
 const cfg = config();
 const context = { getRuntimeConfig: () => cfg };
+const status = { serverDeviceKnown: false, pendingVerifications: 0 };
 
-async function invoke(
+async function expectReply(
   handle: typeof handleVerificationBootstrap,
   params: Parameters<typeof handleVerificationBootstrap>[0]["params"],
+  result: unknown,
+  routed = false,
+  success = true,
 ) {
   const respond = vi.fn();
-  await handle({ params, respond, context });
-  return respond;
+  await handle({
+    params: { ...params, ...(routed ? { expectedOwnerId: "owner-fixture" } : {}) },
+    respond,
+    context,
+  });
+  expect(respond).toHaveBeenCalledWith(
+    routed || success,
+    routed ? { result, accountId: "ops" } : result,
+  );
 }
 
-describe("Matrix command config handoff", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mocks.bootstrap.mockResolvedValue({ success: true });
-    mocks.runtime.mockReturnValue({
-      config: { current: () => cfg, replaceConfigFile: mocks.replaceConfigFile },
-    });
-    mocks.acquire.mockResolvedValue({
-      client: {
-        prepareForOneOff: async () => {},
-        getUserId: async () => "@bot:example.org",
-        getUserProfile: async () => ({ displayname: "Old Bot" }),
-        setDisplayName: mocks.setDisplayName,
-        setAvatarUrl: mocks.setAvatarUrl,
-        verifyWithRecoveryKey: async () => ({ success: true }),
-        bootstrapOwnDeviceVerification: mocks.bootstrap,
-        crypto: { listVerifications: async () => [], getRecoveryKey: mocks.recoveryKey },
-        getOwnDeviceVerificationStatus: async () => ({ serverDeviceKnown: false }),
-      },
-      start: async () => {},
-      release: mocks.release,
-    });
+beforeEach(() => {
+  vi.clearAllMocks();
+  mocks.bootstrap.mockResolvedValue({ success: true });
+  mocks.runtime.mockReturnValue({
+    config: { current: () => cfg, replaceConfigFile: mocks.replaceConfigFile },
   });
-
-  it.each([false, true])("updates the profile with explicit config=%s", async (explicit) => {
-    const supplied = config({ homeserver: "https://tool.example.org" });
-    const result = await applyMatrixProfileUpdate({
-      account: "ops",
-      displayName: "Ops Bot",
-      avatarUrl: "mxc://example.org/avatar",
-      ...(explicit ? { cfg: supplied } : {}),
-    });
-
-    expect(result.profile).toMatchObject({ displayNameUpdated: true, avatarUpdated: true });
-    expect(mocks.setDisplayName).toHaveBeenCalledWith("Ops Bot");
-    expect(mocks.setAvatarUrl).toHaveBeenCalledWith("mxc://example.org/avatar");
-    expect(mocks.acquire).toHaveBeenCalledWith(
-      expect.objectContaining({ cfg: explicit ? supplied : cfg }),
-    );
-    const ops = {
-      ...account,
-      enabled: true,
-      name: "Ops Bot",
-      avatarUrl: "mxc://example.org/avatar",
-    };
-    const nextConfig = { channels: { matrix: { enabled: true, accounts: { ops } } } };
-    expect(mocks.replaceConfigFile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        nextConfig: expect.objectContaining(nextConfig),
-      }),
-    );
-    expect(mocks.release).toHaveBeenCalledWith({ mode: "persist" });
-  });
-
-  it.each([
-    ["recovery key", handleVerifyRecoveryKey, { key: "synthetic-recovery-key" }, { success: true }],
-    ["bootstrap", handleVerificationBootstrap, {}, { success: true }],
-    ["status", handleVerificationStatus, {}, { serverDeviceKnown: false, pendingVerifications: 0 }],
-  ] as const)(
-    "runs %s verification with Gateway config",
-    async (_label, handle, params, result) => {
-      for (const routed of [false, true]) {
-        const response = await invoke(handle, {
-          accountId: "ops",
-          ...params,
-          ...(routed ? { expectedOwnerId: "owner-fixture" } : {}),
-        });
-        expect(response).toHaveBeenCalledWith(true, routed ? { result, accountId: "ops" } : result);
-      }
-      expect(mocks.acquire).toHaveBeenCalledWith(
-        expect.objectContaining({ cfg, accountId: "ops" }),
-      );
-      expect(mocks.release).toHaveBeenCalledTimes(2);
+  mocks.acquire.mockResolvedValue({
+    client: {
+      prepareForOneOff: async () => {},
+      getUserId: async () => "@bot:example.org",
+      getUserProfile: async () => ({ displayname: "Old Bot" }),
+      setDisplayName: mocks.setDisplayName,
+      setAvatarUrl: mocks.setAvatarUrl,
+      verifyWithRecoveryKey: async () => ({ success: true }),
+      bootstrapOwnDeviceVerification: mocks.bootstrap,
+      crypto: { listVerifications: async () => [], getRecoveryKey: mocks.recoveryKey },
+      getOwnDeviceVerificationStatus: async () => ({ serverDeviceKnown: false }),
     },
-  );
-
-  it("preserves structured verification failure for CLI rendering and legacy RPCs", async () => {
-    mocks.bootstrap.mockResolvedValue({ success: false });
-    for (const routed of [false, true]) {
-      const response = await invoke(
-        handleVerificationBootstrap,
-        routed ? { expectedOwnerId: "owner-fixture" } : {},
-      );
-      expect(response).toHaveBeenCalledWith(
-        routed,
-        routed ? { result: { success: false }, accountId: "ops" } : { success: false },
-      );
-    }
+    start: async () => {},
+    release: mocks.release,
   });
-
-  it.each([false, true])(
-    "includes the stored recovery key only when explicitly requested (%s)",
-    async (includeRecoveryKey) => {
-      const response = await invoke(handleVerificationStatus, {
-        expectedOwnerId: "owner-fixture",
-        includeRecoveryKey,
-        allowDegradedLocalState: true,
-      });
-      expect(response).toHaveBeenCalledWith(true, {
-        accountId: "ops",
-        result: {
-          serverDeviceKnown: false,
-          pendingVerifications: 0,
-          ...(includeRecoveryKey ? { recoveryKey: "synthetic-stored-key" } : {}),
-        },
-      });
-      expect(mocks.recoveryKey).toHaveBeenCalledTimes(includeRecoveryKey ? 1 : 0);
-      expect(mocks.release).toHaveBeenCalledWith({ mode: "persist" });
-    },
-  );
 });
+
+it.each([false, true])("updates the profile with explicit config=%s", async (explicit) => {
+  const supplied = config({ homeserver: "https://tool.example.org" });
+  const result = await applyMatrixProfileUpdate({
+    account: "ops",
+    displayName: "Ops Bot",
+    avatarUrl: "mxc://example.org/avatar",
+    ...(explicit ? { cfg: supplied } : {}),
+  });
+
+  expect(result.profile).toMatchObject({ displayNameUpdated: true, avatarUpdated: true });
+  expect(mocks.setDisplayName).toHaveBeenCalledWith("Ops Bot");
+  expect(mocks.setAvatarUrl).toHaveBeenCalledWith("mxc://example.org/avatar");
+  expect(mocks.acquire).toHaveBeenCalledWith(
+    expect.objectContaining({ cfg: explicit ? supplied : cfg }),
+  );
+  const ops = { ...account, enabled: true, name: "Ops Bot", avatarUrl: "mxc://example.org/avatar" };
+  const nextConfig = { channels: { matrix: { enabled: true, accounts: { ops } } } };
+  expect(mocks.replaceConfigFile).toHaveBeenCalledWith(
+    expect.objectContaining({ nextConfig: expect.objectContaining(nextConfig) }),
+  );
+  expect(mocks.release).toHaveBeenCalledWith({ mode: "persist" });
+});
+
+it.each([
+  ["recovery key", handleVerifyRecoveryKey, { key: "synthetic-recovery-key" }, { success: true }],
+  ["bootstrap", handleVerificationBootstrap, {}, { success: true }],
+  ["status", handleVerificationStatus, {}, status],
+] as const)("runs %s verification with Gateway config", async (_label, handle, params, result) => {
+  for (const routed of [false, true]) {
+    await expectReply(handle, { accountId: "ops", ...params }, result, routed);
+  }
+  expect(mocks.acquire).toHaveBeenCalledWith(expect.objectContaining({ cfg, accountId: "ops" }));
+  expect(mocks.release).toHaveBeenCalledTimes(2);
+});
+
+it("preserves structured verification failure for CLI rendering and legacy RPCs", async () => {
+  mocks.bootstrap.mockResolvedValue({ success: false });
+  for (const routed of [false, true]) {
+    await expectReply(handleVerificationBootstrap, {}, { success: false }, routed, false);
+  }
+});
+
+it.each([false, true])(
+  "includes recovery key only if requested (%s)",
+  async (includeRecoveryKey) => {
+    await expectReply(
+      handleVerificationStatus,
+      { includeRecoveryKey, allowDegradedLocalState: true },
+      { ...status, ...(includeRecoveryKey ? { recoveryKey: "synthetic-stored-key" } : {}) },
+      true,
+    );
+    expect(mocks.recoveryKey).toHaveBeenCalledTimes(includeRecoveryKey ? 1 : 0);
+    expect(mocks.release).toHaveBeenCalledWith({ mode: "persist" });
+  },
+);
