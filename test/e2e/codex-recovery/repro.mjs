@@ -843,7 +843,7 @@ try {
         appToken: ref(process.env.OPENCLAW_CODEX_RECOVERY_SLACK_APP_ENV),
         channels: {
           [channel]: {
-            allow: true,
+            enabled: true,
             requireMention: true,
             users: [process.env.OPENCLAW_CODEX_RECOVERY_SLACK_USER],
           },
