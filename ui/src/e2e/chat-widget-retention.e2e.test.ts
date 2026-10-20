@@ -1,6 +1,7 @@
 import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { createNestedToolActivity } from "../../../src/sessions/nested-tool-activity.js";
@@ -17,6 +18,17 @@ import {
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+const canvasPreview = (viewId: string, url: string, title: string) => ({
+  kind: "canvas",
+  surface: "assistant_message",
+  render: "url",
+  viewId,
+  url,
+  title,
+  sandbox: "scripts",
+});
+const text = (value: string) => ({ type: "text", text: value });
+const toolResult = <T>(details: T) => ({ content: [text(JSON.stringify(details))], details });
 
 suite.define(() => {
   const canvasView = useCanvasSandboxFixture();
@@ -38,7 +50,7 @@ suite.define(() => {
         {
           role: "assistant",
           content: [
-            { type: "text", text: "Preparing the interactive preview." },
+            text("Preparing the interactive preview."),
             { type: "toolCall", id: "show-preview", name: "show_widget", arguments: {} },
           ],
           timestamp: startedAt + 1,
@@ -112,14 +124,8 @@ suite.define(() => {
           {
             type: "canvas",
             preview: {
-              kind: "canvas",
-              surface: "assistant_message",
-              render: "url",
-              viewId: docId,
-              url: documentUrl,
-              title: "Interactive preview",
+              ...canvasPreview(docId, documentUrl, "Interactive preview"),
               preferredHeight: 240,
-              sandbox: "scripts",
             },
           },
         ],
@@ -211,18 +217,8 @@ suite.define(() => {
           view: { backend: "canvas", id: docId, url: documentUrl, title: "Counter" },
           presentation: { target: "assistant_message", sandbox: "scripts" },
         };
-        const nestedResult = {
-          content: [{ type: "text", text: JSON.stringify(result) }],
-          details: result,
-        };
-        const wrapperValue = {
-          output: [{ type: "text", text: JSON.stringify(result) }],
-          value: result,
-        };
-        const wrapperResult = {
-          content: [{ type: "text", text: JSON.stringify(wrapperValue) }],
-          details: wrapperValue,
-        };
+        const nestedResult = toolResult(result);
+        const wrapperResult = toolResult({ output: [text(JSON.stringify(result))], value: result });
         const gateway = await installMockGateway(page, {
           sessionKey,
           agentModel: "openai/gpt-4.1",
@@ -262,21 +258,37 @@ suite.define(() => {
           name: "exec",
           args: { code: "await tools.show_widget({ title: 'Counter' })" },
         });
-        await tool({
-          phase: "start",
-          toolCallId: nestedToolCallId,
-          parentToolCallId,
-          name: "show_widget",
-          args: { title: "Counter" },
-        });
-        await tool({
-          phase: "result",
-          toolCallId: nestedToolCallId,
-          parentToolCallId,
-          name: "show_widget",
-          result: nestedResult,
-        });
+        const nestedTool = (data: Record<string, unknown>) =>
+          tool({
+            toolCallId: nestedToolCallId,
+            parentToolCallId,
+            name: "show_widget",
+            ...data,
+          });
+        await nestedTool({ phase: "start", args: { title: "Counter" } });
+        await nestedTool({ phase: "result", result: nestedResult });
         const widgets = page.locator(".chat-thread openclaw-canvas-widget-view");
+        const capture = async (name: string, anchors: Locator[]) => {
+          if (!captureUiProofEnabled) {
+            return;
+          }
+          const frame = await takeControlUiScreenshotFrame(
+            page,
+            page.locator("section.chat"),
+            anchors,
+            { animations: "disabled" },
+          );
+          writeFileSync(path.join(artifactDir, name + ".png"), frame.png);
+          console.info(
+            "Nested widget proof",
+            JSON.stringify({ artifactDir, widgets: await widgets.count() }),
+          );
+        };
+        const pauseForProof = async () => {
+          if (captureUiProofEnabled) {
+            await page.waitForTimeout(2_000);
+          }
+        };
         await expect.poll(() => widgets.count()).toBe(1);
         const inner = widgets.first().locator("iframe").contentFrame().frameLocator("iframe");
         await clickBoardWidgetControl(
@@ -284,9 +296,7 @@ suite.define(() => {
           inner.getByRole("button", { name: "Add one", exact: true }),
         );
         await expect.poll(() => inner.locator("output").textContent()).toBe("1");
-        if (captureUiProofEnabled) {
-          await page.waitForTimeout(2_000);
-        }
+        await pauseForProof();
         const userMessage = {
           role: "user",
           content: "Show a tiny interactive counter.",
@@ -320,19 +330,11 @@ suite.define(() => {
         };
         const canvasBlock = {
           type: "canvas",
-          preview: {
-            kind: "canvas",
-            surface: "assistant_message",
-            render: "url",
-            viewId: docId,
-            url: documentUrl,
-            title: "Counter",
-            sandbox: "scripts",
-          },
+          preview: canvasPreview(docId, documentUrl, "Counter"),
         };
         const finalMessage = {
           role: "assistant",
-          content: [{ type: "text", text: "Your counter is ready." }, canvasBlock],
+          content: [text("Your counter is ready."), canvasBlock],
           openclawDisplayContent: [canvasBlock],
           timestamp: startedAt + 901,
           idempotencyKey: runId,
@@ -365,24 +367,10 @@ suite.define(() => {
           prepareChatHistoryFixture([userMessage, nested, wrapper]),
         );
         await persist(wrapper, "wrapper-result", 3);
-        if (captureUiProofEnabled) {
-          const frame = await takeControlUiScreenshotFrame(
-            page,
-            page.locator("section.chat"),
-            [widgets.first().locator("iframe")],
-            { animations: "disabled" },
-          );
-          writeFileSync(path.join(artifactDir, "persisted.png"), frame.png);
-          console.info(
-            "Persisted widget proof",
-            JSON.stringify({ artifactDir, widgets: await widgets.count() }),
-          );
-        }
+        await capture("persisted", [widgets.first().locator("iframe")]);
         expect(await widgets.count()).toBe(1);
         expect(await inner.locator("output").textContent()).toBe("1");
-        if (captureUiProofEnabled) {
-          await page.waitForTimeout(2_000);
-        }
+        await pauseForProof();
         await gateway.setMethodResponse("chat.history", history);
         await persist(finalMessage, "nested-final", 4);
         await gateway.emitGatewayEvent("chat", {
@@ -404,24 +392,10 @@ suite.define(() => {
         await page
           .getByRole("button", { name: "Stop generating", exact: true })
           .waitFor({ state: "hidden" });
-        if (captureUiProofEnabled) {
-          const frame = await takeControlUiScreenshotFrame(
-            page,
-            page.locator("section.chat"),
-            [finalText, widgets.first().locator("iframe")],
-            { animations: "disabled" },
-          );
-          writeFileSync(path.join(artifactDir, "settled.png"), frame.png);
-          console.info(
-            "Nested widget proof",
-            JSON.stringify({ artifactDir, settledWidgets: await widgets.count() }),
-          );
-        }
+        await capture("settled", [finalText, widgets.first().locator("iframe")]);
         expect(await widgets.count()).toBe(1);
         expect(await inner.locator("output").textContent()).toBe("1");
-        if (captureUiProofEnabled) {
-          await page.waitForTimeout(2_000);
-        }
+        await pauseForProof();
         await page.reload();
         await finalText.waitFor();
         await expect.poll(() => widgets.count()).toBe(1);
@@ -431,9 +405,7 @@ suite.define(() => {
           inner.getByRole("button", { name: "Add one", exact: true }),
         );
         await expect.poll(() => inner.locator("output").textContent()).toBe("1");
-        if (captureUiProofEnabled) {
-          await page.waitForTimeout(2_000);
-        }
+        await pauseForProof();
       },
     );
   });

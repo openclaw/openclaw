@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -11,6 +12,12 @@ const video = readFileSync(new URL("./fixtures/video-poster.mp4", import.meta.ur
 // while crossing the advertised limit without slowing the encoder test down.
 const oversized = Buffer.concat([video, Buffer.alloc(256 * 1024)]);
 const limit = 128 * 1024;
+const button = (page: Page, name: string) => page.getByRole("button", { name, exact: true });
+const upload = (page: Page, name: string, buffer = oversized) =>
+  page
+    .locator(".agent-chat__file-input")
+    .first()
+    .setInputFiles({ name, mimeType: "video/mp4", buffer });
 
 suite.define(() => {
   it("loads the encoder only after consent and sends a playable bounded copy", async () => {
@@ -22,15 +29,14 @@ suite.define(() => {
       const gateway = await installMockGateway(page, { attachmentMaxBytes: limit });
       await page.goto(suite.server.baseUrl + "chat");
       const composer = page.locator(".agent-chat__composer-combobox textarea");
-      const picker = page.locator(".agent-chat__file-input").first();
-      const send = page.getByRole("button", { name: "Send message", exact: true });
+      const send = button(page, "Send message");
       await composer.fill("A synthetic screen recording.");
-      await picker.setInputFiles({ name: "small.mp4", mimeType: "video/mp4", buffer: video });
-      await page.getByRole("button", { name: "Remove small.mp4", exact: true }).waitFor();
+      await upload(page, "small.mp4", video);
+      await button(page, "Remove small.mp4").waitFor();
       expect(encoderRequests()).toEqual([]);
-      await page.getByRole("button", { name: "Remove small.mp4", exact: true }).click();
-      await picker.setInputFiles({ name: "screen.mp4", mimeType: "video/mp4", buffer: oversized });
-      const compress = page.getByRole("button", { name: "Compress to fit", exact: true });
+      await button(page, "Remove small.mp4").click();
+      await upload(page, "screen.mp4");
+      const compress = button(page, "Compress to fit");
       await compress.waitFor();
       expect(await send.isDisabled()).toBe(true);
       expect(encoderRequests()).toEqual([]);
@@ -123,39 +129,26 @@ suite.define(() => {
       });
       await page.goto(suite.server.baseUrl + "chat");
       await page.locator(".agent-chat__composer-combobox textarea").fill("Keep this draft.");
-      const picker = page.locator(".agent-chat__file-input").first();
-      await picker.setInputFiles({
-        name: "invalid.mp4",
-        mimeType: "video/mp4",
-        buffer: Buffer.alloc(256 * 1024),
-      });
-      await page.getByRole("button", { name: "Compress to fit", exact: true }).click();
+      const expectError = async (error: string) => {
+        await page
+          .locator(".chat-attachment-thumb")
+          .getByRole("status")
+          .filter({ hasText: error })
+          .waitFor();
+        await page.getByRole("alert").getByText(error, { exact: true }).waitFor();
+      };
+      await upload(page, "invalid.mp4", Buffer.alloc(256 * 1024));
+      await button(page, "Compress to fit").click();
       const invalidError = "Could not compress this video. Try again or choose a smaller file.";
-      await page
-        .locator(".chat-attachment-thumb")
-        .getByRole("status")
-        .filter({ hasText: invalidError })
-        .waitFor();
-      await page.getByRole("alert").getByText(invalidError, { exact: true }).waitFor();
-      await page.getByRole("button", { name: "Remove invalid.mp4", exact: true }).click();
-      await picker.setInputFiles({
-        name: "unsupported.mp4",
-        mimeType: "video/mp4",
-        buffer: oversized,
-      });
-      await page.getByRole("button", { name: "Compress to fit", exact: true }).click();
+      await expectError(invalidError);
+      await button(page, "Remove invalid.mp4").click();
+      await upload(page, "unsupported.mp4");
+      await button(page, "Compress to fit").click();
       const unsupportedError =
         "This browser cannot compress this video with its audio. Try another browser or a smaller file.";
-      await page
-        .locator(".chat-attachment-thumb")
-        .getByRole("status")
-        .filter({ hasText: unsupportedError })
-        .waitFor();
-      await page.getByRole("alert").getByText(unsupportedError, { exact: true }).waitFor();
+      await expectError(unsupportedError);
       expect(await gateway.getRequests("chat.send")).toEqual([]);
-      expect(
-        await page.getByRole("button", { name: "Send message", exact: true }).isEnabled(),
-      ).toBe(true);
+      expect(await button(page, "Send message").isEnabled()).toBe(true);
     });
   });
 
@@ -163,13 +156,10 @@ suite.define(() => {
     await suite.withPage({ viewport: { width: 390, height: 844 } }, async ({ page }) => {
       await installMockGateway(page, { attachmentMaxBytes: limit });
       await page.goto(suite.server.baseUrl + "new");
-      await page
-        .locator(".agent-chat__file-input")
-        .first()
-        .setInputFiles({ name: "screen.mp4", mimeType: "video/mp4", buffer: oversized });
-      await page.getByRole("button", { name: "Compress to fit", exact: true }).click();
+      await upload(page, "screen.mp4");
+      await button(page, "Compress to fit").click();
       await page.locator('.chat-attachment-thumb[aria-busy="true"]').waitFor();
-      await page.getByRole("button", { name: "Remove screen.mp4", exact: true }).click();
+      await button(page, "Remove screen.mp4").click();
       await expect.poll(() => page.locator(".chat-attachment-thumb").count()).toBe(0);
     });
   });

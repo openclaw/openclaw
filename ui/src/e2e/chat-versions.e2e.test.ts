@@ -1,5 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { extractSessionBranchHeadline } from "../../../src/config/sessions/session-message-cut-content.js";
 import {
@@ -20,6 +21,21 @@ suite.define(() => {
     await suite.withPage(
       { viewport: { width: 1200, height: 800 }, colorScheme: "dark" },
       async ({ page }) => {
+        const branch = (leafEntryId: string, content: string, messageCount: number) => ({
+          leafEntryId,
+          headline: extractSessionBranchHeadline({
+            type: "message",
+            message: { role: "assistant", content },
+          }),
+          messageCount,
+          active: leafEntryId === "current",
+        });
+        const capture = async (name: string, surface: Locator, anchors = [surface]) => {
+          const frame = await takeControlUiScreenshotFrame(page, surface, anchors, {
+            animations: "disabled",
+          });
+          await writeFile(path.join(suite.artifactDir, name + ".png"), frame.png);
+        };
         const gateway = await installMockGateway(page, {
           sessionKey: key,
           agentModel: "mock/mock-model",
@@ -40,27 +56,12 @@ suite.define(() => {
           methodResponses: {
             "sessions.branches.list": {
               branches: [
-                {
-                  leafEntryId: "current",
-                  headline: extractSessionBranchHeadline({
-                    type: "message",
-                    message: { role: "assistant", content: "**A simpler way to stay organized**" },
-                  }),
-                  messageCount: 4,
-                  active: true,
-                },
-                {
-                  leafEntryId: "earlier",
-                  headline: extractSessionBranchHeadline({
-                    type: "message",
-                    message: {
-                      role: "assistant",
-                      content: "## A more detailed [release announcement](https://example.com)",
-                    },
-                  }),
-                  messageCount: 6,
-                  active: false,
-                },
+                branch("current", "**A simpler way to stay organized**", 4),
+                branch(
+                  "earlier",
+                  "## A more detailed [release announcement](https://example.com)",
+                  6,
+                ),
               ],
             },
           },
@@ -128,23 +129,14 @@ suite.define(() => {
         expect(
           Math.abs(checkBox!.y + checkBox!.height / 2 - textBox!.y - textBox!.height / 2),
         ).toBeLessThanOrEqual(1);
-        const menuFrame = await takeControlUiScreenshotFrame(
-          page,
-          menuSurface,
-          [info, menu.locator(".chat-pane__branch-item").last()],
-          { animations: "disabled" },
-        );
-        await writeFile(path.join(suite.artifactDir, "after.png"), menuFrame.png);
+        await capture("after", menuSurface, [info, menu.locator(".chat-pane__branch-item").last()]);
 
         await info.press("Enter");
         await help.waitFor();
         expect((await menu.locator(".chat-pane__versions-help").textContent())?.trim()).toBe(
           helpText,
         );
-        const helpFrame = await takeControlUiScreenshotFrame(page, help, [help], {
-          animations: "disabled",
-        });
-        await writeFile(path.join(suite.artifactDir, "after-help.png"), helpFrame.png);
+        await capture("after-help", help);
         expect(await gateway.getRequests("sessions.branches.switch")).toHaveLength(0);
 
         await page.keyboard.press("Escape");
@@ -168,10 +160,7 @@ suite.define(() => {
         await trigger.press("Enter");
         await info.press("Enter");
         await help.waitFor();
-        const beforeBack = await takeControlUiScreenshotFrame(page, help, [help], {
-          animations: "disabled",
-        });
-        await writeFile(path.join(suite.artifactDir, "before-back.png"), beforeBack.png);
+        await capture("before-back", help);
         const switchCount = (await gateway.getRequests("sessions.branches.switch")).length;
         await page.goBack();
         await expect
@@ -180,10 +169,7 @@ suite.define(() => {
         const activePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
         const composer = activePane.locator(".agent-chat__composer-combobox textarea");
         await composer.waitFor();
-        const afterBack = await takeControlUiScreenshotFrame(page, activePane, [composer], {
-          animations: "disabled",
-        });
-        await writeFile(path.join(suite.artifactDir, "after-back.png"), afterBack.png);
+        await capture("after-back", activePane, [composer]);
         expect(await pane.count()).toBe(1);
         expect(await pane.getAttribute("inert")).not.toBeNull();
         await expect.poll(() => menuSurface.isVisible()).toBe(false);
