@@ -51,8 +51,7 @@ it("keeps the context popover open and its usage link focused during live usage 
   const props = usageProps();
   const container = document.body.appendChild(createComposerContainer());
   renderComposerInto(container, props);
-  const query = <T extends Element = HTMLElement>(selector: string): T | null =>
-    container.querySelector<T>(selector);
+  const query = container.querySelector.bind(container);
   const details = query<HTMLDetailsElement>(".context-usage details")!;
   expect(details).not.toBeNull();
   expect(details.querySelector(".context-usage__popover")).toBeNull();

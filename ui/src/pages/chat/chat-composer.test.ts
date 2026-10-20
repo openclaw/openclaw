@@ -25,8 +25,7 @@ function renderComposer(overrides: Parameters<typeof props>[0], attached = false
   }
   const composerProps = props(overrides);
   renderComposerInto(container, composerProps);
-  const query = <T extends Element = HTMLElement>(selector: string): T | null =>
-    container.querySelector<T>(selector);
+  const query = container.querySelector.bind(container);
   return {
     container,
     props: composerProps,
