@@ -1,5 +1,6 @@
 import { Show, createMemo, createSignal } from "solid-js";
 import type { SessionProcessSummary } from "../../../../../packages/gateway-protocol/src/schema/session-processes.js";
+import { ElapsedTime } from "../../../components/elapsed-time.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
@@ -10,7 +11,6 @@ import {
   useSessionPanel,
   type SessionPanelProps,
 } from "./chat-session-panel.tsx";
-import "../../../components/elapsed-time.tsx";
 import "./chat-session-panels.css";
 import "./chat-processes-panel.css";
 
@@ -46,7 +46,7 @@ export const ChatProcessesPanel = defineSolidBridge<SessionPanelProps>(
       );
     const elapsed = (row: SessionProcessSummary) =>
       (row.status === "running" || row.endedAt !== undefined) && (
-        <openclaw-elapsed-time prop:startMs={row.startedAt} prop:endMs={row.endedAt ?? null} />
+        <ElapsedTime startMs={row.startedAt} endMs={row.endedAt ?? null} />
       );
     const stopButton = (row: SessionProcessSummary, detail = false) =>
       row.status === "running" &&

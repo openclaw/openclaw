@@ -50,7 +50,7 @@ interface MarkdownSettings {
   codeBlockIndent?: string; // default: "  "
 }
 
-export interface WarningSettings {
+interface WarningSettings {
   anthropicExtraUsage?: boolean; // default: true
 }
 
@@ -61,7 +61,7 @@ export type TransportSetting = Transport;
  * - String form: load all resources from the package
  * - Object form: filter which resources to load
  */
-export type PackageSource =
+type PackageSource =
   | string
   | {
       source: string;

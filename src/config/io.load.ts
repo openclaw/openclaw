@@ -70,7 +70,7 @@ function* loadConfigWithEffects(
       sync: () => maybeLoadDotEnvForConfig(deps.env),
       async: async () => {
         if (deps.env === process.env) {
-          await loadDotEnvAsync({ env: deps.env, quiet: true });
+          await loadDotEnvAsync({ env: deps.env });
         }
       },
     });

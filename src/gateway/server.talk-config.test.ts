@@ -1,4 +1,3 @@
-import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { validateTalkConfigResult } from "../../packages/gateway-protocol/src/index.js";
@@ -37,8 +36,10 @@ async function withConnection<T>(scopes: string[], run: (ws: GatewaySocket) => P
   try {
     await connectOk(ws, {
       deviceIdentityPath: path.join(
-        os.tmpdir(),
-        `openclaw-talk-config-device-${process.pid}-${deviceSeq++}.sqlite`,
+        process.env.OPENCLAW_STATE_DIR!,
+        `talk-config-device-${deviceSeq++}`,
+        "client",
+        "credentials.sqlite",
       ),
       scopes,
       token: "secret",

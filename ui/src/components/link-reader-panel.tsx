@@ -1,8 +1,8 @@
 import { insert } from "@solidjs/web";
 import { createMemo, For, Repeat, onCleanup, onSettled } from "solid-js";
+import { projectCallbackOwner } from "../lib/reactive/callback-owner.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
-import { projectOwner } from "../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { nativeListener } from "../lib/solid-native-listener.ts";
 import { createTabFocus } from "../lib/tabs.ts";
@@ -159,11 +159,19 @@ function PanelView(
   const tabFocus = createTabFocus();
   let address: HTMLInputElement | undefined;
   const content = new Map<string, HTMLElement>();
-  const owner = createLinkReaderPanel(host, onSettled, (activeId) => ({
-    address,
-    content: content.get(activeId ?? ""),
-  }));
-  const projection = projectOwner(owner, (current) => current);
+  const { owner, view: projection } = projectCallbackOwner(
+    (notify) =>
+      createLinkReaderPanel(
+        host,
+        onSettled,
+        (activeId) => ({
+          address,
+          content: content.get(activeId ?? ""),
+        }),
+        notify,
+      ),
+    (current) => current,
+  );
   const view = projection.read;
   owners.set(host, owner);
   // The panel owns this action while the sidebar hosts its DOM.

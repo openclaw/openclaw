@@ -12,7 +12,7 @@ import {
 } from "./config-redaction.js";
 import type { SystemAgentOperation } from "./operation-types.js";
 import { INVALID_CONFIG_SET_MESSAGE, isInvalidConfigSetOperation } from "./operations-internal.js";
-import type { loadSystemAgentOverview, SystemAgentOverview } from "./overview.js";
+import type { loadSystemAgentOverview } from "./overview.js";
 import { validateSystemAgentPluginInstallSpec } from "./plugin-install-spec.js";
 
 export type { SystemAgentOperation };
@@ -32,7 +32,6 @@ export type SystemAgentOperationResult = {
 
 export type SystemAgentCommandDeps = {
   readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
-  formatOverview?: (overview: SystemAgentOverview) => string;
   loadOverview?: typeof loadSystemAgentOverview;
   applyPluginRuntime?: import("../plugins/lifecycle.js").PluginLifecycleRuntimeApply;
   gatewayHostLifecycle?: import("../gateway/server-public.js").GatewayHostLifecycle;

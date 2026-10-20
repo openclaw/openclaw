@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createRuntimeConfigReader } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { throwIfSettledRejected } from "../infra/error-graph-internal.js";
 import { isTranscriptArtifactText } from "../media-understanding/transcription-text.js";
 import { acquirePluginCapabilityProviders } from "../plugins/capability-provider-acquisition.js";
 import { runPluginCleanup } from "../plugins/plugin-instance-scope.js";
@@ -135,15 +136,7 @@ export function isTranscriptSessionStarting(sessionId: string): boolean {
 async function settleTranscriptCaptureWork(entry: ActiveTranscriptsSession): Promise<void> {
   // Capture pending append outcomes before summary shutdown can await inference.
   const settled = await Promise.allSettled([entry.appends.drain(), entry.summaryUpdates?.stop()]);
-  const failures: unknown[] = settled.flatMap((result) =>
-    result.status === "rejected" ? [result.reason] : [],
-  );
-  if (failures.length === 1) {
-    throw failures[0];
-  }
-  if (failures.length > 1) {
-    throw new AggregateError(failures, "Transcript append and summary shutdown failed");
-  }
+  throwIfSettledRejected(settled, "Transcript append and summary shutdown failed");
 }
 
 // Retain the exact owner on failure so stop can retry persistence without touching

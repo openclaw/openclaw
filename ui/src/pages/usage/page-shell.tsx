@@ -20,10 +20,10 @@ export function UsagePageShell(props: {
   const context = useApplication();
   const agents = projectAgents(context.agents);
   const selection = projectAgentSelection(context.agentSelection);
-  const header = createMemo(() => {
+  const header = () => {
     getLocale();
     return { title: titleForRoute("usage"), subtitle: subtitleForRoute("usage") };
-  });
+  };
   const additionalAgentIds = createMemo(
     () =>
       props.result?.sessions

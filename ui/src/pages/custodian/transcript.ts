@@ -15,7 +15,6 @@ import {
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
-import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { parseCustodianQuestion, type CustodianStructuredQuestion } from "./structured-question.ts";
 
 const CUSTODIAN_TRANSCRIPT_TIMEOUT_MS = 15_000;
@@ -128,14 +127,6 @@ export class CustodianTranscriptLoader {
 
   get refreshing(): boolean {
     return this.inFlight !== null;
-  }
-
-  get available(): boolean {
-    const snapshot = this.getGatewaySnapshot();
-    return (
-      snapshot !== undefined &&
-      isGatewayMethodAdvertised(snapshot, "openclaw.chat.history") === true
-    );
   }
 
   deferRecovery(): void {

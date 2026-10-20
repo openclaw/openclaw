@@ -146,11 +146,8 @@ async function executeClaim(
   });
   const prompt = claim.summary
     ? (previewQueueSummaryPrompt({
-        state: {
-          droppedCount: sources.length,
-          summaryLines: queue.cap > 0 ? summaryLines.slice(-queue.cap) : summaryLines,
-        },
-        noun: "message",
+        droppedCount: sources.length,
+        summaryLines: queue.cap > 0 ? summaryLines.slice(-queue.cap) : summaryLines,
       }) ?? "")
     : buildCollectPrompt({
         title: "[Queued messages while agent was busy]",

@@ -6,7 +6,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { createInferenceConfigFixture } from "./inference-config.test-support.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import type { SystemAgentCommandDeps } from "./operations.js";
-import type { SystemAgentOverview } from "./overview.js";
+import * as overviewModule from "./overview.js";
 import { runSystemAgent, type RunSystemAgentOptions } from "./system-agent.js";
 import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-support.js";
 import { createSystemAgentVerifiedInferenceTestFixture } from "./system-agent.test-helpers.js";
@@ -41,7 +41,7 @@ vi.mock("./verified-inference.js", async (importOriginal) => {
   };
 });
 
-const overview: SystemAgentOverview = {
+const overview: overviewModule.SystemAgentOverview = {
   defaultAgentId: "main",
   defaultModel: "openai/gpt-5.5",
   agents: [],
@@ -57,7 +57,6 @@ const overview: SystemAgentOverview = {
 };
 
 const systemAgentOverviewDeps = {
-  formatOverview: () => "Default model: openai/gpt-5.5",
   loadOverview: async () => overview,
 };
 
@@ -94,10 +93,10 @@ beforeAll(async () => {
   inferenceMocks.sharedVerifiedInference = sharedFixture.binding;
 });
 
-function createVerifiedRunOptions(deps: SystemAgentCommandDeps = {}, revalidate = false) {
+function createVerifiedRunOptions(deps: SystemAgentCommandDeps = {}) {
   const fixture = sharedFixture;
   return {
-    verifiedInference: revalidate ? { ...fixture.binding } : fixture.binding,
+    verifiedInference: fixture.binding,
     deps: {
       readConfigFileSnapshot: vi.fn(async () => configSnapshot(verifiedConfig)) as never,
       ...deps,
@@ -115,6 +114,10 @@ function runner(runtime: RuntimeEnv, verified = createVerifiedRunOptions()) {
 
 describe("runSystemAgent", () => {
   beforeEach(async () => {
+    const formatter = vi
+      .spyOn(overviewModule, "formatSystemAgentOverview")
+      .mockReturnValue("Default model: openai/gpt-5.5");
+    onTestFinished(() => formatter.mockRestore());
     vi.mocked(runDaemonRestart).mockReset().mockResolvedValue(true);
     configFixture = await createInferenceConfigFixture(verifiedConfig);
     const reader = vi
@@ -275,20 +278,21 @@ describe("runSystemAgent", () => {
 
   it("does not print a reply-only plan after its inference owner drifts", async () => {
     const { runtime, lines } = createSystemAgentTestRuntime();
-    let currentConfig: OpenClawConfig = verifiedConfig;
-    const verified = createVerifiedRunOptions(
-      {
-        readConfigFileSnapshot: vi.fn(async () => configSnapshot(currentConfig)) as never,
-      },
-      true,
+    const snapshot = configFixture.snapshot;
+    const fixture = await createSystemAgentVerifiedInferenceTestFixture(
+      snapshot.runtimeConfig ?? snapshot.config,
+      snapshot,
     );
-    const run = runner(runtime, verified);
+    const run = runner(runtime, {
+      verifiedInference: fixture.binding,
+      deps: { readConfigFileSnapshot: vi.mocked(configModule.readConfigFileSnapshot) },
+    });
 
     await expect(
       run({
         message: "explain the current setup",
         planWithAssistant: async () => {
-          currentConfig = changedConfig;
+          await configFixture.write(changedConfig);
           return { reply: "stale reply" };
         },
       }),
@@ -329,11 +333,11 @@ describe("runSystemAgent", () => {
       const { runtime, lines } = createSystemAgentTestRuntime();
       const loadOverview = vi.fn(async () => overview);
       const runInteractiveTui = vi.fn(async () => {});
+      vi.mocked(overviewModule.formatSystemAgentOverview).mockReturnValue("formatted overview");
       await runner(runtime)(
         {
           ...options,
           loadOverview,
-          formatOverview: () => "formatted overview",
           runInteractiveTui,
         },
         false,

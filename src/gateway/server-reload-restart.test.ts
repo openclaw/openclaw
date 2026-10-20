@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  getRuntimeConfigAppliedHash,
+  setRuntimeConfigAppliedHash,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayActiveWorkSnapshot } from "../infra/gateway-active-work.js";
 import * as restartModule from "../infra/restart.js";
@@ -90,6 +94,29 @@ afterEach(() => {
 });
 
 describe("gateway restart readiness preflight", () => {
+  it("publishes only the newest applied revision after accepted restart debt retires", () => {
+    const previousHash = getRuntimeConfigAppliedHash();
+    try {
+      setRuntimeConfigAppliedHash("active");
+      let restartAccepted = true;
+      const coordinator = createCoordinator({}, { hasAcceptedRestart: () => restartAccepted });
+      coordinator.publishAppliedConfigHash("superseded");
+      coordinator.publishAppliedConfigHash("latest");
+      coordinator.publishDeferredAppliedConfigHash();
+      expect(getRuntimeConfigAppliedHash()).toBe("active");
+
+      restartAccepted = false;
+      coordinator.publishDeferredAppliedConfigHash();
+      expect(getRuntimeConfigAppliedHash()).toBe("latest");
+
+      coordinator.publishAppliedConfigHash("next");
+      coordinator.publishDeferredAppliedConfigHash();
+      expect(getRuntimeConfigAppliedHash()).toBe("next");
+    } finally {
+      setRuntimeConfigAppliedHash(previousHash);
+    }
+  });
+
   it("distinguishes candidate preparation from an outstanding restart request", () => {
     const coordinator = createCoordinator();
     const lifecycle = coordinator.beginGatewayRestartLifecycle();

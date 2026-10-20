@@ -113,6 +113,7 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
       </Show>
       <div
         class="sidebar-region__header"
+        tabindex={-1}
         ref={[(element) => (header = element), elementRef(props.onHeaderElementRef)]}
       >
         {props.header}

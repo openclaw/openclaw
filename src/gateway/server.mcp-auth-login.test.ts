@@ -274,7 +274,12 @@ describe("registered mcp.authLogin", () => {
     const client = await gateway.openWs({ origin });
     await connectOk(client, {
       scopes,
-      deviceIdentityPath: path.join(resolveStateDir(), `connector-${randomUUID()}.sqlite`),
+      deviceIdentityPath: path.join(
+        resolveStateDir(),
+        `connector-${randomUUID()}`,
+        "client",
+        "credentials.sqlite",
+      ),
       browserOrigin: origin,
       client: {
         id: GATEWAY_CLIENT_NAMES.CONTROL_UI,

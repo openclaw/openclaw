@@ -184,7 +184,6 @@ function emitCommandResult(
       lifecycleGeneration: getAgentEventLifecycleGeneration,
       startedAt: 1_000,
       state: {
-        currentTurnUserMessagePersisted: true,
         lifecycleFinishing: false,
         lifecycleEnded: false,
       },

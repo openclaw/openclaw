@@ -1,5 +1,5 @@
 // Advanced renders without an include list: it shows every section that has no
-// curated home (config-page computes its exclude list).
+// curated home.
 // Each curated page opens at its first section.
 const CONFIG_PAGES = [
   ["communications", ["messages", "tts", "transcripts"]],
@@ -29,7 +29,8 @@ const CONFIG_PAGE_BY_SECTION = new Map<string, ConfigPageId | "plugin-settings">
   ["plugins", "plugin-settings"],
 ]);
 
-export const SCOPED_CONFIG_SECTION_KEYS = new Set(CONFIG_PAGE_BY_SECTION.keys());
+const SCOPED_CONFIG_SECTION_KEYS = new Set(CONFIG_PAGE_BY_SECTION.keys());
+export const ADVANCED_EXCLUDED_SECTIONS: readonly string[] = [...SCOPED_CONFIG_SECTION_KEYS];
 
 export function configSectionKeysForPage(pageId: ConfigPageId): readonly string[] | undefined {
   return CONFIG_SECTION_KEYS_BY_PAGE[pageId];

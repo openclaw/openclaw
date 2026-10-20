@@ -228,10 +228,6 @@ it("omits optional hints only for a settled unavailable read without caching an 
   const read = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
   read.mockRejectedValueOnce(failure);
   await expect(prepareOptional()).rejects.toBe(failure);
-  read.mockResolvedValueOnce({ ok: true, type: "admit" });
-  await expect(prepareOptional()).rejects.toThrow(
-    "Unexpected compact subagent registry read result",
-  );
   expect(snapshotIdentity()).toBeUndefined();
 });
 

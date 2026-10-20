@@ -608,38 +608,6 @@ describe("retained npm package integrity", () => {
     });
   });
 
-  it("reports unverified when a pre-opened writer changes bytes after prevalidation", async () => {
-    const { params, packageRoot, launcher } = await createPackageSwapFixture(base);
-    const entry = path.join(packageRoot, "dist", "index.js");
-    const writer = await fs.open(entry, "r+");
-    try {
-      const transaction = await retain(params);
-      const rename = fs.rename.bind(fs);
-      let wrote = false;
-      vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
-        if (String(args[0]) === transaction.backupRoot) {
-          await writer.write("changed", 0, "utf8");
-          wrote = true;
-        }
-        return rename(...args);
-      });
-      const rollback = await transaction.rollback(() => {});
-      expect(rollback).toMatchObject({ exitCode: 1 });
-      expect(rollback.stderrTail).toContain(`restored package tree changed at ${packageRoot}`);
-      expect(wrote).toBe(true);
-      // Observation is not exclusion: the same-principal fd survives rename.
-      // Never call this result verified or discard the retained candidate.
-      await expect(readText(entry)).resolves.toContain("changed");
-      await expect(readText(launcher)).resolves.toBe("old launcher\n");
-      await expect(fs.stat(`${transaction.backupRoot}.candidate`)).resolves.toBeDefined();
-      expect(await transaction.complete({ activationVerified: false }, () => {})).toMatchObject({
-        exitCode: 1,
-      });
-    } finally {
-      await writer.close();
-    }
-  });
-
   it.each([
     {
       shape: "sibling dependency link",

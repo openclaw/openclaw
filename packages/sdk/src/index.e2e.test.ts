@@ -9,7 +9,7 @@ import {
   clearAgentRunContext,
   registerAgentRunContext,
 } from "../../../src/infra/agent-run-registry.js";
-import { withTimeout } from "../../../src/utils/with-timeout.js";
+import { withTimeout } from "../../../src/infra/fs-safe.js";
 import { GatewayClientTransport, OpenClaw, type OpenClawEvent } from "./index.js";
 
 type JsonObject = Record<string, unknown>;

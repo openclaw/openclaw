@@ -207,7 +207,6 @@ describe("setup inference credential provider lifetime", () => {
             agentDir: state.agentDir(),
             effects: { credentialsSaved: false },
             beforePersistentEffect: async () => {},
-            deps: {},
             params: {
               kind: "provider-auth",
               authChoice: id,
@@ -467,7 +466,7 @@ it.each([
         },
       ],
     };
-    setup.deps.resolveManifestProviderAuthChoice = () => choice;
+    setup.resolveManifestProviderAuthChoice.mockReturnValue(choice);
     vi.spyOn(providerRuntime, "resolvePluginProvidersCore").mockReturnValue([provider]);
     mockPluginRegistry(["meta", "muse", "codex", "openai"].map((id) => pluginRecord(id)));
     const phases: string[] = [];
@@ -526,7 +525,6 @@ it.each([
           runtime: createNonExitingRuntime(),
           prompter: setup.prompter,
           onActivationStarted: () => phases.push("activate"),
-          deps: setup.deps,
           assertCurrent: () => {
             if (!authorized) {
               throw new Error("setup authority revoked");
@@ -566,7 +564,6 @@ it.each([
           activate({
             ...params,
             nativeSessionCatalogsEnabled: false,
-            deps: setup.deps,
           }),
         ),
       );

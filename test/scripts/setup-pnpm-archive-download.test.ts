@@ -54,7 +54,7 @@ describe("pinned pnpm cold bootstrap", () => {
       );
       expect(result.status, result.stderr).toBe(0);
       expect(result.stdout.trim()).not.toBe("");
-      const root = join(result.stdout.trim(), "v1/pnpm/12.11.1");
+      const root = join(result.stdout.trim(), "v1/pnpm/12.12.1");
       expect(read(join(root, "pnpm"))).toBe("wrapper-fixture\n");
       expect(read(join(root, "node_modules/@pnpm/exe.linux-x64/pnpm"))).toBe("native-fixture\n");
       expect(JSON.parse(read(join(root, ".corepack")))).toEqual({
@@ -101,7 +101,7 @@ describe("pinned pnpm cold bootstrap", () => {
         let wrapperAttempts = 0;
         server.on("request", (request, response) => {
           const name = basename(request.url ?? "");
-          if (name === "pnpm-12.11.1.tgz" && ++wrapperAttempts <= failures) {
+          if (name === "pnpm-12.12.1.tgz" && ++wrapperAttempts <= failures) {
             if (status === null) {
               request.socket.destroy();
               return;
@@ -115,11 +115,11 @@ describe("pinned pnpm cold bootstrap", () => {
         expect(wrapperAttempts).toBe(attempts);
         if (failures === 1) {
           expect(result.status, result.stderr).toBe(0);
-          expect(read(join(result.stdout.trim(), "v1/pnpm/12.11.1/pnpm"))).toBe(
+          expect(read(join(result.stdout.trim(), "v1/pnpm/12.12.1/pnpm"))).toBe(
             "wrapper-fixture\n",
           );
-          expect(fs.readFileSync(join(f.store, "toolchain/pnpm-12.11.1.tgz"))).toEqual(
-            fs.readFileSync(join(f.registry, "pnpm-12.11.1.tgz")),
+          expect(fs.readFileSync(join(f.store, "toolchain/pnpm-12.12.1.tgz"))).toEqual(
+            fs.readFileSync(join(f.registry, "pnpm-12.12.1.tgz")),
           );
         } else {
           expect(result.status).not.toBe(0);
@@ -139,7 +139,7 @@ describe("pinned pnpm cold bootstrap", () => {
     });
   });
 
-  it.for(["pnpm-12.11.1.tgz", "exe.linux-x64-12.11.1.tgz"])(
+  it.for(["pnpm-12.12.1.tgz", "exe.linux-x64-12.12.1.tgz"])(
     "rejects substituted %s without incomplete state",
     async (name, { command }) => {
       const f = createPnpmArchiveFixture(command);
@@ -164,7 +164,7 @@ describe("pinned pnpm cold bootstrap", () => {
 
   it("ignores unknown versions and mismatched integrity", async ({ command }) => {
     const f = createPnpmArchiveFixture(command);
-    for (const spec of [f.spec.replace("12.11.1", "12.11.2"), f.spec.replace(/.$/u, "z")]) {
+    for (const spec of [f.spec.replace("12.12.1", "12.11.2"), f.spec.replace(/.$/u, "z")]) {
       const result = await f.run({}, spec);
       expect(result.status).toBe(0);
       expect(result.stdout).toBe("");

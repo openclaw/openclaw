@@ -53,7 +53,6 @@ type ServiceOptions = {
     request: GatewayRequest,
   ) => Promise<unknown>;
   socketFactory?: (url: string) => RelaySocket;
-  random?: () => number;
 };
 
 export class RelayService {
@@ -568,10 +567,7 @@ export class RelayService {
   #retry(closeCode: number): void {
     const base =
       closeCode === 4401 ? 60_000 : Math.min(60_000, 1000 * 2 ** Math.min(this.#attempt++, 6));
-    const delayMs = Math.min(
-      60_000,
-      Math.round(base * (0.8 + (this.#options.random ?? Math.random)() * 0.4)),
-    );
+    const delayMs = Math.min(60_000, Math.round(base * (0.8 + Math.random() * 0.4)));
     this.#options.scheduler.schedule({ id: "connect", delayMs, run: () => this.#connect() });
   }
 

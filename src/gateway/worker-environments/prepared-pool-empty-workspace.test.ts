@@ -86,9 +86,13 @@ describe("empty workspace prepared worker reserves", () => {
     const uncommittedRoot = path.join(fixture.root, "uncommitted");
     await fs.mkdir(uncommittedRoot);
     const uncommitted = projectOptions(uncommittedRoot);
-    expect((await owner.prepareIntent("development", uncommitted)).preparationKey).toBeUndefined();
+    const uncommittedIntent = await owner.prepareIntent("development", uncommitted);
+    expect(uncommittedIntent.profileSnapshot.project).toBeUndefined();
+    expect(uncommittedIntent.profileSnapshot.runtimePreparation).toBeUndefined();
     await requireGit(uncommittedRoot, ["init", "--quiet", "-b", "main"]);
-    expect((await owner.prepareIntent("development", uncommitted)).preparationKey).toBeUndefined();
+    const unbornIntent = await owner.prepareIntent("development", uncommitted);
+    expect(unbornIntent.profileSnapshot.project).toBeUndefined();
+    expect(unbornIntent.profileSnapshot.runtimePreparation).toBeUndefined();
 
     const firstRoot = await repository("first-empty");
     const source = await owner.createWithProfile(
@@ -115,13 +119,14 @@ describe("empty workspace prepared worker reserves", () => {
 
     const secondRoot = await repository("second-empty");
     const second = await owner.prepareIntent("development", projectOptions(secondRoot));
-    expect(second.preparationKey).toBe(key);
+    expect(second.profileSnapshot.runtimePreparation?.key).toBe(key);
     expect(second.profileSnapshot.project).toBeUndefined();
     expect(pool.candidates(second)).toEqual([spare]);
 
     const projectRoot = await repository("project", "project content\n");
     const projectIntent = await owner.prepareIntent("development", projectOptions(projectRoot));
-    expect(projectIntent.preparationKey).not.toBe(key);
+    const projectPreparationKey = projectIntent.profileSnapshot.project?.preparation?.key;
+    expect(projectPreparationKey).not.toBe(key);
     expect(pool.candidates(projectIntent)).toEqual([]);
     const project = await fixture.attach(
       await owner.createWithProfile(
@@ -133,7 +138,7 @@ describe("empty workspace prepared worker reserves", () => {
     );
     await pool.maintain(project.environmentId);
     const projectSpare = available().find(
-      (record) => record.preparation?.key === projectIntent.preparationKey,
+      (record) => record.preparation?.key === projectPreparationKey,
     );
     expect(projectSpare).toBeDefined();
     expect(pool.candidates(projectIntent)).toEqual([projectSpare]);

@@ -24,7 +24,7 @@ import {
 } from "./login-gate-feedback.ts";
 import { ConnectCommand } from "./solid/connect-command.tsx";
 import { Icon, type IconName } from "./solid/icon.tsx";
-import "./theme-brand-icon.tsx";
+import { ThemeBrandIcon } from "./theme-brand-icon.tsx";
 import "./tooltip.ts";
 
 registerEnglishCatalog(registerLoginEnglish);
@@ -503,7 +503,7 @@ function LoginGateContent(
           ) : (
             <span class="login-gate__logo login-gate__logo--neutral" aria-hidden="true">
               {branding().brandIcon !== "claw" && branding().brandIcon !== "mark" ? (
-                <openclaw-theme-brand-icon prop:branding={branding()} aria-hidden="true" />
+                <ThemeBrandIcon branding={branding()} aria-hidden="true" />
               ) : (
                 <Icon name="mark" />
               )}

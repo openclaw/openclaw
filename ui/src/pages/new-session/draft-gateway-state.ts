@@ -709,6 +709,7 @@ export class DraftGatewayState {
       }
       this.callbacks.changed();
     };
+    // The preference lease requires this live-authority predicate when publishing results.
     this.stopPreferences = preferences.subscribe(
       notify,
       () =>

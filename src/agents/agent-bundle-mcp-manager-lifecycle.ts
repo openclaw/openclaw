@@ -337,16 +337,17 @@ export function createSessionMcpRuntimeManagerLifecycle(
   const isRuntimeIdle = (runtimeKey: string, runtime: SessionMcpRuntime): boolean =>
     (runtime.activeLeases ?? 0) === 0 &&
     !store.runtimeWorkChains.has(runtimeKey) &&
-    !listLiveAgentRunIds().some((runId) => {
-      const run = getAgentRunContext(runId);
-      return (
-        hasAgentRunContextExecutionOwner(runId) &&
-        (run?.sessionId === runtime.sessionId ||
-          (!run?.sessionId &&
-            runtime.sessionKey !== undefined &&
-            run?.sessionKey === runtime.sessionKey))
-      );
-    });
+    (runtimeKey !== runtime.sessionId ||
+      !listLiveAgentRunIds().some((runId) => {
+        const run = getAgentRunContext(runId);
+        return (
+          hasAgentRunContextExecutionOwner(runId) &&
+          (run?.sessionId === runtime.sessionId ||
+            (!run?.sessionId &&
+              runtime.sessionKey !== undefined &&
+              run?.sessionKey === runtime.sessionKey))
+        );
+      }));
 
   const retireIdleRuntimes = async (
     expired: Array<{ runtimeKey: string; runtime: SessionMcpRuntime }>,
@@ -374,7 +375,7 @@ export function createSessionMcpRuntimeManagerLifecycle(
     ensureIdleSweepTimer();
   };
 
-  const sweepIdleRuntimes = async (): Promise<number> => {
+  const sweepIdleRuntimes = async (): Promise<void> => {
     const nowMs = store.scheduler.now();
     const expired = [...store.runtimesBySessionId].flatMap(([runtimeKey, runtime]) => {
       const idleTtlMs = store.runtimeSlots.get(runtime)?.idleTtlMs ?? 0;
@@ -385,7 +386,6 @@ export function createSessionMcpRuntimeManagerLifecycle(
         : [];
     });
     await retireIdleRuntimes(expired);
-    return expired.length;
   };
 
   const ensureIdleSweepTimer = () => {

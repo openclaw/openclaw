@@ -62,6 +62,37 @@ it("bounds run ID tracker FIFO membership and supports explicit cleanup", () => 
   expect(tracker.has("run-100")).toBe(false);
 });
 describe("TuiSessionRunCoordinator", () => {
+  it.each([
+    "finalizedRuns",
+    "finalizedRunsWithDisplay",
+    "persistedTerminalRunIds",
+    "completedRuns",
+    "postFinalizingRuns",
+  ] as const)("bounds %s membership without refreshing duplicate IDs", (field) => {
+    const { coordinator } = createCoordinator();
+    const note = (runId: string) => {
+      if (field === "persistedTerminalRunIds") {
+        coordinator.notePersistedRun(runId);
+      } else if (field === "postFinalizingRuns") {
+        coordinator.notePostFinalizingRun(runId);
+      } else if (field === "completedRuns") {
+        coordinator.noteCompletedRun(runId);
+      } else {
+        coordinator.noteFinalizedRun(runId, { displayedFinal: true });
+      }
+    };
+    for (let index = 0; index < 200; index += 1) {
+      note(`run-${index}`);
+    }
+    note("run-0");
+    expect(coordinator[field].size).toBe(200);
+    note("run-200");
+    expect(coordinator[field].size).toBe(150);
+    expect(coordinator[field].has("run-0")).toBe(false);
+    expect(coordinator[field].has("run-200")).toBe(true);
+    coordinator.clear();
+    expect(coordinator[field].size).toBe(0);
+  });
   it("keeps the active session run while pruning hundreds of abandoned runs", () => {
     const { coordinator, state } = createCoordinator({
       state: { activeChatRunId: "run-live" },

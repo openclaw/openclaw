@@ -64,7 +64,7 @@ test.for(["sessions.reset", "sessions.delete"] as const)(
     const retirementStarted = createDeferred();
     let retirementFinished = false;
     let mutationFinished = false;
-    let sweep: Promise<number> | undefined;
+    let sweep: Promise<void> | undefined;
     let mutation: ReturnType<typeof directSessionReq> | undefined;
     bundleMcpRuntimeMocks.retireSessionMcpRuntime.mockImplementation(async (params) => {
       // Observe the existing fixture seam while the real manager owns retirement.
@@ -138,7 +138,7 @@ test.for(["sessions.reset", "sessions.delete"] as const)(
       expect(pendingEntry?.sessionId).toBe(sessionId);
       expect(pendingEntry?.lifecycleRevision).toBe(initialEntry?.lifecycleRevision);
       terminate.resolve();
-      await expect(withinTest(sweep, signal)).resolves.toBe(1);
+      await withinTest(sweep, signal);
       expect(await withinTest(mutation, signal)).toMatchObject({ ok: true });
       const entry = loadSessionEntry({ agentId: "main", sessionKey, storePath });
       if (method === "sessions.delete") {

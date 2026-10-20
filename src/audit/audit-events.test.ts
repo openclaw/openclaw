@@ -229,19 +229,21 @@ describe("audit event persistence", () => {
     });
   });
 
-  it("deduplicates replayed source events", async () => {
+  it.each(["source", "event"])("deduplicates replayed %s identities", async (identity) => {
     const database = createDatabaseOptions();
     const input = auditInput();
-    const first = recordAuditEventInDatabase(input, {
-      ...database,
-      database: openOpenClawStateDatabase(database),
-    });
+    const first = recordAuditEventInDatabase(
+      input,
+      { ...database, database: openOpenClawStateDatabase(database) },
+      "replayed-event",
+    );
     expect(first?.sequence).toBe(1);
     expect(
-      recordAuditEventInDatabase(input, {
-        ...database,
-        database: openOpenClawStateDatabase(database),
-      }),
+      recordAuditEventInDatabase(
+        { ...input, ...(identity === "event" ? { sourceId: "another-source" } : {}) },
+        { ...database, database: openOpenClawStateDatabase(database) },
+        identity === "event" ? "replayed-event" : "another-event",
+      ),
     ).toBeUndefined();
     const next = recordAuditEventInDatabase(
       auditInput({ sourceId: "after-replay", sourceSequence: 2 }),

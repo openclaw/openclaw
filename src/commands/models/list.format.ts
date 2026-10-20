@@ -1,6 +1,7 @@
 import { truncateToVisibleWidth, visibleWidth } from "../../../packages/terminal-core/src/ansi.js";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { isRich as isRichTerminal, theme } from "../../../packages/terminal-core/src/theme.js";
+import { groupPluginRecords as groupRecords } from "../../plugins/record-groups.js";
 
 const TRUNCATED_SUFFIX = "...";
 
@@ -57,11 +58,5 @@ export const truncate = (value: string, max: number) => {
 export function groupByProvider<T extends { provider: string }>(
   entries: readonly T[],
 ): Map<string, T[]> {
-  const groups = new Map<string, T[]>();
-  for (const entry of entries) {
-    const group = groups.get(entry.provider) ?? [];
-    group.push(entry);
-    groups.set(entry.provider, group);
-  }
-  return groups;
+  return groupRecords(entries, (entry) => entry.provider);
 }

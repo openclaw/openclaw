@@ -651,6 +651,25 @@ async function startProofGateway(modelUrl: string, label: string) {
   };
 }
 
+async function startParentTurn(
+  client: Awaited<ReturnType<typeof startProofGateway>>["client"],
+  runId: string,
+) {
+  // Sidecar readiness precedes chat recovery; preserve the receipt while awaiting admission.
+  await vi.waitFor(
+    () =>
+      expect(
+        client.request("chat.send", {
+          sessionKey: `agent:main:${runId}`,
+          message: parentPrompt,
+          idempotencyKey: runId,
+          deliver: false,
+        }),
+      ).resolves.toMatchObject({ runId, status: "started" }),
+    { timeout: 30_000 },
+  );
+}
+
 /** Resolves once the published registry row satisfies the predicate. */
 async function waitForRun(runId: string, matches: (row: SubagentRunRecord) => boolean) {
   const reached = createDeferred();
@@ -708,14 +727,7 @@ it.each(["active", "paused"] as const)(
     const gateway = await startProofGateway(model.url, `subagent-stop-followup-${sourceState}`);
     const parentRunId = `subagent-stop-followup-parent-${sourceState}`;
     try {
-      await expect(
-        gateway.client.request("chat.send", {
-          sessionKey: `agent:main:${parentRunId}`,
-          message: parentPrompt,
-          idempotencyKey: parentRunId,
-          deliver: false,
-        }),
-      ).resolves.toMatchObject({ runId: parentRunId, status: "started" });
+      await startParentTurn(gateway.client, parentRunId);
       const source = await script.sourceIdentified;
       if (sourceState === "active") {
         await script.firstChildStarted;
@@ -752,14 +764,7 @@ it.each(["delete", "stop"] as const)(
     const gateway = await startProofGateway(model.url, `subagent-retired-${retirement}`);
     const parentRunId = `subagent-retired-${retirement}-parent`;
     try {
-      await expect(
-        gateway.client.request("chat.send", {
-          sessionKey: `agent:main:${parentRunId}`,
-          message: parentPrompt,
-          idempotencyKey: parentRunId,
-          deliver: false,
-        }),
-      ).resolves.toMatchObject({ runId: parentRunId, status: "started" });
+      await startParentTurn(gateway.client, parentRunId);
       const retired = await script.retiredChild;
       await script.retiredChildStarted;
       if (retirement === "delete") {
@@ -809,14 +814,7 @@ it.each([
     const parentRunId = `${label}-parent`;
     const parentSessionKey = `agent:main:${parentRunId}`;
     try {
-      await expect(
-        gateway.client.request("chat.send", {
-          sessionKey: parentSessionKey,
-          message: parentPrompt,
-          idempotencyKey: parentRunId,
-          deliver: false,
-        }),
-      ).resolves.toMatchObject({ runId: parentRunId, status: "started" });
+      await startParentTurn(gateway.client, parentRunId);
       const child = await script.child;
       await script.childStarted;
       await expect(
@@ -873,14 +871,7 @@ it.each([
     const parentRunId = `subagent-awaited-${stopped}-stop-parent`;
     const parentSessionKey = `agent:main:${parentRunId}`;
     try {
-      await expect(
-        gateway.client.request("chat.send", {
-          sessionKey: parentSessionKey,
-          message: parentPrompt,
-          idempotencyKey: parentRunId,
-          deliver: false,
-        }),
-      ).resolves.toMatchObject({ runId: parentRunId, status: "started" });
+      await startParentTurn(gateway.client, parentRunId);
       const child = await script.child;
       await script.childStarted;
       await expect(
@@ -953,14 +944,7 @@ it("confirms a stopped child's kill without losing either of two overlapping con
     typeof sessionReconciliation
   >("../agents/subagents/registry/subagent-session-reconciliation.js");
   try {
-    await expect(
-      gateway.client.request("chat.send", {
-        sessionKey: parentSessionKey,
-        message: parentPrompt,
-        idempotencyKey: parentRunId,
-        deliver: false,
-      }),
-    ).resolves.toMatchObject({ runId: parentRunId, status: "started" });
+    await startParentTurn(gateway.client, parentRunId);
     const children = await script.children;
     await script.childrenStarted;
     await expect(

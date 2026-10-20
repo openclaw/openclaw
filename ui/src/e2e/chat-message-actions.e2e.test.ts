@@ -770,15 +770,15 @@ describeControlUiE2e("Control UI chat message actions", () => {
       const newSessionShortcut = applePlatform ? "⌘⇧O" : "Ctrl+Shift+O";
       await expectHoverTooltip(
         page.locator(".sidebar-rail .sidebar-new-session"),
-        `New conversation (${newSessionShortcut})`,
+        `New conversation ${newSessionShortcut}`,
       );
       await expectHoverTooltip(
         page.getByRole("button", { name: "Open command palette" }),
-        `Open command palette (${commandPaletteShortcut})`,
+        `Open command palette ${commandPaletteShortcut}`,
       );
       await expectHoverTooltip(
         page.locator('[data-navigation-view][aria-pressed="true"]'),
-        `Sessions · Collapse sidebar (${sidebarShortcut})`,
+        `Sessions · Collapse sidebar ${sidebarShortcut}`,
       );
       await page.evaluate(() => {
         const tooltip = document.createElement("openclaw-tooltip");

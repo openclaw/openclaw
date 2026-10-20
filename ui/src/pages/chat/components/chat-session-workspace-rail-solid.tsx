@@ -12,10 +12,8 @@ import { liveValue } from "../../../lib/reactive/live-value.ts";
 import { isSessionWorkspaceFileSelected } from "../../../lib/sessions/workspace.ts";
 import { nativeListener } from "../../../lib/solid-native-listener.ts";
 import { FileDownloadButton } from "./chat-file-download-button.tsx";
-import type {
-  SessionWorkspaceFilter,
-  SessionWorkspaceProps,
-} from "./chat-session-workspace-types.ts";
+import type { SessionWorkspaceFilter } from "./chat-session-workspace-types.ts";
+import type { SessionWorkspaceProps } from "./chat-session-workspace.ts";
 
 const SESSION_KIND_LABELS = {
   modified: "chat.workspaceFiles.changed",

@@ -14,7 +14,7 @@ import {
 } from "../pages/custodian/custodian-session-store.ts";
 import type { JSX as SolidJSX } from "../types/solid-elements.d.ts";
 import "../pages/custodian/custodian-surface.tsx";
-import "./home-session.runtime.ts";
+import { HomeSession } from "./home-session-solid.tsx";
 import "../styles/assistant-panel-content.css";
 
 type Props = {
@@ -28,6 +28,7 @@ type Props = {
   pageSessionKey: string;
   pageAgentId: string;
   store?: CustodianSessionStore;
+  onStore?: (store: CustodianSessionStore) => void;
 };
 export type OpenClawAssistantPanelContent = SolidBridgeElement<Props>;
 
@@ -49,7 +50,7 @@ function ActiveCustodian(props: {
 
 export const AssistantPanelContent = defineSolidBridge<Props>(
   "openclaw-assistant-panel-content",
-  (props, element): SolidJSX.Element => {
+  (props): SolidJSX.Element => {
     const store = () => props.store ?? custodianSessionStore;
     const projection = createMemo(() =>
       projectSource(
@@ -70,11 +71,7 @@ export const AssistantPanelContent = defineSolidBridge<Props>(
         },
       ),
     );
-    onSettled(() => {
-      element.dispatchEvent(
-        new CustomEvent("assistant-custodian-store", { detail: store(), bubbles: true }),
-      );
-    });
+    onSettled(() => props.onStore?.(store()));
     const variant = () => projection().read().store.activeVariant;
     const workContext = createMemo(() => {
       const current = projection().read().context;
@@ -88,10 +85,10 @@ export const AssistantPanelContent = defineSolidBridge<Props>(
       <>
         {props.active &&
           (props.destination !== "custodian" ? (
-            <openclaw-home-session
-              prop:sessionKey={props.sessionKey}
-              prop:agentId={props.agentId}
-              prop:workContext={workContext()}
+            <HomeSession
+              sessionKey={props.sessionKey}
+              agentId={props.agentId}
+              workContext={workContext()}
             />
           ) : (
             <ActiveCustodian store={store()} variant={variant()} />
@@ -111,6 +108,7 @@ export const AssistantPanelContent = defineSolidBridge<Props>(
       pageSessionKey: { default: "" },
       pageAgentId: { default: "" },
       store: { default: undefined, attribute: false },
+      onStore: { default: undefined, attribute: false },
     },
   },
 );
@@ -133,13 +131,7 @@ declare module "@solidjs/web" {
         "prop:sessionContext"?: Props["sessionContext"];
         "prop:context"?: Props["context"];
         "prop:store"?: Props["store"];
-        "onAssistant-custodian-store"?: EventHandlerUnion<
-          OpenClawAssistantPanelContent,
-          CustomEvent<CustodianSessionStore>
-        >;
-      };
-      "openclaw-home-session": AssistantElementAttributes<"openclaw-home-session"> & {
-        "prop:workContext"?: ChatWorkContext;
+        "prop:onStore"?: Props["onStore"];
       };
       "openclaw-custodian-surface": AssistantElementAttributes<"openclaw-custodian-surface"> & {
         "prop:store"?: HTMLElementTagNameMap["openclaw-custodian-surface"]["store"];

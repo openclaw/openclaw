@@ -387,7 +387,7 @@ export async function registerChannelsCli(
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const { channelsLogsCommand } = await import("../commands/channels.js");
-        await channelsLogsCommand(opts, defaultRuntime);
+        await channelsLogsCommand(opts);
       });
     });
 
@@ -407,10 +407,10 @@ export async function registerChannelsCli(
       await runCommandWithRuntime(defaultRuntime, async () => {
         const { channelsDeadLettersListCommand } =
           await import("../commands/channels/dead-letters.js");
-        await channelsDeadLettersListCommand(
-          { ...opts, account: resolveStringOption(command, "account") },
-          defaultRuntime,
-        );
+        await channelsDeadLettersListCommand({
+          ...opts,
+          account: resolveStringOption(command, "account"),
+        });
       });
     });
 
@@ -425,11 +425,10 @@ export async function registerChannelsCli(
       await runCommandWithRuntime(defaultRuntime, async () => {
         const { channelsDeadLettersResubmitCommand } =
           await import("../commands/channels/dead-letters.js");
-        await channelsDeadLettersResubmitCommand(
-          eventId,
-          { ...opts, account: resolveStringOption(command, "account") },
-          defaultRuntime,
-        );
+        await channelsDeadLettersResubmitCommand(eventId, {
+          ...opts,
+          account: resolveStringOption(command, "account"),
+        });
       });
     });
 

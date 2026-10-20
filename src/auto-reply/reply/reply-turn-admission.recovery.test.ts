@@ -51,6 +51,9 @@ afterEach(async () => {
 function createRecoveryGatewayContext(storePath?: string) {
   const recoveryRuntime: GatewayRecoveryRuntime = {
     prepareRestartRecovery: () => undefined,
+    resumeChatInput: async () => {
+      throw new Error("Unexpected chat input recovery");
+    },
     dispatchSessionMethod: vi.fn(),
     dispatchAgent: vi.fn(),
     waitForAgent: vi.fn(),

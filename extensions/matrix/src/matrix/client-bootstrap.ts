@@ -59,17 +59,12 @@ export async function resolveRuntimeMatrixClientWithReadiness(
     );
   }
   const cfg = opts.cfg;
-  const { acquireSharedMatrixClient, resolveMatrixAuthContext } =
-    await loadMatrixSharedClientRuntimeDeps();
+  const { acquireSharedMatrixClient } = await loadMatrixSharedClientRuntimeDeps();
   assertCurrent?.();
-  const authContext = resolveMatrixAuthContext({
-    cfg,
-    accountId: opts.accountId,
-  });
   const lease = await acquireSharedMatrixClient({
     cfg,
     timeoutMs: opts.timeoutMs,
-    accountId: authContext.accountId,
+    accountId: opts.accountId,
     startClient: false,
     role: "transient",
   });

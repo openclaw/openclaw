@@ -2,20 +2,22 @@
 import { describe, expect, it } from "vitest";
 import { mergeHybridResults } from "./hybrid.js";
 import { applyMMRToHybridResults } from "./mmr.js";
-import { jaccardSimilarity, textSimilarity, tokenize } from "./tokenize.js";
+import { prepareSimilarityText, preparedTextSimilarity } from "./tokenize.js";
 
 describe("memory MMR", () => {
   it.each([{ text: "中文🙂今天", expected: ["中文", "今天", "中", "文", "今", "天"] }])(
     "tokenizes $text in stable term order",
     ({ text, expected }) => {
-      expect([...tokenize(text)]).toEqual(expected);
+      expect([...prepareSimilarityText(text).tokens]).toEqual(expected);
     },
   );
 
   it("compares token sets and falls back to literal equality for empty token sets", () => {
-    expect(jaccardSimilarity(new Set(["a", "b"]), new Set(["b", "c"]))).toBeCloseTo(1 / 3);
-    expect(textSimilarity("Привет мир", "Доброе утро")).toBe(0);
-    expect(textSimilarity("🦞🦞", "🦞🦞")).toBe(1);
+    const similarity = (a: string, b: string) =>
+      preparedTextSimilarity(prepareSimilarityText(a), prepareSimilarityText(b));
+    expect(similarity("a b", "b c")).toBeCloseTo(1 / 3);
+    expect(similarity("Привет мир", "Доброе утро")).toBe(0);
+    expect(similarity("🦞🦞", "🦞🦞")).toBe(1);
   });
 
   it.each([
@@ -78,8 +80,8 @@ describe("memory MMR", () => {
     },
   );
 
-  it.each([{ mmr: { enabled: true }, paths: ["/a", "/c", "/b", "/d"] }])(
-    "applies hybrid MMR defaults for $mmr",
+  it.each([{ mmr: { enabled: true, lambda: 0.7 }, paths: ["/a", "/c", "/b", "/d"] }])(
+    "applies configured hybrid MMR for $mmr",
     async ({ mmr, paths }) => {
       const results = [
         { path: "/a", startLine: 1, endLine: 1, score: 1, snippet: "same", source: "memory" },
@@ -105,6 +107,7 @@ describe("memory MMR", () => {
         vectorWeight: 1,
         textWeight: 0,
         mmr,
+        temporalDecay: { enabled: false, halfLifeDays: 30 },
       });
       expect(merged).toEqual(
         paths.map((path) =>

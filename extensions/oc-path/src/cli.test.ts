@@ -15,13 +15,22 @@ import {
   writeSync,
 } from "node:fs";
 import { join } from "node:path";
-import { Command, CommanderError } from "commander";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import plugin from "../index.js";
-import { registerPathCli } from "./cli.js";
+import {
+  createTestRuntime,
+  pathEmitCommand,
+  pathFindCommand,
+  pathResolveCommand,
+  pathSetCommand,
+  pathValidateCommand,
+  stderrText,
+  stdoutText,
+  type TestRuntime,
+} from "./cli.test-support.js";
 
 const JSONC_INPUT_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -43,170 +52,6 @@ const isPathMachineOutput = (() => {
   }
   return resolver;
 })();
-
-type PathCommandOptions = {
-  readonly json?: boolean;
-  readonly human?: boolean;
-  readonly valueJson?: boolean;
-  readonly cwd?: string;
-  readonly file?: string;
-  readonly dryRun?: boolean;
-  readonly diff?: boolean;
-};
-
-interface TestRuntime {
-  readonly stdout: string[];
-  readonly stderr: string[];
-  exitCode: number;
-  error(value: string): void;
-  writeStdout(value: string): void;
-  exit(code: number): void;
-}
-
-function createTestRuntime(): TestRuntime {
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const runtime: TestRuntime = {
-    stdout,
-    stderr,
-    exitCode: 0,
-    error: (value) => {
-      stderr.push(value);
-    },
-    writeStdout: (value) => {
-      stdout.push(value);
-    },
-    exit: (code) => {
-      runtime.exitCode = code;
-    },
-  };
-  return runtime;
-}
-
-const stdoutText = (rt: TestRuntime): string => rt.stdout.join("");
-const stderrText = (rt: TestRuntime): string => rt.stderr.join("");
-
-function optionArgs(options: PathCommandOptions): string[] {
-  const args: string[] = [];
-  if (options.json === true) {
-    args.push("--json");
-  }
-  if (options.human === true) {
-    args.push("--human");
-  }
-  if (options.valueJson === true) {
-    args.push("--value-json");
-  }
-  if (options.cwd !== undefined) {
-    args.push("--cwd", options.cwd);
-  }
-  if (options.file !== undefined) {
-    args.push("--file", options.file);
-  }
-  if (options.dryRun === true) {
-    args.push("--dry-run");
-  }
-  if (options.diff === true) {
-    args.push("--diff");
-  }
-  return args;
-}
-
-async function invokePathCli(args: string[], runtime: TestRuntime): Promise<void> {
-  const previousExitCode = process.exitCode;
-  process.exitCode = 0;
-  const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
-    runtime.writeStdout(String(chunk));
-    return true;
-  }) as typeof process.stdout.write);
-  const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(((chunk: unknown) => {
-    runtime.error(String(chunk));
-    return true;
-  }) as typeof process.stderr.write);
-  try {
-    const program = new Command();
-    program.exitOverride();
-    program.configureOutput({
-      writeOut: (value) => runtime.writeStdout(value),
-      writeErr: (value) => runtime.error(value),
-    });
-    registerPathCli(program);
-    await program.parseAsync(["node", "openclaw", "path", ...args]);
-    runtime.exitCode = process.exitCode ?? 0;
-  } catch (error) {
-    if (!(error instanceof CommanderError)) {
-      throw error;
-    }
-    runtime.exitCode = error.exitCode;
-  } finally {
-    stdoutWrite.mockRestore();
-    stderrWrite.mockRestore();
-    // oxlint-disable-next-line no-warning-comments -- replace the pending link after Bun ships the fix.
-    // TODO(bun#42607): Assign undefined once Bun clears a nonzero process.exitCode.
-    process.exitCode = previousExitCode ?? 0;
-  }
-}
-
-async function pathResolveCommand(
-  path: string | undefined,
-  options: PathCommandOptions,
-  runtime: TestRuntime,
-): Promise<void> {
-  await invokePathCli(
-    ["resolve", ...(path === undefined ? [] : [path]), ...optionArgs(options)],
-    runtime,
-  );
-}
-
-async function pathSetCommand(
-  path: string | undefined,
-  value: string | undefined,
-  options: PathCommandOptions,
-  runtime: TestRuntime,
-): Promise<void> {
-  await invokePathCli(
-    [
-      "set",
-      ...(path === undefined ? [] : [path]),
-      ...(value === undefined ? [] : [value]),
-      ...optionArgs(options),
-    ],
-    runtime,
-  );
-}
-
-async function pathFindCommand(
-  path: string | undefined,
-  options: PathCommandOptions,
-  runtime: TestRuntime,
-): Promise<void> {
-  await invokePathCli(
-    ["find", ...(path === undefined ? [] : [path]), ...optionArgs(options)],
-    runtime,
-  );
-}
-
-async function pathValidateCommand(
-  path: string | undefined,
-  options: PathCommandOptions,
-  runtime: TestRuntime,
-): Promise<void> {
-  await invokePathCli(
-    ["validate", ...(path === undefined ? [] : [path]), ...optionArgs(options)],
-    runtime,
-  );
-}
-
-async function pathEmitCommand(
-  file: string | undefined,
-  options: PathCommandOptions,
-  runtime: TestRuntime,
-): Promise<void> {
-  await invokePathCli(
-    ["emit", ...(file === undefined ? [] : [file]), ...optionArgs(options)],
-    runtime,
-  );
-}
 
 describe("openclaw path CLI", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);

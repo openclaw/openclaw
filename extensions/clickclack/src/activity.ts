@@ -120,10 +120,8 @@ export function createClickClackActivityPublisher(params: {
     if (!segment) {
       return Promise.resolve();
     }
-    if (segment.timer) {
-      clearTimeout(segment.timer);
-      segment.timer = undefined;
-    }
+    clearTimeout(segment.timer);
+    segment.timer = undefined;
     if (!segment.dirty || !segment.body) {
       return Promise.resolve();
     }

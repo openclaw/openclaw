@@ -49,7 +49,6 @@ function createTextEvent(
 
 function createLifecycle() {
   const controller = new AbortController();
-  const abandonHandlers = new Set<() => void | Promise<void>>();
   const calls = {
     adopted: vi.fn(async () => {}),
     deferred: vi.fn(),
@@ -62,12 +61,8 @@ function createLifecycle() {
     onDeferred: calls.deferred,
     onAdoptionFinalizing: calls.finalizing,
     onAbandoned: async () => {
-      await Promise.all([...abandonHandlers].map(async (handler) => await handler()));
+      await lifecycle.onBeforeAbandon?.();
       await calls.abandoned();
-    },
-    registerAbandonHandler: (handler) => {
-      abandonHandlers.add(handler);
-      return () => abandonHandlers.delete(handler);
     },
   };
   return { calls, controller, lifecycle };

@@ -1,7 +1,12 @@
+import os from "node:os";
+import { lowercasePreservingWhitespace } from "@openclaw/normalization-core";
+import {
+  normalizeHomeDirValue,
+  resolveEffectiveHomeDir,
+} from "@openclaw/normalization-core/home-dir";
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { iterateAnsiSegments } from "./ansi-sequences.js";
 import { iterateGraphemes, truncateToVisibleWidth, visibleWidth } from "./ansi.js";
-import { createDisplayStringFormatter } from "./display-string.js";
 import { sanitizeTerminalText } from "./safe-text.js";
 
 type Align = "left" | "right" | "center";
@@ -379,8 +384,73 @@ export function renderTerminalSafeTable(opts: RenderTableOptions): string {
   });
 }
 
+/** Find a case-insensitive Windows path without changing offsets in the original string. */
+function indexOfWindowsPath(input: string, home: string, cursor: number): number {
+  const foldedHome = lowercasePreservingWhitespace(home);
+  // Resolved Windows homes begin with a drive or UNC prefix. Their first backslash
+  // anchors candidates without folding the input and shifting Unicode offsets.
+  const separatorOffset = home.indexOf("\\");
+  for (
+    let separator = input.indexOf("\\", cursor + separatorOffset);
+    separator !== -1;
+    separator = input.indexOf("\\", separator + 1)
+  ) {
+    const index = separator - separatorOffset;
+    if (index > input.length - home.length) {
+      break;
+    }
+    if (lowercasePreservingWhitespace(input.slice(index, index + home.length)) === foldedHome) {
+      return index;
+    }
+  }
+  return -1;
+}
+
 export function renderTable(opts: RenderTableOptions): string {
-  const displayString = createDisplayStringFormatter();
+  // One home snapshot per synchronous render; the next render observes environment changes.
+  const home = resolveEffectiveHomeDir(process.env, os.homedir, {
+    preserveUnresolvedTilde: true,
+  });
+  const prefix = home && normalizeHomeDirValue(process.env.OPENCLAW_HOME) ? "$OPENCLAW_HOME" : "~";
+  const displayString = (input: string): string => {
+    if (!home) {
+      return input;
+    }
+    let output = "";
+    let cursor = 0;
+    // Keep the token-aware table scan local; core owns application path rendering.
+    while (cursor < input.length) {
+      const index =
+        process.platform === "win32"
+          ? indexOfWindowsPath(input, home, cursor)
+          : input.indexOf(home, cursor);
+      if (index < 0) {
+        return `${output}${input.slice(cursor)}`;
+      }
+
+      const before = input[index - 1];
+      const homeEnd = index + home.length;
+      const after = input[homeEnd];
+      const startsToken = before === undefined || /[\s("'`:=[{,]/u.test(before);
+      let punctuationEnd = homeEnd;
+      while (punctuationEnd < input.length && /[)"'`:,;.\]}]/u.test(input.charAt(punctuationEnd))) {
+        punctuationEnd += 1;
+      }
+      const punctuationEndsToken =
+        punctuationEnd > homeEnd &&
+        (punctuationEnd === input.length || /\s/u.test(input.charAt(punctuationEnd)));
+      const endsTokenOrContinuesPath =
+        after === undefined || after === "/" || after === "\\" || punctuationEndsToken;
+      if (startsToken && endsTokenOrContinuesPath) {
+        output += `${input.slice(cursor, index)}${prefix}`;
+      } else {
+        output += input.slice(cursor, index + home.length);
+      }
+      cursor = index + home.length;
+    }
+
+    return output;
+  };
   const rows = opts.rows.map((row) => {
     const next: Record<string, string> = {};
     for (const [key, value] of Object.entries(row)) {

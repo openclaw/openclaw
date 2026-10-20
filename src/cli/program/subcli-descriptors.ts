@@ -190,15 +190,3 @@ export function getSubCliEntriesCore(): readonly SubCliCommand[] {
     Object.assign({}, metadata, registrations[metadata.name]),
   );
 }
-
-export function getSubCliCommandsWithSubcommands(): string[] {
-  return getSubCliEntriesCore()
-    .filter((descriptor) => descriptor.hasSubcommands)
-    .map((descriptor) => descriptor.name);
-}
-
-export function getSubCliParentDefaultHelpCommands(): string[] {
-  return getSubCliEntriesCore()
-    .filter((descriptor) => descriptor.parentDefaultHelp)
-    .map((descriptor) => descriptor.name);
-}

@@ -22,7 +22,7 @@ export type MatrixQaHarnessFiles = {
   registrationToken: string;
 };
 
-export function buildVersionsUrl(baseUrl: string) {
+function buildVersionsUrl(baseUrl: string) {
   return `${baseUrl}_matrix/client/versions`;
 }
 

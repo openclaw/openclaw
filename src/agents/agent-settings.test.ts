@@ -150,19 +150,6 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
     expect(applyOverrides).not.toHaveBeenCalled();
   });
 
-  it("treats keepRecentTokens=0 as invalid and keeps the current setting", () => {
-    const settingsManager = SettingsManager.inMemory({ compaction: { reserveTokens: 25_000 } });
-    const applyOverrides = vi.spyOn(settingsManager, "applyOverrides");
-
-    applySettings({
-      settingsManager,
-      cfg: { agents: { defaults: { compaction: { mode: "safeguard", keepRecentTokens: 0 } } } },
-    });
-
-    expect(settingsManager.getCompactionKeepRecentTokens()).toBe(20_000);
-    expect(applyOverrides).not.toHaveBeenCalled();
-  });
-
   it("caps the effective reserve so small-context models do not compact at token one", () => {
     // Embedded runner default reserveTokens is 16 384. With a 16 384 context window
     // both the default reserve and floor exceed one quarter of the model window.

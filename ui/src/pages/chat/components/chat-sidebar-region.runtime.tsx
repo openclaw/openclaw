@@ -274,9 +274,7 @@ function Region(props: RegionProps, host: RegionElement) {
     before.focus({ preventScroll: true });
     if (document.activeElement !== before) {
       // That control is gone by now; carry on from the main view's own header.
-      props.elements?.header
-        .querySelector<HTMLElement>("button:not([disabled])")
-        ?.focus({ preventScroll: true });
+      props.elements?.header.focus({ preventScroll: true });
     }
   }
 

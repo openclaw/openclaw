@@ -231,7 +231,13 @@ async function verifyOverlappingRetainedWork(createRecoveryFixture: RecoveryFixt
   const old = fixture.previousRegistry;
   const instance = fixture.instance();
   const consumer = instance.retainConsumer();
-  const observation = observeRetainedWork(instance, true);
+  const entered = createDeferredCore();
+  const wait = instance.waitForIdle.bind(instance);
+  const observation = vi.spyOn(instance, "waitForIdle").mockImplementation((signal) => {
+    const pending = wait(signal);
+    entered.resolve();
+    return pending;
+  });
   const first = retainRuntimePluginWork([old]);
   const second = retainRuntimePluginWork([old]);
   const reloading = fixture.reload();
@@ -244,7 +250,7 @@ async function verifyOverlappingRetainedWork(createRecoveryFixture: RecoveryFixt
     expect(instance.run(() => "old run finishes")).toBe("old run finishes");
     expect(fixture.candidates).toHaveLength(0);
     second();
-    await Promise.race([observation.entered, reloading]);
+    await Promise.race([entered.promise, reloading]);
     expect(disposed).toEqual([]);
     consumer.release();
     const receipt = await reloading;
@@ -262,7 +268,7 @@ async function verifyOverlappingRetainedWork(createRecoveryFixture: RecoveryFixt
     first();
     second();
     consumer.release();
-    observation.restore();
+    observation.mockRestore();
     await reloading.catch(() => {});
   }
 }

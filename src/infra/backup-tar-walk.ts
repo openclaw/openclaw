@@ -3,7 +3,7 @@ import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import type { HeaderData } from "tar";
-import { hasErrnoCode, ignoreMissingPath } from "./errno.js";
+import { ignoreMissingPath } from "./errno.js";
 
 /** Open sources before emitting headers so a vanished name cannot leave a partial entry. */
 export async function* walkBackupTar(params: {
@@ -84,9 +84,7 @@ export async function* walkBackupTar(params: {
           await assertDirectory(parent);
         }
       } catch (error) {
-        if (!hasErrnoCode(error, "ENOENT")) {
-          throw error;
-        }
+        ignoreMissingPath(error);
         params.onVanished(sourcePath);
         return;
       }

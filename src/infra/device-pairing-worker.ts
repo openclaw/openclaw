@@ -1,12 +1,14 @@
 import { channel } from "node:diagnostics_channel";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { reserveWorkerEnvironmentNativePublication } from "../gateway/worker-environments/store-native-publication.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
+import { clearDeviceAuthToken } from "./device-auth-store.js";
 import type { DevicePairingAdmissionFacts } from "./device-pairing-admission.types.js";
 import { invalidatePairedCardRendererCache } from "./device-pairing-card-renderer.js";
 import { withDevicePairingLock } from "./device-pairing-lock.js";
@@ -21,6 +23,7 @@ import {
 } from "./sqlite-worker-operation-admission.js";
 
 const pairingDiagnostics = channel("openclaw.device-pairing.operation");
+const pairingLog = createSubsystemLogger("gateway/device-pairing");
 
 export const DevicePairingAuthorityRefusedError = resolveGlobalSingleton(
   Symbol.for("openclaw.devicePairingAuthorityRefusedError"),
@@ -93,6 +96,7 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
       options.baseDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: options.baseDir } } : {},
     );
   const captured = structuredClone(command);
+  const credentialEnvironment = { ...process.env, ...context.environment };
   const startedAt = pairingDiagnostics.hasSubscribers ? performance.now() : undefined;
   let admittedAt = startedAt;
   let publicationMs = 0;
@@ -112,6 +116,7 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
     const mutation = publication?.beginMutation();
     let admission: SqliteWorkerOperationAdmission | undefined;
     let published = false;
+    let cacheCleanup: Promise<boolean> | undefined;
     let publishEnvironment: ReturnType<typeof reserveWorkerEnvironmentNativePublication>;
     const install = () => {
       if (!mutation) {
@@ -121,6 +126,17 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
       if (committed && !published) {
         const publishingAt = startedAt === undefined ? undefined : performance.now();
         const receipt = commitReceipt(committed.facts);
+        if (receipt.retiredNodeToken) {
+          cacheCleanup = clearDeviceAuthToken({
+            ...receipt.retiredNodeToken,
+            role: "node",
+            env: credentialEnvironment,
+          }).catch((error: unknown) => {
+            // Server revocation is committed. A failed cache cleanup cannot restore authority.
+            pairingLog.warn(`Local retired node token cleanup failed: ${String(error)}`);
+            return false;
+          });
+        }
         const environment = receipt.workerEnvironment;
         let environmentPublished = false;
         if (environment && publishEnvironment) {
@@ -150,7 +166,7 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
     };
     const removeService = publication?.servicePending(install);
     try {
-      return await runOpenClawStateWorkerOperation(
+      const result = await runOpenClawStateWorkerOperation(
         context,
         async (scope) => {
           try {
@@ -186,6 +202,8 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
           },
         },
       );
+      await cacheCleanup;
+      return result;
     } finally {
       try {
         install();

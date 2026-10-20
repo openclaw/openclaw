@@ -35,7 +35,6 @@ export type ToolCallSummary = {
   commandBearing: boolean;
   instanceReplaySafe: boolean;
   replaySafe: boolean;
-  mutatingAction: boolean;
   ownerKey?: string;
 };
 

@@ -15,7 +15,7 @@ import {
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { resolveRuntimeWorkerThreadExecArgv } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type * as TelegramProcessingOutcome from "./bot-processing-outcome.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import { asTelegramClientFetch, createTelegramClientFetch } from "./client-fetch.js";
@@ -134,20 +134,20 @@ const noop = async () => undefined;
 function makeWorker(
   task: AsyncVoidFn = noop,
   stop: AsyncVoidFn = noop,
-  onMessage: (listener: WorkerMessageListener) => () => void = () => () => undefined,
-) {
-  return { task: vi.fn(task), stop: vi.fn(stop), onMessage: vi.fn(onMessage) };
+): {
+  task: Mock<AsyncVoidFn>;
+  stop: Mock<AsyncVoidFn>;
+  onMessage?: WorkerMessageListener;
+} {
+  return {
+    task: vi.fn(task),
+    stop: vi.fn(stop),
+  };
 }
 function makeReportingWorker(run: (emit: WorkerMessageListener) => Promise<void>, stop = noop) {
-  let listener: WorkerMessageListener | undefined;
-  return makeWorker(
-    () => run((message) => listener?.(message)),
-    stop,
-    (next) => {
-      listener = next;
-      return () => undefined;
-    },
-  );
+  const worker = makeWorker(noop, stop);
+  worker.task.mockImplementation(() => run((message) => worker.onMessage?.(message)));
+  return worker;
 }
 
 function logContains(source: MockCallSource, text: string): boolean {
@@ -303,11 +303,10 @@ function createListeningIngressWorker() {
     return {
       ...worker,
       ackSpooledUpdate,
-      onMessage: vi.fn((nextListener: WorkerMessageListener) => {
+      set onMessage(nextListener: WorkerMessageListener | undefined) {
         listener = nextListener;
         listening.resolve();
-        return () => undefined;
-      }),
+      },
     };
   });
   return {
@@ -603,11 +602,7 @@ describe("TelegramPollingSession", () => {
             }
           });
         });
-        return {
-          onMessage(listener) {
-            worker.on("message", listener);
-            return () => worker.off("message", listener);
-          },
+        const handle: ReturnType<NonNullable<IsolatedIngressOptions["createWorker"]>> = {
           ackSpooledUpdate(requestId, result) {
             worker.postMessage({ type: "spool-ack", requestId, result }, []);
           },
@@ -617,6 +612,8 @@ describe("TelegramPollingSession", () => {
           },
           task: () => task,
         };
+        worker.on("message", (message) => handle.onMessage?.(message));
+        return handle;
       };
       const abort = new AbortController();
       const persistUpdateId = vi.fn(async () => undefined);
@@ -1013,20 +1010,17 @@ describe("TelegramPollingSession", () => {
             }
           });
         });
-        return {
-          onMessage: vi.fn((listener: WorkerMessageListener) => {
-            const forwardMessage = (message: TelegramIngressWorkerMessage) => {
-              listener(message);
-              if (message.type === "poll-error") {
-                pollErrorReceived.resolve(message);
-              }
-            };
-            worker.on("message", forwardMessage);
-            return () => worker.off("message", forwardMessage);
-          }),
+        const handle: ReturnType<NonNullable<IsolatedIngressOptions["createWorker"]>> = {
           stop: workerStop,
           task: () => task,
         };
+        worker.on("message", (message: TelegramIngressWorkerMessage) => {
+          handle.onMessage?.(message);
+          if (message.type === "poll-error") {
+            pollErrorReceived.resolve(message);
+          }
+        });
+        return handle;
       });
       const session = createPollingSession({
         abortSignal: abort.signal,
@@ -1167,7 +1161,6 @@ describe("TelegramPollingSession", () => {
         workerCycle += 1;
         if (workerCycle === 1) {
           return {
-            onMessage: vi.fn(() => () => undefined),
             stop: firstWorkerStop,
             task: vi.fn(async () => {
               await firstWorkerTask;
@@ -1175,7 +1168,6 @@ describe("TelegramPollingSession", () => {
           };
         }
         return {
-          onMessage: vi.fn(() => () => undefined),
           stop: vi.fn(async () => undefined),
           task: vi.fn(async () => {
             expect(replacement.close).not.toHaveBeenCalled();
@@ -2014,7 +2006,6 @@ describe("TelegramPollingSession", () => {
     const bot = makeIsolatedBot({ deleteWebhook: cleanup });
     createTelegramBotMock.mockReturnValueOnce(bot);
     const createWorker = vi.fn(() => ({
-      onMessage: () => () => {},
       task: async () => {
         abort.abort();
       },

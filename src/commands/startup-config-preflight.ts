@@ -221,6 +221,7 @@ async function prepareStartupConfig(
             manifestRegistry: read.pluginMetadataSnapshot?.manifestRegistry,
             pluginIds: pendingWebhookChannels,
             historicalWebhookListeners: true,
+            historicalWebhookCompletion: { marker: webhookCompletion },
             startup: true,
           }),
         );

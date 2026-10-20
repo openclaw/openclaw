@@ -468,7 +468,7 @@ export class ComposedGatewayHarness {
         },
       },
     });
-    this.liveEventsValue.clearEnvironment(ENVIRONMENT_ID, staleClaim.owner.ownerEpoch);
+    this.liveEventsValue.clearEnvironment(ENVIRONMENT_ID);
     await this.placementLifecycle.prepareRun(runId, credential);
     return next.ownerEpoch;
   }

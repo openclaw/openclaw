@@ -36,7 +36,6 @@ export type ToolStreamEntry = {
   toolCallId: string;
   parentToolCallId?: string;
   runId: string;
-  sessionKey?: string;
   name: string;
   args?: unknown;
   output?: string;

@@ -18,10 +18,9 @@ import type {
 } from "./chat-session-companion.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import type { ChatProps } from "./chat-view-frame.ts";
-import type {
-  SessionWorkspaceProps,
-  SessionWorkspaceState,
-} from "./components/chat-session-workspace-types.ts";
+import type { ChatModelControlsProps } from "./components/chat-model-controls.tsx";
+import type { SessionWorkspaceState } from "./components/chat-session-workspace-types.ts";
+import type { SessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import type { SidebarSelection } from "./components/chat-sidebar-content-types.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.tsx";
 import type { SidebarSlotId } from "./sidebar-layout-types.ts";
@@ -75,6 +74,7 @@ export type SidebarPanelDefinitionParams = {
   activeRunId: string | null;
   pullRequests: ControlUiSessionPullRequest[];
   companion: ChatSessionCompanionThread;
+  companionModelControls?: ChatModelControlsProps;
   companionPresented: PresentationValue;
   companionFocusRequest: (() => boolean) | undefined;
   onCompanionSubmit: (question: string | ChatSessionCompanionTurn) => void;

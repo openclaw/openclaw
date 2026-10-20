@@ -44,6 +44,7 @@ beforeEach(() => {
   params = createMigrationParams(stateDir);
   params.env = { ...params.env, HOME: stateDir };
   params.context = {
+    readPluginStateEntriesInKeyRange: () => [],
     openPluginStateKeyedStore: vi.fn(() => {
       throw new Error("absent or retired state must not open a store");
     }),
@@ -107,6 +108,12 @@ it("completes absent legacy-state checks without loading client runtimes", async
   }
   const inboundDedupe = await migrationById("matrix-inbound-dedupe-to-claimable-dedupe");
   await expect(inboundDedupe.detectLegacyState(params)).resolves.toBeNull();
+  const replayMarkers = await migrationById("matrix-replay-guard-to-ingress");
+  expect(replayMarkers.detectLegacyState(params)).toBeNull();
+  await expect(replayMarkers.migrateLegacyState(params)).resolves.toEqual({
+    changes: [],
+    warnings: [],
+  });
   const credentials = await migrationById("matrix-credentials-json-to-plugin-state");
   await expect(credentials.detectLegacyState(params)).resolves.toBeNull();
   const credentialsDir = path.join(stateDir, "credentials", "matrix");

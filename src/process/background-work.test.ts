@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { createBackgroundWorkOwner, getBackgroundWorkSnapshot } from "./background-work.js";
+import { getSkillWorkshopReviewLane, getBackgroundWorkSnapshot } from "./background-work.js";
 import {
   enqueueCommandInLane,
   getCommandLaneSnapshot,
@@ -84,7 +84,7 @@ function configureBackground(members: string[], lanes?: Capacities, reservations
 }
 
 function park(
-  lane: string | ReturnType<typeof createBackgroundWorkOwner>,
+  lane: string,
   onStart?: () => void,
   options?: Parameters<typeof enqueueCommandInLane>[2],
 ) {
@@ -93,10 +93,7 @@ function park(
     onStart?.();
     await gate.promise;
   };
-  const run =
-    typeof lane === "string"
-      ? enqueueCommandInLane(lane, task, options)
-      : enqueueCommandInLane(lane.lane, task, { ...options, priority: "background" });
+  const run = enqueueCommandInLane(lane, task, options);
   return { run, resolve: gate.resolve };
 }
 
@@ -104,21 +101,19 @@ beforeEach(resetCommandQueueStateForTest);
 afterEach(resetCommandQueueStateForTest);
 
 it("does not scan sibling lanes while reading registered owner widths", () => {
-  const owners = Array.from({ length: 32 }, (_, index) =>
-    createBackgroundWorkOwner({ owner: `core:stable-${index}` }),
-  );
-  const members = owners.map((owner) => owner.lane);
+  const siblings = Array.from({ length: 32 }, (_, index) => `background:core:stable-${index}`);
+  configureBackground(siblings, Object.fromEntries(siblings.map((lane) => [lane, 1])));
+  const lane = getSkillWorkshopReviewLane();
+  const members = [...siblings, lane];
   expect(state.lanes.size).toBe(members.length);
-  for (const lane of state.lanes.values()) {
-    expect(lane).toMatchObject({ draining: false, queue: { length: 0 } });
+  for (const registeredLane of state.lanes.values()) {
+    expect(registeredLane).toMatchObject({ draining: false, queue: { length: 0 } });
   }
   const unchanged = preserveQueueState();
   const { result: observed, reads } = countLaneReads(() =>
-    Array.from({ length: 1_000 }, (_, index) => owners[index % owners.length]!.lane),
+    Array.from({ length: 1_000 }, () => getSkillWorkshopReviewLane()),
   );
-  expect(observed).toEqual(
-    Array.from({ length: 1_000 }, (_, index) => members[index % members.length]),
-  );
+  expect(observed).toEqual(Array.from({ length: 1_000 }, () => lane));
   unchanged();
   expect(reads).toBeLessThanOrEqual(1_000);
 });
@@ -128,18 +123,19 @@ it.each([
   [true, 1],
   [true, 2],
 ] as const)("registers lazily (group-only=%s, width=%i)", (groupOnly, maxConcurrent) => {
-  const lane = "background:core:width";
+  const lane = "background:core:skill-workshop";
   if (groupOnly) {
     configureBackground([lane], maxConcurrent === 1 ? undefined : { [lane]: maxConcurrent });
   }
-  const owner = createBackgroundWorkOwner({ owner: "  core:width  " });
   expect(state.lanes.size).toBe(groupOnly && maxConcurrent !== 1 ? 1 : 0);
   if (groupOnly) {
     const group = state.laneGroups.get("background-work");
     if (maxConcurrent === 1) {
-      expect(owner.lane).toBe(lane);
+      expect(getSkillWorkshopReviewLane()).toBe(lane);
     } else {
-      expect(() => owner.lane).toThrow("already registered with different concurrency");
+      expect(() => getSkillWorkshopReviewLane()).toThrow(
+        "already registered with different concurrency",
+      );
     }
     expect(state.lanes.size).toBe(maxConcurrent === 1 ? 0 : 1);
     expect(state.laneGroups.get("background-work")).toBe(group);
@@ -147,18 +143,20 @@ it.each([
     return;
   }
   expect(state.laneGroups.size).toBe(0);
-  expect(owner.lane).toBe(lane);
+  expect(getSkillWorkshopReviewLane()).toBe(lane);
   const registered = state.lanes.get(lane);
   const group = state.laneGroups.get("background-work");
   expect(registered?.maxConcurrent).toBe(1);
   expect([...group!.members]).toEqual([lane]);
-  expect(createBackgroundWorkOwner({ owner: "core:width" }).lane).toBe(lane);
+  expect(getSkillWorkshopReviewLane()).toBe(lane);
   for (const width of [0, 2, 3, 1]) {
     publishLaneConfiguration({ lanes: { [lane]: width } });
     if (width === 1) {
-      expect(owner.lane).toBe(lane);
+      expect(getSkillWorkshopReviewLane()).toBe(lane);
     } else {
-      expect(() => owner.lane).toThrow("already registered with different concurrency");
+      expect(() => getSkillWorkshopReviewLane()).toThrow(
+        "already registered with different concurrency",
+      );
     }
     expect(state.lanes.get(lane)).toBe(registered);
     expect(registered?.maxConcurrent).toBe(width);
@@ -263,15 +261,15 @@ it("preserves admission draining and the newest generation across Gateway restar
 
 it("shares three slots, preserves owner widths and FIFO, and leaves foreground capacity free", async () => {
   const parallel = "background:plugin:parallel";
-  const serial = createBackgroundWorkOwner({ owner: "core:serial" });
-  configureBackground([parallel, serial.lane], { [parallel]: 3 });
+  const serial = getSkillWorkshopReviewLane();
+  configureBackground([parallel, serial], { [parallel]: 3 });
   const gates = Array.from({ length: 3 }, () =>
     park(parallel, undefined, { priority: "background" }),
   );
   const parallelRuns = gates.map(({ run }) => run);
   const order: number[] = [];
-  const first = park(serial, () => void order.push(1));
-  const second = enqueueCommandInLane(serial.lane, async () => void order.push(2), {
+  const first = park(serial, () => void order.push(1), { priority: "background" });
+  const second = enqueueCommandInLane(serial, async () => void order.push(2), {
     priority: "background",
   });
   try {
@@ -285,7 +283,7 @@ it("shares three slots, preserves owner widths and FIFO, and leaves foreground c
     expect(getBackgroundWorkSnapshot()).toMatchObject({ activeCount: 3, queuedCount: 1 });
     gates.slice(1).forEach((gate) => gate.resolve());
     await Promise.all(parallelRuns);
-    expect(getCommandLaneSnapshot(serial.lane)).toMatchObject({ activeCount: 1, queuedCount: 1 });
+    expect(getCommandLaneSnapshot(serial)).toMatchObject({ activeCount: 1, queuedCount: 1 });
     first.resolve();
     await Promise.all([first.run, second]);
     expect(order).toEqual([1, 2]);
@@ -297,19 +295,19 @@ it("shares three slots, preserves owner widths and FIFO, and leaves foreground c
 });
 
 it("removes cancelled work immediately without invoking it or reordering its successors", async () => {
-  const owner = createBackgroundWorkOwner({ owner: "core:cancel" });
-  const active = park(owner);
+  const owner = getSkillWorkshopReviewLane();
+  const active = park(owner, undefined, { priority: "background" });
   const controller = new AbortController();
   const cancelledTask = vi.fn(async () => undefined);
   const order: number[] = [];
-  const first = enqueueCommandInLane(owner.lane, async () => void order.push(1), {
+  const first = enqueueCommandInLane(owner, async () => void order.push(1), {
     priority: "background",
   });
-  const cancelled = enqueueCommandInLane(owner.lane, cancelledTask, {
+  const cancelled = enqueueCommandInLane(owner, cancelledTask, {
     priority: "background",
     abortSignal: controller.signal,
   });
-  const last = enqueueCommandInLane(owner.lane, async () => void order.push(2), {
+  const last = enqueueCommandInLane(owner, async () => void order.push(2), {
     priority: "background",
   });
   const rejection = expect(cancelled).rejects.toThrow("cancel background work");

@@ -2,13 +2,19 @@ import fs from "node:fs";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
 import {
   beginAgentDeletionJournal as beginJournal,
   removeAgentDeletionJournal as removeJournal,
 } from "../test-utils/agent-deletion-journal.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState as withState } from "../test-utils/openclaw-test-state.js";
-import { createRetainedAgentDatabaseMatcherFromSnapshot as retainedMatcher } from "./agent-deletion-discovery.js";
+import {
+  createRetainedAgentDatabaseMatcherFromSnapshot as retainedMatcher,
+  listRetainedDeletedAgentIdsForCleanup,
+} from "./agent-deletion-discovery.js";
 import { reconstructAgentDeletionJournal } from "./agent-deletion-journal-recovery.js";
 import {
   completeAgentDeletionJournalInDatabase as completeJournal,
@@ -30,6 +36,67 @@ import {
   runOpenClawStateWriteTransaction as writeState,
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath as stateSqlitePath } from "./openclaw-state-db.paths.js";
+
+it("reads cleanup IDs in one statement and observes committed deletion changes", async () => {
+  await withState({ scenario: "minimal" }, async (state) => {
+    const options = { env: state.env };
+    const log = state.statePath("cleanup-sql.jsonl");
+    const preload = state.statePath("cleanup-sql.cjs");
+    fs.writeFileSync(log, "");
+    fs.writeFileSync(
+      preload,
+      `const fs = require('node:fs');
+const { DatabaseSync, StatementSync } = require('node:sqlite');
+const record = sql => fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(sql) + '\\n');
+const exec = DatabaseSync.prototype.exec;
+DatabaseSync.prototype.exec = function(sql) { record(sql); return exec.call(this, sql); };
+for (const method of ['get', 'all', 'run', 'iterate']) {
+  const execute = StatementSync.prototype[method];
+  StatementSync.prototype[method] = function(...args) {
+    record(this.sourceSQL);
+    return execute.apply(this, args);
+  };
+}`,
+    );
+    beginJournal(journalInput(state, "retained"), options);
+    beginJournal({ ...journalInput(state, "removed"), deleteFiles: true }, options);
+    try {
+      await withEnvAsync(sqliteWorkerPreloadEnv(preload), async () => {
+        expect(await listRetainedDeletedAgentIdsForCleanup(state.env)).toEqual(new Set());
+        writeState((writer) => {
+          completeJournal(writer, "retained", "delete-retained");
+          completeJournal(writer, "removed", "delete-removed");
+          writer.db
+            .prepare(
+              "UPDATE agent_deletion_journal SET database_paths_json = '[1]' WHERE agent_id = ?",
+            )
+            .run("retained");
+        }, options);
+        expect(await listRetainedDeletedAgentIdsForCleanup(state.env)).toEqual(
+          new Set(["retained"]),
+        );
+        fs.writeFileSync(log, "");
+        await withoutHostSql(async () => {
+          expect(await listRetainedDeletedAgentIdsForCleanup(state.env)).toEqual(
+            new Set(["retained"]),
+          );
+        });
+        const statements: unknown[] = fs
+          .readFileSync(log, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line));
+        expect(statements).toEqual([
+          expect.stringMatching(/^select "agent_id" from "agent_deletion_journal" where /iu),
+        ]);
+        expect(removeJournal("retained", "delete-retained", options)).toBe(true);
+        expect(await listRetainedDeletedAgentIdsForCleanup(state.env)).toEqual(new Set());
+      });
+    } finally {
+      await closeStateDatabaseForTest();
+    }
+  });
+});
 
 it.each(["runtime", "runtime-discovery", "maintenance", "legacy"] as const)(
   "reads journal facts once per %s snapshot, including committed cleanup",

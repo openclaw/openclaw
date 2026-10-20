@@ -264,7 +264,7 @@ export function approvalTitle(active: ExecApprovalRequest): string {
 export function SidebarApprovalRow(props: SidebarApprovalRowProps) {
   const approval = createMemo(() => props.approval);
   const nowMs = useApprovalClock();
-  const expired = createMemo(() => approval().expiresAtMs <= nowMs());
+  const expired = () => approval().expiresAtMs <= nowMs();
   const command = createMemo(() => compactApprovalCommand(approval().request.command));
   const sessionTitle = createMemo(() => {
     const sessionKey = approval().request.sessionKey?.trim();
@@ -273,10 +273,10 @@ export function SidebarApprovalRow(props: SidebarApprovalRowProps) {
       (sessionKey ? resolveSessionDisplayName(sessionKey) : approvalTitle(approval()))
     );
   });
-  const expiryUrgent = createMemo(() => expired() || approval().expiresAtMs - nowMs() < 2 * 60_000);
-  const expiryLabel = createMemo(() => approvalRemainingLabel(approval().expiresAtMs, nowMs()));
-  const reviewOnlyMessage = createMemo(() => t("execApproval.reviewOnly"));
-  const grantError = createMemo(() => !props.canGrant && props.error === reviewOnlyMessage());
+  const expiryUrgent = () => expired() || approval().expiresAtMs - nowMs() < 2 * 60_000;
+  const expiryLabel = () => approvalRemainingLabel(approval().expiresAtMs, nowMs());
+  const reviewOnlyMessage = () => t("execApproval.reviewOnly");
+  const grantError = () => !props.canGrant && props.error === reviewOnlyMessage();
   return (
     <openclaw-sidebar-approval-row style={{ display: "contents" }}>
       <article
@@ -382,22 +382,17 @@ export function SidebarApprovalRow(props: SidebarApprovalRowProps) {
 function ExecApprovalCardContent(props: ExecApprovalCardProps) {
   const active = createMemo(() => props.approval);
   const decisions = createMemo(() => resolveApprovalDecisions(active()));
-  const reviewOnlyMessage = createMemo(() => t("execApproval.reviewOnly"));
-  const grantError = createMemo(() => !props.canGrant && props.error === reviewOnlyMessage());
-  const rawSeverity = createMemo(() => active().pluginSeverity?.trim().toLowerCase());
-  const severity = createMemo(() =>
+  const reviewOnlyMessage = () => t("execApproval.reviewOnly");
+  const grantError = () => !props.canGrant && props.error === reviewOnlyMessage();
+  const rawSeverity = () => active().pluginSeverity?.trim().toLowerCase();
+  const severity = () =>
     active().kind === "exec" || rawSeverity() === "warning" || rawSeverity() === "warn"
       ? "warning"
       : rawSeverity() === "danger" || rawSeverity() === "critical" || rawSeverity() === "error"
         ? "danger"
-        : "info",
-  );
-  const pluginId = createMemo(() =>
-    active().kind === "plugin" ? active().pluginId?.trim() : null,
-  );
-  const agentId = createMemo(() =>
-    props.variant === "modal" ? active().request.agentId?.trim() : null,
-  );
+        : "info";
+  const pluginId = () => (active().kind === "plugin" ? active().pluginId?.trim() : null);
+  const agentId = () => (props.variant === "modal" ? active().request.agentId?.trim() : null);
   const content = () => (
     <>
       <div class="exec-approval-header">

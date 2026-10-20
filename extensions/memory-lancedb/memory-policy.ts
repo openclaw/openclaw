@@ -1,5 +1,4 @@
 import { sha256Hex as captureFingerprint } from "openclaw/plugin-sdk/node-crypto-runtime";
-import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import {
   asOptionalRecord,
   normalizeLowercaseStringOrEmpty,
@@ -43,8 +42,9 @@ export function normalizeRecallQuery(
   maxChars: number = DEFAULT_RECALL_MAX_CHARS,
 ): string {
   const normalized = text.replace(/\s+/g, " ").trim();
-  const limit = resolveNonNegativeIntegerOption(maxChars, DEFAULT_RECALL_MAX_CHARS);
-  return normalized.length > limit ? truncateUtf16Safe(normalized, limit).trimEnd() : normalized;
+  return normalized.length > maxChars
+    ? truncateUtf16Safe(normalized, maxChars).trimEnd()
+    : normalized;
 }
 
 export type AutoCaptureMessageProgress = {
@@ -222,8 +222,7 @@ export function formatRecalledMemoryForModel(
   text: string,
   maxChars: number = DEFAULT_RECALL_MAX_CHARS,
 ): string {
-  const limit = resolveNonNegativeIntegerOption(maxChars, DEFAULT_RECALL_MAX_CHARS);
-  return truncateUtf16Safe(escapeHtml(text), limit);
+  return truncateUtf16Safe(escapeHtml(text), maxChars);
 }
 
 export function formatRelevantMemoriesContext(
@@ -258,7 +257,7 @@ export function shouldCapture(
   if (looksLikeEnvelopeSludge(text)) {
     return false;
   }
-  const maxChars = resolveNonNegativeIntegerOption(options?.maxChars, DEFAULT_CAPTURE_MAX_CHARS);
+  const maxChars = options?.maxChars ?? DEFAULT_CAPTURE_MAX_CHARS;
   if (text.length > maxChars) {
     return false;
   }
