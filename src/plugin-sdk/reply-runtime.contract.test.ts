@@ -8,13 +8,20 @@ import {
   createReplyDispatcher,
   dispatchInboundMessage,
   isSilentReplyText,
-  type GetReplyOptions,
+  type GetReplyOptions as Options,
   type PreparedAgentRunStart,
   type ReplyDispatcher,
 } from "./reply-runtime.js";
 
 type ProgressResult = boolean | void;
-type ProgressCallback = GetReplyOptions[
+type ProgressReturn = Promise<ProgressResult> | ProgressResult;
+type AsyncVisibility = (() => Promise<boolean>) | undefined;
+type PublicReplyKey =
+  | "internalEventExecution"
+  | "onReplyOperationAdmitted"
+  | "onReplyOperationOwned";
+type Present<T> = Exclude<T, undefined>;
+type ProgressCallback = Options[
   | "onToolResult"
   | "onToolStart"
   | "onItemEvent"
@@ -22,7 +29,7 @@ type ProgressCallback = GetReplyOptions[
   | "onApprovalEvent"
   | "onCommandOutput"
   | "onPatchSummary"];
-type ProgressBoundaryCallback = GetReplyOptions[
+type ProgressBoundaryCallback = Options[
   | "onReasoningEnd"
   | "onAssistantMessageStart"
   | "onBlockReplyQueued"
@@ -44,12 +51,10 @@ describe("reply SDK silence surface", () => {
 
 describe("reply runtime public progress contracts", () => {
   it("retains released lifecycle callback arguments and synchronous completion acknowledgment", () => {
-    type Deferral = NonNullable<
-      NonNullable<GetReplyOptions["turnAdoptionLifecycle"]>["onDeferred"]
-    >;
+    type Deferral = Present<Present<Options["turnAdoptionLifecycle"]>["onDeferred"]>;
     expectTypeOf<Parameters<Deferral>>().toEqualTypeOf<[]>();
     expectTypeOf<ReturnType<Deferral>>().toEqualTypeOf<boolean | void>();
-    type AgentRunStart = NonNullable<GetReplyOptions["onAgentRunStart"]>;
+    type AgentRunStart = NonNullable<Options["onAgentRunStart"]>;
     type LegacyAgentRunStart = (
       runId: string,
       executionIdentityToken?: Parameters<AgentRunStart>[1],
@@ -64,88 +69,61 @@ describe("reply runtime public progress contracts", () => {
   });
 
   it("requires prepared transcript facts on the modern run-start contract", () => {
-    type Callback = NonNullable<GetReplyOptions["onPreparedAgentRunStart"]>;
+    type Callback = NonNullable<Options["onPreparedAgentRunStart"]>;
     expectTypeOf<Parameters<Callback>>().toEqualTypeOf<[PreparedAgentRunStart]>();
     expectTypeOf<{ runId: string }>().not.toExtend<PreparedAgentRunStart>();
     expectTypeOf<Callback>().returns.toEqualTypeOf<unknown>();
   });
 
   it("retains released synchronous visibility contracts beside awaited companions", () => {
-    expectTypeOf<GetReplyOptions["onVerboseProgressVisibility"]>().toEqualTypeOf<
+    expectTypeOf<Options["onVerboseProgressVisibility"]>().toEqualTypeOf<
       ((isActive: () => boolean) => void) | undefined
     >();
-    expectTypeOf<GetReplyOptions["onVerboseProgressVisibilityAsync"]>().toEqualTypeOf<
+    expectTypeOf<Options["onVerboseProgressVisibilityAsync"]>().toEqualTypeOf<
       ((isActive: () => Promise<boolean>) => Promise<void> | void) | undefined
     >();
+    type Event = PluginHookReplyDispatchEvent;
+    expectTypeOf<Event["shouldSendToolSummaries"]>().toEqualTypeOf<boolean>();
+    expectTypeOf<Event["shouldSendFullToolDetails"]>().toEqualTypeOf<boolean>();
+    expectTypeOf<Event["shouldSendToolSummariesAsync"]>().toEqualTypeOf<AsyncVisibility>();
+    expectTypeOf<Event["shouldSendFullToolDetailsAsync"]>().toEqualTypeOf<AsyncVisibility>();
     expectTypeOf<
-      PluginHookReplyDispatchEvent["shouldSendToolSummaries"]
-    >().toEqualTypeOf<boolean>();
-    expectTypeOf<
-      PluginHookReplyDispatchEvent["shouldSendFullToolDetails"]
-    >().toEqualTypeOf<boolean>();
-    expectTypeOf<PluginHookReplyDispatchEvent["shouldSendToolSummariesAsync"]>().toEqualTypeOf<
-      (() => Promise<boolean>) | undefined
-    >();
-    expectTypeOf<PluginHookReplyDispatchEvent["shouldSendFullToolDetailsAsync"]>().toEqualTypeOf<
-      (() => Promise<boolean>) | undefined
-    >();
-    expectTypeOf<
-      Omit<
-        PluginHookReplyDispatchEvent,
-        "shouldSendToolSummariesAsync" | "shouldSendFullToolDetailsAsync"
-      >
-    >().toExtend<PluginHookReplyDispatchEvent>();
+      Omit<Event, "shouldSendToolSummariesAsync" | "shouldSendFullToolDetailsAsync">
+    >().toExtend<Event>();
   });
   it("still accepts the deprecated suppressToolErrorWarnings option as a no-op", () => {
     // Removal window: first stable release after 2026.10 (see GetReplyOptions).
-    expectTypeOf<GetReplyOptions["suppressToolErrorWarnings"]>().toEqualTypeOf<
-      boolean | undefined
-    >();
+    expectTypeOf<Options["suppressToolErrorWarnings"]>().toEqualTypeOf<boolean | undefined>();
   });
 
   it("exports acceptance-aware progress callback results", () => {
-    expectTypeOf<Exclude<ProgressCallback, undefined>>().returns.toEqualTypeOf<
-      Promise<ProgressResult> | ProgressResult
-    >();
-    expectTypeOf<Exclude<GetReplyOptions["onPartialReply"], undefined>>().returns.toEqualTypeOf<
-      Promise<ProgressResult> | ProgressResult
-    >();
-    expectTypeOf<Exclude<GetReplyOptions["onReasoningStream"], undefined>>().returns.toEqualTypeOf<
-      Promise<ProgressResult> | ProgressResult
-    >();
-    expectTypeOf<Exclude<ProgressBoundaryCallback, undefined>>().returns.toEqualTypeOf<
-      Promise<ProgressResult> | ProgressResult
-    >();
+    expectTypeOf<Present<ProgressCallback>>().returns.toEqualTypeOf<ProgressReturn>();
+    expectTypeOf<Present<Options["onPartialReply"]>>().returns.toEqualTypeOf<ProgressReturn>();
+    expectTypeOf<Present<Options["onReasoningStream"]>>().returns.toEqualTypeOf<ProgressReturn>();
+    expectTypeOf<Present<ProgressBoundaryCallback>>().returns.toEqualTypeOf<ProgressReturn>();
   });
 
   it("exports the snapshotted commentary delivery gate", () => {
-    expectTypeOf<GetReplyOptions["commentaryPayloadsEnabled"]>().toEqualTypeOf<
-      boolean | undefined
-    >();
+    expectTypeOf<Options["commentaryPayloadsEnabled"]>().toEqualTypeOf<boolean | undefined>();
     expectTypeOf<
-      Exclude<GetReplyOptions["shouldDeliverCommentaryPayloads"], undefined>
+      Present<Options["shouldDeliverCommentaryPayloads"]>
     >().returns.toEqualTypeOf<boolean>();
   });
 });
 
 describe("reply runtime public dispatcher compatibility", () => {
   it("keeps internal event authority out of the public reply option types", () => {
-    type Options = NonNullable<Parameters<typeof dispatchInboundMessage>[0]["replyOptions"]>;
+    type DispatchOptions = NonNullable<
+      Parameters<typeof dispatchInboundMessage>[0]["replyOptions"]
+    >;
     type RuntimeOptions = NonNullable<
       Parameters<PluginRuntimeChannel["reply"]["dispatchReplyFromConfig"]>[0]["replyOptions"]
     >;
     type Resolver = NonNullable<Parameters<typeof dispatchInboundMessage>[0]["replyResolver"]>;
-    expectTypeOf<"internalEventExecution">().not.toExtend<keyof Options>();
-    expectTypeOf<"onReplyOperationAdmitted">().not.toExtend<keyof Options>();
-    expectTypeOf<"onReplyOperationOwned">().not.toExtend<keyof Options>();
-    expectTypeOf<"internalEventExecution">().not.toExtend<keyof RuntimeOptions>();
-    expectTypeOf<"onReplyOperationAdmitted">().not.toExtend<keyof RuntimeOptions>();
-    expectTypeOf<"onReplyOperationOwned">().not.toExtend<keyof RuntimeOptions>();
     type ResolverOptions = NonNullable<Parameters<Resolver>[1]>;
-    expectTypeOf<"internalEventExecution">().not.toExtend<keyof ResolverOptions>();
-    expectTypeOf<"onReplyOperationAdmitted">().not.toExtend<keyof ResolverOptions>();
-    expectTypeOf<"onReplyOperationOwned">().not.toExtend<keyof ResolverOptions>();
-    expectTypeOf<"onSessionPrepared">().toExtend<keyof Options>();
+    type ExposedKeys = keyof DispatchOptions | keyof RuntimeOptions | keyof ResolverOptions;
+    expectTypeOf<Extract<ExposedKeys, PublicReplyKey>>().toEqualTypeOf<never>();
+    expectTypeOf<"onSessionPrepared">().toExtend<keyof DispatchOptions>();
     expectTypeOf<"onSessionPrepared">().toExtend<keyof ResolverOptions>();
   });
 

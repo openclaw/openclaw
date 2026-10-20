@@ -1,4 +1,3 @@
-// QA channel protocol tests cover synthetic channel payload validation and parsing.
 import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -6,10 +5,27 @@ import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { buildQaTarget, parseQaTarget, sanitizeQaBusToolCalls } from "./qa-channel-protocol.js";
+import {
+  buildQaTarget,
+  parseQaTarget,
+  sanitizeQaBusToolCalls,
+  type QaTargetParts,
+} from "./qa-channel-protocol.js";
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
 const execute = promisify(execFile);
+function expectTarget(
+  raw: string,
+  chatType: QaTargetParts["chatType"],
+  conversationId: string,
+  threadId?: string,
+) {
+  expect(parseQaTarget(raw)).toEqual({
+    chatType,
+    conversationId,
+    ...(threadId ? { threadId } : {}),
+  });
+}
 
 describe("qa-channel protocol", () => {
   it("loads natively when the private QA SDK alias selects its source", async () => {
@@ -63,25 +79,10 @@ describe("qa-channel protocol", () => {
   });
 
   it("parses canonical targets without folding ids or prefix casing", () => {
-    expect(parseQaTarget("channel:CaseSensitive")).toEqual({
-      chatType: "channel",
-      conversationId: "CaseSensitive",
-    });
-    expect(parseQaTarget("thread:Room/Topic")).toEqual({
-      chatType: "channel",
-      conversationId: "Room",
-      threadId: "Topic",
-    });
-    expect(parseQaTarget("thread:/v1/group/Room%2FOne/Topic%2FTwo")).toEqual({
-      chatType: "group",
-      conversationId: "Room/One",
-      threadId: "Topic/Two",
-    });
-    expect(parseQaTarget("thread:/v1/dm/Alice/Topic")).toEqual({
-      chatType: "direct",
-      conversationId: "Alice",
-      threadId: "Topic",
-    });
+    expectTarget("channel:CaseSensitive", "channel", "CaseSensitive");
+    expectTarget("thread:Room/Topic", "channel", "Room", "Topic");
+    expectTarget("thread:/v1/group/Room%2FOne/Topic%2FTwo", "group", "Room/One", "Topic/Two");
+    expectTarget("thread:/v1/dm/Alice/Topic", "direct", "Alice", "Topic");
     expect(parseQaTarget("bare-id", { defaultChatType: "group" })).toEqual({
       chatType: "group",
       conversationId: "bare-id",
@@ -96,45 +97,23 @@ describe("qa-channel protocol", () => {
   });
 
   it("preserves QA bus tool-call arguments while normalizing calls", () => {
-    const toolCalls = sanitizeQaBusToolCalls([
-      null,
-      { name: 123 },
-      {
-        name: " exec ",
-        arguments: {
-          command: "cat README.md",
-          apiToken: "secret-token",
-          headers: {
-            Authorization: "Bearer sk_test_12345678901234567890",
-          },
-          headerPairs: [
-            ["X-API-Key", "secret"],
-            ["Accept", "application/json"],
-          ],
-          argv: ["gh", "api", "--token", "secret-token", "repos/openclaw/openclaw"],
-          values: ["ok", { password: "hunter2" }],
-        },
+    const args = {
+      command: "cat README.md",
+      apiToken: "secret-token",
+      headers: {
+        Authorization: "Bearer sk_test_12345678901234567890",
       },
-    ]);
-
-    expect(toolCalls).toEqual([
-      {
-        name: "exec",
-        arguments: {
-          command: "cat README.md",
-          apiToken: "secret-token",
-          headers: {
-            Authorization: "Bearer sk_test_12345678901234567890",
-          },
-          headerPairs: [
-            ["X-API-Key", "secret"],
-            ["Accept", "application/json"],
-          ],
-          argv: ["gh", "api", "--token", "secret-token", "repos/openclaw/openclaw"],
-          values: ["ok", { password: "hunter2" }],
-        },
-      },
-    ]);
+      headerPairs: [
+        ["X-API-Key", "secret"],
+        ["Accept", "application/json"],
+      ],
+      argv: ["gh", "api", "--token", "secret-token", "repos/openclaw/openclaw"],
+      values: ["ok", { password: "hunter2" }],
+    };
+    const expectedArgs = structuredClone(args);
+    expect(
+      sanitizeQaBusToolCalls([null, { name: 123 }, { name: " exec ", arguments: args }]),
+    ).toEqual([{ name: "exec", arguments: expectedArgs }]);
   });
 
   it("caps QA bus tool-call sanitization before processing the tail", () => {

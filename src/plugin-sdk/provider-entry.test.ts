@@ -1,9 +1,11 @@
-// Provider entry tests cover provider plugin entry contracts and catalog integration.
 import { describe, expect, it, vi } from "vitest";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { capturePluginRegistration } from "../plugins/captured-registration.js";
 import type { ProviderCatalogContext } from "../plugins/types.js";
-import { defineSingleProviderPluginEntry } from "./provider-entry.js";
+import {
+  defineSingleProviderPluginEntry,
+  type SingleProviderPluginOptions,
+} from "./provider-entry.js";
 
 const demoPlugin = {
   id: "demo",
@@ -17,15 +19,32 @@ function createModel(id: string, name: string): ModelDefinitionConfig {
     name,
     reasoning: false,
     input: ["text"],
-    cost: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-    },
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 128_000,
     maxTokens: 8_192,
   };
+}
+
+const demoProvider = { label: "Demo", docsPath: "/providers/demo", catalog: {} };
+type Provider = Extract<SingleProviderPluginOptions["provider"], { label: string }>;
+function createEntry(
+  provider: Partial<Provider> = {},
+  overrides: Partial<SingleProviderPluginOptions> = {},
+) {
+  return defineSingleProviderPluginEntry({
+    ...demoPlugin,
+    manifest: createProviderManifest(),
+    provider: { ...demoProvider, ...provider },
+    ...overrides,
+  });
+}
+
+function configuredModels(
+  id: string,
+  baseUrl: string,
+  models = [createModel("configured", "Configured")],
+) {
+  return { models: { providers: { [id]: { baseUrl, models } } } };
 }
 
 function createProviderManifest() {
@@ -82,13 +101,9 @@ async function captureProviderEntry(params: {
   const modelCatalogProvider = captured.modelCatalogProviders[0];
   const catalog = await provider?.catalog?.run(createCatalogContext(params.config));
   const staticCatalog = await provider?.staticCatalog?.run(createCatalogContext(params.config));
-  const unifiedCatalog = await modelCatalogProvider?.liveCatalog?.(
-    createCatalogContext(params.config),
-  );
-  const unifiedStaticCatalog = await modelCatalogProvider?.staticCatalog?.(
-    createCatalogContext(params.config),
-  );
-  return { captured, provider, catalog, staticCatalog, unifiedCatalog, unifiedStaticCatalog };
+  await modelCatalogProvider?.liveCatalog?.(createCatalogContext(params.config));
+  await modelCatalogProvider?.staticCatalog?.(createCatalogContext(params.config));
+  return { captured, provider, catalog, staticCatalog };
 }
 
 describe("defineSingleProviderPluginEntry", () => {
@@ -112,8 +127,7 @@ describe("defineSingleProviderPluginEntry", () => {
         ...demoPlugin,
         manifest: createProviderManifest(),
         provider: {
-          label: "Demo",
-          docsPath: "/providers/demo",
+          ...demoProvider,
           aliases: ["demo-alias"],
           catalog: { liveModelDiscovery: true },
         },
@@ -143,42 +157,28 @@ describe("defineSingleProviderPluginEntry", () => {
   });
 
   it("gates generated catalogs by canonical and alias provider identities before auth", async () => {
-    const entry = defineSingleProviderPluginEntry({
-      ...demoPlugin,
-      manifest: createProviderManifest(),
-      provider: {
-        label: "Demo",
-        docsPath: "/providers/demo",
-        aliases: ["demo-alias"],
-        catalog: {},
-      },
-    });
+    const entry = createEntry({ aliases: ["demo-alias"] });
     const provider = capturePluginRegistration(entry).providers[0];
-    let resolveProviderApiKeyCalls = 0;
-    const resolveProviderApiKey = () => {
-      resolveProviderApiKeyCalls += 1;
-      return { apiKey: "test-key" };
-    };
+    const resolveProviderApiKey = vi.fn(() => ({ apiKey: "test-key" }));
     const context = { ...createCatalogContext(), resolveProviderApiKey };
 
     await expect(
       provider?.catalog?.run({ ...context, providerIds: ["demo-alias"] }),
     ).resolves.toMatchObject({ provider: { apiKey: "test-key" } });
 
-    resolveProviderApiKeyCalls = 0;
+    resolveProviderApiKey.mockClear();
     await expect(
       provider?.catalog?.run({ ...context, providerIds: ["other"] }),
     ).resolves.toBeNull();
     await expect(provider?.catalog?.run({ ...context, providerIds: [] })).resolves.toBeNull();
-    expect(resolveProviderApiKeyCalls).toBe(0);
+    expect(resolveProviderApiKey).not.toHaveBeenCalled();
   });
 
   it("accepts an alias scope for generated live model discovery", async () => {
     const entry = defineSingleProviderPluginEntry({
       ...demoPlugin,
       provider: {
-        label: "Demo",
-        docsPath: "/providers/demo",
+        ...demoProvider,
         aliases: ["demo-alias"],
         catalog: {
           liveModelDiscovery: true,
@@ -200,20 +200,19 @@ describe("defineSingleProviderPluginEntry", () => {
   it("creates registration-scoped provider state for provider factories", () => {
     let registrations = 0;
     const registrationApis: unknown[] = [];
-    const entry = defineSingleProviderPluginEntry({
-      ...demoPlugin,
-      manifest: createProviderManifest(),
-      provider(api) {
-        registrationApis.push(api);
-        const registration = ++registrations;
-        return {
-          label: "Demo",
-          docsPath: "/providers/demo",
-          catalog: {},
-          normalizeModelId: ({ modelId }) => `${modelId}:${registration}`,
-        };
+    const entry = createEntry(
+      {},
+      {
+        provider(api) {
+          registrationApis.push(api);
+          const registration = ++registrations;
+          return {
+            ...demoProvider,
+            normalizeModelId: ({ modelId }) => `${modelId}:${registration}`,
+          };
+        },
       },
-    });
+    );
 
     const firstRegistration = capturePluginRegistration(entry);
     const secondRegistration = capturePluginRegistration(entry);
@@ -237,82 +236,45 @@ describe("defineSingleProviderPluginEntry", () => {
       onboardingFeatured: true,
       onboardingScopes: ["text-inference", "music-generation"],
     };
-    const entry = defineSingleProviderPluginEntry({
-      ...demoPlugin,
-      manifest: {
-        ...manifest,
-        providerAuthChoices: [manifestChoice],
-      },
-      provider: {
-        label: "Demo",
-        docsPath: "/providers/demo",
-        manifestAuth: {
-          wizard: {
-            modelAllowlist: { allowedKeys: ["demo/default"], loadCatalog: true },
-            modelSelection: { promptWhenAuthChoiceProvided: true, allowKeepCurrent: false },
-          },
-        },
-        catalog: {},
-      },
-    });
-
-    expect(capturePluginRegistration(entry).providers[0]?.auth[0]?.wizard).toMatchObject({
-      choiceId: "demo-api-key",
-      choiceLabel: "Demo API key",
-      choiceHint: "Manifest-owned key",
-      groupId: "demo-group",
-      groupLabel: "Demo providers",
-      groupHint: "Manifest-owned setup",
-      assistantPriority: 4,
-      modelTarget: "utility",
-      assistantVisibility: "manual-only",
-      onboardingFeatured: true,
-      onboardingScopes: ["text-inference", "music-generation"],
-      methodId: "api-key",
+    const wizard = {
       modelAllowlist: { allowedKeys: ["demo/default"], loadCatalog: true },
       modelSelection: { promptWhenAuthChoiceProvided: true, allowKeepCurrent: false },
-    });
+    };
+    const entry = createEntry(
+      { manifestAuth: { wizard } },
+      {
+        manifest: { ...manifest, providerAuthChoices: [manifestChoice] },
+      },
+    );
+    const {
+      provider: _provider,
+      method,
+      optionKey: _optionKey,
+      cliFlag: _cliFlag,
+      ...metadata
+    } = manifestChoice;
+
+    const expectedWizard = structuredClone({ ...metadata, methodId: method, ...wizard });
+    expect(capturePluginRegistration(entry).providers[0]?.auth[0]?.wizard).toMatchObject(
+      expectedWizard,
+    );
   });
 
   it("allows provider-owned manifest auth to disable the onboarding wizard", () => {
-    const entry = defineSingleProviderPluginEntry({
-      ...demoPlugin,
-      manifest: createProviderManifest(),
-      provider: {
-        label: "Demo",
-        docsPath: "/providers/demo",
-        manifestAuth: { wizard: false },
-        catalog: {},
-      },
-    });
+    const entry = createEntry({ manifestAuth: { wizard: false } });
 
     expect(capturePluginRegistration(entry).providers[0]?.auth[0]?.wizard).toBeUndefined();
   });
 
   it("honors explicit base URLs and provider-owned manifest auth overrides", async () => {
-    const entry = defineSingleProviderPluginEntry({
-      ...demoPlugin,
-      manifest: createProviderManifest(),
-      provider: {
-        label: "Demo",
-        docsPath: "/providers/demo",
-        manifestAuth: { defaultModel: "demo/custom", preserveExistingPrimary: true },
-        catalog: { allowExplicitBaseUrl: true },
-      },
+    const entry = createEntry({
+      manifestAuth: { defaultModel: "demo/custom", preserveExistingPrimary: true },
+      catalog: { allowExplicitBaseUrl: true },
     });
 
     const { provider, catalog, staticCatalog } = await captureProviderEntry({
       entry,
-      config: {
-        models: {
-          providers: {
-            demo: {
-              baseUrl: "https://override.demo.test/v1",
-              models: [createModel("configured", "Configured")],
-            },
-          },
-        },
-      },
+      config: configuredModels("demo", "https://override.demo.test/v1"),
     });
 
     expect(provider?.auth[0]?.starterModel).toBe("demo/custom");
@@ -322,11 +284,12 @@ describe("defineSingleProviderPluginEntry", () => {
 
   it("rejects manifest API-key metadata without its declared credential source", () => {
     const manifest = createProviderManifest();
-    const entry = defineSingleProviderPluginEntry({
-      ...demoPlugin,
-      manifest: { ...manifest, setup: { providers: [] } },
-      provider: { label: "Demo", docsPath: "/providers/demo", catalog: {} },
-    });
+    const entry = createEntry(
+      {},
+      {
+        manifest: { ...manifest, setup: { providers: [] } },
+      },
+    );
 
     expect(() => capturePluginRegistration(entry)).toThrow(
       'Incomplete manifest API-key auth for provider "demo"',
@@ -334,10 +297,7 @@ describe("defineSingleProviderPluginEntry", () => {
   });
 
   it("rejects a provider catalog without a manifest catalog or explicit builder", () => {
-    const entry = defineSingleProviderPluginEntry({
-      ...demoPlugin,
-      provider: { label: "Demo", docsPath: "/providers/demo", catalog: {} },
-    });
+    const entry = createEntry({}, { manifest: undefined });
 
     expect(() => capturePluginRegistration(entry)).toThrow("Missing modelCatalog.providers.demo");
   });
@@ -400,30 +360,27 @@ describe("defineSingleProviderPluginEntry", () => {
 
     const { captured, provider, catalog } = await captureProviderEntry({
       entry,
-      config: {
-        models: {
-          providers: {
-            gateway: {
-              baseUrl: "https://override.test/v1",
-              models: [createModel("router", "Router")],
-            },
-          },
-        },
-      },
+      config: configuredModels("gateway", "https://override.test/v1", [
+        createModel("router", "Router"),
+      ]),
     });
     expect(captured.providers).toHaveLength(1);
     expect(captured.modelCatalogProviders).toHaveLength(1);
     expect(captured.webSearchProviders).toHaveLength(1);
 
-    expect(provider?.id).toBe("gateway");
-    expect(provider?.label).toBe("Gateway");
-    expect(provider?.aliases).toEqual(["gw"]);
-    expect(provider?.envVars).toEqual(["GATEWAY_KEY", "SECONDARY_KEY"]);
-    expect(provider?.preserveLiteralProviderPrefix).toBe(true);
-    expect(provider?.auth[0]?.wizard?.choiceId).toBe("gateway-api-key");
-    expect(provider?.auth[0]?.wizard?.groupId).toBe("shared-gateway");
-    expect(provider?.auth[0]?.wizard?.groupLabel).toBe("Shared Gateway");
-    expect(provider?.auth[0]?.wizard?.groupHint).toBe("Primary key");
+    expect(provider).toMatchObject({
+      id: "gateway",
+      label: "Gateway",
+      aliases: ["gw"],
+      envVars: ["GATEWAY_KEY", "SECONDARY_KEY"],
+      preserveLiteralProviderPrefix: true,
+    });
+    expect(provider?.auth[0]?.wizard).toMatchObject({
+      choiceId: "gateway-api-key",
+      groupId: "shared-gateway",
+      groupLabel: "Shared Gateway",
+      groupHint: "Primary key",
+    });
 
     expect(catalog).toEqual({
       provider: {

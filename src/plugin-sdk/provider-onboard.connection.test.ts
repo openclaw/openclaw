@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
-  createDefaultModelsConnectionPresetAppliers,
+  createDefaultModelsConnectionPresetAppliers as defaultConnectionPreset,
   createDefaultModelsPresetAppliers,
   createModelCatalogPresetAppliers,
-  createProviderConnectionPresetAppliers,
+  createProviderConnectionPresetAppliers as connectionPreset,
   type ModelDefinitionConfig,
   type OpenClawConfig,
 } from "./provider-onboard.js";
@@ -20,7 +20,8 @@ function model(id: string): ModelDefinitionConfig {
   };
 }
 
-function preset(models: () => ModelDefinitionConfig[]) {
+function preset(...ids: string[]) {
+  const models = () => ids.map(model);
   return {
     primaryModelRef: "fixture/default",
     resolveParams: () => ({
@@ -35,23 +36,24 @@ function preset(models: () => ModelDefinitionConfig[]) {
   };
 }
 
+function configured(
+  models: ModelDefinitionConfig[],
+  mode: "merge" | "replace" = "replace",
+): OpenClawConfig {
+  return {
+    models: { mode, providers: { fixture: { baseUrl: "https://fixture.invalid/v1", models } } },
+  };
+}
+
 describe.each([
-  ["catalog", createProviderConnectionPresetAppliers<[]>],
-  ["default models", createDefaultModelsConnectionPresetAppliers<[]>],
+  ["catalog", connectionPreset<[]>],
+  ["default models", defaultConnectionPreset<[]>],
 ] as const)("connection-only %s setup", (_name, create) => {
   it("keeps authored native-named and unique rows, defaults, fallbacks and aliases", () => {
     const authoredDefault = { ...model("default"), name: "Authored", contextWindow: 32768 };
     const authoredUnique = model("private-choice");
     const config: OpenClawConfig = {
-      models: {
-        mode: "merge",
-        providers: {
-          fixture: {
-            baseUrl: "https://fixture.invalid/v1",
-            models: [authoredDefault, authoredUnique],
-          },
-        },
-      },
+      ...configured([authoredDefault, authoredUnique], "merge"),
       agents: {
         defaults: {
           model: { primary: "other/chosen", fallbacks: ["other/backup", "fixture/private-choice"] },
@@ -60,7 +62,7 @@ describe.each([
       },
     };
 
-    const result = create(preset(() => [model("default"), model("extra")])).applyConfig(config);
+    const result = create(preset("default", "extra")).applyConfig(config);
 
     expect(result.models?.providers?.fixture?.models).toEqual([authoredDefault, authoredUnique]);
     expect(result.agents?.defaults?.model).toEqual(config.agents?.defaults?.model);
@@ -70,9 +72,7 @@ describe.each([
 });
 
 it("keeps provider-only setup from changing the primary", () => {
-  const result = createDefaultModelsConnectionPresetAppliers(
-    preset(() => [model("default")]),
-  ).applyProviderConfig({});
+  const result = defaultConnectionPreset(preset("default")).applyProviderConfig({});
 
   expect(result.models?.providers?.fixture?.models).toEqual([]);
   expect(result.agents?.defaults?.model).toBeUndefined();
@@ -80,7 +80,7 @@ it("keeps provider-only setup from changing the primary", () => {
 
 it("preserves a resolver's intentional no-op", () => {
   const config: OpenClawConfig = { agents: { defaults: { model: { fallbacks: [] } } } };
-  const result = createDefaultModelsConnectionPresetAppliers({
+  const result = defaultConnectionPreset({
     primaryModelRef: "fixture/default",
     resolveParams: () => null,
   }).applyConfig(config);
@@ -90,16 +90,11 @@ it("preserves a resolver's intentional no-op", () => {
 
 it("keeps catalog and default-model membership rules distinct in replace mode", () => {
   const authored = { ...model("default"), name: "Authored" };
-  const config: OpenClawConfig = {
-    models: {
-      mode: "replace",
-      providers: { fixture: { baseUrl: "https://fixture.invalid/v1", models: [authored] } },
-    },
-  };
-  const params = preset(() => [model("default"), model("extra")]);
+  const config = configured([authored]);
+  const params = preset("default", "extra");
 
-  const catalog = createProviderConnectionPresetAppliers(params).applyConfig(config);
-  const defaults = createDefaultModelsConnectionPresetAppliers(params).applyConfig(config);
+  const catalog = connectionPreset(params).applyConfig(config);
+  const defaults = defaultConnectionPreset(params).applyConfig(config);
 
   expect(catalog.models?.providers?.fixture?.models).toEqual([authored, model("extra")]);
   expect(defaults.models?.providers?.fixture?.models).toEqual([authored]);
@@ -107,14 +102,9 @@ it("keeps catalog and default-model membership rules distinct in replace mode", 
 
 it("still adds required defaults in replace mode when the authored rows omit the default", () => {
   const authored = model("private-choice");
-  const result = createDefaultModelsConnectionPresetAppliers(
-    preset(() => [model("default"), model("extra")]),
-  ).applyConfig({
-    models: {
-      mode: "replace",
-      providers: { fixture: { baseUrl: "https://fixture.invalid/v1", models: [authored] } },
-    },
-  });
+  const result = defaultConnectionPreset(preset("default", "extra")).applyConfig(
+    configured([authored]),
+  );
 
   expect(result.models?.providers?.fixture?.models).toEqual([
     authored,
@@ -126,7 +116,7 @@ it("still adds required defaults in replace mode when the authored rows omit the
 it.each([createModelCatalogPresetAppliers<[]>, createDefaultModelsPresetAppliers<[]>])(
   "preserves the existing public catalog-seeding helper behavior",
   (create) => {
-    const result = create(preset(() => [model("default")])).applyConfig({});
+    const result = create(preset("default")).applyConfig({});
 
     expect(result.models?.providers?.fixture?.models).toEqual([model("default")]);
   },

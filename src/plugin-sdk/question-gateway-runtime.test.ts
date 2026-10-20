@@ -10,6 +10,8 @@ const binding = {
   questionId: "ask_0123456789abcdef0123456789abcdef",
   optionValues: ["One", "Two"],
 };
+const identity = { accountId: "default", messageId: "message-1" };
+const resolveDefaults = { identities: [identity], optionIndex: 0, cfg: {}, senderId: "sender-1" };
 
 function createStore(
   overrides: {
@@ -22,14 +24,18 @@ function createStore(
     channel: "test",
     channelDisplayName: "Test",
     ttlMs: overrides.ttlMs,
-    buildKey: (identity: { accountId: string; messageId: string }) => {
-      const accountId = identity.accountId.trim();
-      const messageId = identity.messageId.trim();
+    buildKey: (target: typeof identity) => {
+      const accountId = target.accountId.trim();
+      const messageId = target.messageId.trim();
       return accountId && messageId ? `${accountId}:${messageId}` : null;
     },
-    registerChannelDelivery: overrides.registerChannelDelivery,
+    registerChannelDelivery: overrides.registerChannelDelivery ?? vi.fn<RegisterChannelDelivery>(),
     resolveReaction: overrides.resolveReaction,
   });
+}
+type Store = ReturnType<typeof createStore>;
+function resolve(store: Store, params: Partial<Parameters<Store["resolve"]>[0]> = {}) {
+  return expect(store.resolve({ ...resolveDefaults, ...params })).resolves.toBe(true);
 }
 
 afterEach(() => {
@@ -39,11 +45,7 @@ afterEach(() => {
 describe("createQuestionReactionTargetStore", () => {
   it("replaces target timers without letting the old timer delete the new target", () => {
     vi.useFakeTimers();
-    const store = createStore({
-      ttlMs: 1_000,
-      registerChannelDelivery: vi.fn<RegisterChannelDelivery>(),
-    });
-    const identity = { accountId: "default", messageId: "message-1" };
+    const store = createStore({ ttlMs: 1_000 });
 
     expect(store.register(binding, identity)).toBe(true);
     vi.advanceTimersByTime(500);
@@ -60,7 +62,6 @@ describe("createQuestionReactionTargetStore", () => {
     });
     const resolveReaction = vi.fn<ResolveReaction>();
     const store = createStore({ registerChannelDelivery, resolveReaction });
-    const identity = { accountId: "default", messageId: "message-1" };
     const logDebug = vi.fn();
 
     expect(store.register(binding, identity)).toBe(true);
@@ -70,15 +71,7 @@ describe("createQuestionReactionTargetStore", () => {
         deliveryId: "test-reaction:default:message-1",
       }),
     );
-    await expect(
-      store.resolve({
-        identities: [identity],
-        optionIndex: 0,
-        cfg: {},
-        senderId: "sender-1",
-        logDebug,
-      }),
-    ).resolves.toBe(true);
+    await resolve(store, { logDebug });
     expect(resolveReaction).not.toHaveBeenCalled();
     expect(logDebug).toHaveBeenCalledWith(
       `test: stale question reaction ignored id=${binding.questionId}`,
@@ -91,26 +84,19 @@ describe("createQuestionReactionTargetStore", () => {
       questionId: "choice",
       optionValue: "Two",
     });
-    const store = createStore({
-      registerChannelDelivery: vi.fn<RegisterChannelDelivery>(),
-      resolveReaction,
-    });
-    const identity = { accountId: "default", messageId: "message-1" };
+    const store = createStore({ resolveReaction });
     store.register(binding, identity);
 
     const resolveParams = {
-      identities: [identity],
+      ...resolveDefaults,
       optionIndex: 1,
-      cfg: {},
-      senderId: "sender-1",
       gatewayUrl: "ws://127.0.0.1:1234",
       logDebug: vi.fn(),
     };
-    await expect(store.resolve(resolveParams)).resolves.toBe(true);
-    await expect(store.resolve(resolveParams)).resolves.toBe(true);
+    await resolve(store, resolveParams);
+    await resolve(store, resolveParams);
 
-    expect(resolveReaction).toHaveBeenCalledOnce();
-    expect(resolveReaction).toHaveBeenCalledWith({
+    expect(resolveReaction).toHaveBeenCalledExactlyOnceWith({
       cfg: {},
       questionId: binding.questionId,
       optionValue: "Two",
@@ -125,34 +111,15 @@ describe("createQuestionReactionTargetStore", () => {
 
   it("consumes out-of-range choices and resolver failures without losing diagnostics", async () => {
     const resolveReaction = vi.fn<ResolveReaction>().mockRejectedValue(new Error("gateway down"));
-    const store = createStore({
-      registerChannelDelivery: vi.fn<RegisterChannelDelivery>(),
-      resolveReaction,
-    });
+    const store = createStore({ resolveReaction });
     const outOfRange = { accountId: "default", messageId: "out-of-range" };
     const failure = { accountId: "default", messageId: "failure" };
     const logDebug = vi.fn();
     store.register(binding, outOfRange);
     store.register(binding, failure);
 
-    await expect(
-      store.resolve({
-        identities: [outOfRange],
-        optionIndex: 3,
-        cfg: {},
-        senderId: "sender-1",
-        logDebug,
-      }),
-    ).resolves.toBe(true);
-    await expect(
-      store.resolve({
-        identities: [failure],
-        optionIndex: 0,
-        cfg: {},
-        senderId: "sender-1",
-        logDebug,
-      }),
-    ).resolves.toBe(true);
+    await resolve(store, { identities: [outOfRange], optionIndex: 3, logDebug });
+    await resolve(store, { identities: [failure], logDebug });
 
     expect(logDebug).toHaveBeenCalledWith(
       `test: out-of-range question reaction ignored id=${binding.questionId}`,

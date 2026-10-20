@@ -1,6 +1,3 @@
-/**
- * Tests provider selection runtime helper behavior.
- */
 import { describe, expect, it, vi } from "vitest";
 import { withPluginRuntimePluginScope } from "../plugins/runtime/gateway-request-scope.js";
 import {
@@ -20,19 +17,18 @@ describe("plugin-sdk provider-selection-runtime", () => {
     { id: "first", autoSelectOrder: 1 },
     { id: "second", autoSelectOrder: 2, configured: true },
   ];
+  const params = {
+    cfg: {},
+    cfgForResolve: {},
+    getConfiguredProvider: (id: string | undefined) => providers.find((entry) => entry.id === id),
+    listProviders: () => providers,
+    resolveProviderConfig: ({ rawConfig }: { rawConfig: Record<string, unknown> }) => rawConfig,
+    isProviderConfigured: ({ provider }: { provider: TestProvider }) =>
+      provider.configured === true,
+  };
 
   it("keeps legacy selection compatible while warning once with the awaited replacement", async () => {
     const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
-    const params = {
-      cfg: {},
-      cfgForResolve: {},
-      getConfiguredProvider: (providerId: string | undefined) =>
-        providers.find((entry) => entry.id === providerId),
-      listProviders: () => providers,
-      resolveProviderConfig: () => ({}),
-      isProviderConfigured: ({ provider }: { provider: TestProvider }) =>
-        provider.configured === true,
-    };
     try {
       await withPluginRuntimePluginScope(
         { pluginId: "provider-selection-diagnostic" },
@@ -73,9 +69,8 @@ describe("plugin-sdk provider-selection-runtime", () => {
 
   it("selects an explicit provider when it exists", () => {
     const selection = selectConfiguredOrAutoProvider({
+      ...params,
       configuredProviderId: " second ",
-      getConfiguredProvider: (providerId) => providers.find((entry) => entry.id === providerId),
-      listProviders: () => providers,
     });
 
     expect(selection).toEqual({
@@ -87,13 +82,8 @@ describe("plugin-sdk provider-selection-runtime", () => {
 
   it("reports a missing explicit provider", () => {
     const resolution = resolveConfiguredCapabilityProvider({
+      ...params,
       configuredProviderId: "missing",
-      cfg: {},
-      cfgForResolve: {},
-      getConfiguredProvider: (providerId) => providers.find((entry) => entry.id === providerId),
-      listProviders: () => providers,
-      resolveProviderConfig: ({ rawConfig }) => rawConfig,
-      isProviderConfigured: ({ provider }) => provider.configured === true,
     });
 
     expect(resolution).toEqual({
@@ -105,10 +95,7 @@ describe("plugin-sdk provider-selection-runtime", () => {
 
   it("auto-selects the first configured provider by order", () => {
     const resolution = resolveConfiguredCapabilityProvider({
-      cfg: {},
-      cfgForResolve: {},
-      getConfiguredProvider: (providerId) => providers.find((entry) => entry.id === providerId),
-      listProviders: () => providers,
+      ...params,
       resolveProviderConfig: ({ provider, rawConfig }) => ({
         ...rawConfig,
         providerId: provider.id,
@@ -116,21 +103,19 @@ describe("plugin-sdk provider-selection-runtime", () => {
       isProviderConfigured: ({ providerConfig }) => providerConfig.providerId === "second",
     });
 
-    expect(resolution.ok).toBe(true);
-    if (!resolution.ok) {
-      throw new Error("expected provider resolution to succeed");
-    }
+    expect(resolution).toEqual({
+      ok: true,
+      configuredProviderId: undefined,
+      provider: providers[1],
+      providerConfig: { providerId: "second" },
+    });
     expect(resolution.provider).toBe(providers[1]);
-    expect(resolution.providerConfig).toEqual({ providerId: "second" });
   });
 
   it("retains the first unavailable provider when no auto candidate is available", () => {
     const resolveProviderConfig = vi.fn();
     const resolution = resolveConfiguredCapabilityProvider({
-      cfg: {},
-      cfgForResolve: {},
-      getConfiguredProvider: (providerId) => providers.find((entry) => entry.id === providerId),
-      listProviders: () => providers,
+      ...params,
       isProviderAvailable: () => false,
       resolveProviderConfig,
       isProviderConfigured: () => true,
@@ -144,26 +129,18 @@ describe("plugin-sdk provider-selection-runtime", () => {
     expect(resolveProviderConfig).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      configuredProviderId: "other-alias",
-      expected: { apiKey: "default", model: "other-model", voice: "second", language: "en" },
-    },
-  ])(
-    "merges provider config with explicit selection $configuredProviderId",
-    ({ configuredProviderId, expected }) => {
-      expect(
-        resolveProviderRawConfig({
-          providerId: "canonical",
-          providerAliases: ["alias", "other-alias"],
-          configuredProviderId,
-          providerConfigs: {
-            canonical: { apiKey: "default", model: "base" },
-            "other-alias": { model: "other-model", voice: "second", language: "en" },
-            alias: { model: "alias-model", voice: "first" },
-          },
-        }),
-      ).toEqual(expected);
-    },
-  );
+  it("merges provider config with explicit alias selection", () => {
+    expect(
+      resolveProviderRawConfig({
+        providerId: "canonical",
+        providerAliases: ["alias", "other-alias"],
+        configuredProviderId: "other-alias",
+        providerConfigs: {
+          canonical: { apiKey: "default", model: "base" },
+          "other-alias": { model: "other-model", voice: "second", language: "en" },
+          alias: { model: "alias-model", voice: "first" },
+        },
+      }),
+    ).toEqual({ apiKey: "default", model: "other-model", voice: "second", language: "en" });
+  });
 });
