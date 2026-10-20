@@ -38,15 +38,13 @@ export function setupCliBundleMcpTestHarness(): void {
   afterEach(disposeAllSessionMcpRuntimes);
 
   beforeAll(async () => {
-    // Use an empty bundled-dir override so only temp fixture plugins participate.
     envSnapshot = captureEnv(["OPENCLAW_BUNDLED_PLUGINS_DIR"]);
     const { tempHarness } = harness;
-    harness.bundleProbeHomeDir = await tempHarness.createTempDir("openclaw-cli-bundle-mcp-home-");
-    harness.bundleProbeWorkspaceDir = await tempHarness.createTempDir(
-      "openclaw-cli-bundle-mcp-workspace-",
-    );
-    const emptyBundledDir = await tempHarness.createTempDir("openclaw-cli-bundle-mcp-bundled-");
-    setTestEnvValue("OPENCLAW_BUNDLED_PLUGINS_DIR", emptyBundledDir);
+    const createDir = (kind: string) =>
+      tempHarness.createTempDir(`openclaw-cli-bundle-mcp-${kind}-`);
+    harness.bundleProbeHomeDir = await createDir("home");
+    harness.bundleProbeWorkspaceDir = await createDir("workspace");
+    setTestEnvValue("OPENCLAW_BUNDLED_PLUGINS_DIR", await createDir("bundled"));
     ({ serverPath: harness.bundleProbeServerPath } = await createBundleProbePlugin(
       harness.bundleProbeHomeDir,
     ));
@@ -86,14 +84,12 @@ export function cliNativeMcpPolicyContext(
   sessionId: string,
   workspaceDir = cliBundleMcpHarness.bundleProbeWorkspaceDir,
 ) {
-  const sessionKey = `agent:main:${sessionId}`;
+  const session = { sessionId, sessionKey: `agent:main:${sessionId}` };
   return {
-    sessionId,
-    sessionKey,
+    ...session,
     capabilityProfile: resolveConversationCapabilityProfile({
       config,
-      sessionKey,
-      sessionId,
+      ...session,
       agentId: "main",
       modelProvider: "openai",
       modelId: "gpt-5.4-codex",
@@ -102,10 +98,9 @@ export function cliNativeMcpPolicyContext(
   };
 }
 
-export async function prepareBundleProbeCliConfig(params?: {
-  additionalConfig?: Parameters<typeof prepareCliBundleMcpConfig>[0]["additionalConfig"];
-  env?: Parameters<typeof prepareCliBundleMcpConfig>[0]["env"];
-}) {
+export async function prepareBundleProbeCliConfig(
+  params?: Pick<Parameters<typeof prepareCliBundleMcpConfig>[0], "additionalConfig" | "env">,
+) {
   const { bundleProbeHomeDir, bundleProbeWorkspaceDir } = cliBundleMcpHarness;
   return withEnvAsync({ HOME: bundleProbeHomeDir }, () =>
     prepareCliBundleMcpConfig({

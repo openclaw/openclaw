@@ -87,6 +87,7 @@ it.each([
       }),
     });
     initializeGlobalHookRunner(registry);
+    const text = "The worker result passed validation";
     const result = await persist({
       runParams: {
         ...runParams,
@@ -94,16 +95,11 @@ it.each([
         privateCompletion,
         inputProvenance: { kind: "inter_session", sourceTool, sourceRole: "subagent" },
       },
-      text: "The worker result passed validation",
+      text,
     });
     expect(result.owned).toBe(true);
     const messages = await transcriptMessages(target);
-    expect(messages).toMatchObject([
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "The worker result passed validation" }],
-      },
-    ]);
+    expect(messages).toMatchObject([{ role: "assistant", content: [{ type: "text", text }] }]);
     expect(Reflect.get(messages[0]!, "display") === false).toBe(hidden);
     expect(updates).toHaveLength(1);
     expect(Reflect.get(updates[0]!.message!, "display") === false).toBe(hidden);

@@ -1,15 +1,9 @@
-/** Test doubles and setup for CLI execution supervisor and event seams. */
-import { vi, type Mock } from "vitest";
+import { vi } from "vitest";
 import type { enqueueSessionEventForHost } from "../../auto-reply/reply/session-event-handoff.js";
-import type { getProcessSupervisor } from "../../process/supervisor/index.js";
-import type { RunExit } from "../../process/supervisor/types.js";
+import type { ProcessSupervisor, RunExit } from "../../process/supervisor/types.js";
 import { withTestRunAdmission } from "../admitted-run-context.test-support.js";
 import { executeDeps } from "./execute-deps.js";
 import type { PreparedCliRunContext } from "./types.js";
-
-type ProcessSupervisor = ReturnType<typeof getProcessSupervisor>;
-type SupervisorSpawnFn = ProcessSupervisor["spawn"];
-type EnqueueSessionEventFn = typeof enqueueSessionEventForHost;
 
 /** Encloses a logical test run, including retries, in the admission preparation normally owns. */
 export function wrapPreparedCliRunWithTestAdmission<Args extends unknown[], T>(
@@ -32,8 +26,8 @@ export function setCliRunnerExecuteTestDeps(overrides: Partial<typeof executeDep
   Object.assign(executeDeps, overrides);
 }
 
-export const supervisorSpawnMock = vi.fn<SupervisorSpawnFn>();
-export const enqueueSessionEventMock = vi.fn<EnqueueSessionEventFn>(() => ({
+export const supervisorSpawnMock = vi.fn<ProcessSupervisor["spawn"]>();
+export const enqueueSessionEventMock = vi.fn<typeof enqueueSessionEventForHost>(() => ({
   id: "cli-watchdog-event",
   accepted: Promise.resolve({ ok: true }),
   cancel: () => true,
@@ -42,23 +36,22 @@ export const enqueueSessionEventMock = vi.fn<EnqueueSessionEventFn>(() => ({
 
 setCliRunnerExecuteTestDeps({
   getProcessSupervisor: () => {
-    const activeRuns = new Map<string, Awaited<ReturnType<SupervisorSpawnFn>>>();
+    const activeRuns = new Map<string, Awaited<ReturnType<ProcessSupervisor["spawn"]>>>();
     return {
       acquireScopeCleanup: vi.fn(() => {
         throw new Error("CLI execution fixture does not own a cleanup scope");
       }),
-      spawn: async (params: Parameters<SupervisorSpawnFn>[0]) => {
+      spawn: async (params: Parameters<ProcessSupervisor["spawn"]>[0]) => {
         const streamed = { stdout: false, stderr: false };
         const callbacks = { stdout: params.onStdout, stderr: params.onStderr };
         const forward = (stream: keyof typeof callbacks) => {
           const callback = callbacks[stream];
-          return (
-            callback &&
-            ((chunk: string) => {
-              streamed[stream] = true;
-              callback(chunk);
-            })
-          );
+          return callback
+            ? (chunk: string) => {
+                streamed[stream] = true;
+                callback(chunk);
+              }
+            : undefined;
         };
         const wrappedParams = {
           ...params,
@@ -70,10 +63,7 @@ setCliRunnerExecuteTestDeps({
         };
         const managedRun = await supervisorSpawnMock(wrappedParams);
         if (!managedRun) {
-          // A consumed once-mock must fail instead of hanging the run.
-          throw new Error(
-            "supervisorSpawnMock returned no managed run; a test consumed or reset the mock implementation",
-          );
+          throw new Error("supervisorSpawnMock returned no managed run (consumed or reset mock)");
         }
         activeRuns.set(params.runId ?? managedRun.runId, managedRun);
         const wait = managedRun.wait;
@@ -109,24 +99,16 @@ setCliRunnerExecuteTestDeps({
 
 type MockRunExit = Omit<RunExit, "oomScoreWrapperSelected">;
 
-type ManagedRunMock = Awaited<ReturnType<SupervisorSpawnFn>> & {
-  pid: number;
-  stdin: undefined;
-  wait: Mock<() => Promise<MockRunExit>>;
-  cancel: Mock<() => void>;
-};
-
-/** Build a managed-run mock returned by the process supervisor test double. */
-export function createManagedRun(exit: MockRunExit, pid = 1234): ManagedRunMock {
+export function createManagedRun(exit: MockRunExit, pid = 1234) {
   return {
     activity: { resultSettled: true, lastOutputAtMs: Date.now() },
     runId: "run-supervisor",
     pid,
     startedAtMs: Date.now(),
     stdin: undefined,
-    wait: vi.fn().mockResolvedValue(exit),
-    cancel: vi.fn(),
-  };
+    wait: vi.fn<() => Promise<MockRunExit>>().mockResolvedValue(exit),
+    cancel: vi.fn<() => void>(),
+  } satisfies Awaited<ReturnType<ProcessSupervisor["spawn"]>>;
 }
 
 export function createSuccessfulProcessExit(): MockRunExit {

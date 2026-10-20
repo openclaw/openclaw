@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { wrapRunWithTestPreparedAdmission } from "../admitted-run-context.test-support.js";
@@ -29,11 +29,11 @@ import {
 import { prepareCliRunTerminalReply } from "./terminal-reply.js";
 
 type RunResultParams = Parameters<typeof buildCliRunResult>[0];
-function testRunResult(
-  context: RunResultParams["context"],
-  output: RunResultParams["output"],
-  overrides: Partial<Omit<RunResultParams, "context" | "output">> = {},
-) {
+function testRunResult({
+  context,
+  output,
+  ...overrides
+}: Pick<RunResultParams, "context" | "output"> & Partial<RunResultParams>) {
   return buildCliRunResult({
     context,
     output,
@@ -56,15 +56,47 @@ function continuityResult(context: RunResultParams["context"], kind: string) {
           error: new Error("synthetic failure"),
           evidence: { didSendViaMessagingTool: true },
         })
-      : testRunResult(
+      : testRunResult({
           context,
-          { text: "done" },
-          {
-            effectiveCliSessionId: kind === "native" ? "next-native-session" : undefined,
-            bindingFlushOk: kind !== "no-native-id",
-            sessionBindingDisabled: kind === "stateless",
-          },
-        );
+          output: { text: "done" },
+          effectiveCliSessionId: kind === "native" ? "next-native-session" : undefined,
+          bindingFlushOk: kind !== "no-native-id",
+          sessionBindingDisabled: kind === "stateless",
+        });
+}
+
+function mcpFixture(sessionId: string) {
+  const manager = createSessionMcpRuntimeManager();
+  const previous = Object.getOwnPropertyDescriptor(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY);
+  Object.defineProperty(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY, {
+    configurable: true,
+    writable: true,
+    value: manager,
+  });
+  onTestFinished(async () => {
+    await manager.disposeAll();
+    if (previous) {
+      Object.defineProperty(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY, previous);
+    } else {
+      Reflect.deleteProperty(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY);
+    }
+  });
+  const input = {
+    sessionId,
+    workspaceDir: "/workspace",
+    cfg: unopenedMcpConfig,
+    manifestRegistry: { plugins: [] },
+  };
+  const context = buildPreparedCliRunContext({ sessionId });
+  context.params.cleanupBundleMcpOnRunEnd = true;
+  const peek = (id = sessionId) => peekSessionMcpRuntime({ sessionId: id });
+  return { manager, input, context, peek };
+}
+
+function expectOutcome(promise: Promise<unknown>, expected: unknown, rejected: boolean) {
+  return rejected
+    ? expect(promise).rejects.toBe(expected)
+    : expect(promise).resolves.toBe(expected);
 }
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
@@ -144,14 +176,12 @@ it.each(["required", "result-required", "optional"] as const)(
   (terminalReplyExpectation) => {
     const context = buildPreparedCliRunContext({ provider: "claude-cli" });
     context.params.terminalReplyExpectation = terminalReplyExpectation;
-    const result = testRunResult(
+    const result = testRunResult({
       context,
-      { text: "" },
-      {
-        bindingFlushOk: true,
-        sessionBindingDisabled: false,
-      },
-    );
+      output: { text: "" },
+      bindingFlushOk: true,
+      sessionBindingDisabled: false,
+    });
     const classification = classifyEmbeddedAgentRunResultForModelFallback({
       provider: "claude-cli",
       model: "test-model",
@@ -164,9 +194,14 @@ it.each(["required", "result-required", "optional"] as const)(
     );
   },
 );
-it.each(["blocked", "no-native-id", "native", "stateless"])(
+it.each([
+  ["blocked", "s1", "previous-native-session"],
+  ["no-native-id", "s1", "previous-native-session"],
+  ["native", "next-native-session", "next-native-session"],
+  ["stateless", "s1", undefined],
+] as const)(
   "projects only explicit native continuity from a %s result",
-  (kind) => {
+  (kind, resultSessionId, bindingSessionId) => {
     const context = buildPreparedCliRunContext({ provider: "claude-cli" });
     context.params.modelProvider = "anthropic";
     const result = continuityResult(context, kind);
@@ -178,17 +213,11 @@ it.each(["blocked", "no-native-id", "native", "stateless"])(
 
     applyCliSessionBindingResult(entry, "claude-cli", result.meta.agentMeta);
 
-    expect(entry.sessionId).toBe(context.params.sessionId);
-    expect(result.meta.agentMeta?.sessionId).toBe(
-      kind === "native" ? "next-native-session" : context.params.sessionId,
-    );
-    expect(getCliSessionBinding(entry, "claude-cli")?.sessionId).toBe(
-      kind === "native"
-        ? "next-native-session"
-        : kind === "stateless"
-          ? undefined
-          : "previous-native-session",
-    );
+    expect([
+      entry.sessionId,
+      result.meta.agentMeta?.sessionId,
+      getCliSessionBinding(entry, "claude-cli")?.sessionId,
+    ]).toEqual([context.params.sessionId, resultSessionId, bindingSessionId]);
   },
 );
 
@@ -223,15 +252,15 @@ it.each(
           })
         : continuityResult(context, kind === "completed" ? "native" : kind);
 
-    expect(result.meta.agentMeta?.provider).toBe(modelProvider ?? "claude-cli");
-    if (kind === "hook-handled") {
-      expect(result.meta.executionTrace).toBeUndefined();
-    } else {
-      expect(result.meta.executionTrace).toMatchObject({
-        winnerProvider: "claude-cli",
-        attempts: [expect.objectContaining({ provider: "claude-cli" })],
-      });
-    }
+    expect([result.meta.agentMeta?.provider, result.meta.executionTrace]).toEqual([
+      modelProvider ?? "claude-cli",
+      kind === "hook-handled"
+        ? undefined
+        : expect.objectContaining({
+            winnerProvider: "claude-cli",
+            attempts: [expect.objectContaining({ provider: "claude-cli" })],
+          }),
+    ]);
   },
 );
 
@@ -259,9 +288,7 @@ it.each(["progress", "ambiguous", "final"] as const)(
   async (delivery) => {
     const context = buildPreparedCliRunContext();
     const error = new Error("backend release failed");
-    context.preparedBackend.cleanup = async () => {
-      throw error;
-    };
+    context.preparedBackend.cleanup = vi.fn().mockRejectedValue(error);
     const result = {
       payloads: [{ text: "output" }],
       meta: { durationMs: 1 },
@@ -275,11 +302,7 @@ it.each(["progress", "ambiguous", "final"] as const)(
           }),
     };
     const settled = settlePreparedCliRun({ context, run: async () => result });
-    if (delivery === "final") {
-      await expect(settled).resolves.toBe(result);
-    } else {
-      await expect(settled).rejects.toBe(error);
-    }
+    await expectOutcome(settled, delivery === "final" ? result : error, delivery !== "final");
   },
 );
 
@@ -287,7 +310,7 @@ it.each(["Done", ""])("captures only the final CLI result %j after narration", (
   const textParts = rawFinalText ? ["Checking now", rawFinalText] : undefined;
   const text = textParts?.join("\n") ?? "Checking now";
   const output = transformCliResultText({ text, textParts, rawFinalText });
-  const result = testRunResult(buildPreparedCliRunContext(), output);
+  const result = testRunResult({ context: buildPreparedCliRunContext(), output });
   expect(result.meta.finalAssistantRawText).toBe(text);
   expect(resolveDiagnosticModelResponse(result)).toBe(rawFinalText || undefined);
 });
@@ -295,7 +318,7 @@ it.each(["Done", ""])("captures only the final CLI result %j after narration", (
 it("never captures host-synthesized optional silence as model output", async () => {
   const context = buildPreparedCliRunContext();
   context.params.terminalReplyExpectation = "optional";
-  const result = testRunResult(context, { text: "" });
+  const result = testRunResult({ context, output: { text: "" } });
   expect(result.payloads).toBeUndefined();
   expect(result.meta.terminalReply).toEqual({ disposition: "empty" });
   expect(resolveDiagnosticModelResponse(result)).toBeUndefined();
@@ -307,7 +330,9 @@ it("preserves completed result boundaries for independent final delivery", async
     text: "First answer.\nLast answer.",
     textParts: ["First answer.", "Last answer."],
   };
-  const result = testRunResult(context, output, {
+  const result = testRunResult({
+    context,
+    output,
     assistantTranscriptOwned: true,
     assistantTranscriptIdempotencyKey: "synthetic-turn",
   });
@@ -322,97 +347,55 @@ it("preserves completed result boundaries for independent final delivery", async
   }
 });
 
-describe("CLI MCP retirement", () => {
-  let manager: ReturnType<typeof createSessionMcpRuntimeManager>;
-  let previous: PropertyDescriptor | undefined;
-  beforeEach(() => {
-    manager = createSessionMcpRuntimeManager();
-    previous = Object.getOwnPropertyDescriptor(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY);
-    Object.defineProperty(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY, {
-      configurable: true,
-      writable: true,
-      value: manager,
-    });
+it.each([false, true])("joins preparation cleanup with revoked authority %s", async (revoked) => {
+  const { manager, input, context, peek } = mcpFixture("preparation");
+  const runtime = await manager.getOrCreate(input);
+  const survivor = await manager.getOrCreate({ ...input, sessionId: "survivor" });
+  const started = createDeferred();
+  const finish = createDeferred();
+  const dispose = runtime.dispose.bind(runtime);
+  const closing = vi.spyOn(runtime, "dispose").mockImplementationOnce(async () => {
+    started.resolve();
+    await finish.promise;
+    await dispose();
   });
-  afterEach(async () => {
-    await manager.disposeAll();
-    if (previous) {
-      Object.defineProperty(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY, previous);
-    } else {
-      Reflect.deleteProperty(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY);
-    }
-  });
-  const input = (sessionId: string) => ({
-    sessionId,
-    workspaceDir: "/workspace",
-    cfg: unopenedMcpConfig,
-    manifestRegistry: { plugins: [] },
-  });
-
-  it.each([false, true])("joins preparation cleanup with revoked authority %s", async (revoked) => {
-    const runtime = await manager.getOrCreate(input("preparation"));
-    const survivor = await manager.getOrCreate(input("survivor"));
-    const started = createDeferred();
-    const finish = createDeferred();
-    const dispose = runtime.dispose.bind(runtime);
-    let closing = false;
-    vi.spyOn(runtime, "dispose").mockImplementationOnce(async () => {
-      closing = true;
-      started.resolve();
-      await finish.promise;
-      await dispose();
-    });
-    const context = buildPreparedCliRunContext({ sessionId: runtime.sessionId });
-    const authorityError = new Error("Preparation authority revoked");
-    let settled = false;
-    const cleanup = settleCliPreparationError(new Error("Preparation failed"), {
-      ...context.params,
-      cleanupBundleMcpOnRunEnd: true,
-      assertCurrent: () => {
-        if (revoked) {
-          throw authorityError;
-        }
-      },
-    }).finally(() => {
-      settled = true;
-    });
-    void cleanup.catch(() => undefined);
-    try {
-      await Promise.race([started.promise, cleanup.catch(() => undefined)]);
-      expect(closing).toBe(true);
-      expect(settled).toBe(false);
-      finish.resolve();
+  const authorityError = new Error("Preparation authority revoked");
+  const settled = vi.fn();
+  const cleanup = settleCliPreparationError(new Error("Preparation failed"), {
+    ...context.params,
+    assertCurrent: () => {
       if (revoked) {
-        await expect(cleanup).rejects.toBe(authorityError);
-      } else {
-        await expect(cleanup).resolves.toBeUndefined();
+        throw authorityError;
       }
-      expect(peekSessionMcpRuntime({ sessionId: runtime.sessionId })).toBeUndefined();
-      expect(peekSessionMcpRuntime({ sessionId: survivor.sessionId })).toBe(survivor);
-    } finally {
-      finish.resolve();
-      await cleanup.catch(() => undefined);
-    }
-  });
+    },
+  }).finally(settled);
+  void cleanup.catch(() => undefined);
+  try {
+    await Promise.race([started.promise, cleanup.catch(() => undefined)]);
+    expect(closing).toHaveBeenCalled();
+    expect(settled).not.toHaveBeenCalled();
+    finish.resolve();
+    await expectOutcome(cleanup, revoked ? authorityError : undefined, revoked);
+    expect(peek()).toBeUndefined();
+    expect(peek(survivor.sessionId)).toBe(survivor);
+  } finally {
+    finish.resolve();
+    await cleanup.catch(() => undefined);
+  }
+});
 
-  it("defers terminal retirement until the session's active lease releases", async () => {
-    const acquired = await acquireSessionMcpRuntime(input("active"));
-    const survivor = await manager.getOrCreate(input("survivor"));
-    const context = buildPreparedCliRunContext({ sessionId: acquired.runtime.sessionId });
-    context.params.cleanupBundleMcpOnRunEnd = true;
-    const result = { payloads: [{ text: "done" }], meta: { durationMs: 1 } };
-    try {
-      await expect(settlePreparedCliRun({ context, run: async () => result })).resolves.toBe(
-        result,
-      );
-      expect(peekSessionMcpRuntime({ sessionId: acquired.runtime.sessionId })).toBe(
-        acquired.runtime,
-      );
-      await releaseSessionMcpRuntime(acquired);
-      expect(peekSessionMcpRuntime({ sessionId: acquired.runtime.sessionId })).toBeUndefined();
-      expect(peekSessionMcpRuntime({ sessionId: survivor.sessionId })).toBe(survivor);
-    } finally {
-      await releaseSessionMcpRuntime(acquired);
-    }
-  });
+it("defers terminal retirement until the session's active lease releases", async () => {
+  const { manager, input, context, peek } = mcpFixture("active");
+  const acquired = await acquireSessionMcpRuntime(input);
+  const survivor = await manager.getOrCreate({ ...input, sessionId: "survivor" });
+  const result = { payloads: [{ text: "done" }], meta: { durationMs: 1 } };
+  try {
+    await expect(settlePreparedCliRun({ context, run: async () => result })).resolves.toBe(result);
+    expect(peek()).toBe(acquired.runtime);
+    await releaseSessionMcpRuntime(acquired);
+    expect(peek()).toBeUndefined();
+    expect(peek(survivor.sessionId)).toBe(survivor);
+  } finally {
+    await releaseSessionMcpRuntime(acquired);
+  }
 });
