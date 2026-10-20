@@ -17,12 +17,7 @@ describe("resolvePendingDeviceApprovalState", () => {
     expect(
       resolvePendingDeviceApprovalState(operator, {
         ...operator,
-        tokens: {
-          operator: {
-            role: "operator",
-            revokedAtMs: Date.now(),
-          },
-        },
+        tokens: { operator: { role: "operator", revokedAtMs: Date.now() } },
       }),
     ).toEqual({
       kind: "role-upgrade",

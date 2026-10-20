@@ -57,13 +57,8 @@ describe("shared/frontmatter", () => {
     const raw = { type: " Brew ", id: "brew.git", label: "Git", bins: [" git ", "git"] };
     const expectedRaw = structuredClone(raw);
     const parsed = parseOpenClawManifestInstallBase(raw, ["brew", "npm"]);
-    expect(parsed).toEqual({
-      raw: expectedRaw,
-      kind: "brew",
-      id: "brew.git",
-      label: "Git",
-      bins: ["git", "git"],
-    });
+    const common = { id: "brew.git", label: "Git", bins: ["git", "git"] };
+    expect(parsed).toEqual({ raw: expectedRaw, kind: "brew", ...common });
     expect(parseOpenClawManifestInstallBase({ kind: "bad" }, ["brew"])).toBeUndefined();
     expect(
       applyOpenClawManifestInstallCommonFields<{
@@ -72,12 +67,7 @@ describe("shared/frontmatter", () => {
         label?: string;
         bins?: string[];
       }>({ extra: true }, expectDefined(parsed, "manifest install base")),
-    ).toEqual({
-      extra: true,
-      id: "brew.git",
-      label: "Git",
-      bins: ["git", "git"],
-    });
+    ).toEqual({ extra: true, ...common });
   });
 
   it("prefers explicit kind, ignores invalid common fields, and leaves missing ones untouched", () => {
@@ -90,11 +80,7 @@ describe("shared/frontmatter", () => {
         { id: "keep", label: "Keep", bins: ["bun"] },
         parsed!,
       ),
-    ).toEqual({
-      id: "keep",
-      label: "Keep",
-      bins: ["bun"],
-    });
+    ).toEqual({ id: "keep", label: "Keep", bins: ["bun"] });
   });
 
   it("maps install entries through the parser and filters rejected specs", () => {

@@ -110,21 +110,13 @@ describe("device bootstrap profile", () => {
     ).toBe(true);
   });
 
-  test("recognizes only the supported mobile setup profiles", () => {
-    expect(isMobilePairingSetupBootstrapProfile(PAIRING_SETUP_BOOTSTRAP_PROFILE)).toBe(true);
-    expect(isMobilePairingSetupBootstrapProfile(FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE)).toBe(
-      true,
-    );
-    expect(
-      isMobilePairingSetupBootstrapProfile(profile(scopes("approvals", "read", "write"))),
-    ).toBe(false);
-    expect(
-      isMobilePairingSetupBootstrapProfile(
-        profile(scopes("approvals", "pairing", "read", "write")),
-      ),
-    ).toBe(false);
-    expect(
-      isMobilePairingSetupBootstrapProfile(profile(scopes("admin", "approvals", "read", "write"))),
-    ).toBe(false);
+  test.each<[DeviceBootstrapProfileInput, boolean]>([
+    [PAIRING_SETUP_BOOTSTRAP_PROFILE, true],
+    [FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE, true],
+    [profile(scopes("approvals", "read", "write")), false],
+    [profile(scopes("approvals", "pairing", "read", "write")), false],
+    [profile(scopes("admin", "approvals", "read", "write")), false],
+  ])("recognizes only supported mobile setup profiles: %j", (input, expected) => {
+    expect(isMobilePairingSetupBootstrapProfile(input)).toBe(expected);
   });
 });
