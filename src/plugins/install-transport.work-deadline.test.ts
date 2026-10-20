@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { installPluginFromClawHub } from "./clawhub.js";
 import { installPluginFromMarketplace } from "./marketplace.js";
@@ -55,53 +55,53 @@ beforeEach(() => {
   });
 });
 
-describe("plugin transport work deadlines", () => {
-  it.each([undefined, null, 5000])(
-    "preserves ClawHub work policy %s and finite metadata",
-    async (workTimeoutMs) => {
-      const result = await installPluginFromClawHub({
-        spec: "clawhub:demo@2026.3.22",
-        ...installOptions,
-        workTimeoutMs,
-      });
-      expect(result.ok).toBe(true);
-      expect(transport.archive).toHaveBeenCalledOnce();
-      expect(transport.archive).toHaveBeenCalledWith(expect.objectContaining({ workTimeoutMs }));
-      expect(transport.metadata).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 1000 }));
-      expect(transport.download).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 1000 }));
-      expect(transport.cleanup).toHaveBeenCalledOnce();
-    },
-  );
+function installMarketplace(workTimeoutMs: number | null | undefined) {
+  return withTempDir("openclaw-marketplace-deadline-", async (root) => {
+    await fs.mkdir(path.join(root, "plugin"));
+    const marketplace = path.join(root, "marketplace.json");
+    await fs.writeFile(
+      marketplace,
+      JSON.stringify({
+        name: "fixture-marketplace",
+        plugins: [{ name: "demo", source: "./plugin" }],
+      }),
+    );
+    return installPluginFromMarketplace({
+      ...installOptions,
+      marketplace,
+      plugin: "demo",
+      workTimeoutMs,
+      trustedSourceLinkedOfficialInstall: true,
+    });
+  });
+}
 
-  it.each([undefined, null, 5000])(
-    "preserves marketplace work policy %s without granting source trust",
-    async (workTimeoutMs) => {
-      await withTempDir("openclaw-marketplace-deadline-", async (root) => {
-        await fs.mkdir(path.join(root, "plugin"));
-        const manifest = path.join(root, "marketplace.json");
-        await fs.writeFile(
-          manifest,
-          JSON.stringify({
-            name: "fixture-marketplace",
-            plugins: [{ name: "demo", source: "./plugin" }],
-          }),
-        );
-        const result = await installPluginFromMarketplace({
-          marketplace: manifest,
-          plugin: "demo",
-          ...installOptions,
-          workTimeoutMs,
-          trustedSourceLinkedOfficialInstall: true,
-        });
-        expect(result.ok).toBe(true);
-        expect(transport.directory).toHaveBeenCalledOnce();
-        expect(transport.directory).toHaveBeenCalledWith(
-          expect.objectContaining({ workTimeoutMs, timeoutMs: 1000 }),
-        );
-        expect(
-          transport.directory.mock.calls[0]?.[0].trustedSourceLinkedOfficialInstall,
-        ).toBeUndefined();
-      });
-    },
-  );
+it.each([
+  ["ClawHub", undefined],
+  ["ClawHub", null],
+  ["ClawHub", 5000],
+  ["marketplace", undefined],
+  ["marketplace", null],
+  ["marketplace", 5000],
+] as const)("%s preserves work policy %s", async (source, workTimeoutMs) => {
+  const clawhub = source === "ClawHub";
+  const result = await (clawhub
+    ? installPluginFromClawHub({
+        ...installOptions,
+        spec: "clawhub:demo@2026.3.22",
+        workTimeoutMs,
+      })
+    : installMarketplace(workTimeoutMs));
+  const install = clawhub ? transport.archive : transport.directory;
+  expect(result.ok).toBe(true);
+  expect(install.mock.calls).toEqual([[expect.objectContaining({ workTimeoutMs })]]);
+  if (clawhub) {
+    for (const request of [transport.metadata, transport.download]) {
+      expect(request).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 1000 }));
+    }
+    expect(transport.cleanup).toHaveBeenCalledOnce();
+  } else {
+    expect(install).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 1000 }));
+    expect(install.mock.calls[0]?.[0].trustedSourceLinkedOfficialInstall).toBeUndefined();
+  }
 });

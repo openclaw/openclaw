@@ -65,11 +65,21 @@ describe("recordPluginInstall", () => {
     expect(next.plugins?.installs?.demo).toEqual({ ...recordIdentity, ...update });
   });
 
-  it("moves an exact prior npm load path on same-version reinstall", () => {
-    const customPath = `${previousInstallPath}/custom-child`;
+  it.each([
+    {
+      name: "moves the prior slot without moving custom children",
+      paths: [`${previousInstallPath}/custom-child`, previousInstallPath, adjacentPath],
+      expected: [`${previousInstallPath}/custom-child`, nextInstallPath, adjacentPath],
+    },
+    {
+      name: "preserves the replacement slot and removes stale duplicates",
+      paths: [nextInstallPath, adjacentPath, previousInstallPath, nextInstallPath],
+      expected: [nextInstallPath, adjacentPath],
+    },
+  ])("$name on same-version reinstall", ({ paths, expected }) => {
     const existing = {
       plugins: {
-        load: { paths: [customPath, previousInstallPath, adjacentPath] },
+        load: { paths },
         installs: {
           alpha: npmInstall(previousInstallPath),
           beta: npmInstall(adjacentPath, "beta@1.0.0"),
@@ -82,27 +92,7 @@ describe("recordPluginInstall", () => {
       ...npmInstall(nextInstallPath),
     });
 
-    expect(next.plugins?.load?.paths).toEqual([customPath, nextInstallPath, adjacentPath]);
+    expect(next.plugins?.load?.paths).toEqual(expected);
     expect(next.plugins?.installs?.beta).toBe(existing.plugins.installs.beta);
-  });
-
-  it("preserves an existing replacement path position while removing stale managed paths", () => {
-    const existing = {
-      plugins: {
-        load: {
-          paths: [nextInstallPath, adjacentPath, previousInstallPath, nextInstallPath],
-        },
-        installs: {
-          alpha: npmInstall(previousInstallPath),
-        },
-      },
-    };
-
-    const next = recordPluginInstall(existing, {
-      pluginId: "alpha",
-      ...npmInstall(nextInstallPath),
-    });
-
-    expect(next.plugins?.load?.paths).toEqual([nextInstallPath, adjacentPath]);
   });
 });
