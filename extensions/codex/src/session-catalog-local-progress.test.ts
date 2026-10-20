@@ -12,9 +12,7 @@ beforeAll(async () => {
 afterEach(() => vi.useRealTimers());
 
 function fixture() {
-  const control = catalogFactory({
-    getRuntimeConfig: () => config,
-  });
+  const control = catalogFactory({ getRuntimeConfig: () => config });
   const provider = catalogProvider(control);
   const started = createDeferred<void>();
   const response = createDeferred<unknown>();
@@ -42,15 +40,28 @@ function fixture() {
   return { started, response, reply, list, onHost, publications, controller };
 }
 
+async function withPendingList(
+  partial: boolean,
+  run: (f: ReturnType<typeof fixture>, result: ReturnType<typeof observe>) => Promise<void>,
+) {
+  const f = fixture();
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
+  const result = observe(f.list(partial));
+  try {
+    await f.started.promise;
+    await vi.advanceTimersByTimeAsync(250);
+    await run(f, result);
+  } finally {
+    f.reply();
+    await result.done;
+    await Promise.allSettled(f.publications);
+  }
+}
+
 it.each([true, false])(
   "bounds cold local progress and reuses resident rows (partial: %s)",
-  async (partial) => {
-    const f = fixture();
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
-    const result = observe(f.list(partial));
-    try {
-      await f.started.promise;
-      await vi.advanceTimersByTimeAsync(250);
+  async (partial) =>
+    withPendingList(partial, async (f, result) => {
       expect.soft(result.state.settled).toBe(partial);
       expect(f.onHost).not.toHaveBeenCalled();
       if (result.state.settled) {
@@ -72,21 +83,11 @@ it.each([true, false])(
         { sessions: [{ threadId: "cold-row" }], connected: true },
       ]);
       expect(commandRpcMocks.codexControlRequest).not.toHaveBeenCalled();
-    } finally {
-      f.reply();
-      await result.done;
-      await Promise.allSettled(f.publications);
-    }
-  },
+    }),
 );
 
-it.each(["error", "abort"])("settles a pending local publication after %s", async (outcome) => {
-  const f = fixture();
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
-  const result = observe(f.list());
-  try {
-    await f.started.promise;
-    await vi.advanceTimersByTimeAsync(250);
+it.each(["error", "abort"])("settles a pending local publication after %s", async (outcome) =>
+  withPendingList(true, async (f, result) => {
     expect(result.state.settled).toBe(true);
     await expect(result.done).resolves.toMatchObject({
       status: "fulfilled",
@@ -110,9 +111,5 @@ it.each(["error", "abort"])("settles a pending local publication after %s", asyn
         },
       }),
     );
-  } finally {
-    f.reply();
-    await result.done;
-    await Promise.allSettled(f.publications);
-  }
-});
+  }),
+);

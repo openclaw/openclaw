@@ -15,11 +15,11 @@ import {
 } from "./session-catalog-events.js";
 import type { StoredCodexCatalogEntry } from "./session-catalog-index-state.js";
 import { CodexCatalogIndex } from "./session-catalog-index.js";
+import { catalogWebSocketOptions } from "./session-catalog-index.test-support.js";
 import { projectNativeCatalogFixture as projectCodexCatalogPage } from "./session-catalog-projection.test-support.js";
-import { writeCatalogRollout } from "./session-catalog-resident.test-support.js";
+import { catalogFactory, writeCatalogRollout } from "./session-catalog-resident.test-support.js";
 import {
   commandRpcMocks,
-  createCodexSessionCatalogControlFactory,
   config,
   idleThread,
   pinnedConnectionMocks,
@@ -72,6 +72,22 @@ const threadIds = async (index: CodexCatalogIndex) =>
   (await index.list({})).sessions.map((row) => row.threadId);
 const storedRows = async (state: ReturnType<typeof catalogState>) =>
   (await state.entries()).flatMap((entry) => (entry.value.kind === "row" ? [entry.value.row] : []));
+const closeState = async (index: CodexCatalogIndex) => {
+  await index.close();
+  await closeOpenClawStateDatabaseAsync();
+};
+function rolloutReads() {
+  const open = vi.spyOn(fs, "open");
+  const readFile = vi.spyOn(fs, "readFile");
+  return {
+    open,
+    readFile,
+    expectUnread: () => {
+      expect(open).not.toHaveBeenCalled();
+      expect(readFile).not.toHaveBeenCalled();
+    },
+  };
+}
 
 function createSnapshotFixture(
   namespace: string,
@@ -100,8 +116,7 @@ function createSnapshotFixture(
     const index = createIndex();
     await index.initialize();
     const result = await inspect(index);
-    await index.close();
-    await closeOpenClawStateDatabaseAsync();
+    await closeState(index);
     return result;
   };
   const pause = () => {
@@ -195,9 +210,8 @@ describe("resident Codex catalog SQLite durability", () => {
     current.path = await writeCatalogRollout(root, current);
     const openState = () => catalogState("selected-rollout-test");
     const createFactory = () =>
-      createCodexSessionCatalogControlFactory({
+      catalogFactory({
         env: { CODEX_HOME: home },
-        getPluginConfig: () => ({ supervision: { enabled: true } }),
         getRuntimeConfig: () => config,
         openResidentState: openState,
       });
@@ -211,28 +225,22 @@ describe("resident Codex catalog SQLite durability", () => {
       assertCurrent: () => {},
     });
     await first.initialize();
-    await first.close();
-    await closeOpenClawStateDatabaseAsync();
+    await closeState(first);
+    const line = (type: string, payload: unknown) => JSON.stringify({ type, payload });
     const writeMetadata = (file: string, cwd: string, padding = 0) =>
       fs.writeFile(
         file,
         [
-          JSON.stringify({
-            type: "session_meta",
-            payload: {
-              id: current.id,
-              timestamp: "2026-09-16T12:00:00.000Z",
-              cwd,
-              source: "cli",
-              originator: "codex_cli_rs",
-              history_mode: "paginated",
-              base_instructions: { text: "x".repeat(padding) },
-            },
+          line("session_meta", {
+            id: current.id,
+            timestamp: "2026-09-16T12:00:00.000Z",
+            cwd,
+            source: "cli",
+            originator: "codex_cli_rs",
+            history_mode: "paginated",
+            base_instructions: { text: "x".repeat(padding) },
           }),
-          JSON.stringify({
-            type: "event_msg",
-            payload: { type: "user_message", message: "Older request" },
-          }),
+          line("event_msg", { type: "user_message", message: "Older request" }),
           "",
         ].join("\n"),
       );
@@ -310,9 +318,9 @@ describe("resident Codex catalog SQLite durability", () => {
       const persisted = (await openState().entries()).map((entry) => entry.value);
       expect(persisted).toHaveLength(3);
       expect(persisted).toContainEqual({ version: 1, kind: "complete" });
-      expect(persisted.filter((entry) => entry.kind === "row")).toEqual([
-        expect.objectContaining({ row: expect.objectContaining({ nativeMetadata: true }) }),
-        expect.objectContaining({ row: expect.objectContaining({ nativeMetadata: true }) }),
+      expect(persisted.filter((entry) => entry.kind === "row")).toMatchObject([
+        { row: { nativeMetadata: true } },
+        { row: { nativeMetadata: true } },
       ]);
       expect(
         persisted.flatMap((entry) => (entry.kind === "row" ? [entry.row.threadId] : [])).toSorted(),
@@ -325,8 +333,7 @@ describe("resident Codex catalog SQLite durability", () => {
       cwd: "/workspace/stale-rollout-header",
     });
     const nativeAllowed = pause();
-    const open = vi.spyOn(fs, "open");
-    const readFile = vi.spyOn(fs, "readFile");
+    const reads = rolloutReads();
     const restarted = createIndex();
     expect(await restarted.list({})).toEqual({
       ...initial,
@@ -335,8 +342,7 @@ describe("resident Codex catalog SQLite durability", () => {
       ),
     });
     expect(readNative).not.toHaveBeenCalled();
-    expect(open).not.toHaveBeenCalled();
-    expect(readFile).not.toHaveBeenCalled();
+    reads.expectUnread();
     await restarted.reconcile();
     expect(
       (await restarted.list({})).sessions.find((row) => row.threadId === "changed"),
@@ -355,9 +361,9 @@ describe("resident Codex catalog SQLite durability", () => {
         expect.objectContaining({ threadId: "untouched", fallbackName: "Original untouched" }),
       ]),
     );
-    expect(open.mock.calls.map((call) => call[0])).toEqual([changedFile]);
+    expect(reads.open.mock.calls.map((call) => call[0])).toEqual([changedFile]);
     expect(readNative).toHaveBeenCalledOnce();
-    expect(readFile).not.toHaveBeenCalled();
+    expect(reads.readFile).not.toHaveBeenCalled();
   });
 
   it("refreshes an offline native rename after returning the persisted list without reading unchanged rollouts", async () => {
@@ -387,13 +393,11 @@ describe("resident Codex catalog SQLite durability", () => {
       mtimeMs: originalStat.mtimeMs,
       size: originalStat.size,
     });
-    const open = vi.spyOn(fs, "open");
-    const readFile = vi.spyOn(fs, "readFile");
+    const reads = rolloutReads();
     const restarted = createIndex();
     expect((await restarted.list({})).sessions[0]?.name).toBe("Previous title");
     expect(readNative).not.toHaveBeenCalled();
-    expect(open).not.toHaveBeenCalled();
-    expect(readFile).not.toHaveBeenCalled();
+    reads.expectUnread();
     await vi.waitFor(() => expect(readNative).toHaveBeenCalledOnce());
     expect(readNative.mock.calls[0]?.[0]).toMatchObject({ useStateDbOnly: true });
     expect((await restarted.list({ searchTerm: "previous" })).sessions).toHaveLength(1);
@@ -405,18 +409,11 @@ describe("resident Codex catalog SQLite durability", () => {
     });
     expect((await restarted.list({ searchTerm: "previous" })).sessions).toEqual([]);
     expect(readNative).toHaveBeenCalledOnce();
-    expect(open).not.toHaveBeenCalled();
-    expect(readFile).not.toHaveBeenCalled();
+    reads.expectUnread();
   });
 
   it("drains title, status, and archive changes to SQLite before closing", async () => {
-    const startOptions: CodexAppServerStartOptions = {
-      transport: "websocket",
-      command: "codex",
-      args: ["app-server"],
-      url: "wss://resident-state.example.test/codex",
-      headers: {},
-    };
+    const startOptions = catalogWebSocketOptions("wss://resident-state.example.test/codex");
     const homeId = await codexCatalogResidentHomeKey({ startOptions });
     const native = [
       thread("visible", {
@@ -506,8 +503,7 @@ it("does not restore offline-deleted rows after repeated failed snapshot enumera
     expect(await threadIds(recovering)).toEqual([current.id]);
     await recovering.initialize();
     await recovering.upsertThread({ ...current, name: `Changed during outage ${restart}` });
-    await recovering.close();
-    await closeOpenClawStateDatabaseAsync();
+    await closeState(recovering);
   }
 
   await expectRecovered(current.id);

@@ -5,15 +5,26 @@ import type { CodexThread, CodexThreadListResponse } from "./app-server/protocol
 import { catalogFactory, remoteCatalogFactory } from "./session-catalog-resident.test-support.js";
 import { commandRpcMocks, idleThread } from "./session-catalog.test-helpers.js";
 
-beforeEach(() => {
-  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
-});
-afterEach(() => {
-  vi.useRealTimers();
-});
+beforeEach(() => vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] }));
+afterEach(() => vi.useRealTimers());
 
 const nativeThread = (overrides: Partial<CodexThread>) =>
   idleThread({ source: "cli", updatedAt: 100, recencyAt: 100, ...overrides });
+
+async function withCatalog(
+  factory: ReturnType<typeof catalogFactory>,
+  run: (
+    control: ReturnType<typeof factory.forRequest>,
+    source: Awaited<ReturnType<typeof factory.homesForAgent>>[number],
+  ) => Promise<void>,
+) {
+  const source = (await factory.homesForAgent("main"))[0]!;
+  try {
+    await run(factory.forRequest("main", source), source);
+  } finally {
+    await factory.stop();
+  }
+}
 
 it("reconciles remote membership without reparsing unchanged visible or hidden previews", async () => {
   const known = nativeThread({
@@ -23,16 +34,8 @@ it("reconciles remote membership without reparsing unchanged visible or hidden p
     path: "/remote/sessions/known.jsonl",
     status: { type: "active", activeFlags: ["waitingOnApproval"] },
   });
-  const changed = nativeThread({
-    id: "changed",
-    name: null,
-    preview: "Previous request",
-  });
-  const hidden = nativeThread({
-    id: "hidden",
-    source: "exec",
-    preview: "Hidden native execution",
-  });
+  const changed = nativeThread({ id: "changed", name: null, preview: "Previous request" });
+  const hidden = nativeThread({ id: "hidden", source: "exec", preview: "Hidden native execution" });
   let native = [known, changed, idleThread({ id: "removed", source: "cli" }), hidden];
   commandRpcMocks.codexControlRequest.mockImplementation(
     async (_plugin, method, params, options) => {
@@ -44,10 +47,8 @@ it("reconciles remote membership without reparsing unchanged visible or hidden p
     },
   );
   const factory = remoteCatalogFactory("remote-catalog");
-  const source = (await factory.homesForAgent("main"))[0]!;
-  expect(source.localSessionsRoot).toBeUndefined();
-  const control = factory.forRequest("main", source);
-  try {
+  await withCatalog(factory, async (control, source) => {
+    expect(source.localSessionsRoot).toBeUndefined();
     await control.initialize();
     const initial = await control.listPage({});
     expect(initial.sessions.map((row) => row.threadId).toSorted()).toEqual([
@@ -110,9 +111,7 @@ it("reconciles remote membership without reparsing unchanged visible or hidden p
     });
     expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(3);
     expect(sanitize).not.toHaveBeenCalled();
-  } finally {
-    await factory.stop();
-  }
+  });
 });
 
 it("walks remote pages beyond the resident bound without projecting the uncached tail", async () => {
@@ -135,12 +134,10 @@ it("walks remote pages beyond the resident bound without projecting the uncached
     return { data, nextCursor } satisfies CodexThreadListResponse;
   });
   const factory = remoteCatalogFactory("bounded-remote-catalog");
-  const source = (await factory.homesForAgent("main"))[0]!;
-  const control = factory.forRequest("main", source);
   const tailPreview = vi.fn(() => {
     throw new Error("Uncached native tail must not be projected on each refresh");
   });
-  try {
+  await withCatalog(factory, async (control) => {
     await control.initialize();
     const first = await control.listPage({ limit: 64 });
     expect(first.sessions.map((row) => row.threadId)).toEqual(
@@ -160,9 +157,7 @@ it("walks remote pages beyond the resident bound without projecting the uncached
     expect(refreshed).toEqual(first);
     expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(pages * 2 + 1);
     expect(tailPreview).not.toHaveBeenCalled();
-  } finally {
-    await factory.stop();
-  }
+  });
 });
 
 it("reconciles displayed native metadata and explicit Git clears without activity or file changes", async () => {
@@ -184,9 +179,7 @@ it("reconciles displayed native metadata and explicit Git clears without activit
     return { data: [native] };
   });
   const factory = catalogFactory();
-  const source = (await factory.homesForAgent("main"))[0]!;
-  const control = factory.forRequest("main", source);
-  try {
+  await withCatalog(factory, async (control) => {
     await control.initialize();
     expect((await control.listPage({})).sessions[0]).toMatchObject({
       gitBranch: "previous-branch",
@@ -220,7 +213,5 @@ it("reconciles displayed native metadata and explicit Git clears without activit
       expect((await control.listPage({})).sessions[0]).not.toHaveProperty("gitBranch");
     });
     expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(3);
-  } finally {
-    await factory.stop();
-  }
+  });
 });
