@@ -22,6 +22,11 @@ import {
   waitForControlUiRoute,
 } from "./control-ui-e2e.ts";
 
+const readJson = (root: string, name: string) =>
+  JSON.parse(readFileSync(path.join(root, `failure.${name}.json`), "utf8"));
+const readFiles = (root: string) =>
+  readdirSync(root).map((name) => [name, readFileSync(path.join(root, name), "utf8")]);
+
 describe("shared proof capture", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   afterEach(() => {
@@ -83,14 +88,9 @@ describe("shared proof capture", () => {
         const directories = readdirSync(parent);
         expect(directories).toHaveLength(1);
         const root = path.join(parent, directories[0]!);
-        const before = readdirSync(root).map((name) => [
-          name,
-          readFileSync(path.join(root, name), "utf8"),
-        ]);
-        const report = JSON.parse(readFileSync(path.join(root, "failure.private.json"), "utf8"));
-        expect(
-          JSON.parse(readFileSync(path.join(root, "failure.public.json"), "utf8")),
-        ).toMatchObject({
+        const before = readFiles(root);
+        const report = readJson(root, "private");
+        expect(readJson(root, "public")).toMatchObject({
           hostBeforeRead: { pageClosed: false, browserConnected: true },
           lifecycle: null,
           rendererRead: stage === "evaluation" ? "deadline" : "completed",
@@ -112,9 +112,7 @@ describe("shared proof capture", () => {
         }
         await vi.runAllTimersAsync();
         await failedAction;
-        expect(
-          readdirSync(root).map((name) => [name, readFileSync(path.join(root, name), "utf8")]),
-        ).toEqual(before);
+        expect(readFiles(root)).toEqual(before);
       } finally {
         pending.resolve(Buffer.from("cleanup"));
         await failedAction;
@@ -139,18 +137,13 @@ describe("shared proof capture", () => {
         send: async (method: string) => {
           sent.push(method);
           if (method === "Debugger.enable") {
-            session.emit("Debugger.scriptParsed", {
-              scriptId: "bundle",
-              url: "http://127.0.0.1:4173/assets/index-private.js?token=private",
-            });
-            session.emit("Debugger.scriptParsed", {
-              scriptId: "blob",
-              url: "blob:https://private.invalid/id",
-            });
-            session.emit("Debugger.scriptParsed", {
-              scriptId: "private-path",
-              url: "https://private.invalid/private-session/report.js?token=private",
-            });
+            for (const [scriptId, url] of [
+              ["bundle", "http://127.0.0.1:4173/assets/index-private.js?token=private"],
+              ["blob", "blob:https://private.invalid/id"],
+              ["private-path", "https://private.invalid/private-session/report.js?token=private"],
+            ]) {
+              session.emit("Debugger.scriptParsed", { scriptId, url });
+            }
           }
           if (method === "Performance.getMetrics") {
             if (!metrics) {
@@ -217,7 +210,7 @@ describe("shared proof capture", () => {
       await vi.advanceTimersByTimeAsync(5_000 + 3_000);
       await capture;
       const root = path.join(parent, readdirSync(parent)[0]!);
-      const report = JSON.parse(readFileSync(path.join(root, "failure.public.json"), "utf8"));
+      const report = readJson(root, "public");
       expect(report).toMatchObject({
         rendererRead: "deadline",
         rendererStall: {
@@ -337,7 +330,7 @@ describe("shared proof capture", () => {
         label: "test",
       });
       const root = path.join(parent, readdirSync(parent)[0]!);
-      const report = JSON.parse(readFileSync(path.join(root, "failure.public.json"), "utf8"));
+      const report = readJson(root, "public");
       expect(report).toMatchObject({
         hostBeforeRead: { pageClosed: closed, browserConnected: connected },
         lifecycle,
@@ -354,44 +347,14 @@ describe("shared proof capture", () => {
   );
 
   it.each([
-    {
-      shardIndex: "5",
-      shardCount: "6",
-      failure: "none",
-      sendLabel: "Send message",
-      catalogSource: "snapshot",
-    },
-    {
-      shardIndex: undefined,
-      shardCount: undefined,
-      failure: "none",
-      sendLabel: "Loading chat",
-      catalogSource: "none",
-    },
-    {
-      shardIndex: undefined,
-      shardCount: undefined,
-      failure: "evaluation",
-      sendLabel: "Send message",
-      catalogSource: "list",
-    },
-    {
-      shardIndex: undefined,
-      shardCount: undefined,
-      failure: "screenshot",
-      sendLabel: "private-label",
-      catalogSource: "list",
-    },
-    {
-      shardIndex: undefined,
-      shardCount: undefined,
-      failure: "storage",
-      sendLabel: "Sending message...",
-      catalogSource: "list",
-    },
-  ])(
-    "retains safe failure state despite $failure failure ($sendLabel; $shardIndex/$shardCount; $catalogSource catalog)",
-    async ({ shardIndex, shardCount, failure, sendLabel, catalogSource }) => {
+    ["none", "Send message", "snapshot", "5", "6"],
+    ["none", "Loading chat", "none", undefined, undefined],
+    ["evaluation", "Send message", "list", undefined, undefined],
+    ["screenshot", "private-label", "list", undefined, undefined],
+    ["storage", "Sending message...", "list", undefined, undefined],
+  ] as const)(
+    "retains safe failure state despite %s failure (%s; %s catalog; %s/%s)",
+    async (failure, sendLabel, catalogSource, shardIndex, shardCount) => {
       vi.useFakeTimers();
       const parent = tempDirs.make("control-ui-failure-proof-");
       const diagnosticParent = failure === "storage" ? path.join(parent, "blocked") : parent;
@@ -508,6 +471,7 @@ describe("shared proof capture", () => {
               },
             }
           : undefined;
+      const unlessEmpty = <T>(items: T[]) => (failure === "screenshot" ? [] : items);
       const modelResponses =
         catalogSource !== "list"
           ? { snapshot }
@@ -515,47 +479,30 @@ describe("shared proof capture", () => {
               list: {
                 ok: true,
                 payload: {
-                  models:
-                    failure === "screenshot"
-                      ? []
-                      : [
-                          { id: "private-model", available: true },
-                          { available: false, unavailableReason: "private-reason" },
-                          { available: "private-availability" },
-                        ],
+                  models: unlessEmpty([
+                    { id: "private-model", available: true },
+                    { available: false, unavailableReason: "private-reason" },
+                    { available: "private-availability" },
+                  ]),
                   pendingProviders: [],
-                  providerOutcomes:
-                    failure === "screenshot"
-                      ? []
-                      : [
-                          {
-                            provider: "private-provider",
-                            profileId: "private-profile",
-                            status: "ready",
-                          },
-                          { status: "private-outcome" },
-                        ],
+                  providerOutcomes: unlessEmpty([
+                    { provider: "private-provider", profileId: "private-profile", status: "ready" },
+                    { status: "private-outcome" },
+                  ]),
                 },
               },
               authStatus: {
                 ok: true,
                 payload: {
-                  providers:
-                    failure === "screenshot"
-                      ? []
-                      : [
-                          {
-                            profiles: [
-                              {
-                                profileId: "private-profile",
-                                status: "ok",
-                                token: "private-token",
-                              },
-                              { status: "expired" },
-                              { status: "private-health" },
-                            ],
-                          },
-                        ],
+                  providers: unlessEmpty([
+                    {
+                      profiles: [
+                        { profileId: "private-profile", status: "ok", token: "private-token" },
+                        { status: "expired" },
+                        { status: "private-health" },
+                      ],
+                    },
+                  ]),
                 },
               },
             };
@@ -603,44 +550,30 @@ describe("shared proof capture", () => {
       pageEvents.emit("websocket", socket);
       const sendFrame = (direction: string, frame: unknown) =>
         socket.emit(direction, { payload: JSON.stringify(frame) });
-      sendFrame("framesent", {
-        type: "req",
-        id: "private-auth-id",
-        method: "connect",
-        params: { token: "private-token" },
-      });
-      sendFrame("framereceived", {
-        type: "res",
-        id: "private-auth-id",
-        ok: true,
-        payload: { token: "private-token" },
-      });
-      sendFrame("framesent", {
-        type: "req",
-        id: "private-file-id",
-        method: "agents.files.get",
-        params: { agentId: "private-agent" },
-      });
-      sendFrame("framereceived", {
-        type: "res",
-        id: "private-file-id",
-        ok: false,
-        error: { message: "private-error" },
-      });
+      const rpc = (method: string, params: unknown, response: object) => {
+        const id = `private-${method}`;
+        sendFrame("framesent", { type: "req", id, method, params });
+        sendFrame("framereceived", { type: "res", id, ...response });
+      };
+      rpc("connect", { token: "private-token" }, { ok: true, payload: { token: "private-token" } });
+      rpc(
+        "agents.files.get",
+        { agentId: "private-agent" },
+        {
+          ok: false,
+          error: { message: "private-error" },
+        },
+      );
       for (const ok of [true, false]) {
-        sendFrame("framesent", {
-          type: "req",
-          id: "private-canvas-id",
-          method: "canvas.document.view",
-          params: { docId: "private-document" },
-        });
-        sendFrame("framereceived", {
-          type: "res",
-          id: "private-canvas-id",
-          ok,
-          payload: { html: "private-html", sandboxUrl: "https://private-host/?private-token" },
-          error: { message: "private-canvas-error" },
-        });
+        rpc(
+          "canvas.document.view",
+          { docId: "private-document" },
+          {
+            ok,
+            payload: { html: "private-html", sandboxUrl: "https://private-host/?private-token" },
+            error: { message: "private-canvas-error" },
+          },
+        );
       }
       const frameEvent = {
         at: "2026-09-01T00:00:00.000Z",

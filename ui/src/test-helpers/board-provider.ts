@@ -26,52 +26,43 @@ import { normalizeDefaultMainSessionAliasForUi } from "../lib/sessions/session-k
 import { applyMockBoardOp, normalizeMockBoardSnapshot } from "./board-ops.ts";
 
 function mockSnapshot(sessionKey: string): BoardSnapshot {
+  type Widget = BoardSnapshot["widgets"][number];
+  const widget = (input: Pick<Widget, "name" | "title"> & Partial<Widget>): Widget => ({
+    tabId: "main",
+    contentKind: "html",
+    sizeW: 4,
+    sizeH: 3,
+    position: 0,
+    grantState: "granted",
+    revision: 1,
+    ...input,
+  });
   return {
     sessionKey,
     revision: 1,
     tabs: [
       { tabId: "main", title: "Overview", position: 0, chatDock: "right" },
-      {
-        tabId: "research",
-        title: "Research",
-        position: 1,
-        chatDock: "bottom",
-      },
+      { tabId: "research", title: "Research", position: 1, chatDock: "bottom" },
     ],
     widgets: [
-      {
-        name: "session-status",
-        tabId: "main",
-        title: "Session status",
-        contentKind: "html",
-        sizeW: 4,
-        sizeH: 3,
-        position: 0,
-        grantState: "granted",
-        revision: 1,
-      },
-      {
+      widget({ name: "session-status", title: "Session status" }),
+      widget({
         name: "recent-findings",
-        tabId: "main",
         title: "Recent findings",
         contentKind: "mcp-app",
         sizeW: 8,
         sizeH: 6,
         position: 1,
         grantState: "pending",
-        revision: 1,
-      },
-      {
+      }),
+      widget({
         name: "source-map",
         tabId: "research",
         title: "Source map",
-        contentKind: "html",
         sizeW: 12,
         sizeH: 8,
-        position: 0,
         grantState: "none",
-        revision: 1,
-      },
+      }),
     ],
   };
 }

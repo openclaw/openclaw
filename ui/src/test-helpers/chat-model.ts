@@ -1,4 +1,3 @@
-// Chat model test helpers.
 import type {
   GatewaySessionRow,
   ModelCatalogEntry,
@@ -44,44 +43,31 @@ export function createAmbiguousModelCatalog(
   }));
 }
 
-function createMainSessionRow(overrides: Partial<GatewaySessionRow> = {}): GatewaySessionRow {
-  return {
-    key: "main",
-    kind: "direct",
-    updatedAt: null,
-    ...overrides,
-  };
-}
-
-export function createSessionsListResult(
-  params: {
-    model?: string | null;
-    modelProvider?: string | null;
-    modelOverrideSource?: GatewaySessionRow["modelOverrideSource"];
-    defaultsModel?: string | null;
-    defaultsProvider?: string | null;
-    defaultsThinkingLevels?: SessionsListResult["defaults"]["thinkingLevels"];
-    defaultsThinkingOptions?: string[];
-    defaultsThinkingDefault?: string;
-    thinkingDefault?: string;
-    thinkingLevels?: GatewaySessionRow["thinkingLevels"];
-    omitSessionFromList?: boolean;
-  } = {},
-): SessionsListResult {
-  const {
-    model = null,
-    modelProvider = model ? "openai" : null,
-    modelOverrideSource,
-    defaultsModel = "gpt-5",
-    defaultsProvider = defaultsModel ? "openai" : null,
-    defaultsThinkingLevels,
-    defaultsThinkingOptions,
-    defaultsThinkingDefault,
-    thinkingDefault,
-    thinkingLevels,
-    omitSessionFromList = false,
-  } = params;
-
+export function createSessionsListResult({
+  model = null,
+  modelProvider = model ? "openai" : null,
+  modelOverrideSource,
+  defaultsModel = "gpt-5",
+  defaultsProvider = defaultsModel ? "openai" : null,
+  defaultsThinkingLevels,
+  defaultsThinkingOptions,
+  defaultsThinkingDefault,
+  thinkingDefault,
+  thinkingLevels,
+  omitSessionFromList = false,
+}: {
+  model?: string | null;
+  modelProvider?: string | null;
+  modelOverrideSource?: GatewaySessionRow["modelOverrideSource"];
+  defaultsModel?: string | null;
+  defaultsProvider?: string | null;
+  defaultsThinkingLevels?: SessionsListResult["defaults"]["thinkingLevels"];
+  defaultsThinkingOptions?: string[];
+  defaultsThinkingDefault?: string;
+  thinkingDefault?: string;
+  thinkingLevels?: GatewaySessionRow["thinkingLevels"];
+  omitSessionFromList?: boolean;
+} = {}): SessionsListResult {
   return {
     ts: 0,
     path: "",
@@ -97,13 +83,16 @@ export function createSessionsListResult(
     sessions: omitSessionFromList
       ? []
       : [
-          createMainSessionRow({
+          {
+            key: "main",
+            kind: "direct",
+            updatedAt: null,
             ...(modelProvider ? { modelProvider } : {}),
             ...(model ? { model } : {}),
             ...(modelOverrideSource === undefined ? {} : { modelOverrideSource }),
             ...(thinkingDefault ? { thinkingDefault } : {}),
             ...(thinkingLevels === undefined ? {} : { thinkingLevels }),
-          }),
+          },
         ],
   };
 }
