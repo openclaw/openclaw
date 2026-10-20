@@ -32,8 +32,7 @@ test("projects each session's account provenance when metadata reuses its catalo
   onTestFinished(() => harness.runtime.stop());
   await harness.refresh();
   for (const source of ["user", "user-link", "user"] as const) {
-    const metadata = await harness.runtime.read({
-      agentId: "main",
+    const metadata = await harness.read({
       sessionEntry: {
         authProfileOverride: "test:shared",
         authProfileOverrideSource: source,
@@ -61,10 +60,7 @@ test.each(["neutral", "profile"] as const)(
     const harness = createChatMetadataHarness();
     onTestFinished(() => harness.runtime.stop());
     await harness.refresh();
-    const metadata = await harness.runtime.read({
-      agentId: "main",
-      sessionEntry: new SessionInput(),
-    });
+    const metadata = await harness.read({ sessionEntry: new SessionInput() });
     await setImmediate();
     const retained = queryObjects(SessionInput);
     expect(control.deref()).toBeUndefined();

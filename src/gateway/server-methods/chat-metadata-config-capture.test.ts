@@ -13,24 +13,25 @@ import {
   createChatMetadataOwner,
 } from "./chat-metadata-runtime.test-support.js";
 
+const provider = "fixture";
+const runtime = "capture";
+const api = "openai-completions";
+
 test.each([1, 32])(
   "bounds source projection work for %i metadata models after neutral reload",
   async (count) => {
     const models: ModelCatalogEntry[] = Array.from({ length: count }, (_, index) => ({
-      provider: "capture-fixture",
+      provider,
       id: "model-" + index,
       name: "Model " + index,
-      api: "openai-completions",
+      api,
     }));
     const config: OpenClawConfig = {
       agents: {
         defaults: {
-          model: { primary: "capture-fixture/model-0" },
+          model: { primary: `${provider}/model-0` },
           models: Object.fromEntries(
-            models.map(({ id }) => [
-              "capture-fixture/" + id,
-              { agentRuntime: { id: "capture-harness" } },
-            ]),
+            models.map(({ id }) => [`${provider}/${id}`, { agentRuntime: { id: runtime } }]),
           ),
         },
         entries: { main: {} },
@@ -39,8 +40,8 @@ test.each([1, 32])(
       models: {
         mode: "replace",
         providers: {
-          "capture-fixture": {
-            api: "openai-completions",
+          [provider]: {
+            api,
             baseUrl: "https://fixture.invalid/v1",
             models: [],
           },
@@ -50,21 +51,15 @@ test.each([1, 32])(
     // Making an existing resolved default explicit changes source, not runtime policy.
     setRuntimeConfigSnapshot(config, { ...config, gateway: {} });
     const harness = createChatMetadataHarness(config, { useDefaultProjection: true });
-    const template = createChatMetadataOwner(
-      config,
-      "model-0",
-      {},
-      "capture-fixture",
-      "openai-completions",
-    );
+    const template = createChatMetadataOwner(config, "model-0", {}, provider, api);
     let current = true;
     const registry = createEmptyPluginRegistry();
     const supports = vi.fn(() => ({ supported: true as const }));
     registry.agentHarnesses.push({
-      pluginId: "capture-harness",
+      pluginId: runtime,
       source: "fixture",
       harness: {
-        id: "capture-harness",
+        id: runtime,
         label: "Capture fixture",
         supports,
         async runAttempt() {
@@ -84,13 +79,13 @@ test.each([1, 32])(
       version: 1,
       profiles: Object.fromEntries(
         ["before", "after"].map((profile) => [
-          `capture-fixture:${profile}`,
-          { type: "api_key" as const, provider: "capture-fixture", key: "synthetic" },
+          `${provider}:${profile}`,
+          { type: "api_key" as const, provider, key: "synthetic" },
         ]),
       ),
     });
     const sessionEntry = (profile: string) => ({
-      authProfileOverride: "capture-fixture:" + profile,
+      authProfileOverride: `${provider}:${profile}`,
       authProfileOverrideSource: "user" as const,
     });
     const project = vi.spyOn(sourceProjection, "projectRuntimeChangesOntoSource");
@@ -116,7 +111,7 @@ test.each([1, 32])(
       expect(project.mock.calls.length).toBeLessThanOrEqual(1);
       expect(after.models).toEqual(before.models);
       expect(after.accountSelection).toMatchObject({
-        authProfileId: "capture-fixture:after",
+        authProfileId: `${provider}:after`,
       });
       const retained = await read("after");
       expect(project).not.toHaveBeenCalled();

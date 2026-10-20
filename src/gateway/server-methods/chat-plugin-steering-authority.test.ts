@@ -19,9 +19,10 @@ it("withholds plugin guidance when Control UI session access is revoked after hi
     await captureRuntimeConfigAsyncReader()();
     const scope = {
       agentId: "main",
-      sessionKey: "agent:main:steering-history-revocation",
-      sessionId: "steering-history-revocation",
+      sessionKey: "agent:main:steering",
+      sessionId: "steering",
     };
+    const guidance = "Keep the change small.";
     await upsertSessionEntryCore(scope, {
       sessionId: scope.sessionId,
       updatedAt: 1,
@@ -33,13 +34,13 @@ it("withholds plugin guidance when Control UI session access is revoked after hi
       message: {
         role: "user",
         display: false,
-        content: "Private model prefix\n\nKeep the change small.",
+        content: `Private model prefix\n\n${guidance}`,
         provenance: { kind: "internal_system", sourceTool: "plugin:reviewer" },
         __openclaw: {
           pluginSteering: {
             pluginId: "reviewer",
             pluginName: "Reviewer",
-            displayText: "Keep the change small.",
+            displayText: guidance,
           },
         },
       },
@@ -53,27 +54,21 @@ it("withholds plugin guidance when Control UI session access is revoked after hi
         client,
         context,
         respond,
-        req: { type: "req", id: "steering-history-revocation", method: "chat.history" },
+        req: { type: "req", id: scope.sessionId, method: "chat.history" },
         isWebchatConnect: () => true,
       });
     const initial = vi.fn<RespondFn>();
     await call(initial);
-    expect(initial).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        messages: [
-          expect.objectContaining({
-            display: true,
-            content: [{ type: "text", text: "Keep the change small." }],
-          }),
-        ],
-      }),
-    );
+    const visible = expect.objectContaining({
+      display: true,
+      content: [{ type: "text", text: guidance }],
+    });
+    expect(initial).toHaveBeenCalledWith(true, expect.objectContaining({ messages: [visible] }));
 
     const prepared = createDeferred();
     const release = createDeferred();
     const read = historyPages.readChatHistoryPage;
-    const readSpy = vi
+    using readSpy = vi
       .spyOn(historyPages, "readChatHistoryPage")
       .mockImplementationOnce(async (...args) => {
         const page = await read(...args);
@@ -90,18 +85,14 @@ it("withholds plugin guidance when Control UI session access is revoked after hi
       await patchSessionEntryCore(scope, () => ({ visibility: "draft" }));
     } finally {
       release.resolve();
-      try {
-        await pending;
-      } finally {
-        readSpy.mockRestore();
-      }
+      await pending;
     }
     expect(respond).toHaveBeenCalledExactlyOnceWith(
       false,
       undefined,
       expect.objectContaining({ code: "INVALID_REQUEST" }),
     );
-    expect(JSON.stringify(respond.mock.calls)).not.toContain("Keep the change small.");
+    expect(JSON.stringify(respond.mock.calls)).not.toContain(guidance);
     expect(JSON.stringify(respond.mock.calls)).not.toContain("Private model prefix");
   });
 });
