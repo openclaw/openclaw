@@ -11,6 +11,10 @@ import { doctorDatabasePort } from "../../commands/doctor-database-port.js";
 import * as configIo from "../../config/io.js";
 import * as pluginMetadata from "../../plugins/plugin-metadata-snapshot.js";
 import { readBackupEngine } from "../../snapshot/database-backup.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import * as recovery from "../database-port-recovery.js";
 import * as disk from "../disk-space.js";
 import { acquireGatewayLock } from "../gateway-lock.js";
@@ -183,6 +187,55 @@ describe("database port command custody and inspection", () => {
 });
 
 describe.skipIf(!connection)("database port command PostgreSQL conformance", () => {
+  it("privately adds the first-use deletion phase when porting a current-schema journal", async () => {
+    await fixture(async ({ state, client }) => {
+      assert(client);
+      openOpenClawStateDatabase({ env: state.env });
+      await closeOpenClawStateDatabaseAsync();
+      const shared = state.statePath("state", "openclaw.sqlite");
+      {
+        using db = openNodeSqliteDatabase(shared);
+        db.exec(`
+          ALTER TABLE agent_deletion_journal DROP COLUMN phase;
+          INSERT INTO agent_deletion_journal (agent_id, agent_dir, workspace_dir, sessions_dir, created_at)
+          VALUES ('retired', '/retired/agent', '/retired/workspace', '/retired/sessions', 17);
+        `);
+      }
+      const original = hash(shared);
+      const preview = await doctorDatabasePort({ to: "postgres", dryRun: true });
+      expect(preview).toMatchObject({ migrations: [shared] });
+      expect(hash(shared)).toBe(original);
+      const ported = await doctorDatabasePort({ to: "postgres" });
+      const anchor = readBackupEngine(shared);
+      assert(anchor.engine === "postgres");
+      expect(
+        (
+          await client.query(
+            `SELECT agent_id, phase, created_at FROM "${anchor.namespace}".agent_deletion_journal`,
+          )
+        ).rows,
+      ).toEqual([{ agent_id: "retired", phase: null, created_at: "17" }]);
+      assert("manifest" in ported && typeof ported.manifest === "string");
+      const saved = JSON.parse(
+        fs.readFileSync(ported.manifest, "utf8"),
+      ) as recovery.DatabasePortManifest;
+      const captured = saved.targets.find(
+        (target) => target.original.engine === "sqlite" && target.original.path === shared,
+      );
+      assert(captured);
+      using originalDb = openNodeSqliteDatabase(captured.originalCapture.path, { readOnly: true });
+      expect(
+        originalDb
+          .prepare("PRAGMA table_info(agent_deletion_journal)")
+          .all()
+          .map((column) => column.name),
+      ).not.toContain("phase");
+      expect(
+        originalDb.prepare("SELECT agent_id, created_at FROM agent_deletion_journal").all(),
+      ).toEqual([{ agent_id: "retired", created_at: 17 }]);
+    }, true);
+  }, 120_000);
+
   it("reconnects after a committed PostgreSQL transaction loses its reply before authorizing the anchor", async () => {
     assert(connection);
     const proxy = await loseOneCommittedReply(connection);
