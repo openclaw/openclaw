@@ -6,7 +6,6 @@ import { describe, expect, it, vi } from "vitest";
 import { parseExecApprovalData } from "./approval-custom-id.js";
 import { discordApprovalNativeRuntime } from "./approval-handler.runtime.js";
 import { parseCustomId } from "./internal/components.base.js";
-import { Container } from "./internal/components.message.js";
 
 const handlerContext = {
   cfg: {},
@@ -195,9 +194,9 @@ describe("discordApprovalNativeRuntime", () => {
           : await discordApprovalNativeRuntime.presentation.buildExpiredResult(args as never);
 
       assert(result.kind === "update");
-      assert(result.payload instanceof Container);
-      const container = result.payload.serialize();
+      const container = result.payload;
       expect(container).toMatchObject({
+        type: 17,
         accent_color: accentColor,
         components: expect.arrayContaining(
           [

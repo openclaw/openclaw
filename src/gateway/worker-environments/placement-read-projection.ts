@@ -14,7 +14,7 @@ import {
   getAdmittedSqliteSchemaFacts,
   type SqliteSchemaFacts,
 } from "../../infra/sqlite-schema-facts.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { readTableColumns, tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
 import { workerInferenceMetadata } from "./inference-placement.js";
@@ -339,15 +339,13 @@ export function readWorkerSessionPlacementProjectionInDatabase(
     return { projection, conflictSessionIds };
   };
   // One SELECT has its own snapshot; multiple batches must retain the same read transaction.
-  return sessionIds.length <= PROJECTION_BATCH_SIZE
-    ? read()
-    : runSqliteDeferredTransactionSync(db, read);
+  return sessionIds.length <= PROJECTION_BATCH_SIZE ? read() : runSqliteReadSnapshotSync(db, read);
 }
 
 export function readWorkerPlacementRecoveryCandidatesInDatabase(
   db: EngineConnection,
 ): WorkerPlacementRecoveryCandidate[] {
-  return runSqliteDeferredTransactionSync(db, () => {
+  return runSqliteReadSnapshotSync(db, () => {
     const query = getNodeSqliteKysely<StateDatabase>(db);
     const placements = new Map(
       executeSqliteQuerySync(

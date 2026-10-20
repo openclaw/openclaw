@@ -4,7 +4,6 @@ import { root as openFsSafeRoot } from "../../infra/fs-safe.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { createStagedInputPathMatcher } from "../../media/staged-inputs.js";
 import { getOrCreatePromise } from "../../shared/lazy-promise.js";
-import { isManagedSandboxSkillsPath } from "../../shared/sandbox-workspace-paths.js";
 import { MAX_WORKSPACE_INVENTORY_ENTRIES } from "./workspace-inventory-limits.js";
 import {
   hasPathAncestor,
@@ -17,7 +16,11 @@ import type {
   WorkspaceManifestValueOutputs,
 } from "./workspace-manifest-computation.js";
 import { workspacePathAncestors } from "./workspace-path-ancestors.js";
-import { isDerivedWorkspacePath } from "./workspace-path-exclusions.js";
+import {
+  isDerivedWorkspacePath,
+  isRuntimeOwnedWorkspacePath,
+  buildCacheInputPaths,
+} from "./workspace-path-exclusions.js";
 import {
   directoryContainsOnlyWorkspaceEntries,
   localPath,
@@ -31,6 +34,7 @@ async function localWorkspaceDescendantPaths(
   entryPaths: readonly string[],
   isRetainedInput: ReturnType<typeof createStagedInputPathMatcher>,
   nonDirectoryReplacements: ReadonlySet<string>,
+  excludeBuildCaches: boolean,
 ): Promise<string[]> {
   const paths: string[] = [];
   const pending = [...entryPaths];
@@ -52,15 +56,15 @@ async function localWorkspaceDescendantPaths(
       if (pathBytes > MAX_RECONCILIATION_PATH_BYTES) {
         throw new Error("Gateway workspace manifest paths exceed their byte limit");
       }
-      if (isManagedSandboxSkillsPath(childPath)) {
-        // Runtime projections are excluded edits, not disposable cache children.
+      if (isRuntimeOwnedWorkspacePath(childPath)) {
+        // Runtime-owned paths are excluded edits, not disposable cache children.
         // Surface their presence as a conflict before replacing an ancestor.
         if (hasPathAncestor(nonDirectoryReplacements, childPath)) {
           paths.push(childPath);
         }
         continue;
       }
-      if (isDerivedWorkspacePath(childPath, await isRetainedInput(childPath))) {
+      if (isDerivedWorkspacePath(childPath, await isRetainedInput(childPath), excludeBuildCaches)) {
         continue;
       }
       paths.push(childPath);
@@ -76,7 +80,15 @@ async function localWorkspaceDescendantPaths(
 export async function preflightWorkspaceApplyImpl(
   params: Omit<WorkspaceManifestValueInputs["workspace.reconcile.preflight"], "hashes">,
 ): Promise<WorkspaceManifestValueOutputs["workspace.reconcile.preflight"]["value"]> {
-  const isRetainedInput = createStagedInputPathMatcher(await openFsSafeRoot(params.root));
+  const excludeBuildCaches =
+    params.base.buildCacheInputs !== undefined || params.current.buildCacheInputs !== undefined;
+  const staged = createStagedInputPathMatcher(await openFsSafeRoot(params.root));
+  const retained = buildCacheInputPaths([
+    ...(params.base.buildCacheInputs ?? []),
+    ...(params.current.buildCacheInputs ?? []),
+  ]);
+  const isRetainedInput = async (entryPath: string) =>
+    retained.has(entryPath) || (await staged(entryPath));
   const baseNodes = manifestNodes(params.base);
   const currentNodes = manifestNodes(params.current);
   const manifestPaths = [...new Set([...baseNodes.keys(), ...currentNodes.keys()])];
@@ -109,6 +121,7 @@ export async function preflightWorkspaceApplyImpl(
     localStructuralRoots,
     isRetainedInput,
     new Set(structuralRoots.filter((entryPath) => currentNodes.has(entryPath))),
+    excludeBuildCaches,
   );
   const paths = [...new Set([...changed, ...localStructuralPaths])].toSorted();
   const applyPaths = new Set<string>();
@@ -179,9 +192,16 @@ export async function preflightWorkspaceApplyImpl(
       local = await localNode(entryPath);
       if (
         local?.type === "directory" &&
+        !isRuntimeOwnedWorkspacePath(entryPath) &&
         (!baseNodes.has(entryPath) || !currentNodes.has(entryPath)) &&
         currentNodes.get(entryPath)?.type !== "directory" &&
-        (await directoryContainsOnlyWorkspaceEntries(params.root, entryPath, isRetainedInput))
+        (await directoryContainsOnlyWorkspaceEntries(
+          params.root,
+          entryPath,
+          isRetainedInput,
+          undefined,
+          excludeBuildCaches,
+        ))
       ) {
         local = undefined;
       }

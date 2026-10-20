@@ -1,10 +1,10 @@
-import { onTestFinished, vi } from "vitest";
+import { expect, onTestFinished, vi } from "vitest";
 import type { GatewayAgentRow, ModelCatalogEntry } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGateway } from "../../app/context.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import { modelCatalogEventInvalidation } from "../../lib/model-catalog-cache.ts";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { NewSessionModelControlView } from "./model-control-view.tsx";
 import { NewSessionModelControl } from "./model-control.ts";
 
@@ -128,5 +128,13 @@ export function renderControl(
     picker.dispatchEvent(new Event("toggle"));
     flush();
   }
+  return container;
+}
+
+export async function waitForModelControl(...params: Parameters<typeof renderControl>) {
+  const container = renderControl(...params);
+  await waitForSolid(() =>
+    expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
+  );
   return container;
 }

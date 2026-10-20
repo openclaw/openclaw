@@ -49,10 +49,52 @@ Doctor completes recognized schema-1 databases that predate the audit ledger bef
 | 25      | Original operator restriction retained for recovered subagent completions; metadata-only downgrade fence                                                                                                                                                                                                                                       | Unreleased          |
 | 26      | Session state heads stored directly by their composite primary key                                                                                                                                                                                                                                                                             | Unreleased          |
 | 27      | Redundant ACP replay and skill-usage indexes removed; lease-owner index no longer includes the renewal timestamp                                                                                                                                                                                                                               | Unreleased          |
+| 28      | GitHub publication requests retain their explicit draft choice across execution and recovery                                                                                                                                                                                                                                                   | Unreleased          |
+| 29      | Client private identities, token caches, and native socket credentials move to a separately versioned local store                                                                                                                                                                                                                              | Unreleased          |
 
 Earlier beta releases first included schema 1 in `v2026.5.30-beta.1`, schema 2
 in `v2026.7.2-beta.1`, schema 3 in `v2026.7.2-beta.2`, schema 5 in
 `v2026.7.2-beta.4`, and schema 6 in `v2026.7.2-beta.5`.
+
+### State schema 29
+
+Schema 29 moves client private material to local SQLite schema 1 at
+`<resolved-client-root>/client/credentials.sqlite` on both SQLite and PostgreSQL
+installations. The shared schema retires `device_identities`, `device_auth_tokens`,
+and `gateway_origin_device_tokens`; `exec_approvals_config` keeps shared approval
+policy with its socket material cleared. Policy semantics do not change.
+
+Updater or Doctor custody captures the source, copies and verifies exact identity
+and token bytes, records a pending receipt, retires the source, and publishes a
+complete receipt. Native bootstrap reads this local receipt without opening the
+selected Gateway database. An old native client refuses the missing shared tables;
+update the app and run the matching `openclaw doctor --fix` for pending migration.
+
+For schema 28→29, the table-scoped SQLite recovery copy contains `device_identities`,
+`device_auth_tokens`, `gateway_origin_device_tokens`, and `exec_approvals_config`,
+plus existing `sqlite_stat1` and `sqlite_stat4` for the removed indexes. Older sources
+also include the scopes declared by intervening migrations. A binary
+rollback requires the pre-upgrade shared database, where those tables still exist.
+Published SQLite drivers ignore the orphaned local store; credentials issued
+between upgrade and rollback are lost and affected clients re-pair. The next
+upgrade rebuilds a stale orphan from the restored shared source, never merges it.
+Engine-aware PostgreSQL drivers also capture and restore the local family.
+See [local client credentials](/reference/database-schemas/versioning#local-client-credentials).
+
+### State schema 28
+
+Schema 28 adds a nullable `draft` field to the existing shared, personal, and
+repository-checkpoint GitHub publication request tables. New requests record
+open or draft creation explicitly. Previously accepted requests retain null,
+their original request digest, and their original draft behavior after recovery.
+Updating an existing PR does not change its state.
+
+SQLite and PostgreSQL add the field transactionally without rewriting retained
+requests. Absent first-use tables remain absent. The declared backup scope is
+these three request tables plus the schema and content-version metadata supplied
+by the backup owner. No credentials, retention policy, or publication authority
+changes. Older builds refuse the new version; rollback restores the verified
+pre-upgrade backup with its matching build.
 
 ### State schema 27
 

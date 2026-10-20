@@ -42,26 +42,30 @@ const native: ModelProviderConfig = {
     },
   ],
 };
-const metadata = createPluginMetadataSnapshotFixture({
-  plugins: [
-    {
-      id: "catalog-owner",
-      providers: ["fixture", "cached-fixture"],
-      modelIdNormalization: {
-        providers: {
-          fixture: { aliases: { latest: "middle", middle: "final" } },
-          "cached-fixture": { aliases: { latest: "middle", middle: "final" } },
+function createMetadata() {
+  return createPluginMetadataSnapshotFixture({
+    plugins: [
+      {
+        id: "catalog-owner",
+        providers: ["fixture", "cached-fixture"],
+        modelIdNormalization: {
+          providers: {
+            fixture: { aliases: { latest: "middle", middle: "final" } },
+            "cached-fixture": { aliases: { latest: "middle", middle: "final" } },
+          },
         },
       },
-    },
-  ],
-});
+    ],
+  });
+}
 
 describe("manual root catalog authorship", () => {
   let state: OpenClawTestState;
+  let metadata: ReturnType<typeof createMetadata>;
   beforeEach(async () => {
     clearRuntimeAuthProfileStoreSnapshots();
     state = await createOpenClawTestState({ label: "manual-root-catalog" });
+    metadata = createMetadata();
   });
   afterEach(async () => {
     clearRuntimeAuthProfileStoreSnapshots();

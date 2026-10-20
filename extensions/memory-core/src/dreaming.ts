@@ -15,11 +15,7 @@ import {
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { peekSystemEventEntries } from "openclaw/plugin-sdk/system-event-runtime";
-import {
-  type CronServiceLike,
-  reconcileShortTermDreamingCronJob,
-  resolveCronServiceFromGatewayContext,
-} from "./dreaming-cron.js";
+import { type CronServiceLike, reconcileShortTermDreamingCronJob } from "./dreaming-cron.js";
 import { appendFailedDreamingEvent } from "./dreaming-events.js";
 import type { DreamNarrativeRequest, NarrativePhaseData } from "./dreaming-narrative.js";
 import {
@@ -370,6 +366,7 @@ async function runShortTermDreamingPromotion(params: {
 export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void {
   let resolveServiceCron: (() => CronServiceLike | null) | null = null;
   let unavailableCronWarningEmitted = false;
+  let missingOwnerWarningEmitted = false;
   let startupDreamingCleanupTimer: ReturnType<typeof setTimeout> | null = null;
   const dreamingTasks = new Set<Promise<unknown>>();
   let runtimeCronReconcileTimer: ReturnType<typeof setInterval> | null = null;
@@ -431,11 +428,18 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     if (cron) {
       unavailableCronWarningEmitted = false;
     }
-    await reconcileShortTermDreamingCronJob({
+    const result = await reconcileShortTermDreamingCronJob({
       cron,
       config,
       logger: api.logger,
     });
+    const missingOwner = result.status === "owner-required";
+    if (missingOwner && !missingOwnerWarningEmitted) {
+      api.logger.warn(
+        "memory-core: managed dreaming cron job was not created because no ambient agent owner is configured. Set agents.defaults.systemAgent.agentId to an existing agent to enable automatic dreaming.",
+      );
+    }
+    missingOwnerWarningEmitted = missingOwner;
   };
 
   const startRuntimeCronReconcileTimer = (): void => {
@@ -541,7 +545,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
       }
       serviceStartedAtMs = Date.now();
       disposed = false;
-      resolveServiceCron = () => resolveCronServiceFromGatewayContext(ctx);
+      resolveServiceCron = () => ctx.getCron?.() ?? null;
       void trackDreamingTask(async () => {
         try {
           await reconcileManagedDreamingCron({
@@ -565,7 +569,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     },
   });
 
-  api.on("gateway_start", async (_event, ctx) => {
+  api.on("gateway_start", (_event, ctx) => {
     const startupStartedAtMs = serviceStartedAtMs;
     if (disposed || startupStartedAtMs === undefined) {
       return;
@@ -574,7 +578,9 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
       clearTimeout(startupDreamingCleanupTimer);
       startupDreamingCleanupTimer = null;
     }
-    await trackDreamingTask(() =>
+    // Historical cleanup is maintenance, not activation. Keep it owned by the
+    // instance and joined at service stop without consuming the start hook deadline.
+    void trackDreamingTask(() =>
       startDreamingSessionCleanup(ctx.config ?? api.config, startupStartedAtMs),
     ).catch((error: unknown) => {
       api.logger.warn(`memory-core: dreaming startup cleanup failed: ${formatErrorMessage(error)}`);

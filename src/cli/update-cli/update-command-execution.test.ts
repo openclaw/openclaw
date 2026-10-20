@@ -256,7 +256,7 @@ describe("mutable update execution", () => {
           serviceMutationSkipMessage: expect.stringContaining("rc.d or foreground process owner"),
         });
         expect(execution?.preManagedServiceStop?.serviceMutationSkipMessage).toContain(
-          "Restart the Gateway you launched manually",
+          "openclaw gateway stop",
         );
         expect(mocks.serviceStopped).toBe(false);
         expect(mocks.runPackageUpdate).toHaveBeenCalled();

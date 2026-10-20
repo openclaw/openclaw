@@ -378,7 +378,6 @@ describeUnix("inspectPortUsage", () => {
       port: address.port,
       status: "busy",
       listeners: [],
-      detail: undefined,
       errors,
     });
     expect(result?.hints).toContain(
@@ -515,40 +514,6 @@ describeUnix("inspectPortUsage", () => {
     ]);
   });
 
-  it("does not match ss listener ports by substring", async () => {
-    mockUnixCommands({
-      lsof: Object.assign(new Error("spawn lsof ENOENT"), { code: "ENOENT" }),
-      ss: commandOutput(
-        'LISTEN 0 4096 127.0.0.1:18789 0.0.0.0:* users:(("openclaw",pid=123,fd=12))',
-      ),
-    });
-
-    const result = await inspectPortUsage(1878);
-
-    expect(result.listeners).toEqual([]);
-  });
-
-  it("matches ss listener on exact port within multi-listener output", async () => {
-    mockUnixCommands({
-      lsof: Object.assign(new Error("spawn lsof ENOENT"), { code: "ENOENT" }),
-      ss: commandOutput(
-        [
-          'LISTEN 0 4096 127.0.0.1:8080 0.0.0.0:* users:(("app",pid=100,fd=3))',
-          'LISTEN 0 4096 127.0.0.1:18789 0.0.0.0:* users:(("openclaw",pid=123,fd=12))',
-          'LISTEN 0 4096 127.0.0.1:18790 0.0.0.0:* users:(("other",pid=456,fd=7))',
-        ].join("\n"),
-      ),
-    });
-
-    const result = await inspectPortUsage(18789);
-
-    expect(result.listeners).toHaveLength(1);
-    expect(result.listeners[0]).toMatchObject({
-      pid: 123,
-      address: "127.0.0.1:18789",
-    });
-  });
-
   it("reports established gateway client connections from lsof", async () => {
     mockUnixCommands({
       lsof: commandOutput(
@@ -673,8 +638,6 @@ describeUnix("inspectPortUsage", () => {
         }),
       ],
     });
-    expect(results.get(18789)?.detail).toBe("p111\ncnode\nnTCP *:18789 (LISTEN)");
-    expect(results.get(19001)?.detail).toBe("p222\ncdeno\nnTCP 127.0.0.1:19001 (LISTEN)");
   });
 
   it("preserves malformed lsof pid records as unknown-pid listener diagnostics", async () => {
@@ -800,7 +763,6 @@ describeUnix("inspectPortUsage", () => {
         ppid: 1,
       },
     ]);
-    expect(result.errors).toBeUndefined();
   });
 
   it("preserves ss rows with IPv6, unknown processes, and multiple process owners", async () => {
@@ -841,7 +803,6 @@ describeUnix("inspectPortUsage", () => {
         direction: "client",
       },
     ]);
-    expect(result.errors).toBeUndefined();
   });
 
   it("preserves ss rows for exact-port listeners without reading process text as socket fields", async () => {
@@ -849,47 +810,26 @@ describeUnix("inspectPortUsage", () => {
       lsof: commandOutput("", 2),
       ss: commandOutput(
         [
-          'LISTEN 0 128 [::1]:18789 [::]:* users:(("node worker:1",pid=111,fd=12))',
-          "LISTEN 0 128 127.0.0.1:18789 0.0.0.0:*",
+          'LISTEN 0 128 [::1]:1878 [::]:* users:(("node worker:1",pid=111,fd=12))',
+          "LISTEN 0 128 127.0.0.1:1878 0.0.0.0:*",
+          'LISTEN 0 128 127.0.0.1:8080 0.0.0.0:* users:(("app",pid=100,fd=3))',
+          'LISTEN 0 128 127.0.0.1:1879 0.0.0.0:* users:(("other",pid=456,fd=7))',
+          // A valid prefix neighbor must be rejected independently of the invalid port below.
+          'LISTEN 0 128 127.0.0.1:18789 0.0.0.0:* users:(("prefix",pid=444,fd=8))',
           'LISTEN 0 128 127.0.0.1:187890 0.0.0.0:* users:(("other",pid=222,fd=13))',
-          'ESTAB 0 0 127.0.0.1:18789 127.0.0.1:50123 users:(("LISTEN :1",pid=333,fd=14))',
+          'ESTAB 0 0 127.0.0.1:1878 127.0.0.1:50123 users:(("LISTEN :1",pid=333,fd=14))',
         ].join("\n"),
       ),
     });
 
-    const result = await inspectPortUsage(18789);
+    const result = await inspectPortUsage(1878);
 
     expect(result.status).toBe("busy");
     expect(result.listeners).toEqual([
-      { address: "[::1]:18789", pid: 111, command: "node worker:1" },
-      { address: "127.0.0.1:18789" },
+      { address: "[::1]:1878", pid: 111, command: "node worker:1" },
+      { address: "127.0.0.1:1878" },
     ]);
     expect(result.errors).toBeUndefined();
-  });
-
-  it("falls back to ss for established gateway client connections", async () => {
-    mockUnixCommands({
-      lsof: commandOutput("", 1, "lsof: not found\n"),
-      ss: commandOutput(
-        '0 0 127.0.0.1:50123 127.0.0.1:18789 users:(("node",pid=111,fd=12))\n' +
-          '0 0 127.0.0.1:50124 198.51.100.7:18789 users:(("browser",pid=333,fd=9))\n',
-      ),
-      commandLine: (pid) =>
-        pid === "111"
-          ? "node /tmp/newer-openclaw/dist/index.js logs --follow"
-          : "browser https://example.invalid/",
-      user: "tester",
-      parentPid: "1",
-    });
-
-    const result = await inspectPortConnections(18789);
-
-    expect(result.connections).toHaveLength(1);
-    expect(result.connections[0]).toMatchObject({
-      pid: 111,
-      direction: "client",
-      commandLine: "node /tmp/newer-openclaw/dist/index.js logs --follow",
-    });
   });
 });
 
@@ -1113,7 +1053,6 @@ describe.skipIf(process.platform !== "linux")("native ss process metadata contra
         direction: "client",
         address: `TCP 127.0.0.1:${clientPort}->127.0.0.1:${port} (ESTABLISHED)`,
       });
-      expect(result.errors).toBeUndefined();
     });
   }, 30_000);
 });

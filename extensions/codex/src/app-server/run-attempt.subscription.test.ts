@@ -212,20 +212,19 @@ describe("Codex attempt subscription recovery", () => {
   });
 
   it.each<{
-    nativeOwned: boolean;
     failureAt: "monitor" | "turn request";
     revoked?: "abort" | "host" | "binding" | "closed" | "expired" | "successor";
   }>([
-    { nativeOwned: true, failureAt: "turn request" },
-    { nativeOwned: true, failureAt: "monitor", revoked: "abort" },
-    { nativeOwned: true, failureAt: "monitor", revoked: "host" },
-    { nativeOwned: true, failureAt: "monitor", revoked: "binding" },
-    { nativeOwned: true, failureAt: "monitor", revoked: "closed" },
-    { nativeOwned: true, failureAt: "monitor", revoked: "expired" },
-    { nativeOwned: true, failureAt: "monitor", revoked: "successor" },
+    { failureAt: "turn request" },
+    { failureAt: "monitor", revoked: "abort" },
+    { failureAt: "monitor", revoked: "host" },
+    { failureAt: "monitor", revoked: "binding" },
+    { failureAt: "monitor", revoked: "closed" },
+    { failureAt: "monitor", revoked: "expired" },
+    { failureAt: "monitor", revoked: "successor" },
   ])(
-    "settles a warm claim after $failureAt failure (native: $nativeOwned, revoked: $revoked)",
-    async ({ nativeOwned, failureAt, revoked }) => {
+    "settles a native warm claim after $failureAt failure (revoked: $revoked)",
+    async ({ failureAt, revoked }) => {
       const sessionFile = path.join(tempDir, "subscription-session.jsonl");
       const workspaceDir = path.join(tempDir, "workspace");
       const threadId = "thread-1";
@@ -244,21 +243,19 @@ describe("Codex attempt subscription recovery", () => {
           originalHost.assertActive();
         },
       };
-      if (nativeOwned) {
-        const native = threadStartResult(threadId);
-        await writeCodexAppServerBinding(sessionFile, {
-          threadId,
-          cwd: workspaceDir,
-          dynamicToolsFingerprint: "[]",
-          preserveNativeModel: true,
-          webSearchThreadConfigFingerprint: JSON.stringify({
-            "features.standalone_web_search": false,
-            web_search: "disabled",
-          }),
-          model: native.model,
-          modelProvider: native.modelProvider,
-        });
-      }
+      const native = threadStartResult(threadId);
+      await writeCodexAppServerBinding(sessionFile, {
+        threadId,
+        cwd: workspaceDir,
+        dynamicToolsFingerprint: "[]",
+        preserveNativeModel: true,
+        webSearchThreadConfigFingerprint: JSON.stringify({
+          "features.standalone_web_search": false,
+          web_search: "disabled",
+        }),
+        model: native.model,
+        modelProvider: native.modelProvider,
+      });
       let turnCount = 0;
       const harness = createStartedThreadHarness(
         async (method) => {
@@ -271,7 +268,7 @@ describe("Codex attempt subscription recovery", () => {
           }
           return undefined;
         },
-        { persistedThreads: nativeOwned ? [threadId] : [] },
+        { persistedThreads: [threadId] },
       );
       const first = runCodexAppServerAttempt(params);
       await harness.waitForMethod("turn/start");
@@ -280,7 +277,7 @@ describe("Codex attempt subscription recovery", () => {
       const originalBinding = await readCodexAppServerBinding(sessionFile);
       expect(originalBinding).toMatchObject({
         threadId,
-        ...(nativeOwned ? { preserveNativeModel: true } : {}),
+        preserveNativeModel: true,
       });
       harness.requests.length = 0;
 

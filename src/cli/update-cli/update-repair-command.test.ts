@@ -484,6 +484,15 @@ describe("update repair ledger recovery", () => {
     { driver: "reused", ageMs: 60_000 },
   ] as const)("repairs a dead driver without maintenance: %j", async (fixture) => {
     const run = seedRun(fixture);
+    const recorded = getUpdateRun(run.runId);
+    expect(await readUpdateRunStatus()).toMatchObject({
+      abandonedRun: {
+        runId: run.runId,
+        rule: "inactive-driver-dead",
+        nextAction: "Run `openclaw update repair` before retrying the update.",
+      },
+    });
+    expect(getUpdateRun(run.runId)).toEqual(recorded);
 
     await runRegisteredCli({ register: registerUpdateCli, argv: ["update", "repair"] });
 
@@ -503,6 +512,31 @@ describe("update repair ledger recovery", () => {
     );
     expect(mocks.runtime.exit).not.toHaveBeenCalledWith(1);
   });
+
+  it.each(["exited", "reused"] as const)(
+    "settles a %s repair driver before later maintenance can fail",
+    async (driver) => {
+      const run = seedRun({ phase: "repairing", driver, ageMs: 60_000 });
+      recordUpdateRunStep(run.runId, { step: "finalize:doctor", status: "in_progress" });
+      let observedBeforeMaintenance: UpdateRunRecord | undefined;
+      mocks.finalize.mockImplementationOnce(async () => {
+        observedBeforeMaintenance = getUpdateRun(run.runId);
+        throw new Error("Later maintenance failed");
+      });
+
+      await expect(updateRepairCommand({ yes: true })).rejects.toThrow("Later maintenance failed");
+
+      expect(observedBeforeMaintenance).toMatchObject({
+        phase: "finished",
+        status: "failed",
+        reason: "abandoned",
+      });
+      expect(getUpdateRun(run.runId)).toEqual(observedBeforeMaintenance);
+      expect(observedBeforeMaintenance?.steps).not.toContainEqual(
+        expect.objectContaining({ step: "reconcile:acknowledged" }),
+      );
+    },
+  );
 
   it.each(["abandoned", "legacy-driver-expired"])(
     "exits successfully when the Gateway already reconciled the %s row",
@@ -816,7 +850,7 @@ describe("update repair ledger recovery", () => {
     await expect(updateRepairCommand({})).rejects.toThrow("Stop the service through its owner");
 
     expect(getUpdateRun(run.runId)).toEqual(run);
-    expect(mocks.finalize).toHaveBeenCalledWith({}, [run.runId]);
+    expect(mocks.finalize).toHaveBeenCalledWith({}, [run.runId], undefined);
     expect(mocks.runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("Reconciled"));
   });
 });

@@ -1,5 +1,4 @@
 // Google provider test helpers assert converted message and stream payloads.
-import { expect } from "vitest";
 import type { Model } from "../types.js";
 import { buildGoogleGenerateContentParams } from "./google-shared.js";
 
@@ -85,24 +84,4 @@ export function makeGoogleAssistantMessage(model: string, content: unknown) {
     stopReason: "stop",
     timestamp: 0,
   };
-}
-
-export function makeGeminiCliAssistantMessage(model: string, content: unknown) {
-  return {
-    role: "assistant",
-    content,
-    api: "google-gemini-cli",
-    provider: "google-gemini-cli",
-    model,
-    usage: makeZeroUsageSnapshot(),
-    stopReason: "stop",
-    timestamp: 0,
-  };
-}
-
-export function expectConvertedRoles(contents: Array<{ role?: string }>, expectedRoles: string[]) {
-  expect(contents).toHaveLength(expectedRoles.length);
-  for (const [index, role] of expectedRoles.entries()) {
-    expect(contents[index]?.role).toBe(role);
-  }
 }

@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import { cleanupFeishuMonitorStateForTests } from "./monitor.cleanup.test-helpers.js";
-import { botOpenIds, wsClients } from "./monitor.state.js";
+import { botOpenIds } from "./monitor.state.js";
 import { monitorWebSocket } from "./monitor.transport.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
@@ -39,7 +39,6 @@ async function startMonitor(accountId: string, ...clients: ReturnType<typeof cre
     async stop() {
       abortController.abort();
       await monitor;
-      expect(wsClients.has(accountId)).toBe(false);
       expect(botOpenIds.has(accountId)).toBe(false);
     },
     async reportError(message: string) {
@@ -80,10 +79,8 @@ describe("feishu websocket cleanup", () => {
     const monitor = await startMonitor("retry", failed, recovered);
     expect(failed.start).toHaveBeenCalledTimes(1);
     expect(failed.close).toHaveBeenCalledTimes(1);
-    expect(wsClients.has("retry")).toBe(false);
     await vi.advanceTimersByTimeAsync(1_000);
     expect(recovered.start).toHaveBeenCalledTimes(1);
-    expect(wsClients.get("retry")).toBe(recovered);
     await monitor.stop();
     expect(createFeishuWSClientMock).toHaveBeenCalledTimes(2);
     expect(recovered.close).toHaveBeenCalledTimes(1);
@@ -100,14 +97,11 @@ describe("feishu websocket cleanup", () => {
     const recovered = createWsClient();
     const monitor = await startMonitor("exhausted", exhausted, recovered);
     expect(exhausted.start).toHaveBeenCalledTimes(1);
-    expect(wsClients.get("exhausted")).toBe(exhausted);
     await monitor.reportError("WebSocket reconnect exhausted after 3 attempts\nBearer token_abc");
     expect(exhausted.close).toHaveBeenCalledTimes(1);
-    expect(wsClients.has("exhausted")).toBe(false);
     expect(botOpenIds.get("exhausted")).toBe("ou_bot");
     await vi.advanceTimersByTimeAsync(1_000);
     expect(recovered.start).toHaveBeenCalledTimes(1);
-    expect(wsClients.get("exhausted")).toBe(recovered);
     await monitor.stop();
     expect(createFeishuWSClientMock).toHaveBeenCalledTimes(2);
     expect(recovered.close).toHaveBeenCalledTimes(1);
@@ -120,12 +114,10 @@ describe("feishu websocket cleanup", () => {
     const client = createWsClient();
     const monitor = await startMonitor("recoverable", client);
     expect(client.start).toHaveBeenCalledTimes(1);
-    expect(wsClients.get("recoverable")).toBe(client);
     await monitor.reportError("temporary callback failure\nBearer token_abc");
     await vi.advanceTimersByTimeAsync(1_000);
     expect(createFeishuWSClientMock).toHaveBeenCalledTimes(1);
     expect(client.close).not.toHaveBeenCalled();
-    expect(wsClients.get("recoverable")).toBe(client);
     const message = errorMessage(monitor.runtime);
     expect(message).toContain("WebSocket SDK reported recoverable error");
     expect(message).toContain("Bearer [redacted]");

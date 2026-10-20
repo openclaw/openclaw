@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, vi } from "vitest";
+import { sha256Hex } from "../../../infra/crypto-digest.js";
 import { loadPendingSessionDeliveries } from "../../../infra/session-delivery-queue-storage.js";
-import { prepareClaimedSessionDelivery } from "../../../infra/session-delivery-queue.records.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -13,14 +13,18 @@ import {
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
+import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
 import { SubagentLifecycleController } from "../registry/subagent-registry-lifecycle.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
+import { mutateSubagentRuns } from "../registry/subagent-registry-persistence.js";
 import { getLatestLiveSubagentRunByChildSessionKey } from "../registry/subagent-registry-read.js";
 import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry-state.fixture.test-support.js";
+import { createSubagentRegistrySweeper } from "../registry/subagent-registry-sweeper.js";
 import { observeRootWork } from "../registry/subagent-registry.browser-cleanup.test-support.js";
 import { bindSubagentRunRecord } from "../registry/subagent-registry.store.codec.js";
 import { writeSubagentRunValuesInDatabase } from "../registry/subagent-registry.store.kernel.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
+import { mutateRequesterCompletionBatch } from "./subagent-completion-admission.store.js";
 
 /** Admit the actual worker before tests add deliberate runtime write-failure triggers. */
 export async function admitCompletionFixtureDatabase(): Promise<void> {
@@ -81,9 +85,7 @@ export function records() {
   const subagent = createSubagentRunRecord({
     runId: "completion-run",
     taskRunId: "original-run",
-    childSessionKey: "agent:main:subagent:child",
     childSessionIdentity: { sessionId: "session-id", lifecycleRevision: "session-revision" },
-    requesterSessionKey: "agent:main:main",
     requesterDisplayKey: "agent:main:main",
     requesterAgentId: "main",
     requesterOrigin: { channel: "discord", to: "channel:requester", accountId: "primary" },
@@ -92,41 +94,17 @@ export function records() {
     endedAt: now - 1_000,
     outcome: { status: "ok" },
     expectsCompletionMessage: true,
-    completion: {
-      required: true,
-      resultText: "canonical result",
-      terminalReply: { disposition: "visible", text: "canonical result" },
-      capturedAt: now,
-    },
+    completion: { required: true, resultText: "canonical result", capturedAt: now },
     delivery: {
       status: "in_progress",
       disposition: "session_queued",
       generation: 1,
-      queueId: "placeholder",
+      queueId: sha256Hex("completion:1"),
       windowStartedAt: now,
       deadlineAt: now + 30 * 60_000,
     },
   });
-  const queueEntry = prepareClaimedSessionDelivery(
-    {
-      kind: "agentTurn",
-      sessionKey: subagent.requesterSessionKey,
-      message: "canonical result is loaded at delivery time",
-      messageId: "completion:1",
-      idempotencyKey: "completion:1",
-      owner: {
-        kind: "subagent_completion",
-        runId: subagent.runId,
-        taskId: subagent.taskRunId!,
-        generation: 1,
-        deadlineAt: subagent.delivery!.deadlineAt!,
-      },
-    },
-    125_000,
-    now,
-  );
-  subagent.delivery!.queueId = queueEntry.id;
-  return { queueEntry, subagent };
+  return { subagent };
 }
 
 export function requesterWakeDriver(inputs: ReturnType<typeof records>[]) {
@@ -151,6 +129,7 @@ export function requesterWakeDriver(inputs: ReturnType<typeof records>[]) {
     notifyContextEngineSubagentEnded: vi.fn(async () => {}),
     retireSupersededRun: vi.fn(async () => {}),
     resumeSubagentRun: vi.fn(),
+    confirmProvisionalKill: vi.fn(),
     callGateway: vi.fn(),
     captureSubagentCompletionReply: vi.fn(),
     runSubagentAnnounceFlow: vi.fn(),
@@ -161,6 +140,47 @@ export function requesterWakeDriver(inputs: ReturnType<typeof records>[]) {
     controller,
     wake,
     warn,
+    [Symbol.dispose]: () => controller.clearRuntimeState(),
+    async sweep() {
+      const sweeper = createSubagentRegistrySweeper({
+        runs: subagentRuns,
+        resumedRuns: new Set(),
+        clearPendingLifecycleError: vi.fn(),
+        clearPendingLifecycleTimeout: vi.fn(),
+        sweepPendingLifecycle: vi.fn(),
+        completeSubagentRunWithRecovery: vi.fn(),
+        getGatewayRecoveryRuntime: () => undefined,
+        finalizeInterruptedSubagentRun: vi.fn(async () => 0),
+        startSubagentAnnounceCleanupFlow: controller.startSubagentAnnounceCleanupFlow,
+        completeCleanupBookkeeping: controller.completeCleanupBookkeeping,
+        resumeRequesterSettleWake: controller.resumeRequesterSettleWake,
+        resumePendingRequesterSettlements: controller.resumePendingRequesterSettlements,
+        isCleanupOwnerCurrent: controller.isCleanupOwnerCurrent,
+        isTerminalTailActive: controller.isTerminalTailActive,
+        sessionEffectsHostCurrent: (entry) => controller.sessionEffectsHostCurrent(entry),
+        shouldSuppressSessionEffects: (entry, effects) =>
+          controller.shouldSuppressSessionEffects(entry, effects),
+        discardTerminalDelivery: SubagentLifecycleController.discardTerminalDelivery,
+        shouldEmitEndedHookForRun: () => false,
+        emitSubagentEndedHookForRun: vi.fn(async () => {}),
+        callGateway: vi.fn(),
+        cleanupCollectorLaunchResources: vi.fn(async () => true),
+        runContextEngineSubagentEnded: vi.fn(async () => {}),
+        notifyContextEngineSubagentEnded: vi.fn(async () => {}),
+        retireSupersededRun: vi.fn(async () => {}),
+        retireObligations: vi.fn(async () => {}),
+        getRunsForChildSession: () => [],
+        getRunsForCollectorGroup: () => [],
+        warn,
+      });
+      const settleRootWork = observeRootWork();
+      try {
+        await sweeper.sweepOnce();
+      } finally {
+        await settleRootWork();
+        await sweeper.reset();
+      }
+    },
     async run(entry = inputs[0]!.subagent) {
       const settleRootWork = observeRootWork();
       try {
@@ -248,4 +268,36 @@ export async function reopenCompletionFixtureOwners() {
 
 export function currentCompletionRun(input: { subagent: SubagentRunRecord }): SubagentRunRecord {
   return expectDefined(subagentRuns.get(input.subagent.runId), "published completion run");
+}
+
+export function updateCompletionOwner(
+  runId: string,
+  update: (current: SubagentRunRecord) => SubagentRunRecord | null,
+  options?: Pick<NonNullable<Parameters<typeof mutateSubagentRuns>[2]>, "context">,
+): Promise<void> {
+  return mutateSubagentRuns(
+    [runId],
+    (rows) => ({
+      value: undefined,
+      postimages: new Map([[runId, update(expectDefined(rows.get(runId), "completion owner"))]]),
+    }),
+    options,
+  );
+}
+
+/** Fixture convenience; production callers use the guarded mutation owner directly. */
+export function settleRequesterCompletionBatch(
+  params: Omit<
+    Parameters<typeof mutateRequesterCompletionBatch>[0],
+    "operation" | "assertCurrent"
+  > & {
+    outcome?: SubagentAnnounceDeliveryResult;
+    assertCurrent?: () => void;
+  },
+): ReturnType<typeof mutateRequesterCompletionBatch> {
+  return mutateRequesterCompletionBatch({
+    ...params,
+    assertCurrent: params.assertCurrent ?? (() => {}),
+    operation: params.outcome ? { kind: "settle", outcome: params.outcome } : { kind: "complete" },
+  });
 }

@@ -1,13 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import * as onboardInference from "../commands/onboard-inference.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { waitForPluginCacheRetirement } from "../plugins/plugin-cache.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
-import { resolveManifestProviderAuthChoices } from "../plugins/provider-auth-choices.js";
 import { detectAvailableSetupProviderIds } from "../plugins/provider-setup-availability.js";
-import { resolvePluginProvidersCore } from "../plugins/providers.runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { detectSetupInference } from "./setup-inference-detect.js";
@@ -92,6 +91,7 @@ it.each([false, true])(
         },
       };
       await state.writeConfig(config);
+      const backend = vi.spyOn(onboardInference, "detectInferenceBackends").mockResolvedValue([]);
       try {
         for (let iteration = 0; iteration < 2; iteration++) {
           const started = createDeferredCore();
@@ -103,21 +103,7 @@ it.each([false, true])(
             }
           };
           process.on(observationEvent, observe);
-          const inventories: { choices?: object; providers?: object } = {};
-          const work = detectSetupInference(
-            {
-              detectInferenceBackends: async () => [],
-              resolveManifestProviderAuthChoices: (params) => {
-                inventories.choices = params?.metadataSnapshot;
-                return resolveManifestProviderAuthChoices(params);
-              },
-              resolvePluginProviders: (params) => {
-                inventories.providers = params.pluginMetadataSnapshot;
-                return resolvePluginProvidersCore(params);
-              },
-            },
-            "main",
-          );
+          const work = detectSetupInference("main");
           try {
             await Promise.race([started.promise, work]);
             expect(phases).toEqual(["detect"]);
@@ -141,9 +127,6 @@ it.each([false, true])(
                   ],
             );
             expect(phases).toEqual(["detect", "dispose"]);
-            // Repeated detection loads providers from the inventory that selected them.
-            expect(inventories.choices).toBeDefined();
-            expect(inventories.providers).toBe(inventories.choices);
             expect(process.listenerCount(nativeEvent)).toBe(nativeBefore);
             expect(process.listenerCount(releaseEvent)).toBe(0);
           } finally {
@@ -160,6 +143,7 @@ it.each([false, true])(
         ).toEqual(new Set([id]));
         expect(process.listenerCount(nativeEvent)).toBe(nativeBefore);
       } finally {
+        backend.mockRestore();
         // Restore only this fixture's events when running the regression against its leaking predecessor.
         process.removeAllListeners(nativeEvent);
         process.removeAllListeners(releaseEvent);

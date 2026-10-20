@@ -63,9 +63,9 @@ vi.mock("../media/store.js", () => ({
   prunePlaybackTranscodeCache: () => forbiddenDefaultAdapter("playback media GC"),
 }));
 
+// mock-isolation: Worker-free maintenance must reject default chat-abort work instead of mutating live controller state.
 vi.mock("./chat-abort.js", () => ({
   abortChatRunById: () => forbiddenDefaultAdapter("chat abort"),
-  removeChatAbortControllerEntry: () => forbiddenDefaultAdapter("chat abort removal"),
 }));
 
 vi.mock("./session-request-agent.js", () => ({
@@ -306,9 +306,7 @@ describe("gateway telemetry maintenance", () => {
     expect(checkTelemetryUpdateMock).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(checkTelemetryUpdateMock).toHaveBeenCalledWith(maintenanceState.getRuntimeConfig, {
-      surface: "gateway",
-    });
+    expect(checkTelemetryUpdateMock).toHaveBeenCalledWith(maintenanceState.getRuntimeConfig);
     expect(logHealth.error).not.toHaveBeenCalled();
     expect(generateSecureIntMock).toHaveBeenNthCalledWith(2, 5 * 60_000);
 

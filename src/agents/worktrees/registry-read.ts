@@ -1,4 +1,7 @@
-import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
+import {
+  executeExistingOpenClawStateRead,
+  withOpenClawStateDatabaseReadSnapshot,
+} from "../../state/openclaw-state-db-readonly.js";
 import type { RegisteredStateReadCommand } from "../../state/openclaw-state-read-operation-registry.js";
 import { captureOpenClawStateReadWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
@@ -326,5 +329,31 @@ export async function readExistingRegistryWorktrees(env: NodeJS.ProcessEnv, sign
   return (
     (await readWorktreeRegistryCommand(context, { type: "worktrees.list", input: {} }, signal))
       ?.value ?? []
+  );
+}
+
+/** Discovery keeps pending publication and live rows in one SQLite or PostgreSQL snapshot. */
+export async function readExistingWorktreePaths(env: NodeJS.ProcessEnv): Promise<string[]> {
+  return withOpenClawStateDatabaseReadSnapshot(
+    async () => {
+      // Current/live reads leave discovery snapshots and can miss a slot as it publishes.
+      const [live, pending] = await Promise.all([
+        executeExistingOpenClawStateRead(
+          { env },
+          { type: "worktrees.livePaths", input: undefined },
+        ),
+        executeExistingOpenClawStateRead(
+          { env },
+          { type: "worktrees.pendingSlots", input: undefined },
+        ),
+      ]);
+      return [
+        ...new Set([
+          ...(live?.value ?? []),
+          ...(pending?.records ?? []).map(({ record }) => record.path),
+        ]),
+      ];
+    },
+    { env },
   );
 }

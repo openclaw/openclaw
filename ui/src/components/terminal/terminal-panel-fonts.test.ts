@@ -63,6 +63,7 @@ it("adopts the newest font after asynchronous recovery without another panel ren
     isCurrent: () => true,
     onReady: vi.fn(),
     onExit: vi.fn(),
+    captureDeliveryError: () => () => undefined,
   });
   boot.tab.status = "live";
   vi.useFakeTimers();

@@ -56,6 +56,7 @@ export async function refreshManagedWorkspaceBase(params: {
     excludeAccountId: identity.account.accountId,
   });
   const assertCurrent = () => {
+    params.signal?.throwIfAborted();
     owner.assertCurrent();
     params.assertCurrent();
     if (!attribution.isCurrent()) {
@@ -136,6 +137,7 @@ export async function refreshManagedWorkspaceBase(params: {
               "The pending base integration changed; call refresh_base again and resolve its returned baseCommit.",
             );
           }
+          const continuingIntegration = Boolean(baseCommit);
           if (!baseCommit) {
             if (params.baseCommit) {
               throw new Error(
@@ -151,10 +153,12 @@ export async function refreshManagedWorkspaceBase(params: {
               target.githubHost,
               identity.env,
             );
-            await requireGitHubPublicationCommit(
+          }
+          const prepareContents = (commit: string, commitPresent: boolean) =>
+            requireGitHubPublicationCommit(
               run,
               target.repository,
-              baseCommit,
+              commit,
               target.githubHost,
               cwd,
               {
@@ -162,8 +166,42 @@ export async function refreshManagedWorkspaceBase(params: {
                 GIT_CONFIG_GLOBAL: gitNullConfigPath(),
                 GIT_CONFIG_SYSTEM: gitNullConfigPath(),
               },
-              "The selected repository base could not be fetched; retry refresh_base.",
+              "The selected repository base contents could not be fetched; retry refresh_base.",
+              { contents: true, commitPresent },
             );
+          await prepareContents(baseCommit, continuingIntegration);
+          const mergeBases = async (left: string, right: string) => {
+            const bases = await probe(["merge-base", "--all", left, right]);
+            if (bases.code === 1) {
+              return [];
+            }
+            if (bases.code !== 0) {
+              throw new Error("The selected base ancestry could not be verified.");
+            }
+            return bases.stdout.trim().split(/\s+/u);
+          };
+          const inputs = await mergeBases("HEAD", baseCommit);
+          if (!inputs.length) {
+            throw new Error("The selected base could not be integrated; saved work was preserved.");
+          }
+          const discovered = new Set([baseCommit, ...inputs]);
+          // Git combines multiple merge bases using their own common ancestors.
+          // Prepare that closure of trees without fetching every historical file version.
+          for (let index = 0; index < inputs.length; index++) {
+            const input = inputs[index]!;
+            if (input !== baseCommit) {
+              await prepareContents(input, true);
+            }
+            for (let previous = 0; previous < index; previous++) {
+              for (const ancestor of await mergeBases(input, inputs[previous]!)) {
+                if (!discovered.has(ancestor)) {
+                  discovered.add(ancestor);
+                  inputs.push(ancestor);
+                }
+              }
+            }
+          }
+          if (!continuingIntegration) {
             const ancestor = await probe(["merge-base", "--is-ancestor", baseCommit, "HEAD"]);
             if (ancestor.code === 0) {
               return {
@@ -267,12 +305,20 @@ export async function refreshManagedWorkspaceBase(params: {
                 });
                 snapshots.push(await captureWorkspaceSnapshot({ root: destination, baseCommit }));
               }
+              const buildCacheInputs = await state.buildCacheInputs();
               const accepted = parseWorkerWorkspaceManifest(
                 state.current().baseline_json!,
                 state.current().baseline_ref!,
+                buildCacheInputs,
               );
               const before = snapshots[0]!.manifest;
               const current = applyWorkspaceSourceOverlay(before, accepted, snapshots[1]!.manifest);
+              current.buildCacheInputs = [
+                ...new Set([
+                  ...buildCacheInputs,
+                  ...snapshots[1]!.manifest.entries.map((entry) => entry.path),
+                ]),
+              ];
               const priorNodes = manifestNodes(before);
               const currentNodes = manifestNodes(current);
               for (const [file, entry] of manifestNodes(accepted)) {
@@ -292,6 +338,7 @@ export async function refreshManagedWorkspaceBase(params: {
                 currentManifestRef:
                   "sha256:" + createHash("sha256").update(currentRaw).digest("hex"),
                 currentManifestRaw: currentRaw,
+                buildCacheInputs: current.buildCacheInputs,
                 assertCurrent: check,
               });
             } finally {

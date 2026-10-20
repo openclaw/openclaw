@@ -1,41 +1,67 @@
 /* @vitest-environment jsdom */
 
+import { getQueriesForElement } from "@solidjs/testing-library";
 import { createComponent, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { pathForClawCatalogEntry } from "../../app-route-paths.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { ClawsPage } from "../claws/page.tsx";
 import {
   cleanupAgentsHomePageTest,
   createPage,
   setupAgentsHomePageTest,
   workflowOperator,
 } from "./agents-home-page.test-helpers.ts";
-import { ClawsCatalogDialog } from "./claws-catalog-dialog.tsx";
 
 beforeEach(setupAgentsHomePageTest);
 afterEach(cleanupAgentsHomePageTest);
 
-function createDetail(
-  options: Parameters<typeof createPage>[0],
-  initialEntry: typeof workflowOperator | null = workflowOperator,
-) {
+function createDetail(options: Parameters<typeof createPage>[0]) {
   const fixture = createPage(options);
-  const [packageName, setPackageName] = createSignal<string>(workflowOperator.packageName);
+  const [location, setLocation] = createSignal({
+    pathname: pathForClawCatalogEntry(workflowOperator.packageName, ""),
+    search: "",
+    hash: "",
+  });
   const view = mountSolid(
     () =>
-      createComponent(ClawsCatalogDialog, {
-        initialEntry,
-        get initialPackageName() {
-          return packageName();
+      createComponent(ClawsPage, {
+        get routeData() {
+          return { location: location(), basePath: "" };
         },
-        pageMode: true,
       }),
     { wrapper: fixture.wrapper },
   );
   onTestFinished(view.unmount);
-  return { ...fixture, detail: view.container, setPackageName };
+  return {
+    ...fixture,
+    detail: view.container,
+    setPackageName: (packageName: string) =>
+      setLocation({ pathname: pathForClawCatalogEntry(packageName, ""), search: "", hash: "" }),
+  };
 }
 
 describe("Claws on Agents Home", () => {
+  it.each(["explore", "catalog"])("names the Add target in the %s view", async (surface) => {
+    const { page, navigate } = createPage({ clawsEnabled: true });
+    const queries = getQueriesForElement(page);
+    if (surface === "catalog") {
+      (await queries.findByRole<HTMLButtonElement>("button", { name: "Search Claws" })).click();
+    }
+    const container = surface === "catalog" ? ".claws-catalog" : "[data-claws-explore]";
+    await vi.waitFor(() => expect(page.querySelector(container)).not.toBeNull());
+    const view = getQueriesForElement(page.querySelector(container)!);
+    const add = await view.findByRole<HTMLButtonElement>("button", {
+      name: "Add Workflow Operator",
+    });
+    expect(add.textContent?.trim()).toBe("Add");
+    add.click();
+    expect(navigate).toHaveBeenCalledWith("claws", {
+      pathname: "/agents/claws/packages/%40openclaw%2Fworkflow-operator",
+    });
+  });
+
   it.each([
     {
       names: ["AGENTS.md", "SOUL.md", "USER.md", "notes/context.md"],
@@ -96,7 +122,7 @@ describe("Claws on Agents Home", () => {
 
     page.querySelector<HTMLButtonElement>(".agents-home__claw-card-link")?.click();
     expect(navigate).toHaveBeenCalledWith("claws", {
-      pathname: "/agents/claws/workflow-operator",
+      pathname: "/agents/claws/packages/%40openclaw%2Fworkflow-operator",
     });
     expect(request).toHaveBeenCalledWith("claws.catalog.search", {});
   });
@@ -144,12 +170,21 @@ describe("Claws on Agents Home", () => {
     });
   });
 
-  it("clears a selected Claw when the detail route changes", async () => {
-    const { detail, request, setPackageName } = createDetail({ clawsEnabled: true }, null);
+  it("retains the selected Claw on revalidation and clears it when the package changes", async () => {
+    const { detail, request, setPackageName } = createDetail({ clawsEnabled: true });
 
     await vi.waitFor(() =>
       expect(detail.querySelector(".plugin-capabilities")?.textContent).toContain("AGENTS.md"),
     );
+    const selected = detail.querySelector(".plugin-capabilities");
+    const searches = request.mock.calls.filter(([method]) => method === "claws.catalog.search");
+    setPackageName(workflowOperator.packageName);
+    await waitForSolid(() => {
+      expect(detail.querySelector(".plugin-capabilities")).toBe(selected);
+      expect(request.mock.calls.filter(([method]) => method === "claws.catalog.search")).toEqual(
+        searches,
+      );
+    });
     setPackageName("@openclaw/another-claw");
 
     await vi.waitFor(() =>
@@ -167,10 +202,10 @@ describe("Claws on Agents Home", () => {
     const applyWait = new Promise<void>((resolve) => {
       finishApply = resolve;
     });
-    const { detail, request, setPackageName } = createDetail(
-      { clawsEnabled: true, applyWait },
-      null,
-    );
+    const { detail, request, navigate, setPackageName } = createDetail({
+      clawsEnabled: true,
+      applyWait,
+    });
 
     await vi.waitFor(() =>
       expect(detail.querySelector<HTMLButtonElement>("[data-claws-confirm] button")?.disabled).toBe(
@@ -191,6 +226,14 @@ describe("Claws on Agents Home", () => {
       ),
     );
     finishApply?.();
+    detail.querySelector<HTMLButtonElement>("[data-claws-confirm] button")?.click();
+    await vi.waitFor(() =>
+      expect(navigate).toHaveBeenCalledWith(
+        "chat",
+        expect.objectContaining({ pathname: "/chat/workflow-operator-2" }),
+      ),
+    );
+    expect(navigate.mock.calls.filter(([route]) => route === "chat")).toHaveLength(1);
   });
 
   it("asks before acknowledging a ClawHub trust warning", async () => {

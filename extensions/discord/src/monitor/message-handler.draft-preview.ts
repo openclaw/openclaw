@@ -49,8 +49,6 @@ export function createDiscordDraftPreviewController(params: {
   deliveryRest: RequestClient;
   deliverChannelId: string;
   replyReference: DraftReplyReference;
-  onFinalReplyStart?: () => void;
-  onFinalReplyDelivered?: () => void;
   log: (message: string) => void;
 }) {
   // Capture the channel owner before per-reply delivery binds a requester assertion.
@@ -118,7 +116,6 @@ export function createDiscordDraftPreviewController(params: {
   const progressSeed = `${params.accountId}:${params.deliverChannelId}`;
   const progressDraft = createChannelProgressDraftCompositor({
     preparedItems: true,
-    showWorkStatus: true,
     entry: params.discordConfig,
     mode: discordStreamMode,
     active: Boolean(draftStream),
@@ -189,13 +186,9 @@ export function createDiscordDraftPreviewController(params: {
       : undefined,
     retainOnError: true,
     cleanupUndelivered: true,
-    onFinalStarted: () => {
-      freezeProgress();
-      params.onFinalReplyStart?.();
-    },
+    onFinalStarted: freezeProgress,
     onFinalDelivered: () => {
       progressDraft.markFinalReplyDelivered();
-      params.onFinalReplyDelivered?.();
     },
     onCleanupFailure: (err) => params.log(`discord: draft cleanup failed: ${String(err)}`),
   });

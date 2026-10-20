@@ -3,9 +3,9 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { refreshSessionEntryFromStore } from "../../auto-reply/reply/agent-runner-core.js";
-import { getReplyOperationSessionReader } from "../../auto-reply/reply/reply-run-registry.state.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { ContextEngineRuntimeContext } from "../../context-engine/types.js";
+import { getReplyOperationSessionReader } from "../../sessions/session-controller.session-reader.js";
 import { resolveCompactionTimeoutMs } from "./compaction-safety-timeout.js";
 import {
   type RecoveryFixture,
@@ -286,7 +286,8 @@ describe("embedded compaction recovery authority", () => {
 
       expect(fixture.compact).toHaveBeenCalledOnce();
       await expect.soft(fixture.compact.mock.results[0]?.value).rejects.toBeInstanceOf(Error);
-      expect.soft(outcome).toMatchObject({ action: "surface", kind: "context_overflow" });
+      // A rejected recovery compaction is a genuine failure, not a benign skip.
+      expect.soft(outcome).toMatchObject({ action: "surface", kind: "compaction_failure" });
       expect.soft(await fixture.snapshot()).toEqual(before);
       expect.soft(fixture.loadEntry()).toEqual(entryBefore);
       expect.soft(fixture.recoveryState).toMatchObject({

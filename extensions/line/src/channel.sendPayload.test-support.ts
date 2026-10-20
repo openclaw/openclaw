@@ -16,7 +16,7 @@ export function lineResult(messageId: string, chatId = "c1") {
   return {
     messageId,
     chatId,
-    receipt: createLineSendReceipt({ messageId, chatId, kind: "text" }),
+    receipt: createLineSendReceipt({ messageIds: [messageId], chatId, kind: "text" }),
   };
 }
 

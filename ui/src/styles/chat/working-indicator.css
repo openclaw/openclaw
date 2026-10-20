@@ -28,6 +28,10 @@
   animation: chatWorkingIndicatorEnter 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
+.chat-working-indicator--continued {
+  animation: none;
+}
+
 .chat-reading-indicator--brand {
   animation: chatWorkingDotPulse 1.2s ease-in-out infinite;
 }

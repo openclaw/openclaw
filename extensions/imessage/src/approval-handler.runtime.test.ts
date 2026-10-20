@@ -6,7 +6,7 @@ import {
 } from "./approval-polls.js";
 import {
   clearIMessageApprovalReactionTargetsForTest,
-  maybeResolveIMessageApprovalReaction,
+  handleIMessageApprovalReaction,
 } from "./approval-reactions.js";
 import { pollVote } from "./test-support/approval.js";
 
@@ -109,8 +109,12 @@ vi.mock("./send.js", () => ({ sendMessageIMessage: send }));
 
 // mock-isolation: keep transport effects in test-owned doubles.
 vi.mock("./probe.js", () => ({
-  getCachedIMessagePrivateApiStatus: probeMock.cachedStatus,
   probeIMessagePrivateApi: probeMock.probeIMessagePrivateApi,
+}));
+
+// mock-isolation: Keep the shared bridge cache under test control.
+vi.mock("./private-api-status.js", () => ({
+  getCachedIMessagePrivateApiStatus: probeMock.cachedStatus,
 }));
 
 // mock-isolation: keep transport effects in test-owned doubles.
@@ -301,20 +305,22 @@ describe("imessageApprovalNativeRuntime", () => {
       to,
     );
     expect(actionsMock.sendPoll).not.toHaveBeenCalled();
-    const react = (sender: string) =>
-      maybeResolveIMessageApprovalReaction({
-        cfg: pollDeliverArgs.cfg,
-        accountId: ACCOUNT_ID,
-        message: {
-          sender,
-          chat_guid: groupChatGuid,
-          is_group: true,
-          is_reaction: true,
-          reaction_emoji: "👍",
-          reacted_to_guid: PROMPT_GUID,
-        },
-        bodyText: "",
-      });
+    const react = async (sender: string) =>
+      (
+        await handleIMessageApprovalReaction({
+          cfg: pollDeliverArgs.cfg,
+          accountId: ACCOUNT_ID,
+          message: {
+            sender,
+            chat_guid: groupChatGuid,
+            is_group: true,
+            is_reaction: true,
+            reaction_emoji: "👍",
+            reacted_to_guid: PROMPT_GUID,
+          },
+          bodyText: "",
+        })
+      ).handled;
 
     await expect(react("+15559999999")).resolves.toBe(true);
     expect(approvalGatewayMock.resolve).not.toHaveBeenCalled();

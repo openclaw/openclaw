@@ -5,7 +5,7 @@ import type { parseClawInstallRecordSchemaVersion } from "./provenance-schema-ve
 
 export type ClawOrphanWorkspace = { workspace: string; updatedAtMs: number };
 
-export type ClawInstallStatus = ClawStatusEntry["status"];
+type ClawInstallStatus = ClawStatusEntry["status"];
 
 export type PersistedClawInstall = {
   schemaVersion: ReturnType<typeof parseClawInstallRecordSchemaVersion>;

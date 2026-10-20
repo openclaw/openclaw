@@ -95,6 +95,12 @@ export async function exportPostgresBackup(params: {
     await createVerifiedSqliteSnapshot({
       sourcePath: raw,
       targetPath: image,
+      // This worker created and closed the private export; no live source locks need isolation.
+      sourceAcquisition: {
+        mode: "isolated-process",
+        stagingRoot: params.directory,
+        preserveSourceArtifacts: true,
+      },
       preserveRowIds: true,
       async transform(db) {
         if (params.gitIdentity) {

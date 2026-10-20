@@ -1,4 +1,5 @@
 /* @vitest-environment jsdom */
+import { createSignal } from "solid-js";
 import { expect, it, onTestFinished } from "vitest";
 import type { CronJob } from "../api/types.ts";
 import { i18n } from "../i18n/index.ts";
@@ -12,7 +13,10 @@ import {
 } from "../test-helpers/gateway-client.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
-import { SessionHovercardAutomations } from "./session-hovercard-automations.tsx";
+import {
+  SessionHovercardAutomations,
+  type SessionHovercardAutomation,
+} from "./session-hovercard-automations.tsx";
 
 registerEnglishCatalog(registerGitHubEnglish);
 
@@ -46,17 +50,14 @@ it("updates retained automation labels and schedule without reloading its jobs",
     phase: "connected",
     client: createTestGatewayClient(request),
   });
-  const view = mountSolid(() => (
-    <SessionHovercardAutomations
-      automation={{
-        gateway: source.gateway,
-        sessionKey: "agent:main:example",
-        agentId: "main",
-        href: "/automations?session=agent%3Amain%3Aexample&agent=main",
-        navigate: () => {},
-      }}
-    />
-  ));
+  const [automation, setAutomation] = createSignal<SessionHovercardAutomation>({
+    gateway: source.gateway,
+    sessionKey: "agent:main:example",
+    agentId: "main",
+    href: "/automations?session=agent%3Amain%3Aexample&agent=main",
+    navigate: () => {},
+  });
+  const view = mountSolid(() => <SessionHovercardAutomations automation={automation()} />);
   onTestFinished(async () => {
     view.unmount();
     await restoreI18n();
@@ -81,7 +82,9 @@ it("updates retained automation labels and schedule without reloading its jobs",
   await i18n.setLocale("de");
   await waitForSolid(() => {
     expect(content?.getAttribute("aria-label")).toBe("Automatisierungen");
-    expect(content?.textContent).toContain("Every 5 Min.");
+    expect(content?.textContent).toContain(
+      `Every ${new Intl.NumberFormat("de", { style: "unit", unit: "minute", unitDisplay: "narrow" }).format(5)}`,
+    );
     expect(trigger.closest("openclaw-tooltip")).toBe(tooltip);
     expect(content?.querySelector(".session-hovercard__automation-open")).toBe(link);
     expect(document.activeElement).toBe(trigger);
@@ -101,4 +104,29 @@ it("updates retained automation labels and schedule without reloading its jobs",
     );
     expect(request).toHaveBeenCalledTimes(1);
   });
+  setAutomation((previous) => ({ ...previous, href: "/automations?updated=1" }));
+  await waitForSolid(() => {
+    expect(trigger.getAttribute("href")).toBe("/automations?updated=1");
+    expect(view.container.querySelector(".session-hovercard__automations")).toBe(content);
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  const replacement = createApplicationGateway();
+  replacement.publish({
+    ...replacement.gateway.snapshot,
+    phase: "connected",
+    client: createTestGatewayClient(request),
+  });
+  setAutomation((previous) => ({ ...previous, gateway: replacement.gateway }));
+  await waitForSolid(() => {
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(view.container.querySelector(".session-hovercard__automation-name")?.textContent).toBe(
+      "Example automation",
+    );
+  });
+  source.publishEvent({ type: "event", event: "cron", payload: {} });
+  expect(request).toHaveBeenCalledTimes(2);
+  view.unmount();
+  replacement.publishEvent({ type: "event", event: "cron", payload: {} });
+  expect(request).toHaveBeenCalledTimes(2);
 });

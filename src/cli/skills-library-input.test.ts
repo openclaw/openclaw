@@ -1,12 +1,41 @@
 import fs from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
+import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { readLibraryInput, uploadLibraryZip } from "./skills-library-input.js";
+import { registerSkillsLibraryCli } from "./skills-library-cli.js";
 
-const call = vi.hoisted(() => vi.fn());
-vi.mock("./gateway-rpc.js", () => ({ callGatewayFromCliWithTransport: call }));
+const { call, error, exit } = vi.hoisted(() => ({
+  call: vi.fn<
+    (method: string, opts: unknown, params: Record<string, unknown>) => Promise<unknown>
+  >(),
+  error: vi.fn(),
+  exit: vi.fn(),
+}));
+vi.mock("./gateway-rpc.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./gateway-rpc.js")>()),
+  callGatewayFromCliWithTransport: call,
+}));
+vi.mock("../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../runtime.js")>()),
+  defaultRuntime: {
+    log: vi.fn(),
+    error,
+    exit,
+    writeJson: vi.fn(),
+    writeStdout: vi.fn(),
+  },
+}));
+
+async function parseLibraryInput(input: string, zip = false) {
+  const program = new Command().exitOverride();
+  registerSkillsLibraryCli(program.command("skills"));
+  await program.parseAsync(
+    ["skills", "library", zip ? "import" : "create", input, "--slug", "skill", "--json"],
+    { from: "user" },
+  );
+}
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(() => {
@@ -19,12 +48,14 @@ const MIB = 1024 * 1024;
 
 beforeEach(() => {
   call.mockReset();
+  error.mockReset();
+  exit.mockReset();
   call.mockImplementation(async (_method, _opts, params) => {
     if (params.action === "begin") {
       return { uploadId: "upload", offset: 0, maxChunkBytes: MIB };
     }
     if (params.action === "chunk") {
-      return { offset: params.offset + Buffer.from(params.data, "base64").length };
+      return { offset: Number(params.offset) + Buffer.from(String(params.data), "base64").length };
     }
     return { state: "published" };
   });
@@ -73,11 +104,16 @@ describe("skills library file admission", () => {
     for (let index = 0; index < 255; index++) {
       await fs.writeFile(path.join(directory, `${index}.txt`), "");
     }
-    const bundle = await readLibraryInput(directory);
-    expect(bundle.files).toHaveLength(255);
+    await parseLibraryInput(directory);
+    expect(call.mock.calls[0]?.[2].files).toHaveLength(255);
+    expect(error).not.toHaveBeenCalled();
 
     await fs.writeFile(path.join(directory, "extra.txt"), "");
-    await expect(readLibraryInput(directory)).rejects.toThrow("256-file limit");
+    call.mockClear();
+    await parseLibraryInput(directory);
+    expect(error).toHaveBeenCalledWith(expect.stringContaining("256-file limit"));
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(call).not.toHaveBeenCalled();
   });
 
   it("preserves hardlinks, ancestor symlinks, and executable metadata", async () => {
@@ -92,10 +128,11 @@ describe("skills library file admission", () => {
     await fs.writeFile(original, Buffer.from([0, 255, 13, 10]), { mode: 0o755 });
     await fs.link(original, path.join(bundle, "linked.bin"));
 
-    const result = await readLibraryInput(path.join(alias, "bundle"));
+    await parseLibraryInput(path.join(alias, "bundle"));
 
-    expect(result.content).toBe("skill\r\n");
-    expect(result.files).toEqual([
+    expect(error).not.toHaveBeenCalled();
+    expect(call.mock.calls[0]?.[2].content).toBe("skill\r\n");
+    expect(call.mock.calls[0]?.[2].files).toEqual([
       {
         path: "linked.bin",
         content: "AP8NCg==",
@@ -116,42 +153,47 @@ describe("skills library file admission", () => {
     { kind: "zip", change: "becomes empty", bytes: 0, error: /exceeds|between|empty/iu },
     { kind: "bundle", change: "grows beyond 8 MiB total", bytes: MIB, error: /exceeds|limit/iu },
     { kind: "skill", change: "changes inode", bytes: undefined, error: /identity|changed/iu },
-  ])("rejects $kind input that $change after metadata capture", async ({ kind, bytes, error }) => {
-    const directory = tempDirs.make("skills-library-admission-");
-    const file = path.join(
-      directory,
-      kind === "zip" ? "skill.zip" : kind === "bundle" ? "00-grown.bin" : "SKILL.md",
-    );
-    await fs.writeFile(
-      file,
-      kind === "zip" ? "zip" : kind === "bundle" ? "x" : bytes === undefined ? "original" : "skill",
-    );
-    if (kind === "bundle") {
-      await fs.writeFile(path.join(directory, "SKILL.md"), "skill");
-      for (let index = 1; index <= 7; index++) {
-        await fs.writeFile(path.join(directory, `0${index}.bin`), Buffer.alloc(MIB));
+  ])(
+    "rejects $kind input that $change after metadata capture",
+    async ({ kind, bytes, error: expectedError }) => {
+      const directory = tempDirs.make("skills-library-admission-");
+      const file = path.join(
+        directory,
+        kind === "zip" ? "skill.zip" : kind === "bundle" ? "00-grown.bin" : "SKILL.md",
+      );
+      await fs.writeFile(
+        file,
+        kind === "zip"
+          ? "zip"
+          : kind === "bundle"
+            ? "x"
+            : bytes === undefined
+              ? "original"
+              : "skill",
+      );
+      if (kind === "bundle") {
+        await fs.writeFile(path.join(directory, "SKILL.md"), "skill");
+        for (let index = 1; index <= 7; index++) {
+          await fs.writeFile(path.join(directory, `0${index}.bin`), Buffer.alloc(MIB));
+        }
       }
-    }
-    const replacement = path.join(directory, "replacement.md");
-    if (bytes === undefined) {
-      await fs.writeFile(replacement, "replacement");
-    }
-    const mutation = mutateBeforeFileRead(
-      file,
-      () =>
-        bytes === undefined
-          ? fs.rename(replacement, file)
-          : fs.writeFile(file, Buffer.alloc(bytes)),
-      bytes === undefined,
-    );
-    const result =
-      kind === "zip"
-        ? uploadLibraryZip(file, "skill", {})
-        : readLibraryInput(kind === "bundle" ? directory : file);
-    await expect(result).rejects.toMatchObject({ message: expect.stringMatching(error) });
-    expect(mutation).toHaveBeenCalledTimes(1);
-    if (kind === "zip") {
+      const replacement = path.join(directory, "replacement.md");
+      if (bytes === undefined) {
+        await fs.writeFile(replacement, "replacement");
+      }
+      const mutation = mutateBeforeFileRead(
+        file,
+        () =>
+          bytes === undefined
+            ? fs.rename(replacement, file)
+            : fs.writeFile(file, Buffer.alloc(bytes)),
+        bytes === undefined,
+      );
+      await parseLibraryInput(kind === "bundle" ? directory : file, kind === "zip");
+      expect(error).toHaveBeenCalledWith(expect.stringMatching(expectedError));
+      expect(exit).toHaveBeenCalledWith(1);
+      expect(mutation).toHaveBeenCalledTimes(1);
       expect(call).not.toHaveBeenCalled();
-    }
-  });
+    },
+  );
 });

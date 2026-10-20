@@ -6,6 +6,7 @@ import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { constants, DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
+import { mapRetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { afterEach, expect, it, vi } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
@@ -42,7 +43,6 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
-import * as readWorker from "./openclaw-state-read-worker.js";
 
 function createOptions(stateDir: string) {
   return {
@@ -151,16 +151,16 @@ it("preserves query authorization denial and recovers the cached reader", async 
   await withOpenClawTestState({ label: "state-readonly-authorizer" }, async ({ env }) => {
     const options = { env };
     const opened = openOpenClawStateDatabase(options);
-    const operation = vi.fn(({ db }: { db: typeof opened.db }) =>
-      db.prepare("SELECT role FROM schema_meta").get(),
-    );
     let denied = false;
-    requireNativeSqliteDatabase(opened.db).setAuthorizer((action) => {
-      if (action === constants.SQLITE_SELECT && !denied) {
-        denied = true;
-        return constants.SQLITE_DENY;
-      }
-      return constants.SQLITE_OK;
+    const operation = vi.fn(({ db }: { db: typeof opened.db }) => {
+      requireNativeSqliteDatabase(db).setAuthorizer((action) => {
+        if (action === constants.SQLITE_SELECT && !denied) {
+          denied = true;
+          return constants.SQLITE_DENY;
+        }
+        return constants.SQLITE_OK;
+      });
+      return db.prepare("SELECT role FROM schema_meta").get();
     });
     try {
       expect(() => withExistingOpenClawStateDatabaseReadOnly(operation, options)).toThrow(
@@ -357,14 +357,28 @@ it.each([
     await withTempDir("openclaw-state-readonly-admission-", async (stateDir) => {
       const options = createClosedState(stateDir);
       const refused = new Error("synthetic readonly verification failure");
-      const prepare = sqliteReadOnly.prepareSqliteReadOnlyLocation;
       let preparedLocation: string | undefined;
       let failurePublished = false;
-      vi.spyOn(sqliteReadOnly, "prepareSqliteReadOnlyLocation").mockImplementationOnce(
-        async (...args) => {
-          const prepared = await prepare(...args);
-          preparedLocation = prepared.location;
-          if (failure === "quarantine") {
+      if (composite) {
+        const start = sqliteReadOnly.startSqliteReadOnlyLocationAsync;
+        vi.spyOn(sqliteReadOnly, "startSqliteReadOnlyLocationAsync").mockImplementationOnce(
+          (...args) => {
+            const preparation = start(...args);
+            return {
+              ...preparation,
+              ...mapRetainedOperation(preparation, (prepared) => {
+                preparedLocation = prepared.location;
+                return prepared;
+              }),
+            };
+          },
+        );
+      } else {
+        const prepare = sqliteReadOnly.prepareSqliteReadOnlyLocation;
+        vi.spyOn(sqliteReadOnly, "prepareSqliteReadOnlyLocation").mockImplementationOnce(
+          async (...args) => {
+            const prepared = await prepare(...args);
+            preparedLocation = prepared.location;
             seedOpenClawDatabaseQuarantine({
               env: options.env,
               kind: "state",
@@ -372,10 +386,10 @@ it.each([
               reason: "synthetic readonly quarantine",
             });
             failurePublished = true;
-          }
-          return prepared;
-        },
-      );
+            return prepared;
+          },
+        );
+      }
       const operation = vi.fn(() => {
         throw refused;
       });
@@ -476,29 +490,6 @@ it("keeps the original synchronous snapshot while retained current reads see lat
       .run("retained.snapshot.fixture", '"first"', 1);
     const controller = new AbortController();
     const pending: Array<ReturnType<typeof executeExistingOpenClawStateRead>> = [];
-    const wait = new Int32Array(new SharedArrayBuffer(4));
-    const captured: Array<{
-      source: ReturnType<typeof readWorker.captureOpenClawStateReadSource>;
-      released: boolean;
-    }> = [];
-    const captureSource = readWorker.captureOpenClawStateReadSource;
-    const capture = vi
-      .spyOn(readWorker, "captureOpenClawStateReadSource")
-      .mockImplementation(() => {
-        const selected = captureSource();
-        const read = { source: selected, released: false };
-        captured.push(read);
-        return {
-          ...selected,
-          own(service, close) {
-            const unregister = selected.own(service, close);
-            return () => {
-              unregister();
-              read.released = true;
-            };
-          },
-        };
-      });
     const legacyRead = () =>
       withExistingOpenClawStateDatabaseReadOnly(
         ({ db }) =>
@@ -507,8 +498,7 @@ it("keeps the original synchronous snapshot while retained current reads see lat
             .get("retained.snapshot.fixture")?.value_json,
         options,
       );
-    const finishRead = (current = false) => {
-      const index = captured.length;
+    const startRead = (current = false) => {
       pending.push(
         executeExistingOpenClawStateRead(
           options,
@@ -516,27 +506,6 @@ it("keeps the original synchronous snapshot while retained current reads see lat
           { current, signal: controller.signal },
         ),
       );
-      const read = captured[index];
-      if (!read) {
-        throw new Error("Snapshot read source was not captured");
-      }
-      const deadline = performance.now() + 15_000;
-      let microtaskRan = false;
-      queueMicrotask(() => {
-        microtaskRan = true;
-      });
-      while (!read.released) {
-        read.source.service();
-        if (read.released) {
-          break;
-        }
-        if (performance.now() >= deadline) {
-          throw new Error("Retained snapshot read did not settle");
-        }
-        Atomics.wait(wait, 0, 0, 2);
-      }
-      expect(microtaskRan).toBe(false);
-      expect(read.released).toBe(true);
     };
     try {
       withArtifactPreservingStateReads(() =>
@@ -554,9 +523,9 @@ it("keeps the original synchronous snapshot while retained current reads see lat
             throw new Error("Retained read executed SQLite on the caller thread");
           });
           try {
-            finishRead();
-            finishRead(true);
-            finishRead();
+            startRead();
+            startRead(true);
+            startRead();
             expect(prepare).not.toHaveBeenCalled();
             expect(exec).not.toHaveBeenCalled();
           } finally {
@@ -576,7 +545,6 @@ it("keeps the original synchronous snapshot while retained current reads see lat
         }),
       ).toEqual(['"first"', '"second"', '"first"']);
     } finally {
-      capture.mockRestore();
       controller.abort(new Error("Snapshot proof finished"));
       await Promise.allSettled(pending);
       await closeOpenClawStateDatabaseAsync();

@@ -11,6 +11,38 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Control UI composer picker layout" });
 
 suite.define(() => {
+  it("fits a tall model catalog above the mobile new-session composer", async () => {
+    await suite.withPage(
+      { viewport: { width: 393, height: 500 }, isMobile: true, hasTouch: true },
+      async ({ page }) => {
+        await page.emulateMedia({ reducedMotion: "reduce" });
+        await installMockGateway(page, {
+          models: Array.from({ length: 24 }, (_, index) => ({
+            id: "model-" + index,
+            name: "Example Model " + index,
+            provider: "example",
+          })),
+        });
+        await page.goto(suite.server.baseUrl + "new?agent=main");
+        const trigger = page.locator("[data-chat-model-select]");
+        await trigger.click();
+        const search = page.locator("[data-chat-model-search]");
+        await search.waitFor();
+        await page.locator("[data-chat-model-provider-toggle]").first().click();
+        const composer = await page.locator(".agent-chat__input").boundingBox();
+        const panel = await page.locator(".chat-picker-overlay:popover-open").boundingBox();
+        expect(panel!.y).toBeGreaterThanOrEqual(0);
+        expect(panel!.y + panel!.height).toBeLessThan(composer!.y);
+        expect(panel!.height).toBeGreaterThan(200);
+        // Filtering and selection remain reachable without dismissing the picker.
+        await search.fill("Model 23");
+        await page.locator('[data-chat-model-option="example/model-23"]').click();
+        expect(await trigger.textContent()).toContain("Model 23");
+        expect(await search.isVisible()).toBe(false);
+      },
+    );
+  });
+
   it("keeps model and effort targets separate when Files narrows the composer", async () => {
     const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const artifactDir = artifactRoot

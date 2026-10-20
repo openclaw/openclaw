@@ -9,6 +9,9 @@ import {
   withPluginRuntimeGenerationScope,
 } from "../../plugins/runtime/generation-scope.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
+import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
+import { getCurrentSessionControllerOwner } from "../../sessions/session-controller.lifecycle.js";
+import { resolveSessionControllerOperationForSignal } from "../../sessions/session-controller.state.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { resolveUserPath } from "../../utils.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
@@ -33,6 +36,7 @@ import {
   applyAgentRunSessionTargetIdentity,
   resolveAgentRunSessionTarget,
 } from "../run-session-target.js";
+import type { CompactionAppendPersistenceAsync } from "../sessions/session-compaction-persistence.js";
 import { buildCompactionFailureResult } from "./compact-reasons.js";
 import { runForegroundCompactionWork } from "./compact.foreground-work.js";
 import type {
@@ -40,21 +44,18 @@ import type {
   CompactEmbeddedAgentSessionRuntimeParams,
 } from "./compact.types.js";
 import { resolveEmbeddedCompactionTarget } from "./compaction-runtime-context.js";
-import {
-  projectCodexHostTranscriptBytePreflightConfig,
-  resolveCompactionRuntimeSelection,
-} from "./compaction-runtime-preparation.js";
+import { resolveCompactionRuntimeSelection } from "./compaction-runtime-preparation.js";
 import { resolveCompactionTimeoutMs } from "./compaction-safety-timeout.js";
 import type { PreparedCompactEmbeddedAgentSessionParams } from "./direct-compaction-preparation.js";
 import { compactEmbeddedAgentSessionDirectOnce } from "./direct-compaction.js";
 import { readCompactionAccountingRecorder } from "./run/compaction-accounting-bridge.js";
 import { resolveSharedPluginRuntimeWorkspace } from "./run/prepared-runtime-context.js";
-import { consumeTranscriptBytePreflightClaim } from "./transcript-byte-preflight-authority.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
 
 export type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
 
 export async function compactNativeCliSession(params: {
+  replyOperation?: ReplyOperation;
   runtime: string | undefined;
   compactParams: CompactEmbeddedAgentSessionParams;
   runControlOperation?: (run: () => Promise<void>) => Promise<void>;
@@ -98,6 +99,7 @@ export async function compactNativeCliSession(params: {
   try {
     const runControlOperation = async () => {
       await runCliAgent({
+        replyOperation: params.replyOperation,
         preparedRunAdmission,
         sessionId: params.compactParams.sessionId,
         sessionKey: params.compactParams.sessionKey,
@@ -177,6 +179,7 @@ function resolveCompactionFallbacksOverride(
  */
 export async function compactEmbeddedAgentSessionDirect(
   paramsInput: CompactEmbeddedAgentSessionRuntimeParams,
+  seedCompaction?: CompactionAppendPersistenceAsync,
 ): Promise<EmbeddedAgentCompactResult> {
   const paramsBase = applyAgentRunSessionTargetIdentity(paramsInput);
   const parentSignal = getAsyncWorkSignal();
@@ -206,18 +209,8 @@ export async function compactEmbeddedAgentSessionDirect(
     ));
   assertReadCurrent();
   const lockedHarnessRuntime = resolveSessionPinnedHarnessId(entry);
-  const transcriptBytePreflightClaim = consumeTranscriptBytePreflightClaim(
-    paramsBase,
-    runSessionTarget,
-    lockedHarnessRuntime,
-  );
-  const transcriptBytePreflightAuthority = transcriptBytePreflightClaim?.authority;
   const requestedParams: CompactEmbeddedAgentSessionParams = {
     ...paramsBase,
-    config: projectCodexHostTranscriptBytePreflightConfig(
-      paramsBase.config,
-      Boolean(transcriptBytePreflightAuthority),
-    ),
     sessionEntry: entry ? projectPublicSessionEntry(entry) : undefined,
     agentHarnessId: lockedHarnessRuntime ?? paramsBase.agentHarnessId,
     modelSelectionLocked: entry?.modelSelectionLocked ?? paramsBase.modelSelectionLocked,
@@ -258,6 +251,9 @@ export async function compactEmbeddedAgentSessionDirect(
   // Run them before generic model preparation so subscription-only CLI sessions do
   // not incorrectly require an OpenClaw model API credential.
   const nativeCliResult = await compactNativeCliSession({
+    replyOperation:
+      resolveSessionControllerOperationForSignal(paramsInput.abortSignal) ??
+      getCurrentSessionControllerOwner(),
     runtime: runtimeSelection.selectedHarnessRuntime,
     compactParams: {
       ...requestedParams,
@@ -268,11 +264,7 @@ export async function compactEmbeddedAgentSessionDirect(
   if (nativeCliResult) {
     return nativeCliResult;
   }
-  if (
-    lockedHarnessRuntime &&
-    lockedHarnessRuntime !== "openclaw" &&
-    !transcriptBytePreflightAuthority
-  ) {
+  if (lockedHarnessRuntime && lockedHarnessRuntime !== "openclaw" && !seedCompaction) {
     return buildCompactionFailureResult(
       `Model selection is locked to native agent harness "${lockedHarnessRuntime}"; generic compaction is unavailable.`,
       { reason: "model_selection_locked" },
@@ -310,11 +302,7 @@ export async function compactEmbeddedAgentSessionDirect(
         },
         {
           abortSignal: requestedParams.abortSignal,
-          deriveRuntimePluginSelections: ({ config: admittedConfig, metadataSnapshot }) => {
-            const config = projectCodexHostTranscriptBytePreflightConfig(
-              admittedConfig,
-              Boolean(transcriptBytePreflightAuthority),
-            );
+          deriveRuntimePluginSelections: ({ config, metadataSnapshot }) => {
             const selected = resolveCompactionRuntimeSelection({
               ...requestedParams,
               config,
@@ -332,7 +320,7 @@ export async function compactEmbeddedAgentSessionDirect(
               provider: selected.provider,
               model: selected.modelId,
               requestedRouteResolution: "resolved",
-              fallbacksOverride: transcriptBytePreflightAuthority
+              fallbacksOverride: seedCompaction
                 ? []
                 : resolveCompactionFallbacksOverride({ ...requestedParams, config }),
             });
@@ -365,11 +353,7 @@ export async function compactEmbeddedAgentSessionDirect(
     owner.adoptLease(preparedModelRuntimeLease);
     try {
       const preparedModelRuntimeOwnerSnapshot = preparedModelRuntimeLease.snapshot;
-      const preparedConfig =
-        projectCodexHostTranscriptBytePreflightConfig(
-          preparedModelRuntimeOwnerSnapshot.config,
-          Boolean(transcriptBytePreflightAuthority),
-        ) ?? preparedModelRuntimeOwnerSnapshot.config;
+      const preparedConfig = preparedModelRuntimeOwnerSnapshot.config;
       const preparedWorkspaceDir = sharedRuntimeWorkspace
         ? requestedWorkspaceDir
         : (preparedModelRuntimeOwnerSnapshot.workspaceDir ?? requestedWorkspaceDir);
@@ -393,27 +377,11 @@ export async function compactEmbeddedAgentSessionDirect(
         agentDir: preparedModelRuntime.agentDir,
         workspaceDir: preparedWorkspaceDir,
         preparedModelRuntime,
-        ...(transcriptBytePreflightClaim
-          ? {
-              transcriptBytePreflightAuthority: true as const,
-              ...(transcriptBytePreflightClaim.withCompactionPersistenceAsync
-                ? {
-                    transcriptByteCompactionPersistenceAsync:
-                      transcriptBytePreflightClaim.withCompactionPersistenceAsync,
-                  }
-                : {}),
-              ...(transcriptBytePreflightClaim.withCompactionPersistence
-                ? {
-                    transcriptByteCompactionPersistence:
-                      transcriptBytePreflightClaim.withCompactionPersistence,
-                  }
-                : {}),
-            }
-          : {}),
+        seedCompaction,
       };
       const compactPrepared = async () => {
         if (
-          transcriptBytePreflightAuthority ||
+          seedCompaction ||
           params.config?.agents?.defaults?.compaction?.model?.trim() ||
           (
             resolveCompactionFallbacksOverride(params) ??

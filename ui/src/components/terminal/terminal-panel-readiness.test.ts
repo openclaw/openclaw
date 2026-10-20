@@ -105,7 +105,7 @@ describe("terminal panel readiness", () => {
           return (
             method === "terminal.open"
               ? { ...terminalOpenResult("catalog-terminal-1"), title: "claude --resume 1234…" }
-              : {}
+              : { ok: true }
           ) as T;
         },
         addEventListener: (nextListener) => {

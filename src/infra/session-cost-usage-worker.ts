@@ -1,7 +1,4 @@
-import {
-  collectErrorGraphCandidates,
-  toErrorObject,
-} from "@openclaw/normalization-core/error-coercion";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { WorkerTaskError } from "@openclaw/worker-runtime";
 import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
 import type { SqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
@@ -58,14 +55,12 @@ import {
   createUsageCostReportSource,
   prepareUsageCostReportEntry,
 } from "./session-cost-usage-worker-report.js";
-import {
-  UsageCostHostEffectError,
-  type UsageCostWorkerDatabase,
-  type UsageCostWorkerHostEffects,
-  type UsageCostWorkerHostReply,
-  type UsageCostWorkerInput,
-  type UsageCostWorkerReply,
-  type UsageCostWorkerResult,
+import type {
+  UsageCostWorkerDatabase,
+  UsageCostWorkerHostEffects,
+  UsageCostWorkerInput,
+  UsageCostWorkerReply,
+  UsageCostWorkerResult,
 } from "./session-cost-usage-worker.types.js";
 import type { EngineConnection } from "./sql-connection.js";
 import { runSqliteReadSnapshotSync } from "./sqlite-transaction.js";
@@ -93,15 +88,10 @@ export async function executeUsageCostWorker(
   ): Promise<UsageCostWorkerHostEffects[Kind]["output"]> => {
     control.throwIfCancelled();
     const response = await channel.request({ kind, input: value }, transfer);
-    // SAFETY: The paired host constructs this reply on the operation's private channel.
-    const reply = response.input as UsageCostWorkerHostReply;
     response.consumed();
-    if (!reply.ok) {
-      throw new UsageCostHostEffectError(reply.origin, reply.message);
-    }
     control.throwIfCancelled();
     // SAFETY: Channel request IDs pair this value with the host dispatch for the requested kind.
-    return reply.value as UsageCostWorkerHostEffects[Kind]["output"];
+    return response.input as UsageCostWorkerHostEffects[Kind]["output"];
   };
   const target = (agentId: string, storePath: string) => {
     const binding = input.stores.find(
@@ -696,19 +686,11 @@ export async function executeUsageCostWorker(
 export function usageCostWorkerFailure(
   error: unknown,
 ): Extract<UsageCostWorkerReply, { ok: false }> {
-  const hostFailure = collectErrorGraphCandidates(error, (entry) =>
-    entry instanceof Error
-      ? [entry.cause, ...(entry instanceof AggregateError ? entry.errors : [])]
-      : [],
-  ).find((entry): entry is UsageCostHostEffectError => entry instanceof UsageCostHostEffectError);
   return {
     ok: false,
     error: {
       message: toErrorObject(error, "Usage cost worker failed").message,
       error: encodeOpenClawStateWorkerError(error, { includeOrdinary: true }),
-      ...(hostFailure
-        ? { hostOrigin: hostFailure.origin, hostFailureOnly: error === hostFailure }
-        : {}),
     },
   };
 }

@@ -27,6 +27,7 @@ import {
   drainSessionStateForTest,
 } from "../../../test-utils/session-state-cleanup.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
+import { isSubagentRegistryWriteCommand } from "../../subagent-test-fixtures.test-helpers.js";
 import {
   captureSubagentCompletionReply,
   runSubagentAnnounceFlow,
@@ -35,7 +36,9 @@ import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-
 import { testing as schedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import { settleSubagentRegistryPersistenceWork } from "./subagent-registry.persistence.test-support.js";
+import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
 import { resetSubagentRegistryForTests } from "./subagent-registry.test-helpers.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 vi.mock("../../../browser-lifecycle-cleanup.js", { spy: true });
 vi.mock("../../../context-engine/registry.js", { spy: true });
@@ -209,6 +212,29 @@ export function useSubagentControlFixture(options: { reuseStateDir?: boolean } =
       return stateDir;
     },
     worker,
+    rejectRegistryWrites(reject: (row: SubagentRunRecord) => boolean, message: string) {
+      worker.mockImplementation((context, operation, operationOptions) =>
+        runSubagentStateWorkerOperation(
+          context,
+          (scope) =>
+            operation({
+              execute: async (command, executeOptions) => {
+                if (
+                  isSubagentRegistryWriteCommand(command) &&
+                  command.input.values.some((value) => {
+                    const row = rowToSubagentRunRecord(value);
+                    return row !== null && reject(row);
+                  })
+                ) {
+                  throw new Error(message);
+                }
+                return scope.execute(command, executeOptions);
+              },
+            }),
+          operationOptions,
+        ),
+      );
+    },
     gateway,
     announce,
     capture,

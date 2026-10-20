@@ -156,7 +156,7 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
         this.scheduleSessionIndexPass();
       });
     });
-    const unsubscribeTranscripts = this.subscribeSessionTranscriptUpdates((update) => {
+    const unsubscribeTranscripts = onInternalSessionTranscriptUpdate((update) => {
       this.runInBackgroundContext(() => {
         if (this.closing || this.closed) {
           return;
@@ -180,12 +180,6 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
       unsubscribeActivity();
       unsubscribeTranscripts();
     };
-  }
-
-  protected subscribeSessionTranscriptUpdates(
-    listener: (update: MemorySessionTranscriptUpdate) => void,
-  ): () => void {
-    return onInternalSessionTranscriptUpdate(listener);
   }
 
   private async scheduleCorpusSessionFileDirty(sessionFile: string): Promise<void> {

@@ -340,12 +340,11 @@ export function normalizeSafeBinProfileFixtures(
 export function resolveSafeBinProfiles(
   fixtures?: SafeBinProfileFixtures | null,
 ): Record<string, SafeBinProfile> {
-  const normalizedFixtures = normalizeSafeBinProfileFixtures(fixtures);
-  if (Object.keys(normalizedFixtures).length === 0) {
+  if (!fixtures || Object.keys(fixtures).length === 0) {
     return SAFE_BIN_PROFILES;
   }
   return {
     ...SAFE_BIN_PROFILES,
-    ...compileSafeBinProfiles(normalizedFixtures),
+    ...compileSafeBinProfiles(fixtures),
   };
 }

@@ -23,21 +23,22 @@ beforeEach(() => {
 });
 afterEach(() => vi.useRealTimers());
 
+const providerId = "synthetic-audio";
+const providerConfig = {
+  baseUrl: "https://unused.invalid",
+  apiKey: "synthetic-fixture-key",
+  models: [],
+};
+const providerMetadata = {
+  id: providerId,
+  contracts: { mediaUnderstandingProviders: [providerId] },
+};
 const cfg: OpenClawConfig = {
-  models: {
-    providers: {
-      "synthetic-audio": {
-        baseUrl: "https://unused.invalid",
-        apiKey: "synthetic-fixture-key",
-        models: [],
-      },
-    },
-  },
+  models: { providers: { [providerId]: providerConfig } },
   tools: {
     media: {
-      audio: { enabled: true, maxBytes: 8192 },
       models: [
-        { provider: "synthetic-audio", model: "whisper", capabilities: ["audio"] },
+        { provider: providerId, model: "whisper", capabilities: ["audio"] },
         {
           type: "cli",
           command: process.execPath,
@@ -49,75 +50,20 @@ const cfg: OpenClawConfig = {
   },
 };
 
-async function withCapture(
-  provider: Pick<MediaUnderstandingProvider, "transcribeAudio" | "transcribeAudioWithContext">,
-  run: (capture: {
-    session: ReturnType<typeof createTalkFileTranscriptionSession>;
-    transcripts: string[];
-    revoke: () => void;
-  }) => Promise<void>,
-) {
-  const registry = createEmptyPluginRegistry();
-  registry.mediaUnderstandingProviders.push({
-    pluginId: "synthetic-audio",
-    source: "test",
-    provider: { id: "synthetic-audio", capabilities: ["audio"], ...provider },
-  });
-  await withPluginRuntimeGenerationScope(
-    {
-      pluginRegistry: registry,
-      metadataSnapshot: createPluginMetadataSnapshotFixture({
-        plugins: [
-          {
-            id: "synthetic-audio",
-            contracts: { mediaUnderstandingProviders: ["synthetic-audio"] },
-          },
-        ],
-      }),
-    },
-    async () => {
-      const transcripts: string[] = [];
-      let current = true;
-      const session = createTalkFileTranscriptionSession(
-        {
-          cfg,
-          agentId: "main",
-          agentDir: resolveAgentDir(cfg, "main"),
-          workspaceDir: resolveAgentWorkspaceDir(cfg, "main"),
-          maxBytes: 8192,
-          ready: true,
-          provider: "synthetic-audio",
-          providers: [{ id: "synthetic-audio", models: ["whisper"], configured: true }],
-        },
-        { onTranscript: (text) => transcripts.push(text) },
-        () => {
-          if (!current) {
-            throw new Error("Speech requester authority revoked");
-          }
-        },
-      );
-      session.sendAudio(Buffer.alloc(1600, 0xff));
-      try {
-        await run({
-          session,
-          transcripts,
-          revoke: () => {
-            current = false;
-          },
-        });
-      } finally {
-        session.close();
-      }
-    },
-  );
-}
-
-it.each(["allowed", "closed", "revoked"] as const)(
-  "retains %s capture authority across provider retry and CLI fallback",
-  async (state) => {
+it.each([
+  ["retry", "allowed", 2, 1, "CLI fallback"],
+  ["retry", "closed", 1, 0, null],
+  ["retry", "revoked", 1, 0, null],
+  ["http", "allowed", 1, 0, "HTTP transcript"],
+  ["http", "closed", 0, 0, null],
+  ["http", "revoked", 0, 0, null],
+] as const)(
+  "revalidates %s capture authority when %s",
+  async (phase, state, calls, cliCalls, transcript) => {
     const started = createDeferred();
     const release = createDeferred();
     onTestFinished(() => release.resolve());
+    const upload = vi.fn<typeof fetch>(async () => Response.json({ text: "HTTP transcript" }));
     const transcribeAudio = vi.fn<NonNullable<MediaUnderstandingProvider["transcribeAudio"]>>(
       async () => {
         if (transcribeAudio.mock.calls.length === 1) {
@@ -127,82 +73,83 @@ it.each(["allowed", "closed", "revoked"] as const)(
         throw Object.assign(new Error("Temporary transcription failure"), { status: 503 });
       },
     );
-    await withCapture({ transcribeAudio }, async ({ session, transcripts, revoke }) => {
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      const finishing = session.finish();
-      const outcome = finishing.then(
-        () => true,
-        () => false,
-      );
-      await awaitGateBeforeSettlement(
-        started.promise,
-        finishing,
-        "capture finished before provider",
-      );
-      if (state === "closed") {
-        session.close();
-      } else if (state === "revoked") {
-        revoke();
-      }
-      release.resolve();
-      await vi.advanceTimersByTimeAsync(1000);
-      expect(await outcome).toBe(state === "allowed");
-      expect(transcribeAudio).toHaveBeenCalledTimes(state === "allowed" ? 2 : 1);
-      expect(cli).toHaveBeenCalledTimes(state === "allowed" ? 1 : 0);
-      expect(transcripts).toEqual(state === "allowed" ? ["CLI fallback"] : []);
-    });
-  },
-);
-
-it.each(["allowed", "closed", "revoked"] as const)(
-  "revalidates %s capture at HTTP dispatch after provider preparation",
-  async (state) => {
-    const prepared = createDeferred();
-    const release = createDeferred();
-    onTestFinished(() => release.resolve());
-    const upload = vi.fn<typeof fetch>().mockImplementation(
-      async () =>
-        new Response(JSON.stringify({ text: "HTTP transcript" }), {
-          headers: { "content-type": "application/json" },
-        }),
-    );
-    await withCapture(
+    const provider: MediaUnderstandingProvider = { id: providerId, capabilities: ["audio"] };
+    if (phase === "retry") {
+      provider.transcribeAudio = transcribeAudio;
+    } else {
+      provider.transcribeAudioWithContext = async (request) => {
+        started.resolve();
+        await release.promise;
+        return ok(
+          await transcribeOpenAiCompatibleAudio({
+            ...request,
+            apiKey: "synthetic-fixture-key",
+            defaultBaseUrl: "https://speech.example/v1",
+            defaultModel: "whisper",
+            fetchFn: upload,
+          }),
+        );
+      };
+    }
+    const registry = createEmptyPluginRegistry();
+    registry.mediaUnderstandingProviders.push({ pluginId: providerId, source: "test", provider });
+    await withPluginRuntimeGenerationScope(
       {
-        transcribeAudioWithContext: async (request) => {
-          prepared.resolve();
-          await release.promise;
-          return ok(
-            await transcribeOpenAiCompatibleAudio({
-              ...request,
-              apiKey: "synthetic-fixture-key",
-              defaultBaseUrl: "https://speech.example/v1",
-              defaultModel: "whisper",
-              fetchFn: upload,
-            }),
-          );
-        },
+        pluginRegistry: registry,
+        metadataSnapshot: createPluginMetadataSnapshotFixture({ plugins: [providerMetadata] }),
       },
-      async ({ session, transcripts, revoke }) => {
-        const finishing = session.finish();
-        const outcome = finishing.then(
-          () => true,
-          () => false,
+      async () => {
+        const transcripts: string[] = [];
+        let current = true;
+        const session = createTalkFileTranscriptionSession(
+          {
+            cfg,
+            agentId: "main",
+            agentDir: resolveAgentDir(cfg, "main"),
+            workspaceDir: resolveAgentWorkspaceDir(cfg, "main"),
+            maxBytes: 8192,
+            ready: true,
+            provider: providerId,
+            providers: [{ id: providerId, models: ["whisper"], configured: true }],
+          },
+          { onTranscript: (text) => transcripts.push(text) },
+          () => {
+            if (!current) {
+              throw new Error("Speech requester authority revoked");
+            }
+          },
         );
-        await awaitGateBeforeSettlement(
-          prepared.promise,
-          finishing,
-          "capture finished before preparation",
-        );
-        if (state === "closed") {
+        session.sendAudio(Buffer.alloc(1600, 0xff));
+        try {
+          if (phase === "retry") {
+            vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+          }
+          const finishing = session.finish();
+          const outcome = finishing.then(
+            () => true,
+            () => false,
+          );
+          await awaitGateBeforeSettlement(
+            started.promise,
+            finishing,
+            "capture finished before provider gate",
+          );
+          if (state === "closed") {
+            session.close();
+          } else if (state === "revoked") {
+            current = false;
+          }
+          release.resolve();
+          if (phase === "retry") {
+            await vi.advanceTimersByTimeAsync(1000);
+          }
+          expect(await outcome).toBe(transcript !== null);
+          expect(phase === "retry" ? transcribeAudio : upload).toHaveBeenCalledTimes(calls);
+          expect(cli).toHaveBeenCalledTimes(cliCalls);
+          expect(transcripts).toEqual(transcript === null ? [] : [transcript]);
+        } finally {
           session.close();
-        } else if (state === "revoked") {
-          revoke();
         }
-        release.resolve();
-        expect(await outcome).toBe(state === "allowed");
-        expect(upload).toHaveBeenCalledTimes(state === "allowed" ? 1 : 0);
-        expect(cli).not.toHaveBeenCalled();
-        expect(transcripts).toEqual(state === "allowed" ? ["HTTP transcript"] : []);
       },
     );
   },

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import fs, { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -9,6 +9,7 @@ import {
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
+import * as clawhubStore from "./clawhub-store.js";
 import { untrackClawHubSkill } from "./clawhub-store.js";
 import { applyClawHubSkillUninstall, planClawHubSkillUninstall } from "./clawhub-uninstall.js";
 import { digestClawHubSkillTree } from "./skill-tree-digest.js";
@@ -277,6 +278,19 @@ describe("ClawHub skill uninstall lifecycle", () => {
           : failure === "untracking"
             ? "lockfile write failed"
             : "parent canceled";
+      const renameSpy =
+        failure === "parent deletion"
+          ? vi
+              .spyOn(fs, "rename")
+              .mockImplementation(async (...args: Parameters<typeof rename>) => {
+                await rename(...args);
+                active = false;
+              })
+          : undefined;
+      const untrackSpy =
+        failure === "untracking"
+          ? vi.spyOn(clawhubStore, "untrackClawHubSkill").mockRejectedValueOnce(new Error(message))
+          : undefined;
       const result = await applyClawHubSkillUninstall(
         removal,
         failure === "parent deletion"
@@ -286,17 +300,9 @@ describe("ClawHub skill uninstall lifecycle", () => {
                   throw new Error(message);
                 }
               },
-              rename: async (...args: Parameters<typeof rename>) => {
-                await rename(...args);
-                active = false;
-              },
             }
           : failure === "untracking"
-            ? {
-                untrack: async () => {
-                  throw new Error(message);
-                },
-              }
+            ? {}
             : {
                 authorizeMutation: async (phase) => {
                   phases.push(phase);
@@ -309,7 +315,10 @@ describe("ClawHub skill uninstall lifecycle", () => {
                   }
                 },
               },
-      );
+      ).finally(() => {
+        renameSpy?.mockRestore();
+        untrackSpy?.mockRestore();
+      });
       expect(result).toMatchObject({ ok: false, error: expect.stringContaining(message) });
       const lock = await current.readLock();
       expect(JSON.parse(lock)).toEqual(JSON.parse(before));
@@ -333,23 +342,23 @@ describe("ClawHub skill uninstall lifecycle", () => {
       const removal = await requirePlan(current);
       let active = true;
       let replacement = "";
+      const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+        await rename(from, to);
+        active = false;
+        replacement = changed === "staging" ? String(to) : current.skillDir;
+        if (changed === "staging") {
+          await rename(to, `${String(to)}.original`);
+        }
+        await mkdir(replacement);
+        await writeFile(join(replacement, "SKILL.md"), "successor skill");
+      });
       const result = await applyClawHubSkillUninstall(removal, {
         beforePersistentApply: () => {
           if (!active) {
             throw new Error("Parent deletion ended.");
           }
         },
-        rename: async (from, to) => {
-          await rename(from, to);
-          active = false;
-          replacement = changed === "staging" ? String(to) : current.skillDir;
-          if (changed === "staging") {
-            await rename(to, `${String(to)}.original`);
-          }
-          await mkdir(replacement);
-          await writeFile(join(replacement, "SKILL.md"), "successor skill");
-        },
-      });
+      }).finally(() => renameSpy.mockRestore());
       expect(result).toMatchObject({
         ok: false,
         error: expect.stringContaining("staging or destination changed"),

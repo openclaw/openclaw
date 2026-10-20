@@ -90,8 +90,6 @@ import {
   listOwnedRuntimeAuthProfileStoreSnapshots,
   listRuntimeAuthProfileStoreSnapshotsForSharedOwner,
   restoreOwnedRuntimeAuthProfileStoreSnapshot,
-  setRuntimeAuthProfileStoreSnapshot,
-  updateRuntimeAuthProfileStoreSnapshot,
   type OwnedRuntimeAuthProfileStoreSnapshotEntry,
 } from "./runtime-snapshots.js";
 import {
@@ -792,7 +790,11 @@ export { preserveResolvedSecretBackedCredentials } from "./runtime-snapshot-owne
 export function createAuthProfileStoreRuntime(
   externalAuth: ReturnType<typeof createExternalAuthRuntime>,
 ) {
-  const { listRuntimeExternalAuthProfiles, overlayExternalAuthProfiles } = externalAuth;
+  const {
+    listRuntimeExternalAuthProfiles,
+    overlayExternalAuthProfiles,
+    withPreparedExternalAuthProfiles,
+  } = externalAuth;
 
   function maybeSyncPersistedExternalCliAuthProfiles(params: {
     store: AuthProfileStore;
@@ -1103,19 +1105,17 @@ export function createAuthProfileStoreRuntime(
     );
   }
 
-  const {
-    loadAuthProfileStoreForRuntime,
-    loadAuthProfileStoreForRuntimeAsync,
-    withPreparedAuthProfileStoreReads,
-  } = createAuthProfileStoreRuntimeReader({
-    isEnvOnlyAuthProfileRuntime,
-    getScopedAuthProfileEnv,
-    resolveRuntimeAuthProfileAgentDir,
-    resolveRuntimeAuthProfileLoadOptions,
-    loadAuthProfileStoreForAgent,
-    loadRuntimeAuthProfileStore,
-    captureScope,
-  });
+  const { loadAuthProfileStoreForRuntime, withPreparedAuthProfileStoreReads, ...runtimeReads } =
+    createAuthProfileStoreRuntimeReader({
+      isEnvOnlyAuthProfileRuntime,
+      getScopedAuthProfileEnv,
+      resolveRuntimeAuthProfileAgentDir,
+      resolveRuntimeAuthProfileLoadOptions,
+      loadAuthProfileStoreForAgent,
+      loadRuntimeAuthProfileStore,
+      withPreparedExternalAuthProfiles,
+      captureScope,
+    });
 
   /** Prepare a recorded provider without putting persisted SQLite reads on the caller's thread. */
   async function prepareAuthProfileProvider(params: {
@@ -1305,8 +1305,7 @@ export function createAuthProfileStoreRuntime(
     captureScope,
     withPreparedAuthProfileStoreReads,
     overlayExternalAuthProfiles,
-    setRuntimeAuthProfileStoreSnapshot,
-    updateRuntimeAuthProfileStoreSnapshot,
+    withPreparedExternalAuthProfiles,
   });
 
   /** Retain read owners, never copies of their migration refusals, for a session facade. */
@@ -1350,7 +1349,7 @@ export function createAuthProfileStoreRuntime(
     };
     const readAsync = async (): Promise<AuthProfileStore> => {
       const store = await runInScope(() =>
-        loadAuthProfileStoreForRuntimeAsync(effectiveAgentDir, readOptions, env),
+        runtimeReads.loadAuthProfileStoreForRuntimeAsync(effectiveAgentDir, readOptions, env),
       );
       assertReadOwners();
       return store;
@@ -1441,7 +1440,7 @@ export function createAuthProfileStoreRuntime(
     agentDir?: string,
     options?: Parameters<typeof loadAuthProfileStoreForSecretsRuntime>[1],
   ): Promise<AuthProfileStore> {
-    return loadAuthProfileStoreForRuntimeAsync(agentDir, {
+    return runtimeReads.loadAuthProfileStoreForRuntimeAsync(agentDir, {
       ...options,
       readOnly: true,
       allowKeychainPrompt: false,
@@ -1737,8 +1736,8 @@ export function createAuthProfileStoreRuntime(
     );
     return {
       owned,
-      publishRuntimeSnapshots: () => {
-        return publishRuntimeSnapshotsAfterCommit({
+      publishRuntimeSnapshots: () =>
+        publishRuntimeSnapshotsAfterCommit({
           ...publication,
           publish: () => {
             const owner = owned.owner;
@@ -1753,19 +1752,18 @@ export function createAuthProfileStoreRuntime(
             );
             return converged;
           },
-        });
-      },
+        }),
     };
   }
 
   return {
     prepareAuthProfileStoreForModelRuntime,
+    ...runtimeReads,
+    loadAuthProfileStoreForRuntime,
     createAuthProfileStoreReadScope,
     createAuthProfileStoreReadScopeAsync,
     updateAuthProfileStoreWithLock,
     loadAuthProfileStore,
-    loadAuthProfileStoreForRuntime,
-    loadAuthProfileStoreForRuntimeAsync,
     loadAuthProfileStoreForSecretsRuntime,
     loadAuthProfileStoreForSecretsRuntimeAsync,
     loadAuthProfileStoreWithoutExternalProfiles,

@@ -83,10 +83,7 @@ export async function readAcpSessionMetaForEntries(
   if (result === undefined) {
     return entries.map(() => null);
   }
-  if (result.ok && result.type === "acpSessions.metadata") {
-    return result.rows.map((row) => (row ? rowToAcpSessionMeta(row) : null));
-  }
-  throw new Error("Unexpected ACP session metadata read result");
+  return result.rows.map((row) => (row ? rowToAcpSessionMeta(row) : null));
 }
 
 /** Read metadata for an already selected entry without loading its session row again. */
@@ -132,14 +129,7 @@ export function rowToAcpSessionMeta(
 }
 
 export function readAcpSessionMetaForEntry(
-  params: {
-    sessionKey: string;
-    agentId?: string;
-    cfg?: OpenClawConfig;
-    entry: AcpSessionEntryBinding | undefined;
-    env?: NodeJS.ProcessEnv;
-    databasePath?: string;
-  },
+  params: Parameters<typeof readAcpSessionMetaForEntryAsync>[0],
   options: { current?: true } = {},
 ): SessionAcpMeta | undefined {
   const sessionKey = params.sessionKey.trim();

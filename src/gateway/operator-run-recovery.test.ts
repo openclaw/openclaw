@@ -1,5 +1,16 @@
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import {
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+} from "../agents/admitted-run-context.js";
+import { createAgentHarnessHostCapabilities } from "../agents/harness/host-capability.js";
+import { readPersistedFileStat } from "../agents/sessions/tools/file-write-verification.js";
+import { createWriteTool } from "../agents/sessions/tools/write.js";
+import { getCommandOwnerAuthority } from "../auto-reply/command-owner-authority.js";
+import { withAdminIngress } from "../channels/message-access/operator-authority.test-support.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   persistSessionTranscriptTurn,
@@ -13,6 +24,7 @@ import { persistDevicePairingStoreState } from "../infra/device-pairing-store.js
 import { ensureDeviceToken, rotateDeviceToken } from "../infra/device-pairing-tokens.js";
 import { getPairedDevice, updatePairedDeviceMetadata } from "../infra/device-pairing.js";
 import type { PairedDevice } from "../infra/device-pairing.types.js";
+import { isMissingPathError } from "../infra/errors.js";
 import type { PluginGatewayAccessPolicy } from "../plugins/gateway-access-policy.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
@@ -20,8 +32,14 @@ import {
   restoreActivePluginRegistrySnapshot,
   stageActivePluginRegistry,
 } from "../plugins/runtime.js";
+import {
+  bindGatewayContextResolver,
+  withPluginRuntimeGatewayRequestScope,
+} from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { changeCanonicalUserChannelIdentity } from "../state/user-channel-identity-operations.js";
 import { setCanonicalUserProfileDisplayName } from "../state/user-profile-writes.js";
 import {
   linkEmail,
@@ -38,12 +56,20 @@ import {
 import { retireDeviceTokenClients } from "./device-token-client-lifecycle.js";
 import { publishOperatorRoleConfigChange } from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { decodeQueuedOperatorRecoverySource } from "./operator-run-recovery-source.codec.js";
+import { captureQueuedOperatorRecoverySource } from "./operator-run-recovery-source.js";
 import {
   readGatewayOperatorRecoverySource,
   restoreGatewayOperatorSource,
+  restoreGatewayQueuedOperatorRecovery,
 } from "./operator-run-recovery.js";
 import { createOperatorRecoveryFixture } from "./operator-run-recovery.test-support.js";
+import {
+  captureOperatorToolGatewayContinuationContext,
+  withOperatorToolGatewayAuthority,
+} from "./server-plugin-in-process-authority.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
+import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import {
   enforceSharedGatewaySessionGenerationForConfigWrite,
   SharedGatewaySessionGenerationState,
@@ -136,6 +162,110 @@ function expectRevoked(authority: { signal?: AbortSignal; assertCurrent: () => v
 }
 
 describe("restart recovery authenticated operator source", () => {
+  it("keeps an accepted child current after its recovered requester settles", () =>
+    withRecovery(async (fixture, stateDir) => {
+      const restored = expectDefined(await fixture.restore(), "recovered requester authority");
+      const client = createSyntheticPluginRuntimeClient({
+        authenticatedUserProfile: fixture.client.authenticatedUserProfile,
+        operatorRoleActor: { kind: "operator", profileId: restored.authority.profileId },
+        operatorRunAuthority: restored.authority,
+        scopes: ["operator.write"],
+      });
+      const child = expectDefined(
+        await withPluginRuntimeGatewayRequestScope(
+          { client, context: fixture.context, isWebchatConnect: () => false },
+          () =>
+            withOperatorToolGatewayAuthority(
+              { operatorRunAuthority: restored.authority, scopes: ["operator.write"] },
+              async () => await captureOperatorToolGatewayContinuationContext(),
+            ),
+        ),
+        "accepted child authority",
+      );
+      const beforeWrite = createDeferredCore();
+      const releaseWrite = createDeferredCore();
+      let pauseWrite = false;
+      let writes = 0;
+      let pendingWrite: Promise<unknown> | undefined;
+      let admission: ReturnType<typeof prepareAgentRunAdmission> | undefined;
+      let host: ReturnType<typeof createAgentHarnessHostCapabilities> | undefined;
+      try {
+        const runId = "recovered-child-effect";
+        const { agentId, sessionKey, sessionId } = fixture.target;
+        const prepared = prepareAgentRunAdmission({
+          cfg: {},
+          facts: {
+            runId,
+            agentId,
+            ingress: { kind: "system", boundary: "recovered-child-test", state: "present" },
+          },
+          operationalRunInstance: createOperationalRunInstanceRef(runId),
+          operatorAuthority: child.operatorAuthority,
+        });
+        admission = prepared;
+        const admittedRunContext = await child.run(() =>
+          prepared.admit("plugin-harness", `harness-${runId}`),
+        );
+        bindGatewayContextResolver(admittedRunContext, () => fixture.context);
+        host = child.run(() =>
+          createAgentHarnessHostCapabilities({
+            attempt: { runId, agentId, sessionKey, sessionId, admittedRunContext },
+            pluginId: "codex",
+          }),
+        );
+        const tool = expectDefined(
+          host.capabilities.bindToolSurface([
+            createWriteTool(stateDir, {
+              operations: {
+                mkdir: async (dir) => {
+                  await mkdir(dir, { recursive: true });
+                  if (pauseWrite) {
+                    beforeWrite.resolve();
+                    await releaseWrite.promise;
+                  }
+                },
+                readFile,
+                statFile: (file) => readPersistedFileStat(file, isMissingPathError),
+                writeFile: async (file, content) => {
+                  writes += 1;
+                  await writeFile(file, content, "utf8");
+                },
+              },
+            }),
+          ])[0],
+          "child write capability",
+        );
+        const file = "recovered-child-effect.txt";
+        fixture.retire();
+        restored.release();
+        expect(restored.authority.assertCurrent).toThrow("Recovery claim retired");
+        expect(child.operatorAuthority?.scopes).toEqual(["operator.write"]);
+        await child.run(() => tool.execute("allowed", { path: file, content: "allowed\n" }));
+        expect(await readFile(path.join(stateDir, file), "utf8")).toBe("allowed\n");
+
+        // No cancellation signal: the final write must revalidate its admitted principal.
+        pauseWrite = true;
+        pendingWrite = child.run(() =>
+          tool.execute("revoked", { path: file, content: "forbidden\n" }),
+        );
+        void pendingWrite.catch(beforeWrite.reject);
+        await beforeWrite.promise;
+        invalidateGatewayDeviceRevocation(fixture.context, "recovery-device", "operator");
+        releaseWrite.resolve();
+        await expect(pendingWrite).rejects.toThrow("no longer active");
+        expect(writes).toBe(1);
+        expect(await readFile(path.join(stateDir, file), "utf8")).toBe("allowed\n");
+        expect(child.signal.aborted).toBe(true);
+      } finally {
+        releaseWrite.resolve();
+        await pendingWrite?.catch(() => undefined);
+        host?.close();
+        admission?.close();
+        child.release();
+        restored.release();
+      }
+    }));
+
   it.each(["current", "owner closed", "device revoked"] as const)(
     "checks independently owned continuation custody after preparation: %s",
     (change) =>
@@ -193,6 +323,121 @@ describe("restart recovery authenticated operator source", () => {
         { scopes: ["operator.write"] },
       ),
   );
+  it("preserves live channel work at recovery bounds and rejects revoked ingress", async () => {
+    await withAdminIngress(
+      async ({ admins, context, gateway, retire, cfg, activatePolicy }) => {
+        const admin = expectDefined(admins[0], "linked administrator");
+        cfg.agents = { entries: { main: { model: "fixture/permitted" } } };
+        const roles = expectDefined(cfg.gateway?.roles, "configured channel roles");
+        for (const count of [256, 257]) {
+          await activatePolicy({
+            roles: {
+              ...roles,
+              definitions: {
+                ...roles.definitions,
+                admin: {
+                  ...expectDefined(roles.definitions.admin, "administrator role"),
+                  modelPolicy: {
+                    sourceAgent: "main",
+                    allow: ["fixture/*"],
+                    deny: Array.from({ length: count }, (_, index) => `fixture/blocked-${index}/*`),
+                  },
+                },
+              },
+            },
+          });
+          const bounded = expectDefined(
+            getCommandOwnerAuthority(await context(admin.identity.senderId))?.operatorAuthority,
+            "live linked operator with configured model policy",
+          );
+          expect(bounded.modelPolicy?.allows({ provider: "fixture", model: "permitted" })).toBe(
+            true,
+          );
+          expect(
+            bounded.modelPolicy?.allows({
+              provider: "fixture",
+              model: `blocked-${count - 1}/test`,
+            }),
+          ).toBe(false);
+          const captured = captureQueuedOperatorRecoverySource(bounded);
+          expect(bounded.assertCurrent).not.toThrow();
+          const serialized = JSON.stringify(captured);
+          const persisted: unknown = JSON.parse(serialized);
+          if (count === 256) {
+            expect(captured?.kind).toBe("channel");
+            const resumed = await restoreGatewayQueuedOperatorRecovery({
+              source: decodeQueuedOperatorRecoverySource(persisted),
+              context: gateway,
+              assertCurrent: () => {},
+            });
+            try {
+              expect(
+                resumed.authority.modelPolicy?.allows({ provider: "fixture", model: "permitted" }),
+              ).toBe(true);
+              expect(
+                resumed.authority.modelPolicy?.allows({
+                  provider: "fixture",
+                  model: "blocked-255/test",
+                }),
+              ).toBe(false);
+            } finally {
+              resumed.release();
+            }
+          } else {
+            expect(captured).toEqual({ kind: "unavailable" });
+            await expect(
+              restoreGatewayQueuedOperatorRecovery({
+                source: decodeQueuedOperatorRecoverySource(persisted),
+                context: gateway,
+                assertCurrent: () => {},
+              }),
+            ).rejects.toThrow(
+              "Queued operator authority cannot be recovered; submit a new request.",
+            );
+            await changeCanonicalUserChannelIdentity("unlink", admin.profile.id, admin.identity);
+            expect(() => captureQueuedOperatorRecoverySource(bounded)).toThrow(
+              "Channel operator authority changed",
+            );
+            await changeCanonicalUserChannelIdentity("link", admin.profile.id, admin.identity);
+          }
+        }
+        await activatePolicy({ roles });
+        const original = expectDefined(
+          getCommandOwnerAuthority(await context(admin.identity.senderId))?.operatorAuthority,
+          "authenticated channel operator",
+        );
+        const source = expectDefined(
+          captureQueuedOperatorRecoverySource(original),
+          "queued source",
+        );
+        expect(source.kind).toBe("channel");
+        const serializedSource = JSON.stringify(source);
+        const persisted: unknown = JSON.parse(serializedSource);
+        retire();
+        expect(original.assertCurrent).toThrow();
+        const restore = () =>
+          restoreGatewayQueuedOperatorRecovery({
+            source: decodeQueuedOperatorRecoverySource(persisted),
+            context: gateway,
+            assertCurrent: () => {},
+          });
+        const restored = await restore();
+        try {
+          expect(restored.authority.assertCurrent).not.toThrow();
+          expect(restored.authority.profileId).toBe(admin.profile.id);
+          await changeCanonicalUserChannelIdentity("unlink", admin.profile.id, admin.identity);
+          await changeCanonicalUserChannelIdentity("link", admin.profile.id, admin.identity);
+          expect(restored.authority.assertCurrent).toThrow();
+          await expect(restore()).rejects.toThrow("Queued channel operator authority changed");
+        } finally {
+          restored.release();
+        }
+      },
+      "role",
+      "slack",
+    );
+  });
+
   it("keeps restored authority current during unrelated issuance", () =>
     withRecovery(async (fixture, stateDir) => {
       const restored = expectDefined(await fixture.restore(), "exact device source");
@@ -252,21 +497,31 @@ describe("restart recovery authenticated operator source", () => {
         }
       }),
   );
-  it("keeps restored authority when a same-device handshake reissues its token", () =>
-    withRecovery(async (fixture) => {
-      const restored = expectDefined(await fixture.restore(), "original device source");
-      using _ = { [Symbol.dispose]: restored.release };
+  it.each(["before restoration", "after restoration"] as const)(
+    "checks the original credential when a same-device handshake reissues its token %s",
+    (timing) =>
+      withRecovery(async (fixture) => {
+        const restored =
+          timing === "after restoration"
+            ? expectDefined(await fixture.restore(), "original device source")
+            : undefined;
+        using _ = restored ? { [Symbol.dispose]: restored.release } : undefined;
 
-      expect(
-        await ensureDeviceToken({
-          deviceId: "recovery-device",
-          role: "operator",
-          scopes: ["operator.admin"],
-          issuer: { kind: "shared-gateway-auth", generation: "replacement-issuer" },
-        }),
-      ).not.toBeNull();
-      expectCurrent(restored.authority);
-    }));
+        expect(
+          await ensureDeviceToken({
+            deviceId: "recovery-device",
+            role: "operator",
+            scopes: ["operator.admin"],
+            issuer: { kind: "shared-gateway-auth", generation: "replacement-issuer" },
+          }),
+        ).not.toBeNull();
+        if (restored) {
+          expectCurrent(restored.authority);
+        } else {
+          await expect(fixture.restore()).rejects.toThrow("operator authority changed");
+        }
+      }),
+  );
   it("keeps accepted device authority through unrelated pairing traffic until Gateway retirement", () =>
     withRecovery(async (fixture, stateDir) => {
       const device = pairedOperator();

@@ -5,7 +5,6 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import * as jsonFiles from "../infra/json-files.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import {
   createUpdateRun,
@@ -211,20 +210,15 @@ it.each(["contention observed", "helper wait exhausted"] as const)(
     const { options, run, result, opts, reportPath } = fixture();
     const paused = createDeferred();
     const release = createDeferred();
-    const atomicWrite = jsonFiles.writeTextAtomic;
+    const rename = fs.rename;
     let intercepted = false;
-    vi.spyOn(jsonFiles, "writeTextAtomic").mockImplementation(async (target, body, policy) => {
-      if (target !== reportPath || intercepted) {
-        return atomicWrite(target, body, policy);
+    vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      if (to === reportPath && !intercepted) {
+        intercepted = true;
+        paused.resolve();
+        await release.promise;
       }
-      intercepted = true;
-      return atomicWrite(target, body, {
-        ...policy,
-        beforeRename: async () => {
-          paused.resolve();
-          await release.promise;
-        },
-      });
+      return rename(from, to);
     });
     const foreground = printResult(result, opts);
     await Promise.race([
@@ -256,6 +250,7 @@ it.each(["contention observed", "helper wait exhausted"] as const)(
       await Promise.allSettled([foreground, terminal]);
     }
     await foreground;
+    expect(intercepted).toBe(true);
     const stderr = await terminal;
     if (releaseAfter === "contention observed") {
       expect(stderr).not.toContain("Update report could not be saved:");

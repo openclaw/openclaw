@@ -68,17 +68,19 @@ await withOpenClawTestState({ label: "session-write-hold" }, async (state) => {
       }
     },
   });
-  JSON.parse = (...args: Parameters<typeof parse>) => {
-    const start = performance.now();
-    const held = holdStart !== undefined;
-    try {
-      return parse(...args);
-    } finally {
-      if (held) {
-        jsonInHoldMs += performance.now() - start;
+  JSON.parse = new Proxy(parse, {
+    apply(target, receiver, args) {
+      const start = performance.now();
+      const held = holdStart !== undefined;
+      try {
+        return Reflect.apply(target, receiver, args);
+      } finally {
+        if (held) {
+          jsonInHoldMs += performance.now() - start;
+        }
       }
-    }
-  };
+    },
+  });
   try {
     for (let index = 0; index < 60; index += 1) {
       holdMs = 0;

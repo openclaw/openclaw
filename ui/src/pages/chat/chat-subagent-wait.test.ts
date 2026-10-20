@@ -402,7 +402,7 @@ describe("chat waiting on subagents", () => {
   it.each([
     { name: "no loaded handoff", history: [] },
     { name: "only an earlier turn's handoff", history: messages },
-  ])("renders the recorded wait clock with $name", async ({ history }) => {
+  ])("renders the recorded wait clock with $name", ({ history }) => {
     const now = Date.UTC(2026, 9, 12, 20, 48);
     const wait = resolveChatSubagentWait({
       selectedSession: { ...parent, startedAt: now - 100_000, endedAt: now - 65_000 },
@@ -428,8 +428,6 @@ describe("chat waiting on subagents", () => {
       );
       flush();
       const elapsed = container.querySelector("openclaw-elapsed-time");
-      await elapsed?.updateComplete;
-      flush();
       expect(elapsed?.textContent?.trim()).toBe("1m 5s");
     } finally {
       view?.unmount();
@@ -531,7 +529,7 @@ describe("chat waiting on subagents", () => {
 
   it.each([false, true])(
     "keeps a working fallback until child activity replaces it (bubble mode: %s)",
-    (bubbleMode) => {
+    async (bubbleMode) => {
       const container = document.body.appendChild(document.createElement("div"));
       const onOpenSubagent = vi.fn();
       const projection = projectSubagentStatus(
@@ -557,6 +555,8 @@ describe("chat waiting on subagents", () => {
         ...options,
         subagentActivity: { rows: projection.activity, onOpenSubagent },
       });
+      await vi.dynamicImportSettled();
+      flush();
       expect(container.textContent).toContain("Backend implementation");
       expect(container.textContent).not.toContain("Waiting on");
       expect(container.querySelector(".chat-working-indicator")).toBeNull();

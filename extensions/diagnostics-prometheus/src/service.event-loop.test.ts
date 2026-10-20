@@ -98,6 +98,8 @@ describe("diagnostics-prometheus runtime metrics", () => {
         type: "diagnostic.memory.sample",
         memory: {
           ...memory,
+          anonymousRssBytes: 700,
+          anonymousSwapBytes: 0,
           workerHeaps: [
             {
               script: "code-mode-node.worker.js",
@@ -123,6 +125,8 @@ describe("diagnostics-prometheus runtime metrics", () => {
         },
       });
       const before = metrics.render();
+      expect(before).toContain('openclaw_process_anonymous_memory_bytes{kind="rss"} 700\n');
+      expect(before).toContain('openclaw_process_anonymous_memory_bytes{kind="swap"} 0\n');
       expect(before).toContain(
         'openclaw_gc_duration_seconds_count{kind="mark_sweep_compact",reason="forced",slot="1",thread="code-mode-node.worker.js"} 2\n',
       );
@@ -172,6 +176,7 @@ describe("diagnostics-prometheus runtime metrics", () => {
         },
       });
       const after = metrics.render();
+      expect(after).not.toContain("openclaw_process_anonymous_memory_bytes");
       expect(after).toContain('openclaw_code_mode_worker_heap_bytes{kind="used",slot="1"} 50\n');
       expect(after).not.toContain('openclaw_code_mode_worker_heap_bytes{kind="limit"');
       expect(after).not.toContain('openclaw_code_mode_worker_heap_bytes{kind="used",slot="2"}');
@@ -605,7 +610,7 @@ describe("diagnostics-prometheus runtime identity", () => {
         metrics.record({ type: "gateway.rpc", method: `method.${index}`, phase: "received" });
       }
       expect(metrics.render()).toContain(info);
-      expect(metrics.render()).toContain("openclaw_prometheus_series_dropped_total 53");
+      expect(metrics.render()).toContain("openclaw_prometheus_series_dropped_total 2153");
       metrics.stop();
       expect(metrics.render()).toBe("");
       identity.processInstanceId = "a6aa1fc7-1f10-4b56-8ae8-4ff8c4dc02ea";

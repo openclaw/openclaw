@@ -246,6 +246,7 @@ export function createSessionActorMemoryMetadata(context: SessionActorMemoryStor
               now: Date.parse(entry.timestamp),
               message: entry.message,
               appendMode: entry.appendMode,
+              supersedesEntryId: source.id,
               idempotencyLookup: "caller-checked",
               custody: pendingInput ? { ...pendingInput, relocation: source.id } : undefined,
             });
@@ -256,6 +257,8 @@ export function createSessionActorMemoryMetadata(context: SessionActorMemoryStor
               throw new Error("Transcript rewrite produced an invalid message");
             }
             entry.message = appended.result.message;
+            // The returned view must match the stored row for later source comparisons.
+            entry.supersedesEntryId = source.id;
             pendingInputReceipt = appended.receipt ?? pendingInputReceipt;
           } else if (!events.appendRaw(entry).appended) {
             throw new Error("Transcript rewrite entry was not appended");

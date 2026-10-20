@@ -346,7 +346,7 @@ export async function connectBrowser(
     }
     const browser = await connectRelayBrowser(relay, normalized, relayReference);
     observeBrowser(browser);
-    return { browser, cdpUrl: normalized };
+    return { browser };
   }
   const cached = cachedByCdpUrl.get(normalized);
   if (cached) {
@@ -469,7 +469,6 @@ export async function connectBrowser(
         }
         const connected: ConnectedBrowser = {
           browser,
-          cdpUrl: normalized,
           onDisconnected,
           engine,
           headless,

@@ -10,6 +10,7 @@ import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { withConfigWriteLock } from "../config/write-lock.js";
 import { discoverBackupDatabasePaths } from "../infra/backup-sqlite-snapshot.js";
+import { capturePortClientCredentialBinding } from "../infra/client-credential-restore.js";
 import { resolveDatabaseEngineInput } from "../infra/database-engine/config.js";
 import { getDatabaseEngineInput } from "../infra/database-engine/context.js";
 import {
@@ -280,6 +281,26 @@ async function captureOriginals(ctx: Context, facts: Awaited<ReturnType<typeof p
     const file = path.join(ctx.directory, `config-${index}.json`);
     writeDatabasePortArtifact(file, fs.readFileSync(input.path), ctx.assertCurrent);
     artifacts.push(await captureDatabaseArtifact(file));
+  }
+  const sharedIndex = targets.findIndex(
+    (target) => livePath(target) === path.join(ctx.stateDir, "state", "openclaw.sqlite"),
+  );
+  const sharedInput = ctx.inputs.stores[sharedIndex];
+  const credentialBinding = sharedInput
+    ? capturePortClientCredentialBinding({
+        env: ctx.env,
+        sourcePath: targets[sharedIndex]!.originalCapture.path,
+        sourceFile: { path: sharedInput.original.path, dev: sharedInput.dev, ino: sharedInput.ino },
+      })
+    : undefined;
+  if (credentialBinding !== undefined) {
+    const bindingFile = path.join(ctx.directory, "client-credential-binding.json");
+    writeDatabasePortArtifact(
+      bindingFile,
+      `${JSON.stringify(credentialBinding)}\n`,
+      ctx.assertCurrent,
+    );
+    artifacts.push(await captureDatabaseArtifact(bindingFile));
   }
   const inputFile = path.join(ctx.directory, "inputs.json");
   writeDatabasePortArtifact(inputFile, `${JSON.stringify(ctx.inputs)}\n`, ctx.assertCurrent);
@@ -615,7 +636,7 @@ export async function doctorDatabasePort(options: DatabasePortOptions) {
       : undefined;
     return await withDatabasePortStateOwner(ctx, recovery, async () => {
       if (recovery) {
-        ctx.manifest = assertDatabasePortRecoveryAllowed(stateDir, recovery);
+        ctx.manifest = assertDatabasePortRecoveryAllowed(ctx.stateDir, recovery);
         await loadRecovery(ctx);
         if (ctx.manifest.state === "complete") {
           return finalize(ctx, ctx.manifest.outcome!);

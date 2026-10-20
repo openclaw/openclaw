@@ -13,8 +13,8 @@ import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
 import type { SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import type { SidebarContent } from "../chat/components/chat-sidebar-content-types.ts";
 import type { ChatWelcomeProps } from "../chat/components/chat-welcome.tsx";
+import { DirectDictationControl } from "../chat/composer-direct-dictation.ts";
 import * as catalog from "./catalog-target.ts";
-import { NewSessionDictationControl } from "./composer-dictation-control.ts";
 import type { NewSessionComposerOptions } from "./composer.tsx";
 import { ConnectMachineSetupState } from "./connect-machine-dialog.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
@@ -52,6 +52,7 @@ export type PageHost = SolidBridgeElement<
 
 export class NewSessionPageOwner {
   private readonly listeners = new Set<() => void>();
+  private contextSubscriptions: Array<() => void> = [];
   isConnected = false;
   private pendingChange = false;
   readonly changed = () => {
@@ -121,7 +122,7 @@ export class NewSessionPageOwner {
   readonly browser: DraftPlaceBrowser;
   readonly place: DraftPlaceState;
   readonly submission: DraftSubmissionFlow;
-  readonly dictation: NewSessionDictationControl;
+  readonly dictation: DirectDictationControl;
   titlePreparation?: ReturnType<typeof createNewSessionTitle>;
   readonly flushDraft = () => this.submission.draftPersistence.persistNow();
   readonly setImageLightbox = (item: ImageLightboxItem | null) => {
@@ -130,6 +131,7 @@ export class NewSessionPageOwner {
   };
 
   constructor(readonly host: PageHost) {
+    // The page owner publishes its child loader's status through the shared page projection.
     this.attachmentPanelLoader.subscribe(this.changed);
     this.draft = new NewSessionDraft(
       () => ({ context: this.context, data: this.data, isConnected: this.isConnected }),
@@ -184,7 +186,7 @@ export class NewSessionPageOwner {
       () => ({ client: this.gateway.client, connected: this.gateway.connected }),
       this.changed,
     );
-    this.dictation = new NewSessionDictationControl({
+    this.dictation = new DirectDictationControl({
       textarea: this.submission.composerTextarea,
       getClient: () => this.gateway.client,
       isConnected: () => this.gateway.connected,
@@ -193,6 +195,7 @@ export class NewSessionPageOwner {
       onError: (message) => this.submission.setError(message),
       onSubmit: () => void this.submission.submit(),
     });
+    // Dictation receipts reconcile draft availability before the page projection reads it.
     this.dictation.subscribe(this.changed);
   }
 
@@ -220,6 +223,19 @@ export class NewSessionPageOwner {
       return;
     }
     this.isConnected = true;
+    // These receipts reconcile the draft and prepared title before the view reads them.
+    const context = this.context;
+    if (context) {
+      this.contextSubscriptions = [
+        context.theme,
+        context.agents,
+        context.agentIdentity,
+        context.sessions,
+        context.placementStartup,
+        context.runtimeConfig,
+        context.config,
+      ].map((source) => source.subscribe(this.changed));
+    }
     this.draft.connect();
     this.submission.draftPersistence.connect();
     this.critterImport.schedule();
@@ -229,6 +245,9 @@ export class NewSessionPageOwner {
   disconnect() {
     if (!this.isConnected) {
       return;
+    }
+    for (const stop of this.contextSubscriptions.splice(0)) {
+      stop();
     }
     this.closeAttachmentPanel();
     this.attachmentPanelLoader.requestWhileActive(attachmentPanelElement, false);
@@ -391,7 +410,6 @@ export class NewSessionPageOwner {
       get submitting() {
         return submission.submitting;
       },
-      composerTextarea: submission.composerTextarea,
 
       get messageLocked() {
         return Boolean(submission.pendingPlacement.sessionKey);
@@ -466,6 +484,3 @@ export class NewSessionPageOwner {
     };
   }
 }
-
-// Rollback can reattach the same host after its Solid root has been disposed.
-// Keep the synchronous draft owner with that host until the handoff releases it.

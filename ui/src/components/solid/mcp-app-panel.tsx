@@ -10,7 +10,6 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import type { McpAppOpenDetail } from "../mcp-app-launch.ts";
 import { McpAppRetirement } from "../mcp-app-retirement.tsx";
 import { McpAppSettingsForm } from "./mcp-app-settings.tsx";
@@ -19,11 +18,10 @@ import "../../styles/mcp-app-extensions.css";
 registerMcpAppEnglish();
 
 type McpAppPanelProps = { launch?: McpAppOpenDetail };
-export type McpAppPanelElement = SolidBridgeElement<McpAppPanelProps>;
 
-function McpAppPanelContent(props: McpAppPanelProps & { host: HTMLElement }) {
+export function McpAppPanel(props: McpAppPanelProps) {
+  let host!: HTMLElement;
   const context = useApplication();
-  const host = untrack(() => props.host);
   const gateway = projectGateway(context.gateway);
   const [viewId, setViewId] = createSignal("");
   const [busy, setBusy] = createSignal(false);
@@ -76,7 +74,7 @@ function McpAppPanelContent(props: McpAppPanelProps & { host: HTMLElement }) {
       mounted &&
       host.isConnected &&
       generation === currentGeneration &&
-      untrack(launchIdentity) === identity &&
+      launchIdentity() === identity &&
       props.launch?.owner === client &&
       context.gateway.snapshot.client === client &&
       gatewayPresentationScope(context.gateway).key === scope;
@@ -87,7 +85,7 @@ function McpAppPanelContent(props: McpAppPanelProps & { host: HTMLElement }) {
       if (loadView) {
         View = (await import("../mcp-app-view-registration.ts")).McpAppView;
         // Loading presentation yields; recheck the live target before invoking a tool.
-        if (!untrack(current)) {
+        if (!current()) {
           return;
         }
       }
@@ -198,94 +196,89 @@ function McpAppPanelContent(props: McpAppPanelProps & { host: HTMLElement }) {
     gateway.read();
     return JSON.stringify([launchIdentity(), gatewayPresentationScope(context.gateway).key]);
   });
-  createEffect(openIdentity, () =>
+  createEffect(openIdentity, () => {
     // The memo schedules work; each operation samples its live admission target.
-    untrack(() => {
-      generation++;
-      setViewId("");
-      setSettings(null);
-      setBusy(false);
-      setError(null);
-      if (props.launch && props.launch.owner === context.gateway.snapshot.client) {
-        void open();
-      }
-    }),
-  );
+    generation++;
+    setViewId("");
+    setSettings(null);
+    setBusy(false);
+    setError(null);
+    if (props.launch && props.launch.owner === context.gateway.snapshot.client) {
+      void open();
+    }
+  });
   return (
-    <Show when={props.launch}>
-      {(launch) => (
-        <section class="mcp-app-panel">
-          <div class="mcp-app-panel__toolbar">
-            <strong>{launch().entrypoint.title}</strong>
-            <span class="muted">{launch().serverName}</span>
-            <Show when={launch().settings && !settings()}>
-              <button
-                class="btn btn--sm"
-                disabled={busy()}
-                onClick={() => {
-                  setViewId("");
-                  void readSettings();
-                }}
-              >
-                {t("mcpApp.settings")}
+    <openclaw-mcp-app-panel ref={(element) => (host = element)}>
+      <Show when={props.launch}>
+        {(launch) => (
+          <section class="mcp-app-panel">
+            <div class="mcp-app-panel__toolbar">
+              <strong>{launch().entrypoint.title}</strong>
+              <span class="muted">{launch().serverName}</span>
+              <Show when={launch().settings && !settings()}>
+                <button
+                  class="btn btn--sm"
+                  disabled={busy()}
+                  onClick={() => {
+                    setViewId("");
+                    void readSettings();
+                  }}
+                >
+                  {t("mcpApp.settings")}
+                </button>
+              </Show>
+            </div>
+            <Show when={busy()}>
+              <p role="status">{t("mcpApp.loading")}</p>
+            </Show>
+            <Show when={error()}>
+              <p role="alert">{error()}</p>
+              <button class="btn" onClick={() => void open()}>
+                {t("mcpApp.retry")}
               </button>
             </Show>
-          </div>
-          <Show when={busy()}>
-            <p role="status">{t("mcpApp.loading")}</p>
-          </Show>
-          <Show when={error()}>
-            <p role="alert">{error()}</p>
-            <button class="btn" onClick={() => void open()}>
-              {t("mcpApp.retry")}
-            </button>
-          </Show>
-          <Show when={notice()}>
-            <p role="status">{notice()}</p>
-          </Show>
-          <Show when={settings()}>
-            {(current) => (
-              <McpAppSettingsForm
-                settings={current()}
-                busy={busy()}
-                onSave={(changes) => void saveSettings(changes)}
-                onTool={(name) => void runTool(name)}
-              />
-            )}
-          </Show>
-          <McpAppRetirement identity={viewId()} roots={() => [host]}>
-            {(id) => {
-              const acceptedLaunch = untrack(launch);
-              const acceptedIdentity = untrack(launchIdentity);
-              const viewLaunch = createMemo<McpAppOpenDetail>((previous) => {
-                const current = launch();
-                return launchIdentity() === acceptedIdentity &&
-                  current.owner === acceptedLaunch.owner
-                  ? current
-                  : (previous ?? acceptedLaunch);
-              });
-              const LoadedView = View;
-              return id && LoadedView ? (
-                <LoadedView
-                  sessionKey={viewLaunch().sessionKey}
-                  agentId={viewLaunch().agentId ?? ""}
-                  viewId={id}
-                  title={viewLaunch().entrypoint.title}
-                  deepLink={viewLaunch().deepLink}
-                  onRelaunch={() => void open()}
-                  relaunching={busy()}
+            <Show when={notice()}>
+              <p role="status">{notice()}</p>
+            </Show>
+            <Show when={settings()}>
+              {(current) => (
+                <McpAppSettingsForm
+                  settings={current()}
+                  busy={busy()}
+                  onSave={(changes) => void saveSettings(changes)}
+                  onTool={(name) => void runTool(name)}
                 />
-              ) : undefined;
-            }}
-          </McpAppRetirement>
-        </section>
-      )}
-    </Show>
+              )}
+            </Show>
+            <McpAppRetirement identity={viewId()} roots={() => [host]}>
+              {(id) => {
+                // Retiring App content keeps its original target until unmount is acknowledged.
+                const initialLaunch = untrack(launch);
+                const initialIdentity = untrack(launchIdentity);
+                const viewLaunch = createMemo<McpAppOpenDetail>((previous) => {
+                  const current = launch();
+                  return launchIdentity() === initialIdentity &&
+                    current.owner === initialLaunch.owner
+                    ? current
+                    : (previous ?? initialLaunch);
+                });
+                const LoadedView = View;
+                return id && LoadedView ? (
+                  <LoadedView
+                    sessionKey={viewLaunch().sessionKey}
+                    agentId={viewLaunch().agentId ?? ""}
+                    viewId={id}
+                    title={viewLaunch().entrypoint.title}
+                    deepLink={viewLaunch().deepLink}
+                    onRelaunch={() => void open()}
+                    relaunching={busy()}
+                  />
+                ) : undefined;
+              }}
+            </McpAppRetirement>
+          </section>
+        )}
+      </Show>
+    </openclaw-mcp-app-panel>
   );
 }
-
-export const McpAppPanel = defineSolidBridge<McpAppPanelProps>(
-  "openclaw-mcp-app-panel",
-  (props, host) => <McpAppPanelContent {...props} host={host} />,
-  { properties: { launch: { default: undefined, attribute: false } } },
-);

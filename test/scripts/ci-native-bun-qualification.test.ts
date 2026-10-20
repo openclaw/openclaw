@@ -101,7 +101,7 @@ describe("native Bun qualification inspection", () => {
     expect(inspectNativeBunQualifications(cwd)).toEqual({ staleEntries: [], changedInputs: [] });
   });
 
-  it.each(["bun-compatible", "bun-all", "dual-all"] as const)(
+  it.each(["bun-all", "dual-all"] as const)(
     "stays silent and preserves the native-to-Vitest fallback under %s",
     (policy) => {
       const { cwd, write } = qualifiedSource();
@@ -123,7 +123,6 @@ describe("native Bun qualification inspection", () => {
         ...(policy === "dual-all" ? [{ runtime: "node" }] : []),
         {
           runtime: "bun",
-          ...(policy === "bun-compatible" ? { includePatterns: [fixture.tests[0]] } : {}),
         },
       ]);
       expect(log).not.toHaveBeenCalled();

@@ -1,8 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
-  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
-} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   createWorkerPlacementInitialRecovery,
@@ -16,6 +12,7 @@ import {
   seedProvisioningPlacement,
 } from "./placement-dispatch-test-fixtures.js";
 import { createHarness, createRecoveryService } from "./placement-dispatch-test-harness.js";
+import { expectPlacement, workerBundle } from "./placement-lifecycle.test-support.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import {
   deriveEnvironmentIntent,
@@ -27,13 +24,7 @@ describe("worker placement shutdown replay", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
   it("retains interrupted fresh provisioning and activates the same operation after restart", async () => {
-    support.testState.prepareInstallation = async () => ({
-      ...support.BUNDLE_ARTIFACT,
-      protocolFeatures: [
-        WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
-        WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
-      ],
-    });
+    support.testState.prepareInstallation = async () => workerBundle(support.BUNDLE_ARTIFACT);
     const interrupted = createDeferredCore<never>();
     const provisionStarted = createDeferredCore();
     const operationIds: string[] = [];
@@ -66,8 +57,7 @@ describe("worker placement shutdown replay", () => {
     interrupted.reject(new Error("provider interrupted"));
     await rejected;
 
-    expect(placements.get(REQUEST.sessionId)).toMatchObject({
-      state: "provisioning",
+    expectPlacement(placements, "provisioning", {
       terminalAtMs: null,
       generation: provisioning.generation,
       environmentId,
@@ -127,7 +117,7 @@ describe("worker placement shutdown replay", () => {
       await uninstallGuard();
     }
 
-    expect(placements.get(REQUEST.sessionId)).toMatchObject({ state: "active", environmentId });
+    expectPlacement(placements, "active", { environmentId });
     expect(support.testState.store.get(environmentId)).toMatchObject({
       state: "attached",
       provisionOperationId: operationId,
@@ -219,7 +209,7 @@ describe("worker placement shutdown replay", () => {
 
     await harness.service.resumeProvisioning(owner, async () => {});
 
-    expect(placements.get(REQUEST.sessionId)).toMatchObject({ state: "failed" });
+    expectPlacement(placements, "failed");
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
     expect(harness.environments.recordError).not.toHaveBeenCalled();
   });
@@ -253,10 +243,9 @@ describe("worker placement shutdown replay", () => {
         "provider interrupted",
       );
 
-      expect(placements.get(REQUEST.sessionId)).toMatchObject({ state: "failed" });
+      expectPlacement(placements, "failed");
       expect(placements.get(REQUEST.sessionId)?.terminalAtMs).not.toBeNull();
-      expect(destroy).toHaveBeenCalledOnce();
-      expect(destroy).toHaveBeenCalledWith(
+      expect(destroy).toHaveBeenCalledExactlyOnceWith(
         deriveEnvironmentIntent(`session-dispatch:${REQUEST.sessionId}:1`).environmentId,
       );
     },

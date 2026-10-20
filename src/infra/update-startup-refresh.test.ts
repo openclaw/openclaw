@@ -309,7 +309,7 @@ describe("interactive Dev update discovery", () => {
     },
   );
 
-  it.each(["channel replacement", "newer background", "applying campaign"] as const)(
+  it.each(["channel replacement", "applying campaign"] as const)(
     "rejects a manual observation superseded by %s",
     async (replacement) => {
       const applying = replacement === "applying campaign";
@@ -334,18 +334,11 @@ describe("interactive Dev update discovery", () => {
           await runGatewayUpdateCheck({
             cfg: { update: { channel: "beta", checkOnStart: false } },
           });
-        } else {
-          mockDevGitStatus({ upstreamSha: "new-upstream" });
-          await runGatewayUpdateCheck({ cfg });
         }
         const schedule = getUpdateSchedule();
         const available = getUpdateAvailable();
         remote.resolve(
-          applying
-            ? createDevGitStatus({ upstreamSha: "new-upstream", behind: 4 })
-            : replacement === "newer background"
-              ? createDevGitStatus({ upstreamSha: "old-upstream" })
-              : oldStatus,
+          applying ? createDevGitStatus({ upstreamSha: "new-upstream", behind: 4 }) : oldStatus,
         );
         expect(await refresh).toEqual(
           expect.objectContaining({ message: expect.stringContaining("superseded") }),
@@ -353,9 +346,6 @@ describe("interactive Dev update discovery", () => {
         expect(getUpdateSchedule()).toEqual(schedule);
         if (applying) {
           expect(getUpdateAvailable()).toEqual(available);
-        }
-        if (replacement === "newer background") {
-          expect(getUpdateAvailable()?.upstreamSha).toBe("new-upstream");
         }
       } finally {
         remote.resolve(createDevGitStatus());
@@ -559,62 +549,7 @@ describe("interactive Dev update discovery", () => {
     },
   );
 
-  it.each(["initialization", "fetch", "telemetry", "metadata"] as const)(
-    "keeps a newer manual target when old background %s finishes last",
-    async (stage) => {
-      const cfg = { update: { channel: "dev" as const, auto: { enabled: true } } };
-      const oldStatus = mockDevGitStatus({ upstreamSha: "old-upstream" });
-      const started = createDeferred();
-      const remote = createDeferred<UpdateCheckResult>();
-      const telemetry = createDeferred<null>();
-      const metadata = createDeferred<Awaited<ReturnType<typeof resolveDevGitCommits>>>();
-      if (stage === "initialization" || stage === "fetch") {
-        vi.mocked(checkUpdateStatus).mockImplementation(({ fetchGit }) => {
-          if (fetchGit || stage === "initialization") {
-            started.resolve();
-            return remote.promise;
-          }
-          return Promise.resolve(oldStatus);
-        });
-      } else if (stage === "telemetry") {
-        vi.mocked(checkTelemetryUpdate).mockImplementationOnce(pauseAt(started, telemetry));
-      } else {
-        vi.mocked(resolveDevGitCommits).mockImplementationOnce(pauseAt(started, metadata));
-      }
-      const background = runGatewayUpdateCheck({ cfg });
-      try {
-        await started.promise;
-        mockDevGitStatus({ upstreamSha: "new-upstream", behind: 4 });
-        await refreshGatewayUpdateStatus(() => cfg);
-        const latestSchedule = getUpdateSchedule();
-        const latestAvailability = getUpdateAvailable();
-        expect(latestSchedule?.target).toMatchObject({ upstreamSha: "new-upstream" });
-
-        remote.resolve(oldStatus);
-        telemetry.resolve(null);
-        metadata.resolve([]);
-        await background;
-
-        expect(getUpdateSchedule()).toEqual(latestSchedule);
-        expect(getUpdateAvailable()).toEqual(latestAvailability);
-        expect(campaign.getState()?.state).toBe("countdown");
-        await vi.advanceTimersByTimeAsync(60_000);
-        expect(runCampaignUpdate).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({
-            version: "new-upstream",
-            devTarget: { mode: "tracked", upstreamRef: "origin/main", upstreamSha: "new-upstream" },
-          }),
-        );
-      } finally {
-        remote.resolve(oldStatus);
-        telemetry.resolve(null);
-        metadata.resolve([]);
-        await background;
-      }
-    },
-  );
-
-  it("rejects an older manual observation after an overlapping background target publishes", async () => {
+  it("publishes the last completed observation and reconciles its campaign", async () => {
     const cfg = { update: { channel: "dev" as const, auto: { enabled: true } } };
     const fetching = createDeferred();
     const remote = createDeferred<UpdateCheckResult>();
@@ -642,12 +577,17 @@ describe("interactive Dev update discovery", () => {
       const latest = getUpdateSchedule();
       expect(latest?.target).toMatchObject({ upstreamSha: "newer-background" });
       metadata.resolve([]);
-      expect(await manual).toMatchObject({
-        status: "rejected",
-        reason: expect.objectContaining({ message: expect.stringContaining("superseded") }),
-      });
-      expect(getUpdateSchedule()).toEqual(latest);
-      expect(getUpdateAvailable()?.upstreamSha).toBe("newer-background");
+      expect(await manual).toEqual({ status: "fulfilled" });
+      expect(getUpdateSchedule()?.target).toMatchObject({ upstreamSha: "older-manual" });
+      expect(getUpdateAvailable()?.upstreamSha).toBe("older-manual");
+      expect(campaign.getState()?.state).toBe("countdown");
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(runCampaignUpdate).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          version: "older-manual",
+          devTarget: { mode: "tracked", upstreamRef: "origin/main", upstreamSha: "older-manual" },
+        }),
+      );
     } finally {
       remote.resolve(createDevGitStatus());
       metadata.resolve([]);

@@ -33,6 +33,7 @@ export function isRetainedSourceIssue(issue: DoctorSessionSqliteIssue): boolean 
     "historical_duplicate_settled",
     "legacy_import_deferred",
     "transcript_malformed",
+    "transcript_filename_mismatch",
     "transcript_missing",
     "retained_plugin_source_index_rebuilt",
     "retained_missing_transcript_superseded",
@@ -91,6 +92,7 @@ export type DoctorSessionSqliteOptions = {
   cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   mode: DoctorSessionSqliteMode;
+  integrityCheck?: "quick" | "full";
   store?: string;
 };
 

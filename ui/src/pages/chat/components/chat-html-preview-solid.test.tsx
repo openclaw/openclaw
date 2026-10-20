@@ -58,7 +58,6 @@ describe("Solid preview consumers", () => {
   });
 
   it("loads an SVG image when mounted from a Solid parent", async () => {
-    vi.stubGlobal("IntersectionObserver", undefined);
     const fetchMock = vi.fn(
       async () => new Response('<svg xmlns="http://www.w3.org/2000/svg"><circle r="4"/></svg>'),
     );

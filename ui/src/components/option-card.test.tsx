@@ -17,10 +17,8 @@ describe("option card", () => {
     container.remove();
   });
 
-  it("accents and focuses the recommended choice, then emits its value", () => {
+  it("accents and focuses the recommended choice, then calls its selection handler", () => {
     const onSelect = vi.fn();
-    const selected = vi.fn();
-    container.addEventListener("option-select", selected);
     const props = {
       header: "Access",
       question: "How should OpenClaw help?",
@@ -47,15 +45,10 @@ describe("option card", () => {
     recommended.click();
 
     expect(onSelect).toHaveBeenCalledWith("full");
-    expect(selected).toHaveBeenCalledOnce();
-    const selectEvent = selected.mock.calls[0]![0] as CustomEvent;
-    expect(selectEvent.detail).toEqual({ value: "full" });
   });
 
-  it("always renders a skip affordance and emits dismissal", () => {
+  it("always renders a skip affordance and calls its dismissal handler", () => {
     const onSkip = vi.fn();
-    const skipped = vi.fn();
-    container.addEventListener("option-skip", skipped);
     const props = {
       question: "Choose one",
       options: [
@@ -69,31 +62,42 @@ describe("option card", () => {
     container.querySelector<HTMLButtonElement>(".option-card__skip")!.click();
 
     expect(onSkip).toHaveBeenCalledOnce();
-    expect(skipped).toHaveBeenCalledOnce();
   });
 
   it.each(["textarea", "button"] as const)(
-    "preserves focus on a %s when a recommended answer arrives",
+    "preserves focus on a %s without retrying a refused recommendation",
     (tagName) => {
       const control = document.createElement(tagName);
       const target = document.createElement("div");
       container.append(control, target);
       control.focus();
-      const props = {
+      const [props, setProps] = createSignal({
         question: "What would you like to do first?",
         options: [
           { value: "chat", label: "Talk to my agent", recommended: true },
           { value: "channels", label: "See all channels" },
         ],
-      };
-      mountSolid(() => <OptionCard props={props} />, { container: target });
+        disabled: false,
+      });
+      mountSolid(() => <OptionCard props={props()} />, { container: target });
       flush();
 
       expect(document.activeElement).toBe(control);
+      control.blur();
+      setProps((current) => ({ ...current, disabled: true }));
+      flush();
+      setProps((current) => ({
+        ...current,
+        disabled: false,
+        options: current.options.map((option) => ({ ...option, description: "Updated details" })),
+      }));
+      flush();
+
+      expect(document.activeElement).toBe(document.body);
     },
   );
 
-  it("retains the selected answer across disabled updates and preselects a new question", () => {
+  it("holds a disabled recommendation and retains selection and rows across display updates", () => {
     const onSelect = vi.fn();
     const [props, setProps] = createSignal({
       question: "Choose one",
@@ -101,12 +105,28 @@ describe("option card", () => {
         { value: "one", label: "One", recommended: true },
         { value: "two", label: "Two" },
       ],
-      disabled: false,
+      disabled: true,
       onSelect,
     });
     const view = mountSolid(() => <OptionCard props={props()} />, { container });
     flush();
+    const recommended = view.getByRole("radio", { name: "OneRecommended" });
     const second = view.getByRole("radio", { name: "Two" });
+    expect(document.activeElement).toBe(document.body);
+
+    setProps((current) => ({
+      ...current,
+      options: current.options.map((option) => ({ ...option, description: "Updated details" })),
+    }));
+    flush();
+    expect(view.getAllByRole("radio")[0]).toBe(recommended);
+    expect(view.getAllByRole("radio")[1]).toBe(second);
+    expect(document.activeElement).toBe(document.body);
+
+    setProps((current) => ({ ...current, disabled: false }));
+    flush();
+    expect(document.activeElement).toBe(recommended);
+    second.focus();
     second.click();
     flush();
     expect(second.getAttribute("aria-checked")).toBe("true");
@@ -118,10 +138,41 @@ describe("option card", () => {
     expect(second.hasAttribute("disabled")).toBe(true);
     expect(onSelect).toHaveBeenCalledExactlyOnceWith("two");
 
+    setProps((current) => ({
+      ...current,
+      disabled: false,
+      options: current.options.map((option) => ({ ...option, description: "More details" })),
+    }));
+    flush();
+    expect(view.getAllByRole("radio")[0]).toBe(recommended);
+    expect(view.getAllByRole("radio")[1]).toBe(second);
+    expect(second.getAttribute("aria-checked")).toBe("true");
+
     setProps((current) => ({ ...current, question: "Next question", disabled: false }));
     flush();
-    const recommended = view.getByRole("radio", { name: "OneRecommended" });
     expect(recommended.getAttribute("aria-checked")).toBe("true");
     expect(document.activeElement).toBe(recommended);
+  });
+
+  it("cancels a disabled recommendation when the next request has none", () => {
+    const [props, setProps] = createSignal({
+      question: "Choose one",
+      options: [{ value: "one", label: "One", recommended: true }],
+      disabled: true,
+    });
+    const view = mountSolid(() => <OptionCard props={props()} />, { container });
+    flush();
+
+    setProps((current) => ({
+      ...current,
+      question: "Choose freely",
+      options: [{ value: "one", label: "One", recommended: false }],
+    }));
+    flush();
+    setProps((current) => ({ ...current, disabled: false }));
+    flush();
+
+    expect(view.getByRole("radio").getAttribute("aria-checked")).toBe("false");
+    expect(document.activeElement).toBe(document.body);
   });
 });

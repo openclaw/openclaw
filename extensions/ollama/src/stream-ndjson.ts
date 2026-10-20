@@ -1,5 +1,5 @@
 import { parseJsonPreservingUnsafeIntegers } from "openclaw/plugin-sdk/json-unsafe-integers";
-import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "openclaw/plugin-sdk/provider-transport-runtime";
+import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "openclaw/plugin-sdk/provider-stream-shared";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OllamaToolCall } from "./stream-messages.js";
 import { checkNdjsonRecordCap } from "./stream-ndjson-cap.js";

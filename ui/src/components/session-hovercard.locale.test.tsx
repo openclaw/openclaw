@@ -1,4 +1,5 @@
 /* @vitest-environment jsdom */
+import { createSignal } from "solid-js";
 import { expect, it, onTestFinished } from "vitest";
 import { i18n } from "../i18n/index.ts";
 import { captureI18nStateForTesting } from "../i18n/lib/translate.test-support.ts";
@@ -78,5 +79,54 @@ it("refreshes retained hovercard labels and age without replacing its focused li
     expect(machine?.textContent).toContain("16 Go");
     expect(card?.querySelector(".session-hovercard__machine")).toBe(machine);
     expect(document.activeElement).toBe(link);
+  });
+});
+
+it("retains the header across row updates and clears optional details without stale snapshots", async () => {
+  const initial: SidebarSessionHovercardRow = {
+    label: "Synthetic session",
+    hasActiveRun: false,
+    hasAutomation: false,
+    color: "blue",
+    channelPresentation: { channel: "slack", channelLabel: "Slack", kind: "group" },
+    createdActor: {
+      type: "human",
+      id: "synthetic-person",
+      label: "Synthetic person",
+      identity: { type: "profile", id: "synthetic-person" },
+    },
+  };
+  const [row, setRow] = createSignal<SidebarSessionHovercardRow | undefined>(initial);
+  const view = mountSolid(() => <SessionHovercard row={row()} />);
+  onTestFinished(view.unmount);
+  await waitForSolid(() => {
+    expect(view.container.querySelector(".session-color-dot")).not.toBeNull();
+    expect(view.container.querySelector(".session-hovercard__creator-avatar")).not.toBeNull();
+  });
+  const header = view.container.querySelector(".session-hovercard__header");
+  setRow({ ...initial, label: "Updated synthetic session", color: "purple" });
+  await waitForSolid(() => {
+    expect(view.container.querySelector(".session-hovercard__header")).toBe(header);
+    expect(header?.textContent).toContain("Updated synthetic session");
+    expect(view.container.querySelector(".session-color-dot")?.getAttribute("style")).toContain(
+      "session-color-purple",
+    );
+  });
+  setRow({ label: "Plain synthetic session", hasActiveRun: false, hasAutomation: false });
+  await waitForSolid(() => {
+    expect(view.container.querySelector(".session-hovercard__header")).toBe(header);
+    expect(view.container.querySelector(".session-color-dot")).toBeNull();
+    expect(view.container.querySelector(".session-hovercard__channel")).toBeNull();
+    expect(view.container.querySelector(".session-hovercard__creator-avatar")).toBeNull();
+  });
+  setRow(undefined);
+  await waitForSolid(() => expect(view.container.querySelector(".session-hovercard")).toBeNull());
+  setRow(initial);
+  await waitForSolid(() => {
+    expect(view.container.querySelector(".session-hovercard__header")?.textContent).toContain(
+      "Synthetic session",
+    );
+    expect(view.container.querySelector(".session-color-dot")).not.toBeNull();
+    expect(view.container.querySelector(".session-hovercard__creator-avatar")).not.toBeNull();
   });
 });

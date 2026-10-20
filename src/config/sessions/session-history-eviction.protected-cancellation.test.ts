@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
-import * as lifecycle from "../../sessions/session-lifecycle-admission.js";
+import * as lifecycle from "../../sessions/session-controller.lifecycle.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
 import {
   appendTranscriptMessage,
@@ -81,9 +81,9 @@ it.each(["planning", "materialization", "worker", "archived entry"] as const)(
     let protectionChanged = false;
     vi.spyOn(diskBudget, "measureSessionPhysicalDiskUsage").mockImplementation(async (pathname) => {
       if (protectionChanged) {
-        expect(
-          lifecycle.isSessionLifecycleMutationActive(storePath, [protectedHistory.sessionId]),
-        ).toBe(false);
+        expect(lifecycle.isSessionMutationActive(storePath, [protectedHistory.sessionId])).toBe(
+          false,
+        );
       }
       return await measure(pathname);
     });
@@ -104,23 +104,22 @@ it.each(["planning", "materialization", "worker", "archived entry"] as const)(
       protectionChanged = true;
     };
     if (stage === "planning") {
-      const mutate = lifecycle.runExclusiveSessionLifecycleMutation;
-      vi.spyOn(lifecycle, "runExclusiveSessionLifecycleMutation").mockImplementation(
-        (operation, params) =>
-          mutate(operation, {
-            ...params,
-            run: async () => {
-              if (
-                !protectionChanged &&
-                "scope" in params &&
-                params.scope === storePath &&
-                Array.from(params.identities).includes(protectedHistory.sessionId)
-              ) {
-                releasePressure();
-              }
-              return await params.run();
-            },
-          }),
+      const mutate = lifecycle.runSessionMutation;
+      vi.spyOn(lifecycle, "runSessionMutation").mockImplementation((params) =>
+        mutate({
+          ...params,
+          run: async () => {
+            if (
+              !protectionChanged &&
+              "scope" in params &&
+              params.scope === storePath &&
+              Array.from(params.identities).includes(protectedHistory.sessionId)
+            ) {
+              releasePressure();
+            }
+            return await params.run();
+          },
+        }),
       );
     }
     if (stage === "materialization") {

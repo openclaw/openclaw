@@ -17,6 +17,7 @@ export type DoctorConfigPreflightOptions = {
   retiredStateAdmitted?: boolean;
   stateSchemaPreparation?: LegacyStateMigrationStepReceipt;
   agentDatabaseMigrationDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
+  integrityCheck?: "quick" | "full";
   migrateState?: boolean;
   /** Select Doctor normalization without enabling repair-only migrations. */
   invocationPurpose?: LegacyStateMigrationInvocationPurpose;

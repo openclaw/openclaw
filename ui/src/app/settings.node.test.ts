@@ -132,10 +132,21 @@ describe("gateway settings and layout persistence", () => {
   installSettingsStorageLifecycle();
   beforeEach(() => {
     setTestLocation({ protocol: "https:", host: "gateway.example:8443", pathname: "/" });
+    vi.stubGlobal("matchMedia", (media: string): MediaQueryList => ({
+      media,
+      matches: false,
+      onchange: null,
+      addListener() {},
+      removeListener() {},
+      addEventListener() {},
+      removeEventListener() {},
+      dispatchEvent: () => true,
+    }));
   });
 
   it("keeps development credentials scoped to the upstream when the Vite target changes", () => {
     setTestLocation({ protocol: "http:", host: "localhost:5173", pathname: "/" });
+    vi.stubGlobal("OPENCLAW_UI_DEV_SERVER", true);
     const first = "ws://localhost:18789";
     const second = "ws://localhost:18790";
     saveSettings(makeUiSettings(first));
@@ -154,16 +165,31 @@ describe("gateway settings and layout persistence", () => {
 
   it("keeps IPv6 dev-page default gateway hosts dialable", () => {
     setTestLocation({ protocol: "http:", host: "[::1]:5173", pathname: "/" });
-    // The Vite marker selects the development gateway port.
-    vi.stubGlobal("document", {
-      querySelector: (selector: string) => (selector.includes("@vite/client") ? {} : null),
-      documentElement: { getAttribute: () => null },
-    });
+    vi.stubGlobal("OPENCLAW_UI_DEV_SERVER", true);
 
     try {
       expect(loadSettings().gatewayUrl).toBe("ws://[::1]:18789");
     } finally {
-      // Drop the document before the shared persistence cleanup.
+      // Drop the development fact before the shared persistence cleanup.
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps remote-ingress pages on their serving Gateway during development", () => {
+    vi.stubGlobal("OPENCLAW_UI_DEV_SERVER", true);
+    vi.stubGlobal("OPENCLAW_UI_DEV_GATEWAY", {
+      gatewayUrl: "wss://other.example",
+      proxyPath: "/dev-other",
+    });
+    vi.stubGlobal("document", {
+      documentElement: {
+        getAttribute: (name: string) => (name === "data-openclaw-remote-ingress" ? "true" : null),
+      },
+    });
+
+    try {
+      expect(loadSettings().gatewayUrl).toBe("wss://gateway.example:8443");
+    } finally {
       vi.unstubAllGlobals();
     }
   });
@@ -406,7 +432,7 @@ describe("gateway settings and layout persistence", () => {
     expect(loadUiPreferences("wss://other.example").openLinksExternally).not.toBe(true);
   });
 
-  it("publishes profile readiness on request without inventing a theme selection", () => {
+  it("publishes profile readiness only when requested", () => {
     setTestLocation({ protocol: "https:", host: "gateway.example", pathname: "/" });
     const initial = loadSettings();
     const { gateway } = createGatewayStoreTestStore({ settings: initial });
@@ -419,7 +445,6 @@ describe("gateway settings and layout persistence", () => {
       expect(listener).not.toHaveBeenCalled();
       theme.refresh({ notify: true });
       expect(listener).toHaveBeenCalledOnce();
-      expect(theme.serverSelection).toBeNull();
     } finally {
       theme.dispose();
       gateway.stop();

@@ -51,6 +51,9 @@ Configure the provider plugin before selecting its model:
   and the OpenAI Platform Decisions API. Configure an OpenAI API key;
   ChatGPT/Codex subscription credentials do not authorize this endpoint.
   Evaluations send the supplied evidence to OpenAI and incur Platform usage charges.
+- [SubQ](/plugins/subq) connects to hosted SubQ Snap for text/JSON decisions.
+  Configure a protected SubQ credential. This V1 adapter supports text/JSON
+  input only; it does not expose the vendor API's image input.
 - [TypeSafe AI](/plugins/typesafe) connects to hosted Jev or a self-hosted System One
   server such as Kev. Install and enable the external plugin, then configure a
   protected hosted credential, the existing loopback setting, or a
@@ -71,11 +74,12 @@ The current plugins declare these model references:
 | `onnx/gliner2.5-base-v1`             | GLiNER 2.5 Base        | Download pinned ONNX artifacts                         |
 | `onnx/gliner2.5-small-v1`            | GLiNER 2.5 Small       | Download pinned ONNX artifacts                         |
 | `openai/gpt-6-luna`                  | GPT-6 Luna             | OpenAI Platform API key and Decisions API access       |
+| `subq/subq-snap-preview`             | SubQ Snap (preview)    | SubQ credential and account credits                    |
 | `typesafe/jev-1.13.0`                | Jev 1.13.0             | TypeSafe credential                                    |
 | `typesafe/jev-latest`                | Jev                    | TypeSafe credential; follows the vendor's latest model |
 | `typesafe/kev-latest`                | Kev (local server)     | Running System One server and explicit loopback URL    |
 
-The ONNX and TypeSafe AI plugins are currently unpublished candidates. Their setup pages explain
+The ONNX, SubQ, and TypeSafe AI plugins are currently unpublished candidates. Their setup pages explain
 source-checkout use and the packaged host floor. The table describes the plugins' declared models,
 not which artifacts or credentials are ready on your machine.
 
@@ -161,8 +165,28 @@ answer. The tool collects no ambient conversation. Its trusted calling-agent
 binding selects the provider and model; input cannot override that identity or
 selection.
 
-The tool keeps this bounded Boolean/Choice/Score input contract and executes it
-through V2. Results preserve explicit Boolean answers separately from probabilities,
+The tool preserves this input format and also accepts `contractVersion: 2` with
+tagged state: `text`, `json`, `image`, or `list`. This explicit discriminator keeps
+existing JSON state from being mistaken for image or list instructions. For example:
+
+```json
+{
+  "contractVersion": 2,
+  "state": { "type": "image", "dataUri": "data:image/png;base64,...", "text": "Listing photo" },
+  "questions": {
+    "present": { "type": "boolean", "instructions": "Is the product visible?" },
+    "region": { "type": "box", "instructions": "the product in the listing photo" }
+  }
+}
+```
+
+The selected provider must declare support for the input and question types.
+Images use inline PNG, JPEG, or WebP data, up to 4 MiB decoded; provider limits can
+be stricter. Box questions require image state and return normalized edges, not
+proof that the target exists. V2 also supports `sort` over list item IDs and
+`tags` over named criteria when the provider declares those operations.
+
+Results preserve explicit Boolean answers separately from probabilities,
 abstention (`null`), per-question errors, fractional scores, original distributions,
 optional confidence, provider metadata and usage, including reported USD cost and
 native units. Missing fields stay absent; estimates are not normalized or derived.
@@ -302,16 +326,18 @@ perform another effect.
 
 ## Limits and unavailable results
 
-For portable rubrics, use at most 32 questions, 2–64 Choice alternatives, 2–10
+For portable rubrics, use at most 16 questions, 2–64 Choice alternatives, 2–10
 meaningful Score anchors, explicit true/false descriptions, and concise evidence.
 Provider limits differ:
 
 | Provider    | Choice alternatives | Score levels | Additional limits                                                                  |
 | ----------- | ------------------- | ------------ | ---------------------------------------------------------------------------------- |
 | ONNX        | 2–64                | 2–64         | Up to 32 questions; 512 tokens per encoded input; one MiB of compiled batch inputs |
+| SubQ        | 2–255               | 2–10         | Up to 16 questions; text/JSON state; question IDs at most 100 characters           |
 | TypeSafe AI | 2–255               | 2–10         | Subject to the host's batch limits and the vendor input contract                   |
 
-The host bounds requests to one MiB, 20,000 JSON nodes, depth 32, and 256 questions. It admits at most four
+The host bounds JSON evidence to one MiB, 20,000 nodes, depth 32, and 256 questions.
+Version 2 image state has a separate four-MiB decoded image limit. It admits at most four
 requests per provider and caps each deadline at 30 seconds. Optional assistance
 leaves the fourth slot for requested evaluations; under contention, the tool
 prefilter skips evaluation and retains tools. Provider-specific limits can be

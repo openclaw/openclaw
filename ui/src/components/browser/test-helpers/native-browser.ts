@@ -158,8 +158,26 @@ export function setupNativeBrowserPanelTests() {
     nextFrame = 0;
     hit = null;
     vi.stubGlobal("localStorage", createStorageMock());
-    vi.stubGlobal("ResizeObserver", undefined);
-    vi.stubGlobal("IntersectionObserver", undefined);
+    // Geometry and hit testing below own this no-layout native presentation.
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+        takeRecords() {
+          return [];
+        }
+      },
+    );
     vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
       frames.set(++nextFrame, callback);
       return nextFrame;

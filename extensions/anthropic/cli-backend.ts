@@ -11,7 +11,11 @@ import {
   CLAUDE_CLI_MODEL_ALIASES,
   CLAUDE_CLI_SESSION_ID_FIELDS,
 } from "./cli-constants.js";
-import { parseClaudeCliJsonlEvent, parseClaudeCliJsonlLifecycleEvent } from "./cli-output.js";
+import {
+  classifyClaudeCliErrorCode,
+  parseClaudeCliJsonlEvent,
+  parseClaudeCliJsonlLifecycleEvent,
+} from "./cli-output.js";
 import {
   normalizeClaudeBackendConfig,
   resolveClaudeCliAutoCompactEnv,
@@ -298,6 +302,7 @@ export function buildAnthropicCliBackend(
       return supportProbe ? supportProbe.then(prepare) : prepare();
     },
     parseJsonlEvent: parseClaudeCliJsonlEvent,
+    classifyErrorCode: classifyClaudeCliErrorCode,
     parseJsonlLifecycleEvent: parseClaudeCliJsonlLifecycleEvent,
     resolveExecutionArgs: (context) =>
       resolveClaudeCliExecutionArgs(context, {

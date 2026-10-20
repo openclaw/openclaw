@@ -5,11 +5,13 @@ import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { runWithSqliteDatabaseAdmissionTurn } from "../../infra/sqlite-database-admission-turn.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createSessionTranscriptReadPool } from "./session-transcript-read-pools.js";
+import { createSessionTranscriptReadPool } from "./session-transcript-read-worker-runtime.js";
 import type { SessionSqliteTargetWorkerInput } from "./session-transcript-worker-read.types.js";
+import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 
 function readWorkers(contexts: readonly unknown[]): Worker[] {
   return contexts.map((context) => {
@@ -20,11 +22,12 @@ function readWorkers(contexts: readonly unknown[]): Worker[] {
   });
 }
 
-it.each(["exact", "family", "alias"] as const)(
+it.each(["exact", "family", "alias", "history-reuse", "history-first"] as const)(
   "joins foreground reader exit on %s close and reuses the pool afterward",
   async (selection) => {
     await withOpenClawTestState({ label: "foreground-reader-close" }, async (state) => {
       const pool = createSessionTranscriptReadPool<SessionSqliteTargetWorkerInput>(1);
+      const sharesHistory = selection === "history-reuse" || selection === "history-first";
       const alias = state.path("alias");
       if (selection === "alias") {
         await fs.symlink(state.stateDir, alias, "junction");
@@ -32,10 +35,12 @@ it.each(["exact", "family", "alias"] as const)(
       const storePath =
         selection === "alias"
           ? path.join(alias, "transcript.sqlite")
-          : state.statePath(selection === "family" ? "transcript.json" : "transcript.sqlite");
-      const closingPath = state.statePath(
-        selection === "family" ? "transcript.main.sqlite" : "transcript.sqlite",
-      );
+          : sharesHistory
+            ? resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env })
+            : state.statePath(selection === "family" ? "transcript.json" : "transcript.sqlite");
+      const closingPath = sharesHistory
+        ? storePath
+        : state.statePath(selection === "family" ? "transcript.main.sqlite" : "transcript.sqlite");
       const otherPath = state.statePath("other.sqlite");
       const posts = vi.spyOn(Worker.prototype, "postMessage");
       const workers = new Set<Worker>();
@@ -52,9 +57,30 @@ it.each(["exact", "family", "alias"] as const)(
         );
       try {
         const maintenance = createOpenClawDatabaseMaintenanceScope();
-        await maintenance.run(() => read(storePath));
-        await read(storePath);
-        await maintenance.close();
+        const readWithHistory = () =>
+          withSessionHistoryWorkerDatabase(
+            { agentId: "main", path: storePath, env: state.env },
+            async (owner) => {
+              if (selection === "history-first") {
+                await maintenance.run(() => read(storePath));
+              }
+              await maintenance.close();
+              await expect(
+                owner.prewarm({ env: state.env, history: false }),
+              ).resolves.toBeUndefined();
+            },
+          );
+        if (selection === "history-first") {
+          await readWithHistory();
+        } else {
+          await maintenance.run(() => read(storePath));
+          if (selection === "history-reuse") {
+            await readWithHistory();
+          } else {
+            await read(storePath);
+            await maintenance.close();
+          }
+        }
         for (const worker of readWorkers(posts.mock.contexts)) {
           workers.add(worker);
         }

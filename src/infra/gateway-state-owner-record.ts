@@ -5,7 +5,6 @@ import { isMainThread } from "node:worker_threads";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getCliParentPid } from "../../cli-parent-lifetime.mjs";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { resolveOpenClawStateDirForDatabasePath } from "../state/openclaw-state-db.paths.js";
 import {
@@ -15,53 +14,44 @@ import {
   readGatewayLockProcessNamespace,
   type LockPayload,
 } from "./gateway-lock-payload.js";
+import {
+  StateDatabaseAccessError,
+  StateDatabaseAdmissionPendingError,
+  StateDatabaseOfflineMaintenanceError,
+} from "./gateway-state-owner-errors.js";
 import { isLockOwnerDefinitelyStale } from "./stale-lock-file.js";
 
-/** Admission and reclamation use the same namespace-qualified PID evidence. */
-export function isGatewayStateOwnerDefinitelyStale(value: unknown, lockPath: string): boolean {
-  const payload = isRecord(value) ? value : null;
-  const namespace = classifyGatewayLockProcessNamespace(payload?.processNamespace, lockPath);
-  if (namespace === "unknown") {
-    throw new GatewayLockNamespaceError(payload ?? {}, lockPath);
-  }
+function isComparableStateOwnerStale(
+  payload: Record<string, unknown>,
+  namespace: "same" | "dead" | "unknown",
+): boolean {
   return (
     namespace === "dead" ||
-    isLockOwnerDefinitelyStale({
-      payload: payload ? { pid: payload.pid, starttime: payload.startTime } : null,
-    })
+    (namespace === "same" &&
+      isLockOwnerDefinitelyStale({ payload: { pid: payload.pid, starttime: payload.startTime } }))
   );
 }
 
-export class StateDatabaseAccessError extends Error {
-  override name = "StateDatabaseAccessError";
+/** Reclamation requires proof that the recorded owner stopped. */
+export function isGatewayStateOwnerDefinitelyStale(value: unknown, lockPath: string): boolean {
+  const payload = isRecord(value) ? value : null;
+  if (!payload) {
+    // Exclusive creation precedes publication; an incomplete record still owns its lock.
+    return false;
+  }
+  const namespace = classifyGatewayLockProcessNamespace(payload.processNamespace, lockPath);
+  if (namespace === "unknown") {
+    throw new GatewayLockNamespaceError(payload, lockPath);
+  }
+  return isComparableStateOwnerStale(payload, namespace);
 }
 
-export const StateDatabaseAdmissionPendingError = resolveGlobalSingleton(
-  Symbol.for("openclaw.stateDatabaseAdmissionPendingError"),
-  () =>
-    class extends StateDatabaseAccessError {
-      constructor(
-        readonly databasePath: string,
-        message: string,
-      ) {
-        super(message);
-      }
-    },
-);
-
-/** A live foreign process holds offline-maintenance custody of this database. */
-export const StateDatabaseOfflineMaintenanceError = resolveGlobalSingleton(
-  Symbol.for("openclaw.stateDatabaseOfflineMaintenanceError"),
-  () =>
-    class extends StateDatabaseAccessError {
-      constructor(
-        readonly databasePath: string,
-        message: string,
-      ) {
-        super(message);
-      }
-    },
-);
+export {
+  GatewayStateOwnerContentionError,
+  StateDatabaseAdmissionPendingError,
+  StateDatabaseMaintenanceScopeError,
+  StateDatabaseOfflineMaintenanceError,
+} from "./gateway-state-owner-errors.js";
 
 export const isStateDatabaseMaintenanceContention = (error: unknown): boolean =>
   error instanceof AggregateError
@@ -94,26 +84,29 @@ export function assertPersistedStateDatabaseAccessAllowed(params: {
   if (!Number.isSafeInteger(owner.pid) || owner.pid <= 0) {
     throw new StateDatabaseAccessError(unavailable);
   }
-  if (isGatewayStateOwnerDefinitelyStale(owner, ownerPath)) {
+  // Ordinary SQLite access does not reclaim the owner or borrow schema custody.
+  // Unknown namespaces retain maintenance contention without probing a local PID.
+  const namespace = classifyGatewayLockProcessNamespace(owner.processNamespace, ownerPath);
+  if (isComparableStateOwnerStale(owner, namespace)) {
     return;
   }
   // Workers share the process PID, but their schema authority still comes from
   // the host operation's retained lease and is never inferred from this record.
-  if (owner.pid === process.pid && !isMainThread) {
+  if (namespace === "same" && owner.pid === process.pid && !isMainThread) {
     return;
   }
-  if (!isPidAlive(owner.pid)) {
+  if (namespace === "same" && !isPidAlive(owner.pid)) {
     throw new StateDatabaseAccessError(unavailable);
   }
   const role = owner.role ?? "gateway";
   if (role === "gateway" || role === "agent-embedded") {
     return;
   }
-  if (owner.pid === process.pid) {
+  if (namespace === "same" && owner.pid === process.pid) {
     assertMaintenance();
     return;
   }
-  const maintenancePending = `OpenClaw state at ${databasePath} is undergoing offline maintenance; retry when it finishes.`;
+  const maintenancePending = `OpenClaw state at ${databasePath} is undergoing offline maintenance by ${role} process ${owner.pid}; retry when it finishes.`;
   if (owner.stateOwnerKind === "schema" && owner.role === "sqlite-maintenance") {
     throw new StateDatabaseAdmissionPendingError(databasePath, maintenancePending);
   }

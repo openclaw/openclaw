@@ -118,6 +118,11 @@ const plan = JSON.parse(fs.readFileSync(process.env.OPENCLAW_IOS_RELEASE_PLAN, "
 const buildNumber = process.argv[process.argv.indexOf("--build-number") + 1];
 const notes = renderMobileReleaseNotes({ rootDir: sourceRoot, platform: "ios", version: plan.appStoreVersion, build: buildNumber, audience: "ios" });
 fs.appendFileSync(process.env.FIXTURE_UPLOAD_AUDIT, JSON.stringify({ sha, stageOnly, notes, buildNumber, destination: process.argv.includes("--destination") ? process.argv[process.argv.indexOf("--destination") + 1] : "app-store", stampedSha: process.env.GIT_COMMIT, status: git("status", "--porcelain", "--untracked-files=all"), remoteMain: git("ls-remote", "origin", "refs/heads/main").split(/\\s+/)[0], metadata: fs.readFileSync("apps/ios/CHANGELOG.md", "utf8") }) + "\\n");
+if (!stageOnly) {
+  fs.mkdirSync("apps/ios/build", { recursive: true });
+  fs.writeFileSync("apps/ios/build/screenshot-diagnostics.json", JSON.stringify({ schemaVersion: 1, diagnostics: [{ phase: "build", durationSeconds: 1.25, outcome: "succeeded" }] }));
+  fs.writeFileSync("apps/ios/build/private-diagnostics.json", "Synthetic private build environment");
+}
 if (process.env.FIXTURE_UPLOAD_FAIL === "1") {
   fs.mkdirSync("apps/ios/fastlane/screenshots/en-US", { recursive: true });
   fs.writeFileSync("apps/ios/fastlane/screenshots/en-US/iPhone-01-control-connected.png", "Synthetic fixture screenshot");
@@ -461,6 +466,13 @@ describe("mobile release CLI", () => {
       expect(
         ["source", "release-notes.json", "release.bundle"].map((file) => exists(f.recovery, file)),
       ).toEqual([false, true, false]);
+      expect(fs.readdirSync(path.join(f.recovery, "screenshot-diagnostics"))).toEqual([
+        "screenshot-diagnostics.json",
+      ]);
+      expect(json(f.recovery, "screenshot-diagnostics/screenshot-diagnostics.json")).toEqual({
+        schemaVersion: 1,
+        diagnostics: [{ phase: "build", durationSeconds: 1.25, outcome: "succeeded" }],
+      });
       expect(git(f.remote, "for-each-ref", "--format=%(refname)", "refs/heads")).toBe(
         "refs/heads/main",
       );
@@ -488,8 +500,13 @@ describe("mobile release CLI", () => {
     const diagnostics = path.join(f.recovery, "screenshot-diagnostics");
     expect(fs.readdirSync(diagnostics).toSorted()).toEqual([
       "capture-attempts.json",
+      "screenshot-diagnostics.json",
       "screenshots",
     ]);
+    expect(json(diagnostics, "screenshot-diagnostics.json")).toEqual({
+      schemaVersion: 1,
+      diagnostics: [{ phase: "build", durationSeconds: 1.25, outcome: "succeeded" }],
+    });
     expect(json(diagnostics, "capture-attempts.json")).toEqual({
       schemaVersion: 1,
       attempts: [

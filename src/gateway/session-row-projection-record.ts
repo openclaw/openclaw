@@ -183,10 +183,11 @@ type RowTarget = Pick<Row, "agentId" | "key" | "storeTarget">;
 export const identity = (row: RowTarget) =>
   `${row.agentId}\0${row.storeTarget.storePath}\0${row.key}`;
 export const physical = (storePath: string, key: string) => `physical:${storePath}\0${key}`;
-const logical = (agentId: string, key: string) => `logical:${agentId}\0${key}`;
+export const logicalSessionRowIdentity = (agentId: string, key: string) =>
+  `logical:${agentId}\0${key}`;
 export function dependents(row: Row, byParent: ReadonlyMap<string, Set<string>>) {
   return new Set([
-    ...(byParent.get(logical(row.agentId, row.key)) ?? []),
+    ...(byParent.get(logicalSessionRowIdentity(row.agentId, row.key)) ?? []),
     ...(byParent.get(physical(row.storeTarget.storePath, row.key)) ?? []),
   ]);
 }
@@ -509,54 +510,6 @@ export function snapshot(
     : { row: null };
 }
 
-function updateIndex(
-  map: Map<string, Set<string>>,
-  key: string | undefined,
-  id: string,
-  deleting: boolean,
-) {
-  if (!key) {
-    return;
-  }
-  const values = map.get(key);
-  if (deleting) {
-    values?.delete(id);
-    if (values?.size === 0) {
-      map.delete(key);
-    }
-  } else if (values) {
-    values.add(id);
-  } else {
-    map.set(key, new Set([id]));
-  }
-}
-
-export function index(
-  row: Row,
-  indexes: {
-    byStore: Map<string, Set<string>>;
-    byAgent: Map<string, Set<string>>;
-    byKey: Map<string, Set<string>>;
-    byParent: Map<string, Set<string>>;
-  },
-  deleting = false,
-) {
-  const { byStore, byAgent, byKey, byParent } = indexes;
-  const id = identity(row);
-  updateIndex(byStore, row.storeTarget.storePath, id, deleting);
-  updateIndex(byAgent, row.agentId, id, deleting);
-  updateIndex(byKey, `key:${row.key}`, id, deleting);
-  updateIndex(byKey, row.entry && `id:${row.entry.sessionId}`, id, deleting);
-  updateIndex(byKey, logical(row.agentId, row.key), id, deleting);
-  // Only raw sentinel parents resolve by physical store; ordinary parents resolve logically.
-  if (row.key === "global" || row.key === "unknown") {
-    updateIndex(byKey, physical(row.storeTarget.storePath, row.key), id, deleting);
-  }
-  for (const parent of row.parents) {
-    updateIndex(byParent, parent, id, deleting);
-  }
-}
-
 export function isPrivateSourceCurrent(source: NonNullable<Row["privateSource"]>): boolean {
   try {
     source.assertCurrent();
@@ -599,9 +552,13 @@ function selectSessionRowParent(
     cfg,
     agentId: fallbackAgentId,
     sessionKey: key,
-    read: (agentId, sessionKey) => referenced?.(logical(agentId, sessionKey))?.storedEntry,
+    read: (agentId, sessionKey) =>
+      referenced?.(logicalSessionRowIdentity(agentId, sessionKey))?.storedEntry,
   });
-  return { key: selected.key, reference: logical(selected.agentId, selected.key) };
+  return {
+    key: selected.key,
+    reference: logicalSessionRowIdentity(selected.agentId, selected.key),
+  };
 }
 
 /** Drop reader-only graphs while retaining cold metadata and index identity. */

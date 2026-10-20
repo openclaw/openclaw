@@ -24,6 +24,7 @@ import {
 } from "./diagnostic-liveness.js";
 import {
   emitDiagnosticMemorySample,
+  createDiagnosticMemorySampler,
   type EmitDiagnosticMemorySample,
 } from "./diagnostic-memory.js";
 import { emitMessageProcessedDiagnosticEvent } from "./diagnostic-message-content.js";
@@ -61,6 +62,8 @@ import {
   retireDiagnosticSessionObservations,
   getDiagnosticSessionState,
   isDiagnosticSessionStateCurrent,
+  isIncognitoDiagnosticSession,
+  resolveDiagnosticSessionKey,
   pruneDiagnosticSessionStates,
   touchDiagnosticSessionState,
   type SessionRef,
@@ -76,7 +79,7 @@ import {
   stopDiagnosticStabilityRecorder,
 } from "./diagnostic-stability.js";
 
-export { diagnosticLogger } from "./diagnostic-runtime.js";
+export { diagnosticLogger, logSessionStateChange } from "./diagnostic-runtime.js";
 
 const webhookStats = {
   received: 0,
@@ -127,10 +130,14 @@ const loadCommandPollBackoffRuntime = createLazyRuntimeModule(
 async function recoverStuckSession(
   params: StuckSessionRecoveryRequest,
 ): Promise<StuckSessionRecoveryOutcome> {
+  // Runtime loading can outlive the diagnostic alias used by an ID-only request.
+  const incognito = isIncognitoDiagnosticSession(params);
   return loadStuckSessionRecoveryRuntime()
     .then(({ recoverStuckDiagnosticSession }) => recoverStuckDiagnosticSession(params))
     .catch((err: unknown) => {
-      diag.warn(`stuck session recovery unavailable: ${String(err)}`);
+      if (!incognito) {
+        diag.warn(`stuck session recovery unavailable: ${String(err)}`);
+      }
       return {
         status: "failed",
         action: "none",
@@ -214,9 +221,7 @@ function emitDiagnosticLivenessWarning(
   const phase = getCurrentDiagnosticPhase();
   // Attribute only phases completed during this measured liveness interval.
   // The retained ring is capacity-bounded history, not a temporal recency signal.
-  const recentPhases = getRecentDiagnosticPhases(6, {
-    completedAfter: now - Math.max(0, sample.intervalMs),
-  });
+  const recentPhases = getRecentDiagnosticPhases(now - Math.max(0, sample.intervalMs));
   const recentPhaseSummary = formatRecentDiagnosticPhases(recentPhases);
   const workLabelSummary = formatDiagnosticWorkLabels(work);
   const message = `liveness warning: reasons=${sample.reasons.join(",")} interval=${Math.round(
@@ -460,7 +465,7 @@ export function logMessageDispatchCompleted(
     return;
   }
   const level = params.outcome === "error" ? "error" : "debug";
-  if (diag.isEnabled(level)) {
+  if (!isIncognitoDiagnosticSession(params) && diag.isEnabled(level)) {
     const payload = `message dispatch completed: channel=${params.channel ?? "unknown"} sessionId=${
       params.sessionId ?? "unknown"
     } sessionKey=${params.sessionKey ?? "unknown"} source=${params.source} outcome=${
@@ -473,7 +478,7 @@ export function logMessageDispatchCompleted(
   emitDiagnosticEvent({
     type: "message.dispatch.completed",
     sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
+    sessionKey: resolveDiagnosticSessionKey(params),
     channel: params.channel,
     source: params.source,
     durationMs: params.durationMs,
@@ -494,7 +499,7 @@ export function logMessageProcessed(
     return;
   }
   const level = params.outcome === "error" ? "error" : "debug";
-  if (diag.isEnabled(level)) {
+  if (!isIncognitoDiagnosticSession(params) && diag.isEnabled(level)) {
     const payload = `message processed: channel=${params.channel} chatId=${
       params.chatId ?? "unknown"
     } messageId=${params.messageId ?? "unknown"} sessionId=${
@@ -506,7 +511,10 @@ export function logMessageProcessed(
     }`;
     diag[level](payload);
   }
-  emitMessageProcessedDiagnosticEvent(params);
+  emitMessageProcessedDiagnosticEvent({
+    ...params,
+    sessionKey: resolveDiagnosticSessionKey(params),
+  });
   markActivity();
 }
 
@@ -522,38 +530,6 @@ export function logSessionTurnCreated(params: DiagnosticLogParams<"session.turn.
     agentId: params.agentId,
     channel: params.channel,
     trigger: params.trigger,
-  });
-  markActivity();
-}
-
-export function logSessionStateChange(
-  params: SessionRef & {
-    state: SessionStateValue;
-    reason?: string;
-  },
-) {
-  if (!areDiagnosticsEnabledForProcess()) {
-    return;
-  }
-  const state = getDiagnosticSessionState(params);
-  const prevState = state.state;
-  state.state = params.state;
-  touchDiagnosticSessionState(state);
-  if (params.state === "processing" && prevState !== "processing") {
-    state.activeQueuedTurn = state.queueDepth > 0;
-  }
-  if (params.state === "idle") {
-    state.queueDepth = Math.max(0, state.queueDepth - 1);
-    state.activeQueuedTurn = false;
-  }
-  emitDiagnosticEvent({
-    type: "session.state",
-    sessionId: state.sessionId,
-    sessionKey: state.sessionKey,
-    prevState,
-    state: params.state,
-    reason: params.reason,
-    queueDepth: state.queueDepth,
   });
   markActivity();
 }
@@ -681,23 +657,25 @@ function logSessionAttention(
       : classification.eventType === "session.stalled"
         ? "stalled session"
         : "long-running session";
-  void logWithSessionDiagnosticContext({
-    level:
-      classification.eventType === "session.long_running" && queueDepth <= 0 ? "debug" : "warn",
-    sessionKey: params.sessionKey,
-    format: (sessionFields) => {
-      const detailFields = [formatSessionActivityLogFields(activity), sessionFields]
-        .filter(Boolean)
-        .join(" ");
-      return `${label}: sessionId=${params.sessionId ?? "unknown"} sessionKey=${
-        params.sessionKey ?? "unknown"
-      } state=${params.expectedState} age=${Math.round(params.ageMs / 1000)}s queueDepth=${
-        queueDepth
-      } reason=${classification.reason} classification=${classification.classification}${
-        classification.activeWorkKind ? ` activeWorkKind=${classification.activeWorkKind}` : ""
-      }${detailFields ? ` ${detailFields}` : ""} recovery=${recovery ? "checking" : "none"}`;
-    },
-  });
+  if (!isIncognitoDiagnosticSession(state)) {
+    void logWithSessionDiagnosticContext({
+      level:
+        classification.eventType === "session.long_running" && queueDepth <= 0 ? "debug" : "warn",
+      sessionKey: params.sessionKey,
+      format: (sessionFields) => {
+        const detailFields = [formatSessionActivityLogFields(activity), sessionFields]
+          .filter(Boolean)
+          .join(" ");
+        return `${label}: sessionId=${params.sessionId ?? "unknown"} sessionKey=${
+          params.sessionKey ?? "unknown"
+        } state=${params.expectedState} age=${Math.round(params.ageMs / 1000)}s queueDepth=${
+          queueDepth
+        } reason=${classification.reason} classification=${classification.classification}${
+          classification.activeWorkKind ? ` activeWorkKind=${classification.activeWorkKind}` : ""
+        }${detailFields ? ` ${detailFields}` : ""} recovery=${recovery ? "checking" : "none"}`;
+      },
+    });
+  }
   const baseEvent = {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
@@ -804,6 +782,9 @@ export function startGatewayDiagnosticHeartbeat(
     reconcileObservations();
   };
   reconcileObservations();
+  const sampleMemory = createDiagnosticMemorySampler(
+    () => !scheduler.signal.aborted && heartbeatJob === job && observing,
+  );
   const tick = () => {
     if (scheduler.signal.aborted || heartbeatJob !== job) {
       return;
@@ -855,13 +836,7 @@ export function startGatewayDiagnosticHeartbeat(
     const shouldEmitLivenessReport = shouldEmitLivenessEvent || shouldEmitLivenessWarning;
     const shouldRecordMemorySample =
       shouldEmitLivenessReport || hasRecentDiagnosticActivity(now) || hasOpenDiagnosticWork(work);
-    if (opts?.emitMemorySample) {
-      opts.emitMemorySample({ emitSample: shouldRecordMemorySample });
-    } else {
-      emitDiagnosticMemorySample({
-        emitSample: shouldRecordMemorySample,
-      });
-    }
+    sampleMemory(shouldRecordMemorySample, opts);
 
     if (!shouldRecordMemorySample) {
       return;

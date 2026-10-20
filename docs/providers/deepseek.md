@@ -197,3 +197,71 @@ the selected model.
     Full config reference for agents, models, and providers.
   </Card>
 </CardGroup>
+
+## Web search
+
+The same plugin can provide `web_search` for any model. Search uses DeepSeek's
+search engine directly, not a chat completion. Install the plugin as above, then
+choose **DeepSeek** in **Settings → Search** or `openclaw configure --section web`.
+
+```json5
+{
+  tools: {
+    web: {
+      search: { provider: "deepseek" },
+    },
+  },
+  plugins: {
+    entries: {
+      deepseek: {
+        config: {
+          webSearch: {
+            apiKey: "YOUR_DEEPSEEK_API_KEY", // pragma: allowlist secret
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+The key is optional when `DEEPSEEK_API_KEY` is set in the Gateway environment
+or `models.providers.deepseek.apiKey` is configured. Credential precedence is
+plugin search key, environment key, then model-provider key. The plugin search
+key and model-provider fallback support SecretRefs through the standard secret
+preparation flow. Search does not reuse API keys stored only in model auth profiles.
+
+With no explicit search provider, credential auto-detection considers DeepSeek
+after Parallel (order 80), before configured endpoint providers. Select
+`provider: "deepseek"` to prevent automatic fallback to another search service.
+
+Search always calls `https://api.deepseek.com/v1/tools/search`; a configured chat
+base URL does not redirect search or its credential to a proxy.
+
+### Queries and results
+
+- `query`: 1–128 Unicode characters. Oversized queries are rejected, never truncated.
+- `count`: 1–10 results, defaulting to `tools.web.search.maxResults` or 5.
+- Use query operators such as `site:`, `-site:`, `lang:`, `after:`, `before:`, and
+  quoted phrases directly in `query`. Separate structured filter parameters are
+  not supported and return an error rather than being ignored.
+- Results contain titles, URLs, model-oriented summaries (falling back to short
+  snippets), publication dates, and site names. Core validates URLs/dates and
+  wraps returned prose as untrusted web content. Full page content is not requested.
+
+```javascript
+await web_search({
+  query: "OpenClaw site:github.com lang:en after:2026-10-01",
+  count: 5,
+});
+```
+
+Search uses the shared timeout and cache settings. Cached results are separated
+by query, result count, and credential. Errors are not cached or automatically
+retried by the DeepSeek adapter.
+
+DeepSeek documents a limit of 5 search requests per second per account and a
+price of $0.75 per 1,000 successful non-empty search requests. Empty results and
+failed requests are not billed. See [DeepSeek Search & Fetch](https://api-docs.deepseek.com/guides/search/)
+for current pricing and account limits. This plugin integration adds search only;
+`web_fetch` continues to use its existing local extraction and configured fallbacks.

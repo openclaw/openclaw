@@ -44,6 +44,8 @@ Quick rule:
 
 Visible assistant text appears as append-only `agent_message_chunk` updates, including narration before tool calls and the answer afterward. Providers without explicit text phases do not retroactively reclassify earlier text when tools or reasoning arrive. Explicit OpenAI Responses and Harmony commentary/final phases remain distinct, so narration is preserved once and the final answer streams completely. Reasoning visibility and private-tag filtering still apply.
 
+Gateway failure explanations appear as `[OpenClaw interruption]` message updates before the prompt settles and are included in session replay. A partial answer that reaches the model output token limit returns the ACP stop reason `max_tokens`; user cancellation returns `cancelled`.
+
 ## Known limitations
 
 - ACP v1 cannot retract or replace text already displayed. Repeated snapshots of the same item append only a suffix that extends the displayed text; incompatible rewrites are ignored rather than replayed as duplicated narration.

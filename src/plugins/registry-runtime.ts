@@ -36,8 +36,9 @@ import {
   withPluginRuntimePluginScope,
   withPluginRuntimeRegistryScope,
 } from "./runtime/gateway-request-scope.js";
-import type { PreparedDecisionBillingFacts } from "./runtime/runtime-model-usage.js";
+import { withNativeSubagentRuntimeGuard } from "./runtime/native-subagent-context.js";
 import type { PluginRuntime } from "./runtime/types.js";
+import type { PluginRegistrationMode } from "./types.js";
 
 // A completed reaction must retain only the emptied holder, not the caller's registry closure.
 function createRuntimeRegistryRelease(held: PluginRegistry[]) {
@@ -75,9 +76,12 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
     readRuntimeProperty(record, "channel", registryParams.runtime),
   );
 
-  const resolvePluginRuntime = (record: PluginRecord): PluginRuntime => {
+  const resolvePluginRuntime = (
+    record: PluginRecord,
+    registrationMode: PluginRegistrationMode = "full",
+  ): PluginRuntime => {
     const pluginId = record.id;
-    const cached = pluginRuntimes.get(record);
+    const cached = registrationMode === "full" ? pluginRuntimes.get(record) : undefined;
     if (cached) {
       return cached;
     }
@@ -121,6 +125,12 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         })?.()
       ) {
         throw new Error(`Plugin "${pluginId}" runtime is no longer active.`);
+      }
+    };
+    const assertNativeRuntimeCurrent = () => {
+      assertRuntimeCurrent();
+      if (registrationMode !== "full") {
+        throw new Error(`Plugin "${pluginId}" native subagents require full registration mode.`);
       }
     };
     // Cache checks, not config or row facts; actions resolve ownership after the import settles.
@@ -293,11 +303,12 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             evaluate: async (batch, options) => {
               assertRuntimeCurrent();
               const capturedRegistry = currentDecisionRegistry();
-              const { evaluateDecisionInRegistry } = await import("../decisions/runtime.js");
+              const { evaluateDecisionOperation, completeDecisionEvaluation } =
+                await import("../decisions/runtime.js");
               assertRuntimeCurrent();
               const selectedRegistry = currentDecisionRegistry(capturedRegistry);
               const result = await withPluginRuntimeRegistryScope(selectedRegistry, () =>
-                evaluateDecisionInRegistry(
+                evaluateDecisionOperation(
                   batch,
                   options,
                   selectedRegistry,
@@ -311,36 +322,18 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
               );
               assertRuntimeCurrent();
               options.signal.throwIfAborted();
-              return result;
+              return completeDecisionEvaluation(result);
             },
             evaluateV2: async (batch, options) => {
               assertRuntimeCurrent();
               const capturedRegistry = currentDecisionRegistry();
-              const [
-                { evaluateDecisionV2InRegistry },
-                { finalizePluginModelUsage },
-                { resolveDecisionModelSetting },
-                { splitTrailingAuthProfile },
-              ] = await Promise.all([
-                import("../decisions/runtime.js"),
-                import("./runtime/runtime-model-usage.js"),
-                import("../agents/decision-model-setting.js"),
-                import("../agents/model-ref-profile.js"),
-              ]);
+              const { evaluateDecisionV2Operation, completeDecisionEvaluation } =
+                await import("../decisions/runtime.js");
               assertRuntimeCurrent();
               const selectedRegistry = currentDecisionRegistry(capturedRegistry);
               const config = getRuntimeConfig();
-              const selected = resolveDecisionModelSetting(config, options.agentId);
-              const target = selected
-                ? {
-                    provider: selected.provider,
-                    model: splitTrailingAuthProfile(selected.model).model,
-                    agentId: options.agentId,
-                  }
-                : undefined;
-              let preparedBilling: PreparedDecisionBillingFacts | undefined;
               const result = await withPluginRuntimeRegistryScope(selectedRegistry, () =>
-                evaluateDecisionV2InRegistry(
+                evaluateDecisionV2Operation(
                   batch,
                   options,
                   selectedRegistry,
@@ -350,27 +343,11 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                     assertRuntimeCurrent();
                     return true;
                   },
-                  undefined,
-                  (facts) => {
-                    preparedBilling = facts;
-                  },
                 ),
               );
               assertRuntimeCurrent();
               options.signal.throwIfAborted();
-              if (result.status === "ok" && target) {
-                // Preparation captures prices, not success. Record only the validated
-                // snapshot after provider and caller lifetimes have both accepted it.
-                finalizePluginModelUsage({
-                  cfg: config,
-                  hostPluginId: record.id,
-                  rawUsage: result.result.usage,
-                  estimate: "none",
-                  target,
-                  preparedBilling,
-                });
-              }
-              return result;
+              return completeDecisionEvaluation(result);
             },
           } satisfies PluginRuntime["decisions"];
         }
@@ -644,7 +621,28 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
           return getRuntimeProperty();
         }
         const subagent: PluginRuntime["subagent"] = getRuntimeProperty();
+        const native = subagent.native;
         return {
+          ...(native
+            ? {
+                native: {
+                  spawn: (params) =>
+                    runWithPluginScope(() =>
+                      withNativeSubagentRuntimeGuard(
+                        { pluginId, assertCurrent: assertNativeRuntimeCurrent },
+                        () => native.spawn(params),
+                      ),
+                    ),
+                  collect: (params) =>
+                    runWithPluginScope(() =>
+                      withNativeSubagentRuntimeGuard(
+                        { pluginId, assertCurrent: assertNativeRuntimeCurrent },
+                        () => native.collect(params),
+                      ),
+                    ),
+                },
+              }
+            : {}),
           complete: (params) => runWithPluginScope(() => subagent.complete(params)),
           forkSession: (params) => runWithPluginScope(() => subagent.forkSession(params)),
           run: async (params) => {
@@ -673,7 +671,9 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         } satisfies PluginRuntime["subagent"];
       },
     });
-    pluginRuntimes.set(record, runtime);
+    if (registrationMode === "full") {
+      pluginRuntimes.set(record, runtime);
+    }
     return runtime;
   };
 

@@ -3,6 +3,12 @@ import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../format-error.ts";
 import { showToast } from "../toast.ts";
 import type { readSessionChangedEvent } from "./reconcile.ts";
+import {
+  normalizeAgentId,
+  resolveUiConversationIdentity,
+  resolveUiSelectedGlobalAgentId,
+} from "./session-key.ts";
+import { requestSessionDelete } from "./session-requests.ts";
 import type {
   SessionConnectionOwner,
   SessionDeleteBatchResult,
@@ -13,13 +19,7 @@ import type {
   SessionListScope,
   SessionRefreshOutcome,
   SessionState,
-} from "./session-capability.ts";
-import {
-  normalizeAgentId,
-  resolveUiConversationIdentity,
-  resolveUiSelectedGlobalAgentId,
-} from "./session-key.ts";
-import { requestSessionDelete } from "./session-requests.ts";
+} from "./session-types.ts";
 
 type Deletion = {
   target: SessionDeleteTarget;

@@ -11,7 +11,6 @@ import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../infra/gateway-shutdown-budge
 import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
 import { DoctorUnreadableStateDatabaseError } from "../infra/state-repair-message.js";
 import * as updateState from "../infra/update-candidate-state.js";
-import { readUpdatePhysicalDatabaseGenerations } from "../infra/update-database-generations.js";
 import {
   collectUpdateDoctorFailureFacts,
   consumeUpdatePostInstallDoctorResult,
@@ -21,6 +20,7 @@ import {
   writeUpdatePostInstallDoctorResult,
 } from "../infra/update-doctor-result.js";
 import { projectPublicUpdateFailureIdentifiers } from "../infra/update-failure-public-identifiers.js";
+import { readUpdatePhysicalDatabaseGenerations } from "../infra/update-physical-database-generations.js";
 import { redactPublicSupportDiagnosticLine } from "../logging/diagnostic-support-redaction.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";

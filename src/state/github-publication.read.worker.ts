@@ -16,10 +16,18 @@ import {
   readRepositoryGitHubPublicationInDatabase,
 } from "../gateway/github-repository-publication-store.worker.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
+import {
+  readTaskPublicationReceipts,
+  type TaskPublicationRead,
+} from "./github-publication-task-reads.worker.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { WorkerOperationHandlers } from "./worker-operation-registry.js";
 
 export const publicationReadOperations = {
+  "githubPublications.taskReceipts": (input: TaskPublicationRead, db) => ({
+    type: "githubPublications.taskReceipts" as const,
+    result: readTaskPublicationReceipts(db, input),
+  }),
   "githubPublications.sharedRead": (
     input: Parameters<typeof readGitHubPublicationRequest>[1],
     db,

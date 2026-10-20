@@ -379,7 +379,7 @@ if (process.argv[2] === 'print') {
           .find((line) => line.startsWith("recovery-artifact-path="));
         expect(artifactLine).toBeDefined();
         const artifact = artifactLine!.slice("recovery-artifact-path=".length);
-        expect(fs.readdirSync(artifact)).toEqual(
+        expect(fs.readdirSync(artifact).toSorted()).toEqual(
           hosts === 2 ? ["phase-0-events.jsonl", "phase-1-events.jsonl"] : ["phase-0-events.jsonl"],
         );
         expect(fs.readFileSync(path.join(artifact, "phase-0-events.jsonl"), "utf8")).toContain(

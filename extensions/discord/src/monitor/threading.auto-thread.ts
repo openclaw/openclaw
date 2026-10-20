@@ -7,7 +7,7 @@ import {
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { ChannelType, createThread, getChannelMessage, type Client } from "../internal/discord.js";
+import { ChannelType, createThread, getChannelMessage } from "../internal/discord.js";
 import { resolveDiscordMessageChannelId } from "./message-channel-info.js";
 import { generateThreadTitle } from "./thread-title.js";
 import { resolveDiscordReplyDeliveryPlan, sanitizeDiscordThreadName } from "./threading.starter.js";
@@ -102,7 +102,7 @@ export async function resolveDiscordAutoThreadReplyPlan(
         parentInheritanceEnabled: params.threadParentInheritanceEnabled,
       })
     : null;
-  return { ...deliveryPlan, createdThreadId, autoThreadContext };
+  return { ...deliveryPlan, autoThreadContext };
 }
 
 export async function maybeCreateDiscordAutoThread(
@@ -176,26 +176,63 @@ export async function maybeCreateDiscordAutoThread(
       params.cfg &&
       params.agentId
     ) {
-      const modelRef = resolveDiscordThreadTitleModelRef({
-        cfg: params.cfg,
-        channel: params.channel,
-        agentId: params.agentId,
-        threadId: createdId,
-        messageChannelId,
-        channelName: params.channelName,
-      });
-      void maybeRenameDiscordAutoThread({
-        client: params.client,
-        threadId: createdId,
-        currentName: threadName,
-        fallbackId: params.message.id,
-        sourceText: rawThreadSource,
-        modelRef,
-        channelName: params.channelName,
-        channelDescription: params.channelDescription,
-        cfg: params.cfg,
-        agentId: params.agentId,
-      });
+      const modelRef = (() => {
+        const {
+          cfg: modelConfig,
+          channel: rawChannel,
+          agentId: modelAgentId,
+          channelName: modelChannelName,
+        } = params;
+        const channel = rawChannel?.trim();
+        if (!channel) {
+          return undefined;
+        }
+        const parentSessionKey = buildAgentSessionKey({
+          agentId: modelAgentId,
+          channel,
+          peer: { kind: "channel", id: messageChannelId },
+        });
+        const channelLabel = modelChannelName?.trim();
+        const groupChannel = channelLabel ? `#${channelLabel}` : undefined;
+        const channelOverride = resolveChannelModelOverride({
+          cfg: modelConfig,
+          channel,
+          groupId: createdId,
+          groupChatType: "channel",
+          groupChannel,
+          groupSubject: groupChannel,
+          parentSessionKey,
+        });
+        return channelOverride?.model;
+      })();
+      const { client } = params;
+      const fallbackId = params.message.id;
+      const { channelName, channelDescription, cfg, agentId } = params;
+      void (async (): Promise<void> => {
+        try {
+          const fallbackName = sanitizeDiscordThreadName("", fallbackId);
+          const generated = await generateThreadTitle({
+            cfg,
+            agentId,
+            messageText: rawThreadSource,
+            modelRef,
+            channelName,
+            channelDescription,
+          });
+          if (!generated) {
+            return;
+          }
+          const nextName = sanitizeDiscordThreadName(generated, fallbackId);
+          if (!nextName || nextName === threadName || nextName === fallbackName) {
+            return;
+          }
+          await client.rest.patch(Routes.channel(createdId), {
+            body: { name: nextName },
+          });
+        } catch (err) {
+          logVerbose(`discord: autoThread rename failed for ${createdId}: ${String(err)}`);
+        }
+      })();
     }
     return createdId || undefined;
   } catch (err) {
@@ -203,69 +240,5 @@ export async function maybeCreateDiscordAutoThread(
       `discord: autoThread creation failed for ${messageChannelId}/${params.message.id}: ${String(err)}`,
     );
     return findExistingThread();
-  }
-}
-
-function resolveDiscordThreadTitleModelRef(params: {
-  cfg: OpenClawConfig;
-  channel?: string;
-  agentId: string;
-  threadId: string;
-  messageChannelId: string;
-  channelName?: string;
-}): string | undefined {
-  const channel = params.channel?.trim();
-  if (!channel) {
-    return undefined;
-  }
-  const parentSessionKey = buildAgentSessionKey({
-    agentId: params.agentId,
-    channel,
-    peer: { kind: "channel", id: params.messageChannelId },
-  });
-  const channelLabel = params.channelName?.trim();
-  const groupChannel = channelLabel ? `#${channelLabel}` : undefined;
-  const channelOverride = resolveChannelModelOverride({
-    cfg: params.cfg,
-    channel,
-    groupId: params.threadId,
-    groupChatType: "channel",
-    groupChannel,
-    groupSubject: groupChannel,
-    parentSessionKey,
-  });
-  return channelOverride?.model;
-}
-
-async function maybeRenameDiscordAutoThread(params: {
-  client: Client;
-  threadId: string;
-  currentName: string;
-  fallbackId: string;
-  sourceText: string;
-  modelRef?: string;
-  channelName?: string;
-  channelDescription?: string;
-  cfg: OpenClawConfig;
-  agentId: string;
-}): Promise<void> {
-  try {
-    const fallbackName = sanitizeDiscordThreadName("", params.fallbackId);
-    const generated = await generateThreadTitle({
-      ...params,
-      messageText: params.sourceText,
-    });
-    if (!generated) {
-      return;
-    }
-    const nextName = sanitizeDiscordThreadName(generated, params.fallbackId);
-    if (!nextName || nextName === params.currentName || nextName === fallbackName) {
-      return;
-    }
-    await params.client.rest.patch(Routes.channel(params.threadId), {
-      body: { name: nextName },
-    });
-  } catch (err) {
-    logVerbose(`discord: autoThread rename failed for ${params.threadId}: ${String(err)}`);
   }
 }

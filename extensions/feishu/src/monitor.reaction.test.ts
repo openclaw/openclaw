@@ -10,6 +10,8 @@ import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runt
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import { parseFeishuMessageEvent, type FeishuMessageEvent } from "./bot.js";
+import { withFeishuRuntimeDefaults } from "./bot.test-support.js";
+import { FeishuConfigSchema } from "./config-schema.js";
 import * as dedup from "./dedup.js";
 import {
   monitorSingleAccount,
@@ -18,6 +20,7 @@ import {
 } from "./monitor.account.js";
 import { createFeishuTestIngressQueue } from "./monitor.test-mocks.js";
 import { setFeishuRuntime } from "./runtime.js";
+import * as send from "./send.js";
 import type { FeishuMessageInfo, ResolvedFeishuAccount } from "./types.js";
 
 const handleFeishuMessageMock = vi.hoisted(() =>
@@ -92,23 +95,25 @@ function fetchedMessage(overrides: Partial<FeishuMessageInfo> = {}): FeishuMessa
   };
 }
 function resolveReaction(
-  params: Partial<Parameters<typeof resolveReactionSyntheticEvent>[0]> = {},
+  params: Partial<Parameters<typeof resolveReactionSyntheticEvent>[0]> & {
+    fetchMessage?: typeof send.getMessageFeishu;
+  } = {},
 ) {
+  const { cfg = {}, fetchMessage = async () => fetchedMessage(), ...options } = params;
+  vi.spyOn(send, "getMessageFeishu").mockImplementation(fetchMessage);
   return resolveReactionSyntheticEvent({
-    cfg: {},
+    cfg: withFeishuRuntimeDefaults(cfg),
     accountId: "default",
     event: makeReactionEvent(),
     botOpenId: "ou_bot",
-    fetchMessage: async () => fetchedMessage(),
-    uuid: () => "fixed-uuid",
-    ...params,
+    ...options,
   });
 }
 function monitorParams(): Parameters<typeof monitorSingleAccount>[0] {
   return {
     cfg: {
       messages: { inbound: { debounceMs: 0, byChannel: { feishu: 20 } } },
-      channels: { feishu: { enabled: true } },
+      channels: { feishu: FeishuConfigSchema.parse({ enabled: true }) },
     } as ClawdbotConfig,
     account: {
       accountId: "default",
@@ -117,7 +122,7 @@ function monitorParams(): Parameters<typeof monitorSingleAccount>[0] {
       appId: "cli_test",
       appSecret: "secret_test", // pragma: allowlist secret
       domain: "feishu",
-      config: { enabled: true, connectionMode: "websocket" },
+      config: FeishuConfigSchema.parse({ enabled: true, connectionMode: "websocket" }),
     } as ResolvedFeishuAccount,
     runtime: createNonExitingRuntimeEnv(),
     botOpenIdSource: { kind: "prefetched", botOpenId: "ou_bot" },
@@ -275,10 +280,9 @@ describe("resolveReactionSyntheticEvent", () => {
   it("drops unverified reactions when sender verification times out", async () => {
     vi.useFakeTimers();
     const pending = resolveReaction({
-      verificationTimeoutMs: 1,
       fetchMessage: () => new Promise<never>(() => {}),
     });
-    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(1_500);
     await expect(pending).resolves.toBeNull();
   });
 

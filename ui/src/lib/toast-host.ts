@@ -1,4 +1,4 @@
-import { createComponent, createEffect, lazy, Loading, onCleanup, Show } from "solid-js";
+import { createComponent, lazy, Loading, onCleanup, Show } from "solid-js";
 import { defineSolidBridge, type SolidBridgeElement } from "./solid-bridge.ts";
 import { toastOwnerFor, type ToastProperties, type ToastMethods } from "./toast.ts";
 
@@ -10,11 +10,6 @@ if (typeof customElements !== "undefined") {
     "openclaw-toast-host",
     (props, host) => {
       const owner = toastOwnerFor(host);
-      // Focus after the DOM commit determines whether the existing toast deadline pauses.
-      createEffect(
-        () => [props.toast, props.active],
-        () => owner.syncDismissTimer(),
-      );
       return createComponent(Show, {
         get when() {
           return Boolean(props.toast);
@@ -35,6 +30,7 @@ if (typeof customElements !== "undefined") {
                 },
                 host,
                 bodyRef: (element) => (owner.body = element),
+                ready: () => owner.syncDismissTimer(),
                 hover: (hovered) => owner.hover(hovered),
                 focus: (focused) => owner.syncDismissTimer(focused),
                 dismiss: (reason) => owner.dismiss(reason),
@@ -52,6 +48,7 @@ if (typeof customElements !== "undefined") {
       },
       connected: (host) => toastOwnerFor(host).connect(),
       disconnected: (host) => toastOwnerFor(host).disconnect(),
+      propertyChanged: (host) => toastOwnerFor(host).afterPropertyChange(),
       methods: { show: (host, options) => toastOwnerFor(host).show(options) },
     },
   );

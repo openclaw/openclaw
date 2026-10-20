@@ -331,10 +331,12 @@ export const nostrPairingTextAdapter = {
     message: string;
     accountId?: string;
   }) => {
-    const bus = activeBuses.get(accountId ?? resolveDefaultNostrAccountId(cfg));
-    if (bus) {
-      await bus.sendDm(id, message);
+    const aid = accountId ?? resolveDefaultNostrAccountId(cfg);
+    const bus = activeBuses.get(aid);
+    if (!bus) {
+      throw new Error(`Nostr bus not running for account ${aid}`);
     }
+    await bus.sendDm(id, message);
   },
 };
 
@@ -386,6 +388,6 @@ export const nostrOutboundAdapter = {
   },
 } satisfies ChannelOutboundAdapter;
 
-export function getActiveNostrBuses(): Map<string, NostrBusHandle> {
-  return new Map(activeBuses);
+export function getActiveNostrBuses(): ReadonlyMap<string, NostrBusHandle> {
+  return activeBuses;
 }

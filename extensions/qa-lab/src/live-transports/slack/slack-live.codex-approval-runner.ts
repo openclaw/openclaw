@@ -18,14 +18,12 @@ import type {
   SlackQaCodexApprovalScenarioRun,
   SlackQaApprovalContext,
   SlackQaScenarioMetadata,
-  SlackObservedMessage,
   SlackApprovalArtifact,
 } from "./slack-live.contracts.js";
 
 export async function runSlackCodexApprovalScenario(params: {
   channelId: string;
   context: SlackQaApprovalContext;
-  observedMessages: SlackObservedMessage[];
   primaryModel: string;
   run: SlackQaCodexApprovalScenarioRun;
   scenario: SlackQaScenarioMetadata;
@@ -91,7 +89,6 @@ async function runSlackCodexApprovalScenarioInner(params: {
   channelId: string;
   codexRun: { runId: string; sessionKey: string };
   context: SlackQaApprovalContext;
-  observedMessages: SlackObservedMessage[];
   primaryModel: string;
   run: SlackQaCodexApprovalScenarioRun;
   scenario: SlackQaScenarioMetadata;
@@ -119,10 +116,8 @@ async function runSlackCodexApprovalScenarioInner(params: {
     client: params.context.sutReadClient,
     decision: params.run.decision,
     extraTextMatches: ["codex", expectedTitle],
-    observedMessages: params.observedMessages,
     oldestTs,
     scenarioId: params.scenario.id,
-    scenarioTitle: params.scenario.title,
     sutIdentity: params.context.sutIdentity,
     timeoutMs: params.scenario.timeoutMs,
   };

@@ -50,14 +50,13 @@ describe("installIMessageCli", () => {
     await withTempDir("openclaw-imsg-brew-", async (brewPrefix) => {
       await fs.mkdir(path.join(brewPrefix, "bin"), { recursive: true });
       await fs.writeFile(path.join(brewPrefix, "bin", "imsg"), "");
-      mockCommandOutputs("", `${brewPrefix}\n`, "0.13.0\n");
+      mockCommandOutputs("", `${brewPrefix}\n`);
 
       const result = await installIMessageCli(createRuntimeSpies());
 
       expect(result).toEqual({
         ok: true,
         cliPath: path.join(brewPrefix, "bin", "imsg"),
-        version: "0.13.0",
       });
       expect(runPluginCommandWithTimeoutMock).toHaveBeenNthCalledWith(1, {
         argv: ["/opt/homebrew/bin/brew", "install", "steipete/tap/imsg"],
@@ -82,7 +81,6 @@ describe("installIMessageCli", () => {
         "",
         "",
         `${brewPrefix}\n`,
-        "0.13.1\n",
       );
 
       const result = await installIMessageCli(createRuntimeSpies(), {
@@ -92,7 +90,6 @@ describe("installIMessageCli", () => {
       expect(result).toEqual({
         ok: true,
         cliPath,
-        version: "0.13.1",
       });
       expect(runPluginCommandWithTimeoutMock).toHaveBeenNthCalledWith(4, {
         argv: ["/opt/homebrew/bin/brew", "update"],

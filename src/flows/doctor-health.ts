@@ -3,14 +3,8 @@ import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
 import type { BackupSqliteSnapshotFact } from "../commands/backup-resource-inventory.js";
 import type { DoctorDatabasePreflight } from "../commands/doctor-database-preflight.js";
 import type { DoctorOptions } from "../commands/doctor-prompter.js";
-import {
-  isDoctorUpdateRepairMode,
-  resolveDoctorRepairMode,
-} from "../commands/doctor-repair-mode.js";
-import {
-  DOCTOR_SQLITE_NOCOW_REPAIR_ENV,
-  isUpdateDoctorLintPass,
-} from "../commands/doctor/shared/update-phase.js";
+import * as doctorMode from "../commands/doctor-repair-mode.js";
+import * as updatePhase from "../commands/doctor/shared/update-phase.js";
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -178,7 +172,7 @@ async function runDoctorHealthFlowWithResult(
     };
     return true;
   };
-  const repairMode = resolveDoctorRepairMode(options);
+  const repairMode = doctorMode.resolveDoctorRepairMode(options);
   let interactiveRepair = false;
   let updateAdmissionComplete = false;
   if (repairMode.canPrompt && !repairMode.shouldRepair) {
@@ -230,6 +224,7 @@ async function runDoctorHealthFlowWithResult(
           writeAuthority,
           rehearsalRoot: preCaptureRehearsalRoot,
           json: options.json,
+          fullIntegrityCheck: options.fullIntegrityCheck,
         }),
       }),
     );
@@ -523,8 +518,8 @@ async function runDoctorHealthFlowWithResult(
       );
       if (ctx && maintenance && options.repair === true && sqliteNoCowPaths.length > 0) {
         if (
-          resolveDoctorRepairMode(options).updateInProgress &&
-          !isTruthyEnvValue(process.env[DOCTOR_SQLITE_NOCOW_REPAIR_ENV])
+          doctorMode.resolveDoctorRepairMode(options).updateInProgress &&
+          !isTruthyEnvValue(process.env[updatePhase.DOCTOR_SQLITE_NOCOW_REPAIR_ENV])
         ) {
           effectiveRuntime.log(
             "SQLite NOCOW repair deferred: the managed updater did not request the store rewrite in this run.",
@@ -534,7 +529,10 @@ async function runDoctorHealthFlowWithResult(
         }
       }
       if (ctx && maintenance && ctx.prompter.shouldRepair) {
-        if (isDoctorUpdateRepairMode(ctx.prompter.repairMode) && sqliteReclamationAgents) {
+        if (
+          doctorMode.isDoctorUpdateRepairMode(ctx.prompter.repairMode) &&
+          sqliteReclamationAgents
+        ) {
           await maintenance.enableSqliteReclamation(sqliteReclamationAgents);
         }
         await maintenance.cleanupRetainedRuntimes();
@@ -604,7 +602,7 @@ async function runDoctorHealthFlowWithResult(
     }
     if (pluginWarnings.length > 0) {
       showDoctorOutro("Doctor finished with plugin load errors.");
-      if (options.nonInteractive && !isUpdateDoctorLintPass(process.env)) {
+      if (options.nonInteractive && !updatePhase.isUpdateDoctorLintPass(process.env)) {
         exitCode = 1;
       }
       return;
@@ -614,7 +612,7 @@ async function runDoctorHealthFlowWithResult(
       !maintenance &&
       error instanceof DoctorMaintenanceRefusalError &&
       error.refusal.kind === "deferred" &&
-      isDoctorUpdateRepairMode(resolveDoctorRepairMode(options))
+      doctorMode.isDoctorUpdateRepairMode(doctorMode.resolveDoctorRepairMode(options))
     ) {
       writeAuthority?.assertCurrent();
       // Admission restored its service before refusing; no migration work has started.

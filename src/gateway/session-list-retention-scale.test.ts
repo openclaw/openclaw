@@ -31,7 +31,8 @@ it("retains 25 readers' ten Team-scale queries and reports bounded reference cos
     const clients = Array.from({ length: 25 }, (_, index) => roleClient("view", `scale-${index}`));
     using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
     clients.forEach((client) => prepareGatewayRecipientProfile(client));
-    const rows = fixture.scenario.sessions!;
+    // This retention scenario owns 300 roots; reload fixtures also include child and cron rows.
+    const rows = fixture.scenario.sessions!.slice(0, 300);
     for (const [index, row] of rows.entries()) {
       replaceSessionEntrySync(
         { agentId: "main", sessionKey: row.key },

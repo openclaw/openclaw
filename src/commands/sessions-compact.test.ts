@@ -22,6 +22,55 @@ beforeEach(() => {
 });
 
 describe("sessionsCompactCommand", () => {
+  it.each(["compacted", "pending", "noop", "failed", "throw"])(
+    "escapes terminal controls in %s output without changing RPC input",
+    async (outcome) => {
+      const key = "agent:main:notes\u001b[2J\nnext";
+      const reason = "detail\u001b]2;changed\u0007\rnext";
+      if (outcome === "throw") {
+        callGatewayCli.mockRejectedValue(new Error(reason));
+      } else {
+        callGatewayCli.mockResolvedValue({
+          ok: outcome !== "failed",
+          key,
+          compacted: outcome === "compacted",
+          reason,
+          result: { details: { pending: outcome === "pending" } },
+        });
+      }
+      const runtime = createNonExitingRuntimeEnv();
+
+      await sessionsCompactCommand({ key }, runtime);
+
+      expect(callGatewayCli.mock.calls[0]?.[2]).toEqual({ key });
+      const output = `${joinedArgs(runtime.log)}${joinedArgs(runtime.error)}`;
+      for (const control of ["\u0007", "\u001b", "\r", "\n"]) {
+        expect(output).not.toContain(control);
+      }
+      if (outcome !== "throw") {
+        expect(output).toContain("agent:main:notes\\nnext");
+      }
+      if (["noop", "failed", "throw"].includes(outcome)) {
+        expect(output).toContain("detail\\rnext");
+      }
+    },
+  );
+
+  it("preserves raw result values in JSON output", async () => {
+    const payload = {
+      ok: false,
+      key: "agent:main:notes\u001b[2J\nnext",
+      reason: "detail\u001b]2;changed\u0007\rnext",
+    };
+    callGatewayCli.mockResolvedValue(payload);
+    const runtime = createNonExitingRuntimeEnv();
+
+    await sessionsCompactCommand({ key: payload.key, json: true }, runtime);
+
+    expect(runtime.writeJson).toHaveBeenCalledWith(payload, 2);
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
   it("rejects a blank agent before calling the Gateway", async () => {
     const runtime = createNonExitingRuntimeEnv();
 

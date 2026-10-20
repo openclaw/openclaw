@@ -5,11 +5,17 @@ import { restoreDoctorMigrationBackup } from "../commands/doctor-migration-backu
 import { createScopedMigrationSnapshot } from "../infra/sqlite-migration-scoped-snapshot.js";
 import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
+import {
+  AGENT_INDEX_RETIREMENT_SCHEMA_VERSION,
+  OPENCLAW_AGENT_SCHEMA_VERSION,
+} from "./openclaw-agent-db-contract.js";
 import { AGENT_DATABASE_MAINTENANCE_LEASE } from "./openclaw-agent-db-lease.js";
 import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
 import { getOpenClawAgentMigrationSchema } from "./openclaw-agent-db-schema-helpers.js";
-import { ensureOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
+import {
+  ensureOpenClawAgentDatabaseSchema,
+  ensureOpenClawAgentSchema,
+} from "./openclaw-agent-db-schema.js";
 import {
   assertOpenClawMigrationWitnessPreserved,
   captureOpenClawMigrationWitness,
@@ -42,13 +48,13 @@ const schemaV28 = fs
   );
 const scope = ["schema_meta", "session_nodes", "session_reactions", "sqlite_stat1", "sqlite_stat4"];
 
-function seed(database: DatabaseSync): void {
-  database.exec(schemaV28);
+function seed(database: DatabaseSync, schema = schemaV28, version = 28): void {
+  database.exec(schema);
   database.exec(`
-    PRAGMA user_version = 28;
+    PRAGMA user_version = ${version};
     PRAGMA foreign_keys = ON;
     INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
-      VALUES ('primary', 'agent', 28, 'main', 1, 1);
+      VALUES ('primary', 'agent', ${version}, 'main', 1, 1);
     INSERT INTO session_nodes
       (session_key, current_session_id, entry_json, updated_at, last_interaction_at)
       VALUES ('agent:main:test', 'session', '{"sessionId":"session","updatedAt":1}', 1, 10);
@@ -92,16 +98,18 @@ describe("agent index retirement migration", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const pathname = state.statePath("registered-migration.sqlite");
       using database = new DatabaseSync(pathname);
-      seed(database);
       if (phase === "index repair") {
+        seed(
+          database,
+          getOpenClawAgentMigrationSchema(OPENCLAW_AGENT_SCHEMA_VERSION),
+          OPENCLAW_AGENT_SCHEMA_VERSION,
+        );
         database.exec(`
-          DROP INDEX idx_agent_session_nodes_last_interaction_at;
-          DROP INDEX idx_agent_session_reactions_message;
           DROP INDEX idx_agent_cache_expiry;
-          PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};
-          UPDATE schema_meta SET schema_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};
           UPDATE session_nodes SET entry_valid = 1;
         `);
+      } else {
+        seed(database);
       }
       const previousVersion = database.prepare("PRAGMA user_version").get()?.user_version;
       const before = retained(database);
@@ -217,18 +225,19 @@ describe("agent index retirement migration", () => {
           database.setAuthorizer((action, name, value) =>
             action === constants.SQLITE_PRAGMA &&
             name === "user_version" &&
-            value === String(OPENCLAW_AGENT_SCHEMA_VERSION)
+            value === String(AGENT_INDEX_RETIREMENT_SCHEMA_VERSION)
               ? constants.SQLITE_DENY
               : constants.SQLITE_OK,
           );
         }
         await withAgentDatabaseMaintenanceLease({ env: state.env }, async () => {
           const migrate = () =>
-            ensureOpenClawAgentDatabaseSchema(database, {
-              agentId: "main",
-              env: state.env,
-              path: pathname,
-            });
+            ensureOpenClawAgentSchema(
+              database,
+              "main",
+              pathname,
+              AGENT_INDEX_RETIREMENT_SCHEMA_VERSION,
+            );
           await assertSqliteMigrationScopePreserved(database, scope, () => {
             if (outcome === "rollback") {
               expect(migrate).toThrow(/authoriz/u);
@@ -239,7 +248,7 @@ describe("agent index retirement migration", () => {
         });
         database.setAuthorizer(null);
         expect(retained(database)).toEqual(before);
-        const expectedVersion = outcome === "rollback" ? 28 : OPENCLAW_AGENT_SCHEMA_VERSION;
+        const expectedVersion = outcome === "rollback" ? 28 : AGENT_INDEX_RETIREMENT_SCHEMA_VERSION;
         expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(expectedVersion);
         expect(
           database.prepare("SELECT schema_version FROM schema_meta").get()?.schema_version,
@@ -320,7 +329,7 @@ describe("agent index retirement migration", () => {
         resolveSchemaMigrationBackupTables({
           kind: "agent",
           foundVersion: 28,
-          supportedVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
+          supportedVersion: AGENT_INDEX_RETIREMENT_SCHEMA_VERSION,
         }),
       ).toEqual(scope);
       await withAgentDatabaseMaintenanceLease({ env: state.env }, async (lease) => {
@@ -330,11 +339,12 @@ describe("agent index retirement migration", () => {
           tables: scope,
           beforePublish: () => lease.assertOwned(),
         });
-        ensureOpenClawAgentDatabaseSchema(database, {
-          agentId: "main",
-          env: state.env,
-          path: pathname,
-        });
+        ensureOpenClawAgentSchema(
+          database,
+          "main",
+          pathname,
+          AGENT_INDEX_RETIREMENT_SCHEMA_VERSION,
+        );
       });
       database.exec("UPDATE cache_entries SET blob = X'BEEF' WHERE scope = 'unrelated'");
       await assertSqliteMigrationScopePreserved(database, scope, () =>

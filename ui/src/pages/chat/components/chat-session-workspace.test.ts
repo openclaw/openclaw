@@ -1,8 +1,9 @@
-import { createComponent, createSignal, flush } from "solid-js";
+import { createComponent, flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../../api/gateway.ts";
 import type { SessionWorkspaceGetResult, SessionWorkspaceListResult } from "../../../api/types.ts";
+import { projectOwner } from "../../../lib/reactive/projection.ts";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import {
@@ -10,7 +11,11 @@ import {
   createSessionCapabilityFixture,
 } from "../chat-pane.test-support.ts";
 import { SessionWorkspaceRail } from "./chat-session-workspace-rail-solid.tsx";
-import { getSessionWorkspace, loadSessionWorkspace } from "./chat-session-workspace-state.ts";
+import {
+  getSessionWorkspace,
+  loadSessionWorkspace,
+  sessionWorkspaceForHost,
+} from "./chat-session-workspace-state.ts";
 import {
   loadedSidebarContent,
   createSidebarContentRecorder,
@@ -113,29 +118,28 @@ function readPreview(file: SessionWorkspaceGetResult["file"], hello = gatewayHel
 
 function nextWorkspaceUpdate(state: SessionWorkspaceHost, ready: () => boolean) {
   const next = createDeferred();
-  state.requestUpdate = () => {
+  const stop = sessionWorkspaceForHost(state).subscribe(() => {
     if (ready()) {
       next.resolve();
     }
-  };
-  return next.promise;
+  });
+  return next.promise.finally(stop);
 }
 
 function mountWorkspaceRail(container: HTMLElement, state: SessionWorkspaceHost) {
-  const [workspace, setWorkspace] = createSignal(workspaceProps(state, { expanded: true }));
   mountSolid(
-    () =>
-      createComponent(SessionWorkspaceRail, {
+    () => {
+      const workspace = projectOwner(sessionWorkspaceForHost(state), (owner) => owner.state);
+      return createComponent(SessionWorkspaceRail, {
         get workspace() {
-          return workspace();
+          workspace.read();
+          return workspaceProps(state, { expanded: true });
         },
-      }),
+      });
+    },
     { container },
   );
-  return () => {
-    setWorkspace(workspaceProps(state, { expanded: true }));
-    flush();
-  };
+  return flush;
 }
 
 describe("session workspace state", () => {
@@ -144,15 +148,22 @@ describe("session workspace state", () => {
       client: null,
       connected: false,
       connectionEpoch: 1,
-      requestUpdate: vi.fn(),
       sessions: {},
     }) as unknown as SessionWorkspaceHost;
 
     const workspace = workspaceProps(state);
     expect(workspace.filter).toBe("all");
+    const owner = sessionWorkspaceForHost(state);
+    const previous = owner.state;
+    const published = vi.fn(() => expect(owner.state?.filter).toBe("read"));
+    const stop = owner.subscribe(published);
     workspace.onSetFilter("read");
     expect(workspaceProps(state).filter).toBe("read");
-    expect(state.requestUpdate).toHaveBeenCalledOnce();
+    expect(owner.state).toBe(previous);
+    expect(published).toHaveBeenCalledOnce();
+    stop();
+    workspace.onSetFilter("changed");
+    expect(published).toHaveBeenCalledOnce();
 
     state.sessionKey = "agent:main:next";
     expect(workspaceProps(state).filter).toBe("all");
@@ -180,7 +191,7 @@ describe("session workspace state", () => {
       agentId: "main",
     });
     const skeleton = mount.querySelector("openclaw-panel-loading-skeleton");
-    expect(skeleton).toMatchObject({ variant: "files" });
+    expect(skeleton?.getAttribute("data-panel-skeleton")).toBe("files");
     expect(mount.textContent).not.toContain("Loading session workspace");
 
     list.resolve({
@@ -289,6 +300,36 @@ describe("session workspace state", () => {
     await vi.waitFor(() => expect(workspaceProps(state).list).not.toBeNull());
     expect(listFiles).toHaveBeenCalledTimes(2);
     expect(workspaceProps(state).error).toBeNull();
+  });
+
+  it("retries the current query once when its search timer is pending", async () => {
+    vi.useFakeTimers();
+    try {
+      const listFiles = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("temporary failure"))
+        .mockResolvedValue({ sessionKey: "agent:main:current", files: [] });
+      const state = createLoadingHost({ listFiles });
+      workspaceProps(state, { expanded: true });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(workspaceProps(state).error).toBe("temporary failure");
+
+      const props = workspaceProps(state);
+      props.onSearch("checklist");
+      props.onRetry();
+      await vi.advanceTimersByTimeAsync(160);
+
+      expect(listFiles).toHaveBeenCalledTimes(2);
+      expect(listFiles).toHaveBeenLastCalledWith("agent:main:current", {
+        agentId: "main",
+        path: "",
+        search: "checklist",
+      });
+      expect(workspaceProps(state).browserSearch).toBe("checklist");
+      expect(workspaceProps(state).error).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it.each([

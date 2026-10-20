@@ -23,6 +23,7 @@ import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   readSqliteDatabaseScopedWriteTokenForPath,
+  retainSqliteDatabaseWriteScopesForPath,
   sqliteSessionIdWriteScope,
 } from "../../infra/sqlite-database-admission.js";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
@@ -233,28 +234,37 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
   };
   const prepareSource = async (): Promise<PreparedSessionSourceAuthority> => {
     assertScopeCurrent();
-    if (validatedWriteToken === undefined || readWriteToken() !== validatedWriteToken) {
-      // The reader retains writer admission through this callback. Reuse its
-      // authority until an owning session or transcript writer publishes a change.
-      validatedWriteToken = undefined;
-      await readSessionTranscriptAnchorsAsync(
-        source,
-        {
-          entryIds: [],
-          contextValidation: { through: candidate.source, expectedAuthority: sourceEntry },
-        },
-        abortSignal,
-        (facts) => {
-          if (facts.contextValidated) {
-            validatedWriteToken = readWriteToken();
-          }
-        },
-      );
+    const release = retainSqliteDatabaseWriteScopesForPath(source.storePath, writeScopes);
+    if (!release) {
+      throw new SessionTranscriptReadFenceError("Session review source is unavailable");
     }
-    const token = validatedWriteToken;
-    const assertCurrent = () => assertReceiptCurrent(token);
-    assertCurrent();
-    return { assertCurrent, checks: [] };
+    try {
+      if (validatedWriteToken === undefined || readWriteToken() !== validatedWriteToken) {
+        // The reader retains writer admission through this callback. Reuse its
+        // authority until an owning session or transcript writer publishes a change.
+        validatedWriteToken = undefined;
+        await readSessionTranscriptAnchorsAsync(
+          source,
+          {
+            entryIds: [],
+            contextValidation: { through: candidate.source, expectedAuthority: sourceEntry },
+          },
+          abortSignal,
+          (facts) => {
+            if (facts.contextValidated) {
+              validatedWriteToken = readWriteToken();
+            }
+          },
+        );
+      }
+      const token = validatedWriteToken;
+      const assertCurrent = () => assertReceiptCurrent(token);
+      assertCurrent();
+      return { assertCurrent, checks: [], release };
+    } catch (error) {
+      release();
+      throw error;
+    }
   };
   const assertSourceCurrent = composeSessionSourceAssertion([
     Object.assign(

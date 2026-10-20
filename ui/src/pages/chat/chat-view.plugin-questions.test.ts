@@ -16,7 +16,7 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { resetComposerFixture } from "./chat-composer.test-support.ts";
-import { resetChatViewState } from "./chat-view-state.ts";
+import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import { createChatProps } from "./chat-view.test-helpers.ts";
 import { ChatView, type ChatProps } from "./chat-view.tsx";
 import { questionPanelIn } from "./components/chat-question-card.test-support.ts";
@@ -33,7 +33,7 @@ afterEach(async () => {
   await resetComposerFixture();
 });
 
-function createPluginChat(replacement: ControlUiReplacement<"composer">) {
+function createPluginChat(replacement: ControlUiReplacement<"composer">, initiallySelected = true) {
   installTranscriptDomMocks();
   const lifetime = new AbortController();
   const pluginHost = {
@@ -52,14 +52,19 @@ function createPluginChat(replacement: ControlUiReplacement<"composer">) {
     host: pluginHost,
     value: replacement,
   };
+  let selected = initiallySelected;
+  const listeners = new Set<() => void>();
   const context = {
     gateway: createApplicationGateway().gateway,
     agentSelection: { state: { selectedId: "main" }, subscribe: () => () => undefined },
     plugins: {
       registrations: () => [],
       selectedReplacement: (surface: ControlUiSurface) =>
-        surface === "composer" ? registration : undefined,
-      subscribe: () => () => undefined,
+        surface === "composer" && selected ? registration : undefined,
+      subscribe: (listener: () => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
       reportError,
     },
   } as unknown as ApplicationContext;
@@ -94,7 +99,17 @@ function createPluginChat(replacement: ControlUiReplacement<"composer">) {
     props.transcript.update();
     flush();
   }
-  return { provider, render, refresh: () => render(current), reportError };
+  return {
+    provider,
+    render,
+    reportError,
+    selectReplacement: () => {
+      selected = true;
+      for (const listener of listeners) {
+        listener();
+      }
+    },
+  };
 }
 
 it.each([
@@ -102,26 +117,29 @@ it.each([
   { mode: "delegated", action: "skip" },
   { mode: "failing", action: "submit" },
 ] as const)(
-  "keeps one usable async question with a $mode plugin composer",
+  "keeps one usable async question when switching to a $mode plugin composer",
   async ({ mode, action }) => {
-    const { provider, render, refresh, reportError } = createPluginChat({
-      id: "custom-draft",
-      label: "Custom draft",
-      surface: "composer",
-      mount(container, view) {
-        if (mode === "failing") {
-          throw new Error("Synthetic composer mount failure");
-        }
-        if (mode === "delegated") {
-          return { dispose: view.mountDefault(container) };
-        }
-        const input = document.createElement("textarea");
-        input.setAttribute("aria-label", "Custom draft");
-        input.value = "Keep the plugin draft.";
-        container.append(input);
-        return undefined;
+    const { provider, render, reportError, selectReplacement } = createPluginChat(
+      {
+        id: "custom-draft",
+        label: "Custom draft",
+        surface: "composer",
+        mount(container, view) {
+          if (mode === "failing") {
+            throw new Error("Synthetic composer mount failure");
+          }
+          if (mode === "delegated") {
+            return { dispose: view.mountDefault(container) };
+          }
+          const input = document.createElement("textarea");
+          input.setAttribute("aria-label", "Custom draft");
+          input.value = "Keep the plugin draft.";
+          container.append(input);
+          return undefined;
+        },
       },
-    });
+      false,
+    );
     const submit = vi.fn(async () => true);
     render(
       createChatProps({
@@ -138,9 +156,9 @@ it.each([
           },
         ],
         onAsyncQuestionSubmit: submit,
-        onRequestUpdate: refresh,
       }),
     );
+    selectReplacement();
     await waitForSolid(async () => {
       await questionPanelIn(provider);
       expect(provider.querySelectorAll("openclaw-chat-question-panel")).toHaveLength(1);
@@ -185,7 +203,7 @@ it.each([
 );
 
 it("keeps one actionable local queue row with a nondelegating plugin composer", async () => {
-  const { provider, render, refresh } = createPluginChat({
+  const { provider, render } = createPluginChat({
     id: "custom-queue",
     label: "Custom queue",
     surface: "composer",
@@ -210,7 +228,6 @@ it("keeps one actionable local queue row with a nondelegating plugin composer", 
         },
       ],
       onQueueRemove,
-      onRequestUpdate: refresh,
     }),
   );
   flush();

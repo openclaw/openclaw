@@ -218,6 +218,14 @@ export function createTerminalIntentQueue(persistent = true) {
       fenceHost.setBooting(false);
     }, fenceHost.timeoutMs());
   }
+  function releaseRefreshFence(host: TerminalIntentHost): void {
+    if (ownedFenceHost !== host) {
+      return;
+    }
+    api.resetLifecycle(host);
+    void api.drain();
+  }
+
   const api = {
     bindHost(host: TerminalIntentHost): void {
       if (ownedHosts.length === 0) {
@@ -252,23 +260,24 @@ export function createTerminalIntentQueue(persistent = true) {
       host: TerminalIntentHost,
       isConnected: () => boolean,
       restore?: () => void,
+      resume?: () => Promise<void>,
     ): void {
       const generation = host.currentGeneration();
       api.beginRefreshFence(host, generation);
       restore?.();
-      const release = () => {
+      const release = async () => {
         if (generation !== host.currentGeneration() || !isConnected()) {
           return;
         }
-        api.releaseRefreshFence(host);
+        // Retained streams recover under the fence before queued work uses their connection.
+        await resume?.();
+        if (generation === host.currentGeneration() && isConnected()) {
+          releaseRefreshFence(host);
+        }
       };
       void import("../../app/sw-refresh.runtime.ts")
         .then(({ refreshControlUiServiceWorker }) => refreshControlUiServiceWorker())
-        .then((replacementActivated) => {
-          if (!replacementActivated) {
-            release();
-          }
-        }, release);
+        .then((replacementActivated) => (replacementActivated ? undefined : release()), release);
     },
     beginRefreshFence(host: TerminalIntentHost, generation: number): void {
       ownedRefreshPending = true;
@@ -277,13 +286,6 @@ export function createTerminalIntentQueue(persistent = true) {
       clearRefreshFailure();
       clearRefreshTimer();
       armRefreshTimer();
-    },
-    releaseRefreshFence(host: TerminalIntentHost): void {
-      if (ownedFenceHost !== host) {
-        return;
-      }
-      api.resetLifecycle(host);
-      void api.drain();
     },
     // Only the panel that opened the fence may drop it; another panel disposing
     // its tabs must not unblock a refresh it knows nothing about.

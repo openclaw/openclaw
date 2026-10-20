@@ -11,7 +11,6 @@ import {
   createModelVisibilityPolicy,
   type ModelVisibilityPolicy,
 } from "../agents/model-visibility-policy.js";
-import { resolveContextConfigProviderForRuntime } from "../agents/openai-routing.js";
 import { resolveOperatorModelDefault } from "../agents/operator-model-policy.js";
 import {
   persistStickyModelSelectionBestEffort,
@@ -464,11 +463,6 @@ export async function applySessionModelSelectionInternal(
     });
   }
 
-  const contextProvider = resolveContextConfigProviderForRuntime({
-    provider,
-    runtimeId: agentRuntime,
-    config: params.cfg,
-  });
   return {
     status: "applied",
     provider,
@@ -478,7 +472,7 @@ export async function applySessionModelSelectionInternal(
     changed: selectionChanged,
     contextTokens: resolveContextTokens({
       cfg: params.cfg,
-      provider: contextProvider,
+      provider,
       model,
       modelContextWindow: selectedCatalogEntry?.contextWindow,
       modelContextTokens: selectedCatalogEntry?.contextTokens,

@@ -416,6 +416,27 @@ describe("formatControlUiSshHint", () => {
 });
 
 describe("waitForGatewayReachable", () => {
+  it("cancels the pending retry timer when readiness is abandoned", async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.probeGateway.mockResolvedValue({ ok: false, error: "not ready" });
+      const controller = new AbortController();
+      const waiting = waitForGatewayReachable({
+        url: "ws://127.0.0.1:18789",
+        deadlineMs: 60_000,
+        pollMs: 30_000,
+        signal: controller.signal,
+      });
+      const cancelled = expect(waiting).rejects.toMatchObject({ name: "AbortError" });
+      await vi.advanceTimersByTimeAsync(0);
+      controller.abort();
+      await cancelled;
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps oversized poll intervals within the overall deadline", async () => {
     mocks.probeGateway.mockResolvedValue({
       ok: false,

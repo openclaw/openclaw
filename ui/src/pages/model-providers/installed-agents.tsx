@@ -15,6 +15,7 @@ import { createWizardLogin, WizardLogin } from "../../components/wizard-login-co
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
+import { createPageRequest } from "../../lib/page-request.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
@@ -54,13 +55,31 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
   const gatewayState = projectGateway(context.gateway);
   const config = projectRuntimeConfig(context.runtimeConfig);
   const overlays = projectOwner(context.overlays, (source) => source.snapshot);
-  const listeners = new Set<() => void>();
-  const notify = () => listeners.forEach((listener) => listener());
+  let publish: (() => void) | undefined;
+  const notify = () => publish?.();
   let installed: InstalledAgent[] | null = null;
-  let listRequest: AbortController | null = null;
   let listClient: GatewayBrowserClient | null | undefined;
   let listEpoch = -1;
   let loadError: string | null = null;
+  const currentList = () =>
+    listClient !== null &&
+    listClient !== undefined &&
+    options.gateway.isCurrent({ client: listClient, epoch: listEpoch });
+  const listRequest = createPageRequest(notify, {
+    task: (client: GatewayBrowserClient, { signal }) =>
+      client.request<{ agents: InstalledAgent[] }>(INSTALLED_AGENTS_METHOD, {}, { signal }),
+    onComplete: (result) => {
+      if (currentList()) {
+        installed = result.agents;
+      }
+    },
+    onError: (error) => {
+      if (currentList()) {
+        loadError = modelProviderErrorMessage(error);
+      }
+    },
+  });
+  onCleanup(listRequest.cancel);
   /** Requested enabled state per agent while its config write is unsettled. */
   const pending = new Map<string, boolean>();
   const messages = new Map<string, ModelProviderRowMessage>();
@@ -96,14 +115,14 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
     read: () => ({
       agents: installed,
       error: loadError,
-      loading: listRequest !== null,
+      loading: listRequest.pending,
       pending,
       messages,
       enablement,
     }),
     subscribe: (_, listener) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
+      publish = listener;
+      return () => (publish = undefined);
     },
     equality: "revision",
   });
@@ -120,9 +139,7 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
   }
 
   function cancel(): void {
-    const request = listRequest;
-    listRequest = null;
-    request?.abort();
+    listRequest.cancel();
     loadError = null;
   }
 
@@ -137,28 +154,7 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
       notify();
       return;
     }
-    const request = new AbortController();
-    listRequest = request;
-    notify();
-    try {
-      const result = await client.request<{ agents: InstalledAgent[] }>(
-        INSTALLED_AGENTS_METHOD,
-        {},
-        { signal: request.signal },
-      );
-      if (listRequest === request && options.gateway.isCurrent({ client, epoch })) {
-        installed = result.agents;
-      }
-    } catch (error) {
-      if (listRequest === request && options.gateway.isCurrent({ client, epoch })) {
-        loadError = modelProviderErrorMessage(error);
-      }
-    } finally {
-      if (listRequest === request) {
-        listRequest = null;
-        notify();
-      }
-    }
+    await listRequest.run(client);
   }
 
   function subscribe(gateway: ApplicationContext["gateway"]): () => void {
@@ -190,6 +186,9 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
   }
 
   function available(): boolean {
+    if (!options.gateway.connected && installed !== null) {
+      return true;
+    }
     return canCallGatewayMethod(
       gatewayState.read().snapshot,
       INSTALLED_AGENTS_METHOD,
@@ -518,9 +517,8 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
     return <InstalledAgents />;
   }
   onCleanup(() => {
-    listeners.clear();
+    publish = undefined;
     enablement = null;
-    cancel();
     listClient = undefined;
   });
   return {

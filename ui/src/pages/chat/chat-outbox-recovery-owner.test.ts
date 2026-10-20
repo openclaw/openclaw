@@ -4,11 +4,17 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { t } from "../../i18n/index.ts";
 import { readChatOutboxRecovery } from "../../lib/chat/outbox-recovery.ts";
-import { readStoredOutboxStore, storageTargetForComposer } from "../../lib/chat/outbox-store.ts";
+import {
+  readStoredOutboxStore,
+  storageTargetForComposer,
+  storageTargetForGateway,
+} from "../../lib/chat/outbox-store.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import "./chat-outbox-recovery.tsx";
+import { PaneOutboxRecovery } from "./chat-outbox-recovery.tsx";
+import { chatRunPresentation } from "./chat-run-presentation.ts";
 
 const recoveryIo = vi.hoisted(() => ({
   confirm: vi.fn<(typeof import("../../components/confirm-dialog.ts"))["showConfirmDialog"]>(),
@@ -46,9 +52,9 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-async function mountRecovery() {
+async function mountRecovery(kind: "draft" | "queue" = "draft") {
   const request = vi.fn(async () => ({}));
-  const host: NonNullable<HTMLElementTagNameMap["openclaw-chat-outbox-recovery"]["host"]> = {
+  const host: Parameters<typeof PaneOutboxRecovery>[0]["state"] = {
     settings: { gatewayUrl: "ws://recovery-owner.test" },
     connected: true,
     client: createTestGatewayClient(request),
@@ -61,37 +67,49 @@ async function mountRecovery() {
     chatQueue: [],
     chatMessages: [],
   };
+  const preview = kind === "draft" ? "Saved input for explicit review" : "Saved queued input";
+  const target = storageTargetForGateway(host.settings.gatewayUrl);
   sessionStorage.setItem(
-    `openclaw.control.chatComposer.v2:${encodeURIComponent(host.settings.gatewayUrl)}`,
+    kind === "draft" ? target.previousKey : target.key,
     JSON.stringify({
-      version: 2,
+      version: kind === "draft" ? 2 : 4,
       gatewayOwner: host.settings.gatewayUrl,
+      recovery: {},
       sessions: {
-        "global\u0000agent:main": {
-          draft: "Saved input for explicit review",
+        [kind === "draft" ? "global\u0000agent:main" : "agent:main:main\u0000agent:main"]: {
+          ...(kind === "draft"
+            ? { draft: preview }
+            : {
+                queue: [
+                  {
+                    id: "queued-input",
+                    text: preview,
+                    createdAt: 1,
+                    sendRunId: "pending-delivery",
+                    sessionId: host.currentSessionId,
+                  },
+                ],
+              }),
           draftRevision: 1,
           updatedAt: 1,
         },
       },
     }),
   );
-  const element = Object.assign(document.createElement("openclaw-chat-outbox-recovery"), {
-    host,
-    identity: "current-owner",
-  });
   const restored = vi.fn();
-  element.addEventListener("outbox-restored", restored);
-  document.body.append(element);
+  const props = { state: host, identity: "current-owner", onRestored: restored };
+  let view = mountSolid(PaneOutboxRecovery, props);
+  document.body.append(view.container);
   await waitForSolid(() =>
-    expect(element.querySelector(".chat-outbox-recovery__preview")?.textContent).toBe(
-      "Saved input for explicit review",
+    expect(view.container.querySelector(".chat-outbox-recovery__preview")?.textContent).toBe(
+      preview,
     ),
   );
   const button = (action: "restore" | "discard") => {
     const label = t(
       action === "restore" ? "chat.outboxRecoveryRestore" : "chat.outboxRecoveryDelete",
     );
-    const found = [...element.querySelectorAll("button")].find(
+    const found = [...view.container.querySelectorAll("button")].find(
       (candidate) => candidate.textContent?.trim() === label,
     );
     if (!found) {
@@ -99,8 +117,43 @@ async function mountRecovery() {
     }
     return found;
   };
-  return { host, element, button, restored, request };
+  return {
+    host,
+    button,
+    restored,
+    request,
+    get element() {
+      return view.container;
+    },
+    remount() {
+      view.dispose();
+      view = mountSolid(PaneOutboxRecovery, props);
+      document.body.append(view.container);
+    },
+  };
 }
+
+it("retires durable delivery receipts from the run owner without bridge prop refreshes", async () => {
+  const { host, element } = await mountRecovery("queue");
+  const owner = chatRunPresentation(host);
+  const initialReads = recoveryIo.prepare.mock.calls.length;
+  owner.publish();
+  await Promise.resolve();
+  flush();
+  expect(recoveryIo.prepare).toHaveBeenCalledTimes(initialReads);
+
+  host.chatMessages = [
+    { role: "user", __openclaw: { id: null, seq: null, idempotencyKey: "pending-delivery" } },
+  ];
+  await waitForSolid(() => expect(recoveryIo.prepare).toHaveBeenCalledTimes(initialReads + 1));
+  expect(readChatOutboxRecovery(host).entries).toHaveLength(1);
+
+  host.chatMessages = [
+    { role: "user", __openclaw: { id: "delivered", idempotencyKey: "pending-delivery" } },
+  ];
+  await waitForSolid(() => expect(element.querySelector(".chat-outbox-recovery-row")).toBeNull());
+  expect(readChatOutboxRecovery(host).entries).toEqual([]);
+});
 
 it("admits one review before Solid flushes and restores through the storage owner", async () => {
   const confirmation = createDeferred<boolean>();
@@ -129,7 +182,7 @@ it("admits one review before Solid flushes and restores through the storage owne
 });
 
 it.each(["restore", "discard"] as const)(
-  "retires a pending %s review with its Solid owner even when its tag reconnects",
+  "retires a pending %s review when its Solid owner remounts",
   async (action) => {
     const confirmation = createDeferred<boolean>();
     recoveryIo.confirm.mockReturnValue(confirmation.promise);
@@ -137,11 +190,7 @@ it.each(["restore", "discard"] as const)(
     fixture.button(action).click();
     await waitForSolid(() => expect(recoveryIo.confirm).toHaveBeenCalledOnce());
 
-    fixture.element.remove();
-    // Cross the bridge's same-turn move window before reconnecting the tag.
-    await Promise.resolve();
-    flush();
-    document.body.append(fixture.element);
+    fixture.remount();
     await waitForSolid(() => expect(fixture.button(action).disabled).toBe(false));
     confirmation.resolve(true);
     await confirmation.promise;

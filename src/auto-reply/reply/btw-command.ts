@@ -1,5 +1,5 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeCommandBody, type CommandNormalizeOptions } from "../commands-registry.js";
+import { matchSlashCommandToken } from "./commands-slash-parse.js";
 
 const BTW_COMMAND_RE = /^\/btw(?::|\s|$)/i;
 
@@ -18,10 +18,5 @@ export function extractBtwQuestion(
   if (!text) {
     return null;
   }
-  const normalized = normalizeCommandBody(text, options).trim();
-  const match = normalized.match(/^\/btw(?:\s+(.*))?$/i);
-  if (!match) {
-    return null;
-  }
-  return normalizeOptionalString(match[1]) ?? "";
+  return matchSlashCommandToken(normalizeCommandBody(text, options), "/btw");
 }

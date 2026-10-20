@@ -1,35 +1,51 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProgressCard } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  createSettledExecution,
+  createTurn,
+} from "../../auto-reply/reply/followup-delivery.test-helpers.js";
 import { createFollowupRunner } from "../../auto-reply/reply/followup-runner.js";
-import type { AdmittedFollowupTurn } from "../../auto-reply/reply/followup-turn-admission.js";
 import type { FollowupExecutionResult } from "../../auto-reply/reply/followup-turn-execution.js";
 import { scheduleFollowupDrain } from "../../auto-reply/reply/queue/drain.js";
-import { enqueueFollowupRun, parkSteerCandidate } from "../../auto-reply/reply/queue/enqueue.js";
+import { enqueueFollowupRun, reserveSteerCandidate } from "../../auto-reply/reply/queue/enqueue.js";
 import { admitFollowupRunLifecycle } from "../../auto-reply/reply/queue/lifecycle.js";
 import {
   clearFollowupQueue,
   getExistingFollowupQueue,
 } from "../../auto-reply/reply/queue/state.js";
 import type { FollowupRun, QueueSettings } from "../../auto-reply/reply/queue/types.js";
-import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.operation.js";
+import type { AdmittedFollowupTurn } from "../../auto-reply/reply/reply-agent-turn-preparation.js";
+import { createMockTypingController } from "../../auto-reply/reply/test-helpers.js";
+import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
+import {
+  bindSessionControllerSource,
+  claimSessionControllerInput,
+} from "../../sessions/session-controller.mailbox.js";
+import { createReplyOperation } from "../../sessions/session-controller.operation.js";
+import {
+  isRpcSourceQueued,
+  requestRpcSourceCancellation,
+  type RpcSourceRef,
+} from "../../sessions/session-controller.rpc-sources.js";
+import { markReplyOperationExecutionStarted } from "../../sessions/session-controller.state.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
-import {
-  abortQueuedChatTurnById,
-  abortQueuedChatTurns,
-  registerQueuedChatTurn,
-} from "../chat-queued-turns.js";
+import { registerChatAbortController } from "../chat-abort.js";
+import { createChatRunState } from "../server-chat-state.js";
+import { createRpcSourceForTest } from "../test-helpers.rpc-source.js";
 import type { handleTrustedInternalChatSend } from "./chat-send-handler.js";
 import { createChatSendTurnAdoptionLifecycle } from "./chat-send-turn-adoption.js";
-import { createChatSendWorkAdmission } from "./chat-send-work-admission.js";
 import { requestProgressCardRefresh } from "./progress-card-refresh.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   send: vi.fn<typeof handleTrustedInternalChatSend>(),
   admit:
-    vi.fn<typeof import("../../auto-reply/reply/followup-turn-admission.js").admitFollowupTurn>(),
+    vi.fn<
+      typeof import("../../auto-reply/reply/reply-agent-turn-preparation.js").prepareReplyAgentTurn
+    >(),
   execute:
     vi.fn<typeof import("../../auto-reply/reply/followup-turn-execution.js").executeFollowupTurn>(),
 }));
@@ -43,8 +59,11 @@ vi.mock("./chat-send-source-finalization.js", () => ({
 }));
 // Keep enqueue, drain, adoption, completion, and the followup runner real. Only
 // replace session/provider admission and the execution/accounting/delivery edges.
-vi.mock("../../auto-reply/reply/followup-turn-admission.js", () => ({
-  admitFollowupTurn: mocks.admit,
+vi.mock("../../auto-reply/reply/reply-agent-turn-preparation.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../auto-reply/reply/reply-agent-turn-preparation.js")
+  >()),
+  prepareReplyAgentTurn: mocks.admit,
 }));
 vi.mock("../../auto-reply/reply/followup-turn-execution.js", () => ({
   executeFollowupTurn: mocks.execute,
@@ -82,35 +101,14 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 
-function settledExecution(runId: string): FollowupExecutionResult {
-  return {
-    commentaryPayloadsEnabled: false,
-    execution: {
-      runId,
-      outcome: {
-        kind: "settled",
-        status: "ok",
-        result: { payloads: [], meta: { durationMs: 0 } },
-        resolved: { provider: "test", model: "test" },
-        fallback: { exhausted: false, attempts: [] },
-        autoCompactionCount: 0,
-      },
-    },
-    runStartedAt: Date.now(),
-    sessionCtx: {},
-    pendingToolTasks: new Set(),
-    progress: { drain: async () => {} },
-  };
-}
-
-function fixture(options: { parkSteer?: boolean } = {}) {
+function fixture(options: { parkSteer?: boolean; onQueuedFollowupSettled?: () => void } = {}) {
   const sessionKey = `agent:work:queued-refresh-` + randomUUID();
   queueKeys.add(sessionKey);
+  const storeScope = "/synthetic/progress-refresh/" + randomUUID();
   const card: ProgressCard = { sessionKey, revision: 7, updatedAt: 1, markdown: "Previous status" };
   const context = {
+    chatRunState: createChatRunState(),
     dedupe: new Map(),
-    chatAbortControllers: new Map(),
-    chatQueuedTurns: new Map(),
     broadcast: vi.fn(),
     logGateway: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
   } as unknown as GatewayRequestContext;
@@ -127,25 +125,16 @@ function fixture(options: { parkSteer?: boolean } = {}) {
     string,
     {
       queued: FollowupRun;
-      adoption: ReturnType<typeof createChatSendTurnAdoptionLifecycle>;
       controller: AbortController;
-      parked?: ReturnType<typeof parkSteerCandidate>;
-      releaseAdmission: ReturnType<typeof vi.fn>;
+      sourceRef: RpcSourceRef;
+      parked?: ReturnType<typeof reserveSteerCandidate>;
     }
   >();
   const runFollowup = createFollowupRunner({
+    opts: { onQueuedFollowupSettled: options.onQueuedFollowupSettled },
     defaultModel: "test",
     typingMode: "never",
-    typing: {
-      onReplyStart: async () => {},
-      startTypingLoop: async () => {},
-      startTypingOnText: async () => {},
-      refreshTypingTtl: () => {},
-      isActive: () => false,
-      markRunComplete: () => {},
-      markDispatchIdle: () => {},
-      cleanup: () => {},
-    },
+    typing: createMockTypingController(),
   });
   // This bounded admission adapter replays the real Gateway dedupe map. It does
   // not implement queued completion: only the real runner/lifecycle may do that.
@@ -159,44 +148,48 @@ function fixture(options: { parkSteer?: boolean } = {}) {
       request.respond(cached.ok, cached.payload, cached.error);
       return;
     }
-    const controller = new AbortController();
-    const releaseAdmission = vi.fn();
-    const work = createChatSendWorkAdmission({
-      admission: { release: releaseAdmission },
-      logGateway: context.logGateway,
+    const target = { sessionKey, agentId: "work" };
+    const identity = { ...target, sessionId: "session" };
+    const registration = registerChatAbortController({
+      runId,
+      ...identity,
+      timeoutMs: 1_000,
+      controlUiVisible: false,
+      projectSessionActive: false,
+      target: captureSessionTarget({
+        storeScope,
+        sessionKey,
+        incarnation: "session",
+        agentId: "work",
+      }),
     });
-    cleanups.push(async () => work.release());
+    if (!registration.entry) {
+      throw new Error("Missing refresh source");
+    }
+    const sourceRef = registration.entry;
+    const controller = registration.controller;
+    const release = vi.fn();
+    releases.set(runId, release);
+
     const adoption = createChatSendTurnAdoptionLifecycle({
       accountId: undefined,
-      chatQueuedTurns: context.chatQueuedTurns,
+      sourceRef,
       context,
       runId,
       controller,
-      sessionBinding: {
-        sessionId: "session",
-        sessionKey,
-        agentId: "work",
-        lifecycleGeneration: "test-generation",
-      },
-      sessionKey,
-      agentId: "work",
+      ...target,
       originatingChannel: "webchat",
       session: {
-        agentId: "work",
+        ...target,
         backingSessionId: "session",
         cfg: {},
         clientRunId: runId,
-        sessionKey,
         sessionLoadOptions: { agentId: "work" },
       },
       hasCronCreatorAuthority: false,
       suppressReplies: true,
-      releaseSourceWorkAdmission: work.release,
-      retainWorkAdmission: () => {
-        const release = vi.fn(work.retain());
-        releases.set(runId, release);
-        return release;
-      },
+      releaseSourceWorkAdmission: release,
+      retainWorkAdmission: () => release,
     });
     const queued: FollowupRun = {
       prompt: String(request.params.message),
@@ -209,13 +202,11 @@ function fixture(options: { parkSteer?: boolean } = {}) {
       },
       originatingChannel: "webchat",
       run: {
-        agentId: "work",
+        ...identity,
         agentDir: "/unused-agent",
-        sessionId: "session",
-        sessionKey,
         sessionFile: "/unused-session.jsonl",
         workspaceDir: "/unused-workspace",
-        config: {},
+        config: { session: { store: storeScope } },
         provider: "test",
         model: "test",
         timeoutMs: 1_000,
@@ -223,8 +214,9 @@ function fixture(options: { parkSteer?: boolean } = {}) {
         inputProvenance: { kind: "internal_system", sourceTool: "progress_card_refresh" },
       },
     };
+    bindSessionControllerSource(sourceRef.input, queued);
     const parked = options.parkSteer
-      ? parkSteerCandidate(sessionKey, queued, queueSettings, runFollowup)
+      ? reserveSteerCandidate(sessionKey, queued, queueSettings, runFollowup)
       : undefined;
     if (options.parkSteer) {
       expect(parked).toBeDefined();
@@ -233,7 +225,8 @@ function fixture(options: { parkSteer?: boolean } = {}) {
         true,
       );
     }
-    sources.set(runId, { queued, adoption, controller, parked, releaseAdmission });
+    registration.cleanup();
+    sources.set(runId, { queued, controller, sourceRef, parked });
     setGatewayDedupeEntry({
       dedupe: context.dedupe,
       key: `chat:` + runId,
@@ -252,14 +245,20 @@ function fixture(options: { parkSteer?: boolean } = {}) {
     );
     return invocation.respond;
   };
-  const first = () => {
+  const start = async () => {
+    expectAccepted(await refresh());
     const item = sources.entries().next().value;
     if (!item) {
       throw new Error("refresh was not queued");
     }
     return { runId: item[0], ...item[1] };
   };
-  return { context, card, sources, sessionKey, releases, refresh, first, runFollowup };
+  return { context, card, sources, sessionKey, storeScope, releases, refresh, start, runFollowup };
+}
+
+function expectReleased(f: ReturnType<typeof fixture>, runId: string) {
+  expect(rpcSourceTesting.has(runId)).toBe(false);
+  expect(f.releases.get(runId)).toHaveBeenCalledOnce();
 }
 
 function holdQueuedExecution(f: ReturnType<typeof fixture>) {
@@ -267,25 +266,29 @@ function holdQueuedExecution(f: ReturnType<typeof fixture>) {
   const releaseExecution = createDeferredCore();
   const runnerDone = createDeferredCore();
   mocks.admit.mockImplementation(async ({ queued }) => {
+    const mailboxClaim = await claimSessionControllerInput(queued);
     await admitFollowupRunLifecycle(queued);
+    const operation = createReplyOperation({
+      sessionKey: f.sessionKey,
+      sessionId: "session",
+      mailboxClaim,
+      target: mailboxClaim.mailbox.owner.target,
+      resetTriggered: false,
+    });
     return {
       kind: "admitted",
-      turn: {
+      configured: undefined,
+      turn: createTurn({
         runId: randomUUID(),
         queued,
-        operation: createReplyOperation({
-          sessionKey: f.sessionKey,
-          sessionId: "session",
-          resetTriggered: false,
-        }),
-        config: {},
-        session: { kind: "detached", current: () => undefined, publish: () => {}, adopt: () => {} },
-        sendPolicy: "allow",
-        preflightCompactionApplied: false,
-      },
+        operation,
+        session: { kind: "detached", current: () => undefined, publish: () => {} },
+      }),
     };
   });
   mocks.execute.mockImplementation(async ({ turn }) => {
+    turn.operation.setPhase("running");
+    markReplyOperationExecutionStarted(turn.operation);
     const source = turn.queued.queuedFollowupReplyDisposition;
     if (source?.kind !== "deliver") {
       throw new Error("queued refresh lost its delivery owner");
@@ -299,7 +302,19 @@ function holdQueuedExecution(f: ReturnType<typeof fixture>) {
     });
     entered.resolve(turn);
     await releaseExecution.promise;
-    return settledExecution(turn.runId);
+    turn.operation.freezeAbort();
+    const execution = createSettledExecution();
+    execution.runId = turn.runId;
+    execution.outcome.resolved = { provider: "test", model: "test" };
+    execution.outcome.result.meta = { durationMs: 0 };
+    return {
+      commentaryPayloadsEnabled: false,
+      execution,
+      runStartedAt: Date.now(),
+      sessionCtx: {},
+      pendingToolTasks: new Set(),
+      progress: { drain: async () => {} },
+    } satisfies FollowupExecutionResult;
   });
   const runner = async (run: FollowupRun) => {
     try {
@@ -311,17 +326,12 @@ function holdQueuedExecution(f: ReturnType<typeof fixture>) {
     }
   };
   scheduleFollowupDrain(f.sessionKey, runner);
-  cleanups.push(async () => {
+  const finish = async () => {
     releaseExecution.resolve();
     await runnerDone.promise;
-  });
-  return {
-    entered: entered.promise,
-    finish: async () => {
-      releaseExecution.resolve();
-      await runnerDone.promise;
-    },
   };
+  cleanups.push(finish);
+  return { entered: entered.promise, finish };
 }
 
 function expectAccepted(respond: ReturnType<typeof vi.fn<RespondFn>>) {
@@ -343,49 +353,59 @@ function expectTerminal(respond: ReturnType<typeof vi.fn<RespondFn>>) {
 }
 
 describe("queued progress refresh settlement", () => {
-  it("keeps progress pending, then reconciles the separate followup run before retrying a new intent", async () => {
-    const f = fixture();
-    expectAccepted(await f.refresh());
-    const source = f.first();
-    const execution = holdQueuedExecution(f);
-    const turn = await execution.entered;
-    expect(turn.runId).not.toBe(source.runId);
-    expect(getExistingFollowupQueue(f.sessionKey)?.inFlight.has(source.queued)).toBe(true);
-    expectAccepted(await f.refresh());
-    expect(f.sources.size).toBe(1);
-    expect(f.releases.get(source.runId)).not.toHaveBeenCalled();
+  it.each([false, true])(
+    "reconciles queued completion before a new intent (late cancellation: %s)",
+    async (lateCancellation) => {
+      const onQueuedFollowupSettled = vi.fn(() =>
+        lateCancellation ? requestRpcSourceCancellation(source.sourceRef) : undefined,
+      );
+      const f = fixture({ onQueuedFollowupSettled });
+      const source = await f.start();
+      expect(isRpcSourceQueued(source.sourceRef)).toBe(true);
+      expect(rpcSourceTesting.get(source.runId)).toBe(source.sourceRef);
+      const execution = holdQueuedExecution(f);
+      const turn = await execution.entered;
+      expect(turn.runId).not.toBe(source.runId);
+      expect(turn.queued.controllerInput).toBe(source.sourceRef.input);
+      expect(rpcSourceTesting.get(source.runId)).toBe(source.sourceRef);
+      expect(getExistingFollowupQueue(f.sessionKey)?.inFlight.has(source.queued)).toBe(true);
+      expectAccepted(await f.refresh());
+      expect(f.sources.size).toBe(1);
+      expect(f.releases.get(source.runId)).not.toHaveBeenCalled();
 
-    await execution.finish();
-    expect(f.context.chatQueuedTurns.has(source.runId)).toBe(false);
-    expect(f.releases.get(source.runId)).toHaveBeenCalledOnce();
-    expectTerminal(await f.refresh());
-    expect(f.context.dedupe.get(`chat:` + source.runId)?.payload).toMatchObject({
-      status: "completed",
-    });
-    expect(f.card).toEqual({
-      sessionKey: f.sessionKey,
-      revision: 7,
-      updatedAt: 1,
-      markdown: "Previous status",
-    });
-    expect(f.context.broadcast).not.toHaveBeenCalled();
-    expect(mocks.execute).toHaveBeenCalledOnce();
+      await execution.finish();
+      await source.sourceRef.input.settlement.promise;
+      expect(onQueuedFollowupSettled).toHaveBeenCalledOnce();
+      expect(onQueuedFollowupSettled).toHaveReturnedWith(lateCancellation ? false : undefined);
+      expectReleased(f, source.runId);
+      expectTerminal(await f.refresh());
+      expect(f.context.dedupe.get(`chat:` + source.runId)?.payload).toMatchObject({
+        status: "completed",
+      });
+      expect(f.card).toEqual({
+        sessionKey: f.sessionKey,
+        revision: 7,
+        updatedAt: 1,
+        markdown: "Previous status",
+      });
+      expect(f.context.broadcast).not.toHaveBeenCalled();
+      expect(mocks.execute).toHaveBeenCalledOnce();
 
-    expectAccepted(await f.refresh("click-2"));
-    expect(f.sources.size).toBe(2);
-    expect([...f.sources.keys()][1]).not.toBe(source.runId);
-    expect(mocks.execute).toHaveBeenCalledOnce();
-  });
+      expectAccepted(await f.refresh("click-2"));
+      expect(f.sources.size).toBe(2);
+      expect([...f.sources.keys()][1]).not.toBe(source.runId);
+      expect(mocks.execute).toHaveBeenCalledOnce();
+    },
+  );
 
   it("does not turn consumed steering custody into terminal completion", async () => {
     const f = fixture({ parkSteer: true });
-    expectAccepted(await f.refresh());
-    const source = f.first();
+    const source = await f.start();
     expect(await source.parked?.admit()).toBe("steer");
     await admitFollowupRunLifecycle(source.queued);
     source.parked?.consume("consumed");
-    expect(f.context.chatQueuedTurns.has(source.runId)).toBe(false);
-    expect(f.releases.get(source.runId)).toHaveBeenCalledOnce();
+    await source.sourceRef.input.settlement.promise;
+    expectReleased(f, source.runId);
     expectAccepted(await f.refresh());
     expect(f.context.dedupe.get(`chat:` + source.runId)?.payload).toMatchObject({ status: "ok" });
     expect(mocks.execute).not.toHaveBeenCalled();
@@ -393,13 +413,25 @@ describe("queued progress refresh settlement", () => {
 
   it("settles an abandoned pending refresh through actual queue overflow", async () => {
     const f = fixture();
-    expectAccepted(await f.refresh());
-    const source = f.first();
+    const source = await f.start();
     const replacement: FollowupRun = {
       ...source.queued,
+      controllerInput: undefined,
+      controllerClaim: undefined,
+      abortSignal: undefined,
       turnAdoptionLifecycle: undefined,
       queuedFollowupReplyDisposition: undefined,
     };
+    const replacementSource = createRpcSourceForTest(
+      {},
+      {
+        storeScope: f.storeScope,
+        sessionKey: f.sessionKey,
+        sessionId: "session",
+        agentId: "work",
+      },
+    );
+    bindSessionControllerSource(replacementSource.input, replacement);
     expect(
       enqueueFollowupRun(
         f.sessionKey,
@@ -410,40 +442,24 @@ describe("queued progress refresh settlement", () => {
         false,
       ),
     ).toBe(true);
-    expect(f.context.chatQueuedTurns.has(source.runId)).toBe(false);
-    expect(f.releases.get(source.runId)).toHaveBeenCalledOnce();
+    await source.sourceRef.input.settlement.promise;
+    expectReleased(f, source.runId);
     expectTerminal(await f.refresh());
     expect(mocks.execute).not.toHaveBeenCalled();
   });
 
-  it.each(["single", "bulk", "signal"])(
+  it.each(["source", "signal"])(
     "retires a cancelled queued refresh before %s abort removes its owner",
     async (mode) => {
       const f = fixture();
-      expectAccepted(await f.refresh());
-      const source = f.first();
-      if (mode === "single") {
-        expect(
-          abortQueuedChatTurnById(f.context.chatQueuedTurns, {
-            runId: source.runId,
-            sessionKey: f.sessionKey,
-            stopReason: "rpc",
-          }).aborted,
-        ).toBe(true);
-      } else if (mode === "bulk") {
-        const entry = f.context.chatQueuedTurns.get(source.runId);
-        if (!entry) {
-          throw new Error("Missing queued refresh owner");
-        }
-        expect(
-          abortQueuedChatTurns(f.context.chatQueuedTurns, [{ runId: source.runId, entry }], "rpc"),
-        ).toEqual([source.runId]);
-      } else {
+      const source = await f.start();
+      if (mode === "signal") {
         source.controller.abort();
+      } else {
+        expect(requestRpcSourceCancellation(source.sourceRef)).toBe(true);
       }
-      expect(f.context.chatQueuedTurns.has(source.runId)).toBe(false);
-      expect(f.releases.get(source.runId)).toHaveBeenCalledOnce();
-      expect(source.releaseAdmission).toHaveBeenCalledOnce();
+      await source.sourceRef.input.settlement.promise;
+      expectReleased(f, source.runId);
       expectTerminal(await f.refresh());
       expect(f.context.dedupe.get(`chat:${source.runId}`)?.payload).toMatchObject({
         status: "timeout",
@@ -457,22 +473,23 @@ describe("queued progress refresh settlement", () => {
 
   it("does not let a revoked queued controller overwrite its successor receipt", async () => {
     const f = fixture();
-    await f.refresh();
-    const source = f.first();
+    const source = await f.start();
     const execution = holdQueuedExecution(f);
     await execution.entered;
     source.controller.abort();
-    const successor = new AbortController();
-    expect(
-      registerQueuedChatTurn({
-        chatQueuedTurns: f.context.chatQueuedTurns,
+    const successor = createRpcSourceForTest(
+      {},
+      {
         runId: source.runId,
-        controller: successor,
+        storeScope: f.storeScope,
+        phase: "waiting",
         sessionId: "successor-session",
         sessionKey: f.sessionKey,
         agentId: "work",
-      }),
-    ).toBe(true);
+      },
+    );
+    // The old producer retains custody; replacing correlation cannot transfer it.
+    rpcSourceTesting.set(source.runId, successor);
     const successorReceipt = {
       ts: Date.now(),
       ok: true,
@@ -480,10 +497,11 @@ describe("queued progress refresh settlement", () => {
     };
     f.context.dedupe.set(`chat:` + source.runId, successorReceipt);
     await execution.finish();
-    expect(f.context.chatQueuedTurns.get(source.runId)?.controller).toBe(successor);
+    await source.sourceRef.input.settlement.promise;
+    expect(rpcSourceTesting.get(source.runId)).toBe(successor);
     expect(f.context.dedupe.get(`chat:` + source.runId)).toBe(successorReceipt);
     expect(f.releases.get(source.runId)).toHaveBeenCalledOnce();
     expectAccepted(await f.refresh());
-    successor.abort();
+    requestRpcSourceCancellation(successor);
   });
 });

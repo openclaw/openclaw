@@ -1,3 +1,4 @@
+import { createChangeListeners } from "../../../src/shared/listeners.js";
 import { t } from "../i18n/index.ts";
 import {
   isStaleChunkImportError,
@@ -74,8 +75,8 @@ export function createLazyCustomElementRequests(
   let activeElement: OptionalCustomElement | undefined;
   let activeDismissed = false;
   let staleRetry: LazyCustomElementRequest | undefined;
-  const listeners = new Set<() => void>();
-  const notify = () => listeners.forEach((listener) => listener());
+  const listeners = createChangeListeners();
+  const notify = listeners.publish;
 
   function preload(element: OptionalCustomElement, options?: { reportError?: boolean }): void {
     if (isOptionalElementDefined(element) || preloads.has(element.tagName)) {
@@ -226,10 +227,7 @@ export function createLazyCustomElementRequests(
     get visibleState(): LazyCustomElementRequestState | undefined {
       return current;
     },
-    subscribe(listener: () => void) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe: listeners.subscribe,
     preload,
     request: requestElement,
     requestWhileActive,

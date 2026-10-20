@@ -22,7 +22,7 @@ import type {
   CronUpdateResult,
   CronWakeMode,
 } from "./service/state.js";
-import type { CronJob, CronPayload } from "./types.js";
+import type { CronJob, CronPayload, CronStoredJob } from "./types.js";
 
 type CronWakeResult = { ok: true } | { ok: false; reason?: "unwakeable-session-key" };
 
@@ -71,8 +71,8 @@ export interface CronServiceContract {
     mode?: CronRunMode,
     opts?: CronCommitGuardOptions,
   ): Promise<CronServiceRunResult>;
-  getJob(id: string): CronJob | undefined;
-  readJob(id: string): Promise<CronJob | undefined>;
+  getJob(id: string): CronStoredJob | undefined;
+  readJob(id: string): Promise<CronStoredJob | undefined>;
   getDefaultAgentId(): string | undefined;
   wake(opts: {
     mode: CronWakeMode;

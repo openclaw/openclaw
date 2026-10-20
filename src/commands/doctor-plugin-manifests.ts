@@ -89,11 +89,9 @@ function buildLegacyManifestContractMigration(params: {
   };
 }
 
-export function collectLegacyPluginManifestContractMigrations(params?: {
-  config?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  manifestRoots?: string[];
-  workspaceDir?: string;
+export function collectLegacyPluginManifestContractMigrations(params: {
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
 }): LegacyManifestContractMigration[] {
   const seen = new Set<string>();
   const migrations: LegacyManifestContractMigration[] = [];
@@ -110,23 +108,7 @@ export function collectLegacyPluginManifestContractMigrations(params?: {
     }
   };
 
-  for (const root of params?.manifestRoots ?? []) {
-    if (!fs.existsSync(root)) {
-      continue;
-    }
-    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
-      if (!entry.isDirectory()) {
-        continue;
-      }
-      inspectManifest(path.join(root, entry.name, "openclaw.plugin.json"));
-    }
-  }
-
-  for (const plugin of loadPluginManifestRegistryCore({
-    ...(params?.config ? { config: params.config } : {}),
-    ...(params?.env ? { env: params.env } : {}),
-    ...(params?.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-  }).plugins) {
+  for (const plugin of loadPluginManifestRegistryCore(params).plugins) {
     inspectManifest(plugin.manifestPath);
   }
 
@@ -152,7 +134,6 @@ export async function maybeRepairLegacyPluginManifestContracts(
   params: NonNullable<Parameters<typeof collectLegacyPluginManifestContractMigrations>[0]> & {
     runtime: RuntimeEnv;
     prompter: DoctorPrompter;
-    note?: typeof note;
   },
 ): Promise<boolean> {
   const migrations = collectLegacyPluginManifestContractMigrations(params);
@@ -160,8 +141,7 @@ export async function maybeRepairLegacyPluginManifestContracts(
     return false;
   }
 
-  const emitNote = params.note ?? note;
-  emitNote(
+  note(
     [
       "Legacy plugin manifest capability keys detected.",
       ...migrations.flatMap((migration) => migration.changeLines),
@@ -196,7 +176,7 @@ export async function maybeRepairLegacyPluginManifestContracts(
   }
 
   if (applied.length > 0) {
-    emitNote(applied.join("\n"), "Doctor changes");
+    note(applied.join("\n"), "Doctor changes");
   }
   return applied.length > 0;
 }

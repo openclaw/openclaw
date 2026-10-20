@@ -8,7 +8,11 @@ import { gunzipSync } from "node:zlib";
 import { afterAll, expect, it } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { generateStoredDeviceIdentity } from "../infra/device-identity-store.js";
+import {
+  generateStoredDeviceIdentity,
+  insertStoredDeviceIdentityIfAbsent,
+  readStoredDeviceIdentity,
+} from "../infra/device-identity-store.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import { hasActiveStartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
@@ -98,18 +102,20 @@ type AdmissionCase = {
   unavailablePlugin?: boolean;
   selectedSession?: boolean;
   restored?: boolean;
+  redirected?: boolean;
   identityFile?: string;
   canonicalIdentity?: boolean;
 };
 it.each<[string, AdmissionCase]>([
   ["Config auto-restored from backup", { config: "clobbered", restored: true }],
+  ["Config auto-restored from backup", { config: "clobbered", restored: true, redirected: true }],
   ["Legacy workspace setup state requires migration", { config: "clobbered", workspace: true }],
   ["Legacy session store requires migration", { selectedSession: true }],
   ["Missing config", { config: "absent" }],
   ["Missing config", { config: "absent", consolidated: true }],
   ["Configured plugin load path is unavailable", { consolidated: true, unavailablePlugin: true }],
   ["OpenClaw config is invalid", { consolidated: true, unavailablePlugin: true, repairable: true }],
-  ["Legacy device identity exists", { identityFile: "device.json" }],
+  ["Legacy client credentials require migration", { identityFile: "device.json" }],
   ["__CANONICAL_IDENTITY_READY__", { identityFile: "device.json", canonicalIdentity: true }],
 ])(
   "startup admission preserves shipped state: %s (%j)",
@@ -123,6 +129,7 @@ it.each<[string, AdmissionCase]>([
       unavailablePlugin,
       selectedSession,
       restored,
+      redirected,
       identityFile,
       canonicalIdentity,
     },
@@ -150,12 +157,13 @@ it.each<[string, AdmissionCase]>([
     );
     const configPath = path.join(stateDir, "openclaw.json");
     const baseEnv = fixtureEnv(root, stateDir, configPath);
+    const admitted = restored || canonicalIdentity || (unavailablePlugin && !repairable);
     const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
     fs.mkdirSync(path.dirname(databasePath), { recursive: true });
     fs.mkdirSync(path.join(stateDir, "agents", "main", "agent"), { recursive: true });
     fs.mkdirSync(workspaceDir);
-    if (selectedSession) {
-      // Reach the legacy session refusal without an earlier registry-schema refusal.
+    if (selectedSession || admitted) {
+      // Config admission and legacy-session checks begin with current credential ownership.
       openOpenClawStateDatabase({ path: databasePath, env: baseEnv });
       await closeOpenClawStateDatabaseByPathAsync(databasePath);
     } else {
@@ -173,12 +181,9 @@ it.each<[string, AdmissionCase]>([
       }
       const identity = canonicalIdentity ? generateStoredDeviceIdentity() : undefined;
       if (identity) {
-        const { deviceId, publicKeyPem, privateKeyPem, createdAtMs } = identity;
-        prepared
-          .prepare(
-            "INSERT INTO device_identities (identity_key, device_id, public_key_pem, private_key_pem, created_at_ms, updated_at_ms) VALUES ('primary', ?, ?, ?, ?, ?)",
-          )
-          .run(deviceId, publicKeyPem, privateKeyPem, createdAtMs, createdAtMs);
+        insertStoredDeviceIdentityIfAbsent(identity, { env: baseEnv });
+      } else if (admitted) {
+        expect(readStoredDeviceIdentity({ env: baseEnv })).toBeNull();
       }
       if (consolidated) {
         prepared.close();
@@ -242,8 +247,10 @@ it.each<[string, AdmissionCase]>([
       const configBefore = fs.existsSync(configPath) ? fs.readFileSync(configPath, "utf8") : null;
       const schemaBefore = schemaMetadata(databasePath);
       const before = manifest(stateDir);
-      expect(schemaBefore.userVersion).toBe(selectedSession ? OPENCLAW_STATE_SCHEMA_VERSION : 1);
-      if (!selectedSession) {
+      expect(schemaBefore.userVersion).toBe(
+        selectedSession || admitted ? OPENCLAW_STATE_SCHEMA_VERSION : 1,
+      );
+      if (!selectedSession && !admitted) {
         expect(Boolean(before[path.join("state", "openclaw.sqlite-wal")])).toBe(!consolidated);
       }
       const entry = `
@@ -261,15 +268,23 @@ it.each<[string, AdmissionCase]>([
         if (${Boolean(restored)} && process.env.OPENCLAW_GATEWAY_TOKEN) {
           throw new Error("Discarded clobbered config environment leaked through admission.");
         }
+        if (${Boolean(redirected)} &&
+            (process.env.PGCLI_ADMISSION_BOOTSTRAP !== "retained" ||
+             process.env.PGCLI_ADMISSION_DOTENV !== "retained")) {
+          throw new Error("Config recovery discarded accepted routing or dotenv environment.");
+        }
         if (${Boolean(canonicalIdentity)}) {
-          const { DatabaseSync } = await import("node:sqlite");
-          const db = new DatabaseSync(${JSON.stringify(databasePath)}, { readOnly: true });
-          try {
-            const current = db.prepare("SELECT device_id FROM device_identities WHERE identity_key = 'primary'").get();
-            if (current?.device_id !== ${JSON.stringify(identity?.deviceId)}) {
-              throw new Error("Startup replaced the canonical identity.");
-            }
-          } finally { db.close(); }
+          const { isDeepStrictEqual } = await import("node:util");
+          const { readStoredDeviceIdentityReadOnly } = await import(${JSON.stringify(
+            runtimeUrl({
+              currentModuleUrl: import.meta.url,
+              sourceWorkerName: "../infra/device-identity-store",
+              distWorkerPath: "infra/device-identity-store.js",
+            }),
+          )});
+          if (!isDeepStrictEqual(readStoredDeviceIdentityReadOnly(), ${JSON.stringify(identity)})) {
+            throw new Error("Startup replaced the canonical identity.");
+          }
           console.log("__CANONICAL_IDENTITY_READY__");
         }
       `;
@@ -280,6 +295,20 @@ it.each<[string, AdmissionCase]>([
           config === "clobbered" ? path.join(stateDir, "empty-workspace") : workspaceDir,
         OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(root, "bundled"),
       };
+      if (redirected) {
+        fs.mkdirSync(path.join(root, ".openclaw"));
+        writeJson(path.join(root, ".openclaw", "openclaw.json"), {
+          env: {
+            vars: {
+              OPENCLAW_STATE_DIR: stateDir,
+              PGCLI_ADMISSION_BOOTSTRAP: "retained",
+            },
+          },
+        });
+        fs.writeFileSync(path.join(stateDir, ".env"), "PGCLI_ADMISSION_DOTENV=retained\n");
+        delete env.OPENCLAW_STATE_DIR;
+        delete env.OPENCLAW_CONFIG_PATH;
+      }
       const result = await runFixture(
         runtimeRoot,
         env,
@@ -293,7 +322,6 @@ it.each<[string, AdmissionCase]>([
       `,
       );
       const output = `${result.stdout}\n${result.stderr}`;
-      const admitted = restored || canonicalIdentity || (unavailablePlugin && !repairable);
       expect(result.code, output).toBe(admitted ? 0 : 78);
       expect(output).toContain(reason);
       if (admitted) {

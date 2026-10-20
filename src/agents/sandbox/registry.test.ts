@@ -7,6 +7,7 @@ import {
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
+import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import * as sqliteQueries from "../../infra/kysely-sync.js";
 import { deferSqlitePostCommitPublication } from "../../infra/sqlite-post-commit.js";
@@ -311,6 +312,7 @@ describe("registry race safety", () => {
       databasePath: resolveOpenClawStateSqlitePath(),
       payload: {
         pid: process.pid,
+        processNamespace: readGatewayLockProcessNamespace(),
         createdAt: new Date().toISOString(),
         configPath: path.join(TEST_STATE_DIR, "openclaw.json"),
         role: "gateway",
@@ -328,7 +330,7 @@ describe("registry race safety", () => {
     }
   });
 
-  it("settles browser activity in workers while preserving captured fields and workspace custody", async () => {
+  it("settles browser activity in workers while preserving immutable fields and workspace custody", async () => {
     // Admit the schema before observing the runtime write boundary.
     await updateRegistry(containerEntry());
     const hostSql = vi.spyOn(sqliteQueries, "executeSqliteQuerySync").mockImplementation(() => {
@@ -336,10 +338,7 @@ describe("registry race safety", () => {
     });
     try {
       const entry = browserEntry({ workspaceDir: "/original/workspace", cdpPort: 0 });
-      const reservation = updateBrowserRegistry(entry);
-      entry.image = "changed-after-dispatch";
-      entry.workspaceDir = "/changed-after-dispatch";
-      await reservation;
+      await updateBrowserRegistry(entry);
       await updateBrowserRegistry(
         browserEntry({ createdAtMs: 99, lastUsedAtMs: 2, image: "ignored" }),
       );
@@ -355,7 +354,7 @@ describe("registry race safety", () => {
     }
   });
 
-  it("captures a Podman target and preserves immutable fields across usage updates", async () => {
+  it("preserves the Podman target and immutable fields across usage updates", async () => {
     const target = {
       key: "machine:target-a",
       globalArgs: ["--url", "ssh://core@127.0.0.1:60001/run/podman/podman.sock"],
@@ -366,12 +365,7 @@ describe("registry race safety", () => {
       createdAtMs: 11,
       workspaceDir: "/original/workspace",
     });
-    const initialWrite = updateRegistry(entry);
-    target.globalArgs[1] = "ssh://changed-after-dispatch/run/podman/podman.sock";
-    entry.createdAtMs = 99;
-    entry.image = "changed-after-dispatch";
-    entry.workspaceDir = "/changed-after-dispatch";
-    await initialWrite;
+    await updateRegistry(entry);
     await updateRegistry(
       containerEntry({
         backendId: "podman",

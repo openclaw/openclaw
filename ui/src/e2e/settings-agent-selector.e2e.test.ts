@@ -136,9 +136,12 @@ suite.define(() => {
         await page.locator(`.settings-sidebar__item[href="${pathForRoute(routeId)}"]`).click();
         await waitForControlUiRoute(page, { routeId });
         await expectSelectedAgent(page, "Research");
+        if (routeId === "memory") {
+          await gateway.waitForRequest("doctor.memory.status", { match: { agentId: "research" } });
+        } else if (routeId === "skill-settings") {
+          await gateway.waitForRequest("skills.status", { match: { agentId: "research" } });
+        }
       }
-      await gateway.waitForRequest("doctor.memory.status", { match: { agentId: "research" } });
-      await gateway.waitForRequest("skills.status", { match: { agentId: "research" } });
       await gateway.waitForRequest("models.list", {
         match: { agentId: "research", view: "configured" },
       });

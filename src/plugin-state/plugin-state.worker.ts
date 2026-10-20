@@ -1,6 +1,6 @@
 import { err, ok } from "@openclaw/normalization-core/result";
 import { requestSessionEntriesCurrentAdmission } from "../config/sessions/session-entry-current-admission.worker.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import { captureOpenClawStateDatabaseReadAdmission } from "../state/openclaw-state-db-cache.js";
 import type {
@@ -199,7 +199,7 @@ export function executePluginStateCommand(
           "lookup",
           (store) => {
             const run = () => executePluginStateOperation(store, command.input, handler);
-            return store.db.isTransaction ? run() : runSqliteDeferredTransactionSync(store.db, run);
+            return store.db.isTransaction ? run() : runSqliteReadSnapshotSync(store.db, run);
           },
           options,
         );
@@ -216,10 +216,9 @@ export function executePluginStateCommand(
             const result = withPluginStateWorkerReceipt(
               store.db,
               () => executePluginStateOperation(store, command.input, handler),
-              (completed): PluginStateOperationCommit => ({
+              (): PluginStateOperationCommit => ({
                 pluginStateOperation: {
                   receiptId: command.input.receiptId,
-                  validUntil: completed.validUntil,
                 },
               }),
             );

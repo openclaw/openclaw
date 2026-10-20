@@ -347,9 +347,12 @@ suite.define(() => {
         textIncludes: `${nonOwnerMarker}:`,
         timeoutMs: 60_000,
       });
-      expect(provider.toolAvailability.get(nonOwnerMarker)).toBe(false);
-      expect(provider.results.has(nonOwnerMarker)).toBe(false);
-      expect(nonOwnerReply.text).toContain("Automation tools are unavailable for this caller.");
+      // The definition stays visible for prompt caching; execution requires owner authority.
+      const nonOwnerRefusal =
+        "automations needs the owner's authority, and this turn was not started by the owner. Do not retry automations.";
+      expect(provider.toolAvailability.get(nonOwnerMarker)).toBe(true);
+      expect(provider.results.get(nonOwnerMarker)).toBe(nonOwnerRefusal);
+      expect(nonOwnerReply.text).toContain(nonOwnerRefusal);
       expect(await gateway.call("cron.get", { id: jobId })).toEqual(jobBeforeNonOwner);
       expect(await gateway.call("cron.runs", { id: jobId })).toEqual(runsBeforeNonOwner);
       expect(managementAuditEvents()).toHaveLength(0);
@@ -437,13 +440,15 @@ suite.define(() => {
         }
       });
       const auditEvents = managementAuditEvents();
-      expect(auditEvents).toHaveLength(actions.length + 2);
+      // Both configured-owner reads and removal's revision lookup are audited.
+      expect(auditEvents).toHaveLength(actions.length + 3);
       await writeVerdict("verdict.json", {
         admin: adminResults,
         cronRuns: observedCronRuns,
         configuredTelegramOwner: ownerResults,
         nonOwnerTelegramConversation: {
           automationsAvailable: provider.toolAvailability.get(nonOwnerMarker),
+          refusal: provider.results.get(nonOwnerMarker),
         },
         adminManagementAuditEvents: auditEvents.length,
       });

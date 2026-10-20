@@ -240,6 +240,15 @@ onboarding.
       </Step>
     </Steps>
 
+    Kimi Coding's default model, `kimi/kimi-for-coding`, and its
+    `kimi/kimi-for-coding-highspeed` variant expose only `/think on` (level `low`)
+    and default to it. Their K2 backend can put raw reasoning into visible replies
+    when thinking is disabled. OpenClaw keeps thinking enabled with a 1024-token
+    budget; stored `off` preferences resolve to `on` without failing the turn.
+    These models do not expose K3's effort levels. Explicit model
+    `params.thinking` overrides are still honored, including disabling thinking,
+    but disabling it can expose raw reasoning in replies.
+
     Kimi Coding K3 always uses adaptive thinking when reasoning is enabled and
     defaults to high effort. `/think minimal|low` maps to low effort,
     `/think medium|high|adaptive` maps to high effort, and `/think xhigh|max`

@@ -50,7 +50,10 @@ function terminalTabStatusLabel(tab: TerminalPanelTab): string | null {
     : t("terminal.exited");
 }
 
-export function terminalPanelHostedTabs(tabs: TerminalPanelTab[]): PanelHostedTab[] {
+export function terminalPanelHostedTabs(
+  tabs: TerminalPanelTab[],
+  connected: boolean,
+): PanelHostedTab[] {
   return tabs.map((tab) => ({
     id: tab.id,
     label: tab.shellName ?? t("terminal.tabLabel", { n: String(tab.sequence) }),
@@ -61,5 +64,6 @@ export function terminalPanelHostedTabs(tabs: TerminalPanelTab[]): PanelHostedTa
     statusLabel: terminalTabStatusLabel(tab),
     badge: tab.agentOwned ? t("terminal.agentOwnedBadge") : null,
     className: `is-${tab.status}`,
+    closeDisabled: !connected && tab.status !== "exited",
   }));
 }

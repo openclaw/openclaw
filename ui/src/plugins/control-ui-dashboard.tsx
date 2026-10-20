@@ -1,6 +1,7 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
-import { Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
+import { Loading, Show, createMemo, createSignal, onCleanup } from "solid-js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { Icon } from "../components/solid/icon.tsx";
 import {
   acquireBoardProviderForSession,
@@ -8,9 +9,12 @@ import {
   boardProviderCacheKey,
   type BoardViewCallbacks,
 } from "../lib/board/provider.ts";
-import { projectBoardProvider } from "../lib/reactive/domain-board.ts";
+import { projectGateway } from "../lib/reactive/application.ts";
+import { useOptionalApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { projectSource } from "../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
+import { observeSolidBridgeProperties } from "./control-ui-properties.ts";
 import "./control-ui-dashboard.css";
 
 export type PluginSessionDashboardProps = {
@@ -22,25 +26,43 @@ export type PluginSessionDashboardProps = {
   presented: boolean;
 };
 
-function PluginSessionDashboardContent(props: PluginSessionDashboardProps) {
-  const [viewError, setViewError] = createSignal<string | null>(null);
-  const [boardView, setBoardView] =
-    createSignal<typeof import("../components/board/board-view.tsx").BoardView>();
+function PluginSessionDashboardContent(
+  props: PluginSessionDashboardProps,
+  host: SolidBridgeElement<PluginSessionDashboardProps>,
+) {
+  const context = useOptionalApplication();
+  const gateway = context ? projectGateway(context.gateway) : undefined;
   const [viewAttempt, setViewAttempt] = createSignal(0);
+  const boardView = createMemo(() => {
+    viewAttempt();
+    return import("../components/board/board-view.tsx").then(
+      (module) => ({ view: module.BoardView, error: null }),
+      (error: unknown) => ({
+        view: null,
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    );
+  });
   const scope = createMemo(
-    () =>
-      props.client && props.session?.sessionKey.trim()
+    () => {
+      gateway?.revision();
+      return props.client && props.session?.sessionKey.trim()
         ? {
             client: props.client,
             cacheKey: boardProviderCacheKey(props.session),
+            presentationScope: context ? gatewayPresentationScope(context.gateway) : undefined,
             session: props.session,
             connected: props.connected,
             canMutate: props.canMutate,
             canGrant: props.canGrant,
           }
-        : null,
+        : null;
+    },
     {
-      equals: (left, right) => left?.client === right?.client && left?.cacheKey === right?.cacheKey,
+      equals: (left, right) =>
+        left?.client === right?.client &&
+        left?.cacheKey === right?.cacheKey &&
+        left?.presentationScope === right?.presentationScope,
     },
   );
   const resource = createMemo(() => {
@@ -56,9 +78,25 @@ function PluginSessionDashboardContent(props: PluginSessionDashboardProps) {
       false,
       current.canMutate,
       current.canGrant,
+      current.presentationScope,
     );
     onCleanup(() => lease.release());
-    const projection = projectBoardProvider(lease.provider);
+    const projection = projectSource(lease.provider, {
+      read: (provider) => ({
+        snapshot: provider.snapshot$.value,
+        appViewGeneration: provider.appViewGeneration,
+        hasLoadedSnapshot: provider.hasLoadedSnapshot,
+      }),
+      subscribe: (provider, notify) => {
+        const stopSnapshot = provider.snapshot$.subscribe(notify);
+        const stopError = provider.loadError$.subscribe(notify);
+        return () => {
+          stopSnapshot();
+          stopError();
+        };
+      },
+      equality: "revision",
+    });
     const callbacks: BoardViewCallbacks = {
       get appViewGeneration() {
         return projection.read().appViewGeneration;
@@ -73,21 +111,21 @@ function PluginSessionDashboardContent(props: PluginSessionDashboardProps) {
     return { lease, projection, callbacks };
   });
   // Keep the shared transport and this lease's mutation authority current.
-  createEffect(
-    () => ({
-      resource: resource(),
-      client: props.client,
-      connected: props.connected,
-      canMutate: props.canMutate,
-      canGrant: props.canGrant,
-    }),
-    (current) =>
-      current.resource?.lease.update(current.client!, current.connected, {
-        canPinWidgets: false,
-        canPinMcpApps: false,
-        canMutate: current.canMutate,
-        canGrant: current.canGrant,
-      }),
+  observeSolidBridgeProperties(
+    host,
+    ["session", "client", "connected", "canMutate", "canGrant"],
+    undefined,
+    () => {
+      const current = resource();
+      if (current && host.client) {
+        current.lease.update(host.client, host.connected, {
+          canPinWidgets: false,
+          canPinMcpApps: false,
+          canMutate: host.canMutate,
+          canGrant: host.canGrant,
+        });
+      }
+    },
   );
   // Preserve manual choices within a scope; a replacement initializes only after its first snapshot.
   const [presentation, setPresentation] = createSignal<{
@@ -110,25 +148,6 @@ function PluginSessionDashboardContent(props: PluginSessionDashboardProps) {
         state?.snapshot.tabs.some((tab) => tab.tabId === previous.activeTabId)
           ? previous.activeTabId
           : (state?.snapshot.tabs[0]?.tabId ?? ""),
-    };
-  });
-  // The lazy module loader publishes completion or failure and retires obsolete attempts.
-  createEffect(viewAttempt, () => {
-    let current = true;
-    setViewError(null);
-    void import("../components/board/board-view.tsx")
-      .then((module) => {
-        if (current) {
-          setBoardView(() => module.BoardView);
-        }
-      })
-      .catch((error: unknown) => {
-        if (current) {
-          setViewError(error instanceof Error ? error.message : String(error));
-        }
-      });
-    return () => {
-      current = false;
     };
   });
   const board = createMemo(() => {
@@ -162,38 +181,42 @@ function PluginSessionDashboardContent(props: PluginSessionDashboardProps) {
         </span>
       </button>
       <div class="plugin-session-dashboard__body" hidden={!presentation().expanded}>
-        {viewError() ? (
-          <>
-            <p role="alert">{viewError()}</p>
-            <button type="button" onClick={() => setViewAttempt((value) => value + 1)}>
-              {t("common.retry")}
-            </button>
-          </>
-        ) : (
-          <Show
-            when={board()}
-            fallback={<p class="plugin-session-dashboard__empty">{t("pluginUi.dashboardEmpty")}</p>}
-          >
-            {(current) => (
-              <Show when={boardView()} keyed>
-                {(BoardView) => (
-                  <BoardView
-                    active={presentation().expanded && props.presented}
-                    session={current().session}
-                    snapshot={current().snapshot}
-                    activeTabId={presentation().activeTabId}
-                    widgetFrameUrl={(name: string, revision: number) =>
-                      current().lease.provider.widgetFrameUrl(name, revision)
-                    }
-                    callbacks={current().callbacks}
-                    canMutate={props.canMutate}
-                    canGrant={props.canGrant}
-                  />
-                )}
-              </Show>
-            )}
-          </Show>
-        )}
+        <Loading>
+          {boardView().error ? (
+            <>
+              <p role="alert">{boardView().error}</p>
+              <button type="button" onClick={() => setViewAttempt((value) => value + 1)}>
+                {t("common.retry")}
+              </button>
+            </>
+          ) : (
+            <Show
+              when={board()}
+              fallback={
+                <p class="plugin-session-dashboard__empty">{t("pluginUi.dashboardEmpty")}</p>
+              }
+            >
+              {(current) => (
+                <Show when={boardView().view} keyed>
+                  {(BoardView) => (
+                    <BoardView
+                      active={presentation().expanded && props.presented}
+                      session={current().session}
+                      snapshot={current().snapshot}
+                      activeTabId={presentation().activeTabId}
+                      widgetFrameUrl={(name: string, revision: number) =>
+                        current().lease.provider.widgetFrameUrl(name, revision)
+                      }
+                      callbacks={current().callbacks}
+                      canMutate={props.connected && props.canMutate}
+                      canGrant={props.connected && props.canGrant}
+                    />
+                  )}
+                </Show>
+              )}
+            </Show>
+          )}
+        </Loading>
       </div>
       <Show when={!presentation().expanded && presentation().initialized && !board()}>
         <p class="plugin-session-dashboard__collapsed-empty">{t("pluginUi.dashboardEmpty")}</p>

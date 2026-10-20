@@ -66,7 +66,7 @@ const TerminalToolOutputSchema = Type.Union([
 ]);
 
 const TERMINAL_RECOVERY_GUIDANCE =
-  "Use action=list to find a shared terminal or ask the operator to open one in this chat.";
+  "Use action=list to find a terminal the operator opened in this chat. This tool cannot open one; run your own commands with exec when available, otherwise ask the operator to open a terminal.";
 const TERMINAL_UNAVAILABLE_MESSAGE = `Terminal session unavailable. ${TERMINAL_RECOVERY_GUIDANCE}`;
 
 type TerminalToolGatewayContext = Pick<GatewayRequestContext, "terminalSessions">;
@@ -283,6 +283,7 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
         });
         const decision = await resolveRegisteredExecApprovalDecision({
           approvalId: registration.id,
+          expiresAtMs: registration.expiresAtMs,
           preResolvedDecision: registration.finalDecision,
         });
         if (decision !== "allow-once") {

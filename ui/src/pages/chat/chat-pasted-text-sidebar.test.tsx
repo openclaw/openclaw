@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { createSignal, flush } from "solid-js";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -13,7 +14,7 @@ import {
   createAttachmentSidebarHarness,
   renderAttachmentHarness,
 } from "./chat-attachment-picker.test-support.ts";
-import { resetChatViewState } from "./chat-view-state.ts";
+import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import { createPasteEvent, renderChatView } from "./chat-view.test-helpers.ts";
 import type { ChatAttachmentControlsProps } from "./components/chat-attachment-controls.types.ts";
 import { ComposerPastedText } from "./components/chat-composer-pasted-text.tsx";
@@ -29,6 +30,32 @@ afterEach(() => {
   resetChatViewState();
   resetTranscriptTestDom();
   vi.restoreAllMocks();
+});
+
+it("retains the focused restore action when the same attachment is refreshed", () => {
+  const attachment: ChatAttachment = {
+    id: "focused-paste",
+    mimeType: "text/plain",
+    origin: "paste",
+    dataUrl: "data:text/plain;base64,cGFzdGU=",
+  };
+  const controls: ChatAttachmentControlsProps = {
+    attachments: [attachment],
+    onDraftChange: vi.fn(),
+  };
+  let updateControls!: (next: ChatAttachmentControlsProps) => void;
+  const view = mountSolid(() => {
+    const [current, setCurrent] = createSignal(controls);
+    updateControls = setCurrent;
+    return <ComposerPastedText attachment={current().attachments![0]!} controls={current()} />;
+  });
+  flush();
+  const restore = view.getByRole("button", { name: "Show in text field" });
+  restore.focus();
+  updateControls({ ...controls, attachments: [{ ...attachment }] });
+  flush();
+  expect(view.getByRole("button", { name: "Show in text field" })).toBe(restore);
+  expect(document.activeElement).toBe(restore);
 });
 
 it.each(["restore", "preview"] as const)(

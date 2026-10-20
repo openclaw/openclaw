@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type {
@@ -5,26 +6,49 @@ import type {
   SessionCatalogProvider,
   SessionCatalogTranscriptItem,
 } from "openclaw/plugin-sdk/session-catalog";
-import { sessionCatalogPaging } from "openclaw/plugin-sdk/session-catalog";
+import {
+  createSessionCatalogAdoptionCoordinator,
+  sessionCatalogPaging,
+} from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { adoptedSourceKey, CLAUDE_LOCAL_SESSION_HOST_ID } from "./session-catalog-adoption.js";
-import { continueClaudeSession } from "./session-catalog-continue.js";
+import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_DEFAULT_MODEL_REF } from "./cli-constants.js";
+import {
+  adoptedSessionKey,
+  adoptedSourceKey,
+  CLAUDE_LOCAL_SESSION_HOST_ID,
+} from "./session-catalog-adoption.js";
 import { isExactClaudeSessionCursor } from "./session-catalog-cursor.js";
 import { listClaudeSessions } from "./session-catalog-discovery.js";
+import { importClaudeHistory } from "./session-catalog-history.js";
 import { resolveClaudeCatalogHomeDir } from "./session-catalog-home.js";
 import {
   assertClaudeLocalAccess,
+  readBoundedClaudeHistory,
   listClaudeSessionCatalog,
   readClaudeSessionTranscript,
   resolveNodeClaudeRecord,
 } from "./session-catalog-listing.js";
 import { MAX_TRANSCRIPT_LIMIT, readTranscriptParams } from "./session-catalog-parsing.js";
-import { type BoundClaudeSession, listBoundClaudeSessions } from "./session-catalog-runtime.js";
+import {
+  type BoundClaudeSession,
+  listBoundClaudeSessions,
+  currentClaudeSessionCatalogConfig,
+  resolveClaudeCliRoutedModelId,
+} from "./session-catalog-runtime.js";
 import { configuredClaudeConfigDir, gatewayClaudeScanOptions } from "./session-catalog-scan.js";
-import { ClaudeCatalogParamsError } from "./session-catalog-shared.js";
+import {
+  CLAUDE_CLI_NODE_RUN_COMMAND,
+  CLAUDE_SESSION_READ_COMMAND,
+  CLAUDE_SESSIONS_LIST_COMMAND,
+  ClaudeCatalogParamsError,
+  isResumableClaudeSource,
+} from "./session-catalog-shared.js";
 import * as catalogTerminal from "./session-catalog-terminal.js";
 import { collectTranscriptText, type ClaudeTranscriptItem } from "./session-catalog-transcript.js";
-import type { ClaudeSessionCatalogHost } from "./session-catalog-types.js";
+import type {
+  ClaudeSessionCatalogHost,
+  ClaudeSessionCatalogSession,
+} from "./session-catalog-types.js";
 import * as upstream from "./session-upstream-activity.js";
 
 export * from "./session-catalog-shared.js";
@@ -45,6 +69,9 @@ const CLAUDE_BLOCK_TYPES = new Map<unknown, SessionCatalogTranscriptItem["type"]
   ["tool_use", "toolCall"],
   ["tool_result", "toolResult"],
 ]);
+
+const continueClaudeAdoption =
+  createSessionCatalogAdoptionCoordinator<Awaited<ReturnType<typeof upstream.linkContinued>>>();
 
 function toGenericClaudeItems(item: ClaudeTranscriptItem): SessionCatalogTranscriptItem[] {
   const common = {
@@ -126,23 +153,12 @@ function toGenericClaudeHost(
       // the run command: continue only returns the existing session key, and
       // the turn itself still fails closed at invoke time.
       const continuable = terminal.localResumable || nodeCli || Boolean(existingSessionKey);
+      const { name, recencyAt, ...metadata } = session;
       return [
         {
-          threadId: session.threadId,
-          ...(session.name ? { name: session.name } : {}),
-          ...(session.color ? { color: session.color } : {}),
-          ...(session.cwd ? { cwd: session.cwd } : {}),
-          status: session.status,
-          ...(session.createdAt !== undefined ? { createdAt: session.createdAt } : {}),
-          ...(session.updatedAt !== undefined ? { updatedAt: session.updatedAt } : {}),
-          ...(session.recencyAt != null ? { recencyAt: session.recencyAt } : {}),
-          source: session.source,
-          modelProvider: session.modelProvider,
-          ...(session.cliVersion ? { cliVersion: session.cliVersion } : {}),
-          ...(session.gitBranch ? { gitBranch: session.gitBranch } : {}),
-          ...(session.customGroup ? { customGroup: session.customGroup } : {}),
-          ...(session.pullRequest ? { pullRequest: session.pullRequest } : {}),
-          archived: session.archived,
+          ...metadata,
+          ...(name ? { name } : {}),
+          ...(recencyAt != null ? { recencyAt } : {}),
           ...(continuable && existingSessionKey ? { sessionKey: existingSessionKey } : {}),
           canContinue: continuable,
           canArchive: false,
@@ -255,13 +271,145 @@ export function createClaudeSessionCatalogRuntime(
         config: api.config,
         agentId: request.agentId,
       }).sessionAgentId;
-      return await continueClaudeSession(
-        api,
-        agentId,
-        request.hostId,
-        request.threadId,
-        request.allowProcessHomeFallback,
-      );
+      const { hostId, threadId, allowProcessHomeFallback } = request;
+      const scanOptions = {
+        ...gatewayClaudeScanOptions(allowProcessHomeFallback),
+        sessionId: threadId,
+      };
+      const sourceKey = adoptedSourceKey(hostId, threadId);
+      const operationKey = `${agentId}\0${sourceKey}`;
+      const linkSession = async (sessionKey: string, history?: ClaudeTranscriptItem[]) =>
+        await upstream.linkContinued({
+          sessionKey,
+          hostId,
+          threadId,
+          ...(history ? { history } : {}),
+          listLocalSessions: async () =>
+            (await listClaudeSessions(resolveClaudeCatalogHomeDir(), scanOptions)).records,
+          readRemote: async () =>
+            (
+              await readClaudeSessionTranscript({
+                runtime: api.runtime,
+                hostId,
+                threadId,
+                limit: 1,
+                allowProcessHomeFallback,
+              })
+            ).items,
+        });
+      const existing = listBoundClaudeSessions(api, agentId).get(sourceKey)?.sessionKey;
+      if (existing) {
+        return await linkSession(existing);
+      }
+      let history: ClaudeTranscriptItem[] | undefined;
+      return await continueClaudeAdoption({
+        sourceKey: operationKey,
+        findExisting: () => listBoundClaudeSessions(api, agentId).get(sourceKey)?.sessionKey,
+        create: async () => {
+          let nodeId: string | undefined;
+          let record: ClaudeSessionCatalogSession;
+          if (hostId === CLAUDE_LOCAL_SESSION_HOST_ID) {
+            const localRecord = (
+              await listClaudeSessions(resolveClaudeCatalogHomeDir(), scanOptions)
+            ).records.find((candidate) => candidate.threadId === threadId);
+            if (!localRecord || !isResumableClaudeSource(localRecord.source)) {
+              throw new ClaudeCatalogParamsError(
+                "only local Claude Code sessions can be continued",
+              );
+            }
+            const source = await fs.stat(localRecord.filePath).catch(() => undefined);
+            if (!source?.isFile()) {
+              throw new ClaudeCatalogParamsError("Claude session transcript is unavailable");
+            }
+            record = localRecord;
+          } else if (hostId.startsWith("node:")) {
+            nodeId = hostId.slice("node:".length);
+            const node = (await api.runtime.nodes.list()).nodes.find(
+              (candidate) =>
+                candidate.nodeId === nodeId &&
+                candidate.connected === true &&
+                candidate.commands?.includes(CLAUDE_SESSIONS_LIST_COMMAND) &&
+                candidate.commands.includes(CLAUDE_SESSION_READ_COMMAND) &&
+                candidate.commands.includes(CLAUDE_CLI_NODE_RUN_COMMAND) &&
+                candidate.invocableCommands?.includes(CLAUDE_SESSIONS_LIST_COMMAND) === true &&
+                candidate.invocableCommands.includes(CLAUDE_SESSION_READ_COMMAND) &&
+                candidate.invocableCommands.includes(CLAUDE_CLI_NODE_RUN_COMMAND),
+            );
+            if (!node) {
+              throw new ClaudeCatalogParamsError(
+                "paired node does not permit Claude CLI session continuation",
+              );
+            }
+            // Node rows stay CLI-only: desktop transcripts on nodes have no
+            // node-side run command and remain view-only.
+            const nodeRecord = await resolveNodeClaudeRecord({
+              runtime: api.runtime,
+              nodeId,
+              threadId,
+            });
+            if (!nodeRecord || nodeRecord.source !== "claude-cli") {
+              throw new ClaudeCatalogParamsError("only Claude CLI sessions can be continued");
+            }
+            record = nodeRecord;
+          } else {
+            throw new ClaudeCatalogParamsError("hostId is invalid");
+          }
+          // Narrowed local: afterCreate below needs a definite array, while the outer
+          // `history` stays optional so complete() can link without a reread on races.
+          const loadedHistory = await readBoundedClaudeHistory({
+            runtime: api.runtime,
+            hostId,
+            threadId,
+            allowProcessHomeFallback,
+          });
+          history = loadedHistory;
+          const config = currentClaudeSessionCatalogConfig(api);
+          // Adopt onto the model this agent actually routes to the CLI backend; the
+          // packaged default may not be routed or allowed in an existing config.
+          const model =
+            resolveClaudeCliRoutedModelId(config, agentId) ??
+            CLAUDE_CLI_DEFAULT_MODEL_REF.slice(`${CLAUDE_CLI_BACKEND_ID}/`.length);
+          const marker = {
+            sourceThreadId: threadId,
+            ...(hostId !== CLAUDE_LOCAL_SESSION_HOST_ID ? { sourceHostId: hostId } : {}),
+          };
+          const created = await api.runtime.agent.session.createSessionEntry({
+            cfg: config,
+            key: adoptedSessionKey(hostId, threadId),
+            agentId,
+            recoverMatchingInitialEntry: true,
+            ...(record.name ? { displayName: record.name } : {}),
+            ...(record.cwd ? { spawnedCwd: record.cwd } : {}),
+            ...(nodeId ? { execNode: nodeId, ...(record.cwd ? { execCwd: record.cwd } : {}) } : {}),
+            initialEntry: {
+              ...(record.color ? { color: record.color } : {}),
+              cliBackendId: CLAUDE_CLI_BACKEND_ID,
+              model,
+              modelSelectionLocked: true,
+              pluginOwnerId: api.id,
+              cliSessionBinding: { sessionId: threadId, forceReuse: true, forkNextResume: true },
+              pluginExtensions: { anthropic: { sessionCatalog: marker } },
+            },
+            afterCreate: async (entry) => {
+              await importClaudeHistory({
+                items: loadedHistory,
+                threadId,
+                sessionId: entry.sessionId,
+                sessionKey: entry.key,
+                agentId: entry.agentId,
+                storePath: api.runtime.agent.session.resolveStorePath(config.session?.store, {
+                  agentId: entry.agentId,
+                }),
+                ...(record.cwd ? { cwd: record.cwd } : {}),
+                config,
+              });
+              return { pluginExtensions: { anthropic: { sessionCatalog: marker } } };
+            },
+          });
+          return { sessionKey: created.key };
+        },
+        complete: async (continued) => await linkSession(continued.sessionKey, history),
+      });
     },
     startTerminalSession: async (request) => {
       // Node launches run in the paired node's environment, not gateway HOME;
@@ -281,11 +429,13 @@ export function createClaudeSessionCatalogRuntime(
       return await catalogTerminal.openClaudeCatalogTerminal({
         api,
         ...request,
-        listClaudeSessions: () =>
-          listClaudeSessions(
-            resolveClaudeCatalogHomeDir(),
-            gatewayClaudeScanOptions(request.allowProcessHomeFallback),
-          ),
+        listClaudeSessions: async () =>
+          (
+            await listClaudeSessions(resolveClaudeCatalogHomeDir(), {
+              ...gatewayClaudeScanOptions(request.allowProcessHomeFallback),
+              sessionId: request.threadId,
+            })
+          ).records,
         resolveNodeClaudeRecord,
       });
     },

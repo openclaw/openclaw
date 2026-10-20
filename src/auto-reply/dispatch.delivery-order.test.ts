@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resetGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { setReplyPayloadMetadata } from "./reply-payload.js";
 import { expectedNoQueuedReplyResult } from "./reply/dispatch-result-expectations.test-support.js";
 import { buildTestCtx } from "./reply/test-ctx.js";
 import type { FinalizedMsgContext, MsgContext } from "./templating.js";
@@ -338,42 +339,79 @@ describe("foreground reply delivery order", () => {
     expect(deliveries).toEqual(finals("second chat final", "first chat final"));
   });
 
-  it("delivers same-session /status while an earlier foreground turn still holds the fence", async () => {
-    const deliveries: Delivery[] = [];
-    const older = pause();
-
-    mockReplies({
-      "old-message": finalReply("old final", older.wait),
-      "status-message": finalReply("🧠 Model: mock | ⚙️ Status: ok"),
-    });
-
-    const olderDispatch = dispatch("old-message", deliveries);
-    await older.started;
-
-    const statusDispatch = dispatch(
-      buildForegroundCtx("status-message", {
-        CommandAuthorized: true,
-        CommandSource: "text",
-        CommandTurn: {
-          kind: "text-slash",
-          source: "text",
-          authorized: true,
-          commandName: "status",
-          body: "/status",
+  it.each(["status command", "queue admission notice"] as const)(
+    "delivers %s immediately while later ordinary output retains the active turn's fence",
+    async (noticeKind) => {
+      const deliveries: Delivery[] = [];
+      const older = pause();
+      const newerStarted = createDeferred();
+      const beforeDeliver = vi.fn(async (payload: ReplyPayload) => payload);
+      const onSettled = vi.fn();
+      const onFreshSettledDelivery = vi.fn();
+      const notice = "Runtime notice";
+      const pending: Promise<unknown>[] = [];
+      mockReplies({
+        "old-message": finalReply("old final", older.wait),
+        "notice-message": async (params) => {
+          const payload = { text: notice, isStatusNotice: true };
+          params.dispatcher.sendFinalReply(
+            noticeKind === "queue admission notice"
+              ? setReplyPayloadMetadata(payload, { queueAdmissionNotice: true })
+              : payload,
+          );
+          return queuedFinalResult();
         },
-        Body: "/status",
-        RawBody: "/status",
-        CommandBody: "/status",
-        BodyForAgent: "/status",
-      }),
-      deliveries,
-    );
-
-    await expect(statusDispatch).resolves.toEqual(settledFinalResult());
-    expect(deliveries).toEqual(finals("🧠 Model: mock | ⚙️ Status: ok"));
-
-    older.release();
-    await expect(olderDispatch).resolves.toEqual(settledFinalResult());
-    expect(deliveries).toEqual(finals("🧠 Model: mock | ⚙️ Status: ok", "old final"));
-  });
+        "new-message": async (params) => {
+          newerStarted.resolve();
+          // A generic status flag is not an admission acknowledgment.
+          params.dispatcher.sendFinalReply({ text: "new status", isStatusNotice: true });
+          return queuedFinalResult();
+        },
+      });
+      try {
+        const olderDispatch = dispatch("old-message", deliveries);
+        pending.push(olderDispatch);
+        await older.started;
+        const noticeDispatch = dispatch(
+          buildForegroundCtx(
+            "notice-message",
+            noticeKind === "status command"
+              ? {
+                  CommandAuthorized: true,
+                  CommandSource: "text",
+                  CommandTurn: {
+                    kind: "text-slash",
+                    source: "text",
+                    authorized: true,
+                    commandName: "status",
+                    body: "/status",
+                  },
+                  Body: "/status",
+                  RawBody: "/status",
+                  CommandBody: "/status",
+                  BodyForAgent: "/status",
+                }
+              : {},
+          ),
+          deliveries,
+          { beforeDeliver, onSettled, onFreshSettledDelivery },
+        );
+        pending.push(noticeDispatch);
+        await expect(noticeDispatch).resolves.toEqual(settledFinalResult());
+        expect(beforeDeliver).toHaveBeenCalledOnce();
+        expect(onSettled).toHaveBeenCalledOnce();
+        expect(onFreshSettledDelivery).toHaveBeenCalledOnce();
+        const newerDispatch = dispatch("new-message", deliveries);
+        pending.push(newerDispatch);
+        await newerStarted.promise;
+        expect(deliveries).toEqual(finals(notice));
+        older.release();
+        await Promise.all([olderDispatch, newerDispatch]);
+        expect(deliveries).toEqual(finals(notice, "old final", "new status"));
+      } finally {
+        older.release();
+        await Promise.allSettled(pending);
+      }
+    },
+  );
 });

@@ -13,11 +13,14 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
+import { GatewayProtocolRequestError } from "../../packages/gateway-client/src/protocol-request.js";
 import type { callGateway } from "../gateway/call.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { hasRetryableConnectionErrorCode } from "../infra/retryable-network-errors.js";
-import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
+import {
+  getGatewayRestartDrainSignal,
+  isGatewayRestartDraining,
+} from "../process/gateway-work-admission.js";
 import { normalizeBlockedLivenessWaitStatus } from "../shared/agent-liveness.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import {
@@ -51,12 +54,6 @@ function resolveRunWaitDeadlineAtMs(params: { deadlineAtMs?: number; timeoutMs?:
     resolveDateTimestampMs(Date.now())
   );
 }
-
-type AgentRunsDrainResult = {
-  timedOut: boolean;
-  pendingRunIds: string[];
-  deadlineAtMs: number;
-};
 
 type RawAgentWaitResponse = {
   status?: string;
@@ -118,10 +115,12 @@ const RECOVERABLE_AGENT_WAIT_ERROR_PATTERNS: readonly RegExp[] = [
 
 function normalizeAgentWaitError(cause: unknown): AgentWaitResult {
   const error = formatErrorMessage(cause);
+  // A rejected observation during drain carries no terminal fact about the run.
   const unavailable =
-    cause instanceof GatewayClientRequestError &&
-    cause.gatewayCode === "UNAVAILABLE" &&
-    cause.retryable;
+    isGatewayRestartDraining() ||
+    (cause instanceof GatewayProtocolRequestError &&
+      cause.gatewayCode === "UNAVAILABLE" &&
+      cause.retryable);
   const timedOut =
     !unavailable &&
     (error.includes("gateway timeout") || error.includes("gateway request timeout"));
@@ -164,6 +163,8 @@ function readOpenClawMessageMeta(message: unknown): Record<string, unknown> | un
 export async function readLatestAssistantReply(params: {
   sessionKey: string;
   agentId?: string;
+  /** Only rows written by this run qualify. */
+  runId?: string;
   limit?: number;
   callGateway?: GatewayCaller;
 }): Promise<string | undefined> {
@@ -179,11 +180,14 @@ export async function readLatestAssistantReply(params: {
     if (isAssistantReplyTranscriptArtifact(message)) {
       continue;
     }
+    const meta = readOpenClawMessageMeta(message);
+    if (params.runId !== undefined && meta?.runId !== params.runId) {
+      continue;
+    }
     const text = extractStoredAssistantText(message);
     if (!text?.trim()) {
       continue;
     }
-    const meta = readOpenClawMessageMeta(message);
     if (meta?.truncated !== true) {
       return text;
     }
@@ -285,7 +289,7 @@ export async function waitForAgentRunsToDrain(params: {
   timeoutMs?: number;
   deadlineAtMs?: number;
   callGateway?: GatewayCaller;
-}): Promise<AgentRunsDrainResult> {
+}): Promise<void> {
   const deadlineAtMs = resolveRunWaitDeadlineAtMs(params);
   const callGateway = params.callGateway ?? bindAgentToolGatewayRequest({ hostedOnly: true });
 
@@ -320,10 +324,4 @@ export async function waitForAgentRunsToDrain(params: {
       pendingRunIds = normalizePendingRunIds(await params.getPendingRunIds());
     }
   }
-
-  return {
-    timedOut: pendingRunIds.size > 0,
-    pendingRunIds: [...pendingRunIds],
-    deadlineAtMs,
-  };
 }

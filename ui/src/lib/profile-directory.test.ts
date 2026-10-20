@@ -18,6 +18,76 @@ const photo = {
   githubIdentity: null,
 };
 
+it.each(["account", "recovery scope"])(
+  "retires profiles when the same client's %s changes",
+  async (change) => {
+    const pending = createDeferred<UsersListResult>();
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ profiles: [photo] })
+      .mockReturnValue(pending.promise);
+    const source = createApplicationGateway();
+    const hello = gatewayHelloForMethods(["users.list"], ["operator.read"]);
+    hello.auth!.recoveryScope = "alice-scope";
+    source.publish({
+      ...source.gateway.snapshot,
+      client: createTestGatewayClient(request),
+      phase: "connected",
+      hello,
+      selfUser: { id: "alice", name: "Alice" },
+    });
+    const directory = profileDirectory(source.gateway);
+    const stop = directory.subscribe(() => {});
+    await directory.load();
+    const old = directory.load(true);
+    source.publish({
+      ...source.gateway.snapshot,
+      ...(change === "account"
+        ? { selfUser: { id: "bob", name: "Bob" } }
+        : {
+            selfUser: undefined,
+            hello: { ...hello, auth: { ...hello.auth!, recoveryScope: "bob-scope" } },
+          }),
+    });
+    expect(directory.get("photo")).toBeUndefined();
+    pending.resolve({ profiles: [] });
+    await old;
+    await directory.load();
+    expect(directory.get("photo")).toBeUndefined();
+    stop();
+  },
+);
+
+it("retains profiles during a blip and clears them on fresh access loss", async () => {
+  const refreshed = createDeferred<UsersListResult>();
+  const request = vi
+    .fn()
+    .mockResolvedValueOnce({ profiles: [photo] })
+    .mockReturnValue(refreshed.promise);
+  const fixture = createApplicationGateway();
+  const { gateway } = fixture;
+  const hello = gatewayHelloForMethods(["users.list"], ["operator.read"]);
+  fixture.publish({
+    ...gateway.snapshot,
+    phase: "connected",
+    hello,
+    client: createTestGatewayClient(request),
+  });
+  const directory = profileDirectory(gateway);
+  const stop = directory.subscribe(() => {});
+  await directory.load();
+  fixture.publish({ ...gateway.snapshot, phase: "reconnecting", hello: null });
+  expect(directory.get("photo")).toEqual(photo);
+  fixture.publish({ ...gateway.snapshot, phase: "connected", hello });
+  expect(directory.get("photo")).toEqual(photo);
+  fixture.publish({ ...gateway.snapshot, hello: gatewayHelloForMethods(["users.list"], []) });
+  expect(directory.get("photo")).toBeUndefined();
+  refreshed.resolve({ profiles: [photo] });
+  await directory.load();
+  expect(directory.get("photo")).toBeUndefined();
+  stop();
+});
+
 it("shares directory reads, resolves merged identities, and advertises uploaded and email-backed photos", async () => {
   const reply = createDeferred<UsersListResult>();
   const request = vi.fn(() => reply.promise);

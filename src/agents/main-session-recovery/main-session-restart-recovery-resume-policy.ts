@@ -9,6 +9,7 @@ import {
   type InputProvenance,
 } from "../../sessions/input-provenance.js";
 import { readTerminalSourceReplyDeliveryMirror } from "../../shared/chat-message-content.js";
+import { readCodeModeCheckpointFact } from "../code-mode-checkpoint.js";
 import { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME } from "../code-mode-control-tools.js";
 import {
   getTranscriptMessageRole as getMessageRole,
@@ -23,8 +24,13 @@ import { isAgentToolReplaySafe } from "../tool-replay-safety.js";
 
 export function requiresDelegatedRecoverySource(
   entry: SessionEntry,
-  source: InputProvenance["kind"] | "completion" | "harness_completion" | undefined,
+  source: InputProvenance["kind"] | "completion" | "cron" | "harness_completion" | undefined,
 ): boolean {
+  // Cron owns retry admission through a fresh occurrence and current job policy.
+  // An earlier operator turn cannot authorize a generic recovery dispatch.
+  if (source === "cron") {
+    return true;
+  }
   // Steering is context, not a new admission. A non-browser operator can have
   // internal ingress too; its durable source goes through the Gateway's exact
   // claim and current-policy restoration before any recovery turn executes.
@@ -196,6 +202,12 @@ function readCodeModeCheckpoint(
   if (toolName !== CODE_MODE_EXEC_TOOL_NAME && toolName !== CODE_MODE_WAIT_TOOL_NAME) {
     return undefined;
   }
+  const metadata = asOptionalObjectRecord(Reflect.get(record, "__openclaw"));
+  if (metadata && Object.hasOwn(metadata, "codeModeCheckpoint")) {
+    return readCodeModeCheckpointFact(metadata.codeModeCheckpoint);
+  }
+  // v2026.10.4 stored only display text. Preserve its upgrade-window recovery,
+  // never a fallback for current results (including explicit unowned null facts).
   const content = record.content;
   if (!Array.isArray(content)) {
     return undefined;

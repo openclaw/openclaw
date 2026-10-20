@@ -198,7 +198,10 @@ export function extractCanvasFromText(outputText: string | undefined): CanvasPre
 }
 
 /** Extracts [embed ...] shortcodes outside Markdown code and returns stripped text. */
-export function extractCanvasShortcodes(text: string | undefined): {
+export function extractCanvasShortcodes(
+  text: string | undefined,
+  includePreview?: (preview: CanvasPreview) => boolean,
+): {
   text: string;
   previews: CanvasPreview[];
 } {
@@ -246,7 +249,7 @@ export function extractCanvasShortcodes(text: string | undefined): {
     }
     stripped += text.slice(cursor, match.start);
     const preview = previewFromShortcode(match.attrs);
-    if (!preview) {
+    if (!preview || (includePreview && !includePreview(preview))) {
       stripped += text.slice(match.start, match.end);
     } else {
       previews.push(preview);

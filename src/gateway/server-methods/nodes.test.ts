@@ -348,6 +348,48 @@ it("node.describe projects exact runner slots with derived launch eligibility", 
 });
 
 describe("nodeHandlers node.pair.approve", () => {
+  it("promotes a node that connects while its first surface approval is pending", async () => {
+    const { stateDir, nodeId } = await createNodeState("node-connect-during-approval");
+    const pairingState = expectDefined(await captureNodePairingState(nodeId), "paired node");
+    expect(pairingState.generation).toBeNull();
+    const pending = await nodePairing.requestNodePairing(
+      { nodeId, caps: ["system"], commands: ["system.run"] },
+      stateDir,
+    );
+    const registry = new NodeRegistry({
+      resolveCurrentPairingState: resolveCurrentPairedDeviceNodeBinding,
+      isPairingStateCurrent: isPairedDeviceNodeBindingCurrent,
+    });
+    const client = createWorkerSupervisorNodeClient("conn-during-approval");
+    Object.assign(client.connect, {
+      device: { id: nodeId },
+      commands: [],
+      declaredCaps: ["system"],
+      declaredCommands: ["system.run"],
+    });
+    const approve = nodePairing.approveNodePairing;
+    const approval = vi
+      .spyOn(nodePairing, "approveNodePairing")
+      .mockImplementation(async (...args) => {
+        registry.register(client, { pairingIdentity: pairingState.identity.key });
+        expect(registry.get(nodeId)?.commands).toEqual([]);
+        return await approve(...args);
+      });
+    const { opts } = createOptions({ requestId: pending.request.requestId }, undefined, registry);
+    try {
+      await invokeNode("node.pair.approve", opts);
+      expectApproved(opts, nodeId);
+      expect(registry.get(nodeId)?.commands).toEqual(["system.run"]);
+      expect(registry.get(nodeId)?.pairingGeneration).toBe(
+        (await captureNodePairingGeneration(nodeId))?.key,
+      );
+      await expect(registry.getCurrentConnected(nodeId)).resolves.toBeDefined();
+    } finally {
+      approval.mockRestore();
+      registry.unregister(client.connId);
+    }
+  });
+
   it("promotes the first surface only for the same authenticated pairing identity", async () => {
     const { stateDir, nodeId } = await createNodeState("node-pending-identity-stable");
     const pending = await requestSurface(stateDir, nodeId, "Galaxy A54 5G pending");

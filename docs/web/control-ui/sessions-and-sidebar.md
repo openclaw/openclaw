@@ -129,10 +129,15 @@ or connections without a durable profile stay browser-local rather than writing
 another person’s layout or shared Gateway configuration.
 
 New session previews the first prompt immediately while the Gateway accepts it.
-A temporary selected row appears in the sidebar immediately, at the top of the
-session list or under its agent in the agent roster, clearing the previous chat’s
-highlight without changing the saved session until creation is accepted.
+A temporary selected row appears at the top of the sidebar session list
+immediately, clearing the previous chat’s highlight without changing the saved
+session until creation is accepted. The agent roster (**Show all**) lists agents
+rather than sessions, so it shows no temporary row.
 The temporary row has no session actions; a failed creation restores the draft.
+Sessions created by another client or an agent appear through the sidebar's batched
+refresh, normally within five seconds. A busy Gateway can extend the refresh interval
+to fifteen seconds after the previous refresh finishes. Creating a conversation here
+still updates its list immediately when accepted.
 As soon as creation is accepted, the submitted prompt and attachments are cleared
 from the New session composer, without waiting for its chat preview to load. The
 submitted browser draft is retired before the confirmed conversation URL is
@@ -397,7 +402,7 @@ Follow-up turns in an existing subagent session keep the parent’s activity rin
 
 When a child run fails or publishes an attention request, the parent chat shows the child’s name and full diagnostic above the composer, even if the parent has no new reply. **Open session** opens that child’s details. Opening the parent does not acknowledge a child’s active attention request; its notice follows the child’s read state, explicit clearing, and expiry.
 
-Hover a session to see its project and branch. Repository details and the working directory stay in the hovercard and tooltip, leaving sidebar rows clear for session titles and activity indicators. Associated pull requests appear in the same hovercard, with titles, repository references, state, available diff totals, and CI status. Open and draft PRs appear before merged and closed history. The preview shows all PRs supplied by the Gateway, which returns up to three for the branch. Keyboard users can focus the session row and Tab into its PR links. A warning identifies retained GitHub data that could not be refreshed.
+Hover a session to see its project and branch. Repository details and the working directory stay in the hovercard and tooltip, leaving sidebar rows clear for session titles and activity indicators. Associated pull requests appear in the same hovercard, with titles, repository references, state, available diff totals, and CI status. Open and draft PRs appear before merged and closed history. The sidebar also counts pull requests published by the session and its accessible descendants, including delegated work on other branches. The hovercard combines those recorded publications with up to three PRs for the current branch, deduplicates links, and identifies each task branch. Recorded links remain available after a checkout changes or the Gateway restarts; unavailable GitHub metadata is labeled **Status unavailable**, never guessed from a publication receipt. The preview shows up to 20 recorded publications and indicates when more exist. Merely mentioning a PR in chat does not associate it with the task. Keyboard users can focus the session row and Tab into its PR links. A warning identifies retained GitHub data that could not be refreshed.
 
 Hover a session with an enabled automation to inspect its attached jobs without leaving the conversation. The clock row shows the automation name for one job or a count for multiple jobs. Hover or focus that row to open a read-only flyout; clicking keeps it open. The flyout lists attached jobs, including paused jobs, and shows the selected job’s schedule, next run, current state, last outcome, and instructions. Expand **Full instructions** to read long prompts, commands, or scripts. Loading, empty, and unavailable states are explicit; a failed read offers **Retry**. **Open automation** opens the selected job in the existing editor, with the usual permissions for settings, history, and changes. Escape dismisses the flyout before the session hovercard. Cmd/Ctrl-click retains normal new-tab navigation. **Show all automations** on the Automations page clears the session filter.
 

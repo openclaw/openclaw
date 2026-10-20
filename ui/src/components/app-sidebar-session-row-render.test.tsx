@@ -68,12 +68,12 @@ function createHost(mode: "chip" | "roster" = "roster", snapshot?: Partial<Sideb
   const container = document.createElement("div");
   const props = document.createElement("openclaw-app-sidebar") as AppSidebarElement;
   props.sidebarAgentsMode = mode;
-  const host = new AppSidebarOwner(
-    { dashboards: null, loadMoreDashboards() {} },
-    props,
-    context,
-    props,
-  );
+  const host = new AppSidebarOwner({ dashboards: null, loadMoreDashboards() {} }, context, props);
+  // The full sidebar mounts this owner; row-only fixtures keep the supplied catalog summary.
+  host.sessionPullRequests = {
+    summary: (_sessionKey, _worktreeId, initial) => initial,
+    count: () => undefined,
+  };
   host.sessionOwnershipVisibility = { filters: true, avatars: true };
   document.body.append(container);
   if (snapshot) {
@@ -202,7 +202,7 @@ it("keeps cached agent rows while the live roster settles", async () => {
         return { ts: 1, path: "", count: 0, defaults: {}, sessions: [] };
       }
       if (method === "sessions.groups.list") {
-        return { names: [], sectionOrder: [] };
+        return { groups: [], sectionOrder: [] };
       }
       if (method === "sessions.subscribe") {
         return { subscribed: true };
@@ -321,7 +321,7 @@ it.each([false, null, undefined])(
 
 it.each(["owner", "icon"] as const)(
   "retains %s artwork and actions when live rows republish unchanged presentation",
-  async (kind) => {
+  (kind) => {
     const { dom, session, current, setCurrent } = mountRow({
       label: "Research",
       color: "blue",
@@ -330,7 +330,7 @@ it.each(["owner", "icon"] as const)(
       owner: { actor: { type: "human", id: "ada", label: "Ada" } },
     });
     const chip = dom.query("openclaw-session-owner-chip");
-    await chip?.updateComplete;
+    flush();
     const content = dom.query(".session-glyph__content")!;
     const artwork = content.firstElementChild;
     const graphic = content.querySelector("svg");
@@ -362,7 +362,6 @@ it.each(["owner", "icon"] as const)(
       owner: { actor: { type: "human", id: "ada", label: "Ada renamed" } },
     });
     flush();
-    await chip?.updateComplete;
     expect(archive.getAttribute("aria-label")).toBe("Restore session: Research");
     expect(archive.querySelector("svg")).toBe(archiveIcon);
     expect(content.firstElementChild).toBe(artwork);

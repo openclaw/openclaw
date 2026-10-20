@@ -123,6 +123,7 @@ import { resolveVitestCliEntry } from "./lib/vitest-build-prerequisites.mts";
 import { resolveVitestCacheRoot, resolveVitestCacheSlotPath } from "./lib/vitest-cache-slots.mts";
 import {
   collectVitestFileFilters,
+  replaceVitestFileFilters,
   resolveBooleanModeFlag,
   vitestOptionConsumesNextArg,
 } from "./lib/vitest-cli-mode.mts";
@@ -797,6 +798,10 @@ const SOURCE_TEST_TARGETS = new Map([
       "src/agents/live-target-matcher.test.ts",
       "src/agents/model-compat.test.ts",
     ],
+  ],
+  [
+    "src/plugin-sdk/lazy-value.ts",
+    ["src/plugin-sdk/core.test.ts", "src/plugin-sdk/channel-entry-contract.test.ts"],
   ],
   ["src/plugin-sdk/memory-host-events.ts", ["src/plugin-sdk/memory-host-events.test.ts"]],
   ["src/plugin-sdk/persistent-dedupe.ts", ["src/plugin-sdk/memory-host-events.test.ts"]],
@@ -6034,7 +6039,7 @@ export function createVitestRunSpecs(
   )
     ? loadIncludePatternsForSpecFilter(baseEnv)
     : null;
-  return plans.flatMap((originalPlan, index) => {
+  const scopedPlans = plans.flatMap((originalPlan) => {
     const plan =
       originalPlan.includePatterns && inheritedIncludes
         ? {
@@ -6046,9 +6051,28 @@ export function createVitestRunSpecs(
             ),
           }
         : originalPlan;
-    if (inheritedIncludes && plan.includePatterns?.length === 0) {
-      return [];
+    return inheritedIncludes && plan.includePatterns?.length === 0 ? [] : [plan];
+  });
+  const boundedPlans = scopedPlans.flatMap((plan) => {
+    if (plan.watchMode || plan.config !== GATEWAY_SERVER_VITEST_CONFIG) {
+      return [plan];
     }
+    const chunks = createGatewayServerTestTargetChunks(
+      cwd,
+      plan.forwardedArgs,
+      baseEnv,
+      plan.includePatterns ?? undefined,
+    );
+    return chunks.length > 1
+      ? chunks.map((targets) =>
+          Object.assign({}, plan, {
+            forwardedArgs: replaceVitestFileFilters(plan.forwardedArgs, targets),
+            timingTargets: targets,
+          }),
+        )
+      : [plan];
+  });
+  return boundedPlans.map((plan, index) => {
     const includeFilePath = plan.includePatterns
       ? path.join(os.tmpdir(), `openclaw-vitest-include-${randomUUID()}-${index}.json`)
       : null;

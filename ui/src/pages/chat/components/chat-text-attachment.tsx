@@ -1,5 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createEffect, createMemo, createSignal, onCleanup, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, onSettled, Show } from "solid-js";
 import { createLazyCustomElementRequests } from "../../../app/lazy-custom-element.ts";
 import { MarkdownBlocks } from "../../../components/markdown-blocks-owner.ts";
 import { createMarkdownRef } from "../../../components/markdown-dom-ref.ts";
@@ -97,7 +97,12 @@ function TextAttachment(props: TextAttachmentProps, host: SolidBridgeElement<Tex
   host.style.display = "contents";
   const [text, setText] = createSignal<string | null>(null);
   const [failed, setFailed] = createSignal(false);
-  const [source, setSource] = createSignal(false);
+  // A different attachment starts in preview mode; renewed tickets keep the chosen view.
+  const identity = createMemo(() => props.sourceIdentity);
+  const [source, setSource] = createSignal(() => {
+    identity();
+    return false;
+  });
   const [version, setVersion] = createSignal(0);
   const [retry, setRetry] = createSignal(0);
   const htmlPreviewLoader = createLazyCustomElementRequests({
@@ -138,70 +143,64 @@ function TextAttachment(props: TextAttachmentProps, host: SolidBridgeElement<Tex
         before.retry === after.retry,
     },
   );
-  createEffect(sourceInput, (current, previous) => {
-    const policyChanged =
-      !previous ||
-      previous.plain !== current.plain ||
-      previous.mime !== current.mime ||
-      previous.label !== current.label;
-    const identityChanged = !previous || previous.identity !== current.identity;
-    const clear =
-      policyChanged ||
-      identityChanged ||
-      previous?.size !== current.size ||
-      previous?.retry !== current.retry ||
-      !current.src ||
-      !current.identity;
-    if (identityChanged) {
-      setSource(false);
-    }
-    if (clear) {
-      setText(null);
-    }
-    setFailed(false);
-    setVersion((value) => value + 1);
-    if (!current.src) {
-      return undefined;
-    }
-    const controller = new AbortController();
-    let active = true;
-    const isCurrent = () =>
-      active &&
-      host.isConnected &&
-      host.src === current.src &&
-      host.sourceIdentity === current.identity &&
-      host.sizeBytes === current.size &&
-      host.plainText === current.plain &&
-      host.mimeType === current.mime &&
-      host.label === current.label;
-    void readAttachmentText(
-      current.src,
-      current.size,
-      controller.signal,
-      current.html ? "html" : "full",
-    ).then(
-      (value) => {
-        if (isCurrent()) {
-          setText(value);
-        }
-      },
-      () => {
-        if (isCurrent()) {
-          setText(null);
-          setFailed(true);
-        }
-      },
-    );
-    return () => {
-      active = false;
-      controller.abort();
-    };
-  });
-  createEffect(
-    () => htmlDocument() && text() !== null && !failed(),
-    (active) => htmlPreviewLoader.requestWhileActive(htmlPreviewElement, active),
-  );
-  onCleanup(() => htmlPreviewLoader.requestWhileActive(htmlPreviewElement, false));
+  let previous: ReturnType<typeof sourceInput> | undefined;
+  const readSource = (current: ReturnType<typeof sourceInput>) => {
+    onSettled(() => {
+      const clear =
+        !previous ||
+        previous.plain !== current.plain ||
+        previous.mime !== current.mime ||
+        previous.label !== current.label ||
+        previous.identity !== current.identity ||
+        previous.size !== current.size ||
+        previous.retry !== current.retry ||
+        !current.src ||
+        !current.identity;
+      if (clear) {
+        setText(null);
+      }
+      previous = current;
+      setFailed(false);
+      setVersion((value) => value + 1);
+      if (!current.src) {
+        return undefined;
+      }
+      const controller = new AbortController();
+      let active = true;
+      const isCurrent = () =>
+        active &&
+        host.isConnected &&
+        host.src === current.src &&
+        host.sourceIdentity === current.identity &&
+        host.sizeBytes === current.size &&
+        host.plainText === current.plain &&
+        host.mimeType === current.mime &&
+        host.label === current.label;
+      void readAttachmentText(
+        current.src,
+        current.size,
+        controller.signal,
+        current.html ? "html" : "full",
+      ).then(
+        (value) => {
+          if (isCurrent()) {
+            setText(value);
+          }
+        },
+        () => {
+          if (isCurrent()) {
+            setText(null);
+            setFailed(true);
+          }
+        },
+      );
+      return () => {
+        active = false;
+        controller.abort();
+      };
+    });
+    return null;
+  };
   const htmlLoadState = () => {
     const state = previewState.read();
     return state?.status === "error" ? (
@@ -223,6 +222,18 @@ function TextAttachment(props: TextAttachmentProps, host: SolidBridgeElement<Tex
   );
   return (
     <>
+      <Show when={sourceInput()} keyed>
+        {readSource}
+      </Show>
+      <Show when={htmlDocument() && text() !== null && !failed()}>
+        {(_active) => {
+          onSettled(() => {
+            htmlPreviewLoader.requestWhileActive(htmlPreviewElement, true);
+            return () => htmlPreviewLoader.requestWhileActive(htmlPreviewElement, false);
+          });
+          return null;
+        }}
+      </Show>
       <div class="sidebar-file-toolbar">
         <span class="sidebar-file-toolbar__type" title={props.mimeType}>
           {props.mimeType || props.label.split(".").at(-1)}

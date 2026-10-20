@@ -9,6 +9,7 @@ import type {
 import type { WorkspaceManifestComputationOperations } from "../gateway/worker-environments/workspace-manifest-computation.js";
 import type { WorkspaceArtifactReadOperations } from "../gateway/worker-environments/workspace-result-inventory.js";
 import type { BufferedCommandOptions, BufferedCommandResult } from "../process/exec.js";
+import type { DiffReadTiming } from "./diff-read-timing.js";
 import type { GitCommandBytesResult, GitCommandOptions } from "./git-exec.js";
 import type { GitReadOperations } from "./git-read-operations.js";
 
@@ -73,4 +74,10 @@ export type GitWorkerFailure = {
   code?: string | number;
   origin?: number;
 };
-export type GitWorkerReply<T> = { ok: true; value: T } | { ok: false; error: GitWorkerFailure };
+export type GitWorkerReply<T> =
+  | {
+      ok: true;
+      value: T;
+      revisionUnavailableReason?: DiffReadTiming["revisionUnavailableReason"];
+    }
+  | { ok: false; error: GitWorkerFailure };

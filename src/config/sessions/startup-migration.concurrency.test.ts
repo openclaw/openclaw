@@ -169,8 +169,7 @@ function rejectIfSettled(startup: Promise<unknown>, message: string) {
 }
 
 type HeldRequest = { agentId: string; release: () => void };
-type HeldKind = "certification" | "release";
-type ObservedTask = { agentId: string; closed: boolean; exited: Deferred };
+type ObservedTask = { agentId: string; exited: Deferred };
 function releaseHeld(requests: HeldRequest[]) {
   while (requests.length > 0) {
     requests[0]!.release();
@@ -180,7 +179,6 @@ function releaseHeld(requests: HeldRequest[]) {
 function gateFirstCertificationPerTask() {
   const tasks: ObservedTask[] = [];
   const held: HeldRequest[] = [];
-  const heldReleases: HeldRequest[] = [];
   let bypass = false;
   let requestHeld = createDeferredCore();
   const hold = (requests: HeldRequest[], agentId: string, post: () => void) => {
@@ -199,15 +197,10 @@ function gateFirstCertificationPerTask() {
     requestHeld = createDeferredCore();
   };
   observer.onTask = ({ worker, port, agentId }) => {
-    const observed = { agentId, closed: false, exited: createDeferredCore() };
+    const observed = { agentId, exited: createDeferredCore() };
     tasks.push(observed);
     worker.once("exit", () => {
       observed.exited.resolve();
-    });
-    port.on("message", (message: { type: string; settled?: boolean }) => {
-      if (message.type === "closed") {
-        observed.closed = message.settled === true;
-      }
     });
     const postMessage = port.postMessage.bind(port);
     let gated = false;
@@ -216,10 +209,6 @@ function gateFirstCertificationPerTask() {
       const post = () => postMessage(message, options);
       if (typeof message !== "object" || message === null || !("type" in message)) {
         post();
-        return;
-      }
-      if (!bypass && message.type === "release") {
-        hold(heldReleases, agentId, post);
         return;
       }
       if (gated || message.type !== "canonical-validation") {
@@ -237,21 +226,21 @@ function gateFirstCertificationPerTask() {
   };
   return {
     held,
-    heldReleases,
     tasks,
-    waitFor: async (kind: HeldKind, count: number, startup: Promise<unknown>) => {
-      const requests = kind === "certification" ? held : heldReleases;
-      while (requests.length < count) {
+    waitFor: async (count: number, startup: Promise<unknown>) => {
+      while (held.length < count) {
         await Promise.race([
           requestHeld.promise,
-          rejectIfSettled(startup, `Startup settled before ${count} ${kind} requests were held`),
+          rejectIfSettled(
+            startup,
+            `Startup settled before ${count} certification requests were held`,
+          ),
         ]);
       }
     },
     releaseAll: () => {
       bypass = true;
       releaseHeld(held);
-      releaseHeld(heldReleases);
     },
   };
 }
@@ -274,8 +263,6 @@ it("reuses two workers while closing each database task before runtime handoff",
     const consumed: string[] = [];
     const handoffWaves = [createDeferredCore(), createDeferredCore()];
     const startup = start(undefined, async ({ agentId }) => {
-      const task = gate.tasks.find((entry) => entry.agentId === agentId);
-      expect(task?.closed).toBe(true);
       expect(state.leases(agentId)).toEqual([]);
       const proof = withOpenClawAgentDatabaseReadOnly(
         (database) => ({
@@ -303,7 +290,7 @@ it("reuses two workers while closing each database task before runtime handoff",
     try {
       let admitted = 0;
       for (const [waveIndex, waveSize] of [2, 2, 1].entries()) {
-        await gate.waitFor("certification", waveSize, startup);
+        await gate.waitFor(waveSize, startup);
         expect(gate.held).toHaveLength(waveSize);
         admitted += waveSize;
         expect(gate.tasks).toHaveLength(admitted);
@@ -318,12 +305,6 @@ it("reuses two workers while closing each database task before runtime handoff",
           expect(gate.held).toHaveLength(waveSize);
         }
         releaseHeld(gate.held);
-        await gate.waitFor("release", waveSize, startup);
-        expect(gate.heldReleases).toHaveLength(waveSize);
-        // Even a closed database cannot free the task until its parent releases the close owner.
-        expect(gate.tasks).toHaveLength(admitted);
-        expect(consumed).toHaveLength(admitted - waveSize);
-        releaseHeld(gate.heldReleases);
         const handoffWave = handoffWaves[waveIndex];
         if (handoffWave) {
           await Promise.race([handoffWave.promise, startup]);
@@ -358,12 +339,10 @@ it("drains sibling startup work and the worker pool before closing cold database
     const startup = start(startupAgents);
     void startup.catch(() => {});
     try {
-      await gate.waitFor("certification", 2, startup);
+      await gate.waitFor(2, startup);
       gate.held.find(({ agentId }) => agentId === startupAgents[0])!.release();
-      await gate.waitFor("release", 1, startup);
-      gate.heldReleases[0]!.release();
       // The third task starts only after the first completes; its sibling is still held.
-      await gate.waitFor("certification", 2, startup);
+      await gate.waitFor(2, startup);
       expect(gate.tasks).toHaveLength(3);
       expect(coldCloses).toEqual([]);
 
@@ -399,7 +378,7 @@ it("stops fleet admission on refusal and drains an already-started sibling befor
     const observation = observeOutcome(startup);
     const { outcome } = observation;
     try {
-      await gate.waitFor("certification", 2, outcome);
+      await gate.waitFor(2, outcome);
       expect(gate.held).toHaveLength(2);
       const first = gate.held.find(({ agentId }) => agentId === agentIds[0]);
       const failedWorker = gate.tasks.find(({ agentId }) => agentId === agentIds[0]);
@@ -468,14 +447,14 @@ it("retries failed native retirement while shared-state drainage already owns th
   withFleet(async (state) => {
     const { agentIds, start } = state;
     const releaseRetirement = createDeferredCore();
-    let retryEntered = false;
+    const retryEntered = createDeferredCore();
     let drainage: Promise<boolean> | undefined;
     let drainageOutcome: ReturnType<typeof observeOutcome> | undefined;
     const retirement = observeRetirement((mock, terminate) => {
       mock
         .mockRejectedValueOnce(new Error("synthetic overlapping retirement failed"))
         .mockImplementationOnce(async () => {
-          retryEntered = true;
+          retryEntered.resolve();
           await releaseRetirement.promise;
           return terminate();
         });
@@ -486,7 +465,10 @@ it("retries failed native retirement while shared-state drainage already owns th
     const observation = observeOutcome(start(agentIds.slice(0, 1)));
     const { outcome } = observation;
     try {
-      await vi.waitFor(() => expect(retryEntered).toBe(true));
+      await Promise.race([
+        retryEntered.promise,
+        rejectIfSettled(outcome, "Startup settled before native retirement retry began"),
+      ]);
       expect([observation.settled, drainageOutcome?.settled]).toEqual([false, false]);
       expect(retirement.worker?.threadId).toBeGreaterThan(0);
       expect(state.closeShared()).toBe(drainage);

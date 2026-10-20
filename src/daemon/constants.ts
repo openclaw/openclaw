@@ -1,4 +1,3 @@
-/** Cross-platform daemon service names, labels, and profile-aware descriptions. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 // Default service labels (canonical + legacy compatibility)

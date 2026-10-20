@@ -6,11 +6,6 @@ import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
-import type { ReplyBackendMessageInjectionV2 } from "../../auto-reply/reply/reply-run-registry.contracts.js";
-import {
-  beginReplyMessageInjectionTarget,
-  replyRunRegistry,
-} from "../../auto-reply/reply/reply-run-registry.js";
 import { createTestReplyOperation } from "../../auto-reply/reply/reply-run-registry.test-helpers.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
@@ -19,6 +14,9 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { SqliteTranscriptMutationConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
 import type { Model } from "../../llm/types.js";
+import type { ReplyBackendMessageInjectionV2 } from "../../sessions/session-controller.contracts.js";
+import { beginReplyMessageInjectionTarget } from "../../sessions/session-controller.js";
+import { captureCurrentReplyMessageInjectionTarget } from "../../sessions/session-controller.message-injection.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
@@ -449,9 +447,7 @@ it("keeps the active turn and all steers after an earlier steer receipt rewrites
         ),
       );
       expect(staged).toEqual(words.map(() => true));
-      const injectionTarget = replyRunRegistry.resolveCurrentMessageInjectionTarget(
-        target.sessionKey,
-      )!;
+      const injectionTarget = captureCurrentReplyMessageInjectionTarget(target.sessionKey)!;
       const queued = recorders.map(({ recorder, input }) =>
         beginReplyMessageInjectionTarget(injectionTarget, input.text, {
           steeringMode: "all",

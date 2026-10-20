@@ -1126,7 +1126,7 @@ describe("createTelegramBot", () => {
         { kind: "completed" },
       ]);
       expect(commitSpy).toHaveBeenCalledTimes(2);
-      queuedLifecycle?.onSettled?.();
+      await queuedLifecycle?.onSettled?.();
     } finally {
       commitSpy.mockRestore();
       setTimeoutSpy.mockRestore();
@@ -1161,7 +1161,7 @@ describe("createTelegramBot", () => {
           throw queuedAbortSignal.reason;
         }
         modelTurnRan = true;
-        queuedLifecycle?.onSettled?.();
+        await queuedLifecycle?.onSettled?.();
       };
       queuedTurnReady.resolve();
       return undefined;
@@ -2204,7 +2204,7 @@ describe("createTelegramBot", () => {
     });
     const queuedLifecycle = await queuedLifecycleReady.promise;
     expect(queuedLifecycle?.onAbandoned).toEqual(expect.any(Function));
-    queuedLifecycle?.onAbandoned?.();
+    await queuedLifecycle?.onAbandoned?.();
     const firstReplay = await firstReplayPromise;
     const firstDeferredWork = requireValue(firstReplay.deferredWork, "first deferred spooled work");
     await expect(firstDeferredWork.task).resolves.toMatchObject({ kind: "failed-retryable" });

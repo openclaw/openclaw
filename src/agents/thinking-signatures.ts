@@ -1,7 +1,7 @@
 import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { AgentMessage } from "./runtime/index.js";
+import { isThinkingLikeBlock } from "./thinking-block.js";
 
-type AssistantContentBlock = Extract<AgentMessage, { role: "assistant" }>["content"][number];
 type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
 
 export function isAssistantMessageWithContent(message: AgentMessage): message is AssistantMessage {
@@ -13,19 +13,10 @@ export function isAssistantMessageWithContent(message: AgentMessage): message is
   );
 }
 
-export function isThinkingBlock(block: AssistantContentBlock): boolean {
-  return (
-    Boolean(block) &&
-    typeof block === "object" &&
-    ((block as { type?: unknown }).type === "thinking" ||
-      (block as { type?: unknown }).type === "redacted_thinking")
-  );
-}
-
 function stripThinkingSignaturesFromMessage(message: AssistantMessage): AssistantMessage {
   let changed = false;
   const content = Array.from(message.content, (block) => {
-    if (!isThinkingBlock(block)) {
+    if (!isThinkingLikeBlock(block)) {
       return block;
     }
     const signatureFields = ["thinkingSignature", "signature", "thought_signature"];

@@ -1,17 +1,11 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
-import { isBrowserPanelAvailable, isDesktopPanelAvailable } from "../../app/panel-availability.ts";
-import {
-  bindBrowserRequestClient,
-  listBrowserTabs,
-} from "../../components/browser/browser-client.ts";
-import type { BrowserTabSelection } from "../../components/browser/browser-target.ts";
+import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
 import {
   desktopSourceForEnvironment,
   loadDesktopEnvironments,
 } from "../../components/desktop/desktop-source.ts";
-import { latestBrowserTabCards } from "../../lib/chat/browser-tab-preview.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import type {
@@ -29,7 +23,7 @@ import {
   type SidebarLayout,
 } from "./sidebar-layout.ts";
 
-type ResourceSlot = "desktop" | "browser";
+type ResourceSlot = "desktop";
 export type ActiveResourceOwner = {
   client: GatewayBrowserClient;
   sessions: Pick<SessionCapability, "describe">;
@@ -38,12 +32,10 @@ export type ActiveResourceOwner = {
   agentId?: string;
   connectionEpoch: number;
   desktopAvailable: boolean;
-  browserAvailable: boolean;
   placement: GatewaySessionRow["placement"];
   sessionId?: GatewaySessionRow["sessionId"];
   execNode?: GatewaySessionRow["execNode"];
   archived?: boolean;
-  browserTab?: BrowserTabSelection;
   layout: () => SidebarLayout;
   commit: (layout: SidebarLayout, resource: ResourceSlot) => void;
   isCurrent: () => boolean;
@@ -85,7 +77,7 @@ function hasResourceSlot(layout: SidebarLayout, slot: ResourceSlot): boolean {
 
 /** Read-only discovery belongs to the visible session, not to a global tool dock. */
 export class ChatPaneActiveResources {
-  private readonly listeners = new Set<() => void>();
+  private render?: () => void;
   private owner: ActiveResourceOwner | null = null;
   private descriptorRead:
     | {
@@ -142,14 +134,10 @@ export class ChatPaneActiveResources {
             agentId,
             connectionEpoch: state.connectionEpoch,
             desktopAvailable: isDesktopPanelAvailable(view.gateway),
-            browserAvailable: isBrowserPanelAvailable(view.gateway),
             placement: session?.placement,
             sessionId: session?.sessionId,
             execNode: session?.execNode,
             archived: session?.archived,
-            browserTab: [
-              ...latestBrowserTabCards(state.chatMessages, state.chatToolMessages).values(),
-            ].at(-1),
             layout: () => state.sidebarLayout,
             // Discovery is not a saved layout preference. Reload must validate again
             // before mounting a resource; explicit UI actions still persist normally.
@@ -177,8 +165,10 @@ export class ChatPaneActiveResources {
   }
 
   subscribe(listener: () => void): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
+    this.render = listener;
+    return () => {
+      this.render = undefined;
+    };
   }
 
   reconcileObservation(): void {
@@ -189,9 +179,7 @@ export class ChatPaneActiveResources {
     const layout = owner.layout();
     const desktopDiscovery =
       owner.desktopAvailable && (this.desktop !== undefined || !hasResourceSlot(layout, "desktop"));
-    const browserDiscovery =
-      !this.dismissed(layout) && owner.browserAvailable && owner.browserTab !== undefined;
-    if (!desktopDiscovery && !browserDiscovery) {
+    if (!desktopDiscovery) {
       return;
     }
     // Do not expose a resource while its assignment is being revalidated.
@@ -273,8 +261,6 @@ export class ChatPaneActiveResources {
       owner.connectionEpoch,
       identity,
       owner.desktopAvailable,
-      owner.browserAvailable,
-      owner.browserTab,
       owner.layout().resourceAutoOpenDismissed,
     ]);
     if (
@@ -314,13 +300,9 @@ export class ChatPaneActiveResources {
       owner.isCurrent() &&
       (!this.dismissed(owner.layout()) ||
         (this.desktop !== undefined && hasResourceSlot(owner.layout(), "desktop")));
-    // Independent probes: a broken browser route must not hide an available desktop.
     // Existing manual panels own their reads, including dormant retained tabs.
     if (owner.desktopAvailable && (this.desktop || !desktopAlreadyPresent)) {
       void this.discoverDesktop(owner, current);
-    }
-    if (!this.dismissed(owner.layout()) && owner.browserAvailable && owner.browserTab) {
-      void this.discoverBrowser(owner, owner.browserTab, current);
     }
   }
 
@@ -357,9 +339,7 @@ export class ChatPaneActiveResources {
       this.reveal(owner, "desktop");
     }
     if (changed) {
-      for (const listener of this.listeners) {
-        listener();
-      }
+      this.render?.();
     }
   }
 
@@ -444,40 +424,6 @@ export class ChatPaneActiveResources {
         this.publishDesktop(owner, null);
       }
       // Unavailable inventory is not evidence of a live resource. Manual opening remains available.
-    }
-  }
-
-  private async discoverBrowser(
-    owner: ActiveResourceOwner,
-    selection: BrowserTabSelection,
-    current: () => boolean,
-  ): Promise<void> {
-    try {
-      const session = await this.readSession(owner);
-      if (
-        !session ||
-        session.archived ||
-        !current() ||
-        resourceIdentityForSession(session) !== resourceIdentityForSession(owner)
-      ) {
-        return;
-      }
-      const snapshot = await listBrowserTabs(
-        bindBrowserRequestClient(owner.client, selection.tab, current),
-      );
-      if (
-        !current() ||
-        !snapshot?.running ||
-        !snapshot.tabs.some(
-          (tab) => tab.targetId === selection.tab.targetId && !tab.urlUnavailableReason,
-        )
-      ) {
-        return;
-      }
-      // No /start, /tabs/open, focus, or unscoped default-browser probe.
-      this.reveal(owner, "browser");
-    } catch {
-      // Historical result cards alone cannot prove the tab still exists.
     }
   }
 }

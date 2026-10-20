@@ -1,5 +1,6 @@
 .sidebar.sidebar--rail {
   flex-direction: row;
+  overflow: visible;
 }
 
 .sidebar--rail .sidebar-shell {
@@ -174,11 +175,6 @@
   min-width: 36px;
   height: 36px;
   padding: 0;
-}
-
-.sidebar-rail .sidebar-identity-card[data-connection-status] {
-  outline: 1px solid var(--warn);
-  outline-offset: -2px;
 }
 
 .sidebar-rail .sidebar-brand__icon {

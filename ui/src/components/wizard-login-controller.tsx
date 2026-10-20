@@ -1,5 +1,6 @@
 import { createMemo, createSignal, onCleanup } from "solid-js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { registerModelSetupEnglish } from "../i18n/locales/en-model-setup.ts";
 import { registerSettingsEnglish } from "../i18n/locales/en-settings.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
@@ -10,6 +11,8 @@ import {
 } from "../pages/model-setup/wizard-runner.ts";
 import { ModelSetupWizard, type WizardViewProps } from "../pages/model-setup/wizard-view-solid.tsx";
 import "../styles/model-setup.css";
+
+registerModelSetupEnglish();
 registerEnglishCatalog(registerSettingsEnglish);
 
 export function createWizardLogin(options: {

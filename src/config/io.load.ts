@@ -1,6 +1,6 @@
 import { isMainThread } from "node:worker_threads";
 import { loadDotEnvAsync } from "../infra/dotenv.js";
-import { hasErrnoCode } from "../infra/errno.js";
+import { ignoreMissingPath } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { withSynchronousArtifactPreservingStateSnapshot } from "../state/openclaw-state-db-readonly.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
@@ -70,20 +70,14 @@ function* loadConfigWithEffects(
       sync: () => maybeLoadDotEnvForConfig(deps.env),
       async: async () => {
         if (deps.env === process.env) {
-          await loadDotEnvAsync({ env: deps.env, quiet: true });
+          await loadDotEnvAsync({ env: deps.env });
         }
       },
     });
     envBeforeRead = snapshotEnv(deps.env);
     const raw = yield* resolveConfigIoEffect({
       sync: () => readConfigFileIfPresent(deps, configPath),
-      async: () =>
-        deps.fs.promises.readFile(configPath, "utf-8").catch((error: unknown) => {
-          if (hasErrnoCode(error, "ENOENT")) {
-            return undefined;
-          }
-          throw error;
-        }),
+      async: () => deps.fs.promises.readFile(configPath, "utf-8").catch(ignoreMissingPath),
     });
     if (raw === undefined) {
       loggedConfigWarningFingerprints.delete(configPath);

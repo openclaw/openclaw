@@ -33,7 +33,7 @@ import type {
   MockGatewayRequestSelector,
   MockGatewayWindow,
 } from "./control-ui-e2e-contract.ts";
-import { createMockGatewayControls } from "./control-ui-e2e-controls.ts";
+import { createMockGatewayControls, installMockGatewayScript } from "./control-ui-e2e-controls.ts";
 import {
   defaultControlUiFeatureMethods,
   createControlUiDefaultResponses,
@@ -44,9 +44,9 @@ import {
 } from "./control-ui-e2e-diagnostics.ts";
 import { resolveAvailableLoopbackPort } from "./control-ui-e2e-port.ts";
 import {
+  installControlUiRosterNavigationWait,
   controlUiE2eWaitTimeoutMs,
   extendControlUiE2eWaitTimeoutForSourceServer,
-  waitForControlUiInitialRoster,
 } from "./control-ui-e2e-readiness.ts";
 import { getSharedControlUiE2ePreview } from "./control-ui-e2e-shared-preview.ts";
 import { createControlUiMockDeferredRequests } from "./control-ui-mock-deferred-requests.ts";
@@ -597,6 +597,7 @@ export async function startControlUiE2eServer(
     { controlUiPluginDistributionsPlugin },
     {
       commonJsOptimizeDeps,
+      controlUiRuntimeDefines,
       resolveExternalPackageAliasesForVite,
       resolveSourcePackageAliasesForVite,
       resolveTsconfigPathAliasesForVite,
@@ -616,12 +617,10 @@ export async function startControlUiE2eServer(
     cacheDir: path.join(repoRoot, ".artifacts", "control-ui-e2e-vite"),
     clearScreen: false,
     configFile: false,
-    define: {
-      "globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO": JSON.stringify(resolvedBuildInfo),
-    },
+    define: controlUiRuntimeDefines("serve", resolvedBuildInfo),
     logLevel: "error",
     optimizeDeps: {
-      include: ["ipaddr.js", ...commonJsOptimizeDeps],
+      include: ["ipaddr.js", "@solidjs/testing-library", ...commonJsOptimizeDeps],
     },
     publicDir: path.join(uiRoot, "public"),
     plugins: [
@@ -799,12 +798,12 @@ async function runProductionControlUiBuild(
 export async function startBuiltControlUiE2eServer(
   outDir: string,
   bootstrapConfig?: Record<string, unknown>,
+  port?: number,
 ): Promise<ControlUiE2eProductionServer> {
   const [{ preview }, { default: controlUiViteConfig }] = await Promise.all([
     import("vite"),
     import("../../vite.config.ts"),
   ]);
-  const port = await resolveAvailableLoopbackPort();
   const sharedConfig = createBundledControlUiE2eConfig(controlUiViteConfig, outDir);
   const publication = createControlUiE2eBuildPublication(outDir);
   const server = await preview({
@@ -817,7 +816,7 @@ export async function startBuiltControlUiE2eServer(
     ],
     preview: {
       host: "127.0.0.1",
-      port,
+      port: port ?? (await resolveAvailableLoopbackPort()),
       strictPort: true,
     },
   });
@@ -1639,7 +1638,7 @@ function installControlUiMockGateway(
     if (socket && !socket.sessionMessageSubscriptions.allows(event, payload)) {
       return;
     }
-    socket?.deliver({ event, payload, seq: ++seq, type: "event" });
+    socket?.deliver(presence.eventFrame(socket.sessionMessageSubscriptions, event, payload, ++seq));
   }
 
   function stopRepeatingSessionEvents(): void {
@@ -2748,6 +2747,9 @@ export async function prepareControlUiMockGatewayScenario(
 export async function installMockGateway(
   page: Page,
   scenario: ControlUiMockGatewayScenario = {},
+  options: {
+    requestHandlers?: Record<string, (params: unknown) => unknown>;
+  } = {},
 ): Promise<MockGatewayControls> {
   const prepared = await prepareControlUiMockGatewayScenario(scenario);
   if (prepared.assets.size) {
@@ -2766,7 +2768,11 @@ export async function installMockGateway(
     }),
   );
   await installControlUiE2eUnhandledRejectionRing(page);
-  await page.addInitScript({ content: createControlUiMockGatewayInitScript(normalizedScenario) });
+  await installMockGatewayScript(
+    page,
+    createControlUiMockGatewayInitScript(normalizedScenario),
+    options.requestHandlers,
+  );
   const rosterGates = new Set([
     "connect",
     "agents.list",
@@ -2792,20 +2798,7 @@ export async function installMockGateway(
         ...normalizedScenario.deferredRequests.map((request) => request.method),
       ].some((method) => rosterGates.has(method)))
   ) {
-    // Startup renders the selected descriptor before releasing the automatic roster.
-    // Keep navigation's Response, but give ordinary scenarios the fully rendered roster.
-    const goto = page.goto.bind(page);
-    const reload = page.reload.bind(page);
-    page.goto = async (...args) => {
-      const response = await goto(...args);
-      await waitForControlUiInitialRoster(page);
-      return response;
-    };
-    page.reload = async (...args) => {
-      const response = await reload(...args);
-      await waitForControlUiInitialRoster(page);
-      return response;
-    };
+    installControlUiRosterNavigationWait(page);
   }
   return createMockGatewayControls(
     page,

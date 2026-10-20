@@ -1,10 +1,6 @@
 // Owns the published index state and the isolated lifetime of shadow reindex work.
 import type { DatabaseSync } from "node:sqlite";
-import {
-  createSubsystemLogger,
-  resolveStateDir,
-  resolveUserPath,
-} from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import {
   openSqliteWorkerStore,
@@ -35,6 +31,7 @@ import type {
   MemoryEmbeddingCacheMutation,
   MemoryPublicationOperations,
   MemoryPublicationResult,
+  MemoryPublicationSchema,
   MemoryPublicationState,
 } from "./manager-publication-task.js";
 import { MEMORY_INDEX_WRITE_SCOPE } from "./manager-publication-task.js";
@@ -56,6 +53,7 @@ import type { MemorySourceIndexReplacement } from "./manager-source-index-kernel
 import type { loadMemorySourceFileState } from "./manager-source-state.js";
 
 type PublicationScope = Pick<SqliteWorkerStore<MemoryPublicationOperations>, "execute">;
+type CachePruneInput = MemoryPublicationOperations["cache.prune"]["input"];
 const log = createSubsystemLogger("memory");
 type PublicationWorker = {
   store: Pick<
@@ -190,16 +188,6 @@ export class MemoryIndexDatabase {
     }
   }
 
-  static captureWriteOptions(agentId: string, databasePath: string, source?: MemoryIndexDatabase) {
-    const env = { ...(source?.writeOptions?.env ?? process.env) };
-    env.OPENCLAW_STATE_DIR = resolveStateDir(env);
-    return {
-      agentId,
-      path: source?.writeOptions?.path ?? resolveUserPath(databasePath),
-      env,
-    };
-  }
-
   readonly vector: {
     enabled: boolean;
     available: boolean | null;
@@ -225,6 +213,7 @@ export class MemoryIndexDatabase {
     hasVectorTable: false,
     vectorState: { state: "empty" },
   };
+  searchSchema: MemoryPublicationSchema = { fts: null, paths: null, vector: null };
   vectorDegradedWriteWarningShown = false;
   closed = false;
 
@@ -539,6 +528,7 @@ export class MemoryIndexDatabase {
     });
     if (result?.facts) {
       this.installFacts(result.facts, result.writeToken);
+      this.searchSchema = result.searchSchema ?? this.searchSchema;
     }
     return result?.value;
   }
@@ -592,14 +582,13 @@ export class MemoryIndexDatabase {
     return this.read({ type: "source.state", input: query }, assertCurrent);
   }
 
-  async pruneEmbeddingCache(maxEntries: number, assertCurrent: () => void): Promise<boolean> {
+  async pruneEmbeddingCache(input: CachePruneInput, assertCurrent: () => void): Promise<boolean> {
     assertCurrent();
     // Each failed BEGIN releases admission before retry; successful batches yield at the caller.
-    return (
-      (await this.retryPublication(() =>
-        this.executePublication({ type: "cache.prune", input: { maxEntries } }, assertCurrent),
-      )) ?? false
+    const pruned = await this.retryPublication(() =>
+      this.executePublication({ type: "cache.prune", input }, assertCurrent),
     );
+    return pruned ?? false;
   }
 
   async mutateEmbeddingCache(
@@ -706,7 +695,7 @@ export class MemoryIndexDatabase {
             ...input,
             state: {
               ...this.publicationState(),
-              extensionPath: input.sourceHasVectors ? input.extensionPath : undefined,
+              extensionPath: input.sourceSchema.vector ? input.extensionPath : undefined,
             },
           },
         },

@@ -27,6 +27,10 @@ import { readResponseTextPrefix } from "../infra/http-body.js";
 import { fetchWithRuntimeDispatcher } from "../infra/net/runtime-fetch.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { appendConfigPathSegment } from "../shared/dot-path.js";
+import {
+  OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID,
+  OPENAI_COMPATIBLE_MODEL_APIS,
+} from "./embedding-provider-config.js";
 import type {
   EmbeddingInput,
   EmbeddingProvider,
@@ -35,9 +39,6 @@ import type {
   EmbeddingProviderCreateOptions,
 } from "./embedding-provider-types.js";
 
-/** Provider id for OpenAI-compatible remote embedding servers. */
-const OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID = "openai-compatible";
-const OPENAI_COMPATIBLE_MODEL_APIS = new Set(["openai-completions", "openai-responses"]);
 const EMBEDDING_ERROR_BODY_MAX_BYTES = 8 * 1024;
 const EMBEDDING_ERROR_BODY_MAX_CHARS = 1_000;
 const EMBEDDING_ERROR_TRUNCATED_SUFFIX = "... [truncated]";

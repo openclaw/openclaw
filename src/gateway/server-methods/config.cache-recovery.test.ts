@@ -33,6 +33,7 @@ vi.mock("../../secrets/runtime.js", () => ({
 }));
 vi.mock("../../config/runtime-schema.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/runtime-schema.js")>()),
+  loadGatewayConfigRedactionHints: () => undefined,
   loadGatewayRuntimeConfigSchema: () => ({ schema: {}, uiHints: undefined }),
 }));
 

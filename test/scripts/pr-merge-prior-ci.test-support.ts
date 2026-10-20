@@ -29,6 +29,7 @@ export function createPriorCiFixtureState(head: string) {
     runHead: head,
     runConclusion: "success",
     latestAttempt: 2,
+    jobPageFault: "",
     omitPullRequests: false,
     sourceRepository: { id: 1103012935, full_name: "fixture/repo" },
     runRepository: undefined as { id: number; full_name: string } | undefined,

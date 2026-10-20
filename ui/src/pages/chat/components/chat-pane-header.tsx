@@ -1,14 +1,18 @@
-import { Show, createMemo, createUniqueId } from "solid-js";
+import { dynamic } from "@solidjs/web";
+import { Show, createMemo, createUniqueId, onSettled } from "solid-js";
 import { buildControlUiResourcePath } from "../../../../../src/gateway/control-ui-resource-routes.js";
 import { isIncognitoSessionKey } from "../../../../../src/shared/incognito-session-key.js";
 import type { GatewaySessionRow, SessionBranch } from "../../../api/types.ts";
 import type { ApplicationContext } from "../../../app/context.ts";
 import { resolveControlUiAuthCandidates } from "../../../app/control-ui-auth.ts";
 import { beginNativeWindowDrag } from "../../../app/native-window-drag.ts";
+import { NAV_DRAWER_TOGGLE_REGISTRATION } from "../../../app/navigation-surface.ts";
+import { createRouteElementRef } from "../../../app/route-element-ref.ts";
 import {
   SHELL_NAV_DRAWER_TOGGLE_EVENT,
   type ShellNavDrawerToggleDetail,
 } from "../../../components/command-palette-contract.ts";
+import type { GatewayStatusProps } from "../../../components/gateway-status.ts";
 import { StandalonePersonLink } from "../../../components/person-activity-link-solid.tsx";
 import {
   personActivityLink,
@@ -16,6 +20,7 @@ import {
 } from "../../../components/person-activity-link.ts";
 import { SessionColorDot } from "../../../components/session-color.ts";
 import { isCloudWorkerPlacementState } from "../../../components/session-row-badges.ts";
+import { GatewayStatus } from "../../../components/solid/gateway-status.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { AgentIdentityAvatar } from "../../../components/solid/identity-avatar.tsx";
 import { Menu, type MenuItem } from "../../../components/solid/menu.tsx";
@@ -31,6 +36,7 @@ import {
   recordCompositionEnd,
 } from "../../../lib/ime.ts";
 import type { PresentationValue } from "../../../lib/presentation.ts";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { isSessionTitlePending, resolveSessionDisplayName } from "../../../lib/session-display.ts";
 import {
@@ -38,15 +44,11 @@ import {
   resolveUiSessionNavigationParentKey,
 } from "../../../lib/sessions/session-key.ts";
 import { nativeListener } from "../../../lib/solid-native-listener.ts";
-import {
-  PaneDetails,
-  PaneHeaderPresence,
-  PaneHeaderSessionMenu,
-  PaneSubagentStop,
-  type PaneDetailsProps,
-} from "../chat-pane-header-view.tsx";
+import { PaneHeaderPresence, PaneSubagentStop } from "../chat-pane-header-view.tsx";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
+import { ChatDetails, type ChatDetailsViewProps } from "./chat-details.tsx";
 import { ChatPaneLayoutMenu, type ChatPaneLayoutMenuProps } from "./chat-header-panel-actions.tsx";
+import { ChatHeaderSessionMenu } from "./chat-header-session-menu.tsx";
 import { ChatPanePlacement } from "./chat-pane-placement.tsx";
 import { ChatPaneVersionsMenu } from "./chat-pane-versions-menu.tsx";
 import {
@@ -67,9 +69,11 @@ type ChatPaneParentSession = {
 };
 
 export type ChatPaneHeaderProps = ChatPaneLayoutMenuProps & {
+  onHeaderRef?: (element: HTMLElement) => void | (() => void);
   presented: PresentationValue;
   mergedChrome: boolean;
   navDrawerOpen?: boolean;
+  gatewayStatus?: GatewayStatusProps | null;
   title: string;
   agent?: AgentIdentity & { name: string };
   titlePending?: boolean;
@@ -100,7 +104,8 @@ export type ChatPaneHeaderProps = ChatPaneLayoutMenuProps & {
   copiedAction: ChatPaneHeaderAction | null;
   renameDisabledReason?: string;
   runningSubagentCount?: number;
-  detailsControl?: PaneDetailsProps;
+  onOpenSubagents?: (focus?: boolean) => void;
+  detailsControl?: ChatDetailsViewProps;
   onOpenDetails?: (source: HTMLElement) => void;
   conversationVisible?: boolean;
   onToggleConversation?: () => void;
@@ -109,7 +114,7 @@ export type ChatPaneHeaderProps = ChatPaneLayoutMenuProps & {
   sharingControl?: ChatSessionSharingProps;
   publicAccessIndicator?: ChatSessionSharingProps;
   placementControl?: Parameters<typeof ChatPanePlacement>[0];
-  sessionMenuAction?: Parameters<typeof PaneHeaderSessionMenu>[0];
+  sessionMenuAction?: Parameters<typeof ChatHeaderSessionMenu>[0];
   onBeginRename: () => void;
   onRenameInput: (value: string) => void;
   onCommitRename: () => void;
@@ -161,11 +166,17 @@ export function resolveChatPaneParentSession(
 
 function IdentityCrumbs(props: ChatPaneHeaderProps) {
   const hasProject = () => !props.catalog && Boolean(props.workspaceLabel);
+  const status = () =>
+    props.mergedChrome && props.gatewayStatus?.kind !== "connected" && props.gatewayStatus?.kind;
   return (
     <div class="chat-pane__crumbs">
-      <Show when={hasProject()}>
+      <Show when={hasProject() || status()}>
         <div class="chat-pane__project-row">
-          <ProjectCrumb {...props} />
+          <Show when={status()} fallback={<ProjectCrumb {...props} />}>
+            <div class="mobile-connection-status">
+              <GatewayStatus {...props.gatewayStatus!} />
+            </div>
+          </Show>
         </div>
       </Show>
       <div class="chat-pane__session-trail">
@@ -229,7 +240,6 @@ function AgentCrumb(
                   <AgentIdentityAvatar agent={props.agent} />
                 </span>
                 <span class="chat-pane__agent-name">{props.agent.name}</span>
-                <Icon name="chevronDown" />
               </>
             }
           >
@@ -240,7 +250,6 @@ function AgentCrumb(
       <button
         class="chat-pane__agent-settings"
         type="button"
-        title={t("agentChip.namedSettings", { name: props.agent.name })}
         aria-label={t("agentChip.namedSettings", { name: props.agent.name })}
         onClick={() => props.onOpenAgentSettings?.(props.agent.id)}
       >
@@ -294,32 +303,47 @@ function SessionCrumb(props: ChatPaneHeaderProps) {
         </Show>
       }
     >
-      <input
-        class="chat-pane__session-title-input"
-        value={props.renameValue}
-        aria-label={t("chat.sessionHeader.renameInputAria")}
-        placeholder={t("chat.sessionHeader.renameInputPlaceholder")}
-        onInput={(event) => props.onRenameInput(event.currentTarget.value)}
-        onCompositionEnd={recordCompositionEnd}
-        ref={nativeListener("keyup", clearCompositionEnd)}
-        onKeyDown={(event) => {
-          if (isComposingKeyboardEvent(event)) {
-            return;
-          }
-          if (event.key === "Enter") {
-            event.preventDefault();
-            props.onCommitRename();
-          } else if (event.key === "Escape") {
-            event.preventDefault();
-            props.onCancelRename();
-          }
-        }}
-        onBlur={(event) => {
-          clearCompositionEnd(event);
-          props.onCommitRename();
-        }}
-      />
+      <SessionRenameInput {...props} />
     </Show>
+  );
+}
+
+function SessionRenameInput(props: ChatPaneHeaderProps) {
+  let input!: HTMLInputElement;
+  onSettled(() => {
+    input.focus();
+    input.select();
+  });
+  return (
+    <input
+      class="chat-pane__session-title-input"
+      value={props.renameValue}
+      aria-label={t("chat.sessionHeader.renameInputAria")}
+      placeholder={t("chat.sessionHeader.renameInputPlaceholder")}
+      onInput={(event) => props.onRenameInput(event.currentTarget.value)}
+      onCompositionEnd={recordCompositionEnd}
+      ref={[(element) => (input = element), nativeListener("keyup", clearCompositionEnd)]}
+      onKeyDown={(event) => {
+        if (isComposingKeyboardEvent(event)) {
+          return;
+        }
+        if (event.key === "Enter") {
+          event.preventDefault();
+          if (!props.renameDisabledReason) {
+            props.onCommitRename();
+          }
+        } else if (event.key === "Escape") {
+          event.preventDefault();
+          props.onCancelRename();
+        }
+      }}
+      onBlur={(event) => {
+        clearCompositionEnd(event);
+        if (!props.renameDisabledReason) {
+          props.onCommitRename();
+        }
+      }}
+    />
   );
 }
 
@@ -422,6 +446,7 @@ export function ChatPaneHeader(props: ChatPaneHeaderProps) {
   return (
     <>
       <div
+        ref={[elementRef(props.onHeaderRef)]}
         class={[
           "chat-pane__header",
           {
@@ -438,27 +463,37 @@ export function ChatPaneHeader(props: ChatPaneHeaderProps) {
         onMouseDown={beginNativeWindowDrag}
       >
         <div class="chat-pane__header-leading">
-          {props.mergedChrome ? (
-            <openclaw-tooltip prop:content={drawerLabel()}>
-              <button
-                class="btn btn--ghost btn--icon chat-icon-btn chat-pane__nav-toggle"
-                type="button"
-                aria-label={drawerLabel()}
-                aria-expanded={props.navDrawerOpen ? "true" : "false"}
-                onClick={(event) => {
-                  window.dispatchEvent(
-                    new CustomEvent<ShellNavDrawerToggleDetail>(SHELL_NAV_DRAWER_TOGGLE_EVENT, {
-                      detail: {
-                        trigger: event.currentTarget,
-                      },
-                    }),
-                  );
-                }}
-              >
-                <Icon name="menu" />
-              </button>
-            </openclaw-tooltip>
-          ) : undefined}
+          <Show when={props.mergedChrome}>
+            {(_mergedChrome) => {
+              const drawerRef = createRouteElementRef(NAV_DRAWER_TOGGLE_REGISTRATION);
+              return (
+                <openclaw-tooltip prop:content={drawerLabel()}>
+                  <button
+                    ref={drawerRef}
+                    class="btn btn--ghost btn--icon chat-icon-btn chat-pane__nav-toggle"
+                    type="button"
+                    aria-label={drawerLabel()}
+                    aria-expanded={props.navDrawerOpen ? "true" : "false"}
+                    data-connection-status={props.gatewayStatus?.kind ?? undefined}
+                    onClick={(event) => {
+                      window.dispatchEvent(
+                        new CustomEvent<ShellNavDrawerToggleDetail>(SHELL_NAV_DRAWER_TOGGLE_EVENT, {
+                          detail: {
+                            trigger: event.currentTarget,
+                          },
+                        }),
+                      );
+                    }}
+                  >
+                    <Icon name="menu" />
+                    <Show when={props.gatewayStatus?.kind}>
+                      <span class="gateway-status-dot" aria-hidden="true" />
+                    </Show>
+                  </button>
+                </openclaw-tooltip>
+              );
+            }}
+          </Show>
           <Show when={incognito()}>
             <openclaw-tooltip
               prop:content={t("sessionsView.incognitoDescription")}
@@ -542,7 +577,7 @@ export function ChatPaneHeader(props: ChatPaneHeaderProps) {
             </button>
           </Show>
           <Show when={props.detailsControl !== undefined}>
-            <PaneDetails {...props.detailsControl!} />
+            <ChatDetails {...props.detailsControl!} />
           </Show>
           {/* The observed row (and its menu) retires offline; cached Details stays local. */}
           <Show
@@ -573,7 +608,7 @@ export function ChatPaneHeader(props: ChatPaneHeaderProps) {
           </Show>
           <div class="chat-pane__actions">
             <Show when={!props.narrow}>
-              <RunningSubagents count={props.runningSubagentCount} />
+              <RunningSubagents count={props.runningSubagentCount} onOpen={props.onOpenSubagents} />
             </Show>
             <Show when={props.runAction}>{(action) => <PaneSubagentStop {...action()} />}</Show>
             <Show when={props.sharingControl}>
@@ -581,19 +616,19 @@ export function ChatPaneHeader(props: ChatPaneHeaderProps) {
             </Show>
             <Show when={props.mergedChrome}>
               <Show when={props.sessionMenuAction}>
-                {(menu) => <PaneHeaderSessionMenu {...menu()} />}
+                {(menu) => <ChatHeaderSessionMenu {...menu()} />}
               </Show>
             </Show>
             <ChatPaneLayoutMenu {...props} mobile={props.mergedChrome} />
             <Show when={!props.mergedChrome}>
               <Show when={props.sessionMenuAction}>
-                {(menu) => <PaneHeaderSessionMenu {...menu()} />}
+                {(menu) => <ChatHeaderSessionMenu {...menu()} />}
               </Show>
             </Show>
           </div>
         </div>
         <Show when={props.narrow}>
-          <RunningSubagents count={props.runningSubagentCount} />
+          <RunningSubagents count={props.runningSubagentCount} onOpen={props.onOpenSubagents} />
         </Show>
       </div>
       <Show when={incognito()}>
@@ -632,15 +667,20 @@ export function resolveChatPaneWorkspaceIcon(
   };
 }
 
-function RunningSubagents(props: { count?: number }) {
+function RunningSubagents(props: { count?: number; onOpen?: (focus?: boolean) => void }) {
+  const Status = dynamic(() => (props.onOpen ? "button" : "span"));
   return (
     <Show when={(props.count ?? 0) > 0}>
-      <span class="chat-pane__subagents-running">
+      <Status
+        class={["chat-pane__subagents-running", { "btn btn--ghost": Boolean(props.onOpen) }]}
+        type={props.onOpen ? "button" : undefined}
+        onClick={(event: MouseEvent) => props.onOpen?.(event.detail === 0)}
+      >
         <span aria-hidden="true">
           <Icon name="bot" />
         </span>
         {t("chat.sessionHeader.subagentsRunning", { count: String(props.count) })}
-      </span>
+      </Status>
     </Show>
   );
 }

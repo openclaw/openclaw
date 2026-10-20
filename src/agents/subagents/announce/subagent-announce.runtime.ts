@@ -31,7 +31,3 @@ export async function readSubagentSessionEntry(
 export const callSubagentLifecycleGateway: typeof GatewayCaller = (request) =>
   bindGatewayLifecycleRequest()(request);
 export { readSessionMessagesAsync } from "../../../gateway/session-transcript-readers.js";
-export {
-  isEmbeddedAgentRunActive,
-  waitForEmbeddedAgentRunEnd,
-} from "../../embedded-agent-runner/runs.js";

@@ -139,52 +139,45 @@ it("keeps concurrent lazy reads private until complete and preserves append orde
   expect(names(workspaceEntries)).toEqual(["workspace"]);
 });
 
-it.each(["retry", "concurrent"] as const)(
-  "publishes current workspace entries after a library wait (%s)",
-  async (mode) => {
-    const base = `/synthetic/embedded-${mode}`;
-    const roots = {
-      agentWorkspaceDir: `${base}/agent/../agent`,
-      executionWorkspaceDir: `${base}/execution/../execution`,
-    };
-    const bumpSources = () =>
-      bumpSkillsSnapshotVersion({
-        workspaceDir: path.resolve(roots.agentWorkspaceDir),
-        sourceScopes: [{ executionWorkspaceDir: path.resolve(roots.executionWorkspaceDir) }],
-      });
-    workspace
-      .mockResolvedValueOnce([entry("workspace-stale")])
-      .mockResolvedValue([entry("workspace-current")]);
-    const { gate, entered } = pause("library");
-    const result = await resolve({
-      workspaceDir: "/synthetic/fallback-workspace",
-      agentId: "fixture",
-      skillsSnapshot: {
-        ...snapshot,
-        promptFormatVersion: WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION,
-        skillRoots: roots,
-      },
+it("preserves the first complete publication across concurrent lazy reads", async () => {
+  const base = "/synthetic/embedded-concurrent";
+  const roots = {
+    agentWorkspaceDir: `${base}/agent/../agent`,
+    executionWorkspaceDir: `${base}/execution/../execution`,
+  };
+  const bumpSources = () =>
+    bumpSkillsSnapshotVersion({
+      workspaceDir: path.resolve(roots.agentWorkspaceDir),
+      sourceScopes: [{ executionWorkspaceDir: path.resolve(roots.executionWorkspaceDir) }],
     });
-    const first = result.loadSkillEntries();
-    await entered.promise;
-    bumpSources();
-    const winner = mode === "concurrent" ? await result.loadSkillEntries() : undefined;
-    if (winner) {
-      workspace.mockResolvedValue([entry("workspace-after-publication")]);
-      bumpSources();
-    }
-    gate.resolve(libraryEntries);
-    const entries = await first;
-    expect(names(entries)).toEqual(["workspace-current", "library"]);
-    if (winner) {
-      expect(entries).toBe(winner);
-    }
-    workspace.mockResolvedValue([entry("workspace-after-publication")]);
-    bumpSources();
-    expect(await result.loadSkillEntries()).toBe(entries);
-    expect(names(entries)).toEqual(["workspace-current", "library"]);
-  },
-);
+  workspace
+    .mockResolvedValueOnce([entry("workspace-stale")])
+    .mockResolvedValue([entry("workspace-current")]);
+  const { gate, entered } = pause("library");
+  const result = await resolve({
+    workspaceDir: "/synthetic/fallback-workspace",
+    agentId: "fixture",
+    skillsSnapshot: {
+      ...snapshot,
+      promptFormatVersion: WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION,
+      skillRoots: roots,
+    },
+  });
+  const first = result.loadSkillEntries();
+  await entered.promise;
+  bumpSources();
+  const winner = await result.loadSkillEntries();
+  workspace.mockResolvedValue([entry("workspace-after-publication")]);
+  bumpSources();
+  gate.resolve(libraryEntries);
+  const entries = await first;
+  expect(names(entries)).toEqual(["workspace-current", "library"]);
+  expect(entries).toBe(winner);
+  workspace.mockResolvedValue([entry("workspace-after-publication")]);
+  bumpSources();
+  expect(await result.loadSkillEntries()).toBe(entries);
+  expect(names(entries)).toEqual(["workspace-current", "library"]);
+});
 
 it.each([
   ["workspace", "rejection"],

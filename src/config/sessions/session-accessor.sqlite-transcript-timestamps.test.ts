@@ -97,7 +97,7 @@ describe("SQLite transcript timestamp writes", () => {
               const run = () => {
                 expect(append("first", 1000)).not.toBe(false);
                 assertWindow(1000, 4001);
-                expect(writes.counts.window).toBe(mode === "actor" ? 1 : 2);
+                expect(writes.counts.window).toBe(1);
                 expect(append("second", 2000)).not.toBe(false);
                 assertWindow(2000, 4002);
                 expect(writes.counts.window).toBe(1);

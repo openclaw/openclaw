@@ -118,7 +118,6 @@ describe("session discussion panel", () => {
       expect(candidate).not.toBeNull();
       return candidate!;
     });
-    await empty.updateComplete;
     expect(empty.textContent).toContain("This discussion cannot be embedded");
     const external = panel.querySelector<HTMLAnchorElement>("a");
     expect(panel.querySelector("iframe")).toBeNull();

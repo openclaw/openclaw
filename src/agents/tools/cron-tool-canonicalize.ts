@@ -149,6 +149,16 @@ function setScheduleAtMs(schedule: Record<string, unknown>, value: unknown): voi
 function canonicalizeCronToolSchedule(value: Record<string, unknown>): void {
   const schedule = isRecord(value.schedule) ? { ...value.schedule } : {};
 
+  if (
+    (schedule.command !== undefined || value.command !== undefined) &&
+    !isCronScheduleKind(schedule.kind) &&
+    !isCronScheduleKind(value.kind)
+  ) {
+    throw new Error(
+      'A command schedule needs an explicit schedule.kind. Read the full automations schema and WATCH OUTPUT example before retrying. For a stream, use kind:"stream" and command as an argv array.',
+    );
+  }
+
   if (schedule.atMs !== undefined) {
     setScheduleAtMs(schedule, schedule.atMs);
     delete schedule.atMs;
@@ -185,7 +195,6 @@ function canonicalizeCronToolSchedule(value: Record<string, unknown>): void {
   for (const [kind, target, sources] of [
     ["every", "everyMs", ["everyMs", "every"]],
     ["cron", "expr", ["cron", "expr"]],
-    ["on-exit", "command", ["command"]],
   ] as const) {
     // Consume only the first alias; conflicting fields remain for Gateway validation.
     const moved = sources.some((source) => moveDefinedField(value, schedule, source, target));
@@ -193,6 +202,8 @@ function canonicalizeCronToolSchedule(value: Record<string, unknown>): void {
       schedule.kind = kind;
     }
   }
+
+  moveDefinedField(value, schedule, "command");
 
   for (const key of [
     "anchorMs",
@@ -222,8 +233,6 @@ function canonicalizeCronToolSchedule(value: Record<string, unknown>): void {
       schedule.kind = "every";
     } else if (schedule.expr !== undefined) {
       schedule.kind = "cron";
-    } else if (schedule.command !== undefined) {
-      schedule.kind = "on-exit";
     }
   }
 
@@ -344,9 +353,7 @@ function nestDottedCronKey(
 }
 
 /** Converts model-friendly cron tool shorthands into the nested gateway job/patch shape. */
-export function canonicalizeCronToolObject(
-  value: Record<string, unknown>,
-): Record<string, unknown> {
+function canonicalizeCronToolObject(value: Record<string, unknown>): Record<string, unknown> {
   const unwrapped = isRecord(value.data) ? value.data : isRecord(value.job) ? value.job : value;
   const next = { ...unwrapped };
   repairPaddedCronKeys(next);
@@ -397,7 +404,7 @@ export function isEmptyRecoveredCronPatch(value: unknown): boolean {
 }
 
 /** Recovers cron job or patch fields that a model flattened beside the action arguments. */
-export function recoverCronObjectFromFlatParams(params: Record<string, unknown>): {
+function recoverCronObjectFromFlatParams(params: Record<string, unknown>): {
   found: boolean;
   value: Record<string, unknown>;
 } {
@@ -425,7 +432,7 @@ export function recoverCronObjectFromFlatParams(params: Record<string, unknown>)
 }
 
 /** Checks whether a recovered flat object has enough schedule/payload signal to create a job. */
-export function hasCronCreateSignal(value: Record<string, unknown>): boolean {
+function hasCronCreateSignal(value: Record<string, unknown>): boolean {
   return (
     value.schedule !== undefined ||
     value.at !== undefined ||
@@ -437,4 +444,23 @@ export function hasCronCreateSignal(value: Record<string, unknown>): boolean {
     value.message !== undefined ||
     value.text !== undefined
   );
+}
+
+export function readCronToolJob(params: Record<string, unknown>, action: "add" | "update") {
+  let recovered = false;
+  // Models sometimes flatten job fields beside action; create requires a schedule/payload signal.
+  if (!params.job || (isRecord(params.job) && Object.keys(params.job).length === 0)) {
+    const synthetic = recoverCronObjectFromFlatParams(params);
+    if (synthetic.found && (action === "update" || hasCronCreateSignal(synthetic.value))) {
+      params.job = synthetic.value;
+      recovered = true;
+    }
+  }
+  if (!isRecord(params.job)) {
+    throw new Error("job required");
+  }
+  return {
+    job: canonicalizeCronToolObject(params.job),
+    recovered,
+  };
 }

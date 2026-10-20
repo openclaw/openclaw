@@ -13,12 +13,18 @@ import {
   asOptionalRecord,
   normalizeOptionalString as trimToUndefined,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { DEFAULT_GRADIUM_VOICE_ID, GRADIUM_VOICES, normalizeGradiumBaseUrl } from "./shared.js";
-import { gradiumTTS } from "./tts.js";
+import {
+  DEFAULT_GRADIUM_VOICE_ID,
+  GRADIUM_API_HOSTNAME,
+  GRADIUM_VOICES,
+  normalizeGradiumBaseUrl,
+} from "./shared.js";
+
+const DEFAULT_TTS_MAX_BYTES = 16 * 1024 * 1024;
 
 function normalizeGradiumProviderConfig(rawConfig: Record<string, unknown>) {
   const providers = asOptionalRecord(rawConfig.providers);
-  const raw = asOptionalRecord(providers?.gradium) ?? asOptionalRecord(rawConfig.gradium);
+  const raw = asOptionalRecord(providers?.gradium);
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
@@ -31,7 +37,7 @@ function normalizeGradiumProviderConfig(rawConfig: Record<string, unknown>) {
 
 function readGradiumProviderConfig(config: SpeechProviderConfig) {
   return normalizeGradiumProviderConfig({
-    gradium: { ...config, apiKey: trimToUndefined(config.apiKey) },
+    providers: { gradium: { ...config, apiKey: trimToUndefined(config.apiKey) } },
   });
 }
 
@@ -50,15 +56,51 @@ async function synthesizeGradium(
   }
   const { resolveGeneratedMediaMaxBytes } =
     await import("openclaw/plugin-sdk/media-generation-runtime");
-  return await gradiumTTS({
-    text: req.text,
-    apiKey,
-    baseUrl: config.baseUrl,
-    voiceId: trimToUndefined(req.providerOverrides?.voiceId) ?? config.voiceId,
-    outputFormat,
-    timeoutMs: req.timeoutMs,
-    maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
+  const text = req.text;
+  const voiceId = trimToUndefined(req.providerOverrides?.voiceId) ?? config.voiceId;
+  const timeoutMs = req.timeoutMs;
+  const maxBytes = resolveGeneratedMediaMaxBytes(req.cfg, "audio") ?? DEFAULT_TTS_MAX_BYTES;
+  const normalizedBaseUrl = normalizeGradiumBaseUrl(config.baseUrl);
+  const url = `${normalizedBaseUrl}/api/post/speech/tts`;
+  const { assertOkOrThrowProviderError, readProviderBinaryResponse } =
+    await import("openclaw/plugin-sdk/provider-http");
+  const { fetchWithSsrFGuard } = await import("openclaw/plugin-sdk/ssrf-runtime");
+
+  const { response, release } = await fetchWithSsrFGuard({
+    url,
+    init: {
+      method: "POST",
+      headers: {
+        "x-api-key": apiKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        text,
+        voice_id: voiceId,
+        only_audio: true,
+        output_format: outputFormat,
+        json_config: JSON.stringify({ padding_bonus: 0 }),
+      }),
+    },
+    timeoutMs,
+    requireHttps: true,
+    // Keep the transport boundary independent from config normalization so a
+    // future validator relaxation cannot silently widen credential egress.
+    policy: { hostnameAllowlist: [GRADIUM_API_HOSTNAME] },
+    auditContext: "gradium.tts",
   });
+
+  try {
+    await assertOkOrThrowProviderError(response, "Gradium API error");
+
+    return await readProviderBinaryResponse(response, "Gradium API error", "audio", {
+      maxBytes,
+      onOverflow: ({ maxBytes: maxBytesLocal }) =>
+        new Error(`Gradium TTS audio response exceeds ${maxBytesLocal} bytes`),
+    });
+  } finally {
+    await release();
+  }
 }
 
 function isGradiumProviderConfigured(config: SpeechProviderConfig): boolean {

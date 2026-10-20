@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { QA_CHILD_STDERR_TAIL_BYTES } from "./child-output.js";
 import { runQaCli } from "./qa-cli-process.js";
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -38,7 +39,7 @@ describe("qa suite runtime CLI integration", () => {
         "const [command, subcommand] = process.argv.slice(2);",
         "const metadataPath = path.join(process.env.OPENCLAW_BUNDLED_PLUGINS_DIR ?? '', 'memory-core', 'cli-metadata.js');",
         "if (command === 'memory' && subcommand === 'status' && fs.existsSync(metadataPath)) {",
-        "  console.log(JSON.stringify({ command, subcommand, status: 'ok' }));",
+        `  await new Promise((resolve, reject) => process.stdout.write(JSON.stringify({ command, subcommand, status: 'ok', payload: 'x'.repeat(${QA_CHILD_STDERR_TAIL_BYTES + 1}) }) + '\\n', error => error ? reject(error) : resolve()));`,
         "  process.exit(0);",
         "}",
         "console.error(\"error: unknown command 'memory'\");",
@@ -70,6 +71,7 @@ describe("qa suite runtime CLI integration", () => {
       command: "memory",
       subcommand: "status",
       status: "ok",
+      payload: "x".repeat(QA_CHILD_STDERR_TAIL_BYTES + 1),
     });
   });
 

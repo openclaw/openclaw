@@ -9,13 +9,14 @@ import {
 } from "../../../src/shared/control-ui-link-reader.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
-import { formatRelativeTimestamp } from "../lib/format.ts";
 import { takeGraphemes } from "../lib/graphemes.ts";
+import { formatRelativeTimestamp } from "../lib/reactive/format.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { formatGitHubItemReference, parseGitHubLinkTarget } from "./github-link-target.ts";
 import { createPreviewRenderer } from "./link-reader-preview-root.ts";
 import { linkReaderAuthorHref, linkReaderResponseMatchesTarget } from "./link-reader-response.ts";
 import { linkReaderTargetKey, type LinkReaderTarget } from "./link-reader-target.ts";
+import { createHovercardControlRef } from "./portaled-hovercard-focus.ts";
 import { BrandIcon, Icon } from "./solid/icon.tsx";
 export type LinkPreview = LinkReaderTarget & ControlUiLinkReaderPreview;
 
@@ -125,6 +126,7 @@ export function cacheEntryFromDocument(
   });
   return {
     preview,
+    generation: previous?.generation,
     enrichment: previous?.preview && !previous.enrichment ? undefined : "needed",
     promise: Promise.resolve(preview),
     expiresAt,
@@ -271,6 +273,7 @@ function CardLink(props: {
 }) {
   return (
     <a
+      ref={createHovercardControlRef()}
       class={props.class}
       href={props.href}
       target={EXTERNAL_LINK_TARGET}
@@ -282,46 +285,51 @@ function CardLink(props: {
   );
 }
 
-const renderLoadingContent = createPreviewRenderer(() => {
-  const rows = [
-    ["header", ["badge", "subtitle", "time"]],
-    ["title", ["title"]],
-    ["footer", ["author", "metadata"]],
-  ] as const;
-  return (
-    <div class="link-reader-hovercard__skeleton" aria-hidden="true">
-      <For each={rows}>
-        {(row) => (
-          <div class={"link-reader-hovercard__" + row[0]}>
-            <For each={row[1]}>
-              {(part) => (
-                <span class={["skeleton", `link-reader-hovercard__placeholder--${part}`]} />
-              )}
-            </For>
-          </div>
-        )}
-      </For>
-    </div>
-  );
-});
+const renderLoadingContent = createPreviewRenderer(
+  () => {
+    const rows = [
+      ["header", ["badge", "subtitle", "time"]],
+      ["title", ["title"]],
+      ["footer", ["author", "metadata"]],
+    ] as const;
+    return (
+      <div class="link-reader-hovercard__skeleton" aria-hidden="true">
+        <For each={rows}>
+          {(row) => (
+            <div class={"link-reader-hovercard__" + row[0]}>
+              <For each={row[1]}>
+                {(part) => (
+                  <span class={["skeleton", `link-reader-hovercard__placeholder--${part}`]} />
+                )}
+              </For>
+            </div>
+          )}
+        </For>
+      </div>
+    );
+  },
+  () => t("linkReader.loadingPreview"),
+);
 
 export function renderLoading(card: HTMLDivElement, afterCommit: () => void): void {
   card.dataset.loading = "true";
   card.removeAttribute("data-state");
   card.removeAttribute("data-cached");
-  card.setAttribute("aria-label", t("linkReader.loadingPreview"));
   renderLoadingContent(card, undefined, afterCommit);
 }
 
-function ErrorNotice(props: { message: string }) {
+function ErrorNotice(props: { message: () => string }) {
   return (
     <p class="link-reader-hovercard__error" role="status">
-      {props.message}
+      {props.message()}
     </p>
   );
 }
 
-const renderErrorContent = createPreviewRenderer<{ target: LinkReaderTarget; message: string }>(
+const renderErrorContent = createPreviewRenderer<{
+  target: LinkReaderTarget;
+  message: () => string;
+}>(
   (props) => {
     const target = () => props.value.target;
     const item = () => parseGitHubLinkTarget(target().href);
@@ -356,104 +364,107 @@ const renderErrorContent = createPreviewRenderer<{ target: LinkReaderTarget; mes
       </>
     );
   },
+  () => t("linkReader.previewUnavailable"),
 );
 
 export function renderPreviewError(
   card: HTMLDivElement,
   target: LinkReaderTarget,
-  message: string,
+  message: () => string,
   afterCommit: () => void,
 ): void {
   card.dataset.loading = "false";
   card.removeAttribute("data-cached");
   card.removeAttribute("data-state");
-  card.setAttribute("aria-label", t("linkReader.previewUnavailable"));
   renderErrorContent(card, { target, message }, afterCommit);
 }
 
 const renderPreviewContent = createPreviewRenderer<{
   preview: LinkPreview;
   seeded: boolean;
-  error?: string;
-}>((props) => {
-  const preview = () => props.value.preview;
-  const timestamp = () => preview().updatedAt ?? preview().createdAt;
-  const authorHref = () => linkReaderAuthorHref(preview().authorUrl, preview().href);
-  const author = () => (
-    <>
-      <Avatar imageUrl={preview().imageUrl} />
-      <Show when={preview().author}>
-        <span class="link-reader-hovercard__author-name">{preview().author}</span>
-      </Show>
-    </>
-  );
-  return (
-    <>
-      <div class="link-reader-hovercard__header">
-        <Show when={preview().badge}>
-          {(badge) => (
-            <span class="link-reader-hovercard__state" data-tone={badge().tone}>
-              <span class="link-reader-hovercard__state-dot" aria-hidden="true" />
-              {badge().label}
-            </span>
-          )}
+  error?: () => string;
+}>(
+  (props) => {
+    const preview = () => props.value.preview;
+    const timestamp = () => preview().updatedAt ?? preview().createdAt;
+    const authorHref = () => linkReaderAuthorHref(preview().authorUrl, preview().href);
+    const author = () => (
+      <>
+        <Avatar imageUrl={preview().imageUrl} />
+        <Show when={preview().author}>
+          <span class="link-reader-hovercard__author-name">{preview().author}</span>
         </Show>
-        <CardLink class="link-reader-hovercard__subtitle" href={preview().href}>
-          {preview().subtitle ?? preview().reader.label}
-        </CardLink>
-        <Show
-          when={props.value.seeded}
-          fallback={
-            <Show when={timestamp()}>
-              {(value) => (
-                <time class="link-reader-hovercard__time" datetime={value()}>
-                  {formatRelativeTimestamp(Date.parse(value()))}
-                </time>
-              )}
-            </Show>
-          }
-        >
-          <span class="link-reader-hovercard__time">{t("linkReader.cachedPreview")}</span>
-        </Show>
-      </div>
-      <CardLink class="link-reader-hovercard__title" href={preview().href}>
-        {preview().title}
-      </CardLink>
-      <div class="link-reader-hovercard__footer">
-        <Show when={preview().author || preview().imageUrl}>
-          <Show
-            when={authorHref()}
-            fallback={<span class="link-reader-hovercard__author">{author()}</span>}
-          >
-            {(href) => (
-              <CardLink class="link-reader-hovercard__author" href={href()} external>
-                {author()}
-              </CardLink>
-            )}
-          </Show>
-        </Show>
-        <CoAuthors preview={preview()} />
-        <span class="link-reader-hovercard__metadata">
-          <For each={preview().metadata}>
-            {(entry) => (
-              <span class="link-reader-hovercard__metric" data-tone={entry.tone}>
-                {entry.label ? entry.label + ": " : ""}
-                {entry.value}
+      </>
+    );
+    return (
+      <>
+        <div class="link-reader-hovercard__header">
+          <Show when={preview().badge}>
+            {(badge) => (
+              <span class="link-reader-hovercard__state" data-tone={badge().tone}>
+                <span class="link-reader-hovercard__state-dot" aria-hidden="true" />
+                {badge().label}
               </span>
             )}
-          </For>
-        </span>
-      </div>
-      <Show when={props.value.error}>{(error) => <ErrorNotice message={error()} />}</Show>
-    </>
-  );
-});
+          </Show>
+          <CardLink class="link-reader-hovercard__subtitle" href={preview().href}>
+            {preview().subtitle ?? preview().reader.label}
+          </CardLink>
+          <Show
+            when={props.value.seeded}
+            fallback={
+              <Show when={timestamp()}>
+                {(value) => (
+                  <time class="link-reader-hovercard__time" datetime={value()}>
+                    {formatRelativeTimestamp(Date.parse(value()))}
+                  </time>
+                )}
+              </Show>
+            }
+          >
+            <span class="link-reader-hovercard__time">{t("linkReader.cachedPreview")}</span>
+          </Show>
+        </div>
+        <CardLink class="link-reader-hovercard__title" href={preview().href}>
+          {preview().title}
+        </CardLink>
+        <div class="link-reader-hovercard__footer">
+          <Show when={preview().author || preview().imageUrl}>
+            <Show
+              when={authorHref()}
+              fallback={<span class="link-reader-hovercard__author">{author()}</span>}
+            >
+              {(href) => (
+                <CardLink class="link-reader-hovercard__author" href={href()} external>
+                  {author()}
+                </CardLink>
+              )}
+            </Show>
+          </Show>
+          <CoAuthors preview={preview()} />
+          <span class="link-reader-hovercard__metadata">
+            <For each={preview().metadata}>
+              {(entry) => (
+                <span class="link-reader-hovercard__metric" data-tone={entry.tone}>
+                  {entry.label ? entry.label + ": " : ""}
+                  {entry.value}
+                </span>
+              )}
+            </For>
+          </span>
+        </div>
+        <Show when={props.value.error}>{(error) => <ErrorNotice message={error()} />}</Show>
+      </>
+    );
+  },
+  ({ preview }) => t("linkReader.previewAriaLabel", { title: preview.title }),
+);
 
 export function renderPreview(
   card: HTMLDivElement,
   preview: LinkPreview,
   seeded: boolean,
-  error: string | undefined,
+  error: (() => string) | undefined,
   afterCommit: () => void,
 ): void {
   card.dataset.loading = "false";
@@ -461,10 +472,10 @@ export function renderPreview(
   card.dataset.cached = String(cached);
   card.dataset.state = preview.badge?.tone ?? "neutral";
   renderPreviewContent(card, { preview, seeded: cached, error }, afterCommit);
-  card.setAttribute("aria-label", t("linkReader.previewAriaLabel", { title: preview.title }));
 }
 
 export type CacheEntry = {
+  generation: number | undefined;
   enrichment?: "needed" | "pending";
   preview?: ControlUiLinkReaderPreview;
   expiresAt: number;
@@ -474,7 +485,6 @@ export type CacheEntry = {
 };
 
 export type PreviewContext = {
-  generation: number;
   recoveryScope: string;
   succeeded: boolean;
 };
@@ -493,13 +503,8 @@ export function previewContextFor(
   }
   const key = agentId ?? "";
   let context = contexts.get(key);
-  if (
-    !context ||
-    context.generation !== client.connectionGeneration ||
-    context.recoveryScope !== client.recoveryScope
-  ) {
+  if (!context || context.recoveryScope !== client.recoveryScope) {
     context = {
-      generation: client.connectionGeneration,
       recoveryScope: client.recoveryScope,
       succeeded: false,
     };

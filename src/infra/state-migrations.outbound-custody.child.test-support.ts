@@ -120,9 +120,7 @@ async function runMode(stateDir: string, mode: Mode) {
     failed: failure !== undefined,
     callbackFailure: errors.includes(nativeState.callbackFailure),
     retainedFailure: errors.includes(nativeState.failure),
-    acquisitionFailure: acquisitionFailure
-      ? { pluginIds: acquisitionFailure.pluginIds, message: acquisitionFailure.message }
-      : null,
+    acquisitionFailure: acquisitionFailure ? { message: acquisitionFailure.message } : null,
   };
 }
 

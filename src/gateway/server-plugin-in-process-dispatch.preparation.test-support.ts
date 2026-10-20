@@ -15,8 +15,10 @@ export function registerInProcessGatewayDispatchPreparationTests({
   it.each([
     { method: "agent", outcome: "current" },
     { method: "agent", outcome: "replaced" },
+    { method: "agent", outcome: "retired-factory" },
     { method: "agent.wait", outcome: "current" },
     { method: "agent.wait", outcome: "replaced" },
+    { method: "agent.wait", outcome: "retired-factory" },
   ])(
     "refreshes source authority after $method facade preparation with a $outcome Gateway",
     async ({ method, outcome }) => {
@@ -47,7 +49,7 @@ export function registerInProcessGatewayDispatchPreparationTests({
           forceSyntheticClient: true,
           operatorRoleActor: { kind: "system" },
           resolveGatewayContext: () => current,
-          prepareDispatchCurrent,
+          ...(outcome === "retired-factory" ? {} : { prepareDispatchCurrent }),
         },
       );
       const result =
@@ -56,9 +58,12 @@ export function registerInProcessGatewayDispatchPreparationTests({
           : expect(pending).rejects.toThrow("current gateway instance binding");
       await entered.promise;
       expect(prepareDispatchCurrent).not.toHaveBeenCalled();
+      if (outcome === "retired-factory") {
+        current = createContext();
+      }
       release.resolve();
       await result;
-      expect(prepareDispatchCurrent).toHaveBeenCalledOnce();
+      expect(prepareDispatchCurrent).toHaveBeenCalledTimes(outcome === "retired-factory" ? 0 : 1);
       expect(startTurn).toHaveBeenCalledTimes(outcome === "current" && method === "agent" ? 1 : 0);
       expect(waitForTurn).toHaveBeenCalledTimes(
         outcome === "current" && method === "agent.wait" ? 1 : 0,

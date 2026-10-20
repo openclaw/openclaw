@@ -425,6 +425,13 @@ private `sqlite-runtime` facade exposes that existing owner and its recorded
 native identity; each worker command keeps its own FIFO turn and live authority
 checks. Native maintenance and private shadow stores keep their existing owners.
 
+Doctor migrations can use `withSqliteReadOnlyInspection(path, inspect)` from
+`openclaw/plugin-sdk/sqlite-runtime`. The synchronous callback borrows a read-only
+connection in one transaction snapshot. For a shared-state path already admitted
+by Doctor after backup, the maintenance scope owns the reader. Other sources use
+an artifact-preserving private copy with the existing unstable-source refusal.
+The helper owns cleanup; callbacks must not retain or close the connection.
+
 SQLite worker backends set connection lock-wait policy with
 `setSqliteBusyTimeout` from `openclaw/plugin-sdk/sqlite-worker-runtime`, including
 temporary changes. The connection owner retains the current timeout, skips

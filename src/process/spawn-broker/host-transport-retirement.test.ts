@@ -145,7 +145,7 @@ function brokerFixture(bootstrapFailure?: SendFailure) {
   return fixture;
 }
 
-it.each(["before", "during"] as const)(
+it.each(["before", "after disconnect", "during"] as const)(
   "classifies a nonzero broker exit %s close while waiting for late stderr",
   async (exitTiming) => {
     const fixture = brokerFixture();
@@ -153,6 +153,8 @@ it.each(["before", "during"] as const)(
     await fixture.host.ready();
     if (exitTiming === "before") {
       fixture.exit(null, "SIGKILL");
+    } else if (exitTiming === "after disconnect") {
+      fixture.disconnect();
     }
     const closing = fixture.host.close();
     let settled = false;
@@ -166,12 +168,14 @@ it.each(["before", "during"] as const)(
     );
     if (exitTiming === "during") {
       fixture.exit(1);
+    } else if (exitTiming === "after disconnect") {
+      fixture.exit(null, "SIGKILL");
     }
     await fixture.host.waitForCleanup();
     expect(settled).toBe(false);
     fixture.stderr("late broker diagnostic\n");
     fixture.close();
-    if (exitTiming === "before") {
+    if (exitTiming !== "during") {
       await expect(closing).resolves.toBeUndefined();
     } else {
       await expect(closing).rejects.toMatchObject({
@@ -270,7 +274,7 @@ it.each([
     const id = lease.attachment.id;
     lease.receive({ type: "resource-ready", id, pid: worker.pid!, generation: 0 });
     lease.receive({ type: "resource-created", id });
-    const write = lease.ownerMessage({ operation: "accepted native write" });
+    lease.ownerMessage({ operation: "accepted native write" });
     await fixture.sent("resource-owner");
 
     let launchSettlement: Promise<unknown> | undefined;
@@ -324,8 +328,7 @@ it.each([
     }
 
     // Proxy rejection and failed write delivery are not native settlement receipts.
-    const error = await failed.promise;
-    await expect(write.result).rejects.toBe(error);
+    await failed.promise;
     await child.waitForClose();
     expect(fixture.disconnect).toHaveBeenCalledOnce();
     expect(fixture.kill).not.toHaveBeenCalled();

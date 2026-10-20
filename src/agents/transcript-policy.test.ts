@@ -1,6 +1,6 @@
 /**
  * Regression coverage for transcript replay policy resolution.
- * Exercises provider-family fallbacks, plugin replay hooks, and policy caching.
+ * Exercises provider-family fallbacks and plugin replay hooks.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -180,26 +180,7 @@ describe("resolveTranscriptPolicy", () => {
     };
   }
 
-  it("memoizes replay policy resolution for the same config and process env", () => {
-    const config = {} as OpenClawConfig;
-
-    const firstPolicy = resolveTranscriptPolicy({
-      provider: "mistral",
-      modelId: "mistral-large-latest",
-      config,
-      env: process.env,
-    });
-    const secondPolicy = resolveTranscriptPolicy({
-      provider: "mistral",
-      modelId: "mistral-large-latest",
-      config,
-      env: process.env,
-    });
-
-    expect(secondPolicy).toBe(firstPolicy);
-  });
-
-  it("does not reuse cached replay policies across custom env objects", () => {
+  it("resolves replay policy from each supplied environment", () => {
     const config = {} as OpenClawConfig;
     for (const mode of ["strict", "loose", "null"]) {
       const policy = resolveTranscriptPolicy({
@@ -347,7 +328,7 @@ describe("resolveTranscriptPolicy", () => {
     expect(sonnet37.dropThinkingBlocks).toBe(true);
   });
 
-  it("does not reuse cached Anthropic policies across canonical model identities", () => {
+  it("resolves Anthropic policy from the canonical model identity", () => {
     const config = {} as OpenClawConfig;
     const model = makeOpenAiCompatibleReasoningModel({
       id: "production-claude",
@@ -381,7 +362,7 @@ describe("resolveTranscriptPolicy", () => {
     expect(opus5.dropThinkingBlocks).toBe(false);
   });
 
-  it("gates in-history updates by authenticated route and keeps cached policies separate", () => {
+  it("gates in-history updates by authenticated route", () => {
     const config = {} as OpenClawConfig;
     const model = makeOpenAiCompatibleReasoningModel({
       id: "claude-opus-5",
@@ -429,7 +410,7 @@ describe("resolveTranscriptPolicy", () => {
     }
   });
 
-  it("limits OpenAI prompt updates to native Responses routes across cached policy reads", () => {
+  it("limits OpenAI prompt updates to native Responses routes", () => {
     const config = {} as OpenClawConfig;
     for (const [provider, api, baseUrl, expected] of [
       ["openai", "openai-responses", "https://api.openai.com/v1", true],
@@ -489,7 +470,7 @@ describe("resolveTranscriptPolicy", () => {
     },
   );
 
-  it("does not reuse cached unowned Anthropic policies across reasoning compat changes", () => {
+  it("resolves unowned Anthropic policy from reasoning compatibility", () => {
     const config = {} as OpenClawConfig;
     const model = {
       id: "moonshotai/kimi-k2.5",
@@ -523,7 +504,7 @@ describe("resolveTranscriptPolicy", () => {
     expect(noReasoningPolicy.dropThinkingBlocks).toBe(true);
   });
 
-  it("does not reuse cached OpenAI-compatible policies across reasoning metadata changes", () => {
+  it("resolves OpenAI-compatible policy from reasoning metadata", () => {
     const config = {} as OpenClawConfig;
 
     const defaultPolicy = resolveTranscriptPolicy({

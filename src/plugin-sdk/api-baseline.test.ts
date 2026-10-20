@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { afterEach, expect, it, vi } from "vitest";
 import * as nativeTypeScript from "../../scripts/lib/native-typescript.mts";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";

@@ -1,17 +1,26 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runGit, type GitResult } from "../agents/worktrees/git.js";
+import { onTrustedInternalDiagnosticEvent } from "../infra/diagnostic-events.js";
+import type { DiffReadTiming } from "../infra/diff-read-timing.js";
+import * as execRunner from "../process/exec-runner.js";
+import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import {
   loadSessionDiffBranchMetadata,
   resolveSessionDiffBase,
   resolveSessionDiffEmptyTree,
 } from "./session-diff-revisions.js";
+import { loadCheckoutDiff } from "./session-diff.js";
 
-vi.mock("../agents/worktrees/git.js", () => ({ runGit: vi.fn() }));
+vi.mock("../agents/worktrees/git.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/worktrees/git.js")>()),
+  runGit: vi.fn(),
+}));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function gitResult(stdout: string, code = 0): GitResult {
@@ -164,3 +173,267 @@ describe("captured session history", () => {
     expect(metadata.mergeBase?.subject).toBe("base");
   });
 });
+
+it.skipIf(process.platform === "win32")(
+  "reuses diffs from nested and aliased linked worktrees while an index writer holds its lock",
+  async () => {
+    vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
+    vi.stubEnv("GIT_CONFIG_GLOBAL", os.devNull);
+    await drainGlobalSingletonLifecycleState("restart");
+    const root = await fs.realpath(tempDirs.make("openclaw-linked-diff-"));
+    const origin = path.join(root, "origin");
+    const checkout = path.join(root, "checkout");
+    const execute = promisify(execFile);
+    const git = (...args: string[]) =>
+      execute("git", [
+        "-C",
+        origin,
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.invalid",
+        "-c",
+        "commit.gpgsign=false",
+        ...args,
+      ]);
+    const stopDiagnostics = onTrustedInternalDiagnosticEvent(() => undefined, {
+      includeTrusted: ["diagnostic.phase.completed"],
+    });
+    try {
+      await fs.mkdir(origin);
+      await git("init", "-b", "main");
+      await fs.writeFile(path.join(origin, "tracked.txt"), "before\n");
+      await fs.writeFile(path.join(origin, ".gitignore"), "ignored/\n");
+      await git("add", ".");
+      await git("commit", "-m", "base");
+      await git("worktree", "add", "--detach", checkout, "HEAD");
+      await fs.mkdir(path.join(checkout, "nested"));
+      await fs.mkdir(path.join(checkout, "ignored"));
+      await fs.symlink(checkout, path.join(root, "alias"));
+      await fs.appendFile(path.join(checkout, "tracked.txt"), "after\n");
+      await fs.writeFile(path.join(origin, ".git/worktrees/checkout/index.lock"), "writer\n");
+      for (const cwd of [path.join(checkout, "nested"), path.join(root, "alias")]) {
+        const timing: DiffReadTiming = { durations: {} };
+        const read = () => loadCheckoutDiff({ cwd, sessionKey: "fixture" }, timing);
+        const first = await read();
+        expect(first.files[0]?.patch).toContain("+after");
+        await fs.writeFile(path.join(checkout, "ignored/build.txt"), "rebuilt\n");
+        expect(await read()).toEqual(first);
+        expect(timing.outcome).toBe("cache-hit");
+        await fs.appendFile(path.join(checkout, "tracked.txt"), "later\n");
+        expect((await read()).files[0]?.patch).toContain("+later");
+        expect(timing.missReason).toBe("revision-changed-worktree-mtime");
+      }
+      const excludes = path.join(root, "ignore rules");
+      await fs.appendFile(path.join(origin, ".git/config"), "\n# unrelated config\n".repeat(4096));
+      await fs.writeFile(excludes, "external-ignore.txt\n");
+      await fs.writeFile(path.join(checkout, "external-ignore.txt"), "untracked\n");
+      await git("config", "core.excludesFile", "../ignore rules");
+      const configuredTiming: DiffReadTiming = { durations: {} };
+      const readConfigured = () =>
+        loadCheckoutDiff({ cwd: checkout, sessionKey: "fixture" }, configuredTiming);
+      const configured = await readConfigured();
+      expect(configured.files.map((file) => file.path)).not.toContain("external-ignore.txt");
+      expect(await readConfigured()).toEqual(configured);
+      expect(configuredTiming.outcome).toBe("cache-hit");
+      await fs.writeFile(excludes, "");
+      expect((await readConfigured()).files.map((file) => file.path)).toContain(
+        "external-ignore.txt",
+      );
+      await git("config", "filter.fixture.clean", "cat");
+      const timing: DiffReadTiming = { durations: {} };
+      expect(
+        (await loadCheckoutDiff({ cwd: checkout, sessionKey: "fixture" }, timing)).files.find(
+          (file) => file.path === "tracked.txt",
+        )?.patch,
+      ).toContain("+later");
+      expect(timing.missReason).toBe("no-revision-config");
+    } finally {
+      stopDiagnostics();
+      await drainGlobalSingletonLifecycleState("restart");
+      vi.restoreAllMocks();
+      vi.unstubAllEnvs();
+    }
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "caches opaque nested repositories and refreshes gitlink dirtiness",
+  async () => {
+    vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
+    vi.stubEnv("GIT_CONFIG_GLOBAL", os.devNull);
+    await drainGlobalSingletonLifecycleState("restart");
+    const root = await fs.realpath(tempDirs.make("openclaw-nested-repo-diff-"));
+    const nested = path.join(root, "clone");
+    const execute = promisify(execFile);
+    const git = (cwd: string, ...args: string[]) =>
+      execute("git", [
+        "-C",
+        cwd,
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.invalid",
+        "-c",
+        "commit.gpgsign=false",
+        ...args,
+      ]);
+    const stopDiagnostics = onTrustedInternalDiagnosticEvent(() => undefined, {
+      includeTrusted: ["diagnostic.phase.completed"],
+    });
+    try {
+      await git(root, "init", "-b", "main");
+      await git(root, "commit", "--allow-empty", "-m", "base");
+      await fs.mkdir(nested);
+      await git(nested, "init", "-b", "main");
+      await fs.mkdir(path.join(nested, "content"));
+      const nestedFile = path.join(nested, "content/file.txt");
+      await fs.writeFile(nestedFile, "before\n");
+      await git(nested, "add", ".");
+      await git(nested, "commit", "-m", "nested base");
+      for (const summaryOnly of [false, true]) {
+        const timing: DiffReadTiming = { durations: {} };
+        const read = () =>
+          loadCheckoutDiff({ cwd: root, sessionKey: "fixture", summaryOnly }, timing);
+        const opaque = await read();
+        expect(opaque.files).toEqual([
+          {
+            path: "clone/",
+            status: "added",
+            additions: 0,
+            deletions: 0,
+            untracked: true,
+            truncated: true,
+          },
+        ]);
+        expect(await read()).toEqual(opaque);
+        expect(timing.outcome).toBe("cache-hit");
+        await fs.appendFile(nestedFile, "inside clone\n");
+        expect(await read()).toEqual(opaque);
+        expect(timing.outcome).toBe("cache-hit");
+      }
+      await git(nested, "commit", "-am", "nested changes");
+      await git(root, "add", "clone");
+      await git(root, "commit", "-m", "gitlink");
+      const baseCommit = (await git(root, "rev-parse", "HEAD")).stdout.trim();
+      const nestedBase = (await git(nested, "rev-parse", "HEAD")).stdout.trim();
+      const timing: DiffReadTiming = { durations: {} };
+      const read = () => loadCheckoutDiff({ cwd: root, sessionKey: "fixture" }, timing);
+      expect((await read()).files).toEqual([]);
+      await fs.appendFile(nestedFile, "dirty gitlink\n");
+      const dirty = await read();
+      expect(dirty.files).toEqual([
+        { path: "clone", status: "modified", additions: 0, deletions: 0, truncated: true },
+      ]);
+      expect(await read()).toEqual(dirty);
+      expect(timing.outcome).toBe("cache-hit");
+      await git(nested, "commit", "-am", "new gitlink head");
+      expect((await read()).files).toEqual([
+        { path: "clone", status: "modified", additions: 1, deletions: 1, truncated: true },
+      ]);
+      await git(root, "add", "clone");
+      await git(root, "commit", "-m", "updated gitlink");
+      expect((await read()).files).toEqual([]);
+      await fs.appendFile(nestedFile, "third commit\n");
+      await git(nested, "commit", "-am", "third gitlink head");
+      const nestedThird = (await git(nested, "rev-parse", "HEAD")).stdout.trim();
+      await git(nested, "checkout", "--detach", nestedBase);
+      const readFromBase = () =>
+        loadCheckoutDiff({ cwd: root, sessionKey: "fixture", baseCommit }, timing);
+      const atBase = await readFromBase();
+      expect(atBase.files).toEqual([
+        { path: "clone", status: "modified", additions: 0, deletions: 0, truncated: true },
+      ]);
+      expect(await readFromBase()).toEqual(atBase);
+      expect(timing.outcome).toBe("cache-hit");
+      await git(nested, "checkout", "--detach", nestedThird);
+      expect((await readFromBase()).files).toEqual([
+        { path: "clone", status: "modified", additions: 1, deletions: 1, truncated: true },
+      ]);
+    } finally {
+      stopDiagnostics();
+      await drainGlobalSingletonLifecycleState("restart");
+      vi.restoreAllMocks();
+      vi.unstubAllEnvs();
+    }
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "reuses committed diffs across ignored and index churn but refreshes patch eligibility and attributes",
+  async () => {
+    vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
+    vi.stubEnv("GIT_CONFIG_GLOBAL", os.devNull);
+    await drainGlobalSingletonLifecycleState("restart");
+    const root = await fs.realpath(tempDirs.make("openclaw-diff-cache-"));
+    const execute = promisify(execFile);
+    const git = (...args: string[]) =>
+      execute("git", [
+        "-C",
+        root,
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.invalid",
+        "-c",
+        "commit.gpgsign=false",
+        ...args,
+      ]);
+    const write = (file: string, content: string) => fs.writeFile(path.join(root, file), content);
+    const timing: DiffReadTiming = { durations: {} };
+    const read = () => loadCheckoutDiff({ cwd: root, sessionKey: "fixture" }, timing);
+    const stopDiagnostics = onTrustedInternalDiagnosticEvent(() => undefined, {
+      includeTrusted: ["diagnostic.phase.completed"],
+    });
+    try {
+      await git("init", "-b", "main");
+      await fs.mkdir(path.join(root, "nested"));
+      await write("nested/tracked.txt", "before\n");
+      await write(".gitignore", ".gitattributes\nignored.txt\n");
+      await git("add", ".");
+      await git("commit", "-m", "base");
+      await git("checkout", "-b", "feature");
+      await write("nested/tracked.txt", "before\nafter\n");
+      await git("commit", "-am", "feature change");
+      const linked = path.join(tempDirs.make("openclaw-diff-hardlink-"), "linked.txt");
+      await fs.link(path.join(root, "nested/tracked.txt"), linked);
+      const withheld = await read();
+      expect(withheld.files[0]?.truncated).toBe(true);
+      expect(withheld.files[0]?.patch).toBeUndefined();
+      await read(); // Admit the clean committed file's displayed path.
+      await fs.unlink(linked);
+      const full = await read();
+      expect(full.files[0]?.patch).toContain("+after");
+      await read(); // Admit displayed paths' attribute dependencies.
+      const commands = vi.spyOn(execRunner, "runCommandBuffersWithTimeout");
+      expect(await read()).toEqual(full);
+      expect(commands.mock.calls.length).toBe(0);
+      await write("ignored.txt", "rebuilt output\n");
+      await fs.utimes(path.join(root, ".git/index"), new Date(0), new Date(0));
+      expect(await read()).toEqual(full);
+      expect(commands.mock.calls.filter(([argv]) => !argv.includes("status")).length).toBe(0);
+      await write("nested/tracked.txt", "before\nafter\nunstaged\n");
+      await read();
+      expect(timing.missReason).toBe("revision-changed-worktree-mtime");
+      await write("nested/tracked.txt", "before\nafter\n");
+      expect(await read()).toEqual(full);
+      expect(timing.missReason).toBe("revision-changed-worktree-mtime");
+      await write("nested/tracked.txt", "before\nafter\nstaged\n");
+      await git("add", "nested/tracked.txt");
+      await read();
+      expect(timing.missReason).toBe("revision-changed-index");
+      await write("nested/tracked.txt", "before\nafter\nstaged\nunstaged\n");
+      await read();
+      expect(timing.missReason).toBe("revision-changed-worktree-mtime");
+      await write("nested/.gitattributes", "tracked.txt -diff\n");
+      const changed = await read();
+      expect(changed.files[0]?.binary).toBe(true);
+      expect(changed.files[0]?.patch).toBeUndefined();
+    } finally {
+      stopDiagnostics();
+      await drainGlobalSingletonLifecycleState("restart");
+      vi.restoreAllMocks();
+      vi.unstubAllEnvs();
+    }
+  },
+);

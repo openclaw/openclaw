@@ -14,6 +14,7 @@ import { deleteCronJobScratch, readCronJobScratchState } from "../cron/scratch-s
 import { resolveCronJobsStorePath, saveCronJobsStore } from "../cron/store.js";
 import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "./heartbeat-events.js";
 import { claimHeartbeatOutcomeForRun } from "./heartbeat-outcome-store.js";
+import { bindHeartbeatReply, bindHeartbeatSend } from "./heartbeat-runner.boundary-test-support.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import {
@@ -81,22 +82,17 @@ async function createFixture(
   });
   const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
   replySpy.mockResolvedValue(quietReply());
+  bindHeartbeatReply(replySpy);
+  bindHeartbeatSend("telegram", sendTelegram);
   return {
     ...sandbox,
     cfg,
     sessionKey,
     sendTelegram,
-    run: (overrides: Omit<Parameters<typeof runHeartbeatOnce>[0], "cfg" | "deps"> = {}) =>
+    run: (overrides: Omit<Parameters<typeof runHeartbeatOnce>[0], "cfg"> = {}) =>
       runHeartbeatOnce({
         cfg,
         ...overrides,
-        deps: {
-          telegram: sendTelegram,
-          getReplyFromConfig: replySpy,
-          getQueueSize: () => 0,
-          // Storage retention uses wall time, so isolated sessions must share that clock.
-          nowMs: Date.now,
-        },
       }),
     expectSend: (text: string, silent?: boolean) => {
       expect(sendTelegram).toHaveBeenCalledExactlyOnceWith(TELEGRAM_GROUP, text, {

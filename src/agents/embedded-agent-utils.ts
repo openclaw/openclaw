@@ -1,10 +1,5 @@
 import { stripCompactionReplayCheckpointInPlace } from "@openclaw/ai/transports";
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
-/**
- * Embedded-agent message text utilities.
- * Extracts visible assistant text, reasoning summaries, thinking-tag blocks,
- * and compact tool metadata for channel delivery and transcript replay.
- */
 import type { AssistantMessage } from "../llm/types.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import {

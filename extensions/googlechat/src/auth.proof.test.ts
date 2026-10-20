@@ -1,17 +1,6 @@
-// Proof: verifyGoogleChatRequest → fetchChatCerts through the REAL
-// fetchWithSsrFGuard, exercised against a real hanging node:http loopback.
-//
-// This file does NOT mock openclaw/plugin-sdk/ssrf-runtime, so the production
-// timeout composition and hostname policy run for every call. The auth runtime
-// stays hermetic, while globalThis.fetch redirects the guarded request onto a
-// loopback server that never responds. That fetch interception bypasses pinned
-// DNS and dispatcher construction, but lets the real 30s deadline abort a real
-// hanging HTTP request.
-//
-// Mirrors the Google auth transport proof (#103627) / MiniMax OAuth timeout
-// proof (#102862): capture the production timeout callback and fire it only
-// after the real loopback server confirms request receipt.
-import { afterEach, describe, expect, it, vi } from "vitest";
+// Real SSRF guard and deadline, with fetch redirected to a hanging loopback.
+// DNS pinning/dispatcher construction are bypassed; JWT verification is hermetic.
+import { afterEach, expect, it, vi } from "vitest";
 import { startHangingLoopbackServer } from "../../test-support/hanging-loopback-server.js";
 
 const GOOGLECHAT_CERT_FETCH_TIMEOUT_MS = 30_000;
@@ -56,12 +45,8 @@ function captureCertFetchTimeout() {
     return originalSetTimeout(() => callback(...args), timeout);
   }) as typeof setTimeout);
   return {
-    setTimeoutSpy,
-    scheduled() {
-      return setTimeoutSpy.mock.calls.some(
-        ([, timeout]) => timeout === GOOGLECHAT_CERT_FETCH_TIMEOUT_MS,
-      );
-    },
+    scheduled: () =>
+      setTimeoutSpy.mock.calls.some(([, ms]) => ms === GOOGLECHAT_CERT_FETCH_TIMEOUT_MS),
     fire() {
       if (!fireTimeout) {
         throw new Error("expected Google Chat cert-fetch 30s timeout to be scheduled");
@@ -73,93 +58,52 @@ function captureCertFetchTimeout() {
   };
 }
 
-async function verifyOutcomeWithin(
-  promise: Promise<{ ok: boolean; reason?: string }>,
-  timeoutMs: number,
-): Promise<
-  | { status: "resolved"; value: { ok: boolean; reason?: string } }
-  | { status: "rejected"; error: unknown }
-  | { status: "pending" }
-> {
-  let timeout: ReturnType<typeof setTimeout> | undefined;
+it("times out a stalled cert fetch through the real production guard", async () => {
+  const realFetch = globalThis.fetch;
+  const server = await startHangingLoopbackServer();
+  vi.useFakeTimers({ toFake: ["setTimeout"] });
+  const certFetchTimeout = captureCertFetchTimeout();
+  let pendingVerify: Promise<{ ok: boolean; reason?: string }> | undefined;
+
+  // Keep the guard's composed timeout signal while redirecting transport.
+  const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) =>
+    realFetch(`${server.origin}${CHAT_CERTS_PATH}`, {
+      method: (init?.method as string | undefined) ?? "GET",
+      signal: init?.signal,
+    }),
+  );
+  vi.stubGlobal("fetch", fetchMock);
+
   try {
-    return await Promise.race([
-      promise.then(
-        (value) => ({ status: "resolved" as const, value }),
-        (error: unknown) => ({ status: "rejected" as const, error }),
-      ),
-      new Promise<{ status: "pending" }>((resolve) => {
-        timeout = setTimeout(() => resolve({ status: "pending" as const }), timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timeout !== undefined) {
-      clearTimeout(timeout);
-    }
-  }
-}
-
-describe("googlechat cert-fetch — real guard proof", () => {
-  it("times out a stalled cert fetch through the real production guard", async () => {
-    const realFetch = globalThis.fetch;
-    const server = await startHangingLoopbackServer();
-    vi.useFakeTimers({ toFake: ["setTimeout"] });
-    const certFetchTimeout = captureCertFetchTimeout();
-    let pendingVerify: Promise<{ ok: boolean; reason?: string }> | undefined;
-
-    // Redirect the request the real guard emits onto the hanging loopback
-    // server while preserving the guard's composed timeout signal. The
-    // googleapis.com cert URL keeps the real SSRF hostname allowlist satisfied.
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      return await realFetch(`${server.origin}${CHAT_CERTS_PATH}`, {
-        method: (init?.method as string | undefined) ?? "GET",
-        signal: init?.signal,
-      });
+    pendingVerify = verifyGoogleChatRequest({
+      bearer: "token",
+      audienceType: "project-number",
+      audience: "12345",
     });
-    vi.stubGlobal("fetch", fetchMock);
 
-    try {
-      pendingVerify = verifyGoogleChatRequest({
-        bearer: "token",
-        audienceType: "project-number",
-        audience: "12345",
-      });
+    await server.waitForRequestCount(1);
+    expect(certFetchTimeout.scheduled()).toBe(true);
+    expect(fetchMock.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal);
 
-      // The real guard scheduled its 30s deadline and dispatched the request;
-      // the loopback server confirms it genuinely arrived and is now hanging.
-      await server.waitForRequestCount(1);
-      expect(certFetchTimeout.scheduled()).toBe(true);
-      expect(fetchMock.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal);
+    // Only the production deadline may settle the pending request.
+    let verifySettled = false;
+    const markSettled = () => {
+      verifySettled = true;
+    };
+    void pendingVerify.then(markSettled, markSettled);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(verifySettled).toBe(false);
 
-      // Mutation control: advance the original 500ms pending window without
-      // sleeping, then prove only the production deadline can settle it.
-      let verifySettled = false;
-      void pendingVerify.then(
-        () => {
-          verifySettled = true;
-        },
-        () => {
-          verifySettled = true;
-        },
-      );
-      await vi.advanceTimersByTimeAsync(500);
-      expect(verifySettled).toBe(false);
+    certFetchTimeout.fire();
 
-      // Fire the captured production deadline; the composed signal aborts the
-      // in-flight loopback request and verifyGoogleChatRequest returns ok:false.
-      certFetchTimeout.fire();
-
-      const outcome = await verifyOutcomeWithin(pendingVerify, 2_000);
-      if (outcome.status !== "resolved") {
-        throw new Error(`expected stalled cert fetch to resolve, got ${outcome.status}`);
-      }
-      expect(outcome.value.ok).toBe(false);
-      expect(outcome.value.reason).toMatch(/aborted|timed out|timeout/i);
-      expect(server.requests).toContain(CHAT_CERTS_PATH);
-      expect(mockVerifySignedJwt).not.toHaveBeenCalled();
-    } finally {
-      await server.close();
-      await pendingVerify?.catch(() => undefined);
-    }
-  });
+    await expect(pendingVerify).resolves.toMatchObject({
+      ok: false,
+      reason: expect.stringMatching(/aborted|timed out|timeout/i),
+    });
+    expect(server.requests).toContain(CHAT_CERTS_PATH);
+    expect(mockVerifySignedJwt).not.toHaveBeenCalled();
+  } finally {
+    await server.close();
+    await pendingVerify?.catch(() => undefined);
+  }
 });

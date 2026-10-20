@@ -5,7 +5,8 @@ import {
   type RuntimeConfigCapability,
 } from "../../lib/config/runtime-config-capability.ts";
 import { createSkill } from "../skills/view.test-support.ts";
-import { clearAgentSkillFilter, createAgentSkillActions } from "./skills.ts";
+import { createAgentConfigActions } from "./agent-config-actions.ts";
+import { clearAgentSkillFilter } from "./skills.ts";
 
 describe("createAgentSkillActions", () => {
   it("snapshots reported skills without learned Workshop skills on the first toggle", () => {
@@ -24,11 +25,12 @@ describe("createAgentSkillActions", () => {
     });
 
     try {
-      const actions = createAgentSkillActions({
+      const actions = createAgentConfigActions({
         getRuntimeConfig: () => runtimeConfig,
         getReport: () => report,
         canUpdate: () => true,
-      });
+        onPrimaryChanged: () => undefined,
+      }).skills;
       actions.onToggle("main", "weather", false);
 
       expect(runtimeConfig.state.configForm).toEqual({

@@ -1,20 +1,28 @@
+import fs from "node:fs";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { holdForeignWriter } from "./sqlite-worker-shared-state-admission.test-support.js";
 import { createRetainedUpdateRecovery } from "./update-retained-recovery.test-support.js";
+import { readUpdateRunDriver } from "./update-run-driver.js";
 import {
+  adoptUpdateRun,
   createUpdateRun,
+  getUpdateRun,
   getUpdateRunAsync,
   getUpdateRunWithReconciliationAsync,
   reconcileAbandonedUpdateRunsAsync,
+  recordUpdateRunPhase,
 } from "./update-run-ledger.js";
 import { loadUpdateRecovery } from "./update-run-recovery.js";
+import { readUpdateRunStatus } from "./update-run-status.js";
 
 const admission = vi.hoisted(
   (): { created?: () => void; beforeGrant?: (stage: string) => void } => ({}),
@@ -66,6 +74,89 @@ async function expiredLegacyRun() {
 }
 
 describe("update run reconciliation workers", () => {
+  it("releases the live ledger when admission has no prior runs to reconcile", async () => {
+    const state = tempDirs.make("update-empty-reconciliation-");
+    const options = { env: { OPENCLAW_STATE_DIR: state } };
+    const run = createUpdateRun(
+      { trigger: "cli", origin: { driver: readUpdateRunDriver() } },
+      options,
+    );
+    expect(
+      await reconcileAbandonedUpdateRunsAsync(
+        { excludeRunId: run.runId },
+        { ...options, snapshot: true },
+      ),
+    ).toEqual([]);
+    const recorded = recordUpdateRunPhase(run.runId, "validating", {}, options);
+    closeOpenClawStateDatabaseForTest();
+    const displaced = path.join(state, "displaced.sqlite");
+    fs.renameSync(path.join(state, "state", "openclaw.sqlite"), displaced);
+    expect(getUpdateRun(run.runId, { path: displaced })).toEqual(recorded);
+  });
+
+  it("preserves an owner that adopts dead-driver work before reconciliation commits", async () => {
+    const options = { env: { OPENCLAW_STATE_DIR: tempDirs.make("update-settling-owner-") } };
+    const driver = readUpdateRunDriver();
+    if (!driver) {
+      throw new Error("The fixture requires process start identity");
+    }
+    const run = createUpdateRun(
+      {
+        trigger: "cli",
+        origin: { driver: { ...driver, startIdentity: String(Number(driver.startIdentity) + 1) } },
+      },
+      options,
+    );
+    recordUpdateRunPhase(run.runId, "activating", {}, options);
+    await closeOpenClawStateDatabaseAsync();
+    let adopted: ReturnType<typeof adoptUpdateRun> | undefined;
+    admission.created = () => {
+      admission.created = undefined;
+      adopted = adoptUpdateRun(run.runId, options);
+    };
+    expect(await reconcileAbandonedUpdateRunsAsync({}, { ...options, snapshot: true })).toEqual([]);
+    expect(adopted).toMatchObject({ status: "running", phase: "activating", origin: { driver } });
+    expect(await getUpdateRunAsync(run.runId, options)).toEqual(adopted);
+  });
+
+  it("status projects recent driver loss until explicit reconciliation", async () => {
+    const state = tempDirs.make("update-driver-loss-");
+    const options = { env: { OPENCLAW_STATE_DIR: state } };
+    const driver = readUpdateRunDriver();
+    if (!driver) {
+      throw new Error("The fixture requires process start identity");
+    }
+    const run = createUpdateRun(
+      {
+        trigger: "cli",
+        origin: { driver: { ...driver, startIdentity: String(Number(driver.startIdentity) + 1) } },
+      },
+      options,
+    );
+    const recorded = recordUpdateRunPhase(run.runId, "activating", {}, options);
+    await closeOpenClawStateDatabaseAsync();
+    vi.stubEnv("OPENCLAW_STATE_DIR", state);
+    try {
+      expect(await readUpdateRunStatus()).toMatchObject({
+        activeRun: { runId: run.runId, status: "running", phase: "activating" },
+        abandonedRun: {
+          runId: run.runId,
+          rule: "inactive-driver-dead",
+          nextAction: "Run `openclaw update repair` before retrying the update.",
+        },
+      });
+      expect(await getUpdateRunAsync(run.runId, options)).toEqual(recorded);
+      await reconcileAbandonedUpdateRunsAsync({ explicit: true }, options);
+      expect(await getUpdateRunAsync(run.runId, options)).toMatchObject({
+        status: "failed",
+        phase: "finished",
+        finishedAtMs: expect.any(Number),
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it.each(["history", "reconciliation"] as const)(
     "settles expired legacy history through %s without host SQLite",
     async (entryPoint) => {

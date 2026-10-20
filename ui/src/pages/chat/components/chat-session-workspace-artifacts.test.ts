@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import "./chat-detail-panel.tsx";
+import { sessionWorkspaceForHost } from "./chat-session-workspace-state.ts";
 import { createSidebarContentRecorder } from "./chat-session-workspace.test-support.ts";
 import {
   createSessionWorkspaceProps,
@@ -82,15 +83,17 @@ describe("session workspace artifacts", () => {
       sessionKey: "agent:main:current",
       sidebarContent: null,
       sessions: {},
-      requestUpdate: () => {
+    } as unknown as SessionWorkspaceHost;
+    onTestFinished(
+      sessionWorkspaceForHost(state).subscribe(() => {
         const content = state.sessionWorkspaceState?.previews.find(
           (entry) => entry.id === state.sessionWorkspaceState?.activePreviewId,
         )?.content;
         if (content && content.kind !== "loading") {
           settled.resolve(content);
         }
-      },
-    } as unknown as SessionWorkspaceHost;
+      }),
+    );
     const loadedContent = async (): Promise<SidebarContent> => {
       const content = await settled.promise;
       if (content.kind === "unavailable") {

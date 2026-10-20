@@ -7,9 +7,9 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { UpdatePreMutationError } from "./shared.js";
+import { reportPreMutationUpdateResult } from "./update-command-admission-report.js";
 import { handoffUpdateFromGateway } from "./update-command-handoff.js";
 import { resolveMutableUpdateFailure, UpdateCommandFailure } from "./update-command-result.js";
-import { reportPreMutationUpdateResult } from "./update-command-terminal.js";
 import { withUpdateFailureTriage } from "./update-command-triage.js";
 
 const metadata = vi.hoisted(() => ({ unavailable: false }));

@@ -165,9 +165,6 @@ export async function readActionsPayload(opts: {
   actions?: string;
   actionsFile?: string;
 }): Promise<string> {
-  if (opts.actions !== undefined && opts.actionsFile !== undefined) {
-    throw new Error("Specify only one of --actions or --actions-file");
-  }
   if (opts.actionsFile) {
     return opts.actionsFile === "-"
       ? await readStdinText()

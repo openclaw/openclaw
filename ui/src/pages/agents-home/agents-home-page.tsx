@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal } from "solid-js";
+import { createMemo, createSignal, onSettled } from "solid-js";
 import { pathForClawCatalogEntry } from "../../app-route-paths.ts";
 import { rosterActivityStore } from "../../lib/agents/roster-activity-store.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
@@ -10,7 +10,6 @@ import {
   projectRosterActivity,
   projectRuntimeConfig,
 } from "../../lib/reactive/domain-capabilities.ts";
-import { createParkedProjection } from "../../lib/reactive/parked-projection.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { LAB_FEATURES, resolveLabFeatureState } from "../labs/labs-registry.ts";
 import type { ClawCatalogEntry } from "./claws-catalog-client.ts";
@@ -19,7 +18,7 @@ import { AgentsHomeView } from "./view.tsx";
 
 const clawsLab = LAB_FEATURES.find((feature) => feature.id === "claws");
 
-export function AgentsHomePage(props: { active?: boolean }) {
+export function AgentsHomePage() {
   const context = useApplication();
   const store = rosterActivityStore(context);
   const roster = projectRosterActivity(store);
@@ -27,32 +26,22 @@ export function AgentsHomePage(props: { active?: boolean }) {
   const agents = projectAgents(context.agents);
   const runtimeConfig = projectRuntimeConfig(context.runtimeConfig);
   const [catalogOpen, setCatalogOpen] = createSignal(false);
-  // Load Gateway runtime configuration when the retained home page becomes active.
-  createEffect(
-    () => props.active ?? true,
-    (active) => {
-      if (!active) {
-        return;
-      }
-      void context.runtimeConfig.ensureLoaded();
-    },
-  );
-  const snapshot = createParkedProjection(
-    () => {
-      const currentGateway = gateway.read().snapshot;
-      return {
-        roster: roster.read(),
-        defaultId: agents.read().agentsList?.defaultId,
-        connected: currentGateway.phase === "connected",
-        canCreate: canCallGatewayMethod(currentGateway, "openclaw.chat", "operator.admin"),
-        showExplore: Boolean(
-          clawsLab &&
-          resolveLabFeatureState(currentConfigObject(runtimeConfig.read().state), clawsLab).enabled,
-        ),
-      };
-    },
-    () => props.active ?? true,
-  );
+  onSettled(() => {
+    void context.runtimeConfig.ensureLoaded();
+  });
+  const snapshot = createMemo(() => {
+    const currentGateway = gateway.read().snapshot;
+    return {
+      roster: roster.read(),
+      defaultId: agents.read().agentsList?.defaultId,
+      connected: currentGateway.phase === "connected",
+      canCreate: canCallGatewayMethod(currentGateway, "openclaw.chat", "operator.admin"),
+      showExplore: Boolean(
+        clawsLab &&
+        resolveLabFeatureState(currentConfigObject(runtimeConfig.read().state), clawsLab).enabled,
+      ),
+    };
+  });
   const cards = createMemo(() => {
     const defaultId = snapshot().defaultId;
     return snapshot()

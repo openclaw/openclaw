@@ -58,29 +58,24 @@ vi.mock("../../plugins/manifest-contract-eligibility.js", () => ({
 vi.mock("../../system-agent/audit.js", () => ({ appendSystemAgentAuditEntry: fixture.audit }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const codex: SetupInferenceCandidate = {
-  kind: "codex-cli",
+const presentedCodex = {
+  kind: "codex-cli" as const,
   modelRef: "openai/model",
   label: "Codex",
   detail: "Stored credentials found",
   brandId: "openai",
-  credentials: true,
-  recommended: false,
 };
-const openai: SetupInferenceCandidate = {
-  kind: "openai-api-key",
+const presentedOpenai = {
+  kind: "openai-api-key" as const,
   modelRef: "openai/model",
   label: "OpenAI API key",
   detail: "OPENAI_API_KEY set",
+};
+const codex: SetupInferenceCandidate = { ...presentedCodex, credentials: true, recommended: false };
+const openai: SetupInferenceCandidate = {
+  ...presentedOpenai,
   credentials: true,
   recommended: false,
-};
-const presentedCodex = {
-  kind: "codex-cli",
-  modelRef: "openai/model",
-  label: "Codex",
-  detail: "Stored credentials found",
-  brandId: "openai",
 };
 const ollama: SetupInferenceCandidate = {
   kind: "provider-auto:ollama-local",
@@ -116,6 +111,14 @@ function detection(
   };
 }
 
+function expectUnused(...mocks: unknown[]) {
+  for (const mock of mocks) {
+    expect(mock).not.toHaveBeenCalled();
+  }
+}
+
+const runSetup = () => runGatewayAutomaticSetup(context(), () => {});
+
 function context(): GatewayRequestContext {
   return createWizardSessionTracker() as GatewayRequestContext;
 }
@@ -143,12 +146,8 @@ describe("Gateway automatic inference setup", () => {
   it("surfaces detection errors before choosing or preparing any inference route", async () => {
     fixture.detect.mockRejectedValueOnce(new Error("Codex detection failed: permission denied"));
 
-    await expect(runGatewayAutomaticSetup(context(), () => {})).rejects.toThrow(
-      "Codex detection failed: permission denied",
-    );
-    expect(fixture.activate).not.toHaveBeenCalled();
-    expect(fixture.prepare).not.toHaveBeenCalled();
-    expect(fixture.commit).not.toHaveBeenCalled();
+    await expect(runSetup()).rejects.toThrow("Codex detection failed: permission denied");
+    expectUnused(fixture.activate, fixture.prepare, fixture.commit);
   });
 
   it.each(["unavailable", "unknown", "timeout", "throw"] as const)(
@@ -162,15 +161,14 @@ describe("Gateway automatic inference setup", () => {
         fixture.activate.mockResolvedValueOnce({ ok: false, status: failureMode, error });
       }
 
-      expect(await runGatewayAutomaticSetup(context(), () => {})).toMatchObject({
+      expect(await runSetup()).toMatchObject({
         status: "unavailable",
         attempts: [{ kind: "codex-cli", label: "Codex", error }],
         alternatives: [{ kind: ollama.kind, modelRef: ollama.modelRef }],
       });
       expect(fixture.activate).toHaveBeenCalledOnce();
       expect(fixture.activate).toHaveBeenCalledWith(expect.objectContaining({ kind: "codex-cli" }));
-      expect(fixture.prepare).not.toHaveBeenCalled();
-      expect(fixture.commit).not.toHaveBeenCalled();
+      expectUnused(fixture.prepare, fixture.commit);
     },
   );
 
@@ -182,7 +180,7 @@ describe("Gateway automatic inference setup", () => {
         .mockResolvedValueOnce({ ok: false, status, error: "Model request failed." })
         .mockResolvedValueOnce({ ok: true, modelRef: ollama.modelRef, latencyMs: 1, lines: [] });
 
-      expect(await runGatewayAutomaticSetup(context(), () => {})).toMatchObject({
+      expect(await runSetup()).toMatchObject({
         status: "activated",
         selected: { kind: ollama.kind, modelRef: ollama.modelRef },
         attempts: [{ kind: "codex-cli", error: "Model request failed." }],
@@ -201,7 +199,7 @@ describe("Gateway automatic inference setup", () => {
       lines: [],
     });
 
-    expect(await runGatewayAutomaticSetup(context(), () => {})).toMatchObject({
+    expect(await runSetup()).toMatchObject({
       status: "activated",
       selected: { kind: "provider-auto:ollama-local", modelRef: "ollama/fixture" },
       attempts: [],
@@ -218,26 +216,15 @@ describe("Gateway automatic inference setup", () => {
     };
     fixture.detect.mockResolvedValue(detection([openai, current, codex], { setupComplete: true }));
 
-    expect(await runGatewayAutomaticSetup(context(), () => {})).toEqual({
+    expect(await runSetup()).toEqual({
       status: "configured",
       selected: { ...presentedCodex, kind: "existing-model", label: "Current model" },
-      alternatives: [
-        presentedCodex,
-        {
-          kind: openai.kind,
-          modelRef: openai.modelRef,
-          label: openai.label,
-          detail: openai.detail,
-        },
-      ],
+      alternatives: [presentedCodex, presentedOpenai],
       attempts: [],
       installedPlugins: [],
     });
     expect(fixture.readConfig).toHaveBeenCalledOnce();
-    expect(fixture.activate).not.toHaveBeenCalled();
-    expect(fixture.prepare).not.toHaveBeenCalled();
-    expect(fixture.commit).not.toHaveBeenCalled();
-    expect(fixture.audit).not.toHaveBeenCalled();
+    expectUnused(fixture.activate, fixture.prepare, fixture.commit, fixture.audit);
   });
 
   it.each(["user", "agent"] as const)(
@@ -257,12 +244,11 @@ describe("Gateway automatic inference setup", () => {
       fixture.detect.mockResolvedValue(
         detection([{ ...codex, kind: "existing-model" }], { setupComplete: true }),
       );
-      const result = await runGatewayAutomaticSetup(context(), () => {});
+      const result = await runSetup();
       expect(result).toMatchObject({ status: "configured" });
       expect(result.selected?.shared).toBe(homeScope === "user" ? true : undefined);
       expect(result.separateSignIn).toEqual(homeScope === "user" ? separateSignIn : undefined);
-      expect(fixture.activate).not.toHaveBeenCalled();
-      expect(fixture.commit).not.toHaveBeenCalled();
+      expectUnused(fixture.activate, fixture.commit);
     },
   );
 
@@ -279,18 +265,11 @@ describe("Gateway automatic inference setup", () => {
       error: "Saved sign-in expired.",
     });
 
-    expect(await runGatewayAutomaticSetup(context(), () => {})).toEqual({
+    expect(await runSetup()).toEqual({
       status: "activated",
       selected: { ...presentedCodex, shared: true },
       separateSignIn,
-      alternatives: [
-        {
-          kind: openai.kind,
-          modelRef: openai.modelRef,
-          label: openai.label,
-          detail: openai.detail,
-        },
-      ],
+      alternatives: [presentedOpenai],
       attempts: [{ kind: saved.kind, label: saved.label, error: "Saved sign-in expired." }],
       installedPlugins: ["codex"],
     });
@@ -314,23 +293,13 @@ describe("Gateway automatic inference setup", () => {
     for (const id of ["e", "d", "c", "b", "a"]) {
       candidates.push({ ...openai, kind: `saved-auth:${id}`, label: `Saved ${id}` });
     }
-    fixture.detect.mockResolvedValueOnce(detection(candidates)).mockResolvedValueOnce(
-      detection([codex], {
-        authOptions: [
-          {
-            id: "openai-device-code",
-            brandId: "openai",
-            label: "ChatGPT",
-            kind: "device-code",
-            featured: true,
-          },
-        ],
-      }),
-    );
+    fixture.detect
+      .mockResolvedValueOnce(detection(candidates))
+      .mockResolvedValueOnce(detection([codex]));
     fixture.activate.mockResolvedValue({ ok: false, status: "auth", error: "Sign-in expired." });
     fixture.prepare.mockResolvedValue({ ok: true, config: {} });
 
-    expect(await runGatewayAutomaticSetup(context(), () => {})).toEqual({
+    expect(await runSetup()).toEqual({
       status: "needs-sign-in",
       signIn: { authOptionId: "openai-device-code", label: "ChatGPT" },
       alternatives: [],
@@ -365,9 +334,7 @@ describe("Gateway automatic inference setup", () => {
       );
       const joined = runGatewayAutomaticSetup(gateway, () => {});
       expect(joined).toBe(first);
-      await expect(runGatewayAutomaticSetup(context(), () => {})).rejects.toBeInstanceOf(
-        SetupAdmissionBusyError,
-      );
+      await expect(runSetup()).rejects.toBeInstanceOf(SetupAdmissionBusyError);
       expect(fixture.detect).toHaveBeenCalledOnce();
       expect(fixture.activate).not.toHaveBeenCalled();
       discovered.resolve(detection([codex]));
@@ -397,9 +364,7 @@ describe("Gateway automatic inference setup", () => {
     current = false;
     discovered.resolve(detection([codex]));
     await rejection;
-    expect(fixture.activate).not.toHaveBeenCalled();
-    expect(fixture.prepare).not.toHaveBeenCalled();
-    expect(fixture.commit).not.toHaveBeenCalled();
+    expectUnused(fixture.activate, fixture.prepare, fixture.commit);
   });
 
   it.each([false, true])(
@@ -436,7 +401,7 @@ describe("Gateway automatic inference setup", () => {
         }),
       );
 
-      expect(await runGatewayAutomaticSetup(context(), () => {})).toEqual({
+      expect(await runSetup()).toEqual({
         status: "needs-sign-in",
         alternatives: [],
         attempts: [],

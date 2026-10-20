@@ -17,11 +17,11 @@ import {
   requireDirectorySync,
   syncDirectory,
 } from "../../infra/directory-durability.js";
+import { ignoreMissingPath } from "../../infra/errno.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { readJsonIfExists, writeJsonAtomic, writeTextAtomic } from "../../infra/json-files.js";
 import { removePackageUpdatePath } from "../../infra/package-update-filesystem.js";
-import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { readExistingStateRootMode } from "../../infra/private-dir-mode.js";
 import {
   createUpdateDatabaseBackup,
@@ -109,12 +109,7 @@ async function saveReceipt(file: string, receipt: Receipt) {
 async function readIdentities(databases: readonly string[]) {
   const identities: Record<string, FileIdentity> = {};
   for (const database of databases) {
-    const info = await fs.stat(database, { bigint: true }).catch((error: unknown) => {
-      if (hasNodeErrorCode(error, "ENOENT")) {
-        return undefined;
-      }
-      throw error;
-    });
+    const info = await fs.stat(database, { bigint: true }).catch(ignoreMissingPath);
     if (info) {
       identities[database] = { dev: info.dev, ino: info.ino };
     }

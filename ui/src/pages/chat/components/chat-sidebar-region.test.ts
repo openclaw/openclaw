@@ -2,6 +2,7 @@
 
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { GatewayBrowserClient } from "../../../api/gateway.ts";
+import { createOverlay } from "../../../components/overlay-lifecycle.ts";
 import { createControlUiPluginHost } from "../../../plugins/control-ui-host.ts";
 import "../../../components/resizable-divider.ts";
 import {
@@ -81,7 +82,10 @@ async function createRegion(
   primary.innerHTML = "<main data-primary>Primary</main>";
   const rightRuntime = document.createElement("div");
   rightRuntime.className = "sidebar-region__right-runtime";
-  shell.append(region, primary, rightRuntime);
+  const header = document.createElement("div");
+  header.className = "sidebar-region__header";
+  region.elements = { shell, primary, header, outlet: rightRuntime };
+  shell.append(header, region, primary, rightRuntime);
   document.body.append(shell);
   regions.push(region);
   await region.updateComplete;
@@ -383,12 +387,11 @@ describe("chat sidebar region", () => {
   it("routes native Browser focus by its presentation scope, not stale page focus", async () => {
     const other = await createRegion();
     const region = await createRegion(openSlot({ columns: [] }, "browser"));
+    const browser = element('<div data-native-browser-scope="native-owner"></div>');
     region.panelDefinitions = region.panelDefinitions.map((definition) =>
       Object.assign({}, definition, {
-        content:
-          definition.slot === "browser"
-            ? element('<div data-native-browser-scope="native-owner"></div>')
-            : null,
+        content: definition.slot === "browser" ? browser : null,
+        panelHost: definition.slot === "browser" ? browser : undefined,
       }),
     );
     await region.updateComplete;
@@ -403,6 +406,42 @@ describe("chat sidebar region", () => {
     expect(command.defaultPrevented).toBe(true);
     expect(region.callbacks!.closeSlot).toHaveBeenCalledExactlyOnceWith("browser");
     expect(other.callbacks!.closeSlot).not.toHaveBeenCalled();
+  });
+
+  it("yields native Close while a registered dialog remains native-open", async () => {
+    const region = await createRegion();
+    const dialog = document.createElement("dialog");
+    document.body.append(dialog);
+    const overlay = createOverlay("sidebar-modal-fixture", undefined, {
+      native: {
+        isOpen: () => dialog.open,
+        show: () => {
+          dialog.open = true;
+        },
+        hide: () => {
+          dialog.open = false;
+        },
+      },
+    });
+    overlay.bindSurface(dialog);
+    onTestFinished(() => {
+      overlay.dispose();
+      dialog.remove();
+    });
+    root(region)
+      .querySelector("[data-panel-slot]")!
+      .dispatchEvent(new Event("pointerdown", { bubbles: true, composed: true }));
+    dialog.open = true;
+    const blocked = new CustomEvent("openclaw:native-close-focused-panel", { cancelable: true });
+    window.dispatchEvent(blocked);
+    expect(blocked.defaultPrevented).toBe(false);
+    expect(region.callbacks!.closeSlot).not.toHaveBeenCalled();
+
+    dialog.open = false;
+    const admitted = new CustomEvent("openclaw:native-close-focused-panel", { cancelable: true });
+    window.dispatchEvent(admitted);
+    expect(admitted.defaultPrevented).toBe(true);
+    expect(region.callbacks!.closeSlot).toHaveBeenCalledExactlyOnceWith("detail");
   });
 
   it.each(["hidden", "minimized", "disconnected"] as const)(
@@ -435,7 +474,7 @@ describe("chat sidebar region", () => {
     const context = createInitializationContext();
     const state = createPageState(
       context,
-      { afterCommit: () => () => {}, invalidate: vi.fn() },
+      { afterCommit: () => () => {} },
       document.createElement("div"),
     );
     state.sessionKey = "agent:main:main";
@@ -497,6 +536,7 @@ describe("chat sidebar region", () => {
       desktopRefreshOnPresentation: false,
       desktopAvailable: false,
       desktopSource: null,
+      desktopRuntimeConfig: null,
       desktopFocusHref: "",
       onDesktopFocusTargetChange: vi.fn(),
       dashboard: null,
@@ -581,13 +621,12 @@ describe("chat sidebar region", () => {
     async ({ slot, eventType, detail }) => {
       const handleToggleRequest = vi.fn();
       const region = await createRegion(openSlot({ columns: [] }, slot));
+      const panel = Object.assign(element("<div>Panel content</div>"), { handleToggleRequest });
       region.panelDefinitions = region.panelDefinitions.map((definition) =>
         Object.assign({}, definition, {
           available: definition.slot === slot,
-          content:
-            definition.slot === slot
-              ? Object.assign(element("<div>Panel content</div>"), { handleToggleRequest })
-              : null,
+          content: definition.slot === slot ? panel : null,
+          panelHost: definition.slot === slot ? panel : undefined,
         }),
       );
       await region.updateComplete;

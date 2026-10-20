@@ -159,7 +159,11 @@ export function buildReplyRunStateParams(run: FollowupRun["run"]) {
     ownerNumbers: run.ownerNumbers,
     inputProvenance: run.inputProvenance,
     senderIsOwner: run.senderIsOwner,
+    gitContributorProfileId: run.gitContributorProfileId,
     conversationToolPolicy: run.conversationToolPolicy,
+    requesterOrigin: run.requesterOrigin,
+    operatorProfileId: run.operatorProfileId,
+    conversationId: run.conversationId,
     channelContext: run.channelContext,
     approvalReviewerDeviceId: run.approvalReviewerDeviceId,
     terminalReplyExpectation: run.terminalReplyExpectation,
@@ -167,28 +171,5 @@ export function buildReplyRunStateParams(run: FollowupRun["run"]) {
     bootstrapUserProfileId: run.bootstrapUserProfileId,
     gatewayUiCommandTarget: run.gatewayUiCommandTarget,
     taskSuggestionDeliveryMode: run.taskSuggestionDeliveryMode,
-  };
-}
-
-export function buildReplyMediaContextParams(
-  { run, originatingAccountId }: FollowupRun,
-  sessionKey: string | undefined,
-  cfg: FollowupRun["run"]["config"],
-) {
-  return {
-    cfg,
-    agentId: run.agentId,
-    sessionKey,
-    workspaceDir: run.workspaceDir,
-    mediaNormalizationOwner: run.mediaNormalizationOwner,
-    messageProvider: run.messageProvider,
-    accountId: originatingAccountId ?? run.agentAccountId,
-    groupId: run.groupId,
-    groupChannel: run.groupChannel,
-    groupSpace: run.groupSpace,
-    requesterSenderId: run.senderId,
-    requesterSenderName: run.senderName,
-    requesterSenderUsername: run.senderUsername,
-    requesterSenderE164: run.senderE164,
   };
 }

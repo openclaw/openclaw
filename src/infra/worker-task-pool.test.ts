@@ -114,9 +114,15 @@ it.each(["options", "constructor"] as const)(
     const reason = new Error("canceled during worker preparation");
     const workerChannel = channel("worker_threads");
     const cancel = () => controller.abort(reason);
-    if (phase === "constructor") {
-      workerChannel.subscribe(cancel);
-    }
+    const scratchPresentAtExit: boolean[] = [];
+    const observeWorker = (message: unknown) => {
+      const { worker } = message as { worker: Worker };
+      worker.once("exit", () => scratchPresentAtExit.push(fs.existsSync(directory)));
+      if (phase === "constructor") {
+        cancel();
+      }
+    };
+    workerChannel.subscribe(observeWorker);
     const pool = createPool({
       workerOptions: {
         get workerData() {
@@ -133,11 +139,13 @@ it.each(["options", "constructor"] as const)(
         reason,
       );
       await pool.close();
-      expect(workers.map((worker) => worker.threadId)).toEqual(phase === "constructor" ? [-1] : []);
+      // Synchronous cancellation can still construct a worker; its scratch must outlive it.
+      expect(workers.map((worker) => worker.threadId)).toEqual([-1]);
+      expect(scratchPresentAtExit).toEqual([true]);
       expect(fs.existsSync(directory)).toBe(false);
     } finally {
-      workerChannel.unsubscribe(cancel);
-      // Join even a Worker incorrectly created after reentrant cancellation.
+      workerChannel.unsubscribe(observeWorker);
+      // A failed assertion must still join the worker created after cancellation.
       await Promise.all(workers.map((worker) => worker.terminate()));
       await pool.close();
     }

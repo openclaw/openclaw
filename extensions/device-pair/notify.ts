@@ -26,16 +26,14 @@ import {
 const NOTIFY_POLL_INTERVAL_MS = 10_000;
 
 // Gateway services and workspace command registries have distinct APIs but share these stores.
-const notifyStateListeners = new Set<() => void>();
+let wakeNotifier: (() => void) | undefined;
 
 async function writeNotifyState<T>(write: () => Promise<T>): Promise<T> {
   try {
     return await write();
   } finally {
     // Failed replies can follow durable writes; wake the owner to reconcile either outcome.
-    for (const listener of notifyStateListeners) {
-      listener();
-    }
+    wakeNotifier?.();
   }
 }
 
@@ -74,22 +72,11 @@ export function formatPendingRequests(pending: PendingPairingRequest[]): string 
   return lines.join("\n");
 }
 
-type NotifySubscriberStore = PluginStateKeyedStore<NotifySubscription> & {
-  observe: NonNullable<PluginStateKeyedStore<NotifySubscription>["observe"]>;
-  compareAndApply: NonNullable<PluginStateKeyedStore<NotifySubscription>["compareAndApply"]>;
-};
-
-function openNotifySubscriberStore(api: OpenClawPluginApi): NotifySubscriberStore {
-  const store = api.runtime.state.openKeyedStore<NotifySubscription>({
+function openNotifySubscriberStore(api: OpenClawPluginApi) {
+  return api.runtime.state.openKeyedStoreV2<NotifySubscription>({
     namespace: DEVICE_PAIR_NOTIFY_SUBSCRIBER_NAMESPACE,
     maxEntries: DEVICE_PAIR_NOTIFY_SUBSCRIBER_MAX_ENTRIES,
   });
-  if (!store.observe || !store.compareAndApply) {
-    throw new Error(
-      "device-pair notify requires a runtime with atomic plugin state compare-and-apply support",
-    );
-  }
-  return store as NotifySubscriberStore;
 }
 
 function openNotifySeenRequestStore(
@@ -379,9 +366,7 @@ export async function handleNotifyCommand(params: {
   if (params.action === "status" || params.action === "") {
     const [current, subscriberCount, pending] = await Promise.all([
       subscriberStore.lookup(targetStoreKey),
-      subscriberStore.count
-        ? subscriberStore.count()
-        : subscriberStore.entries().then((entries) => entries.length),
+      subscriberStore.count(),
       listDevicePairing(),
     ]);
     const enabled = Boolean(current);
@@ -440,17 +425,20 @@ export function startPairingNotifier(
     });
   }
 
-  const wake = () => {
+  wakeNotifier = () => {
     if (running) {
       wakeRequested = true;
     } else {
       scheduleNext();
     }
   };
-  notifyStateListeners.add(wake);
-  scheduler.signal.addEventListener("abort", () => notifyStateListeners.delete(wake), {
-    once: true,
-  });
+  scheduler.signal.addEventListener(
+    "abort",
+    () => {
+      wakeNotifier = undefined;
+    },
+    { once: true },
+  );
   // Keep the first scan off Gateway readiness; retirement joins delivery and its receipt.
   scheduleNext();
 }

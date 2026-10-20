@@ -24,9 +24,29 @@ import {
   type SessionRowProjection,
 } from "../session-row-projection.js";
 import * as rowInputs from "../session-utils-row.js";
+import { listProjectRecents } from "./projects-recents.js";
 import { loadProjectSessionStore } from "./projects-session-store.js";
 import { projectsHandlers as registeredProjectsHandlers } from "./projects.js";
 import { initializeRepository, invokeProjectMethod } from "./projects.test-support.js";
+
+test("folder recents deduplicate normalized nodes without merging different runners", async () => {
+  const candidates = [" node-a ", "node-a", "node-b", " ", undefined].map((execNode, index) => ({
+    key: `agent:main:folder-${index}`,
+    agentId: "main",
+    entry: { sessionId: `folder-${index}`, updatedAt: index, spawnedCwd: "/work/app", execNode },
+  }));
+  const usedSessions = new Set<string>();
+  expect(await listProjectRecents(candidates, [], usedSessions)).toEqual([
+    { kind: "folder", folder: "/work/app", displayName: "app", execNode: "node-a" },
+    { kind: "folder", folder: "/work/app", displayName: "app", execNode: "node-b" },
+    { kind: "folder", folder: "/work/app", displayName: "app" },
+  ]);
+  expect([...usedSessions]).toEqual([
+    "agent:main:folder-0",
+    "agent:main:folder-2",
+    "agent:main:folder-3",
+  ]);
+});
 
 test("projects.list reuses durable metadata until a committed session change", async () => {
   const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-reuse-" });

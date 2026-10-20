@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { readAgentDatabaseDeletionSnapshot } from "../../state/agent-deletion-journal.read.js";
@@ -79,6 +80,7 @@ it.each([false, true])(
               databasePath: context.admission.databasePath,
               payload: {
                 pid: process.pid,
+                processNamespace: readGatewayLockProcessNamespace(),
                 createdAt: new Date().toISOString(),
                 configPath: state.configPath,
                 stateDir: state.stateDir,

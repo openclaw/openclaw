@@ -18,7 +18,6 @@ import {
   KEY,
   RUN,
   ID,
-  EPOCH,
   msg,
   captureWorkerTranscriptSource,
 } from "./live-events.test-support.js";
@@ -107,7 +106,7 @@ describe("worker live reply media", () => {
         await started.promise;
         expect(deltas()).toEqual(["first"]);
         if (revoke) {
-          rx.clearEnvironment(ID.environmentId, EPOCH);
+          rx.clearEnvironment(ID.environmentId);
         }
         prepared.resolve({
           text: "ready",

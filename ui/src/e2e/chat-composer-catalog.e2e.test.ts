@@ -9,6 +9,7 @@ import {
   installMockGateway,
   navigateToControlUiSession,
   type ControlUiMockGateway,
+  type MockGatewayWindow,
 } from "../test-helpers/control-ui-e2e.ts";
 import { revealChatModelOption, selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -742,61 +743,80 @@ suite.define(() => {
       await revealChatModelOption(modelOption(composer, "example/first-open"));
       await expectVisible(modelOption(composer, "example/first-open"));
       await gateway.setMethodResponse("models.list", { models: [existing, firstOpen, published] });
+      const refreshBaseline = await gateway.deferNext("models.list", {
+        agentId: "main",
+        sessionKey: "agent:main:main",
+      });
+      await gateway.emitGatewayEvent("chat.metadata.changed", {});
+      await gateway.waitForRequest("models.list", { after: refreshBaseline });
       const previousRequestCount = (await gateway.getRequests("models.list")).length;
 
-      const reopened = await picker.evaluate(async (details: HTMLDetailsElement) => {
-        const pane = details.closest<
-          HTMLElement & { requestUpdate(): void; updateComplete: Promise<boolean> }
-        >("openclaw-chat-pane");
-        const summary = details.querySelector<HTMLElement>(":scope > summary");
-        if (!pane || !summary) {
-          throw new Error("Expected the native picker and its chat pane");
-        }
-        if (document.visibilityState !== "visible") {
-          throw new Error("Expected a visible document before native picker activation");
-        }
-        await pane.updateComplete;
-        if (!details.open || !details.isConnected) {
-          throw new Error("Expected the first-open catalog to remain rendered");
-        }
-        const listeners = new Set<() => void>();
-        const nextToggle = () =>
-          new Promise<void>((resolve) => {
-            const listener = () => {
-              listeners.delete(listener);
-              resolve();
-            };
-            listeners.add(listener);
-            details.addEventListener("toggle", listener, { once: true });
-          });
-        try {
-          const closed = nextToggle();
-          summary.click();
-          if (details.open) {
-            throw new Error("Expected native close activation to close the picker");
+      const reopened = await picker.evaluate(
+        async (details: HTMLDetailsElement, models) => {
+          const pane = details.closest<HTMLElement & { updateComplete: Promise<boolean> }>(
+            "openclaw-chat-pane",
+          );
+          const summary = details.querySelector<HTMLElement>(":scope > summary");
+          if (!pane || !summary) {
+            throw new Error("Expected the native picker and its chat pane");
           }
-          await closed;
-          const opened = nextToggle();
-          summary.click();
-          if (!details.open) {
-            throw new Error("Expected native reopen activation to open the picker");
+          // SAFETY: installMockGateway installs this typed browser fixture before navigation.
+          const mockGateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
+          if (!mockGateway) {
+            throw new Error("Expected the mock Gateway publication owner");
           }
-          // A normal render must not overwrite a newer native open before its queued toggle.
-          pane.requestUpdate();
+          if (document.visibilityState !== "visible") {
+            throw new Error("Expected a visible document before native picker activation");
+          }
           await pane.updateComplete;
-          await opened;
-          return { open: details.open, connected: details.isConnected };
-        } finally {
-          for (const listener of listeners) {
-            details.removeEventListener("toggle", listener);
+          if (!details.open || !details.isConnected) {
+            throw new Error("Expected the first-open catalog to remain rendered");
           }
-        }
-      });
+          const listeners = new Set<() => void>();
+          const nextToggle = () =>
+            new Promise<void>((resolve) => {
+              const listener = () => {
+                listeners.delete(listener);
+                resolve();
+              };
+              listeners.add(listener);
+              details.addEventListener("toggle", listener, { once: true });
+            });
+          try {
+            const closed = nextToggle();
+            summary.click();
+            if (details.open) {
+              throw new Error("Expected native close activation to close the picker");
+            }
+            await closed;
+            const opened = nextToggle();
+            summary.click();
+            if (!details.open) {
+              throw new Error("Expected native reopen activation to open the picker");
+            }
+            // A catalog publication must preserve native open before its queued toggle publishes.
+            mockGateway.resolveDeferred(
+              "models.list",
+              { models },
+              { match: { agentId: "main", sessionKey: "agent:main:main" } },
+            );
+            await pane.updateComplete;
+            await opened;
+            return { open: details.open, connected: details.isConnected };
+          } finally {
+            for (const listener of listeners) {
+              details.removeEventListener("toggle", listener);
+            }
+          }
+        },
+        [existing, { ...firstOpen, name: "First open republished" }],
+      );
 
       expect(reopened).toEqual({ open: true, connected: true });
       expect(await gateway.getRequests("models.list")).toHaveLength(previousRequestCount);
       await revealChatModelOption(modelOption(composer, "example/first-open"));
       expect(await modelOption(composer, "example/first-open").isVisible()).toBe(true);
+      await expectText(modelOption(composer, "example/first-open"), "First open republished");
       await gateway.emitGatewayEvent("chat.metadata.changed", {});
       await gateway.waitForRequest("models.list", { after: previousRequestCount });
       await expectVisible(modelOption(composer, "example/published"));

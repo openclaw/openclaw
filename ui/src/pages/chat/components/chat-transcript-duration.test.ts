@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flush } from "../../../test-helpers/solid-settle.ts";
-import { createChatState } from "../chat-state-controller.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { projectChatTranscriptMetadata } from "../session-message-cache.ts";
 import { render, renderChatThread } from "../test-helpers/chat-transcript-native.tsx";
@@ -100,7 +99,7 @@ describe("completed-work duration", () => {
     },
   );
 
-  it("refreshes the work disclosure callback when its render lifecycle is replaced", async () => {
+  it("keeps the work disclosure interactive after its parent renders again", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(60_000);
     const runId = "restored-work";
@@ -128,19 +127,10 @@ describe("completed-work duration", () => {
       render(renderChatThread(props, transcript), container);
       transcript.update();
     };
-    const controller = createChatState({
-      invalidate: rerender,
-      updateComplete: Promise.resolve(true),
-    });
-    const dispose = controller.dispose;
-    const original = controller.createRenderLifecycle();
-    props.onRequestUpdate = () => original.invalidate();
     try {
       rerender();
       transcript.start();
       await vi.advanceTimersByTimeAsync(0);
-      const replacement = controller.createRenderLifecycle();
-      props.onRequestUpdate = () => replacement.invalidate();
       rerender();
       const disclosure = container.querySelector<HTMLButtonElement>(".chat-work-group > button");
       expect(disclosure).not.toBeNull();
@@ -155,7 +145,6 @@ describe("completed-work duration", () => {
       expect(container.textContent).not.toContain("read");
       expect(container.textContent).toContain("Inspection complete");
     } finally {
-      dispose();
       transcript.dispose();
       container.remove();
       vi.useRealTimers();
@@ -235,6 +224,7 @@ describe("live progress placement", () => {
   afterEach(resetTranscriptTestDom);
 
   it("keeps progress after accepted steers and before queued input", () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(31_000);
     const runId = "active-run";
     const prompt = (id: string, seq: number, target?: string) => ({
       role: "user",
@@ -305,7 +295,7 @@ describe("live progress placement", () => {
 
       expect(container.querySelectorAll(".chat-working-indicator")).toHaveLength(1);
       expect(progress.textContent).toContain("5.6k output tokens");
-      expect(progress.querySelector("openclaw-elapsed-time")).toMatchObject({ startMs: 1_000 });
+      expect(progress.querySelector("openclaw-elapsed-time")?.textContent).toBe("30s");
       expect(answer.compareDocumentPosition(progress) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
         Node.DOCUMENT_POSITION_FOLLOWING,
       );
@@ -321,6 +311,7 @@ describe("live progress placement", () => {
         Node.DOCUMENT_POSITION_FOLLOWING,
       );
     } finally {
+      clock.mockRestore();
       transcript.dispose();
       container.remove();
     }

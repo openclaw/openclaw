@@ -28,7 +28,7 @@ import {
   type SessionPendingInputReceipt,
 } from "./session-accessor.pending-inputs.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
-import { createDurableSessionActorFactory } from "./session-actor-durable.js";
+import { createSessionActorFactory } from "./session-actor-durable.js";
 import { readSessionPendingInputContext } from "./session-pending-input-history.js";
 import { readPendingInputHistoryInDatabase } from "./session-pending-input-history.kernel.js";
 import * as historyRuntime from "./session-transcript-worker-runtime.js";
@@ -48,7 +48,7 @@ it("skips covered empty history and reads a newly staged input after its owner c
     if (typeof identity.identity !== "string") {
       throw new Error("Pending history fixture requires a durable database");
     }
-    const actor = await createDurableSessionActorFactory({
+    const actor = await createSessionActorFactory({
       agentId: scope.agentId,
       path: database.path,
       env,
@@ -409,6 +409,86 @@ it("keeps a recovered owner queued when its generation changes after the history
       original.finish("interrupted");
       recovered?.finish("interrupted");
       await Promise.all([original.settled?.(), recovered?.settled?.()]);
+    }
+  });
+});
+
+it("keeps concurrent history readers consistent after one reconciles orphaned input", async ({
+  signal,
+}) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:concurrent-pending-history",
+      sessionId: "concurrent-pending-history",
+    };
+    const database = openOpenClawAgentDatabase({ agentId: scope.agentId });
+    writeSessionEntry(database, scope.sessionKey, { sessionId: scope.sessionId, updatedAt: 1 });
+    const receipt = expectDefined(
+      await stageSessionPendingInput(scope, {
+        runId: "orphaned",
+        message: {
+          role: "user",
+          content: "Saved update",
+          timestamp: 1,
+          idempotencyKey: "orphaned:user",
+        },
+        assertCurrent() {},
+      }),
+      "Expected accepted input",
+    );
+    receipt.finish("interrupted");
+    await receipt.settled?.();
+    database.db
+      .prepare("UPDATE session_pending_inputs SET state = 'queued' WHERE input_id = ?")
+      .run(receipt.inputId);
+    const snapshotReady = createDeferred();
+    const release = createDeferred();
+    const readHistory = historyRuntime.withSessionHistoryWorkerDatabase;
+    let paused = false;
+    const spy = vi
+      .spyOn(historyRuntime, "withSessionHistoryWorkerDatabase")
+      .mockImplementation(
+        <T>(
+          options: Parameters<typeof readHistory>[0],
+          operation: (owner: historyRuntime.SessionHistoryWorkerDatabase) => Promise<T>,
+          lane?: Parameters<typeof readHistory>[2],
+        ) =>
+          readHistory(
+            options,
+            (owner) =>
+              operation({
+                ...owner,
+                readPendingInputHistory: async (...args) => {
+                  const snapshot = await owner.readPendingInputHistory(...args);
+                  if (!paused) {
+                    paused = true;
+                    snapshotReady.resolve();
+                    await release.promise;
+                  }
+                  return snapshot;
+                },
+              }),
+            lane,
+          ),
+      );
+    const first = listSessionPendingInputs(scope);
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(snapshotReady.promise, first, "History skipped its reader"),
+        signal,
+      );
+      expect(await listSessionPendingInputs(scope)).toMatchObject({
+        items: [{ id: receipt.inputId, state: "interrupted" }],
+      });
+      release.resolve();
+      await expect(first).resolves.toMatchObject({
+        items: [{ id: receipt.inputId, state: "interrupted" }],
+      });
+    } finally {
+      release.resolve();
+      await Promise.allSettled([first]);
+      spy.mockRestore();
     }
   });
 });
