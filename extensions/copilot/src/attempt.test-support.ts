@@ -38,27 +38,9 @@ export type SessionEventShape = {
 type SendFn = (options?: unknown) => Promise<string>;
 type SendAndWaitFn = (options?: unknown) => Promise<SessionEventShape | undefined>;
 
-export type FakeSession = {
-  abort: ReturnType<typeof vi.fn<() => Promise<void>>>;
-  cfg: Record<string, unknown>;
-  disconnect: ReturnType<typeof vi.fn<() => Promise<void>>>;
-  emit: (eventType: string, data: Record<string, unknown>) => void;
-  id: string;
-  off: ReturnType<
-    typeof vi.fn<(eventType: string, handler: (event: SessionEventShape) => void) => void>
-  >;
-  on: ReturnType<typeof vi.fn>;
-  rpc: {
-    history: {
-      cancelBackgroundCompaction: ReturnType<typeof vi.fn<() => Promise<{ cancelled: boolean }>>>;
-    };
-  };
-  send: ReturnType<typeof vi.fn<SendFn>>;
-  sendAndWait: ReturnType<typeof vi.fn<SendAndWaitFn>>;
-  sessionId: string;
-};
-
+export type FakeSession = ReturnType<typeof createFakeSession>;
 export type FakeSdk = ReturnType<typeof makeFakeSdk>;
+type SessionHook = (session: FakeSession, cfg: Record<string, unknown>) => void | Promise<void>;
 
 function makeEvent(type: string, data: Record<string, unknown>): SessionEventShape {
   return {
@@ -82,7 +64,7 @@ export function makeAssistantMessageEvent(
   });
 }
 
-function createFakeSession(cfg: Record<string, unknown>, id: string): FakeSession {
+function createFakeSession(cfg: Record<string, unknown>, id: string) {
   const listeners = new Map<string, Array<(event: SessionEventShape) => void>>();
   const off = vi.fn((eventType: string, handler: (event: SessionEventShape) => void) => {
     const handlers = listeners.get(eventType) ?? [];
@@ -141,12 +123,9 @@ export function makeFakePool(sdk: FakeSdk) {
 
 export function makeFakeSdk(
   options:
-    | ((session: FakeSession, cfg: Record<string, unknown>) => void | Promise<void>)
+    | SessionHook
     | {
-        onCreateSession?: (
-          session: FakeSession,
-          cfg: Record<string, unknown>,
-        ) => void | Promise<void>;
+        onCreateSession?: SessionHook;
         onResumeSession?: (
           session: FakeSession,
           sessionId: string,

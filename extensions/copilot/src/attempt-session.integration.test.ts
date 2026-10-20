@@ -66,6 +66,31 @@ const toolResultFault = useSqliteWorkerFault([
   },
 ]);
 
+function makeParams(attempt: AttemptParamsLike, tempDir: string) {
+  return {
+    ...attempt,
+    agentDir: tempDir,
+    auth: { useLoggedInUser: true },
+    provider: "github-copilot",
+    modelId: "gpt-5",
+    model: {
+      api: "openai-responses",
+      id: "gpt-5",
+      name: "GPT-5",
+      provider: "github-copilot",
+      baseUrl: "https://api.githubcopilot.com",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 4096,
+    },
+    hostCapabilities: createCopilotTestHostCapabilities(),
+    promptMode: "none",
+    disableTools: true,
+  } satisfies AgentHarnessAttemptParamsV2 & Pick<AttemptParamsLike, "auth">;
+}
+
 describe("Copilot canonical session persistence", () => {
   beforeEach(() => setRuntimeConfigSnapshot({}));
   afterEach(() => {
@@ -156,27 +181,11 @@ describe("Copilot canonical session persistence", () => {
       });
       const pool = makeFakePool(sdk);
       const params = {
-        ...attempt,
+        ...makeParams(attempt, tempDir),
         abortSignal: controller.signal,
-        agentDir: tempDir,
-        auth: { useLoggedInUser: true },
         config: { tools: { toolSearch: false } },
         disableTools: false,
         hostCapabilities: createCopilotTestHostCapabilities(() => [sourceTool]),
-        provider: "github-copilot",
-        modelId: "gpt-5",
-        model: {
-          api: "openai-responses",
-          id: "gpt-5",
-          name: "GPT-5",
-          provider: "github-copilot",
-          baseUrl: "https://api.githubcopilot.com",
-          reasoning: true,
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 128_000,
-          maxTokens: 4096,
-        },
         // Raw prompts omit SDK tools; this fixture exercises the ordinary tool bridge.
         promptMode: "minimal",
       } satisfies AgentHarnessAttemptParamsV2 & Pick<AttemptParamsLike, "auth">;
@@ -296,35 +305,12 @@ describe("Copilot canonical session persistence", () => {
       dispose: vi.fn(async () => []),
       size: () => 0,
     } satisfies CopilotClientPool;
-    const params = {
-      ...attempt,
-      agentDir: tempDir,
-      provider: "github-copilot",
-      modelId: "gpt-5",
-      model: {
-        api: "openai-responses",
-        id: "gpt-5",
-        name: "GPT-5",
-        provider: "github-copilot",
-        baseUrl: "https://api.githubcopilot.com",
-        reasoning: true,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128_000,
-        maxTokens: 4096,
-      } satisfies AgentHarnessAttemptParamsV2["model"],
-      auth: { useLoggedInUser: true },
-      hostCapabilities: createCopilotTestHostCapabilities(),
-      promptMode: "none" as const,
-      disableTools: true,
-    };
+    const params = makeParams(attempt, tempDir);
     copilotAttemptOverrides.createToolBridge = async () => ({
       sourceTools: [],
       promptToolPolicy: { apply: () => ({ tools: [], callableToolNames: [] }) },
     });
-    const deps = {
-      pool,
-    };
+    const deps = { pool };
     const failed = (await runCopilotAttempt(params, deps)) as AttemptResultWithSdkSessionId;
     expect(failed.terminal).toEqual({ kind: "failed", source: "prompt", error: failure });
     expect(failed.sdkSessionId).toBe("sdk-session-1");

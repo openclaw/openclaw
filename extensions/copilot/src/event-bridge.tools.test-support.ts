@@ -13,6 +13,8 @@ type ToolEventFixtures = {
 export function registerCopilotToolEventTests({ createFakeSession, makeEvent }: ToolEventFixtures) {
   it("fans prepared executed outcomes to bus and callback without changing SDK counters", async () => {
     const session = createFakeSession();
+    const emit = (type: string, data: Record<string, unknown>) =>
+      session.emit(type, makeEvent(type, data));
     const runId = "copilot-activity";
     const bus: Record<string, unknown>[] = [];
     const direct = vi.fn();
@@ -33,28 +35,22 @@ export function registerCopilotToolEventTests({ createFakeSession, makeEvent }: 
         ["quiet", "kill", "poll", false],
         ["failed", "poll", "poll", true],
       ] as const) {
-        session.emit(
-          "tool.execution_start",
-          makeEvent("tool.execution_start", {
-            toolCallId,
-            toolName: "process",
-            arguments: { action: requestedAction },
-          }),
-        );
+        emit("tool.execution_start", {
+          toolCallId,
+          toolName: "process",
+          arguments: { action: requestedAction },
+        });
         bridge.completeTool({
           toolCallId,
           toolName: "process",
           args: { action: executedAction },
           isError,
         });
-        session.emit(
-          "tool.execution_complete",
-          makeEvent("tool.execution_complete", {
-            toolCallId,
-            success: !isError,
-            result: { content: "raw result" },
-          }),
-        );
+        emit("tool.execution_complete", {
+          toolCallId,
+          success: !isError,
+          result: { content: "raw result" },
+        });
       }
       await bridge.awaitAgentEventChain();
       expect(bus).toHaveLength(6);
@@ -68,14 +64,11 @@ export function registerCopilotToolEventTests({ createFakeSession, makeEvent }: 
           .map((item) => Boolean(item.hideFromChannelProgress)),
       ).toEqual([false, true, false]);
       expect(bridge.snapshot()).toMatchObject({ startedCount: 3, completedCount: 3 });
-      session.emit(
-        "tool.execution_start",
-        makeEvent("tool.execution_start", {
-          toolCallId: "root-catalog",
-          toolName: "tool_search",
-          arguments: {},
-        }),
-      );
+      emit("tool.execution_start", {
+        toolCallId: "root-catalog",
+        toolName: "tool_search",
+        arguments: {},
+      });
       bridge.completeTool({
         toolCallId: "root-nested",
         parentToolCallId: "root-catalog",

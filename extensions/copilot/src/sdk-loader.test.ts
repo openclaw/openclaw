@@ -1,16 +1,14 @@
-// Copilot tests cover sdk loader plugin behavior.
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import copilotPluginPackage from "../package.json" with { type: "json" };
 
-const FAKE_SDK = {
-  CopilotClient: vi.fn(),
-};
-
-function mockPrimaryImport(factory: () => Promise<unknown>) {
-  vi.doMock("@github/copilot-sdk", factory);
+const FAKE_SDK = { CopilotClient: vi.fn() };
+function mockPrimaryImport(value: typeof FAKE_SDK | Error) {
+  vi.doMock("@github/copilot-sdk", () =>
+    value instanceof Error ? Promise.reject(value) : Promise.resolve(value),
+  );
 }
 
 describe("sdk-loader", () => {
@@ -20,14 +18,7 @@ describe("sdk-loader", () => {
   beforeEach(() => {
     vi.resetModules();
     stateDir = mkdtempSync(path.join(tmpdir(), "copilot-sdk-loader-"));
-    fallbackPath = path.join(
-      stateDir,
-      "npm-runtime",
-      "copilot",
-      "node_modules",
-      "@github",
-      "copilot-sdk",
-    );
+    fallbackPath = path.join(stateDir, "npm-runtime/copilot/node_modules/@github/copilot-sdk");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   });
 
@@ -48,15 +39,11 @@ describe("sdk-loader", () => {
       path.join(fallbackPath, "index.cjs"),
       "module.exports = { openclawDefaultImporterSentinel: true };",
     );
-    mockPrimaryImport(async () => {
-      throw new Error("Cannot find module '@github/copilot-sdk'");
-    });
+    mockPrimaryImport(new Error("Cannot find module '@github/copilot-sdk'"));
     const { loadCopilotSdk } = await import("./sdk-loader.js");
-
-    const sdk = (await loadCopilotSdk()) as unknown as {
-      openclawDefaultImporterSentinel?: boolean;
-    };
-    expect(sdk.openclawDefaultImporterSentinel).toBe(true);
+    await expect(loadCopilotSdk()).resolves.toMatchObject({
+      openclawDefaultImporterSentinel: true,
+    });
   });
 
   it("throws an actionable error with install and resolution details", async () => {
@@ -80,25 +67,21 @@ describe("sdk-loader", () => {
   });
 
   it("caches successful loads across calls", async () => {
-    mockPrimaryImport(async () => FAKE_SDK);
+    mockPrimaryImport(FAKE_SDK);
     const { loadCopilotSdk } = await import("./sdk-loader.js");
     const first = await loadCopilotSdk();
 
-    mockPrimaryImport(async () => {
-      throw new Error("a cached load must not import again");
-    });
+    mockPrimaryImport(new Error("a cached load must not import again"));
     expect(await loadCopilotSdk()).toBe(first);
     expect(first.CopilotClient).toBe(FAKE_SDK.CopilotClient);
   });
 
   it("does not poison the cache after a failed load", async () => {
-    mockPrimaryImport(async () => {
-      throw new Error("first boom");
-    });
+    mockPrimaryImport(new Error("first boom"));
     const { loadCopilotSdk } = await import("./sdk-loader.js");
     await expect(loadCopilotSdk()).rejects.toMatchObject({ code: "COPILOT_SDK_MISSING" });
 
-    mockPrimaryImport(async () => FAKE_SDK);
+    mockPrimaryImport(FAKE_SDK);
     const sdk = await loadCopilotSdk();
     expect(sdk.CopilotClient).toBe(FAKE_SDK.CopilotClient);
   });
