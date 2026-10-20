@@ -130,7 +130,7 @@ type ApprovalReplayHost = Pick<
   reconcileApprovalTerminals?: ApplicationOverlays["reconcileApprovalTerminals"];
 };
 
-export function currentSessionApprovalReplay(
+function currentSessionApprovalReplay(
   state: ApprovalReplayHost,
   agentId?: string,
 ): SessionApprovalReplayState | undefined {
