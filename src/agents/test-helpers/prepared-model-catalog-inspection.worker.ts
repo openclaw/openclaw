@@ -64,6 +64,7 @@ port.on = (event, listener) => {
 };
 const post = port.postMessage.bind(port);
 port.postMessage = (message: { status: string; value?: object }, transferList) => {
+  let response = message;
   if (message.status === "ok" && message.value) {
     const { input, sourceConfigForSecrets } = task.value;
     const runtimeFacts = facts.getConfigResolutionFacts(input.config);
@@ -94,8 +95,12 @@ port.postMessage = (message: { status: string; value?: object }, transferList) =
       inspection.authoredRef = facts.getAuthoredConfigSecretRef(config, key);
       inspection.resolvedEnvRef = facts.getResolvedConfigEnvSecretRef(config, key);
     }
-    return post({ ...message, value: { ...message.value, inspection } }, transferList);
+    response = { ...message, value: { ...message.value, inspection } };
   }
-  post(message, transferList);
+  if (Array.isArray(transferList)) {
+    post(response, transferList);
+  } else {
+    post(response, transferList);
+  }
 };
 await import("../prepared-model-catalog.worker.js");

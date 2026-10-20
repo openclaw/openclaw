@@ -2,6 +2,7 @@ import { expect, test, vi } from "vitest";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { commitMemory } from "../config/sessions/session-actor-memory-publication.test-support.js";
 import { withSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
+import type { SessionActorStorageWrites } from "../config/sessions/session-actor-storage-contract.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import * as sessionHistoryState from "./session-history-state.js";
 import {
@@ -82,7 +83,7 @@ export function registerMemorySessionHistoryTests(
 
         const authority = { assertCurrent() {}, authorize() {} };
         const lifetime = { assertCurrent() {}, assertReadable() {} };
-        const input = {
+        const input: SessionActorStorageWrites["session.entry.create"]["input"] = {
           entry: { sessionId, updatedAt: Date.now(), incognito: true },
           transcriptEvents: [
             { type: "session", id: sessionId, version: 3, cwd: "/synthetic" },
