@@ -1,17 +1,10 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
-import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
-import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createUpdateRunFixture } from "../../test-helpers/update-run.ts";
 import { mountConfigPage } from "./config-page.test-support.ts";
-
-afterEach(() => {
-  cleanupSolid();
-  document.body.replaceChildren();
-  vi.restoreAllMocks();
-});
 
 it.each([
   ["owner administrator", "gateway-owner", "operator.admin", true, true],
@@ -37,9 +30,6 @@ it.each([
         canSet: true,
         state: {
           connected: true,
-          configLoading: false,
-          configSaving: false,
-          configApplying: false,
           configForm: { update: { channel: "stable", auto: { enabled: false } } },
           configSnapshot: null,
         },
@@ -77,8 +67,6 @@ it.each([
       },
     } as unknown as ApplicationContext;
     const { container } = mountConfigPage(context, { pageId: "updates" });
-    flush();
-
     const report = await waitForSolid(() => {
       const button = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
         (candidate) => candidate.textContent?.trim() === "Report update failure",
@@ -86,11 +74,8 @@ it.each([
       expect(button).toBeDefined();
       return button!;
     });
-    expect(report?.disabled).toBe(!allowed);
-    report?.click();
-    expect(reportUpdateFailure).toHaveBeenCalledTimes(allowed ? 1 : 0);
-    if (allowed) {
-      expect(reportUpdateFailure).toHaveBeenCalledWith(run.runId);
-    }
+    expect(report).toMatchObject({ disabled: !allowed });
+    report.click();
+    expect(reportUpdateFailure.mock.calls).toEqual(allowed ? [[run.runId]] : []);
   },
 );

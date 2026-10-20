@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
+import { nextFrame } from "../../test-helpers/modal-dialog.ts";
 import "../../styles/base.css";
 import "../../styles/layout.css";
 import "../../styles/settings.css";
@@ -37,10 +38,6 @@ function mountMemory(settings = false) {
   return (selector: string) => expectDefined(host?.querySelector<HTMLElement>(selector), selector);
 }
 
-const nextFrame = () =>
-  new Promise<void>((resolve) => {
-    requestAnimationFrame(() => resolve());
-  });
 const expectFixed = (before: number, after: number) =>
   expect(Math.abs(after - before)).toBeLessThanOrEqual(layoutTolerancePx);
 
@@ -50,21 +47,18 @@ describe.skipIf(!hasBrowserLayout)("Memory page browser layout", () => {
     const header = find(".hub-page-header");
     const title = find(".hub-page-header__title");
     const actions = find(".hub-page-header__actions");
-    const before = {
+    const measure = () => ({
       paddingInlineStart: getComputedStyle(header).paddingInlineStart,
       title: title.getBoundingClientRect(),
       actions: actions.getBoundingClientRect(),
-    };
+    });
+    const before = measure();
 
     find(".settings-page").remove();
     find(".content").classList.remove("content--settings-page");
     await nextFrame();
 
-    const after = {
-      paddingInlineStart: getComputedStyle(header).paddingInlineStart,
-      title: title.getBoundingClientRect(),
-      actions: actions.getBoundingClientRect(),
-    };
+    const after = measure();
     expect(after.paddingInlineStart).toBe(before.paddingInlineStart);
     expectFixed(before.title.left, after.title.left);
     expectFixed(before.actions.right, after.actions.right);
@@ -75,20 +69,17 @@ describe.skipIf(!hasBrowserLayout)("Memory page browser layout", () => {
     const content = find(".content");
     const header = find(".hub-page-header");
     const tabs = find(".hub-page-header__tabs");
-    const before = {
+    const measure = () => ({
       clientWidth: content.clientWidth,
       header: header.getBoundingClientRect(),
       tabs: tabs.getBoundingClientRect(),
-    };
+    });
+    const before = measure();
 
     find(".memory-page__panel").style.height = "1200px";
     await nextFrame();
 
-    const after = {
-      clientWidth: content.clientWidth,
-      header: header.getBoundingClientRect(),
-      tabs: tabs.getBoundingClientRect(),
-    };
+    const after = measure();
     expect(getComputedStyle(content).scrollbarGutter).toBe("stable");
     expect(after.clientWidth).toBe(before.clientWidth);
     expectFixed(before.header.left, after.header.left);
