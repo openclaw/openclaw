@@ -13,6 +13,54 @@ import { withSessionSendDelivery } from "../session-send-delivery.js";
 import { persistAgentSessionPhase } from "./agent-session-persist.js";
 
 const profileState = { scenario: "minimal", prepareProfileCatalog: true } as const;
+type PersistParams = Parameters<typeof persistAgentSessionPhase>[0];
+
+function makePersistParams(
+  overrides: Pick<PersistParams, "runId" | "canonicalSessionKey" | "storePath" | "cfg"> &
+    Partial<PersistParams>,
+): PersistParams {
+  const { runId } = overrides;
+  const initialPatchBuild: AgentSessionPatchBuild = {
+    patch: { sessionId: runId, updatedAt: 1 },
+    spawnedBy: undefined,
+    groupId: undefined,
+    groupChannel: undefined,
+    groupSpace: undefined,
+    freshSessionRotatedSinceLoad: false,
+    isNewSession: true,
+    rotatedSessionId: false,
+    usableRequestedSessionId: undefined,
+    freshness: undefined,
+  };
+  return {
+    request: { message: "sandboxed", idempotencyKey: runId },
+    sessionAgentId: "main",
+    mainSessionKey: "agent:main:main",
+    creation: { via: "run" },
+    lifecycleGeneration: getAgentEventLifecycleGeneration(),
+    isRestartRecoveryResumeRun: false,
+    agentId: "main",
+    suppressVisibleSessionEffects: false,
+    initialPatchBuild,
+    buildSessionPatch: async () => initialPatchBuild,
+    state: {
+      sessionPersistedBeforeGatewayAdmission: false,
+      admittedSessionId: runId,
+      skipAgentInitialSessionTouch: false,
+      isNewSession: true,
+      bestEffortDeliver: false,
+    },
+    touchInteraction: false,
+    expectedSession: undefined,
+    maintenanceConfig: undefined,
+    assertGatewayWorkAdmissionAllowed: vi.fn(),
+    respondToGatewayAdmissionOutcome: () => false,
+    setCronContinuationClaim: vi.fn(),
+    setMainRestartRecoveryOwnerLease: vi.fn(),
+    respond: vi.fn(),
+    ...overrides,
+  };
+}
 
 describe("persistAgentSessionPhase", () => {
   it.each([false, true])(
@@ -24,19 +72,6 @@ describe("persistAgentSessionPhase", () => {
         const sessionKey = "agent:main:synthetic-sandbox";
         const runId = "synthetic-sandbox-run";
         const storePath = state.statePath("agents", "main", "sessions", "sessions.json");
-        const patchBuild: AgentSessionPatchBuild = {
-          patch: { sessionId: runId, updatedAt: 1 },
-          spawnedBy: undefined,
-          groupId: undefined,
-          groupChannel: undefined,
-          groupSpace: undefined,
-          freshSessionRotatedSinceLoad: false,
-          isNewSession: true,
-          rotatedSessionId: false,
-          usableRequestedSessionId: undefined,
-          freshness: undefined,
-        };
-
         const sql = observeHostDataSql();
         const committed = vi.fn((entry: { sessionId: string }) => {
           sql.restore();
@@ -45,9 +80,8 @@ describe("persistAgentSessionPhase", () => {
           );
         });
         const setMainRestartRecoveryOwnerLease = vi.fn();
-        const params: Parameters<typeof persistAgentSessionPhase>[0] = {
+        const params = makePersistParams({
           onSessionCommitted: committed,
-          request: { message: "sandboxed", idempotencyKey: runId },
           cfg: {
             gateway: {
               roles: {
@@ -65,33 +99,10 @@ describe("persistAgentSessionPhase", () => {
           },
           storePath,
           canonicalSessionKey: sessionKey,
-          sessionAgentId: "main",
-          mainSessionKey: "agent:main:main",
-          creation: { via: "run" },
           operatorRoleActor: { kind: "operator", profileId: profile.id },
-          lifecycleGeneration: getAgentEventLifecycleGeneration(),
-          isRestartRecoveryResumeRun: false,
           runId,
-          agentId: "main",
-          suppressVisibleSessionEffects: false,
-          initialPatchBuild: patchBuild,
-          buildSessionPatch: async () => patchBuild,
-          state: {
-            sessionPersistedBeforeGatewayAdmission: false,
-            admittedSessionId: runId,
-            skipAgentInitialSessionTouch: false,
-            isNewSession: true,
-            bestEffortDeliver: false,
-          },
-          touchInteraction: false,
-          expectedSession: undefined,
-          maintenanceConfig: undefined,
-          assertGatewayWorkAdmissionAllowed: vi.fn(),
-          respondToGatewayAdmissionOutcome: () => false,
-          setCronContinuationClaim: vi.fn(),
           setMainRestartRecoveryOwnerLease,
-          respond: vi.fn(),
-        };
+        });
         const result = await persistAgentSessionPhase(params).finally(sql.restore);
 
         expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
@@ -119,7 +130,7 @@ describe("persistAgentSessionPhase", () => {
           restartRecoveryRuns: [interruptedRun],
         };
         await replaceSessionEntry({ agentId: "main", sessionKey, storePath }, interrupted);
-        const resumedPatch = { ...patchBuild, isNewSession: false };
+        const resumedPatch = { ...params.initialPatchBuild, isNewSession: false };
         const persist = () =>
           persistAgentSessionPhase({
             ...params,
@@ -176,70 +187,34 @@ describe("persistAgentSessionPhase", () => {
         using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         const allowedAgents = revokeDuringPreparation ? ["main"] : [];
         const respond = vi.fn<Parameters<typeof persistAgentSessionPhase>[0]["respond"]>();
-        const patchBuild: AgentSessionPatchBuild = {
-          patch: { sessionId: runId, updatedAt: 1 },
-          spawnedBy: undefined,
-          groupId: undefined,
-          groupChannel: undefined,
-          groupSpace: undefined,
-          freshSessionRotatedSinceLoad: false,
-          isNewSession: true,
-          rotatedSessionId: false,
-          usableRequestedSessionId: undefined,
-          freshness: undefined,
-        };
-
-        await expect(
-          persistAgentSessionPhase({
-            request: { message: "denied", idempotencyKey: runId },
-            cfg: {
-              gateway: {
-                roles: {
-                  default: "restricted",
-                  definitions: {
-                    restricted: {
-                      sessions: { others: "none" },
-                      agents: allowedAgents,
-                      scopes: [],
-                    },
+        const params = makePersistParams({
+          request: { message: "denied", idempotencyKey: runId },
+          cfg: {
+            gateway: {
+              roles: {
+                default: "restricted",
+                definitions: {
+                  restricted: {
+                    sessions: { others: "none" },
+                    agents: allowedAgents,
+                    scopes: [],
                   },
                 },
               },
             },
-            storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
-            canonicalSessionKey: sessionKey,
-            sessionAgentId: "main",
-            mainSessionKey: "agent:main:main",
-            creation: { via: "run" },
-            operatorRoleActor: { kind: "operator", profileId: profile.id },
-            lifecycleGeneration: getAgentEventLifecycleGeneration(),
-            isRestartRecoveryResumeRun: false,
-            runId,
-            agentId: "main",
-            suppressVisibleSessionEffects: false,
-            initialPatchBuild: patchBuild,
-            buildSessionPatch: async () => {
-              await Promise.resolve();
-              allowedAgents.length = 0;
-              return patchBuild;
-            },
-            state: {
-              sessionPersistedBeforeGatewayAdmission: false,
-              admittedSessionId: runId,
-              skipAgentInitialSessionTouch: false,
-              isNewSession: true,
-              bestEffortDeliver: false,
-            },
-            touchInteraction: false,
-            expectedSession: undefined,
-            maintenanceConfig: undefined,
-            assertGatewayWorkAdmissionAllowed: vi.fn(),
-            respondToGatewayAdmissionOutcome: () => false,
-            setCronContinuationClaim: vi.fn(),
-            setMainRestartRecoveryOwnerLease: vi.fn(),
-            respond,
-          }),
-        ).resolves.toBeUndefined();
+          },
+          storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
+          canonicalSessionKey: sessionKey,
+          operatorRoleActor: { kind: "operator", profileId: profile.id },
+          runId,
+          respond,
+        });
+        params.buildSessionPatch = async () => {
+          await Promise.resolve();
+          allowedAgents.length = 0;
+          return params.initialPatchBuild;
+        };
+        await expect(persistAgentSessionPhase(params)).resolves.toBeUndefined();
 
         expect(respond).toHaveBeenCalledWith(
           false,

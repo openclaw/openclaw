@@ -65,6 +65,11 @@ async function writeMediaImage(state: OpenClawTestState, name: string) {
   return { imagePath, png };
 }
 
+const assistantText = (text = "Completed") =>
+  makeAgentAssistantMessage({ content: [{ type: "text", text }], stopReason: "stop" });
+const displayedImage = (fields: Record<string, unknown> = {}) =>
+  expect.arrayContaining([expect.objectContaining({ type: "image", ...fields })]);
+
 async function runMediaTurn(
   state: OpenClawTestState,
   authoredMessage: AssistantMessage,
@@ -305,11 +310,8 @@ async function runMediaTurn(
 
 it("preserves agent-run commentary attachments after their source files are removed", async () => {
   await withOpenClawTestState({ label: "agent-commentary-media" }, async (state) => {
-    const imagePath = path.join(state.workspaceDir, "before.png");
-    const hookImagePath = path.join(state.workspaceDir, "hook-added.png");
-    const png = createSolidPngBuffer(1, 1, { r: 24, g: 64, b: 128 });
-    await fs.mkdir(state.workspaceDir, { recursive: true });
-    await Promise.all([imagePath, hookImagePath].map((file) => fs.writeFile(file, png)));
+    const { imagePath, png } = await writeMediaImage(state, "before.png");
+    const { imagePath: hookImagePath } = await writeMediaImage(state, "hook-added.png");
     vi.spyOn(hookRunnerGlobal, "getGlobalHookRunner").mockReturnValue(
       createHookRunnerWithRegistry([
         {
@@ -392,10 +394,7 @@ it.each(["raw directive", "structured attachment", "separate text payload"] as c
           : source === "separate text payload"
             ? `MEDIA:${imagePath}`
             : "Completed";
-      const authored = makeAgentAssistantMessage({
-        content: [{ type: "text", text }],
-        stopReason: "stop",
-      });
+      const authored = assistantText(text);
       const { result, context, sessionKey, message, messageAtFinal, finalizationStatements } =
         await runMediaTurn(state, authored, {
           payloads: [
@@ -438,16 +437,14 @@ it("keeps final media under its original sandbox policy when the store alias cha
     const text = `Completed\nMEDIA:${imagePath}`;
     const { result, context, messageAtFinal, retargetedEntry } = await runMediaTurn(
       state,
-      makeAgentAssistantMessage({ content: [{ type: "text", text }], stopReason: "stop" }),
+      assistantText(text),
       { payloads: [{ text }], retargetBeforeNormalization: true },
     );
     expect(retargetedEntry?.sandbox).toBe("required");
     expect(result.terminalOutcome.status).toBe("ok");
     expect(context.logGateway.warn).not.toHaveBeenCalled();
     expect(messageAtFinal?.openclawDisplayContent).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ type: "image", artifactId: expect.any(String) }),
-      ]),
+      displayedImage({ artifactId: expect.any(String) }),
     );
   });
 });
@@ -468,18 +465,11 @@ it.each<{
 ])("does not retain final $name through the WebChat projector", async (scenario) => {
   await withOpenClawTestState({ label: "agent-final-media-suppression" }, async (state) => {
     const { imagePath } = await writeMediaImage(state, "private.png");
-    const { sessionKey, message } = await runMediaTurn(
-      state,
-      makeAgentAssistantMessage({
-        content: [{ type: "text", text: "Completed" }],
-        stopReason: "stop",
-      }),
-      {
-        payloads: [{ text: "Completed", mediaUrls: [imagePath], ...scenario.payload }],
-        options: scenario.options,
-        incognito: scenario.incognito,
-      },
-    );
+    const { sessionKey, message } = await runMediaTurn(state, assistantText(), {
+      payloads: [{ text: "Completed", mediaUrls: [imagePath], ...scenario.payload }],
+      options: scenario.options,
+      incognito: scenario.incognito,
+    });
     expect(message?.openclawDisplayContent).toBeUndefined();
     expect(await listManagedImageRecordEntries({ sessionKey })).toEqual([]);
   });
@@ -492,10 +482,7 @@ it.each(["abort", "permission", "placement", "route"] as const)(
       const { imagePath } = await writeMediaImage(state, "revoked.png");
       const { result, sessionKey, message, messageAtFinal } = await runMediaTurn(
         state,
-        makeAgentAssistantMessage({
-          content: [{ type: "text", text: "Completed" }],
-          stopReason: "stop",
-        }),
+        assistantText(),
         {
           payloads: [{ text: "Completed", mediaUrls: [imagePath] }],
           changeAfterPreparation: change,
@@ -507,9 +494,7 @@ it.each(["abort", "permission", "placement", "route"] as const)(
       }
       const records = await listManagedImageRecordEntries({ sessionKey });
       if (change === "route") {
-        expect(messageAtFinal?.openclawDisplayContent).toEqual(
-          expect.arrayContaining([expect.objectContaining({ type: "image" })]),
-        );
+        expect(messageAtFinal?.openclawDisplayContent).toEqual(displayedImage());
         expect(records).toHaveLength(1);
         expect(records[0]?.record.messageId).toBe("progress");
       } else {
@@ -524,17 +509,11 @@ it.each(["abort", "permission", "placement", "route"] as const)(
 it("settles committed media ownership even when the run aborts before publication", async () => {
   await withOpenClawTestState({ label: "agent-final-media-committed" }, async (state) => {
     const { imagePath, png } = await writeMediaImage(state, "committed.png");
-    const { sessionKey, messageAtFinal } = await runMediaTurn(
-      state,
-      makeAgentAssistantMessage({
-        content: [{ type: "text", text: "Completed" }],
-        stopReason: "stop",
-      }),
-      { payloads: [{ text: "Completed", mediaUrls: [imagePath] }], abortAfterCommit: true },
-    );
-    expect(messageAtFinal?.openclawDisplayContent).toEqual(
-      expect.arrayContaining([expect.objectContaining({ type: "image" })]),
-    );
+    const { sessionKey, messageAtFinal } = await runMediaTurn(state, assistantText(), {
+      payloads: [{ text: "Completed", mediaUrls: [imagePath] }],
+      abortAfterCommit: true,
+    });
+    expect(messageAtFinal?.openclawDisplayContent).toEqual(displayedImage());
     const records = await listManagedImageRecordEntries({ sessionKey });
     expect(records).toHaveLength(1);
     expect(records[0]?.record.messageId).toBe("progress");
