@@ -3,12 +3,7 @@ import { createTelephonyTtsProvider, type TelephonyTtsRuntime } from "./telephon
 
 const passthroughPreparation: TelephonyTtsRuntime["prepareTtsRequest"] = async ({ cfg, text }) => ({
   cfg,
-  directives: {
-    cleanedText: text,
-    hasDirective: false,
-    overrides: {},
-    warnings: [],
-  },
+  directives: { cleanedText: text, hasDirective: false, overrides: {}, warnings: [] },
 });
 
 function createProvider(
@@ -17,12 +12,7 @@ function createProvider(
   logger?: Parameters<typeof createTelephonyTtsProvider>[0]["logger"],
 ) {
   return createTelephonyTtsProvider({
-    coreConfig: {
-      tts: {
-        provider: "openai",
-        providers: { openai: { model: "gpt-4o-mini-tts", voice: "alloy" } },
-      },
-    },
+    coreConfig: {},
     runtime: { prepareTtsRequest, textToSpeechTelephony },
     logger,
   });

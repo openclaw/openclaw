@@ -43,8 +43,7 @@ it("finalizes fixture calls and releases their timers, database workers, and dir
     init(id, type) {
       const owner = ownership.getStore();
       if (type === "Timeout" && owner) {
-        // Database operations inherit caller context too. Keep their idle
-        // timers under observation without miscounting them as call timers.
+        // Database idle timers inherit caller context but are not call timers.
         if (timerDelay.getStore() === timerMs[owner]) {
           allocated[owner]++;
           pending.set(id, owner);
@@ -62,11 +61,10 @@ it("finalizes fixture calls and releases their timers, database workers, and dir
   }).enable();
   const fixtures: Array<Awaited<ReturnType<typeof createManagerHarness>>> = [];
   const calls: CallRecord[] = [];
-  const turns: Array<ReturnType<(typeof fixtures)[number]["manager"]["continueCall"]>> = [];
-  let turnResult: Awaited<(typeof turns)[number]> | undefined;
+  let turn: ReturnType<(typeof fixtures)[number]["manager"]["continueCall"]> | undefined;
+  let turnResult: Awaited<typeof turn>;
 
-  // Finish hooks are LIFO: register verification before allocating fixtures so
-  // it observes their cleanup, after afterEach and fixture teardown have run.
+  // LIFO: register before fixtures so verification runs after their teardown.
   onTestFinished(async () => {
     try {
       await setImmediate(); // Node delivers timer destroy events on the next loop.
@@ -93,14 +91,13 @@ it("finalizes fixture calls and releases their timers, database workers, and dir
       expect(turnResult).toEqual({ success: false, error: "Call ended: hangup-user" });
     } finally {
       try {
-        // Keep failing-before proof contained; this runs only after assertions
-        // and uses carrier hangup, not the fixture's synthetic terminal event.
+        // Failure cleanup uses carrier hangup, not the fixture's synthetic event.
         for (const { manager } of fixtures) {
           for (const call of manager.getActiveCalls()) {
             await manager.endCall(call.callId);
           }
         }
-        await Promise.all(turns);
+        await turn;
         await closeOpenClawStateDatabaseAsync();
         for (const { storePath } of fixtures) {
           fs.rmSync(storePath, { recursive: true, force: true });
@@ -127,13 +124,11 @@ it("finalizes fixture calls and releases their timers, database workers, and dir
       markCallAnswered(fixture.manager, started.callId, `answered-${index}`),
     );
     if (index === 0) {
-      turns.push(
-        ownership.run("transcript", () =>
-          fixture.manager.continueCall(started.callId, "Waiting for a reply").then((result) => {
-            turnResult = result;
-            return result;
-          }),
-        ),
+      turn = ownership.run("transcript", () =>
+        fixture.manager.continueCall(started.callId, "Waiting for a reply").then((result) => {
+          turnResult = result;
+          return result;
+        }),
       );
     }
   }
@@ -141,17 +136,17 @@ it("finalizes fixture calls and releases their timers, database workers, and dir
   await withinTest(
     awaitGateBeforeSettlement(
       transcriptAllocated.promise,
-      Promise.all(turns),
+      expectDefined(turn, "fixture turn"),
       "fixture turn settled before allocating its transcript timer",
     ),
     signal,
   );
   expect(allocated).toEqual({ duration: 2, transcript: 1 });
   // Database admission workers can finish before fixture teardown; call timers must stay live.
-  expect(
-    [...pending.values()]
-      .filter((owner) => owner === "duration" || owner === "transcript")
-      .toSorted(),
-  ).toEqual(["duration", "duration", "transcript"]);
+  expect([...pending.values()].filter((owner) => owner !== "database-timer").toSorted()).toEqual([
+    "duration",
+    "duration",
+    "transcript",
+  ]);
   expect(turnResult).toBeUndefined();
 });

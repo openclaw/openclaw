@@ -197,6 +197,23 @@ async function withPausedPersistence(
   }
 }
 
+type TestCall = Awaited<ReturnType<typeof startCall>>;
+async function deliverAcrossIgnoredEvent(
+  call: TestCall,
+  first: Awaited<ReturnType<typeof responseAt>>,
+  interrupt: () => Promise<void>,
+) {
+  await withPausedPersistence(call.manager, async (persistence, processEvent) => {
+    const delivery = first.early("current reply");
+    await persistence.entered;
+    const event = interrupt();
+    await vi.waitFor(() => expect(processEvent).toHaveBeenCalledOnce());
+    persistence.release();
+    await event;
+    expect(await delivery).toBe(true);
+  });
+}
+
 beforeEach(() => {
   state.setup();
   mocks.createTranscription.mockClear();
@@ -221,27 +238,41 @@ afterEach(async () => {
 });
 
 describe("automatic phone reply ownership", () => {
-  it("revokes a reply waiting for persistence when partial stream speech arrives", async () => {
-    const call = await startCall(true);
-    const { callbacks } = await call.openStream("stream-pending-write");
-    callbacks.onTranscript?.("first question");
-    const first = await responseAt(0);
-    await withPausedPersistence(call.manager, async (persistence) => {
-      const delivery = first.early("obsolete early reply");
-      await persistence.entered;
-      call.expectPlayback();
-      callbacks.onPartial?.("wait");
-      expect(call.provider.clearTtsQueue).toHaveBeenCalled();
-      persistence.release();
-      expect(await delivery).toBe(false);
-      call.expectPlayback();
-      await first.finish("obsolete final reply");
-      callbacks.onTranscript?.("replacement question");
-      const second = await responseAt(1);
-      await second.finish("current reply");
-      call.expectPlayback("current reply");
-    });
-  });
+  it.each([true, false])(
+    "orders pending playback behind partial speech (stream=%s)",
+    async (streaming) => {
+      const call = await startCall(streaming);
+      const callbacks = streaming
+        ? (await call.openStream("stream-pending-write")).callbacks
+        : undefined;
+      const question = async (text: string) =>
+        callbacks ? callbacks.onTranscript?.(text) : call.speech(text);
+      await question("first question");
+      const first = await responseAt(0);
+      await withPausedPersistence(call.manager, async (persistence, processEvent) => {
+        const delivery = first.early("obsolete early reply");
+        await persistence.entered;
+        call.expectPlayback();
+        const speech = callbacks ? undefined : call.speech("replacement question", false);
+        if (callbacks) {
+          callbacks.onPartial?.("wait");
+          expect(call.provider.clearTtsQueue).toHaveBeenCalled();
+        } else {
+          await vi.waitFor(() => expect(processEvent).toHaveBeenCalledOnce());
+          call.expectPlayback();
+        }
+        persistence.release();
+        await speech;
+        expect(await delivery).toBe(false);
+        call.expectPlayback();
+        await first.finish(streaming ? "obsolete final reply" : "");
+        await question("replacement question");
+        const second = await responseAt(1);
+        await second.finish("current reply");
+        call.expectPlayback("current reply");
+      });
+    },
+  );
 
   it("does not revive a pending transcript reply after newer stream speech starts", async () => {
     const call = await startCall(true);
@@ -278,28 +309,6 @@ describe("automatic phone reply ownership", () => {
     });
   });
 
-  it("orders automatic playback behind queued partial carrier speech", async () => {
-    const call = await startCall();
-    await call.speech("first question");
-    const first = await responseAt(0);
-    await withPausedPersistence(call.manager, async (persistence, processEvent) => {
-      const delivery = first.early("obsolete reply");
-      await persistence.entered;
-      const speech = call.speech("replacement question", false);
-      await vi.waitFor(() => expect(processEvent).toHaveBeenCalledOnce());
-      call.expectPlayback();
-      persistence.release();
-      await speech;
-      expect(await delivery).toBe(false);
-      call.expectPlayback();
-      await first.finish("");
-      await call.speech("replacement question");
-      const replacement = await responseAt(1);
-      await replacement.finish("current reply");
-      call.expectPlayback("current reply");
-    });
-  });
-
   it("keeps explicit speech available after a speech-start with no final transcript", async () => {
     const call = await startCall(true);
     const { callbacks } = await call.openStream("stream-1");
@@ -331,39 +340,27 @@ describe("automatic phone reply ownership", () => {
     if (!turnToken) {
       throw new Error("Expected explicit turn token");
     }
-    await withPausedPersistence(call.manager, async (persistence, processEvent) => {
-      const delivery = first.early("current reply");
-      await persistence.entered;
-      const rejectedSpeech = call.speech("obsolete input", true, "mismatched-event", "old-token");
-      await vi.waitFor(() => expect(processEvent).toHaveBeenCalledOnce());
-      persistence.release();
-      await rejectedSpeech;
-      expect(await delivery).toBe(true);
-      call.expectPlayback("explicit prompt", "current reply");
-      await call.speech("accepted input", true, "accepted-event", turnToken);
-      expect(await waiting).toMatchObject({ success: true, transcript: "accepted input" });
-      await first.finish("obsolete final reply");
-      call.expectPlayback("explicit prompt", "current reply");
-    });
+    await deliverAcrossIgnoredEvent(call, first, () =>
+      call.speech("obsolete input", true, "mismatched-event", "old-token"),
+    );
+    call.expectPlayback("explicit prompt", "current reply");
+    await call.speech("accepted input", true, "accepted-event", turnToken);
+    expect(await waiting).toMatchObject({ success: true, transcript: "accepted input" });
+    await first.finish("obsolete final reply");
+    call.expectPlayback("explicit prompt", "current reply");
   });
 
   it("does not invalidate on a replayed transcript", async () => {
     const call = await startCall();
     await call.speech("first question", true, "same-event");
     const first = await responseAt(0);
-    await withPausedPersistence(call.manager, async (persistence, processEvent) => {
-      const delivery = first.early("current reply");
-      await persistence.entered;
-      const replay = call.speech("first question", true, "same-event");
-      await vi.waitFor(() => expect(processEvent).toHaveBeenCalledOnce());
-      persistence.release();
-      await replay;
-      expect(await delivery).toBe(true);
-      await first.finish("");
-      expect(await first.early("late callback after completion")).toBe(false);
-      call.expectPlayback("current reply");
-      expect(mocks.generate).toHaveBeenCalledTimes(1);
-    });
+    await deliverAcrossIgnoredEvent(call, first, () =>
+      call.speech("first question", true, "same-event"),
+    );
+    await first.finish("");
+    expect(await first.early("late callback after completion")).toBe(false);
+    call.expectPlayback("current reply");
+    expect(mocks.generate).toHaveBeenCalledTimes(1);
   });
 
   it("ignores a late final transcript from a predecessor stream", async () => {

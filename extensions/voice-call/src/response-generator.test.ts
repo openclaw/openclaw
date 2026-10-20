@@ -5,30 +5,24 @@ import type { OpenClawPluginApi } from "../api.js";
 import { normalizeVoiceCallConfig } from "./config.js";
 import { generateVoiceResponse } from "./response-generator.js";
 
-type TestSessionEntry = {
-  sessionId: string;
-  updatedAt: number;
-  agentHarnessId?: string;
-  agentRuntimeOverride?: string;
-  providerOverride?: string;
-  modelOverride?: string;
-  modelOverrideSource?: string;
-  model?: string;
-  modelProvider?: string;
-  modelSelectionLocked?: boolean;
-  pluginOwnerId?: string;
-  pluginExtensions?: Record<string, unknown>;
-  contextTokens?: number;
-  authProfileOverride?: string;
-};
-
 type AgentRuntime = OpenClawPluginApi["runtime"]["agent"];
+type TestSessionEntry = NonNullable<
+  Awaited<ReturnType<AgentRuntime["session"]["getSessionEntryAsync"]>>
+>;
 type EmbeddedAgentArgs = Parameters<AgentRuntime["runEmbeddedAgent"]>[0];
 type ReplyPayload = Parameters<NonNullable<EmbeddedAgentArgs["onBlockReply"]>>[0];
 type VoiceResponseParams = Parameters<typeof generateVoiceResponse>[0];
 const defaultSessionKey = "agent:main:voice:15550001111";
+const voiceConfig = (overrides: Parameters<typeof normalizeVoiceCallConfig>[0] = {}) =>
+  normalizeVoiceCallConfig({ responseTimeoutMs: 5000, ...overrides });
+const sessionEntry = (overrides: Partial<TestSessionEntry> = {}): TestSessionEntry => ({
+  sessionId: "existing-session",
+  updatedAt: 100,
+  ...overrides,
+});
+const spoken = (text: string): ReplyPayload => ({ text: JSON.stringify({ spoken: text }) });
 const agentResult = (text?: string) => ({
-  payloads: text ? [{ text: JSON.stringify({ spoken: text }) }] : [],
+  payloads: text ? [spoken(text)] : [],
   meta: { durationMs: 20_000, aborted: false },
 });
 
@@ -41,19 +35,17 @@ function createAgentRuntime(
     async (params: { sessionKey: string }) => sessionStore[params.sessionKey],
   );
   const prepareSessionEntryPatch = vi.fn(
-    async (params: {
-      sessionKey: string;
-      fallbackEntry?: TestSessionEntry;
-      replaceEntry?: boolean;
-      prepare: (
-        entry: TestSessionEntry,
-      ) => Partial<TestSessionEntry> | null | Promise<Partial<TestSessionEntry> | null>;
-    }) => {
+    async (params: Parameters<AgentRuntime["session"]["prepareSessionEntryPatch"]>[0]) => {
       const existing = sessionStore[params.sessionKey] ?? params.fallbackEntry;
       if (!existing) {
         return null;
       }
-      const patch = await params.prepare({ ...existing });
+      const patch = await params.prepare(
+        { ...existing },
+        {
+          existingEntry: sessionStore[params.sessionKey],
+        },
+      );
       if (!patch) {
         return existing;
       }
@@ -111,17 +103,17 @@ function createAgentRuntime(
   };
 }
 
-function requireEmbeddedAgentArgs(runEmbeddedAgent: ReturnType<typeof vi.fn>) {
-  const calls = runEmbeddedAgent.mock.calls as unknown[][];
-  const firstCall = expectDefined(
-    calls.at(0),
+function requireEmbeddedAgentArgs(
+  runEmbeddedAgent: ReturnType<typeof createAgentRuntime>["runEmbeddedAgent"],
+) {
+  const [args] = expectDefined(
+    runEmbeddedAgent.mock.calls.at(0),
     "voice response generator embedded agent invocation",
   );
-  const args = firstCall[0] as Partial<EmbeddedAgentArgs> | undefined;
-  if (!args?.extraSystemPrompt) {
+  if (!args.extraSystemPrompt) {
     throw new Error("voice response generator did not pass the spoken-output contract prompt");
   }
-  return args as EmbeddedAgentArgs;
+  return args;
 }
 
 async function runGenerateVoiceResponse(
@@ -131,7 +123,7 @@ async function runGenerateVoiceResponse(
   const { runtime, ...params } = overrides;
   const userMessage = params.userMessage ?? "hello there";
   const result = await generateVoiceResponse({
-    voiceConfig: normalizeVoiceCallConfig({ responseTimeoutMs: 5000 }),
+    voiceConfig: voiceConfig(),
     coreConfig: {},
     agentRuntime: runtime ?? createAgentRuntime(payloads).runtime,
     callId: "call-123",
@@ -162,9 +154,7 @@ async function runStreamingScenario(
 
 describe("generateVoiceResponse", () => {
   it("keeps bounded audible opening context at external-user priority", async () => {
-    const { runtime, runEmbeddedAgent } = createAgentRuntime([
-      { text: '{"spoken":"Safe response."}' },
-    ]);
+    const { runtime, runEmbeddedAgent } = createAgentRuntime([spoken("Safe response.")]);
     const currentCallerSpeech = "My confirmation number is ABC-123";
 
     await runGenerateVoiceResponse([], {
@@ -195,9 +185,7 @@ describe("generateVoiceResponse", () => {
   });
 
   it("does not replay cumulative call history after the first caller turn", async () => {
-    const { runtime, runEmbeddedAgent } = createAgentRuntime([
-      { text: '{"spoken":"Safe response."}' },
-    ]);
+    const { runtime, runEmbeddedAgent } = createAgentRuntime([spoken("Safe response.")]);
     const currentCallerSpeech = "What did you just say?";
 
     await runGenerateVoiceResponse([], {
@@ -217,9 +205,7 @@ describe("generateVoiceResponse", () => {
   });
 
   it("caps oversized audible opening context without splitting UTF-16", async () => {
-    const { runtime, runEmbeddedAgent } = createAgentRuntime([
-      { text: '{"spoken":"Safe response."}' },
-    ]);
+    const { runtime, runEmbeddedAgent } = createAgentRuntime([spoken("Safe response.")]);
     const currentCallerSpeech = "I am ready.";
     const oversizedGreeting = "🚀x".repeat(3_000);
 
@@ -344,10 +330,7 @@ describe("generateVoiceResponse", () => {
     const { result, onEarlyText } = await runStreamingScenario(async (args) => {
       args.onBlockReply?.({ text: '{"spoken":"I will check."}' }, { assistantMessageIndex: 0 });
       await args.onBlockReplyFlush?.({ reason: "tool_start", assistantMessageIndex: 0 });
-      args.onBlockReply?.(
-        { text: '{"spoken":"The result is ready."}' },
-        { assistantMessageIndex: 1 },
-      );
+      args.onBlockReply?.(spoken("The result is ready."), { assistantMessageIndex: 1 });
       await args.onBlockReplyFlush?.({ reason: "pre_compaction", attemptAccepted: true });
     }, "The result is ready.");
 
@@ -359,10 +342,7 @@ describe("generateVoiceResponse", () => {
     const { result, onEarlyText } = await runStreamingScenario(async (args) => {
       await args.onBlockReplyFlush?.({ reason: "tool_start", assistantMessageIndex: 0 });
       args.onBlockReply?.({ text: '{"spoken":"I will check."}' }, { assistantMessageIndex: 0 });
-      args.onBlockReply?.(
-        { text: '{"spoken":"The deferred result is ready."}' },
-        { assistantMessageIndex: 1 },
-      );
+      args.onBlockReply?.(spoken("The deferred result is ready."), { assistantMessageIndex: 1 });
       await args.onBlockReplyFlush?.({ reason: "pre_compaction", attemptAccepted: true });
     }, "The deferred result is ready.");
 
@@ -384,15 +364,9 @@ describe("generateVoiceResponse", () => {
   it("resets a rejected attempt tool boundary before the accepted retry", async () => {
     const { result, onEarlyText } = await runStreamingScenario(async (args) => {
       await args.onBlockReplyFlush?.({ reason: "tool_start", assistantMessageIndex: 0 });
-      args.onBlockReply?.(
-        { text: '{"spoken":"Rejected tool response."}' },
-        { assistantMessageIndex: 1 },
-      );
+      args.onBlockReply?.(spoken("Rejected tool response."), { assistantMessageIndex: 1 });
       await args.onBlockReplyFlush?.({ reason: "pre_compaction", attemptAccepted: false });
-      args.onBlockReply?.(
-        { text: '{"spoken":"Accepted retry response."}' },
-        { assistantMessageIndex: 0 },
-      );
+      args.onBlockReply?.(spoken("Accepted retry response."), { assistantMessageIndex: 0 });
       await args.onBlockReplyFlush?.({ reason: "pre_compaction", attemptAccepted: true });
     }, "Accepted retry response.");
 
@@ -429,21 +403,15 @@ describe("generateVoiceResponse", () => {
   it("pins the voice session to responseModel before running the embedded agent", async () => {
     const { runtime, runEmbeddedAgent, prepareSessionEntryPatch, sessionStore } =
       createAgentRuntime([{ text: '{"spoken":"Pinned model works."}' }]);
-    sessionStore["agent:main:voice:15550001111"] = {
-      sessionId: "existing-session",
-      updatedAt: 100,
+    sessionStore[defaultSessionKey] = sessionEntry({
       model: "old-model",
       modelProvider: "old-provider",
       contextTokens: 123,
       authProfileOverride: "old-auth-profile",
-    };
-    const voiceConfig = normalizeVoiceCallConfig({
-      responseModel: "openai/gpt-4.1-nano",
-      responseTimeoutMs: 5000,
     });
 
     const { result } = await runGenerateVoiceResponse([], {
-      voiceConfig,
+      voiceConfig: voiceConfig({ responseModel: "openai/gpt-4.1-nano" }),
       runtime,
     });
 
@@ -477,20 +445,15 @@ describe("generateVoiceResponse", () => {
   it("rejects responseModel for a model-locked session without running the embedded agent", async () => {
     const { runtime, runEmbeddedAgent, prepareSessionEntryPatch, sessionStore } =
       createAgentRuntime([]);
-    sessionStore["agent:main:voice:15550001111"] = {
+    sessionStore[defaultSessionKey] = sessionEntry({
       sessionId: "locked-session",
-      updatedAt: 100,
       model: "gpt-5.5",
       modelProvider: "openai",
       modelSelectionLocked: true,
-    };
-    const voiceConfig = normalizeVoiceCallConfig({
-      responseModel: "openai/gpt-4.1-nano",
-      responseTimeoutMs: 5000,
     });
 
     const { result } = await runGenerateVoiceResponse([], {
-      voiceConfig,
+      voiceConfig: voiceConfig({ responseModel: "openai/gpt-4.1-nano" }),
       runtime,
     });
 
@@ -511,12 +474,11 @@ describe("generateVoiceResponse", () => {
 
   it("propagates the lock for a same-agent supervised Codex session", async () => {
     const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime([
-      { text: '{"spoken":"Native Codex continued."}' },
+      spoken("Native Codex continued."),
     ]);
     const sessionKey = "agent:main:harness:codex:supervision:019f-codex-thread";
-    sessionStore[sessionKey] = {
+    sessionStore[sessionKey] = sessionEntry({
       sessionId: "catalog-adopted-session",
-      updatedAt: 100,
       agentHarnessId: "codex",
       agentRuntimeOverride: "openclaw",
       modelSelectionLocked: true,
@@ -528,7 +490,7 @@ describe("generateVoiceResponse", () => {
           },
         },
       },
-    };
+    });
     const { result } = await runGenerateVoiceResponse([], {
       runtime,
       sessionKey,
@@ -562,13 +524,9 @@ describe("generateVoiceResponse", () => {
     },
   ])("does not turn $name into a native voice pin", async ({ entry }) => {
     const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime([
-      { text: '{"spoken":"Voice continued."}' },
+      spoken("Voice continued."),
     ]);
-    sessionStore["agent:main:voice:15550001111"] = {
-      sessionId: "existing-session",
-      updatedAt: 100,
-      ...entry,
-    };
+    sessionStore[defaultSessionKey] = sessionEntry(entry);
 
     const { result } = await runGenerateVoiceResponse([], { runtime });
 
@@ -581,16 +539,12 @@ describe("generateVoiceResponse", () => {
 
   it("keeps wrapped foreign Matrix identities stable across restore", async () => {
     const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime([
-      { text: '{"spoken":"Matrix context."}' },
+      spoken("Matrix context."),
     ]);
-    const voiceConfig = normalizeVoiceCallConfig({
-      agentId: "voice",
-      responseTimeoutMs: 5000,
-    });
     const canonical = "agent:voice:agent:other:matrix:channel:!RoomAbC:example.org";
     const generate = (sessionKey: string) =>
       runGenerateVoiceResponse([], {
-        voiceConfig,
+        voiceConfig: voiceConfig({ agentId: "voice" }),
         runtime,
         agentId: "voice",
         sessionKey,
@@ -616,15 +570,10 @@ describe("generateVoiceResponse", () => {
 
   it("uses the configured core main key for restored call aliases", async () => {
     const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime([
-      { text: '{"spoken":"Main context."}' },
+      spoken("Main context."),
     ]);
-    const voiceConfig = normalizeVoiceCallConfig({
-      agentId: "voice",
-      responseTimeoutMs: 5000,
-    });
-
     await runGenerateVoiceResponse([], {
-      voiceConfig,
+      voiceConfig: voiceConfig({ agentId: "voice" }),
       coreConfig: { session: { mainKey: "work" } },
       runtime,
       agentId: "voice",
@@ -662,25 +611,11 @@ describe("generateVoiceResponse", () => {
     { policy: "empty configured allowlist", tools: { allow: [] } },
     { policy: "allowlist with a deny", tools: { allow: ["web_search", "read"], deny: ["read"] } },
   ])("keeps the routed agent's $policy in conversation config across turns", async ({ tools }) => {
-    const { runtime, runEmbeddedAgent } = createAgentRuntime([
-      { text: '{"spoken":"No tools needed."}' },
-    ]);
-    const coreConfig = {
-      agents: {
-        entries: {
-          voice: {
-            tools,
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
+    const { runtime, runEmbeddedAgent } = createAgentRuntime([spoken("No tools needed.")]);
+    const coreConfig = { agents: { entries: { voice: { tools } } } } satisfies OpenClawConfig;
 
     const params = {
-      voiceConfig: normalizeVoiceCallConfig({
-        agentId: "main",
-        responseModel: "ollama/qwen2.5:1.5b",
-        responseTimeoutMs: 5000,
-      }),
+      voiceConfig: voiceConfig({ agentId: "main", responseModel: "ollama/qwen2.5:1.5b" }),
       coreConfig,
       runtime,
       agentId: "voice",
