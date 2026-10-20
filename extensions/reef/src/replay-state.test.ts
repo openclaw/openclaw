@@ -2,9 +2,15 @@ import { randomBytes } from "@noble/hashes/utils.js";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
   OpenAsyncKeyedStoreOptions,
+  OpenKeyedStoreOptions,
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import {
+  createPluginStateKeyedStoreV2ForTests,
+  createPluginStateSyncKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   closeOpenClawStateDatabaseAsync,
   observeHostDataSql,
@@ -12,7 +18,6 @@ import {
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { generateIdentity, signReceipt } from "../protocol/index.js";
-import { flowRuntime } from "./flow.test-helpers.js";
 import {
   REEF_REPLAY_MAX_ENTRIES,
   REEF_REPLAY_NAMESPACE,
@@ -28,8 +33,9 @@ const hash = "a".repeat(64);
 const key = reefReplayStoreKey("alice", id);
 
 function fixture(maxEntries = REEF_REPLAY_MAX_ENTRIES) {
-  const env = { OPENCLAW_STATE_DIR: temp.make("reef-replay-") };
-  const runtime = flowRuntime(env);
+  const stateDir = temp.make("reef-replay-");
+  const env = { OPENCLAW_STATE_DIR: stateDir };
+  const runtime = createPluginRuntimeMock();
   const options = {
     namespace: REEF_REPLAY_NAMESPACE,
     maxEntries,
@@ -37,30 +43,39 @@ function fixture(maxEntries = REEF_REPLAY_MAX_ENTRIES) {
     defaultTtlMs: REEF_REPLAY_TTL_MS,
     env,
   };
-  const openStore = runtime.state.openKeyedStoreV2;
-  const store = openStore<ReefReplayRecord>(options);
-  const raw = runtime.state.openSyncKeyedStore<ReefReplayRecord>(options);
+  const store = createPluginStateKeyedStoreV2ForTests<ReefReplayRecord>("reef", options, {
+    assertCurrent() {},
+  });
+  const raw = createPluginStateSyncKeyedStoreForTests<ReefReplayRecord>("reef", options);
+  runtime.state.openSyncKeyedStore = <T>(opts: OpenKeyedStoreOptions) =>
+    createPluginStateSyncKeyedStoreForTests<T>("reef", { ...opts, env });
   runtime.state.openKeyedStoreV2 = <T>(opts: OpenAsyncKeyedStoreOptions) => {
     if (opts.retention === "retained" || opts.namespace !== REEF_REPLAY_NAMESPACE) {
-      return openStore<T>(opts);
+      return createPluginStateKeyedStoreV2ForTests<T>(
+        "reef",
+        { ...opts, env },
+        { assertCurrent() {} },
+      );
     }
     // The runtime's generic namespace selects this fixture's ReefReplayRecord store.
     return { ...store } as PluginStateKeyedStore<T, 2>;
   };
+  const identity = generateIdentity();
   const replayKey = new Uint8Array(32).fill(2);
-  const open = (rng: (length: number) => Uint8Array = randomBytes) =>
+  const open = () => new ReefSqliteReplayStore(runtime, replayKey, randomBytes, maxEntries);
+  const openWithRng = (rng: (length: number) => Uint8Array) =>
     new ReefSqliteReplayStore(runtime, replayKey, rng, maxEntries);
-  const update = (patch: Partial<ReefReplayRecord>) =>
-    store.register(key, { ...raw.lookup(key)!, ...patch });
   const receipt = signReceipt(
     { id, bodyHash: "b".repeat(64), auditHead: "c".repeat(64), status: "accepted" },
-    generateIdentity().signing.secretKey,
+    identity.signing.secretKey,
   );
-  return { store, raw, open, update, receipt };
+  return { store, raw, runtime, open, openWithRng, receipt, env };
 }
 
 describe("Reef replay worker ownership", () => {
-  beforeEach(resetPluginStateStoreForTests);
+  beforeEach(() => {
+    resetPluginStateStoreForTests();
+  });
   afterEach(async () => {
     vi.restoreAllMocks();
     await closeOpenClawStateDatabaseAsync();
@@ -70,19 +85,25 @@ describe("Reef replay worker ownership", () => {
   it("claims, refreshes, completes and reopens encrypted replay without host SQLite calls", async () => {
     const f = fixture();
     const replay = f.open();
-    const sql = observeHostDataSql().calls;
-    const completed = { receipt: f.receipt, body: { text: "synthetic private body" } };
+    const observation = observeHostDataSql();
+    const sql = observation.calls;
     await expect(replay.claim("alice", id, hash)).resolves.toBe("new");
     await replay.refresh?.("alice", id);
     await replay.complete("alice", id, f.receipt, { text: "synthetic private body" });
     await expect(replay.claim("alice", id, hash)).resolves.toBe("duplicate");
-    await expect(replay.completed("alice", id)).resolves.toEqual(completed);
+    await expect(replay.completed("alice", id)).resolves.toEqual({
+      receipt: f.receipt,
+      body: { text: "synthetic private body" },
+    });
     await expect(replay.claim("alice", id, "different")).resolves.toBe("mismatch");
     for (const spy of sql) {
       expect(spy).not.toHaveBeenCalled();
     }
     vi.restoreAllMocks();
-    await expect(f.open().completed("alice", id)).resolves.toEqual(completed);
+    await expect(f.open().completed("alice", id)).resolves.toEqual({
+      receipt: f.receipt,
+      body: { text: "synthetic private body" },
+    });
     expect(JSON.stringify(f.raw.lookup(key))).not.toContain("synthetic private body");
   });
 
@@ -126,14 +147,14 @@ describe("Reef replay worker ownership", () => {
     f.store.compareAndApply = async (...args) => {
       if (takeover) {
         takeover = false;
-        await f.update({ claimExpiresAt: Date.now() - 1 });
+        await f.store.register(key, { ...f.raw.lookup(key)!, claimExpiresAt: Date.now() - 1 });
         await successor.claim("alice", id, hash);
       }
       return compare(...args);
     };
     // A fresh handle captures the instrumented worker method but owns its own claim.
     const stale = f.open();
-    await f.update({ claimExpiresAt: Date.now() - 1 });
+    await f.store.register(key, { ...f.raw.lookup(key)!, claimExpiresAt: Date.now() - 1 });
     takeover = false;
     await stale.claim("alice", id, hash);
     takeover = true;
@@ -170,7 +191,7 @@ describe("Reef replay worker ownership", () => {
       if (!changed) {
         changed = true;
         expect(args[2]).toMatchObject({ action: "set", value: { claimOwner: "previous" } });
-        await f.update({ claimExpiresAt: deadline + 1 });
+        await f.store.register(key, { ...f.raw.lookup(key)!, claimExpiresAt: deadline + 1 });
         clock.mockReturnValue(deadline + 2);
       }
       return compare(...args);
@@ -187,7 +208,7 @@ describe("Reef replay worker ownership", () => {
     const rng = vi.fn<(length: number) => Uint8Array>(() => {
       throw failure;
     });
-    const replay = f.open(rng);
+    const replay = f.openWithRng(rng);
     await replay.claim("alice", id, hash);
     await expect(replay.complete("alice", id, f.receipt, { text: "body" })).rejects.toBe(failure);
     expect(rng.mock.calls).toEqual([[12]]);
@@ -204,17 +225,21 @@ describe("Reef replay worker ownership", () => {
         ciphertexts.push(intent.value.body!.enc);
         if (ciphertexts.length === 1) {
           const current = f.raw.lookup(entryKey)!;
-          await f.update({ claimExpiresAt: current.claimExpiresAt! + 1 });
+          await f.store.register(entryKey, {
+            ...current,
+            claimExpiresAt: current.claimExpiresAt! + 1,
+          });
         }
       }
       return compare(entryKey, comparison, intent);
     };
     const rng = vi.fn(randomBytes);
-    const replay = f.open(rng);
+    const replay = f.openWithRng(rng);
     await replay.claim("alice", id, hash);
     const receipt = structuredClone(f.receipt);
     const body = { text: "original" };
-    await replay.complete("alice", id, receipt, body);
+    const complete = replay.complete("alice", id, receipt, body);
+    await complete;
     expect(ciphertexts).toHaveLength(2);
     expect(new Set(ciphertexts).size).toBe(1);
     expect(rng.mock.calls).toEqual([[12]]);
@@ -243,7 +268,7 @@ describe("Reef replay worker ownership", () => {
   it("validates completion only after matching the live claim", async () => {
     const f = fixture();
     const rng = vi.fn(randomBytes);
-    const replay = f.open(rng);
+    const replay = f.openWithRng(rng);
     await expect(
       replay.complete("alice", id, { ...f.receipt, id: "wrong" }, { text: "body" }),
     ).rejects.toThrow("receipt id does not match");
