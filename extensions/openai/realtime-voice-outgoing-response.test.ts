@@ -38,19 +38,24 @@ function playResponse(socket: Socket, responseId: string, itemId: string) {
 function finishResponse(socket: Socket, id: string, status = "completed") {
   emitServerEvent(socket, { type: "response.done", response: { id, status, output: [] } });
 }
-async function preparingBridge(onClearAudio: (bridge: RealtimeVoiceBridge) => void) {
-  let cancelSuppression = false;
+async function interruptibleBridge(
+  eventType: "session.update" | "response.create",
+  options: Parameters<typeof createNativeBridge>[0] = {},
+  onClearAudio?: (bridge: RealtimeVoiceBridge) => void,
+) {
+  let armed = false;
   const bridge = createNativeBridge({
-    onClearAudio: () => onClearAudio(bridge),
+    ...options,
+    onClearAudio: () => onClearAudio?.(bridge),
     onEvent: (event) => {
-      if (cancelSuppression && event.direction === "client" && event.type === "session.update") {
-        cancelSuppression = false;
+      if (armed && event.direction === "client" && event.type === eventType) {
+        armed = false;
         bridge.handleBargeIn?.({ force: true });
       }
     },
   });
   const socket = await connectReadyBridge(bridge);
-  cancelSuppression = true;
+  armed = true;
   return { bridge, socket };
 }
 
@@ -62,19 +67,11 @@ describe("OpenAI realtime outgoing response ownership", () => {
     "sends %s creation before its observer can cancel",
     async (mode) => {
       const onAudio = vi.fn();
-      let cancelled = false;
-      const bridge: RealtimeVoiceBridge = createNativeBridge({
+      const { bridge, socket } = await interruptibleBridge("response.create", {
         autoRespondToAudio: false,
         onAudio,
         onToolCall: vi.fn(),
-        onEvent: (event) => {
-          if (event.direction === "client" && event.type === "response.create" && !cancelled) {
-            cancelled = true;
-            bridge.handleBargeIn?.({ force: true });
-          }
-        },
       });
-      const socket = await connectReadyBridge(bridge);
       if (mode === "standalone") {
         emitCompletedToolCalls(socket);
       }
@@ -99,7 +96,7 @@ describe("OpenAI realtime outgoing response ownership", () => {
   it.each([false, true])(
     "cancels during VAD suppression and preserves replacement admission (clear requests replacement=%s)",
     async (replaceOnClear) => {
-      const { bridge, socket } = await preparingBridge((activeBridge) => {
+      const { bridge, socket } = await interruptibleBridge("session.update", {}, (activeBridge) => {
         if (replaceOnClear) {
           activeBridge.sendUserMessage?.("Replacement from the clear callback.");
         }
@@ -149,7 +146,7 @@ describe("OpenAI realtime outgoing response ownership", () => {
     await bridge.close();
   });
   it("does not drain a replacement when preparing-response cleanup throws", async () => {
-    const { bridge, socket } = await preparingBridge((activeBridge) => {
+    const { bridge, socket } = await interruptibleBridge("session.update", {}, (activeBridge) => {
       activeBridge.sendUserMessage?.("Queued replacement.");
       throw new Error("sink clear failed");
     });

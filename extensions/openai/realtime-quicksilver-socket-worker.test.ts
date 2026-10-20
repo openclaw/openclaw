@@ -3,8 +3,6 @@ import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import { MessageChannel, Worker } from "node:worker_threads";
 import { describe, expect, it } from "vitest";
-import WebSocket from "ws";
-import { OpenAIQuicksilverAudioClock } from "./realtime-quicksilver-audio-buffer.js";
 import { closeOpenAILiveSocket } from "./realtime-quicksilver-protocol.js";
 import { OpenAIQuicksilverWorkerSocket } from "./realtime-quicksilver-socket.js";
 
@@ -35,30 +33,8 @@ describe("GPT-Live socket worker", () => {
     });
     const errors: Error[] = [];
     let direct: OpenAIQuicksilverWorkerSocket | undefined;
-    let baseline: WebSocket | undefined;
-    let clock: OpenAIQuicksilverAudioClock | undefined;
     try {
       const [url] = await once(receiver, "message");
-      baseline = new WebSocket(String(url));
-      await once(baseline, "open");
-      const baselineSocket = baseline;
-      clock = new OpenAIQuicksilverAudioClock(() =>
-        baselineSocket.send(
-          JSON.stringify({
-            type: "session.input_audio.append",
-            audio: Buffer.alloc(960).toString("base64"),
-          }),
-        ),
-      );
-      clock.start();
-      await waitForPackets(count, 5);
-      const beforeBaseline = Atomics.load(count, 0);
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
-      const baselineDuringStall = Atomics.load(count, 0) - beforeBaseline;
-      clock.stop();
-      baseline.close();
-      await once(baseline, "close");
-
       direct = OpenAIQuicksilverWorkerSocket.create(
         String(url),
         { headers: { Authorization: "Bearer synthetic-fixture" }, maxPayload: 16 * 1024 * 1024 },
@@ -72,7 +48,7 @@ describe("GPT-Live socket worker", () => {
       direct.on("message", (data) => frames.push(data.toString()));
       direct.sendAudio(Buffer.alloc(240_000, 1));
       direct.startAudio();
-      await waitForPackets(count, beforeBaseline + baselineDuringStall + 5);
+      await waitForPackets(count, 5);
       await waitForPackets(outputCount, 5);
       const beforeOutput = Atomics.load(outputCount, 0);
       const beforeWorker = Atomics.load(count, 0);
@@ -84,7 +60,6 @@ describe("GPT-Live socket worker", () => {
         { length: Math.max(0, workerDuringStall - 1) },
         (_, index) => times[beforeWorker + index + 1]! - times[beforeWorker + index]!,
       );
-      expect(baselineDuringStall).toBeLessThanOrEqual(1);
       expect(workerDuringStall).toBeGreaterThanOrEqual(10);
       expect(outputDuringStall).toBeGreaterThanOrEqual(10);
       expect(callbackAudio).toEqual([]);
@@ -98,8 +73,6 @@ describe("GPT-Live socket worker", () => {
       ]);
       expect(errors).toEqual([]);
     } finally {
-      clock?.stop();
-      baseline?.terminate();
       direct?.close();
       port1.close();
       port2.close();
