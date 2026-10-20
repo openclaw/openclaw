@@ -156,6 +156,7 @@ if (isMainThread) {
           return;
         }
         namedDiagnostics.set(captureId, startGatewayBenchDiagnostics());
+        markGc("diagnostics-start", captureId);
         reply();
       } else {
         const stopDiagnostics = namedDiagnostics.get(captureId);
@@ -163,6 +164,7 @@ if (isMainThread) {
           reply("Gateway diagnostics have not started");
           return;
         }
+        markGc("diagnostics-stop", captureId);
         const result = stopDiagnostics();
         namedDiagnostics.delete(captureId);
         process.send?.({

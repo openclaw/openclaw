@@ -12,7 +12,6 @@ import {
 import { createServer } from "node:http";
 import type { Profiler } from "node:inspector";
 import path from "node:path";
-import { createInterface } from "node:readline";
 import { finished } from "node:stream/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
@@ -35,7 +34,6 @@ import { stopChild } from "../lib/gateway-bench-child.ts";
 import { startGatewayBenchDiagnostics } from "../lib/gateway-bench-diagnostics.ts";
 import {
   controlGatewayProfile,
-  createGatewayGcTraceCollector,
   readGatewayCpuProfile,
   readGatewayHeapProfile,
   readGatewayGcTrace,
@@ -761,42 +759,6 @@ const recapReceipts: RecapReceipt[] = [];
 let recapPhase: Awaited<ReturnType<typeof runRecapBurst>> | undefined;
 let gateway: ChildProcess | undefined;
 let stressCronJobId: string | undefined;
-let gcTrace: ReturnType<typeof createGatewayGcTraceCollector> | undefined;
-type GcTraceSnapshot = ReturnType<ReturnType<typeof createGatewayGcTraceCollector>["snapshot"]>;
-function summarizeGcTrace(
-  before: GcTraceSnapshot,
-  after: GcTraceSnapshot,
-  turns: number,
-  wallMs: number,
-) {
-  if (before.pid !== after.pid || (before.isolate !== null && before.isolate !== after.isolate)) {
-    throw new Error("GC trace isolate changed during measurement");
-  }
-  const delta = {
-    promotedBytes: after.promotedBytes - before.promotedBytes,
-    gcCount: after.gcCount - before.gcCount,
-    pauseMs: after.pauseMs - before.pauseMs,
-    scavengeCount: after.scavengeCount - before.scavengeCount,
-    scavengePauseMs: after.scavengePauseMs - before.scavengePauseMs,
-    majorCount: after.majorCount - before.majorCount,
-    majorPauseMs: after.majorPauseMs - before.majorPauseMs,
-    unknownCount: after.unknownCount - before.unknownCount,
-    malformedCount: after.malformedCount - before.malformedCount,
-  };
-  if (delta.unknownCount || delta.malformedCount) {
-    throw new Error(`GC trace accounting incomplete: ${JSON.stringify(delta)}`);
-  }
-  return {
-    before,
-    after,
-    ...delta,
-    completedTurns: turns,
-    wallMs,
-    promotedMbPerTurn: delta.promotedBytes / 1_000_000 / turns,
-    scavengeSecondsPerMinute: (delta.scavengePauseMs * 60) / wallMs,
-    majorSecondsPerMinute: (delta.majorPauseMs * 60) / wallMs,
-  };
-}
 function fieldBytes(record: Record<string, unknown>) {
   return Object.fromEntries(
     Object.entries(record).map(([field, value]) => [
@@ -863,7 +825,7 @@ function launch(args: string[], name: string, extraEnv: NodeJS.ProcessEnv = {}, 
   child.stderr?.pipe(log, { end: false });
   child.once("close", () => log.end());
   childLogs.push(log);
-  if (values.allocations || values["stream-start-allocations"]) {
+  if (values.allocations || values["stream-start-allocations"] || values["trace-gc"]) {
     // Keep stderr diagnostics from interleaving with V8's line-oriented GC trace.
     const stdoutLog = createWriteStream(path.join(output, `${name}.stdout.log`));
     child.stdout?.pipe(stdoutLog, { end: false });
@@ -1451,6 +1413,26 @@ function sessionEventSizesSnapshot() {
     [...sessionEventSizes].map(([bucket, sizes]) => [bucket, { ...sizes }]),
   );
 }
+function trackClientFrames(
+  client: ReturnType<typeof createGatewayWsClient>,
+  onFrame?: (bytes: number) => void,
+) {
+  const responseSizes = new Map<string, number>();
+  responseFrameBytes.set(client, responseSizes);
+  // The helper parses frames before onEvent; capture their exact uncompressed size first.
+  client.ws.prependListener("message", (data: import("ws").RawData) => {
+    const receivedFrameBytes = Array.isArray(data)
+      ? data.reduce((sum, part) => sum + part.byteLength, 0)
+      : data.byteLength;
+    onFrame?.(receivedFrameBytes);
+    if (measuring) {
+      const frame = JSON.parse(rawDataToString(data));
+      if (frame.type === "res" && typeof frame.id === "string") {
+        responseSizes.set(frame.id, receivedFrameBytes);
+      }
+    }
+  });
+}
 async function connectClient(index: number) {
   const started = performance.now();
   assertGatewayAlive();
@@ -1534,19 +1516,8 @@ async function connectClient(index: number) {
       }
     },
   });
-  const responseSizes = new Map<string, number>();
-  responseFrameBytes.set(client, responseSizes);
-  // The helper parses frames before onEvent; capture their exact uncompressed size first.
-  client.ws.prependListener("message", (data: import("ws").RawData) => {
-    receivedFrameBytes = Array.isArray(data)
-      ? data.reduce((sum, part) => sum + part.byteLength, 0)
-      : data.byteLength;
-    if (measuring) {
-      const frame = JSON.parse(rawDataToString(data));
-      if (frame.type === "res" && typeof frame.id === "string") {
-        responseSizes.set(frame.id, receivedFrameBytes);
-      }
-    }
+  trackClientFrames(client, (bytes) => {
+    receivedFrameBytes = bytes;
   });
   client.ws.on("close", (code) => {
     if (!closing && !expectedClosures.has(client)) {
@@ -1560,26 +1531,7 @@ async function connectClient(index: number) {
   });
   clients[index] = client;
   await client.waitOpen();
-  const hello = await rpc(client, "connect", {
-    minProtocol: PROTOCOL_VERSION,
-    maxProtocol: PROTOCOL_VERSION,
-    client: {
-      id: "gateway-client",
-      displayName: "synthetic-broadcast-measurement",
-      version: "1.0.0",
-      platform: process.platform,
-      mode: "backend",
-    },
-    role: "operator",
-    scopes: ["operator.read", "operator.admin"],
-    caps: [
-      "session-scoped-events",
-      "chat-only-assistant-text",
-      ...(exactClients < clientCount ? ["roster-message-bodies-optional"] : []),
-      ...(values["session-row-deltas"] ? ["session-row-deltas"] : []),
-      ...(values["session-envelope-refs"] ? ["session-event-field-refs"] : []),
-    ],
-  });
+  const hello = await rpc(client, "connect", connectParams);
   const handshakeElapsedMs = performance.now() - started;
   if (
     !Value.Check(HelloOkSchema, hello) ||
@@ -1602,6 +1554,16 @@ function cleanup() {
   return (cleanupPromise ??= (async () => {
     closing = true;
     cohort?.release();
+    if (stressCronJobId) {
+      try {
+        const result = await clients[0]?.request("cron.remove", { id: stressCronJobId }, 5000);
+        if (!result?.ok) {
+          throw new Error("cron.remove did not succeed");
+        }
+      } catch (error) {
+        console.warn("Stress cron cleanup failed; discard this fixture before reuse:", error);
+      }
+    }
     for (const client of clients) {
       client.close();
     }
@@ -1638,11 +1600,9 @@ try {
   await ready(mockPort, "/health");
   gateway = launch(
     buildGatewayBenchChildArgs(values.entry, port, [
-      ...(values.allocations || values["stream-start-allocations"]
+      ...(values.allocations || values["stream-start-allocations"] || values["trace-gc"]
         ? ["--trace-gc-nvp"]
-        : values["trace-gc"]
-          ? ["--trace-gc"]
-          : []),
+        : []),
       "--import",
       "./scripts/tsx.mjs",
       "--import",
@@ -1897,9 +1857,8 @@ try {
   }
   const measurementStartedAt = Date.now();
   const measuredGateway = gateway;
-  const wholeSoakGcBefore = soakScenario ? gcTrace?.snapshot() : undefined;
   const finishWholeSoakDiagnostics =
-    soakScenario && (values.diagnostics || values.allocations)
+    soakScenario && (values.diagnostics || values.allocations || values["trace-gc"])
       ? await startGatewayDiagnostics(gateway, "whole-soak")
       : undefined;
   const samples = [];
@@ -1979,8 +1938,6 @@ try {
       ? startGatewayBenchDiagnostics()
       : undefined;
     const before = await readGatewayCpuUsage(gateway);
-    const gcBefore = gcTrace?.snapshot();
-    const gcStartedAt = performance.now();
     measuring = true;
     const rpcLatencies: Record<string, number[]> = {
       "sessions.list": [],
@@ -2033,10 +1990,11 @@ try {
                     : undefined;
                   if (method === "connect") {
                     const peer = createGatewayWsClient({ url: `ws://127.0.0.1:${port}` });
+                    trackClientFrames(peer);
                     try {
                       await peer.waitOpen();
                       const hello = await rpc(peer, "connect", connectParams, onResponse);
-                      if (!isRecord(hello) || hello.type !== "hello-ok") {
+                      if (!Value.Check(HelloOkSchema, hello)) {
                         throw new Error("fresh connect did not return hello-ok");
                       }
                     } finally {
@@ -2145,16 +2103,6 @@ try {
     if (!values.allocations || soakScenario) {
       await workload();
     }
-    const gcAfter = gcTrace?.snapshot();
-    const gc =
-      gcBefore && gcAfter
-        ? summarizeGcTrace(
-            gcBefore,
-            gcAfter,
-            turnScenario ? runCount : operations,
-            performance.now() - gcStartedAt,
-          )
-        : undefined;
     if (values["mixed-rpc"] && Object.values(rpcLatencies).some((latencies) => !latencies.length)) {
       throw new Error("mixed RPC workload must observe every method; increase cohort duration");
     }
@@ -2261,7 +2209,6 @@ try {
       ...(turnScenario && allocation
         ? { allocatedMbPerTurn: allocation.estimatedAllocatedBytesPerOperation / 1_000_000 }
         : {}),
-      gcTrace: gc,
       diagnostics,
       streamStart,
       ...(values["mixed-rpc"]
@@ -2362,25 +2309,6 @@ try {
     }
   }
   const wholeSoakDiagnostics = await finishWholeSoakDiagnostics?.();
-  const wholeSoakGcAfter = soakScenario ? gcTrace?.snapshot() : undefined;
-  const wholeSoakGc =
-    wholeSoakGcBefore && wholeSoakGcAfter
-      ? summarizeGcTrace(
-          wholeSoakGcBefore,
-          wholeSoakGcAfter,
-          samples.length * runCount,
-          Date.now() - measurementStartedAt,
-        )
-      : undefined;
-  if (
-    values["trace-gc"] &&
-    !(
-      wholeSoakGc?.gcCount ??
-      samples.reduce((sum, sample) => sum + (sample.gcTrace?.gcCount ?? 0), 0)
-    )
-  ) {
-    throw new Error("No main-isolate GC trace observed; promotion evidence is unavailable");
-  }
   let wholeSoakAllocation;
   if (soakAllocationPath) {
     // Stop after the GC/loop window so the profiler's forced collection cannot affect acceptance.
@@ -2464,6 +2392,25 @@ try {
   }
   // Process exit plus drained log streams makes promotion accounting independent of pipe buffering.
   await cleanup();
+  let wholeSoakGc;
+  if (wholeSoakDiagnostics && (values.allocations || values["trace-gc"])) {
+    const trace = readGatewayGcTrace(
+      path.join(output, "gateway.stdout.log"),
+      "whole-soak",
+      "diagnostics",
+    );
+    const completedTurns = samples.length * runCount;
+    const wallMs = wholeSoakDiagnostics.durationMs;
+    wholeSoakGc = {
+      ...trace,
+      completedTurns,
+      wallMs,
+      promotedMbPerTurn: trace.promotedBytes / 1_000_000 / completedTurns,
+      scavengeSecondsPerMinute:
+        ((wholeSoakDiagnostics.gc.minorDurationMs?.total ?? 0) * 60) / wallMs,
+      majorSecondsPerMinute: ((wholeSoakDiagnostics.gc.majorDurationMs?.total ?? 0) * 60) / wallMs,
+    };
+  }
   const result = {
     output,
     scenario,

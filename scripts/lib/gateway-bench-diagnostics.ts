@@ -76,13 +76,6 @@ const PHASES = [
 const MAX_HISTOGRAMS = 256;
 const MAX_DURATION_MS = 3_600_000;
 const HISTOGRAM_SCALE = 1_000;
-const GC_KINDS = new Map([
-  [constants.NODE_PERFORMANCE_GC_MINOR, "scavenge"],
-  [constants.NODE_PERFORMANCE_GC_MINOR_MARK_SWEEP, "scavenge"],
-  [constants.NODE_PERFORMANCE_GC_MAJOR, "mark_sweep_compact"],
-  [constants.NODE_PERFORMANCE_GC_INCREMENTAL, "incremental"],
-  [constants.NODE_PERFORMANCE_GC_WEAKCB, "weak_processing"],
-]);
 
 type Metric = {
   count: number;
@@ -271,9 +264,6 @@ export function startGatewayBenchDiagnostics() {
       droppedHistogramSamples,
       histogram: { maxHistograms: MAX_HISTOGRAMS, maxDurationMs: MAX_DURATION_MS, figures: 2 },
       gc: summarizeMetrics(gc),
-      gcByKind: Object.fromEntries(
-        Object.entries(gcByKind).map(([kind, metrics]) => [kind, summarizeMetrics(metrics)]),
-      ),
       groups: [...groups.values()].map((group) => ({
         channel: group.channel,
         operation: group.operation,

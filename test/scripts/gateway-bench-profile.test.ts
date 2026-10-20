@@ -8,7 +8,6 @@ import { fileURLToPath } from "node:url";
 import { expect, it, onTestFinished } from "vitest";
 import {
   controlGatewayProfile,
-  createGatewayGcTraceCollector,
   measureGatewayCpuUsage,
   measureGatewayAllocations,
   readGatewayCpuUsage,
@@ -25,46 +24,6 @@ const preloadUrl = new URL("../../scripts/lib/gateway-bench-profile-preload.ts",
 const fixturePath = (name: string) =>
   fileURLToPath(new URL(`./fixtures/${name}.mjs`, import.meta.url));
 const readJson = async <T>(file: string): Promise<T> => JSON.parse(await readFile(file, "utf8"));
-
-it("counts Node 26 promotion and GC pauses only for the owned main thread", () => {
-  const trace = createGatewayGcTraceCollector(73);
-  const before = trace.snapshot();
-  trace.consume('[73:0xbbb:1] 1 ms: GC: {"pause":9,"gc":"s","promoted":999999}');
-  expect(trace.snapshot().isolate).toBeNull();
-  trace.consume('[73:0xaaa:0] 3 ms: GC: {"pause":1.25,"mutator":2,"gc":"s","promoted":4096}');
-  trace.consume('[73:0xbbb:1] 4 ms: GC: {"pause":99,"gc":"mc","promoted":999999}');
-  trace.consume('[74:0xaaa:0] 5 ms: GC: {"pause":99,"gc":"mc","promoted":999999}');
-  trace.consume('[73:0xaaa:0] 6 ms: GC: {"pause":2.5,"gc":"mc","promoted":8192}');
-  trace.consume('[73:0xaaa:0] 7 ms: GC: {"pause":0.5,"gc":"s","promoted":0}');
-  expect(trace.snapshot()).toEqual({
-    pid: 73,
-    isolate: "0xaaa",
-    promotedBytes: 12288,
-    gcCount: 3,
-    pauseMs: 4.25,
-    scavengeCount: 2,
-    scavengePauseMs: 1.75,
-    majorCount: 1,
-    majorPauseMs: 2.5,
-    unknownCount: 0,
-    malformedCount: 0,
-  });
-  expect(before.promotedBytes).toBe(0);
-  expect(before.gcCount).toBe(0);
-  trace.consume("unrelated gateway message");
-  trace.consume('[73:0xaaa:0] 7 ms: Memory pool: {"committed":1000}');
-  trace.consume('[73:0xaaa:0] 8 ms: GC: {"pause":1,"gc":"s"}');
-  trace.consume('[73:0xaaa:0] 9 ms: GC: {"pause":NaN,"gc":"s","promoted":10}');
-  trace.consume('[73:0xaaa:0] 10 ms: GC: {"pause":1,"gc":"s","promoted":-10}');
-  trace.consume('[73:0xaaa:0] 11 ms: GC: {"pause":3,"gc":"unknown","promoted":32}');
-  expect(trace.snapshot()).toMatchObject({
-    promotedBytes: 12320,
-    gcCount: 4,
-    pauseMs: 7.25,
-    unknownCount: 1,
-    malformedCount: 3,
-  });
-});
 
 function spawnFixture(args: string[], directory?: string, ipc = true) {
   const child = spawn(nodeExecutable, args, {
@@ -411,7 +370,7 @@ it("separates discarded allocation churn from retained objects and cleans up fai
       throw new Error("workload failed");
     }),
   ).rejects.toThrow("workload failed");
-  const stopDiagnostics = await startGatewayDiagnostics(child);
+  const stopDiagnostics = await startGatewayDiagnostics(child, "soak");
   const result = await measure("completed", 4, async () => {
     expect(await sendMessage(child, { run: true })).toEqual({ completed: 4 });
   });
@@ -477,6 +436,7 @@ it("separates discarded allocation churn from retained objects and cleans up fai
   expect(gc.promotedBytes).toBeGreaterThan(0);
   expect(gc.gcCount).toBeGreaterThan(0);
   expect(readGatewayGcTrace(logPath, retainedPath).promotedBytes).toBeGreaterThan(0);
+  expect(readGatewayGcTrace(logPath, "soak", "diagnostics").promotedBytes).toBeGreaterThan(0);
 });
 
 it("accounts only the identified main isolate inside the requested heap capture", async () => {
@@ -489,10 +449,12 @@ it("accounts only the identified main isolate inside the requested heap capture"
     'OPENCLAW_GATEWAY_BENCH_GC {"phase":"identify-stop","pid":42}',
     "[42:0xabc] 10 ms: pause=1.0 gc=s promoted=4096",
     'OPENCLAW_GATEWAY_BENCH_GC {"phase":"heap-start","pid":42,"profilePath":"measured"}',
+    'OPENCLAW_GATEWAY_BENCH_GC {"phase":"diagnostics-start","pid":42,"profilePath":"soak"}',
     "[42:0xabc] 15 ms: pause=1.0 gc=s promoted=1024",
     '[42:0xdef:1] 16 ms: GC: {"gc":"s","promoted":65536}',
     '[42:0xdef:1] 16 ms: GC: {"gc":"s",interleaved worker log',
     "[43:0xabc] 17 ms: pause=1.0 gc=s promoted=65536",
+    'OPENCLAW_GATEWAY_BENCH_GC {"phase":"diagnostics-stop","pid":42,"profilePath":"soak"}',
     '[42:0xabc:0] 18 ms: GC: {"gc":"mc","promoted":256}',
     'OPENCLAW_GATEWAY_BENCH_GC {"phase":"heap-stop","pid":42,"profilePath":"measured"}',
     "[42:0xabc] 20 ms: pause=1.0 gc=s promoted=4096",
@@ -504,6 +466,11 @@ it("accounts only the identified main isolate inside the requested heap capture"
     isolate: "0xabc",
     promotedBytes: 1280,
     gcCount: 2,
+    excludedWorkerGcCount: 2,
+  });
+  expect(readGatewayGcTrace(logPath, "soak", "diagnostics")).toMatchObject({
+    promotedBytes: 1024,
+    gcCount: 1,
     excludedWorkerGcCount: 2,
   });
   expect(() => readGatewayGcTrace(logPath, "missing")).toThrow("complete heap capture window");

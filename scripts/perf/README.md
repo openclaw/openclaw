@@ -750,7 +750,9 @@ code result, and the original reasoning signature. The default remains a direct
 `read` call. In memory-soak mode, stress tools also enables one normal isolated
 cron agent job every thirty seconds, with delivery disabled. Setup forces and
 verifies one run; measured successful run-history entries are reported separately
-as `cronRuns`. These background turns contribute resource cost but are excluded
+as `cronRuns`. Cleanup removes the job on success, failure, or interruption; if
+removal fails, discard the fixture before reuse as directed by the warning.
+These background turns contribute resource cost but are excluded
 from the foreground-turn denominator. Child sessions are direct `agent` calls,
 not model-driven `sessions_spawn` calls.
 
@@ -772,12 +774,13 @@ captures sample every 512 KiB on average to bound native sample records and the
 final JSON export; short allocation experiments retain their 32 KiB interval. V8 forces
 a major collection when a sampling profile is read or stopped, so the soak
 never reads the profile between cohorts and stops it only after recording the
-whole-window GC and event-loop metrics. With `--trace-gc`, the owned Node process runs
-`--trace-gc-nvp`; the collector uses its PID and Node's explicit main-thread
-identifier, excluding worker-isolate GC. `gcTrace` retains cumulative before and
-after snapshots, their difference, promoted bytes, decimal `promotedMbPerTurn`,
-and minor/major pause seconds per minute. Unsupported or malformed main-isolate
-traces fail the capture instead of reporting zero promotion. `wholeSoakGc` and
+whole-window GC and event-loop metrics. With `--trace-gc` or allocation profiling,
+the owned Node process runs `--trace-gc-nvp`. The shared trace reader identifies
+the main isolate before Gateway startup and reads promotion between diagnostic
+window markers after process exit and log drainage. It supports legacy NVP and
+JSON traces. `wholeSoakGc` reports promoted bytes, decimal `promotedMbPerTurn`,
+and minor/major GC seconds per minute from the diagnostic observer. Missing
+capture markers or malformed promotion traces fail the capture. `wholeSoakGc` and
 `wholeSoakDiagnostics` span all measured cohorts **and the idle gaps**, stopping
 before final forced collection and the edit control. The latter includes
 event-loop p99/max and GC duration by kind. The continuous allocation window

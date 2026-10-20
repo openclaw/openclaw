@@ -3,7 +3,6 @@ import { existsSync, readFileSync } from "node:fs";
 import type { HeapProfiler, Profiler } from "node:inspector";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 import type { WorkerMessageMetric } from "../../src/infra/worker-message-metrics.ts";
 import type { startGatewayBenchDiagnostics } from "./gateway-bench-diagnostics.ts";
 
@@ -11,66 +10,6 @@ export const GATEWAY_PROFILE_CHANNEL = "openclaw-gateway-bench-profile";
 export const GATEWAY_GC_TRACE_MARKER = "OPENCLAW_GATEWAY_BENCH_GC ";
 export const GATEWAY_HEAP_SAMPLE_INTERVAL = 32 * 1024;
 export const GATEWAY_CPU_SAMPLE_INTERVAL_MICROS = 1_000;
-
-/** Node 26 NVP traces identify the main isolate with thread 0; workers stay excluded. */
-export function createGatewayGcTraceCollector(pid: number) {
-  let isolate: string | null = null;
-  const counters = {
-    promotedBytes: 0,
-    gcCount: 0,
-    pauseMs: 0,
-    scavengeCount: 0,
-    scavengePauseMs: 0,
-    majorCount: 0,
-    majorPauseMs: 0,
-    unknownCount: 0,
-    malformedCount: 0,
-  };
-  return {
-    consume(line: string) {
-      const header = /^\[(\d+):(0x[\da-f]+):0\]\s+[\d.]+ ms:\s+GC:\s*(.*)$/iu.exec(line);
-      if (!header || Number(header[1]) !== pid) {
-        return;
-      }
-      isolate = header[2]!.toLowerCase();
-      let fields: unknown;
-      try {
-        fields = JSON.parse(header[3]!);
-      } catch {
-        counters.malformedCount++;
-        return;
-      }
-      if (
-        !isRecord(fields) ||
-        typeof fields.gc !== "string" ||
-        typeof fields.pause !== "number" ||
-        !Number.isFinite(fields.pause) ||
-        fields.pause < 0 ||
-        typeof fields.promoted !== "number" ||
-        !Number.isFinite(fields.promoted) ||
-        fields.promoted < 0
-      ) {
-        counters.malformedCount++;
-        return;
-      }
-      counters.gcCount++;
-      counters.pauseMs += fields.pause;
-      counters.promotedBytes += fields.promoted;
-      if (fields.gc === "s") {
-        counters.scavengeCount++;
-        counters.scavengePauseMs += fields.pause;
-      } else if (fields.gc === "mc") {
-        counters.majorCount++;
-        counters.majorPauseMs += fields.pause;
-      } else {
-        counters.unknownCount++;
-      }
-    },
-    snapshot() {
-      return { pid, isolate, ...counters };
-    },
-  };
-}
 
 export type GatewayProfileCommand = {
   channel: typeof GATEWAY_PROFILE_CHANNEL;
@@ -150,7 +89,11 @@ function readProfileArtifacts(profilePath: string): GatewayProfileArtifacts {
 }
 
 /** Read promoted bytes from V8, excluding worker isolates and GC outside this capture. */
-export function readGatewayGcTrace(logPath: string, profilePath: string) {
+export function readGatewayGcTrace(
+  logPath: string,
+  profilePath: string,
+  captureKind: "heap" | "diagnostics" = "heap",
+) {
   let identifying = false;
   let identified = false;
   let pid: number | undefined;
@@ -178,14 +121,14 @@ export function readGatewayGcTrace(logPath: string, profilePath: string) {
         identifying = false;
         identified = true;
       } else if (marker.profilePath === profilePath) {
-        if (marker.phase === "heap-start") {
+        if (marker.phase === `${captureKind}-start`) {
           if (!identified || marker.pid !== pid || capturing || completed) {
-            throw new Error("GC trace has an invalid heap capture start");
+            throw new Error(`GC trace has an invalid ${captureKind} capture start`);
           }
           capturing = true;
-        } else if (marker.phase === "heap-stop") {
+        } else if (marker.phase === `${captureKind}-stop`) {
           if (!capturing || marker.pid !== pid) {
-            throw new Error("GC trace has an invalid heap capture stop");
+            throw new Error(`GC trace has an invalid ${captureKind} capture stop`);
           }
           capturing = false;
           completed = true;
@@ -231,7 +174,9 @@ export function readGatewayGcTrace(logPath: string, profilePath: string) {
     }
   }
   if (!identified || !completed || capturing) {
-    throw new Error("GC trace is missing identification or the complete heap capture window");
+    throw new Error(
+      `GC trace is missing identification or the complete ${captureKind} capture window`,
+    );
   }
   return {
     scope: "main-isolate" as const,
