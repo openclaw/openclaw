@@ -38,7 +38,7 @@ import {
 } from "./compaction/request-budget.js";
 import type { CustomMessage } from "./messages.js";
 import { expandPromptTemplate } from "./prompt-templates.js";
-import type { DefaultResourceLoader } from "./resource-loader.js";
+import type { ResourceLoader } from "./resource-loader.js";
 import { withSessionManagerAppend } from "./session-manager-append-admission.js";
 import { setSteeringMessageIdentity } from "./steering-message-identity.js";
 
@@ -738,7 +738,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     return this.followUpMessages.map((entry) => entry.text);
   }
 
-  get resourceLoader(): DefaultResourceLoader {
+  get resourceLoader(): ResourceLoader {
     return this.sessionResourceLoader;
   }
 

@@ -48,7 +48,7 @@ import {
   registerQueuedUserMessageRetirement,
   retireQueuedUserMessage,
 } from "./queued-user-message-retirement.js";
-import type { DefaultResourceLoader } from "./resource-loader.js";
+import type { ResourceLoader } from "./resource-loader.js";
 import type { SessionManager } from "./session-manager.js";
 import { createSessionToolResultPreparer } from "./session-tool-result-preparation.js";
 import type { SettingsManager } from "./settings-manager.js";
@@ -86,7 +86,7 @@ export abstract class AgentSessionBase {
   protected currentExtensionRunner!: ExtensionRunner;
   private turnIndex = 0;
 
-  protected sessionResourceLoader: DefaultResourceLoader;
+  protected sessionResourceLoader: ResourceLoader;
   protected customTools: ToolDefinition[];
   protected cwd: string;
   protected extensionRunnerRef?: { current?: ExtensionRunner };

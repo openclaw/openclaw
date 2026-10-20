@@ -14,12 +14,21 @@ import { createExtensionRuntime, loadExtensionFromFactory } from "./extensions/l
 import type { Extension, ExtensionFactory, LoadExtensionsResult } from "./extensions/types.js";
 import type { PromptTemplate } from "./prompt-templates.js";
 import { loadPromptTemplates } from "./prompt-templates.js";
-import type { PathMetadata, SourceInfo } from "./source-info.js";
+import { createSourceInfo, type PathMetadata, type SourceInfo } from "./source-info.js";
 
 export interface ResourceExtensionPaths {
   skillPaths?: Array<{ path: string; metadata: PathMetadata }>;
   promptPaths?: Array<{ path: string; metadata: PathMetadata }>;
   themePaths?: Array<{ path: string; metadata: PathMetadata }>;
+}
+
+export interface ResourceLoader {
+  getExtensions(): LoadExtensionsResult;
+  getSkills(): { skills: Skill[]; diagnostics: ResourceDiagnostic[] };
+  getPrompts(): { prompts: PromptTemplate[]; diagnostics: ResourceDiagnostic[] };
+  getThemes(): { themes: Theme[]; diagnostics: ResourceDiagnostic[] };
+  extendResources(paths: ResourceExtensionPaths): void;
+  reload(): Promise<void>;
 }
 
 interface DefaultResourceLoaderOptions {
@@ -46,8 +55,7 @@ class ResourceCollection<T> {
     const sourceInfos = this.sourceInfos;
     return (entries ?? []).map((entry) => {
       const path = resolvePath(entry.path);
-      const { source, scope, origin, baseDir } = entry.metadata;
-      sourceInfos.set(path, { path, source, scope, origin, baseDir });
+      sourceInfos.set(path, createSourceInfo(path, entry.metadata));
       return path;
     });
   }
@@ -59,7 +67,7 @@ class ResourceCollection<T> {
   }
 }
 
-export class DefaultResourceLoader {
+export class DefaultResourceLoader implements ResourceLoader {
   private cwd: string;
   private agentDir: string;
   private eventBus: EventBus;

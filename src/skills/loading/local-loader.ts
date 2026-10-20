@@ -133,7 +133,7 @@ export function loadSingleSkillDirectory(params: {
         filePath,
         baseDir,
         source: params.source,
-        sourceOptions: { source: params.source, scope: "project" },
+        sourceOptions: { source: params.source, scope: "project", origin: "top-level" },
       }),
       frontmatter,
     };
