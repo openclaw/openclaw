@@ -5,6 +5,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { WebSocket } from "ws";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { handleDesktopAudioUpgrade } from "./audio-bridge.js";
+import { closeServer, listenLoopback } from "./desktop.test-support.js";
 import {
   handleDesktopObserveUpgrade,
   mintDesktopObserverToken,
@@ -22,22 +23,13 @@ beforeAll(async () => {
       handleDesktopObserveUpgrade(req, socket, head, { registry });
     }
   });
-  httpServer.listen(0, "127.0.0.1");
-  await once(httpServer, "listening");
-  const address = httpServer.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Missing test address");
-  }
-  origin = "ws://127.0.0.1:" + address.port;
+  origin = "ws://127.0.0.1:" + (await listenLoopback(httpServer));
 });
 afterEach(() => {
   cleanups.splice(0).forEach((cleanup) => cleanup());
   vi.useRealTimers();
 });
-afterAll(async () => {
-  httpServer.close();
-  await once(httpServer, "close");
-});
+afterAll(() => closeServer(httpServer));
 async function attach(path: string) {
   const socket = new WebSocket(origin + path);
   cleanups.push(() => socket.terminate());
@@ -87,19 +79,21 @@ describe("audio tied to the actual RFB observer", () => {
       expect(grant.audio).toBeDefined();
       const audio = await attach(grant.audio!.wsPath);
       const audioClosed = once(audio, "close");
+      const expectAudioDenied = async () => {
+        await audioClosed;
+        expect(start).not.toHaveBeenCalled();
+      };
       audio.send(JSON.stringify({ action: "start" }));
       if (outcome === "released") {
         expect(
           await releaseDesktopObserverToken("/desktop/observe?token=" + grant.token, requester),
         ).toBe(true);
-        await audioClosed;
-        expect(start).not.toHaveBeenCalled();
+        await expectAudioDenied();
         return;
       }
       if (outcome === "expired") {
         vi.advanceTimersByTime(60_001);
-        await audioClosed;
-        expect(start).not.toHaveBeenCalled();
+        await expectAudioDenied();
         return;
       }
       let upstreamStage = 0;
@@ -124,8 +118,7 @@ describe("audio tied to the actual RFB observer", () => {
       });
       await once(screen, "open");
       if (outcome === "stale-owner") {
-        await audioClosed;
-        expect(start).not.toHaveBeenCalled();
+        await expectAudioDenied();
         return;
       }
       serverStream.write(version);
@@ -133,8 +126,7 @@ describe("audio tied to the actual RFB observer", () => {
       expect(start).not.toHaveBeenCalled();
       if (outcome === "rejected") {
         serverStream.write(Buffer.from([0, 0, 0, 1, 0, 0, 0, 0]));
-        await audioClosed;
-        expect(start).not.toHaveBeenCalled();
+        await expectAudioDenied();
         return;
       }
       const startFrame = once(audio, "message");

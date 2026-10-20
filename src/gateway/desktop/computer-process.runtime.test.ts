@@ -110,6 +110,7 @@ module.exports = {
       assertCurrent: () => {},
     });
     const executionId = "123e4567-e89b-42d3-a456-426614174000";
+    const invocation = { sessionKey: "fixture-session", assertCurrent: () => {} };
     try {
       expect((await child.ready).provider).toEqual({
         id: pluginId,
@@ -118,18 +119,16 @@ module.exports = {
       });
       await expect(
         child.invoke({
+          ...invocation,
           command: "screen.snapshot",
           params: { executionId },
-          sessionKey: "fixture-session",
-          assertCurrent: () => {},
         }),
       ).resolves.toEqual({ format: "png", base64: "c3ludGhldGljLXBpeGVscw==" });
       await expect(
         child.invoke({
+          ...invocation,
           command: "computer.act",
           params: { executionId, action: "left_click", x: 1, y: 2 },
-          sessionKey: "fixture-session",
-          assertCurrent: () => {},
         }),
       ).resolves.toEqual({
         ok: true,

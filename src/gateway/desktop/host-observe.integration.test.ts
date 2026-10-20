@@ -1,9 +1,9 @@
-import { on } from "node:events";
+import { on, once } from "node:events";
 import http from "node:http";
-import net from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, type RawData } from "ws";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { closeServer, createSocketServer, listenLoopback } from "./desktop.test-support.js";
 import { createHostDesktopService } from "./host-source.js";
 import { handleDesktopObserveUpgrade } from "./observe-bridge.js";
 import { createDesktopSessionRegistry } from "./session-registry.js";
@@ -37,17 +37,10 @@ describe("gateway host desktop observe integration", () => {
   it.each(["connected", "access denied", "invalid security"] as const)(
     "preserves ARD authentication, access rejection, and protocol failure (%s)",
     async (outcome) => {
-      const peers = new Set<net.Socket>();
       let connectionCount = 0;
-      const {
-        promise: observerScript,
-        resolve: resolveObserverScript,
-        reject: rejectObserverScript,
-      } = createDeferred();
+      const script = createDeferred();
       const browserReady = createDeferred();
-      const rfbServer = net.createServer((socket) => {
-        peers.add(socket);
-        socket.once("close", () => peers.delete(socket));
+      const { server: rfbServer } = createSocketServer(cleanups, (socket) => {
         connectionCount += 1;
         const connectionIndex = connectionCount;
         const reader = new SocketReader(socket);
@@ -72,7 +65,7 @@ describe("gateway host desktop observe integration", () => {
             await browserReady.promise;
             socket.write(Buffer.concat([header, modulus, serverPublic]));
             if (outcome === "invalid security") {
-              resolveObserverScript();
+              script.resolve();
               return;
             }
             expect(await reader.readExactly(128 + keyLength)).toHaveLength(128 + keyLength);
@@ -82,7 +75,7 @@ describe("gateway host desktop observe integration", () => {
               result.writeUInt32BE(1, 0);
               result.writeUInt32BE(reason.length, 4);
               socket.write(Buffer.concat([result, reason]));
-              resolveObserverScript();
+              script.resolve();
               return;
             }
             socket.write(Buffer.alloc(4));
@@ -92,33 +85,17 @@ describe("gateway host desktop observe integration", () => {
             socket.write(Buffer.from("server-init", "ascii"));
             const framebufferRequest = Buffer.from([3, 1, 0, 0, 0, 0, 0, 64, 0, 64]);
             expect(await reader.readExactly(framebufferRequest.length)).toEqual(framebufferRequest);
-            resolveObserverScript();
+            script.resolve();
           } catch (error) {
-            rejectObserverScript(error instanceof Error ? error : new Error(String(error)));
+            script.reject(error instanceof Error ? error : new Error(String(error)));
           }
         })();
       });
-      await new Promise<void>((resolve, reject) => {
-        rfbServer.once("error", reject);
-        rfbServer.listen(0, "127.0.0.1", resolve);
-      });
-      const rfbAddress = rfbServer.address();
-      if (!rfbAddress || typeof rfbAddress === "string") {
-        throw new Error("expected RFB address");
-      }
-      cleanups.push(
-        async () =>
-          await new Promise<void>((resolve) => {
-            for (const peer of peers) {
-              peer.destroy();
-            }
-            rfbServer.close(() => resolve());
-          }),
-      );
+      const port = await listenLoopback(rfbServer);
 
       const registry = createDesktopSessionRegistry();
       const service = createHostDesktopService({
-        getConfig: () => ({ enabled: true, port: rfbAddress.port }),
+        getConfig: () => ({ enabled: true, port }),
         registry,
       });
       cleanups.push(async () => registry.stopAll());
@@ -133,30 +110,16 @@ describe("gateway host desktop observe integration", () => {
       httpServer.on("upgrade", (req, socket, head) => {
         handleDesktopObserveUpgrade(req, socket, head, { registry });
       });
-      await new Promise<void>((resolve) => {
-        httpServer.listen(0, "127.0.0.1", resolve);
-      });
-      const httpAddress = httpServer.address();
-      if (!httpAddress || typeof httpAddress === "string") {
-        throw new Error("expected HTTP address");
-      }
-      cleanups.push(
-        async () =>
-          await new Promise<void>((resolve) => {
-            httpServer.close(() => resolve());
-          }),
-      );
+      const httpPort = await listenLoopback(httpServer);
+      cleanups.push(() => closeServer(httpServer));
 
-      const ws = new WebSocket(`ws://127.0.0.1:${httpAddress.port}${observed.wsPath}`);
+      const ws = new WebSocket(`ws://127.0.0.1:${httpPort}${observed.wsPath}`);
       const browser = new WebSocketReader(ws);
       const closed = new Promise<{ code: number; reason: string }>((resolve) => {
         ws.once("close", (code, reason) => resolve({ code, reason: reason.toString() }));
       });
       cleanups.push(async () => ws.terminate());
-      await new Promise<void>((resolve, reject) => {
-        ws.once("open", resolve);
-        ws.once("error", reject);
-      });
+      await once(ws, "open");
       expect(await browser.next()).toEqual(VERSION);
       // Coalesce the synthetic handshake replies with exclusive ClientInit.
       ws.send(Buffer.concat([VERSION, Buffer.from([1, 0])]));
@@ -179,7 +142,7 @@ describe("gateway host desktop observe integration", () => {
         );
         expect(Buffer.byteLength(result.reason)).toBeLessThanOrEqual(123);
         expect(result.reason).not.toContain("account-password");
-        await expect(observerScript).resolves.toBeUndefined();
+        await expect(script.promise).resolves.toBeUndefined();
         return;
       }
       expect(await browser.next()).toEqual(Buffer.alloc(4));
@@ -188,7 +151,7 @@ describe("gateway host desktop observe integration", () => {
       const keyEvent = Buffer.from([4, 1, 0, 0, 0, 0, 0, 65]);
       const framebufferRequest = Buffer.from([3, 1, 0, 0, 0, 0, 0, 64, 0, 64]);
       ws.send(Buffer.concat([keyEvent, framebufferRequest]));
-      await expect(observerScript).resolves.toBeUndefined();
+      await expect(script.promise).resolves.toBeUndefined();
       await vi.waitFor(() => expect(connectionCount).toBe(2));
     },
   );
