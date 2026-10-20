@@ -29,27 +29,33 @@ vi.mock("./provider-discovery.runtime.js", () => ({
   resolvePluginDiscoveryProvidersRuntime: () => fixture.providers,
 }));
 
-it("keeps first-match configured precedence and last-entry aggregate precedence", async () => {
-  const providerId = "catalog-precedence";
-  const metadata = createPluginMetadataSnapshotFixture();
-  const model = (name: string): ModelDefinitionConfig => ({
-    id: "shared-model",
+function makeModel(id: string, name: string): ModelDefinitionConfig {
+  return {
+    id,
     name,
     reasoning: false,
     input: ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 32_000,
     maxTokens: 2_048,
-  });
+  };
+}
+
+it("keeps first-match configured precedence and last-entry aggregate precedence", async () => {
+  const providerId = "catalog-precedence";
+  const metadata = createPluginMetadataSnapshotFixture();
   const first: ModelProviderConfig = {
     api: "openai-completions",
     baseUrl: "https://first.example.invalid/v1",
-    models: [model("First match"), model("Later duplicate")],
+    models: [
+      makeModel("shared-model", "First match"),
+      makeModel("shared-model", "Later duplicate"),
+    ],
   };
   const last: ModelProviderConfig = {
     ...first,
     baseUrl: "https://last.example.invalid/v1",
-    models: [model("Last entry")],
+    models: [makeModel("shared-model", "Last entry")],
   };
   const prepared = await prepareProviderStaticCatalog({
     providers: [first, last].map((provider, index) => ({
@@ -94,15 +100,7 @@ it("shares a workspace catalog across configured and implicit agent reads", asyn
   const modelsPerAgent = 32;
   const models: ModelDefinitionConfig[] = Array.from(
     { length: agentCount * modelsPerAgent },
-    (_, index) => ({
-      id: `model-${index}`,
-      name: `Model ${index}`,
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 32_000,
-      maxTokens: 2_048,
-    }),
+    (_, index) => makeModel(`model-${index}`, `Model ${index}`),
   );
   const providerConfig: ModelProviderConfig = {
     api: "openai-completions",

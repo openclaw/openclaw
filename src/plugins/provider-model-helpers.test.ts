@@ -35,82 +35,53 @@ function createTemplateModel(
   } as ProviderRuntimeModel;
 }
 
-describe("cloneFirstTemplateModel", () => {
-  it.each([
-    {
-      name: "clones the first matching template and applies patches",
-      params: {
-        providerId: "test-provider",
-        modelId: " next-model ",
-        templateIds: ["missing", "template-a", "template-b"],
-        ctx: createContext([createTemplateModel("template-a", { name: "Template A" })]),
-        patch: { reasoning: true },
-      },
-      expected: {
-        id: "next-model",
-        name: "next-model",
-        provider: "test-provider",
-        api: "openai-completions",
-        reasoning: true,
-      },
+it.each([
+  {
+    name: "clones the first matching template and applies patches",
+    params: {
+      modelId: " next-model ",
+      templateIds: ["missing", "template-a", "template-b"],
+      ctx: createContext([createTemplateModel("template-a", { name: "Template A" })]),
+      patch: { reasoning: true },
     },
-    {
-      name: "normalizes the patched transport",
-      params: {
-        providerId: "test-provider",
-        modelId: "next-model",
-        templateIds: ["template-a"],
-        ctx: createContext([createTemplateModel("template-a")]),
-        patch: { api: "anthropic-messages", baseUrl: "https://models.example/v1" },
-      },
-      expected: {
-        id: "next-model",
-        name: "next-model",
-        provider: "test-provider",
-        api: "anthropic-messages",
-        baseUrl: "https://models.example",
-      },
+    expected: createTemplateModel("next-model", { reasoning: true }),
+  },
+  {
+    name: "normalizes the patched transport",
+    params: {
+      templateIds: ["template-a"],
+      ctx: createContext([createTemplateModel("template-a")]),
+      patch: { api: "anthropic-messages", baseUrl: "https://models.example/v1" },
     },
-    {
-      name: "returns undefined when no template exists",
-      params: {
-        providerId: "test-provider",
-        modelId: "next-model",
-        templateIds: ["missing"],
-        ctx: createContext([]),
-      },
-      expected: undefined,
+    expected: createTemplateModel("next-model", {
+      api: "anthropic-messages",
+      baseUrl: "https://models.example",
+    }),
+  },
+  {
+    name: "returns undefined when no template exists",
+    params: {
+      templateIds: ["missing"],
+      ctx: createContext([]),
     },
-  ] as const)("$name", ({ params, expected }) => {
-    const model = cloneFirstTemplateModel(params);
-    if (expected == null) {
-      expect(model).toBeUndefined();
-      return;
-    }
-    expect(model).toEqual(expected);
-  });
+    expected: undefined,
+  },
+] as const)("cloneFirstTemplateModel: $name", ({ params, expected }) => {
+  expect(
+    cloneFirstTemplateModel({
+      providerId: "test-provider",
+      modelId: "next-model",
+      ...params,
+    }),
+  ).toEqual(expected);
 });
 
-describe("matchesExactOrPrefix", () => {
-  it.each([
-    {
-      id: "MiniMax-M2.7",
-      candidates: ["minimax-m2.7"],
-      expected: true,
-    },
-    {
-      id: "minimax-m2.7-highspeed",
-      candidates: ["MiniMax-M2.7"],
-      expected: true,
-    },
-    {
-      id: "glm-5",
-      candidates: ["minimax-m2.7"],
-      expected: false,
-    },
-  ] as const)("matches $id against prefixes", ({ id, candidates, expected }) => {
-    expect(matchesExactOrPrefix(id, candidates)).toBe(expected);
-  });
+it.each([
+  ["MiniMax-M2.7", "minimax-m2.7", true],
+  ["minimax-m2.7-highspeed", "MiniMax-M2.7", true],
+  ["glm-5", "minimax-m2.7", false],
+] as const)("matchesExactOrPrefix: %s against prefix %s: %s", (id, candidate, expected) => {
+  expect(matchesExactOrPrefix(id, [candidate])).toBe(expected);
 });
 
 describe("resolveFamilyForwardCompatModel", () => {

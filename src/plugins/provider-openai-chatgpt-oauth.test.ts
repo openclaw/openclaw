@@ -1,10 +1,9 @@
-/** Covers ChatGPT OAuth provider wiring exposed through plugin provider discovery. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 
 const providerRuntimeMocks = vi.hoisted(() => ({
-  loadActivatedBundledPluginPublicSurfaceModuleSync: vi.fn(),
+  loadFacade: vi.fn(),
   resolveProviderRuntimePlugin: vi.fn(),
   runOAuth: vi.fn(),
   runFacadeOAuth: vi.fn(),
@@ -15,8 +14,7 @@ vi.mock("./provider-hook-runtime.js", () => ({
 }));
 
 vi.mock("../plugin-sdk/facade-runtime.js", () => ({
-  loadActivatedBundledPluginPublicSurfaceModuleSync:
-    providerRuntimeMocks.loadActivatedBundledPluginPublicSurfaceModuleSync,
+  loadActivatedBundledPluginPublicSurfaceModuleSync: providerRuntimeMocks.loadFacade,
 }));
 
 import { loginOpenAICodexOAuth } from "./provider-openai-chatgpt-oauth.js";
@@ -45,14 +43,14 @@ function createRuntime(): RuntimeEnv {
   };
 }
 
-function createCredential() {
+function createLoginParams(isRemote = false) {
   return {
-    type: "oauth" as const,
-    provider: "openai",
-    access: "access-token",
-    refresh: "refresh-token",
-    expires: Date.now() + 60_000,
-    email: "user@example.com",
+    prompter: createPrompter(),
+    runtime: createRuntime(),
+    isRemote,
+    openUrl: vi.fn(async () => {}),
+    signal: new AbortController().signal,
+    onManualCodeInput: vi.fn(async () => "manual-code"),
   };
 }
 
@@ -62,69 +60,46 @@ describe("loginOpenAICodexOAuth", () => {
       mock.mockReset();
     }
     providerRuntimeMocks.resolveProviderRuntimePlugin.mockReturnValue({
-      auth: [
-        {
-          id: "oauth",
-          run: providerRuntimeMocks.runOAuth,
-        },
-      ],
+      auth: [{ id: "oauth", run: providerRuntimeMocks.runOAuth }],
     });
-    providerRuntimeMocks.loadActivatedBundledPluginPublicSurfaceModuleSync.mockReturnValue({
+    providerRuntimeMocks.loadFacade.mockReturnValue({
       loginOpenAICodexOAuth: providerRuntimeMocks.runFacadeOAuth,
     });
   });
 
   it("delegates OAuth login to the OpenAI provider auth hook", async () => {
-    const credential = createCredential();
-    const prompter = createPrompter();
-    const runtime = createRuntime();
-    const openUrl = vi.fn(async () => {});
-    const controller = new AbortController();
-    const onManualCodeInput = vi.fn(async () => "manual-code");
+    const credential = {
+      type: "oauth" as const,
+      provider: "openai",
+      access: "access-token",
+      refresh: "refresh-token",
+      expires: Date.now() + 60_000,
+      email: "user@example.com",
+    };
+    const params = createLoginParams(true);
     providerRuntimeMocks.runOAuth.mockResolvedValueOnce({
       profiles: [{ profileId: "openai:user@example.com", credential }],
     });
 
     const result = await loginOpenAICodexOAuth({
-      prompter,
-      runtime,
-      isRemote: true,
-      openUrl,
-      signal: controller.signal,
-      onManualCodeInput,
+      ...params,
       localBrowserMessage: "Complete sign-in in browser...",
     });
 
     expect(result).toEqual(credential);
     expect(providerRuntimeMocks.runOAuth).toHaveBeenCalledOnce();
-    expect(
-      providerRuntimeMocks.loadActivatedBundledPluginPublicSurfaceModuleSync,
-    ).not.toHaveBeenCalled();
+    expect(providerRuntimeMocks.loadFacade).not.toHaveBeenCalled();
     expect(providerRuntimeMocks.runOAuth).toHaveBeenCalledWith({
       config: {},
-      prompter,
-      runtime,
-      isRemote: true,
-      openUrl,
-      signal: controller.signal,
-      onManualCodeInput,
-      oauth: {
-        createVpsAwareHandlers: expect.any(Function),
-      },
+      ...params,
+      oauth: { createVpsAwareHandlers: expect.any(Function) },
     });
   });
 
   it("returns null when the provider hook does not create an OAuth credential", async () => {
     providerRuntimeMocks.runOAuth.mockResolvedValueOnce({ profiles: [] });
 
-    await expect(
-      loginOpenAICodexOAuth({
-        prompter: createPrompter(),
-        runtime: createRuntime(),
-        isRemote: false,
-        openUrl: async () => {},
-      }),
-    ).resolves.toBeNull();
+    await expect(loginOpenAICodexOAuth(createLoginParams())).resolves.toBeNull();
   });
 
   it("falls back to the OpenAI plugin facade when the provider hook is unavailable", async () => {
@@ -134,62 +109,36 @@ describe("loginOpenAICodexOAuth", () => {
       expires: Date.now() + 60_000,
       accountId: "acct_facade",
     };
-    const prompter = createPrompter();
-    const runtime = createRuntime();
-    const openUrl = vi.fn(async () => {});
-    const controller = new AbortController();
-    const onManualCodeInput = vi.fn(async () => "manual-code");
+    const params = {
+      ...createLoginParams(),
+      localBrowserMessage: "Complete sign-in in browser...",
+    };
     providerRuntimeMocks.resolveProviderRuntimePlugin.mockReturnValueOnce(undefined);
     providerRuntimeMocks.runFacadeOAuth.mockResolvedValueOnce(credential);
 
-    const result = await loginOpenAICodexOAuth({
-      prompter,
-      runtime,
-      isRemote: false,
-      openUrl,
-      signal: controller.signal,
-      onManualCodeInput,
-      localBrowserMessage: "Complete sign-in in browser...",
-    });
+    const result = await loginOpenAICodexOAuth(params);
 
     expect(result).toEqual(credential);
     expect(providerRuntimeMocks.runOAuth).not.toHaveBeenCalled();
-    expect(
-      providerRuntimeMocks.loadActivatedBundledPluginPublicSurfaceModuleSync,
-    ).toHaveBeenCalledWith({
+    expect(providerRuntimeMocks.loadFacade).toHaveBeenCalledWith({
       dirName: "openai",
       artifactBasename: "api.js",
     });
     expect(providerRuntimeMocks.runFacadeOAuth).toHaveBeenCalledWith({
-      prompter,
-      runtime,
-      isRemote: false,
-      openUrl,
-      signal: controller.signal,
-      onManualCodeInput,
-      localBrowserMessage: "Complete sign-in in browser...",
-      oauth: {
-        createVpsAwareHandlers: expect.any(Function),
-      },
+      ...params,
+      oauth: { createVpsAwareHandlers: expect.any(Function) },
     });
   });
 
   it("preserves activated-facade failures when the OpenAI plugin is disabled", async () => {
     providerRuntimeMocks.resolveProviderRuntimePlugin.mockReturnValueOnce(undefined);
-    providerRuntimeMocks.loadActivatedBundledPluginPublicSurfaceModuleSync.mockImplementationOnce(
-      () => {
-        throw new Error("plugin runtime is not activated");
-      },
-    );
+    providerRuntimeMocks.loadFacade.mockImplementationOnce(() => {
+      throw new Error("plugin runtime is not activated");
+    });
 
-    await expect(
-      loginOpenAICodexOAuth({
-        prompter: createPrompter(),
-        runtime: createRuntime(),
-        isRemote: false,
-        openUrl: async () => {},
-      }),
-    ).rejects.toThrow("plugin runtime is not activated");
+    await expect(loginOpenAICodexOAuth(createLoginParams())).rejects.toThrow(
+      "plugin runtime is not activated",
+    );
     expect(providerRuntimeMocks.runFacadeOAuth).not.toHaveBeenCalled();
   });
 });
