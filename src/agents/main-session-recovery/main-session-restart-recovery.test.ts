@@ -1383,7 +1383,7 @@ describe("main-session-restart-recovery", () => {
       "agent:main:issue-82433": runningSessionEntry("active-custom-session"),
     });
 
-    const result = await markRestartAbortedMainSessions({
+    const result = await markInterrupted({
       cfg: { session: { store: storePath } },
       stateDir: tmpDir,
       activeRuns: [
