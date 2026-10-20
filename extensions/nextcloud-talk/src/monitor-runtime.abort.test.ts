@@ -63,7 +63,7 @@ function createMonitorFixture() {
     abortController,
     spool,
     options,
-    start(settings: ChannelConfig = {}, accountId?: string, gateway?: { port: number }) {
+    start: (settings: ChannelConfig = {}, accountId?: string, gateway?: { port: number }) => {
       const cfg = monitorConfig(settings, gateway);
       const startAccount = nextcloudTalkPlugin.gateway?.startAccount;
       if (!startAccount) {
