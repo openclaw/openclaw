@@ -108,7 +108,7 @@ function observeEntries(sessionKey: string) {
       }
     }
   });
-  return { entries, stop };
+  return { entries, stop, [Symbol.dispose]: stop };
 }
 
 function withoutSql(body: () => void) {
@@ -257,12 +257,12 @@ describe.skipIf(!connection)("PostgreSQL committed session publications", () => 
         updatedAt: 1,
         label: "before",
       });
-      const observed = observeEntries(scope.sessionKey);
+      using observed = observeEntries(scope.sessionKey);
       const db = database.db;
       assert(isPostgresSqlConnection(db));
       const failure = new Error(`Synthetic ${outcome}`);
       const exec = db.exec.bind(db);
-      const delivery =
+      using delivery =
         outcome === "unknown commit"
           ? vi.spyOn(db, "exec").mockImplementation((sql) => {
               exec(sql);
@@ -271,30 +271,26 @@ describe.skipIf(!connection)("PostgreSQL committed session publications", () => 
               }
             })
           : undefined;
-      try {
-        expect(() =>
-          withEngineStoreAdmission(() =>
-            owners.runOpenClawAgentWriteTransaction(
-              (current) => {
-                writeSessionEntry(current, scope.sessionKey, {
-                  sessionId: scope.sessionKey,
-                  updatedAt: 2,
-                  label: "candidate",
-                });
-                if (outcome === "rollback") {
-                  throw failure;
-                }
-              },
-              { agentId: "main", path: database.path },
-            ),
+      expect(() =>
+        withEngineStoreAdmission(() =>
+          owners.runOpenClawAgentWriteTransaction(
+            (current) => {
+              writeSessionEntry(current, scope.sessionKey, {
+                sessionId: scope.sessionKey,
+                updatedAt: 2,
+                label: "candidate",
+              });
+              if (outcome === "rollback") {
+                throw failure;
+              }
+            },
+            { agentId: "main", path: database.path },
           ),
-        ).toThrow(failure.message);
-        expect(observed.entries).toEqual([]);
-        expect(readSessionActorEntryFacts(target)?.entry?.label).not.toBe("candidate");
-      } finally {
-        delivery?.mockRestore();
-        observed.stop();
-      }
+        ),
+      ).toThrow(failure.message);
+      expect(observed.entries).toEqual([]);
+      expect(readSessionActorEntryFacts(target)?.entry?.label).not.toBe("candidate");
+      delivery?.mockRestore();
       const facts = getPostgresPhysicalFactsForPath(database.path);
       assert(facts);
       const persisted = await client.query<{ entry_json: string }>(
@@ -309,22 +305,15 @@ describe.skipIf(!connection)("PostgreSQL committed session publications", () => 
 
   it("rejects incomplete or mismatched PG admission without querying the database", async () => {
     const scope = scopeFor("identity");
-    const observed = observeEntries(scope.sessionKey);
-    let source: SessionEntryPublicationSource;
-    try {
-      await owners.upsertSessionEntryCore(scope, {
-        sessionId: "publication-identity",
-        updatedAt: 1,
-        label: "committed",
-      });
-      const published = observed.entries.findLast(
-        (entry) => entry.fullEntry?.label === "committed",
-      );
-      assert(published?.source.admission);
-      source = published.source;
-    } finally {
-      observed.stop();
-    }
+    using observed = observeEntries(scope.sessionKey);
+    await owners.upsertSessionEntryCore(scope, {
+      sessionId: "publication-identity",
+      updatedAt: 1,
+      label: "committed",
+    });
+    const published = observed.entries.findLast((entry) => entry.fullEntry?.label === "committed");
+    assert(published?.source.admission);
+    const source = published.source;
     assert(source.admission);
     const admission = source.admission;
     const invalid: SessionEntryPublicationSource[] = [{ ...source, admission: undefined }];

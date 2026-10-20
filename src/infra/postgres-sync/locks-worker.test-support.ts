@@ -12,15 +12,13 @@ import {
 } from "../sqlite-transaction.js";
 import { PostgresSyncConnection } from "./connection.js";
 
-export type PostgresLockWorkerInput = {
-  connection: string;
-  schema: string;
-  storeId: string;
-  path: string;
+export type PostgresLockWorkerInput = Record<
+  "connection" | "schema" | "storeId" | "path" | "id",
+  string
+> & {
   gates: SharedArrayBuffer;
   admissions: SqliteDatabaseAdmissions;
   mode: "single" | "worker" | "deferred";
-  id: string;
   holdStatement?: boolean;
   holdAdmission?: boolean;
   holdRead?: boolean;
@@ -31,41 +29,40 @@ if (!parentPort) {
 }
 const port = parentPort;
 const gates = new Int32Array(input.gates);
-function wait(index: number) {
+function wait(index: number, enabled = true) {
+  if (!enabled) {
+    return;
+  }
   while (Atomics.load(gates, index) === 0) {
     Atomics.wait(gates, index, 0);
   }
 }
+const token = () => readSqliteDatabaseWriteTokenForPath(input.path);
+const post = (event: string, fields: object = {}) => port.postMessage({ event, ...fields });
 
 try {
   installSqliteDatabaseAdmissions(input.admissions);
-  const anchor = openNodeSqliteDatabase(input.path);
-  let db: PostgresSyncConnection | undefined;
+  using anchor = openNodeSqliteDatabase(input.path);
+  const db = new PostgresSyncConnection(input.connection, input.schema, anchor, input.storeId);
   try {
-    db = new PostgresSyncConnection(input.connection, input.schema, anchor, input.storeId);
-    const connection = db;
-    port.postMessage({ event: "ready" });
+    post("ready");
     wait(0);
-    const before = readSqliteDatabaseWriteTokenForPath(input.path);
+    const before = token();
     const statement = () => {
-      port.postMessage({ event: "statement" });
-      if (input.holdStatement) {
-        wait(2);
-      }
+      post("statement");
+      wait(2, input.holdStatement ?? false);
       if (input.mode === "deferred") {
-        const value = Number(connection.prepare("SELECT value FROM counter").get()!.value);
-        port.postMessage({ event: "read", value });
-        if (input.holdRead) {
-          wait(3);
-        }
-        return connection.prepare("UPDATE counter SET value = ?").run(value + 1);
+        const value = Number(db.prepare("SELECT value FROM counter").get()!.value);
+        post("read", { value });
+        wait(3, input.holdRead ?? false);
+        return db.prepare("UPDATE counter SET value = ?").run(value + 1);
       }
-      return connection.prepare("INSERT INTO events (id) VALUES (?)").run(input.id);
+      return db.prepare("INSERT INTO events (id) VALUES (?)").run(input.id);
     };
     if (input.mode === "single") {
       runSqliteSingleStatementSync(db, statement);
     } else if (input.mode === "deferred") {
-      port.postMessage({ event: "admission" });
+      post("admission");
       runSqliteDeferredTransactionSync(db, statement);
     } else {
       runSqliteWorkerTransactionSync(
@@ -74,30 +71,20 @@ try {
           databasePath: input.path,
           admit(stage) {
             if (stage === "transaction") {
-              port.postMessage({ event: "admission" });
-              if (input.holdAdmission) {
-                wait(1);
-              }
+              post("admission");
+              wait(1, input.holdAdmission ?? false);
             }
           },
         },
         statement,
       );
     }
-    port.postMessage({
-      event: "done",
-      before,
-      after: readSqliteDatabaseWriteTokenForPath(input.path),
-    });
+    post("done", { before, after: token() });
   } finally {
-    db?.close();
-    anchor.close();
+    db.close();
   }
 } catch (error) {
-  port.postMessage({
-    event: "done",
-    error: error instanceof Error ? error.message : String(error),
-  });
+  post("done", { error: error instanceof Error ? error.message : String(error) });
 } finally {
   port.close();
 }

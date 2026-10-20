@@ -5,8 +5,8 @@ import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { withEngineStoreAdmission } from "../database-engine/admission-scope.js";
 import {
-  readSqliteDatabasePendingScopedWriteToken,
-  readSqliteDatabaseScopedWriteToken,
+  readSqliteDatabasePendingScopedWriteToken as pendingToken,
+  readSqliteDatabaseScopedWriteToken as token,
   withSqliteDatabaseWriteScope,
 } from "../sqlite-database-admission.js";
 import { PostgresSyncConnection } from "./connection.js";
@@ -32,11 +32,12 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
   const exec = (db: PostgresSyncConnection, sql: string) => run(() => db.exec(sql));
   const rows = (db: PostgresSyncConnection, sql: string) => run(() => db.prepare(sql).all());
   const get = (db: PostgresSyncConnection, sql: string) => run(() => db.prepare(sql).get());
+  const query = (db: PostgresSyncConnection, sql: string) => run(() => db.query(sql).rows);
   const close = (db: PostgresSyncConnection) => run(() => db.close());
-  const token = readSqliteDatabaseScopedWriteToken;
-  const pendingToken = readSqliteDatabasePendingScopedWriteToken;
-  const transaction = (db: PostgresSyncConnection, body: () => void, readOnly = false) =>
+  const transaction = <T>(db: PostgresSyncConnection, body: () => T, readOnly = false) =>
     run(() => db.runTransaction(body, undefined, readOnly));
+  const readOnly = (db: PostgresSyncConnection, sql: string) =>
+    transaction(db, () => db.query(sql), true);
   const scoped = (db: PostgresSyncConnection, scope: string, body: () => void) =>
     transaction(db, () => withSqliteDatabaseWriteScope(db, [scope], body));
 
@@ -115,15 +116,9 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
     exec(db, 'CREATE TABLE keyword_entries ("update" integer, "into" integer)');
     exec(db, "INSERT INTO keyword_entries VALUES (7, 8)");
     const before = token(db, "first");
-    transaction(
-      db,
-      () => {
-        expect(
-          db.query("SELECT t.update, t . /* column */ into FROM keyword_entries AS t").rows,
-        ).toEqual([{ update: 7, into: 8 }]);
-      },
-      true,
-    );
+    expect(
+      readOnly(db, "SELECT t.update, t . /* column */ into FROM keyword_entries AS t").rows,
+    ).toEqual([{ update: 7, into: 8 }]);
     expect(token(db, "first")).toBe(before);
     exec(db, "DROP TABLE keyword_entries");
     close(db);
@@ -139,18 +134,14 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
       writer.prepare("INSERT INTO snapshot_entries VALUES (?)").run(7);
       pending = pendingToken(writer, "entry");
       expect(pending).not.toBe(before);
-      expect(() =>
-        reader.runTransaction(
-          () => reader.query("SELECT merge FROM snapshot_entries"),
-          undefined,
-          true,
-        ),
-      ).toThrow("PostgreSQL read snapshot cannot execute a mutation");
+      expect(() => readOnly(reader, "SELECT merge FROM snapshot_entries")).toThrow(
+        "PostgreSQL read snapshot cannot execute a mutation",
+      );
       expect(token(writer, "entry")).toBe(before);
       expect(pendingToken(writer, "entry")).toBe(pending);
     });
     expect(token(writer, "entry")).toBe(pending);
-    expect(run(() => reader.query("SELECT * FROM snapshot_entries").rows)).toEqual([{ merge: 7 }]);
+    expect(query(reader, "SELECT * FROM snapshot_entries")).toEqual([{ merge: 7 }]);
     exec(writer, "DROP TABLE snapshot_entries");
     close(reader);
     close(writer);
@@ -198,17 +189,6 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
     close(recovered);
   });
 
-  it("uses the server transaction status when a combined statement leaves a transaction open", () => {
-    const first = open();
-    const originalPid = pid(first);
-    exec(first, "SELECT 1; BEGIN; INSERT INTO entries VALUES (2)");
-    close(first);
-    const second = open();
-    expect(pid(second)).not.toBe(originalPid);
-    expect(get(second, "SELECT count(*)::int AS count FROM entries")).toEqual({ count: 0 });
-    close(second);
-  });
-
   it("settles committed batches and retains transactions opened later in a batch", () => {
     const db = open();
     exec(db, "CREATE TABLE batch_entries (id integer)");
@@ -219,11 +199,13 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
     expect(committed).not.toBe(before);
     expect(rows(db, "SELECT id FROM batch_entries")).toEqual([{ id: 1 }]);
 
+    const uncommittedPid = pid(db);
     exec(db, "SELECT 1; BEGIN; INSERT INTO batch_entries VALUES (2)");
     expect(db.isTransaction).toBe(true);
     expect(token(db, "first")).toBe(committed);
     close(db);
     const reader = open();
+    expect(pid(reader)).not.toBe(uncommittedPid);
     expect(rows(reader, "SELECT id FROM batch_entries")).toEqual([{ id: 1 }]);
     exec(reader, "DROP TABLE batch_entries");
     close(reader);
@@ -259,14 +241,12 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
     );
     try {
       expect(
-        run(
-          () =>
-            db.query(
-              "SELECT current_setting('synchronous_commit') AS synchronous_commit, " +
-                "current_setting('lock_timeout') AS lock_timeout, " +
-                "current_setting('statement_timeout') AS statement_timeout, " +
-                "current_setting('search_path') AS search_path, current_schema() AS schema",
-            ).rows,
+        query(
+          db,
+          "SELECT current_setting('synchronous_commit') AS synchronous_commit, " +
+            "current_setting('lock_timeout') AS lock_timeout, " +
+            "current_setting('statement_timeout') AS statement_timeout, " +
+            "current_setting('search_path') AS search_path, current_schema() AS schema",
         ),
       ).toEqual([
         {

@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import path from "node:path";
 import { getEnvironmentData } from "node:worker_threads";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -30,12 +31,7 @@ import { runSqliteReadSnapshotSync } from "../sqlite-transaction.js";
 
 const configured: unknown = getEnvironmentData("openclaw.test.workboard.connection");
 const connection = typeof configured === "string" ? configured : undefined;
-type StoreFixture = {
-  pathname: string;
-  writer: PostgresSqlConnection;
-  open: () => PostgresSqlConnection;
-  close: () => void;
-};
+type StoreFixture = ReturnType<typeof openStore>;
 const stores: StoreFixture[] = [];
 const directories = useAutoCleanupTempDirTracker((cleanup) =>
   afterAll(() => {
@@ -51,7 +47,7 @@ const directories = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-function openStore(schema: StoreSchema): StoreFixture {
+function openStore(schema: StoreSchema) {
   const pathname = path.join(directories.make("pg-read-facts-"), "anchor.sqlite");
   const handles: {
     db: PostgresSqlConnection;
@@ -73,9 +69,7 @@ function openStore(schema: StoreSchema): StoreFixture {
           return { hasExistingData: false, hasEngineAnchor: Boolean(readEngineAnchor(anchor)) };
         },
       });
-      if (!isPostgresSqlConnection(db)) {
-        throw new Error("Expected PostgreSQL connection");
-      }
+      assert(isPostgresSqlConnection(db), "Expected PostgreSQL connection");
       handles.push({ db, anchor });
       return db;
     } catch (error) {
@@ -85,9 +79,7 @@ function openStore(schema: StoreSchema): StoreFixture {
   };
   const writer = open();
   const facts = getPostgresPhysicalFacts(writer);
-  if (!facts) {
-    throw new Error("Expected production schema admission");
-  }
+  assert(facts, "Expected production schema admission");
   const store = {
     pathname,
     writer,
@@ -130,20 +122,14 @@ function commandFor(...names: string[]) {
 
 function seedAcp(db: PostgresSqlConnection, name: string, value: string) {
   // Seed durable rows without the writer's optional metadata postimage publication.
+  const row = bindAcpSessionMeta({
+    sessionKey: buildAcpDatabaseSessionKey(`agent:main:acp:${name}`, "main"),
+    lifecycleRevision: "generation",
+    updatedAt: 100,
+    meta: metadata(value),
+  });
   db.runTransaction(() =>
-    executeSqliteQuerySync(
-      db,
-      getAcpSessionKysely(db)
-        .insertInto("acp_sessions")
-        .values(
-          bindAcpSessionMeta({
-            sessionKey: buildAcpDatabaseSessionKey(`agent:main:acp:${name}`, "main"),
-            lifecycleRevision: "generation",
-            updatedAt: 100,
-            meta: metadata(value),
-          }),
-        ),
-    ),
+    executeSqliteQuerySync(db, getAcpSessionKysely(db).insertInto("acp_sessions").values(row)),
   );
 }
 
@@ -173,7 +159,7 @@ function acpReader(store: StoreFixture, ...names: string[]) {
   return {
     reader,
     read,
-    snapshot: () => runSqliteReadSnapshotSync(reader, read),
+    snapshot: (body: () => unknown = read) => runSqliteReadSnapshotSync(reader, body),
     published: () => readPublishedAcpSessionRows(store.pathname, input.entries),
   };
 }
@@ -191,74 +177,68 @@ describe.skipIf(!connection)("PostgreSQL admitted read facts", () => {
     withEngineStoreAdmission(() => {
       seedAcp(state.writer, "published", "initial");
       const { reader, read, snapshot, published } = acpReader(state, "published", "absent");
-      const query = vi.spyOn(reader, "query");
+      using query = vi.spyOn(reader, "query");
       const metadataReads = () =>
         query.mock.calls.filter(([sql]) => /\b(?:from|join)\s+"?acp_sessions\b/iu.test(sql));
-      try {
-        runSqliteReadSnapshotSync(reader, () => {
-          expectRows(read(), "initial", null);
-          expect(published()).toBeUndefined();
-        });
-        expect(metadataReads()).toHaveLength(1);
-        expectRows(published(), "initial", null);
-        query.mockClear();
-        const revision = readSqliteDatabaseWriteRevision(reader);
-        writeAcp(state.writer, "absent", "created");
-        expect(readSqliteDatabaseWriteRevision(reader)).not.toBe(revision);
-        expectRows(snapshot(), "initial", "created");
-        writeAcp(state.writer, "published", null);
-        expectRows(snapshot(), null, "created");
-        expect(metadataReads()).toHaveLength(0);
-      } finally {
-        query.mockRestore();
-      }
-    });
-  });
-
-  it("discards read-derived ACP facts when the snapshot callback fails", () => {
-    withEngineStoreAdmission(() => {
-      seedAcp(state.writer, "aborted-positive", "durable");
-      const { reader, read, snapshot, published } = acpReader(
-        state,
-        "aborted-positive",
-        "aborted-negative",
-      );
-      expect(() =>
-        runSqliteReadSnapshotSync(reader, () => {
-          expectRows(read(), "durable", null);
-          throw new Error("abort snapshot");
-        }),
-      ).toThrow("abort snapshot");
-      expect(published()).toBeUndefined();
-      snapshot();
-      expectRows(published(), "durable", null);
-    });
-  });
-
-  it("does not publish ACP facts when snapshot closure has an unknown outcome", () => {
-    withEngineStoreAdmission(() => {
-      const { reader, read, snapshot, published } = acpReader(state, "unknown-close");
-      const exec = reader.exec.bind(reader);
-      const close = vi.spyOn(reader, "exec").mockImplementation((sql) => {
-        exec(sql);
-        if (sql === "ROLLBACK") {
-          throw new Error("snapshot close response lost");
-        }
-      });
-      try {
-        expect(() =>
-          runSqliteReadSnapshotSync(reader, () => {
-            expect(read()).toEqual([null]);
-          }),
-        ).toThrow("snapshot close response lost");
+      runSqliteReadSnapshotSync(reader, () => {
+        expectRows(read(), "initial", null);
         expect(published()).toBeUndefined();
-      } finally {
-        close.mockRestore();
-      }
-      snapshot();
-      expect(published()).toEqual([null]);
+      });
+      expect(metadataReads()).toHaveLength(1);
+      expectRows(published(), "initial", null);
+      query.mockClear();
+      const revision = readSqliteDatabaseWriteRevision(reader);
+      writeAcp(state.writer, "absent", "created");
+      expect(readSqliteDatabaseWriteRevision(reader)).not.toBe(revision);
+      expectRows(snapshot(), "initial", "created");
+      writeAcp(state.writer, "published", null);
+      expectRows(snapshot(), null, "created");
+      expect(metadataReads()).toHaveLength(0);
     });
   });
+
+  it.each(["callback", "close"] as const)(
+    "discards ACP facts after a failed snapshot %s",
+    (failureAt) => {
+      withEngineStoreAdmission(() => {
+        if (failureAt === "callback") {
+          seedAcp(state.writer, failureAt, "durable");
+        }
+        const { reader, read, snapshot, published } = acpReader(
+          state,
+          failureAt,
+          `${failureAt}:absent`,
+        );
+        const expected = failureAt === "callback" ? ["durable", null] : [null, null];
+        const failure = new Error("snapshot failure");
+        const exec = reader.exec.bind(reader);
+        const close =
+          failureAt === "close"
+            ? vi.spyOn(reader, "exec").mockImplementation((sql) => {
+                exec(sql);
+                if (sql === "ROLLBACK") {
+                  throw failure;
+                }
+              })
+            : undefined;
+        try {
+          expect(() =>
+            snapshot(() => {
+              expectRows(read(), ...expected);
+              if (failureAt === "callback") {
+                throw failure;
+              }
+            }),
+          ).toThrow(failure.message);
+          expect(published()).toBeUndefined();
+        } finally {
+          close?.mockRestore();
+        }
+        snapshot();
+        expectRows(published(), ...expected);
+      });
+    },
+  );
 
   it("keeps old ACP snapshots isolated from newer positive and negative postimages", () => {
     withEngineStoreAdmission(() => {
@@ -280,60 +260,61 @@ describe.skipIf(!connection)("PostgreSQL admitted read facts", () => {
     });
   });
 
-  it("reuses exact session rows only in their original snapshot and refreshes the next snapshot", () => {
-    withEngineStoreAdmission(() => {
-      const agent = openStore(agentEngineSchema);
-      const key = "agent:main:read-facts";
-      const insert = (sessionKey: string, sessionId: string) =>
-        agent.writer.runTransaction(() =>
-          agent.writer
-            .prepare(
-              "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
-            )
-            .run(sessionKey, sessionId, JSON.stringify({ sessionId, updatedAt: 100 }), 100),
-        );
-      insert(key, "before");
-      const reader = agent.open();
-      const queries = getExactSessionEntryQueries(reader);
-      const query = vi.spyOn(reader, "query");
-      const rowReads = () =>
-        query.mock.calls.filter(([sql]) => /\bfrom\s+"?session_nodes\b/iu.test(sql));
-      try {
-        runSqliteReadSnapshotSync(reader, () => {
-          expect(queries.row(key)?.current_session_id).toBe("before");
-          expect(queries.row(key)?.current_session_id).toBe("before");
+  it.each([
+    { initial: "before", updated: "after" },
+    { initial: undefined, updated: "created" },
+  ])(
+    "refreshes cached session rows between snapshots ($initial -> $updated)",
+    ({ initial, updated }) => {
+      withEngineStoreAdmission(() => {
+        const agent = openStore(agentEngineSchema);
+        const key = `agent:main:read-facts:${updated}`;
+        const insert = (sessionId: string) =>
           agent.writer.runTransaction(() =>
             agent.writer
-              .prepare("UPDATE session_nodes SET current_session_id = ? WHERE session_key = ?")
-              .run("after", key),
+              .prepare(
+                "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
+              )
+              .run(key, sessionId, JSON.stringify({ sessionId, updatedAt: 100 }), 100),
           );
-          expect(queries.row(key)?.current_session_id).toBe("before");
+        if (initial) {
+          insert(initial);
+        }
+        const reader = agent.open();
+        const queries = getExactSessionEntryQueries(reader);
+        using query = vi.spyOn(reader, "query");
+        const rowReads = () =>
+          query.mock.calls.filter(([sql]) => /\bfrom\s+"?session_nodes\b/iu.test(sql));
+        const expectRow = (id: string | undefined) => {
+          const row = queries.row(key);
+          if (id === undefined) {
+            expect(row).toBeUndefined();
+          } else {
+            expect(row?.current_session_id).toBe(id);
+          }
+        };
+        runSqliteReadSnapshotSync(reader, () => {
+          expectRow(initial);
+          expectRow(initial);
+          if (initial) {
+            agent.writer.runTransaction(() =>
+              agent.writer
+                .prepare("UPDATE session_nodes SET current_session_id = ? WHERE session_key = ?")
+                .run(updated, key),
+            );
+          } else {
+            insert(updated);
+          }
+          expectRow(initial);
           expect(rowReads()).toHaveLength(1);
         });
         query.mockClear();
         runSqliteReadSnapshotSync(reader, () => {
-          expect(queries.row(key)?.current_session_id).toBe("after");
-          expect(queries.row(key)?.current_session_id).toBe("after");
+          expectRow(updated);
+          expectRow(updated);
         });
         expect(rowReads()).toHaveLength(1);
-        query.mockClear();
-        const absentKey = `${key}:absent`;
-        runSqliteReadSnapshotSync(reader, () => {
-          expect(queries.row(absentKey)).toBeUndefined();
-          expect(queries.row(absentKey)).toBeUndefined();
-          insert(absentKey, "created");
-          expect(queries.row(absentKey)).toBeUndefined();
-          expect(rowReads()).toHaveLength(1);
-        });
-        query.mockClear();
-        runSqliteReadSnapshotSync(reader, () => {
-          expect(queries.row(absentKey)?.current_session_id).toBe("created");
-          expect(queries.row(absentKey)?.current_session_id).toBe("created");
-        });
-        expect(rowReads()).toHaveLength(1);
-      } finally {
-        query.mockRestore();
-      }
-    });
-  });
+      });
+    },
+  );
 });
