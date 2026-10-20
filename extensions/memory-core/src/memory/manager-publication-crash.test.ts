@@ -14,6 +14,12 @@ import { memoryPublicationInline } from "./manager-publication-transfer.js";
 import { bindSqliteWorkerBackend } from "./manager-publication.worker.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const names = ["first", "second"];
+const sourceRows = (hash: string) => names.map((name) => ({ path: `memory/${name}.md`, hash }));
+const chunkRows = (text: string) =>
+  names.flatMap((name) =>
+    [1, 2].map((line) => ({ path: `memory/${name}.md`, text: `${text} ${line}` })),
+  );
 
 function replacement(text: string): MemoryPublicationOperations["source.replace.group"]["input"] {
   return {
@@ -22,7 +28,7 @@ function replacement(text: string): MemoryPublicationOperations["source.replace.
       fts: { enabled: true, available: true },
       hasVectorTable: false,
     },
-    sources: ["first", "second"].map((name) =>
+    sources: names.map((name) =>
       memoryPublicationInline({
         source: "memory",
         entry: { path: `memory/${name}.md`, hash: text, mtimeMs: 1, size: text.length },
@@ -92,16 +98,8 @@ it.skipIf(process.platform === "win32")(
     expect(JSON.parse(crashed.stdout)).toEqual({
       inTransaction: true,
       revision: 2,
-      sources: [
-        { path: "memory/first.md", hash: "discarded" },
-        { path: "memory/second.md", hash: "discarded" },
-      ],
-      chunks: [
-        { path: "memory/first.md", text: "discarded 1" },
-        { path: "memory/first.md", text: "discarded 2" },
-        { path: "memory/second.md", text: "discarded 1" },
-        { path: "memory/second.md", text: "discarded 2" },
-      ],
+      sources: sourceRows("discarded"),
+      chunks: chunkRows("discarded"),
     });
 
     const reopened = openNodeSqliteDatabase(databasePath);
@@ -119,28 +117,15 @@ it.skipIf(process.platform === "win32")(
       ).toEqual({ revision: 1 });
       expect(
         reopened.prepare("SELECT path, hash FROM memory_index_sources ORDER BY path").all(),
-      ).toEqual([
-        { path: "memory/first.md", hash: "original" },
-        { path: "memory/second.md", hash: "original" },
-      ]);
-      expect(readChunks()).toEqual([
-        { path: "memory/first.md", text: "original 1" },
-        { path: "memory/first.md", text: "original 2" },
-        { path: "memory/second.md", text: "original 1" },
-        { path: "memory/second.md", text: "original 2" },
-      ]);
+      ).toEqual(sourceRows("original"));
+      expect(readChunks()).toEqual(chunkRows("original"));
       expect(
         retry.execute({ type: "source.replace.group", input: replacement("replacement") }),
       ).toMatchObject({
         ok: true,
         facts: { revision: 2 },
       });
-      expect(readChunks()).toEqual([
-        { path: "memory/first.md", text: "replacement 1" },
-        { path: "memory/first.md", text: "replacement 2" },
-        { path: "memory/second.md", text: "replacement 1" },
-        { path: "memory/second.md", text: "replacement 2" },
-      ]);
+      expect(readChunks()).toEqual(chunkRows("replacement"));
     } finally {
       retry.close();
       reopened.close();

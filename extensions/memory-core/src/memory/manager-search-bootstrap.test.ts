@@ -3,7 +3,6 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { loadSqliteVecExtension } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "openclaw/plugin-sdk/sqlite-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
@@ -15,8 +14,8 @@ describe("memory search bootstrap", () => {
     getMemorySearchManager,
     closeAllMemorySearchManagers,
   });
-  const { provider: providerFixture } = fixture;
   const {
+    provider: providerFixture,
     createConfig: createCfg,
     getFreshManager,
     getFtsSessionManager,
@@ -91,37 +90,22 @@ describe("memory search bootstrap", () => {
       const results = await manager.search("alpha", { minScore: 0 });
       expect(results).toHaveLength(2);
       expect(results.every((result) => result.source === source)).toBe(true);
-      expect(results.map((result) => result.snippet).join("\n")).toContain("alpha sentinel 0");
-      expect(results.map((result) => result.snippet).join("\n")).toContain("alpha sentinel 1");
+      const snippets = results.map((result) => result.snippet).join("\n");
+      expect(snippets).toContain("alpha sentinel 0");
+      expect(snippets).toContain("alpha sentinel 1");
       expect(manager.status().custom?.indexIdentity).toEqual({ status: "valid" });
       if (provider !== "none") {
-        const observer = new DatabaseSync(
+        using observer = new DatabaseSync(
           expectDefined(manager.status().dbPath, "memory database path"),
-          {
-            readOnly: true,
-            allowExtension: true,
-          },
+          { readOnly: true, allowExtension: true },
         );
-        try {
-          const loaded = await loadSqliteVecExtension({ db: observer });
-          expect(loaded.ok).toBe(true);
-          const query = getNodeSqliteKysely<{
-            memory_index_chunks: { id: string };
-            memory_index_chunks_vec: { id: string };
-          }>(observer);
-          const vectors = executeSqliteQuerySync(
-            observer,
-            query.selectFrom("memory_index_chunks_vec").select("id").orderBy("id"),
-          ).rows;
-          const chunks = executeSqliteQuerySync(
-            observer,
-            query.selectFrom("memory_index_chunks").select("id").orderBy("id"),
-          ).rows;
-          expect(vectors).toHaveLength(2);
-          expect(vectors).toEqual(chunks);
-        } finally {
-          observer.close();
-        }
+        expect((await loadSqliteVecExtension({ db: observer })).ok).toBe(true);
+        const vectors = observer
+          .prepare("SELECT id FROM memory_index_chunks_vec ORDER BY id")
+          .all();
+        const chunks = observer.prepare("SELECT id FROM memory_index_chunks ORDER BY id").all();
+        expect(vectors).toHaveLength(2);
+        expect(vectors).toEqual(chunks);
       }
       await manager.close();
       const reopened = await getFreshManager(cfg, "cli");
