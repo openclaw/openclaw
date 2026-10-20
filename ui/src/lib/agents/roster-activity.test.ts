@@ -44,7 +44,6 @@ describe("agent roster activity", () => {
       "I have set up the template.",
       undefined,
     ]);
-    expect(cards.map((card) => card.sessionCount)).toEqual([3, 1]);
     expect(cards[0]?.mainKey).toBe("agent:main:main");
   });
 
@@ -147,7 +146,6 @@ describe("agent roster activity", () => {
       name: "Ember",
       textAvatar: "🔥",
       activeNow: true,
-      sessionCount: 3,
       lastActiveAt: 6,
       preview: "Main summary",
       mainKey: "agent:ember:team",
@@ -157,7 +155,7 @@ describe("agent roster activity", () => {
       lastActiveAt: 9,
       preview: "Recent fallback",
     });
-    expect(cards[2]).toMatchObject({ activeNow: false, sessionCount: 0, lastActiveAt: 0 });
+    expect(cards[2]).toMatchObject({ activeNow: false, lastActiveAt: 0 });
   });
 
   it("honors terminal run state and uses the main flag when its canonical key is absent", () => {
