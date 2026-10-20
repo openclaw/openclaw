@@ -6,59 +6,42 @@ import { gatewayServiceCommandUsesRoot } from "../cli/update-cli/update-command-
 import { summarizeGatewayServiceLayout } from "./service-layout.js";
 
 describe("summarizeGatewayServiceLayout", () => {
-  it.each(
+  it.each<[string[], string]>([
+    [["node", "dist/index.js", "gateway", "run"], "dist/index.js"],
     [
-      ["node", "dist/index.js", "gateway", "run"],
       ["node", "--title", "gateway", "dist/index.js", "--profile", "dev", "gateway"],
-      ["bun", "run", "dist/index.js", "--profile=gateway", "gateway"],
-      ["tsx", "watch", "dist/index.js", "--dev", "gateway"],
-      ["dist/index.js", "--profile", "dev", "gateway"],
-    ].map((programArguments) => ({ programArguments })),
-  )(
-    "resolves a relative entrypoint against an absolute working directory: $programArguments",
-    async ({ programArguments }) => {
-      expect(
-        (
-          await summarizeGatewayServiceLayout({
-            programArguments,
-            workingDirectory: "/repo/openclaw",
-          })
-        )?.entrypoint,
-      ).toBe(path.join("/repo/openclaw", "dist", "index.js"));
+      "dist/index.js",
+    ],
+    [["bun", "run", "dist/index.js", "--profile=gateway", "gateway"], "dist/index.js"],
+    [["tsx", "watch", "dist/index.js", "--dev", "gateway"], "dist/index.js"],
+    [["dist/index.js", "--profile", "dev", "gateway"], "dist/index.js"],
+    [["/bin/sh", "bin/gateway.sh", "--profile", "dev", "gateway"], "bin/gateway.sh"],
+  ])(
+    "resolves a relative entrypoint without mistaking root options for the script: %j",
+    async (programArguments, entrypoint) => {
+      await expect(
+        summarizeGatewayServiceLayout({ programArguments, workingDirectory: "/repo/openclaw" }),
+      ).resolves.toHaveProperty("entrypoint", path.join("/repo/openclaw", entrypoint));
     },
   );
 
-  it("resolves a shell file launcher without mistaking CLI root options for the script", async () => {
-    expect(
-      (
-        await summarizeGatewayServiceLayout({
-          programArguments: ["/bin/sh", "bin/gateway.sh", "--profile", "dev", "gateway"],
-          workingDirectory: "/repo/openclaw",
-        })
-      )?.entrypoint,
-    ).toBe(path.join("/repo/openclaw", "bin", "gateway.sh"));
-  });
-
   it("resolves Windows service entrypoints with Windows path semantics", async () => {
-    expect(
-      (
-        await summarizeGatewayServiceLayout({
-          programArguments: ["node.exe", "dist\\index.js", "gateway", "run"],
-          workingDirectory: "C:\\openclaw",
-        })
-      )?.entrypoint,
-    ).toBe("C:\\openclaw\\dist\\index.js");
+    await expect(
+      summarizeGatewayServiceLayout({
+        programArguments: ["node.exe", "dist\\index.js", "gateway", "run"],
+        workingDirectory: "C:\\openclaw",
+      }),
+    ).resolves.toHaveProperty("entrypoint", "C:\\openclaw\\dist\\index.js");
   });
 
   it("rejects a relative entrypoint without an absolute service working directory", async () => {
+    const programArguments = ["node", "dist/index.js", "gateway", "run"];
+    await expect(summarizeGatewayServiceLayout({ programArguments })).resolves.not.toHaveProperty(
+      "entrypoint",
+    );
     await expect(
       summarizeGatewayServiceLayout({
-        programArguments: ["node", "dist/index.js", "gateway", "run"],
-      }),
-    ).resolves.not.toHaveProperty("entrypoint");
-    await expect(
-      summarizeGatewayServiceLayout({
-        programArguments: ["node", "dist/index.js", "gateway", "run"],
+        programArguments,
         workingDirectory: "./checkout",
       }),
     ).resolves.not.toHaveProperty("entrypoint");
@@ -93,19 +76,12 @@ describe("gatewayServiceCommandUsesRoot release ownership", () => {
             path.resolve(String(target)) === current ? selected : stat(target),
           );
         }
+        const commandAt = (dir: string) => ({
+          programArguments: [process.execPath, path.join(dir, "dist", "index.js"), "gateway"],
+        });
         const command = {
-          programArguments: [
-            process.execPath,
-            path.join(layout === "pinned" ? release : current, "dist", "index.js"),
-            "gateway",
-          ],
-          managedDefinition: {
-            programArguments: [
-              process.execPath,
-              path.join(managedRoot, "dist", "index.js"),
-              "gateway",
-            ],
-          },
+          ...commandAt(layout === "pinned" ? release : current),
+          managedDefinition: commandAt(managedRoot),
         };
         await expect(gatewayServiceCommandUsesRoot({ root: managedRoot, command })).resolves.toBe(
           layout === "stable" || layout === "paired",

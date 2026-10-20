@@ -9,6 +9,22 @@ import {
 } from "./service-stage.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+const fileState = {
+  sha256: "a".repeat(64),
+  mode: 0o600,
+  dev: 7,
+  ino: 42,
+  size: 10,
+  mtimeMs: 1,
+  ctimeMs: 1,
+};
+function readReceipt(after: unknown, before: unknown = null) {
+  return GatewayServiceDefinitionBackupReceiptSchema.parse({
+    id: "00000000-0000-4000-8000-000000000000",
+    files: [{ sourcePath: path.resolve("legacy.service"), before, after }],
+    guards: [],
+  }).files[0]!.after!;
+}
 
 describe.skipIf(process.platform === "win32")("service publication permissions", () => {
   it.each([0o000, 0o077])(
@@ -68,29 +84,11 @@ describe("service backup receipt identity compatibility", () => {
   it.each(["9007199254740992", "-9007199254740992"])(
     "reads released numeric receipts and preserves full-width ID %s",
     (ino) => {
-      const state = {
-        sha256: "a".repeat(64),
-        mode: 0o600,
-        dev: 7,
-        ino: 42,
-        size: 10,
-        mtimeMs: 1,
-        ctimeMs: 1,
-      };
-      const input = {
-        id: "00000000-0000-4000-8000-000000000000",
-        files: [{ sourcePath: path.resolve("legacy.service"), before: state, after: state }],
-        guards: [],
-      };
-      const legacy = GatewayServiceDefinitionBackupReceiptSchema.parse(input).files[0]!.after!;
+      const legacy = readReceipt(fileState, fileState);
       expect(legacy).toMatchObject({ dev: 7, ino: 42 });
       expect(matchesServiceFilePublication({ ...legacy, dev: "7", ino: "42" }, legacy)).toBe(true);
 
-      const fullWidth = { ...state, ino };
-      const exact = GatewayServiceDefinitionBackupReceiptSchema.parse({
-        ...input,
-        files: [{ ...input.files[0], after: fullWidth }],
-      }).files[0]!.after!;
+      const exact = readReceipt({ ...fileState, ino }, fileState);
       expect(matchesServiceFilePublication({ ...exact }, exact)).toBe(true);
       for (const field of ["mtimeMs", "ctimeMs"] as const) {
         const settled = { ...exact, [field]: exact[field] + 10 };
@@ -114,31 +112,12 @@ describe("service backup receipt identity compatibility", () => {
     "keeps rounded legacy $field $exactId explicit while exact receipts detect a same-double replacement",
     ({ field, exactId, legacyId }) => {
       const state = {
-        sha256: "a".repeat(64),
-        mode: 0o600,
+        ...fileState,
         dev: "7",
         ino: "42",
-        size: 10,
-        mtimeMs: 1,
-        ctimeMs: 1,
         [field]: exactId,
       };
-      const legacy = GatewayServiceDefinitionBackupReceiptSchema.parse({
-        id: "00000000-0000-4000-8000-000000000000",
-        files: [
-          {
-            sourcePath: path.resolve("legacy.service"),
-            before: null,
-            after: {
-              ...state,
-              dev: 7,
-              ino: 42,
-              [field]: legacyId,
-            },
-          },
-        ],
-        guards: [],
-      }).files[0]!.after!;
+      const legacy = readReceipt({ ...fileState, [field]: legacyId });
       expect(legacy[field]).toBe(legacyId);
       expect(matchesServiceFilePublication(state, legacy)).toBe(true);
       expect(matchesServiceFilePublication({ ...state, [field]: legacyId }, legacy)).toBe(true);

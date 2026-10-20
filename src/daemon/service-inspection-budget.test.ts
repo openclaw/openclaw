@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   getServiceInspectionClock,
@@ -7,15 +7,23 @@ import {
 } from "./service-inspection-budget.js";
 import { createSystemdPeerQueue } from "./systemd-peer-queue.js";
 
+let now = 0;
+const makeBudget = () => withServiceInspectionBudget((scope) => scope);
+const advance = (ms: number) => {
+  now += ms;
+};
+const guard = (ms: number) => runServiceInspectionGuard(() => advance(ms));
+beforeEach(() => {
+  now = 0;
+  vi.spyOn(performance, "now").mockImplementation(() => now);
+});
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
 it("counts nested synchronous guards once, propagates refusal, and charges async work", async () => {
-  let now = 0;
-  vi.spyOn(performance, "now").mockImplementation(() => now);
-  const budget = withServiceInspectionBudget((scope) => scope);
+  const budget = makeBudget();
   const refusal = new Error("current custody revoked");
   await budget.run(async () => {
     expect(getServiceInspectionClock()).toBe(budget.now);
@@ -23,9 +31,7 @@ it("counts nested synchronous guards once, propagates refusal, and charges async
       now += 2_000;
       withServiceInspectionBudget((nested) => {
         expect(nested).toBe(budget);
-        runServiceInspectionGuard(() => {
-          now += 3_000;
-        });
+        guard(3_000);
       });
       now += 1_000;
     });
@@ -38,9 +44,7 @@ it("counts nested synchronous guards once, propagates refusal, and charges async
     ).toThrow(refusal);
     expect(budget.now()).toBe(0);
     const gate = createDeferred();
-    const work = gate.promise.then(() => {
-      now += 100;
-    });
+    const work = gate.promise.then(() => advance(100));
     now += 200;
     gate.resolve();
     await work;
@@ -50,25 +54,19 @@ it("counts nested synchronous guards once, propagates refusal, and charges async
 });
 
 it("keeps concurrent scopes and retained clocks independent", async () => {
-  let now = 0;
-  vi.spyOn(performance, "now").mockImplementation(() => now);
-  const a = withServiceInspectionBudget((scope) => scope);
-  const b = withServiceInspectionBudget((scope) => scope);
+  const a = makeBudget();
+  const b = makeBudget();
   const entered = createDeferred();
   const release = createDeferred();
   const first = a.run(async () => {
     entered.resolve();
     await release.promise;
-    runServiceInspectionGuard(() => {
-      now += 40;
-    });
+    guard(40);
     expect(getServiceInspectionClock()).toBe(a.now);
   });
   await entered.promise;
   await b.run(async () => {
-    runServiceInspectionGuard(() => {
-      now += 60;
-    });
+    guard(60);
     release.resolve();
     await first;
     expect(getServiceInspectionClock()).toBe(b.now);
@@ -80,9 +78,7 @@ it("keeps concurrent scopes and retained clocks independent", async () => {
 
 it("rechecks queued expiry in the shared clock while preserving FIFO and cleanup joining", async () => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  let now = 0;
-  vi.spyOn(performance, "now").mockImplementation(() => now);
-  const budget = withServiceInspectionBudget((scope) => scope);
+  const budget = makeBudget();
   const queue = createSystemdPeerQueue();
   const entered = createDeferred();
   const release = createDeferred();
@@ -98,9 +94,7 @@ it("rechecks queued expiry in the shared clock while preserving FIFO and cleanup
       order.push("second");
     });
     // The event loop resumes after a slow synchronous check; its old timer is due.
-    runServiceInspectionGuard(() => {
-      now += 1_000;
-    });
+    guard(1_000);
     await vi.advanceTimersByTimeAsync(50);
     expect(order).toEqual([]);
     let joined = false;
@@ -118,11 +112,9 @@ it("rechecks queued expiry in the shared clock while preserving FIFO and cleanup
 
 it("does not credit another scope's guard to a queued deadline", async () => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  let now = 0;
-  vi.spyOn(performance, "now").mockImplementation(() => now);
   const queue = createSystemdPeerQueue();
-  const a = withServiceInspectionBudget((scope) => scope);
-  const b = withServiceInspectionBudget((scope) => scope);
+  const a = makeBudget();
+  const b = makeBudget();
   const entered = createDeferred();
   const release = createDeferred();
   const first = a.run(() =>
@@ -135,11 +127,7 @@ it("does not credit another scope's guard to a queued deadline", async () => {
   const execute = vi.fn(async () => {});
   const second = b.run(() => queue.run(50, execute));
   const expired = expect(second).rejects.toThrow("deadline expired");
-  a.run(() =>
-    runServiceInspectionGuard(() => {
-      now += 100;
-    }),
-  );
+  a.run(() => guard(100));
   await vi.advanceTimersByTimeAsync(50);
   await expired;
   expect(execute).not.toHaveBeenCalled();

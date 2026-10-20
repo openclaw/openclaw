@@ -48,14 +48,6 @@ function unitNotFound(unit: string) {
   };
 }
 
-function expectBudgetShares(timeouts: Array<number | undefined>, minMs: number) {
-  expect(timeouts.length).toBeGreaterThan(1);
-  for (const timeout of timeouts) {
-    expect(timeout).toBeGreaterThan(minMs);
-    expect(timeout).toBeLessThanOrEqual(BUDGET_MS);
-  }
-}
-
 describe.skipIf(process.platform === "win32")("systemd budgets across a wall-clock step", () => {
   let root: string;
   let env: Record<string, string>;
@@ -105,11 +97,7 @@ describe.skipIf(process.platform === "win32")("systemd budgets across a wall-clo
         timeoutMs: BUDGET_MS,
       });
 
-      // The budget is split across the remaining manager calls (three at most).
-      expectBudgetShares(
-        busctl.mock.calls.map((call) => call[2]),
-        BUDGET_MS / 3 - 100,
-      );
+      // Exact shares prove both the split and the remaining monotonic budget.
       expect(busctl.mock.calls.map((call) => call[2])).toEqual([1_666, 1_633]);
     },
   );
@@ -139,11 +127,6 @@ describe.skipIf(process.platform === "win32")("systemd budgets across a wall-clo
         readSystemdServiceExecStart(env, { requireEffective: true, timeoutMs: BUDGET_MS }),
       ).resolves.toMatchObject({ programArguments: snapshot.programArguments });
 
-      expect(busctl).toHaveBeenCalledTimes(3);
-      expectBudgetShares(
-        busctl.mock.calls.map((call) => call[2]),
-        BUDGET_MS / 3 - 100,
-      );
       expect(busctl.mock.calls.map((call) => call[2])).toEqual([1_666, 2_450, 4_800]);
     },
   );
@@ -183,7 +166,6 @@ describe.skipIf(process.platform === "win32")("systemd budgets across a wall-clo
         ...reloadUserManager.mock.calls.map((call) => call[1]),
       ];
       expect(assertNoSystemOwnership).toHaveBeenCalledTimes(3);
-      expectBudgetShares(timeouts, BUDGET_MS - 1_000);
       expect(timeouts).toEqual([5_000, 4_900, 4_800, 4_700]);
     },
   );
