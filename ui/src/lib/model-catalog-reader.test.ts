@@ -17,7 +17,7 @@ const second = { models: [{ provider: "fixture", id: "second", name: "Second" }]
 function fixture(scope: ModelsListParams = { agentId: "main" }) {
   const { gateway, current } = createGatewayStoreTestStore();
   gateway.start();
-  current().opts.onHello?.(gatewayHelloForMethods([]));
+  current().testOptions.onHello?.(gatewayHelloForMethods([]));
   const client = gateway.snapshot.client;
   if (!client) {
     throw new Error("Expected connected fixture client");
