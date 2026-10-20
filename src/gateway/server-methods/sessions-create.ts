@@ -174,7 +174,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     }
     const { personalModelSelection, personalAccountDefaults } = personalAccounts;
     const cfg = getCurrentConfig();
-    const sessionCreation = attributeAgentToolSessionCreation(preparedCreation, cfg, toolRequester);
+    const sessionCreation = attributeAgentToolSessionCreation(preparedCreation, toolRequester);
     const authority = createAgentRuntimeAuthorityGuard(client, context, respond);
     const assertSessionCreateCurrent = Object.assign(
       bindGatewayDeviceRevocation(() => {

@@ -135,10 +135,6 @@ it.each([
   "pending ACP spawn transfers work only from its live parent: %s / %s",
   async (stage, closure) => {
     const cfg = configRuntime.getRuntimeConfig();
-    cfg.agents = {
-      ...cfg.agents,
-      defaults: { ...cfg.agents?.defaults, experimental: { delegatedCreatorAttribution: true } },
-    };
     const storePath = await registryPersistence.writeSubagentSessionEntry({
       stateDir,
       ...parentScope,

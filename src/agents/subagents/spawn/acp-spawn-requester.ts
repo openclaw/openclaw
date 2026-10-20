@@ -161,7 +161,6 @@ export function buildAcpSpawnCreationStamp(params: {
     via: "spawn",
     actor: attributeDelegatedSessionCreator(
       { type: "agent", id: params.requesterAgentId },
-      params.cfg,
       params.creatorProfileId,
     ),
     inheritedGitContributorProfileIds: inheritSessionGitContributorProfileIds(params.parentEntry, {

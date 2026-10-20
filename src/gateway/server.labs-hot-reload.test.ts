@@ -10,7 +10,6 @@ import type {
 } from "../../packages/gateway-protocol/src/index.js";
 import { withTestTimeout } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
-import { getRuntimeConfig } from "../config/config.js";
 import { resetGatewayRestartStateForInProcessRestart } from "../infra/restart.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
@@ -132,7 +131,6 @@ it("applies all Labs switches through config.patch without restarting the Gatewa
     } };`,
   );
   const labsPatch = (enabled: boolean) => ({
-    agents: { defaults: { experimental: { delegatedCreatorAttribution: enabled ? true : null } } },
     tools: {
       codeMode: { enabled: enabled ? "auto" : false },
       toolSearch: { enabled, mode: "directory" },
@@ -256,9 +254,6 @@ it("applies all Labs switches through config.patch without restarting the Gatewa
     }>("config.patch", { raw: JSON.stringify(labsPatch(enabled)), baseHash: config.hash });
     expect(patch.sentinel.payload.stats.requiresRestart).toBe(false);
     expect(patch.restart).toBeUndefined();
-    expect(getRuntimeConfig().agents?.defaults?.experimental?.delegatedCreatorAttribution).toBe(
-      enabled ? true : undefined,
-    );
     await assertPluginUi(enabled);
     await assertWorkerDesktop(enabled);
     if (enabled) {

@@ -115,7 +115,6 @@ export async function resolveSubagentChildPlan(params: {
   );
   creationPolicy.actor = attributeDelegatedSessionCreator(
     creationPolicy.actor,
-    params.cfg,
     params.creatorProfileId,
     params.requesterAgentId,
   );

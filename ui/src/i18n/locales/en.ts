@@ -1577,7 +1577,6 @@ export const en: TranslationMap & {
     saveErrorTitle: "Could not update feature",
     saveFailed: "The feature setting could not be saved.",
     decisionAssistance: {},
-    delegatedCreatorAttribution: {},
     codeMode: {},
 
     swarm: {

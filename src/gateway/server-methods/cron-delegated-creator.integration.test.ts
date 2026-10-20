@@ -57,37 +57,26 @@ beforeEach(async () => {
 
 it.each([
   {
-    name: "opted-in causal human",
-    enabled: true,
+    name: "causal human with default configuration",
     operatorProfileId: "selected-user",
     delegatedCreatorProfileId: "causal-human",
     expectedCreator: "causal-human",
   },
   {
-    name: "Lab disabled",
-    enabled: false,
-    operatorProfileId: "selected-user",
-    delegatedCreatorProfileId: "causal-human",
-    expectedCreator: undefined,
-  },
-  {
     name: "no human requester",
-    enabled: true,
     operatorProfileId: undefined,
     delegatedCreatorProfileId: undefined,
     expectedCreator: undefined,
   },
   {
     name: "explicit no-human origin with selected execution user",
-    enabled: true,
     operatorProfileId: "selected-user",
     delegatedCreatorProfileId: null,
     expectedCreator: undefined,
   },
 ])(
   "attributes new cron to $name, never the session's historical human",
-  async ({ enabled, operatorProfileId, delegatedCreatorProfileId, expectedCreator }) => {
-    config.agents!.defaults!.experimental = { delegatedCreatorAttribution: enabled };
+  async ({ operatorProfileId, delegatedCreatorProfileId, expectedCreator }) => {
     const fixture = createCronFixture(undefined, config);
     const client = createSyntheticPluginRuntimeClient({ scopes: ["operator.admin"] });
     client.internal = { isLocalClient: true };
@@ -123,16 +112,12 @@ it.each([
             ...CREATOR,
             ...(expectedCreator
               ? { delegatedBy: { type: "human", source: "profile", id: expectedCreator } }
-              : enabled
-                ? { delegatedBy: { type: "agent", id: "main" } }
-                : {}),
+              : { delegatedBy: { type: "agent", id: "main" } }),
           });
           expect(resolveSessionCreatorActor(job?.createdActor)).toEqual(
             expectedCreator
               ? { type: "human", source: "profile", id: expectedCreator }
-              : enabled
-                ? { type: "agent", id: "main" }
-                : CREATOR,
+              : { type: "agent", id: "main" },
           );
           expect(sessionIsolationProfileId(job?.createdActor)).toBe(CREATOR.id);
           expect(job?.owner).toMatchObject({ agentId: "main", sessionKey: SESSION });

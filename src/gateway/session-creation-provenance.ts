@@ -5,7 +5,6 @@ import type {
   SessionCreatedActor,
   SessionCreatedVia,
 } from "../config/sessions/session-entry-provenance.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentRuntimeIdentity } from "./agent-runtime-identity-token.js";
 import type { AgentRuntimeSessionSpawnContext } from "./agent-runtime-session-spawn-context.js";
 
@@ -120,7 +119,6 @@ export function validateAgentToolSessionCreation(
 /** After validation, attribution changes only creator controls, never execution identity. */
 export function attributeAgentToolSessionCreation(
   creation: TrustedSessionCreation,
-  config: OpenClawConfig,
   caller: { agentId: string; requesterOrigin?: RequesterOrigin } | undefined,
 ): TrustedSessionCreation {
   if (creation.via !== "operator" || creation.requesterSessionKey === undefined || !caller) {
@@ -130,7 +128,6 @@ export function attributeAgentToolSessionCreation(
     ...creation,
     actor: attributeDelegatedSessionCreator(
       creation.actor,
-      config,
       requesterCreatorProfileId(caller.requesterOrigin),
       caller.agentId,
     ),

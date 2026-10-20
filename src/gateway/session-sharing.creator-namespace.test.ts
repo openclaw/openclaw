@@ -169,7 +169,6 @@ describe("creator namespace authorization", () => {
               visibility: "draft",
               createdActor: attributeDelegatedSessionCreator(
                 { type: "human", source: "profile", id: isolation!.id },
-                { agents: { defaults: { experimental: { delegatedCreatorAttribution: true } } } },
                 hasHuman ? causal!.id : undefined,
                 "main",
               ),

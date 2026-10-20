@@ -18,7 +18,7 @@ import {
 it("keeps autonomous spawn creator separate from the inherited human sandbox", () => {
   const { creation } = resolveSessionCreateInheritance({
     request: {
-      cfg: { agents: { defaults: { experimental: { delegatedCreatorAttribution: true } } } },
+      cfg: {},
       creation: { via: "spawn", actor: { type: "agent", id: "main" } },
     },
     parent: {

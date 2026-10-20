@@ -409,7 +409,6 @@ export async function maybeSpawnVisibleSession(params: {
             via: "spawn",
             actor: attributeDelegatedSessionCreator(
               { type: "agent", id: requesterAgentId },
-              cfg,
               creatorProfileId,
             ),
             requesterSessionKey: requesterKey,

@@ -18,7 +18,7 @@ export type SessionActor = SchemaContract<
   Pick<ProjectedSessionCreatedActor, "type" | "id" | "label">
 >;
 
-/** Opted-in creator attribution; the enclosing actor stays the legacy isolation identity. */
+/** Causal creator attribution; the enclosing actor stays the legacy isolation identity. */
 type DelegatedSessionCreator =
   | { type: "human"; source: "profile"; id: string }
   | { type: "agent"; id?: string };
@@ -66,7 +66,6 @@ export function sessionIsolationProfileId(actor: CreatorInput | undefined): stri
 /** Call only at creation with a host-captured causal requester, never a selected tool user. */
 export function attributeDelegatedSessionCreator(
   actor: SessionCreatedActor | undefined,
-  config: OpenClawConfig,
   requesterProfileId?: string,
   spawningAgentId?: string,
 ): SessionCreatedActor | undefined {
@@ -75,9 +74,6 @@ export function attributeDelegatedSessionCreator(
     return undefined;
   }
   const { delegatedBy: _previous, ...legacyActor } = actor;
-  if (config.agents?.defaults?.experimental?.delegatedCreatorAttribution !== true) {
-    return legacyActor;
-  }
   const agentId = spawningAgentId?.trim();
   if (!id && legacyActor.type !== "human" && (!agentId || legacyActor.id === agentId)) {
     return legacyActor;

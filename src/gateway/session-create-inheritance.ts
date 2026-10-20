@@ -145,7 +145,6 @@ export function resolveSessionCreateInheritance(params: {
       ...policy,
       actor: attributeDelegatedSessionCreator(
         policy.actor,
-        params.request.cfg,
         params.request.creation.actor?.delegatedBy?.type === "human"
           ? params.request.creation.actor.delegatedBy.id
           : undefined,

@@ -84,15 +84,12 @@ export function registerParticipantSpawnCases(
       conversationId: parentSessionKey,
     });
   it.each([
-    { visible: false, queued: false, attribution: false },
-    { visible: true, queued: false, attribution: false },
-    { visible: false, queued: true, attribution: false },
-    { visible: false, queued: false, attribution: true },
-    { visible: true, queued: false, attribution: true },
-    { visible: false, queued: true, attribution: true },
+    { visible: false, queued: false },
+    { visible: true, queued: false },
+    { visible: false, queued: true },
   ])(
-    "delegates participant custody (visible=$visible, queued=$queued, attribution=$attribution)",
-    async ({ visible, queued, attribution }) => {
+    "delegates participant custody (visible=$visible, queued=$queued)",
+    async ({ visible, queued }) => {
       const envelopes: ExecutionIdentityAdmissionEnvelope[] = [];
       onTestFinished(
         configureExecutionIdentityAdmissionSink((work) => {
@@ -106,15 +103,6 @@ export function registerParticipantSpawnCases(
       const { source: aliceSource, person: alice } = participant("alice", "Alice");
       const { source: bobSource, person: bob } = participant("bob", "Bob");
       const bound = await createBoundParent(aliceSource.authority);
-      if (attribution) {
-        bound.cfg.agents = {
-          ...bound.cfg.agents,
-          defaults: {
-            ...bound.cfg.agents?.defaults,
-            experimental: { delegatedCreatorAttribution: true },
-          },
-        };
-      }
       const parentEnvelope = expectDefined(
         envelopes.find((entry) => entry.runId === parentRunId),
         "parent admission",
@@ -306,9 +294,11 @@ export function registerParticipantSpawnCases(
                   storePath: bound.storePath,
                   sessionKey: details.childSessionKey,
                 });
-                expect(persisted?.createdActor?.delegatedBy).toEqual(
-                  attribution ? { type: "human", source: "profile", id: "alice" } : undefined,
-                );
+                expect(persisted?.createdActor?.delegatedBy).toEqual({
+                  type: "human",
+                  source: "profile",
+                  id: "alice",
+                });
                 expect(persisted?.createdActor?.type).toBe("agent");
                 if (queued) {
                   expect(tools).toContain("read");

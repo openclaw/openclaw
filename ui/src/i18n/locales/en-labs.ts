@@ -14,11 +14,6 @@ const enLabs = {
       unavailable: "Couldn’t load this setting. Reconnect or refresh to try again.",
       refresh: "Refresh configuration",
     },
-    delegatedCreatorAttribution: {
-      title: "Delegated human creators",
-      description:
-        "Attribute new agent-delegated sessions and automations to the human who requested them. Off by default. Applies to new work without restarting the Gateway; existing creators, execution permissions, and sandbox isolation stay unchanged.",
-    },
     codeMode: {
       title: "Code Mode",
       description:

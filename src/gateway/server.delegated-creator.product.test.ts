@@ -37,10 +37,10 @@ type Client = Awaited<ReturnType<typeof connectGatewayClient>>;
 type Created = { key: string; sessionId: string };
 type Receipt = { sessionKey: string; sessionId: string; runStarted: boolean };
 
-it.each([false, true])(
-  "enforces creator final effects and revocation with delegated attribution enabled=%s",
+it(
+  "enforces causal creator final effects and revocation with default configuration",
   { timeout: 90_000 },
-  async (enabled) => {
+  async () => {
     const state = await createOpenClawTestState({
       label: "delegated-creator-product",
       env: {
@@ -133,7 +133,6 @@ it.each([false, true])(
           workspace: state.workspaceDir,
           skipBootstrap: true,
           heartbeat: { every: "0m" },
-          ...(enabled ? { experimental: { delegatedCreatorAttribution: true } } : {}),
           model: { primary: model.modelRef },
           models: {
             [model.modelRef]: {
@@ -257,9 +256,7 @@ it.each([false, true])(
       type: "human",
       source: "profile",
       id: people.selected!.id,
-      ...(enabled
-        ? { delegatedBy: { type: "human", source: "profile", id: people.causal!.id } }
-        : {}),
+      delegatedBy: { type: "human", source: "profile", id: people.causal!.id },
     });
     await admin.request("sessions.assignOwner", {
       key: child.sessionKey,
@@ -267,10 +264,10 @@ it.each([false, true])(
     });
     const shareParams = { sessionKey: child.sessionKey, expectedSessionId: child.sessionId };
     const archiveParams = { key: child.sessionKey, expectedSessionId: child.sessionId };
-    const creator = enabled ? causal : selected;
-    const creatorId = enabled ? people.causal!.id : people.selected!.id;
+    const creator = causal;
+    const creatorId = people.causal!.id;
     for (const [name, client] of [
-      [enabled ? "selected/isolation" : "causal without opt-in", enabled ? selected : causal],
+      ["selected/isolation", selected],
       ["assignee", assignee],
     ] as const) {
       const before = structuredClone(entry());
@@ -299,7 +296,7 @@ it.each([false, true])(
     await creator.request("sessions.patch", { ...archiveParams, archived: false });
     expect(entry()?.archivedAt).toBeUndefined();
     console.log(
-      `Creator proof: ${enabled ? "causal human" : "legacy selected user"} published/unpublished and archived/restored the real created session`,
+      "Creator proof: causal human published/unpublished and archived/restored the real created session with default configuration",
     );
 
     // Pause only after the real sharing owner has admitted this request. Revoke via

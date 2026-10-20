@@ -322,7 +322,6 @@ export async function captureCronCreatorSession(
   const createdActor = callerScope
     ? attributeDelegatedSessionCreator(
         legacyActor,
-        cfg,
         callerScope.creatorProfileId,
         callerScope.agentId,
       )

@@ -126,11 +126,10 @@ it("preserves authorized collaborative task and nested-delegation credit", () =>
 });
 
 describe("delegated human creators", () => {
-  const config = { agents: { defaults: { experimental: { delegatedCreatorAttribution: true } } } };
   const actor: SessionCreatedActor = { type: "human", source: "profile", id: "isolation-owner" };
 
   it("keeps the legacy isolation actor while projecting the captured human creator", () => {
-    const attributed = attributeDelegatedSessionCreator(actor, config, "requester");
+    const attributed = attributeDelegatedSessionCreator(actor, "requester");
     expect(attributed).toEqual({
       ...actor,
       delegatedBy: { type: "human", source: "profile", id: "requester" },
@@ -145,21 +144,17 @@ describe("delegated human creators", () => {
     expect(actor).not.toHaveProperty("delegatedBy");
   });
 
-  it("requires explicit opt-in and a captured human, not an assignee or execution agent", () => {
-    for (const cfg of [
-      {},
-      { agents: { defaults: { experimental: { delegatedCreatorAttribution: false } } } },
-    ]) {
-      expect(attributeDelegatedSessionCreator(spawningAgent, cfg, "requester")).toEqual(
-        spawningAgent,
-      );
-    }
-    expect(attributeDelegatedSessionCreator(spawningAgent, config)).toEqual(spawningAgent);
-    expect(attributeDelegatedSessionCreator(undefined, config, "requester")).toBeUndefined();
+  it("requires a captured human, not an assignee or execution agent", () => {
+    expect(attributeDelegatedSessionCreator(spawningAgent, "requester")).toEqual({
+      ...spawningAgent,
+      delegatedBy: { type: "human", source: "profile", id: "requester" },
+    });
+    expect(attributeDelegatedSessionCreator(spawningAgent)).toEqual(spawningAgent);
+    expect(attributeDelegatedSessionCreator(undefined, "requester")).toBeUndefined();
   });
 
-  it("does not rewrite stored attribution when settings, assignment or proposed creator change", () => {
-    const attributed = attributeDelegatedSessionCreator(actor, config, "requester");
+  it("does not rewrite stored attribution when assignment or proposed creator changes", () => {
+    const attributed = attributeDelegatedSessionCreator(actor, "requester");
     const stored = {
       createdActor: attributed,
       createdVia: "spawn" as const,

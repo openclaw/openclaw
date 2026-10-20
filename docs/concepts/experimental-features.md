@@ -38,7 +38,7 @@ Open **Settings → Labs** to manage experiments that have a
 Control UI switch. Enabling or disabling a lab patches the saved Gateway
 config immediately without restarting the Gateway.
 
-Labs includes Speech bubbles, Decision assistance, Delegated human creators, Advisor, Code Mode, Tool Search for all models,
+Labs includes Speech bubbles, Decision assistance, Advisor, Code Mode, Tool Search for all models,
 Claws, Custom plugin UI, Host Desktop, and Cloud Worker Desktop. Under the default reload mode, custom
 plugin views and desktop availability update in connected Control UI pages.
 Code Mode and Tool Search changes take effect for future agent runs.
@@ -67,54 +67,6 @@ force Code Mode on for every model.
 Tool Search is enabled by default when `tools.toolSearch` is unset.
 Turning its Labs switch off disables the global default; turning it on restores
 that default.
-
-## Delegated human creators
-
-Enable **Settings → Labs → Delegated human creators** to attribute new delegated
-sessions and automations to the verified human who initiated the work:
-
-```json5
-{
-  agents: {
-    defaults: {
-      experimental: { delegatedCreatorAttribution: true },
-    },
-  },
-}
-```
-
-The default is **off**. The switch uses the existing hot config reload path; it
-does not restart the Gateway or disconnect active clients. New work uses its
-admitted configuration. Changing the switch does not rewrite existing creators.
-Disabling it stops attribution on subsequent work; it does not remove attribution
-already saved.
-
-With the experiment enabled, the retained human is the creator for discovery,
-sharing, public-link management, and creator/admin archive and restore checks.
-The assigned owner remains separate: reassignment alone does not transfer these
-creator rights. A selected tool user supplies execution authority, not evidence
-that they initiated the task. Autonomous work without a retained human stays
-agent/system-created. The executing agent, model/tool permissions, and required
-sandbox namespace are not changed by attribution.
-
-Public links still require explicit publication. Their URLs, anonymous read-only
-view, content exclusions, revocation, and future-message behavior are unchanged.
-The experiment neither publishes sessions automatically nor exposes private
-isolation metadata.
-
-### Rollback compatibility
-
-Attribution is stored alongside the original actor inside the existing creation
-record. Original actor fields and database schema versions are unchanged. A
-compatible older runtime ignores the additional attribution and uses its original
-creator rules; it retains the record when writing sessions, so returning to this
-runtime restores the attributed creator without changing sandbox identity.
-Remove the experiment's config key before starting a runtime that does not know
-it (the Labs switch's Off position removes that override). Retain the ordinary
-[rollback safeguards](/install/updating/rollback-and-recovery): this feature does
-not make unrelated database-format changes in newer OpenClaw releases readable
-by older binaries. An incompatible binary remains blocked rather than silently
-restoring an old backup and losing later writes.
 
 ## Decision assistance
 
