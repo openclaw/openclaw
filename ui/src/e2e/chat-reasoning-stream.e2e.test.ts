@@ -43,16 +43,8 @@ suite.define(() => {
           const send = await gateway.waitForRequest("chat.send");
           const runId = (send.params as { idempotencyKey: string }).idempotencyKey;
           let seq = 0;
-          const agent = async (stream: string, data: Record<string, unknown>, ts: number) => {
-            await gateway.emitGatewayEvent("agent", {
-              runId,
-              seq: ++seq,
-              stream,
-              ts,
-              sessionKey,
-              data,
-            });
-          };
+          const agent = (stream: string, data: Record<string, unknown>, ts: number) =>
+            gateway.emitGatewayEvent("agent", { runId, seq: ++seq, stream, ts, sessionKey, data });
           const thinking = (index: number) =>
             agent(
               "thinking",
@@ -61,6 +53,19 @@ suite.define(() => {
             );
           const reasoning = (index: number) =>
             pane.locator(".chat-thinking", { hasText: thoughts[index] });
+          const tool = (index: number, phase: "start" | "result") =>
+            agent(
+              "tool",
+              {
+                toolCallId: `read-${index}`,
+                name: "read",
+                phase,
+                ...(phase === "start"
+                  ? { args: { path: `evidence-${index}.txt` } }
+                  : { result: { content: [{ type: "text", text: "42" }] } }),
+              },
+              (phase === "start" ? 1_150 : 1_160) + index * 100,
+            );
           const persisted: unknown[] = [
             {
               role: "user",
@@ -126,26 +131,8 @@ suite.define(() => {
             await reasoning(index).waitFor();
             // The earlier occurrence must survive before its durable row arrives.
             expect(await reasoning(0).count()).toBe(1);
-            await agent(
-              "tool",
-              {
-                toolCallId: `read-${index}`,
-                name: "read",
-                phase: "start",
-                args: { path: `evidence-${index}.txt` },
-              },
-              1_150 + index * 100,
-            );
-            await agent(
-              "tool",
-              {
-                toolCallId: `read-${index}`,
-                name: "read",
-                phase: "result",
-                result: { content: [{ type: "text", text: "42" }] },
-              },
-              1_160 + index * 100,
-            );
+            await tool(index, "start");
+            await tool(index, "result");
           }
           await thinking(2);
           await reasoning(2).waitFor();
@@ -188,13 +175,6 @@ suite.define(() => {
           const rawDetails = pane.locator(".chat-activity-group__summary", {
             hasText: "Raw details",
           });
-          const expandRawDetails = async () => {
-            await rawDetails.waitFor();
-            if ((await rawDetails.getAttribute("aria-expanded")) === "false") {
-              await rawDetails.click();
-            }
-            await expect.poll(() => rawDetails.getAttribute("aria-expanded")).toBe("true");
-          };
           for (const index of [0, 1, 2]) {
             await persist(index);
             // Enabled persisted reasoning stays visible between tool steps.
@@ -215,7 +195,11 @@ suite.define(() => {
           await worked.waitFor();
           await worked.click();
           await expect.poll(() => worked.getAttribute("aria-expanded")).toBe("true");
-          await expandRawDetails();
+          await rawDetails.waitFor();
+          if ((await rawDetails.getAttribute("aria-expanded")) === "false") {
+            await rawDetails.click();
+          }
+          await expect.poll(() => rawDetails.getAttribute("aria-expanded")).toBe("true");
           for (const index of [0, 1]) {
             await expect
               .poll(() =>

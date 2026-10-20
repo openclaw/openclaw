@@ -14,31 +14,35 @@ const finalText = "Reviewed the error handling and confirmed the failure path is
 const baseTime = Date.UTC(2026, 9, 16, 14, 5);
 
 function projectedHistory() {
-  const messages = [
-    {
-      role: "user",
-      content: userText,
-      timestamp: baseTime - 1_000,
-    },
+  const toolStep = (
+    id: string,
+    name: string,
+    args: Record<string, string>,
+    text: string,
+    offset: number,
+  ) => [
     {
       role: "assistant",
-      content: [
-        {
-          type: "toolCall",
-          id: "read-error-handling",
-          name: "read",
-          arguments: { path: "/workspace/src/error-handling.ts" },
-        },
-      ],
-      timestamp: baseTime,
+      content: [{ type: "toolCall", id, name, arguments: args }],
+      timestamp: baseTime + offset,
     },
     {
       role: "toolResult",
-      toolCallId: "read-error-handling",
-      toolName: "read",
-      content: [{ type: "text", text: "The error handler returns a structured failure." }],
-      timestamp: baseTime + 1_000,
+      toolCallId: id,
+      toolName: name,
+      content: [{ type: "text", text }],
+      timestamp: baseTime + offset + 1_000,
     },
+  ];
+  const messages = [
+    { role: "user", content: userText, timestamp: baseTime - 1_000 },
+    ...toolStep(
+      "read-error-handling",
+      "read",
+      { path: "/workspace/src/error-handling.ts" },
+      "The error handler returns a structured failure.",
+      0,
+    ),
     {
       role: "user",
       display: false,
@@ -49,25 +53,13 @@ function projectedHistory() {
       },
       timestamp: baseTime + 2_000,
     },
-    {
-      role: "assistant",
-      content: [
-        {
-          type: "toolCall",
-          id: "check-error-handling",
-          name: "exec",
-          arguments: { command: "pnpm test src/error-handling.test.ts" },
-        },
-      ],
-      timestamp: baseTime + 3_000,
-    },
-    {
-      role: "toolResult",
-      toolCallId: "check-error-handling",
-      toolName: "exec",
-      content: [{ type: "text", text: "Error handling checks passed." }],
-      timestamp: baseTime + 4_000,
-    },
+    ...toolStep(
+      "check-error-handling",
+      "exec",
+      { command: "pnpm test src/error-handling.test.ts" },
+      "Error handling checks passed.",
+      3_000,
+    ),
     { role: "assistant", content: finalText, timestamp: baseTime + 5_000 },
   ];
   return prepareChatHistoryFixture(

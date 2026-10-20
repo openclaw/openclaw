@@ -1,9 +1,8 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createControlUiMockSameOriginGatewayScript } from "../test-helpers/control-ui-e2e.ts";
 import {
+  chatMessage,
   createChatFlowE2eSuite,
   installMockGateway,
   waitForChatScrollIdle,
@@ -15,43 +14,26 @@ suite.define(() => {
     await suite.withPage(
       { colorScheme: "dark", viewport: { width: 1440, height: 900 } },
       async ({ page }) => {
+        const answerText =
+          "Yes. Navigation should appear only when there is more conversation to explore.";
         const gateway = await installMockGateway(page, {
           historyMessages: [
-            {
+            chatMessage("user", "Can we keep short conversations distraction-free?", {
               __openclaw: { id: "short-question", seq: 1 },
-              role: "user",
-              content: [
-                { type: "text", text: "Can we keep short conversations distraction-free?" },
-              ],
-            },
-            {
-              __openclaw: { id: "short-answer", seq: 2 },
-              role: "assistant",
-              content: [
-                {
-                  type: "text",
-                  text: "Yes. Navigation should appear only when there is more conversation to explore.",
-                },
-              ],
-            },
+            }),
+            chatMessage("assistant", answerText, { __openclaw: { id: "short-answer", seq: 2 } }),
           ],
         });
         await page.addInitScript(createControlUiMockSameOriginGatewayScript());
         await page.goto(suite.server.baseUrl + "chat");
         const thread = page.locator(".chat-thread");
-        const answer = page.getByText(
-          "Yes. Navigation should appear only when there is more conversation to explore.",
-          { exact: true },
-        );
+        const answer = page.getByText(answerText, { exact: true });
         await answer.waitFor();
         await waitForChatScrollIdle(page);
         expect(
           await thread.evaluate((element) => element.scrollHeight - element.clientHeight),
         ).toBe(0);
-        const frame = await takeControlUiScreenshotFrame(page, thread, [answer], {
-          animations: "disabled",
-        });
-        await writeFile(path.join(suite.artifactDir, "short-conversation.png"), frame.png);
+        await takeControlUiScreenshotFrame(page, thread, [answer], { animations: "disabled" });
         const marks = page.locator(".chat-position-rail__marks");
         expect(await marks.isVisible()).toBe(false);
         const marker = marks.locator("button").first();
@@ -91,21 +73,16 @@ suite.define(() => {
           runId,
           sessionKey: "agent:main:main",
           state: "delta",
-          message: {
-            role: "assistant",
-            content: [
-              {
-                type: "text",
-                text: Array.from(
-                  { length: 12 },
-                  (_, index) =>
-                    "### Checkpoint " +
-                    (index + 1) +
-                    "\nKeep the conversation easy to read while preserving useful navigation for longer discussions.",
-                ).join("\n\n"),
-              },
-            ],
-          },
+          message: chatMessage(
+            "assistant",
+            Array.from(
+              { length: 12 },
+              (_, index) =>
+                "### Checkpoint " +
+                (index + 1) +
+                "\nKeep the conversation easy to read while preserving useful navigation for longer discussions.",
+            ).join("\n\n"),
+          ),
         });
         await expect
           .poll(() => thread.evaluate((element) => element.scrollHeight - element.clientHeight))
@@ -123,13 +100,7 @@ suite.define(() => {
         expect(await column.evaluate((element) => element.getBoundingClientRect().left)).toBe(
           columnLeft,
         );
-        const overflowFrame = await takeControlUiScreenshotFrame(page, thread, [marks], {
-          animations: "disabled",
-        });
-        await writeFile(
-          path.join(suite.artifactDir, "overflowing-conversation.png"),
-          overflowFrame.png,
-        );
+        await takeControlUiScreenshotFrame(page, thread, [marks], { animations: "disabled" });
         await marker.focus();
         await page.setViewportSize({ width: 1440, height: 3000 });
         await expect.poll(() => marks.isVisible()).toBe(false);

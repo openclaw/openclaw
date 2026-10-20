@@ -1,4 +1,3 @@
-import { writeFile } from "node:fs/promises";
 import { expect, it } from "vitest";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -55,7 +54,6 @@ suite.define(() => {
           await peerRow.locator(".chat-queue__remove").click();
         }
         await conflict.waitFor({ state: "visible" });
-        await page.screenshot({ path: `${suite.artifactDir}/action-blocked.png`, fullPage: true });
 
         if (scenario === "resolved-edit") {
           await left
@@ -72,25 +70,13 @@ suite.define(() => {
         const rightEdit = right.locator(".chat-queue__edit-input");
         await rightEdit.waitFor({ state: "visible" });
         const receipt = {
-          scenario,
           editedText: await rightEdit.inputValue(),
           composerDraft: await rightComposer.inputValue(),
           queueRows: await right.locator(".chat-queue__item").count(),
           openEdits: await page.locator(".chat-queue__edit-input").count(),
-          errors: await right.locator(".chat-error").allTextContents(),
           pageErrors,
           sendRequests: await gateway.getRequests("chat.send"),
         };
-        await writeFile(
-          `${suite.artifactDir}/edit-recovery.json`,
-          JSON.stringify(receipt, null, 2),
-        );
-        await page.screenshot({
-          path: `${suite.artifactDir}/editor-opened.png`,
-          fullPage: true,
-          animations: "disabled",
-        });
-        console.log(JSON.stringify({ artifactDir: suite.artifactDir, ...receipt }));
         expect(receipt.editedText).toBe(
           scenario === "resolved-edit" ? "QA queued B" : "QA queued C",
         );
