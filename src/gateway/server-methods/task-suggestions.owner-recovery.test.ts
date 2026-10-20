@@ -21,6 +21,7 @@ import {
 import type { RespondFn } from "./types.js";
 
 const { handleChatSend } = vi.hoisted(() => ({ handleChatSend: vi.fn() }));
+// mock-isolation: exercise suggestion recovery without starting a real agent turn.
 vi.mock("./chat-send-handler.js", () => ({ handleChatSend }));
 
 beforeEach(async () => {

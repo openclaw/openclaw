@@ -12,10 +12,12 @@ vi.mock("./embedded-agent-helpers/images.js", async () => ({
   ...history.createSanitizeSessionHistoryImagesMock(),
 }));
 
+// mock-isolation: replay policy uses the history harness catalog, not the process plugin runtime.
 vi.mock(
   "../plugins/provider-runtime.js",
   async () => await history.createSanitizeSessionHistoryProviderRuntimeMock(),
 );
+// mock-isolation: replay hooks are supplied by the isolated history harness.
 vi.mock(
   "../plugins/provider-hook-runtime.js",
   async () =>
