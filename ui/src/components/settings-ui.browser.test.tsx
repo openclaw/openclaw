@@ -2,9 +2,11 @@ import { createSignal, flush } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
-import type { SettingsSaveIndicatorProps } from "./settings-save-indicator.tsx";
+import {
+  SettingsSaveIndicator,
+  type SettingsSaveIndicatorProps,
+} from "./settings-save-indicator.tsx";
 import { SettingsSegmented } from "./solid/settings-ui.tsx";
-import "./settings-save-indicator.tsx";
 import startupStyles from "../styles.css?inline";
 
 function mountRadioGroups(onChange = vi.fn()) {
@@ -52,32 +54,30 @@ it("animates Applying before lazy settings styles load", async () => {
   let view: ReturnType<typeof mountSolid> | undefined;
   try {
     const target = root.appendChild(document.createElement("div"));
-    const indicator = Object.assign(document.createElement("openclaw-settings-save-indicator"), {
-      props: {
-        status: "idle",
-        lastError: null,
-        needsApply: true,
-        applying: true,
-        applyDisabled: false,
-        onRetry: vi.fn(),
-        onSave: vi.fn(),
-        onReload: vi.fn(),
-        onApply: vi.fn(),
-      } satisfies SettingsSaveIndicatorProps,
-    });
+    const indicatorProps = {
+      status: "idle",
+      lastError: null,
+      needsApply: true,
+      applying: true,
+      applyDisabled: false,
+      onRetry: vi.fn(),
+      onSave: vi.fn(),
+      onReload: vi.fn(),
+      onApply: vi.fn(),
+    } satisfies SettingsSaveIndicatorProps;
     view = mountSolid(
       () => (
         <>
           <style>{startupStyles}</style>
-          {indicator}
+          <SettingsSaveIndicator {...indicatorProps} />
         </>
       ),
       { container: target },
     );
     await waitForSolid(() =>
-      expect(indicator.querySelector(".settings-save-indicator__spinner svg")).not.toBeNull(),
+      expect(target.querySelector(".settings-save-indicator__spinner svg")).not.toBeNull(),
     );
-    const spinner = indicator.querySelector<SVGElement>(".settings-save-indicator__spinner svg")!;
+    const spinner = target.querySelector<SVGElement>(".settings-save-indicator__spinner svg")!;
     const animations = spinner.getAnimations();
     expect(animations.length).toBeGreaterThan(0);
     const animation = animations[0]!;

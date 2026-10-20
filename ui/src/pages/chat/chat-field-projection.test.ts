@@ -1,8 +1,8 @@
 import { createEffect, createRoot, flush } from "solid-js";
 import { expect, it } from "vitest";
-import { projectChatErrors } from "./chat-error-projection.ts";
-import { createChatErrorState } from "./chat-error-state.ts";
 import { projectChatFields } from "./chat-field-projection.ts";
+import { makeChatHost } from "./chat-host.test-support.ts";
+import { createTestPageState } from "./chat-page-state.test-support.ts";
 
 it("publishes fields independently while owner reads and array identity stay synchronous", () => {
   const owner = { loading: false, messages: ["first"], unrelated: 0 };
@@ -84,17 +84,16 @@ it("keeps callback values and existing accessor ownership when selecting all fie
 });
 
 it("publishes error changes without letting recovery clear another writer's identical error", () => {
-  const state = createChatErrorState();
   const frames: Array<{ lastError: string | null; chatError: string | null }> = [];
-  const dispose = createRoot((stop) => {
-    expect(projectChatErrors(state)).toBe(state);
+  const { state, dispose } = createRoot((stop) => {
+    const createdState = createTestPageState(makeChatHost());
     createEffect(
-      () => ({ lastError: state.lastError, chatError: state.chatError }),
+      () => ({ lastError: createdState.lastError, chatError: createdState.chatError }),
       (value) => {
         frames.push(value);
       },
     );
-    return stop;
+    return { state: createdState, dispose: stop };
   });
   try {
     flush();

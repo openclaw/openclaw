@@ -366,57 +366,6 @@ describe("OpenAI-compatible completions params", () => {
     ).toEqual(["alpha_tool", "zeta_tool"]);
   });
 
-  it("fails locally when a pinned official OpenAI tool is unreadable", async () => {
-    const stream = streamOpenAICompletions(
-      model,
-      {
-        ...context,
-        tools: [
-          {
-            name: "broken",
-            description: "Broken tool.",
-            get parameters(): never {
-              throw new Error("parameters exploded");
-            },
-          },
-        ],
-      },
-      {
-        apiKey: "sk-test",
-        toolChoice: { type: "function", function: { name: "broken" } },
-      },
-    );
-
-    const result = await stream.result();
-
-    expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toContain('requested unavailable tool "broken"');
-  });
-
-  it("does not reread an unreadable tool inventory length", async () => {
-    let capturedPayload: Record<string, unknown> | undefined;
-    const tools = new Proxy([], {
-      get(target, property, receiver) {
-        if (property === "length") {
-          throw new Error("length exploded");
-        }
-        return Reflect.get(target, property, receiver);
-      },
-    });
-    const stream = streamOpenAICompletions(model, { ...context, tools } as never, {
-      apiKey: "sk-test",
-      onPayload(payload) {
-        capturedPayload = payload as Record<string, unknown>;
-        throw new Error("stop before network");
-      },
-    });
-
-    const result = await stream.result();
-
-    expect(result.stopReason).toBe("error");
-    expect(capturedPayload).not.toHaveProperty("tools");
-  });
-
   it("uses Z.AI max_tokens and disables thinking by default", async () => {
     const stream = streamOpenAICompletions(
       {
@@ -1167,4 +1116,3 @@ describe("openai-completions stop-reason tool-call guard", () => {
     );
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

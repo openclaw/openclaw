@@ -250,9 +250,7 @@ function buildChatPayload(
   if (context.tools?.length) {
     const tools = toFunctionTools(context.tools);
     convertedToolNames = new Set(tools.map((tool) => tool.function.name));
-    if (tools.length > 0) {
-      payload.tools = tools;
-    }
+    payload.tools = tools;
   }
   if (options?.temperature !== undefined) {
     payload.temperature = options.temperature;
@@ -745,12 +743,6 @@ function mapToolChoice(
 ): MistralOptions["toolChoice"] {
   if (!choice) {
     return undefined;
-  }
-  if (convertedToolNames && convertedToolNames.size === 0) {
-    if (choice === "none" || choice === "auto") {
-      return choice === "none" ? "none" : undefined;
-    }
-    throw new Error("Mistral tool_choice requires a tool, but no tools survived schema conversion");
   }
   if (choice === "auto" || choice === "none" || choice === "any" || choice === "required") {
     return choice;
