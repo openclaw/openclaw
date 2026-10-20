@@ -263,9 +263,16 @@ it("keeps real guest file requests in their session's private sandbox", async ()
         const libraryDownload = expectSuccess(await request("download", { path: "library.txt" }));
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey: key },
+          { ...libraryEntry, updatedAt: 2, displayName: "Renamed library session" },
+        );
+        const sameLibrary = await openSessionFileDownload(owner, libraryDownload.url);
+        expect(sameLibrary.status).toBe(200);
+        expect(await sameLibrary.text()).toBe("library session work");
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey: key },
           {
             ...libraryEntry,
-            updatedAt: 2,
+            updatedAt: 3,
             skillsSnapshot: {
               ...libraryEntry.skillsSnapshot,
               librarySelections: [{ ...librarySelections[0]!, revision: "b".repeat(64) }],

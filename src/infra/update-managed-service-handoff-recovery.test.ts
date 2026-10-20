@@ -74,7 +74,6 @@ it("records the settlement receipt before releasing a dead legacy lease and admi
 
 it.each([
   "live descendant",
-  "unverified descendant",
   "live owner",
   "unverified owner",
   "45-minute floor",
@@ -92,12 +91,6 @@ it.each([
   } else if (reason.endsWith("owner")) {
     births.set(helper.pid, reason === "live owner" ? Number(helper.startIdentity) : null);
     expected = new RegExp("live or unverified: PID " + helper.pid);
-  } else if (reason === "unverified descendant") {
-    processCensus.unverifiedPids.push(81234);
-    processCensus.error = "Retry update repair as Administrator using the same Windows account.";
-    expected = new Error(
-      `Handoff descendants remain alive or unverified: PID 81234. ${processCensus.error}`,
-    );
   } else {
     processCensus.matchingPids.push(81234);
     expected = /PID 81234.*openclaw update repair/;
@@ -109,6 +102,26 @@ it.each([
     expect(ledger.listUpdateRuns({}, { env })).toEqual([]);
   }
 });
+
+it.each(["unverified intermediate-parent descendant", "incomplete census"])(
+  "blocks settlement and the next update for an %s",
+  async (reason) => {
+    const previous = fixture.seed();
+    if (reason === "incomplete census") {
+      fixture.processCensus.error = "Host process census is incomplete.";
+    } else {
+      // The census cannot trace a surviving worker through an exited parent.
+      fixture.processCensus.unverifiedPids.push(81234);
+    }
+    await expect(prepareRepair()).rejects.toThrow(
+      reason === "incomplete census" ? /census is incomplete/ : /unverified: PID 81234/,
+    );
+    expect(fixture.current()).toEqual(previous);
+    expect(nextUpdate()).toBe("busy");
+    expect(ledger.listUpdateRuns({}, { env })).toEqual([]);
+    expect(fs.readFileSync(fixture.diagnosticPath, "utf8")).toBe("Retained update diagnostics\n");
+  },
+);
 
 it("preserves an incomplete rollback across repair state overrides", async () => {
   const previous = fixture.seed();
@@ -243,3 +256,117 @@ it("preserves interrupted repair evidence across reboot until explicit repair se
   expect(nextStore.read(fixture.root)).toEqual({ kind: "absent" });
   expect(nextUpdate(nextStore)).toBe("acquired");
 });
+
+it("settles a prior-boot family with an unreadable recycled owner PID", async () => {
+  fixture.seed({ ageMs: 1_000 });
+  fixture.births.set(fixture.helper.pid, null);
+  const boot = fixture.store.bootIdentity();
+  vi.spyOn(bootReader, "createManagedHandoffBootIdentityReader").mockReturnValue(() => ({
+    ...boot,
+    identity:
+      boot.platform === "win32"
+        ? "2026-09-16T03:42:10.5000000Z"
+        : "01234567-89ab-cdef-0123-456789abcdee",
+  }));
+  const nextStore = createManagedHandoffLeaseStore();
+  using repair = await prepareRepair(nextStore);
+  const run = newRun();
+  repair.bindRun(run.runId);
+  repair.complete(run.runId);
+  expect(nextStore.read(fixture.root)).toEqual({ kind: "absent" });
+  expect(nextUpdate(nextStore)).toBe("acquired");
+});
+
+it.each(["before", "retained-child", "at-margin", "after", "unreadable", "runtime-holder"])(
+  "repairs a legacy handoff using its durable write time and boot time: %s",
+  async (observation) => {
+    const now = Date.parse("2026-10-20T12:00:00.000Z");
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const bootStartedAt = now - 60_000;
+    const before = ["before", "retained-child", "unreadable", "runtime-holder"].includes(
+      observation,
+    );
+    const previous = fixture.seed({
+      legacy: "original",
+      ageMs: before ? 6 * 60_000 + 1 : observation === "at-margin" ? 6 * 60_000 : 59_999,
+    });
+    const child =
+      observation === "retained-child"
+        ? fixture.seed({ legacy: "retained", ageMs: 6 * 60_000 + 1 })
+        : undefined;
+    fixture.births.set(fixture.helper.pid, null);
+    vi.spyOn(fixture.store, "bootIdentity").mockImplementation(() => {
+      if (observation === "unreadable") {
+        throw new Error("OS boot time unavailable");
+      }
+      return {
+        platform: "win32",
+        identity: new Date(bootStartedAt).toISOString().replace(".000Z", ".0000000Z"),
+      };
+    });
+    if (observation === "runtime-holder") {
+      fixture.processCensus.matchingPids.push(81234);
+    }
+    if (!["before", "retained-child"].includes(observation)) {
+      await expect(prepareRepair()).rejects.toThrow(
+        observation === "runtime-holder" ? /PID 81234/ : /Handoff owners are live or unverified/,
+      );
+      expect(fixture.store.read(previous.key)).toEqual({ kind: "current", lease: previous });
+      expect(nextUpdate()).toBe("busy");
+      expect(ledger.listUpdateRuns({}, { env })).toEqual([]);
+      return;
+    }
+    using repair = await prepareRepair();
+    const run = newRun();
+    repair.bindRun(run.runId);
+    if (child) {
+      const record = ledger.recordUpdateRunStep;
+      vi.spyOn(ledger, "recordUpdateRunStep").mockImplementation((...args) => {
+        if (args[1].step === "finalize:handoff-settlement") {
+          expect(fixture.store.read(child.key)).toEqual({ kind: "current", lease: child });
+        }
+        return record(...args);
+      });
+    }
+    repair.complete(run.runId);
+    expect(settlement(run.runId)?.status).toBe("completed");
+    expect(fixture.store.read(previous.key)).toEqual({ kind: "absent" });
+    if (child) {
+      expect(fixture.store.read(child.key)).toEqual({ kind: "absent" });
+    }
+    expect(fixture.store.read(fixture.root)).toEqual({ kind: "absent" });
+    expect(nextUpdate()).toBe("acquired");
+  },
+);
+
+it.each(["missing-recorded", "unknown-recorded", "unknown-current", "unreadable-current"])(
+  "preserves owner liveness checks with %s boot identity",
+  async (observation) => {
+    const previous = fixture.seed({ ageMs: 1_000 });
+    fixture.births.set(fixture.helper.pid, null);
+    if (observation.endsWith("recorded")) {
+      if (previous.action.kind !== "triage" || previous.action.lifetime.kind !== "foreground") {
+        throw new Error("Expected a foreground repair fixture");
+      }
+      const boot = previous.action.lifetime.boot;
+      if (observation === "missing-recorded") {
+        Reflect.deleteProperty(boot, "identity");
+      } else {
+        boot.identity = "unknown";
+      }
+      vi.spyOn(fixture.store, "read").mockReturnValue({ kind: "current", lease: previous });
+    } else {
+      const boot = fixture.store.bootIdentity();
+      vi.spyOn(fixture.store, "bootIdentity").mockImplementation(() => {
+        if (observation === "unreadable-current") {
+          throw new Error("OS boot identity unavailable");
+        }
+        return { ...boot, identity: "unknown" };
+      });
+    }
+    await expect(prepareRepair()).rejects.toThrow(
+      `Handoff owners are live or unverified: PID ${fixture.helper.pid}`,
+    );
+    expect(fixture.repairFacts).not.toHaveBeenCalled();
+  },
+);

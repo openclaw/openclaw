@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync, StatementSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import { Worker } from "node:worker_threads";
 import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -454,10 +454,12 @@ it("retains admitted ID origins across updates, reopen, and Doctor restoration",
 it("bounds exact retry lookups to one caption ID without adding statements", async () => {
   const target = await admit();
   writeTransaction((db) => {
-    const sql = observeMainThreadSql();
+    const queries: string[] = [];
+    const sql = observeMainThreadSql({ onStatement: (query) => queries.push(query) });
     try {
       const append = (utterance: TranscriptUtterance) => {
         sql.clear();
+        queries.length = 0;
         appendMeetingTranscriptUtterance({
           database: db,
           session: target,
@@ -465,11 +467,7 @@ it("bounds exact retry lookups to one caption ID without adding statements", asy
           metadataJson: null,
           now: 1,
         });
-        return sql.calls.flatMap((call) =>
-          call.mock.contexts.flatMap((receiver) =>
-            receiver instanceof StatementSync ? [receiver.expandedSQL] : [],
-          ),
-        );
+        return [...queries];
       };
       const utterance = { id: "new-caption", text: "Speech" };
       const statements = append(utterance);

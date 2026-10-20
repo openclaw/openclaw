@@ -820,19 +820,12 @@ describe("AgentSession retry behavior", () => {
         )
         .mockImplementationOnce(createRecoveredAssistantStream);
       const { session } = await createRetrySession({ baseDelayMs: 2_000, maxRetries: 1 });
-      const retryDelays: number[] = [];
-      session.subscribe((event) => {
-        if (event.type === "auto_retry_start") {
-          retryDelays.push(event.delayMs);
-        }
-      });
-
       const promptPromise = session.prompt("test Retry-After");
       await vi.advanceTimersByTimeAsync(0);
-
-      expect(retryDelays).toEqual([30_000]);
-
-      await vi.advanceTimersByTimeAsync(30_000);
+      expect(streamMocks.streamSimple).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(streamMocks.streamSimple).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
       await promptPromise;
       expect(streamMocks.streamSimple).toHaveBeenCalledTimes(2);
     } finally {

@@ -122,8 +122,6 @@ function summarizeSessionTranscriptEvents(
   let lastAssistantContentTypes: string[] = [];
   let lastAssistantErrorMessage: string | undefined;
   let lastAssistantStopReason: string | undefined;
-  let lastAssistantToolNames: string[] = [];
-  let lastMessageRole: string | undefined;
   let userMessageCount = 0;
 
   for (const event of events) {
@@ -141,7 +139,6 @@ function summarizeSessionTranscriptEvents(
     if (!message) {
       continue;
     }
-    lastMessageRole = readNonEmptyString(message.role);
     if (message.role === "user") {
       userMessageCount += 1;
       continue;
@@ -193,7 +190,6 @@ function summarizeSessionTranscriptEvents(
     lastAssistantErrorMessage = readNonEmptyString(message.errorMessage);
     lastAssistantStopReason = readNonEmptyString(message.stopReason);
     const assistantToolCalls = readAssistantToolCalls(message);
-    lastAssistantToolNames = assistantToolCalls.map((toolCall) => toolCall.name);
     for (const toolCall of assistantToolCalls) {
       if (toolCall.id) {
         if (
@@ -273,8 +269,6 @@ function summarizeSessionTranscriptEvents(
     ...(lastAssistantContentTypes.length > 0 ? { lastAssistantContentTypes } : {}),
     ...(lastAssistantErrorMessage ? { lastAssistantErrorMessage } : {}),
     ...(lastAssistantStopReason ? { lastAssistantStopReason } : {}),
-    ...(lastAssistantToolNames.length > 0 ? { lastAssistantToolNames } : {}),
-    ...(lastMessageRole ? { lastMessageRole } : {}),
   };
 }
 

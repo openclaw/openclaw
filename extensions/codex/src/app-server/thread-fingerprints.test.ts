@@ -8,64 +8,34 @@ import {
   readActiveCodexTurnIdsFromResume,
 } from "./thread-fingerprints.js";
 
-describe("codexDynamicToolsFingerprint", () => {
-  const createMessageTool = (description: string, channelDescription: string) =>
-    ({
-      type: "function",
-      name: "message",
-      description,
-      inputSchema: {
-        type: "object",
-        properties: {
-          channel: {
-            type: "string",
-            description: channelDescription,
-          },
-        },
-      },
-    }) satisfies CodexDynamicToolFunctionSpec;
+it("keeps tool fingerprints stable when tools and schema properties are reordered", () => {
+  const message: CodexDynamicToolFunctionSpec = {
+    type: "function",
+    name: "message",
+    description: "Send a message.",
+    inputSchema: {
+      type: "object",
+      properties: { channel: { type: "string", description: "Current channel." } },
+    },
+  };
+  const reorderedMessage: CodexDynamicToolFunctionSpec = {
+    name: message.name,
+    type: message.type,
+    inputSchema: {
+      properties: { channel: { description: "Current channel.", type: "string" } },
+      type: "object",
+    },
+    description: message.description,
+  };
+  const search = { ...message, name: "search" };
 
-  it("remains stable when tools and schema properties are reordered", () => {
-    const message = createMessageTool("Send a message.", "Current channel.");
-    const reorderedMessage: CodexDynamicToolFunctionSpec = {
-      name: message.name,
-      type: message.type,
-      inputSchema: {
-        properties: {
-          channel: {
-            description: "Current channel.",
-            type: "string",
-          },
-        },
-        type: "object",
-      },
-      description: message.description,
-    };
-    const search: CodexDynamicToolFunctionSpec = {
-      type: "function",
-      name: "search",
-      description: "Search the current conversation.",
-      inputSchema: { type: "object", properties: {} },
-    };
-
-    expect(codexDynamicToolsFingerprint([message, search])).toBe(
-      codexDynamicToolsFingerprint([search, reorderedMessage]),
-    );
-  });
+  expect(codexDynamicToolsFingerprint([message, search])).toBe(
+    codexDynamicToolsFingerprint([search, reorderedMessage]),
+  );
 });
 
 describe("fingerprintCodexThreadConfig", () => {
-  const request = {
-    model: "gpt-5.6-sol",
-    modelProvider: "openai",
-    approvalPolicy: "never",
-    approvalsReviewer: "user",
-    sandbox: "workspace-write",
-    personality: "none",
-    serviceTier: "fast",
-    developerInstructions: "Keep the current conversation private.",
-    config: { features: { hooks: true, plugins: false } },
-  };
+  const request = { model: "gpt-5.6-sol", modelProvider: "openai" };
 
   it.each<{ setting: string; patch: JsonObject }>([
     { setting: "requested model provider", patch: { requestedModelProvider: "custom" } },
@@ -135,46 +105,31 @@ describe.each(["ordinary", "restricted"] as const)("%s proxied thread fingerprin
   });
 });
 
-describe("fingerprintUserMcpServersConfigPatch", () => {
-  it.each(["header"])("retains literal __proto__ %s keys during redaction", (scope) => {
-    const config = (value: string): JsonObject => ({
-      mcp_servers: {
-        [scope === "server" ? "__proto__" : "calendar"]: {
-          url: "https://example.test/mcp",
-          http_headers: {
-            Authorization: scope === "server" ? value : "synthetic-access-token",
-            ...(scope === "header" ? { ["__proto__"]: value } : {}),
-          },
+it("retains literal __proto__ MCP header keys during redaction", () => {
+  const config = (value: string): JsonObject => ({
+    mcp_servers: {
+      calendar: {
+        http_headers: {
+          Authorization: "synthetic-access-token",
+          ["__proto__"]: value,
         },
       },
-    });
-    const first = fingerprintUserMcpServersConfigPatch(config("synthetic-first"));
-    const second = fingerprintUserMcpServersConfigPatch(config("synthetic-second"));
-
-    expect(first).not.toBe(second);
-    expect(first).toMatch(/^sha256:[a-f0-9]{64}$/);
-    expect(first).not.toContain("synthetic");
-    expect(second).not.toContain("synthetic");
+    },
   });
+  const first = fingerprintUserMcpServersConfigPatch(config("synthetic-first"));
+  const second = fingerprintUserMcpServersConfigPatch(config("synthetic-second"));
+
+  expect(first).not.toBe(second);
+  expect(first).toMatch(/^sha256:[a-f0-9]{64}$/);
+  expect(first).not.toContain("synthetic");
+  expect(second).not.toContain("synthetic");
 });
 
-describe("readActiveCodexTurnIdsFromResume", () => {
-  it("uses the bounded initial turns page when Codex returns one", () => {
-    expect(
-      readActiveCodexTurnIdsFromResume({
-        thread: { turns: [{ id: "stale", status: "inProgress" }] },
-        initialTurnsPage: {
-          data: [{ id: "current", status: "inProgress" }],
-        },
-      }),
-    ).toEqual(["current"]);
-  });
-
-  it("falls back to legacy resume turns when no page is returned", () => {
-    expect(
-      readActiveCodexTurnIdsFromResume({
-        thread: { turns: [{ id: "legacy", status: "inProgress" }] },
-      }),
-    ).toEqual(["legacy"]);
-  });
+it.each([true, false])("reads active turn IDs with an initial page: %s", (hasPage) => {
+  expect(
+    readActiveCodexTurnIdsFromResume({
+      thread: { turns: [{ id: "legacy", status: "inProgress" }] },
+      ...(hasPage && { initialTurnsPage: { data: [{ id: "current", status: "inProgress" }] } }),
+    }),
+  ).toEqual([hasPage ? "current" : "legacy"]);
 });

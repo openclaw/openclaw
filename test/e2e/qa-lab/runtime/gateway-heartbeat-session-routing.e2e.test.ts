@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { getRuntimeConfigSnapshot } from "../../../../src/config/config.js";
 import {
   loadSessionEntry,
@@ -148,6 +148,8 @@ const readSessionId = (sessionKey: string) =>
 
 describe("Gateway heartbeat session routing", () => {
   let fixtureSettlement: Promise<void> | undefined;
+  // Compile the server before the behavior timeout includes both real starts.
+  beforeAll(() => import("../../../../src/gateway/server-start.js"));
   beforeEach(resetGatewayState);
   afterEach(async () => {
     // A timed-out body still owns Gateway shutdown. Join it before outer hooks

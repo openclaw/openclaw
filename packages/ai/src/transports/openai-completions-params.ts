@@ -315,9 +315,9 @@ export function buildOpenAICompletionsRequest(
     preserveSystemPromptCacheBoundary:
       cacheControl !== undefined && !managedCompat?.requiresStringContent,
   });
+  applyCompletionsReplay(convertedMessages, context, model, compat);
   let messages: unknown[] = convertedMessages;
   if (managedCompat) {
-    applyCompletionsReplay(convertedMessages, context, model, managedCompat);
     if (managedCompat.strictMessageKeys) {
       messages = stripCompletionMessagesToRoleContent(messages);
     }

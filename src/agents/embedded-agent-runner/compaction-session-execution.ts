@@ -478,7 +478,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
               extraParams: effectiveExtraParams,
               requestBudget: accountingRecorder?.requestBudget,
               customInstructions: params.customInstructions,
-              config: params.config,
               onUsage: recordUsage,
               onCompactionCommitted: recordServerCompaction,
               assertActive,

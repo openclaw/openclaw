@@ -16,6 +16,8 @@ const ClawCatalogCoordinateSchema = closedObject({
 
 export const ClawsCatalogSearchParamsSchema = closedObject({
   query: Type.Optional(Type.String({ maxLength: 200 })),
+  category: Type.Optional(Type.String({ maxLength: 40 })),
+  featured: Type.Optional(Type.Boolean()),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
 });
 
@@ -28,6 +30,8 @@ export const ClawsCatalogEntrySchema = closedObject({
   official: Type.Boolean(),
   ownerHandle: Type.Optional(NonEmptyString),
   downloads: Type.Number({ minimum: 0 }),
+  installs: Type.Number({ minimum: 0 }),
+  featuredAt: Type.Optional(Type.Number({ minimum: 0 })),
   updatedAtMs: Type.Number({ minimum: 0 }),
 });
 

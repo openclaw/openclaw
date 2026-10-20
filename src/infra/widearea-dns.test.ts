@@ -25,8 +25,6 @@ const baseZoneOpts: WideAreaGatewayZoneOpts = {
   gatewayPort: 18789,
   displayName: "Mac Studio (OpenClaw)",
   tailnetIPv4: "100.123.224.76",
-  hostLabel: "studio-london",
-  instanceLabel: "studio-london",
 };
 const zonePath = getWideAreaZonePath(baseZoneOpts.domain);
 
@@ -40,6 +38,7 @@ async function expectZoneWrite(changed: boolean, overrides: Partial<WideAreaGate
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   replaceFileAtomicSyncMock.mockReset();
 });
 
@@ -48,17 +47,15 @@ it("normalizes domains with a terminal dot", () => {
 });
 
 it("returns null for invalid env domains", () => {
-  expect(
-    resolveWideAreaDiscoveryDomain({ env: { OPENCLAW_WIDE_AREA_DOMAIN: "foo/bar" } }),
-  ).toBeNull();
+  vi.stubEnv("OPENCLAW_WIDE_AREA_DOMAIN", "foo/bar");
+  expect(resolveWideAreaDiscoveryDomain()).toBeNull();
 });
 
 it("renders gateway DNS-SD records", () => {
+  vi.spyOn(os, "hostname").mockReturnValue("Studio London");
   const txt = renderZoneText({
     domain: "openclaw.internal",
     displayName: "  Mac Studio (OpenClaw)  ",
-    hostLabel: " Studio London ",
-    instanceLabel: " Studio London ",
     tailnetIPv6: "fd7a:115c:a1e0::8801:e04c",
     sshPort: 22,
     cliPath: " /opt/homebrew/bin/openclaw ",
@@ -71,13 +68,13 @@ it("renders gateway DNS-SD records", () => {
     `$ORIGIN openclaw.internal.`,
     `studio-london IN A 100.123.224.76`,
     `studio-london IN AAAA fd7a:115c:a1e0::8801:e04c`,
-    `_openclaw-gw._tcp IN PTR studio-london._openclaw-gw._tcp`,
-    `studio-london._openclaw-gw._tcp IN SRV 0 0 18789 studio-london`,
+    `_openclaw-gw._tcp IN PTR studio-london-gateway._openclaw-gw._tcp`,
+    `studio-london-gateway._openclaw-gw._tcp IN SRV 0 0 18789 studio-london`,
     `displayName=Mac Studio (OpenClaw)`,
     `gatewayPort=18789`,
     `sshPort=22`,
     `cliPath=/opt/homebrew/bin/openclaw`,
-    `studio-london._openclaw-gw._tcp IN TXT`,
+    `studio-london-gateway._openclaw-gw._tcp IN TXT`,
     `gatewayTls=1`,
     `gatewayTlsSha256=abc123`,
     `gatewayDirectReachable=1`,

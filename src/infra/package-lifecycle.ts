@@ -22,7 +22,6 @@ const lifecycleLocks = createFileLockManager("openclaw.package-lifecycle");
 /** Ownership is uncertain: callers must preserve the package until its writers settle. */
 export class PackageLifecycleOwnershipError extends Error {
   readonly packageRoot: string;
-  readonly lockPath: string;
 
   constructor(packageRoot: string, reason: string, cause?: unknown) {
     const lockPath = path.join(packageRoot, PACKAGE_LIFECYCLE_LOCK_RELATIVE_PATH);
@@ -33,7 +32,6 @@ export class PackageLifecycleOwnershipError extends Error {
     );
     this.name = "PackageLifecycleOwnershipError";
     this.packageRoot = packageRoot;
-    this.lockPath = lockPath;
   }
 }
 

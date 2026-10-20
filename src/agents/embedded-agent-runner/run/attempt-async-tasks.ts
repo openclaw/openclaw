@@ -17,9 +17,7 @@ export type AsyncStartedToolMeta = {
 };
 
 export type CompletionRequiredAsyncTaskWaitResult = {
-  waitedRunIds: string[];
   timedOutRunIds: string[];
-  terminalTasks: MediaGenerationOperation[];
 };
 
 const DEFAULT_ASYNC_TASK_POLL_INTERVAL_MS = 500;
@@ -113,7 +111,6 @@ export async function waitForCompletionRequiredAsyncTasks(params: {
     params.pollIntervalMs ?? (isFastTestRuntimeEnv() ? 10 : DEFAULT_ASYNC_TASK_POLL_INTERVAL_MS);
   const waitedRunIds = new Set<string>();
   const timedOutRunIds = new Set<string>();
-  const terminalTasksByRunId = new Map<string, MediaGenerationOperation>();
 
   waitForTasks: while (true) {
     throwIfAborted(params.abortSignal);
@@ -139,14 +136,7 @@ export async function waitForCompletionRequiredAsyncTasks(params: {
         if (task?.completionDelivery === "queued") {
           return false;
         }
-        if (!task || !isTerminalMediaGenerationStatus(task.status)) {
-          return true;
-        }
-        const taskRunId = task.runId?.trim();
-        if (taskRunId) {
-          terminalTasksByRunId.set(taskRunId, task);
-        }
-        return false;
+        return !task || !isTerminalMediaGenerationStatus(task.status);
       });
       if (pendingRunIds.length === 0) {
         break;
@@ -165,8 +155,6 @@ export async function waitForCompletionRequiredAsyncTasks(params: {
     }
   }
   return {
-    waitedRunIds: [...waitedRunIds],
     timedOutRunIds: [...timedOutRunIds],
-    terminalTasks: [...terminalTasksByRunId.values()],
   };
 }

@@ -1,5 +1,4 @@
 import { isDeepStrictEqual } from "node:util";
-import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
@@ -24,7 +23,7 @@ type PreparedModelRuntimePublicationEvent =
       modelFactsChanged?: boolean;
       refreshStatusChanged?: boolean;
     }
-  | { phase: "catalog-failed"; error: Error; modelFactsChanged?: boolean };
+  | { phase: "catalog-failed"; modelFactsChanged?: boolean };
 
 type CatalogPublication = {
   catalog: ModelCatalogSnapshot | undefined;
@@ -105,7 +104,6 @@ export function createCatalogAttemptReporter(
       if (isPublished?.() !== false) {
         notifyPreparedModelRuntimePublication({
           phase: "catalog-failed",
-          error: toStringifiedError(error),
           modelFactsChanged: false,
         });
       }

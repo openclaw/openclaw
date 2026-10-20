@@ -93,6 +93,7 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/terminal-fonts.e2e.test.ts",
   "ui/src/e2e/terminal-runtime.e2e.test.ts",
   "ui/src/pages/agents-home/claws-catalog.e2e.test.ts",
+  "ui/src/pages/claws/creator-review.e2e.test.ts",
   "ui/src/pages/workboard/workboard-distribution.e2e.test.ts",
 ].map((file) => resolveUiTypeScriptPath(file));
 

@@ -20,6 +20,7 @@ const catalogEntry = {
   channel: "official",
   official: true,
   downloads: 0,
+  installs: 0,
   updatedAtMs: 0,
 };
 const basePlan = {
@@ -47,7 +48,38 @@ describe("Claws Gateway contract", () => {
     const preview = { kind: "instruction", name: "AGENTS.md" };
     expect(validateClawsCatalogPreviewParams({ ...coordinate, ...preview })).toBe(true);
     expect(
-      validateClawsCatalogPreviewResult({ preview: { ...preview, content: "# Instructions" } }),
+      validateClawsCatalogSearchResult({
+        entries: [
+          {
+            packageName: "@openclaw/workflow-operator",
+            displayName: "Workflow Operator",
+            channel: "official",
+            official: true,
+            downloads: 0,
+            installs: 0,
+            updatedAtMs: 0,
+          },
+        ],
+      }),
+    ).toBe(true);
+    expect(
+      validateClawsCatalogDetailParams({
+        packageName: "@openclaw/workflow-operator",
+        version: "1.0.0",
+      }),
+    ).toBe(true);
+    expect(
+      validateClawsCatalogPreviewParams({
+        packageName: "@openclaw/workflow-operator",
+        version: "1.0.0",
+        kind: "instruction",
+        name: "AGENTS.md",
+      }),
+    ).toBe(true);
+    expect(
+      validateClawsCatalogPreviewResult({
+        preview: { kind: "instruction", name: "AGENTS.md", content: "# Instructions" },
+      }),
     ).toBe(true);
     expect(
       validateClawsCatalogDetailResult({
@@ -102,6 +134,7 @@ describe("Claws Gateway contract", () => {
             official: false,
             ownerHandle: "alice",
             downloads: 0,
+            installs: 0,
             updatedAtMs: 0,
           },
         ],

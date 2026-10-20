@@ -15,7 +15,7 @@ import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { resolveWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
-import { downloadGoogleChatMedia, sendGoogleChatMessage } from "./api.js";
+import { downloadGoogleChatMedia, GoogleChatApiError, sendGoogleChatMessage } from "./api.js";
 import { maybeHandleGoogleChatApprovalCardClick } from "./approval-card-click.js";
 import { applyGoogleChatInboundAccessPolicy } from "./monitor-access.js";
 import { resolveGoogleChatDurableReplyOptions } from "./monitor-durable.js";
@@ -194,15 +194,18 @@ async function processGoogleChatEvent(
         runtime.error?.(`[${account.accountId}] ${notice}`);
       }
     } catch (error) {
-      if (!(error instanceof MediaFetchError) || error.code !== "max_bytes") {
+      const missing = error instanceof GoogleChatApiError && error.status === 404;
+      if (!missing && (!(error instanceof MediaFetchError) || error.code !== "max_bytes")) {
         throw error;
       }
-      // Adopt permanent size failures after authorizing the original text; retrying
+      // Adopt permanent attachment failures after authorizing the original text; retrying
       // them would block every later durable message in the same conversation.
-      const notice = `[Google Chat attachment too large; maximum ${mediaMaxMb} MB]`;
+      const notice = missing
+        ? "[Google Chat attachment unavailable: file not found; upload the file directly]"
+        : `[Google Chat attachment too large; maximum ${mediaMaxMb} MB]`;
       rawBody = formatInboundMediaUnavailableText({ body: rawBody, notice });
       runtime.error?.(
-        `[${account.accountId}] ${notice} Increase channels.googlechat.mediaMaxMb to process larger attachments.`,
+        `[${account.accountId}] ${notice}${missing ? "" : " Increase channels.googlechat.mediaMaxMb to process larger attachments."}`,
       );
     }
   }

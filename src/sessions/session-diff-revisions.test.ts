@@ -175,6 +175,71 @@ describe("captured session history", () => {
 });
 
 it.skipIf(process.platform === "win32")(
+  "reuses diffs from nested and aliased linked worktrees while an index writer holds its lock",
+  async () => {
+    vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
+    vi.stubEnv("GIT_CONFIG_GLOBAL", os.devNull);
+    await drainGlobalSingletonLifecycleState("restart");
+    const root = await fs.realpath(tempDirs.make("openclaw-linked-diff-"));
+    const origin = path.join(root, "origin");
+    const checkout = path.join(root, "checkout");
+    const execute = promisify(execFile);
+    const git = (...args: string[]) =>
+      execute("git", [
+        "-C",
+        origin,
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.invalid",
+        "-c",
+        "commit.gpgsign=false",
+        ...args,
+      ]);
+    const stopDiagnostics = onTrustedInternalDiagnosticEvent(() => undefined, {
+      includeTrusted: ["diagnostic.phase.completed"],
+    });
+    try {
+      await fs.mkdir(origin);
+      await git("init", "-b", "main");
+      await fs.writeFile(path.join(origin, "tracked.txt"), "before\n");
+      await fs.writeFile(path.join(origin, ".gitignore"), "ignored/\n");
+      await git("add", ".");
+      await git("commit", "-m", "base");
+      await git("worktree", "add", "--detach", checkout, "HEAD");
+      await fs.mkdir(path.join(checkout, "nested"));
+      await fs.mkdir(path.join(checkout, "ignored"));
+      await fs.symlink(checkout, path.join(root, "alias"));
+      await fs.appendFile(path.join(checkout, "tracked.txt"), "after\n");
+      await fs.writeFile(path.join(origin, ".git/worktrees/checkout/index.lock"), "writer\n");
+      for (const cwd of [path.join(checkout, "nested"), path.join(root, "alias")]) {
+        const timing: DiffReadTiming = { durations: {} };
+        const read = () => loadCheckoutDiff({ cwd, sessionKey: "fixture" }, timing);
+        const first = await read();
+        expect(first.files[0]?.patch).toContain("+after");
+        await fs.writeFile(path.join(checkout, "ignored/build.txt"), "rebuilt\n");
+        expect(await read()).toEqual(first);
+        expect(timing.outcome).toBe("cache-hit");
+        await fs.appendFile(path.join(checkout, "tracked.txt"), "later\n");
+        expect((await read()).files[0]?.patch).toContain("+later");
+        expect(timing.missReason).toBe("revision-changed-worktree-mtime");
+      }
+      await git("config", "filter.fixture.clean", "cat");
+      const timing: DiffReadTiming = { durations: {} };
+      expect(
+        (await loadCheckoutDiff({ cwd: checkout, sessionKey: "fixture" }, timing)).files[0]?.patch,
+      ).toContain("+later");
+      expect(timing.missReason).toBe("no-revision-config");
+    } finally {
+      stopDiagnostics();
+      await drainGlobalSingletonLifecycleState("restart");
+      vi.restoreAllMocks();
+      vi.unstubAllEnvs();
+    }
+  },
+);
+
+it.skipIf(process.platform === "win32")(
   "reuses committed diffs across ignored and index churn but refreshes patch eligibility and attributes",
   async () => {
     vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");

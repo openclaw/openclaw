@@ -55,9 +55,29 @@ writes checkpoint every 8 MiB and pause between batches; Linux generation stops
 if system dirty pages reach 2 GiB. A failed seed has no completion marker and
 must be regenerated in a new directory.
 
+To measure a mix of bundled and external plugins, pass
+`--bundled-plugin-fixture /path/to/plugins.json` to both the seed and run commands.
+The file is an OpenClaw config fragment with `plugins.allow` selecting 1–44
+bundled IDs and `plugins.entries.<id>.config` supplying any required synthetic
+configuration. For example, `{ "plugins": { "allow": ["openai", "google"] } }`
+uses plugin defaults. Optional `models`, `tools`, and `channels` sections select
+the corresponding startup capabilities; enabling a plugin alone does not
+override its lazy activation policy. Other root sections and `plugins.load`
+are rejected, preserving the benchmark's state, workspaces, auth, and disabled
+background jobs. Each bundled ID replaces one synthetic external plugin,
+keeping the total at 44. Include only synthetic configuration and credentials,
+disable scheduled external work, and deny external network access for the run.
+Channels remain suppressed even when configured for plugin activation.
+The fixture metadata and result contain the full config fragment and external
+count; a run rejects configuration that differs from its seed or a loaded
+inventory that is not 44 plugins including every requested bundled ID. Use the
+bundled IDs from the target deployment's startup log and build their artifacts
+before measuring. Omit the flag to retain the all-synthetic fixture.
+
 Startup results include spawn-to-`/readyz` and spawn-to-first-successful
-`sessions.list` timings. The authenticated protocol handshake uses the isolated
-Gateway's loopback `auth: none` policy. Session RPC probing starts when `/healthz`
+`sessions.list` timings. The `teamBoot` protocol handshake uses the isolated
+Gateway's synthetic shared token so access-policy plugins receive a real owner
+identity; other cases retain loopback `auth: none`. Session RPC probing starts when `/healthz`
 first responds, concurrently with `/readyz`, and retries startup refusals until
 the shared deadline. A healthy HTTP endpoint without a successful session RPC
 fails the measurement. The `teamBoot` case also requires the expected seeded
@@ -286,7 +306,7 @@ visible. Only browser list requests are counted; the controller socket is
 excluded, and the created jobs are removed on exit.
 
 For board/chat document loads, use `--load-runs 5 --load-path /dashboard --duration 12`.
-This mode retains synthetic `cron.list`, `models.list`, and `users.self` parameters,
+This mode retains synthetic `cron.list`, `models.list`, `users.self`, and `sessions.describe` parameters,
 response bytes, `models.snapshot` event counts, paint entries, and native Long Task
 blocking (the sum of each task's duration above 50 ms). It records the first cold
 browser context separately from later documents that retain browser cache and
@@ -307,6 +327,16 @@ It excludes `--activity-session` and `--activity-cron`. Catalog observations
 retain model rows for before/after option comparisons; use only synthetic
 catalogs. Compare warm session-scoped request counts and activity blocking time,
 keeping the initial catalogs separate from the activity window.
+With `--open-details`, the final check reopens Details for the selected conversation
+after the activity window, then compares its session identity, label, model, status
+note, and thinking level with a fresh controller-side descriptor. It records this
+as an input-state comparison, then separately checks the rendered model in Details
+and the visible conversation header's label. The controller read is excluded
+from browser request counts; compare activity requests only between
+`activityStartedAtMs` and `activityEndedAtMs`. Request traces retain the preceding
+event's session key, reason, timestamp, and revision to distinguish event-driven
+reads from navigation or idle reads. Use `--request-stacks` for caller diagnosis,
+then omit it for paired timing.
 
 For active-session loads, add `--activity-session <synthetic-key>` and configure
 that isolated Gateway with two loopback mock-provider models:
@@ -647,7 +677,8 @@ internal operation aggregates without starting CPU or heap profiling. List
 samples also retain the response ID, client index, round, start/end timestamps,
 and duration; `p99Request` identifies the nearest-rank round p99. For a multi-round
 pair, sort all `sessionsList.requests` by duration to identify its pooled p99.
-These records contain timing and identity only, never RPC payloads. Gateway
+These timing records contain no RPC payloads; `--capture-responses` separately
+opts into representative response payloads, as described below. Gateway
 metrics cover its main isolate, not worker isolates. Capture adds overhead, so
 compare equally instrumented pairs and keep earlier uncaptured runs distinct.
 
@@ -786,14 +817,16 @@ node --import ./scripts/tsx.mjs scripts/perf/transcript-broadcast-measure.ts \
   --clients 30 --runs 20 --chunks 100 --chunk-interval-ms 10 \
   --warmup-ms 300000 --duration-ms 1200000 --round-interval-ms 15000 \
   --retained-profile-ms 0 --allocations --trace-gc --diagnostics \
-  --stress-tools --mixed-rpc --list-interval-ms 2000 --poll-seed steady \
+  --stress-tools --stress-subagents --mixed-rpc --list-interval-ms 2000 --poll-seed steady \
   --revision <measured-commit-sha> --start-at <shared-future-epoch-ms>
 ```
 
 `--stress-tools` enables Code Mode in the synthetic configuration. Each outer
 `exec` calls the real `read` and shell `exec` tools; the shell runs `pwd` in the
 fixture's first registered linked worktree and its exit code and output must
-match. The provider continuation must contain the fixture text, the successful
+match. The outer call uses `awaitResults: true` so required tool waits stay owned
+until completion, including when host load exceeds the inline wait budget.
+The provider continuation must contain the fixture text, the successful
 code result, and the original reasoning signature. The default remains a direct
 `read` call. In memory-soak mode, stress tools also enables one normal isolated
 cron agent job every thirty seconds, with delivery disabled. Setup forces and
@@ -801,8 +834,20 @@ verifies one run; measured successful run-history entries are reported separatel
 as `cronRuns`. Cleanup removes the job on success, failure, or interruption; if
 removal fails, discard the fixture before reuse as directed by the warning.
 These background turns contribute resource cost but are excluded
-from the foreground-turn denominator. Child sessions are direct `agent` calls,
-not model-driven `sessions_spawn` calls.
+from the foreground-turn denominator. The twenty foreground child sessions are
+direct `agent` calls.
+
+`--stress-subagents` requires `memory-soak --stress-tools`. Each cohort adds one
+dedicated parent that uses Code Mode to call the real `sessions_spawn` tool with
+an isolated native child and `completionTarget: "parent"`, then calls the direct
+`sessions_yield` tool. The mock holds the child until public `chat.history` shows
+a successful persisted yield and all foreground streams have reached their
+barrier. The child returns a unique result; the resumed parent must receive it
+and persist a unique acknowledgment. Both the child and that parent continuation
+must finish successfully through `agent.wait`. Per-cohort evidence is recorded in
+`streamStart.subagent`. This additional parent/child work contributes resource
+cost but does not change the foreground-turn denominator. The hidden child uses
+`cleanup: "delete"`; the dedicated parent resets before each cohort.
 
 `--mixed-rpc` cycles each viewer through `sessions.list`, retained-fixture
 `chat.history`, worktree `sessions.diff`, and a newly opened WebSocket `connect`.
@@ -1211,6 +1256,13 @@ hit rate on the repaired path, without a material paired latency regression.
 Native Git status used to validate a revision still counts as Git work; cache
 hits do not imply zero subprocesses.
 
+Add `--nested-cwd` to launch each session from the fixture's `new/` subdirectory.
+This exercises checkout discovery through a session's working directory instead
+of supplying the repository root. Compare full diffs under `--churn-ms 1000`
+with and without this option; require identical response hashes, immediate edit
+visibility, and the same cache eligibility as the root-directory case. The
+267,000-file fixture remains a detached linked worktree with a separate Git dir.
+
 For a second scenario with independent revision checks, add
 `--poll-state-dir <other seeded fixture>` on each side. Both isolated Gateways
 then poll both existing synthetic worktrees concurrently, using a separate
@@ -1282,6 +1334,40 @@ and uncompressed wire response bytes. Handler and worker queue timings remain in
 Gateway diagnostics. Whole-window CPU/allocation divided by source-event or
 socket-delivery counts is a workload-normalized cost, not isolated encode/send
 cost. Use CPU profiles when attributing broadcast work.
+
+Add `--workload-cpu-profile` to capture the full measured workload in the Gateway
+main isolate. Each sample's `workloadCpuProfile` includes the full
+`workload-<round>.cpuprofile` path, sampling duration/count, diagnostics, the 40
+hottest functions, and sampled time under `broadcastInternal`. This differs from
+`--cpu-profile`, which captures stream admission/release and optional recap
+phases; the two flags cannot be combined.
+
+Run full CPU attribution in a separate matched pass, replacing `--allocations`
+with `--workload-cpu-profile`. The new mode rejects `--allocations`, `--trace-gc`,
+`--stream-start-allocations`, and retained heap capture; for `memory-soak`, set
+`--retained-profile-ms 0`. Serializing and writing CPU profiles allocates enough
+memory to contaminate simultaneous allocation, promotion, and GC measurements.
+Keep the allocation/GC pairs and full CPU pairs separate with matching workloads.
+
+Event/RPC counting starts after the CPU-start acknowledgment and ends when the
+workload, event drain, and outstanding polls finish. The CPU profile then stops.
+CPU samples include the small start-acknowledgment and stop-request edges,
+including stop bookkeeping before V8 stops sampling; event counts exclude those
+edges. Existing whole-window CPU counters include profiler setup, stopping, and
+profile serialization. No new 25 ms priming wait is added; if
+`--stream-start-diagnostics` is also enabled, its existing 25 ms waits occur inside
+the full-workload capture. Keep these attribution runs separate from unprofiled
+acceptance timing, and compare equally instrumented pairs.
+
+Add `--capture-responses` to retain the first successful measured response payload
+per method per round at `samples[].rpc[method].representativeResponse.payload`.
+Capture is opt-in and happens in the controller; payloads are saved only in the
+result artifact, not the stdout sample summaries. Serialization into the report
+happens after measurement. The sample preserves parsed payload content, not the
+original wire encoding or response envelope. Use it for offline content and
+serialized-payload comparison, accounting explicitly for expected dynamic fields
+such as timestamps and IDs. Exact uncompressed response-frame byte totals remain
+in the RPC metrics. Neither option changes defaults or generates additional RPCs.
 
 Turn scenarios use `--runs` (forced
 to one for `chat.send`); `--chunks` controls streamed answer size. `plugins.reload`

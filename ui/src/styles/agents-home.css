@@ -93,6 +93,28 @@
   padding-left: 36px;
 }
 
+.agents-home__claw-categories {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 0 0 12px;
+  margin-bottom: 8px;
+}
+
+.agents-home__claw-categories .btn {
+  flex: 0 0 auto;
+}
+
+.agents-home__claw-category--active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.agents-home__claw-section-title {
+  margin: 24px 0 12px;
+  font-size: 14px;
+}
+
 .agents-home__grid,
 .agents-home__claw-grid {
   display: grid;

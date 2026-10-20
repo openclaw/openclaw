@@ -124,6 +124,16 @@ export function createSessionManagerPublicationHooks(params: {
               ),
             ),
           ),
+          undefined,
+          new Map(
+            entryPublication.flatMap((receipt) =>
+              [...receipt.facts].flatMap(([key, fact]) =>
+                fact.kind === "postimage" && fact.value.fullEntry
+                  ? [[key, fact.value.fullEntry] as const]
+                  : [],
+              ),
+            ),
+          ),
         );
       }
       pending.transcript.begin(transcriptPublication);

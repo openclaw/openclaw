@@ -65,14 +65,8 @@ export {
 } from "./status-snapshot.js";
 export type { PluginCapabilityKind, PluginInspectShape } from "./inspect-shape.js";
 
-export {
-  formatPluginCompatibilityNotice,
-  summarizePluginCompatibility,
-} from "./status-compatibility.js";
-export type {
-  PluginCompatibilityNotice,
-  PluginCompatibilitySummary,
-} from "./status-compatibility.js";
+export { formatPluginCompatibilityNotice } from "./status-compatibility.js";
+export type { PluginCompatibilityNotice } from "./status-compatibility.js";
 
 export type PluginInspectReport = ReturnType<typeof buildPluginShapeSummary> & {
   workspaceDir?: string;

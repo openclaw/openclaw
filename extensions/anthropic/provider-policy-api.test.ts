@@ -1,4 +1,4 @@
-// Anthropic tests cover provider policy api plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-types";
 import { describe, expect, it } from "vitest";
 import { parseAnthropicModelRef } from "./claude-model-refs.js";
@@ -15,15 +15,26 @@ function createModel(id: string, name: string): ModelDefinitionConfig {
     name,
     reasoning: false,
     input: ["text"],
-    cost: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-    },
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 128_000,
     maxTokens: 8_192,
   };
+}
+
+function apiKeyDefaults(
+  defaults: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> = {},
+  ordered = false,
+) {
+  return applyConfigDefaults({
+    config: {
+      auth: {
+        profiles: { "anthropic:default": { provider: "anthropic", mode: "api_key" } },
+        ...(ordered ? { order: { anthropic: ["anthropic:default"] } } : {}),
+      },
+      agents: { defaults },
+    },
+    env: {},
+  });
 }
 
 const modelRefCases: Array<[string, string | null, string | null, boolean | null]> = [
@@ -64,70 +75,30 @@ describe("anthropic provider policy public artifact", () => {
       models: [createModel("gpt-5.4", "GPT-5.4")],
     };
 
-    expect(
-      normalizeConfig({
-        provider: "openai",
-        providerConfig,
-      }),
-    ).toBe(providerConfig);
+    expect(normalizeConfig({ provider: "openai", providerConfig })).toBe(providerConfig);
   });
 
   it("applies Anthropic API-key defaults without loading the full provider plugin", () => {
-    const nextConfig = applyConfigDefaults({
-      config: {
-        auth: {
-          profiles: {
-            "anthropic:default": {
-              provider: "anthropic",
-              mode: "api_key",
-            },
-          },
-          order: { anthropic: ["anthropic:default"] },
-        },
-        agents: {
-          defaults: {},
-        },
-      },
-      env: {},
+    expect(apiKeyDefaults({}, true).agents?.defaults?.contextPruning).toMatchObject({
+      mode: "cache-ttl",
+      ttl: "1h",
     });
-
-    expect(nextConfig.agents?.defaults?.contextPruning?.mode).toBe("cache-ttl");
-    expect(nextConfig.agents?.defaults?.contextPruning?.ttl).toBe("1h");
   });
 
   it("adds cacheRetention defaults for dated Anthropic primary model refs", () => {
-    const nextConfig = applyConfigDefaults({
-      config: {
-        auth: {
-          profiles: {
-            "anthropic:default": {
-              provider: "anthropic",
-              mode: "api_key",
-            },
-          },
-        },
-        agents: {
-          defaults: {
-            model: { primary: "anthropic/claude-sonnet-4-20250514" },
-          },
-        },
-      },
-      env: {},
-    });
+    const nextConfig = apiKeyDefaults({ model: { primary: "anthropic/claude-sonnet-4-20250514" } });
 
     expect(
       nextConfig.agents?.defaults?.models?.["anthropic/claude-sonnet-4-6"]?.params?.cacheRetention,
     ).toBe("short");
   });
 
-  it.each(["claude-sonnet-5-5"])(
-    "keeps the %s thinking profile identical across API and CLI routes",
-    (modelId) => {
-      expect(resolveThinkingProfile({ provider: "claude-cli", modelId })).toEqual(
-        resolveThinkingProfile({ provider: "anthropic", modelId }),
-      );
-    },
-  );
+  it("keeps the claude-sonnet-5-5 thinking profile identical across API and CLI routes", () => {
+    const modelId = "claude-sonnet-5-5";
+    expect(resolveThinkingProfile({ provider: "claude-cli", modelId })).toEqual(
+      resolveThinkingProfile({ provider: "anthropic", modelId }),
+    );
+  });
 
   it("keeps direct-only Mythos thinking disabled on the CLI route", () => {
     expect(resolveThinkingProfile({ provider: "claude-cli", modelId: "claude-mythos-5" })).toEqual({
@@ -137,11 +108,6 @@ describe("anthropic provider policy public artifact", () => {
   });
 
   it("does not expose Anthropic thinking profiles for unrelated providers", () => {
-    expect(
-      resolveThinkingProfile({
-        provider: "openai",
-        modelId: "claude-opus-4-7",
-      }),
-    ).toBeNull();
+    expect(resolveThinkingProfile({ provider: "openai", modelId: "claude-opus-4-7" })).toBeNull();
   });
 });

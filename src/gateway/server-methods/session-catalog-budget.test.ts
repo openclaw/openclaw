@@ -7,6 +7,7 @@ import {
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   catalogHost,
+  catalogProvider as provider,
   catalogSession,
   expectCatalog,
   expectCatalogs,
@@ -14,7 +15,6 @@ import {
 import {
   call,
   hoisted,
-  provider,
   resetSessionCatalogTestState,
   setSessionCatalogEntries,
   startCall,

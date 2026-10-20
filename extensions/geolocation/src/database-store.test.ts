@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -154,11 +155,10 @@ function createStore(
     warn?: (message: string) => void;
   } = {},
 ) {
-  return createGeolocationDatabaseStore({
+  const databaseUrl = options.databaseUrl ?? "https://host.test/db.mmdb";
+  const store = createGeolocationDatabaseStore({
     stateDir,
-    settings: resolveGeolocationSettings({
-      databaseUrl: options.databaseUrl ?? "https://host.test/db.mmdb",
-    }),
+    settings: resolveGeolocationSettings({ databaseUrl }),
     now: () => currentTime,
     logger: options.warn ? { info: () => {}, warn: options.warn } : undefined,
     fetchImpl:
@@ -169,6 +169,8 @@ function createStore(
             return jsonResponse(body);
           },
   });
+  const digest = createHash("sha256").update(databaseUrl).digest("hex").slice(0, 12);
+  return { ...store, databaseFile: path.join(stateDir, "geolocation", `ip-city-${digest}.mmdb`) };
 }
 
 type Store = ReturnType<typeof createStore>;
