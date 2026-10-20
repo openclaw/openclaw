@@ -25,9 +25,8 @@ const pluginApiMocks = vi.hoisted(() => ({
   }),
 }));
 
-vi.mock("./api.js", async () => ({
-  resolvePairingGatewayUrl: (await import("openclaw/plugin-sdk/device-bootstrap"))
-    .resolvePairingGatewayUrl,
+vi.mock("./api.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./api.js")>()),
   PAIRING_SETUP_BOOTSTRAP_PROFILE: {
     roles: ["node", "operator"],
     scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
