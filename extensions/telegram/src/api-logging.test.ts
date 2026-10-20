@@ -4,6 +4,24 @@ import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { createTelegramRequestWithDiag } from "./send-context.js";
 
 const logs = vi.hoisted(() => ({ apiError: vi.fn(), httpWarning: vi.fn() }));
+const rejecting = (error: unknown) => async () => {
+  throw error;
+};
+const safeFailure = 'network request failed transport={"code":"ECONNRESET","syscall":"read"}';
+
+async function expectLogged(error: HttpError, suffix = "", useRuntime = false) {
+  const logger = vi.fn();
+  await expect(
+    withTelegramApiErrorLogging({
+      operation: "sendMessage",
+      fn: rejecting(error),
+      ...(useRuntime ? { runtime: { error: logger } } : { logger }),
+    }),
+  ).rejects.toBe(error);
+  expect(logger).toHaveBeenCalledExactlyOnceWith(
+    `telegram sendMessage failed: network request failed${suffix}`,
+  );
+}
 
 vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
@@ -40,21 +58,7 @@ describe("Telegram API error logging", () => {
       "Network request failed: https://example.test/bot-private-token request body",
       new TypeError("fetch failed", { cause }),
     );
-    const logger = vi.fn();
-
-    await expect(
-      withTelegramApiErrorLogging({
-        operation: "sendMessage",
-        fn: async () => {
-          throw error;
-        },
-        logger,
-      }),
-    ).rejects.toBe(error);
-
-    expect(logger).toHaveBeenCalledExactlyOnceWith(
-      `telegram sendMessage failed: network request failed transport={"code":"ECONNRESET","syscall":"read"}`,
-    );
+    await expectLogged(error, ' transport={"code":"ECONNRESET","syscall":"read"}');
   });
 
   it("does not serialize arbitrary cause fields as transport diagnostics", async () => {
@@ -63,39 +67,12 @@ describe("Telegram API error logging", () => {
       syscall: "private request body",
       cause: { code: "UND_ERR_SOCKET", syscall: "connect" },
     });
-    const logger = vi.fn();
-
-    await expect(
-      withTelegramApiErrorLogging({
-        operation: "sendMessage",
-        fn: async () => {
-          throw error;
-        },
-        runtime: { error: logger },
-      }),
-    ).rejects.toBe(error);
-
-    expect(logger).toHaveBeenCalledExactlyOnceWith(
-      `telegram sendMessage failed: network request failed transport={"code":"UND_ERR_SOCKET","syscall":"connect"}`,
-    );
+    await expectLogged(error, ' transport={"code":"UND_ERR_SOCKET","syscall":"connect"}', true);
   });
 
   it("does not print an HTTP error's request text when no transport fields are available", async () => {
     const error = new HttpError("private request body", new Error("private nested request body"));
-    const logger = vi.fn();
-
-    await expect(
-      withTelegramApiErrorLogging({
-        operation: "sendMessage",
-        fn: async () => {
-          throw error;
-        },
-        logger,
-      }),
-    ).rejects.toBe(error);
-    expect(logger).toHaveBeenCalledExactlyOnceWith(
-      "telegram sendMessage failed: network request failed",
-    );
+    await expectLogged(error);
   });
 
   it.each([
@@ -121,27 +98,15 @@ describe("Telegram API error logging", () => {
         retry: { attempts: 1 },
       });
       await expect(
-        request(
-          async () => {
-            throw error;
-          },
-          "sendMessage",
-          { shouldLog: () => shouldLog },
-        ),
+        request(rejecting(error), "sendMessage", { shouldLog: () => shouldLog }),
       ).rejects.toBe(error);
 
-      expect(logs.apiError).toHaveBeenCalledTimes(Number(apiRecord));
-      if (apiRecord) {
-        expect(logs.apiError).toHaveBeenCalledWith(
-          `telegram sendMessage failed: network request failed transport={"code":"ECONNRESET","syscall":"read"}`,
-        );
-      }
-      expect(logs.httpWarning).toHaveBeenCalledTimes(Number(httpRecord));
-      if (httpRecord) {
-        expect(logs.httpWarning).toHaveBeenCalledWith(
-          `telegram http error (sendMessage): network request failed transport={"code":"ECONNRESET","syscall":"read"}`,
-        );
-      }
+      expect(logs.apiError.mock.calls).toEqual(
+        apiRecord ? [[`telegram sendMessage failed: ${safeFailure}`]] : [],
+      );
+      expect(logs.httpWarning.mock.calls).toEqual(
+        httpRecord ? [[`telegram http error (sendMessage): ${safeFailure}`]] : [],
+      );
     },
   );
 
@@ -154,13 +119,7 @@ describe("Telegram API error logging", () => {
         retry: { attempts: 1 },
       });
       await expect(
-        request(
-          async () => {
-            throw error;
-          },
-          "sendMessage",
-          { shouldLog: () => shouldLog },
-        ),
+        request(rejecting(error), "sendMessage", { shouldLog: () => shouldLog }),
       ).rejects.toBe(error);
       expect(logs.apiError.mock.calls).toEqual(
         shouldLog ? [["telegram sendMessage failed: expected API rejection"]] : [],

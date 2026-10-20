@@ -12,21 +12,26 @@ vi.mock("undici/index.js", async () => {
 const requests: Array<{ bytes: Buffer; dispatcher: Agent }> = [];
 let respond: () => Response | Promise<Response>;
 
+const expectedRequests = (...chatIds: string[]) =>
+  chatIds.map((chatId) =>
+    Buffer.from(
+      `GET https://api.telegram.org/bot123:fixture-token/getChatMember?chat_id=${chatId}&user_id=123\n`,
+    ),
+  );
+const auditGroups = (groupIds = ["-1001"]) =>
+  auditTelegramGroupMembership({
+    token: "123:fixture-token",
+    botId: 123,
+    groupIds,
+    timeoutMs: 5_000,
+    network: { autoSelectFamily: false },
+  });
+
 beforeEach(() => {
   requests.length = 0;
-  for (const key of [
-    "HTTP_PROXY",
-    "HTTPS_PROXY",
-    "ALL_PROXY",
-    "http_proxy",
-    "https_proxy",
-    "all_proxy",
-    "NO_PROXY",
-    "no_proxy",
-    "OPENCLAW_PROXY_URL",
-    "OPENCLAW_PROXY_ACTIVE",
-    "OPENCLAW_DEBUG_PROXY_ENABLED",
-  ]) {
+  for (const key of "HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy NO_PROXY no_proxy OPENCLAW_PROXY_URL OPENCLAW_PROXY_ACTIVE OPENCLAW_DEBUG_PROXY_ENABLED".split(
+    " ",
+  )) {
     vi.stubEnv(key, undefined);
   }
   rawFetch.mockReset().mockImplementation(async (input, init) => {
@@ -61,21 +66,11 @@ it.each(["success", "network failure", "malformed JSON"] as const)(
         ? new Response("not-json")
         : Response.json({ ok: true, result: { status: "member" } });
     };
-    const result = await auditTelegramGroupMembership({
-      token: "123:fixture-token",
-      botId: 123,
-      groupIds: ["-1001"],
-      timeoutMs: 5_000,
-      network: { autoSelectFamily: false },
-    });
+    const result = await auditGroups();
 
     expect(result.ok).toBe(outcome === "success");
     expect(result.checkedGroups).toBe(1);
-    expect(requests.map(({ bytes }) => bytes)).toEqual([
-      Buffer.from(
-        "GET https://api.telegram.org/bot123:fixture-token/getChatMember?chat_id=-1001&user_id=123\n",
-      ),
-    ]);
+    expect(requests.map(({ bytes }) => bytes)).toEqual(expectedRequests("-1001"));
     expect(requests[0]?.dispatcher.destroyed).toBe(true);
   },
 );
@@ -99,30 +94,20 @@ it("keeps the audit transport open until the final group's response body settles
             { highWaterMark: 0 },
           ),
         );
-  const audit = auditTelegramGroupMembership({
-    token: "123:fixture-token",
-    botId: 123,
-    groupIds: ["-1001", "-1002"],
-    timeoutMs: 5_000,
-    network: { autoSelectFamily: false },
-  });
+  const audit = auditGroups(["-1001", "-1002"]);
   try {
     await readingBody.promise;
-    expect(requests.map(({ bytes }) => bytes)).toEqual([
-      Buffer.from(
-        "GET https://api.telegram.org/bot123:fixture-token/getChatMember?chat_id=-1001&user_id=123\n",
-      ),
-      Buffer.from(
-        "GET https://api.telegram.org/bot123:fixture-token/getChatMember?chat_id=-1002&user_id=123\n",
-      ),
-    ]);
+    expect(requests.map(({ bytes }) => bytes)).toEqual(expectedRequests("-1001", "-1002"));
     expect(requests[0]?.dispatcher).toBe(requests[1]?.dispatcher);
     expect(requests[1]?.dispatcher.destroyed).toBe(false);
   } finally {
     finishBody.resolve();
   }
   const result = await audit;
-  expect(result.groups.map(({ status }) => status)).toEqual(["member", "administrator"]);
+  expect(result.groups.map(({ chatId, status }) => [chatId, status])).toEqual([
+    ["-1001", "member"],
+    ["-1002", "administrator"],
+  ]);
   expect(result.ok).toBe(true);
   expect(requests[1]?.dispatcher.destroyed).toBe(true);
 });

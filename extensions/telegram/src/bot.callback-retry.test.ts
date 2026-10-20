@@ -43,37 +43,36 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-async function createTelegramPluginCallbackHandler(params: {
-  handler: TelegramInteractiveHandlerRegistration["handler"];
-}) {
+async function createTelegramPluginCallbackHandler(
+  handler: TelegramInteractiveHandlerRegistration["handler"],
+) {
   registerPluginInteractiveHandler("callback-fixture", {
     channel: "telegram",
     namespace: "callback-fixture",
     // SAFETY: The registry erases channel context; only Telegram dispatches this fixture.
-    handler: (context) => params.handler(context as TelegramInteractiveHandlerContext),
+    handler: (context) => handler(context as TelegramInteractiveHandlerContext),
   });
   await createTelegramBotCore({ token: "tok", botInfo: telegramBotInfoForTest });
   return getOnHandler("callback_query");
 }
 
-function makeCallbackContext(id: string, data: string, message: Record<string, unknown>) {
-  return createTelegramCallbackContext({ id, data, message });
+function makeCallbackContext(id: string) {
+  return createTelegramCallbackContext({
+    id,
+    data: "callback-fixture:choice",
+    message: { message_id: 11, text: "Select a thread" },
+  });
 }
 
 it.each([
   { message: "Gateway requester authority changed", reason: "callback-authority-changed" },
   { message: "gateway unavailable", reason: undefined },
 ])("classifies a spooled callback failure: $message", async ({ message, reason }) => {
-  const callbackHandler = await createTelegramPluginCallbackHandler({
-    handler: async ({ respond }) => {
-      await respond.reply({ text: "This action is no longer available." });
-      throw new Error(message);
-    },
+  const callbackHandler = await createTelegramPluginCallbackHandler(async ({ respond }) => {
+    await respond.reply({ text: "This action is no longer available." });
+    throw new Error(message);
   });
-  const context = makeCallbackContext("callback-failure", "callback-fixture:choice", {
-    message_id: 11,
-    text: "Select a thread",
-  });
+  const context = makeCallbackContext("callback-failure");
   const update = { update_id: 404, callback_query: context.callbackQuery };
   const queue = createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>({
     channelId: "telegram",
@@ -119,13 +118,8 @@ it("processes a callback action after its acknowledgment expires", async () => {
     await respond.reply({ text: "Action completed." });
     return { handled: true };
   });
-  const callbackHandler = await createTelegramPluginCallbackHandler({ handler });
-  await callbackHandler(
-    makeCallbackContext("expired-ack", "callback-fixture:choice", {
-      message_id: 11,
-      text: "Select a thread",
-    }),
-  );
+  const callbackHandler = await createTelegramPluginCallbackHandler(handler);
+  await callbackHandler(makeCallbackContext("expired-ack"));
   expect(handler).toHaveBeenCalledOnce();
   expect(sendMessageSpy).toHaveBeenCalledExactlyOnceWith(1234, "Action completed.", undefined);
 });
