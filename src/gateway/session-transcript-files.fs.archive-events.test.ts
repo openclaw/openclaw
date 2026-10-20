@@ -32,9 +32,7 @@ function archive(onArchiveError?: (err: unknown, sourcePath: string) => void) {
 
 describe("archiveSessionTranscriptsDetailed failure surface", () => {
   it("invokes onArchiveError when fs.renameSync fails and returns only successful entries", () => {
-    const renameError = Object.assign(new Error("EACCES: permission denied"), {
-      code: "EACCES",
-    });
+    const renameError = Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
     const renameSpy = vi.spyOn(fs, "renameSync").mockImplementation(() => {
       throw renameError;
     });

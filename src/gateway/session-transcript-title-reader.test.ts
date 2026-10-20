@@ -29,8 +29,8 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
-import { readSessionTitleFieldsFromTranscriptAsync } from "./session-transcript-title-reader.js";
-import { readSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.worker.js";
+import { readSessionTitleFieldsFromTranscriptAsync as readTitlesAsync } from "./session-transcript-title-reader.js";
+import { readSessionTitleFieldsFromTranscript as readTitles } from "./session-transcript-title-reader.worker.js";
 
 vi.mock("../config/sessions/session-accessor.sqlite-active-events.js", async (importOriginal) => {
   const actual =
@@ -72,10 +72,18 @@ afterEach(async () => {
   envSnapshot.restore();
 });
 
-const titleFields = (firstUserMessage: string | null, lastMessagePreview: string | null) => ({
-  firstUserMessage,
-  lastMessagePreview,
-});
+function expectTitle(
+  scope: Parameters<typeof readTitles>[0],
+  firstUserMessage: string | null,
+  lastMessagePreview: string | null,
+  options?: Parameters<typeof readTitles>[1],
+) {
+  expect(readTitles(scope, options)).toEqual({ firstUserMessage, lastMessagePreview });
+}
+const user = (content: unknown, fields = {}) => ({ role: "user", content, ...fields });
+const assistant = (content: unknown) => ({ role: "assistant", content });
+const repeatedReplies = (count: number, content: string) =>
+  Array.from({ length: count }, () => assistant(content));
 function scopeFor(sessionId: string) {
   return { agentId: "main", sessionId, sessionKey: `agent:main:${sessionId}`, storePath };
 }
@@ -88,55 +96,52 @@ async function writeTranscript(sessionId: string, events: unknown[]) {
   return scope;
 }
 
+async function appendMessages(
+  scope: Parameters<typeof persistSessionTranscriptTurn>[0],
+  messages: Array<{ content: unknown; display?: boolean; provenance?: unknown; role: string }>,
+) {
+  await persistSessionTranscriptTurn(scope, {
+    messages: messages.map((message) => ({ message })),
+    touchSessionEntry: false,
+  });
+}
 async function writeSqliteMessages(
   sessionId: string,
   messages: Array<{ content: unknown; display?: boolean; provenance?: unknown; role: string }>,
 ) {
   const scope = scopeFor(sessionId);
-  await persistSessionTranscriptTurn(scope, {
-    messages: messages.map((message) => ({ message })),
-    touchSessionEntry: false,
-  });
+  await appendMessages(scope, messages);
   return scope;
 }
 
 describe("session transcript title hydration", () => {
   test("selects usable tasks without contaminating the list cache with command metadata", async () => {
     const scope = await writeSqliteMessages("reader-title-command-source", [
-      { role: "user", content: "/status" },
-      {
-        role: "user",
-        content: "[Mon 2026-08-10 12:00 UTC] /topic_proof /api routing needs repair",
-      },
-      { role: "user", content: "[Mon 2026-08-10 12:01 UTC] Later ordinary task" },
+      user("/status"),
+      user("[Mon 2026-08-10 12:00 UTC] /topic_proof /api routing needs repair"),
+      user("[Mon 2026-08-10 12:01 UTC] Later ordinary task"),
     ]);
     const skillCommands = [
       { name: "topic_proof", skillName: "topic-proof", description: "Review a task" },
     ];
-    expect(readSessionTitleFieldsFromTranscript(scope).firstUserMessage).toBe(
-      "Later ordinary task",
-    );
-    expect(
-      (await readSessionTitleFieldsFromTranscriptAsync(scope, { skillCommands })).firstUserMessage,
-    ).toBe("/api routing needs repair");
-    expect(readSessionTitleFieldsFromTranscript(scope, { skillCommands }).firstUserMessage).toBe(
+    expect(readTitles(scope).firstUserMessage).toBe("Later ordinary task");
+    expect((await readTitlesAsync(scope, { skillCommands })).firstUserMessage).toBe(
       "/api routing needs repair",
     );
-    expect((await readSessionTitleFieldsFromTranscriptAsync(scope)).firstUserMessage).toBe(
-      "Later ordinary task",
-    );
+    expect(readTitles(scope, { skillCommands }).firstUserMessage).toBe("/api routing needs repair");
+    expect((await readTitlesAsync(scope)).firstUserMessage).toBe("Later ordinary task");
   });
 
   test("reads fresh title fields in the worker after in-process appends and rewrites", async () => {
     const scope = await writeSqliteMessages("reader-title-worker", [
-      { role: "user", content: "Original question" },
-      { role: "assistant", content: "Initial answer" },
+      user("Original question"),
+      assistant("Initial answer"),
     ]);
-    await readSessionTitleFieldsFromTranscriptAsync(scope);
+    await readTitlesAsync(scope);
     const read = async (firstUserMessage: string, lastMessagePreview: string) => {
       const sql = observeHostDataSql();
       try {
-        await expect(readSessionTitleFieldsFromTranscriptAsync(scope)).resolves.toEqual({
+        await expect(readTitlesAsync(scope)).resolves.toEqual({
           firstUserMessage,
           lastMessagePreview,
         });
@@ -145,14 +150,11 @@ describe("session transcript title hydration", () => {
         sql.restore();
       }
     };
-    await persistSessionTranscriptTurn(scope, {
-      messages: [{ message: { role: "assistant", content: "Latest answer" } }],
-      touchSessionEntry: false,
-    });
+    await appendMessages(scope, [assistant("Latest answer")]);
     await read("Original question", "Latest answer");
     await replaceTranscriptEvents(scope, [
       { type: "session", version: 3, id: scope.sessionId },
-      event("replacement", null, { role: "user", content: "Replacement question" }),
+      event("replacement", null, user("Replacement question")),
     ]);
     await read("Replacement question", "Replacement question");
   });
@@ -160,8 +162,8 @@ describe("session transcript title hydration", () => {
   test("keeps cold transcripts archived while reading mixed title rows and heals after restoration", async () => {
     const cold = await writeTranscript("reader-title-archived", [
       { type: "session", version: 3, id: "reader-title-archived" },
-      event("user", null, { role: "user", content: "Archived prompt" }),
-      event("reply", "user", { role: "assistant", content: "Archived reply" }),
+      event("user", null, user("Archived prompt")),
+      event("reply", "user", assistant("Archived reply")),
     ]);
     await sessionAccessor.replaceSessionEntry(cold, {
       sessionId: cold.sessionId,
@@ -191,21 +193,16 @@ describe("session transcript title hydration", () => {
     const archive = readSessionColdTranscript(database.db, cold.sessionId);
     expect(archive).toBeDefined();
     const hot = await writeSqliteMessages("reader-title-hot", [
-      { role: "user", content: "Hot prompt" },
-      { role: "assistant", content: "Hot reply" },
+      user("Hot prompt"),
+      assistant("Hot reply"),
     ]);
-    const empty = { firstUserMessage: null, lastMessagePreview: null };
-    expect(readSessionTitleFieldsFromTranscript(cold)).toEqual(empty);
-    expect(readSessionTitleFieldsFromTranscript(hot)).toEqual(
-      titleFields("Hot prompt", "Hot reply"),
-    );
-    expect(readSessionTitleFieldsFromTranscript(cold)).toEqual(empty);
+    expectTitle(cold, null, null);
+    expectTitle(hot, "Hot prompt", "Hot reply");
+    expectTitle(cold, null, null);
     expect(readSessionColdTranscript(database.db, cold.sessionId)).toEqual(archive);
 
     await restoreSessionColdTranscript(cold);
-    expect(readSessionTitleFieldsFromTranscript(cold)).toEqual(
-      titleFields("Archived prompt", "Archived reply"),
-    );
+    expectTitle(cold, "Archived prompt", "Archived reply");
   });
 
   test("finds the late first user and last nonblank reply with bounded probes", async () => {
@@ -213,18 +210,16 @@ describe("session transcript title hydration", () => {
       "reader-title-parity",
       Array.from({ length: 105 }, (_, index) => {
         if (index === 60) {
-          return { role: "user", content: "late prompt" };
+          return user("late prompt");
         }
         if (index === 102) {
-          return { role: "assistant", content: "last visible" };
+          return assistant("last visible");
         }
         return { role: "assistant", content: index > 102 ? " " : `reply ${String(index)}` };
       }),
     );
     vi.clearAllMocks();
-    expect(readSessionTitleFieldsFromTranscript(scope)).toEqual(
-      titleFields("late prompt", "last visible"),
-    );
+    expectTitle(scope, "late prompt", "last visible");
     expect(sessionAccessor.readSessionTranscriptMessageEvents).not.toHaveBeenCalled();
   });
 
@@ -232,20 +227,18 @@ describe("session transcript title hydration", () => {
     const sessionId = "reader-title-reset-window";
     const scope = await writeTranscript(sessionId, [
       { type: "session", version: 3, id: sessionId },
-      event("old", null, { role: "user", content: "hidden old prompt" }),
+      event("old", null, user("hidden old prompt")),
       event("kept-routed", "old", {
         role: "user",
         content: "kept routed prompt",
         provenance: { kind: "inter_session" },
       }),
-      event("kept-user", "kept-routed", { role: "user", content: "kept prompt" }),
-      event("kept-assistant", "kept-user", { role: "assistant", content: "kept answer" }),
+      event("kept-user", "kept-routed", user("kept prompt")),
+      event("kept-assistant", "kept-user", assistant("kept answer")),
     ]);
     const before = sessionAccessor.readSessionTranscriptWatermark(scope);
     for (const includeInterSession of [false, true]) {
-      expect(readSessionTitleFieldsFromTranscript(scope, { includeInterSession })).toEqual(
-        titleFields("hidden old prompt", "kept answer"),
-      );
+      expectTitle(scope, "hidden old prompt", "kept answer", { includeInterSession });
     }
     await sessionAccessor.appendTranscriptEvent(scope, {
       type: "reset",
@@ -255,16 +248,8 @@ describe("session transcript title hydration", () => {
     });
     await persistSessionTranscriptTurn(scope, {
       messages: [
-        {
-          eventId: "post-reset",
-          parentId: "reset-boundary",
-          message: { role: "user", content: "new question" },
-        },
-        {
-          eventId: "newest",
-          parentId: "post-reset",
-          message: { role: "assistant", content: "newest answer" },
-        },
+        { eventId: "post-reset", parentId: "reset-boundary", message: user("new question") },
+        { eventId: "newest", parentId: "post-reset", message: assistant("newest answer") },
       ],
       touchSessionEntry: false,
     });
@@ -272,10 +257,12 @@ describe("session transcript title hydration", () => {
       before.generation,
     );
     for (const includeInterSession of [false, true, false, true]) {
-      expect(readSessionTitleFieldsFromTranscript(scope, { includeInterSession })).toEqual({
-        firstUserMessage: includeInterSession ? "kept routed prompt" : "kept prompt",
-        lastMessagePreview: "newest answer",
-      });
+      expectTitle(
+        scope,
+        includeInterSession ? "kept routed prompt" : "kept prompt",
+        "newest answer",
+        { includeInterSession },
+      );
     }
   });
 
@@ -286,27 +273,18 @@ describe("session transcript title hydration", () => {
       { agentId: "work", sessionId, sessionKey: "agent:work:duplicate-title" },
     ];
     for (const [index, scope] of scopes.entries()) {
-      await persistSessionTranscriptTurn(scope, {
-        messages: [
-          { message: { role: "user", content: `prompt ${index}` } },
-          { message: { role: "assistant", content: `reply ${index}` } },
-        ],
-        touchSessionEntry: false,
-      });
+      await appendMessages(scope, [user(`prompt ${index}`), assistant(`reply ${index}`)]);
     }
     for (const [index, scope] of [...scopes.entries(), ...scopes.entries()]) {
-      expect(readSessionTitleFieldsFromTranscript(scope)).toEqual({
-        firstUserMessage: `prompt ${index}`,
-        lastMessagePreview: `reply ${index}`,
-      });
+      expectTitle(scope, `prompt ${index}`, `reply ${index}`);
     }
   });
 
   test("keeps the first user title when an append lands between tail and head probes", async () => {
     const scope = await writeSqliteMessages("reader-title-concurrent-append", [
-      { role: "user", content: "Original question" },
-      { role: "user", content: "Later question" },
-      ...Array.from({ length: 18 }, () => ({ role: "assistant", content: "Older reply" })),
+      user("Original question"),
+      user("Later question"),
+      ...Array.from({ length: 18 }, () => assistant("Older reply")),
     ]);
     await sessionAccessor.replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     const actual = await vi.importActual<
@@ -316,14 +294,14 @@ describe("session transcript title hydration", () => {
     pageReader.mockImplementationOnce((readScope, options) => {
       expect(
         sessionAccessor.appendTranscriptMessageSync(scope, {
-          message: { role: "assistant", content: "Concurrent reply" },
+          message: assistant("Concurrent reply"),
         }),
       ).toMatchObject({ ok: true, value: { appended: true } });
       return actual.readSessionTranscriptMessageEventPage(readScope, options);
     });
 
-    const first = readSessionTitleFieldsFromTranscript(scope);
-    const next = readSessionTitleFieldsFromTranscript(scope);
+    const first = readTitles(scope);
+    const next = readTitles(scope);
     expect([first.firstUserMessage, next.firstUserMessage]).toEqual([
       "Original question",
       "Original question",
@@ -337,24 +315,15 @@ describe("session transcript title hydration", () => {
     const sessionId = `reader-title-late-user-${messageCount}`;
     const scope = await writeSqliteMessages(sessionId, [
       { role: "user", content: "Routed work", provenance: { kind: "inter_session" } },
-      ...Array.from({ length: messageCount - 1 }, () => ({
-        role: "assistant",
-        content: "reply",
-      })),
+      ...repeatedReplies(messageCount - 1, "reply"),
     ]);
-    expect(readSessionTitleFieldsFromTranscript(scope).firstUserMessage).toBeNull();
-    expect(
-      readSessionTitleFieldsFromTranscript(scope, { includeInterSession: true }).firstUserMessage,
-    ).toBe("Routed work");
-    await writeSqliteMessages(sessionId, [{ role: "user", content: "First human question" }]);
+    expect(readTitles(scope).firstUserMessage).toBeNull();
+    expect(readTitles(scope, { includeInterSession: true }).firstUserMessage).toBe("Routed work");
+    await writeSqliteMessages(sessionId, [user("First human question")]);
     vi.clearAllMocks();
 
-    expect(
-      readSessionTitleFieldsFromTranscript(scope, { includeInterSession: true }).firstUserMessage,
-    ).toBe("Routed work");
-    expect(readSessionTitleFieldsFromTranscript(scope)).toEqual(
-      titleFields(null, "First human question"),
-    );
+    expect(readTitles(scope, { includeInterSession: true }).firstUserMessage).toBe("Routed work");
+    expectTitle(scope, null, "First human question");
     const pageReader = vi.mocked(sessionAccessor.readSessionTranscriptMessageEventPage);
     expect(pageReader).not.toHaveBeenCalled();
     expect(sessionAccessor.readSessionTranscriptBoundedMessageTailPage).toHaveBeenCalledTimes(1);
@@ -363,17 +332,14 @@ describe("session transcript title hydration", () => {
   test("preserves previews across an oversized assistant tail message", async () => {
     const sessionId = "reader-title-oversized-assistant-false";
     const scope = await writeSqliteMessages(sessionId, [
-      { role: "user", content: "Original question" },
-      ...Array.from({ length: 25 }, () => ({ role: "assistant", content: "Earlier reply" })),
+      user("Original question"),
+      ...Array.from({ length: 25 }, () => assistant("Earlier reply")),
     ]);
-    expect(readSessionTitleFieldsFromTranscript(scope).firstUserMessage).toBe("Original question");
-    await writeSqliteMessages(sessionId, [{ role: "assistant", content: "x".repeat(70 * 1024) }]);
+    expect(readTitles(scope).firstUserMessage).toBe("Original question");
+    await writeSqliteMessages(sessionId, [assistant("x".repeat(70 * 1024))]);
     vi.clearAllMocks();
 
-    expect(readSessionTitleFieldsFromTranscript(scope)).toEqual({
-      firstUserMessage: "Original question",
-      lastMessagePreview: `${"x".repeat(237)}...`,
-    });
+    expectTitle(scope, "Original question", `${"x".repeat(237)}...`);
     expect(sessionAccessor.readSessionTranscriptBoundedMessageTailPage).toHaveBeenCalledTimes(1);
     expect(
       vi
@@ -389,16 +355,16 @@ describe("session transcript Markdown title previews", () => {
       { role: "toolResult", content: "tool output" },
       { role: "system", content: "system event" },
       { role: "assistant", content: [{ type: "thinking", thinking: "private thought" }] },
-      { role: "assistant", content: "NO_REPLY" },
+      assistant("NO_REPLY"),
       { role: "assistant", content: "ANNOUNCE_SKIP", display: false },
       { role: "assistant", content: "REPLY_SKIP", display: false },
       { role: "assistant", content: [{ type: "text", text: "" }] },
-      { role: "assistant", content: "```ts\nconst hidden = true;\n```" },
+      assistant("```ts\nconst hidden = true;\n```"),
     ];
     const olderText = "Earlier **reply**";
     // Keep the observed row outside the first-user head probe, including after widening.
     const prefix = [
-      { role: "user", content: "Keep **title Markdown** unchanged" },
+      user("Keep **title Markdown** unchanged"),
       ...Array.from({ length: 100 }, () => ({ role: "toolResult", content: "tool output" })),
     ];
     const olderSeq = prefix.length + 1;
@@ -449,11 +415,7 @@ describe("session transcript Markdown title previews", () => {
         observeOlderContent(page.events);
         return page;
       });
-      const fields = readSessionTitleFieldsFromTranscript(scope);
-
-      expect(fields).toEqual(
-        titleFields("Keep **title Markdown** unchanged", "Latest Read the guide."),
-      );
+      expectTitle(scope, "Keep **title Markdown** unchanged", "Latest Read the guide.");
       expect(observedRows).toBe(1);
       expect(readOlderText).not.toHaveBeenCalled();
     } finally {

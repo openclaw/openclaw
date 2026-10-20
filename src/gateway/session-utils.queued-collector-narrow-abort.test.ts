@@ -102,9 +102,7 @@ it.each(["active", "queued", "pending-chat"] as const)(
     const context = requestContext();
     const oldRunId = "prior-incarnation-input";
     const old = createRpcSourceForTest(
-      {
-        requester: { connectionId: client.connId },
-      },
+      { requester: { connectionId: client.connId } },
       {
         runId: oldRunId,
         storeScope: loaded.storePath,
@@ -116,8 +114,6 @@ it.each(["active", "queued", "pending-chat"] as const)(
     );
     if (kind === "active") {
       await claimRpcSourceForTest(old);
-    }
-    if (kind === "active") {
       rpcSourceTesting.set(oldRunId, old);
       context.chatRunState.getOrCreate(oldRunId).buffer = "untouched old partial";
     } else if (kind === "queued") {
@@ -146,29 +142,25 @@ it.each(["active", "queued", "pending-chat"] as const)(
       { ok: true, status: "aborted", abortedRunId: entry.runId },
     ]);
     expect(isSubagentRunQueued(entry)).toBe(false);
-    const stopped = expectDefined(
-      getCurrentSubagentRunOwner(subagentRuns, entry),
-      "stopped reserved collector",
-    );
-    expect(stopped.collectorCompletion?.status).toBe("killed");
+    expect(getCurrentSubagentRunOwner(subagentRuns, entry)).toMatchObject({
+      collectorCompletion: { status: "killed" },
+    });
     expect(old.input.abortSignal.aborted).toBe(false);
     if (descendant && descendantSource) {
-      const stoppedDescendant = expectDefined(
-        getCurrentSubagentRunOwner(subagentRuns, descendant.entry),
-        "stopped descendant collector",
-      );
-      expect(stoppedDescendant.collectorCompletion?.status).toBe("killed");
+      expect(getCurrentSubagentRunOwner(subagentRuns, descendant.entry)).toMatchObject({
+        collectorCompletion: { status: "killed" },
+      });
       expect(descendantSource.input.abortSignal.aborted).toBe(false);
       expect(descendantOwnedSource?.input.abortSignal.aborted).toBe(true);
       await descendantOwnedSource?.input.settlement.promise;
     }
 
     if (kind === "active") {
-      expect(rpcSourceTesting.get(oldRunId)).toBe(old);
       expect(context.chatRunState.resolveBuffer(oldRunId, { final: true }).text).toBe(
         "untouched old partial",
       );
-    } else if (kind === "queued") {
+    }
+    if (kind !== "pending-chat") {
       expect(rpcSourceTesting.get(oldRunId)).toBe(old);
     } else {
       expect(context.dedupe.get(`${kind}:${oldRunId}`)).toBe(originalPending);

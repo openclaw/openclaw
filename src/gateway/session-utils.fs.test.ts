@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import {
   estimateStringChars,
   estimateTokensFromChars,
@@ -23,6 +22,16 @@ let storePath: string;
 let imageData: string;
 let imageBytes: number;
 const requireRecord = createRequireRecord("object", "expected-label");
+const textBlock = (text: string) => ({ type: "text", text });
+const messageRow = (role: string, content: unknown, extra = {}) => ({ role, content, ...extra });
+const artifact = (role: string, content: unknown) => ({ message: messageRow(role, content) });
+const imageSource = (data: string, media_type = "image/png") => ({
+  type: "base64",
+  media_type,
+  data,
+});
+const nativeImage = (data: string) => ({ type: "image", data });
+const omittedImage = (bytes = imageBytes) => ({ type: "image", omitted: true, bytes });
 const archiveTimestamp = "2026-08-28T00-00-00.000Z";
 const signedText = (text: string, phase: string, id?: string) => ({
   type: "text",
@@ -141,7 +150,7 @@ describe("archive selection", () => {
       expect(contents(rows)).toEqual([
         "kept question",
         "kept answer",
-        [{ type: "text", text: "Reset" }],
+        [textBlock("Reset")],
         "new turn",
       ]);
     }
@@ -178,7 +187,7 @@ describe("archive selection", () => {
       messages: [
         {
           role: "system",
-          content: [{ type: "text", text: "Compaction" }],
+          content: [textBlock("Compaction")],
           timestamp: Date.parse("2026-02-07T00:00:00.000Z"),
           __openclaw: { kind: "compaction", id: "comp-1", seq: 1, tokensBefore: 123 },
         },
@@ -190,15 +199,12 @@ describe("archive selection", () => {
     const id = "reset-archive-fallback";
     writeRecords(path.join(tmpDir, `${id}.jsonl`), [
       { type: "session", version: 1, id },
-      { message: { role: "assistant", content: "active artifact" } },
+      artifact("assistant", "active artifact"),
     ]);
-    archive(id, [{ message: { role: "assistant", content: "older archive" } }], {
+    archive(id, [artifact("assistant", "older archive")], {
       timestamp: "2026-02-16T22-26-33.000Z",
     });
-    archive(id, [
-      { message: { role: "user", content: "restored prompt" } },
-      { message: { role: "assistant", content: "restored archive" } },
-    ]);
+    archive(id, [artifact("user", "restored prompt"), artifact("assistant", "restored archive")]);
     expect(contents(await full(id))).toEqual(["restored prompt", "restored archive"]);
     expect(await reader(id).readRecentWithStats({ maxMessages: 1, maxBytes: 2048 })).toMatchObject({
       transcriptSource: "reset-archive",
@@ -210,22 +216,20 @@ describe("archive selection", () => {
   test("accepts stale generated session archives when the header matches the current session", async () => {
     const id = "00000000-0000-4000-8000-000000000006";
     const stale = "00000000-0000-4000-8000-000000000007";
-    archive(id, [{ message: { role: "assistant", content: "valid stale-name archive" } }], {
-      stem: stale,
-    });
+    archive(id, [artifact("assistant", "valid stale-name archive")], { stem: stale });
     expect(contents(await full(id, `${stale}.jsonl`))).toEqual(["valid stale-name archive"]);
   });
 
   test("revalidates a custom archive header after same-path replacement", async () => {
     const id = "00000000-0000-4000-8000-00000000000a";
-    const file = archive(id, [{ message: { role: "assistant", content: "matching archive" } }], {
+    const file = archive(id, [artifact("assistant", "matching archive")], {
       stem: "shared-topic-replaced",
     });
     const read = () => full(id, "shared-topic-replaced.jsonl");
     expect(contents(await read())).toEqual(["matching archive"]);
     writeRecords(file, [
       { type: "session", version: 3, id: "00000000-0000-4000-8000-00000000000b" },
-      { message: { role: "assistant", content: "replaced archive" } },
+      artifact("assistant", "replaced archive"),
     ]);
     await expect(read()).resolves.toEqual([]);
     await expect(
@@ -236,12 +240,12 @@ describe("archive selection", () => {
   test("uses the newest custom reset archive whose header matches the session", async () => {
     const id = "00000000-0000-4000-8000-000000000008";
     const stem = "shared-topic-valid-latest";
-    archive(id, [{ message: { role: "assistant", content: "newer canonical archive" } }]);
-    archive(id, [{ message: { role: "assistant", content: "older valid archive" } }], {
+    archive(id, [artifact("assistant", "newer canonical archive")]);
+    archive(id, [artifact("assistant", "older valid archive")], {
       stem,
       timestamp: "2026-02-16T22-26-35.000Z",
     });
-    archive(id, [{ message: { role: "assistant", content: "newer invalid archive" } }], {
+    archive(id, [artifact("assistant", "newer invalid archive")], {
       stem,
       header: "00000000-0000-4000-8000-000000000009",
     });
@@ -395,11 +399,17 @@ describe("transcript path safety", () => {
 });
 
 describe("oversized transcript records", () => {
-  const prefix = { type: "text", text: "keep prefix text" };
-  const suffix = { type: "text", text: "keep suffix text" };
+  const prefix = textBlock("keep prefix text");
+  const suffix = textBlock("keep suffix text");
 
   async function recent(id: string) {
     return (await reader(id).readRecentWithStats({ maxMessages: 10 })).messages;
+  }
+  function archiveUser(id: string, content: unknown, fields: Record<string, unknown> = {}) {
+    return archive(id, [message(id, null, "user", content, fields)]);
+  }
+  function rewrite(file: string, from: string, to: string) {
+    fs.writeFileSync(file, fs.readFileSync(file, "utf8").replace(from, to));
   }
 
   async function expectOversized(id: string) {
@@ -407,7 +417,7 @@ describe("oversized transcript records", () => {
     expect(rows).toMatchObject([
       {
         role: "user",
-        content: [{ type: "text", text: "[chat.history omitted: message too large]" }],
+        content: [textBlock("[chat.history omitted: message too large]")],
         __openclaw: { id, truncated: true, reason: "oversized" },
       },
     ]);
@@ -419,7 +429,7 @@ describe("oversized transcript records", () => {
     {
       name: "Anthropic source before type",
       image: (data: string) => ({
-        source: { type: "base64", media_type: "image/png", data },
+        source: imageSource(data),
         cache_control: { type: "ephemeral" },
         type: "image",
       }),
@@ -429,16 +439,13 @@ describe("oversized transcript records", () => {
       image: (data: string) => ({
         type: "image",
         data,
-        source: { type: "base64", media_type: "image/png", data },
+        source: imageSource(data),
       }),
     },
   ])("preserves recoverable reset-archive text around oversized $name", async ({ name, image }) => {
     const id = `image-${name.replaceAll(" ", "-")}`;
-    archive(id, [message(id, null, "user", [prefix, image(imageData), suffix])]);
-    const expected = {
-      role: "user",
-      content: [prefix, { type: "image", omitted: true, bytes: imageBytes }, suffix],
-    };
+    archiveUser(id, [prefix, image(imageData), suffix]);
+    const expected = { role: "user", content: [prefix, omittedImage(), suffix] };
     const rows = projectChatDisplayMessages(await recent(id));
     expect(rows).toMatchObject([{ ...expected, __openclaw: { id } }]);
     expect(JSON.stringify(rows)).not.toContain(imageData);
@@ -457,20 +464,18 @@ describe("oversized transcript records", () => {
     const privateImage = Buffer.from("private-image-payload");
     const privateData = privateImage.toString("base64");
     const metadata = { data: Buffer.from("notes").toString("base64") };
-    archive(id, [
-      message(id, null, "user", [
-        prefix,
-        { type: "image", metadata: { caption: "x".repeat(70 * 1024) }, data: privateData },
-        { type: "image", metadata, data: imageData },
-        suffix,
-      ]),
+    archiveUser(id, [
+      prefix,
+      { type: "image", metadata: { caption: "x".repeat(70 * 1024) }, data: privateData },
+      { type: "image", metadata, data: imageData },
+      suffix,
     ]);
     const single = await reader(id).readById(id);
     for (const row of [(await recent(id))[0], single.message]) {
       expect(row).toMatchObject({
         content: [
           prefix,
-          { type: "image", omitted: true, bytes: privateImage.length },
+          omittedImage(privateImage.length),
           { type: "image", metadata, omitted: true, bytes: imageBytes },
           suffix,
         ],
@@ -485,95 +490,57 @@ describe("oversized transcript records", () => {
     const id = "document-and-image";
     const document = {
       type: "document",
-      source: {
-        type: "base64",
-        media_type: "application/pdf",
-        data: Buffer.from("%PDF-1.4\nexample").toString("base64"),
-      },
+      source: imageSource(Buffer.from("%PDF-1.4\nexample").toString("base64"), "application/pdf"),
     };
-    archive(id, [
-      message(id, null, "user", [
-        document,
-        prefix,
-        { type: "image", source: { type: "base64", media_type: "image/png", data: imageData } },
-        suffix,
-      ]),
-    ]);
+    archiveUser(id, [document, prefix, { type: "image", source: imageSource(imageData) }, suffix]);
     const rows = projectChatDisplayMessages(await recent(id));
     expect(rows).toMatchObject([
-      {
-        role: "user",
-        content: [document, prefix, { type: "image", omitted: true, bytes: imageBytes }, suffix],
-      },
+      { role: "user", content: [document, prefix, omittedImage(), suffix] },
     ]);
     expect(JSON.stringify(rows)).not.toContain(imageData);
   });
 
   test("keeps oversized fallback when recovered JSON numbers expand after parsing", async () => {
     const id = "expanded-json";
-    const file = archive(id, [
-      message(id, null, "user", [prefix, { type: "image", data: imageData }], {
-        compactNumbers: "__COMPACT_NUMBERS__",
-      }),
-    ]);
+    const file = archiveUser(id, [prefix, nativeImage(imageData)], {
+      compactNumbers: "__COMPACT_NUMBERS__",
+    });
     const numbers = Array.from({ length: 13_000 }, () => "1e20").join(",");
-    fs.writeFileSync(
-      file,
-      fs.readFileSync(file, "utf8").replace('"__COMPACT_NUMBERS__"', `[${numbers}]`),
-    );
+    rewrite(file, '"__COMPACT_NUMBERS__"', `[${numbers}]`);
     await expectOversized(id);
   });
 
   test("rejects JSON-escaped transcript recovery marker collisions", async () => {
     const id = "escaped-marker";
-    const file = archive(id, [
-      message(id, null, "user", [
-        { type: "text", text: "__MARKER_SPOOF__" },
-        { type: "image", data: imageData },
-      ]),
-    ]);
-    fs.writeFileSync(
-      file,
-      fs
-        .readFileSync(file, "utf8")
-        .replace('"__MARKER_SPOOF__"', '"\\u005f_openclaw_omitted_image_0__"'),
-    );
+    const file = archiveUser(id, [textBlock("__MARKER_SPOOF__"), nativeImage(imageData)]);
+    rewrite(file, '"__MARKER_SPOOF__"', '"\\u005f_openclaw_omitted_image_0__"');
     await expectOversized(id);
   });
 
   test.each([
-    {
-      name: "unrelated oversized data",
-      content: (data: string) => [{ type: "document", source: { type: "base64", data } }],
-    },
-    {
-      name: "malformed image base64",
-      content: (data: string) => [{ type: "image", data: `${data.slice(0, -1)}!` }],
-    },
-    {
-      name: "oversized non-image residual",
-      content: (data: string) => [
-        { type: "image", data },
-        { type: "text", text: "x".repeat(300 * 1024) },
+    [
+      "unrelated oversized data",
+      (data: string) => [{ type: "document", source: { type: "base64", data } }],
+    ],
+    ["malformed image base64", (data: string) => [nativeImage(`${data.slice(0, -1)}!`)]],
+    [
+      "oversized non-image residual",
+      (data: string) => [nativeImage(data), textBlock("x".repeat(300 * 1024))],
+    ],
+    [
+      "oversized unrelated data after a small image",
+      (data: string) => [nativeImage("aGVsbG8="), { type: "document", data }],
+    ],
+    [
+      "too many image candidates",
+      (data: string) => [
+        ...Array.from({ length: 33 }, () => nativeImage("aGVsbG8=")),
+        nativeImage(data),
       ],
-    },
-    {
-      name: "oversized unrelated data after a small image",
-      content: (data: string) => [
-        { type: "image", data: "aGVsbG8=" },
-        { type: "document", data },
-      ],
-    },
-    {
-      name: "too many image candidates",
-      content: (data: string) => [
-        ...Array.from({ length: 33 }, () => ({ type: "image", data: "aGVsbG8=" })),
-        { type: "image", data },
-      ],
-    },
-  ])("keeps the existing oversized fallback for $name", async ({ name, content }) => {
+    ],
+  ] as const)("keeps the existing oversized fallback for %s", async (name, content) => {
     const id = `adversarial-${name.replaceAll(" ", "-")}`;
-    archive(id, [message(id, null, "user", content(imageData))]);
+    archiveUser(id, content(imageData));
     await expectOversized(id);
   });
 
@@ -615,7 +582,7 @@ describe("oversized transcript records", () => {
     expect(rows).toHaveLength(2);
     expect(rows[1]).toMatchObject({
       role: "assistant",
-      content: [{ type: "text", text: "[chat.history omitted: message too large]" }],
+      content: [textBlock("[chat.history omitted: message too large]")],
       __openclaw: {
         id: "oversized-child",
         idempotencyKey: "oversized-key",
@@ -628,7 +595,7 @@ describe("oversized transcript records", () => {
   test("readSessionMessagesAsync keeps id-less oversized message placeholders", async () => {
     const id = "oversized-idless";
     const oversized = "w".repeat(300 * 1024);
-    archive(id, [{ message: { role: "assistant", content: oversized } }]);
+    archive(id, [artifact("assistant", oversized)]);
     const rows = await full(id);
     expect(rows).toHaveLength(1);
     expect(JSON.stringify(rows)).toContain("[chat.history omitted: message too large]");
@@ -668,27 +635,10 @@ describe("buildSessionPreviewItems bounded projection", () => {
     const originalRows = messages.slice();
     const originalContents = messages.map((row) => row.content);
     const signatureTexts = new Set(sourceMessages.map((row) => row.content[0]!.textSignature));
-    const parse = JSON.parse;
-    const descriptor = expectDefined(
-      Object.getOwnPropertyDescriptor(JSON, "parse"),
-      "native JSON.parse descriptor",
-    );
-    let parsedSignatures = 0;
-    Object.defineProperty(JSON, "parse", {
-      ...descriptor,
-      value(...args: Parameters<typeof JSON.parse>) {
-        if (signatureTexts.has(args[0])) {
-          parsedSignatures += 1;
-        }
-        return parse(...args);
-      },
-    });
-    let result: ReturnType<typeof buildSessionPreviewItems>;
-    try {
-      result = buildSessionPreviewItems(messages, 12, 120);
-    } finally {
-      Object.defineProperty(JSON, "parse", descriptor);
-    }
+    const parse = vi.spyOn(JSON, "parse");
+    const result = buildSessionPreviewItems(messages, 12, 120);
+    const parsedSignatures = parse.mock.calls.filter(([value]) => signatureTexts.has(value)).length;
+    parse.mockRestore();
 
     expect(result).toEqual(
       Array.from({ length: 12 }, (_, index) => ({
@@ -703,9 +653,9 @@ describe("buildSessionPreviewItems bounded projection", () => {
   });
 
   const visibilityMessages = [
-    { role: "user", content: "older excluded text" },
-    { role: "assistant", content: "NO_REPLY" },
-    { role: "toolResult", content: "tool output" },
+    messageRow("user", "older excluded text"),
+    messageRow("assistant", "NO_REPLY"),
+    messageRow("toolResult", "tool output"),
     { role: "user", content: [{ type: "input_text", text: "  question  " }] },
     { role: "assistant", content: "model only", display: false },
     {
@@ -715,9 +665,9 @@ describe("buildSessionPreviewItems bounded projection", () => {
         signedText(`${"x".repeat(16)}🦊tail`, "final_answer"),
       ],
     },
-    { role: "assistant", content: "REPLY_SKIP" },
-    { role: "assistant", content: [{ type: "text", text: "   " }] },
-    { role: "system", content: "system metadata" },
+    messageRow("assistant", "REPLY_SKIP"),
+    { role: "assistant", content: [textBlock("   ")] },
+    messageRow("system", "system metadata"),
   ];
   test.each([
     ...(["display", "model-context"] as const).map((view) => ({
@@ -738,15 +688,12 @@ describe("buildSessionPreviewItems bounded projection", () => {
         null,
         undefined,
         {},
-        { role: "user", content: "first" },
-        { role: "toolResult", content: "tool output" },
-        { role: "assistant", content: "ANNOUNCE_SKIP" },
+        messageRow("user", "first"),
+        messageRow("toolResult", "tool output"),
+        messageRow("assistant", "ANNOUNCE_SKIP"),
         { role: "assistant", content: "hidden", display: false },
-        { role: "assistant", content: "last" },
-        {
-          role: "assistant",
-          content: [signedText("commentary only", "commentary")],
-        },
+        messageRow("assistant", "last"),
+        { role: "assistant", content: [signedText("commentary only", "commentary")] },
       ],
       view: undefined,
       limit: 12,
