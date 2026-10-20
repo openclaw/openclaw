@@ -74,7 +74,7 @@ export function createActiveRun(
     runId?: string;
   } = {},
 ): RpcSourceRef {
-  const sessionId = params.sessionId ?? `${sessionKey}-session`;
+  const { sessionId = `${sessionKey}-session`, agentId, storeScope, storePath } = params;
   const adapter: RpcSourceAdapter = {
     controlUiVisible: params.controlUiVisible,
     requester: params.owner
@@ -86,14 +86,14 @@ export function createActiveRun(
     protocolRunId: params.runId,
     target: captureSessionTarget({
       storeScope:
-        params.storeScope ??
-        params.storePath ??
+        storeScope ??
+        storePath ??
         resolveSessionStorePathCore(getRuntimeConfig().session?.store, {
-          agentId: params.agentId ?? parseAgentSessionKey(sessionKey)?.agentId ?? "main",
+          agentId: agentId ?? parseAgentSessionKey(sessionKey)?.agentId ?? "main",
         }),
       sessionKey,
       incarnation: sessionId,
-      agentId: params.agentId,
+      agentId,
     }),
     policy: { mode: "followup" },
     adapter,
@@ -109,7 +109,7 @@ export function createActiveRun(
       const operation = createReplyOperation({
         sessionKey,
         sessionId,
-        agentId: params.agentId,
+        agentId,
         resetTriggered: false,
         mailboxClaim: claim,
         target: input.target,
@@ -165,9 +165,7 @@ export function createChatAbortContext(
   const context = {
     chatRunState,
     dedupe: new Map(),
-    removeChatRun: vi
-      .fn()
-      .mockImplementation((run: string) => ({ sessionKey: "main", clientRunId: run })),
+    removeChatRun: vi.fn((run: string) => ({ sessionKey: "main", clientRunId: run })),
     agentRunSeq: new Map<string, number>(),
     getRuntimeConfig: () => ({}),
     broadcast: vi.fn(),

@@ -97,11 +97,10 @@ export function useChatAbortRegistryFixture() {
         failures.push(error);
       }
     }
-    if (failures.length === 1) {
-      throw failures[0];
-    }
-    if (failures.length > 1) {
-      throw new AggregateError(failures, "Chat abort registry fixture cleanup failed");
+    if (failures.length) {
+      throw failures.length === 1
+        ? failures[0]
+        : new AggregateError(failures, "Chat abort registry fixture cleanup failed");
     }
   });
 
