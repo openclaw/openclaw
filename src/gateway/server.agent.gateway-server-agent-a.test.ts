@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 import { resetPreparedModelCatalogStateForTest } from "../agents/prepared-model-runtime.test-support.js";
 import { listSessionPendingInputs } from "../config/sessions/session-accessor.js";
-import { createAbortError } from "../infra/abort-signal.js";
+import { createAbortError, racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import * as mediaStore from "../media/store.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
@@ -134,37 +134,10 @@ async function expectNoNewInboundMedia(before: Set<string>): Promise<void> {
   });
 }
 
-async function runAgentImageRequest(params: {
-  idempotencyKey: string;
-  sessionId: string;
-  sessionKey?: string;
-  agentId?: string;
-  attachment?: ReturnType<typeof baseImageAttachment>;
-}) {
-  await setTestSessionStore({ main: sessionEntry(params.sessionId) }, params.agentId);
-
-  return acceptedAgent(params.idempotencyKey, {
-    message: "what is in the image?",
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    sessionKey: params.sessionKey ?? "main",
-    attachments: [params.attachment ?? baseImageAttachment()],
-  });
-}
-
 const defaultRegistry = createRegistry([]);
 
 describe("gateway server agent", () => {
-  beforeEach(() => {
-    vi.mocked(agentCommandMock).mockClear();
-    testState.agentsConfig = undefined;
-    testState.allowFrom = undefined;
-    setRegistry(defaultRegistry);
-  });
-
-  afterEach(() => {
-    testState.agentsConfig = undefined;
-    testState.allowFrom = undefined;
-  });
+  beforeEach(() => setRegistry(defaultRegistry));
 
   test("agent resolves a bare key through configured fixed-store ownership", async () => {
     testState.agentConfig = { sessionStore: { agentId: "ops" } };
@@ -210,7 +183,6 @@ describe("gateway server agent", () => {
       const sessionKey = `agent:main:bound-identity-${kind}`;
       // Expired under the one-minute reset, but not old enough for archival.
       const expiredAt = Date.now() - 120_000;
-      const previousSessionConfig = testState.sessionConfig;
       testState.sessionConfig = { reset: { mode: "idle", idleMinutes: 1 } };
       const execution = await observeGatewayRunExecution({ method: "agent", runId });
       try {
@@ -260,7 +232,6 @@ describe("gateway server agent", () => {
         }
       } finally {
         await execution.restore();
-        testState.sessionConfig = previousSessionConfig;
       }
     },
   );
@@ -298,15 +269,12 @@ describe("gateway server agent", () => {
       await setVisionModel();
       await setTestSessionStore({ main: sessionEntry("aborted-media-session") });
       if (outcome === "abort") {
-        vi.mocked(agentCommandMock).mockImplementationOnce(
-          async (rawOpts) =>
-            await new Promise<void>((_resolve, reject) => {
-              (rawOpts as { abortSignal?: AbortSignal }).abortSignal?.addEventListener(
-                "abort",
-                () => reject(createAbortError("forced provider abort")),
-                { once: true },
-              );
-            }),
+        vi.mocked(agentCommandMock).mockImplementationOnce((rawOpts) =>
+          racePromiseWithAbortSignal(
+            new Promise<void>(() => {}),
+            (rawOpts as { abortSignal?: AbortSignal }).abortSignal,
+            () => createAbortError("forced provider abort"),
+          ),
         );
       } else {
         vi.mocked(agentCommandMock).mockImplementationOnce(async () => {});
@@ -365,10 +333,11 @@ describe("gateway server agent", () => {
   test("agent retains image offload facts beside the claim-check line", async () => {
     await setVisionModel([TEXT_ONLY_AGENT_MODEL, VISION_AGENT_MODEL]);
     const inboundBefore = await listInboundMedia();
-    const call = await runAgentImageRequest({
-      idempotencyKey: "idem-agent-offloaded-media",
-      sessionId: "sess-main-offloaded-media",
-      attachment: offloadedImageAttachment(),
+    await setTestSessionStore({ main: sessionEntry("sess-main-offloaded-media") });
+    const call = await acceptedAgent("idem-agent-offloaded-media", {
+      message: "what is in the image?",
+      sessionKey: "main",
+      attachments: [offloadedImageAttachment()],
     });
 
     const media = call.media as
@@ -406,17 +375,15 @@ describe("gateway server agent", () => {
     };
     await setGatewayModelCatalogForTest([TEXT_ONLY_AGENT_MODEL, VISION_AGENT_MODEL]);
 
-    const call = await runAgentImageRequest({
+    await setTestSessionStore({ main: sessionEntry("sess-vision-fresh-image") }, "vision");
+    const call = await acceptedAgent("idem-agent-vision-first-image", {
+      message: "what is in the image?",
       agentId: "vision",
       sessionKey: "agent:vision:main",
-      idempotencyKey: "idem-agent-vision-first-image",
-      sessionId: "sess-vision-fresh-image",
+      attachments: [baseImageAttachment()],
     });
 
     expect(call.sessionKey).toBe("agent:vision:main");
-    expect(call.images, "agent command should include one forwarded image attachment").toHaveLength(
-      1,
-    );
     expect(call.images).toEqual([
       expect.objectContaining({ type: "image", mimeType: "image/png", data: BASE_IMAGE_PNG }),
     ]);
@@ -424,24 +391,20 @@ describe("gateway server agent", () => {
 
   test("agent errors when delivery requested and no last channel exists", async () => {
     testState.allowFrom = ["+1555"];
-    try {
-      await setVisionModel();
-      await setTestSessionStore({ main: sessionEntry("sess-main-missing-provider") });
-      const inboundBefore = await listInboundMedia();
-      const res = await agentRequest("idem-agent-missing-provider", {
-        sessionKey: "main",
-        deliver: true,
-        bestEffortDeliver: false,
-        attachments: [offloadedImageAttachment()],
-      });
-      expect(res.ok).toBe(false);
-      expect(res.error?.code).toBe("INVALID_REQUEST");
-      expect(res.error?.message).toContain("Channel is required");
-      expect(res.error?.message).not.toMatch(/^Error:/u);
-      expect(vi.mocked(agentCommandMock)).not.toHaveBeenCalled();
-      await expectNoNewInboundMedia(inboundBefore);
-    } finally {
-      testState.allowFrom = undefined;
-    }
+    await setVisionModel();
+    await setTestSessionStore({ main: sessionEntry("sess-main-missing-provider") });
+    const inboundBefore = await listInboundMedia();
+    const res = await agentRequest("idem-agent-missing-provider", {
+      sessionKey: "main",
+      deliver: true,
+      bestEffortDeliver: false,
+      attachments: [offloadedImageAttachment()],
+    });
+    expect(res.ok).toBe(false);
+    expect(res.error?.code).toBe("INVALID_REQUEST");
+    expect(res.error?.message).toContain("Channel is required");
+    expect(res.error?.message).not.toMatch(/^Error:/u);
+    expect(vi.mocked(agentCommandMock)).not.toHaveBeenCalled();
+    await expectNoNewInboundMedia(inboundBefore);
   });
 });

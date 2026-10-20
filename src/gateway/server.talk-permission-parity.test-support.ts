@@ -147,24 +147,19 @@ export async function runTalkNodePermissionParity({
   const workspace = expectDefined(config.agents?.defaults?.workspace, "fixture workspace");
   const marker = path.join(workspace, "node-parity-effects");
   const processExec = await import("../process/exec.js");
-  const originalRun = processExec.runCommandWithTimeout;
-  const native: Array<{
-    argv: string[];
-    cwd?: string;
-    result: import("../process/exec-result.js").SpawnResult;
-  }> = [];
-  const observeNative = vi
-    .spyOn(processExec, "runCommandWithTimeout")
-    .mockImplementation(async (...args) => {
-      const result = await originalRun(...args);
-      if (args[0].some((arg) => arg.includes(marker))) {
-        native.push({
-          argv: [...args[0]],
-          cwd: typeof args[1] === "object" ? args[1].cwd : undefined,
-          result,
-        });
-      }
-      return result;
+  const observeNative = vi.spyOn(processExec, "runCommandWithTimeout");
+  const nativeExecutions = () =>
+    observeNative.mock.calls.flatMap(([argv, options], index) => {
+      const result = observeNative.mock.settledResults[index];
+      return argv.some((arg) => arg.includes(marker)) && result?.type === "fulfilled"
+        ? [
+            {
+              argv,
+              cwd: typeof options === "object" ? options.cwd : undefined,
+              result: result.value,
+            },
+          ]
+        : [];
     });
   let requested = createDeferred<Record<string, unknown>>();
   let approvalEvents = 0;
@@ -200,7 +195,7 @@ export async function runTalkNodePermissionParity({
       const key = ingress + "-" + decision;
       const requiresApproval = decision !== "permitted" && decision !== "policy-deny";
       const invocationCount = node.invokes.length;
-      const nativeCount = native.length;
+      const nativeCount = nativeExecutions().length;
       await fs.rm(marker, { force: true });
       await replaceSessionEntry(scope, {
         sessionId,
@@ -415,7 +410,7 @@ export async function runTalkNodePermissionParity({
         }
         expect(approvalEvents - eventCount).toBe(requiresApproval ? 1 : 0);
         const cellInvocations = node.invokes.slice(invocationCount);
-        const cellNative = native.slice(nativeCount);
+        const cellNative = nativeExecutions().slice(nativeCount);
         expect(cellInvocations.filter((frame) => frame.command === "system.which")).toHaveLength(1);
         if (decision === "policy-deny") {
           expect(result).toEqual({ error: "Error: exec denied: host=node security=deny" });
@@ -443,6 +438,7 @@ export async function runTalkNodePermissionParity({
         source.release();
       }
     }
+    const native = nativeExecutions();
     expect(native).toHaveLength(publicOnly ? 0 : 6);
     for (const invocation of native) {
       expect(invocation).toMatchObject({

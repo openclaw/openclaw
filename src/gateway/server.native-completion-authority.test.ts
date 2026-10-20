@@ -39,7 +39,6 @@ import {
 } from "../plugins/runtime/gateway-request-scope.js";
 import { tryBeginGatewayRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { withSessionTurn } from "../sessions/session-controller.admission.js";
-import * as sessionQueries from "../sessions/session-controller.queries.js";
 import * as userTurnTranscript from "../sessions/user-turn-transcript.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
@@ -67,6 +66,16 @@ async function receiveCompletion(command: AgentCommandOpts): ReturnType<typeof a
 }
 
 const createGate = () => ({ entered: createDeferred(), resume: createDeferred() });
+
+function trackRequests(context: GatewayRequestContext) {
+  const work = vi.spyOn(context, "trackExecution");
+  return (settled = false) => {
+    const requests = work.mock.results.flatMap((result) =>
+      result.type === "return" ? [result.value] : [],
+    );
+    return settled ? Promise.allSettled(requests) : Promise.all(requests);
+  };
+}
 
 async function createCompletion(context: GatewayRequestContext) {
   const id = randomUUID();
@@ -188,31 +197,23 @@ describe("native completion final-effect authority", () => {
       let requesterCommands = 0;
       const release = () => gates.forEach((gate) => gate.resume.resolve());
       signal.addEventListener("abort", release, { once: true });
-      const requestWork = vi.spyOn(context, "trackExecution");
-      const settleRequests = () =>
-        Promise.allSettled(
-          requestWork.mock.results.flatMap((result) =>
-            result.type === "return" ? [result.value] : [],
-          ),
-        );
+      const settleRequests = trackRequests(context);
       const stage = pendingInputs.stageSessionPendingInput;
-      const stageSpy = vi
-        .spyOn(pendingInputs, "stageSessionPendingInput")
-        .mockImplementation(async (...args) => {
-          const index = pair.runs.findIndex(
-            (run) =>
-              args[0].sessionKey === pair.requesterScope.sessionKey &&
-              readMessageIdempotencyKey(args[1].message) === `${run.idempotencyKey}:user`,
-          );
-          if (index === 0 || index === 1) {
-            sources[index] =
-              getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority?.source;
-            attempts.push(pair.runs[index].runId);
-            gates[index].entered.resolve();
-            await gates[index].resume.promise;
-          }
-          return stage(...args);
-        });
+      vi.spyOn(pendingInputs, "stageSessionPendingInput").mockImplementation(async (...args) => {
+        const index = pair.runs.findIndex(
+          (run) =>
+            args[0].sessionKey === pair.requesterScope.sessionKey &&
+            readMessageIdempotencyKey(args[1].message) === `${run.idempotencyKey}:user`,
+        );
+        if (index === 0 || index === 1) {
+          sources[index] =
+            getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority?.source;
+          attempts.push(pair.runs[index].runId);
+          gates[index].entered.resolve();
+          await gates[index].resume.promise;
+        }
+        return stage(...args);
+      });
       agentCommandMock.mockImplementation(async (input) => {
         const command = input as AgentCommandOpts;
         const child = pair.handleChildCommand(command);
@@ -245,7 +246,7 @@ describe("native completion final-effect authority", () => {
         pair.runs[revokedIndex].revoked.abort(new Error("operator completion authority revoked"));
         release();
         await pair.settle();
-        await settleRequests();
+        await settleRequests(true);
         expect(attempts.toSorted()).toEqual(pair.runs.map((run) => run.runId).toSorted());
         const allowed = pair.runs.filter((_, index) => index !== revokedIndex);
         expect(requesterCommands).toBe(allowed.length);
@@ -275,16 +276,14 @@ describe("native completion final-effect authority", () => {
           resumeSubagentRun(run.runId);
         }
         await pair.settle();
-        await settleRequests();
+        await settleRequests(true);
         expect(requesterCommands).toBe(allowed.length);
         expect(agentCommandMock).toHaveBeenCalledTimes(2 + allowed.length);
         expect(sessionAccessor.loadTranscriptEventsSync(pair.requesterScope)).toEqual(events);
       } finally {
         release();
         await pair.dispose();
-        await settleRequests();
-        stageSpy.mockRestore();
-        requestWork.mockRestore();
+        await settleRequests(true);
         signal.removeEventListener("abort", release);
       }
     },
@@ -302,26 +301,17 @@ describe("native completion final-effect authority", () => {
       signal.addEventListener("abort", release, { once: true });
       const executionModule = await import("./agent-turn/agent-run-execution-phase.js");
       const execution = vi.spyOn(executionModule, "startAgentRunExecution");
-      const requestWork = vi.spyOn(context, "trackExecution");
-      const settleRequests = () =>
-        Promise.all(
-          requestWork.mock.results.flatMap((result) =>
-            result.type === "return" ? [result.value] : [],
-          ),
-        );
+      const settleRequests = trackRequests(context);
       const stage = pendingInputs.stageSessionPendingInput;
-      const stageSpy = vi
-        .spyOn(pendingInputs, "stageSessionPendingInput")
-        .mockImplementationOnce(async (...args) => {
+      vi.spyOn(pendingInputs, "stageSessionPendingInput").mockImplementationOnce(
+        async (...args) => {
           entered.resolve();
           // Hold before acquiring the writer so a requester replacement can commit.
           await resume.promise;
           return await stage(...args);
-        });
-      agentCommandMock.mockImplementation(async (input) => {
-        // SAFETY: The real Gateway dispatcher supplies AgentCommandOpts at this boundary.
-        return receiveCompletion(input as AgentCommandOpts);
-      });
+        },
+      );
+      agentCommandMock.mockImplementation((input) => receiveCompletion(input as AgentCommandOpts));
       expect(context.dedupe.has(`agent:${completion.idempotencyKey}`)).toBe(false);
       const delivery = completion.deliver();
       try {
@@ -340,9 +330,6 @@ describe("native completion final-effect authority", () => {
       } finally {
         release();
         await Promise.allSettled([delivery, settleRequests()]);
-        stageSpy.mockRestore();
-        execution.mockRestore();
-        requestWork.mockRestore();
         signal.removeEventListener("abort", release);
       }
     },
@@ -354,12 +341,6 @@ describe("native completion final-effect authority", () => {
       await prepareGatewayReplyRuntimeForTest();
       const context = getContext();
       using completion = await createCompletion(context);
-      const actualRuns = await vi.importActual<typeof sessionQueries>(
-        "../sessions/session-controller.queries.js",
-      );
-      // importActual can share this namespace; capture the function before spyOn replaces it.
-      const isSessionRunActive = actualRuns.isSessionRunActive;
-      vi.spyOn(sessionQueries, "isSessionRunActive").mockImplementation(isSessionRunActive);
       const { entered, resume } = createGate();
       const { entered: compacting, resume: resumeCompaction } = createGate();
       const queued = createDeferred();

@@ -1,14 +1,13 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, test, vi } from "vitest";
-import { WebSocket } from "ws";
-import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import type { WebSocket } from "ws";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { drainOpenClawAgentWriteQueuesForTest } from "../state/openclaw-agent-write-admission.test-support.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { writeMainChatSessionTranscript } from "./server.chat-session-store.test-support.js";
 import { installGatewayServerChatTestSuite } from "./server.chat.gateway-server-chat.test-support.js";
 import {
   collectHistoryTextValues,
@@ -17,11 +16,10 @@ import {
 import { removeChatTestDirectory as removeTempDir } from "./session-test-directories.test-support.js";
 import {
   agentDiscoveryMock,
-  connectOk,
+  connectWebchatClient,
   dispatchInboundMessageMock,
   rpcReq,
   testState,
-  trackConnectChallengeNonce,
   writeSessionStore,
 } from "./test-helpers.js";
 import { agentCommandMock } from "./test-helpers.runtime-state.js";
@@ -80,27 +78,19 @@ describe("gateway server chat", () => {
   const replaceMainTranscriptMessages = async (
     messages: Record<string, unknown>[],
   ): Promise<void> => {
-    const storePath = testState.sessionStorePath;
-    if (!storePath) {
-      throw new Error("session store path was not initialized");
-    }
-    const events = messages.map((message, index) => ({
-      message,
-      id: `message-${index}`,
-      type: "message",
-    }));
-    await replaceTranscriptEvents(
-      { agentId: "main", sessionId: "sess-main", sessionKey: "main", storePath },
-      events,
+    await writeMainChatSessionTranscript(
+      messages.map((message, index) => ({ message, id: `message-${index}`, type: "message" })),
+      "sess-main",
+      { sessionKey: "main" },
     );
   };
 
   test("sanitizes inbound chat.send message text and rejects null bytes", async () => {
     const nullByteRes = await sendChat("idem-null-byte-1", { message: "hello\u0000world" });
-    expect(nullByteRes.ok).toBe(false);
-    expect((nullByteRes.error as { message?: string } | undefined)?.message ?? "").toMatch(
-      /null bytes/i,
-    );
+    expect(nullByteRes).toMatchObject({
+      ok: false,
+      error: { message: expect.stringMatching(/null bytes/i) },
+    });
 
     const sanitizedRes = await sendChat("idem-sanitized-1", { message: "Cafe\u0301\u0007\tline" });
     expect(sanitizedRes.ok).toBe(true);
@@ -108,10 +98,9 @@ describe("gateway server chat", () => {
   });
 
   test("handles chat send and history flows", async () => {
-    const tempDirs: string[] = [];
+    const tempDirs = createTempDirTracker();
     const useStore = async (entries: Record<string, Record<string, unknown>>) => {
-      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
-      tempDirs.push(dir);
+      const dir = tempDirs.make("openclaw-gw-");
       testState.sessionStorePath = path.join(dir, "sessions.json");
       await writeSessionStore({ entries });
     };
@@ -127,14 +116,8 @@ describe("gateway server chat", () => {
     ];
 
     try {
-      webchatWs = new WebSocket(`ws://127.0.0.1:${port}`, {
-        headers: { origin: `http://127.0.0.1:${port}` },
-      });
-      trackConnectChallengeNonce(webchatWs);
-      await new Promise<void>((resolve) => {
-        webchatWs?.once("open", resolve);
-      });
-      await connectOk(webchatWs, {
+      webchatWs = await connectWebchatClient({
+        port,
         client: {
           id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
           version: "dev",
@@ -179,10 +162,10 @@ describe("gateway server chat", () => {
       });
 
       const blockedRes = await sendChat("idem-1", { sessionKey: "discord:group:dev" });
-      expect(blockedRes.ok).toBe(false);
-      expect((blockedRes.error as { message?: string } | undefined)?.message ?? "").toMatch(
-        /send blocked/i,
-      );
+      expect(blockedRes).toMatchObject({
+        ok: false,
+        error: { message: expect.stringMatching(/send blocked/i) },
+      });
 
       testState.sessionStorePath = undefined;
       testState.sessionConfig = undefined;
@@ -277,7 +260,7 @@ describe("gateway server chat", () => {
       if (webchatWs) {
         webchatWs.close();
       }
-      await Promise.all(tempDirs.map((dir) => removeTempDir(dir)));
+      await Promise.all([...tempDirs.dirs].map((dir) => removeTempDir(dir)));
     }
   });
 
@@ -306,12 +289,7 @@ describe("gateway server chat", () => {
         parentId,
         message: { role, content },
       });
-      const storePath = testState.sessionStorePath;
-      if (!storePath) {
-        throw new Error("session store path was not initialized");
-      }
-      await replaceTranscriptEvents(
-        { agentId: "main", sessionId: "sess-main", sessionKey: "main", storePath },
+      await writeMainChatSessionTranscript(
         [
           message("old", null, "user", "old"),
           message("kept-user", "old", "user", "kept question"),
@@ -327,6 +305,8 @@ describe("gateway server chat", () => {
           },
           message("post-reset", "reset-boundary", "user", "new turn"),
         ],
+        "sess-main",
+        { sessionKey: "main" },
       );
 
       expect(collectHistoryTextValues((await readHistory())?.messages ?? [])).toEqual([
@@ -342,37 +322,34 @@ describe("gateway server chat", () => {
     "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.";
 
   test.each([
-    {
-      name: "structured context-overflow code",
-      fields: {
-        errorCode: "context_overflow",
-        errorMessage: "private upstream body: 203557 tokens sent",
-      },
-      expected: contextOverflowCopy,
-    },
-
-    {
-      name: "token-per-minute rate limit",
-      fields: {
-        errorCode: "rate_limit_exceeded",
-        errorMessage: "413 request too large: 203557 tokens per minute (TPM)",
-      },
-      expected: "⚠️ The AI service needs a short break. Please try again in a few minutes.",
-    },
-    {
-      name: "private upstream failure",
-      fields: { errorMessage: "private upstream at secret.internal.example failed" },
-      expected: "The agent run failed before producing a reply.",
-    },
-  ])(
-    "chat.history safely displays $name over authenticated WebSocket",
-    async ({ fields, expected }) => {
+    [
+      "structured context-overflow code",
+      "context_overflow",
+      "private upstream body: 203557 tokens sent",
+      contextOverflowCopy,
+    ],
+    [
+      "token-per-minute rate limit",
+      "rate_limit_exceeded",
+      "413 request too large: 203557 tokens per minute (TPM)",
+      "⚠️ The AI service needs a short break. Please try again in a few minutes.",
+    ],
+    [
+      "private upstream failure",
+      undefined,
+      "private upstream at secret.internal.example failed",
+      "The agent run failed before producing a reply.",
+    ],
+  ] as const)(
+    "chat.history safely displays %s over authenticated WebSocket",
+    async (_name, errorCode, errorMessage, expected) => {
       const historyMessages = await loadChatHistoryWithMessages([
         {
           role: "assistant",
           content: [],
           stopReason: "error",
-          ...fields,
+          ...(errorCode ? { errorCode } : {}),
+          errorMessage,
           timestamp: 1,
         },
       ]);
@@ -453,8 +430,7 @@ describe("gateway server chat", () => {
     const roleAndText = historyMessages.map((message) => {
       const entry = isRecord(message) ? message : {};
       const role = typeof entry.role === "string" ? entry.role : "unknown";
-      const text =
-        typeof entry.text === "string" ? entry.text : (extractFirstTextBlock(message) ?? "");
+      const text = collectHistoryTextValues([message])[0] ?? "";
       return `${role}:${text}`;
     });
 
