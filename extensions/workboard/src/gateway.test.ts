@@ -280,6 +280,8 @@ describe("workboard gateway methods", () => {
         "workboard.cards.dispatch.owner",
         "workboard.cards.dispatchWithOptions",
         "workboard.cards.dispatchWithOptions.owner",
+        "workboard.cards.dispatchExact",
+        "workboard.cards.dispatchExact.owner",
         "workboard.boards.list",
         "workboard.boards.upsert",
         "workboard.sessionsBoard.read",
