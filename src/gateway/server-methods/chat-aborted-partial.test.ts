@@ -19,8 +19,8 @@ it.each([
   ["rejected partial", CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE, false, false],
   ["wrapped rejected partial", CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE, true, false],
   ["unrelated format failure", undefined, false, true],
-] as const)("honors the settled producer's %s", async (_name, code, wrapped, retained) => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+] as const)("honors the settled producer's %s", (_name, code, wrapped, retained) =>
+  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const scope = {
       agentId: "main",
       sessionKey: "agent:main:abort-partial",
@@ -31,7 +31,7 @@ it.each([
     const cfg = { agents: { entries: { main: {} } } };
     const producer = createDeferred<unknown>();
     let settlement: Promise<void> | undefined;
-    const text = "Buffered text is not validation evidence";
+    const text = "Unvalidated partial";
     const snapshot = captureAbortedPartial({
       ...scope,
       runId: "rejected-partial",
@@ -40,11 +40,10 @@ it.each([
       session: {
         ok: true,
         value: {
+          ...scope,
           cfg,
-          storePath: scope.storePath,
           entry: loadSessionEntry(scope),
           canonicalKey: scope.sessionKey,
-          agentId: scope.agentId,
         },
       },
       resolveTerminalProducer: () => ({
@@ -74,23 +73,17 @@ it.each([
         wrapped ? new Error("Wrapped producer failure", { cause: failure }) : failure,
       );
       await settlement;
-      const events = await loadTranscriptEvents(scope);
-      if (retained) {
-        expect(events).toContainEqual(
-          expect.objectContaining({
-            message: expect.objectContaining({
-              role: "assistant",
-              content: [{ type: "text", text }],
-            }),
-          }),
-        );
-      } else {
-        expect(events).toEqual(before);
-      }
+      const message = expect.objectContaining({
+        role: "assistant",
+        content: [{ type: "text", text }],
+      });
+      expect(await loadTranscriptEvents(scope)).toEqual(
+        retained ? expect.arrayContaining([expect.objectContaining({ message })]) : before,
+      );
       expect(warn).not.toHaveBeenCalled();
     } finally {
       producer.resolve(undefined);
       await settlement;
     }
-  });
-});
+  }),
+);

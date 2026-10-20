@@ -1,34 +1,17 @@
+import assert from "node:assert/strict";
 import path from "node:path";
-import { afterEach, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../../config/runtime-snapshot.js";
+import { expect, it } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { readTranscriptDisplayDelta } from "../../config/sessions/session-accessor.sqlite-history-events.test-support.js";
 import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawAgentDatabasesForTest,
-} from "../../state/openclaw-agent-db.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
 import { readChatHistoryDelta } from "./chat-history-delta.js";
 import { readChatHistoryPage } from "./chat-history-pages.js";
-
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    for (const directory of tempDirs.dirs) {
-      await closeOpenClawAgentDatabasesAsync(directory);
-      closeOpenClawAgentDatabasesForTest(directory);
-    }
-    clearRuntimeConfigSnapshot();
-    cleanup();
-  }),
-);
 
 it.each([
   ["context-free status", true, true, true],
@@ -37,9 +20,8 @@ it.each([
   ["command marker alone", undefined, true, false],
   ["non-boolean exclusion", "true", true, false],
   ["non-boolean command marker", true, "true", false],
-] as const)(
-  "preserves command outcome pairing across %s",
-  async (_name, exclusion, command, paired) => {
+] as const)("preserves command outcome pairing across %s", (_name, exclusion, command, paired) =>
+  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const markers = {
       ...(exclusion === undefined ? {} : { excludeFromContext: exclusion }),
       ...(command === undefined ? {} : { __openclaw: { contextFreeCommand: command } }),
@@ -52,14 +34,12 @@ it.each([
       agentId: "main",
       sessionKey,
       sessionId,
-      storePath: path.join(tempDirs.make("openclaw-history-command-context-"), "sessions.json"),
+      storePath: path.join(state.sessionsDir(), "sessions.json"),
     };
     await replaceSessionEntry(scope, entry);
     await replaceTranscriptEvents(scope, [{ type: "session", version: 3, id: sessionId }]);
     const head = readTranscriptDisplayDelta(scope);
-    if (head.kind !== "page") {
-      throw new Error("Expected an initial transcript cursor");
-    }
+    assert(head.kind === "page", "Expected an initial transcript cursor");
     const cursor = head.cursor;
     const call = {
       role: "assistant",
@@ -118,20 +98,14 @@ it.each([
         sessionRow: { key: sessionKey, kind: "direct", ...entry },
       }),
     });
-    if (delta.kind !== "delta") {
-      throw new Error("Expected the command exchange delta");
-    }
+    assert(delta.kind === "delta", "Expected the command exchange delta");
     const completed = { toolCallId: "command", phase: "end", status: "completed" };
+    const outcome = paired
+      ? completed
+      : { toolCallId: "command", phase: "end", summary: "Outcome unknown" };
     for (const activity of [page.activity, delta.activity]) {
       expect(activity).toMatchObject([
-        {
-          messageId: "command-call",
-          items: [
-            paired
-              ? completed
-              : { toolCallId: "command", phase: "end", summary: "Outcome unknown" },
-          ],
-        },
+        { messageId: "command-call", items: [outcome] },
         { messageId: "command-result", items: [completed] },
       ]);
       if (!paired) {
@@ -144,5 +118,5 @@ it.each([
       );
     }
     expect(readTranscriptDisplayDelta(scope, { cursor })).toEqual(saved);
-  },
+  }),
 );

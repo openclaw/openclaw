@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
@@ -27,9 +28,14 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "../chat-abort.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { claimRpcSourceForTest } from "../test-helpers.rpc-source.js";
+import {
+  seedHistorySession as seedSession,
+  expectHistorySuccess as expectSuccess,
+  expectHistoryFailure as expectFailure,
+  requestHistory,
+} from "./chat-history-fixtures.test-support.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
-import { chatMessageGetHandlers } from "./chat-message-get-handler.js";
 import {
   registerMetadataCallerCases,
   registerMetadataRevocationCases,
@@ -46,54 +52,8 @@ async function withHistoryState(run: () => Promise<void>) {
   });
 }
 
-async function seedSession(
-  id: string,
-  entry: Partial<Parameters<typeof upsertSessionEntryCore>[1]> = {},
-) {
-  const scope = { agentId: "main", sessionKey: `agent:main:${id}`, sessionId: id };
-  await upsertSessionEntryCore(scope, { sessionId: id, updatedAt: 1, ...entry });
-  return scope;
-}
-
-function expectSuccess(respond: ReturnType<typeof vi.fn<RespondFn>>) {
-  expect(respond).toHaveBeenCalledTimes(1);
-  const [ok, payload, error] = expectDefined(respond.mock.calls[0], "history response");
-  expect([ok, error]).toEqual([true, undefined]);
-  return expectDefined(asOptionalRecord(payload), "history payload");
-}
-
-function expectFailure(
-  respond: ReturnType<typeof vi.fn<RespondFn>>,
-  code: string,
-  retryable?: boolean,
-) {
-  expect(respond).toHaveBeenCalledExactlyOnceWith(
-    false,
-    undefined,
-    expect.objectContaining({ code, ...(retryable ? { retryable } : {}) }),
-  );
-}
-
-async function requestHistory(
-  method: string,
-  params: Record<string, unknown>,
-  context: GatewayRequestContext,
-  client: GatewayRequestHandlerOptions["client"] = null,
-  respond = vi.fn<RespondFn>(),
-  isWebchatConnect = false,
-) {
-  await expectDefined(
-    { ...chatHistoryHandlers, ...chatMessageGetHandlers }[method],
-    "chat handler",
-  )({
-    params,
-    context,
-    client,
-    respond,
-    req: { type: "req", id: "history-test", method },
-    isWebchatConnect: () => isWebchatConnect,
-  });
-  return respond;
+function historyCase(run: (method: string) => Promise<void>) {
+  return (method: string) => withHistoryState(() => run(method));
 }
 
 function createPersonalMetadataFixture() {
@@ -143,20 +103,15 @@ function createPersonalMetadataFixture() {
     params: Record<string, unknown>,
     overrides: Partial<Pick<GatewayRequestHandlerOptions, "client" | "signal">> = {},
   ) => {
-    const respond = vi.fn<RespondFn>();
-    await expectDefined(
-      chatHistoryHandlers["chat.metadata"],
-      "metadata handler",
-    )({
+    return requestHistory(
+      "chat.metadata",
       params,
       context,
-      client,
-      respond,
-      req: { type: "req", id: "draft-preview", method: "chat.metadata" },
-      isWebchatConnect: () => false,
-      ...overrides,
-    });
-    return respond;
+      overrides.client === undefined ? client : overrides.client,
+      undefined,
+      false,
+      overrides.signal,
+    );
   };
   return { owner, authProfileId, client, clients, config, metadata, readChatMetadata, request };
 }
@@ -224,19 +179,17 @@ it("serves notices only to Control UI through worker history, startup, delta, an
         const response = await request(method);
         expect(response.messages).toHaveLength(visible ? 2 : 1);
         if (visible) {
-          expect(response.messages).toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({
-                display: true,
-                content: [{ type: "text", text: "Keep the change small." }],
-                __openclaw: expect.objectContaining({
-                  pluginSteering: expect.objectContaining({
-                    pluginId: "reviewer",
-                    pluginName: "Reviewer",
-                  }),
+          expect(response.messages).toContainEqual(
+            expect.objectContaining({
+              display: true,
+              content: [{ type: "text", text: "Keep the change small." }],
+              __openclaw: expect.objectContaining({
+                pluginSteering: expect.objectContaining({
+                  pluginId: "reviewer",
+                  pluginName: "Reviewer",
                 }),
               }),
-            ]),
+            }),
           );
         }
       }
@@ -296,115 +249,107 @@ it.each(["chat.history", "chat.startup"] as const)(
 describe("chat history sharing projection", () => {
   it.each(["chat.history", "chat.startup"] as const)(
     "%s projects unbound canonical ACP metadata without host ACP reads",
-    async (method) => {
-      await withHistoryState(async () => {
-        const sessionKey = "agent:main:acp:unbound-history";
-        seedCanonicalAcpSessionMeta({
-          sessionKey,
-          meta: {
-            backend: "acpx",
-            agent: "main",
-            runtimeSessionName: "unbound-history",
-            mode: "persistent",
-            state: "idle",
-            lastActivityAt: 1,
-          },
-        });
-        const context = await createHistoryReadContext();
-        const client = identifiedClient("unbound-history-operator");
-        client.connect.scopes = ["operator.admin"];
-        const respond = vi.fn<RespondFn>();
-        const hostSql = observeHostDataSql();
-        try {
-          await requestHistory(method, { sessionKey }, context, client, respond);
-          const info = expectDefined(
-            asOptionalRecord(expectSuccess(respond).sessionInfo),
-            "session info",
-          );
-          expect(info.runtimeSelectionLocked).toBe(true);
-          expect(info.agentRuntime).toEqual({
-            id: "acpx",
-            source: "session-key",
-            cloudPlacementSupported: false,
-            devicePlacementSupported: false,
-          });
-          expect(hostSql.queries.filter((sql) => /\bacp_sessions\b/i.test(sql))).toEqual([]);
-        } finally {
-          hostSql.restore();
-        }
+    historyCase(async (method) => {
+      const sessionKey = "agent:main:acp:unbound-history";
+      seedCanonicalAcpSessionMeta({
+        sessionKey,
+        meta: {
+          backend: "acpx",
+          agent: "main",
+          runtimeSessionName: "unbound-history",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: 1,
+        },
       });
-    },
+      const context = await createHistoryReadContext();
+      const client = identifiedClient("unbound-history-operator");
+      client.connect.scopes = ["operator.admin"];
+      const respond = vi.fn<RespondFn>();
+      const hostSql = observeHostDataSql();
+      try {
+        await requestHistory(method, { sessionKey }, context, client, respond);
+        const info = asOptionalRecord(expectSuccess(respond).sessionInfo);
+        assert(info, "session info");
+        expect(info.runtimeSelectionLocked).toBe(true);
+        expect(info.agentRuntime).toEqual({
+          id: "acpx",
+          source: "session-key",
+          cloudPlacementSupported: false,
+          devicePlacementSupported: false,
+        });
+        expect(hostSql.queries.filter((sql) => /\bacp_sessions\b/i.test(sql))).toEqual([]);
+      } finally {
+        hostSql.restore();
+      }
+    }),
   );
 
   it.each(["chat.history", "chat.startup"] as const)(
     "%s carries current caller sharing controls on sessionInfo",
-    async (method) => {
-      await withHistoryState(async () => {
-        const scope = { agentId: "main", sessionKey: "agent:main:sharing-history" };
-        await upsertSessionEntryCore(scope, {
-          sessionId: "sharing-history",
-          updatedAt: Date.now(),
-          visibility: "read-only",
-          createdActor: { type: "human", source: "profile", id: "owner" },
-        });
-        for (const role of ["owner", "admin", "viewer"] as const) {
-          const client = identifiedClient(role);
-          if (role === "admin") {
-            client.connect.scopes = ["operator.admin"];
-          }
-          const respond = await requestHistory(
-            method,
-            scope,
-            await createHistoryReadContext(),
-            client,
-          );
-          expect(expectSuccess(respond).sessionInfo).toMatchObject({
-            sessionId: "sharing-history",
-            sharingRole: role,
-            visibility: "read-only",
-          });
-        }
+    historyCase(async (method) => {
+      const scope = { agentId: "main", sessionKey: "agent:main:sharing-history" };
+      await upsertSessionEntryCore(scope, {
+        sessionId: "sharing-history",
+        updatedAt: Date.now(),
+        visibility: "read-only",
+        createdActor: { type: "human", source: "profile", id: "owner" },
       });
-    },
+      for (const role of ["owner", "admin", "viewer"] as const) {
+        const client = identifiedClient(role);
+        if (role === "admin") {
+          client.connect.scopes = ["operator.admin"];
+        }
+        const respond = await requestHistory(
+          method,
+          scope,
+          await createHistoryReadContext(),
+          client,
+        );
+        expect(expectSuccess(respond).sessionInfo).toMatchObject({
+          sessionId: "sharing-history",
+          sharingRole: role,
+          visibility: "read-only",
+        });
+      }
+    }),
   );
 
   it.each(["chat.history", "chat.startup"] as const)(
     "%s refreshes sharing after startup work and rejects a replaced session",
-    async (method) => {
-      await withHistoryState(async () => {
-        const scope = { agentId: "main", sessionKey: "agent:main:sharing-history-race" };
-        await upsertSessionEntryCore(scope, {
-          sessionId: "sharing-history-race",
-          updatedAt: Date.now(),
-          visibility: "shared",
-          createdActor: { type: "human", source: "profile", id: "owner" },
-        });
-        const client = identifiedClient("viewer");
-        client.connect.scopes = ["operator.admin"];
-        const readChatStartupProjection = vi.fn(async () => {
-          client.connect.scopes = ["operator.read", "operator.write"];
-          await patchSessionEntryCore(scope, () => ({ visibility: "read-only" }));
-          return undefined;
-        });
-        const context = await createHistoryReadContext({ readChatStartupProjection });
-        const call = () => requestHistory(method, scope, context, client);
-        expect(expectSuccess(await call()).sessionInfo).toMatchObject({
-          sharingRole: "viewer",
-          visibility: "read-only",
-        });
-        readChatStartupProjection.mockImplementationOnce(async () => {
-          await patchSessionEntryCore(scope, () => ({ visibility: "draft" }));
-          return undefined;
-        });
-        expectFailure(await call(), "INVALID_REQUEST");
-        await patchSessionEntryCore(scope, () => ({ visibility: "read-only" }));
-        readChatStartupProjection.mockImplementationOnce(async () => {
-          await patchSessionEntryCore(scope, () => ({ sessionId: "replacement-history" }));
-          return undefined;
-        });
-        expectFailure(await call(), "UNAVAILABLE", true);
+    historyCase(async (method) => {
+      const scope = { agentId: "main", sessionKey: "agent:main:sharing-history-race" };
+      await upsertSessionEntryCore(scope, {
+        sessionId: "sharing-history-race",
+        updatedAt: Date.now(),
+        visibility: "shared",
+        createdActor: { type: "human", source: "profile", id: "owner" },
       });
-    },
+      const client = identifiedClient("viewer");
+      client.connect.scopes = ["operator.admin"];
+      const readChatStartupProjection = vi.fn(async () => {
+        client.connect.scopes = ["operator.read", "operator.write"];
+        await patchSessionEntryCore(scope, () => ({ visibility: "read-only" }));
+        return undefined;
+      });
+      const context = await createHistoryReadContext({ readChatStartupProjection });
+      const call = () => requestHistory(method, scope, context, client);
+      expect(expectSuccess(await call()).sessionInfo).toMatchObject({
+        sharingRole: "viewer",
+        visibility: "read-only",
+      });
+      readChatStartupProjection.mockImplementationOnce(async () => {
+        await patchSessionEntryCore(scope, () => ({ visibility: "draft" }));
+        return undefined;
+      });
+      expectFailure(await call(), "INVALID_REQUEST");
+      await patchSessionEntryCore(scope, () => ({ visibility: "read-only" }));
+      readChatStartupProjection.mockImplementationOnce(async () => {
+        await patchSessionEntryCore(scope, () => ({ sessionId: "replacement-history" }));
+        return undefined;
+      });
+      expectFailure(await call(), "UNAVAILABLE", true);
+    }),
   );
 });
 
@@ -446,9 +391,7 @@ it.each([
         sessionInfo: { sessionId: scope.sessionId, lifecycleRevision: "before-reset" },
       });
       const cursor = initialResponse.deltaCursor;
-      if (typeof cursor !== "string") {
-        throw new Error("expected initial delta cursor");
-      }
+      assert(typeof cursor === "string", "expected initial delta cursor");
       await appendTranscriptMessage(scope, {
         message: { role: "assistant", content: "private delta content", timestamp: 2 },
       });
@@ -512,233 +455,216 @@ it.each([
 
 it.each(["chat.history", "chat.startup"] as const)(
   "%s projects fresh owned session state without another preparation copy",
-  async (method) => {
-    await withHistoryState(async () => {
-      const now = Date.now();
-      const childScope = { agentId: "main", sessionKey: "agent:main:subagent:history-child" };
-      const toolOverrides = { mcpToolsDeny: { synthetic: ["blocked"] } };
-      const skillsSnapshot = { prompt: "history unused saved prompt", skills: [] };
-      const scope = await seedSession("history-owned", {
-        updatedAt: now,
-        thinkingLevel: "high",
-        toolOverrides,
-        skillsSnapshot,
-      });
-      await upsertSessionEntryCore(childScope, {
-        sessionId: "history-child",
-        updatedAt: now,
-        parentSessionKey: scope.sessionKey,
-        spawnedBy: scope.sessionKey,
-        skillsSnapshot,
-      });
-      const context = await createHistoryReadContext();
-      const call = async () => {
-        const respond = vi.fn<RespondFn>();
-        const cloneSpy = vi.spyOn(globalThis, "structuredClone");
-        const parseSpy = vi.spyOn(JSON, "parse");
-        try {
-          const pending = requestHistory(
-            method,
-            { sessionKey: scope.sessionKey },
-            context,
-            null,
-            respond,
-          );
-          // Count synchronous history preparation before optional startup icon work resumes.
-          const preparationCopies = cloneSpy.mock.calls.filter(
-            ([value]) => asOptionalRecord(value)?.sessionId === scope.sessionId,
-          ).length;
-          expect(parseSpy.mock.calls.some(([value]) => value.includes(skillsSnapshot.prompt))).toBe(
-            false,
-          );
-          await pending;
-          expect(
-            parseSpy.mock.calls.filter(([value]) => value.includes('"sessionId":"history-child"'))
-              .length,
-          ).toBeLessThanOrEqual(1);
-          expect(preparationCopies).toBe(0);
-          return expectSuccess(respond);
-        } finally {
-          cloneSpy.mockRestore();
-          parseSpy.mockRestore();
-        }
-      };
-
-      const first = await call();
-      expect(first).toMatchObject({ thinkingLevel: "high", toolOverrides });
-      expect(first.sessionInfo).toMatchObject({ childSessions: [childScope.sessionKey] });
-      const responseTools = expectDefined(asOptionalRecord(first.toolOverrides), "tool overrides");
-      const deniedByServer = expectDefined(
-        asOptionalRecord(responseTools.mcpToolsDeny),
-        "denied tools by server",
-      );
-      const deniedTools = deniedByServer.synthetic;
-      if (!Array.isArray(deniedTools)) {
-        throw new Error("expected nested denied tool array");
-      }
-      deniedTools.push("response-only");
-      expect(toolOverrides.mcpToolsDeny.synthetic).toEqual(["blocked"]);
-      expect((await call()).toolOverrides).toEqual(toolOverrides);
-
-      await updateSessionEntry(scope, () => ({ thinkingLevel: "low", updatedAt: now + 1 }));
-      await updateSessionEntry(childScope, () => ({
-        parentSessionKey: "agent:main:other-parent",
-        spawnedBy: "agent:main:other-parent",
-        updatedAt: now + 1,
-      }));
-      const fresh = await call();
-      expect(fresh).toMatchObject({ thinkingLevel: "low", toolOverrides });
-      expect(asOptionalRecord(fresh.sessionInfo)?.childSessions).toBeUndefined();
-      expect(first.thinkingLevel).toBe("high");
+  historyCase(async (method) => {
+    const now = Date.now();
+    const childScope = { agentId: "main", sessionKey: "agent:main:subagent:history-child" };
+    const toolOverrides = { mcpToolsDeny: { synthetic: ["blocked"] } };
+    const skillsSnapshot = { prompt: "history unused saved prompt", skills: [] };
+    const scope = await seedSession("history-owned", {
+      updatedAt: now,
+      thinkingLevel: "high",
+      toolOverrides,
+      skillsSnapshot,
     });
-  },
+    await upsertSessionEntryCore(childScope, {
+      sessionId: "history-child",
+      updatedAt: now,
+      parentSessionKey: scope.sessionKey,
+      spawnedBy: scope.sessionKey,
+      skillsSnapshot,
+    });
+    const context = await createHistoryReadContext();
+    const call = async () => {
+      const respond = vi.fn<RespondFn>();
+      const cloneSpy = vi.spyOn(globalThis, "structuredClone");
+      const parseSpy = vi.spyOn(JSON, "parse");
+      try {
+        const pending = requestHistory(
+          method,
+          { sessionKey: scope.sessionKey },
+          context,
+          null,
+          respond,
+        );
+        // Count synchronous history preparation before optional startup icon work resumes.
+        const preparationCopies = cloneSpy.mock.calls.filter(
+          ([value]) => asOptionalRecord(value)?.sessionId === scope.sessionId,
+        ).length;
+        expect(parseSpy.mock.calls.some(([value]) => value.includes(skillsSnapshot.prompt))).toBe(
+          false,
+        );
+        await pending;
+        expect(
+          parseSpy.mock.calls.filter(([value]) => value.includes('"sessionId":"history-child"'))
+            .length,
+        ).toBeLessThanOrEqual(1);
+        expect(preparationCopies).toBe(0);
+        return expectSuccess(respond);
+      } finally {
+        cloneSpy.mockRestore();
+        parseSpy.mockRestore();
+      }
+    };
+
+    const first = await call();
+    expect(first).toMatchObject({ thinkingLevel: "high", toolOverrides });
+    expect(first.sessionInfo).toMatchObject({ childSessions: [childScope.sessionKey] });
+    const deniedTools = asOptionalRecord(
+      asOptionalRecord(first.toolOverrides)?.mcpToolsDeny,
+    )?.synthetic;
+    assert(Array.isArray(deniedTools), "expected nested denied tool array");
+    deniedTools.push("response-only");
+    expect(toolOverrides.mcpToolsDeny.synthetic).toEqual(["blocked"]);
+    expect((await call()).toolOverrides).toEqual(toolOverrides);
+
+    await updateSessionEntry(scope, () => ({ thinkingLevel: "low", updatedAt: now + 1 }));
+    await updateSessionEntry(childScope, () => ({
+      parentSessionKey: "agent:main:other-parent",
+      spawnedBy: "agent:main:other-parent",
+      updatedAt: now + 1,
+    }));
+    const fresh = await call();
+    expect(fresh).toMatchObject({ thinkingLevel: "low", toolOverrides });
+    expect(asOptionalRecord(fresh.sessionInfo)?.childSessions).toBeUndefined();
+    expect(first.thinkingLevel).toBe("high");
+  }),
 );
 
 it.each(["chat.history", "chat.startup"] as const)(
   "%s reuses measured history bytes while preserving the recovery boundary",
-  async (method) => {
-    await withHistoryState(async () => {
-      const scope = await seedSession("history-bytes");
-      const marker = "history-byte-fixture";
-      for (let index = 0; index < 12; index++) {
-        await appendTranscriptMessage(scope, {
-          message: {
-            role: index % 2 === 0 ? "user" : "assistant",
-            content: `${marker}-${index}: ${'漢字\n"\\'.repeat(100)}`,
-            timestamp: index + 1,
-          },
-        });
-      }
-      const context = await createHistoryReadContext();
-      const call = async (params: Record<string, unknown> = {}) => {
-        const respond = vi.fn<RespondFn>();
-        const stringify = JSON.stringify;
-        let historyArrayBytes = 0;
-        const serialization = vi.spyOn(JSON, "stringify").mockImplementation((...args) => {
-          const result = stringify(...args);
-          if (
-            Array.isArray(args[0]) &&
-            args[0].some((value) => {
-              const record = asOptionalRecord(value);
-              return record?.role === "user" || asOptionalRecord(record?.message)?.role === "user";
-            }) &&
-            typeof result === "string" &&
-            result.includes(marker)
-          ) {
-            historyArrayBytes += Buffer.byteLength(result);
-          }
-          return result;
-        });
-        try {
-          await requestHistory(
-            method,
-            { sessionKey: scope.sessionKey, ...params },
-            context,
-            null,
-            respond,
-          );
-        } finally {
-          serialization.mockRestore();
-        }
-        expect(historyArrayBytes).toBe(0);
-        return expectSuccess(respond);
-      };
-      const inactive = await call();
-      expect(inactive.messages).toHaveLength(12);
-      expect(inactive.inFlightRun).toBeUndefined();
-      const historyJson = JSON.stringify(inactive.messages);
-      const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
-      const registration = registerChatAbortController({
-        target: captureRpcTargetForTest(scope),
-        runId: "run-history-bytes",
-        ...scope,
-        timeoutMs: 60_000,
+  historyCase(async (method) => {
+    const scope = await seedSession("history-bytes");
+    const marker = "history-byte-fixture";
+    for (let index = 0; index < 12; index++) {
+      await appendTranscriptMessage(scope, {
+        message: {
+          role: index % 2 === 0 ? "user" : "assistant",
+          content: `${marker}-${index}: ${'漢字\n"\\'.repeat(100)}`,
+          timestamp: index + 1,
+        },
       });
-      const releaseSource = await claimRpcSourceForTest(
-        expectDefined(registration.entry, "history source"),
-      );
-      const run = context.chatRunState.getOrCreate("run-history-bytes");
-      run.buffer = "partial reply ".repeat(1_000);
-      run.planSnapshot = { steps: [{ step: "Read history", status: "in_progress" }] };
-      const expected = {
-        runId: "run-history-bytes",
-        text: run.buffer,
-        startedAt: 1_000,
-        plan: run.planSnapshot,
-      };
-      const exactBytes =
-        Buffer.byteLength(historyJson) + Buffer.byteLength(JSON.stringify(expected));
-      clock.mockReturnValue(1_800_000_000_000);
-      try {
-        const bounded = await call({ maxBytes: exactBytes - 1 });
-        expect(bounded.messages).toEqual(inactive.messages);
-        expect(bounded.inFlightRun).toEqual({ ...expected, text: "" });
-        const exact = await call({ maxBytes: exactBytes });
-        expect(exact.messages).toEqual(inactive.messages);
-        expect(exact.inFlightRun).toEqual(expected);
-        expect(
-          Buffer.byteLength(JSON.stringify(exact.messages)) +
-            Buffer.byteLength(JSON.stringify(exact.inFlightRun)),
-        ).toBe(exactBytes);
-        const delta = await call({ cursor: exact.deltaCursor, maxBytes: exactBytes });
-        expect(delta).toMatchObject({ kind: "delta", messages: [], inFlightRun: expected });
-        await appendTranscriptMessage(scope, {
-          eventId: "delta-user",
-          message: {
-            role: "user",
-            content: `${marker}: ${'漢字\n"\\🤖'.repeat(100)}`,
-            timestamp: 13,
-          },
-        });
-        await appendTranscriptMessage(scope, {
-          eventId: "delta-tool",
-          message: {
-            role: "assistant",
-            content: [{ type: "toolCall", id: "read-delta", name: "read", arguments: {} }],
-            timestamp: 14,
-          },
-        });
-        const appended = await call({ cursor: exact.deltaCursor });
-        expect(appended).toMatchObject({
-          kind: "delta",
-          messages: [{ messageId: "delta-user" }, { messageId: "delta-tool" }],
-          activity: [{ messageId: "delta-tool" }],
-          inFlightRun: expected,
-        });
-        const deltaBytes =
-          Buffer.byteLength(JSON.stringify(appended.messages)) +
-          Buffer.byteLength(JSON.stringify({ activity: appended.activity })) -
-          1 +
-          Buffer.byteLength(JSON.stringify(expected));
-        for (const extraBytes of [0, -1]) {
-          const page = await call({
-            cursor: exact.deltaCursor,
-            maxBytes: deltaBytes + extraBytes,
-          });
-          expect(page.messages).toEqual(appended.messages);
-          expect(page.activity).toEqual(appended.activity);
-          expect(page.inFlightRun).toEqual(extraBytes === 0 ? expected : { ...expected, text: "" });
-          expect(page).not.toHaveProperty("messagesBytes");
-          expect(page).not.toHaveProperty("activityBytes");
+    }
+    const context = await createHistoryReadContext();
+    const call = async (params: Record<string, unknown> = {}) => {
+      const respond = vi.fn<RespondFn>();
+      const stringify = JSON.stringify;
+      let historyArrayBytes = 0;
+      const serialization = vi.spyOn(JSON, "stringify").mockImplementation((...args) => {
+        const result = stringify(...args);
+        if (
+          Array.isArray(args[0]) &&
+          args[0].some((value) => {
+            const record = asOptionalRecord(value);
+            return record?.role === "user" || asOptionalRecord(record?.message)?.role === "user";
+          }) &&
+          typeof result === "string" &&
+          result.includes(marker)
+        ) {
+          historyArrayBytes += Buffer.byteLength(result);
         }
-        expect(delta).not.toHaveProperty("messagesBytes");
-        expect(delta).not.toHaveProperty("activityBytes");
-        expect(JSON.stringify(inactive.messages)).toBe(historyJson);
+        return result;
+      });
+      try {
+        await requestHistory(
+          method,
+          { sessionKey: scope.sessionKey, ...params },
+          context,
+          null,
+          respond,
+        );
       } finally {
-        clock.mockRestore();
-        releaseSource();
-        registration.cleanup();
-        context.chatRunState.clearRun("run-history-bytes");
+        serialization.mockRestore();
       }
-      const completed = await call();
-      expect(completed.messages).toHaveLength(14);
-      if (!Array.isArray(completed.messages)) {
-        throw new Error("Expected completed history messages");
-      }
-      expect(completed.messages.slice(0, 12)).toEqual(inactive.messages);
-      expect(completed.inFlightRun).toBeUndefined();
+      expect(historyArrayBytes).toBe(0);
+      return expectSuccess(respond);
+    };
+    const inactive = await call();
+    expect(inactive.messages).toHaveLength(12);
+    expect(inactive.inFlightRun).toBeUndefined();
+    const historyJson = JSON.stringify(inactive.messages);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const registration = registerChatAbortController({
+      target: captureRpcTargetForTest(scope),
+      runId: "run-history-bytes",
+      ...scope,
+      timeoutMs: 60_000,
     });
-  },
+    assert(registration.entry, "history source");
+    const releaseSource = await claimRpcSourceForTest(registration.entry);
+    const run = context.chatRunState.getOrCreate("run-history-bytes");
+    run.buffer = "partial reply ".repeat(1_000);
+    run.planSnapshot = { steps: [{ step: "Read history", status: "in_progress" }] };
+    const expected = {
+      runId: "run-history-bytes",
+      text: run.buffer,
+      startedAt: 1_000,
+      plan: run.planSnapshot,
+    };
+    const exactBytes = Buffer.byteLength(historyJson) + Buffer.byteLength(JSON.stringify(expected));
+    clock.mockReturnValue(1_800_000_000_000);
+    try {
+      const bounded = await call({ maxBytes: exactBytes - 1 });
+      expect(bounded.messages).toEqual(inactive.messages);
+      expect(bounded.inFlightRun).toEqual({ ...expected, text: "" });
+      const exact = await call({ maxBytes: exactBytes });
+      expect(exact.messages).toEqual(inactive.messages);
+      expect(exact.inFlightRun).toEqual(expected);
+      const delta = await call({ cursor: exact.deltaCursor, maxBytes: exactBytes });
+      expect(delta).toMatchObject({ kind: "delta", messages: [], inFlightRun: expected });
+      await appendTranscriptMessage(scope, {
+        eventId: "delta-user",
+        message: {
+          role: "user",
+          content: `${marker}: ${'漢字\n"\\🤖'.repeat(100)}`,
+          timestamp: 13,
+        },
+      });
+      await appendTranscriptMessage(scope, {
+        eventId: "delta-tool",
+        message: {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "read-delta", name: "read", arguments: {} }],
+          timestamp: 14,
+        },
+      });
+      const appended = await call({ cursor: exact.deltaCursor });
+      expect(appended).toMatchObject({
+        kind: "delta",
+        messages: [{ messageId: "delta-user" }, { messageId: "delta-tool" }],
+        activity: [{ messageId: "delta-tool" }],
+        inFlightRun: expected,
+      });
+      const deltaBytes =
+        Buffer.byteLength(JSON.stringify(appended.messages)) +
+        Buffer.byteLength(JSON.stringify({ activity: appended.activity })) -
+        1 +
+        Buffer.byteLength(JSON.stringify(expected));
+      for (const extraBytes of [0, -1]) {
+        const page = await call({
+          cursor: exact.deltaCursor,
+          maxBytes: deltaBytes + extraBytes,
+        });
+        expect(page.messages).toEqual(appended.messages);
+        expect(page.activity).toEqual(appended.activity);
+        expect(page.inFlightRun).toEqual(extraBytes === 0 ? expected : { ...expected, text: "" });
+        expect(page).not.toHaveProperty("messagesBytes");
+        expect(page).not.toHaveProperty("activityBytes");
+      }
+      expect(delta).not.toHaveProperty("messagesBytes");
+      expect(delta).not.toHaveProperty("activityBytes");
+      expect(JSON.stringify(inactive.messages)).toBe(historyJson);
+    } finally {
+      clock.mockRestore();
+      releaseSource();
+      registration.cleanup();
+      context.chatRunState.clearRun("run-history-bytes");
+    }
+    const completed = await call();
+    expect(completed.messages).toHaveLength(14);
+    assert(Array.isArray(completed.messages), "Expected completed history messages");
+    expect(completed.messages.slice(0, 12)).toEqual(inactive.messages);
+    expect(completed.inFlightRun).toBeUndefined();
+  }),
 );
 
 describe("chat metadata ownership", () => {
@@ -776,32 +702,21 @@ describe("chat metadata ownership", () => {
   it("reads the persisted session profile without contaminating neutral agent metadata", async () => {
     await withHistoryState(async () => {
       const sessionKey = "agent:main:locked";
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey },
-        {
-          sessionId: "locked",
-          updatedAt: 1,
-          authProfileOverride: "test:locked",
-          authProfileOverrideSource: "user",
-        },
-      );
+      await seedSession("locked", {
+        authProfileOverride: "test:locked",
+        authProfileOverrideSource: "user",
+      });
       const readChatMetadata = vi.fn<GatewayRequestContext["readChatMetadata"]>(async () => ({
         commands: [],
         models: [],
         swarmEnabled: false,
       }));
-      const respond = vi.fn();
-      const handler = expectDefined(chatHistoryHandlers["chat.metadata"], "metadata handler");
+      const respond = vi.fn<RespondFn>();
       const context = createDirectChatContext({ readChatMetadata });
+      const call = (params: Record<string, unknown>) =>
+        requestHistory("chat.metadata", params, context, null, respond);
       for (const params of [{ agentId: "   ", sessionKey }, { agentId: "main" }]) {
-        await handler({
-          params,
-          context,
-          respond,
-          req: {} as never,
-          client: null,
-          isWebchatConnect: () => false,
-        });
+        await call(params);
       }
       expect(readChatMetadata.mock.calls).toEqual([
         [
@@ -829,14 +744,7 @@ describe("chat metadata ownership", () => {
       expectDefined(neutral.assertCurrent, "neutral metadata authority check")();
       expect(respond).toHaveBeenCalledTimes(2);
       readChatMetadata.mockClear();
-      await handler({
-        params: { agentId: "other", sessionKey },
-        context,
-        respond,
-        req: {} as never,
-        client: null,
-        isWebchatConnect: () => false,
-      });
+      await call({ agentId: "other", sessionKey });
       expect(readChatMetadata).not.toHaveBeenCalled();
       expect(respond).toHaveBeenLastCalledWith(
         false,

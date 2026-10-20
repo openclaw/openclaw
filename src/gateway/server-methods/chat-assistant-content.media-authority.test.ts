@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
@@ -24,30 +25,24 @@ const fixtureLifetime = createFixtureLifetime();
 afterEach(() => fixtureLifetime.cleanup());
 
 it("interrupts a pending remote reply attachment when its run is aborted", async ({ signal }) =>
-  fixtureLifetime.run(async () => {
-    await withOpenClawTestState(
+  fixtureLifetime.run(() =>
+    withOpenClawTestState(
       { label: "reply-media-abort", verifyCleanup: fixtureLifetime.verifyCleanup },
       async (state) => {
         const cleanupState = state.cleanup;
-        let stateCleanup: Promise<void> | undefined;
-        state.cleanup = () =>
-          (stateCleanup ??= fixtureLifetime.verifyCleanup(() => cleanupState()));
+        state.cleanup = () => fixtureLifetime.verifyCleanup(cleanupState);
         const firstWrite = createDeferred();
         const responseClosed = createDeferred();
         const upstream = http.createServer((_request, response) => {
           response.writeHead(200, { "content-type": "image/png" });
           response.write(Buffer.from("89504e470d0a1a0a", "hex"));
-          response.on("close", () => {
-            responseClosed.resolve();
-          });
+          response.on("close", () => responseClosed.resolve());
         });
         await new Promise<void>((resolve) => {
           upstream.listen(0, "127.0.0.1", resolve);
         });
         const address = upstream.address();
-        if (!address || typeof address === "string") {
-          throw new Error("Expected a listening fixture server");
-        }
+        assert(address && typeof address !== "string", "Expected a listening fixture server");
         const url = `http://127.0.0.1:${address.port}/pending.png`;
         const controller = new AbortController();
         const saveRemoteMedia = mediaFetch.saveRemoteMedia;
@@ -58,14 +53,16 @@ it("interrupts a pending remote reply attachment when its run is aborted", async
         const streamObserver = vi
           .spyOn(mediaStore, "saveMediaStream")
           .mockImplementation((stream, ...args) => {
-            const observed = (async function* () {
-              for await (const chunk of stream) {
-                yield chunk;
-                // The store awaits writeFile before pulling again; resumption observes a write.
-                firstWrite.resolve();
-              }
-            })();
-            return saveMediaStream(observed, ...args);
+            return saveMediaStream(
+              (async function* () {
+                for await (const chunk of stream) {
+                  yield chunk;
+                  // The store awaits writeFile before pulling again; resumption observes a write.
+                  firstWrite.resolve();
+                }
+              })(),
+              ...args,
+            );
           });
         const saving = withStoreRemoteFixture({ url }, () =>
           buildAssistantReplyContent({
@@ -75,10 +72,7 @@ it("interrupts a pending remote reply attachment when its run is aborted", async
             assertCurrent: () => controller.signal.throwIfAborted(),
           }),
         );
-        const delivery = saving.then(
-          () => ({ completed: true }),
-          (error: unknown) => ({ error }),
-        );
+        const delivery = saving.catch((error: unknown) => error);
         try {
           await withinTest(
             awaitGateBeforeSettlement(
@@ -89,14 +83,13 @@ it("interrupts a pending remote reply attachment when its run is aborted", async
             signal,
           );
           const directory = state.statePath("media", "outgoing", "originals");
-          const entries = await fs.readdir(directory);
           const stats = await Promise.all(
-            entries.map((name) => fs.stat(path.join(directory, name))),
+            (await fs.readdir(directory)).map((name) => fs.stat(path.join(directory, name))),
           );
           expect(stats.some((stat) => stat.isFile() && stat.size > 0)).toBe(true);
           controller.abort();
           await withinTest(responseClosed.promise, signal);
-          expect(await delivery).toMatchObject({ error: { name: "AbortError" } });
+          expect(await delivery).toMatchObject({ name: "AbortError" });
         } finally {
           await fixtureLifetime.verifyCleanup(async () => {
             controller.abort();
@@ -111,14 +104,13 @@ it("interrupts a pending remote reply attachment when its run is aborted", async
           });
         }
       },
-    );
-  }));
+    ),
+  ));
 
-it("retains the resized image after replacing an owned staging file", async () => {
-  await withOpenClawTestState({ label: "reply-media-resize" }, async (state) => {
+it("retains the resized image after replacing an owned staging file", () =>
+  withOpenClawTestState({ label: "reply-media-resize" }, async (state) => {
     const source = state.workspaceDir + "/wide.png";
     const image = createSolidPngBuffer(5000, 32, { r: 80, g: 120, b: 160 });
-    await fs.mkdir(state.workspaceDir, { recursive: true });
     await fs.writeFile(source, image);
     const { assistantContent } = await buildAssistantReplyContent({
       sessionKey: "agent:main:reply-media-resize",
@@ -133,5 +125,4 @@ it("retains the resized image after replacing an owned staging file", async () =
     const dimensions = await getImageMetadata(await fs.readFile(path.join(originals, files[0]!)));
     expect(dimensions?.width).toBeLessThanOrEqual(4096);
     expect(await fs.readFile(source)).toEqual(image);
-  });
-});
+  }));
