@@ -1,39 +1,29 @@
 import assert from "node:assert/strict";
 import { realpathSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-  repairOpenClawStateDatabaseSchema,
-} from "./openclaw-state-db.js";
+import * as state from "./openclaw-state-db.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(() => {
     vi.restoreAllMocks();
-    closeOpenClawStateDatabaseForTest();
+    state.closeOpenClawStateDatabaseForTest();
     cleanup();
   }),
 );
 
-describe("state schema fast-path failure settlement", () => {
-  it.each([
-    { name: "retains repair after successful rollback" },
-    { name: "preserves the original error after native close", rollbackFails: true },
-    {
-      name: "preserves undefined rejection after native close",
-      rollbackFails: true,
-      undefinedError: true,
-    },
-    {
-      name: "restores foreign-key enforcement after failed schema convergence",
-      convergenceFails: true,
-    },
-  ])("$name", ({ rollbackFails = false, undefinedError = false, convergenceFails = false }) => {
+it.each([
+  [false, false, false],
+  [true, false, false],
+  [true, true, false],
+  [false, false, true],
+])(
+  "settles COMMIT failure (rollback=%s, undefined error=%s, convergence=%s)",
+  (rollbackFails, undefinedError, convergenceFails) => {
     const env = { OPENCLAW_STATE_DIR: dirs.make("state-fast-path-settlement-") };
-    const pathname = realpathSync(openOpenClawStateDatabase({ env }).path);
-    closeOpenClawStateDatabaseForTest();
+    const pathname = realpathSync(state.openOpenClawStateDatabase({ env }).path);
+    state.closeOpenClawStateDatabaseForTest();
     const original = undefinedError ? undefined : new Error("synthetic fast-path COMMIT failure");
     const rollbackError = new Error("synthetic fast-path ROLLBACK failure");
     const convergenceError = new Error("synthetic schema BEGIN failure");
@@ -81,10 +71,10 @@ describe("state schema fast-path failure settlement", () => {
       }
     });
     let result:
-      | { status: "fulfilled"; database: ReturnType<typeof openOpenClawStateDatabase> }
+      | { status: "fulfilled"; database: ReturnType<typeof state.openOpenClawStateDatabase> }
       | { status: "rejected"; error: unknown };
     try {
-      result = { status: "fulfilled", database: openOpenClawStateDatabase({ env }) };
+      result = { status: "fulfilled", database: state.openOpenClawStateDatabase({ env }) };
     } catch (error) {
       result = { status: "rejected", error };
     }
@@ -107,46 +97,40 @@ describe("state schema fast-path failure settlement", () => {
       ...(!rollbackFails ? [["fallback", true]] : []),
       ...(rollbackFails || convergenceFails ? [["close", false]] : []),
     ]);
+  },
+);
+
+it.each([false, true])("settles Doctor's disabled foreign-key connection (failure=%s)", (fails) => {
+  const env = { OPENCLAW_STATE_DIR: dirs.make("state-doctor-foreign-keys-") };
+  const pathname = realpathSync(state.openOpenClawStateDatabase({ env }).path);
+  state.closeOpenClawStateDatabaseForTest();
+  // oxlint-disable-next-line typescript/unbound-method -- Forwarded with its exact database receiver.
+  const originalExec = DatabaseSync.prototype.exec;
+  // oxlint-disable-next-line typescript/unbound-method -- Forwarded with its exact database receiver.
+  const originalClose = DatabaseSync.prototype.close;
+  const selected = new Set<DatabaseSync>();
+  let foreignKeysAtClose: unknown;
+  vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(function (this: DatabaseSync, sql) {
+    if (sql === "BEGIN IMMEDIATE" && this.location() === pathname) {
+      selected.add(this);
+      expect(this.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 0 });
+      if (fails) {
+        throw new Error("synthetic Doctor BEGIN failure");
+      }
+    }
+    originalExec.call(this, sql);
+  });
+  vi.spyOn(DatabaseSync.prototype, "close").mockImplementation(function (this: DatabaseSync) {
+    if (selected.has(this)) {
+      foreignKeysAtClose = this.prepare("PRAGMA foreign_keys").get()?.foreign_keys;
+    }
+    originalClose.call(this);
   });
 
-  it.each([false, true])(
-    "settles Doctor's disabled foreign-key connection (failure=%s)",
-    (fails) => {
-      const env = { OPENCLAW_STATE_DIR: dirs.make("state-doctor-foreign-keys-") };
-      const pathname = realpathSync(openOpenClawStateDatabase({ env }).path);
-      closeOpenClawStateDatabaseForTest();
-      // oxlint-disable-next-line typescript/unbound-method -- Forwarded with its exact database receiver.
-      const originalExec = DatabaseSync.prototype.exec;
-      // oxlint-disable-next-line typescript/unbound-method -- Forwarded with its exact database receiver.
-      const originalClose = DatabaseSync.prototype.close;
-      const selected = new Set<DatabaseSync>();
-      let foreignKeysAtClose: unknown;
-      vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(function (
-        this: DatabaseSync,
-        sql,
-      ) {
-        if (sql === "BEGIN IMMEDIATE" && this.location() === pathname) {
-          selected.add(this);
-          expect(this.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 0 });
-          if (fails) {
-            throw new Error("synthetic Doctor BEGIN failure");
-          }
-        }
-        originalExec.call(this, sql);
-      });
-      vi.spyOn(DatabaseSync.prototype, "close").mockImplementation(function (this: DatabaseSync) {
-        if (selected.has(this)) {
-          foreignKeysAtClose = this.prepare("PRAGMA foreign_keys").get()?.foreign_keys;
-        }
-        originalClose.call(this);
-      });
-
-      const repaired = repairOpenClawStateDatabaseSchema({ env });
-      expect(repaired.warnings).toEqual(
-        fails ? [expect.stringContaining("synthetic Doctor BEGIN failure")] : [],
-      );
-      expect([...selected].map((database) => database.isOpen)).toEqual([false]);
-      expect(foreignKeysAtClose).toBe(0);
-    },
+  const repaired = state.repairOpenClawStateDatabaseSchema({ env });
+  expect(repaired.warnings).toEqual(
+    fails ? [expect.stringContaining("synthetic Doctor BEGIN failure")] : [],
   );
+  expect([...selected].map((database) => database.isOpen)).toEqual([false]);
+  expect(foreignKeysAtClose).toBe(0);
 });

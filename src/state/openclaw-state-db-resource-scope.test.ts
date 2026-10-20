@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -16,11 +17,7 @@ it("keeps resource custody unprivileged and preserves inherited owner validity",
 
   let current = true;
   const lost = new Error("Maintenance owner is no longer current");
-  const assertOwnerCurrent = vi.fn(() => {
-    if (!current) {
-      throw lost;
-    }
-  });
+  const assertOwnerCurrent = vi.fn(() => assert(current, lost));
   const maintenance = createOpenClawDatabaseMaintenanceScope({ assertOwnerCurrent });
   const nested = maintenance.run(() => createOpenClawDatabaseMaintenanceScope());
   expect(nested.ownsSchemaMaintenance).toBe(false);
@@ -79,18 +76,12 @@ it("keeps nested authority reads in their resource scope without admitting effec
       } else if (nestedEffect) {
         current?.assertAdmission();
       }
-      if (revoked) {
-        throw new Error("requester revoked");
-      }
+      assert(!revoked, new Error("requester revoked"));
     },
   });
   const child = parent.run(() =>
     createOpenClawDatabaseMaintenanceScope({
-      assertOwnerCurrent: () => {
-        if (childRevoked) {
-          throw new Error("child revoked");
-        }
-      },
+      assertOwnerCurrent: () => assert(!childRevoked, new Error("child revoked")),
     }),
   );
   const close = vi.fn();
