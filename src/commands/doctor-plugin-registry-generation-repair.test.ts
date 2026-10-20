@@ -31,38 +31,37 @@ const PACKAGE_NAME = "@proof/openclaw-generation";
 const PLUGIN_ID = "generation-proof";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function writeManagedFlat(stateDir: string, version: string): string {
+function writeManaged(stateDir: string, version: string, generation = false): string {
   const npmDir = path.join(stateDir, "npm");
   writeManagedNpmPlugin({ stateDir, packageName: PACKAGE_NAME, pluginId: PLUGIN_ID, version });
-  return path.join(
-    resolvePluginNpmProjectDir({ npmDir, packageName: PACKAGE_NAME }),
-    "node_modules",
-    ...PACKAGE_NAME.split("/"),
-  );
+  let project = resolvePluginNpmProjectDir({ npmDir, packageName: PACKAGE_NAME });
+  if (generation) {
+    const target = resolvePluginNpmGenerationProjectDir({
+      npmDir,
+      packageName: PACKAGE_NAME,
+      generationKey: `${PACKAGE_NAME}@${version}`,
+    });
+    fs.renameSync(project, target);
+    project = target;
+  }
+  return path.join(project, "node_modules", ...PACKAGE_NAME.split("/"));
 }
 
-function writeManagedGeneration(stateDir: string, version: string): string {
-  const npmDir = path.join(stateDir, "npm");
-  writeManagedNpmPlugin({ stateDir, packageName: PACKAGE_NAME, pluginId: PLUGIN_ID, version });
-  const flatProjectRoot = resolvePluginNpmProjectDir({ npmDir, packageName: PACKAGE_NAME });
-  const generationProjectRoot = resolvePluginNpmGenerationProjectDir({
-    npmDir,
-    packageName: PACKAGE_NAME,
-    generationKey: `${PACKAGE_NAME}@${version}`,
-  });
-  fs.renameSync(flatProjectRoot, generationProjectRoot);
-  return path.join(generationProjectRoot, "node_modules", ...PACKAGE_NAME.split("/"));
-}
+const repairParams = (stateDir: string) => ({
+  env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+  prompter: { shouldRepair: true },
+  stateDir,
+});
 
 function setInstallTimestamp(packageDir: string, timestamp: Date): void {
   const packageInfo = resolveRetainedManagedNpmInstallPackageInfo(packageDir);
   if (!packageInfo) {
     throw new Error(`Expected managed npm package dir: ${packageDir}`);
   }
-  fs.utimesSync(path.join(packageDir, "package.json"), timestamp, timestamp);
-  fs.utimesSync(packageDir, timestamp, timestamp);
-  fs.utimesSync(path.join(packageInfo.projectRoot, "package.json"), timestamp, timestamp);
-  fs.utimesSync(packageInfo.projectRoot, timestamp, timestamp);
+  for (const directory of [packageDir, packageInfo.projectRoot]) {
+    fs.utimesSync(path.join(directory, "package.json"), timestamp, timestamp);
+    fs.utimesSync(directory, timestamp, timestamp);
+  }
 }
 
 afterEach(() => {
@@ -121,8 +120,8 @@ describe("doctor managed npm generation repair", () => {
   it("retires the stale flat install and prunes it after gateway shutdown", async () => {
     const stateDir = tempDirs.make("openclaw-doctor-plugin-generation-");
     const npmDir = path.join(stateDir, "npm");
-    const activePackageDir = writeManagedGeneration(stateDir, "2026.7.1");
-    const stalePackageDir = writeManagedFlat(stateDir, "2026.6.11");
+    const activePackageDir = writeManaged(stateDir, "2026.7.1", true);
+    const stalePackageDir = writeManaged(stateDir, "2026.6.11");
     await seedInstalledPluginIndex(
       {
         [PLUGIN_ID]: {
@@ -139,11 +138,7 @@ describe("doctor managed npm generation repair", () => {
     );
 
     await expect(
-      maybeRepairStaleManagedNpmInstallGenerations({
-        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-        prompter: { shouldRepair: true },
-        stateDir,
-      }),
+      maybeRepairStaleManagedNpmInstallGenerations(repairParams(stateDir)),
     ).resolves.toBe(true);
     expect(hasRetainedManagedNpmInstallMarker(stalePackageDir)).toBe(true);
     expect(hasRetainedManagedNpmInstallMarker(activePackageDir)).toBe(false);
@@ -160,12 +155,10 @@ describe("doctor managed npm generation repair", () => {
 
   it("persists the recency fallback when no authoritative record exists", async () => {
     const stateDir = tempDirs.make("openclaw-doctor-plugin-generation-");
-    const activePackageDir = writeManagedGeneration(stateDir, "1.0.0");
-    const stalePackageDir = writeManagedFlat(stateDir, "9.0.0");
-    const activeTimestamp = new Date("2026-01-02T00:00:00.000Z");
-    const staleTimestamp = new Date("2026-01-01T00:00:00.000Z");
-    setInstallTimestamp(activePackageDir, activeTimestamp);
-    setInstallTimestamp(stalePackageDir, staleTimestamp);
+    const activePackageDir = writeManaged(stateDir, "1.0.0", true);
+    const stalePackageDir = writeManaged(stateDir, "9.0.0");
+    setInstallTimestamp(activePackageDir, new Date("2026-01-02T00:00:00.000Z"));
+    setInstallTimestamp(stalePackageDir, new Date("2026-01-01T00:00:00.000Z"));
     await seedInstalledPluginIndex({}, { stateDir, candidates: [] });
     vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
 
@@ -176,9 +169,7 @@ describe("doctor managed npm generation repair", () => {
           entries: { [PLUGIN_ID]: { enabled: true } },
         },
       },
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-      prompter: { shouldRepair: true },
-      stateDir,
+      ...repairParams(stateDir),
     });
 
     const persisted = await readPersistedInstalledPluginIndexInstallRecordsAsync({ stateDir });

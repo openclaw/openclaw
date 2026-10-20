@@ -39,6 +39,23 @@ describe("Doctor disabled LaunchAgent diagnosis", () => {
     await fs.rm(home, { recursive: true, force: true });
   });
 
+  async function install(label: string, disabled: boolean) {
+    const directory = path.join(home, "Library", "LaunchAgents");
+    await fs.mkdir(directory, { recursive: true });
+    await fs.writeFile(path.join(directory, `${label}.plist`), "fixture");
+    vi.mocked(execLaunchctl).mockImplementation(async ([action, target]) => {
+      const result = { code: 0, stdout: "", stderr: "", termination: "exit" as const };
+      if (action === "print" && target?.endsWith(`/${label}`)) {
+        return { ...result, code: 113, stderr: "Could not find service" };
+      }
+      if (action === "print-disabled") {
+        return { ...result, stdout: `"${label}" => ${disabled ? "disabled" : "enabled"}` };
+      }
+      throw new Error(`Unexpected launchctl action: ${action}`);
+    });
+    return { HOME: home, OPENCLAW_LAUNCHD_LABEL: label };
+  }
+
   it.each([
     {
       label: "ai.openclaw.gateway",
@@ -59,17 +76,7 @@ describe("Doctor disabled LaunchAgent diagnosis", () => {
         OPENCLAW_CONFIG_PATH: path.join(home, "state", "openclaw.json"),
         OPENCLAW_LAUNCHD_LABEL: override,
       };
-      await fs.mkdir(path.join(home, "Library", "LaunchAgents"), { recursive: true });
-      await fs.writeFile(path.join(home, "Library", "LaunchAgents", `${label}.plist`), "fixture");
-      vi.mocked(execLaunchctl).mockImplementation(async ([action, target]) => {
-        if (action === "print" && target?.endsWith(`/${label}`)) {
-          return { code: 113, stdout: "", stderr: "Could not find service", termination: "exit" };
-        }
-        if (action === "print-disabled") {
-          return { code: 0, stdout: `"${label}" => disabled`, stderr: "", termination: "exit" };
-        }
-        throw new Error(`Unexpected launchctl action: ${action}`);
-      });
+      await install(label, true);
       const ctx = createDoctorHealthFlowContext({
         env,
         options: { repair: true, nonInteractive: true },
@@ -80,42 +87,22 @@ describe("Doctor disabled LaunchAgent diagnosis", () => {
 
       expect(note).toHaveBeenCalledOnce();
       const message = note.mock.calls[0]?.[0];
-      expect(message).toContain(
+      for (const text of [
         `Gateway LaunchAgent ${label} is installed but unloaded and disabled`,
-      );
-      expect(message).toContain(command);
-      expect(message).toContain("update");
-      expect(message).toContain("doctor");
-      expect(message).toContain("triage");
+        command,
+        "update",
+        "doctor",
+        "triage",
+      ]) {
+        expect(message).toContain(text);
+      }
       expect(maybeRepairGatewayDaemon).not.toHaveBeenCalled();
       expect(execLaunchctl).toHaveBeenCalledTimes(2);
     },
   );
 
   it("leaves an installed and enabled service unchanged", async () => {
-    const label = "dev.openclaw.other-state";
-    const env = { HOME: home, OPENCLAW_LAUNCHD_LABEL: label };
-    await fs.mkdir(path.join(home, "Library", "LaunchAgents"), { recursive: true });
-    await fs.writeFile(path.join(home, "Library", "LaunchAgents", `${label}.plist`), "fixture");
-    vi.mocked(execLaunchctl).mockImplementation(async ([action]) => {
-      if (action === "print") {
-        return {
-          code: 113,
-          stdout: "",
-          stderr: "Could not find service",
-          termination: "exit",
-        };
-      }
-      if (action === "print-disabled") {
-        return {
-          code: 0,
-          stdout: `"${label}" => enabled`,
-          stderr: "",
-          termination: "exit",
-        };
-      }
-      throw new Error(`Unexpected launchctl action: ${action}`);
-    });
+    const env = await install("dev.openclaw.other-state", false);
     const ctx = createDoctorHealthFlowContext({ env, healthOk: true });
 
     await runGatewayDaemonHealth(ctx);

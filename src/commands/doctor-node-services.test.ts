@@ -61,6 +61,27 @@ let plist: string;
 let original: string;
 let restoreEnv: ReturnType<typeof captureEnv>;
 const serviceEnv = () => ({ ...process.env, ...resolveNodeServiceIdentityEnvironment() });
+const nodeOptions = [
+  "node",
+  "run",
+  "--host",
+  "node.example.test",
+  "--port",
+  "9443",
+  "--tls",
+  "--display-name",
+  "Original node",
+];
+const isolatedEnvKeys = [
+  "OPENCLAW_HOME",
+  "OPENCLAW_CONFIG_PATH",
+  "OPENCLAW_PROFILE",
+  "OPENCLAW_UPDATE_IN_PROGRESS",
+  "OPENCLAW_SERVICE_REPAIR_POLICY",
+  "OPENCLAW_SUPERVISOR_MODE",
+  "OPENCLAW_NIX_MODE",
+];
+const bootstrapped = () => native.exec.mock.calls.some(([args]) => args[0] === "bootstrap");
 
 async function writeDefinition(entry = "index.js", customPolicy = false) {
   const env = serviceEnv();
@@ -71,15 +92,7 @@ async function writeDefinition(entry = "index.js", customPolicy = false) {
       process.execPath,
       "--no-warnings",
       path.join(packageRoot, "dist", entry),
-      "node",
-      "run",
-      "--host",
-      "node.example.test",
-      "--port",
-      "9443",
-      "--tls",
-      "--display-name",
-      "Original node",
+      ...nodeOptions,
     ],
     workingDirectory: packageRoot,
     environment: {
@@ -101,29 +114,11 @@ async function writeDefinition(entry = "index.js", customPolicy = false) {
 }
 
 beforeEach(async () => {
-  restoreEnv = captureEnv([
-    "HOME",
-    "OPENCLAW_HOME",
-    "OPENCLAW_STATE_DIR",
-    "OPENCLAW_CONFIG_PATH",
-    "OPENCLAW_PROFILE",
-    "OPENCLAW_UPDATE_IN_PROGRESS",
-    "OPENCLAW_SERVICE_REPAIR_POLICY",
-    "OPENCLAW_SUPERVISOR_MODE",
-    "OPENCLAW_NIX_MODE",
-  ]);
+  restoreEnv = captureEnv(["HOME", "OPENCLAW_STATE_DIR", ...isolatedEnvKeys]);
   home = await fs.realpath(await fs.mkdtemp(path.join(process.env.HOME!, "doctor-node-")));
   process.env.HOME = home;
   process.env.OPENCLAW_STATE_DIR = path.join(home, ".openclaw");
-  for (const key of [
-    "OPENCLAW_HOME",
-    "OPENCLAW_CONFIG_PATH",
-    "OPENCLAW_PROFILE",
-    "OPENCLAW_UPDATE_IN_PROGRESS",
-    "OPENCLAW_SERVICE_REPAIR_POLICY",
-    "OPENCLAW_SUPERVISOR_MODE",
-    "OPENCLAW_NIX_MODE",
-  ]) {
+  for (const key of isolatedEnvKeys) {
     delete process.env[key];
   }
   mockSystemAccountHome();
@@ -206,20 +201,12 @@ describe("Doctor node service launcher repair", () => {
         process.execPath,
         "--no-warnings",
         path.join(packageRoot, "openclaw.mjs"),
-        "node",
-        "run",
-        "--host",
-        "node.example.test",
-        "--port",
-        "9443",
-        "--tls",
-        "--display-name",
-        "Original node",
+        ...nodeOptions,
       ]);
       expect(after?.workingDirectory).toBe(before?.workingDirectory);
       expect(after?.environment).toEqual(before?.environment);
       expect(native.loaded).toBe(true);
-      expect(native.exec.mock.calls.some(([args]) => args[0] === "bootstrap")).toBe(true);
+      expect(bootstrapped()).toBe(true);
     },
   );
 
@@ -239,7 +226,7 @@ describe("Doctor node service launcher repair", () => {
       path.join(packageRoot, "openclaw.mjs"),
     );
     expect(native.loaded).toBe(false);
-    expect(native.exec.mock.calls.some(([args]) => args[0] === "bootstrap")).toBe(false);
+    expect(bootstrapped()).toBe(false);
   });
 
   it("leaves an absent node service alone", async () => {
@@ -248,7 +235,7 @@ describe("Doctor node service launcher repair", () => {
     await repair();
     expect(runtime.error).not.toHaveBeenCalled();
     expect(await resolveNodeService().readCommand(process.env)).toBeNull();
-    expect(native.exec.mock.calls.some(([args]) => args[0] === "bootstrap")).toBe(false);
+    expect(bootstrapped()).toBe(false);
   });
 
   it("preserves a custom launcher", async () => {
@@ -256,7 +243,7 @@ describe("Doctor node service launcher repair", () => {
     await fs.writeFile(plist, original);
     await repair();
     expect(await fs.readFile(plist, "utf8")).toBe(original);
-    expect(native.exec.mock.calls.some(([args]) => args[0] === "bootstrap")).toBe(false);
+    expect(bootstrapped()).toBe(false);
   });
 
   it.each(["update", "external", "custom-policy", "relocated-state", "nix"])(
@@ -279,7 +266,7 @@ describe("Doctor node service launcher repair", () => {
       }
       await repair();
       expect(await fs.readFile(plist, "utf8")).toBe(original);
-      expect(native.exec.mock.calls.some(([args]) => args[0] === "bootstrap")).toBe(false);
+      expect(bootstrapped()).toBe(false);
     },
   );
 });

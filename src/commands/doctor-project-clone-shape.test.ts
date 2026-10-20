@@ -29,18 +29,12 @@ describe("doctor project clone shape", () => {
         urlRemote.username = "user";
         urlRemote.password = ["synthetic", "secret"].join("-");
         const userInfo = [urlRemote.username, urlRemote.password].join(":");
+        const remotePath = "example.invalid/project.git?opaque=query-private#fragment-private";
         const addressRemotes = [
           urlRemote.href,
           ["https", urlRemote.href].join("::"),
-          [userInfo, "example.invalid:org/project.git?opaque=query-private#fragment-private"].join(
-            "@",
-          ),
-          [
-            "odd_scheme",
-            [userInfo, "example.invalid/project.git?opaque=query-private#fragment-private"].join(
-              "@",
-            ),
-          ].join("://"),
+          `${userInfo}@${remotePath.replace("/project", ":org/project")}`,
+          `odd_scheme://${userInfo}@${remotePath}`,
         ];
         const urlKeys = addressRemotes.flatMap((remote) =>
           ["promisor", "partialclonefilter"].map((field) => `remote.${remote}.${field}`),
@@ -123,13 +117,8 @@ describe("doctor project clone shape", () => {
               expect(output).not.toContain(credential);
             }
           }
-          expect(finding.message).toContain(
-            "remote.https://***@example.invalid/project.git.promisor",
-          );
-          expect(finding.message).toContain(
-            "remote.https://***@example.invalid/project.git.partialclonefilter",
-          );
           for (const remote of [
+            "https://***@example.invalid/project.git",
             "https::https://***@example.invalid/project.git",
             "***@example.invalid:org/project.git",
             "odd_scheme://***@example.invalid/project.git",
@@ -139,16 +128,14 @@ describe("doctor project clone shape", () => {
             }
           }
           expect(finding.message).toContain("extensions.partialclone");
-          expect(finding.fixHint).toContain(
+          for (const command of [
             "git config --get-regexp '^remote\\..*\\.(promisor|partialclonefilter)$'",
-          );
-          expect(finding.fixHint).toContain(
             "git config --unset-all <the key shown by that command>",
-          );
-          expect(finding.fixHint).toContain(
             "git config --unset-all remote.origin.partialclonefilter",
-          );
-          expect(finding.fixHint).toContain("git config --unset-all remote.origin.promisor");
+            "git config --unset-all remote.origin.promisor",
+          ]) {
+            expect(finding.fixHint).toContain(command);
+          }
           expect(finding.fixHint).not.toMatch(/git config --unset-all .*(?::\/\/|::|@)/);
         }
         expect(await fs.readFile(path.join(clone, ".git", "config"), "utf8")).toBe(configBefore);

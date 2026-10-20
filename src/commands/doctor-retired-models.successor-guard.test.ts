@@ -6,28 +6,23 @@ import {
   repairRetiredConfigModelRefs,
 } from "./doctor/shared/retired-model-ref-repair.js";
 
+async function useRealRoutes() {
+  const routes = await import("../agents/openai-model-routes.js");
+  const actual = await vi.importActual<typeof routes>("../agents/openai-model-routes.js");
+  vi.spyOn(routes, "createOpenAIModelRoutesResolver").mockImplementation(
+    actual.createOpenAIModelRoutesResolver,
+  );
+}
+
 // #156155: validate successors against the selected route before rewriting config.
 describe("doctor retired successor guard", () => {
   it.each(["available", "cooldown", "authoritative-cooldown"] as const)(
     "migrates a supported successor absent from catalogs (%s)",
     async (availability) => {
-      const { cfg, state } = await fixture("oauth");
-      if (availability !== "available") {
-        await state.writeAuthProfiles({
-          version: 1,
-          profiles: {
-            chatgpt: {
-              provider: "openai",
-              type: "oauth",
-              access: "synthetic-access",
-              refresh: "synthetic-refresh",
-              expires: 9_999_999_999_999,
-            },
-            platform: { provider: "openai", type: "api_key", key: "synthetic-key" },
-          },
-          usageStats: { chatgpt: { cooldownUntil: Date.now() + 60_000 } },
-        });
-      }
+      const { cfg, state } = await fixture(
+        "oauth",
+        availability === "available" ? undefined : Date.now() + 60_000,
+      );
       if (availability === "authoritative-cooldown") {
         const modelAuthAvailability = await import("../agents/model-auth-availability.js");
         const createResolver = modelAuthAvailability.createModelAuthAvailabilityResolver;
@@ -97,13 +92,7 @@ describe("doctor retired successor guard", () => {
     async (source) => {
       const { cfg, state } = await fixture("oauth");
       if (source === "retired-incompat-chain") {
-        const openaiModelRoutes = await import("../agents/openai-model-routes.js");
-        const actual = await vi.importActual<typeof import("../agents/openai-model-routes.js")>(
-          "../agents/openai-model-routes.js",
-        );
-        vi.spyOn(openaiModelRoutes, "createOpenAIModelRoutesResolver").mockImplementation(
-          actual.createOpenAIModelRoutesResolver,
-        );
+        await useRealRoutes();
         cfg.models!.providers!.openai!.api = "openai-chatgpt-responses";
         cfg.models!.providers!.openai!.baseUrl = "https://chatgpt.com/backend-api/codex";
       }
@@ -140,13 +129,7 @@ describe("doctor retired successor guard", () => {
     "checks the runtime settings preserved by repair (%s, %s)",
     async (scope, keyForm) => {
       const { cfg, state } = await fixture("oauth");
-      const openaiModelRoutes = await import("../agents/openai-model-routes.js");
-      const actual = await vi.importActual<typeof import("../agents/openai-model-routes.js")>(
-        "../agents/openai-model-routes.js",
-      );
-      vi.spyOn(openaiModelRoutes, "createOpenAIModelRoutesResolver").mockImplementation(
-        actual.createOpenAIModelRoutesResolver,
-      );
+      await useRealRoutes();
       delete cfg.models;
       const source = "openai/retired-runtime-parent";
       const sourceKey = keyForm === "qualified" ? source : "retired-runtime-parent";

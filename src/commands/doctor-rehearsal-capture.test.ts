@@ -30,6 +30,13 @@ import { preserveDoctorOriginalState } from "./doctor-original-capture.js";
 
 afterEach(() => vi.restoreAllMocks());
 
+const readSources = (files: string[]) => Promise.all(files.map((file) => fs.readFile(file)));
+const legacyWarning = {
+  kind: "undeclared-migration-resources" as const,
+  pluginId: "synthetic-legacy",
+  message: "Synthetic legacy resources are undeclared",
+};
+
 it("keeps config and declared plugin resources while excluding disposable core images and aliases", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const stateDir = await fs.realpath(state.stateDir);
@@ -80,18 +87,13 @@ it("keeps config and declared plugin resources while excluding disposable core i
           stateMigrations: PluginDoctorStateMigration[];
         }>({ pluginId: "canvas", artifactBasename: "doctor-contract-api.ts" });
         const rawConfig = await fs.readFile(state.configPath);
-        const sourceBytes = await Promise.all(
-          [shared, agent, pluginDatabase, skill].map((file) => fs.readFile(file)),
-        );
+        const sourceFiles = [shared, agent, pluginDatabase, skill];
+        const sourceBytes = await readSources(sourceFiles);
         // Synthetic declarations isolate plugin execution; discovery, native custody,
         // snapshots, file traversal, manifests and publication use production code.
         vi.spyOn(pluginResources, "preparePluginDoctorMigrationBackupResources").mockImplementation(
           async (params) => {
-            params.warnings.push({
-              kind: "undeclared-migration-resources",
-              pluginId: "synthetic-legacy",
-              message: "Synthetic legacy resources are undeclared",
-            });
+            params.warnings.push({ ...legacyWarning });
             const canvas = await preparePluginDoctorMigrationResources(
               stateMigrations.map((migration) => ({ pluginId: "canvas", migration })),
               {
@@ -117,13 +119,12 @@ it("keeps config and declared plugin resources while excluding disposable core i
           },
         );
         const messages: string[] = [];
+        const log = (...args: unknown[]) => {
+          messages.push(args.map(String).join(" "));
+        };
         const runtime: RuntimeEnv = {
-          log: (...args) => {
-            messages.push(args.map(String).join(" "));
-          },
-          error: (...args) => {
-            messages.push(args.map(String).join(" "));
-          },
+          log,
+          error: log,
           exit: () => {
             throw new Error("Doctor exited unexpectedly");
           },
@@ -197,12 +198,8 @@ it("keeps config and declared plugin resources while excluding disposable core i
           } finally {
             captured.close();
           }
-          expect(manifest.warnings).toContainEqual({
-            kind: "undeclared-migration-resources",
-            pluginId: "synthetic-legacy",
-            message: "Synthetic legacy resources are undeclared",
-          });
-          expect(messages).toContain("Synthetic legacy resources are undeclared");
+          expect(manifest.warnings).toContainEqual(legacyWarning);
+          expect(messages).toContain(legacyWarning.message);
           for (const file of [shared, agent]) {
             expect(
               (await fs.readdir(path.dirname(file))).some(
@@ -214,11 +211,7 @@ it("keeps config and declared plugin resources while excluding disposable core i
           await maintenance?.release();
           await fs.rm(captures, { recursive: true, force: true });
         }
-        expect(
-          await Promise.all(
-            [shared, agent, pluginDatabase, skill].map((file) => fs.readFile(file)),
-          ),
-        ).toEqual(sourceBytes);
+        expect(await readSources(sourceFiles)).toEqual(sourceBytes);
       },
     );
   });

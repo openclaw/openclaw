@@ -11,51 +11,39 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 
-const retirementRules = vi.hoisted(() =>
-  [
-    "gpt-5.4",
-    "retired-with-successor",
-    "retired-without-successor",
-    "retired-with-slash",
-    "retired-chain-to-retired",
-    "retired-incompat-chain",
+const retirementRules = vi.hoisted(() => {
+  const successors = {
+    "gpt-5.4": "current-model",
+    "retired-with-successor": "current-model",
+    "retired-without-successor": undefined,
+    "retired-with-slash": "family/current-model",
+    "retired-chain-to-retired": "retired-without-successor",
+    "retired-incompat-chain": "CHAT-LATEST",
+    "retired-global-parent": "retired-route-child",
+    "retired-runtime-parent": "gpt-5.5",
+    "retired-route-child": "current-model",
+    "retired-global-without-successor": undefined,
+    "retired-api-conditioned": "current-model",
+  };
+  const global = new Set([
+    "retired-global-without-successor",
     "retired-global-parent",
     "retired-runtime-parent",
-    "retired-route-child",
-    "retired-global-without-successor",
-    "retired-api-conditioned",
-  ].map((model) => ({
+  ]);
+  return Object.entries(successors).map(([model, replacedBy]) => ({
     provider: "openai",
     model,
-    when:
-      model === "retired-global-without-successor" ||
-      model === "retired-global-parent" ||
-      model === "retired-runtime-parent"
-        ? undefined
-        : {
-            baseUrlHosts: ["chatgpt.com"],
-            ...(model === "retired-api-conditioned"
-              ? { providerConfigApiIn: ["openai-chatgpt-responses"] }
-              : {}),
-          },
-    retirement: model.includes("without-successor")
-      ? {}
+    when: global.has(model)
+      ? undefined
       : {
-          replacedBy:
-            model === "retired-with-slash"
-              ? "family/current-model"
-              : model === "retired-chain-to-retired"
-                ? "retired-without-successor"
-                : model === "retired-incompat-chain"
-                  ? "CHAT-LATEST"
-                  : model === "retired-global-parent"
-                    ? "retired-route-child"
-                    : model === "retired-runtime-parent"
-                      ? "gpt-5.5"
-                      : "current-model",
+          baseUrlHosts: ["chatgpt.com"],
+          ...(model === "retired-api-conditioned"
+            ? { providerConfigApiIn: ["openai-chatgpt-responses"] }
+            : {}),
         },
-  })),
-);
+    retirement: replacedBy === undefined ? {} : { replacedBy },
+  }));
+});
 
 vi.mock("../plugins/manifest-contract-eligibility.js", async (importOriginal) => {
   const actual =
@@ -75,10 +63,7 @@ vi.mock("../plugins/manifest-contract-eligibility.js", async (importOriginal) =>
           };
         }
       }
-      return {
-        ...snapshot,
-        plugins,
-      };
+      return { ...snapshot, plugins };
     },
   };
 });
@@ -90,22 +75,18 @@ vi.mock("../agents/openai-model-routes.js", async (importOriginal) => {
     createOpenAIModelRoutesResolver: () => () => ({
       kind: "routes",
       defaultRuntimeId: "codex",
-      routes: [
-        {
-          api: "openai-responses",
-          baseUrl: "https://api.openai.com/v1",
-          authRequirement: "api-key",
-          requestTransportOverrides: "none",
-          runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
-        },
-        {
-          api: "openai-chatgpt-responses",
-          baseUrl: "https://chatgpt.com/backend-api/codex",
-          authRequirement: "subscription",
-          requestTransportOverrides: "none",
-          runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
-        },
-      ],
+      routes: (
+        [
+          ["openai-responses", "https://api.openai.com/v1", "api-key"],
+          ["openai-chatgpt-responses", "https://chatgpt.com/backend-api/codex", "subscription"],
+        ] as const
+      ).map(([api, baseUrl, authRequirement]) => ({
+        api,
+        baseUrl,
+        authRequirement,
+        requestTransportOverrides: "none",
+        runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
+      })),
     }),
   };
 });
@@ -122,7 +103,10 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-export async function createRetiredModelFixture(auth: "oauth" | "api-key" = "oauth") {
+export async function createRetiredModelFixture(
+  auth: "oauth" | "api-key" = "oauth",
+  cooldownUntil?: number,
+) {
   const state = await createOpenClawTestState({
     layout: "state-only",
     prefix: "doctor-retired-model-",
@@ -142,6 +126,7 @@ export async function createRetiredModelFixture(auth: "oauth" | "api-key" = "oau
       },
       platform: { provider: "openai", type: "api_key", key: "synthetic-key" },
     },
+    ...(cooldownUntil === undefined ? {} : { usageStats: { chatgpt: { cooldownUntil } } }),
   });
   const cfg: OpenClawConfig = {
     agents: { entries: { main: {} }, defaults: { model: "openai/current-model" } },
