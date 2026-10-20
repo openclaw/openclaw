@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { buildCurrentConversationContextBlock } from "./run-current-context.js";
 
 const contextParams = {
@@ -8,9 +8,12 @@ const contextParams = {
   storePath: "/tmp/store.sqlite",
 };
 
-async function buildContext(messages: unknown[]) {
+async function buildContext(messages: unknown[] | Error) {
   return await buildCurrentConversationContextBlock(contextParams, {
-    readSessionMessages: vi.fn().mockResolvedValue(messages),
+    readSessionMessages:
+      messages instanceof Error
+        ? vi.fn().mockRejectedValue(messages)
+        : vi.fn().mockResolvedValue(messages),
   });
 }
 
@@ -22,65 +25,54 @@ function assistantText(text: string, phase: string) {
   };
 }
 
-describe("buildCurrentConversationContextBlock", () => {
-  it("keeps recent user and assistant text while filtering other roles and empty content", async () => {
-    await expect(
-      buildContext([
-        { role: "system", content: "system prompt" },
-        { role: "user", content: " first\n fact " },
-        { role: "tool", content: "tool result" },
-        { role: "assistant", content: [{ type: "text", text: "noted" }] },
-        { role: "assistant", content: [{ type: "toolCall", name: "search" }] },
-        { role: "user", content: "  " },
-      ]),
-    ).resolves.toBe("Recent conversation:\n- User: first fact\n- Assistant: noted");
-  });
+it("keeps recent user and assistant text while filtering other roles and empty content", async () => {
+  await expect(
+    buildContext([
+      { role: "system", content: "system prompt" },
+      { role: "user", content: " first\n fact " },
+      { role: "tool", content: "tool result" },
+      { role: "assistant", content: [{ type: "text", text: "noted" }] },
+      { role: "assistant", content: [{ type: "toolCall", name: "search" }] },
+      { role: "user", content: "  " },
+    ]),
+  ).resolves.toBe("Recent conversation:\n- User: first fact\n- Assistant: noted");
+});
 
-  it("projects raw transcript envelopes and assistant phases before truncation", async () => {
-    await expect(
-      buildContext([
-        {
-          role: "user",
-          content:
-            'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"message_id":"123"}\n```\n\nActual user fact',
-        },
-        ...Array.from({ length: 15 }, () => ({ role: "toolResult", content: "tool output" })),
-        {
-          role: "assistant",
-          content: [
-            assistantText("internal reasoning", "commentary"),
-            assistantText("Visible answer", "final_answer"),
-          ],
-        },
-      ]),
-    ).resolves.toBe("Recent conversation:\n- User: Actual user fact\n- Assistant: Visible answer");
-  });
+it("projects raw transcript envelopes and assistant phases before truncation", async () => {
+  await expect(
+    buildContext([
+      {
+        role: "user",
+        content: "Conversation info: ⟦openclaw:ctx⟧\n```json\n{}\n```\n\nActual user fact",
+      },
+      ...Array.from({ length: 15 }, () => ({ role: "toolResult", content: "tool output" })),
+      {
+        role: "assistant",
+        content: [
+          assistantText("internal reasoning", "commentary"),
+          assistantText("Visible answer", "final_answer"),
+        ],
+      },
+    ]),
+  ).resolves.toBe("Recent conversation:\n- User: Actual user fact\n- Assistant: Visible answer");
+});
 
-  it("caps lines and drops the oldest messages first to fit the count and block limits", async () => {
-    const context = await buildContext(
-      Array.from({ length: 12 }, (_, index) => ({
-        role: index % 2 === 0 ? "user" : "assistant",
-        content: `${index}:${"x".repeat(300)}`,
-      })),
-    );
+it("caps line and block sizes while retaining the newest messages in order", async () => {
+  const context = await buildContext(
+    Array.from({ length: 12 }, (_, index) => ({
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: `${index}:${"x".repeat(300)}`,
+    })),
+  );
+  expect(context).toBeDefined();
+  const lines = context?.split("\n") ?? [];
+  expect(context?.length).toBeLessThanOrEqual(1400);
+  expect(lines.slice(1).every((line) => line.length <= 220)).toBe(true);
+  const indexes = lines.slice(1).map((line) => line.match(/^- (?:User|Assistant): (\d+):/u)?.[1]);
+  expect(indexes).toEqual("6 7 8 9 10 11".split(" "));
+});
 
-    expect(context).toBeDefined();
-    const lines = context?.split("\n") ?? [];
-    expect(context?.length).toBeLessThanOrEqual(1400);
-    expect(lines.slice(1).every((line) => line.length <= 220)).toBe(true);
-    expect(lines.some((line) => line.startsWith("- User: 0:"))).toBe(false);
-    expect(lines.some((line) => line.startsWith("- Assistant: 5:"))).toBe(false);
-    expect(lines.some((line) => line.startsWith("- User: 6:"))).toBe(true);
-    expect(lines.some((line) => line.startsWith("- Assistant: 11:"))).toBe(true);
-    expect(context?.indexOf("- User: 6:")).toBeLessThan(context?.indexOf("- Assistant: 11:") ?? -1);
-  });
-
-  it("returns undefined for empty or unreadable transcripts", async () => {
-    await expect(buildContext([])).resolves.toBeUndefined();
-    await expect(
-      buildCurrentConversationContextBlock(contextParams, {
-        readSessionMessages: vi.fn().mockRejectedValue(new Error("unreadable")),
-      }),
-    ).resolves.toBeUndefined();
-  });
+it("ignores empty and unreadable transcripts", async () => {
+  await expect(buildContext([])).resolves.toBeUndefined();
+  await expect(buildContext(new Error("unreadable"))).resolves.toBeUndefined();
 });
