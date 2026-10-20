@@ -20,17 +20,21 @@ beforeEach(() => {
   runUtf8CommandWithTimeout.mockReset();
 });
 
-it("asks Claude CLI for its active account and returns only safe display fields", async () => {
+function mockStatus(payload: unknown, code = 0) {
   runUtf8CommandWithTimeout.mockResolvedValue({
-    code: 0,
+    code,
     termination: "exit",
-    stdout: JSON.stringify({
-      loggedIn: true,
-      authMethod: "claude.ai",
-      email: " account@example.test ",
-      orgId: "private-organization",
-      accessToken: "synthetic-access-token",
-    }),
+    stdout: JSON.stringify(payload),
+  });
+}
+
+it("asks Claude CLI for its active account and returns only safe display fields", async () => {
+  mockStatus({
+    loggedIn: true,
+    authMethod: "claude.ai",
+    email: " account@example.test ",
+    orgId: "private-organization",
+    accessToken: "synthetic-access-token",
   });
 
   expect(await probeClaudeCliAuthStatus({ command: "/test/claude" })).toEqual({
@@ -49,13 +53,8 @@ it.each([
   ['["CLAUDE_CODE_OAUTH_TOKEN"]', "JSON"],
   ["CLAUDE_CODE_OAUTH_TOKEN, OTHER", "list"],
 ])("probes the login the runtime child keeps from a %s preserve list (%s)", async (preserve) => {
-  // Runtime execution keeps OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV keys for the Claude child;
-  // readiness must observe that same environment or spawn admission refuses a working login.
-  runUtf8CommandWithTimeout.mockResolvedValue({
-    code: 0,
-    termination: "exit",
-    stdout: JSON.stringify({ loggedIn: true, authMethod: "oauth_token" }),
-  });
+  // Readiness must see the same preserved login as the runtime child.
+  mockStatus({ loggedIn: true, authMethod: "oauth_token" });
 
   expect(
     await probeClaudeCliAuthStatus({
@@ -73,7 +72,7 @@ it.each([
   expect(baseEnv).not.toHaveProperty("ANTHROPIC_API_KEY");
 });
 
-it.each(["PATH"])("runs a Windows Claude npm shim selected by %s", async (source) => {
+it("runs a Windows Claude npm shim selected by PATH", async () => {
   await withTempDir("anthropic-cli-auth-", async (dir) => {
     const home = await fs.realpath(dir);
     const shimPath = path.join(home, "claude.cmd");
@@ -113,7 +112,6 @@ it.each(["PATH"])("runs a Windows Claude npm shim selected by %s", async (source
     // Resolve the Windows wrapper, then execute its real JS entrypoint on the host platform.
     await withRestoredMocks([resolver], async () => {
       const result = await probeClaudeCliAuthStatus({
-        ...(source === "explicit" ? { command: shimPath } : {}),
         env: {
           PATH: `${home};${path.dirname(process.execPath)}`,
           PATHEXT: ".CMD;.EXE;.BAT",
@@ -138,29 +136,13 @@ it.each(["PATH"])("runs a Windows Claude npm shim selected by %s", async (source
   });
 });
 
-it.each(["unknown-method"])(
-  "does not attribute an account email to %s authentication",
-  async (authMethod) => {
-    runUtf8CommandWithTimeout.mockResolvedValue({
-      code: 0,
-      termination: "exit",
-      stdout: JSON.stringify({ loggedIn: true, authMethod, email: "inactive@example.test" }),
-    });
-
-    expect(await probeClaudeCliAuthStatus()).toEqual({
-      status: "available",
-      ...(authMethod === "unknown-method" ? {} : { authMethod }),
-    });
-  },
-);
+it("does not attribute an account email to unknown authentication", async () => {
+  mockStatus({ loggedIn: true, authMethod: "unknown-method", email: "inactive@example.test" });
+  expect(await probeClaudeCliAuthStatus()).toEqual({ status: "available" });
+});
 
 it.each([0, 1])("does not inspect Claude token storage on logout (exit %s)", async (code) => {
-  runUtf8CommandWithTimeout.mockResolvedValue({
-    code,
-    termination: "exit",
-    stdout: JSON.stringify({ loggedIn: false }),
-  });
-
+  mockStatus({ loggedIn: false }, code);
   expect(await probeClaudeCliAuthStatus()).toEqual({ status: "missing" });
 });
 

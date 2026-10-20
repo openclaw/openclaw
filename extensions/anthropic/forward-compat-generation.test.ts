@@ -1,16 +1,25 @@
-// Anthropic tests cover forward-compat resolution for unreleased Claude ids.
 import { supportsClaudeAdaptiveThinking } from "openclaw/plugin-sdk/provider-model-shared";
 import { describe, expect, it } from "vitest";
+import { makeModel } from "./model-contract-cases.test-support.js";
 import { buildAnthropicProvider } from "./register.runtime.js";
 
-function resolveModel(modelId: string, provider = "anthropic") {
+const modernIds = [
+  "claude-opus-5-5",
+  "claude-opus-5",
+  "claude-sonnet-5-5",
+  "claude-haiku-5-5",
+  "claude-sonnet-5",
+  "claude-fable-5",
+  "claude-fable-5-1",
+];
+
+function resolveModel(modelId: string, provider = "anthropic", compat?: { codeMode: "capable" }) {
   return buildAnthropicProvider().resolveDynamicModel?.({
     provider,
     modelId,
     config: {},
-    // Released point releases resolve by cloning a catalog template; an empty
-    // registry keeps this test on the generation path under test.
-    modelRegistry: { find: () => undefined },
+    // Empty by default to exercise generation rather than catalog cloning.
+    modelRegistry: { find: () => compat && { compat } },
   } as unknown as Parameters<
     NonNullable<ReturnType<typeof buildAnthropicProvider>["resolveDynamicModel"]>
   >[0]);
@@ -32,25 +41,13 @@ describe("unreleased Claude generations", () => {
         xhigh: "xhigh",
         max: "max",
       });
-      // Without a canonical stamp the shared contracts fall through to pre-4.6
-      // shaping (budget_tokens + caller sampling), which current models reject.
+      // Missing stamps fall back to pre-4.6 request shaping, rejected by these models.
       expect(supportsClaudeAdaptiveThinking({ id: modelId, params: model?.params })).toBe(true);
     },
   );
 
   it("does not stamp a canonical id onto released models", () => {
-    // Released ids already carry their own contract; re-pointing them would
-    // silently change shaping for models that work today.
-    for (const id of [
-      "claude-opus-5-5",
-      "claude-opus-5",
-      "claude-opus-4-8",
-      "claude-sonnet-5-5",
-      "claude-haiku-5-5",
-      "claude-sonnet-5",
-      "claude-fable-5",
-      "claude-fable-5-1",
-    ]) {
+    for (const id of [...modernIds, "claude-opus-4-8"]) {
       const model = resolveModel(id);
       expect(model?.id).toBe(id);
       expect(model?.params?.canonicalModelId).toBeUndefined();
@@ -58,45 +55,23 @@ describe("unreleased Claude generations", () => {
   });
 
   it("clones released snapshot ids from their dateless manifest template", () => {
-    expect(resolveModel("claude-haiku-4-5-20251001")).toEqual({
-      id: "claude-haiku-4-5-20251001",
-      name: "claude-haiku-4-5-20251001",
-      provider: "anthropic",
-      api: "anthropic-messages",
-      baseUrl: "https://api.anthropic.com",
-      reasoning: true,
-      input: ["text", "image"],
-      mediaInput: {
-        image: { maxSidePx: 1568, preferredSidePx: 1568, tokenMode: "provider" },
-      },
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 200_000,
-      maxTokens: 64_000,
-      compat: { codeMode: "capable" },
-    });
+    expect(resolveModel("claude-haiku-4-5-20251001")).toEqual(
+      makeModel("claude-haiku-4-5-20251001", {
+        mediaInput: { image: { maxSidePx: 1568, preferredSidePx: 1568, tokenMode: "provider" } },
+        compat: { codeMode: "capable" },
+      }),
+    );
     expect(resolveModel("claude-haiku-4-9-20251001")).toBeUndefined();
   });
 
   it("carries manifest catalog compat onto hand-built modern rows", () => {
-    // The hand-built forward-compat row replaces the catalog row when the
-    // runtime prefers plugin-resolved modern models. Dropping compat here
-    // silently disables catalog-driven behavior such as codeMode "auto",
-    // including on env-key-only runs whose model registry is empty.
-    for (const id of [
-      "claude-opus-5-5",
-      "claude-opus-5",
-      "claude-sonnet-5-5",
-      "claude-haiku-5-5",
-      "claude-sonnet-5",
-      "claude-fable-5",
-      "claude-fable-5-1",
-    ]) {
+    // Hand-built rows replace catalog rows even on empty-registry env-key runs.
+    for (const id of modernIds) {
       expect(resolveModel(id)?.compat, id).toEqual({
         codeMode: id === "claude-haiku-5-5" ? "capable" : "preferred",
       });
     }
-    // The Claude CLI provider rows are intentionally unflagged: those runs use
-    // the CLI harness where OpenClaw code mode does not apply.
+    // CLI harness rows do not participate in OpenClaw code mode.
     for (const id of ["claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5"]) {
       const model = resolveModel(id, "claude-cli");
       expect(model?.id).toBe(id);
@@ -106,16 +81,7 @@ describe("unreleased Claude generations", () => {
   });
 
   it("prefers registry compat over the manifest index", () => {
-    const model = buildAnthropicProvider().resolveDynamicModel?.({
-      provider: "anthropic",
-      modelId: "claude-opus-5",
-      config: {},
-      modelRegistry: {
-        find: () => ({ compat: { codeMode: "capable" } }),
-      },
-    } as unknown as Parameters<
-      NonNullable<ReturnType<typeof buildAnthropicProvider>["resolveDynamicModel"]>
-    >[0]);
+    const model = resolveModel("claude-opus-5", "anthropic", { codeMode: "capable" });
     expect(model?.compat).toEqual({ codeMode: "capable" });
   });
 

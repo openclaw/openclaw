@@ -1,4 +1,3 @@
-// Anthropic tests cover live model discovery request auth.
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type { ProviderCatalogContext } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -44,6 +43,29 @@ async function readDiscoveryHeaders(apiKey: string): Promise<Headers> {
   return new Headers(request?.init?.headers);
 }
 
+function discoveryRow(id: string, overrides: Record<string, unknown> = {}) {
+  return { id, type: "model", max_input_tokens: 1_000_000, max_tokens: 128_000, ...overrides };
+}
+
+function capabilities(xhigh = true) {
+  return {
+    image_input: { supported: true },
+    thinking: {
+      supported: true,
+      types: { adaptive: { supported: true }, disabled: { supported: true } },
+    },
+    effort: { xhigh: { supported: xhigh }, max: { supported: true } },
+  };
+}
+
+async function discover(apiKey: string) {
+  const result = await buildAnthropicProvider().catalog?.run?.(buildCatalogContext(apiKey));
+  if (!result || !("providers" in result)) {
+    throw new Error("Expected a keyed discovery result");
+  }
+  return result;
+}
+
 describe("anthropic live model discovery auth", () => {
   beforeEach(() => {
     guardedFetchCalls.length = 0;
@@ -51,21 +73,15 @@ describe("anthropic live model discovery auth", () => {
     clearLiveCatalogCacheForTests();
   });
 
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
+  afterEach(() => vi.restoreAllMocks());
 
-  it("sends an API key as x-api-key", async () => {
-    const headers = await readDiscoveryHeaders("sk-ant-api03-test-key");
-    expect(headers.get("x-api-key")).toBe("sk-ant-api03-test-key");
-    expect(headers.get("authorization")).toBeNull();
-    expect(headers.get("anthropic-version")).toBe("2023-06-01");
-  });
-
-  it("sends a subscription OAuth token as a bearer credential", async () => {
-    const headers = await readDiscoveryHeaders("sk-ant-oat01-test-token");
-    expect(headers.get("authorization")).toBe("Bearer sk-ant-oat01-test-token");
-    expect(headers.get("x-api-key")).toBeNull();
+  it.each([
+    ["sk-ant-api03-test-key", "x-api-key", "sk-ant-api03-test-key", "authorization"],
+    ["sk-ant-oat01-test-token", "authorization", "Bearer sk-ant-oat01-test-token", "x-api-key"],
+  ])("sends %s with the exclusive %s header", async (key, header, value, absent) => {
+    const headers = await readDiscoveryHeaders(key);
+    expect(headers.get(header)).toBe(value);
+    expect(headers.get(absent)).toBeNull();
     expect(headers.get("anthropic-version")).toBe("2023-06-01");
   });
 
@@ -86,58 +102,30 @@ describe("anthropic live model discovery auth", () => {
   });
 
   it("keeps shipped models Anthropic does not publish while adding discovered ones", async () => {
-    // Discovery replaces the seed catalog, so a shipped model with no live row
-    // would silently vanish from the provider listing once discovery succeeds.
+    // Discovery must retain shipped rows absent from the live response.
     discoveryRows.value = [
-      {
-        id: "claude-opus-5",
-        type: "model",
-        max_input_tokens: 1_000_000,
-        max_tokens: 128_000,
-      },
-      {
-        id: "claude-brand-new-9",
-        type: "model",
+      discoveryRow("claude-opus-5"),
+      discoveryRow("claude-brand-new-9", {
         display_name: "Claude Brand New 9",
-        max_input_tokens: 1_000_000,
-        max_tokens: 128_000,
-        capabilities: {
-          image_input: { supported: true },
-          thinking: {
-            supported: true,
-            types: { adaptive: { supported: true }, disabled: { supported: true } },
-          },
-          effort: { xhigh: { supported: true }, max: { supported: true } },
-        },
-      },
-      {
-        id: "claude-unshaped-9",
-        type: "model",
+        capabilities: capabilities(),
+      }),
+      discoveryRow("claude-unshaped-9", {
         max_input_tokens: 200_000,
         max_tokens: 64_000,
-      },
+      }),
     ];
-    const provider = buildAnthropicProvider();
-    const result = await provider.catalog?.run?.(buildCatalogContext("sk-ant-oat01-test-token"));
-    // Keyed results are not republished under the `claude-cli` hook alias: Claude CLI
-    // rows come from their own curated catalog, not from the Anthropic API listing.
-    expect(result && "providers" in result ? Object.keys(result.providers) : []).toEqual([
-      "anthropic",
-    ]);
-    // Inventory retention after a later transient failure keys on this successful outcome.
-    expect(result && "providers" in result ? result.outcomes : undefined).toContainEqual(
+    const result = await discover("sk-ant-oat01-test-token");
+    // Never republish API rows under the native CLI hook alias.
+    expect(Object.keys(result.providers)).toEqual(["anthropic"]);
+    expect(result.outcomes).toContainEqual(
       expect.objectContaining({ provider: "anthropic", status: "ready" }),
     );
     const models = new Map(
-      result && "providers" in result
-        ? (result.providers.anthropic?.models ?? []).map((model) => [model.id, model])
-        : [],
+      (result.providers.anthropic?.models ?? []).map((model) => [model.id, model]),
     );
 
     expect(models.has("claude-opus-5")).toBe(true);
-    // Shipped but absent from the live response: must survive discovery.
     expect(models.has("claude-mythos-5")).toBe(true);
-    // An unknown id ships with the capabilities Anthropic advertised, which request shaping reads.
     expect(models.get("claude-brand-new-9")).toMatchObject({
       name: "Claude Brand New 9",
       input: ["text", "image"],
@@ -153,35 +141,20 @@ describe("anthropic live model discovery auth", () => {
         },
       },
     });
-    // Without advertised capabilities an unknown id has no request contract to follow.
     expect(models.has("claude-unshaped-9")).toBe(false);
   });
 
   it("keeps the closest shipped model's request contract for a listed unknown id", async () => {
     discoveryRows.value = [
-      {
-        id: "claude-sonnet-4-6",
-        type: "model",
+      discoveryRow("claude-sonnet-4-6", {
         display_name: "Claude Sonnet 4.6",
-        max_input_tokens: 1_000_000,
-        max_tokens: 128_000,
-        capabilities: {
-          image_input: { supported: true },
-          thinking: {
-            supported: true,
-            types: { adaptive: { supported: true }, disabled: { supported: true } },
-          },
-          effort: { xhigh: { supported: false }, max: { supported: true } },
-        },
-      },
+        capabilities: capabilities(false),
+      }),
     ];
-    const result = await buildAnthropicProvider().catalog?.run?.(
-      buildCatalogContext("sk-ant-api03-test-key"),
+    const result = await discover("sk-ant-api03-test-key");
+    const model = result.providers.anthropic?.models?.find(
+      (entry) => entry.id === "claude-sonnet-4-6",
     );
-    const model =
-      result && "providers" in result
-        ? result.providers.anthropic?.models?.find((entry) => entry.id === "claude-sonnet-4-6")
-        : undefined;
 
     // Tool surface (Code Mode) comes from the shipped Sonnet row; effort comes from the listing.
     expect(model).toMatchObject({

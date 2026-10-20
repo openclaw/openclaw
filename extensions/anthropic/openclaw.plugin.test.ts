@@ -1,4 +1,3 @@
-// Anthropic tests cover provider manifest model catalog behavior.
 import { describe, expect, it } from "vitest";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
@@ -22,63 +21,36 @@ describe("Anthropic plugin manifest", () => {
   });
 
   it.each([
-    {
-      id: "claude-opus-5-5",
-      name: "Claude Opus 5.5",
-      cost: { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 },
-      thinkingLevelMap: { minimal: "low", xhigh: "xhigh", max: "max" },
+    ["claude-opus-5-5", "Claude Opus 5.5", [4, 20, 0.2, 5], true],
+    ["claude-opus-5", "Claude Opus 5", [5, 25, 0.5, 6.25], false],
+    ["claude-sonnet-5-5", "Claude Sonnet 5.5", [2, 10, 0.1, 2.5], true],
+    ["claude-sonnet-5", "Claude Sonnet 5", [2, 10, 0.2, 2.5], false],
+    ["claude-fable-5-1", "Claude Fable 5.1", [10, 50, 0.25, 12.5], true],
+    ["claude-fable-5", "Claude Fable 5", [10, 50, 1, 12.5], true],
+  ] as const)(
+    "publishes %s API contracts",
+    (id, name, [input, output, cacheRead, cacheWrite], remapsMinimal) => {
+      expect(
+        manifest.modelCatalog.providers.anthropic.models.find((model) => model.id === id),
+      ).toEqual({
+        id,
+        name,
+        reasoning: true,
+        input: ["text", "image"],
+        mediaInput: { image: { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" } },
+        contextWindow: 1_000_000,
+        ...selectableContextWindowMetadata,
+        maxTokens: 128_000,
+        cost: { input, output, cacheRead, cacheWrite },
+        thinkingLevelMap: {
+          ...(remapsMinimal ? { minimal: "low" } : {}),
+          xhigh: "xhigh",
+          max: "max",
+        },
+        compat: { codeMode: "preferred" },
+      });
     },
-    {
-      id: "claude-opus-5",
-      name: "Claude Opus 5",
-      cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
-      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
-    },
-    {
-      id: "claude-sonnet-5-5",
-      name: "Claude Sonnet 5.5",
-      cost: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 },
-      thinkingLevelMap: { minimal: "low", xhigh: "xhigh", max: "max" },
-    },
-    {
-      id: "claude-sonnet-5",
-      name: "Claude Sonnet 5",
-      cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
-      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
-    },
-    {
-      id: "claude-fable-5-1",
-      name: "Claude Fable 5.1",
-      cost: { input: 10, output: 50, cacheRead: 0.25, cacheWrite: 12.5 },
-      thinkingLevelMap: { minimal: "low", xhigh: "xhigh", max: "max" },
-    },
-    {
-      id: "claude-fable-5",
-      name: "Claude Fable 5",
-      cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
-      thinkingLevelMap: { minimal: "low", xhigh: "xhigh", max: "max" },
-    },
-  ])("publishes $name API contracts", ({ id, name, cost, thinkingLevelMap }) => {
-    const metadata = {
-      id,
-      reasoning: true,
-      input: ["text", "image"],
-      mediaInput: {
-        image: { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
-      },
-      contextWindow: 1_000_000,
-      ...selectableContextWindowMetadata,
-      maxTokens: 128_000,
-    };
-    const providers = manifest.modelCatalog?.providers;
-    expect(providers?.anthropic?.models?.find((model) => model.id === id)).toEqual({
-      ...metadata,
-      name,
-      cost,
-      thinkingLevelMap,
-      compat: { codeMode: "preferred" },
-    });
-  });
+  );
 
   it("preserves deprecated API metadata without seeding native membership", () => {
     const models = manifest.modelCatalog?.providers?.anthropic?.models ?? [];
@@ -102,11 +74,7 @@ describe("Anthropic plugin manifest", () => {
       reasoning: true,
       input: ["text", "image"],
       mediaInput: {
-        image: {
-          maxSidePx: 1568,
-          preferredSidePx: 1568,
-          tokenMode: "provider",
-        },
+        image: { maxSidePx: 1568, preferredSidePx: 1568, tokenMode: "provider" },
       },
       contextWindow: 200000,
       maxTokens: 64000,
