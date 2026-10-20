@@ -10,7 +10,7 @@ import {
   type SessionWorkspaceMobileLocation,
   type SessionWorkspaceMobileStatus,
 } from "./chat-session-workspace-mobile.tsx";
-import type { SessionWorkspaceProps } from "./chat-sidebar-content-types.ts";
+import type { SessionWorkspaceProps } from "./chat-sidebar-view-types.ts";
 import { hasTranscriptAttachments } from "./chat-transcript-attachments.ts";
 
 type File = SessionWorkspaceListResult["files"][number];
