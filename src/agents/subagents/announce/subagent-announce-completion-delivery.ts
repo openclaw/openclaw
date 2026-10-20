@@ -145,6 +145,12 @@ export async function runAnnounceAgentCall(params: {
           clearTimeout(timer);
           params.onAccepted?.(payload);
         },
+        onStartOwner: (owner) => {
+          // Registered controller custody includes preparation before the RPC acceptance frame.
+          if (owner.observe()) {
+            clearTimeout(timer);
+          }
+        },
         onExecutionStarted: () => {
           executionSignal.throwIfAborted();
           if (!params.isExecutionAllowed()) {
