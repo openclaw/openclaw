@@ -445,6 +445,9 @@ export function readOpenClawStateDatabaseCommand(
     return readUserModelAccountCommand(db, command);
   }
   if (command.type === "sessionRepositoryWorkspaces.find") {
+    if (command.owners.length === 0 || !tableExists(db, "session_repository_workspaces")) {
+      return { type: command.type, workspaces: [] };
+    }
     return {
       type: command.type,
       workspaces: runSqliteReadSnapshotSync(db, () =>

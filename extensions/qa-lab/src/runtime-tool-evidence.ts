@@ -168,15 +168,12 @@ export function readTranscriptToolEvidence(transcriptBytes: string, toolName: st
     .map((activity) => {
       const call = {
         id: activity.toolCallId,
-        tool: activity.toolName,
         args: activity.input,
       };
       const text = extractTranscriptText(activity.result?.content);
       const result =
         activity.completed && text
           ? {
-              id: activity.toolCallId,
-              tool: activity.toolName,
               text,
               ...classifyToolResultFailure({ text, isError: !activity.successful }),
             }

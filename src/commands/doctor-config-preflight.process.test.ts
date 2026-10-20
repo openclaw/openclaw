@@ -11,6 +11,7 @@ import { resolveGatewayLockDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { cronOwnerHardeningEntrypoints } from "../cron/owner-hardening-runtime.test-support.js";
 import { loadCronJobsStoreWithConfigJobsReadOnly, loadCronQuarantinedJobs } from "../cron/store.js";
+import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { hasActiveStartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
@@ -491,6 +492,7 @@ describe("doctor invalid config process exit", () => {
         writeJson(path.join(resolveGatewayLockDir(stateDir), "gateway.state.lock"), {
           pid: ownerChild.pid,
           ownerId: "doctor-prefix-owner",
+          processNamespace: readGatewayLockProcessNamespace(),
           createdAt: new Date().toISOString(),
           configPath,
           port: 18720,
@@ -926,6 +928,7 @@ describe("Doctor repair followed by gateway readiness", () => {
       writeJson(path.join(lockDir, "gateway.state.lock"), {
         pid: ownerChild.pid,
         ownerId: "live-owner-refusal-test",
+        processNamespace: readGatewayLockProcessNamespace(),
         createdAt: new Date().toISOString(),
         configPath,
         port: 18720,

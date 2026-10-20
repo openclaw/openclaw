@@ -62,13 +62,7 @@ import {
   sameManagedChromeIdentity,
   type ManagedChromeProcessIdentity,
 } from "./chrome.process-ownership.js";
-import {
-  decorateOpenClawProfile,
-  ensureProfileCleanExit,
-  ensureProfileNetworkPredictionDisabled,
-  isProfileDecorated,
-  usesOpenClawMockKeychain,
-} from "./chrome.profile-decoration.js";
+import { prepareOpenClawProfile, usesOpenClawMockKeychain } from "./chrome.profile-decoration.js";
 import { withChromeProfileLifecycleLock } from "./chrome.profile-lifecycle-lock.js";
 import type { BrowserGraphicsDiagnostics } from "./client.types.js";
 import {
@@ -833,13 +827,6 @@ async function launchOpenClawChromeLocked(
     process.platform === "darwin" &&
     (usesOpenClawMockKeychain(userDataDir) || (profileIsNew && headlessMode.headless));
 
-  const needsDecorate = !isProfileDecorated(
-    userDataDir,
-    profile.name,
-    profile.color.toUpperCase(),
-    DEFAULT_DOWNLOAD_DIR,
-  );
-
   // Headless profiles are seeded directly; headed profiles retain Chrome's first-run bootstrap.
   const spawnOnce = async (onStderr?: (chunk: Buffer | string) => void) => {
     signal?.throwIfAborted();
@@ -951,30 +938,15 @@ async function launchOpenClawChromeLocked(
 
   signal?.throwIfAborted();
 
-  if (needsDecorate) {
-    try {
-      decorateOpenClawProfile(userDataDir, {
-        name: profile.name,
-        color: profile.color,
-        downloadDir: DEFAULT_DOWNLOAD_DIR,
-        mockKeychain: useMockKeychain,
-      });
-      log.info(`🦞 openclaw browser profile decorated (${profile.color})`);
-    } catch (err) {
-      log.warn(`openclaw browser profile decoration failed: ${String(err)}`);
-    }
-  }
-
   try {
-    ensureProfileNetworkPredictionDisabled(userDataDir);
+    prepareOpenClawProfile(userDataDir, {
+      name: profile.name,
+      color: profile.color,
+      downloadDir: DEFAULT_DOWNLOAD_DIR,
+      mockKeychain: useMockKeychain,
+    });
   } catch (err) {
-    log.warn(`openclaw browser network-prediction prefs failed: ${String(err)}`);
-  }
-
-  try {
-    ensureProfileCleanExit(userDataDir);
-  } catch (err) {
-    log.warn(`openclaw browser clean-exit prefs failed: ${String(err)}`);
+    log.warn(`openclaw browser profile preparation failed: ${String(err)}`);
   }
   signal?.throwIfAborted();
 

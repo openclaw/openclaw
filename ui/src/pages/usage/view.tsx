@@ -119,12 +119,10 @@ export function renderUsage(props: UsageProps) {
         props.data.sessions.find((session) => session.key === props.filters.selectedSessions[0]))
       : null,
   );
-  const totalSessions = createMemo(
-    () =>
-      props.data.overview?.unfilteredSessionCount ??
-      props.data.aggregates?.sessionCount ??
-      props.data.sessions.length,
-  );
+  const totalSessions = () =>
+    props.data.overview?.unfilteredSessionCount ??
+    props.data.aggregates?.sessionCount ??
+    props.data.sessions.length;
   const activeAggregates = createMemo(
     () =>
       props.data.aggregates ?? {
@@ -163,9 +161,7 @@ export function renderUsage(props: UsageProps) {
       ],
     ];
   });
-  const exportSessionCount = createMemo(
-    () => props.data.overview?.selectedRowCount ?? displaySessionCount(),
-  );
+  const exportSessionCount = () => props.data.overview?.selectedRowCount ?? displaySessionCount();
   const insightStats = createMemo(() => {
     const durationMs = props.data.overview?.durationMs ?? 0;
     const durationCount = props.data.overview?.durationCount ?? 0;
@@ -182,16 +178,14 @@ export function renderUsage(props: UsageProps) {
     };
   });
   // Zero totals are normal while idle; an error must keep its own explanation.
-  const isEmpty = createMemo(
-    () =>
-      props.data.cacheRefresh === "complete" &&
-      props.data.totals !== null &&
-      !props.data.loading &&
-      !props.data.error &&
-      props.data.sessions.length === 0 &&
-      (props.data.overview?.unfilteredSessionCount ?? 0) === 0 &&
-      (props.data.totals?.totalTokens ?? 0) === 0,
-  );
+  const isEmpty = () =>
+    props.data.cacheRefresh === "complete" &&
+    props.data.totals !== null &&
+    !props.data.loading &&
+    !props.data.error &&
+    props.data.sessions.length === 0 &&
+    (props.data.overview?.unfilteredSessionCount ?? 0) === 0 &&
+    (props.data.totals?.totalTokens ?? 0) === 0;
   const datePresets = [
     { labelKey: "usage.presets.today", days: 1 },
     { labelKey: "usage.presets.last7d", days: 7 },

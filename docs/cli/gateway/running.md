@@ -35,6 +35,7 @@ openclaw gateway run   # equivalent, explicit form
     - `SIGUSR2` triggers an in-process restart when authorized. `commands.restart` (default: enabled) gates externally-sent `SIGUSR2`; set it to `false` to block manual OS-signal restarts. The agent-facing `gateway` tool is read-only; agents request restart through the `openclaw` delegation tool. Effective Full Access, including Default (Full Access), authorizes permitted delegated changes without an approval prompt; restricted runs require human approval. See [Delegated setup and repair](/gateway/permission-modes#delegated-setup-and-repair).
     - `SIGUSR1` is reserved for Node's inspector, so attaching a debugger does not restart the Gateway. Prefer `openclaw gateway restart` for restarts; update manual restart scripts to send `SIGUSR2`.
     - `SIGINT`/`SIGTERM` stop the process but do not restore custom terminal state — if you wrap the CLI in a TUI or raw-mode input, restore the terminal yourself before exit.
+    - A foreground Gateway does not follow the lifetime of the process that started it. OpenClaw's own launchers, such as Node runtime recovery, forward stop signals and stop their Gateway when they exit. A shell or wrapper script that does not forward signals leaves the Gateway serving after the wrapper is killed. Signal the Gateway process itself (process title `openclaw-gateway`), or forward signals from the wrapper (for example `exec openclaw gateway run`).
 
   </Accordion>
 </AccordionGroup>
@@ -148,3 +149,31 @@ openclaw gateway auth-token --show
 The command resolves `gateway.auth.token`, `OPENCLAW_GATEWAY_TOKEN`, and configured SecretRefs, then prints only the token. It requires an interactive terminal and refuses redirected or piped output so the credential does not silently enter command logs. Treat the terminal output as a secret.
 
 If no persistent token is configured, run `openclaw doctor --generate-gateway-token`, restart the Gateway, and then rerun the command. Generic `openclaw config get` output remains redacted, including `--json`.
+
+## Recover an unverifiable state lock
+
+Gateways that share a state directory must share one owner. A Gateway in another
+container or PID namespace cannot verify that the recorded process has exited.
+It therefore keeps the lock even after its heartbeat stops. Heartbeat age alone
+never authorizes takeover.
+
+If startup reports an unverifiable owner, inspect the recorded holder:
+
+```bash
+openclaw gateway recover-lock
+```
+
+The output includes the holder PID, host/PID namespace, heartbeat age, and an exact
+`openclaw gateway recover-lock --confirm <fingerprint>` command. First stop the
+holder through its original service manager or container. Then run the displayed
+command with the same state directory/profile as the failed startup, and start the
+Gateway again. Recovery explicitly removes the inspected lock records and Gateway
+owner lease. It refuses a locally verified live holder, a renewed heartbeat, or
+any record replaced or changed since inspection. If it refuses because something
+changed, inspect again; do not delete the lock files manually.
+
+A process that exited in the same verifiable PID namespace still recovers
+automatically. The explicit command is needed for crashed owners whose death
+cannot be verified from the new process, including containers with separate PID
+namespaces. `openclaw gateway recover-lock --json` exposes the inspection and
+confirmation command for operator tooling.

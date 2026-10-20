@@ -81,6 +81,10 @@ async function verifyRegisteredRequesterPolicy(signal: AbortSignal) {
   for (const spec of cases) {
     const sourceKey = `agent:${spec.agent}:telegram:direct:provenance-${spec.id === "allowed" ? "denied" : spec.id}`;
     const scenario = createScenario(spec, sourceKey);
+    using steering =
+      spec.mode === "steer" && !spec.denied
+        ? await observeProofSteeringAdmission(scenario.targetPrompt)
+        : undefined;
     using diagnostic = addAbortListener(signal, () => {
       process.stderr.write(`[provenance proof aborted] requester case=${spec.id}\n`);
     });
@@ -142,6 +146,11 @@ async function verifyRegisteredRequesterPolicy(signal: AbortSignal) {
         senderId: spec.sender,
         to: scenario.sourceRecipient,
       });
+      if (steering) {
+        await steering.waitForAdmission(source, signal);
+        scenario.releaseIncumbent.resolve();
+        scenario.releaseTarget.resolve();
+      }
       const sourceResult = await source;
       scenario.sourceCompleted = true;
       expect(sourceResult).toMatchObject({
@@ -173,8 +182,6 @@ async function verifyRegisteredRequesterPolicy(signal: AbortSignal) {
         if (!spec.bootstrap) {
           expect(scenario.incumbentCompleted).toBe(false);
           expect(scenario.targetRequests).toEqual([]);
-        } else {
-          scenario.releaseTarget.resolve();
         }
         if (spec.id === "busy_followup") {
           // Native acceptance already prepared this execution, unlike a human
@@ -233,12 +240,18 @@ async function verifyRegisteredRequesterPolicy(signal: AbortSignal) {
           .soft(scenario.effectAfterSourceCompletion, spec.name)
           .toEqual(spec.denied ? [] : [true]);
       }
-      expect
-        .soft(
-          scenario.targetRequests.map((request) => request.tools.includes("message")),
-          spec.name,
-        )
-        .toEqual(scenario.targetRequests.map(() => !spec.denied));
+      if (spec.denied) {
+        expect
+          .soft(scenario.targetRequests[1]?.output, spec.name)
+          .toMatch(/^(Tool message not found|message is not available in this turn\.)/);
+      } else {
+        expect
+          .soft(
+            scenario.targetRequests.map((request) => request.tools.includes("message")),
+            spec.name,
+          )
+          .toEqual(scenario.targetRequests.map(() => true));
+      }
       if (scenario.targetKey === sourceKey) {
         expect
           .soft(
@@ -270,6 +283,7 @@ async function verifyNativeSpawnRequester(signal: AbortSignal, collect: boolean)
   const sourcePrompt = `PROVENANCE_SOURCE_${marker}`;
   const childPrompt = `PROVENANCE_TARGET_${marker}`;
   const steerPrompt = `PROVENANCE_TARGET_${marker}_steer`;
+  using steering = await observeProofSteeringAdmission(steerPrompt);
   const spawned = createDeferred();
   const childStarted = createDeferred();
   const issueSteer = createDeferred();
@@ -281,6 +295,8 @@ async function verifyNativeSpawnRequester(signal: AbortSignal, collect: boolean)
   const steeringAfterSourceCompletion: boolean[] = [];
   registerProofModelScript(marker, async (request) => {
     if (request.prompt.includes(steerPrompt)) {
+      // Hold continuation past parent completion, after steering is committed.
+      await withinTest(source, signal);
       steeringAfterSourceCompletion.push(sourceCompleted);
       return { text: `PROVENANCE_COMPLETE_${marker}` };
     }
@@ -354,12 +370,13 @@ async function verifyNativeSpawnRequester(signal: AbortSignal, collect: boolean)
       signal,
     );
     issueSteer.resolve();
+    await steering.waitForAdmission(source, signal);
+    releaseChild.resolve();
     await source;
     expect(steerResult, JSON.stringify(steerResult)).toMatchObject({
       status: "accepted",
       targetDisposition: "steered",
     });
-    releaseChild.resolve();
     expect(await waitForProofRun(spawnResult?.runId)).toMatchObject({ status: "ok" });
     await waitForGatewayActiveWork(30_000);
     expect(steeringAfterSourceCompletion).toEqual([true]);
@@ -380,6 +397,7 @@ async function verifyQueuedCollectorAdmission(signal: AbortSignal) {
   const blockerPrompt = `PROVENANCE_TARGET_${marker}_blocker`;
   const queuedPrompt = `PROVENANCE_TARGET_${marker}_queued`;
   const steerInput = `PROVENANCE_TARGET_${marker}_steer`;
+  using steering = await observeProofSteeringAdmission(steerInput);
   const blockerStarted = createDeferred();
   const queuedStarted = createDeferred();
   const releaseBlocker = createDeferred();
@@ -500,12 +518,14 @@ async function verifyQueuedCollectorAdmission(signal: AbortSignal) {
       signal,
     );
     expect(queuedRequests.every((request) => !request.tools.includes("exec"))).toBe(true);
-    await runProofIngress({ ...ingress, message: steerSourcePrompt });
+    source = runProofIngress({ ...ingress, message: steerSourcePrompt });
+    await steering.waitForAdmission(source, signal);
+    releaseQueued.resolve();
+    await source;
     expect(steerResult, JSON.stringify(steerResult)).toMatchObject({
       status: "accepted",
       targetDisposition: "steered",
     });
-    releaseQueued.resolve();
     expect(await queuedCompletion).toMatchObject({ status: "ok" });
     expect(await waitForProofRun(blockerResult?.runId)).toMatchObject({ status: "ok" });
     await waitForGatewayActiveWork(30_000);
@@ -649,6 +669,7 @@ async function verifySteeringPolicyCompatibility(
   const compatiblePrompt = `PROVENANCE_SOURCE_${marker}_compatible`;
   const restrictedInput = `PROVENANCE_TARGET_${marker}_restricted`;
   const compatibleInput = `PROVENANCE_TARGET_${marker}_compatible`;
+  using steering = await observeProofSteeringAdmission(compatibleInput);
   const started = createDeferred();
   const release = createDeferred();
   const requests: ProofModelRequest[] = [];
@@ -694,6 +715,7 @@ async function verifySteeringPolicyCompatibility(
     message: incumbentPrompt,
     to: `provenance-${marker}`,
   });
+  let compatible: ReturnType<typeof runProofIngress> | undefined;
   try {
     await withinTest(
       awaitGateBeforeSettlement(started.promise, incumbent, "DM did not start"),
@@ -722,17 +744,19 @@ async function verifySteeringPolicyCompatibility(
     ).not.toContain("exec");
     expect.soft(results.get(restrictedPrompt)).toMatchObject({ status: "error" });
     expect.soft(results.get(restrictedPrompt)?.error).toMatch(/followup/);
-    await runProofIngress({
+    compatible = runProofIngress({
       ...ingress,
       sessionKey: `agent:boundary:telegram:direct:${marker}-compatible`,
       message: compatiblePrompt,
       to: `provenance-${marker}-compatible`,
     });
+    await steering.waitForAdmission(compatible, signal);
+    release.resolve();
+    await compatible;
     expect(results.get(compatiblePrompt)).toMatchObject({
       status: "accepted",
       targetDisposition: "steered",
     });
-    release.resolve();
     await incumbent;
     await waitForGatewayActiveWork(30_000);
     expect(requests.some((request) => request.prompt.includes(restrictedInput))).toBe(false);
@@ -740,7 +764,7 @@ async function verifySteeringPolicyCompatibility(
     expect(providerErrors).toEqual([]);
   } finally {
     release.resolve();
-    await Promise.allSettled([incumbent]);
+    await Promise.allSettled([incumbent, compatible]);
     await waitForGatewayActiveWork(30_000);
     if (changedGroupPolicy) {
       await patchProofConfig({ channels: { telegram: { groups: { [groupId]: null } } } }, [
@@ -864,16 +888,14 @@ async function verifyCrossHumanAdmission(
     if (collaborative) {
       // The receipt waits for transcript commitment, which needs Alice's held
       // tool to finish. Observe real admission before releasing that tool.
-      await withinTest(
-        awaitGateBeforeSettlement(steering.admitted, bob, "Bob settled before steering admission"),
-        signal,
-      );
+      await steering.waitForAdmission(bob, signal);
     } else if (allowCollaborativeSteering !== true) {
       expect(await bob).toMatchObject({ collaborativeSteeringRefused: true });
       expect(scenario.sourceRequests).toEqual([]);
       expect(scenario.incumbentCompleted).toBe(false);
       stage = "Bob explicit followup admission";
-      bob = runHuman(scenario, "bob", `/followup ${scenario.sourcePrompt}`, "steer", signal);
+      const followup = `/followup ${scenario.sourcePrompt}`;
+      bob = runHuman(scenario, "bob", followup, "steer", signal, "text");
       expect((await bob).deferredToActiveRun).toBe("followup");
     } else {
       expect((await bob).deferredToActiveRun).toBe("followup");

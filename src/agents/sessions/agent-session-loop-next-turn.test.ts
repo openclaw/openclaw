@@ -933,7 +933,6 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
     const { session } = await createTestSession({ settingsManager });
     settingsManager.setSteeringMode("all");
     settingsManager.setFollowUpMode("all");
-    await settingsManager.flush();
 
     expect(session.agent.steeringMode).toBe("one-at-a-time");
     expect(session.agent.followUpMode).toBe("one-at-a-time");

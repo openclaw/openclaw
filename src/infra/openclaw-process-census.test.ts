@@ -156,8 +156,7 @@ type CustodyCase = [
   holder: boolean,
 ];
 const custodyCases: CustodyCase[] = [
-  [["/usr/lib/systemd/systemd", "--user"], { cwd: new Error("denied") }, false],
-  [["/lib/systemd/systemd", "--user"], { cwd: new Error("denied") }, false],
+  [["/lib/systemd/systemd", "--user", "--deserialize=x"], { cwd: new Error("denied") }, true],
   [["node", "dist/index.js"], { cwd: "/unrelated-app" }, false],
   [["node", "/unrelated-app/dist/index.js"], { cwd: "/unrelated-app" }, false],
   [["node", "dist/index.js"], { cwd: "/app" }, true],
@@ -646,10 +645,14 @@ it.each([
 const references = { runId: "update-run-123", artifactPaths: ["/tmp/retained runtime"] };
 const denied = () => Object.assign(new Error("denied"), { code: "EACCES" });
 
-it("does not let protected systemd login processes block update-repair evidence", () => {
+it.each([
+  ["/usr/lib/systemd/systemd", "--user"],
+  ["/usr/lib/systemd/systemd", "--user", "--deserialize=8"],
+  ["/lib/systemd/systemd", "--user", "--deserialize=23"],
+])("does not let protected systemd login processes block update-repair evidence: %j", (...argv) => {
   rows.set(peer, {
     ppid: 1,
-    argv: ["/usr/lib/systemd/systemd", "--user"],
+    argv,
     uid: 1000,
     cwd: denied(),
   });

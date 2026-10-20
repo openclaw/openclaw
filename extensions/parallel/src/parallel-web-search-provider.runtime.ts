@@ -111,6 +111,7 @@ export async function executeParallelWebSearchProviderTool(
   return executeParallelSearchRequest({
     provider: "parallel",
     endpoint,
+    apiKey,
     args,
     searchConfig,
     search: async (request, timeoutSeconds): Promise<ParallelSearchResponse> => {

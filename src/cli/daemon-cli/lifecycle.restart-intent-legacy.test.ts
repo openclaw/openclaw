@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveLaunchAgentLabel } from "../../daemon/launchd-label.js";
 import { resolveSystemdServiceName } from "../../daemon/systemd-service-files.js";
+import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
 import { resolveGatewayLockPaths } from "../../infra/gateway-lock.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { getFileLockProcessStartTime } from "../../shared/pid-alive.js";
@@ -120,7 +121,12 @@ function publishOwner(pid = process.pid, supervised = false) {
       now + 60_000,
       now,
       JSON.stringify({
-        owner: { pid, host: hostname(), startedAt: getFileLockProcessStartTime(pid) },
+        owner: {
+          pid,
+          host: hostname(),
+          startedAt: getFileLockProcessStartTime(pid),
+          processNamespace: readGatewayLockProcessNamespace(),
+        },
         port: 18789,
         mode: supervised ? "supervised" : "foreground",
         supervisor: supervised

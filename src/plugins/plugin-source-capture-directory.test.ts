@@ -103,6 +103,15 @@ function metadataFixture(scheduler = createTestGatewayScheduler()) {
   return metadata;
 }
 
+it("keeps update plugin captures on the selected temporary volume", async () => {
+  vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
+  const { capture, root } = captureFixture();
+  expect(root.startsWith(`${process.env.TMPDIR}${path.sep}`)).toBe(true);
+  const artifact = artifactFixture(capture);
+  expectArtifactBytes(artifact);
+  expect(fs.existsSync(path.join(stateDir, "tmp", "plugin-captures"))).toBe(false);
+});
+
 function artifactFixture(directory?: string, managedRoot?: string) {
   const create = () => capturePluginGenerationArtifact(source);
   const artifact = directory

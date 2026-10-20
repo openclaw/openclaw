@@ -352,6 +352,7 @@ export async function createAgentAccountingPersistenceFixture({
 export function observeCompletionCommands(
   options: {
     hideCommittedReceipt?: boolean;
+    lostReplyError?: Error;
     beforeCommit?: () => void;
     afterRead?: () => void | Promise<void>;
   } = {},
@@ -375,6 +376,13 @@ export function observeCompletionCommands(
                 execute(command, commandOptions) {
                   commands.push(command.type);
                   const result = worker.execute(command, commandOptions);
+                  const lostReplyError = options.lostReplyError;
+                  if (lostReplyError && command.type !== "session.actor.read") {
+                    // Lose only the response after the real worker has completed its write.
+                    return result.then(() => {
+                      throw lostReplyError;
+                    });
+                  }
                   return command.type === "session.actor.read" && options.afterRead
                     ? result.then(async (value) => {
                         await options.afterRead?.();

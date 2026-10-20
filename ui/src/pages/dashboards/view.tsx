@@ -92,7 +92,7 @@ function DashboardCard(props: {
         })
       : null,
   );
-  const author = createMemo(() => dashboardAuthor(props.row, props.data.fallbackAgentId));
+  const author = () => dashboardAuthor(props.row, props.data.fallbackAgentId);
   const title = createMemo(() => resolveSessionDisplayName(props.row.key, props.row));
   const Content = () => (
     <>

@@ -24,6 +24,10 @@ import { isLockOwnerDefinitelyStale } from "./stale-lock-file.js";
 /** Admission and reclamation use the same namespace-qualified PID evidence. */
 export function isGatewayStateOwnerDefinitelyStale(value: unknown, lockPath: string): boolean {
   const payload = isRecord(value) ? value : null;
+  if (!payload) {
+    // Exclusive creation precedes publication; an incomplete record still owns its lock.
+    return false;
+  }
   const namespace = classifyGatewayLockProcessNamespace(payload?.processNamespace, lockPath);
   if (namespace === "unknown") {
     throw new GatewayLockNamespaceError(payload ?? {}, lockPath);

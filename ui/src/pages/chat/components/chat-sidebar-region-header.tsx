@@ -58,24 +58,16 @@ export function sidebarPanelType(definitions: SidebarPanelDefinition[], slot: Si
   return definition;
 }
 
-export function PanelTypeOption(props: { type: SidebarPanelDefinition; slotted?: boolean }) {
+export function PanelTypeOption(props: { type: SidebarPanelDefinition }) {
   return (
     <>
-      <span
-        slot={props.slotted ? "icon" : undefined}
-        class="side-panel-type-option__icon"
-        aria-hidden="true"
-      >
+      <span class="side-panel-type-option__icon" aria-hidden="true">
         <Icon name={props.type.icon} />
       </span>
       <span class="side-panel-type-option__label">{props.type.label}</span>{" "}
       <Show when={props.type.shortcut}>
         {(shortcut) => (
-          <KeyboardShortcut
-            combo={shortcut()}
-            slot={props.slotted ? "details" : undefined}
-            class="side-panel-type-option__shortcut"
-          />
+          <KeyboardShortcut combo={shortcut()} class="side-panel-type-option__shortcut" />
         )}
       </Show>
     </>

@@ -1,11 +1,23 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createCipheriv, createHash, randomUUID } from "node:crypto";
-import { appendFileSync, createWriteStream, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { once } from "node:events";
+import {
+  appendFileSync,
+  createWriteStream,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer } from "node:http";
 import type { Profiler } from "node:inspector";
 import path from "node:path";
+import { finished } from "node:stream/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
+import { Value } from "typebox/value";
+import { rawDataToString } from "../../packages/gateway-client/src/websocket-data.ts";
+import { HelloOkSchema } from "../../packages/gateway-protocol/src/schema/frames.ts";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.ts";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 import { stripInboundMetadata } from "../../src/auto-reply/reply/strip-inbound-meta.js";
@@ -24,6 +36,7 @@ import {
   controlGatewayProfile,
   readGatewayCpuProfile,
   readGatewayHeapProfile,
+  readGatewayGcTrace,
   readGatewayCpuUsage,
   startGatewayDiagnostics,
   readGatewayResources,
@@ -45,12 +58,16 @@ const { values } = parseArgs({
     diagnostics: { type: "boolean", default: false },
     "cpu-profile": { type: "boolean", default: false },
     "trace-gc": { type: "boolean", default: false },
+    "stress-tools": { type: "boolean", default: false },
+    "mixed-rpc": { type: "boolean", default: false },
     "stream-start-diagnostics": { type: "boolean", default: false },
     "stream-start-allocations": { type: "boolean", default: false },
     "active-work-diagnostics": { type: "boolean", default: false },
     scenario: { type: "string", default: "transcript-broadcast" },
     revision: { type: "string" },
     operations: { type: "string" },
+    "rpc-concurrency": { type: "string", default: "1" },
+    "reconnect-stagger-ms": { type: "string", default: "125" },
     limit: { type: "string", default: "100" },
     "row-mode": { type: "string", default: "compact" },
     entry: { type: "string", default: "dist/entry.js" },
@@ -94,6 +111,9 @@ const scenario = values.scenario;
 if (
   ![
     "sessions.list",
+    "sessions.describe",
+    "connect",
+    "reconnect",
     "subscribe",
     "chat.send",
     "transcript-broadcast",
@@ -103,7 +123,7 @@ if (
   ].includes(scenario)
 ) {
   throw new Error(
-    "--scenario must be sessions.list, subscribe, chat.send, transcript-broadcast, attempt-retention, memory-soak, or plugins.reload",
+    "--scenario must be sessions.list, sessions.describe, connect, reconnect, subscribe, chat.send, transcript-broadcast, attempt-retention, memory-soak, or plugins.reload",
   );
 }
 const retentionScenario = scenario === "attempt-retention";
@@ -124,7 +144,8 @@ if (
   throw new Error("--scenario requires --allocations");
 }
 const operations = integer(
-  values.operations ?? (scenario === "plugins.reload" ? "1" : "100"),
+  values.operations ??
+    (scenario === "plugins.reload" ? "1" : scenario === "reconnect" ? values.clients : "100"),
   "--operations",
 );
 const limit = integer(values.limit, "--limit");
@@ -133,6 +154,18 @@ if (!["compact", "sidebar", "dashboard"].includes(rowMode)) {
   throw new Error("--row-mode must be compact, sidebar, or dashboard");
 }
 const clientCount = scenario === "chat.send" ? 1 : integer(values.clients, "--clients");
+const rpcConcurrency = integer(values["rpc-concurrency"], "--rpc-concurrency");
+if (rpcConcurrency > clientCount) {
+  throw new Error("--rpc-concurrency must not exceed --clients");
+}
+const reconnectStaggerMs = integer(values["reconnect-stagger-ms"], "--reconnect-stagger-ms", 0);
+const connectionScenario = scenario === "connect" || scenario === "reconnect";
+if (
+  scenario === "reconnect" &&
+  (Math.min(operations, clientCount) - 1) * reconnectStaggerMs > 5000
+) {
+  throw new Error("reconnect storm starts must fit within 5000 ms; reduce --reconnect-stagger-ms");
+}
 const exactClients = integer(values["exact-clients"] ?? String(clientCount), "--exact-clients", 0);
 if (exactClients > clientCount) {
   throw new Error("--exact-clients must not exceed --clients");
@@ -147,15 +180,28 @@ const retainedProfileMs = integer(values["retained-profile-ms"], "--retained-pro
 const resetEveryRounds = integer(values["reset-every-rounds"], "--reset-every-rounds", 0);
 if (
   soakScenario &&
-  (values.allocations || values["stream-start-allocations"] || retainedProfileMs > durationMs)
+  (values["stream-start-allocations"] ||
+    (values.allocations && retainedProfileMs > 0) ||
+    retainedProfileMs > durationMs)
 ) {
   throw new Error(
-    "memory-soak needs a retained profile no longer than its duration and no allocation-churn capture",
+    "memory-soak requires --retained-profile-ms 0 for --allocations; retained capture must fit its duration and cannot overlap stream-start allocation capture",
   );
 }
 const chunkCount = integer(values.chunks, "--chunks");
 const chunkIntervalMs = integer(values["chunk-interval-ms"], "--chunk-interval-ms", 0);
 const listIntervalMs = integer(values["list-interval-ms"], "--list-interval-ms", 0);
+if (connectionScenario && listIntervalMs) {
+  throw new Error("connection scenarios use their own sidebar refresh; omit --list-interval-ms");
+}
+if (values["stress-tools"] && !toolScenario) {
+  throw new Error("--stress-tools requires chat.send, attempt-retention, or memory-soak");
+}
+if (values["mixed-rpc"] && (!listIntervalMs || !turnScenario || clientCount < 4)) {
+  throw new Error(
+    "--mixed-rpc requires a turn scenario, --list-interval-ms, and at least four clients",
+  );
+}
 const recapBurstRepeats = integer(values["recap-burst-repeats"], "--recap-burst-repeats", 0);
 const recapBurstIntervalMs = integer(
   values["recap-burst-interval-ms"],
@@ -196,16 +242,33 @@ const root = path.resolve(values["state-dir"]);
 const fixture: unknown = JSON.parse(
   readFileSync(path.join(root, "team-shape-summary.json"), "utf8"),
 );
-if (
-  !fixture ||
-  typeof fixture !== "object" ||
-  !("format" in fixture) ||
-  fixture.format !== "openclaw-team-shape-v1"
-) {
+if (!isRecord(fixture) || fixture.format !== "openclaw-team-shape-v1") {
   throw new Error("--state-dir must contain a generated team-shape fixture");
 }
 const output = path.join(root, `broadcast-measure-${Date.now()}`);
 mkdirSync(output);
+const project = Array.isArray(fixture.projectWorktrees) ? fixture.projectWorktrees[0] : undefined;
+const fixtureSessionCount = typeof fixture.sessionCount === "number" ? fixture.sessionCount : 0;
+if (values["mixed-rpc"] && fixtureSessionCount < 1) {
+  throw new Error("--mixed-rpc requires retained fixture sessions for chat.history");
+}
+let stressWorktree: string | undefined;
+let diffControlOriginal: string | undefined;
+if (values["stress-tools"] || values["mixed-rpc"]) {
+  if (!isRecord(project) || typeof project.path !== "string") {
+    throw new Error("stress tools and mixed RPCs require a fixture generated with --projects >= 1");
+  }
+  stressWorktree = realpathSync(project.path);
+  if (
+    !stressWorktree.startsWith(`${realpathSync(root)}${path.sep}`) ||
+    !readFileSync(path.join(stressWorktree, ".git"), "utf8").startsWith("gitdir: ")
+  ) {
+    throw new Error("stress worktree must be a real linked worktree inside the synthetic fixture");
+  }
+  if (values["mixed-rpc"]) {
+    diffControlOriginal = readFileSync(path.join(stressWorktree, "README.md"), "utf8");
+  }
+}
 const cfg = JSON.parse(readFileSync(path.join(root, "openclaw.json"), "utf8"));
 applyMockOpenAiModelConfig(cfg, { mockPort, modelRef: "openai/gpt-4.1" });
 cfg.agents.defaults = {
@@ -215,7 +278,13 @@ cfg.agents.defaults = {
   skipBootstrap: true,
 };
 cfg.memory = { ...cfg.memory, search: { enabled: false } };
-cfg.tools = { codeMode: false };
+cfg.tools = {
+  codeMode: values["stress-tools"],
+  ...(values["stress-tools"] ? { exec: { host: "gateway", mode: "full" } } : {}),
+};
+if (stressWorktree) {
+  cfg.agents.entries.main.workspace = stressWorktree;
+}
 cfg.plugins = {
   ...cfg.plugins,
   entries: {
@@ -236,6 +305,9 @@ if (soakScenario) {
     cfg.plugins.allow = [...new Set([...cfg.plugins.allow, "diagnostics-prometheus"])];
   }
   cfg.plugins.entries["diagnostics-prometheus"] = { enabled: true };
+  if (values["stress-tools"]) {
+    cfg.cron = { ...cfg.cron, enabled: true };
+  }
 }
 let reloadPluginId: string | undefined;
 if (scenario === "plugins.reload") {
@@ -437,10 +509,13 @@ const mock = createServer((req, res) => {
         toolOutputs.some(
           (toolResult) =>
             typeof toolResult.output !== "string" ||
-            !toolResult.output.includes("Synthetic allocation benchmark tool result."),
+            !toolResult.output.includes("Synthetic allocation benchmark tool result.") ||
+            (values["stress-tools"] && !toolResult.output.includes("synthetic-code-exec-verified")),
         )
       ) {
-        throw new Error("synthetic read tool did not return its fixture text");
+        throw new Error(
+          "synthetic tool result did not verify its read and optional code-mode exec",
+        );
       }
       if (!retentionScenario || !cohort?.outputLimited.has(toolOutput.call_id)) {
         toolResults += toolOutputs.length;
@@ -516,8 +591,19 @@ const mock = createServer((req, res) => {
             type: "function_call",
             id: `fc_${currentCohort.id}_${index}_${toolIndex}`,
             call_id: callId,
-            name: "read",
-            arguments: JSON.stringify({ path: toolPath }),
+            name: values["stress-tools"] ? "exec" : "read",
+            arguments: JSON.stringify(
+              values["stress-tools"]
+                ? {
+                    title: "Read the synthetic fixture and verify its worktree",
+                    code:
+                      `json(await read({ path: ${JSON.stringify(toolPath)} }));\n` +
+                      `const shell = await exec({ command: "pwd", workdir: ${JSON.stringify(stressWorktree)} });\n` +
+                      `if (shell.exitCode !== 0 || shell.aggregated.trim() !== ${JSON.stringify(stressWorktree)}) throw new Error("Synthetic exec worktree mismatch");\n` +
+                      'return "synthetic-code-exec-verified";',
+                  }
+                : { path: toolPath },
+            ),
           };
         });
         toolCalls += items.length;
@@ -628,6 +714,19 @@ const mock = createServer((req, res) => {
 });
 const children: ChildProcess[] = [];
 const clients: ReturnType<typeof createGatewayWsClient>[] = [];
+const expectedClosures = new WeakSet<ReturnType<typeof createGatewayWsClient>>();
+const responseFrameBytes = new WeakMap<
+  ReturnType<typeof createGatewayWsClient>,
+  Map<string, number>
+>();
+const rpcMeasurements = new Map<string, { latenciesMs: number[]; responseBytes: number }>();
+const handshakeLatenciesMs: number[] = [];
+const reconnectStorms: Array<{
+  clients: number;
+  startSpreadMs: number;
+  allSidebarsCurrentMs: number;
+}> = [];
+const childLogs: ReturnType<typeof createWriteStream>[] = [];
 const counters = new Map<string, number>();
 const eventBytes = new Map<string, number>();
 const sessionEventSizes = new Map<string, { frames: number; bytes: number }>();
@@ -659,6 +758,7 @@ const perClientRecaps: Map<string, RecapReceipt>[] = [];
 const recapReceipts: RecapReceipt[] = [];
 let recapPhase: Awaited<ReturnType<typeof runRecapBurst>> | undefined;
 let gateway: ChildProcess | undefined;
+let stressCronJobId: string | undefined;
 function fieldBytes(record: Record<string, unknown>) {
   return Object.fromEntries(
     Object.entries(record).map(([field, value]) => [
@@ -721,8 +821,17 @@ function launch(args: string[], name: string, extraEnv: NodeJS.ProcessEnv = {}, 
     detached: true,
     stdio: ipc ? ["ignore", "pipe", "pipe", "ipc"] : ["ignore", "pipe", "pipe"],
   });
-  child.stdout?.pipe(log);
-  child.stderr?.pipe(log);
+  child.stdout?.pipe(log, { end: false });
+  child.stderr?.pipe(log, { end: false });
+  child.once("close", () => log.end());
+  childLogs.push(log);
+  if (values.allocations || values["stream-start-allocations"] || values["trace-gc"]) {
+    // Keep stderr diagnostics from interleaving with V8's line-oriented GC trace.
+    const stdoutLog = createWriteStream(path.join(output, `${name}.stdout.log`));
+    child.stdout?.pipe(stdoutLog, { end: false });
+    child.once("close", () => stdoutLog.end());
+    childLogs.push(stdoutLog);
+  }
   let startupOutput = "";
   const observeStartup = (data: Buffer) => {
     if (!ownedListeners.has(child)) {
@@ -784,6 +893,53 @@ const keys = Array.from(
   { length: runCount },
   (_, index) => `agent:main:transcript-broadcast-measure-child-${index}`,
 );
+const connectParams = {
+  minProtocol: PROTOCOL_VERSION,
+  maxProtocol: PROTOCOL_VERSION,
+  client: {
+    id: "gateway-client",
+    displayName: "synthetic-broadcast-measurement",
+    version: "1.0.0",
+    platform: process.platform,
+    mode: "backend",
+  },
+  role: "operator",
+  scopes: ["operator.read", "operator.admin"],
+  caps: [
+    "session-scoped-events",
+    "chat-only-assistant-text",
+    ...(exactClients < clientCount ? ["roster-message-bodies-optional"] : []),
+    ...(values["session-row-deltas"] ? ["session-row-deltas"] : []),
+    ...(values["session-envelope-refs"] ? ["session-event-field-refs"] : []),
+  ],
+};
+function summarizeLatencies(latencies: number[]) {
+  const sorted = latencies.toSorted((a, b) => a - b);
+  return {
+    count: sorted.length,
+    p50: sorted[Math.ceil(sorted.length * 0.5) - 1] ?? null,
+    p95: sorted[Math.ceil(sorted.length * 0.95) - 1] ?? null,
+    p99: sorted[Math.ceil(sorted.length * 0.99) - 1] ?? null,
+    max: sorted.at(-1) ?? null,
+    latencies,
+  };
+}
+function validateDiff(result: unknown, additions = 1) {
+  if (
+    !isRecord(result) ||
+    result.root !== stressWorktree ||
+    result.unavailableReason !== undefined ||
+    !Array.isArray(result.files) ||
+    !result.files.some(
+      (file: unknown) =>
+        isRecord(file) && file.path === "README.md" && file.additions === additions,
+    )
+  ) {
+    throw new Error(
+      `sessions.diff did not return the synthetic worktree control (${additions} added lines): ${JSON.stringify(result)}`,
+    );
+  }
+}
 async function rpc(
   client: ReturnType<typeof createGatewayWsClient>,
   method: string,
@@ -791,13 +947,77 @@ async function rpc(
   onResponse?: (id: string) => void,
 ) {
   assertGatewayAlive();
+  const started = performance.now();
   const response = await client.request(method, params, 180_000);
+  const rpcDurationMs = performance.now() - started;
   assertGatewayAlive();
   if (!response.ok) {
     throw new Error(`${method}: ${JSON.stringify(response.error)}`);
   }
+  if (
+    method === "sessions.messages.subscribe" &&
+    (!isRecord(params) ||
+      !isRecord(response.payload) ||
+      response.payload.subscribed !== true ||
+      response.payload.key !== params.key ||
+      response.payload.agentId !== "main")
+  ) {
+    throw new Error(
+      "sessions.messages.subscribe did not acknowledge the requested fixture session",
+    );
+  }
+  if (measuring) {
+    const measured = rpcMeasurements.get(method) ?? { latenciesMs: [], responseBytes: 0 };
+    const bytes = responseFrameBytes.get(client)?.get(response.id);
+    if (bytes === undefined) {
+      throw new Error(`missing wire response size for ${method}`);
+    }
+    measured.latenciesMs.push(rpcDurationMs);
+    measured.responseBytes += bytes;
+    rpcMeasurements.set(method, measured);
+    responseFrameBytes.get(client)?.delete(response.id);
+  }
   onResponse?.(response.id);
   return response.payload;
+}
+function latencySummary(latenciesMs: number[]) {
+  const sorted = latenciesMs.toSorted((a, b) => a - b);
+  return {
+    count: sorted.length,
+    p50Ms: sorted[Math.ceil(sorted.length * 0.5) - 1] ?? null,
+    p99Ms: sorted[Math.ceil(sorted.length * 0.99) - 1] ?? null,
+  };
+}
+function readPromotion(profilePath: string, operationCount: number) {
+  const gcTrace = readGatewayGcTrace(path.join(output, "gateway.stdout.log"), profilePath);
+  return { gcTrace, promotedBytesPerOperation: gcTrace.promotedBytes / operationCount };
+}
+function assertListPage(
+  page: unknown,
+  method: string,
+): asserts page is { totalCount: number; count: number; sessions: unknown[] } {
+  if (
+    !isRecord(page) ||
+    typeof page.totalCount !== "number" ||
+    page.count !== Math.min(limit, page.totalCount) ||
+    !Array.isArray(page.sessions) ||
+    page.sessions.length !== page.count ||
+    page.count === 0
+  ) {
+    throw new Error(`${method} did not return the requested nonempty page`);
+  }
+}
+function sidebarIdentity(page: unknown) {
+  assertListPage(page, "sessions.list");
+  return JSON.stringify({
+    totalCount: page.totalCount,
+    sessions: page.sessions.map((row) => {
+      if (!isRecord(row) || typeof row.key !== "string") {
+        throw new Error("sidebar response contains an invalid session row");
+      }
+      return [row.key, row.sessionId, row.updatedAt];
+    }),
+  });
 }
 function summarizeCpuProfile(profilePath: string) {
   const profile: Profiler.Profile = JSON.parse(readFileSync(profilePath, "utf8"));
@@ -959,9 +1179,11 @@ async function runRound(client: ReturnType<typeof createGatewayWsClient>, measur
       ),
     45_000,
   );
+  const turnLatencies: number[] = [];
   try {
     const turns = Promise.all(
       keys.map(async (sessionKey, index) => {
+        const turnStarted = performance.now();
         const runId = randomUUID();
         const image = retentionScenario
           ? promptContent.update(Buffer.alloc(256 * 128 * 4))
@@ -1002,6 +1224,7 @@ async function runRound(client: ReturnType<typeof createGatewayWsClient>, measur
         ) {
           throw new Error(`agent.wait: ${JSON.stringify(result)}`);
         }
+        turnLatencies.push(performance.now() - turnStarted);
       }),
     ).then(() => {
       current.phases.completedAtEpochMs = epochNow();
@@ -1010,7 +1233,7 @@ async function runRound(client: ReturnType<typeof createGatewayWsClient>, measur
     if (soakScenario) {
       completedSoakRounds++;
     }
-    return { phases: current.phases, ...capture };
+    return { phases: current.phases, turnLatencyMs: summarizeLatencies(turnLatencies), ...capture };
   } finally {
     clearTimeout(timeout);
     current.release();
@@ -1190,22 +1413,172 @@ function sessionEventSizesSnapshot() {
     [...sessionEventSizes].map(([bucket, sizes]) => [bucket, { ...sizes }]),
   );
 }
+function trackClientFrames(
+  client: ReturnType<typeof createGatewayWsClient>,
+  onFrame?: (bytes: number) => void,
+) {
+  const responseSizes = new Map<string, number>();
+  responseFrameBytes.set(client, responseSizes);
+  // The helper parses frames before onEvent; capture their exact uncompressed size first.
+  client.ws.prependListener("message", (data: import("ws").RawData) => {
+    const receivedFrameBytes = Array.isArray(data)
+      ? data.reduce((sum, part) => sum + part.byteLength, 0)
+      : data.byteLength;
+    onFrame?.(receivedFrameBytes);
+    if (measuring) {
+      const frame = JSON.parse(rawDataToString(data));
+      if (frame.type === "res" && typeof frame.id === "string") {
+        responseSizes.set(frame.id, receivedFrameBytes);
+      }
+    }
+  });
+}
+async function connectClient(index: number) {
+  const started = performance.now();
+  assertGatewayAlive();
+  const clientCounters = (perClientCounters[index] ??= new Map<string, number>());
+  const recapRows = new Map<string, RecapReceipt>();
+  perClientRecaps[index] = recapRows;
+  const rowEvents = new GatewaySessionRowEvents();
+  let previousSeq: number | undefined;
+  let receivedFrameBytes = 0;
+  const client = createGatewayWsClient({
+    url: `ws://127.0.0.1:${port}`,
+    onEvent: (event) => {
+      lastSubscriberEventAt = performance.now();
+      if (event.seq !== undefined) {
+        if (previousSeq !== undefined && event.seq !== previousSeq + 1) {
+          subscriberFailure ??= new Error(
+            `client ${index} event sequence gap: ${previousSeq} -> ${event.seq}`,
+          );
+        }
+        previousSeq = event.seq;
+      }
+      const payload = isRecord(event.payload) ? event.payload : undefined;
+      if (values["activity-summaries"]) {
+        const decoded = rowEvents.project(event);
+        if (decoded.missingBaseline) {
+          subscriberFailure ??= new Error(`client ${index} lost its session row baseline`);
+        }
+        const facts = isRecord(decoded.event.payload) ? decoded.event.payload : undefined;
+        const row = facts && isRecord(facts.session) ? facts.session : undefined;
+        const summary = row && isRecord(row.activitySummary) ? row.activitySummary : undefined;
+        if (summary && typeof facts?.sessionKey === "string" && keys.includes(facts.sessionKey)) {
+          const receipt = {
+            client: index,
+            key: facts.sessionKey,
+            state: summary.state,
+            text: summary.text,
+            updatedAt: summary.updatedAt,
+            receivedAtEpochMs: epochNow(),
+          };
+          recapRows.set(facts.sessionKey, receipt);
+          if (facts.reason === "activity-summary") {
+            recapReceipts.push(receipt);
+          }
+        }
+      }
+      if (index === 0 && !initialFullFrame && event.event === "sessions.changed" && payload) {
+        const sizes = measureFrameFields(event, payload, receivedFrameBytes);
+        if (sizes.duplicateEnvelopeFields !== undefined) {
+          initialFullFrame = sizes;
+        }
+      }
+      if (measuring) {
+        counters.set(event.event, (counters.get(event.event) ?? 0) + 1);
+        clientCounters.set(event.event, (clientCounters.get(event.event) ?? 0) + 1);
+        eventBytes.set(event.event, (eventBytes.get(event.event) ?? 0) + receivedFrameBytes);
+        const attribution = prepareSessionEventMetrics(event.event, payload, [], undefined)?.("");
+        if (attribution) {
+          const delivery =
+            index < exactClients &&
+            typeof payload?.sessionKey === "string" &&
+            keys.includes(payload.sessionKey)
+              ? "subscribed"
+              : "roster";
+          const bucket = `${event.event}:${attribution.reason}:${delivery}`;
+          const sizes = sessionEventSizes.get(bucket) ?? { frames: 0, bytes: 0 };
+          sizes.frames++;
+          sizes.bytes += receivedFrameBytes;
+          sessionEventSizes.set(bucket, sizes);
+          if (
+            index === 0 &&
+            event.event === "sessions.changed" &&
+            payload &&
+            receivedFrameBytes > (representativeFrames.get(bucket)?.frameBytes ?? 0)
+          ) {
+            representativeFrames.set(
+              bucket,
+              measureFrameFields(event, payload, receivedFrameBytes),
+            );
+          }
+        }
+      }
+    },
+  });
+  trackClientFrames(client, (bytes) => {
+    receivedFrameBytes = bytes;
+  });
+  client.ws.on("close", (code) => {
+    if (!closing && !expectedClosures.has(client)) {
+      subscriberFailure ??= new Error(`subscriber ${index} unexpectedly closed (${code})`);
+    }
+  });
+  client.ws.on("error", (error) => {
+    if (!closing && !expectedClosures.has(client)) {
+      subscriberFailure ??= new Error(`subscriber ${index}: ${error.message}`);
+    }
+  });
+  clients[index] = client;
+  await client.waitOpen();
+  const hello = await rpc(client, "connect", connectParams);
+  const handshakeElapsedMs = performance.now() - started;
+  if (
+    !Value.Check(HelloOkSchema, hello) ||
+    hello.protocol !== PROTOCOL_VERSION ||
+    !hello.features.methods.includes("sessions.list") ||
+    !hello.features.methods.includes("sessions.describe") ||
+    hello.auth.role !== "operator" ||
+    !hello.auth.scopes.includes("operator.admin") ||
+    hello.snapshot.sessionDefaults?.defaultAgentId !== "main"
+  ) {
+    throw new Error("connect did not return a valid hello snapshot");
+  }
+  if (measuring) {
+    handshakeLatenciesMs.push(handshakeElapsedMs);
+  }
+  return client;
+}
 let cleanupPromise: Promise<void> | undefined;
 function cleanup() {
   return (cleanupPromise ??= (async () => {
     closing = true;
     cohort?.release();
+    if (stressCronJobId) {
+      try {
+        const result = await clients[0]?.request("cron.remove", { id: stressCronJobId }, 5000);
+        if (!result?.ok) {
+          throw new Error("cron.remove did not succeed");
+        }
+      } catch (error) {
+        console.warn("Stress cron cleanup failed; discard this fixture before reuse:", error);
+      }
+    }
     for (const client of clients) {
       client.close();
     }
     await Promise.all(
       children.map((child) => stopChild(child, { teardownGraceMs: 10_000, killGraceMs: 2000 })),
     );
+    await Promise.all(childLogs.map((log) => finished(log)));
     mock.closeAllConnections();
     if (mock.listening) {
       await new Promise<void>((resolve, reject) => {
         mock.close((error) => (error ? reject(error) : resolve()));
       });
+    }
+    if (stressWorktree && diffControlOriginal !== undefined) {
+      writeFileSync(path.join(stressWorktree, "README.md"), diffControlOriginal);
     }
   })());
 }
@@ -1227,7 +1600,9 @@ try {
   await ready(mockPort, "/health");
   gateway = launch(
     buildGatewayBenchChildArgs(values.entry, port, [
-      ...(values["trace-gc"] ? ["--trace-gc"] : []),
+      ...(values.allocations || values["stream-start-allocations"] || values["trace-gc"]
+        ? ["--trace-gc-nvp"]
+        : []),
       "--import",
       "./scripts/tsx.mjs",
       "--import",
@@ -1243,129 +1618,11 @@ try {
   // Startup recovery for the retained-run inventory is outside the measured workload.
   await delay(10_000);
   for (let index = 0; index < clientCount; index++) {
-    assertGatewayAlive();
-    const clientCounters = new Map<string, number>();
-    perClientCounters.push(clientCounters);
-    const recapRows = new Map<string, RecapReceipt>();
-    perClientRecaps.push(recapRows);
-    const rowEvents = new GatewaySessionRowEvents();
-    let previousSeq: number | undefined;
-    let receivedFrameBytes = 0;
-    const client = createGatewayWsClient({
-      url: `ws://127.0.0.1:${port}`,
-      onEvent: (event) => {
-        lastSubscriberEventAt = performance.now();
-        if (event.seq !== undefined) {
-          if (previousSeq !== undefined && event.seq !== previousSeq + 1) {
-            subscriberFailure ??= new Error(
-              `client ${index} event sequence gap: ${previousSeq} -> ${event.seq}`,
-            );
-          }
-          previousSeq = event.seq;
-        }
-        const payload = isRecord(event.payload) ? event.payload : undefined;
-        if (values["activity-summaries"]) {
-          const decoded = rowEvents.project(event);
-          if (decoded.missingBaseline) {
-            subscriberFailure ??= new Error(`client ${index} lost its session row baseline`);
-          }
-          const facts = isRecord(decoded.event.payload) ? decoded.event.payload : undefined;
-          const row = facts && isRecord(facts.session) ? facts.session : undefined;
-          const summary = row && isRecord(row.activitySummary) ? row.activitySummary : undefined;
-          if (summary && typeof facts?.sessionKey === "string" && keys.includes(facts.sessionKey)) {
-            const receipt = {
-              client: index,
-              key: facts.sessionKey,
-              state: summary.state,
-              text: summary.text,
-              updatedAt: summary.updatedAt,
-              receivedAtEpochMs: epochNow(),
-            };
-            recapRows.set(facts.sessionKey, receipt);
-            if (facts.reason === "activity-summary") {
-              recapReceipts.push(receipt);
-            }
-          }
-        }
-        if (index === 0 && !initialFullFrame && event.event === "sessions.changed" && payload) {
-          const sizes = measureFrameFields(event, payload, receivedFrameBytes);
-          if (sizes.duplicateEnvelopeFields !== undefined) {
-            initialFullFrame = sizes;
-          }
-        }
-        if (measuring) {
-          counters.set(event.event, (counters.get(event.event) ?? 0) + 1);
-          clientCounters.set(event.event, (clientCounters.get(event.event) ?? 0) + 1);
-          eventBytes.set(event.event, (eventBytes.get(event.event) ?? 0) + receivedFrameBytes);
-          const attribution = prepareSessionEventMetrics(event.event, payload, [], undefined)?.("");
-          if (attribution) {
-            const delivery =
-              index < exactClients &&
-              typeof payload?.sessionKey === "string" &&
-              keys.includes(payload.sessionKey)
-                ? "subscribed"
-                : "roster";
-            const bucket = `${event.event}:${attribution.reason}:${delivery}`;
-            const sizes = sessionEventSizes.get(bucket) ?? { frames: 0, bytes: 0 };
-            sizes.frames++;
-            sizes.bytes += receivedFrameBytes;
-            sessionEventSizes.set(bucket, sizes);
-            if (
-              index === 0 &&
-              event.event === "sessions.changed" &&
-              payload &&
-              receivedFrameBytes > (representativeFrames.get(bucket)?.frameBytes ?? 0)
-            ) {
-              representativeFrames.set(
-                bucket,
-                measureFrameFields(event, payload, receivedFrameBytes),
-              );
-            }
-          }
-        }
-      },
-    });
-    // The helper parses frames before onEvent; capture their exact uncompressed size first.
-    client.ws.prependListener("message", (data: import("ws").RawData) => {
-      receivedFrameBytes = Array.isArray(data)
-        ? data.reduce((sum, part) => sum + part.byteLength, 0)
-        : data.byteLength;
-    });
-    client.ws.on("close", (code) => {
-      if (!closing) {
-        subscriberFailure ??= new Error(`subscriber ${index} unexpectedly closed (${code})`);
-      }
-    });
-    client.ws.on("error", (error) => {
-      if (!closing) {
-        subscriberFailure ??= new Error(`subscriber ${index}: ${error.message}`);
-      }
-    });
-    clients.push(client);
-    await client.waitOpen();
-    await rpc(client, "connect", {
-      minProtocol: PROTOCOL_VERSION,
-      maxProtocol: PROTOCOL_VERSION,
-      client: {
-        id: "gateway-client",
-        displayName: "synthetic-broadcast-measurement",
-        version: "1.0.0",
-        platform: process.platform,
-        mode: "backend",
-      },
-      role: "operator",
-      scopes: ["operator.read", "operator.admin"],
-      caps: [
-        "session-scoped-events",
-        "chat-only-assistant-text",
-        ...(exactClients < clientCount ? ["roster-message-bodies-optional"] : []),
-        ...(values["session-row-deltas"] ? ["session-row-deltas"] : []),
-        ...(values["session-envelope-refs"] ? ["session-event-field-refs"] : []),
-      ],
-    });
+    const client = await connectClient(index);
     if (index === 0) {
       await rpc(client, "sessions.create", {
         key: parentKey,
+        ...(stressWorktree ? { cwd: stressWorktree } : {}),
         visibility: "shared",
         displayName: "Synthetic broadcast parent",
       });
@@ -1373,6 +1630,7 @@ try {
       for (const key of keys) {
         await rpc(client, "sessions.create", {
           key,
+          ...(stressWorktree ? { cwd: stressWorktree } : {}),
           ...(values["activity-summaries"] ? {} : { parentSessionKey: parentKey, spawnDepth: 1 }),
           fork: false,
           visibility: "shared",
@@ -1390,6 +1648,57 @@ try {
   if (!sender) {
     throw new Error("no sender client");
   }
+  const expectedSidebar =
+    scenario === "reconnect"
+      ? sidebarIdentity(await rpc(sender, "sessions.list", { limit, rowMode, archived: "all" }))
+      : undefined;
+  if (stressWorktree && diffControlOriginal !== undefined) {
+    // First work captures the baseline; later child announcements must not capture our edit.
+    const runId = randomUUID();
+    await rpc(sender, "agent", {
+      sessionKey: parentKey,
+      message: "Acknowledge this synthetic diff baseline preparation.",
+      deliver: false,
+      idempotencyKey: runId,
+    });
+    const result = await rpc(sender, "agent.wait", { runId, timeoutMs: 170_000 });
+    if (!isRecord(result) || result.status !== "ok") {
+      throw new Error(`diff baseline preparation failed: ${JSON.stringify(result)}`);
+    }
+    writeFileSync(
+      path.join(stressWorktree, "README.md"),
+      `${diffControlOriginal}Synthetic diff control.\n`,
+    );
+  }
+  if (soakScenario && values["stress-tools"]) {
+    const job = await rpc(sender, "cron.add", {
+      name: "Synthetic allocation stress cron",
+      agentId: "main",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 30_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: {
+        kind: "agentTurn",
+        message: "Acknowledge this synthetic scheduled allocation probe.",
+        timeoutSeconds: 120,
+      },
+      delivery: { mode: "none" },
+      failureAlert: false,
+    });
+    if (!isRecord(job) || typeof job.id !== "string") {
+      throw new Error("stress cron.add did not return a job ID");
+    }
+    stressCronJobId = job.id;
+    const run = await rpc(sender, "cron.run", {
+      id: job.id,
+      mode: "force",
+      waitTimeoutMs: 170_000,
+    });
+    if (!isRecord(run) || !isRecord(run.run) || run.run.status !== "ok") {
+      throw new Error(`stress cron did not complete its real agent turn: ${JSON.stringify(run)}`);
+    }
+  }
   console.log("PHASE subscribed-and-reset");
   const runScenario = async (measuredRound?: number) => {
     if (turnScenario) {
@@ -1399,39 +1708,105 @@ try {
       }
       return streamStart;
     }
-    for (let operation = 0; operation < operations; operation++) {
-      if (scenario === "sessions.list" || scenario === "subscribe") {
-        const method = scenario === "subscribe" ? "sessions.subscribe" : "sessions.list";
-        const result = await rpc(sender, method, {
-          limit,
-          rowMode,
-          archived: "all",
-        });
-        const page =
-          scenario === "subscribe"
-            ? isRecord(result) && result.subscribed === true
-              ? result.list
-              : undefined
-            : result;
-        if (
-          !isRecord(page) ||
-          typeof page.totalCount !== "number" ||
-          page.count !== Math.min(limit, page.totalCount)
-        ) {
-          throw new Error(`${method} did not return the requested page`);
+    for (let offset = 0; offset < operations; offset += clientCount) {
+      const batchCount = Math.min(clientCount, operations - offset);
+      const batchStarted = performance.now();
+      const reconnectStarted: number[] = [];
+      const slots = clients.slice(0, batchCount).entries();
+      await Promise.all(
+        clients.slice(0, Math.min(rpcConcurrency, batchCount)).map(async (workerClient) => {
+          for (const [index, oldClient] of slots) {
+            if (connectionScenario) {
+              if (scenario === "reconnect") {
+                await delay(
+                  Math.max(0, batchStarted + index * reconnectStaggerMs - performance.now()),
+                );
+                reconnectStarted.push(performance.now() - batchStarted);
+              }
+              expectedClosures.add(oldClient);
+              const closed = once(oldClient.ws, "close");
+              oldClient.close();
+              await closed;
+              const client = await connectClient(index);
+              if (scenario === "reconnect") {
+                const subscription = await rpc(client, "sessions.subscribe", {
+                  limit,
+                  rowMode,
+                  archived: "all",
+                });
+                assertListPage(
+                  isRecord(subscription) && subscription.subscribed === true
+                    ? subscription.list
+                    : undefined,
+                  "sessions.subscribe",
+                );
+                for (const key of index < exactClients ? keys : []) {
+                  await rpc(client, "sessions.messages.subscribe", { key, subscriptionId: key });
+                }
+                const sidebar = await rpc(client, "sessions.list", {
+                  limit,
+                  rowMode,
+                  archived: "all",
+                });
+                if (sidebarIdentity(sidebar) !== expectedSidebar) {
+                  throw new Error(
+                    `reconnected client ${index} did not recover the current sidebar`,
+                  );
+                }
+              }
+            } else if (scenario === "sessions.list" || scenario === "subscribe") {
+              const method = scenario === "subscribe" ? "sessions.subscribe" : "sessions.list";
+              const result = await rpc(workerClient, method, {
+                limit,
+                rowMode,
+                archived: "all",
+              });
+              assertListPage(
+                scenario === "subscribe"
+                  ? isRecord(result) && result.subscribed === true
+                    ? result.list
+                    : undefined
+                  : result,
+                method,
+              );
+            } else if (scenario === "sessions.describe") {
+              const result = await rpc(workerClient, "sessions.describe", {
+                key: parentKey,
+              });
+              const row = isRecord(result) ? result.session : undefined;
+              const childKeys = isRecord(row) ? row.childSessions : undefined;
+              if (
+                !isRecord(row) ||
+                row.key !== parentKey ||
+                !Array.isArray(childKeys) ||
+                childKeys.length !== keys.length ||
+                !keys.every((key) => childKeys.includes(key))
+              ) {
+                throw new Error("sessions.describe did not return the parent with seeded children");
+              }
+            } else {
+              const result = await rpc(workerClient, "plugins.reload", {
+                plugins: [{ pluginId: reloadPluginId }],
+                waitForDrain: true,
+              });
+              if (!isRecord(result) || result.restartRequired !== false) {
+                throw new Error("synthetic plugin reload did not apply live");
+              }
+            }
+          }
+        }),
+      );
+      if (scenario === "reconnect") {
+        const startSpreadMs = Math.max(...reconnectStarted) - Math.min(...reconnectStarted);
+        if (startSpreadMs > 5000) {
+          throw new Error("reconnect starts exceeded 5000 ms; increase --rpc-concurrency");
         }
-      } else {
-        const result = await rpc(sender, "plugins.reload", {
-          plugins: [{ pluginId: reloadPluginId }],
-          waitForDrain: true,
-        });
-        if (
-          !result ||
-          typeof result !== "object" ||
-          !("restartRequired" in result) ||
-          result.restartRequired !== false
-        ) {
-          throw new Error("synthetic plugin reload did not apply live");
+        if (measuring) {
+          reconnectStorms.push({
+            clients: batchCount,
+            startSpreadMs,
+            allSidebarsCurrentMs: performance.now() - batchStarted,
+          });
         }
       }
     }
@@ -1464,10 +1839,28 @@ try {
   }
   const initialRetainedResources =
     retentionScenario || soakScenario
-      ? await readGatewayResources(gateway, { collectGarbage: true })
+      ? await readGatewayResources(gateway, {
+          collectGarbage: !soakScenario || !values.allocations,
+        })
       : undefined;
+  const soakAllocationPath =
+    soakScenario && values.allocations
+      ? path.join(output, "allocation-soak.heapprofile")
+      : undefined;
+  // A twenty-minute churn profile needs coarser sampling to bound native records and JSON export.
+  const soakSamplingIntervalBytes = 512 * 1024;
+  if (soakAllocationPath) {
+    // Reading or stopping a V8 sampling profile forces GC; keep one window for the entire soak.
+    await controlGatewayProfile(gateway, "heap", "start", soakAllocationPath, {
+      samplingIntervalBytes: soakSamplingIntervalBytes,
+    });
+  }
   const measurementStartedAt = Date.now();
   const measuredGateway = gateway;
+  const finishWholeSoakDiagnostics =
+    soakScenario && (values.diagnostics || values.allocations || values["trace-gc"])
+      ? await startGatewayDiagnostics(gateway, "whole-soak")
+      : undefined;
   const samples = [];
   const memorySamples: Array<{
     atEpochMs: number;
@@ -1514,6 +1907,9 @@ try {
       retainedProfileStartedAt = Date.now();
     }
     counters.clear();
+    rpcMeasurements.clear();
+    handshakeLatenciesMs.length = 0;
+    reconnectStorms.length = 0;
     eventBytes.clear();
     sessionEventSizes.clear();
     representativeFrames.clear();
@@ -1543,11 +1939,17 @@ try {
       : undefined;
     const before = await readGatewayCpuUsage(gateway);
     measuring = true;
-    const listLatencies: number[] = [];
+    const rpcLatencies: Record<string, number[]> = {
+      "sessions.list": [],
+      "chat.history": [],
+      "sessions.diff": [],
+      connect: [],
+    };
+    const listLatencies = rpcLatencies["sessions.list"]!;
     const initialPollPhasesMs: number[] = [];
     let streamStart: Awaited<ReturnType<typeof runRound>> | undefined;
     const listRequests: Array<{
-      method: "sessions.list";
+      method: string;
       responseId: string;
       client: number;
       round: number;
@@ -1571,38 +1973,89 @@ try {
                 if (random) {
                   await Promise.race([delay(initialPhaseMs, undefined, { ref: false }), stopped]);
                 }
+                let poll = clientIndex;
                 while (true) {
                   if (!polling) {
                     break;
                   }
                   const started = performance.now();
                   let responseId = "";
-                  const page = await rpc(
-                    client,
-                    "sessions.list",
-                    { rowMode: "compact", limit, archived: "all" },
-                    recordListRequests
-                      ? (id) => {
-                          responseId = id;
-                        }
-                      : undefined,
-                  );
-                  if (
-                    !isRecord(page) ||
-                    typeof page.totalCount !== "number" ||
-                    page.count !== Math.min(limit, page.totalCount) ||
-                    !Array.isArray(page.sessions) ||
-                    page.sessions.length !== page.count ||
-                    page.count === 0
-                  ) {
-                    throw new Error("concurrent sessions.list did not return the requested page");
+                  const method = values["mixed-rpc"]
+                    ? ["sessions.list", "chat.history", "sessions.diff", "connect"][poll++ % 4]!
+                    : "sessions.list";
+                  const onResponse = recordListRequests
+                    ? (id: string) => {
+                        responseId = id;
+                      }
+                    : undefined;
+                  if (method === "connect") {
+                    const peer = createGatewayWsClient({ url: `ws://127.0.0.1:${port}` });
+                    trackClientFrames(peer);
+                    try {
+                      await peer.waitOpen();
+                      const hello = await rpc(peer, "connect", connectParams, onResponse);
+                      if (!Value.Check(HelloOkSchema, hello)) {
+                        throw new Error("fresh connect did not return hello-ok");
+                      }
+                    } finally {
+                      peer.close();
+                    }
+                  } else if (method === "chat.history") {
+                    const history = await rpc(
+                      client,
+                      method,
+                      {
+                        sessionKey: `agent:main:team-shape-session-${clientIndex % fixtureSessionCount}`,
+                        limit: 50,
+                      },
+                      onResponse,
+                    );
+                    if (
+                      !isRecord(history) ||
+                      !Array.isArray(history.messages) ||
+                      !history.messages.length
+                    ) {
+                      throw new Error(
+                        "chat.history did not return the retained fixture transcript",
+                      );
+                    }
+                  } else if (method === "sessions.diff") {
+                    validateDiff(
+                      await rpc(
+                        client,
+                        method,
+                        {
+                          sessionKey: parentKey,
+                          scope: "all",
+                          summaryOnly: true,
+                        },
+                        onResponse,
+                      ),
+                    );
+                  } else {
+                    const page = await rpc(
+                      client,
+                      method,
+                      { rowMode, limit, archived: "all" },
+                      onResponse,
+                    );
+                    if (
+                      !isRecord(page) ||
+                      typeof page.totalCount !== "number" ||
+                      page.count !== Math.min(limit, page.totalCount) ||
+                      !Array.isArray(page.sessions) ||
+                      page.sessions.length !== page.count ||
+                      page.count === 0
+                    ) {
+                      throw new Error("concurrent sessions.list did not return the requested page");
+                    }
                   }
                   const ended = performance.now();
                   const requestDurationMs = ended - started;
-                  listLatencies.push(requestDurationMs);
+                  rpcLatencies[method]!.push(requestDurationMs);
                   if (recordListRequests) {
                     listRequests.push({
-                      method: "sessions.list",
+                      method,
                       responseId,
                       client: clientIndex,
                       round,
@@ -1638,16 +2091,20 @@ try {
         await listWork;
       }
     };
-    const allocation = values.allocations
-      ? await measureGatewayAllocations(
-          gateway,
-          path.join(output, `allocation-${round}.heapprofile`),
-          turnScenario ? runCount : operations,
-          workload,
-        )
-      : undefined;
-    if (!values.allocations) {
+    const allocation =
+      values.allocations && !soakScenario
+        ? await measureGatewayAllocations(
+            gateway,
+            path.join(output, `allocation-${round}.heapprofile`),
+            turnScenario ? runCount : operations,
+            workload,
+          )
+        : undefined;
+    if (!values.allocations || soakScenario) {
       await workload();
+    }
+    if (values["mixed-rpc"] && Object.values(rpcLatencies).some((latencies) => !latencies.length)) {
+      throw new Error("mixed RPC workload must observe every method; increase cohort duration");
     }
     if (listIntervalMs && listLatencies.length === 0) {
       throw new Error("No sessions.list samples collected; shorten --list-interval-ms");
@@ -1732,8 +2189,38 @@ try {
       round,
       scenario,
       allocation,
+      rpc: Object.fromEntries(
+        [...rpcMeasurements].map(([method, measurements]) => [
+          method,
+          {
+            ...latencySummary(measurements.latenciesMs),
+            callsPerMinute: (measurements.latenciesMs.length / cpu.wallMs) * 60_000,
+            responseBytes: measurements.responseBytes,
+            responseBytesPerCall: measurements.responseBytes / measurements.latenciesMs.length,
+          },
+        ]),
+      ),
+      ...(connectionScenario
+        ? {
+            handshake: latencySummary(handshakeLatenciesMs),
+            reconnectStorms: [...reconnectStorms],
+          }
+        : {}),
+      ...(turnScenario && allocation
+        ? { allocatedMbPerTurn: allocation.estimatedAllocatedBytesPerOperation / 1_000_000 }
+        : {}),
       diagnostics,
       streamStart,
+      ...(values["mixed-rpc"]
+        ? {
+            rpcLatencyMs: Object.fromEntries(
+              Object.entries(rpcLatencies).map(([method, latencies]) => [
+                method,
+                summarizeLatencies(latencies),
+              ]),
+            ),
+          }
+        : {}),
       activeWorkCounts,
       toolCalls,
       toolResults,
@@ -1759,9 +2246,11 @@ try {
               ...(values["poll-seed"] !== undefined ? { initialPollPhasesMs } : {}),
               ...(recordListRequests
                 ? {
-                    requests: listRequests,
-                    p99Request: listRequests.toSorted((a, b) => a.durationMs - b.durationMs)[
-                      Math.ceil(listRequests.length * 0.99) - 1
+                    requests: listRequests.filter((request) => request.method === "sessions.list"),
+                    p99Request: listRequests
+                      .filter((request) => request.method === "sessions.list")
+                      .toSorted((a, b) => a.durationMs - b.durationMs)[
+                      Math.ceil(listLatencies.length * 0.99) - 1
                     ],
                   }
                 : {}),
@@ -1781,6 +2270,11 @@ try {
       deliveredSessionEvents,
       sourceEvents,
       mainThreadMsPerSessionEvent: sourceEvents ? cpu.mainThread.totalMs / sourceEvents : null,
+      mainThreadMsPerSessionEventDelivery: deliveredSessionEvents
+        ? cpu.mainThread.totalMs / deliveredSessionEvents
+        : null,
+      estimatedAllocatedBytesPerSessionEvent:
+        allocation && sourceEvents ? allocation.sampledAllocatedBytes / sourceEvents : null,
       mainThreadMsPerSecond: (cpu.mainThread.totalMs / cpu.wallMs) * 1000,
       sessionEventsPerSecond: (sourceEvents / cpu.wallMs) * 1000,
     };
@@ -1814,6 +2308,21 @@ try {
       ]);
     }
   }
+  const wholeSoakDiagnostics = await finishWholeSoakDiagnostics?.();
+  let wholeSoakAllocation;
+  if (soakAllocationPath) {
+    // Stop after the GC/loop window so the profiler's forced collection cannot affect acceptance.
+    await controlGatewayProfile(gateway, "heap", "stop", soakAllocationPath);
+    const profile = readGatewayHeapProfile(soakAllocationPath, {
+      samplingIntervalBytes: soakSamplingIntervalBytes,
+    });
+    const completedTurns = samples.length * runCount;
+    wholeSoakAllocation = {
+      ...profile,
+      completedTurns,
+      allocatedMbPerTurn: profile.sampledAllocatedBytes / 1_000_000 / completedTurns,
+    };
+  }
   let retainedProfile;
   if (soakScenario) {
     await sampleMemory();
@@ -1840,20 +2349,95 @@ try {
       });
     }
   }
+  let diffEditVisibilityMs: number | undefined;
+  if (values["mixed-rpc"] && stressWorktree && diffControlOriginal !== undefined) {
+    writeFileSync(
+      path.join(stressWorktree, "README.md"),
+      `${diffControlOriginal}Synthetic diff control.\nSynthetic edit control.\n`,
+    );
+    const editStarted = performance.now();
+    let diff;
+    do {
+      diff = await rpc(sender, "sessions.diff", {
+        sessionKey: parentKey,
+        scope: "all",
+        summaryOnly: true,
+      });
+      if (isRecord(diff) && diff.additions === 2) {
+        break;
+      }
+      await delay(100);
+    } while (performance.now() - editStarted < 12_000);
+    validateDiff(diff, 2);
+    diffEditVisibilityMs = performance.now() - editStarted;
+  }
+  let cronRuns;
+  if (stressCronJobId) {
+    await rpc(sender, "cron.update", { id: stressCronJobId, patch: { enabled: false } });
+    const history = await rpc(sender, "cron.runs", { id: stressCronJobId, limit: 200 });
+    if (
+      !isRecord(history) ||
+      !Array.isArray(history.entries) ||
+      !history.entries.length ||
+      history.entries.some((entry: unknown) => !isRecord(entry) || entry.status !== "ok")
+    ) {
+      throw new Error("stress cron history is missing or contains a failed run");
+    }
+    cronRuns = history.entries.filter(
+      (entry: { runAtMs?: number }) => (entry.runAtMs ?? 0) >= measurementStartedAt,
+    );
+    if (durationMs >= 60_000 && !cronRuns.length) {
+      throw new Error("stress cron did not complete during the measured soak");
+    }
+  }
+  // Process exit plus drained log streams makes promotion accounting independent of pipe buffering.
+  await cleanup();
+  let wholeSoakGc;
+  if (wholeSoakDiagnostics && (values.allocations || values["trace-gc"])) {
+    const trace = readGatewayGcTrace(
+      path.join(output, "gateway.stdout.log"),
+      "whole-soak",
+      "diagnostics",
+    );
+    const completedTurns = samples.length * runCount;
+    const wallMs = wholeSoakDiagnostics.durationMs;
+    wholeSoakGc = {
+      ...trace,
+      completedTurns,
+      wallMs,
+      promotedMbPerTurn: trace.promotedBytes / 1_000_000 / completedTurns,
+      scavengeSecondsPerMinute:
+        ((wholeSoakDiagnostics.gc.minorDurationMs?.total ?? 0) * 60) / wallMs,
+      majorSecondsPerMinute: ((wholeSoakDiagnostics.gc.majorDurationMs?.total ?? 0) * 60) / wallMs,
+    };
+  }
   const result = {
     output,
     scenario,
     revision: values.revision ?? null,
     operationsPerRound: turnScenario ? runCount : operations,
+    rpcConcurrency,
+    reconnectStaggerMs,
+    rpcLatencyScope:
+      "client request-to-response; handler and queue timings are in Gateway diagnostics",
+    perEventResourceScope:
+      "whole measured workload main-isolate CPU and sampled allocations divided by session publications or deliveries; not encode/send-only cost",
+    connectionMeasurementScope: connectionScenario
+      ? "owned socket replacement; handshake includes WebSocket open and connect; reconnect adds subscribe and list; events during intentional disconnection are not replayed"
+      : undefined,
     limit,
     rowMode,
     sessionRowDeltas: values["session-row-deltas"],
     sessionEnvelopeRefs: values["session-envelope-refs"],
     listIntervalMs,
+    mixedRpc: values["mixed-rpc"],
+    stressTools: values["stress-tools"],
+    cronRuns,
+    ...(values["mixed-rpc"] ? { diffEditControlVerified: true, diffEditVisibilityMs } : {}),
     pollSeed: values["poll-seed"] ?? null,
     diagnostics: values.diagnostics,
     cpuProfile: values["cpu-profile"],
-    traceGc: values["trace-gc"],
+    traceGc: values["trace-gc"] || values.allocations || values["stream-start-allocations"],
     streamStartDiagnostics: values["stream-start-diagnostics"],
     streamStartAllocations: values["stream-start-allocations"],
     activeWorkDiagnostics: values["active-work-diagnostics"],
@@ -1882,11 +2466,37 @@ try {
           sessionResets,
           completedSoakRounds,
           initialRetainedResources,
+          initialMemoryCollected: !values.allocations,
           memorySamples,
           retainedProfile,
+          wholeSoakAllocation,
+          wholeSoakDiagnostics,
+          wholeSoakGc,
         }
       : {}),
-    samples,
+    samples: samples.map((sample) =>
+      Object.assign(sample, {
+        ...(sample.allocation
+          ? {
+              allocation: {
+                ...sample.allocation,
+                ...readPromotion(sample.allocation.profilePath, sample.allocation.operationCount),
+              },
+            }
+          : {}),
+        ...(sample.streamStart?.heapProfile
+          ? {
+              streamStart: {
+                ...sample.streamStart,
+                heapProfile: {
+                  ...sample.streamStart.heapProfile,
+                  ...readPromotion(sample.streamStart.heapProfile.profilePath, runCount),
+                },
+              },
+            }
+          : {}),
+      }),
+    ),
   };
   writeFileSync(path.join(output, "result.json"), JSON.stringify(result, null, 2));
   console.log(`RESULT ${path.join(output, "result.json")}`);

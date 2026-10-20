@@ -1224,7 +1224,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       media: mediaFacts,
       commandAuthorized,
       canDetectMention,
-      requireMention,
       wasMentioned: effectiveWasMentioned,
       replyToBody: visibleQuoteText || undefined,
       replyToSender: visibleQuoteSender,

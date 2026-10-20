@@ -10,7 +10,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { resolveConfigPath, resolveGatewayLockDir, resolveStateDir } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { isPidAlive } from "../shared/pid-alive.js";
+import { isPidAlive, isPidDefinitelyDead } from "../shared/pid-alive.js";
 import {
   createOpenClawDatabaseMaintenanceScope,
   getOpenClawDatabaseMaintenanceScope,
@@ -132,7 +132,7 @@ function resolveGatewayOwnerStatusSync(
   }
   const role = payload?.role ?? "gateway";
   if (!isPidAlive(pid)) {
-    return "dead";
+    return isPidDefinitelyDead(pid) ? "dead" : "unknown";
   }
 
   // Process start identity catches PID recycling even when the replacement
@@ -159,8 +159,7 @@ function resolveGatewayOwnerStatusSync(
   const args = readFn(pid);
   remainingTimeoutMs();
   if (!args) {
-    // Legacy Linux locks can eventually become stale. Other Gateway locks retain
-    // conservative liveness when platform inspection is unavailable.
+    // An unavailable command observation cannot prove that the owner stopped.
     return embedded || platform === "linux" || opts.trustUnknownCmdlineOwner === false
       ? "unknown"
       : "alive";
@@ -178,11 +177,7 @@ function resolveGatewayOwnerStatusSync(
     command ? { command, ...identityOptions } : identityOptions,
   );
   remainingTimeoutMs();
-  return identity.kind === "unclassified"
-    ? "unknown"
-    : identity.kind === "openclaw"
-      ? "alive"
-      : "dead";
+  return identity.kind === "openclaw" ? "alive" : "unknown";
 }
 
 export async function resolveGatewayOwnerStatus(
@@ -235,8 +230,6 @@ export function readLockPayloadSync(
 function shouldReclaimGatewayLock(params: {
   lockPath: string;
   payload: LockPayload | null;
-  staleMs: number;
-  now: () => number;
   platform: NodeJS.Platform;
   readProcessCmdline?: (pid: number) => string[] | null;
   readProcessStartTime?: (pid: number) => number | null;
@@ -261,19 +254,7 @@ function shouldReclaimGatewayLock(params: {
   if (ownerPid) {
     return ownerStatus === "dead";
   }
-  if (params.payload?.createdAt) {
-    const createdAt = Date.parse(params.payload.createdAt);
-    if (Number.isFinite(createdAt) && params.now() - createdAt > params.staleMs) {
-      return true;
-    }
-  }
-  try {
-    const stat = fsSync.statSync(params.lockPath);
-    return params.now() - stat.mtimeMs > params.staleMs;
-  } catch {
-    // An unreadable lock can still belong to a healthy gateway. Fail closed.
-    return false;
-  }
+  return false;
 }
 
 export function resolveGatewayLockPaths(env: NodeJS.ProcessEnv, suppliedLockDir?: string) {
@@ -533,7 +514,7 @@ export async function acquireGatewayLock(
             }
             if (!waited) {
               (opts.onWait ?? log.warn)(
-                `Waiting for the previous Gateway's owner heartbeat to expire before reclaiming state (up to ${Math.ceil(remaining / 1000)} seconds). ${error.message}`,
+                `Waiting up to ${Math.ceil(remaining / 1000)} seconds for the previous Gateway to release state; an unverifiable owner will not be reclaimed automatically. ${error.message}`,
               );
             }
             waited = true;
@@ -608,8 +589,6 @@ export async function acquireGatewayLock(
       shouldReclaimGatewayLock({
         lockPath: paths.stateLockPath,
         payload: previous,
-        staleMs: opts.staleMs ?? 30_000,
-        now: Date.now,
         platform: opts.platform ?? process.platform,
         readProcessCmdline: opts.readProcessCmdline,
         readProcessStartTime: opts.readProcessStartTime,

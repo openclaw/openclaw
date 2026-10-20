@@ -240,7 +240,6 @@ extensions/discord/src/monitor/provider.allowlist.ts	1
 extensions/discord/src/monitor/provider.deploy-errors.ts	9
 extensions/discord/src/monitor/provider.deploy.ts	3
 extensions/discord/src/monitor/provider.lifecycle.ts	2
-extensions/discord/src/monitor/reply-context.ts	1
 extensions/discord/src/monitor/reply-safety.ts	1
 extensions/discord/src/monitor/rest-fetch.ts	3
 extensions/discord/src/monitor/thread-bindings.discord-api.ts	2
@@ -1303,7 +1302,7 @@ src/agents/sessions/session-manager-codec.ts	5
 src/agents/sessions/session-manager-core.ts	1
 src/agents/sessions/session-manager-entries.ts	2
 src/agents/sessions/session-manager.ts	2
-src/agents/sessions/settings-manager.ts	8
+src/agents/sessions/settings-manager.ts	3
 src/agents/sessions/steering-message-identity.ts	2
 src/agents/sessions/tools/edit.ts	3
 src/agents/sessions/tools/tool-definition-wrapper.ts	1
@@ -2178,7 +2177,6 @@ src/plugin-sdk/tool-plugin.ts	10
 src/plugin-sdk/windows-spawn.ts	1
 src/plugin-state/plugin-store-validation.ts	1
 src/plugins/agent-tool-result-middleware.ts	1
-src/plugins/api-facades.ts	1
 src/plugins/bundle-config-shared.ts	1
 src/plugins/bundle-lsp.ts	1
 src/plugins/bundle-mcp.ts	2

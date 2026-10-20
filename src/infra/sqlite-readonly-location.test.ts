@@ -74,37 +74,48 @@ function readLogicalFamily(pathname: string): Map<string, Buffer> {
   return family;
 }
 
-it("keeps each scoped artifact-preserving inspection byte-neutral across writer commits", async () => {
-  const cacheRoot = path.join(tempDirs.make("openclaw-sqlite-snapshot-cache-"), "missing");
-  const databasePath = createTempDatabasePath();
-  const writer = new sqlite.DatabaseSync(databasePath);
-  try {
-    writer.exec(
-      "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE probe(value TEXT)",
-    );
-    await withEnvAsync({ XDG_CACHE_HOME: cacheRoot }, () =>
-      withSqliteReadOnlyWorkerScope(async () => {
-        for (const value of ["first", "second"]) {
-          writer.prepare("INSERT INTO probe VALUES (?)").run(value);
-          const familyBefore = readFamily(databasePath);
-          const prepared = await prepareSqliteReadOnlyLocation(databasePath, {
-            preserveSourceArtifacts: true,
-          });
-          inspectSnapshot(prepared, (snapshot) => {
-            expect(prepared.location.startsWith(`${cacheRoot}${path.sep}`)).toBe(true);
-            expect(fs.statSync(path.dirname(prepared.location)).mode & 0o777).toBe(0o700);
-            expect(readFamily(databasePath)).toEqual(familyBefore);
-            expect(
-              snapshot.prepare("SELECT value FROM probe ORDER BY rowid DESC LIMIT 1").get(),
-            ).toEqual({ value });
-          });
-        }
-      }),
-    );
-  } finally {
-    writer.close();
-  }
-});
+it.each(["cache", "update-tmpdir"])(
+  "keeps %s inspections byte-neutral across writer commits",
+  async (placement) => {
+    const cacheRoot = path.join(tempDirs.make("openclaw-sqlite-snapshot-cache-"), "missing");
+    const databasePath = createTempDatabasePath();
+    const writer = new sqlite.DatabaseSync(databasePath);
+    try {
+      writer.exec(
+        "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE probe(value TEXT)",
+      );
+      await withEnvAsync(
+        placement === "cache"
+          ? { XDG_CACHE_HOME: cacheRoot }
+          : {
+              XDG_CACHE_HOME: undefined,
+              TMPDIR: cacheRoot,
+              OPENCLAW_UPDATE_IN_PROGRESS: "1",
+            },
+        () =>
+          withSqliteReadOnlyWorkerScope(async () => {
+            for (const value of ["first", "second"]) {
+              writer.prepare("INSERT INTO probe VALUES (?)").run(value);
+              const familyBefore = readFamily(databasePath);
+              const prepared = await prepareSqliteReadOnlyLocation(databasePath, {
+                preserveSourceArtifacts: true,
+              });
+              inspectSnapshot(prepared, (snapshot) => {
+                expect(prepared.location.startsWith(`${cacheRoot}${path.sep}`)).toBe(true);
+                expect(fs.statSync(path.dirname(prepared.location)).mode & 0o777).toBe(0o700);
+                expect(readFamily(databasePath)).toEqual(familyBefore);
+                expect(
+                  snapshot.prepare("SELECT value FROM probe ORDER BY rowid DESC LIMIT 1").get(),
+                ).toEqual({ value });
+              });
+            }
+          }),
+      );
+    } finally {
+      writer.close();
+    }
+  },
+);
 
 it.each([13, 778])(
   "retains SQLite destination write failure %i and identifies the snapshot cache",

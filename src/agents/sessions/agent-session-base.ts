@@ -37,6 +37,10 @@ import {
 } from "./extensions/index.js";
 import type { RegisteredTool } from "./extensions/types.js";
 import type { CustomMessage } from "./messages.js";
+import {
+  getModelPromptProjectionAppend,
+  sessionManagerAppendPromptContext,
+} from "./model-prompt-projection-append.js";
 import { getModelRegistryRuntime } from "./model-registry-runtime.js";
 import type { ModelRegistry } from "./model-registry.js";
 import type { PromptTemplate } from "./prompt-templates.js";
@@ -363,13 +367,18 @@ export abstract class AgentSessionBase {
     if (event.type === "message_end") {
       if (event.message.role === "custom") {
         const message = event.message;
-        await this.sessionManager.appendCustomMessageEntryAsync(
-          message.customType,
-          message.content,
-          message.display,
-          message.details,
-          message.timestamp,
-        );
+        const prepareProjection = getModelPromptProjectionAppend(message);
+        if (prepareProjection) {
+          await this.sessionManager[sessionManagerAppendPromptContext](message, prepareProjection);
+        } else {
+          await this.sessionManager.appendCustomMessageEntryAsync(
+            message.customType,
+            message.content,
+            message.display,
+            message.details,
+            message.timestamp,
+          );
+        }
       } else if (
         event.message.role === "user" ||
         event.message.role === "assistant" ||

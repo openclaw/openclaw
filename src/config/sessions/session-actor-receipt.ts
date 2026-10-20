@@ -13,8 +13,9 @@ function collectAppendedEvents(
   before: SessionActorHotState,
   after: SessionActorHotState,
   payloads: ReadonlyMap<number, { event: unknown; serializedBytes: number }> | undefined,
+  rewrittenGeneration = before.transcript.version.generation,
 ): SessionActorReceipt["transcript"]["appendedEvents"] {
-  if (!payloads || before.transcript.version.generation !== after.transcript.version.generation) {
+  if (!payloads || rewrittenGeneration !== after.transcript.version.generation) {
     return undefined;
   }
   const beforeSeq = before.transcript.version.rawSeq ?? -1;
@@ -84,7 +85,12 @@ export function createSessionActorCommittedOutcome<
         after: after.transcript.version,
         appendedMessages:
           turn?.result.appendedMessages ?? (appended && "messageId" in appended ? [appended] : []),
-        appendedEvents: collectAppendedEvents(before, after, params.payloads),
+        appendedEvents: collectAppendedEvents(
+          before,
+          after,
+          params.payloads,
+          append?.modelPromptProjection?.after.generation,
+        ),
         authorityReceipts: params.transcriptAuthority,
         append,
         projectionNeedsReconcile:

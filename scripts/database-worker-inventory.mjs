@@ -2904,9 +2904,9 @@ const reviewedOperations = new Map([
       },
       {
         tier: "W",
-        operations: ["deleteRestartSentinelRowSync"],
+        operations: ["deleteRestartSentinelRowSync", "readRestartSentinelSnapshotSync"],
         evidence:
-          "Only src/infra/restart-sentinel.worker.ts:79; worker registration src/state/openclaw-state-worker-registry.ts:110.",
+          "Deletion and snapshot reads run in restart-sentinel.worker.ts or restart-sentinel.read.worker.ts; managed-handoff snapshot callers are also worker operations.",
       },
     ],
   ],

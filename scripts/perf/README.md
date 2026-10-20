@@ -481,6 +481,18 @@ fixtures for each side, with matching client/operation/round counts and the same
 if the deadline has passed. Hold the shared measurement lock around the pair,
 and swap the two CPU halves for the next pair.
 
+Add `--allocations` to replace CPU sampling with main-isolate allocation sampling
+for the same history/diff requests and response checks. Each scenario/round records
+`clients × operations` completed RPCs. Its `profile` includes sampled bytes per
+operation, allocation sites, and separate major/minor/incremental/weak-callback GC
+summaries; `promotion` includes V8 promoted bytes and bytes per operation. The
+stdout-only GC log is parsed after the owned Gateway exits and the log is flushed,
+excluding workers and GC outside the capture. CPU totals remain available.
+Allocation mode waits at `--start-at` before starting capture, excluding barrier
+idle time; first-dispatch skew includes profiler setup. CPU mode retains its
+pre-barrier profile start. Compare matching modes and shapes. Workers, external
+buffers, and controller allocations are outside the main-isolate estimate.
+
 ## Measure transcript broadcast fanout
 
 With runtime artifacts built on the authorized benchmark host, seed a fixture
@@ -705,14 +717,85 @@ an admitted cohort drains before the duration ends, so a slow cohort may overrun
 `memory-samples.jsonl` records Gateway heap, external, ArrayBuffer and RSS memory
 after completed cohorts at the requested interval, including exact timestamps.
 Periodic samples use natural GC; initial and final settled samples explicitly
-collect garbage. Sampling cadence is bounded by cohort duration. The final
+collect garbage. Allocation-churn soaks keep the warmed heap at the initial
+sample (`initialMemoryCollected: false`) instead of forcing a collection before
+measurement. Sampling cadence is bounded by cohort duration. The final
 window writes `retained.heapprofile` with both include-collected flags false and
 a forced collection before stopping. Its `sampledRetainedBytes` and
 `topRetainedSites` describe allocations surviving that window, not allocation
 churn or all objects retained since startup. `--retained-profile-ms 0` disables
-this capture; it cannot run with allocation-churn capture. The optional
+this capture. Retained and allocation-churn capture cannot run together. The optional
 `settled.heapsnapshot` supports retainer inspection. A smoke run can use
 `--warmup-ms 0 --duration-ms 30000 --retained-profile-ms 15000`.
+
+For steady-state allocation and promotion attribution, disable the retained
+profile and add `--allocations --trace-gc --diagnostics`. For example, the
+following workload has twenty concurrent foreground turns and thirty viewers:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/transcript-broadcast-measure.ts \
+  --state-dir /path/to/team-shape --scenario memory-soak \
+  --clients 30 --runs 20 --chunks 100 --chunk-interval-ms 10 \
+  --warmup-ms 300000 --duration-ms 1200000 --round-interval-ms 15000 \
+  --retained-profile-ms 0 --allocations --trace-gc --diagnostics \
+  --stress-tools --mixed-rpc --list-interval-ms 2000 --poll-seed steady \
+  --revision <measured-commit-sha> --start-at <shared-future-epoch-ms>
+```
+
+`--stress-tools` enables Code Mode in the synthetic configuration. Each outer
+`exec` calls the real `read` and shell `exec` tools; the shell runs `pwd` in the
+fixture's first registered linked worktree and its exit code and output must
+match. The provider continuation must contain the fixture text, the successful
+code result, and the original reasoning signature. The default remains a direct
+`read` call. In memory-soak mode, stress tools also enables one normal isolated
+cron agent job every thirty seconds, with delivery disabled. Setup forces and
+verifies one run; measured successful run-history entries are reported separately
+as `cronRuns`. Cleanup removes the job on success, failure, or interruption; if
+removal fails, discard the fixture before reuse as directed by the warning.
+These background turns contribute resource cost but are excluded
+from the foreground-turn denominator. Child sessions are direct `agent` calls,
+not model-driven `sessions_spawn` calls.
+
+`--mixed-rpc` cycles each viewer through `sessions.list`, retained-fixture
+`chat.history`, worktree `sessions.diff`, and a newly opened WebSocket `connect`.
+It requires at least four viewers and a nonzero polling interval. Every method
+must return real nonempty data or a successful handshake in every measured
+cohort. Diff polls require a known tracked README edit in the actual worktree;
+after capture, a second edit must become visible within twelve seconds, and
+cleanup restores the fixture file. Connect latency includes WebSocket opening
+and the protocol handshake. The report keeps per-method p50/p95/p99/max and raw
+latencies in `rpcLatencyMs`, plus each cohort's foreground end-to-end
+`streamStart.turnLatencyMs` from admission through successful `agent.wait`.
+
+Each allocation profile includes collected objects and reports decimal
+`allocatedMbPerTurn`. Allocation soaks keep one continuous sampling window and
+report it as `wholeSoakAllocation` with `allocation-soak.heapprofile`. These long
+captures sample every 512 KiB on average to bound native sample records and the
+final JSON export; short allocation experiments retain their 32 KiB interval. V8 forces
+a major collection when a sampling profile is read or stopped, so the soak
+never reads the profile between cohorts and stops it only after recording the
+whole-window GC and event-loop metrics. With `--trace-gc` or allocation profiling,
+the owned Node process runs `--trace-gc-nvp`. The shared trace reader identifies
+the main isolate before Gateway startup and reads promotion between diagnostic
+window markers after process exit and log drainage. It supports legacy NVP and
+JSON traces. `wholeSoakGc` reports promoted bytes, decimal `promotedMbPerTurn`,
+and minor/major GC seconds per minute from the diagnostic observer. Missing
+capture markers or malformed promotion traces fail the capture. `wholeSoakGc` and
+`wholeSoakDiagnostics` span all measured cohorts **and the idle gaps**, stopping
+before final forced collection and the edit control. The latter includes
+event-loop p99/max and GC duration by kind. The continuous allocation window
+also covers the idle gaps, so both measurements include deferred work. Short
+non-soak allocation experiments still stop a profile per cohort; their GC
+results do not establish natural steady-state GC behavior. Sampling retains
+native sample metadata and adds stack-capture overhead; confirm marginal
+GC/latency results with a matching soak without allocation profiling.
+
+Run at least twenty measured minutes per side and compare at least two concurrent
+pairs with swapped CPU halves. Compare B minus A within each pair for allocation,
+promotion, minor/major GC, loop p99/max, every RPC tail, and turn latency. A lower
+sampled allocation total alone does not justify a change that raises promotion
+or GC time. Keep the same profile settings, fixture shape, reset phase, polling
+seed, and workload options on both revisions.
 
 Use identical fixtures, driver revisions and options for concurrent A/B pairs,
 separate state/ports, the existing `--start-at` barrier after warmup, the shared
@@ -1128,12 +1211,31 @@ Supported scenarios:
 | Scenario               | One measured operation                                                                                     |
 | ---------------------- | ---------------------------------------------------------------------------------------------------------- |
 | `sessions.list`        | One compact sidebar page RPC, `archived=all`, `--limit` rows                                               |
+| `sessions.describe`    | One detailed parent-row RPC, including the harness's synthetic children                                    |
+| `connect`              | One owned socket replacement and validated hello handshake; no sidebar restoration                         |
+| `reconnect`            | One owned socket replacement, subscriptions, and verified current sidebar                                  |
 | `subscribe`            | One `sessions.subscribe` snapshot registration/refresh RPC on the sender, with the same page shape as list |
 | `chat.send`            | One completed turn: synthetic read-tool call, then paced streaming answer; one client and one run          |
 | `transcript-broadcast` | One completed `agent` turn, streamed to `--clients` subscribers; `--runs` concurrent turns per round       |
 | `plugins.reload`       | One live reload of a synthetic no-op plugin through the lifecycle RPC                                      |
 
-RPC scenarios use `--operations` per round. Turn scenarios use `--runs` (forced
+RPC scenarios use `--operations` per round. `--rpc-concurrency` defaults to one
+and bounds concurrent requests across the connected sockets. For a reconnect
+storm, use `--clients 40 --operations 40 --rpc-concurrency 40
+--reconnect-stagger-ms 125`; starts must fit within five seconds. Reconnects
+restore session/message subscriptions and compare the ordered sidebar identities
+and update timestamps with the pre-storm page. The report separates handshake
+latency from time until all sidebars are current. Intentional disconnection does
+not imply event replay. These scenarios isolate RPC costs; they do not generate
+background session activity at production rates.
+
+Every measured scenario records per-method request-to-response p50/p99, call rate,
+and uncompressed wire response bytes. Handler and worker queue timings remain in
+Gateway diagnostics. Whole-window CPU/allocation divided by source-event or
+socket-delivery counts is a workload-normalized cost, not isolated encode/send
+cost. Use CPU profiles when attributing broadcast work.
+
+Turn scenarios use `--runs` (forced
 to one for `chat.send`); `--chunks` controls streamed answer size. `plugins.reload`
 defaults to one operation per round; other RPC scenarios default to 100. Count
 the warmup when choosing reload batches: the admin RPC allows 30 calls per minute.
@@ -1167,7 +1269,13 @@ substantial sampling noise. Run an idle comparison if background allocation is
 material; the driver does not subtract it or silently present heap deltas as churn.
 
 `gcMs`, `gcCount`, and `gcMsPerOperation` come from the main isolate's GC performance
-entries. Heap-used and RSS deltas are separate context fields. Worker allocations,
+entries. Diagnostics also separate major, minor, incremental, and weak-callback
+collections. Allocation capture enables V8's GC trace and records promoted bytes
+in `gcTrace`; compare promotion and GC alongside sampled bytes. A forced collection
+before Gateway startup identifies the main isolate, outside every measured window.
+Synchronous markers bound capture; parsing rejects missing markers or ambiguous
+isolate identity. Profiler setup/teardown and worker collections are excluded from
+promotion. The parser supports classic name/value traces and current V8 JSON traces. Heap-used and RSS deltas are separate context fields. Worker allocations,
 worker GC, external buffers, and driver/model-fixture allocation are **not** in
 these per-operation estimates. Process CPU and RSS include workers; main-thread
 CPU is reported separately. Profiling adds CPU and memory overhead, so compare
@@ -1203,6 +1311,24 @@ both legacy and delta readers still receive real changes. CPU and RSS cover the
 workload in the shared Gateway/client process; they are context, not full-browser
 or production capacity measurements. This script models a reproducible lifecycle
 pattern, not a claim that all observed viewer traffic is redundant.
+
+For payload attribution, use `--scenario payloads --clients 40 --agents 24`.
+This prewarms the real public health collector, then measures one cold attach
+wave and `--rounds` reconnect waves with reused signed devices. It records
+per-field UTF-8 JSON byte totals for hello responses, health events, and presence
+events; connect p50/p99; and socket-to-hello-plus-initial-presence readiness.
+After the first maintenance tick, each wave records a synthetic context-engine
+quarantine through its owner and explicitly probes public health to prove changed
+health still broadcasts. Health RPC sizes
+are separate from the per-wave hello + health + presence traffic total. Fields
+contain sizes only; nested field totals overlap their parent. The default web
+profile uses `presence-deltas` and `hello-health-on-demand`; `--compact-payloads`
+adds `health-summary` and `hello-presence-self`. With `--client-profile native`,
+only `health-summary` is added, preserving the profile's legacy CLI controls.
+Plugins, channels, cron, and heartbeat execution are disabled; this is a small
+synthetic agent roster, not a production-state or browser-rendering benchmark.
+Run concurrent baseline/candidate pairs with the same `--start-at` and swap CPU
+halves for the next pair, as above.
 
 ## Measure session roster refreshes during row churn
 

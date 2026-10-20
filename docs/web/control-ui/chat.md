@@ -239,16 +239,17 @@ Editing a Side chat draft does not interrupt loading its earlier answers. **Clea
 
 The Control UI keeps the latest 24 Side chat turns, including failed questions. Sending a follow-up keeps earlier failures in order; **Retry** resends that question in place. Failed questions stay in the current pane through a reconnect, but are not persisted across a page reload.
 
-The question box wraps and grows like the main composer; Enter (or your configured send shortcut) asks the question, and Shift+Enter adds a line. Highlighting text in a chat message offers **Ask in side chat**. Add an optional comment in the selection editor, then save it to stage an editable comment in Side chat. An empty question box starts with a short quote; an existing Side chat draft and the main composer stay unchanged. The full selection and comment accompany that question as bounded, temporary context. After the answer, the restored thread keeps the question text, including its quote, but not the attached context. Reselect the passage for a later question.
+The question box wraps and grows like the main composer; Enter (or your configured send shortcut) asks the question, and Shift+Enter adds a line. Its toolbar matches the main composer where the control applies to a read-only question: **+** attaches images, `:shortcode:` suggests emoji, the microphone dictates, and the model and effort pickers choose the model, reasoning level, and speed for Side chat's own answers. **Default** is the agent's utility model with its fallbacks; a chosen model answers alone, must be allowed for the agent and your operator role, and never changes the main session's model. Side chat choices apply to that agent's sessions for as long as the page stays open. Slash commands, permissions, and Talk stay in the main composer. Highlighting text in a chat message offers **Ask in side chat**. Add an optional comment in the selection editor, then save it to stage an editable comment in Side chat. An empty question box starts with a short quote; an existing Side chat draft and the main composer stay unchanged. The full selection and comment accompany that question as bounded, temporary context. After the answer, the restored thread keeps the question text, including its quote, but not the attached context. Reselect the passage for a later question.
 
 If the selection alone exceeds the context limit, Side chat opens without adding the selection and shows a notification. An empty question box still gets a short quote; an existing draft stays intact. If a comment or the combined selections exceed the limit, the editor stays open so you can shorten the comment or adjust the pending selections.
 
 Drop an image onto Side chat or paste one into its question box. You can send it
 with a written question or on its own. Side chat accepts image attachments, not
 other file types; its previews never add attachments to the main composer.
-Image questions require an image-capable Side chat utility model. A text-only
+Image questions require an image-capable Side chat model. A text-only
 model produces a visible error instead of answering without the image; choose
-an image-capable utility model before retrying.
+an image-capable model in Side chat's model picker (or utility model) before
+retrying.
 Images are available only for the current question and are not retained in the
 restored text thread. Reattach an image when asking a later question about it.
 A failed question keeps its image for **Retry** while the current pane is retained;

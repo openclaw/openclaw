@@ -47,7 +47,10 @@ function rootItems(menu: ChatComposerPlusMenuContentProps): MenuEntry[] {
       : ([
           ["camera", "camera", t("chat.composer.takePhoto")],
           ["photo", "image", t("chat.composer.attachPhoto")],
-          ["file", "paperclip", t("chat.composer.attachFileOption")],
+          // Image-only composers keep the single picker's file input, filtered to images.
+          ...(menu.attachments.imagesOnly
+            ? []
+            : ([["file", "paperclip", t("chat.composer.attachFileOption")]] as const)),
         ] as const)) {
       entries.push({
         id,

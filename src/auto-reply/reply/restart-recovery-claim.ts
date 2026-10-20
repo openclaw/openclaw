@@ -41,7 +41,7 @@ import {
   createRestartRecoveryClaimChangedError,
   isAgentRunStaleLifecycleError,
 } from "../../infra/agent-lifecycle-error.js";
-import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
+import { wrapSqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import { isMainSessionRestartRecoveryInputProvenance } from "../../sessions/input-provenance.js";
 import type { AgentTurnRestartClaimCleanup } from "./agent-runner-completion.types.js";
 import type {
@@ -239,7 +239,7 @@ export function createReplyRestartRecoveryClaimController(
       return committed;
     }
     if (outcome.kind === "unknown") {
-      throw new SqliteWorkerError(outcome.error.message, "outcome-unknown");
+      throw wrapSqliteWorkerError(outcome.error.message, "outcome-unknown", outcome.error);
     }
     options.rolledBack?.();
     if (authorityFailure) {

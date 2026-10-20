@@ -641,6 +641,8 @@ This lets validation run while the serving Gateway keeps its configured ports.
 It preserves non-secret Gateway auth settings such as `gateway.auth.rateLimit`
 for policy checks, while using a temporary token and disabling Tailscale identity
 authentication.
+Doctor omits the onboarding URL warning derived from that temporary loopback
+binding during rehearsal; other findings remain visible.
 The activated Gateway retains your normal listener settings. Candidate startup
 progress is emitted only when the driving updater announces support, so older
 updaters, including 2026.9.5 and 2026.9.6, retain actual startup errors instead of
@@ -678,10 +680,20 @@ Cancellation may use up to the same allowance to settle accepted work before
 releasing its ownership.
 Update-history writes retry a timed-out commit admission at most three times,
 releasing the SQLite writer between attempts. Ordinary progress that still cannot
-be recorded produces a warning and validation continues. Required recovery and
+be recorded, including a worker queue-capacity refusal before dispatch, produces
+a warning and validation continues. Snapshot progress keeps one write in flight
+and coalesces pending observations to the latest progress. Required recovery and
 terminal records report a failure instead of retrying forever. These limits apply
 when the newer installed updater runs; staging it cannot change an older driver's
 already-running progress writer.
+
+If the `2026.10.4` updater stops with `candidate-snapshot-failed` and
+`SQLite worker queue capacity reached`, staging a newer candidate does not replace
+that progress writer. Preserve a verified state backup and follow the
+[manual package-manager procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun)
+to install a release containing the fix, stopping and starting the Gateway through
+its actual service owner. Keep the same account, installation prefix, profile,
+and state paths; do not delete databases or disable consistency checks.
 
 Runtime retention looks for hoisted dependencies within the package manager's
 owning installation. Missing optional peers do not cause it to copy unrelated
@@ -1337,6 +1349,11 @@ openclaw doctor
 ```
 
 Migrates config, audits DM policies, and checks gateway health. Doctor also compares active official plugins with the OpenClaw package the managed service will load after restart. Resolve any plugin restart-readiness warning before continuing. Details: [Doctor](/gateway/doctor)
+
+On Linux, `openclaw doctor --fix` can reclaim abandoned updater runtimes even
+after a systemd user-manager re-exec. The manager's `--deserialize` argument and
+its protected `(sd-pam)` child do not count as runtime holders. Actual runtime
+references and unverified processes still preserve the affected artifacts.
 
 On Windows, `openclaw doctor --fix` can also retry abandoned backup scratch
 cleanup after an older release reported `EPERM` while renaming to an

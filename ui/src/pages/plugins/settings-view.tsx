@@ -478,20 +478,20 @@ function PluginOverview(props: DetailProps): JSX.Element {
   );
   const catalog = createMemo(() => props.catalog ?? props.inspection?.catalog);
   const components = createMemo(() => props.inspection?.components);
-  const catalogIcon = createMemo(() => {
+  const catalogIcon = () => {
     const url = catalog()?.plugin.catalog.imageUrl;
     return {
       src: url ? props.catalogIconUrls?.[url] : undefined,
       loading: Boolean(url && props.catalogIconLoading?.(url)),
     };
-  });
-  const authorIcon = createMemo(() => {
+  };
+  const authorIcon = () => {
     const url = catalog()?.detail.author?.imageUrl;
     return {
       src: url ? props.catalogIconUrls?.[url] : undefined,
       loading: Boolean(url && props.catalogIconLoading?.(url)),
     };
-  });
+  };
   const skills = createMemo(() =>
     (components()?.skills ?? []).map((name) => ({
       name,

@@ -223,6 +223,8 @@ executable over its structured stdio protocol. Claude Code owns its existing loc
 subscription. OpenClaw uses a non-secret route marker. It never reads, persists,
 refreshes, or forwards native tokens, or sends synthesized Anthropic API
 requests. Compatible agent turns share one warm Claude Code subprocess.
+Gateway shutdown closes these warm subprocesses and waits for their process trees
+and retained runtime resources to finish cleanup.
 A changed model, system prompt, or configured tool surface starts a
 new subprocess. Persisted Claude session IDs still provide
 conversation continuity when the Gateway or subprocess restarts.
@@ -560,16 +562,26 @@ Gemini CLI output notes:
 - The default `stream-json` parser reads assistant `message` events, tool events, final `result` usage, and fatal Gemini error events.
 - Usage falls back to `stats` when `usage` is absent or empty. `stats.cached` normalizes into OpenClaw `cacheRead`, and if `stats.input` is missing, input tokens derive from `stats.input_tokens - stats.cached`.
 
-## Text transform overlays
+<a id="text-transform-overlays" />
 
-Plugins that need small prompt/message compatibility shims can declare bidirectional text transforms without replacing a provider or CLI backend:
+## Backend text transforms
+
+Declare bidirectional `textTransforms` on the CLI backend that owns the compatibility rewrite:
 
 ```typescript
-api.registerTextTransforms({
-  input: [{ from: /red basket/g, to: "blue basket" }],
-  output: [{ from: /blue basket/g, to: "red basket" }],
+api.registerCliBackend({
+  id: "my-cli",
+  config: { command: "my-cli" },
+  textTransforms: {
+    input: [{ from: /red basket/g, to: "blue basket" }],
+    output: [{ from: /blue basket/g, to: "red basket" }],
+  },
 });
 ```
+
+These transforms apply only to this backend. The removed global
+`api.registerTextTransforms(...)` overlay has no equivalent replacement.
+Provider plugins can declare their own `textTransforms` on `registerProvider`.
 
 `input` rewrites the system prompt and user prompt passed to the CLI. `output` rewrites streamed assistant text and parsed final text before OpenClaw handles its own control markers and channel delivery. For provider-backed model calls it also restores string values inside structured tool-call arguments after stream repair and before tool execution. Raw provider JSON fragments are left unchanged. Consumers should use the structured partial, end, or result payload.
 

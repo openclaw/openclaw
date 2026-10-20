@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { createComposerContainer } from "./chat-composer.test-support.ts";
 import * as chatThread from "./chat-thread.ts";
-import { resetChatViewState } from "./chat-view-state.ts";
+import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import { createChatProps, renderChatInto, renderChatPropsInto } from "./chat-view.test-helpers.ts";
 import {
   installTranscriptDomMocks,

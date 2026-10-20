@@ -90,12 +90,41 @@ it.each([
   Object.assign(new Error("disk I/O error"), { code: "SQLITE_IOERR" }),
   new SqliteWorkerError("Persistence outcome is unknown", "outcome-unknown"),
   new AggregateError([new SqliteWorkerError("Persistence outcome is unknown", "outcome-unknown")]),
-])("publishes classified storage admission failures: %s", (error) => {
+])("publishes storage and unknown-outcome admission failures: %s", (error) => {
   const respond = vi.fn();
   const terminal = vi.fn();
   respondChatSendAdmissionError(error, respond, terminal);
   expect(respond).toHaveBeenCalledExactlyOnceWith(false, undefined, expect.anything());
   expect(terminal).toHaveBeenCalledOnce();
+});
+
+it.each([
+  [Object.assign(new Error("write failed"), { code: "SQLITE_FULL" }), "disk is full"],
+  [Object.assign(new Error("write failed"), { code: "ENOSPC" }), "disk is full"],
+  [Object.assign(new Error("write failed"), { code: "SQLITE_IOERR" }), "Check the storage"],
+  [Object.assign(new Error("write failed"), { code: "EIO" }), "Check the storage"],
+  [
+    new SqliteWorkerError("Write settlement was lost", "outcome-unknown"),
+    "reopen the conversation",
+  ],
+  [new Error("Ordinary reply lost"), "reopen the conversation"],
+] as const)("gives actionable terminal reconciliation guidance for %s", (cause, expected) => {
+  const error = Object.assign(
+    new SqliteWorkerError(
+      "Session actor requires reconciliation before another command",
+      "outcome-unknown",
+    ),
+    { cause },
+  );
+  const respond = vi.fn();
+  const terminal = vi.fn();
+  respondChatSendAdmissionError(error, respond, terminal);
+  expect(terminal).toHaveBeenCalledOnce();
+  const message: unknown = terminal.mock.calls[0]?.[0];
+  expect(message).toEqual(expect.stringContaining(expected));
+  expect(message).not.toMatch(/Session actor|SQLite|SQLITE_|outcome-unknown|write failed/);
+  expect(respond.mock.calls[0]?.[2].message).toBe(message);
+  expect(respond.mock.calls[0]?.[2].retryable).not.toBe(true);
 });
 
 describe("retained chat work admission", () => {
