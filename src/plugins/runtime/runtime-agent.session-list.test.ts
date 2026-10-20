@@ -28,59 +28,54 @@ it("lists exact selected keys without losing full entry fields", async () => {
       { agentId: "main", sessionKey: "agent:main:selected" },
       { identity, promptedAt: 1 },
     );
-    expect(
-      runtime.session.listSessionEntries({
-        agentId: "main",
-        readOnly: true,
-        sessionKeys: ["agent:main:selected", "agent:main:missing", "agent:main:alpha"],
-      }),
-    ).toEqual([
-      expect.objectContaining({
+    const list = (options: Parameters<typeof runtime.session.listSessionEntries>[0]) =>
+      runtime.session.listSessionEntries({ agentId: "main", readOnly: true, ...options });
+    const expected = [
+      {
         sessionKey: "agent:main:alpha",
-        entry: expect.objectContaining({
-          sessionId: "alpha",
-          execCwd: "/work/alpha",
-          category: "Team",
-        }),
-      }),
-      expect.objectContaining({
+        entry: { sessionId: "alpha", execCwd: "/work/alpha", category: "Team" },
+      },
+      {
         sessionKey: "agent:main:selected",
-        entry: expect.objectContaining({
+        entry: {
           sessionId: "selected",
           execCwd: "/work/selected",
           category: "Team",
           participants: [{ identity }],
           participantCount: 1,
-        }),
-      }),
-    ]);
+        },
+      },
+    ];
     expect(
-      runtime.session.listSessionEntries({ agentId: "main", readOnly: true, sessionKeys: [] }),
-    ).toEqual([]);
+      list({ sessionKeys: ["agent:main:selected", "agent:main:missing", "agent:main:alpha"] }),
+    ).toEqual(
+      expected.map(({ entry, ...row }) =>
+        expect.objectContaining({ ...row, entry: expect.objectContaining(entry) }),
+      ),
+    );
+    expect(list({ sessionKeys: [] })).toEqual([]);
     const assertions: Array<() => void> = [];
     for (const readOnly of [true, false]) {
-      const selected = runtime.session.listSessionEntries({
-        agentId: "main",
+      const selected = list({
         readOnly,
         sessionKeys: ["agent:main:selected", "agent:main:alpha"],
         captureSource: (assertCurrent) => assertions.push(assertCurrent),
       });
       expect(selected).toEqual(
-        runtime.session
-          .listSessionEntries({ agentId: "main", readOnly })
-          .filter(({ sessionKey }) =>
-            ["agent:main:selected", "agent:main:alpha"].includes(sessionKey),
-          ),
+        list({ readOnly }).filter(({ sessionKey }) =>
+          ["agent:main:selected", "agent:main:alpha"].includes(sessionKey),
+        ),
       );
-      const metadata = runtime.session.listSessionEntries({
-        agentId: "main",
+      const metadata = list({
         readOnly,
         sessionKeys: ["agent:main:selected"],
         includeParticipants: false,
       });
       expect(metadata[0]?.entry).toMatchObject({ sessionId: "selected", category: "Team" });
-      expect(metadata[0]?.entry.participants).toBeUndefined();
-      expect(metadata[0]?.entry.participantCount).toBeUndefined();
+      expect([metadata[0]?.entry.participants, metadata[0]?.entry.participantCount]).toEqual([
+        undefined,
+        undefined,
+      ]);
     }
     expect(assertions).toHaveLength(2);
     assertions.forEach((assertCurrent) => expect(assertCurrent).not.toThrow());

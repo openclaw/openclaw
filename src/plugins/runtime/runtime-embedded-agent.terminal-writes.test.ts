@@ -77,14 +77,10 @@ it.each([false, true])(
         abortSignal: controller.signal,
       }),
     );
-    void run.then(
-      () => {
-        settled = true;
-      },
-      () => {
-        settled = true;
-      },
-    );
+    const markSettled = () => {
+      settled = true;
+    };
+    void run.then(markSettled, markSettled);
     try {
       const { admitted, writeContext, persistence } = await awaitGateBeforeSettlement(
         captured.promise,
