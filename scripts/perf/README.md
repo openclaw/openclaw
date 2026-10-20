@@ -238,7 +238,7 @@ visible. Only browser list requests are counted; the controller socket is
 excluded, and the created jobs are removed on exit.
 
 For board/chat document loads, use `--load-runs 5 --load-path /dashboard --duration 12`.
-This mode retains synthetic `cron.list`, `models.list`, and `users.self` parameters,
+This mode retains synthetic `cron.list`, `models.list`, `users.self`, and `sessions.describe` parameters,
 response bytes, `models.snapshot` event counts, paint entries, and native Long Task
 blocking (the sum of each task's duration above 50 ms). It records the first cold
 browser context separately from later documents that retain browser cache and
@@ -259,6 +259,13 @@ It excludes `--activity-session` and `--activity-cron`. Catalog observations
 retain model rows for before/after option comparisons; use only synthetic
 catalogs. Compare warm session-scoped request counts and activity blocking time,
 keeping the initial catalogs separate from the activity window.
+With `--open-details`, the final check compares the presented Details component's
+session identity, label, model, status note, and thinking level with a fresh
+controller-side descriptor and checks that its label is visible. The controller
+read is excluded from browser request counts. Request traces retain the preceding
+event's session key, reason, timestamp, and revision to distinguish event-driven
+reads from navigation or idle reads. Use `--request-stacks` for caller diagnosis,
+then omit it for paired timing.
 
 For active-session loads, add `--activity-session <synthetic-key>` and configure
 that isolated Gateway with two loopback mock-provider models:

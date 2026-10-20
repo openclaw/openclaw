@@ -10,6 +10,7 @@ import { asOptionalRecord } from "../../packages/normalization-core/src/record-c
 import { buildControlUiSessionPath } from "../../packages/session-url-contract/src/index.ts";
 import { parseAgentSessionKey } from "../../packages/session-url-contract/src/session-key-normalization.ts";
 import type { ControlUiReadiness } from "../../ui/src/app/control-ui-readiness.ts";
+import type { ChatDetailsSession } from "../../ui/src/pages/chat/components/chat-details-session.tsx";
 import { resolvePlaywrightChromiumExecutablePath } from "../../ui/src/test-helpers/playwright-chromium.ts";
 import { createGatewayWsClient } from "../lib/gateway-ws-client.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
@@ -232,7 +233,9 @@ async function measureLoads(runs: number) {
                   payload: {
                     changed: frame.payload?.changed,
                     revision: frame.payload?.revision,
+                    key: frame.payload?.key,
                     sessionKey: frame.payload?.sessionKey,
+                    ts: frame.payload?.ts,
                     reason: frame.payload?.reason,
                     phase: frame.payload?.phase,
                     dataPhase: frame.payload?.data?.phase,
@@ -273,7 +276,7 @@ async function measureLoads(runs: number) {
           const frame = JSON.parse(data);
           if (
             frame.type === "req" &&
-            ["cron.list", "models.list", "users.self"].includes(frame.method)
+            ["cron.list", "models.list", "users.self", "sessions.describe"].includes(frame.method)
           ) {
             const request = {
               method: frame.method,
@@ -459,6 +462,53 @@ async function measureLoads(runs: number) {
       } else {
         await page.waitForTimeout(Math.max(0, durationMs - readyAtMs));
       }
+      let detailsVerification: unknown;
+      if (activityClient && values["open-details"]) {
+        const key = await page.evaluate(() => window.openclawControlUi?.snapshot().sessionKey);
+        const descriptor = await activityRpc("sessions.describe", { key });
+        const session = asOptionalRecord(descriptor?.session);
+        if (!session || session.key !== key) {
+          throw new Error("Final descriptor did not match the visible conversation");
+        }
+        const fields = [
+          "key",
+          "sessionId",
+          "label",
+          "model",
+          "modelProvider",
+          "statusNote",
+          "thinkingLevel",
+        ];
+        const expected = Object.fromEntries(fields.map((field) => [field, session[field] ?? null]));
+        await page.waitForFunction(
+          (expectedFields) => {
+            const details = Array.from(
+              document.querySelectorAll<ChatDetailsSession>("openclaw-chat-details-session"),
+            ).find((element) => element.presented && element.checkVisibility());
+            const selected = details?.props?.selectedSession;
+            return (
+              selected &&
+              Object.entries(expectedFields).every(
+                ([field, value]) => (Reflect.get(selected, field) ?? null) === value,
+              )
+            );
+          },
+          expected,
+          { timeout: 10_000 },
+        );
+        if (typeof session.label === "string" && session.label) {
+          await page
+            .getByText(session.label, { exact: true })
+            .filter({ visible: true })
+            .first()
+            .waitFor();
+        }
+        detailsVerification = {
+          server: expected,
+          presentedDetailsMatch: true,
+          visibleLabel: session.label,
+        };
+      }
       const result = await page.evaluate(() => {
         const probe = Reflect.get(window, "__catalogLoad");
         return {
@@ -485,6 +535,7 @@ async function measureLoads(runs: number) {
         activity,
         activityStartedAtMs,
         activityEndedAtMs,
+        detailsVerification,
         activityBlockingMs: result.tasks
           .filter(
             (task: { startTime: number }) =>
