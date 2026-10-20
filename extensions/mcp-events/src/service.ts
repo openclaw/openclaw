@@ -2,13 +2,13 @@ import { randomUUID } from "node:crypto";
 import { CHANNEL_INGRESS_RETENTION_DEFAULTS } from "openclaw/plugin-sdk/channel-outbound";
 import { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { asOptionalRecord as record } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { preflightCallbackOrigin, resolveMcpEventSourceOptions } from "./config.js";
 import {
   CALLBACK_PREFIX,
   createSigningSecret,
   parseEventCatalog,
   parseSubscriptionResult,
-  record,
 } from "./protocol.js";
 import {
   McpEventsSourceAuthority,
