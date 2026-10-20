@@ -9,21 +9,14 @@ import { runExtensionRelayDaemon } from "./relay-daemon.js";
 const TOKEN = relayTestKey(1);
 
 const tempStateDirs: string[] = [];
-const savedStateDirEnv = process.env.OPENCLAW_STATE_DIR;
-
 afterEach(async () => {
   vi.useRealTimers();
-  if (savedStateDirEnv === undefined) {
-    delete process.env.OPENCLAW_STATE_DIR;
-  } else {
-    process.env.OPENCLAW_STATE_DIR = savedStateDirEnv;
-  }
+  vi.unstubAllEnvs();
   await Promise.all(
     tempStateDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
   );
 });
 
-/** Point readExtensionRelayToken() at an isolated credentials dir holding TOKEN. */
 async function stageRelaySecret(token: string | null = TOKEN): Promise<void> {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-relay-daemon-"));
   tempStateDirs.push(stateDir);
@@ -34,7 +27,21 @@ async function stageRelaySecret(token: string | null = TOKEN): Promise<void> {
       mode: 0o600,
     });
   }
-  process.env.OPENCLAW_STATE_DIR = stateDir;
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+}
+
+async function expectLegacyAuthStatus(allowLegacyAuth: boolean | undefined, expected: number) {
+  await stageRelaySecret();
+  const run = await runExtensionRelayDaemon({ port: 0, allowLegacyAuth });
+  try {
+    const response = await fetch(`http://127.0.0.1:${run.port}/json/version`, {
+      headers: { Authorization: `Bearer ${TOKEN}` },
+    });
+    expect(response.status).toBe(expected);
+  } finally {
+    run.stop();
+    await run.done;
+  }
 }
 
 describe("runExtensionRelayDaemon", () => {
@@ -69,7 +76,6 @@ describe("runExtensionRelayDaemon", () => {
     vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
     const run = await runExtensionRelayDaemon({ port: 0 });
     expect(run.port).toBeGreaterThan(0);
-    // The bound socket answers while the daemon is alive.
     const served = await new Promise<boolean>((resolve) => {
       const socket = net.connect({ host: "127.0.0.1", port: run.port ?? 0 });
       socket.once("connect", () => {
@@ -84,37 +90,10 @@ describe("runExtensionRelayDaemon", () => {
   });
 
   it("is v2-only by default: rejects a VALID legacy Bearer credential so a squatter cannot harvest the secret", async () => {
-    await stageRelaySecret();
-    const run = await runExtensionRelayDaemon({ port: 0 });
-    try {
-      // Even the correct secret over legacy one-directional auth is refused
-      // when allowLegacyAuth is not explicitly enabled.
-      const status = await fetch(`http://127.0.0.1:${run.port}/json/version`, {
-        headers: { Authorization: `Bearer ${TOKEN}` },
-      });
-      expect(status.status).toBe(401);
-    } finally {
-      run.stop();
-      await run.done;
-    }
+    await expectLegacyAuthStatus(undefined, 401);
   });
 
   it("honors an explicit allowLegacyAuth opt-in", async () => {
-    await stageRelaySecret();
-    const run = await runExtensionRelayDaemon({
-      port: 0,
-      allowLegacyAuth: true,
-    });
-    try {
-      // With legacy auth enabled the credential is accepted; the request then
-      // reaches the "extension not connected" state (503) rather than 401.
-      const status = await fetch(`http://127.0.0.1:${run.port}/json/version`, {
-        headers: { Authorization: `Bearer ${TOKEN}` },
-      });
-      expect(status.status).toBe(503);
-    } finally {
-      run.stop();
-      await run.done;
-    }
+    await expectLegacyAuthStatus(true, 503);
   });
 });

@@ -29,43 +29,39 @@ describe("response body operation lifecycle", () => {
     expect(page.eventNames()).toEqual([]);
     expect(vi.getTimerCount()).toBe(0);
   }
-
-  it("keeps the total deadline after delayed response headers", async () => {
+  const emitBody = (body: () => Promise<Buffer>) => page.emit("response", response(body));
+  async function expectBodyInterrupted(
+    interrupt: () => Promise<unknown> | void,
+    delay = 0,
+    signal?: AbortSignal,
+  ) {
     const body = createDeferred<Buffer>();
-    const result = responseBodyViaPlaywright(options);
-    const rejected = expect(result).rejects.toThrow(/timed out|timeout/i);
-    await vi.advanceTimersByTimeAsync(400);
-    page.emit(
-      "response",
-      response(() => body.promise),
+    const result = responseBodyViaPlaywright({ ...options, signal });
+    const rejected = expect(result).rejects.toThrow(
+      signal ? "response request cancelled" : /timed out|timeout/i,
     );
-    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(delay);
+    emitBody(() => body.promise);
     try {
+      await interrupt();
       await rejected;
       expectCleanedUp();
     } finally {
       body.resolve(Buffer.from("late response"));
     }
+    return result.catch((error: unknown) => error);
+  }
+
+  it("keeps the total deadline after delayed response headers", async () => {
+    await expectBodyInterrupted(() => vi.advanceTimersByTimeAsync(100), 400);
   });
 
   it("honors caller cancellation while waiting for the body", async () => {
     const controller = new AbortController();
     const reason = new Error("response request cancelled");
-    const body = createDeferred<Buffer>();
-    const result = responseBodyViaPlaywright({ ...options, signal: controller.signal });
-    const rejected = expect(result).rejects.toBe(reason);
-    await vi.advanceTimersByTimeAsync(0);
-    page.emit(
-      "response",
-      response(() => body.promise),
+    expect(await expectBodyInterrupted(() => controller.abort(reason), 0, controller.signal)).toBe(
+      reason,
     );
-    controller.abort(reason);
-    try {
-      await rejected;
-      expectCleanedUp();
-    } finally {
-      body.resolve(Buffer.from("late response"));
-    }
   });
 
   it("preserves the missing-response recovery hint and removes its listeners", async () => {
@@ -80,10 +76,7 @@ describe("response body operation lifecycle", () => {
     const ignoredBody = vi.fn(async () => Buffer.from("ignored"));
     await vi.advanceTimersByTimeAsync(0);
     page.emit("response", { ...response(ignoredBody), url: () => "https://example.com/other" });
-    page.emit(
-      "response",
-      response(async () => Buffer.from("first response")),
-    );
+    emitBody(async () => Buffer.from("first response"));
     page.emit("response", response(ignoredBody));
     await expect(result).resolves.toMatchObject({ body: "first response", status: 200 });
     expect(ignoredBody).not.toHaveBeenCalled();
@@ -97,10 +90,7 @@ describe("response body operation lifecycle", () => {
       "Page closed before response body was available.",
     );
     await vi.advanceTimersByTimeAsync(0);
-    page.emit(
-      "response",
-      response(() => body.promise),
-    );
+    emitBody(() => body.promise);
     page.emit("close");
     await rejected;
     body.reject(new Error("late transport failure"));
@@ -108,20 +98,14 @@ describe("response body operation lifecycle", () => {
     expectCleanedUp();
   });
 
-  it.each(["B"])(
-    "bounds response decoding without splitting a surrogate pair (%#)",
-    async (suffix) => {
-      const bytes = Buffer.from(`prefix🙂${suffix}`);
-      const subarray = vi.spyOn(bytes, "subarray");
-      const result = responseBodyViaPlaywright({ ...options, maxChars: 7 });
-      await vi.advanceTimersByTimeAsync(0);
-      page.emit(
-        "response",
-        response(async () => bytes),
-      );
-      await expect(result).resolves.toMatchObject({ body: "prefix", truncated: true });
-      expect(subarray).toHaveBeenCalledWith(0, 28);
-      expectCleanedUp();
-    },
-  );
+  it("bounds response decoding without splitting a surrogate pair", async () => {
+    const bytes = Buffer.from("prefix🙂B");
+    const subarray = vi.spyOn(bytes, "subarray");
+    const result = responseBodyViaPlaywright({ ...options, maxChars: 7 });
+    await vi.advanceTimersByTimeAsync(0);
+    emitBody(async () => bytes);
+    await expect(result).resolves.toMatchObject({ body: "prefix", truncated: true });
+    expect(subarray).toHaveBeenCalledWith(0, 28);
+    expectCleanedUp();
+  });
 });

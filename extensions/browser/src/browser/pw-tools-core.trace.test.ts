@@ -1,4 +1,3 @@
-// Browser tests cover trace output publication and Playwright lifecycle ownership.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -30,9 +29,7 @@ const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-browser-trace
 traceTestState.rootDir = await fs.realpath(tempRoot);
 const { traceStopViaPlaywright } = await import("./pw-tools-core.trace.js");
 
-function installTraceStop(
-  implementation: (options: { path: string }) => Promise<void>,
-): ReturnType<typeof vi.fn> {
+function installTraceStop(implementation: (options: { path: string }) => Promise<void>) {
   const stop = vi.fn(implementation);
   traceTestState.context = { tracing: { stop } };
   traceTestState.traceState.traceActive = true;
@@ -40,6 +37,12 @@ function installTraceStop(
 }
 
 const target = { cdpUrl: "http://127.0.0.1:18792", targetId: "tab-1" };
+const outputPath = (name: string) => path.join(traceTestState.rootDir, name);
+const stopTrace = (name: string) => traceStopViaPlaywright({ ...target, path: outputPath(name) });
+function expectStopped(stop: ReturnType<typeof vi.fn>, active: boolean) {
+  expect(stop).toHaveBeenCalledOnce();
+  expect(traceTestState.traceState.traceActive).toBe(active);
+}
 
 describe("traceStopViaPlaywright", () => {
   beforeEach(async () => {
@@ -55,22 +58,18 @@ describe("traceStopViaPlaywright", () => {
   });
 
   it("returns fs-safe's sanitized committed path from a real temporary output root", async () => {
-    const requestedPath = path.join(traceTestState.rootDir, "trace-\u0001.zip");
+    const requestedPath = outputPath("trace-\u0001.zip");
     const stop = installTraceStop(async ({ path: stagingPath }) => {
       await fs.writeFile(stagingPath, "trace payload", "utf8");
     });
 
-    const committedPath = await traceStopViaPlaywright({
-      ...target,
-      path: requestedPath,
-    });
+    const committedPath = await stopTrace("trace-\u0001.zip");
 
     expect(committedPath).not.toBe(requestedPath);
     expect(path.dirname(committedPath)).toBe(traceTestState.rootDir);
     await expect(fs.readFile(committedPath, "utf8")).resolves.toBe("trace payload");
     await expect(fs.access(requestedPath)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(stop).toHaveBeenCalledOnce();
-    expect(traceTestState.traceState.traceActive).toBe(false);
+    expectStopped(stop, false);
   });
 
   it("clears trace state when Playwright stops before publication later fails", async () => {
@@ -79,15 +78,8 @@ describe("traceStopViaPlaywright", () => {
       await fs.unlink(stagingPath);
     });
 
-    await expect(
-      traceStopViaPlaywright({
-        ...target,
-        path: path.join(traceTestState.rootDir, "publication-failure.zip"),
-      }),
-    ).rejects.toBeInstanceOf(Error);
-
-    expect(stop).toHaveBeenCalledOnce();
-    expect(traceTestState.traceState.traceActive).toBe(false);
+    await expect(stopTrace("publication-failure.zip")).rejects.toBeInstanceOf(Error);
+    expectStopped(stop, false);
   });
 
   it("preserves trace state when Playwright stop itself rejects", async () => {
@@ -96,14 +88,7 @@ describe("traceStopViaPlaywright", () => {
       throw stopError;
     });
 
-    await expect(
-      traceStopViaPlaywright({
-        ...target,
-        path: path.join(traceTestState.rootDir, "stop-failure.zip"),
-      }),
-    ).rejects.toBe(stopError);
-
-    expect(stop).toHaveBeenCalledOnce();
-    expect(traceTestState.traceState.traceActive).toBe(true);
+    await expect(stopTrace("stop-failure.zip")).rejects.toBe(stopError);
+    expectStopped(stop, true);
   });
 });

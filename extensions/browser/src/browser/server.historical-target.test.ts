@@ -15,6 +15,13 @@ const { launchOpenClawChrome, stopOpenClawChrome } = await import("./chrome.js")
 
 describe("browser control server historical targets", () => {
   installBrowserControlServerHooks();
+  async function start(reachable = false) {
+    await startBrowserControlServerFromConfig();
+    if (reachable) {
+      setBrowserControlServerReachable(true);
+    }
+    vi.mocked(launchOpenClawChrome).mockClear();
+  }
 
   async function request(path: string, body?: unknown) {
     return await getBrowserTestFetch()(
@@ -28,25 +35,25 @@ describe("browser control server historical targets", () => {
           },
     );
   }
+  async function expectResponse(response: Response, status: number, body: object) {
+    expect(response.status).toBe(status);
+    expect(await response.json()).toMatchObject(body);
+  }
+  const screenshot = () => request("/screenshot", { targetId: "closed-historical-tab" });
 
   it("does not start a stopped browser for a historical screenshot", async () => {
-    await startBrowserControlServerFromConfig();
-    vi.mocked(launchOpenClawChrome).mockClear();
-
-    const response = await request("/screenshot", { targetId: "closed-historical-tab" });
-
+    await start();
+    await expectResponse(await screenshot(), 409, {
+      error: expect.stringContaining("not running"),
+    });
     expect(launchOpenClawChrome).not.toHaveBeenCalled();
-    expect(response.status).toBe(409);
-    expect(await response.json()).toMatchObject({ error: expect.stringContaining("not running") });
     expect(await (await request("/tabs")).json()).toMatchObject({ running: false, tabs: [] });
   });
 
   it.each([false, true])(
     "does not create or stop tabs for a missing target (empty: %s)",
     async (empty) => {
-      await startBrowserControlServerFromConfig();
-      setBrowserControlServerReachable(true);
-      vi.mocked(launchOpenClawChrome).mockClear();
+      await start(true);
       vi.mocked(stopOpenClawChrome).mockClear();
       const fetchCdp = globalThis.fetch;
       const tabRequests: string[] = [];
@@ -61,11 +68,10 @@ describe("browser control server historical targets", () => {
         }),
       );
 
-      const response = await request("/screenshot", { targetId: "closed-historical-tab" });
-
+      await expectResponse(await screenshot(), 404, {
+        error: expect.stringContaining("not found"),
+      });
       expect(getCdpMocks().createTargetViaCdp).not.toHaveBeenCalled();
-      expect(response.status).toBe(404);
-      expect(await response.json()).toMatchObject({ error: expect.stringContaining("not found") });
       expect(launchOpenClawChrome).not.toHaveBeenCalled();
       expect(stopOpenClawChrome).not.toHaveBeenCalled();
       expect(tabRequests.some((url) => url.includes("/json/new"))).toBe(false);
@@ -79,18 +85,14 @@ describe("browser control server historical targets", () => {
   );
 
   it("still resolves a live tab alias", async () => {
-    await startBrowserControlServerFromConfig();
-    setBrowserControlServerReachable(true);
-
-    const response = await request("/snapshot?targetId=t1&format=ai");
-
-    expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ targetId: "abcd1234" });
+    await start(true);
+    await expectResponse(await request("/snapshot?targetId=t1&format=ai"), 200, {
+      targetId: "abcd1234",
+    });
   });
 
   it("preserves intentional startup when opening a tab", async () => {
-    await startBrowserControlServerFromConfig();
-    vi.mocked(launchOpenClawChrome).mockClear();
+    await start();
     getCdpMocks().createTargetViaCdp.mockResolvedValue({
       targetId: "abcd1234",
       finalUrl: "https://example.com",
@@ -103,21 +105,15 @@ describe("browser control server historical targets", () => {
   });
 
   it("uses a changed default on the first request through the same HTTP server", async () => {
-    const state = getBrowserControlServerTestState();
     const profiles = {
-      ...state.cfgProfiles,
+      ...getBrowserControlServerTestState().cfgProfiles,
       work: { cdpUrl: "http://127.0.0.1:9222", color: "#0066CC" },
     };
     setBrowserControlServerProfiles(profiles, "openclaw");
     const server = await startBrowserControlServerFromConfig();
-    const fetch = getBrowserTestFetch();
-    const base = getBrowserControlServerBaseUrl();
-
     for (const defaultProfile of ["openclaw", "work", "openclaw"]) {
       setBrowserControlServerProfiles(profiles, defaultProfile);
-      const response = await fetch(`${base}/`);
-      expect(response.status).toBe(200);
-      expect(await response.json()).toMatchObject({ profile: defaultProfile });
+      await expectResponse(await request("/"), 200, { profile: defaultProfile });
       expect(await startBrowserControlServerFromConfig()).toBe(server);
     }
   });
