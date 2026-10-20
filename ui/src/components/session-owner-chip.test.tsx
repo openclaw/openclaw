@@ -5,10 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
-import {
-  SessionOwnerChipContent,
-  type SessionOwnerChipProps,
-} from "./solid/session-owner-chip.tsx";
+import { SessionOwnerChip, type SessionOwnerChipProps } from "./solid/session-owner-chip.tsx";
 
 const disposals: Array<() => void> = [];
 
@@ -33,7 +30,7 @@ function mount(params: { participants?: SessionParticipant[]; participantCount?:
   disposals.push(
     mountSolid(
       () => (
-        <SessionOwnerChipContent
+        <SessionOwnerChip
           owner={owner()}
           attribution="owned"
           size={size()}

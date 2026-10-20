@@ -3,6 +3,7 @@ import type { ModelCatalogResult } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canonicalModelAuthProviderId } from "../../lib/model-auth.ts";
+import { invalidateModelCatalogCache } from "../../lib/model-catalog-cache.ts";
 import { loadModelCatalog, modelCatalogRefreshError } from "../../lib/model-catalog-store.ts";
 import { loadModelProvidersData, type ModelProvidersData } from "./load.ts";
 
@@ -163,6 +164,8 @@ export class ModelProviderCoreLoader {
 
   private refreshPendingPublication(client: GatewayBrowserClient, agentId: string): void {
     if (this.publicationPending && !this.active && !this.catalogLoading) {
+      // A completed read may have republished facts captured before the notification.
+      invalidateModelCatalogCache(client, { agentId });
       void this.refresh(client, agentId, "publication");
     }
   }

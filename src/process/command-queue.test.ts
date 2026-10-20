@@ -267,27 +267,21 @@ describe("command queue", () => {
     ).toBe(false);
   });
 
-  it.each([0, 3])("counts matching targets with lane concurrency %s", async (concurrency) => {
+  it.each([0, 3])("counts lane work with concurrency %s", async (concurrency) => {
     const lane = CommandLane.CronNested;
     const finish = createDeferred();
     queue.setCommandLaneConcurrency(lane, concurrency);
-    const tasks = ["alpha", "beta", undefined].map((agentId) =>
-      queue.enqueueCommandInLane(lane, () => finish.promise, {
-        sessionTarget: agentId ? { agentId, sessionId: agentId } : undefined,
-      }),
+    const tasks = Array.from({ length: 3 }, () =>
+      queue.enqueueCommandInLane(lane, () => finish.promise),
     );
     try {
       expect(queue.getQueueSize(lane)).toBe(3);
-      expect(queue.getQueueSize(lane, (target) => target?.agentId === "alpha")).toBe(1);
-      expect(queue.getQueueSize(lane, (target) => target?.agentId === "beta")).toBe(1);
-      expect(queue.getQueueSize(lane, (target) => target?.agentId === "other")).toBe(0);
-      expect(queue.getQueueSize(lane, (target) => target === undefined)).toBe(1);
     } finally {
       finish.resolve();
       queue.setCommandLaneConcurrency(lane, 3);
       await Promise.all(tasks);
     }
-    expect(queue.getQueueSize(lane, (target) => target?.agentId === "alpha")).toBe(0);
+    expect(queue.getQueueSize(lane)).toBe(0);
   });
 
   it("task timeout renews from progress timestamps", async () => {
@@ -709,8 +703,9 @@ describe("command queue", () => {
       await expect(staleRun.task).resolves.toBe("stale");
       expect(lanes.get(lane)).toBe(replacementState);
       expectCounts(lane, 1, 0);
-      expect(queue.getQueueSize(lane, (target) => target?.agentId === "stale")).toBe(0);
-      expect(queue.getQueueSize(lane, (target) => target?.agentId === "replacement")).toBe(1);
+      expect(Array.from(replacementState?.activeTasks.values() ?? [])).toEqual([
+        { agentId: "replacement", sessionId: "replacement" },
+      ]);
       replacementRun.release();
       await expect(replacementRun.task).resolves.toBe("replacement");
       expect(lanes.has(lane)).toBe(false);

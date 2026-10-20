@@ -69,7 +69,7 @@ export async function refreshGatewayAuthStateAfterAuthProfileRepair(): Promise<v
     { method: "models.authStatus", params: { refresh: true } },
   ]) {
     try {
-      await callGateway({ ...request, timeoutMs: 3000 });
+      await callGateway({ ...request, timeoutMs: 3000, sharedStateMode: "read-only" });
     } catch {
       // Doctor repair remains best effort when the Gateway is stopped or cannot reload.
     }

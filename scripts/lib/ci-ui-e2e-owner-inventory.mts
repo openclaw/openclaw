@@ -488,7 +488,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/chat-context-attachment.e2e.test.ts",
     ["chat"],
-    ["ui/src/components/assistant-panel-content.ts", "ui/src/components/home-session.runtime.ts"],
+    ["ui/src/components/assistant-panel-content.ts", "ui/src/components/home-session-solid.tsx"],
     ["ui/src/styles/assistant-panel-content.css"],
   ),
   pageWatch(
@@ -1223,7 +1223,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/home-command-recovery.e2e.test.ts",
     ["agents-home", "chat"],
-    ["ui/src/components/assistant-panel-content.ts", "ui/src/components/home-session.runtime.ts"],
+    ["ui/src/components/assistant-panel-content.ts", "ui/src/components/home-session-solid.tsx"],
     ["ui/src/styles/assistant-panel-content.css"],
   ),
   pageWatch("ui/src/e2e/identity-config-refresh.e2e.test.ts", ["chat"]),

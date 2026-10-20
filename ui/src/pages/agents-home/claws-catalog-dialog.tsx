@@ -82,18 +82,8 @@ class ClawsCatalogModel {
   private searchTimer: ReturnType<typeof setTimeout> | null = null;
   onIdentityChange() {
     this.entries = [];
-    this.closePreview();
-    this.selected = null;
-    this.detail = null;
-    this.detailLoading = false;
-    this.detailError = null;
+    this.resetSelection();
     this.applying = false;
-    this.addError = null;
-    this.installedPluginPackages = new Set();
-    this.consentWarning = null;
-    this.reviewPlan = null;
-    this.riskAcknowledged = false;
-    this.addedAgentId = null;
   }
 
   invalidateRequests(change: GatewayPageChange) {
@@ -140,19 +130,14 @@ class ClawsCatalogModel {
       );
       if (this.gateway.isCurrent(scope) && revision === this.searchRevision) {
         this.entries = entries;
-        if (
-          this.props.initialPackageName &&
-          !entries.some((entry) => entry.packageName === this.props.initialPackageName)
-        ) {
-          this.error = t("clawsCatalog.empty");
-          return;
-        }
         if (this.props.initialPackageName) {
           const entry = entries.find(
             (candidate) => candidate.packageName === this.props.initialPackageName,
           );
           if (entry) {
             this.select(entry);
+          } else {
+            this.error = t("clawsCatalog.empty");
           }
         }
       }
@@ -244,15 +229,11 @@ class ClawsCatalogModel {
     }
   }
 
-  private select(entry: ClawCatalogEntry) {
-    if (!this.props.pageMode && this.props.onSelectEntry) {
-      this.props.onSelectEntry(entry);
-      return;
-    }
-    this.selected = entry;
+  private resetSelection(selected: ClawCatalogEntry | null = null) {
     this.closePreview();
+    this.selected = selected;
     this.detail = null;
-    this.detailLoading = true;
+    this.detailLoading = Boolean(selected);
     this.detailError = null;
     this.installedPluginPackages = new Set();
     this.addError = null;
@@ -260,6 +241,14 @@ class ClawsCatalogModel {
     this.reviewPlan = null;
     this.riskAcknowledged = false;
     this.addedAgentId = null;
+  }
+
+  private select(entry: ClawCatalogEntry) {
+    if (!this.props.pageMode && this.props.onSelectEntry) {
+      this.props.onSelectEntry(entry);
+      return;
+    }
+    this.resetSelection(entry);
     void this.loadDetail();
   }
 
@@ -276,17 +265,7 @@ class ClawsCatalogModel {
       return;
     }
     this.detailRevision += 1;
-    this.closePreview();
-    this.selected = null;
-    this.detail = null;
-    this.detailLoading = false;
-    this.detailError = null;
-    this.installedPluginPackages = new Set();
-    this.addError = null;
-    this.consentWarning = null;
-    this.reviewPlan = null;
-    this.riskAcknowledged = false;
-    this.addedAgentId = null;
+    this.resetSelection();
   }
 
   private openAgentChat(agentId: string, agentName: string, context: ApplicationContext) {

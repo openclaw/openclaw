@@ -3,7 +3,7 @@ import { buildConfigSchemaCore } from "./schema.js";
 import { validateConfigObjectRaw } from "./validation-core.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
-describe("experimental database config", () => {
+describe("database config", () => {
   it.each([
     { source: "env", provider: "default", id: "OPENCLAW_DATABASE_DSN" },
     { source: "file", provider: "database", id: "/dsn" },
@@ -48,7 +48,7 @@ describe("experimental database config", () => {
     expect(OpenClawSchema.parse({ database }).database).toEqual(database);
     const hints = buildConfigSchemaCore().uiHints;
     expect(hints["database.postgres.connection"]?.sensitive).toBe(true);
-    expect(hints.database?.label).toContain("Experimental");
+    expect(hints.database?.label).toBe("Database");
     expect(hints.database?.docsUrl).toBe("https://docs.openclaw.ai/reference/database-engines");
   });
 

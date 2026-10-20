@@ -83,7 +83,7 @@ export function hasPendingFollowupQueueWork(
 
 type SummaryElisionCapState = Pick<
   SessionControllerMailbox,
-  "activeSummarySources" | "cap" | "evictedSummaryCount" | "summaryElisions" | "droppedCount"
+  "activeSummarySources" | "cap" | "summaryElisions" | "droppedCount"
 >;
 
 export function trimSummaryElisionsToCap(queue: SummaryElisionCapState): void {
@@ -104,7 +104,6 @@ export function trimSummaryElisionsToCap(queue: SummaryElisionCapState): void {
       const [source] = entry.sources.splice(sourceIndex, 1);
       entry.summaryLines.splice(sourceIndex, 1);
       entry.count = entry.sources.length;
-      queue.evictedSummaryCount += 1;
       queue.droppedCount = Math.max(0, queue.droppedCount - 1);
       for (const [original, compact] of entry.sourceRefs) {
         if (compact === source) {

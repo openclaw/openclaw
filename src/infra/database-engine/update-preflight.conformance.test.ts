@@ -255,7 +255,7 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
       const plan = UpdateCandidatePluginPlanSchema.parse(
         JSON.parse(await fs.readFile(path.join(targetStateDir, inventory.pluginPlan), "utf8")),
       );
-      expect(plan.bindings).toContainEqual(expect.objectContaining({ source: plugin }));
+      expect(Object.keys(plan.pluginPaths)).toContain(plugin);
       const discovery = parseUpdateStateInspectionWorker(
         await inspect("discover"),
         UpdateStateSchemaInspectionPlanSchema,

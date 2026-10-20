@@ -478,14 +478,12 @@ describe("getFollowupQueue", () => {
         ),
       );
     }
-    queue.evictedSummaryCount = 5;
 
     const updated = getFollowupQueue(QUEUE_KEY, { mode: "followup", cap: 1 });
 
     expect(updated.summaryElisions.map((entry) => entry.contextKey)).toEqual(["newest"]);
     expect(updated.summaryElisions[0]?.sources).toHaveLength(1);
     expect(updated.summaryElisions[0]?.summaryLines).toEqual(["newest"]);
-    expect(updated.evictedSummaryCount).toBe(13);
   });
 });
 
@@ -560,9 +558,8 @@ describe("hasPendingFollowupQueueWork", () => {
     }
   });
 
-  it("ignores empty queues and historical eviction accounting", () => {
-    const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
-    queue.evictedSummaryCount = 3;
+  it("ignores empty queues", () => {
+    getFollowupQueue(QUEUE_KEY, { mode: "followup" });
 
     expect(hasPendingFollowupQueueWork([undefined, "", QUEUE_KEY])).toBe(false);
   });

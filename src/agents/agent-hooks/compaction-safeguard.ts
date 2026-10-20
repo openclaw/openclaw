@@ -522,11 +522,11 @@ function formatContextMessage(message: AgentMessage): string | null {
 }
 
 function formatContextSegments(messages: AgentMessage[]): string[] {
-  const pairing = classifyToolUseResultPairing(messages);
+  const frames = classifyToolUseResultPairing(messages);
   // A call-bearing assistant and all occurrence-matched results are one context
   // atom; keeping remainder messages separate lets later terminal text survive.
   const toolSegments = new Map<AgentMessage, AgentMessage[]>(
-    pairing.frames.map((frame) => [
+    frames.map((frame) => [
       frame.assistant,
       [
         frame.assistant,

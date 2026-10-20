@@ -9,6 +9,7 @@ import type { SessionTranscriptReadScope } from "../../config/sessions/session-a
 import { isSessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-accessor.sqlite-active-events.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { TranscriptReadWindow } from "../../sessions/transcript-read-window.js";
+import { getOrCreateWeakOwnerMap } from "../../shared/weak-owner-map.js";
 import { readSessionArtifacts } from "../session-transcript-readers.js";
 import { ArtifactSessionResolutionError } from "./artifacts-session-resolution.js";
 import type { GatewayClient } from "./types.js";
@@ -44,11 +45,7 @@ export async function readArtifactImagePage(params: {
   filters: Pick<ArtifactsListParams, "runId" | "messageRole">;
 }): Promise<{ artifacts: ArtifactSummary[]; nextCursor?: string; omittedOversized?: boolean }> {
   const owner = params.client ?? internalCaller;
-  let state = cursors.get(owner);
-  if (!state) {
-    state = new Map();
-    cursors.set(owner, state);
-  }
+  const state = getOrCreateWeakOwnerMap(cursors, owner);
   const now = Date.now();
   for (const [key, value] of state) {
     if (value.expiresAt <= now) {

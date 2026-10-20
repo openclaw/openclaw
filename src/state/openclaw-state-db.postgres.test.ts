@@ -207,7 +207,7 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
       expect(namespace).toBeDefined();
       const anchor = fs.readFileSync(pathname);
       const credentialPath = path.join(directory, "client", "credentials.sqlite");
-      expect(fs.readdirSync(directory)).toEqual(["client", "state.sqlite"]);
+      expect(fs.readdirSync(directory).toSorted()).toEqual(["client", "state.sqlite"]);
       expect(fs.readdirSync(path.dirname(credentialPath))).toEqual(["credentials.sqlite"]);
       const credentialBytes = fs.readFileSync(credentialPath);
       await withOpenClawStateDatabaseReadSnapshot(async () => {
@@ -236,7 +236,7 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
       expect(await read()).toBe("after");
       expect(fs.readFileSync(pathname)).toEqual(anchor);
       expect(fs.readFileSync(credentialPath)).toEqual(credentialBytes);
-      expect(fs.readdirSync(directory)).toEqual(["client", "state.sqlite"]);
+      expect(fs.readdirSync(directory).toSorted()).toEqual(["client", "state.sqlite"]);
       expect(fs.readdirSync(path.dirname(credentialPath))).toEqual(["credentials.sqlite"]);
     } finally {
       await closeOpenClawStateDatabaseAsync();
@@ -410,7 +410,7 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
       expect(namespace).toBeDefined();
       const anchorBytes = fs.readFileSync(pathname);
       const credentialPath = path.join(directory, "client", "credentials.sqlite");
-      expect(fs.readdirSync(directory)).toEqual(["client", "state.sqlite"]);
+      expect(fs.readdirSync(directory).toSorted()).toEqual(["client", "state.sqlite"]);
       expect(fs.readdirSync(path.dirname(credentialPath))).toEqual(["credentials.sqlite"]);
       const credentialBytes = fs.readFileSync(credentialPath);
       let prepared: Promise<{ changes: string[]; warnings: string[] }> | undefined;
@@ -449,7 +449,7 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
         expect(reply?.row).toEqual({ value_json: valueJson, updated_at_ms: 1 });
         expect(fs.readFileSync(pathname)).toEqual(anchorBytes);
         expect(fs.readFileSync(credentialPath)).toEqual(credentialBytes);
-        expect(fs.readdirSync(directory)).toEqual(["client", "state.sqlite"]);
+        expect(fs.readdirSync(directory).toSorted()).toEqual(["client", "state.sqlite"]);
         expect(fs.readdirSync(path.dirname(credentialPath))).toEqual(["credentials.sqlite"]);
       }
       using anchor = openNodeSqliteDatabase(pathname, { readOnly: true });

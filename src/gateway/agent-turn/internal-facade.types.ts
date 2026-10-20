@@ -43,6 +43,8 @@ export type InternalAgentTurnDispatchOptions = {
   prepareDispatchCurrent?: () => Promise<void>;
   // The source owns admission only; accepted children execute under their own lifetime.
   assertAdmissionCurrent?: () => void;
+  /** Validates cancellation publication independently of the canceled execution lifetime. */
+  assertCancellationCurrent?: () => void;
   /** Accepted execution retains this permission check through tool and delivery effects. */
   executionSource?: SessionSourceAssertion;
   cancelOnDeadline?: boolean;

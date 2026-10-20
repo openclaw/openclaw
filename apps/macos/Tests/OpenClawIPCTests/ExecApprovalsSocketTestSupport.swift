@@ -40,6 +40,12 @@ enum ExecApprovalsSocketTestSupport {
         }
     }
 
+    static func seedPolicy(_ file: ExecApprovalsFile, in root: URL) async throws {
+        let current = try await NativeExecPolicyOwner.snapshot(stateDirectory: root)
+        _ = try await NativeExecPolicyOwner.replace(file: file, baseHash: current.hash, stateDirectory: root)
+        try self.seedLocalCredentials(in: root)
+    }
+
     static func seedLocalCredentials(in root: URL) throws {
         let owner = try OpenClawClientCredentialStore(rootURL: root, migration: true)
         defer { owner.close() }

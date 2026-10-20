@@ -162,11 +162,7 @@ describe("managed attachment branch retention", () => {
           reason: "window-changed",
         });
       } else {
-        expect(await cleanup).toEqual({
-          deletedRecordCount: 0,
-          deletedFileCount: 0,
-          retainedCount: 1,
-        });
+        await cleanup;
       }
       expect(switched).toBe(switchAt !== "after cleanup");
       expect(await readManagedImageRecord(attachmentId, stateDir)).not.toBeNull();

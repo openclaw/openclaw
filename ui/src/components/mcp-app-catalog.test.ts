@@ -24,7 +24,7 @@ import "./mcp-app-catalog.tsx";
 import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { MCP_APP_OPEN_EVENT, type McpAppOpenDetail } from "./mcp-app-launch.ts";
-import "./mcp-app-resources.tsx";
+import { McpAppResources } from "./mcp-app-resources.tsx";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -86,9 +86,11 @@ function discoveryContext(request: ReturnType<typeof vi.fn>, scopes = ["operator
 const providers = new WeakMap<HTMLElement, HTMLElement>();
 function provide(element: HTMLElement, context: unknown) {
   // SAFETY: fixtures supply precisely the capabilities exercised by these catalog flows.
-  const provider = createApplicationContextProvider(context as ApplicationContext);
+  const application = context as ApplicationContext;
+  const provider = createApplicationContextProvider(application);
   provider.append(element);
   providers.set(element, provider);
+  return application;
 }
 function appendElement(element: HTMLElement) {
   const provider = providers.get(element);
@@ -385,15 +387,24 @@ describe("app launch catalog", () => {
     sidebar.surface = "sidebar";
     const thread = document.createElement("openclaw-mcp-app-catalog");
     thread.surface = "thread";
-    const resources = document.createElement("openclaw-mcp-app-resources");
-    const elements = [sidebar, thread, resources];
+    const elements = [sidebar, thread];
     for (const element of elements) {
       element.sessionKey = "agent:main:one";
       element.agentId = "main";
-      provide(element, context);
+    }
+    const application = provide(sidebar, context);
+    provide(thread, context);
+    for (const element of elements) {
       appendElement(element);
       await element.updateComplete;
     }
+    const resourcesMount = mountSolid(
+      () => createComponent(McpAppResources, { sessionKey: "agent:main:one", agentId: "main" }),
+      { wrapper: createSolidApplicationContextProvider(application).wrapper },
+    );
+    onTestFinished(resourcesMount.unmount);
+    const resources = resourcesMount.container;
+    await waitForSolid(() => expect(request).toHaveBeenCalledOnce());
     expect(request).toHaveBeenCalledExactlyOnceWith("mcp.app.discover", {
       sessionKey: "agent:main:one",
       agentId: "main",

@@ -94,7 +94,7 @@ function createWorkloadGateway(readSummary: () => Promise<SessionsListResult>, i
       return { subscribed: true };
     }
     if (method === "sessions.groups.list") {
-      return { names: [], sectionOrder: [] };
+      return { groups: [], sectionOrder: [] };
     }
     if (method === "sessions.list") {
       if (!Value.Check(SessionsListParamsSchema, params)) {

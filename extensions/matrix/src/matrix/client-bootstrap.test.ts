@@ -9,12 +9,8 @@ import {
   setAcquiredMatrixClient,
 } from "./client-resolver.test-helpers.js";
 
-const {
-  getMatrixRuntimeMock,
-  acquireSharedMatrixClientMock,
-  sharedLeaseReleaseMock,
-  resolveMatrixAuthContextMock,
-} = matrixClientResolverMocks;
+const { getMatrixRuntimeMock, acquireSharedMatrixClientMock, sharedLeaseReleaseMock } =
+  matrixClientResolverMocks;
 
 const TEST_CFG = {};
 const captureAuthority = vi.hoisted(() => vi.fn<() => (() => void) | undefined>(() => undefined));
@@ -28,9 +24,9 @@ vi.mock("../runtime.js", () => ({
   getMatrixRuntime: () => getMatrixRuntimeMock(),
 }));
 
+// mock-isolation: Lease fixtures replace shared network/crypto client ownership.
 vi.mock("./client.js", () => ({
   acquireSharedMatrixClient: (...args: unknown[]) => acquireSharedMatrixClientMock(...args),
-  resolveMatrixAuthContext: resolveMatrixAuthContextMock,
 }));
 
 let resolveRuntimeMatrixClientWithReadiness: typeof import("./client-bootstrap.js").resolveRuntimeMatrixClientWithReadiness;

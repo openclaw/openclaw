@@ -70,6 +70,7 @@ import {
 } from "../context.js";
 import { authorizeSlackDirectMessage } from "../dm-auth.js";
 import type { SlackEventScope } from "../event-scope.js";
+import { getOrCreateWeakOwnerMap } from "../lru-map-cache.js";
 import type { SlackMediaResult } from "../media-types.js";
 import { escapeSlackMrkdwn } from "../mrkdwn.js";
 import { resolveSlackRoomContextHints } from "../room-context.js";
@@ -196,11 +197,7 @@ function resolveCachedMentionRegexes(
     normalizeOptionalString(options?.conversationId ?? undefined),
     options?.providerPolicy ? JSON.stringify(options.providerPolicy) : "",
   ].join("\u001f");
-  let byAgent = mentionRegexCache.get(ctx);
-  if (!byAgent) {
-    byAgent = new Map<string, RegExp[]>();
-    mentionRegexCache.set(ctx, byAgent);
-  }
+  const byAgent = getOrCreateWeakOwnerMap(mentionRegexCache, ctx);
   const cached = byAgent.get(key);
   if (cached) {
     return cached;

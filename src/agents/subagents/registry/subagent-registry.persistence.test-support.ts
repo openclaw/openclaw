@@ -129,6 +129,7 @@ export async function prepareSubagentRecoveryFixture(
       };
       return {
         controlUiAdmin: false,
+        assertPolicyCurrent: assertCurrent,
         authenticatedUserProfile: {
           profileId: params.snapshot.profileId,
           displayName: null,

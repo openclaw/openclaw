@@ -316,7 +316,6 @@ const {
   close: closeServers,
 } = createCdpFixture({});
 const fixtureAuthorization = `Basic ${Buffer.from("openclaw:cdp-abort-test").toString("base64")}`;
-const retryOptions = { handshakeRetries: 2, handshakeRetryDelayMs: 1, handshakeMaxRetryDelayMs: 1 };
 type CdpMessage = { id: number; method: string };
 
 function onCommand(
@@ -480,7 +479,7 @@ it("ignores malformed and uncorrelated messages before the matching response", a
 });
 
 it.each([
-  ["closes", "Test.willClose", retryOptions, /CDP socket closed/],
+  ["closes", "Test.willClose", {}, /CDP socket closed/],
   [
     "times out",
     "Page.captureScreenshot",
@@ -524,7 +523,7 @@ it("retries websocket failures before any CDP command is sent", async () => {
     socket.send(JSON.stringify({ id: message.id, result: { echoed: message.method } })),
   );
   const callback = vi.fn(async (send: CdpSendFn) => send("Test.afterOpen"));
-  await expect(withCdpSocket(wsUrl(server), callback, retryOptions)).resolves.toEqual({
+  await expect(withCdpSocket(wsUrl(server), callback)).resolves.toEqual({
     echoed: "Test.afterOpen",
   });
   expect(rejectedHandshakes).toBe(1);
@@ -550,9 +549,6 @@ it("aborts an authenticated 503 retry before opening another socket", async () =
     wsUrl(server, "openclaw:cdp-abort-test@127.0.0.1"),
     async () => "unexpected",
     {
-      handshakeRetries: 3,
-      handshakeRetryDelayMs: 2000,
-      handshakeMaxRetryDelayMs: 2000,
       signal: controller.signal,
     },
   );

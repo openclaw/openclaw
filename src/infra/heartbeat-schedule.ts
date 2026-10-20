@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveStateDir } from "../config/state-dir.js";
 import { loadOrCreateDeviceIdentityAsync } from "./device-identity-async.js";
 import { loadDeviceIdentityIfPresent, loadOrCreateDeviceIdentity } from "./device-identity.js";
 
@@ -48,11 +49,7 @@ export async function resolveHeartbeatSchedulerSeedAsync(
 }
 
 function fallbackSchedulerSeed(env: NodeJS.ProcessEnv): string {
-  return createHash("sha256")
-    .update(env.HOME ?? "")
-    .update("\0")
-    .update(process.cwd())
-    .digest("hex");
+  return createHash("sha256").update(resolveStateDir(env)).digest("hex");
 }
 
 export function resolveHeartbeatPhaseMs(params: {

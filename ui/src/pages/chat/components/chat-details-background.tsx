@@ -1,7 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { For, Show, createMemo, createSignal } from "solid-js";
 import type { SessionProcessSummary } from "../../../../../packages/gateway-protocol/src/schema/session-processes.js";
-import "../../../components/elapsed-time.tsx";
+import { ElapsedTime } from "../../../components/elapsed-time.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import {
@@ -131,10 +131,7 @@ function ProcessRow(props: { row: SessionProcessSummary; onOpen?: () => void }) 
       </span>
       <span class="chat-details__process-name">{props.row.name}</span>
       <span class="chat-details__process-elapsed" aria-hidden="true">
-        <openclaw-elapsed-time
-          prop:startMs={props.row.startedAt}
-          prop:endMs={props.row.endedAt ?? null}
-        />
+        <ElapsedTime startMs={props.row.startedAt} endMs={props.row.endedAt ?? null} />
       </span>
       <span class="chat-details__process-tail">{lastLine() || status()}</span>
     </>

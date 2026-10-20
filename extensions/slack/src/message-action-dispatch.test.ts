@@ -4,25 +4,11 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/channel-test-helpers";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { slackSetupPlugin } from "./channel.setup.js";
-import { handleSlackMessageAction } from "./message-action-dispatch.js";
+import { createInvokeSpy, dispatch } from "./message-action-dispatch.test-support.js";
 import { extractSlackToolSend } from "./message-actions.js";
 import { renderSlackMessagePresentationFallbackText } from "./presentation-fallback.js";
-
-function createInvokeSpy() {
-  return vi.fn(async (action: Record<string, unknown>, _cfg?: unknown, _toolContext?: unknown) => ({
-    ok: true,
-    content: action,
-  }));
-}
-
-function dispatch(
-  invoke: ReturnType<typeof createInvokeSpy>,
-  ctx: Parameters<typeof handleSlackMessageAction>[0]["ctx"],
-) {
-  return handleSlackMessageAction({ providerId: "slack", ctx, invoke: invoke as never });
-}
 
 function slackConfig() {
   return { channels: { slack: { botToken: "tok" } } };
@@ -102,7 +88,7 @@ const paddedMarkdownTable = [
   ...Array.from({ length: 20 }, () => "| x | 2 |"),
 ].join("\n");
 
-describe("handleSlackMessageAction", () => {
+describe("Slack action adapter", () => {
   beforeEach(() => {
     setActivePluginRegistry(
       createTestRegistry([{ pluginId: "slack", source: "test", plugin: slackSetupPlugin }]),
@@ -130,7 +116,7 @@ describe("handleSlackMessageAction", () => {
       emoji: "✅",
       messageId: "171234.567",
     });
-    expect(firstInvokeCall(invoke)[2]).toBe(toolContext);
+    expect(firstInvokeCall(invoke)[2]).toMatchObject(toolContext);
   });
 
   it("sends an exact mirrored portable control row once", async () => {
@@ -938,7 +924,7 @@ describe("handleSlackMessageAction", () => {
     expect(action.fileId).toBe("F123");
     expect(action.channelId).toBeUndefined();
     expectForwardedCfg(invoke, cfg);
-    expect(firstInvokeCall(invoke)[2]).toBe(toolContext);
+    expect(firstInvokeCall(invoke)[2]).toMatchObject(toolContext);
   });
 
   it.each([
@@ -980,7 +966,11 @@ describe("handleSlackMessageAction", () => {
     expect(invoke).toHaveBeenCalledWith(
       expect.objectContaining({ action: "memberInfo", userId: "U123" }),
       expect.any(Object),
-      toolContext,
+      expect.objectContaining({
+        ...toolContext,
+        requesterAccountId: "ops",
+        requesterSenderId: "U123",
+      }),
     );
   });
 
@@ -1000,7 +990,11 @@ describe("handleSlackMessageAction", () => {
     expect(invoke).toHaveBeenCalledWith(
       expect.objectContaining({ action: "memberInfo", userId: "U123" }),
       expect.any(Object),
-      toolContext,
+      expect.objectContaining({
+        ...toolContext,
+        requesterAccountId: "OPS",
+        requesterSenderId: "U123",
+      }),
     );
   });
 
@@ -1055,7 +1049,11 @@ describe("handleSlackMessageAction", () => {
     expect(invoke).toHaveBeenCalledWith(
       expect.objectContaining({ action: "memberInfo", userId: "U999" }),
       expect.any(Object),
-      toolContext,
+      expect.objectContaining({
+        ...toolContext,
+        requesterAccountId: "default",
+        requesterSenderId: "U123",
+      }),
     );
   });
 });

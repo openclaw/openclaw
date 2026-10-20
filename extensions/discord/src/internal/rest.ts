@@ -249,10 +249,6 @@ export class RequestClient {
   clearQueue(): void {
     this.scheduler.clearQueue();
   }
-
-  get queueSize(): number {
-    return this.scheduler.queueSize;
-  }
 }
 
 function normalizeRequestClientOptions(

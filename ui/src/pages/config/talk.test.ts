@@ -103,10 +103,7 @@ function createTalkMutationHarness(options: TalkMutationHarnessOptions = {}) {
     },
   } satisfies TalkCatalogResult;
   let catalogRequestIndex = 0;
-  const request = vi.fn(async (method: string, params: Record<string, unknown>) => {
-    if (method.startsWith("voicewake.") && options.voiceWakeRequest) {
-      return options.voiceWakeRequest(method, params);
-    }
+  const request = vi.fn(async (_method: string, _params: Record<string, unknown>) => {
     if (options.unavailable) {
       throw new Error("talk.catalog unavailable");
     }
@@ -114,7 +111,12 @@ function createTalkMutationHarness(options: TalkMutationHarnessOptions = {}) {
     return await (options.catalogRequest?.(catalogRequestIndex, catalog) ?? catalog);
   });
   const snapshot: ApplicationGatewaySnapshot = {
-    client: { request } as unknown as GatewayBrowserClient,
+    client: {
+      request: (method: string, params: Record<string, unknown>) =>
+        method.startsWith("voicewake.")
+          ? (options.voiceWakeRequest?.(method, params) ?? Promise.resolve({ triggers: [] }))
+          : request(method, params),
+    } as unknown as GatewayBrowserClient,
     phase: "connected",
     offlineStable: false,
     canvasPluginSurfaceUrl: null,

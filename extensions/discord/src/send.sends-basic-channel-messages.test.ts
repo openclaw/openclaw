@@ -1,12 +1,12 @@
 import {
   ChannelType,
+  ComponentType,
   MessageFlags,
   PermissionFlagsBits,
   Routes,
   type APIMessageTopLevelComponent,
 } from "discord-api-types/v10";
 import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
-import { Container, TextDisplay } from "./internal/components.message.js";
 import {
   createDiscordLoopbackRest,
   discordWebMediaMockFactory,
@@ -483,7 +483,15 @@ it("preserves implicit reply scope and delivery progress in upload fallback chun
     mediaUrl: "file:///tmp/report.pdf",
     reply: { messageId: "orig-123", scope: "first" },
     onDeliveryResult,
-    components: [new Container([new TextDisplay("Attachment controls")])],
+    components: [
+      {
+        isV2: true,
+        serialize: () => ({
+          type: ComponentType.Container,
+          components: [{ type: ComponentType.TextDisplay, content: "Attachment controls" }],
+        }),
+      },
+    ],
     embeds: [{ title: "Attachment preview" }],
   });
   expect(postMock).toHaveBeenCalledTimes(3);
