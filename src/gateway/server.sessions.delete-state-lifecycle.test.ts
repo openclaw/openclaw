@@ -563,6 +563,9 @@ async function readState(service: SessionCompanionService, sessionKey: string, a
     { context: { sessionCompanion: service } },
   );
   expect(response.ok, response.error?.message).toBe(true);
+  if (!response.payload) {
+    throw new Error("sessions.companion.state returned no payload");
+  }
   return response.payload;
 }
 
