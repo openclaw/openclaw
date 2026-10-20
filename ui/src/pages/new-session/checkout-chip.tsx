@@ -222,7 +222,7 @@ export function CheckoutChip(props: {
 }) {
   let popover!: PopoverHandle;
   let confirmPending = false;
-  const worktreeAvailable = createMemo(() => props.params.place.worktreeAvailable());
+  const worktreeAvailable = () => props.params.place.worktreeAvailable();
   const branches = () =>
     props.params.place.repository.kind === "git" ? props.params.place.repository : null;
   return (
