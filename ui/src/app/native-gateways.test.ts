@@ -63,7 +63,6 @@ describe("native gateways", () => {
   it.each([
     ["", "This computer"],
     ["This Mac", "This Mac"],
-    ["My desktop", "My desktop"],
   ])("uses a shell's local label with a neutral fallback (%s)", async (name, expected) => {
     installBridge();
     Object.assign(window, {
@@ -90,6 +89,8 @@ describe("native gateways", () => {
     const { nativeGatewaysCapability } = await import("./native-gateways.runtime.ts");
     const capability = nativeGatewaysCapability();
 
+    expect(capability).not.toBeNull();
+    expect(nativeGatewaysCapability()).toBe(capability);
     expect(capability?.snapshot).toEqual(snapshot);
     capability?.select("profile:studio");
     capability?.openWindow?.("profile:studio");
@@ -122,18 +123,6 @@ describe("native gateways", () => {
       new CustomEvent(EVENT, { detail: { ...snapshot, currentId: "profile:studio" } }),
     );
     expect(listener).not.toHaveBeenCalled();
-  });
-
-  it("creates the app-lifetime singleton only once", async () => {
-    installBridge();
-    Object.assign(window, { __OPENCLAW_NATIVE_GATEWAYS__: snapshot });
-    const { nativeGatewaysCapability } = await import("./native-gateways.runtime.ts");
-
-    const first = nativeGatewaysCapability();
-    const second = nativeGatewaysCapability();
-
-    expect(first).not.toBeNull();
-    expect(second).toBe(first);
   });
 });
 

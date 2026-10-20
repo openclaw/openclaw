@@ -22,6 +22,18 @@ function install(postMessage = vi.fn().mockResolvedValue({ ok: true })) {
   vi.stubGlobal("webkit", { messageHandlers: { openclawBrowser: { postMessage } } });
   return postMessage;
 }
+function push(detail: unknown) {
+  window.dispatchEvent(new CustomEvent("openclaw:native-browser-state", { detail }));
+}
+function send(type: "close" | "download" | "snapshot" | "reload") {
+  return postNativeBrowserMessage({ type, tabId: "mac-1" });
+}
+const snapshotReply = {
+  ok: true,
+  dataUrl: "data:image/png;base64,eA==",
+  cssWidth: 640,
+  cssHeight: 480,
+};
 afterEach(() => vi.unstubAllGlobals());
 
 describe("native browser bridge wire contract", () => {
@@ -29,11 +41,9 @@ describe("native browser bridge wire contract", () => {
     const listener = vi.fn();
     expect(hasNativeBrowserBridge()).toBe(false);
     expect(readNativeBrowserState()).toBeNull();
-    expect(await postNativeBrowserMessage({ type: "close", tabId: "mac-1" })).toBeNull();
+    expect(await send("close")).toBeNull();
     const unsubscribe = subscribeNativeBrowserState(listener);
-    window.dispatchEvent(
-      new CustomEvent("openclaw:native-browser-state", { detail: { revision: 1, tabs: [tab] } }),
-    );
+    push({ revision: 1, tabs: [tab] });
     unsubscribe();
     expect(listener).not.toHaveBeenCalled();
   });
@@ -50,27 +60,24 @@ describe("native browser bridge wire contract", () => {
       },
     };
     vi.stubGlobal("webkit", { messageHandlers: { openclawBrowser: bridge } });
-    for (const message of [
+    const requests = [
       { type: "open", tabId: "mac-1", url: "about:blank", sessionKey: "", activate: false },
       { type: "present", scope: "scope", tabId: null, rect: null, visible: false },
       { type: "release-scope", scope: "scope" },
-    ] satisfies NativeBrowserMessage[]) {
-      expect(await postNativeBrowserMessage(message)).toEqual(
+    ] satisfies NativeBrowserMessage[];
+    for (const message of requests) {
+      expect(await postNativeBrowserMessage({ ...message })).toEqual(
         message.type === "open" ? { ok: true, tabId: message.tabId } : { ok: true },
       );
     }
-    expect(messages).toEqual([
-      { type: "open", tabId: "mac-1", url: "about:blank", sessionKey: "", activate: false },
-      { type: "present", scope: "scope", tabId: null, rect: null, visible: false },
-      { type: "release-scope", scope: "scope" },
-    ]);
+    expect(messages).toEqual(requests);
   });
 
   it("downloads through the native tab and distinguishes a saved file from cancellation", async () => {
     const post = install();
     for (const cancelled of [false, true]) {
       post.mockResolvedValueOnce({ ok: true, cancelled });
-      expect(await postNativeBrowserMessage({ type: "download", tabId: "mac-1" })).toEqual({
+      expect(await send("download")).toEqual({
         ok: true,
         cancelled,
       });
@@ -78,7 +85,7 @@ describe("native browser bridge wire contract", () => {
     }
     for (const reply of [{ ok: true }, { ok: true, cancelled: "false" }]) {
       post.mockResolvedValueOnce(reply);
-      expect(await postNativeBrowserMessage({ type: "download", tabId: "mac-1" })).toEqual({
+      expect(await send("download")).toEqual({
         ok: false,
         error: "Invalid native browser download",
       });
@@ -87,36 +94,26 @@ describe("native browser bridge wire contract", () => {
 
   it("rejects malformed snapshots and propagates native failures", async () => {
     const post = install();
-    post.mockResolvedValueOnce({
-      ok: true,
-      dataUrl: "data:image/png;base64,eA==",
-      cssWidth: 640,
-      cssHeight: 480,
-    });
-    expect(await postNativeBrowserMessage({ type: "snapshot", tabId: "mac-1" })).toEqual({
-      ok: true,
-      dataUrl: "data:image/png;base64,eA==",
-      cssWidth: 640,
-      cssHeight: 480,
-    });
+    post.mockResolvedValueOnce({ ...snapshotReply });
+    expect(await send("snapshot")).toEqual(snapshotReply);
     for (const reply of [
       null,
       { ok: true },
-      { ok: true, dataUrl: "file:///example", cssWidth: 640, cssHeight: 480 },
-      { ok: true, dataUrl: "data:image/png;base64,eA==", cssWidth: 0, cssHeight: 480 },
+      { ...snapshotReply, dataUrl: "file:///example" },
+      { ...snapshotReply, cssWidth: 0 },
     ]) {
       post.mockResolvedValueOnce(reply);
-      expect(await postNativeBrowserMessage({ type: "snapshot", tabId: "mac-1" })).toMatchObject({
+      expect(await send("snapshot")).toMatchObject({
         ok: false,
       });
     }
     post.mockResolvedValueOnce({ ok: false, error: "Tab closed" });
-    expect(await postNativeBrowserMessage({ type: "reload", tabId: "mac-1" })).toEqual({
+    expect(await send("reload")).toEqual({
       ok: false,
       error: "Tab closed",
     });
     post.mockRejectedValueOnce(new Error("WebKit unavailable"));
-    expect(await postNativeBrowserMessage({ type: "close", tabId: "mac-1" })).toEqual({
+    expect(await send("close")).toEqual({
       ok: false,
       error: "WebKit unavailable",
     });
@@ -128,8 +125,6 @@ describe("native browser bridge wire contract", () => {
     expect(readNativeBrowserState()).toEqual({ revision: 2, tabs: [tab] });
     const listener = vi.fn();
     const unsubscribe = subscribeNativeBrowserState(listener);
-    const push = (detail: unknown) =>
-      window.dispatchEvent(new CustomEvent("openclaw:native-browser-state", { detail }));
     for (const state of [
       { revision: 1, tabs: [tab] },
       { revision: 2, tabs: [] },
@@ -167,7 +162,7 @@ describe("native browser bridge wire contract", () => {
     const unsubscribe = subscribeNativeBrowserState(listener);
     try {
       const next = { ...state, revision: 2 };
-      window.dispatchEvent(new CustomEvent("openclaw:native-browser-state", { detail: next }));
+      push(next);
       expect(listener.mock.calls).toEqual(accepted ? [[next]] : []);
     } finally {
       unsubscribe();
