@@ -8,7 +8,11 @@ export const en: TranslationMap & {
   gatewayLogs: TranslationMap;
   standingGrants: TranslationMap;
   approvalHistory: TranslationMap;
-  secretsStore: TranslationMap;
+  secretsStore: TranslationMap &
+    Record<
+      "allowedHosts" | "allowedHostsPlaceholder" | "protectedSecret" | "agentReadable" | "hint",
+      string
+    >;
   pluginsPage: TranslationMap & Record<"installed" | "official" | "install", string>;
   mcpApp: TranslationMap;
   linkReader: TranslationMap;
