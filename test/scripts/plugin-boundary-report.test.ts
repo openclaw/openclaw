@@ -10,37 +10,29 @@ const originalPendingCodes = new Set([
   "plugin-sdk-memory-host-core-public-demotion",
   "plugin-sdk-plugin-config-runtime-public-demotion",
 ]);
-type CompatRecord = Record<
-  | "code"
-  | "removeAfter"
-  | "blocker"
-  | "readerCount"
-  | "readerSample"
-  | "dueForReview"
-  | "removalGate"
-  | "eligibleForRemoval",
-  unknown
->;
+type CompatRecord = {
+  code: string;
+  readerSample: string[];
+  removeAfter?: string;
+  removalGate?: string;
+  eligibleForRemoval?: boolean;
+};
 
 it("emits compact CI-safe summary JSON", () => {
   const summaryResult = createPluginBoundaryReport(["--summary", "--json"]);
   const summary = JSON.parse(summaryResult.stdout) as {
-    compat?: {
-      removalPendingCount?: unknown;
-      removalPendingDueCount?: unknown;
-      removalPending?: CompatRecord[];
-    };
-    memoryHostSdk?: {
-      implementation?: unknown;
-    };
+    compat: { removalPending: CompatRecord[] };
+    memoryHostSdk: { implementation: string };
   };
 
   expect(summaryResult).toMatchObject({ exitCode: 0, stderr: "" });
-  expect(summary.compat).toMatchObject({
-    removalPendingCount: 15,
-    removalPendingDueCount: expect.any(Number),
+  expect(summary).toMatchObject({
+    compat: { removalPendingCount: 15, removalPendingDueCount: expect.any(Number) },
   });
-  expect(summary.compat?.removalPending?.map((record) => record.code)).toEqual(
+  expect(["private-core-bridge", "private-package-core-integrated"]).toContain(
+    summary.memoryHostSdk.implementation,
+  );
+  expect(summary.compat.removalPending.map((record) => record.code)).toEqual(
     (
       "sdk-untrusted-context-identifier-aliases plugin-sdk-media-understanding-public-demotion " +
       "plugin-sdk-memory-host-core-public-demotion agent-harness-terminal-result-aliases " +
@@ -51,33 +43,27 @@ it("emits compact CI-safe summary JSON", () => {
       "plugin-sdk-focused-compat-aliases plugin-sdk-plugin-config-runtime-public-demotion"
     ).split(" "),
   );
-  expect(summary.compat?.removalPending?.[0]).toMatchObject({
+  expect(summary.compat.removalPending[0]).toMatchObject({
     removeAfter: "2026-09-08",
     blocker: expect.stringContaining(
       "migration of published plugin readers is verified and explicit breaking-release approval is granted",
     ),
   });
-  for (const record of summary.compat?.removalPending ?? []) {
+  for (const record of summary.compat.removalPending) {
     expect(record).toMatchObject({
       removeAfter: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/u),
       blocker: expect.stringMatching(/retain|replacement/iu),
       readerCount: expect.any(Number),
       dueForReview: expect.any(Boolean),
     });
-    if (originalPendingCodes.has(String(record.code))) {
+    if (originalPendingCodes.has(record.code)) {
       expect(record.readerSample).toEqual(expect.arrayContaining([expect.any(String)]));
     } else {
       expect(record.removeAfter).toBe("2026-10-01");
-      expect(Array.isArray(record.readerSample)).toBe(true);
-      for (const reader of record.readerSample as unknown[]) {
-        expect(reader).toEqual(expect.any(String));
-      }
+      expect(record.readerSample).toEqual(record.readerSample.map(() => expect.any(String)));
     }
-    expect((record.readerSample as unknown[]).length).toBeLessThanOrEqual(5);
+    expect(record.readerSample.length).toBeLessThanOrEqual(5);
   }
-  expect(["private-core-bridge", "private-package-core-integrated"]).toContain(
-    summary.memoryHostSdk?.implementation,
-  );
 });
 
 it.each([
@@ -100,12 +86,8 @@ it("renders removal-pending blockers and reader references without changing fail
 
 it("reports the inbound reply dispatch undated stable-release gate as date-ineligible", () => {
   const jsonResult = createPluginBoundaryReport(["--json", "--owner", "channel"]);
-  const report = JSON.parse(jsonResult.stdout) as {
-    compat?: {
-      records?: CompatRecord[];
-    };
-  };
-  const record = report.compat?.records?.find(
+  const report = JSON.parse(jsonResult.stdout) as { compat: { records: CompatRecord[] } };
+  const record = report.compat.records.find(
     (candidate) => candidate.code === "plugin-sdk-inbound-reply-dispatch-subpath",
   );
 

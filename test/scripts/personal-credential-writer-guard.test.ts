@@ -31,6 +31,19 @@ function expectDenied(
   );
 }
 
+function allowedGraph(sources: Record<string, string>) {
+  expectAllowed(sources);
+  return (
+    file: string,
+    update: string | ((original: string) => string),
+    messages?: string | string[],
+  ) =>
+    expectDenied(
+      { ...sources, [file]: typeof update === "string" ? update : update(sources[file]) },
+      messages,
+    );
+}
+
 it("allows the exact credential worker operations and exclusive Doctor entry", () => {
   expectAllowed({
     "src/agents/auth-profiles/store.worker.ts": `
@@ -256,34 +269,28 @@ it("counts canonical auth sinks and transitional generic sinks without file exem
   const machineState = "src/state/config-machine-state-write.ts";
   const write = `db.insertInto('auth_profile_store');
     db.insertInto('config_machine_state').values({ state_key: 'authProfiles.store' });`;
-  const sources = {
+  const reject = allowedGraph({
     [authCells]: `function writeAuthProfileJsonCell() { ${write} }`,
     [machineState]: `function upsertConfigMachineState(key: string) {
       db.insertInto('config_machine_state').values({ state_key: key });
     }`,
-  };
-  expectAllowed(sources);
-  expectDenied(
-    {
-      ...sources,
-      [authCells]: `${sources[authCells]} function bypass() { db.deleteFrom('auth_profile_store'); }`,
-    },
+  });
+
+  reject(
+    authCells,
+    (original) => `${original} function bypass() { db.deleteFrom('auth_profile_store'); }`,
     "unreviewed auth_profile_store writer",
   );
-  expectDenied(
-    {
-      ...sources,
-      [authCells]: `function writeAuthProfileJsonCell() { ${write} db.deleteFrom('auth_profile_store'); }`,
-    },
+  reject(
+    authCells,
+    `function writeAuthProfileJsonCell() { ${write} db.deleteFrom('auth_profile_store'); }`,
     "unreviewed auth_profile_store writer",
   );
-  expectDenied(
-    {
-      ...sources,
-      [machineState]: `${sources[machineState]} function bypass() {
+  reject(
+    machineState,
+    (original) => `${original} function bypass() {
       db.deleteFrom('config_machine_state').where('state_key', '=', 'authProfiles.store');
     }`,
-    },
     "unreviewed config_machine_state writer",
   );
 });
@@ -325,7 +332,7 @@ const sharedPublication = "src/gateway/github-publication-store.worker.ts";
 const publicationWorker = "src/state/github-publication.worker.ts";
 
 it("permits publication inserts only through the reviewed request and lifecycle owners", () => {
-  const sources = {
+  const reject = allowedGraph({
     [lifecycle]: `export function insertGitHubPublicationSessionLifecycle() {
       db.insertInto('github_publication_session_lifecycles');
     }`,
@@ -343,25 +350,19 @@ it("permits publication inserts only through the reviewed request and lifecycle 
         write();
       } };
     `,
-  };
-  expectAllowed(sources);
-  expectDenied(
-    {
-      ...sources,
-      "src/state/github-publication-request.worker.ts": sources[
-        "src/state/github-publication-request.worker.ts"
-      ].replace("githubPublications.insert", "githubPublications.bypass"),
-    },
+  });
+
+  reject(
+    "src/state/github-publication-request.worker.ts",
+    (original) => original.replace("githubPublications.insert", "githubPublications.bypass"),
     "unreviewed GitHub publication writer reference",
   );
-  expectDenied(
-    {
-      ...sources,
-      "src/new-writer.worker.ts": `
+  reject(
+    "src/new-writer.worker.ts",
+    `
         import { insertGitHubPublicationSessionLifecycle as write } from './state/github-publication-session-lifecycles.worker.js';
         write();
       `,
-    },
     "unreviewed GitHub publication writer reference",
   );
 });
@@ -386,7 +387,7 @@ it.each([
 
 it("guards publication mutation entry paths and the existing repeated factory calls", () => {
   const factory = "createGitHubPublicationExecutionStoreInDatabase";
-  const sources = {
+  const reject = allowedGraph({
     [sharedPublication]: `export function ${factory}() {}`,
     [publicationWorker]: `
       import { ${factory} } from '../gateway/github-publication-store.worker.js';
@@ -396,25 +397,19 @@ it("guards publication mutation entry paths and the existing repeated factory ca
         'githubPublications.maintenance': () => { sharedMutation(); sharedMutation(); },
       };
     `,
-  };
-  expectAllowed(sources);
-  expectDenied(
-    {
-      ...sources,
-      [publicationWorker]: `${sources[publicationWorker]}
+  });
+
+  reject(
+    publicationWorker,
+    (original) => `${original}
         function bypass() { sharedMutation(); }
       `,
-    },
     `from ${publicationWorker}:bypass`,
   );
-  expectDenied(
-    {
-      ...sources,
-      [publicationWorker]: sources[publicationWorker].replace(
-        `function sharedMutation() {`,
-        `function sharedMutation() { ${factory}();`,
-      ),
-    },
+  reject(
+    publicationWorker,
+    (original) =>
+      original.replace(`function sharedMutation() {`, `function sharedMutation() { ${factory}();`),
     `from ${publicationWorker}:sharedMutation`,
   );
 });
@@ -455,7 +450,7 @@ it("guards generic credential publication and custody helpers against new caller
   const authority = "src/state/user-model-account-authority.ts";
   const custody = "src/agents/auth-profiles/credential-write-custody.ts";
   const machine = "src/state/config-machine-state-write.ts";
-  const sources = {
+  const reject = allowedGraph({
     [custody]: `export function withAuthProfileCredentialWriteCustody() {}`,
     [authority]: `
       import { withAuthProfileCredentialWriteCustody } from '../agents/auth-profiles/credential-write-custody.js';
@@ -466,19 +461,16 @@ it("guards generic credential publication and custody helpers against new caller
       function publishMachineStateWrite() { withAuthProfileCredentialWrite(); }
       function upsertConfigMachineState() { publishMachineStateWrite(); }
     `,
-  };
-  expectAllowed(sources);
-  expectDenied({
-    ...sources,
-    "src/new-writer.worker.ts": `
+  });
+
+  reject(
+    "src/new-writer.worker.ts",
+    `
       import { withAuthProfileCredentialWriteCustody as write } from './agents/auth-profiles/credential-write-custody.js';
       write();
     `,
-  });
-  expectDenied({
-    ...sources,
-    [machine]: sources[machine] + `function bypass() { publishMachineStateWrite(); }`,
-  });
+  );
+  reject(machine, (original) => original + `function bypass() { publishMachineStateWrite(); }`);
 });
 
 it("requires the host publication adapter for direct and aliased machine-state commands", () => {
@@ -539,13 +531,13 @@ it.each([
   "import * as sdk from './plugin-sdk/agent-runtime.js'; sdk['saveAuthProfileStore']();",
   "export { saveAuthProfileStore } from './plugin-sdk/agent-runtime.js';",
 ])("rejects a new ordinary worker entry through the released sync SDK: %s", (consumer) => {
-  const sources = {
+  const reject = allowedGraph({
     [authRuntime]: `export const saveAuthProfileStore = () => {};`,
     "src/agents/auth-profiles.ts": `export { saveAuthProfileStore } from './auth-profiles/store-runtime.js';`,
     "src/plugin-sdk/agent-runtime.ts": `export { saveAuthProfileStore } from '../agents/auth-profiles.js';`,
-  };
-  expectAllowed(sources);
-  expectDenied({ ...sources, "src/new-writer.worker.ts": consumer });
+  });
+
+  reject("src/new-writer.worker.ts", consumer);
 });
 
 it("protects destructured facade writers and native readers that can synchronize credentials", () => {
@@ -565,20 +557,17 @@ it("protects destructured facade writers and native readers that can synchronize
 });
 
 it("preserves the released provider-auth package barrel without admitting a new facade", () => {
-  const sources = {
+  const reject = allowedGraph({
     [authRuntime]: `export function ensureAuthProfileStore() {}`,
     "src/plugin-sdk/provider-auth.ts": `export { ensureAuthProfileStore } from '../agents/auth-profiles/store-runtime.js';`,
     "packages/plugin-sdk/src/provider-auth.ts": `export * from '../../../src/plugin-sdk/provider-auth.js';`,
-  };
-  expectAllowed(sources);
-  expectDenied({
-    ...sources,
-    "src/new-facade.ts": `export * from './plugin-sdk/provider-auth.js';`,
   });
+
+  reject("src/new-facade.ts", `export * from './plugin-sdk/provider-auth.js';`);
 });
 
 it("permits the exact native reader dependency forwards without opening sibling callers", () => {
-  const sources = {
+  const reject = allowedGraph({
     [authRuntime]: `export function ensureAuthProfileStore() {} export function loadAuthProfileStoreForRuntime() {}`,
     "extensions/codex/src/app-server/auth-profile.ts": `
       import { ensureAuthProfileStore } from '../../../../src/agents/auth-profiles/store-runtime.js';
@@ -604,16 +593,11 @@ it("permits the exact native reader dependency forwards without opening sibling 
         return (deps.loadAuthProfileStoreForRuntime ?? loadAuthProfileStoreForRuntime)();
       }
     `,
-  };
-  expectAllowed(sources);
-  expectDenied(
-    {
-      ...sources,
-      "src/agents/cli-execution-auth.ts": sources["src/agents/cli-execution-auth.ts"].replace(
-        "resolveCliExecutionAuthProfileId",
-        "newReader",
-      ),
-    },
+  });
+
+  reject(
+    "src/agents/cli-execution-auth.ts",
+    (original) => original.replace("resolveCliExecutionAuthProfileId", "newReader"),
     "from src/agents/cli-execution-auth.ts:newReader",
   );
 });
@@ -637,7 +621,7 @@ it("bounds reviewed lazy imports by loader, declaration scope and selected expor
 });
 
 it("closes raw-store and worker-kernel entries while preserving the named update dispatchers", () => {
-  const sources = {
+  const reject = allowedGraph({
     [authCells]: `export function writeAuthProfileJsonCell() {}`,
     "src/agents/auth-profiles/store-update.worker.ts": `
       import { writeAuthProfileJsonCell } from './sqlite-json-write.js';
@@ -647,15 +631,15 @@ it("closes raw-store and worker-kernel entries while preserving the named update
       import { updateAuthProfileStoreInDatabase } from './store-update.worker.js';
       export const operations = { 'authProfiles.update': () => updateAuthProfileStoreInDatabase() };
     `,
-  };
-  expectAllowed(sources);
-  expectDenied({
-    ...sources,
-    "src/new-writer.worker.ts": `
+  });
+
+  reject(
+    "src/new-writer.worker.ts",
+    `
         import { updateAuthProfileStoreInDatabase } from './agents/auth-profiles/store-update.worker.js';
         updateAuthProfileStoreInDatabase();
       `,
-  });
+  );
 });
 
 function machineStateConsumer(consumer: string) {
@@ -709,7 +693,7 @@ it.each([
 });
 
 it("restricts authorization enrollment to admitted workers and its offline Doctor owner", () => {
-  const sources = {
+  const reject = allowedGraph({
     "src/agents/auth-profiles/sqlite-json-write.ts": `export function writeAuthProfileJsonCell() {}`,
     "src/agents/auth-profiles/authorization-enrollment.ts": `
       import { writeAuthProfileJsonCell } from './sqlite-json-write.js';
@@ -735,28 +719,28 @@ it("restricts authorization enrollment to admitted workers and its offline Docto
         }
       }
     `,
-  };
-  expectAllowed(sources);
+  });
+
   const runtime = "src/agents/auth-profiles/authorization-enrollment-runtime.ts";
-  expectDenied({
-    ...sources,
-    [runtime]:
-      sources[runtime] +
+  reject(
+    runtime,
+    (original) =>
+      original +
       `
         export function unownedSibling() { enrollAuthProfileAuthorizationInDatabase(); }
       `,
-  });
-  expectDenied({
-    ...sources,
-    "src/new-writer.worker.ts": `
+  );
+  reject(
+    "src/new-writer.worker.ts",
+    `
         import { enrollAuthProfileAuthorizationInDatabase } from './agents/auth-profiles/authorization-enrollment.js';
         enrollAuthProfileAuthorizationInDatabase();
       `,
-  });
+  );
 });
 
 it("keeps catalog capture and worker write custody behind the reviewed batch entry", () => {
-  const sources = {
+  const reject = allowedGraph({
     "src/agents/auth-profiles/runtime-scope.ts": `export function withWorkerAuthProfileWrites() {}`,
     "src/state/user-model-account-authority.ts": `export function captureAuthProfileCredentialCommits() {}`,
     "src/agents/prepared-model-catalog.worker.ts": `
@@ -764,15 +748,15 @@ it("keeps catalog capture and worker write custody behind the reviewed batch ent
       import { captureAuthProfileCredentialCommits } from '../state/user-model-account-authority.js';
       captureAuthProfileCredentialCommits(() => withWorkerAuthProfileWrites());
     `,
-  };
-  expectAllowed(sources);
-  expectDenied({
-    ...sources,
-    "src/new-writer.worker.ts": `
+  });
+
+  reject(
+    "src/new-writer.worker.ts",
+    `
         import { withWorkerAuthProfileWrites } from './agents/auth-profiles/runtime-scope.js';
         withWorkerAuthProfileWrites();
       `,
-  });
+  );
 });
 
 it("does not expose the onboarding mutation callback outside its bounded-key adapter", () => {
@@ -798,19 +782,17 @@ it("permits supplied-database SDK save custody without granting sibling factory 
       return { saveAuthProfileStore };
     }
   `;
-  const sources = {
+  const reject = allowedGraph({
     "src/agents/auth-profiles/credential-write-custody.ts": `export function withAuthProfileCredentialWriteCustody() {}`,
     [authStore]: source,
-  };
-  expectAllowed(sources);
-  expectDenied(
-    {
-      ...sources,
-      [authStore]: source.replace(
-        "return { saveAuthProfileStore };",
-        "function bypass() { withAuthProfileCredentialWriteCustody(); } return { saveAuthProfileStore };",
-      ),
-    },
+  });
+
+  reject(
+    authStore,
+    source.replace(
+      "return { saveAuthProfileStore };",
+      "function bypass() { withAuthProfileCredentialWriteCustody(); } return { saveAuthProfileStore };",
+    ),
     "createAuthProfileStoreRuntime/bypass",
   );
 });
@@ -866,7 +848,7 @@ it.each([
 
 it("keeps session membership writes with the worker and canonical entry owners", () => {
   const members = "src/config/sessions/session-sharing-store.native.ts";
-  const sources = {
+  const reject = allowedGraph({
     [members]: `export function addSessionMember() { db.insertInto('session_members'); }`,
     "src/config/sessions/session-sharing-store.worker.ts": `
       import { addSessionMember } from './session-sharing-store.native.js';
@@ -882,17 +864,15 @@ it("keeps session membership writes with the worker and canonical entry owners",
       import { clearSessionCollaborationForKey } from './session-accessor.sqlite-node-artifacts.js';
       function writeSessionEntry() { clearSessionCollaborationForKey(); }
     `,
-  };
-  expectAllowed(sources);
-  expectDenied(
-    {
-      ...sources,
-      "src/new-writer.ts": `
+  });
+
+  reject(
+    "src/new-writer.ts",
+    `
         import { addSessionMember } from './config/sessions/session-sharing-store.native.js';
         addSessionMember();
         db.exec('DELETE FROM session_members');
       `,
-    },
     ["unreviewed session membership writer reference", "raw authority-table write"],
   );
 });

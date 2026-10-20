@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { parse } from "yaml";
+import { expectExcludes, expectIncludes } from "./ci-workflow.test-support.js";
 
 type Step = {
   env?: Record<string, string>;
@@ -62,7 +63,7 @@ function step(jobValue: Job, name: string): Step {
 }
 
 function expectArtifactBinding(value: string) {
-  for (const fragment of [
+  expectIncludes(value, [
     "clawhub-bootstrap-artifact.mjs download",
     '--artifact-size "${ARTIFACT_SIZE}"',
     '--run-attempt "${ARTIFACT_RUN_ATTEMPT}"',
@@ -71,9 +72,7 @@ function expectArtifactBinding(value: string) {
     "--clawhub-toolchain-integrity",
     "--clawhub-toolchain-sha256",
     "--clawhub-toolchain-version",
-  ]) {
-    expect(value).toContain(fragment);
-  }
+  ]);
 }
 
 it("isolates validation runs while serializing publication of the same target", () => {
@@ -178,8 +177,7 @@ it("supports a secretless pre-tag validation mode without tag or parent approval
     const validationJob = job(jobName);
     expect(validationJob.if).toContain("inputs.pretag_validation == true");
     expect(validationJob.environment).toBeUndefined();
-    expect(JSON.stringify(validationJob)).not.toContain("secrets.");
-    expect(JSON.stringify(validationJob)).not.toContain("--publish-packed");
+    expectExcludes(JSON.stringify(validationJob), ["secrets.", "--publish-packed"]);
   }
   const protectedValidation = job("validate_bootstrap_artifact");
   expect(protectedValidation.if).toContain("inputs.pretag_validation == true");
@@ -209,14 +207,14 @@ it("requires an exact attested parent tuple for approved dry-run validation", ()
     RELEASE_TAG: "${{ inputs.release_tag }}",
     RELEASE_TARGET_SHA: "${{ needs.resolve_bootstrap_plan.outputs.ref_revision }}",
   });
-  expect(validation.run).toContain("gh attestation verify");
-  expect(validation.run).toContain(
+  expectIncludes(validation.run, [
+    "gh attestation verify",
     "actions/runs/${RELEASE_PUBLISH_RUN_ID}/attempts/${EXPECTED_RUN_ATTEMPT}",
-  );
-  expect(validation.run).toContain("repository: .repository.full_name");
-  expect(validation.run).toContain('EXPECTED_WORKFLOW_REF="refs/tags/${EXPECTED_WORKFLOW_BRANCH}"');
-  expect(validation.run).toContain('--source-ref "${EXPECTED_WORKFLOW_REF}"');
-  expect(validation.run).toContain('--source-digest "${EXPECTED_WORKFLOW_SHA}"');
+    "repository: .repository.full_name",
+    'EXPECTED_WORKFLOW_REF="refs/tags/${EXPECTED_WORKFLOW_BRANCH}"',
+    '--source-ref "${EXPECTED_WORKFLOW_REF}"',
+    '--source-digest "${EXPECTED_WORKFLOW_SHA}"',
+  ]);
 });
 
 it("packs target code only in the secretless producer", () => {
@@ -260,12 +258,10 @@ it("always validates the immutable handoff without credentials, including dry ru
   expect(step(validate, "Validate packed ClawHub package identities").run).toContain(
     "--validate-packed",
   );
-  expect(step(validate, "Require configure-only registry bytes to match target").run).toContain(
+  expectIncludes(step(validate, "Require configure-only registry bytes to match target").run, [
     "--mode configure-only-preflight",
-  );
-  expect(step(validate, "Require configure-only registry bytes to match target").run).toContain(
     '--terminal-run-attempt "${GITHUB_RUN_ATTEMPT}"',
-  );
+  ]);
   expect(step(validate, "Upload immutable bootstrap validation evidence").with?.name).toBe(
     "clawhub-bootstrap-validation-${{ github.run_id }}-${{ github.run_attempt }}",
   );
@@ -319,16 +315,14 @@ it("rehashes and validates tgz identity before exposing the token", () => {
     step(publish, "Validate packed ClawHub package identities before credentials").run,
   ).toContain("--validate-packed");
   const publishRun = step(publish, "Publish exact ClawHub bootstrap artifacts").run;
-  for (const fragment of [
+  expectIncludes(publishRun, [
     "--publish-packed",
     "verify_release_tag_target",
     "OPENCLAW_CLAWHUB_RELEASE_GIT_DIR",
     "OPENCLAW_CLAWHUB_RELEASE_TAG",
     "OPENCLAW_CLAWHUB_TARGET_SHA",
     "OPENCLAW_CLAWHUB_PACKAGE_FAMILY",
-  ]) {
-    expect(publishRun).toContain(fragment);
-  }
+  ]);
 });
 
 it("uses one lockfile-only ClawHub CLI graph and absolute binary path", () => {
