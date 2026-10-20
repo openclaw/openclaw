@@ -6,6 +6,7 @@ import { observeHostDataSql } from "../../test/helpers/sqlite-statement-executio
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   appendTranscriptEvent,
+  listSessionEntriesCore,
   upsertSessionEntryCore,
   appendTranscriptMessage,
   loadSessionEntryReadOnly,
@@ -36,20 +37,20 @@ import {
   withOpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import {
-  appendAssistantMirrorMessageByIdentity as appendMirror,
-  appendSessionTranscriptMessageByIdentity as appendByIdentity,
+  appendAssistantMirrorMessageByIdentity,
+  appendSessionTranscriptMessageByIdentity,
   appendSessionYieldContext,
-  formatSessionTranscriptMemoryHitKey as formatHitKey,
-  readLatestAssistantTextByIdentity as readLatestText,
-  readSessionTranscriptEvents as readEvents,
-  readVisibleSessionTranscriptMessageEntries as readEntries,
-  resolveSessionTranscriptMemoryHitKeyToSessionKeys as resolveHitKeys,
+  formatSessionTranscriptMemoryHitKey,
+  readLatestAssistantTextByIdentity,
+  readSessionTranscriptEvents,
+  readVisibleSessionTranscriptMessageEntries,
+  resolveSessionTranscriptMemoryHitKeyToSessionKeys,
   withSessionTranscriptWriteLock,
   type SessionTranscriptReadParams,
   createSessionCatalogGitHubLinker,
   createSessionCatalogSourceActorProjector,
-  readSessionTranscriptCatalogPage as readCatalogPage,
-  readSessionTranscriptCatalogTitleAsync as readCatalogTitle,
+  readSessionTranscriptCatalogPage,
+  readSessionTranscriptCatalogTitleAsync,
 } from "./session-transcript-runtime.js";
 
 describe("session transcript runtime SDK", () => {
@@ -65,22 +66,21 @@ describe("session transcript runtime SDK", () => {
     await state.cleanup();
   });
 
-  async function createScope(
-    sessionId = "session",
-    entry: Parameters<typeof upsertSessionEntryCore>[1] = { sessionId, updatedAt: 10 },
-  ) {
+  async function createScope(sessionId = "session") {
     const scope = { agentId: "main", sessionId, sessionKey: "agent:main:main", storePath };
-    await upsertSessionEntryCore(scope, entry);
+    await upsertSessionEntryCore(scope, { sessionId, updatedAt: 10 });
     return scope;
   }
+  const entries = (scope: SessionTranscriptReadParams) =>
+    readVisibleSessionTranscriptMessageEntries(scope);
   const append = (scope: SessionTranscriptReadParams, role: string, content: string) =>
-    appendByIdentity({ ...scope, message: { role, content } });
+    appendSessionTranscriptMessageByIdentity({ ...scope, message: { role, content } });
 
-  it("keeps separately keyed delivery mirrors out of authored assistant text", async () => {
+  it("appends keyed mirrors, dedupes unkeyed mirrors, and rejects a rebound session", async () => {
     const scope = await createScope();
     for (const idempotencyKey of ["delivery-1", "delivery-2"]) {
       await expect(
-        appendMirror({
+        appendAssistantMirrorMessageByIdentity({
           ...scope,
           idempotencyKey,
           deliveryMirror: { kind: "channel-final", sourceMessageId: idempotencyKey },
@@ -88,29 +88,42 @@ describe("session transcript runtime SDK", () => {
         }),
       ).resolves.toMatchObject({ ok: true, messageId: expect.any(String) });
     }
-    await expect(readLatestText(scope)).resolves.toBeUndefined();
-    expect(await readEntries(scope)).toHaveLength(2);
+    await expect(readLatestAssistantTextByIdentity(scope)).resolves.toBeUndefined();
+    expect(await entries(scope)).toHaveLength(2);
+    const unkeyed = await createScope("unkeyed");
+    const request = { ...unkeyed, text: "unkeyed assistant reply" };
+    const first = await appendAssistantMirrorMessageByIdentity(request);
+    expect(first).toMatchObject({ ok: true, messageId: expect.any(String) });
+    await expect(appendAssistantMirrorMessageByIdentity(request)).resolves.toEqual(first);
+    expect(await entries(unkeyed)).toHaveLength(1);
+    await expect(
+      appendAssistantMirrorMessageByIdentity({ ...scope, text: "stale reply" }),
+    ).resolves.toMatchObject({ ok: false, code: "session-rebound" });
   });
 
   it("does not append an assistant mirror after cancellation", async () => {
     const scope = await createScope();
     const cancellation = new Error("cancelled by user");
-    const signal = AbortSignal.abort(cancellation);
-    const write = appendMirror({ ...scope, signal, text: "must not be persisted" });
-    await expect(write).rejects.toBe(cancellation);
-    await expect(readEvents(scope)).resolves.toEqual([]);
+    await expect(
+      appendAssistantMirrorMessageByIdentity({
+        ...scope,
+        signal: AbortSignal.abort(cancellation),
+        text: "must not be persisted",
+      }),
+    ).rejects.toBe(cancellation);
+    await expect(readSessionTranscriptEvents(scope)).resolves.toEqual([]);
   });
 
   it.each(["assistant mirror", "yield context"])(
     "rejects %s after its admitted writer is superseded",
     async (operation) => {
-      const scope = await createScope("session", {
+      const scope = await createScope();
+      await upsertSessionEntryCore(scope, {
         activeWriterRunId: "replacement-run",
         lifecycleRevision: "revision-a",
-        sessionId: "session",
+        sessionId: scope.sessionId,
         updatedAt: 10,
       });
-      const denied = "must not be persisted";
       await expect(
         withOwnedSessionTranscriptWrites(
           {
@@ -122,19 +135,30 @@ describe("session transcript runtime SDK", () => {
             },
             withTranscriptWrite: async (run) => await run(),
           },
-          () =>
-            operation === "yield context"
-              ? appendSessionYieldContext({ ...scope, message: denied, assertCurrent: () => {} })
-              : appendMirror({ ...scope, idempotencyKey: "superseded:fallback", text: denied }),
+          async () => {
+            if (operation === "yield context") {
+              await appendSessionYieldContext({
+                ...scope,
+                message: "must not be persisted",
+                assertCurrent: () => {},
+              });
+            } else {
+              await appendAssistantMirrorMessageByIdentity({
+                ...scope,
+                idempotencyKey: "superseded:fallback",
+                text: "must not be persisted",
+              });
+            }
+          },
         ),
       ).rejects.toBeInstanceOf(SessionTranscriptWriterClaimReboundError);
-      await expect(readEvents(scope)).resolves.toEqual([]);
+      await expect(readSessionTranscriptEvents(scope)).resolves.toEqual([]);
     },
   );
 
   it("rechecks yield settlement authority after waiting for the transcript writer", async () => {
     const scope = await createScope();
-    const authority = new AbortController();
+    let active = true;
     const stopped = new Error("yield settlement stopped");
     const writerEntered = createDeferredCore();
     const releaseWriter = createDeferredCore();
@@ -147,10 +171,14 @@ describe("session transcript runtime SDK", () => {
       const write = appendSessionYieldContext({
         ...scope,
         message: "private continuation",
-        assertCurrent: () => authority.signal.throwIfAborted(),
+        assertCurrent: () => {
+          if (!active) {
+            throw stopped;
+          }
+        },
       });
       const rejected = expect(write).rejects.toBe(stopped);
-      authority.abort(stopped);
+      active = false;
       releaseWriter.resolve();
       await heldWriter;
       await rejected;
@@ -158,10 +186,10 @@ describe("session transcript runtime SDK", () => {
       releaseWriter.resolve();
       await heldWriter;
     }
-    await expect(readEvents(scope)).resolves.toEqual([]);
+    await expect(readSessionTranscriptEvents(scope)).resolves.toEqual([]);
   });
 
-  it("dedupes unkeyed mirrors only on the visible branch and rejects rebound sessions", async () => {
+  it("dedupes unkeyed assistant mirrors against only the visible SQLite branch", async () => {
     const scope = await createScope();
     const active = await append(scope, "assistant", "visible branch reply");
     const inactive = await append(scope, "assistant", "inactive mirror reply");
@@ -172,22 +200,19 @@ describe("session transcript runtime SDK", () => {
       parentId: inactive.messageId,
       targetId: active.messageId,
     });
-    const request = { ...scope, text: "inactive mirror reply" };
-    const result = await appendMirror(request);
-    expect(result).toMatchObject({ ok: true, messageId: expect.any(String) });
+    const result = await appendAssistantMirrorMessageByIdentity({
+      ...scope,
+      text: "inactive mirror reply",
+    });
     assert(result.ok);
     expect(result.messageId).not.toBe(inactive.messageId);
-    await expect(readEvents(scope)).resolves.toContainEqual(
+    await expect(readSessionTranscriptEvents(scope)).resolves.toContainEqual(
       expect.objectContaining({ id: inactive.messageId }),
     );
-    await expect(appendMirror(request)).resolves.toEqual(result);
-    expect(await readEntries(scope)).toMatchObject([
+    expect(await entries(scope)).toMatchObject([
       { entryId: active.messageId },
       { entryId: result.messageId },
     ]);
-    await createScope("replacement");
-    const stale = await appendMirror({ ...scope, text: "stale reply" });
-    expect(stale).toMatchObject({ ok: false, code: "session-rebound" });
   });
 
   it("serializes caller-checked idempotency inside scoped locked appends", async ({ signal }) => {
@@ -212,9 +237,10 @@ describe("session transcript runtime SDK", () => {
         const label = ++enteredWrites === 1 ? "first" : "second";
         steps.push(`${label}:read`);
         const events = await locked.readEvents();
-        const alreadyAppended = events.some(
-          (event) => (event as MessageEvent).message?.idempotencyKey === "mirror-once",
-        );
+        const alreadyAppended = events.some((event) => {
+          const message = (event as { message?: { idempotencyKey?: unknown } }).message;
+          return message?.idempotencyKey === "mirror-once";
+        });
         if (label === "first") {
           firstRead.resolve();
           await releaseFirst.promise;
@@ -222,7 +248,12 @@ describe("session transcript runtime SDK", () => {
         if (!alreadyAppended) {
           await locked.appendMessage({
             idempotencyLookup: "caller-checked",
-            message: { ...assistant([text(label)]), idempotencyKey: "mirror-once", timestamp: 1 },
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: label }],
+              idempotencyKey: "mirror-once",
+              timestamp: 1,
+            },
           });
         }
         steps.push(`${label}:done`);
@@ -245,59 +276,54 @@ describe("session transcript runtime SDK", () => {
     await writes;
 
     expect(steps).toEqual(["first:read", "first:done", "second:read", "second:done"]);
-    const assistantMessages = (await readEvents(scope)).filter(
-      (event) => (event as MessageEvent).message?.role === "assistant",
-    );
+    const assistantMessages = (await readSessionTranscriptEvents(scope)).filter((event) => {
+      const message = (event as { message?: { role?: unknown } }).message;
+      return message?.role === "assistant";
+    });
     expect(assistantMessages).toHaveLength(1);
   });
 
+  it("resolves encoded memory hit keys by agent and opaque session id instead of transcript basename", async () => {
+    const scope = await createScope("my-plugin:task/1");
+    await upsertSessionEntryCore(scope, {
+      sessionFile: state.path("legacy-file-name.jsonl"),
+      sessionId: scope.sessionId,
+      updatedAt: 10,
+    });
+    const key = formatSessionTranscriptMemoryHitKey(scope);
+    expect(key).toBe("transcript:main:my-plugin%3Atask%2F1");
+    expect(
+      resolveSessionTranscriptMemoryHitKeyToSessionKeys({
+        key,
+        store: Object.fromEntries(
+          listSessionEntriesCore({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+        ),
+      }),
+    ).toEqual([scope.sessionKey]);
+  });
+
   it("can avoid synthetic fallback keys for strict live-store checks", () => {
-    const key = formatHitKey({ agentId: "main", sessionId: "deleted-session" });
-    expect(resolveHitKeys({ key, store: {} })).toEqual(["agent:main:deleted-session"]);
-    expect(resolveHitKeys({ includeSyntheticFallback: false, key, store: {} })).toEqual([]);
+    const key = formatSessionTranscriptMemoryHitKey({
+      agentId: "main",
+      sessionId: "deleted-session",
+    });
+    expect(resolveSessionTranscriptMemoryHitKeyToSessionKeys({ key, store: {} })).toEqual([
+      "agent:main:deleted-session",
+    ]);
+    expect(
+      resolveSessionTranscriptMemoryHitKeyToSessionKeys({
+        includeSyntheticFallback: false,
+        key,
+        store: {},
+      }),
+    ).toEqual([]);
   });
 });
 
 const source = { pluginId: "session-share", sourceDomain: "source-node" };
-type MessageEvent = { message?: { role?: unknown; idempotencyKey?: unknown } };
 const scope = { agentId: "main", sessionKey: "agent:main:shared", sessionId: "shared-session" };
 const read = (limit: number, cursor?: string) =>
-  readCatalogPage({ ...scope, ...source, limit, cursor });
-const user = (content: unknown, extra = {}) => ({ role: "user", content, ...extra });
-const assistant = (content: unknown) => ({ role: "assistant", content });
-const text = (value: string) => ({ type: "text", text: value });
-const appendUser = (eventId: string, content: string, parent: { parentId?: string } = {}) =>
-  appendTranscriptMessage(scope, { eventId, message: user(content), ...parent });
-const items = (page: Awaited<ReturnType<typeof read>>) =>
-  page.items.map((item) => [item.type, item.text]);
-const title = (entry: Parameters<typeof readCatalogTitle>[0]["entry"]) =>
-  readCatalogTitle({ ...scope, entry });
-const profileIdentity = (id: string) => ({ type: "profile", id });
-const githubProfile = (accountId: number, login: string, name: string) =>
-  syncGitHubIdentity({
-    identity: { accountId, login, name },
-    authenticationAlias: { kind: "github-login", login },
-  });
-const expectProfile = (value: unknown, id: string, fields = {}) =>
-  expect(value).toMatchObject({ identity: profileIdentity(id), ...fields });
-const humanActor = (id: string) => ({ type: "human" as const, source: "profile" as const, id });
-const remoteIdentity = (idKind: string, id: string) => ({
-  type: "remote",
-  pluginId: source.pluginId,
-  domain: source.sourceDomain,
-  idKind,
-  id,
-});
-async function withoutHostSql<T>(run: () => Promise<T>): Promise<T> {
-  const sql = observeHostDataSql();
-  try {
-    const result = await run();
-    expect(sql.queries).toEqual([]);
-    return result;
-  } finally {
-    sql.restore();
-  }
-}
+  readSessionTranscriptCatalogPage({ ...scope, ...source, limit, cursor });
 
 async function seed(messages: unknown[]) {
   setRuntimeConfigSnapshot({});
@@ -315,33 +341,36 @@ describe("native transcript catalog SDK", () => {
   it("pages only user and assistant text newest-first without opening a writer", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await seed([
-        user("Visible question"),
-        assistant([
-          text("First answer part"),
-          { type: "thinking", thinking: "Reasoning" },
-          { type: "toolCall", id: "call", name: "read", arguments: { path: "README.md" } },
-          { type: "output_text", text: "Second answer part" },
-          { type: "tool_result", content: "Embedded tool result" },
-          { type: "reasoning", text: "More reasoning" },
-          { type: "redacted_thinking", data: "opaque" },
-          { type: "image", text: "Image metadata" },
-          text(" \n "),
-          text("NO_REPLY"),
-        ]),
+        { role: "user", content: "Visible question" },
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "First answer part" },
+            { type: "thinking", thinking: "Reasoning" },
+            { type: "toolCall", id: "call", name: "read", arguments: { path: "README.md" } },
+            { type: "output_text", text: "Second answer part" },
+            { type: "tool_result", content: "Embedded tool result" },
+            { type: "reasoning", text: "More reasoning" },
+            { type: "redacted_thinking", data: "opaque" },
+            { type: "image", text: "Image metadata" },
+            { type: "text", text: " \n " },
+            { type: "text", text: "NO_REPLY" },
+          ],
+        },
         {
           role: "toolResult",
           toolCallId: "call",
           toolName: "read",
-          content: [text("Tool result")],
+          content: [{ type: "text", text: "Tool result" }],
         },
-        assistant([text("Answer")]),
+        { role: "assistant", content: [{ type: "text", text: "Answer" }] },
         { role: "tool", content: "Tool role" },
-        { role: "tool_result", content: [text("Other tool role")] },
+        { role: "tool_result", content: [{ type: "text", text: "Other tool role" }] },
         { role: "system", content: "System instructions" },
-        { role: "custom", content: [text("Unknown role")] },
-        user([{ type: "tool_result", content: "User tool result" }]),
-        assistant("   "),
-        assistant("NO_REPLY"),
+        { role: "custom", content: [{ type: "text", text: "Unknown role" }] },
+        { role: "user", content: [{ type: "tool_result", content: "User tool result" }] },
+        { role: "assistant", content: "   " },
+        { role: "assistant", content: "NO_REPLY" },
       ]);
       const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
       await closeOpenClawAgentDatabasesAsync();
@@ -349,16 +378,27 @@ describe("native transcript catalog SDK", () => {
       closeOpenClawAgentDatabasesForTest();
       closeOpenClawStateDatabaseForTest();
       const before = fs.readFileSync(databasePath);
-      const first = await withoutHostSql(() => read(2));
+      const sql = observeHostDataSql();
+      let first: Awaited<ReturnType<typeof read>>;
+      try {
+        first = await read(2);
+        expect(sql.queries).toEqual([]);
+      } finally {
+        sql.restore();
+      }
       // The shared display projection removes the standalone trailing control line.
-      expect(items(first)).toEqual([
+      expect(first.items.map((item) => [item.type, item.text])).toEqual([
         ["agentMessage", "Answer"],
         ["agentMessage", "Second answer part"],
       ]);
       const second = await read(1, first.nextCursor);
-      expect(items(second)).toEqual([["agentMessage", "First answer part"]]);
+      expect(second.items.map((item) => [item.type, item.text])).toEqual([
+        ["agentMessage", "First answer part"],
+      ]);
       const third = await read(2, second.nextCursor);
-      expect(items(third)).toEqual([["userMessage", "Visible question"]]);
+      expect(third.items.map((item) => [item.type, item.text])).toEqual([
+        ["userMessage", "Visible question"],
+      ]);
       expect(third.nextCursor).toBeUndefined();
       expect(isOpenClawAgentDatabaseOpen(databasePath)).toBe(false);
       expect(fs.readFileSync(databasePath)).toEqual(before);
@@ -368,17 +408,29 @@ describe("native transcript catalog SDK", () => {
   it("preserves text before clipping and derives the same human title as local sessions", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await seed([
-        user("A useful session title"),
-        assistant(`Authorization: Bearer synthetic-secret-token\n${"x".repeat(9000)}`),
+        { role: "user", content: "A useful session title" },
+        {
+          role: "assistant",
+          content: `Authorization: Bearer synthetic-secret-token\n${"x".repeat(9000)}`,
+        },
       ]);
       const page = await read(1);
       expect(page.items[0]).toMatchObject({ type: "agentMessage", truncated: true });
       expect(page.items[0]?.text).toMatch(/^Authorization: Bearer synthetic-secret-token\n/);
       expect(page.items[0]?.text?.length).toBeLessThanOrEqual(6000);
       const entry = loadSessionEntryReadOnly(scope);
-      assert(entry, "missing fixture entry");
-      await expect(title(entry)).resolves.toBe("A useful session title");
-      expect(await title({ ...entry, label: "Named", displayName: "Display" })).toBe("Named");
+      if (!entry) {
+        throw new Error("missing fixture entry");
+      }
+      await expect(readSessionTranscriptCatalogTitleAsync({ ...scope, entry })).resolves.toBe(
+        "A useful session title",
+      );
+      await expect(
+        readSessionTranscriptCatalogTitleAsync({
+          ...scope,
+          entry: { ...entry, label: "Named", displayName: "Display" },
+        }),
+      ).resolves.toBe("Named");
     });
   });
 
@@ -386,36 +438,53 @@ describe("native transcript catalog SDK", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await seed([]);
       const entry = { sessionId: scope.sessionId, updatedAt: 1 };
-      await expect(title(entry)).resolves.toBeUndefined();
-      await appendUser("first-title", "Fresh title after append");
-      await withoutHostSql(async () => {
-        await expect(title(entry)).resolves.toBe("Fresh title after append");
+      await expect(
+        readSessionTranscriptCatalogTitleAsync({ ...scope, entry }),
+      ).resolves.toBeUndefined();
+      await appendTranscriptMessage(scope, {
+        eventId: "first-title",
+        message: { role: "user", content: "Fresh title after append" },
       });
+      const sql = observeHostDataSql();
+      try {
+        await expect(readSessionTranscriptCatalogTitleAsync({ ...scope, entry })).resolves.toBe(
+          "Fresh title after append",
+        );
+        expect(sql.queries).toEqual([]);
+      } finally {
+        sql.restore();
+      }
     });
   });
 
   it("keeps older-item cursors stable across append and rejects malformed or foreign cursors", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await seed(["one", "two", "three"].map((content) => user(content)));
+      await seed(["one", "two", "three"].map((content) => ({ role: "user", content })));
       const first = await read(2);
-      assert(first.nextCursor, "missing fixture cursor");
+      if (!first.nextCursor) {
+        throw new Error("missing fixture cursor");
+      }
       const mixedProjectionCursor = JSON.parse(
         Buffer.from(first.nextCursor, "base64url").toString("utf8"),
       );
       // Before the text-only projection, cursor offsets also counted tools and thinking.
-      const identity = [
-        scope.agentId,
-        scope.sessionKey,
-        scope.sessionId,
-        resolveSessionStorePathForScope(scope),
-      ];
       mixedProjectionCursor.scope = createHash("sha256")
-        .update(JSON.stringify(identity))
+        .update(
+          JSON.stringify([
+            scope.agentId,
+            scope.sessionKey,
+            scope.sessionId,
+            resolveSessionStorePathForScope(scope),
+          ]),
+        )
         .digest("base64url");
       await expect(
         read(2, Buffer.from(JSON.stringify(mixedProjectionCursor)).toString("base64url")),
       ).rejects.toThrow("no longer matches");
-      await appendUser("message-3", "four");
+      await appendTranscriptMessage(scope, {
+        eventId: "message-3",
+        message: { role: "user", content: "four" },
+      });
       const next = await read(2, first.nextCursor);
       expect(next.items.map((item) => item.text)).toEqual(["one"]);
       await expect(read(2, "not-a-cursor")).rejects.toThrow("Invalid session transcript cursor");
@@ -427,7 +496,7 @@ describe("native transcript catalog SDK", () => {
         { sessionId: "other-session", updatedAt: 1 },
       );
       await expect(
-        readCatalogPage({
+        readSessionTranscriptCatalogPage({
           ...source,
           agentId: "main",
           sessionKey: "agent:main:other",
@@ -449,7 +518,11 @@ describe("native transcript catalog SDK", () => {
         ["replacement-two", "message-0"],
         ["replacement-three", "replacement-two"],
       ] as const) {
-        await appendUser(eventId, eventId, { parentId });
+        await appendTranscriptMessage(scope, {
+          eventId,
+          parentId,
+          message: { role: "user", content: eventId },
+        });
       }
       await waitForSessionTranscriptIndexReconcile({ agentId: scope.agentId });
       // Equal-length branch replacements must not reuse the old ordinal as an anchor.
@@ -459,7 +532,10 @@ describe("native transcript catalog SDK", () => {
 
   it("exports portable senders and creators, linking only verified numeric GitHub identities on opt-in", async () => {
     await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
-      const github = githubProfile(12345, "portable-user", "Portable User");
+      const github = syncGitHubIdentity({
+        identity: { accountId: 12345, login: "portable-user", name: "Portable User" },
+        authenticationAlias: { kind: "github-login", login: "portable-user" },
+      });
       const local = ensureProfileForEmail("local@example.test");
       setDisplayName(local.id, "Local User");
       const observation = {
@@ -470,22 +546,55 @@ describe("native transcript catalog SDK", () => {
         id: "external-user",
       };
       await seed([
-        user("GitHub", { __openclaw: { senderIdentity: profileIdentity(github.id) } }),
-        user("Local", { __openclaw: { senderIdentity: profileIdentity(local.id) } }),
-        user("Observed", {
+        {
+          role: "user",
+          content: "GitHub",
+          __openclaw: { senderIdentity: { type: "profile", id: github.id } },
+        },
+        {
+          role: "user",
+          content: "Local",
+          __openclaw: { senderIdentity: { type: "profile", id: local.id } },
+        },
+        {
+          role: "user",
+          content: "Observed",
           __openclaw: { senderIdentity: observation, senderName: "Observed User" },
-        }),
+        },
       ]);
       const page = await read(10);
       expect(page.items.map((item) => item.sender)).toEqual([
         { identity: observation, label: "Observed User" },
-        { identity: remoteIdentity("profile", local.id), label: "Local User" },
-        { identity: remoteIdentity("github-account", "12345"), label: "Portable User" },
+        {
+          identity: {
+            type: "remote",
+            pluginId: source.pluginId,
+            domain: source.sourceDomain,
+            idKind: "profile",
+            id: local.id,
+          },
+          label: "Local User",
+        },
+        {
+          identity: {
+            type: "remote",
+            pluginId: source.pluginId,
+            domain: source.sourceDomain,
+            idKind: "github-account",
+            id: "12345",
+          },
+          label: "Portable User",
+        },
       ]);
       const sender = page.items[2]?.sender;
-      assert(sender, "missing GitHub sender");
-      const { linkParticipant: link, resolveOwner: owner } = createSessionCatalogGitHubLinker();
-      expectProfile(link(sender), github.id, { label: "Portable User" });
+      if (!sender) {
+        throw new Error("missing GitHub sender");
+      }
+      const linker = createSessionCatalogGitHubLinker();
+      expect(linker.linkParticipant(sender)).toMatchObject({
+        identity: { type: "profile", id: github.id },
+        label: "Portable User",
+      });
       const unmatched = {
         ...sender,
         identity: {
@@ -496,21 +605,39 @@ describe("native transcript catalog SDK", () => {
           id: "999",
         },
       };
-      expect(link(unmatched)).toEqual(unmatched);
-      expectProfile(owner("github:PORTABLE-USER"), github.id, { type: "human", id: github.id });
-      expect(owner(`profile:${local.id}`)).toMatchObject({ id: local.id, label: "Local User" });
-      expect(owner("github:missing")).toBeUndefined();
-      const newlyVerified = githubProfile(999, "newly-verified", "Newly Verified");
-      expect(link(unmatched)).toEqual(unmatched);
-      expect(owner("github:newly-verified")).toBeUndefined();
-      const { linkParticipant: nextLink, resolveOwner: nextOwner } =
-        createSessionCatalogGitHubLinker();
-      expectProfile(nextLink(unmatched), newlyVerified.id);
-      expect(nextOwner("github:newly-verified")).toMatchObject({ id: newlyVerified.id });
-      const actor = humanActor(github.id);
-      const projectActor = createSessionCatalogSourceActorProjector({ ...source, actors: [actor] });
-      const expectedActor = { type: "human", identity: sender.identity, label: "Portable User" };
-      expect(projectActor(actor)).toMatchObject(expectedActor);
+      expect(linker.linkParticipant(unmatched)).toEqual(unmatched);
+      expect(linker.resolveOwner("github:PORTABLE-USER")).toMatchObject({
+        type: "human",
+        id: github.id,
+        identity: { type: "profile", id: github.id },
+      });
+      expect(linker.resolveOwner(`profile:${local.id}`)).toMatchObject({
+        id: local.id,
+        label: "Local User",
+      });
+      expect(linker.resolveOwner("github:missing")).toBeUndefined();
+      const newlyVerified = syncGitHubIdentity({
+        identity: { accountId: 999, login: "newly-verified", name: "Newly Verified" },
+        authenticationAlias: { kind: "github-login", login: "newly-verified" },
+      });
+      expect(linker.linkParticipant(unmatched)).toEqual(unmatched);
+      expect(linker.resolveOwner("github:newly-verified")).toBeUndefined();
+      const nextPageLinker = createSessionCatalogGitHubLinker();
+      expect(nextPageLinker.linkParticipant(unmatched)).toMatchObject({
+        identity: { type: "profile", id: newlyVerified.id },
+      });
+      expect(nextPageLinker.resolveOwner("github:newly-verified")).toMatchObject({
+        id: newlyVerified.id,
+      });
+      const projectActor = createSessionCatalogSourceActorProjector({
+        ...source,
+        actors: [{ type: "human", source: "profile", id: github.id }],
+      });
+      expect(projectActor({ type: "human", source: "profile", id: github.id })).toMatchObject({
+        type: "human",
+        identity: sender.identity,
+        label: "Portable User",
+      });
       expect(
         projectActor({ type: "human", source: "channel", id: github.id })?.identity,
       ).toBeUndefined();

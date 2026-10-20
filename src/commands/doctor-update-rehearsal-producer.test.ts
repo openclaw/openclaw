@@ -58,8 +58,6 @@ it("admits real producer plugin host, dependency and basename links without trav
       };
       const raw = await fs.readFile(rehearsal.configPath, "utf8");
       const copied: OpenClawConfig = JSON.parse(raw);
-      const writeConfig = (overrides: Partial<OpenClawConfig>) =>
-        fs.writeFile(rehearsal.configPath, JSON.stringify({ ...copied, ...overrides }));
       const alias = copied.plugins!.installs!.example!.installPath!;
       expect((await fs.lstat(alias)).isSymbolicLink()).toBe(true);
       expect(
@@ -70,9 +68,13 @@ it("admits real producer plugin host, dependency and basename links without trav
       const admitted = await inspectPreparedDoctorRehearsal(params);
       admitted.assertPrepared();
 
-      // Code links cannot authorize data at the link or below it.
+      // A producer-owned code edge still cannot authorize migration data, either
+      // at the link itself or through a descendant of that link.
       for (const dataPath of [host.path, path.join(host.path, "retained.txt")]) {
-        await writeConfig({ canvasHost: { root: dataPath } });
+        await fs.writeFile(
+          rehearsal.configPath,
+          JSON.stringify({ ...copied, canvasHost: { root: dataPath } }),
+        );
         await expect(inspectPreparedDoctorRehearsal(params)).rejects.toThrow(
           /unsafe ownership or links/,
         );
@@ -81,7 +83,8 @@ it("admits real producer plugin host, dependency and basename links without trav
       const escaped = `${host.path}${path.sep}..${path.sep}live.sqlite`;
       const sentinel = path.join(root, "live.sqlite");
       await fs.writeFile(sentinel, "external state must not be admitted");
-      // Win32 normalizes '..'; the admission refusals below still run everywhere.
+      // Node's Win32 binding normalizes .. before realpath; only POSIX preserves
+      // this physical escape. The admission refusals below run on every platform.
       if (process.platform !== "win32") {
         expect(await fs.realpath(escaped)).toBe(sentinel);
       }
@@ -92,7 +95,7 @@ it("admits real producer plugin host, dependency and basename links without trav
         { plugins: { entries: { "memory-wiki": { config: { vault: { path: escaped } } } } } },
         { channels: { reef: { stateDir: escaped } } },
       ]) {
-        await writeConfig(overrides);
+        await fs.writeFile(rehearsal.configPath, JSON.stringify({ ...copied, ...overrides }));
         await expect(inspectPreparedDoctorRehearsal(params)).rejects.toThrow(/parent traversal/);
         expect(await fs.readFile(sentinel, "utf8")).toBe("external state must not be admitted");
       }
@@ -102,24 +105,25 @@ it("admits real producer plugin host, dependency and basename links without trav
       expect(() => admitted.assertPrepared()).toThrow(/unsafe ownership or links/);
       await fs.unlink(unowned);
 
-      // Restore original inodes after replacing either the link or its target.
-      for (const [target, replacement] of [
-        [host.path, () => fs.symlink(path.join(rehearsal.stateDir, "workspace"), host.path, "dir")],
-        [candidate, () => fs.mkdir(candidate)],
-      ] as const) {
-        const held = `${target}.held`;
-        await fs.rename(target, held);
-        try {
-          await replacement();
-          expect(() => admitted.assertPrepared()).toThrow(/code link changed/);
-        } finally {
-          if (target === candidate) {
-            await fs.rmdir(target);
-          } else {
-            await fs.unlink(target);
-          }
-          await fs.rename(held, target);
-        }
+      // Retargeting to another private directory is not permission to replace
+      // the producer's exact code edge. Restore its inode, not a lookalike link.
+      const heldLink = path.join(root, "held-link");
+      await fs.rename(host.path, heldLink);
+      try {
+        await fs.symlink(path.join(rehearsal.stateDir, "workspace"), host.path, "dir");
+        expect(() => admitted.assertPrepared()).toThrow(/code link changed/);
+      } finally {
+        await fs.unlink(host.path);
+        await fs.rename(heldLink, host.path);
+      }
+      const heldCandidate = path.join(root, "held-candidate");
+      await fs.rename(candidate, heldCandidate);
+      try {
+        await fs.mkdir(candidate);
+        expect(() => admitted.assertPrepared()).toThrow(/code link changed/);
+      } finally {
+        await fs.rmdir(candidate);
+        await fs.rename(heldCandidate, candidate);
       }
       admitted.assertPrepared();
       expect(admitted.fact.kind).toBe("doctor-schema-rehearsal");
