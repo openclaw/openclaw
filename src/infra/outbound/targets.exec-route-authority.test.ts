@@ -22,6 +22,8 @@ const cfg: OpenClawConfig = {
   },
 };
 const snapshot = captureActivePluginRegistrySnapshot();
+const groupTopic = "telegram:-1003774691294:topic:47";
+const privateTopic = "telegram:123456789:topic:42";
 const { telegramPlugin } = await loadBundledPluginFacade<{ telegramPlugin: ChannelPlugin }>({
   pluginId: "telegram",
   artifactBasename: "api.ts",
@@ -51,12 +53,8 @@ function expectRoute(result: Route, expected: Pick<Route, "to" | "threadId" | "c
 }
 
 it("keeps real plugin exec authority while normalizing a topic", async () => {
-  const result = await resolveExec({ to: "telegram:-1003774691294:topic:47", threadId: 47 });
-  expectRoute(result, {
-    to: "telegram:-1003774691294:topic:47",
-    threadId: 47,
-    chatType: "group",
-  });
+  const result = await resolveExec({ to: groupTopic, threadId: 47 });
+  expectRoute(result, { to: groupTopic, threadId: 47, chatType: "group" });
 });
 
 it("does not add a saved topic to a captured unthreaded exec route", async () => {
@@ -91,24 +89,19 @@ it("rejects real-plugin embedded topic and post-await explicit thread disagreeme
     },
   };
   register(plugin);
-  const result = await resolveExec({ to: "telegram:-1003774691294:topic:47", threadId: 47 });
+  const result = await resolveExec({ to: groupTopic, threadId: 47 });
   expect(result).toMatchObject({ channel: "none", reason: "exec-route-conflict" });
 });
 
 it.each([
   ["scoped plain private chat", "telegram:123456789", "123456789:42", true],
-  ["cross scoped chat", "telegram:123456789:topic:42", "987654321:42", false],
-  ["cross scoped topic", "telegram:123456789:topic:42", "123456789:99", false],
-  [
-    "cross scoped channel-DM topic",
-    "telegram:123456789:topic:42",
-    "123456789:direct-topic:42",
-    false,
-  ],
+  ["cross scoped chat", privateTopic, "987654321:42", false],
+  ["cross scoped topic", privateTopic, "123456789:99", false],
+  ["cross scoped channel-DM topic", privateTopic, "123456789:direct-topic:42", false],
 ] as const)("retains real-plugin authority for %s", async (_label, to, threadId, allowed) => {
   const result = await resolveExec({ to, threadId });
   if (allowed) {
-    expectRoute(result, { to: "telegram:123456789:topic:42", threadId: 42, chatType: "direct" });
+    expectRoute(result, { to: privateTopic, threadId: 42, chatType: "direct" });
   } else {
     // Scoped tuple disagreement is rejected before target refinement.
     expect(result).toMatchObject({ channel: "none", reason: "no-route" });
@@ -147,8 +140,8 @@ it.each(["target throws", "target rejects"] as const)(
     const result = await resolveHeartbeatDeliveryTargetWithSessionRoute({
       cfg,
       agentId: "main",
-      heartbeat: { target: "telegram", to: "telegram:-1003774691294:topic:47", accountId: "work" },
+      heartbeat: { target: "telegram", to: groupTopic, accountId: "work" },
     });
-    expectRoute(result, { to: "telegram:-1003774691294:topic:47" });
+    expectRoute(result, { to: groupTopic });
   },
 );

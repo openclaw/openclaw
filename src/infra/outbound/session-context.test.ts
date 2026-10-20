@@ -1,21 +1,14 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { buildOutboundSessionContext } from "./session-context.js";
 
 const resolveSessionAgentIdMock = vi.hoisted(() => vi.fn());
 
-type SessionContextModule = typeof import("./session-context.js");
-
-let buildOutboundSessionContext: SessionContextModule["buildOutboundSessionContext"];
-const buildContext = (
-  params: Omit<Parameters<SessionContextModule["buildOutboundSessionContext"]>[0], "cfg">,
-) => buildOutboundSessionContext({ cfg: {}, ...params });
+const buildContext = (params: Omit<Parameters<typeof buildOutboundSessionContext>[0], "cfg">) =>
+  buildOutboundSessionContext({ cfg: {}, ...params });
 
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveSessionAgentId: (...args: unknown[]) => resolveSessionAgentIdMock(...args),
 }));
-
-beforeAll(async () => {
-  ({ buildOutboundSessionContext } = await import("./session-context.js"));
-});
 
 beforeEach(() => {
   resolveSessionAgentIdMock.mockReset();
