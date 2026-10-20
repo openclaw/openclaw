@@ -41,50 +41,40 @@ describe("MCP app deep links", () => {
   });
 
   it("resolves vendor plugin and marketplace without guessing a server name", () => {
-    const entrypoints = [
-      {
-        title: "Library",
-        toolName: "cad.library",
-        resourceUri: "ui://parts/library",
-        entrypoint: { type: "global" as const },
-      },
-    ];
+    const server = (serverName: string, pluginId?: string, marketplace?: string) => ({
+      serverName,
+      label: serverName,
+      pluginId,
+      marketplace,
+      entrypoints: [
+        {
+          title: "Library",
+          toolName: "cad.library",
+          resourceUri: "ui://parts/library",
+          entrypoint: { type: "global" as const },
+        },
+      ],
+    });
     const servers = [
-      {
-        serverName: "parts-runtime",
-        label: "Parts",
-        pluginId: "vendor-parts",
-        marketplace: "team market",
-        entrypoints,
-      },
-      { serverName: "vendor-parts", label: "Unrelated server", entrypoints },
-      {
-        serverName: "other-market",
-        label: "Other marketplace",
-        pluginId: "vendor-parts",
-        marketplace: "other",
-        entrypoints,
-      },
+      server("parts-runtime", "vendor-parts", "team market"),
+      server("vendor-parts"),
+      server("other-market", "vendor-parts", "other"),
     ];
     const route = parseMcpAppLink(
       "codex://plugins/vendor-parts@team%20market/app/cad.library?path=%2Fparts%3Ftag%3Dbolt",
     );
-    expect(route).toEqual({
-      kind: "plugin",
+    const expected = {
+      kind: "plugin" as const,
       pluginId: "vendor-parts",
       marketplace: "team market",
       toolName: "cad.library",
       deepLink: "/parts?tag=bolt",
-    });
+    };
+    expect(route).toEqual(expected);
     expect(mcpAppRouteFromSearch(mcpAppRouteSearch(route!))).toEqual(route);
     expect(resolveMcpAppRouteServer(servers, route!)?.serverName).toBe("parts-runtime");
     expect(
-      resolveMcpAppRouteServer(servers, {
-        kind: "plugin",
-        pluginId: "vendor-parts",
-        toolName: "cad.library",
-        deepLink: "/",
-      }),
+      resolveMcpAppRouteServer(servers, { ...expected, marketplace: undefined, deepLink: "/" }),
     ).toBeUndefined();
     expect(
       resolveMcpAppRouteServer([...servers, { ...servers[0]!, serverName: "ambiguous" }], route!),
@@ -93,7 +83,7 @@ describe("MCP app deep links", () => {
       resolveMcpAppRouteServer(servers, {
         kind: "server",
         serverName: "vendor-parts",
-        toolName: "cad.library",
+        toolName: expected.toolName,
         deepLink: "/",
       })?.serverName,
     ).toBe("vendor-parts");
