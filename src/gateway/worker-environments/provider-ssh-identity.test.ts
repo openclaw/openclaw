@@ -7,6 +7,7 @@ import { createWorkerTunnelManager } from "./tunnel.js";
 import { fakeRunner, success } from "./tunnel.test-support.js";
 
 type ObservedIdentityRequest = WorkerSshIdentityRequest & { assertCurrent?: () => void };
+const IDENTITY = { kind: "path", path: "/keys/worker" } as const;
 
 describe("worker SSH identity invocation lifetime", () => {
   support.setupWorkerEnvironmentServiceSuite();
@@ -27,7 +28,13 @@ describe("worker SSH identity invocation lifetime", () => {
         }),
     });
     const environment = await support.seedReady("worker-identity");
-    return { provider, manager, service, environment };
+    return {
+      manager,
+      service,
+      environment,
+      lookup: () =>
+        service.resolveSshIdentity(environment.environmentId).catch((error: unknown) => error),
+    };
   }
 
   it("fences a cooperating legacy resolver when only its initializing tunnel stops", async () => {
@@ -39,7 +46,7 @@ describe("worker SSH identity invocation lifetime", () => {
       await release.promise;
       request.assertCurrent?.();
       effect();
-      return { kind: "path", path: "/keys/worker" };
+      return IDENTITY;
     });
     const starting = service
       .startTunnel({
@@ -67,19 +74,13 @@ describe("worker SSH identity invocation lifetime", () => {
     const resolveIdentity = vi.fn(async (request: ObservedIdentityRequest) => {
       retained = request.assertCurrent;
       request.assertCurrent?.();
-      return { kind: "path" as const, path: "/keys/worker" };
+      return IDENTITY;
     });
     const { service, environment } = await fixture(resolveIdentity);
-    await expect(service.resolveSshIdentity(environment.environmentId)).resolves.toEqual({
-      kind: "path",
-      path: "/keys/worker",
-    });
+    await expect(service.resolveSshIdentity(environment.environmentId)).resolves.toEqual(IDENTITY);
     expect(retained).toBeTypeOf("function");
     expect(() => retained?.()).toThrow("identity invocation is closed");
-    await expect(service.resolveSshIdentity(environment.environmentId)).resolves.toEqual({
-      kind: "path",
-      path: "/keys/worker",
-    });
+    await expect(service.resolveSshIdentity(environment.environmentId)).resolves.toEqual(IDENTITY);
     expect(resolveIdentity).toHaveBeenCalledTimes(2);
   });
 
@@ -91,14 +92,10 @@ describe("worker SSH identity invocation lifetime", () => {
       await release.promise;
       return { kind: "material" as const, contents: "synthetic-worker-key" };
     });
-    const { service, environment } = await fixture(resolveIdentity);
-    const first = service
-      .resolveSshIdentity(environment.environmentId)
-      .catch((error: unknown) => error);
+    const { service, environment, lookup } = await fixture(resolveIdentity);
+    const first = lookup();
     await entered.promise;
-    const second = service
-      .resolveSshIdentity(environment.environmentId)
-      .catch((error: unknown) => error);
+    const second = lookup();
     try {
       await service.attachSession({
         environmentId: environment.environmentId,
@@ -121,28 +118,26 @@ describe("worker SSH identity invocation lifetime", () => {
     const release = createDeferredCore();
     const settled = createDeferredCore();
     const effect = vi.fn();
-    const { service, environment } = await fixture(async (request) => {
+    const { lookup } = await fixture(async (request) => {
       entered.resolve();
       try {
         await release.promise;
         request.assertCurrent?.();
         effect();
-        return { kind: "path", path: "/keys/worker" };
+        return IDENTITY;
       } finally {
         settled.resolve();
       }
     }, 25);
-    const lookup = service
-      .resolveSshIdentity(environment.environmentId)
-      .catch((error: unknown) => error);
+    const pending = lookup();
     try {
       await entered.promise;
       await vi.advanceTimersByTimeAsync(25);
-      expect(await lookup).toBeInstanceOf(Error);
+      expect(await pending).toBeInstanceOf(Error);
     } finally {
       release.resolve();
       await settled.promise;
-      await lookup;
+      await pending;
       vi.useRealTimers();
     }
     expect(effect).not.toHaveBeenCalled();

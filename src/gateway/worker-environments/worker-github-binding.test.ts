@@ -194,14 +194,11 @@ async function installProfile(scope: "agent" | "system" = "system") {
   return profileDir;
 }
 
-async function bindPreparedGrant(
+function grantRequest(
   fact: Awaited<ReturnType<typeof prepareGitHubPublicationFact>>,
   assertCurrent = () => {},
 ) {
-  // Renewal tests isolate turn attachment; placement-owner tests cover admission.
-  using attachment = vi.spyOn(turnClaims, "bindWorkerTurnGitHubGrant");
-  attachment.mockImplementation(() => {});
-  const grant = await bindWorkerGitHubTurn({
+  return {
     session,
     fact,
     sessionTarget: {
@@ -219,12 +216,22 @@ async function bindPreparedGrant(
       claimId: "grant-claim",
       runId: "grant-run",
       placementGeneration: 1,
-      owner: { kind: "worker", environmentId: "grant-worker", ownerEpoch: 1 },
+      owner: { kind: "worker" as const, environmentId: "grant-worker", ownerEpoch: 1 },
     },
     protocolFeatures: [WORKER_GITHUB_REFRESH_PROTOCOL_FEATURE],
     signal: new AbortController().signal,
     assertCurrent,
-  });
+  };
+}
+
+async function bindPreparedGrant(
+  fact: Awaited<ReturnType<typeof prepareGitHubPublicationFact>>,
+  assertCurrent = () => {},
+) {
+  // Renewal tests isolate turn attachment; placement-owner tests cover admission.
+  using attachment = vi.spyOn(turnClaims, "bindWorkerTurnGitHubGrant");
+  attachment.mockImplementation(() => {});
+  const grant = await bindWorkerGitHubTurn(grantRequest(fact, assertCurrent));
   if (!grant) {
     throw new Error("Expected prepared grant");
   }
@@ -237,7 +244,7 @@ async function prepareGrant(assertCurrent = () => {}, accessExpiresAtMs?: number
     throw new Error("Expected background identity");
   }
   mocks.verify.mockClear();
-  return bindPreparedGrant(
+  const grant = await bindPreparedGrant(
     {
       ...fact,
       identity: {
@@ -247,6 +254,7 @@ async function prepareGrant(assertCurrent = () => {}, accessExpiresAtMs?: number
     },
     assertCurrent,
   );
+  return Object.assign(grant, { [Symbol.asyncDispose]: () => grant.revoke() });
 }
 
 describe("worker GitHub launch binding", () => {
@@ -538,24 +546,8 @@ describe("worker GitHub launch binding", () => {
     mocks.verify.mockClear();
     await expect(
       bindWorkerGitHubTurn({
-        session,
-        fact,
-        sessionTarget: { ...session, storePath: "/synthetic/admitted.sqlite" },
-        store: {
-          prepareTurnClaimAuthority: async () => {
-            throw new Error("older worker must not acquire a grant");
-          },
-        },
-        claim: {
-          sessionId: session.sessionId,
-          claimId: "old-worker-claim",
-          runId: "old-worker-run",
-          placementGeneration: 1,
-          owner: { kind: "worker", environmentId: "old-worker", ownerEpoch: 1 },
-        },
+        ...grantRequest(fact),
         protocolFeatures: [],
-        signal: new AbortController().signal,
-        assertCurrent() {},
       }),
     ).rejects.toThrow("redispatch the session");
     expect(mocks.verify).not.toHaveBeenCalled();
@@ -563,74 +555,58 @@ describe("worker GitHub launch binding", () => {
 
   it("binds a repository credential without synchronous identity discovery", async () => {
     await installProfile();
-    const grant = await prepareGrant();
-    try {
-      expect(grant.binding.token).toBe(token);
-      expect(mocks.verify).not.toHaveBeenCalled();
-      expect(await grant.refresh(0)).toBeUndefined();
-      expect(mocks.verify).not.toHaveBeenCalled();
-    } finally {
-      await grant.revoke();
-    }
+    await using grant = await prepareGrant();
+    expect(grant.binding.token).toBe(token);
+    expect(mocks.verify).not.toHaveBeenCalled();
+    expect(await grant.refresh(0)).toBeUndefined();
+    expect(mocks.verify).not.toHaveBeenCalled();
   });
 
   it.each(["sessionId", "activeWriterRunId", "lifecycleRevision"] as const)(
     "rejects retained renewal after the admitted %s changes",
     async (field) => {
       await installProfile();
-      const grant = await prepareGrant();
-      try {
-        recordCommittedSessionMetadataPublication(
-          "worker-github-binding-fixture",
-          session.sessionKey,
-          undefined,
-          { ...mocks.session().entry, [field]: "replacement" },
-        );
-        await expect(grant.refresh()).rejects.toThrow();
-        expect(grant.signal.aborted).toBe(true);
-        expect(mocks.verify).not.toHaveBeenCalled();
-      } finally {
-        await grant.revoke();
-      }
+      await using grant = await prepareGrant();
+      recordCommittedSessionMetadataPublication(
+        "worker-github-binding-fixture",
+        session.sessionKey,
+        undefined,
+        { ...mocks.session().entry, [field]: "replacement" },
+      );
+      await expect(grant.refresh()).rejects.toThrow();
+      expect(grant.signal.aborted).toBe(true);
+      expect(mocks.verify).not.toHaveBeenCalled();
     },
   );
 
   it("renews one selected account, replays until installed, and revokes on removal", async () => {
     const profileDir = await installProfile();
-    const grant = await prepareGrant();
-    try {
-      await writeManagedGitHubProfileFiles(profileDir, {
-        login: verified.account.login,
-        token: "synthetic-renewal",
-      });
-      const update = await grant.refresh(0);
-      expect(update).toMatchObject({ generation: 1, token: "synthetic-renewal" });
-      expect(await grant.refresh(0)).toEqual(update);
-      expect(await grant.refresh(1)).toBeUndefined();
-      await removeManagedGitHubProfile(profileDir);
-      expect(grant.signal.aborted).toBe(true);
-      await expect(grant.refresh()).rejects.toThrow();
-    } finally {
-      await grant.revoke();
-    }
+    await using grant = await prepareGrant();
+    await writeManagedGitHubProfileFiles(profileDir, {
+      login: verified.account.login,
+      token: "synthetic-renewal",
+    });
+    const update = await grant.refresh(0);
+    expect(update).toMatchObject({ generation: 1, token: "synthetic-renewal" });
+    expect(await grant.refresh(0)).toEqual(update);
+    expect(await grant.refresh(1)).toBeUndefined();
+    await removeManagedGitHubProfile(profileDir);
+    expect(grant.signal.aborted).toBe(true);
+    await expect(grant.refresh()).rejects.toThrow();
   });
 
   it("renews a near-expiry credential and fails closed when renewal is unavailable", async () => {
     await installProfile();
     vi.useFakeTimers({ toFake: ["Date"] });
     const now = Date.now();
-    const grant = await prepareGrant(() => {}, now + 1_000);
-    try {
-      mocks.verify.mockRejectedValue(new Error("issuer unavailable"));
-      expect(await grant.refresh()).toBeUndefined();
-      expect(mocks.verify).toHaveBeenCalledTimes(1);
-      expect(grant.signal.aborted).toBe(false);
-      vi.setSystemTime(now + 1_001);
-      await expect(grant.refresh()).rejects.toThrow("issuer unavailable");
-      expect(grant.signal.aborted).toBe(true);
-    } finally {
-      await grant.revoke();
-    }
+    await using grant = await prepareGrant(() => {}, now + 1_000);
+    mocks.verify.mockRejectedValue(new Error("issuer unavailable"));
+    expect(await grant.refresh()).toBeUndefined();
+    expect(mocks.verify).toHaveBeenCalledTimes(1);
+    expect(grant.signal.aborted).toBe(false);
+    vi.setSystemTime(now + 1_001);
+    await expect(grant.refresh()).rejects.toThrow("issuer unavailable");
+    expect(grant.signal.aborted).toBe(true);
   });
 
   it("refuses a revoked retained caller across renewal", async () => {

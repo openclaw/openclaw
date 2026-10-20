@@ -37,26 +37,24 @@ function fixture(scenario = "same run") {
     timestamp: 200,
   };
   const toolResult = makeTextToolResult("message-call", "message", "Delivered", false, 300);
-  const baseRunId =
-    scenario === "missing base run"
+  const runIdFor = (kind: string) =>
+    scenario === `missing ${kind} run`
       ? undefined
-      : scenario === "foreign base run"
+      : scenario === `foreign ${kind} run`
         ? "foreign"
         : RUN_ID;
-  const mirrorRunId =
-    scenario === "missing mirror run"
-      ? undefined
-      : scenario === "foreign mirror run"
-        ? "foreign"
-        : RUN_ID;
-  const base = messageEntry("base", null, attachSessionTranscriptRunId(assistant, baseRunId));
+  const base = messageEntry(
+    "base",
+    null,
+    attachSessionTranscriptRunId(assistant, runIdFor("base")),
+  );
   const mirror = {
     ...assistant,
     api: "openclaw-transcript",
     idempotencyKey: "source-reply",
     provider: scenario === "foreign provider" ? "other" : "openclaw",
     model: scenario === "ordinary assistant" ? "other" : "delivery-mirror",
-    __openclaw: { runId: mirrorRunId },
+    __openclaw: { runId: runIdFor("mirror") },
   };
   const messages: [CommittedAgentMessage, CommittedAgentMessage] = [
     { ...toolResult, idempotencyKey: "worker-result" },
@@ -138,20 +136,12 @@ describe.each([false, true])(
         expect(result).toEqual({
           ok: true,
           lifecycleRevision: "fixture",
-          messages: [
-            {
-              appended: false,
-              message: messages[0],
-              messageId: "result",
-              ...(!recoverPersistedBatch ? { messageSeq: 3 } : {}),
-            },
-            {
-              appended: false,
-              message: messages[1],
-              messageId: "final",
-              ...(!recoverPersistedBatch ? { messageSeq: 5 } : {}),
-            },
-          ],
+          messages: messages.map((message, index) =>
+            Object.assign(
+              { appended: false, message, messageId: ["result", "final"][index] },
+              !recoverPersistedBatch ? { messageSeq: 3 + index * 2 } : {},
+            ),
+          ),
         });
       },
     );

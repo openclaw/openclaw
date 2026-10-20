@@ -33,37 +33,25 @@ describe("worker environment owner revocation", () => {
         agentId: "main",
         executionMode: "worker-turn",
       });
-      placement = await placements.transition({
-        sessionId: SESSION_ID,
-        from: "requested",
-        to: "provisioning",
-        expectedGeneration: placement.generation,
-        patch: { environmentId: ENVIRONMENT_ID },
-      });
-      placement = await placements.transition({
-        sessionId: SESSION_ID,
-        from: "provisioning",
-        to: "syncing",
-        expectedGeneration: placement.generation,
-        patch: { workerBundleHash: "b".repeat(64) },
-      });
-      placement = await placements.transition({
-        sessionId: SESSION_ID,
-        from: "syncing",
-        to: "starting",
-        expectedGeneration: placement.generation,
-        patch: {
-          remoteWorkspaceDir: "/worker/stale-result-owner",
-          workspaceBaseManifestRef: `sha256:${"c".repeat(64)}`,
+      for (const transition of [
+        { from: "requested", to: "provisioning", patch: { environmentId: ENVIRONMENT_ID } },
+        { from: "provisioning", to: "syncing", patch: { workerBundleHash: "b".repeat(64) } },
+        {
+          from: "syncing",
+          to: "starting",
+          patch: {
+            remoteWorkspaceDir: "/worker/stale-result-owner",
+            workspaceBaseManifestRef: `sha256:${"c".repeat(64)}`,
+          },
         },
-      });
-      placement = await placements.transition({
-        sessionId: SESSION_ID,
-        from: "starting",
-        to: "active",
-        expectedGeneration: placement.generation,
-        patch: { activeOwnerEpoch: attached.ownerEpoch },
-      });
+        { from: "starting", to: "active", patch: { activeOwnerEpoch: attached.ownerEpoch } },
+      ] as const) {
+        placement = await placements.transition({
+          ...transition,
+          sessionId: SESSION_ID,
+          expectedGeneration: placement.generation,
+        });
+      }
       const claim = await placements.claimTurn({
         sessionId: SESSION_ID,
         sessionKey: placement.sessionKey,
