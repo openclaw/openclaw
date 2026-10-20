@@ -61,6 +61,7 @@ const { values } = parseArgs({
     "capture-responses": { type: "boolean", default: false },
     "trace-gc": { type: "boolean", default: false },
     "stress-tools": { type: "boolean", default: false },
+    "stress-subagents": { type: "boolean", default: false },
     "mixed-rpc": { type: "boolean", default: false },
     "stream-start-diagnostics": { type: "boolean", default: false },
     "stream-start-allocations": { type: "boolean", default: false },
@@ -199,6 +200,9 @@ if (connectionScenario && listIntervalMs) {
 }
 if (values["stress-tools"] && !toolScenario) {
   throw new Error("--stress-tools requires chat.send, attempt-retention, or memory-soak");
+}
+if (values["stress-subagents"] && (!soakScenario || !values["stress-tools"])) {
+  throw new Error("--stress-subagents requires memory-soak and --stress-tools");
 }
 if (values["mixed-rpc"] && (!listIntervalMs || !turnScenario || clientCount < 4)) {
   throw new Error(
@@ -384,6 +388,161 @@ function responseEvents(chunks: string[]) {
       },
     },
   ];
+}
+function functionCallEvents(name: string, args: unknown, callId: string) {
+  const item = {
+    type: "function_call",
+    id: `fc_${callId}`,
+    call_id: callId,
+    name,
+    arguments: JSON.stringify(args),
+  };
+  return [
+    { type: "response.output_item.added", output_index: 0, item: { ...item, arguments: "" } },
+    {
+      type: "response.function_call_arguments.delta",
+      item_id: item.id,
+      output_index: 0,
+      delta: item.arguments,
+    },
+    { type: "response.output_item.done", output_index: 0, item },
+    {
+      type: "response.completed",
+      response: {
+        id: `resp_${callId}`,
+        status: "completed",
+        output: [item],
+        usage: { input_tokens: 11, output_tokens: 10, total_tokens: 21 },
+      },
+    },
+  ];
+}
+function contentText(content: unknown): string {
+  if (typeof content === "string") {
+    return content;
+  }
+  return Array.isArray(content)
+    ? content
+        .map((part) => (isRecord(part) && typeof part.text === "string" ? part.text : ""))
+        .join("\n")
+    : "";
+}
+type StressSubagent = {
+  parentPrompt: string;
+  childPrompt: string;
+  childResult: string;
+  parentAck: string;
+  spawnCallId: string;
+  yieldCallId: string;
+  phase: "initial" | "spawn-issued" | "yield-issued" | "ack-issued";
+  accepted?: { childSessionKey: string; runId: string };
+  childRequests: number;
+  yieldObserved: boolean;
+  cancelled: boolean;
+  releaseChild: () => void;
+  childReady: Promise<void>;
+  cohortReady: Promise<void>;
+};
+let stressSubagent: StressSubagent | undefined;
+async function stressSubagentEvents(body: unknown, input: unknown, purpose: string) {
+  const state = stressSubagent;
+  if (
+    !state ||
+    !Array.isArray(input) ||
+    purpose === "activity-recap" ||
+    purpose === "session-observer"
+  ) {
+    return undefined;
+  }
+  const userTexts = input
+    .filter((item) => isRecord(item) && item.role === "user")
+    .map((item) => stripInboundMetadata(contentText(item.content)).trim());
+  const isParent = userTexts.includes(state.parentPrompt);
+  // Native child envelopes reach the provider with escaped delimiters. The parent's
+  // completion quotes that task too, so its original prompt takes precedence.
+  if (!isParent && userTexts.some((text) => text.split("\n").includes(state.childPrompt))) {
+    if (++state.childRequests !== 1) {
+      throw new Error("stress subagent issued more than one child model request");
+    }
+    // Parent yield releases its main-lane slot; all foreground streams must be admitted too.
+    await Promise.all([state.childReady, state.cohortReady]);
+    if (state.cancelled) {
+      throw new Error("stress subagent cohort was cancelled");
+    }
+    return responseEvents([state.childResult]);
+  }
+  if (!isParent) {
+    return undefined;
+  }
+  if (state.phase === "initial") {
+    const tools = isRecord(body) && Array.isArray(body.tools) ? body.tools : [];
+    for (const name of ["exec", "sessions_yield"]) {
+      if (!tools.some((tool) => isRecord(tool) && tool.type === "function" && tool.name === name)) {
+        throw new Error(`stress subagent parent is missing declared tool ${name}`);
+      }
+    }
+    state.phase = "spawn-issued";
+    return functionCallEvents(
+      "exec",
+      {
+        title: "Start the synthetic child task",
+        awaitResults: true,
+        code: `return await sessions_spawn(${JSON.stringify({
+          task: state.childPrompt,
+          agentId: "main",
+          runtime: "subagent",
+          mode: "run",
+          context: "isolated",
+          cleanup: "delete",
+          completionTarget: "parent",
+          runTimeoutSeconds: 120,
+        })});`,
+      },
+      state.spawnCallId,
+    );
+  }
+  if (state.phase === "spawn-issued") {
+    const spawnOutput = input.findLast(
+      (item) =>
+        isRecord(item) &&
+        item.type === "function_call_output" &&
+        item.call_id === state.spawnCallId,
+    );
+    const receipt: unknown = JSON.parse(contentText(spawnOutput?.output));
+    const accepted = isRecord(receipt) ? receipt.value : undefined;
+    if (
+      !isRecord(receipt) ||
+      receipt.status !== "completed" ||
+      !isRecord(accepted) ||
+      accepted.status !== "accepted" ||
+      accepted.context !== "isolated" ||
+      accepted.completionTarget !== "parent" ||
+      typeof accepted.runId !== "string" ||
+      typeof accepted.childSessionKey !== "string" ||
+      !accepted.childSessionKey.startsWith("agent:main:subagent:")
+    ) {
+      throw new Error("stress subagent spawn did not return an accepted native child");
+    }
+    state.accepted = { runId: accepted.runId, childSessionKey: accepted.childSessionKey };
+    state.phase = "yield-issued";
+    return functionCallEvents(
+      "sessions_yield",
+      { message: "Await the synthetic child result." },
+      state.yieldCallId,
+    );
+  }
+  if (
+    state.phase !== "yield-issued" ||
+    !state.yieldObserved ||
+    state.childRequests !== 1 ||
+    !userTexts.some((text) => text.includes(state.childResult))
+  ) {
+    throw new Error(
+      `stress subagent parent resumed without its yielded child result: phase=${state.phase}, yielded=${state.yieldObserved}, childRequests=${state.childRequests}, resultObserved=${userTexts.some((text) => text.includes(state.childResult))}`,
+    );
+  }
+  state.phase = "ack-issued";
+  return responseEvents([state.parentAck]);
 }
 const events = responseEvents(Array.from({ length: chunkCount }, () => chunk));
 const utilityEvents = responseEvents(["Synthetic acknowledgement."]);
@@ -596,6 +755,7 @@ const mock = createServer((req, res) => {
         }
         await cohort.ready;
       }
+      const subagentAnswer = await stressSubagentEvents(body, input, facts.purpose);
       res.writeHead(200, { "content-type": "text/event-stream" });
       let toolAnswer;
       let reasoningReplayKey = toolOutput?.call_id;
@@ -648,6 +808,7 @@ const mock = createServer((req, res) => {
         ];
       }
       let answer =
+        subagentAnswer ??
         toolAnswer ??
         (facts.purpose === "activity-recap"
           ? responseEvents([`Synthetic recap for cohort ${cohort?.id}.`])
@@ -911,6 +1072,7 @@ async function ready(targetPort: number, endpoint: string, owned?: ChildProcess)
   throw new Error(`listener ${targetPort} did not become ready; inspect ${output}`);
 }
 const parentKey = "agent:main:transcript-broadcast-measure-parent";
+const stressParentKey = "agent:main:transcript-broadcast-measure-native-parent";
 const keys = Array.from(
   { length: runCount },
   (_, index) => `agent:main:transcript-broadcast-measure-child-${index}`,
@@ -1087,6 +1249,113 @@ function summarizeCpuProfile(profilePath: string) {
       .slice(0, 40),
   };
 }
+async function startStressSubagent(
+  client: ReturnType<typeof createGatewayWsClient>,
+  current: NonNullable<typeof cohort>,
+) {
+  await rpc(client, "sessions.reset", { key: stressParentKey });
+  let releaseChild!: () => void;
+  const childReady = new Promise<void>((resolve) => {
+    releaseChild = resolve;
+  });
+  const state: StressSubagent = {
+    parentPrompt: `LANE1486_PARENT_${current.id}`,
+    childPrompt: `LANE1486_CHILD_${current.id}`,
+    childResult: `LANE1486_CHILD_RESULT_${current.id}`,
+    parentAck: `LANE1486_PARENT_ACK_${current.id}`,
+    spawnCallId: `call_stress_spawn_${current.id}`,
+    yieldCallId: `call_stress_yield_${current.id}`,
+    phase: "initial",
+    childRequests: 0,
+    yieldObserved: false,
+    cancelled: false,
+    releaseChild,
+    childReady,
+    cohortReady: current.ready,
+  };
+  stressSubagent = state;
+  const started = performance.now();
+  await rpc(client, "agent", {
+    sessionKey: stressParentKey,
+    message: state.parentPrompt,
+    deliver: false,
+    idempotencyKey: randomUUID(),
+  });
+  return { state, started };
+}
+async function finishStressSubagent(
+  client: ReturnType<typeof createGatewayWsClient>,
+  work: Awaited<ReturnType<typeof startStressSubagent>>,
+) {
+  const { state, started } = work;
+  let childCompleted = false;
+  while (performance.now() - started < 180_000) {
+    assertGatewayAlive();
+    const history = await rpc(client, "chat.history", { sessionKey: stressParentKey, limit: 100 });
+    if (!isRecord(history) || !Array.isArray(history.messages)) {
+      throw new Error("stress subagent parent history is missing");
+    }
+    if (!state.yieldObserved) {
+      const blocks = history.messages.flatMap((message) =>
+        isRecord(message)
+          ? [message, ...(Array.isArray(message.content) ? message.content.filter(isRecord) : [])]
+          : [],
+      );
+      const yielded = blocks.find(
+        (block) =>
+          block.toolCallId === `${state.yieldCallId}|fc_${state.yieldCallId}` &&
+          block.toolName === "sessions_yield",
+      );
+      if (yielded) {
+        const receipt: unknown = JSON.parse(contentText(yielded.content));
+        if (!isRecord(receipt) || receipt.status !== "yielded" || !state.accepted) {
+          throw new Error("stress subagent parent did not persist a successful yield");
+        }
+        state.yieldObserved = true;
+        // Observe the real child run before cleanup can retire its session.
+        const completion = rpc(client, "agent.wait", {
+          runId: state.accepted.runId,
+          timeoutMs: 170_000,
+        });
+        state.releaseChild();
+        const result = await completion;
+        if (!isRecord(result) || result.status !== "ok") {
+          throw new Error("stress subagent child did not complete successfully");
+        }
+        childCompleted = true;
+      }
+    }
+    const ack = history.messages.find(
+      (message) =>
+        isRecord(message) &&
+        message.role === "assistant" &&
+        contentText(message.content).trim() === state.parentAck,
+    );
+    if (ack) {
+      const metadata = ack["__openclaw"];
+      const runId = isRecord(metadata) ? metadata.runId : undefined;
+      if (state.phase !== "ack-issued" || !childCompleted || typeof runId !== "string") {
+        throw new Error("stress subagent parent acknowledgment lacks completed run evidence");
+      }
+      const result = await rpc(client, "agent.wait", { runId, timeoutMs: 170_000 });
+      if (!isRecord(result) || result.status !== "ok") {
+        throw new Error("stress subagent parent continuation did not complete successfully");
+      }
+      return {
+        childRunId: state.accepted!.runId,
+        childSessionKey: state.accepted!.childSessionKey,
+        parentContinuationRunId: runId,
+        parentYielded: true,
+        childCompleted: true,
+        parentResultObserved: true,
+        parentAcknowledgmentPersisted: true,
+        durationMs: performance.now() - started,
+      };
+    }
+    await delay(250);
+  }
+  throw new Error(`stress subagent completion timed out in phase ${state.phase}`);
+}
 let completedSoakRounds = 0;
 let sessionResets = 0;
 async function runRound(client: ReturnType<typeof createGatewayWsClient>, measuredRound?: number) {
@@ -1208,7 +1477,12 @@ async function runRound(client: ReturnType<typeof createGatewayWsClient>, measur
     45_000,
   );
   const turnLatencies: number[] = [];
+  let subagentWork: Awaited<ReturnType<typeof startStressSubagent>> | undefined;
   try {
+    // Admit the parent before filling the main lane with the foreground cohort.
+    if (values["stress-subagents"]) {
+      subagentWork = await startStressSubagent(client, current);
+    }
     const turns = Promise.all(
       keys.map(async (sessionKey, index) => {
         const turnStarted = performance.now();
@@ -1257,12 +1531,26 @@ async function runRound(client: ReturnType<typeof createGatewayWsClient>, measur
     ).then(() => {
       current.phases.completedAtEpochMs = epochNow();
     });
-    await Promise.all([cohortReady, captureWork, turns]);
+    const subagentCompletion = subagentWork
+      ? finishStressSubagent(client, subagentWork)
+      : undefined;
+    await Promise.all([cohortReady, captureWork, turns, subagentCompletion]);
+    const subagent = await subagentCompletion;
     if (soakScenario) {
       completedSoakRounds++;
     }
-    return { phases: current.phases, turnLatencyMs: summarizeLatencies(turnLatencies), ...capture };
+    return {
+      phases: current.phases,
+      turnLatencyMs: summarizeLatencies(turnLatencies),
+      ...(subagent ? { subagent } : {}),
+      ...capture,
+    };
   } finally {
+    if (stressSubagent) {
+      stressSubagent.cancelled = true;
+      stressSubagent.releaseChild();
+      stressSubagent = undefined;
+    }
     clearTimeout(timeout);
     current.release();
     await captureWork;
@@ -1655,6 +1943,14 @@ try {
         displayName: "Synthetic broadcast parent",
       });
       await rpc(client, "sessions.reset", { key: parentKey });
+      if (values["stress-subagents"]) {
+        await rpc(client, "sessions.create", {
+          key: stressParentKey,
+          cwd: stressWorktree,
+          visibility: "shared",
+          displayName: "Synthetic native subagent parent",
+        });
+      }
       for (const key of keys) {
         await rpc(client, "sessions.create", {
           key,
@@ -2485,6 +2781,7 @@ try {
     listIntervalMs,
     mixedRpc: values["mixed-rpc"],
     stressTools: values["stress-tools"],
+    stressSubagents: values["stress-subagents"],
     cronRuns,
     ...(values["mixed-rpc"] ? { diffEditControlVerified: true, diffEditVisibilityMs } : {}),
     pollSeed: values["poll-seed"] ?? null,

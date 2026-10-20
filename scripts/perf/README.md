@@ -817,7 +817,7 @@ node --import ./scripts/tsx.mjs scripts/perf/transcript-broadcast-measure.ts \
   --clients 30 --runs 20 --chunks 100 --chunk-interval-ms 10 \
   --warmup-ms 300000 --duration-ms 1200000 --round-interval-ms 15000 \
   --retained-profile-ms 0 --allocations --trace-gc --diagnostics \
-  --stress-tools --mixed-rpc --list-interval-ms 2000 --poll-seed steady \
+  --stress-tools --stress-subagents --mixed-rpc --list-interval-ms 2000 --poll-seed steady \
   --revision <measured-commit-sha> --start-at <shared-future-epoch-ms>
 ```
 
@@ -832,8 +832,20 @@ verifies one run; measured successful run-history entries are reported separatel
 as `cronRuns`. Cleanup removes the job on success, failure, or interruption; if
 removal fails, discard the fixture before reuse as directed by the warning.
 These background turns contribute resource cost but are excluded
-from the foreground-turn denominator. Child sessions are direct `agent` calls,
-not model-driven `sessions_spawn` calls.
+from the foreground-turn denominator. The twenty foreground child sessions are
+direct `agent` calls.
+
+`--stress-subagents` requires `memory-soak --stress-tools`. Each cohort adds one
+dedicated parent that uses Code Mode to call the real `sessions_spawn` tool with
+an isolated native child and `completionTarget: "parent"`, then calls the direct
+`sessions_yield` tool. The mock holds the child until public `chat.history` shows
+a successful persisted yield and all foreground streams have reached their
+barrier. The child returns a unique result; the resumed parent must receive it
+and persist a unique acknowledgment. Both the child and that parent continuation
+must finish successfully through `agent.wait`. Per-cohort evidence is recorded in
+`streamStart.subagent`. This additional parent/child work contributes resource
+cost but does not change the foreground-turn denominator. The hidden child uses
+`cleanup: "delete"`; the dedicated parent resets before each cohort.
 
 `--mixed-rpc` cycles each viewer through `sessions.list`, retained-fixture
 `chat.history`, worktree `sessions.diff`, and a newly opened WebSocket `connect`.
