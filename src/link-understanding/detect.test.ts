@@ -34,6 +34,14 @@ describe("extractLinksFromMessage", () => {
     ]);
   });
 
+  it("preserves authored query and fragment bytes", () => {
+    expect(
+      extractLinksFromMessage(
+        "Query https://example.com/search?ids=1,2 and fragment https://example.com/page#section,",
+      ),
+    ).toStrictEqual(["https://example.com/search?ids=1,2", "https://example.com/page#section,"]);
+  });
+
   it("blocks 127.0.0.1", () => {
     const links = extractLinksFromMessage("http://127.0.0.1/test https://ok.test");
     expect(links).toEqual(["https://ok.test"]);

@@ -15,4 +15,5 @@ export * from "./stable-stringify.js";
 export * from "./string-coerce.js";
 export * from "./string-normalization.js";
 export * from "./text-decoding.js";
+export * from "./url-trailing-punctuation.js";
 export * from "./utf16-slice.js";

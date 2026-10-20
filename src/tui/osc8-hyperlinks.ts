@@ -1,4 +1,4 @@
-import { expectDefined } from "@openclaw/normalization-core";
+import { expectDefined, trimUrlTrailingPunctuation } from "@openclaw/normalization-core";
 import { iterateAnsiSegments } from "../../packages/terminal-core/src/ansi-sequences.js";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 
@@ -7,30 +7,6 @@ import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
  *  fully captured instead of truncated at the first `)`. */
 const URL_PATH_WITH_PARENS =
   /https?:\/\/[^()\s<>\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]+(?:\([^()\s<>\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]*\)[^()\s<>\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]*)*/g;
-
-/** Strip GFM sentence punctuation and unmatched closing parentheses from bare
- *  URLs, while preserving balanced parentheses and exact authored Markdown
- *  destinations. `(see https://example.com/path).` must link only the URL,
- *  but `[label](https://example.com/path.)` must retain its authored dot. */
-function trimUrlTrailingPunctuation(url: string, knownUrls?: ReadonlySet<string>): string {
-  let open = 0;
-  for (let index = 0; index < url.length; index++) {
-    const ch = url[index];
-    if (ch === "(") {
-      open++;
-    } else if (ch === ")") {
-      if (open === 0) {
-        const authoredUrl = url.slice(0, index);
-        return knownUrls?.has(authoredUrl)
-          ? authoredUrl
-          : trimUrlTrailingPunctuation(authoredUrl, knownUrls);
-      }
-      open--;
-    }
-  }
-  const trimmed = url.replace(/[?!.,:;*_~]+$/u, "");
-  return knownUrls?.has(url) && !knownUrls.has(trimmed) ? url : trimmed;
-}
 
 function hasUrlContent(url: string): boolean {
   const authority = expectDefined(
