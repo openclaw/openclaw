@@ -18,16 +18,22 @@ function writeFile(filePath: string, content: string): void {
   fs.writeFileSync(filePath, content);
 }
 
+const read = (repo: string, file: string) => fs.readFileSync(path.join(repo, file), "utf8");
+const readJson = (repo: string, file: string) => JSON.parse(read(repo, file));
+
+function script(filePath: string, content: string) {
+  writeFile(filePath, `#!/usr/bin/env bash\n${content}\n`);
+  fs.chmodSync(filePath, 0o755);
+}
+
 function copyRunOpengrepFiles(repo: string): void {
   for (const file of [
     "run-opengrep.sh",
     "lib/merge-head-diff-base.mjs",
     "lib/arg-utils.runtime.mjs",
   ]) {
-    writeFile(
-      path.join(repo, "scripts", file),
-      fs.readFileSync(path.join("scripts", file), "utf8"),
-    );
+    const relative = path.join("scripts", file);
+    writeFile(path.join(repo, relative), fs.readFileSync(relative, "utf8"));
   }
   fs.chmodSync(path.join(repo, "scripts/run-opengrep.sh"), 0o755);
 }
@@ -59,17 +65,13 @@ function runScan(repo: string, binDir: string, args = ["--changed"], base = "HEA
   });
 }
 
-function installOpengrepStub(repo: string): { argsPath: string; binDir: string } {
+function installOpengrepStub(repo: string) {
   const argsPath = path.join(repo, "opengrep-args.txt");
   const binDir = path.join(repo, "bin");
-  fs.mkdirSync(binDir);
-  writeFile(
+  script(
     path.join(binDir, "opengrep"),
-    ["#!/usr/bin/env bash", `printf '%s\\n' "$@" > ${JSON.stringify(argsPath)}`, "exit 0", ""].join(
-      "\n",
-    ),
+    `printf '%s\\n' "$@" > ${JSON.stringify(argsPath)}\nexit 0`,
   );
-  fs.chmodSync(path.join(binDir, "opengrep"), 0o755);
   return { argsPath, binDir };
 }
 
@@ -97,43 +99,35 @@ function runChangedPathsWorkflow(repo: string, base: string, env: NodeJS.Process
   const output = path.join(repo, "step-output.txt");
   const interpolate = (value: string) =>
     value.replace(/\$\{\{\s*(.*?)\s*\}\}/gu, (_match, expression: string) => {
-      const resolved = values.get(expression);
-      if (resolved === undefined) {
-        throw new Error(`Unbound workflow expression: ${expression}`);
-      }
-      return resolved;
+      expect(values.has(expression), `Unbound workflow expression: ${expression}`).toBe(true);
+      return values.get(expression)!;
     });
-  const renderEnv = (bindings: Record<string, string> = {}) =>
-    Object.fromEntries(Object.entries(bindings).map(([key, value]) => [key, interpolate(value)]));
   const run = (step: OpengrepWorkflowStep) => {
+    let bindings = step.env;
     let command = step.run;
-    let commandEnv = renderEnv(step.env);
     if (step.uses) {
       const actionPath = path.join(repo, step.uses);
       values.set("github.action_path", actionPath);
       for (const [key, value] of Object.entries(step.with ?? {})) {
         values.set(`inputs.${key}`, interpolate(value));
       }
-      const action = parse(fs.readFileSync(path.join(actionPath, "action.yml"), "utf8"));
+      const action = parse(read(actionPath, "action.yml"));
       const actionStep: OpengrepWorkflowStep = action.runs.steps[0];
+      bindings = { ...bindings, ...actionStep.env };
       command = actionStep.run;
-      commandEnv = { ...commandEnv, ...renderEnv(actionStep.env) };
     }
-    if (!command) {
-      throw new Error(`Workflow step has no executable command: ${step.name}`);
-    }
+    expect(command, `No command: ${step.name}`).toBeTypeOf("string");
     fs.writeFileSync(output, "");
-    const result = bash(repo, interpolate(command), {
+    const result = bash(repo, interpolate(command!), {
       ...env,
-      ...commandEnv,
+      ...Object.fromEntries(
+        Object.entries(bindings ?? {}).map(([key, value]) => [key, interpolate(value)]),
+      ),
       GITHUB_OUTPUT: output,
     });
     if (step.id) {
-      for (const line of fs.readFileSync(output, "utf8").trim().split("\n")) {
-        const [key, ...value] = line.split("=");
-        if (value.length) {
-          values.set(`steps.${step.id}.outputs.${key}`, value.join("="));
-        }
+      for (const [, key, value] of read(repo, "step-output.txt").matchAll(/^([^=\n]+)=(.*)$/gm)) {
+        values.set(`steps.${step.id}.outputs.${key}`, value);
       }
     }
     return result;
@@ -145,7 +139,6 @@ function runChangedPathsWorkflow(repo: string, base: string, env: NodeJS.Process
     with: { "node-version": "24.21.0", "package-manager-cache": false },
   });
   expect(ensureIndex).toBeGreaterThan(1);
-  // The fixture already has a supported Node; exercise the repository-owned preparation below.
   for (const step of steps.slice(2, ensureIndex + 1)) {
     const result = run(step);
     if (result.status !== 0) {
@@ -153,275 +146,266 @@ function runChangedPathsWorkflow(repo: string, base: string, env: NodeJS.Process
     }
   }
   const scan = steps.find((step) => step.name === "Run opengrep on PR diff");
-  if (!scan) {
-    throw new Error("Workflow has no scan step");
-  }
-  return run(scan);
+  expect(scan, "Workflow has no scan step").toBeDefined();
+  return run(scan!);
 }
 
-describe("run-opengrep.sh", () => {
-  it.each(["--help"])("prints complete usage without shell bootstrap code for %s", (flag) => {
-    const repo = createTempDir("openclaw-run-opengrep-help-");
-    copyRunOpengrepFiles(repo);
-    const result = spawnSync("bash", ["scripts/run-opengrep.sh", flag], {
-      cwd: repo,
-      encoding: "utf8",
-    });
+it("prints complete usage without shell bootstrap code", () => {
+  const repo = createTempDir("openclaw-run-opengrep-help-");
+  copyRunOpengrepFiles(repo);
+  const result = runScan(repo, "", ["--help"]);
 
-    expect(result).toMatchObject({ status: 0, stderr: "" });
-    expect(result.stdout).toMatch(/^# scripts\/run-opengrep\.sh\n/u);
-    for (const line of [
-      "# Usage:\n",
-      "# Optional positional path overrides come last:\n",
-      "# Exit code: non-zero on scan errors, and on findings when --error is passed.\n",
-    ]) {
-      expect(result.stdout).toContain(line);
-    }
-    expect(result.stdout).not.toContain("BASH_VERSINFO");
-    expect(fs.existsSync(path.join(repo, ".opengrep-out"))).toBe(false);
+  expect(result).toMatchObject({ status: 0, stderr: "" });
+  expect(result.stdout).toMatch(/^# scripts\/run-opengrep\.sh\n/u);
+  for (const line of [
+    "# Usage:\n",
+    "# Optional positional path overrides come last:\n",
+    "# Exit code: non-zero on scan errors, and on findings when --error is passed.\n",
+  ]) {
+    expect(result.stdout).toContain(line);
+  }
+  expect(result.stdout).not.toContain("BASH_VERSINFO");
+  expect(fs.existsSync(path.join(repo, ".opengrep-out"))).toBe(false);
+});
+
+it("fails before scanning with official installation advice when opengrep is missing", () => {
+  const repo = createTempDir("openclaw-run-opengrep-missing-");
+  copyRunOpengrepFiles(repo);
+  writeFile(path.join(repo, "security/opengrep/precise.yml"), "rules: []\n");
+
+  const binDir = path.join(repo, "bin");
+  fs.mkdirSync(binDir);
+  for (const command of ["bash", "dirname", "cat"]) {
+    const executable = execFileSync("bash", ["-c", 'command -v "$1"', "_", command], {
+      encoding: "utf8",
+    }).trim();
+    fs.symlinkSync(executable, path.join(binDir, command));
+  }
+
+  const result = spawnSync("bash", ["scripts/run-opengrep.sh", "--changed", "--sarif", "--error"], {
+    cwd: repo,
+    env: { ...process.env, PATH: binDir },
+    encoding: "utf8",
   });
 
-  it("fails before scanning with official installation advice when opengrep is missing", () => {
-    const repo = createTempDir("openclaw-run-opengrep-missing-");
-    copyRunOpengrepFiles(repo);
-    writeFile(path.join(repo, "security/opengrep/precise.yml"), "rules: []\n");
+  expect(result).toMatchObject({
+    status: 127,
+    stdout: "",
+    stderr: expect.stringContaining("'opengrep' not found on PATH"),
+  });
+  expect(result.stderr).toMatch(
+    /curl -fsSL https:\/\/raw\.githubusercontent\.com\/opengrep\/opengrep\/\S+\/install\.sh \| bash -s -- -v \S+/,
+  );
+  expect(fs.existsSync(path.join(repo, ".opengrep-out"))).toBe(false);
+  for (const obsolete of ["pipx", "opengrep/tap/opengrep"]) {
+    expect(result.stderr).not.toContain(obsolete);
+  }
+});
 
-    const binDir = path.join(repo, "bin");
-    fs.mkdirSync(binDir);
-    for (const command of ["bash", "dirname", "cat"]) {
-      const executable = execFileSync("bash", ["-c", 'command -v "$1"', "_", command], {
+it.each(["rulepack", "empty", "missing-base...HEAD", "ls-files"] as const)(
+  "handles changed-path discovery: %s",
+  (scenario) => {
+    const repo = createRepo(scenario);
+    const changed =
+      scenario === "rulepack"
+        ? "security/opengrep/precise.yml"
+        : scenario === "empty"
+          ? ".github/actions/ensure-base-commit/action.yml"
+          : null;
+    if (scenario === "empty") {
+      writeFile(path.join(repo, changed!), "name: ensure\n");
+    }
+    commit(repo);
+    if (changed) {
+      fs.appendFileSync(path.join(repo, changed), "# changed\n");
+    }
+    const { argsPath, binDir } = installOpengrepStub(repo);
+    const sarifPath = path.join(repo, ".opengrep-out/precise.sarif");
+    if (scenario === "ls-files") {
+      const realGit = execFileSync("bash", ["-lc", "command -v git"], {
         encoding: "utf8",
       }).trim();
-      fs.symlinkSync(executable, path.join(binDir, command));
-    }
-
-    const result = spawnSync(
-      "bash",
-      ["scripts/run-opengrep.sh", "--changed", "--sarif", "--error"],
-      { cwd: repo, env: { ...process.env, PATH: binDir }, encoding: "utf8" },
-    );
-
-    expect(result).toMatchObject({
-      status: 127,
-      stdout: "",
-      stderr: expect.stringContaining("'opengrep' not found on PATH"),
-    });
-    expect(result.stderr).toMatch(
-      /curl -fsSL https:\/\/raw\.githubusercontent\.com\/opengrep\/opengrep\/\S+\/install\.sh \| bash -s -- -v \S+/,
-    );
-    expect(fs.existsSync(path.join(repo, ".opengrep-out"))).toBe(false);
-    for (const obsolete of ["pipx", "opengrep/tap/opengrep"]) {
-      expect(result.stderr).not.toContain(obsolete);
-    }
-  });
-
-  it.each(["rulepack", "empty", "missing-base...HEAD", "ls-files"] as const)(
-    "handles changed-path discovery: %s",
-    (scenario) => {
-      const repo = createRepo(scenario);
-      const changed =
-        scenario === "rulepack"
-          ? "security/opengrep/precise.yml"
-          : scenario === "empty"
-            ? ".github/actions/ensure-base-commit/action.yml"
-            : null;
-      if (scenario === "empty") {
-        writeFile(path.join(repo, changed!), "name: ensure\n");
-      }
-      commit(repo);
-      if (changed) {
-        fs.appendFileSync(path.join(repo, changed), "# changed\n");
-      }
-      const { argsPath, binDir } = installOpengrepStub(repo);
-      const sarifPath = path.join(repo, ".opengrep-out/precise.sarif");
-      if (scenario === "ls-files") {
-        const realGit = execFileSync("bash", ["-lc", "command -v git"], {
-          encoding: "utf8",
-        }).trim();
-        writeFile(
-          path.join(binDir, "git"),
-          `#!/usr/bin/env bash
-if [[ "\${1:-}" == "ls-files" ]]; then
+      script(
+        path.join(binDir, "git"),
+        `if [[ "\${1:-}" == "ls-files" ]]; then
   echo "forced git ls-files failure" >&2
   exit 71
 fi
 exec ${JSON.stringify(realGit)} "$@"
 `,
-        );
-        fs.chmodSync(path.join(binDir, "git"), 0o755);
-      }
-      const result = runScan(
-        repo,
-        binDir,
-        scenario === "rulepack" ? ["--changed"] : ["--changed", "--sarif", "--error"],
-        scenario === "missing-base...HEAD" ? scenario : "HEAD",
       );
-      if (scenario === "missing-base...HEAD" || scenario === "ls-files") {
-        expect.soft(result.status).not.toBe(0);
-        expect
-          .soft(result.stderr)
-          .toContain(scenario === "ls-files" ? "forced git ls-files failure" : scenario);
-        expect.soft(fs.existsSync(argsPath)).toBe(false);
-        expect.soft(fs.existsSync(sarifPath)).toBe(false);
+    }
+    const result = runScan(
+      repo,
+      binDir,
+      scenario === "rulepack" ? ["--changed"] : ["--changed", "--sarif", "--error"],
+      scenario === "missing-base...HEAD" ? scenario : "HEAD",
+    );
+    if (scenario === "missing-base...HEAD" || scenario === "ls-files") {
+      expect.soft(result.status).not.toBe(0);
+      expect
+        .soft(result.stderr)
+        .toContain(scenario === "ls-files" ? "forced git ls-files failure" : scenario);
+      expect.soft(fs.existsSync(argsPath)).toBe(false);
+      expect.soft(fs.existsSync(sarifPath)).toBe(false);
+    } else {
+      expect(result.status, result.stderr).toBe(0);
+      if (scenario === "rulepack") {
+        expect(read(repo, "opengrep-args.txt")).toContain("security/opengrep/precise.yml");
       } else {
-        expect(result.status, result.stderr).toBe(0);
-        if (scenario === "rulepack") {
-          expect(fs.readFileSync(argsPath, "utf8")).toContain("security/opengrep/precise.yml");
-        } else {
-          expect(JSON.parse(fs.readFileSync(sarifPath, "utf8"))).toMatchObject({
-            version: "2.1.0",
-            runs: [
-              {
-                tool: { driver: { name: "Opengrep OSS", semanticVersion: "1.30.2" } },
-                results: [],
-              },
-            ],
-          });
-          expect(fs.existsSync(argsPath)).toBe(false);
-        }
+        expect(readJson(repo, ".opengrep-out/precise.sarif")).toMatchObject({
+          version: "2.1.0",
+          runs: [
+            {
+              tool: { driver: { name: "Opengrep OSS", semanticVersion: "1.30.2" } },
+              results: [],
+            },
+          ],
+        });
+        expect(fs.existsSync(argsPath)).toBe(false);
       }
+    }
+  },
+);
+
+describe("shallow checkout preparation", () => {
+  const sourceDirs = useAutoCleanupTempDirTracker(afterAll);
+  let source: string;
+  let staleBase: string;
+
+  beforeAll(() => {
+    source = createRepo("source", (prefix) => sourceDirs.make(prefix));
+    git(source, "config", "uploadpack.allowFilter", "true");
+    for (const name of ["ensure-base-commit", "git-owner"]) {
+      fs.cpSync(`.github/actions/${name}`, path.join(source, ".github/actions", name), {
+        recursive: true,
+      });
+    }
+    commit(source, "base");
+    staleBase = git(source, "rev-parse", "HEAD");
+    git(source, "branch", "feature");
+    for (const [branch, file] of [
+      ["feature", "pr"],
+      ["main", "main-only"],
+    ]) {
+      git(source, "switch", "-q", branch);
+      writeFile(path.join(source, `src/${file}.ts`), "export {};\n");
+      commit(source, branch);
+    }
+    git(source, "merge", "--no-ff", "feature", "-m", "synthetic merge");
+  });
+
+  it.each([
+    { shape: "partial merge", depth: 2, partial: true },
+    { shape: "merge without parents", depth: 1, partial: false },
+  ])(
+    "prepares and scans a shallow $shape checkout without unrelated base fetches",
+    ({ depth, partial }) => {
+      const repo = createTempDir("openclaw-opengrep-shallow-");
+      git(
+        source,
+        "clone",
+        "--quiet",
+        "--no-local",
+        `--depth=${depth}`,
+        ...(partial ? ["--filter=blob:none"] : []),
+        "--branch",
+        "main",
+        source,
+        repo,
+      );
+      expect(git(repo, "rev-parse", "--is-shallow-repository")).toBe("true");
+      if (partial) {
+        expect(git(repo, "config", "--get", "remote.origin.promisor")).toBe("true");
+      }
+      // Probe local storage only: resolving a missing object in a partial clone can fetch it.
+      const localObjects = git(
+        repo,
+        "cat-file",
+        "--batch-all-objects",
+        "--batch-check=%(objectname)",
+      );
+      expect(localObjects.split("\n")).not.toContain(staleBase);
+      const { argsPath, binDir } = installOpengrepStub(repo);
+      const trace = path.join(createTempDir("openclaw-opengrep-trace-"), "git.jsonl");
+      const result = runChangedPathsWorkflow(repo, staleBase, {
+        ...process.env,
+        PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+        RUNNER_OS:
+          new Map([
+            ["win32", "Windows"],
+            ["darwin", "macOS"],
+          ]).get(process.platform) ?? "Linux",
+        GIT_CONFIG_GLOBAL: devNull,
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_ALLOW_PROTOCOL: "",
+        GIT_TRACE2_EVENT: trace,
+      });
+      const traceEvents = read("", trace)
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      const fetches = traceEvents.filter(
+        (event) => event.event === "cmd_name" && event.name === "fetch",
+      );
+      if (!partial) {
+        expect(result.status, result.stderr).not.toBe(0);
+        expect(result.stdout).toContain("Base commit still unavailable");
+        const fetchArgs = (depthArg: string, ...refs: string[]) => [
+          "fetch",
+          "--filter=blob:none",
+          "--no-tags",
+          depthArg,
+          "origin",
+          ...refs,
+        ];
+        expect(
+          fetches.map((event) => {
+            const start = traceEvents.find(
+              (candidate) => candidate.event === "start" && candidate.sid === event.sid,
+            );
+            return start?.argv.slice(start.argv.indexOf("fetch"));
+          }),
+        ).toEqual([
+          fetchArgs("--depth=1", staleBase),
+          ...[25, 100, 300, 1000].map((deepenBy) =>
+            fetchArgs(`--deepen=${deepenBy}`, "--", "main"),
+          ),
+          fetchArgs("--unshallow", "--", "main"),
+        ]);
+        expect(fs.existsSync(argsPath)).toBe(false);
+        return;
+      }
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+      expect(fetches).toEqual([]);
+      const args = fs.readFileSync(argsPath, "utf8");
+      expect(args).toContain("src/pr.ts");
+      expect(args).not.toContain("src/main-only.ts");
     },
   );
-
-  describe("shallow checkout preparation", () => {
-    const sourceDirs = useAutoCleanupTempDirTracker(afterAll);
-    let source: string;
-    let staleBase: string;
-
-    beforeAll(() => {
-      source = createRepo("source", (prefix) => sourceDirs.make(prefix));
-      git(source, "config", "uploadpack.allowFilter", "true");
-      for (const name of ["ensure-base-commit", "git-owner"]) {
-        fs.cpSync(`.github/actions/${name}`, path.join(source, ".github/actions", name), {
-          recursive: true,
-        });
-      }
-      commit(source, "base");
-      staleBase = git(source, "rev-parse", "HEAD");
-      git(source, "switch", "-q", "-c", "feature");
-      writeFile(path.join(source, "src/pr.ts"), "export const pr = true;\n");
-      commit(source, "feature");
-      git(source, "switch", "-q", "main");
-      writeFile(path.join(source, "src/main-only.ts"), "export const mainOnly = true;\n");
-      commit(source, "main only");
-      git(source, "merge", "--no-ff", "feature", "-m", "synthetic merge");
-    });
-
-    it.each([
-      { shape: "partial merge", branch: "main", depth: 2, partial: true, passes: true },
-      { shape: "merge without parents", branch: "main", depth: 1, partial: false, passes: false },
-    ])(
-      "prepares and scans a shallow $shape checkout without unrelated base fetches",
-      ({ branch, depth, partial, passes }) => {
-        const repo = createTempDir("openclaw-opengrep-shallow-");
-        git(
-          source,
-          "clone",
-          "--quiet",
-          "--no-local",
-          `--depth=${depth}`,
-          ...(partial ? ["--filter=blob:none"] : []),
-          "--branch",
-          branch,
-          source,
-          repo,
-        );
-        expect(git(repo, "rev-parse", "--is-shallow-repository")).toBe("true");
-        if (partial) {
-          expect(git(repo, "config", "--get", "remote.origin.promisor")).toBe("true");
-        }
-        // Probe local storage only: resolving a missing object in a partial clone can fetch it.
-        const localObjects = git(
-          repo,
-          "cat-file",
-          "--batch-all-objects",
-          "--batch-check=%(objectname)",
-        );
-        expect(localObjects.split("\n")).not.toContain(staleBase);
-        const { argsPath, binDir } = installOpengrepStub(repo);
-        const trace = path.join(createTempDir("openclaw-opengrep-trace-"), "git.jsonl");
-        const result = runChangedPathsWorkflow(repo, staleBase, {
-          ...process.env,
-          PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
-          RUNNER_OS:
-            process.platform === "win32"
-              ? "Windows"
-              : process.platform === "darwin"
-                ? "macOS"
-                : "Linux",
-          GIT_CONFIG_GLOBAL: devNull,
-          GIT_CONFIG_NOSYSTEM: "1",
-          GIT_ALLOW_PROTOCOL: "",
-          GIT_TRACE2_EVENT: trace,
-        });
-        const traceEvents = fs
-          .readFileSync(trace, "utf8")
-          .trim()
-          .split("\n")
-          .map((line) => JSON.parse(line));
-        const fetches = traceEvents.filter(
-          (event) => event.event === "cmd_name" && event.name === "fetch",
-        );
-        if (!passes) {
-          expect(result.status, result.stderr).not.toBe(0);
-          expect(result.stdout).toContain("Base commit still unavailable");
-          expect(fetches).toHaveLength(6);
-          const fetchArgs = (depthArg: string, ...refs: string[]) => [
-            "fetch",
-            "--filter=blob:none",
-            "--no-tags",
-            depthArg,
-            "origin",
-            ...refs,
-          ];
-          expect(
-            fetches.map((event) => {
-              const start = traceEvents.find(
-                (candidate) => candidate.event === "start" && candidate.sid === event.sid,
-              );
-              expect(start).toBeDefined();
-              return start.argv.slice(start.argv.indexOf("fetch"));
-            }),
-          ).toEqual([
-            fetchArgs("--depth=1", staleBase),
-            ...[25, 100, 300, 1000].map((deepenBy) =>
-              fetchArgs(`--deepen=${deepenBy}`, "--", "main"),
-            ),
-            fetchArgs("--unshallow", "--", "main"),
-          ]);
-          expect(fs.existsSync(argsPath)).toBe(false);
-          return;
-        }
-        expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-        expect(fetches).toEqual([]);
-        const args = fs.readFileSync(argsPath, "utf8");
-        expect(args).toContain("src/pr.ts");
-        expect(args).not.toContain("src/main-only.ts");
-      },
-    );
-  });
 });
 
 it("preserves raw SARIF evidence and uploads only findings without accepted source suppression", () => {
   const repo = createTempDir("openclaw-opengrep-sarif-");
+  const inSource = (status?: string | null) => ({
+    kind: "inSource",
+    ...(status === undefined ? {} : { status }),
+  });
   const ignored = [
-    { ruleId: "in-source", suppressions: [{ kind: "inSource" }] },
-    { ruleId: "accepted", suppressions: [{ kind: "inSource", status: "accepted" }] },
+    { ruleId: "in-source", suppressions: [inSource()] },
+    { ruleId: "accepted", suppressions: [inSource("accepted")] },
   ];
   const retained = [
     { ruleId: "active" },
     { ruleId: "empty", suppressions: [] },
     { ruleId: "unknown", suppressions: null },
     { ruleId: "external", suppressions: [{ kind: "external", status: "accepted" }] },
-    { ruleId: "under-review", suppressions: [{ kind: "inSource", status: "underReview" }] },
-    { ruleId: "rejected", suppressions: [{ kind: "inSource", status: "rejected" }] },
-    { ruleId: "future-status", suppressions: [{ kind: "inSource", status: "unknown" }] },
-    { ruleId: "null-status", suppressions: [{ kind: "inSource", status: null }] },
+    ...["underReview", "rejected", "unknown", null].map((status) => ({
+      ruleId: `in-source-${status}`,
+      suppressions: [inSource(status)],
+    })),
     { ruleId: "malformed", suppressions: [null] },
-    {
-      ruleId: "mixed",
-      suppressions: [{ kind: "inSource" }, { kind: "inSource", status: "rejected" }],
-    },
+    { ruleId: "mixed", suppressions: [inSource(), inSource("rejected")] },
   ];
   const tool = { driver: { name: "Opengrep OSS", rules: [{ id: "unchanged-rule" }] } };
   const report = {
@@ -458,12 +442,12 @@ it("preserves raw SARIF evidence and uploads only findings without accepted sour
   if (!uploadPath) {
     throw new Error("Workflow must name its SARIF upload payload");
   }
-  const uploaded = JSON.parse(fs.readFileSync(path.join(repo, uploadPath), "utf8"));
+  const uploaded = readJson(repo, uploadPath);
   expect(uploaded).toEqual({
     ...report,
     runs: [{ ...report.runs[0], results: retained }, ...report.runs.slice(1)],
   });
   expect(upload.if).toBe("always() && steps.github-sarif.outcome == 'success'");
   expect(artifact.with).toMatchObject({ path: reportPath, "if-no-files-found": "error" });
-  expect(fs.readFileSync(path.join(repo, reportPath), "utf8")).toBe(raw);
+  expect(read(repo, reportPath)).toBe(raw);
 });
