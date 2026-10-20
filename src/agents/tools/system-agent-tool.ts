@@ -152,6 +152,7 @@ const SYSTEM_AGENT_TOOL_ACTIONS = [
   "config_get",
   "config_schema",
   "gateway_status",
+  "overview",
   "plugin_list",
   "plugin_search",
   // Host directives handled by the hosting chat after this turn.
@@ -282,6 +283,7 @@ const SIMPLE_ACTIONS = new Map<string, SystemAgentOperation>([
   ["channels", { kind: "channel-list" }],
   ["validate_config", { kind: "config-validate" }],
   ["gateway_status", { kind: "gateway-status" }],
+  ["overview", { kind: "overview" }],
   ["plugin_list", { kind: "plugin-list" }],
   ["configure_skills", { kind: "skills-setup" }],
   ["configure_search", { kind: "search-setup" }],
@@ -438,7 +440,7 @@ export function createSystemAgentTool(options: SystemAgentToolOptions): AnyAgent
     catalogMode: "direct-only",
     description: [
       "System agent. Setup, config, channels, plugins, agents, repair.",
-      "Read now: status, models, agents, channels, channel_info, config_get, config_schema, gateway_status, plugin_list, plugin_search, validate_config, doctor, audit.",
+      "Read now: status, models, agents, channels, channel_info, config_get, config_schema, gateway_status, overview, plugin_list, plugin_search, validate_config, doctor, audit.",
       "Handoff: connect_channel, configure_skills, configure_search (web search), configure_gateway, import_memory; open_setup target=channels|search|gateway; open_agent. These open interactive setup flows.",
       "Model providers: configure_model_provider returns Settings → Models sign-in guidance for provider accounts and OAuth. Personal accounts: manage_model_accounts opens the account controls.",
       "Write: setup, set_default_model (agentId optional; live-tested), config_set, config_unset, config_set_ref, create_agent (optional role), create_team, gateway_*, plugin_install, plugin_activate_artifact, plugin_uninstall. Submit the exact proposal first. Direct chat: exact user approval, then approved=true. Delegated requests: host applies session permission policy and returns the final outcome. Host applies after turn; rechecks inference owner.",

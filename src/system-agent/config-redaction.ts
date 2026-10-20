@@ -177,18 +177,16 @@ function resolveConfigUiHint(
   includeAncestors = false,
   acceptHint?: (hint: ConfigUiHint) => boolean,
 ): ConfigUiHint | undefined {
-  return (
-    findWildcardHintMatch({
-      uiHints,
-      path: path.join("."),
-      // Config path segments can themselves contain dots. Preserve the
-      // writer-parsed boundaries instead of reparsing a lossy joined path.
-      targetParts: path,
-      splitPath: splitConfigHintPath,
-      includeAncestors,
-      acceptHint,
-    })?.hint ?? undefined
-  );
+  return findWildcardHintMatch({
+    uiHints,
+    path: path.join("."),
+    // Config path segments can themselves contain dots. Preserve the
+    // writer-parsed boundaries instead of reparsing a lossy joined path.
+    targetParts: path,
+    splitPath: splitConfigHintPath,
+    includeAncestors,
+    acceptHint,
+  })?.hint;
 }
 
 function isUnknownDynamicOwnerPath(

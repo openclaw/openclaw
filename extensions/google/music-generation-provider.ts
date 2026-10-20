@@ -5,7 +5,6 @@ import type {
   MusicGenerationProvider,
   MusicGenerationRequest,
 } from "openclaw/plugin-sdk/music-generation";
-import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   createProviderOperationDeadline,
   resolveProviderOperationTimeoutMs,
@@ -13,6 +12,7 @@ import {
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { toStandardGoogleProviderBase64 } from "./base64.js";
 import type { GoogleGenerateContentResponse } from "./generate-content-response.js";
+import { resolveGoogleGenerationApiKey } from "./generation-auth.js";
 import {
   createGoogleMusicGenerationProviderMetadata,
   DEFAULT_GOOGLE_MUSIC_MODEL,
@@ -117,15 +117,7 @@ export function buildGoogleMusicGenerationProvider(): MusicGenerationProvider {
           `Google music generation supports at most ${GOOGLE_MAX_INPUT_IMAGES} reference images.`,
         );
       }
-      const auth = await resolveApiKeyForProvider({
-        provider: "google",
-        cfg: req.cfg,
-        agentDir: req.agentDir,
-        store: req.authStore,
-      });
-      if (!auth.apiKey) {
-        throw new Error("Google API key missing");
-      }
+      const apiKey = await resolveGoogleGenerationApiKey(req);
 
       const model = normalizeOptionalString(req.model) || DEFAULT_GOOGLE_MUSIC_MODEL;
       if (req.format) {
@@ -148,7 +140,7 @@ export function buildGoogleMusicGenerationProvider(): MusicGenerationProvider {
       // unblocked text-only payloads transiently. Never retry explicit stops.
       for (let attempt = 0; attempt < 2; attempt += 1) {
         const client = createGoogleGenAI({
-          apiKey: auth.apiKey,
+          apiKey,
           httpOptions: {
             ...(configuredBaseUrl ? { baseUrl: configuredBaseUrl } : {}),
             timeout: resolveProviderOperationTimeoutMs({

@@ -24,6 +24,7 @@ import {
 } from "../../../test-utils/openclaw-test-state.js";
 import { resolveSubagentSessionAttachmentRootDir } from "../subagent-attachment-paths.js";
 import { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
+import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import {
   createArchivedSubagentSweeperRun as archivedRun,
@@ -375,6 +376,7 @@ export function registerSubagentSweepCompletionRecoveryTests(ignoreRecovery: () 
           });
           const scheduleSweep = vi.fn();
           const resumeRun = vi.fn();
+          using _ = vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
           const completion = createSubagentRegistryCompletionRuntime({
             runs: h.runs,
             resumed: new Set(),
@@ -382,7 +384,6 @@ export function registerSubagentSweepCompletionRecoveryTests(ignoreRecovery: () 
             completeSubagentRun: attempt,
             scheduleSweep,
             resumeRun,
-            warn: vi.fn(),
           });
           h.completeSubagentRunWithRecovery.mockImplementation(
             completion.completeSubagentRunWithRecovery,

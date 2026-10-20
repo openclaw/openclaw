@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import nodePath from "node:path";
 import { readRegularFile } from "@openclaw/fs-safe/advanced";
+import type { DiffReadTiming } from "../infra/diff-read-timing.js";
 import { resolveExecutablePath } from "../infra/executable-path.js";
 import { GitCommandTimeoutError, requireGitCommandOutput } from "../infra/git-exec.js";
 import type { GitReadOperations } from "../infra/git-read-operations.js";
@@ -17,6 +18,7 @@ import {
   gitFilesystemEnvironmentRevision,
 } from "../infra/git-worker-context.js";
 import type { GitWorkerOperations } from "../infra/git-worker-contract.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import {
   gitOutput,
   isAncestor,
@@ -28,18 +30,23 @@ import {
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 
 /** Observe only this checkout's refs; snapshot publication does not change PR facts. */
-export async function readCheckoutGitRevision({
-  root,
-  scope,
-  branch,
-  defaultBranch,
-}: GitReadOperations["checkout.revision"]["input"]): Promise<string | null> {
+export async function readCheckoutGitRevision(
+  {
+    root,
+    scope,
+    branch,
+    defaultBranch,
+    summaryOnly = false,
+    paths: diffPaths,
+  }: GitReadOperations["checkout.revision"]["input"],
+  timing?: DiffReadTiming,
+): Promise<string | null> {
   if (!canReadGitFilesystemRefs()) {
     return null;
   }
   try {
     if (scope === "diff") {
-      return await readCheckoutDiffRevision(root);
+      return await readCheckoutDiffRevision(root, diffPaths, summaryOnly, timing);
     }
     const head = readGitHead(root, { maxDepth: 1 });
     const checkout = readCheckoutHead(root);
@@ -128,6 +135,8 @@ type GitInstallationFiles = { revision: string; config: string[]; attributes: st
 let gitInstallationFiles:
   | { key: string; promise: Promise<GitInstallationFiles | null> }
   | undefined;
+// Worker retirement drops these bounded observations of externally owned checkouts.
+const smallDiffRevisions = new Map<string, { fingerprint: string; revision: string }>();
 
 async function readGitInstallationFiles(
   root: string,
@@ -189,8 +198,13 @@ async function readGitInstallationFiles(
   return await gitInstallationFiles.promise;
 }
 
-/** External editors own these files; bounded metadata scans avoid Git on unchanged polls. */
-async function readCheckoutDiffRevision(root: string): Promise<string | null> {
+/** Git owns ignored paths and index refreshes; observe only its changed-file inventory. */
+async function readCheckoutDiffRevision(
+  root: string,
+  previousPaths: string[] = [],
+  summaryOnly = false,
+  timing?: DiffReadTiming,
+): Promise<string | null> {
   const environment = createHash("sha256")
     .update(
       JSON.stringify(
@@ -215,21 +229,31 @@ async function readCheckoutDiffRevision(root: string): Promise<string | null> {
   const { gitDir, commonDir } = directories;
   const hash = createHash("sha256").update(environment);
   let remaining = 10_000;
-  const observe = (file: string, allowSymlink = false) => {
-    if (--remaining < 0) {
-      throw new Error("Checkout diff revision exceeds its metadata budget");
+  const oversized = () => {
+    if (timing) {
+      timing.revisionUnavailableReason = "oversized";
     }
-    const stat = fs.lstatSync(file, { bigint: true, throwIfNoEntry: false });
+    throw new Error("Checkout diff revision exceeds its metadata budget");
+  };
+  const readStat = (file: string) => {
+    if (--remaining < 0) {
+      oversized();
+    }
+    return fs.lstatSync(file, { bigint: true, throwIfNoEntry: false });
+  };
+  const observe = (file: string, allowSymlink = false, target = hash, identityOnly = false) => {
+    const stat = readStat(file);
     if (stat?.isSymbolicLink() && !allowSymlink) {
       throw new Error("Indirect Git metadata requires a fresh diff");
     }
-    hash.update(
+    target.update(
       JSON.stringify([
         file,
         ...(stat
-          ? [stat.dev, stat.ino, stat.mode, stat.nlink, stat.size, stat.mtimeNs, stat.ctimeNs].map(
-              String,
-            )
+          ? (identityOnly && stat.isDirectory()
+              ? [stat.dev, stat.ino]
+              : [stat.dev, stat.ino, stat.mode, stat.nlink, stat.size, stat.mtimeNs, stat.ctimeNs]
+            ).map(String)
           : []),
       ]),
     );
@@ -241,7 +265,7 @@ async function readCheckoutDiffRevision(root: string): Promise<string | null> {
     try {
       for (let entry; (entry = handle.readSync());) {
         if (children.length >= remaining) {
-          throw new Error("Checkout diff revision exceeds its metadata budget");
+          oversized();
         }
         children.push(entry);
       }
@@ -250,8 +274,8 @@ async function readCheckoutDiffRevision(root: string): Promise<string | null> {
     }
     return children;
   };
-  const walk = (directory: string, tree = false) => {
-    if (!observe(directory, tree)?.isDirectory()) {
+  const walk = (directory: string) => {
+    if (!observe(directory)?.isDirectory()) {
       return;
     }
     // Inventory first: oversized trees cannot yield a revision, so do not stat/hash their files.
@@ -259,15 +283,9 @@ async function readCheckoutDiffRevision(root: string): Promise<string | null> {
     const files: string[] = [];
     for (const parent of pendingDirectories) {
       for (const entry of entries(parent)) {
-        if (tree && entry.name === ".git") {
-          if (parent !== root) {
-            throw new Error("Nested repositories require a fresh diff");
-          }
-          continue;
-        }
         const file = nodePath.join(parent, entry.name);
         if (files.push(file) > remaining) {
-          throw new Error("Checkout diff revision exceeds its metadata budget");
+          oversized();
         }
         if (entry.isDirectory()) {
           pendingDirectories.push(file);
@@ -275,12 +293,12 @@ async function readCheckoutDiffRevision(root: string): Promise<string | null> {
       }
     }
     for (const file of files.toSorted()) {
-      observe(file, tree);
+      observe(file);
     }
   };
-  walk(root, true);
   for (const file of directories.paths) {
-    observe(file);
+    // Index lock/rename and ignored output change directory stamps, not identity.
+    observe(file, false, hash, true);
   }
   const home = process.env.HOME ?? os.homedir();
   const xdg = process.env.XDG_CONFIG_HOME ?? nodePath.join(home, ".config");
@@ -326,7 +344,7 @@ async function readCheckoutDiffRevision(root: string): Promise<string | null> {
     if (observe(nodePath.join(directory, "reftable"))) {
       return null;
     }
-    for (const file of ["HEAD", "index", "commondir", "packed-refs", "shallow"]) {
+    for (const file of ["commondir", "packed-refs", "shallow"]) {
       observe(nodePath.join(directory, file));
     }
     for (const child of ["refs", "info"]) {
@@ -345,7 +363,138 @@ async function readCheckoutDiffRevision(root: string): Promise<string | null> {
       observe(nodePath.join(objects, child));
     }
   }
-  return hash.digest("hex");
+  // Preserve the zero-Git path for small idle checkouts. Any filesystem churn
+  // revalidates through Git; only Git's semantic revision invalidates the diff.
+  const semanticBudget = remaining;
+  const fingerprint = (() => {
+    try {
+      const files = [root];
+      const pending = [root];
+      for (const parent of pending) {
+        for (const entry of entries(parent)) {
+          if (entry.name === ".git") {
+            if (parent !== root) {
+              return null;
+            }
+            continue;
+          }
+          const file = nodePath.join(parent, entry.name);
+          if (files.push(file) > remaining - 2) {
+            oversized();
+          }
+          if (entry.isDirectory()) {
+            pending.push(file);
+          }
+        }
+      }
+      const stamp = hash.copy();
+      observe(nodePath.join(gitDir, "HEAD"), false, stamp);
+      observe(nodePath.join(gitDir, "index"), false, stamp);
+      for (const file of files.toSorted()) {
+        observe(file, true, stamp);
+      }
+      return stamp.digest("hex");
+    } catch {
+      return null; // Optional memo admission must not disable the semantic revision.
+    }
+  })();
+  remaining = semanticBudget;
+  // Oversized summaries already allow a 10-second fallback. A full status scan
+  // on each poll costs more than that retained summary; full diffs require freshness.
+  if (!fingerprint && summaryOnly) {
+    return null;
+  }
+  const memoKey = JSON.stringify([root, environment, summaryOnly, previousPaths.toSorted()]);
+  const memo = smallDiffRevisions.get(memoKey);
+  smallDiffRevisions.delete(memoKey);
+  if (fingerprint && memo?.fingerprint === fingerprint) {
+    smallDiffRevisions.set(memoKey, memo);
+    return memo.revision;
+  }
+  const status = await runPullRequestGit(
+    root,
+    [
+      "--no-optional-locks",
+      "status",
+      "--porcelain=v2",
+      "--branch",
+      "--no-ahead-behind",
+      "--untracked-files=all",
+      "--ignore-submodules=none",
+      "--no-renames",
+      "-z",
+    ],
+    { maxOutputBytes: 1024 * 1024, terminateOnOutputLimit: true },
+  );
+  if (status.stdoutTruncatedBytes || status.outputLimitExceeded) {
+    oversized();
+  }
+  if (status.code !== 0 || status.termination !== "exit" || status.stdout.includes("\uFFFD")) {
+    return null;
+  }
+  const head = createHash("sha256");
+  const index = createHash("sha256");
+  const untrackedSet = createHash("sha256");
+  const worktreeMtime = createHash("sha256");
+  const paths = new Set<string>();
+  for (const record of status.stdout.split("\0").filter(Boolean)) {
+    if (record.startsWith("# ")) {
+      head.update(record).update("\0");
+      continue;
+    }
+    let file: string;
+    if (record.startsWith("? ")) {
+      file = record.slice(2);
+      untrackedSet.update(file).update("\0");
+    } else {
+      // Porcelain v2 preserves index object/mode identity without index stat-cache bytes.
+      const entry = /^1 (..) (....) (\d+) (\d+) (\d+) ([a-f0-9]+) ([a-f0-9]+) (.*)$/su.exec(record);
+      if (!entry || entry[2] !== "N...") {
+        return null; // Conflicts and dirty nested repositories retain fresh Git reads.
+      }
+      file = entry[8]!;
+      if (entry[1]![0] !== ".") {
+        index.update(JSON.stringify([file, entry[1]![0], entry[4], entry[7]]));
+      }
+      worktreeMtime.update(JSON.stringify([file, entry[1]![1], entry[5]]));
+    }
+    paths.add(file);
+    if (observe(nodePath.join(root, file), true, worktreeMtime)?.isDirectory()) {
+      return null;
+    }
+  }
+  // Clean committed previews still depend on file type and hardlink eligibility.
+  for (const file of previousPaths.toSorted()) {
+    if (!paths.has(file)) {
+      const stat = readStat(nodePath.join(root, file));
+      hash.update(JSON.stringify([file, stat?.mode.toString(), stat?.nlink.toString()]));
+      paths.add(file);
+    }
+  }
+  // Displayed paths also depend on ignored attribute files in parent directories.
+  const attributes = new Set([nodePath.join(root, ".gitattributes")]);
+  for (const file of paths) {
+    let directory = nodePath.dirname(nodePath.join(root, file));
+    while (directory !== root && directory.startsWith(`${root}${nodePath.sep}`)) {
+      attributes.add(nodePath.join(directory, ".gitattributes"));
+      directory = nodePath.dirname(directory);
+    }
+  }
+  for (const file of [...attributes].toSorted()) {
+    observe(file);
+  }
+  const revision = JSON.stringify({
+    head: head.digest("hex"),
+    index: index.digest("hex"),
+    untrackedSet: untrackedSet.digest("hex"),
+    worktreeMtime: worktreeMtime.digest("hex"),
+    metadata: hash.digest("hex"),
+  });
+  if (fingerprint) {
+    smallDiffRevisions.set(memoKey, { fingerprint, revision });
+    pruneMapToMaxSize(smallDiffRevisions, 64);
+  }
+  return revision;
 }
 
 function readDefaultRef(head: ReturnType<typeof readCheckoutHead>): string | null | undefined {

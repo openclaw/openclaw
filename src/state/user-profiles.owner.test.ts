@@ -1,6 +1,9 @@
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  observeHostDataSql,
+  observeSqliteReadSql,
+} from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
@@ -254,9 +257,20 @@ describe("gateway owner profiles", () => {
     const owner = ensureGatewayOwnerProfile(null, options);
     expect(owner.displayName).toBeNull();
     expect(ensureGatewayOwnerProfile(" \t ", options)).toEqual(owner);
-    expect(ensureGatewayOwnerProfile(`${"a".repeat(255)}🤖`, options)).toMatchObject({
-      id: owner.id,
-      displayName: "a".repeat(255),
-    });
+    const observed = observeHostDataSql();
+    try {
+      expect(ensureGatewayOwnerProfile(`${"a".repeat(255)}🤖`, options)).toMatchObject({
+        id: owner.id,
+        displayName: "a".repeat(255),
+      });
+      expect(
+        observed.queries.filter((sql) => /insert into "user_profile_identities"/iu.test(sql)),
+      ).toEqual([]);
+    } finally {
+      observed.restore();
+    }
+    expect(readUserProfileSnapshotSync(options).profiles).toEqual([
+      expect.objectContaining({ id: owner.id, displayName: "a".repeat(255) }),
+    ]);
   });
 });

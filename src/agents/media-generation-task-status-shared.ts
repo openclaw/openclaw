@@ -44,9 +44,7 @@ function buildRecentMediaGenerationTaskKey(params: {
 }
 
 function isRecentMediaGenerationActivity(activityAt: number, nowMs: number): boolean {
-  return (
-    Number.isFinite(activityAt) && nowMs - activityAt <= RECENT_MEDIA_GENERATION_TASK_START_CACHE_MS
-  );
+  return nowMs - activityAt <= RECENT_MEDIA_GENERATION_TASK_START_CACHE_MS;
 }
 
 function pruneRecentMediaGenerationTaskStarts(params: { nowMs: number; preserveKey?: string }) {
