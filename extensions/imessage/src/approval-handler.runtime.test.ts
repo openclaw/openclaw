@@ -580,6 +580,24 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
   });
 
   it.each([
+    ["peer reported as sender", "+15555550123"],
+    ["local account reported as sender", HANDLE],
+  ])("attributes is_from_me DM votes to the local account (%s)", async (_name, sender) => {
+    const peer = "+15555550123";
+    expect(await bind({ conversation: { handle: peer } })).toBe(true);
+    const vote = {
+      ...buildVote({}, { sender, is_from_me: true, destination_caller_id: HANDLE }),
+      chat_identifier: peer,
+      is_group: false,
+    };
+
+    expect(await resolveVote(vote)).toBe(true);
+    expect(approvalGatewayMock.resolve).toHaveBeenCalledWith(
+      expect.objectContaining({ decision: "allow-once", senderId: HANDLE }),
+    );
+  });
+
+  it.each([
     ["does not trust destination_caller_id on received rows", ""],
     ["rejects imsg's local-identity sender fallback on received rows", HANDLE],
   ])("%s", async (_name, sender) => {
@@ -959,6 +977,29 @@ describe("iMessage approval reactions", () => {
       Number.isFinite(now)
         ? [expect.objectContaining({ approvalId, expiresAtMs: now + 24 * 60 * 60 * 1000 })]
         : [],
+    );
+  });
+
+  it.each([
+    ["peer reported as sender", "+15555550123"],
+    ["local account reported as sender", "+15551230000"],
+  ])("attributes is_from_me DM tapbacks to the local account (%s)", async (_name, sender) => {
+    const peer = "+15555550123";
+    await registerTarget({ approvalId: "exec-dm", conversation: { handle: peer } });
+    const message = buildTapbackReactionPayload({
+      is_from_me: true,
+      is_group: false,
+      sender,
+      destination_caller_id: "+15551230000",
+      chat_identifier: peer,
+    });
+
+    await resolveReaction(message, { cfg: { channels: { imessage: { allowFrom: [peer] } } } });
+    expect(approvalGatewayMock.resolve).not.toHaveBeenCalled();
+
+    expect(await resolveReaction(message)).toBe(true);
+    expect(approvalGatewayMock.resolve).toHaveBeenCalledWith(
+      expect.objectContaining({ approvalId: "exec-dm", senderId: "+15551230000" }),
     );
   });
 
