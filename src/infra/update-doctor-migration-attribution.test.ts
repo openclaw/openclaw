@@ -9,6 +9,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
   repairOpenClawStateDatabaseSchema,
+  prepareOpenClawStateDatabaseSchema,
   repairOpenClawStateDatabaseIndexesForDoctor,
   repairOpenClawStateDatabaseReadabilityForDoctor,
 } from "../state/openclaw-state-db.js";
@@ -25,53 +26,71 @@ import { createUpdateDoctorDatabaseWriteCapture } from "./update-doctor-result.j
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
 
-it("retains the migration source through preparation and consumes it before agent maintenance writes", async () => {
-  const root = fs.realpathSync(directories.make("captured-maintenance-state-"));
-  const pathname = path.join(root, "state", "openclaw.sqlite");
-  const env = { ...process.env, OPENCLAW_STATE_DIR: root };
-  openOpenClawStateDatabase({ env });
-  await closeOpenClawStateDatabaseAsync();
-  fs.rmSync(path.join(root, "client"), { recursive: true });
-  {
-    using database = new DatabaseSync(pathname);
-    addPreCutoverClientCredentialTablesForTest(database);
-    database.exec(`PRAGMA user_version = 20;
+it.each(["lease", "outside"] as const)(
+  "settles prior %s writers before acquiring schema repair custody",
+  async (writer) => {
+    const root = fs.realpathSync(directories.make("captured-maintenance-state-"));
+    const pathname = path.join(root, "state", "openclaw.sqlite");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: root };
+    openOpenClawStateDatabase({ env });
+    await closeOpenClawStateDatabaseAsync();
+    fs.rmSync(path.join(root, "client"), { recursive: true });
+    {
+      using database = new DatabaseSync(pathname);
+      addPreCutoverClientCredentialTablesForTest(database);
+      database.exec(`PRAGMA user_version = 20;
       UPDATE schema_meta SET schema_version = 20;
       DELETE FROM config_machine_state WHERE state_key = 'state.schema.contentVersion';`);
-  }
-  const generations = readUpdateDatabaseGenerations([pathname]);
-  const capture = createUpdateDoctorDatabaseWriteCapture(generations, {
-    env,
-    signal: new AbortController().signal,
-    warn() {},
-  })!;
-  const scope = createOpenClawDatabaseMaintenanceScope({
-    schemaMaintenance: true,
-    assertOwnerCurrent() {},
-  });
-  try {
-    await capture.admit();
-    await scope.run(() =>
-      capture.run(async () => {
-        expect(repairOpenClawStateDatabaseIndexesForDoctor({ env }).warnings).toEqual([]);
-        expect(repairOpenClawStateDatabaseReadabilityForDoctor({ env }).warnings).toEqual([]);
-        expect(
-          repairOpenClawStateDatabaseSchema({ env, versionMigrationOnly: true }).warnings,
-        ).toEqual([]);
-        await withAgentDatabaseMaintenanceLease({ env, processBound: true }, async () => {});
-        expect(repairOpenClawStateDatabaseSchema({ env }).warnings).toEqual([]);
-        await closeOpenClawStateDatabaseAsync();
-      }),
-    );
-    await capture.settle();
-    // Ordinary maintenance is not a new rollback baseline.
-    expect(capture.receipt?.unchanged).toBe(false);
-    expect(capture.receipt?.fromGenerations).toEqual(generations);
-  } finally {
-    await closeOpenClawStateDatabaseAsync();
-    await scope.close();
-  }
-});
+    }
+    const generations = readUpdateDatabaseGenerations([pathname]);
+    const capture = createUpdateDoctorDatabaseWriteCapture(generations, {
+      env,
+      signal: new AbortController().signal,
+      warn() {},
+    })!;
+    const scope = createOpenClawDatabaseMaintenanceScope({
+      schemaMaintenance: true,
+      assertOwnerCurrent() {},
+    });
+    try {
+      await capture.admit();
+      await scope.run(() =>
+        capture.run(async () => {
+          expect(repairOpenClawStateDatabaseIndexesForDoctor({ env }).warnings).toEqual([]);
+          expect(repairOpenClawStateDatabaseReadabilityForDoctor({ env }).warnings).toEqual([]);
+          expect(
+            repairOpenClawStateDatabaseSchema({ env, versionMigrationOnly: true }).warnings,
+          ).toEqual([]);
+          if (writer === "lease") {
+            await withAgentDatabaseMaintenanceLease({ env, processBound: true }, async () => {});
+          } else {
+            using outside = new DatabaseSync(pathname);
+            outside
+              .prepare("INSERT INTO config_machine_state VALUES (?, ?, ?)")
+              .run("test.outside-write", "99", 1);
+          }
+          if (writer === "lease") {
+            expect((await prepareOpenClawStateDatabaseSchema({ env }, "doctor")).warnings).toEqual(
+              [],
+            );
+          } else {
+            await expect(prepareOpenClawStateDatabaseSchema({ env }, "doctor")).rejects.toThrow(
+              "SQLite migration source changed after update capture.",
+            );
+          }
+          await closeOpenClawStateDatabaseAsync();
+        }),
+      );
+      await capture.settle();
+      // Closing the owned handle attributes its lease writes; outside writes stay unknown.
+      expect(capture.receipt?.unchanged).toBe(writer === "lease");
+      expect(capture.receipt?.fromGenerations).toEqual(generations);
+    } finally {
+      await closeOpenClawStateDatabaseAsync();
+      await scope.close();
+    }
+  },
+);
 
 it("attributes a captured absent shared store and its new credential companion during bootstrap", async () => {
   const root = fs.realpathSync(directories.make("captured-fresh-state-"));
@@ -123,7 +142,6 @@ it.each(["captured-generation", null])(
       runWithUpdateDoctorMigrationCapture(
         {
           expected: () => generation,
-          migrationSource: () => generation,
           assertCurrent() {},
           accept() {},
           refuse,
@@ -161,7 +179,6 @@ it("preserves an uncaptured relocated source without certifying updater rollback
     runWithUpdateDoctorMigrationCapture(
       {
         expected: () => undefined,
-        migrationSource: () => undefined,
         assertCurrent() {},
         accept() {},
         refuse,

@@ -99,12 +99,8 @@ export function repairStateSchema(
   // This private handle rebuilds referenced tables and is closed after repair.
   const db = openNodeSqliteDatabase(pathname, { enableForeignKeyConstraints: false });
   try {
-    return runUpdateSqliteMigration(
-      db,
-      pathname,
-      () => repairOpenedStateSchema(db, pathname, env, scope, integrityCheck),
-      // These preparatory passes precede the version migration that consumes its source.
-      { retainSource: scope === "indexes" || scope === "readability" },
+    return runUpdateSqliteMigration(db, pathname, () =>
+      repairOpenedStateSchema(db, pathname, env, scope, integrityCheck),
     );
   } finally {
     if (db.isOpen) {

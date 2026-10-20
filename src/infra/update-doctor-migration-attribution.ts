@@ -14,14 +14,8 @@ import { truncateSqliteWal } from "./sqlite-wal-checkpoint.js";
 
 export type UpdateDoctorMigrationCapture = {
   expected(pathname: string): string | null | undefined;
-  migrationSource(pathname: string): string | null | undefined;
   assertCurrent(): void;
-  accept(
-    pathname: string,
-    before: string | null,
-    after: string | null,
-    retainSource?: boolean,
-  ): void;
+  accept(pathname: string, before: string | null, after: string | null): void;
   refuse(message: string): void;
 };
 
@@ -124,7 +118,6 @@ function observeMigrationClose(
   capture: UpdateDoctorMigrationCapture,
   expected: string | null,
   assertCurrent: () => void,
-  retainSource: boolean,
 ) {
   const maintenance = getOpenClawDatabaseMaintenanceScope();
   let closed = false;
@@ -144,7 +137,7 @@ function observeMigrationClose(
       assertCurrent();
       const after = readSqliteGeneration(pathname);
       assertCurrent();
-      capture.accept(pathname, expected, after, retainSource);
+      capture.accept(pathname, expected, after);
     } catch (error) {
       // Failed attribution must not strand a resource that SQLite already closed.
       capture.refuse(
@@ -174,7 +167,7 @@ export function runUpdateSqliteMigration<T>(
   db: DatabaseSync,
   pathname: string,
   operation: () => T,
-  options?: { retainExclusive?: boolean; created?: boolean; retainSource?: boolean },
+  options?: { retainExclusive?: boolean; created?: boolean },
 ): T {
   const context = captures.getStore();
   if (!context?.capture) {
@@ -185,7 +178,7 @@ export function runUpdateSqliteMigration<T>(
     return operation();
   }
   const { capture } = context;
-  const expected = capture.migrationSource(pathname);
+  const expected = capture.expected(pathname);
   if (typeof expected !== "string" && !(expected === null && options?.created)) {
     return operation();
   }
@@ -249,15 +242,8 @@ export function runUpdateSqliteMigration<T>(
           truncateSqliteWal(db, pathname);
           const after = readSqliteGeneration(pathname);
           assertCurrent();
-          capture.accept(pathname, before, after, options?.retainSource);
-          observeMigrationClose(
-            db,
-            pathname,
-            capture,
-            after,
-            assertCurrent,
-            options?.retainSource === true,
-          );
+          capture.accept(pathname, before, after);
+          observeMigrationClose(db, pathname, capture, after, assertCurrent);
           return result;
         });
       } catch (error) {
