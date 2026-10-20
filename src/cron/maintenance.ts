@@ -10,6 +10,7 @@ import {
   sessionChanges,
   sessionChangeScopeAffectsStoredRows,
 } from "../sessions/session-row-changes.js";
+import { isAgentDatabaseDeletionSnapshotChangedError } from "../state/agent-deletion-journal.read.js";
 import { registerOpenClawStateDatabaseLifecycleListener } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -22,6 +23,7 @@ let scope: GatewaySchedulerScope | undefined;
 let scheduledSweep: Promise<void> | undefined;
 let nextHistorySweepAtMs = Infinity;
 let nextRegistrySweepAtMs = Infinity;
+let lastRegistrySuccessAtMs: number | null = null;
 let unsubscribeSessionChanges: (() => void) | undefined;
 let unsubscribeHistoryChanges: (() => void) | undefined;
 let unsubscribeDatabaseLifecycle: (() => void) | undefined;
@@ -81,11 +83,35 @@ async function sweep(signal: AbortSignal, getCronStorePath: () => string) {
               result.nextSweepAtMs ?? Infinity,
             );
             if (result.skippedReason) {
-              log.warn("Session registry maintenance skipped", { reason: result.skippedReason });
+              log.warn("Session registry maintenance skipped", {
+                reason: result.skippedReason,
+                retryAtMs: nextRegistrySweepAtMs,
+                lastSuccessAtMs: lastRegistrySuccessAtMs,
+              });
+            } else {
+              lastRegistrySuccessAtMs = scope?.now() ?? Date.now();
+              log.info("Session registry maintenance completed", {
+                lastSuccessAtMs: lastRegistrySuccessAtMs,
+                nextSweepAtMs: Number.isFinite(nextRegistrySweepAtMs)
+                  ? nextRegistrySweepAtMs
+                  : null,
+                pruned: result.pruned,
+                skippedStores: result.skippedStores,
+              });
             }
           } catch (error) {
-            nextRegistrySweepAtMs = Math.min(nextRegistrySweepAtMs, now + 60_000);
-            throw error;
+            nextRegistrySweepAtMs = Math.min(
+              nextRegistrySweepAtMs,
+              (scope?.now() ?? Date.now()) + 60_000,
+            );
+            if (!isAgentDatabaseDeletionSnapshotChangedError(error)) {
+              throw error;
+            }
+            log.warn("Session registry maintenance deferred", {
+              reason: "agent-database-snapshot-changed",
+              retryAtMs: nextRegistrySweepAtMs,
+              lastSuccessAtMs: lastRegistrySuccessAtMs,
+            });
           }
         }
       },
@@ -113,6 +139,7 @@ export function startCronMaintenance(scheduler: GatewayScheduler, getCronStorePa
     return;
   }
   scope = scheduler.scope();
+  lastRegistrySuccessAtMs = null;
   nextHistorySweepAtMs = nextRegistrySweepAtMs = scope.now() + 5_000;
   const invalidateHistory = () => {
     if (scope) {

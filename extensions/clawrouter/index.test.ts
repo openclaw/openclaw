@@ -12,7 +12,6 @@ const providerAuthRuntimeMocks = vi.hoisted(() => ({
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => providerAuthRuntimeMocks);
 
 import plugin from "./index.js";
-import { wrapClawRouterProviderStream } from "./stream.js";
 
 const LIVE_CATALOG = {
   providers: [
@@ -42,13 +41,16 @@ function streamModel(overrides: Partial<Parameters<StreamFn>[0]> = {}): Paramete
   };
 }
 
-function createStreamCapture(agentId?: string) {
+function createStreamCapture(
+  provider: Awaited<ReturnType<typeof registerSingleProviderPlugin>>,
+  agentId?: string,
+) {
   const calls: Array<Parameters<StreamFn>[0]> = [];
   const streamFn = vi.fn<StreamFn>((model) => {
     calls.push(model);
     return createAssistantMessageEventStream();
   });
-  const wrapped = wrapClawRouterProviderStream({
+  const wrapped = provider.wrapStreamFn?.({
     provider: "clawrouter",
     modelId: "openai/gpt-5.5",
     agentId,
@@ -145,42 +147,48 @@ describe("ClawRouter plugin", () => {
     expect(resolveLevels(["ultra", "custom"])).toBeUndefined();
   });
 
-  it("attaches the proxy key and native upstream id only at request dispatch", () => {
-    const { calls, streamFn } = createStreamCapture();
-    const wrapped = provider?.wrapStreamFn?.({
-      provider: "clawrouter",
-      modelId: "anthropic/claude-sonnet-4-6",
-      streamFn,
-    });
+  it.each(["wrapStreamFn", "wrapSimpleCompletionStreamFn"] as const)(
+    "%s attaches the proxy key and native upstream id only at request dispatch",
+    (hook) => {
+      const { calls, streamFn } = createStreamCapture(provider);
+      expect(
+        provider[hook]?.({ provider: "clawrouter", modelId: "openai/gpt-5.5" }),
+      ).toBeUndefined();
+      const wrapped = provider[hook]?.({
+        provider: "clawrouter",
+        modelId: "anthropic/claude-sonnet-4-6",
+        streamFn,
+      });
 
-    void wrapped?.(
-      streamModel({
-        api: "anthropic-messages",
-        id: "anthropic/claude-sonnet-4-6",
-        headers: { "x-request-id": "request-1" },
-        params: {
-          clawrouterRoute: {
-            api: "anthropic-messages",
-            baseUrl: "https://clawrouter.example/v1/native/anthropic",
-            upstreamModel: "claude-sonnet-4-6",
+      void wrapped?.(
+        streamModel({
+          api: "anthropic-messages",
+          id: "anthropic/claude-sonnet-4-6",
+          headers: { "x-request-id": "request-1" },
+          params: {
+            clawrouterRoute: {
+              api: "anthropic-messages",
+              baseUrl: "https://clawrouter.example/v1/native/anthropic",
+              upstreamModel: "claude-sonnet-4-6",
+            },
           },
-        },
-      }),
-      { messages: [] },
-      { apiKey: "runtime-proxy-key", requestId: "automatic-call-id" },
-    );
+        }),
+        { messages: [] },
+        { apiKey: "runtime-proxy-key", requestId: "automatic-call-id" },
+      );
 
-    expect(calls[0]?.headers).toEqual({
-      "x-request-id": "request-1",
-      "X-ClawRouter-Client": "openclaw",
-      Authorization: "Bearer runtime-proxy-key",
-    });
-    expect(calls[0]?.id).toBe("claude-sonnet-4-6");
-    expect(calls[0]?.params).toBeUndefined();
-  });
+      expect(calls[0]?.headers).toEqual({
+        "x-request-id": "request-1",
+        "X-ClawRouter-Client": "openclaw",
+        Authorization: "Bearer runtime-proxy-key",
+      });
+      expect(calls[0]?.id).toBe("claude-sonnet-4-6");
+      expect(calls[0]?.params).toBeUndefined();
+    },
+  );
 
   it("attaches bounded attribution without overriding configured metadata", () => {
-    const { calls, dispatch } = createStreamCapture("main");
+    const { calls, dispatch } = createStreamCapture(provider, "main");
 
     const longRunId = `run-${"r".repeat(300)}`;
     dispatch(
@@ -221,7 +229,7 @@ describe("ClawRouter plugin", () => {
       ["agent-😀中文-id", "session-🚀测试-id"],
       ["agent-🚀中文-id", "session-😀测试-id"],
     ] as const) {
-      const { calls, dispatch } = createStreamCapture(agentId);
+      const { calls, dispatch } = createStreamCapture(provider, agentId);
       dispatch(streamModel(), { sessionId });
       captured.push(calls[0]?.headers ?? {});
     }
@@ -241,7 +249,7 @@ describe("ClawRouter plugin", () => {
   it("keeps encoded and lone-surrogate attribution ids distinct", () => {
     const captured: string[] = [];
     const captureAgentId = (agentId: string) => {
-      const { calls, dispatch } = createStreamCapture(agentId);
+      const { calls, dispatch } = createStreamCapture(provider, agentId);
       dispatch();
       captured.push(calls[0]?.headers?.["X-ClawRouter-Agent-Id"] ?? "");
     };
@@ -261,7 +269,7 @@ describe("ClawRouter plugin", () => {
   });
 
   it("keeps an explicit per-request header ahead of the automatic model-call id", () => {
-    const { calls, streamFn, dispatch } = createStreamCapture();
+    const { calls, streamFn, dispatch } = createStreamCapture(provider);
 
     dispatch(streamModel(), {
       headers: { "x-request-id": "operator-request" },
@@ -273,7 +281,7 @@ describe("ClawRouter plugin", () => {
   });
 
   it("omits unsafe attribution header values", () => {
-    const { calls, dispatch } = createStreamCapture("bad\nagent");
+    const { calls, dispatch } = createStreamCapture(provider, "bad\nagent");
 
     dispatch(streamModel(), {
       apiKey: "runtime-proxy-key",

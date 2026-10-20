@@ -4349,6 +4349,65 @@ ${buildScript}`,
     }
   });
 
+  it("prepares the real CLI before native policy tests without widening other native phases", () => {
+    const steps = readCiWorkflow().jobs["macos-swift"].steps;
+    const install = requiredWorkflowStep(steps, "Install native asset dependencies");
+    const prepare = requiredWorkflowStep(steps, "Prepare native test CLI");
+    expect(steps.indexOf(install)).toBeLessThan(steps.indexOf(prepare));
+    expect(steps.indexOf(prepare)).toBeLessThan(
+      steps.indexOf(requiredWorkflowStep(steps, "Swift test")),
+    );
+    for (const [phase, hasOwner, buildExit] of [
+      ["tests", true, 0],
+      ["tests", true, 23],
+      ["tests", false, 0],
+      ["release", true, 0],
+      ["packages", true, 0],
+    ] as const) {
+      const root = tempDirs.make("native-cli-preparation-");
+      const bin = path.join(root, "bin");
+      const calls = path.join(root, "calls");
+      const owner = "apps/macos/Sources/OpenClaw/NativeExecPolicyOwner.swift";
+      mkdirSync(bin);
+      if (hasOwner) {
+        mkdirSync(path.dirname(path.join(root, owner)), { recursive: true });
+        writeFileSync(path.join(root, owner), "");
+      }
+      writeExecutable(path.join(bin, "pnpm"), [
+        "#!/bin/bash",
+        'printf "%s\\n" "$*" >> "$PNPM_CALLS"',
+        'if [[ "$1" == "build:runtime" ]]; then exit "$BUILD_EXIT"; fi',
+      ]);
+      const preparesCli = evaluateWorkflowCondition(prepare.if, {
+        eventName: "schedule",
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        matrix: { phase },
+        fileHashes: { [owner]: hasOwner ? "present" : "" },
+      });
+      expect(preparesCli).toBe(phase === "tests" && hasOwner);
+      const result = runWorkflowShellScript(
+        `${install.run}\n${preparesCli ? prepare.run : ""}\nprintf ready`,
+        {
+          cwd: root,
+          env: {
+            ...process.env,
+            PATH: `${bin}:${process.env.PATH ?? ""}`,
+            MACOS_NATIVE_PHASE: phase,
+            PNPM_CALLS: calls,
+            BUILD_EXIT: String(buildExit),
+          },
+        },
+      );
+      expect(result.status, result.stderr).toBe(buildExit);
+      expect(result.stdout).toBe(buildExit === 0 ? "ready" : "");
+      const commands = readFileSync(calls, "utf8").trim().split("\n");
+      expect(commands[0]).toContain("install --frozen-lockfile --prefer-offline --optional");
+      expect(commands[0]?.includes("--filter")).toBe(!preparesCli);
+      expect(commands.slice(1)).toEqual(preparesCli ? ["build:runtime"] : []);
+    }
+  });
+
   it("uses native macOS Swift tests and retains failures after completing every profile", () => {
     const workflow = readCiWorkflow();
     const macosSwift = workflow.jobs["macos-swift"];

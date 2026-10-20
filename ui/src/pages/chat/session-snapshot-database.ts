@@ -39,8 +39,8 @@ function indexedDbFactory(): IDBFactory | null {
 function openIndexedDb(factory: IDBFactory): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = factory.open(CHAT_SNAPSHOT_DB_NAME, CHAT_SNAPSHOT_DB_VERSION);
-    const listeners = new AbortController();
-    const options = { signal: listeners.signal };
+    let blocked = false;
+    const options = { once: true };
     request.addEventListener(
       "upgradeneeded",
       (event) => {
@@ -79,8 +79,12 @@ function openIndexedDb(factory: IDBFactory): Promise<IDBDatabase> {
       request,
       "success",
       () => {
-        listeners.abort();
-        resolve(request.result);
+        // Blocked opens can still finish after their callers receive the rejection.
+        if (blocked) {
+          request.result.close();
+        } else {
+          resolve(request.result);
+        }
       },
       options,
     );
@@ -88,12 +92,19 @@ function openIndexedDb(factory: IDBFactory): Promise<IDBDatabase> {
       request,
       "error",
       () => {
-        listeners.abort();
         reject(request.error ?? new Error("IndexedDB open failed"));
       },
       options,
     );
-    listen(request, "blocked", () => reject(new Error("IndexedDB open was blocked")), options);
+    listen(
+      request,
+      "blocked",
+      () => {
+        blocked = true;
+        reject(new Error("IndexedDB open was blocked"));
+      },
+      options,
+    );
   });
 }
 

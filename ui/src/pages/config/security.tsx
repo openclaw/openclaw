@@ -16,16 +16,9 @@ import {
 import { PROFILE_OPTIONS } from "../../lib/agents/tool-catalog.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 
-export type SecurityOverview = {
-  gatewayAuth: string;
-  execPolicy: string;
-  browserEnabled: boolean;
-  browserEnabledOverridden: boolean;
-  toolProfile: string;
-  toolProfileOverridden: boolean;
-};
+export type SecurityOverview = ReturnType<typeof extractQuickSettingsSecurity>;
 
-export function extractQuickSettingsSecurity(root: Record<string, unknown>): SecurityOverview {
+export function extractQuickSettingsSecurity(root: Record<string, unknown>) {
   const gateway = asConfigRecord(root.gateway);
   const auth = asConfigRecord(gateway?.auth);
   const tools = asConfigRecord(root.tools);
