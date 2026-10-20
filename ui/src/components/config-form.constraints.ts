@@ -291,19 +291,11 @@ export function objectPropertySchema(schema: JsonSchema, key: string): JsonSchem
   );
 }
 
-export function arrayConstraintCandidates(
-  schema: JsonSchema,
-  seen = new Set<JsonSchema>(),
-): unknown[][] {
-  if (seen.has(schema)) {
-    return [];
-  }
-  seen.add(schema);
+export function arrayConstraintCandidates(schema: JsonSchema): unknown[][] {
   const candidates: unknown[][] = [schema.const, ...(schema.enum ?? [])].filter(Array.isArray);
   for (const entry of [...(schema.allOf ?? []), ...(schema.anyOf ?? []), ...(schema.oneOf ?? [])]) {
-    candidates.push(...arrayConstraintCandidates(entry, seen));
+    candidates.push(...arrayConstraintCandidates(entry));
   }
-  seen.delete(schema);
   return candidates;
 }
 
