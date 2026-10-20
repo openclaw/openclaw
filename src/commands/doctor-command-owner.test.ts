@@ -3,27 +3,16 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   formatCommandOwnerFromChannelSender,
   formatCommandOwnerHint,
-  hasConfiguredCommandOwners,
   noteCommandOwnerHealth,
 } from "./doctor-command-owner.js";
 
 const note = vi.hoisted(() => vi.fn());
+const owners = (...ownerAllowFrom: string[]) => ({ commands: { ownerAllowFrom } });
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 
 afterEach(() => vi.unstubAllEnvs());
 beforeEach(() => note.mockClear());
-
-it("detects configured command owners", () => {
-  expect(
-    [
-      {},
-      ...[[], ["telegram:123"], ["*"], ["telegram:*"]].map((ownerAllowFrom) => ({
-        commands: { ownerAllowFrom },
-      })),
-    ].map(hasConfiguredCommandOwners),
-  ).toEqual([false, false, true, false, false]);
-});
 
 it("formats pairing senders as channel-scoped command owners", () => {
   expect(
@@ -34,18 +23,20 @@ it("formats pairing senders as channel-scoped command owners", () => {
 });
 
 it("explains missing command owners in plain language", () => {
-  noteCommandOwnerHealth({});
-
-  expect(note).toHaveBeenCalledWith(
-    [
-      "No command owner is configured.",
-      "A command owner is your trusted human operator account, allowed to update OpenClaw with /update, restart the Gateway, change configuration, and approve commands. Chat allowlists do not grant this authority.",
-      "Run openclaw channels add and complete a channel's setup to choose your operator account, including servers and groups without DM pairing.",
-      "CLI pairing approval records the first command owner. Control UI pairing approval has a separate owner checkbox.",
-      "Fix: set commands.ownerAllowFrom to your channel user id, for example openclaw config set commands.ownerAllowFrom '[\"telegram:123456789\"]'",
-      "Restart the gateway after changing this if it is already running.",
-    ].join("\n"),
-    "Command owner",
+  const missing = [{}, owners(), owners("*"), owners("telegram:*")];
+  missing.forEach(noteCommandOwnerHealth);
+  expect(note.mock.calls).toEqual(
+    missing.map(() => [
+      [
+        "No command owner is configured.",
+        "A command owner is your trusted human operator account, allowed to update OpenClaw with /update, restart the Gateway, change configuration, and approve commands. Chat allowlists do not grant this authority.",
+        "Run openclaw channels add and complete a channel's setup to choose your operator account, including servers and groups without DM pairing.",
+        "CLI pairing approval records the first command owner. Control UI pairing approval has a separate owner checkbox.",
+        "Fix: set commands.ownerAllowFrom to your channel user id, for example openclaw config set commands.ownerAllowFrom '[\"telegram:123456789\"]'",
+        "Restart the gateway after changing this if it is already running.",
+      ].join("\n"),
+      "Command owner",
+    ]),
   );
 });
 
@@ -60,25 +51,18 @@ it.skipIf(process.platform === "win32")(
     const args = execFileSync("/bin/sh", ["-c", shellCommand], { encoding: "utf8" })
       .trim()
       .split("\n");
-    expect(args).toEqual([
-      "--profile",
-      "owner-proof",
-      "config",
-      "set",
-      "commands.ownerAllowFrom",
-      JSON.stringify([`matrix:${id}`]),
-    ]);
+    expect(args).toEqual(
+      "--profile owner-proof config set commands.ownerAllowFrom"
+        .split(" ")
+        .concat(JSON.stringify([`matrix:${id}`])),
+    );
   },
 );
 
 it.each<[Parameters<typeof formatCommandOwnerHint>[0], string]>([
   [
     {
-      cfg: {
-        commands: {
-          ownerAllowFrom: ["slack:owner", "telegram:123", "slack:owner", "*", "telegram:*"],
-        },
-      },
+      cfg: owners("slack:owner", "telegram:123", "slack:owner", "*", "telegram:*"),
       channel: "telegram",
       id: "123",
     },
@@ -97,7 +81,7 @@ it.each<[Parameters<typeof formatCommandOwnerHint>[0], string]>([
 );
 
 it("does not warn when command owners are configured", () => {
-  noteCommandOwnerHealth({ commands: { ownerAllowFrom: ["telegram:123"] } });
+  noteCommandOwnerHealth(owners("telegram:123"));
 
   expect(note).not.toHaveBeenCalled();
 });

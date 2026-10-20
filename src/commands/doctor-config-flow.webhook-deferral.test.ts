@@ -10,8 +10,8 @@ import {
   recordDeferredPluginMigrations,
 } from "../infra/deferred-plugin-migrations.js";
 import {
-  applyPluginDoctorCompatibilityMigrations,
-  withDeferredPluginDoctorMigrations,
+  applyPluginDoctorCompatibilityMigrations as migrateCompatibility,
+  withDeferredPluginDoctorMigrations as withDeferredMigrations,
 } from "../plugins/doctor-contract-registry.js";
 import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
@@ -94,22 +94,15 @@ it("publishes deferred official Teams listener pins before candidate startup", a
       { config },
     );
     await recordDeferredPluginMigrations({
-      pending: [
-        {
-          pluginId: "msteams",
-          reason: "Package convergence must wait for the updating parent.",
-          command: "openclaw doctor --fix",
-        },
-      ],
+      pending: [{ pluginId: "msteams", reason: "pending", command: "openclaw doctor --fix" }],
     });
     const io = createConfigIO({ configPath, observe: false, shellEnvFallback: "defer" });
     const { snapshot, writeOptions } = await io.readConfigFileSnapshotForWrite();
     expect(snapshot).toMatchObject({ issues: [], valid: true });
-    const migration = withDeferredPluginDoctorMigrations(
+    const migration = withDeferredMigrations(
       readDeferredPluginMigrations().map(({ pluginId }) => pluginId),
       () =>
-        applyPluginDoctorCompatibilityMigrations(snapshot.sourceConfig, {
-          config: snapshot.sourceConfig,
+        migrateCompatibility(snapshot.sourceConfig, {
           pluginIds: ["msteams"],
           historicalWebhookListeners: true,
         }),

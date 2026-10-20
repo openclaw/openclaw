@@ -4,11 +4,11 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import { runSessionTranscriptsHealth } from "../flows/doctor-health-contribution-runners.state.js";
-import { resolveLivePluginDoctorStateMigrationInventory } from "../plugins/doctor-contract-registry.js";
+import { resolveLivePluginDoctorStateMigrationInventory as resolveMigrations } from "../plugins/doctor-contract-registry.js";
 import { clearPluginDoctorContractRegistryCache } from "../plugins/doctor-contract-registry.test-fixtures.js";
 import {
-  readPersistedInstalledPluginIndexInstallRecordsAsync,
-  writePersistedInstalledPluginIndexInstallRecordsWithLease,
+  readPersistedInstalledPluginIndexInstallRecordsAsync as readInstallRecords,
+  writePersistedInstalledPluginIndexInstallRecordsWithLease as writeInstallRecords,
 } from "../plugins/installed-plugin-index-records.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -82,24 +82,18 @@ module.exports = { stateMigrations: [{
         const install = vi
           .spyOn(pluginInstalls, "repairMissingConfiguredPluginInstalls")
           .mockImplementationOnce(async ({ cfg, env, beforePersistentEffect }) => {
-            expect(
-              resolveLivePluginDoctorStateMigrationInventory({
-                config: cfg,
-                env: env ?? process.env,
-              }).descriptors.map(({ pluginId }) => pluginId),
-            ).toEqual(existingOwner ? ["early-owner"] : []);
+            const inventory = resolveMigrations({ config: cfg, env: env ?? process.env });
+            expect(inventory.descriptors.map(({ pluginId }) => pluginId)).toEqual(
+              existingOwner ? ["early-owner"] : [],
+            );
             return await withPluginLifecycleLease({ env }, async (lease) => {
               const indexOptions = { config: cfg, env, filePath: lease.databasePath, lease };
-              const records =
-                (await readPersistedInstalledPluginIndexInstallRecordsAsync(indexOptions)) ?? {};
+              const records = (await readInstallRecords(indexOptions)) ?? {};
               await beforePersistentEffect?.();
               lease.assertOwned();
               writePlugin("late-owner");
               // Commit the real index to revoke enclosing metadata scopes.
-              await writePersistedInstalledPluginIndexInstallRecordsWithLease(
-                records,
-                indexOptions,
-              );
+              await writeInstallRecords(records, indexOptions);
               return {
                 changes: ["Installed late-owner."],
                 warnings: [],

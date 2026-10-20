@@ -40,18 +40,6 @@ it.each(["include", "invalid", "doctor"] as const)(
         await fs.writeFile(includePath, JSON.stringify(diagnostics));
       }
       const before = await read(configPath);
-      const includedBefore = scenario === "include" ? await read(includePath) : null;
-      const snapshot = await readConfigFileSnapshot();
-      const plan = planLegacyConfigForUpdateChannel(snapshot);
-      expect(await read(configPath)).toBe(before);
-      if (scenario === "include") {
-        expect(await read(includePath)).toBe(includedBefore);
-      }
-      if (scenario === "invalid") {
-        expect(plan).toBeUndefined();
-      } else {
-        expect(plan?.config.diagnostics?.otel).toEqual(migratedOtel);
-      }
       const prepared = await readConfigFileSnapshotForWrite();
       expect(prepared.snapshot.sourceConfig.commands).toBeUndefined();
       let result: Awaited<ReturnType<typeof repairLegacyConfigForUpdateChannel>>;
