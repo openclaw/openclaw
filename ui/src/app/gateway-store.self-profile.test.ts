@@ -50,7 +50,9 @@ function publishPresence(user: AuthenticatedUser) {
 
 beforeEach(() => {
   stubGatewayStoreTestGlobals();
-  onTestFinished(() => vi.unstubAllGlobals());
+  onTestFinished(() => {
+    vi.unstubAllGlobals();
+  });
   vi.useFakeTimers();
   vi.stubGlobal("requestAnimationFrame", () => 1);
   vi.stubGlobal("cancelAnimationFrame", () => undefined);
