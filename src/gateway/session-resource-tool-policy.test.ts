@@ -66,21 +66,16 @@ beforeEach(() => {
 });
 afterEach(() => expect(storageRead).not.toHaveBeenCalled());
 
+const denyBrowser = { deny: ["browser"] };
+const providerPolicy = { byProvider: { openai: denyBrowser } };
+const defaults = { model: "openai/test-model" };
 it.each<OpenClawConfig>([
   { tools: { profile: "minimal" } },
-  { tools: { deny: ["browser"] } },
-  {
-    tools: { byProvider: { openai: { deny: ["browser"] } } },
-    agents: { defaults: { model: "openai/test-model" } },
-  },
-  { agents: { entries: { main: { tools: { deny: ["browser"] } } } } },
-  {
-    agents: {
-      defaults: { model: "openai/test-model" },
-      entries: { main: { tools: { byProvider: { openai: { deny: ["browser"] } } } } },
-    },
-  },
-  { tools: { toolsBySender: { "*": { deny: ["browser"] } } } },
+  { tools: denyBrowser },
+  { tools: providerPolicy, agents: { defaults } },
+  { agents: { entries: { main: { tools: denyBrowser } } } },
+  { agents: { defaults, entries: { main: { tools: providerPolicy } } } },
+  { tools: { toolsBySender: { "*": denyBrowser } } },
 ])("honors each canonical configured restriction: %j", (config) => {
   expect(() => fixture({ config }).resolve()).toThrow("current tool policy");
 });
@@ -102,7 +97,7 @@ it("rechecks selected model policy when the stored provider changes", () => {
   const test = fixture({
     config: {
       agents: { defaults: { model: "anthropic/test-model" } },
-      tools: { byProvider: { openai: { deny: ["browser"] } } },
+      tools: providerPolicy,
     },
   });
   test.resolve();
@@ -133,24 +128,23 @@ it.each(["agent:main:dashboard:child", "agent:main:acp:child"])(
   },
 );
 
-it("uses a prepared cross-agent ACP parent without falling through to SQLite", () => {
-  const key = "agent:main:acp:child";
-  const test = fixture({ key, entry: { spawnedBy: "agent:other:acp:parent" } });
-  test.entries.set("agent:other:acp:parent", {
-    sessionId: "parent",
-    updatedAt: 1,
-    subagentRole: "orchestrator",
-    spawnDepth: 1,
-  });
-  expect(test.resolve()).toMatchObject({ sandboxRequired: false });
-});
-
-it("denies a missing parent rather than acquiring unprepared database facts", () => {
+it.each([true, false])("uses only prepared cross-agent ACP parents (present: %s)", (present) => {
+  const parent = "agent:other:acp:parent";
   const test = fixture({
     key: "agent:main:acp:child",
-    entry: { spawnedBy: "agent:other:acp:missing" },
+    entry: { spawnedBy: parent },
   });
-  expect(() => test.resolve()).toThrow("current tool policy");
+  if (present) {
+    test.entries.set(parent, {
+      sessionId: "parent",
+      updatedAt: 1,
+      subagentRole: "orchestrator",
+      spawnDepth: 1,
+    });
+    expect(test.resolve()).toMatchObject({ sandboxRequired: false });
+  } else {
+    expect(() => test.resolve()).toThrow("current tool policy");
+  }
 });
 
 it("keeps sandbox requirements and sandbox tool restrictions visible to the resource owner", () => {

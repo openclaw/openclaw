@@ -29,15 +29,11 @@ function digest(
   };
 }
 
-function observeDigestPublications(sessionKey: string) {
+function observeDigestPublications(key: string) {
   const changes: SessionRowChange[] = [];
   onTestFinished(
     sessionChanges.subscribe((change) => {
-      if (
-        "sessionKey" in change &&
-        change.sessionKey === sessionKey &&
-        change.scope === "runtime"
-      ) {
+      if ("sessionKey" in change && change.sessionKey === key && change.scope === "runtime") {
         changes.push(change);
       }
     }),
@@ -50,20 +46,20 @@ it.each([
   { currentRevision: 3, accepted: false },
 ])(
   "reduces a queued observer digest against current revision $currentRevision without losing metadata",
-  async ({ currentRevision, accepted }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  ({ currentRevision, accepted }) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
       const f = fixture();
       const original = loadSessionEntryReadOnly(f.scope)!;
       const publications = observeDigestPublications(f.scope.sessionKey);
       const currentDigest = digest(f.scope, currentRevision);
       const proposedDigest = digest(f.scope, 2);
+      const metadata = { label: "Changed while observer write was queued", updatedAt: 100 };
       delivery.beforeCommit = () => {
         delivery.beforeCommit = undefined;
         replaceSessionEntrySync(f.scope, {
           ...original,
           observerDigest: currentDigest,
-          label: "Changed while observer write was queued",
-          updatedAt: 100,
+          ...metadata,
         });
       };
 
@@ -72,17 +68,15 @@ it.each([
       expect(publications).toHaveLength(accepted ? 1 : 0);
       const expected = {
         observerDigest: accepted ? proposedDigest : currentDigest,
-        label: "Changed while observer write was queued",
-        updatedAt: 100,
+        ...metadata,
       };
       expect(f.read()).toMatchObject(expected);
       expect(loadSessionEntryReadOnly(f.scope)).toMatchObject(expected);
-    });
-  },
+    }),
 );
 
-it("recovers and publishes an acknowledged observer digest once after a lost worker reply", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+it("recovers and publishes an acknowledged observer digest once after a lost worker reply", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
     const f = fixture();
     expect(loadSessionEntryReadOnly(f.scope)?.observerDigest).toBeUndefined();
     const publications = observeDigestPublications(f.scope.sessionKey);
@@ -103,5 +97,4 @@ it("recovers and publishes an acknowledged observer digest once after a lost wor
     expect(await defaultPersistDigest({ ...f.scope, digest: proposedDigest })).toBe(false);
     expect(publications).toHaveLength(1);
     expect(f.read()?.observerDigest).toEqual(proposedDigest);
-  });
-});
+  }));
