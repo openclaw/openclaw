@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { MatrixClient } from "../sdk.js";
 import { readMatrixMessage } from "./messages.js";
 
+const room = "!room:example.org";
 const older = {
   event_id: "$older",
   sender: "@alice:example.org",
@@ -13,7 +14,7 @@ const older = {
 function createClient() {
   const calls = {
     getEvent: vi.fn().mockResolvedValue(older),
-    resolveRoom: vi.fn().mockResolvedValue("!room:example.org"),
+    resolveRoom: vi.fn().mockResolvedValue(room),
     getRelations: vi.fn().mockResolvedValue({ events: [], nextBatch: null }),
     doRequest: vi.fn(),
     start: vi.fn(),
@@ -26,20 +27,19 @@ function createClient() {
 describe("readMatrixMessage", () => {
   it("reads one Matrix event by id and rejects a missing id without falling back", async () => {
     const { calls, client } = createClient();
-    calls.getEvent.mockImplementation(async (_roomId: string, eventId: string) => {
-      if (eventId === older.event_id) {
-        return {
-          ...older,
-          content: {
-            msgtype: "m.text",
-            body: "* fallback",
-            "m.new_content": { msgtype: "m.image", body: "caption", filename: "photo.jpg" },
-            "m.relates_to": { rel_type: "m.replace", event_id: "$original" },
-          },
-        };
-      }
-      throw Object.assign(new Error("Event not found"), { errcode: "M_NOT_FOUND" });
-    });
+    calls.getEvent
+      .mockResolvedValueOnce({
+        ...older,
+        content: {
+          msgtype: "m.text",
+          body: "* fallback",
+          "m.new_content": { msgtype: "m.image", body: "caption", filename: "photo.jpg" },
+          "m.relates_to": { rel_type: "m.replace", event_id: "$original" },
+        },
+      })
+      .mockRejectedValueOnce(
+        Object.assign(new Error("Event not found"), { errcode: "M_NOT_FOUND" }),
+      );
 
     await expect(
       readMatrixMessage("#room:example.org", "$older", { client }),
@@ -53,12 +53,12 @@ describe("readMatrixMessage", () => {
       timestamp: 1000,
     });
     expect(calls.resolveRoom).toHaveBeenCalledWith("#room:example.org");
-    await expect(
-      readMatrixMessage("room:!room:example.org", "$missing", { client }),
-    ).rejects.toThrow("Matrix message $missing was not found in room !room:example.org.");
+    await expect(readMatrixMessage(`room:${room}`, "$missing", { client })).rejects.toThrow(
+      `Matrix message $missing was not found in room ${room}.`,
+    );
     expect(calls.getEvent.mock.calls).toEqual([
-      ["!room:example.org", "$older"],
-      ["!room:example.org", "$missing"],
+      [room, "$older"],
+      [room, "$missing"],
     ]);
     expect(calls.doRequest).not.toHaveBeenCalled();
     expect(calls.start).not.toHaveBeenCalled();
@@ -73,8 +73,8 @@ describe("readMatrixMessage", () => {
   ])("keeps %s on the existing null/not-found path", async (_name, event) => {
     const { calls, client } = createClient();
     calls.getEvent.mockResolvedValue(event);
-    await expect(readMatrixMessage("!room:example.org", "$older", { client })).rejects.toThrow(
-      "Matrix message $older was not found in room !room:example.org.",
+    await expect(readMatrixMessage(room, "$older", { client })).rejects.toThrow(
+      `Matrix message $older was not found in room ${room}.`,
     );
     expect(calls.doRequest).not.toHaveBeenCalled();
     expect(calls.stop).not.toHaveBeenCalled();
@@ -92,16 +92,12 @@ describe("readMatrixMessage", () => {
         },
       },
     });
-    const summary = await readMatrixMessage("!room:example.org", "$older", { client });
+    const summary = await readMatrixMessage(room, "$older", { client });
     expect(summary).toMatchObject({ eventId: "$older", sender: older.sender, timestamp: 1000 });
     expect(summary.body).toContain("Lunch?");
-    expect(calls.getRelations).toHaveBeenCalledWith(
-      "!room:example.org",
-      "$older",
-      "m.reference",
-      undefined,
-      { from: undefined },
-    );
+    expect(calls.getRelations).toHaveBeenCalledWith(room, "$older", "m.reference", undefined, {
+      from: undefined,
+    });
     expect(calls.doRequest).not.toHaveBeenCalled();
   });
 });
