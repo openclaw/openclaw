@@ -62,53 +62,48 @@ async function withCommandFixture(run: (f: CommandFixture) => Promise<void>) {
   });
 }
 
-it("/acp cancel stops the running turn and its queued successor through Stop", async () => {
+it.each(["running", "idle"] as const)("/acp cancel stops an %s backend", async (phase) => {
   await withCommandFixture(async (f) => {
-    const entered = createDeferred();
-    f.runTurn.mockImplementationOnce(async function* (input) {
-      entered.resolve();
-      await new Promise<void>((resolve) => {
-        input.signal?.addEventListener("abort", () => resolve(), { once: true });
-      });
-      yield { type: "done", status: "cancelled" };
-    });
+    const pending: Promise<void>[] = [];
     const queuedEvents: AcpRuntimeEvent[] = [];
-    const running = startTurn(f, "running");
-    const queued = startTurn(f, "queued-child-run", (event) => {
-      queuedEvents.push(event);
-    });
-    try {
+    if (phase === "running") {
+      const entered = createDeferred();
+      f.runTurn.mockImplementationOnce(async function* (input) {
+        entered.resolve();
+        await new Promise<void>((resolve) => {
+          input.signal?.addEventListener("abort", () => resolve(), { once: true });
+        });
+        yield { type: "done", status: "cancelled" };
+      });
+      pending.push(
+        startTurn(f, "running"),
+        startTurn(f, "queued-child-run", (event) => {
+          queuedEvents.push(event);
+        }),
+      );
       await entered.promise;
+    }
+    try {
       const result = await runAcpCommand(f, "/acp cancel");
       expect(result?.reply?.text).toContain(
         `Cancel requested for ACP session ${f.target.sessionKey}`,
       );
-      await Promise.all([running, queued]);
+      await Promise.all(pending);
       expect(f.cancel).toHaveBeenCalledOnce();
-      expect(f.runTurn).toHaveBeenCalledOnce();
-      // The queued child never ran, yet its requester still observes a cancelled terminal.
-      expect(queuedEvents).toEqual([{ type: "done", status: "cancelled", stopReason: "cancel" }]);
-      expect(readDurableAcpSignals(f, "queued-child-run")).toMatchObject([
-        { kind: "run_failed", payload_json: expect.stringContaining("cancelled") },
-      ]);
       expect(f.hook).toHaveBeenCalledOnce();
+      if (phase === "running") {
+        expect(f.runTurn).toHaveBeenCalledOnce();
+        expect(queuedEvents).toEqual([{ type: "done", status: "cancelled", stopReason: "cancel" }]);
+        expect(readDurableAcpSignals(f, "queued-child-run")).toMatchObject([
+          { kind: "run_failed", payload_json: expect.stringContaining("cancelled") },
+        ]);
+      } else {
+        expect(f.cancel).toHaveBeenCalledWith(expect.objectContaining({ reason: "manual-cancel" }));
+        expect(readAcpSessionEntry(f.target)?.acp?.state).toBe("idle");
+      }
     } finally {
-      await Promise.allSettled([running, queued]);
+      await Promise.allSettled(pending);
     }
-  });
-});
-
-it("/acp cancel sends ACP cancel to an idle backend", async () => {
-  await withCommandFixture(async (f) => {
-    const result = await runAcpCommand(f, "/acp cancel");
-    expect(result?.reply?.text).toContain(
-      `Cancel requested for ACP session ${f.target.sessionKey}`,
-    );
-    expect(f.cancel).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ reason: "manual-cancel" }),
-    );
-    expect(readAcpSessionEntry(f.target)?.acp?.state).toBe("idle");
-    expect(f.hook).toHaveBeenCalledOnce();
   });
 });
 

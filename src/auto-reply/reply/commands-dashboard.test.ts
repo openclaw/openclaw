@@ -28,22 +28,19 @@ const releaseNotesSkill: SkillCommandSpec = {
 };
 const controlUiSelections = [{ name: "control-ui", path: controlUiSkill.skillFile }];
 
-function buildParams(
-  commandBodyNormalized: string,
-  skills: SkillCommandSpec[] = [controlUiSkill],
-): HandleCommandsParams {
+function buildParams(body: string, skills: SkillCommandSpec[] = [controlUiSkill]) {
   return {
     cfg: {},
     ctx: {
       Provider: INTERNAL_MESSAGE_CHANNEL,
       Surface: INTERNAL_MESSAGE_CHANNEL,
       CommandSource: "text",
-      BodyForAgent: commandBodyNormalized,
+      BodyForAgent: body,
     },
     command: {
-      commandBodyNormalized,
+      commandBodyNormalized: body,
       isAuthorizedSender: true,
-      rawBodyNormalized: commandBodyNormalized,
+      rawBodyNormalized: body,
     },
     skillCommands: skills,
   } as unknown as HandleCommandsParams;
@@ -52,10 +49,8 @@ function buildParams(
 describe("dashboard command", () => {
   it("expands the Control UI skill for a bare dashboard request", async () => {
     const params = buildParams("/dashboard");
-
     const result = await handleDashboardCommand(params, true);
     const prompt = params.ctx.BodyForAgent ?? "";
-
     expect(result).toEqual({
       shouldContinue: true,
       explicitSkillSelections: controlUiSelections,
@@ -84,9 +79,7 @@ describe("dashboard command", () => {
       controlUiSkill,
       releaseNotesSkill,
     ]);
-
     const result = await handleDashboardCommand(params, true);
-
     expect(result?.explicitSkillSelections).toEqual([
       ...controlUiSelections,
       { name: "release_notes", path: "/workspace/skills/release-notes/SKILL.md" },
@@ -94,24 +87,19 @@ describe("dashboard command", () => {
     expect(params.ctx.BodyForAgent).toContain("- release-notes");
   });
 
-  it("loads skills on demand when command discovery did not preload them", async () => {
-    const params = buildParams("/dashboard", []);
-    params.loadSkillCommands = async () => [controlUiSkill];
-
+  it.each([false, true])("loads Control UI through bundled=%s discovery", async (bundled) => {
+    const params = buildParams(
+      bundled ? "/dashboard release health" : "/dashboard",
+      bundled ? [workspaceControlUiSkill] : [],
+    );
+    if (bundled) {
+      params.loadBundledSkillCommand = async () => controlUiSkill;
+    } else {
+      params.loadSkillCommands = async () => [controlUiSkill];
+    }
     const result = await handleDashboardCommand(params, true);
-
     expect(result?.explicitSkillSelections).toEqual(controlUiSelections);
-    expect(params.ctx.BodyForAgent).toContain("- control-ui");
-  });
-
-  it("selects the bundled Control UI skill across a workspace name collision", async () => {
-    const params = buildParams("/dashboard release health", [workspaceControlUiSkill]);
-    params.loadBundledSkillCommand = async () => controlUiSkill;
-
-    const result = await handleDashboardCommand(params, true);
-
-    expect(result?.explicitSkillSelections).toEqual(controlUiSelections);
-    expect(params.ctx.BodyForAgent).toContain("release health");
+    expect(params.ctx.BodyForAgent).toContain(bundled ? "release health" : "- control-ui");
   });
 
   it("returns a deterministic reply when the Control UI skill is unavailable", async () => {
@@ -119,8 +107,10 @@ describe("dashboard command", () => {
 
     const result = await handleDashboardCommand(params, true);
 
-    expect(result?.shouldContinue).toBe(false);
-    expect(result?.reply?.text).toContain("control-ui skill is unavailable");
+    expect(result).toMatchObject({
+      shouldContinue: false,
+      reply: { text: expect.stringContaining("control-ui skill is unavailable") },
+    });
     expect(params.ctx.BodyForAgent).toBe("/dashboard");
   });
 });

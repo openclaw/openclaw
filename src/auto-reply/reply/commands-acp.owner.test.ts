@@ -30,25 +30,20 @@ const principals = [
 ] as const;
 
 it.each(
-  [
-    {
-      action: "permissions auto-approve",
-      effect: "approval_policy=auto-approve",
-      option: "permissionProfile",
-      value: "auto-approve",
-      principals,
-    },
-    {
-      action: "set-mode plan",
-      effect: "mode=plan",
-      option: "runtimeMode",
-      value: "plan",
-      principals: principals.filter(
-        ({ transition }) => transition === "role" || transition === "accepted",
-      ),
-    },
-  ].flatMap(({ principals: cases, ...action }) =>
-    cases.map((principal) => ({ ...action, ...principal })),
+  (
+    [
+      [
+        "permissions auto-approve",
+        "approval_policy=auto-approve",
+        "permissionProfile",
+        "auto-approve",
+      ],
+      ["set-mode plan", "mode=plan", "runtimeMode", "plan"],
+    ] as const
+  ).flatMap(([action, effect, option, value], index) =>
+    principals
+      .filter(({ transition }) => index === 0 || transition === "role" || transition === "accepted")
+      .map((principal) => Object.assign({ action, effect, option, value }, principal)),
   ),
 )(
   "fences the real /acp $action effect for $principal",
@@ -155,10 +150,10 @@ it.each(
         const after = manager.resolveSession(target);
         if (applied) {
           expect(result?.reply?.text).toContain("Updated ACP");
-          expect(after.kind).toBe("ready");
-          if (after.kind === "ready") {
-            expect(after.meta.runtimeOptions).toMatchObject({ [option]: value });
-          }
+          expect(after).toMatchObject({
+            kind: "ready",
+            meta: { runtimeOptions: { [option]: value } },
+          });
         } else {
           expect(after).toEqual(before);
           expect(result?.reply?.text).toContain(
