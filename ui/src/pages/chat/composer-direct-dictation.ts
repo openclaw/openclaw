@@ -1,16 +1,80 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { patchSettings } from "../../app/settings.ts";
-import { t } from "../../i18n/index.ts";
-import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { listen } from "../../lib/reactive/listener.ts";
-import { ComposerDictationOwner } from "../chat/composer-dictation.ts";
-import { ComposerMicrophoneOwner } from "../chat/composer-microphone-picker.ts";
-import type { NewSessionComposerTextarea } from "./composer-textarea.ts";
+import { adjustTextareaHeight } from "./components/chat-composer-dom.ts";
+import { ComposerDictationOwner, insertComposerDictation } from "./composer-dictation.ts";
+import { ComposerMicrophoneOwner } from "./composer-microphone-picker.ts";
 
-registerNewSessionSetupEnglish();
+export type DirectDictationTextarea = ReturnType<typeof createDirectDictationTextarea>;
 
-type NewSessionDictationOptions = {
-  textarea: NewSessionComposerTextarea;
+/** Caret mutations stay synchronous so partial and late transcripts target one draft snapshot. */
+export function createDirectDictationTextarea(read: () => HTMLTextAreaElement | null) {
+  let capturedSelection: { start: number; end: number; value: string } | null = null;
+  return {
+    /** Keep the pre-preview draft so partial dictation does not compound insertions. */
+    captureSelection() {
+      const textarea = read();
+      capturedSelection = textarea
+        ? { start: textarea.selectionStart, end: textarea.selectionEnd, value: textarea.value }
+        : null;
+    },
+    previewTranscript(transcript: string): string | undefined {
+      const textarea = read();
+      if (!textarea) {
+        return undefined;
+      }
+      const selection = capturedSelection ?? {
+        start: textarea.selectionStart,
+        end: textarea.selectionEnd,
+        value: textarea.value,
+      };
+      return insertComposerDictation(selection.value, transcript, selection.start, selection.end)
+        .value;
+    },
+    /** Commit live keystrokes before the owning draft rerenders. */
+    insertTranscript(transcript: string, late?: true): string | null {
+      const target = read();
+      if (!target) {
+        return null;
+      }
+      // Delayed finals must not replace edits made after Stop unlocked this draft.
+      const selection =
+        capturedSelection && (!late || capturedSelection.value === target.value)
+          ? capturedSelection
+          : {
+              start: late ? target.selectionStart : target.value.length,
+              end: late ? target.selectionEnd : target.value.length,
+              value: target.value,
+            };
+      capturedSelection = null;
+      const insertion = insertComposerDictation(
+        selection.value,
+        transcript,
+        selection.start,
+        selection.end,
+      );
+      if (insertion.value === selection.value) {
+        return null;
+      }
+      target.value = insertion.value;
+      adjustTextareaHeight(target);
+      queueMicrotask(() => {
+        if (target.isConnected) {
+          target.focus({ preventScroll: true });
+          target.selectionStart = insertion.caret;
+          target.selectionEnd = insertion.caret;
+        }
+      });
+      return insertion.value;
+    },
+  };
+}
+
+type DirectDictationOptions = {
+  textarea: Pick<
+    DirectDictationTextarea,
+    "captureSelection" | "insertTranscript" | "previewTranscript"
+  >;
   getClient: () => GatewayBrowserClient | null;
   isConnected: () => boolean;
   canCommit: () => boolean;
@@ -20,15 +84,15 @@ type NewSessionDictationOptions = {
 };
 
 /**
- * Dictation for the new-session draft. This surface has no Talk capability, so
- * its microphone enters the shared dictation session directly on click.
+ * Dictation for composers without a Talk capability (New Session, Side chat).
+ * Their microphone enters the shared dictation session directly on click.
  */
-export class NewSessionDictationControl extends EventTarget {
+export class DirectDictationControl extends EventTarget {
   private readonly devicePicker = new ComposerMicrophoneOwner();
   private session: ComposerDictationOwner | null = null;
   private owner: { key: string } | null = null;
 
-  constructor(private readonly options: NewSessionDictationOptions) {
+  constructor(private readonly options: DirectDictationOptions) {
     super();
     // Forward the owned device picker's receipts through the dictation owner's projection.
     this.devicePicker.subscribe(this.changed);
@@ -80,8 +144,8 @@ export class NewSessionDictationControl extends EventTarget {
       dictationAvailable: this.devicePicker.dictationStatus === "ready",
       realtimeTalkActive: false,
       onCommit: (transcript: string, late?: true) => {
-        // Route changes replace draft ownership. Object identity keeps even an
-        // A -> B -> A transition from accepting the prior route's snapshot.
+        // Owner changes replace draft ownership. Object identity keeps even an
+        // A -> B -> A transition from accepting the prior owner's snapshot.
         if (!ownsDraft() || !this.options.canCommit()) {
           return;
         }
@@ -110,7 +174,6 @@ export class NewSessionDictationControl extends EventTarget {
         connected,
         disabled: !enabled,
         readDictation: () => dictation,
-        idleLabel: t("newSession.dictate"),
         microphonePicker: {
           devices: this.devicePicker.devices,
           loading: this.devicePicker.loading,

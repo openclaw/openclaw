@@ -40,8 +40,8 @@ export function TranscriptSearchForm(props: TranscriptSearchProps) {
   let trigger: HTMLButtonElement | undefined;
   const [expanded, setExpanded] = createSignal(false);
   const query = createMemo(() => props.transcriptSearchQuery);
-  const hasQuery = createMemo(() => query().trim().length > 0);
-  const loading = createMemo(() => props.transcriptSearch.status === "loading");
+  const hasQuery = () => query().trim().length > 0;
+  const loading = () => props.transcriptSearch.status === "loading";
   return (
     <form
       class="sessions-transcript-search__form"
@@ -117,23 +117,23 @@ export function TranscriptSearchForm(props: TranscriptSearchProps) {
 }
 
 export function TranscriptSearchResults(props: TranscriptSearchProps) {
-  const state = createMemo(() => props.transcriptSearch);
+  const state = () => props.transcriptSearch;
   const resultState = createMemo(() => {
     const current = props.transcriptSearch;
     return current.status === "results" ? current : null;
   });
   const results = createMemo(() => resultState()?.results ?? []);
   const rows = createMemo(() => resultState()?.sessions ?? []);
-  const loading = createMemo(() => state().status === "loading");
-  const retryNotice = createMemo(() => {
+  const loading = () => state().status === "loading";
+  const retryNotice = () => {
     const current = props.transcriptSearch;
     return current.status === "error"
       ? `${t("sessionsView.transcriptSearchError")}: ${current.message}`
       : current.status === "results" && current.indexing
         ? t("sessionsView.transcriptSearchIndexing")
         : null;
-  });
-  const retryStatus = createMemo(() => (retryNotice() === null ? null : state().status));
+  };
+  const retryStatus = () => (retryNotice() === null ? null : state().status);
   return (
     <section
       class="sessions-transcript-search"

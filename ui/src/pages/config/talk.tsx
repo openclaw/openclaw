@@ -122,7 +122,7 @@ export function effectiveTalkValues(
 }
 
 function StatusRow(props: TalkViewProps) {
-  const status = createMemo(() => {
+  const status = () => {
     const catalog = props.catalog;
     if (catalog.kind !== "ready") {
       return {
@@ -139,7 +139,7 @@ function StatusRow(props: TalkViewProps) {
       kind: catalog.ready ? ("ok" as const) : ("warn" as const),
       label: t(catalog.ready ? "talkPage.status.ready" : "talkPage.status.notReady"),
     };
-  });
+  };
   return (
     <SettingsRow
       title={t("talkPage.status.title")}

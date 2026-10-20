@@ -4,10 +4,55 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { main } from "../../scripts/check-database-worker-ratchet.mts";
 import { inventory } from "../../scripts/database-worker-inventory.mjs";
+import * as databaseWorkerCompat from "../../scripts/lib/database-worker-compat.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
+
+it("reuses the historical inventory while keeping head analysis fresh and invalidating changed bases", () => {
+  const root = tempDirs.make("openclaw-sqlite-cached-ratchet-");
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", ...args], {
+      cwd: root,
+      stdio: "pipe",
+    });
+  fs.mkdirSync(path.join(root, "src"));
+  const file = path.join(root, "src/runtime.ts");
+  const source = "executeSqliteQuerySync(query);\n";
+  fs.writeFileSync(file, source);
+  git("init");
+  git("add", "src");
+  git("commit", "-m", "base");
+  const inspect = vi.spyOn(databaseWorkerCompat, "inspectDatabaseWorkerBoundaries");
+  vi.spyOn(console, "log").mockImplementation(() => {});
+  vi.spyOn(console, "error").mockImplementation(() => {});
+
+  expect(main(root, ["--base", "HEAD"])).toBe(0);
+  fs.writeFileSync(file, source.repeat(2));
+  expect(main(root, ["--base", "HEAD"])).toBe(1);
+  expect(inspect).toHaveBeenCalledTimes(3);
+
+  git("add", "src");
+  git("commit", "-m", "changed base");
+  expect(main(root, ["--base", "HEAD"])).toBe(0);
+  expect(inspect).toHaveBeenCalledTimes(5);
+
+  // Simulate an edit after module load without changing the running test's source files.
+  const analyzerFile = path.resolve("scripts/lib/database-worker-compat.mts");
+  const readFile = fs.readFileSync;
+  vi.spyOn(fs, "readFileSync").mockImplementation((filePath, options) => {
+    const bytes = readFile(filePath, options);
+    return filePath !== analyzerFile
+      ? bytes
+      : typeof bytes === "string"
+        ? `${bytes}\n`
+        : Buffer.concat([bytes, Buffer.from("\n")]);
+  });
+  expect(main(root, ["--base", "HEAD"])).toBe(0);
+  expect(main(root, ["--base", "HEAD"])).toBe(0);
+  expect(inspect).toHaveBeenCalledTimes(9);
+});
 
 it("excludes the reviewed Vitest suite without exempting arbitrary suite-named runtime files", () => {
   const root = tempDirs.make("openclaw-sqlite-suite-ratchet-");

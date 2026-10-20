@@ -20,6 +20,7 @@ import ai.openclaw.app.R
 import ai.openclaw.app.SecurePrefs
 import ai.openclaw.app.chat.ChatActiveRunPresentation
 import ai.openclaw.app.chat.ChatCacheScope
+import ai.openclaw.app.chat.ChatComposerOwner
 import ai.openclaw.app.chat.ChatController
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
@@ -1751,7 +1752,8 @@ class ChatComposerLayoutTest {
     val height = mutableStateOf(720.dp)
     val viewModel = showChat(viewportWidth = 720.dp, viewportHeight = { height.value }, fontScale = { 1.5f }, useChatShell = true)
     val owner = viewModel.captureChatShareOwner()
-    withChatSendRequests { sent ->
+    val sendJob = AtomicReference<Job?>(null)
+    withChatSendRequests(onSendJob = sendJob::set) { sent ->
       composeRule.runOnIdle {
         viewModel.chatComposerState.addAttachments(
           owner,
@@ -1864,9 +1866,7 @@ class ChatComposerLayoutTest {
         checkNotNull(insetView.onCreateInputConnection(EditorInfo())).commitText(" final", 1)
         assertTrue(send())
       }
-      composeRule.waitUntil {
-        composeRule.runOnIdle { sent.size == 1 }
-      }
+      awaitChatSendSettlement(viewModel, owner, sendJob, sent)
       assertEquals(JsonPrimitive(edited.substring(0, 13) + " final" + edited.substring(13)), sent.single()["message"])
       editor.assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString("")))
     }
@@ -1900,6 +1900,32 @@ class ChatComposerLayoutTest {
     } finally {
       requestField.set(controller, originalRequest)
     }
+  }
+
+  private fun awaitChatSendSettlement(
+    viewModel: MainViewModel,
+    owner: ChatComposerOwner,
+    sendJob: AtomicReference<Job?>,
+    sent: ConcurrentLinkedQueue<JsonObject>,
+  ) {
+    // Room resumes outside Compose's dispatcher; request entry precedes durable
+    // settlement and the ViewModel's draft clearing.
+    val send =
+      object : IdlingResource {
+        override val isIdleNow: Boolean
+          get() = sendJob.get()?.isCompleted == true && owner !in viewModel.chatComposerState.sendStates.value
+
+        override fun getDiagnosticMessageIfBusy(): String =
+          "Chat send requests=${sent.size} completed=${sendJob.get()?.isCompleted} " +
+            "state=${viewModel.chatComposerState.sendStates.value[owner]}"
+      }
+    composeRule.registerIdlingResource(send)
+    try {
+      composeRule.waitForIdle()
+    } finally {
+      composeRule.unregisterIdlingResource(send)
+    }
+    assertFalse("The admitted send must finish normally", checkNotNull(sendJob.get()).isCancelled)
   }
 
   @Test
@@ -2072,24 +2098,7 @@ class ChatComposerLayoutTest {
       val edited = draft + "x visible IME input"
       editor.assertTextEquals(edited)
       composeRule.runOnIdle { dispatchHardwareKey(insetView, KeyEvent.KEYCODE_ENTER) }
-      // Room resumes outside Compose's dispatcher; request entry precedes durable
-      // settlement and the ViewModel's draft clearing.
-      val send =
-        object : IdlingResource {
-          override val isIdleNow: Boolean
-            get() = sendJob.get()?.isCompleted == true && owner !in viewModel.chatComposerState.sendStates.value
-
-          override fun getDiagnosticMessageIfBusy(): String =
-            "Chat send requests=${sent.size} completed=${sendJob.get()?.isCompleted} " +
-              "state=${viewModel.chatComposerState.sendStates.value[owner]}"
-        }
-      composeRule.registerIdlingResource(send)
-      try {
-        composeRule.waitForIdle()
-      } finally {
-        composeRule.unregisterIdlingResource(send)
-      }
-      assertFalse("The admitted send must finish normally", checkNotNull(sendJob.get()).isCancelled)
+      awaitChatSendSettlement(viewModel, owner, sendJob, sent)
       assertEquals(listOf(JsonPrimitive(edited)), sent.map { it["message"] })
       editor.assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString("")))
     }

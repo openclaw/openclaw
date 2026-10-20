@@ -35,11 +35,9 @@ describe("Google Live Extended Thinking interaction lifecycle", () => {
   installGoogleLiveTestFixture();
 
   it("stays active across a filler utterance and tool call", async () => {
-    const onTalkEvent = vi.fn();
     const onTranscript = vi.fn();
-    const transport = await createExtendedThinkingTransport({ onTalkEvent, onTranscript });
+    const transport = await createExtendedThinkingTransport({ onTranscript });
     const ws = await startTransport(transport);
-    onTalkEvent.mockClear();
 
     ws.emitMessage(
       encodeJsonFrame({
@@ -57,7 +55,6 @@ describe("Google Live Extended Thinking interaction lifecycle", () => {
         final: true,
       }),
     );
-    expect(onTalkEvent.mock.calls.map(([event]) => event.type)).not.toContain("turn.ended");
 
     ws.emitMessage(
       encodeJsonFrame({
@@ -67,9 +64,19 @@ describe("Google Live Extended Thinking interaction lifecycle", () => {
       }),
     );
     await waitForFast(() =>
-      expect(onTalkEvent.mock.calls.map(([event]) => event.type)).toContain("tool.error"),
+      expect(ws.messages).toContainEqual({
+        toolResponse: {
+          functionResponses: [
+            {
+              id: "call-unknown",
+              name: "unknown_tool",
+              response: { error: 'Tool "unknown_tool" is not available in browser Talk' },
+            },
+          ],
+        },
+      }),
     );
-    expect(onTalkEvent.mock.calls.map(([event]) => event.type)).not.toContain("turn.ended");
+    expect(ws.readyState).toBe(1);
 
     ws.emitMessage(
       encodeJsonFrame({
@@ -81,30 +88,13 @@ describe("Google Live Extended Thinking interaction lifecycle", () => {
       }),
     );
     await waitForFast(() =>
-      expect(onTalkEvent.mock.calls.map(([event]) => event.type)).toContain("turn.ended"),
-    );
-    expect(onTalkEvent.mock.calls.filter(([event]) => event.type === "turn.ended")).toHaveLength(1);
-  });
-
-  it("cancels an interrupted turn before interaction IDLE", async () => {
-    const onTalkEvent = vi.fn();
-    const transport = await createExtendedThinkingTransport({ onTalkEvent });
-    const ws = await startTransport(transport);
-    onTalkEvent.mockClear();
-
-    ws.emitMessage(
-      encodeJsonFrame({
-        serverContent: {
-          interrupted: true,
-          turnComplete: true,
-          interactionStatus: "IN_PROGRESS",
-        },
+      expect(onTranscript).toHaveBeenLastCalledWith({
+        role: "assistant",
+        text: "The answer is 42.",
+        final: true,
       }),
     );
-
-    await waitForFast(() =>
-      expect(onTalkEvent.mock.calls.map(([event]) => event.type)).toContain("turn.cancelled"),
-    );
-    expect(onTalkEvent.mock.calls.map(([event]) => event.type)).not.toContain("turn.ended");
+    expect(ws.readyState).toBe(1);
+    transport.stop();
   });
 });

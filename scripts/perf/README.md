@@ -481,6 +481,18 @@ fixtures for each side, with matching client/operation/round counts and the same
 if the deadline has passed. Hold the shared measurement lock around the pair,
 and swap the two CPU halves for the next pair.
 
+Add `--allocations` to replace CPU sampling with main-isolate allocation sampling
+for the same history/diff requests and response checks. Each scenario/round records
+`clients × operations` completed RPCs. Its `profile` includes sampled bytes per
+operation, allocation sites, and separate major/minor/incremental/weak-callback GC
+summaries; `promotion` includes V8 promoted bytes and bytes per operation. The
+stdout-only GC log is parsed after the owned Gateway exits and the log is flushed,
+excluding workers and GC outside the capture. CPU totals remain available.
+Allocation mode waits at `--start-at` before starting capture, excluding barrier
+idle time; first-dispatch skew includes profiler setup. CPU mode retains its
+pre-barrier profile start. Compare matching modes and shapes. Workers, external
+buffers, and controller allocations are outside the main-isolate estimate.
+
 ## Measure transcript broadcast fanout
 
 With runtime artifacts built on the authorized benchmark host, seed a fixture
@@ -1128,12 +1140,31 @@ Supported scenarios:
 | Scenario               | One measured operation                                                                                     |
 | ---------------------- | ---------------------------------------------------------------------------------------------------------- |
 | `sessions.list`        | One compact sidebar page RPC, `archived=all`, `--limit` rows                                               |
+| `sessions.describe`    | One detailed parent-row RPC, including the harness's synthetic children                                    |
+| `connect`              | One owned socket replacement and validated hello handshake; no sidebar restoration                         |
+| `reconnect`            | One owned socket replacement, subscriptions, and verified current sidebar                                  |
 | `subscribe`            | One `sessions.subscribe` snapshot registration/refresh RPC on the sender, with the same page shape as list |
 | `chat.send`            | One completed turn: synthetic read-tool call, then paced streaming answer; one client and one run          |
 | `transcript-broadcast` | One completed `agent` turn, streamed to `--clients` subscribers; `--runs` concurrent turns per round       |
 | `plugins.reload`       | One live reload of a synthetic no-op plugin through the lifecycle RPC                                      |
 
-RPC scenarios use `--operations` per round. Turn scenarios use `--runs` (forced
+RPC scenarios use `--operations` per round. `--rpc-concurrency` defaults to one
+and bounds concurrent requests across the connected sockets. For a reconnect
+storm, use `--clients 40 --operations 40 --rpc-concurrency 40
+--reconnect-stagger-ms 125`; starts must fit within five seconds. Reconnects
+restore session/message subscriptions and compare the ordered sidebar identities
+and update timestamps with the pre-storm page. The report separates handshake
+latency from time until all sidebars are current. Intentional disconnection does
+not imply event replay. These scenarios isolate RPC costs; they do not generate
+background session activity at production rates.
+
+Every measured scenario records per-method request-to-response p50/p99, call rate,
+and uncompressed wire response bytes. Handler and worker queue timings remain in
+Gateway diagnostics. Whole-window CPU/allocation divided by source-event or
+socket-delivery counts is a workload-normalized cost, not isolated encode/send
+cost. Use CPU profiles when attributing broadcast work.
+
+Turn scenarios use `--runs` (forced
 to one for `chat.send`); `--chunks` controls streamed answer size. `plugins.reload`
 defaults to one operation per round; other RPC scenarios default to 100. Count
 the warmup when choosing reload batches: the admin RPC allows 30 calls per minute.
@@ -1167,7 +1198,13 @@ substantial sampling noise. Run an idle comparison if background allocation is
 material; the driver does not subtract it or silently present heap deltas as churn.
 
 `gcMs`, `gcCount`, and `gcMsPerOperation` come from the main isolate's GC performance
-entries. Heap-used and RSS deltas are separate context fields. Worker allocations,
+entries. Diagnostics also separate major, minor, incremental, and weak-callback
+collections. Allocation capture enables V8's GC trace and records promoted bytes
+in `gcTrace`; compare promotion and GC alongside sampled bytes. A forced collection
+before Gateway startup identifies the main isolate, outside every measured window.
+Synchronous markers bound capture; parsing rejects missing markers or ambiguous
+isolate identity. Profiler setup/teardown and worker collections are excluded from
+promotion. The parser supports classic name/value traces and current V8 JSON traces. Heap-used and RSS deltas are separate context fields. Worker allocations,
 worker GC, external buffers, and driver/model-fixture allocation are **not** in
 these per-operation estimates. Process CPU and RSS include workers; main-thread
 CPU is reported separately. Profiling adds CPU and memory overhead, so compare
@@ -1203,6 +1240,24 @@ both legacy and delta readers still receive real changes. CPU and RSS cover the
 workload in the shared Gateway/client process; they are context, not full-browser
 or production capacity measurements. This script models a reproducible lifecycle
 pattern, not a claim that all observed viewer traffic is redundant.
+
+For payload attribution, use `--scenario payloads --clients 40 --agents 24`.
+This prewarms the real public health collector, then measures one cold attach
+wave and `--rounds` reconnect waves with reused signed devices. It records
+per-field UTF-8 JSON byte totals for hello responses, health events, and presence
+events; connect p50/p99; and socket-to-hello-plus-initial-presence readiness.
+After the first maintenance tick, each wave records a synthetic context-engine
+quarantine through its owner and explicitly probes public health to prove changed
+health still broadcasts. Health RPC sizes
+are separate from the per-wave hello + health + presence traffic total. Fields
+contain sizes only; nested field totals overlap their parent. The default web
+profile uses `presence-deltas` and `hello-health-on-demand`; `--compact-payloads`
+adds `health-summary` and `hello-presence-self`. With `--client-profile native`,
+only `health-summary` is added, preserving the profile's legacy CLI controls.
+Plugins, channels, cron, and heartbeat execution are disabled; this is a small
+synthetic agent roster, not a production-state or browser-rendering benchmark.
+Run concurrent baseline/candidate pairs with the same `--start-at` and swap CPU
+halves for the next pair, as above.
 
 ## Measure session roster refreshes during row churn
 

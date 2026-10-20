@@ -1,4 +1,3 @@
-import { createMemo } from "solid-js";
 import { HubTabs } from "../../../components/solid/hub-tabs.tsx";
 import { registerDreamingEnglish } from "../../../i18n/locales/en-dreaming.ts";
 import { registerSettingsEnglish } from "../../../i18n/locales/en-settings.ts";
@@ -16,7 +15,7 @@ registerDreamingEnglish();
 export function renderDreaming(props: DreamingProps) {
   const state = () => props.viewState;
   const dreamText = () => t(DREAM_PHRASE_KEYS[state().dreamIndex] ?? DREAM_PHRASE_KEYS[0]);
-  const activeSubTab = createMemo(() => state().activeSubTab);
+  const activeSubTab = () => state().activeSubTab;
 
   return (
     <div class="dreams-page">

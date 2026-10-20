@@ -59,55 +59,6 @@ function resolveKimiBaseUrl(kimi?: KimiConfig, openClawConfig?: OpenClawConfig):
   return DEFAULT_KIMI_BASE_URL;
 }
 
-async function runKimiSearch(params: {
-  query: string;
-  count: number;
-  apiKey: string;
-  baseUrl: string;
-  timeoutSeconds: number;
-  signal?: AbortSignal;
-}) {
-  return withTrustedWebSearchEndpoint(
-    {
-      url: `${params.baseUrl}/tools/search`,
-      timeoutSeconds: params.timeoutSeconds,
-      signal: params.signal,
-      init: {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${params.apiKey}`,
-        },
-        body: JSON.stringify({ text_query: params.query, limit: params.count }),
-      },
-    },
-    async (res) => {
-      if (!res.ok) {
-        throw await createProviderHttpError(res, "Kimi API error");
-      }
-
-      const data = await readProviderJsonObjectResponse(res, "Kimi API error");
-      if (!Array.isArray(data.search_results)) {
-        throw new Error("Kimi API error: malformed JSON response");
-      }
-      return data.search_results.slice(0, params.count).map((entry) => {
-        const result = asNonArrayRecord(entry);
-        const title = normalizeOptionalString(result.title);
-        const url = normalizeOptionalString(result.url) ?? "";
-        const description = normalizeOptionalString(result.snippet);
-        return {
-          title: title ? wrapWebContent(title, "web_search") : "",
-          url,
-          description: description ? wrapWebContent(description, "web_search") : "",
-          // Provider metadata is page-controlled text; keep only values that cannot carry prose.
-          published: normalizeKimiResultDate(result.date),
-          siteName: resolveSiteName(url) || undefined,
-        };
-      });
-    },
-  );
-}
-
 function normalizeKimiResultDate(value: unknown): string | undefined {
   const date = normalizeOptionalString(value);
   return date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : undefined;
@@ -155,14 +106,47 @@ export async function executeKimiWebSearchProviderTool(
   }
 
   const start = Date.now();
-  const results = await runKimiSearch({
-    query,
-    count,
-    apiKey,
-    baseUrl,
-    timeoutSeconds: resolveSearchTimeoutSeconds(searchConfig),
-    signal: opts?.signal,
-  });
+  const timeoutSeconds = resolveSearchTimeoutSeconds(searchConfig);
+  const signal = opts?.signal;
+  const results = await withTrustedWebSearchEndpoint(
+    {
+      url: `${baseUrl}/tools/search`,
+      timeoutSeconds,
+      signal,
+      init: {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({ text_query: query, limit: count }),
+      },
+    },
+    async (res) => {
+      if (!res.ok) {
+        throw await createProviderHttpError(res, "Kimi API error");
+      }
+
+      const data = await readProviderJsonObjectResponse(res, "Kimi API error");
+      if (!Array.isArray(data.search_results)) {
+        throw new Error("Kimi API error: malformed JSON response");
+      }
+      return data.search_results.slice(0, count).map((entry) => {
+        const result = asNonArrayRecord(entry);
+        const title = normalizeOptionalString(result.title);
+        const url = normalizeOptionalString(result.url) ?? "";
+        const description = normalizeOptionalString(result.snippet);
+        return {
+          title: title ? wrapWebContent(title, "web_search") : "",
+          url,
+          description: description ? wrapWebContent(description, "web_search") : "",
+          // Provider metadata is page-controlled text; keep only values that cannot carry prose.
+          published: normalizeKimiResultDate(result.date),
+          siteName: resolveSiteName(url) || undefined,
+        };
+      });
+    },
+  );
   opts?.signal?.throwIfAborted();
   const payload = {
     query,

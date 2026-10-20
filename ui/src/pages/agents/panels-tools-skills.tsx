@@ -581,7 +581,7 @@ export function AgentTools(
                             previewStatus(),
                           ),
                         );
-                        const previewLabel = createMemo(() => {
+                        const previewLabel = () => {
                           const reason = unverifiedReason();
                           if (reason) {
                             return reason;
@@ -594,7 +594,7 @@ export function AgentTools(
                                   source: renderEffectiveToolBadge(entry),
                                 })
                               : availability().reason || availability().summary;
-                        });
+                        };
                         return (
                           <details
                             ref={(element) => (details = element)}

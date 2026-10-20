@@ -3,6 +3,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import {
   captureProviderCatalogExpiries,
   withProviderCatalogExpiry,
+  withProviderCatalogDiscoveryBudget,
 } from "../plugins/provider-catalog-expiry.js";
 import {
   clearLiveCatalogCacheForTests,
@@ -112,4 +113,96 @@ describe("explicit provider catalog acquisition", () => {
     expect((await captureProviderCatalogExpiries(read)).value).toBe("recovered");
     expect(load).toHaveBeenCalledTimes(3);
   });
+});
+
+describe("catalog acquisition budget sharing", () => {
+  beforeEach(() => clearLiveCatalogCacheForTests());
+
+  it.each([
+    [5_000, 180_000],
+    [180_000, 5_000],
+  ])(
+    "isolates %ims and %ims pending loads without fragmenting healthy results",
+    async (firstBudget, secondBudget) => {
+      const firstLoad = createDeferred<string>();
+      const secondLoad = createDeferred<string>();
+      const load = vi
+        .fn<() => Promise<string>>()
+        .mockImplementationOnce(() => firstLoad.promise)
+        .mockImplementationOnce(() => secondLoad.promise);
+      const now = vi.spyOn(performance, "now").mockReturnValue(0);
+      const read = (budget: number, refresh = true) =>
+        withProviderCatalogDiscoveryBudget(budget, () =>
+          captureProviderCatalogExpiries(
+            () =>
+              withProviderCatalogExpiry(
+                () => getCachedLiveCatalogValue({ keyParts: ["budget-order"], load }),
+                () => ["fixture"],
+              ),
+            { refresh },
+          ),
+        );
+      try {
+        const first = read(firstBudget);
+        now.mockReturnValue(100);
+        const second = read(secondBudget);
+        now.mockReturnValue(200);
+        const sameBudgetSibling = read(firstBudget);
+        expect(load).toHaveBeenCalledTimes(2);
+
+        secondLoad.resolve("newer");
+        expect((await second).value).toBe("newer");
+        firstLoad.resolve("older");
+        const [original, sibling] = await Promise.all([first, sameBudgetSibling]);
+        expect([original.value, sibling.value]).toEqual(["older", "older"]);
+        expect(original.providerExpiries.get("fixture")).toBeGreaterThan(Date.now());
+        // Older completion returns to its observers but cannot replace the newer cache generation.
+        expect((await read(firstBudget, false)).value).toBe("newer");
+        expect(load).toHaveBeenCalledTimes(2);
+      } finally {
+        firstLoad.resolve("older");
+        secondLoad.resolve("newer");
+        now.mockRestore();
+      }
+    },
+  );
+
+  it("retries an unsuccessful short acquisition with the explicit budget", async () => {
+    const load = vi
+      .fn<() => Promise<string[]>>()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce(["healthy"]);
+    const read = (budget: number) =>
+      withProviderCatalogDiscoveryBudget(budget, () =>
+        getCachedLiveCatalogValue({
+          keyParts: ["failed-short"],
+          load,
+          shouldCache: (rows) => rows.length > 0,
+        }),
+      );
+    expect(await read(5_000)).toEqual([]);
+    expect(await read(180_000)).toEqual(["healthy"]);
+    expect(await read(5_000)).toEqual(["healthy"]);
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+});
+
+it("publishes cached-result freshness through the nested acquisition budget", async () => {
+  clearLiveCatalogCacheForTests();
+  const result = await captureProviderCatalogExpiries(() =>
+    withProviderCatalogExpiry(
+      () =>
+        withProviderCatalogDiscoveryBudget(180_000, () =>
+          getCachedLiveCatalogValue({
+            keyParts: ["budget-expiry"],
+            load: async () => "healthy",
+            ttlMs: 1_000,
+            now: () => 100,
+          }),
+        ),
+      () => ["fixture"],
+    ),
+  );
+  expect(result.value).toBe("healthy");
+  expect(result.providerExpiries.get("fixture")).toBe(1_100);
 });

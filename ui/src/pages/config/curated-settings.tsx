@@ -1,5 +1,5 @@
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
-import { createMemo, For, Match, onCleanup, Switch, untrack } from "solid-js";
+import { For, Match, onCleanup, Switch, untrack } from "solid-js";
 import { providerIdFromModelRef } from "../../components/provider-icon-data.ts";
 import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import {
@@ -270,7 +270,7 @@ export function CuratedSettingsPanel(props: {
   disabled: boolean;
   onPatch: (sectionPath: readonly string[], path: readonly string[], value: unknown) => void;
 }) {
-  const path = createMemo(() => curatedSettingsConfigPath(props.presentation, props.parameters));
+  const path = () => curatedSettingsConfigPath(props.presentation, props.parameters);
   return (
     <>
       <p class="settings-page__intro">
