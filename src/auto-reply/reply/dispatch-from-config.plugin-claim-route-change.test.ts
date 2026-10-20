@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { readConversationBindingRouteFacts } from "../../channels/conversation-binding-route-facts.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import {
@@ -96,12 +96,11 @@ it.each(["runtime loader", "binding activity read"] as const)(
       (error: unknown) => ({ error }),
     );
     if (early) {
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         entered.promise,
-        first.then(() => {
-          throw new Error("Dispatch completed before the runtime loader barrier");
-        }),
-      ]);
+        first,
+        "Dispatch completed before the runtime loader barrier",
+      );
       current = prepared;
       release.resolve();
     }

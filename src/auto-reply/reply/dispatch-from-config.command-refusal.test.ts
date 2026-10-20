@@ -6,30 +6,17 @@ import {
 } from "../../../test/helpers/promise.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { MISSING_REPLY_NOTICE_TEXT } from "../../agents/reply-completion.js";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../../config/runtime-snapshot.js";
+import * as configSnapshot from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  captureActivePluginRegistrySnapshot,
-  rollbackStagedPluginRegistry,
-  stageActivePluginRegistry,
-} from "../../plugins/runtime.js";
+import * as plugins from "../../plugins/runtime.js";
 import {
   getSessionControllerOperation,
   type ReplyOperation,
 } from "../../sessions/session-controller.js";
-import {
-  createChannelTestPluginBase,
-  createTestRegistry,
-} from "../../test-utils/channel-plugins.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../../test-utils/openclaw-test-state.js";
+import * as channels from "../../test-utils/channel-plugins.js";
+import * as testState from "../../test-utils/openclaw-test-state.js";
 import { withReplyDispatcher } from "../dispatch-dispatcher.js";
 import type { ReplyPayload } from "../types.js";
 import type * as CommandsStatus from "./commands-status.js";
@@ -63,20 +50,20 @@ vi.mock("../../agents/embedded-agent.js", async (importOriginal) => ({
 const channel = "groupchat";
 const targetKey = `agent:main:${channel}:group:room`;
 const modelReply = { payloads: [{ text: "Synthetic final answer." }], meta: { durationMs: 1 } };
-let state: OpenClawTestState;
+let state: testState.OpenClawTestState;
 let cfg: OpenClawConfig;
 
 beforeEach(async ({ onTestFinished }) => {
-  const previous = captureActivePluginRegistrySnapshot();
+  const previous = plugins.captureActivePluginRegistrySnapshot();
   onTestFinished(() => {
-    rollbackStagedPluginRegistry(previous);
+    plugins.rollbackStagedPluginRegistry(previous);
   });
-  stageActivePluginRegistry(
-    createTestRegistry([
+  plugins.stageActivePluginRegistry(
+    channels.createTestRegistry([
       {
         pluginId: channel,
         source: `/tmp/${channel}/index.js`,
-        plugin: createChannelTestPluginBase({
+        plugin: channels.createChannelTestPluginBase({
           id: channel,
           capabilities: { chatTypes: ["group"], nativeCommands: true },
         }),
@@ -85,7 +72,7 @@ beforeEach(async ({ onTestFinished }) => {
     null,
     "default",
   );
-  state = await createOpenClawTestState({
+  state = await testState.createOpenClawTestState({
     label: "command-refusal",
     env: { OPENCLAW_TEST_FAST: "0" },
   });
@@ -108,7 +95,7 @@ beforeEach(async ({ onTestFinished }) => {
 afterEach(async () => {
   statusReply.outcome = "real";
   await state?.cleanup();
-  clearRuntimeConfigSnapshot();
+  configSnapshot.clearRuntimeConfigSnapshot();
   resetInboundDedupe();
 });
 
@@ -117,7 +104,7 @@ async function persistConfig(allowMember = false) {
     cfg.commands = { ...cfg.commands, ownerAllowFrom: [`${channel}:owner`, `${channel}:member`] };
   }
   await state.writeConfig(cfg);
-  setRuntimeConfigSnapshot(cfg);
+  configSnapshot.setRuntimeConfigSnapshot(cfg);
 }
 
 // Ingress has admitted the member; command authorization is the boundary under test.
@@ -175,7 +162,6 @@ function holdAgentRun(
   const entered = createDeferred<ReplyOperation>();
   const release = createDeferred();
   let operation: ReplyOperation | undefined;
-  let running: ReturnType<typeof send> | undefined;
   vi.mocked(runEmbeddedAgent).mockImplementationOnce(async (params) => {
     operation = getSessionControllerOperation(targetKey);
     if (!operation) {
@@ -187,16 +173,14 @@ function holdAgentRun(
     await release.promise;
     return modelReply;
   });
-  const finish = async () => {
-    release.resolve();
-    await running;
-    await operation?.ownerSettlement;
-  };
   return {
     entered,
     release,
-    finish,
-    start: (params: Parameters<typeof send>[0]) => (running = send(params)),
+    async finish(running: Promise<unknown>) {
+      release.resolve();
+      await running;
+      await operation?.ownerSettlement;
+    },
   };
 }
 
@@ -244,7 +228,7 @@ it("delivers a native cross-human steering refusal after consuming its source", 
     });
     operation.setPhase("running");
   });
-  const incumbent = run.start({
+  const incumbent = send({
     sender: "owner",
     body: "Keep working on Alice's task",
     native: false,
@@ -266,7 +250,7 @@ it("delivers a native cross-human steering refusal after consuming its source", 
     expect(injected).not.toHaveBeenCalled();
     expect(getFollowupQueueDepth(targetKey)).toBe(0);
   } finally {
-    await run.finish();
+    await run.finish(incumbent);
   }
   expect(runEmbeddedAgent).toHaveBeenCalledOnce();
   expect(getSessionControllerOperation(targetKey)).toBeUndefined();
@@ -293,7 +277,7 @@ it.for([false, true])(
       expect(params).toMatchObject({ senderId: "member", sessionKey: targetKey });
       await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
     });
-    const dispatch = run.start({
+    const dispatch = send({
       sender: "member",
       body: "/followup return the synthetic answer",
       native: true,
@@ -326,7 +310,7 @@ it.for([false, true])(
       expect(loadSessionEntry(address)?.queueMode).toBe("collect");
       expect(runEmbeddedAgent).toHaveBeenCalledOnce();
     } finally {
-      await run.finish();
+      await run.finish(dispatch);
     }
     expect(deliveredTexts).toEqual(
       cancelled

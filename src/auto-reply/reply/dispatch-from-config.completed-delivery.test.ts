@@ -1,96 +1,59 @@
-import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { buildEmbeddedRunPayloads } from "../../agents/embedded-agent-runner/run/payloads.js";
 import { subscribeEmbeddedAgentSession } from "../../agents/embedded-agent-subscribe.js";
-import {
-  createAssistant,
-  createAssistantResultStream,
-  createTestSession,
-  registerAgentSessionLoopTestLifecycle,
-  streamMocks,
-} from "../../agents/sessions/agent-session-loop-correctness.test-support.js";
-import {
-  createTtsConfig,
-  maybeApplyTtsToPayloadCore,
-  setTtsMachinePrefsPathResolver,
-  synthesizeMock,
-} from "../../tts/tts-runtime.test-support.js";
+import * as sessionTest from "../../agents/sessions/agent-session-loop-correctness.test-support.js";
+import * as tts from "../../tts/tts-runtime.test-support.js";
 import { withReplyDispatcher } from "../dispatch-dispatcher.js";
 import type { ReplyPayload } from "../types.js";
 import { buildReplyPayloads } from "./agent-runner-payloads.js";
 import { ttsMocks } from "./dispatch-from-config.shared.test-harness.js";
-import {
-  describe0BeforeEach0,
-  dispatchReplyFromConfig,
-  globalBeforeAll0,
-  setNoAbort,
-} from "./dispatch-from-config.test-support.js";
+import * as dispatch from "./dispatch-from-config.test-support.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 
-registerAgentSessionLoopTestLifecycle();
-beforeAll(globalBeforeAll0);
-afterEach(() => setTtsMachinePrefsPathResolver());
+sessionTest.registerAgentSessionLoopTestLifecycle();
+beforeAll(dispatch.globalBeforeAll0);
+afterEach(() => tts.setTtsMachinePrefsPathResolver());
 beforeEach(() => {
-  describe0BeforeEach0();
-  setNoAbort();
-  synthesizeMock.mockClear();
+  dispatch.describe0BeforeEach0();
+  dispatch.setNoAbort();
+  tts.synthesizeMock.mockClear();
 });
 
+const ttsText = "[[tts:text]]Spoken.[[/tts:text]]";
+const imageUrl = "https://example.test/image.png";
+const voiceUrl = "https://example.test/voice.ogg";
+const imageSource = `[[reply_to:12345]]MEDIA:${imageUrl}`;
+const voiceSource = `[[audio_as_voice]]MEDIA:${voiceUrl}`;
+const audioUrl = "/tmp/completed-delivery-synthetic.ogg";
 it.each([
-  {
-    name: "speech with visible text",
-    source: "Shown. [[tts:text]]Spoken only.[[/tts:text]]",
-    speech: "Spoken only.",
-    visible: "Shown.",
-  },
-  {
-    name: "explicit speech alongside a literal silence token",
-    source: "[[tts:text]]Speak this.[[/tts:text]]NO_REPLY",
-    speech: "Speak this.",
-    visible: "NO_REPLY",
-  },
-  { name: "channel veto", source: "[[tts:text]]Do not speak.[[/tts:text]]", veto: true },
-  {
-    name: "queued speech only",
-    source: "[[tts:text]]Spoken only.[[/tts:text]]",
-    speech: "Spoken only.",
-    queued: true,
-  },
-  {
-    name: "queued target media",
-    source: "[[reply_to:12345]]MEDIA:https://example.test/image.png",
-    target: "12345",
-    queued: true,
-  },
-  {
-    name: "queued voice media",
-    source: "[[audio_as_voice]]MEDIA:https://example.test/voice.ogg",
-    voice: true,
-    queued: true,
-  },
-  {
-    name: "speech override denied",
-    source: "[[tts:text]]Do not synthesize.[[/tts:text]]",
-    denySpeech: true,
-  },
+  { name: "visible", source: `Shown. ${ttsText}`, speech: "Spoken.", visible: "Shown." },
+  { name: "silence token", source: `${ttsText}NO_REPLY`, speech: "Spoken.", visible: "NO_REPLY" },
+  { name: "channel veto", source: ttsText, veto: true },
+  { name: "queued speech", source: ttsText, speech: "Spoken.", queued: true },
+  { name: "queued target media", source: imageSource, target: "12345", queued: true },
+  { name: "queued voice media", source: voiceSource, voice: true, queued: true },
+  { name: "speech override denied", source: ttsText, denySpeech: true },
   { name: "plain silence", source: "NO_REPLY", silent: true },
   { name: "plain", source: "Plain reply." },
 ])("preserves $name", async (scenario) => {
-  const { session } = await createTestSession();
+  const { session } = await sessionTest.createTestSession();
   const release = createDeferred();
   const completed = createDeferred();
   let calls = 0;
   let turns = 0;
   let blocks = 0;
-  streamMocks.streamSimple.mockImplementation((model: Model) => {
+  sessionTest.streamMocks.streamSimple.mockImplementation((model) => {
     calls += 1;
     if (scenario.queued && calls === 1) {
       void session.followUp("Then return the final reply.");
     }
-    return createAssistantResultStream(
-      createAssistant(model, scenario.queued && calls === 1 ? "Earlier reply." : scenario.source),
+    return sessionTest.createAssistantResultStream(
+      sessionTest.createAssistant(
+        model,
+        scenario.queued && calls === 1 ? "Earlier reply." : scenario.source,
+      ),
     );
   });
   const subscription = subscribeEmbeddedAgentSession({
@@ -112,12 +75,7 @@ it.each([
   const running = session.prompt("Return the synthetic reply.");
   try {
     if (scenario.queued) {
-      await Promise.race([
-        completed.promise,
-        running.then(() => {
-          throw new Error("No second completion");
-        }),
-      ]);
+      await awaitGateBeforeSettlement(completed.promise, running, "No second completion");
       release.resolve();
     }
     await running;
@@ -147,16 +105,16 @@ it.each([
       return;
     }
     expect(replyPayloads).toHaveLength(scenario.queued ? 2 : 1);
-    const cfg = createTtsConfig("completed-delivery-admission-synthetic", {
+    const cfg = tts.createTtsConfig("completed-delivery-admission-synthetic", {
       auto: "tagged",
       ...(scenario.denySpeech ? { modelOverrides: { allowText: false } } : {}),
     });
     let transformed = false;
     ttsMocks.maybeApplyTtsToPayload.mockImplementation(async (params: unknown) => {
       expect(transformed).toBe(true);
-      return maybeApplyTtsToPayloadCore(
-        params as Parameters<typeof maybeApplyTtsToPayloadCore>[0],
-        async () => "/tmp/completed-delivery-synthetic.ogg",
+      return tts.maybeApplyTtsToPayloadCore(
+        params as Parameters<typeof tts.maybeApplyTtsToPayloadCore>[0],
+        async () => audioUrl,
       );
     });
     const deliver = vi.fn(async (_payload: ReplyPayload) => ({
@@ -172,7 +130,7 @@ it.each([
     await withReplyDispatcher({
       dispatcher,
       run: () =>
-        dispatchReplyFromConfig({
+        dispatch.dispatchReplyFromConfig({
           ctx: buildTestCtx({
             Body: "Synthetic request.",
             Provider: "telegram",
@@ -185,7 +143,7 @@ it.each([
         }),
     });
     if (scenario.denySpeech || scenario.veto) {
-      expect(synthesizeMock).not.toHaveBeenCalled();
+      expect(tts.synthesizeMock).not.toHaveBeenCalled();
       if (scenario.veto) {
         expect(deliver).not.toHaveBeenCalled();
         expect(transformed).toBe(true);
@@ -194,24 +152,19 @@ it.each([
     }
     expect(deliver).toHaveBeenCalledTimes(scenario.queued ? 2 : 1);
     const delivered = deliver.mock.calls.at(-1)?.[0];
-    if (scenario.speech) {
-      expect(synthesizeMock).toHaveBeenCalledTimes(1);
-      expect(synthesizeMock.mock.calls[0]?.[0].text).toBe(scenario.speech);
-      expect(delivered?.text).toBe(scenario.visible);
-      expect(delivered).toMatchObject({
-        mediaUrl: "/tmp/completed-delivery-synthetic.ogg",
-        audioAsVoice: true,
-      });
-    } else {
-      expect(synthesizeMock).not.toHaveBeenCalled();
-      expect(delivered).toMatchObject(
-        scenario.voice
-          ? { audioAsVoice: true, mediaUrl: "https://example.test/voice.ogg" }
+    expect(tts.synthesizeMock.mock.calls.map(([request]) => request.text)).toEqual(
+      scenario.speech ? [scenario.speech] : [],
+    );
+    // Project text explicitly so an absent property still compares as undefined.
+    expect({ ...delivered, text: delivered?.text }).toMatchObject(
+      scenario.speech
+        ? { text: scenario.visible, mediaUrl: audioUrl, audioAsVoice: true }
+        : scenario.voice
+          ? { audioAsVoice: true, mediaUrl: voiceUrl }
           : scenario.target
-            ? { replyToId: scenario.target, mediaUrl: "https://example.test/image.png" }
+            ? { replyToId: scenario.target, mediaUrl: imageUrl }
             : { text: "Plain reply." },
-      );
-    }
+    );
   } finally {
     release.resolve();
     await running;

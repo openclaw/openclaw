@@ -3,17 +3,11 @@ import { performance } from "node:perf_hooks";
 import { stripVTControlCharacters } from "node:util";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
-import {
-  areDiagnosticsEnabledForProcess,
-  setDiagnosticsEnabledForProcess,
-} from "../../infra/diagnostic-events.js";
+import * as diagnostics from "../../infra/diagnostic-events.js";
 import { setLoggerOverride } from "../../logging/logger.js";
 import { loggingState } from "../../logging/state.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import {
-  createChannelTestPluginBase,
-  createTestRegistry,
-} from "../../test-utils/channel-plugins.js";
+import * as channels from "../../test-utils/channel-plugins.js";
 import type { MsgContext } from "../templating.js";
 import {
   sessionStoreMocks,
@@ -51,8 +45,12 @@ describe("restart tombstone channel feedback", () => {
     resetInboundDedupe();
     resetPluginTtsAndThreadMocks();
     setActivePluginRegistry(
-      createTestRegistry([
-        { pluginId: "buzz", source: "test", plugin: createChannelTestPluginBase({ id: "buzz" }) },
+      channels.createTestRegistry([
+        {
+          pluginId: "buzz",
+          source: "test",
+          plugin: channels.createChannelTestPluginBase({ id: "buzz" }),
+        },
       ]),
     );
     mocks.tryFastAbortFromMessage.mockResolvedValue(noAbortResult);
@@ -130,11 +128,11 @@ describe("restart tombstone channel feedback", () => {
   it("delivers one message-tool room notice and warns for every rejected inbound", async () => {
     let elapsedMs = 0;
     const clock = vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
-    const diagnosticsWereEnabled = areDiagnosticsEnabledForProcess();
-    setDiagnosticsEnabledForProcess(true);
+    const diagnosticsWereEnabled = diagnostics.areDiagnosticsEnabledForProcess();
+    diagnostics.setDiagnosticsEnabledForProcess(true);
     onTestFinished(() => {
       clock.mockRestore();
-      setDiagnosticsEnabledForProcess(diagnosticsWereEnabled);
+      diagnostics.setDiagnosticsEnabledForProcess(diagnosticsWereEnabled);
     });
     sessionStoreMocks.loadSessionEntry.mockImplementation(() => {
       elapsedMs += 1_500;
