@@ -250,8 +250,10 @@ Supply the message body in the required `message` argument. Hidden aliases such 
 
 `sessions_send` runs another session on the same Gateway and optionally waits for the response. Its `sessionKey`, `label`, or `agentId` selects local model context, not an external destination. A peer's reply reaches the requester once, either inline or as a later inter-session input. Continue the conversation with another `sessions_send`. To post to a channel, use `message` with an explicit channel and target.
 
-Inline and delayed replies use the accepted run's stored answer instead of its
-4,096-character lifecycle preview. If that answer is unavailable, inline results
+Inline replies recover the accepted run's stored answer from history. Delayed
+replies recover from the accepted run's retained result while it remains retained
+on the same Gateway, instead of its 4,096-character lifecycle preview. If that
+answer is unavailable or does not match the preview, inline results
 set `replyTruncated: true` with a `note`, and delayed replies tell the requester
 the same; source-channel messages never include the notice. The normal model
 tool-result budget still applies and reports truncation explicitly. Ask the target

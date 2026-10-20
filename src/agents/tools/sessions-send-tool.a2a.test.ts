@@ -117,34 +117,21 @@ describe("runSessionsSendA2AFlow reply delivery", () => {
       const transport = callGatewayMock.getMockImplementation()!;
       callGatewayMock.mockImplementation(async (opts: CallGatewayOptions) => {
         if (opts.method === "chat.history") {
-          if (throws) {
-            throw new Error("History unavailable");
-          }
-          return {
-            messages: [
-              ...(available
-                ? [
-                    {
-                      role: "assistant",
-                      __openclaw: { runId: "run-delayed" },
-                      content: [{ type: "text", text: full }],
-                    },
-                  ]
-                : []),
-              {
-                role: "assistant",
-                __openclaw: { runId: "other-run" },
-                content: [{ type: "text", text: "Unrelated answer" }],
-              },
-            ],
-          };
+          throw new Error("Gateway requester authority changed");
         }
         return transport(opts);
+      });
+      const readAcceptedReply = vi.fn(() => {
+        if (throws) {
+          throw new Error("Retained result unavailable");
+        }
+        return available ? full : undefined;
       });
       const target = "agent:main:discord:channel:target-room";
       await runSessionsSendA2AFlow({
         callGateway: callGatewayMock,
         runId: "run-delayed",
+        readAcceptedReply,
         targetAgentId: "main",
         targetSessionKey: target,
         displayKey: target,
@@ -161,6 +148,8 @@ describe("runSessionsSendA2AFlow reply delivery", () => {
         ? (requireGatewayCall("send").params as Record<string, unknown>)
         : firstMockArg(vi.mocked(runAgentStep), "requester reply");
       expect(delivered.message).toBe(available ? full : preview);
+      expect(readAcceptedReply).toHaveBeenCalledOnce();
+      expect(callGatewayMock.mock.calls.some(([rpc]) => rpc.method === "chat.history")).toBe(false);
       if (!self && !available) {
         expect(delivered.extraSystemPrompt).toContain("The reply may be truncated.");
         expect(delivered.extraSystemPrompt).toContain(

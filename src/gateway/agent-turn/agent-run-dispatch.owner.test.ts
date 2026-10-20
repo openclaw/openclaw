@@ -581,6 +581,29 @@ describe("Gateway dispatch run ownership", () => {
     }
   });
 
+  it.each([true, false])("settles matched full followup text (match=%s)", async (matches) => {
+    const { owner, dispatch } = createFollowupDispatch();
+    const full = "A".repeat(5_000) + "OWNER_TAIL";
+    const preview = "A".repeat(4_095) + "…";
+    mocks.agentCommand.mockResolvedValueOnce({
+      payloads: [],
+      meta: {
+        terminalReply: { disposition: "visible", text: preview },
+        finalAssistantVisibleText: matches ? full : "different" + full,
+      },
+    });
+    try {
+      await dispatch();
+      expect(await owner.take()).toMatchObject({
+        status: "ok",
+        replyText: matches ? full : preview,
+        terminalReply: { disposition: "visible", text: preview },
+      });
+    } finally {
+      owner.close();
+    }
+  });
+
   it.each<[string, Partial<AgentCommandDeliveryResult["meta"]>, string, string | undefined]>([
     [
       "provider failure",

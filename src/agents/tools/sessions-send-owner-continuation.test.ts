@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { setGatewayDedupeEntry } from "../../gateway/agent-turn/agent-job.js";
 import { waitForGatewayDispatch } from "../../gateway/server-in-process-dispatch.js";
+import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
+import { createContext } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import {
   claimAgentRunDelegatedAuthority,
   clearAgentRunContext,
@@ -26,17 +30,23 @@ import { callAgentToolGatewayRequest } from "./in-process-gateway.js";
 import { prepareSessionsSendFollowup } from "./sessions-send-followup-custody.js";
 import { startSessionsSendReplyFlow } from "./sessions-send-reply-flow.js";
 
-const fixture = vi.hoisted(() => ({
-  assertCustody: vi.fn(),
-  release: vi.fn(),
-  log: vi.fn(),
-  dispatch: vi.fn(),
-  wait: vi.fn(),
-  gatewayContext: {},
-}));
+const fixture = vi.hoisted(() => {
+  const gateway: { context?: GatewayRequestContext } = {};
+  return {
+    assertCustody: vi.fn(),
+    release: vi.fn(),
+    log: vi.fn(),
+    dispatch: vi.fn(),
+    wait: vi.fn(),
+    gateway,
+    peerReply: vi.fn(),
+  };
+});
+vi.mock("./agent-step.js", () => ({ runAgentStep: fixture.peerReply }));
 vi.mock("../../config/config.js", () => ({ getRuntimeConfig: () => ({}) }));
 vi.mock("../../gateway/server-plugin-in-process-dispatch.js", () => ({
-  getInProcessGatewayRequestContext: () => fixture.gatewayContext,
+  getInProcessGatewayRequestContext: () => fixture.gateway.context,
+  runWithOperatorToolGatewayContinuationContext: (work: () => unknown) => work(),
   dispatchGatewayMethodInProcess: (...args: unknown[]) => fixture.dispatch(...args),
   captureOperatorToolGatewayContinuationContext: async () => ({
     signal: new AbortController().signal,
@@ -46,6 +56,7 @@ vi.mock("../../gateway/server-plugin-in-process-dispatch.js", () => ({
   }),
 }));
 vi.mock("../../plugins/runtime/gateway-request-scope.js", () => ({
+  withPluginRuntimeGatewayContextResolver: (_resolver: unknown, work: () => unknown) => work(),
   getPluginRuntimeGatewayRequestScope: () => ({
     client: {
       connect: { scopes: ["operator.admin"] },
@@ -81,6 +92,9 @@ vi.mock("../prepared-model-runtime-generation-scope.js", () => ({
 }));
 vi.mock("../run-wait.js", () => ({
   waitForAgentRunReply: fixture.wait,
+  readLatestAssistantReply: () => {
+    throw new Error("Gateway requester authority changed");
+  },
   isTerminalAgentWaitTimeout: () => false,
 }));
 vi.mock("../../logging/subsystem.js", () => {
@@ -108,6 +122,7 @@ const SESSION = "agent:main:requester";
 const CHILD = "agent:main:subagent:worker";
 const SESSION_ID = `${SESSION}-id`;
 async function inRun<T>(runId: string, work: () => Promise<T>) {
+  fixture.gateway.context ??= createContext();
   const { operationalRunInstance } = createTestAdmittedRunContext(runId);
   const approvalAuthority = claimAgentRunDelegatedAuthority(operationalRunInstance);
   registerAgentRunContext(runId, {
@@ -120,6 +135,7 @@ async function inRun<T>(runId: string, work: () => Promise<T>) {
       {
         agentId: "main",
         sessionKey: SESSION,
+        gatewayContextResolver: () => fixture.gateway.context,
         operationalRunInstance,
         approvalAuthority,
         receiptAuthority: () => validateAgentRunDelegatedAuthority(approvalAuthority),
@@ -133,6 +149,8 @@ async function inRun<T>(runId: string, work: () => Promise<T>) {
 }
 afterEach(() => {
   revokeRequesterCronAuthority(SESSION);
+  fixture.log.mockReset();
+  fixture.peerReply.mockReset();
   fixture.dispatch.mockReset();
   fixture.wait.mockReset();
   vi.useRealTimers();
@@ -406,4 +424,75 @@ describe("child followup requester continuation", () => {
     }
     fixture.assertCustody.mockReset();
   });
+});
+
+describe("plain peer retained result", () => {
+  it.each([false, true])(
+    "delivers after requester authority ends, context changed=%s",
+    async (changed) => {
+      const runId = "peer-retained-" + changed;
+      const full = "A".repeat(5_000) + "PEER_UNIQUE_TAIL";
+      const preview = "A".repeat(4_095) + "…";
+      fixture.gateway.context = createContext();
+      setGatewayDedupeEntry({
+        dedupe: fixture.gateway.context.dedupe,
+        key: "agent:" + runId,
+        session: {
+          agentId: "main",
+          sessionKey: CHILD,
+          sessionId: "accepted-worker",
+          lifecycleGeneration: getAgentEventLifecycleGeneration(),
+        },
+        entry: {
+          ts: Date.now(),
+          ok: true,
+          payload: { runId, status: "ok", result: { meta: { finalAssistantVisibleText: full } } },
+        },
+      });
+      const terminal = createDeferredCore<{
+        status: "ok";
+        replyText: string;
+        terminalReply: { disposition: "visible"; text: string };
+      }>();
+      const delivered = createDeferredCore<{ message: string; extraSystemPrompt: string }>();
+      fixture.log.mockImplementation((message, detail) =>
+        delivered.reject(new Error(message + ": " + JSON.stringify(detail))),
+      );
+      fixture.peerReply.mockImplementation((reply) => {
+        delivered.resolve(reply);
+        return Promise.resolve(undefined);
+      });
+      fixture.wait.mockReturnValue(terminal.promise);
+      await inRun("expired-requester-" + changed, () =>
+        startSessionsSendReplyFlow({
+          runId,
+          skip: false,
+          replyMode: "peer",
+          targetAgentId: "main",
+          targetSessionKey: CHILD,
+          targetSession: { sessionId: "accepted-worker" },
+          displayKey: CHILD,
+          requesterSessionKey: SESSION,
+          requesterAgentId: "main",
+          replyTimeoutMs: 1000,
+          callGateway: async () => {
+            throw new Error("Gateway requester authority changed");
+          },
+        }),
+      );
+      if (changed) {
+        fixture.gateway.context = createContext();
+      }
+      terminal.resolve({
+        status: "ok",
+        replyText: preview,
+        terminalReply: { disposition: "visible", text: preview },
+      });
+      const reply = await delivered.promise;
+      expect(reply.message).toBe(changed ? preview : full);
+      expect(reply.extraSystemPrompt).toContain("Another session returned");
+      expect(reply.extraSystemPrompt.includes("The reply may be truncated.")).toBe(changed);
+      expect(reply.message).not.toContain("The reply may be truncated.");
+    },
+  );
 });

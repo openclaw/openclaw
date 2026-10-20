@@ -7,7 +7,10 @@ import {
   type AgentRunTerminalOutcome,
 } from "../../agents/agent-run-terminal-outcome.js";
 import { normalizeAgentRunTerminalReceipt } from "../../agents/agent-run-terminal-receipt.js";
-import { normalizeAgentRunTerminalReplySnapshot } from "../../agents/agent-run-terminal-reply.js";
+import {
+  matchAgentRunTerminalReplyText,
+  normalizeAgentRunTerminalReplySnapshot,
+} from "../../agents/agent-run-terminal-reply.js";
 import type { PreparedAgentCommandRuntimeContext } from "../../agents/command/prepare.js";
 import {
   createCronCreatorAuthorityCapability,
@@ -387,7 +390,15 @@ export function dispatchAgentRunFromGateway(params: {
         endedAt: terminalOutcome.endedAt ?? Date.now(),
         yielded: result?.meta?.yielded === true,
         terminalReply,
-        ...(terminalReply?.disposition === "visible" ? { replyText: terminalReply.text } : {}),
+        ...(terminalReply?.disposition === "visible"
+          ? {
+              replyText:
+                matchAgentRunTerminalReplyText(
+                  terminalReply.text,
+                  result?.meta?.finalAssistantVisibleText,
+                ) ?? terminalReply.text,
+            }
+          : {}),
         ...(receipt?.runId === params.runId && receipt.sourceReplyDelivered
           ? { sourceReplyDelivered: true as const }
           : {}),

@@ -4,6 +4,7 @@ import { isGatewayProtocolResponseError } from "../../../packages/gateway-client
 import { getRuntimeConfig } from "../../config/config.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { readAcceptedAgentRunReplyText } from "../../gateway/agent-turn/agent-dedupe.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "../../gateway/session-utils-store-worker.js";
 import type { GatewaySessionStoreTargetWithStore } from "../../gateway/session-utils-store.types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -15,13 +16,18 @@ import { recordSessionParticipantBestEffort } from "../../sessions/session-parti
 import { createDeferredCore } from "../../shared/deferred.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../prepared-model-runtime-generation-scope.js";
-import { isTerminalAgentWaitTimeout, waitForAgentRunReply } from "../run-wait.js";
+import {
+  isTerminalAgentWaitTimeout,
+  readLatestAssistantReply,
+  waitForAgentRunReply,
+} from "../run-wait.js";
 import { resolveSubagentAnnounceTimeoutMs } from "../subagents/announce/subagent-announce-delivery-retry.js";
 import type { FollowupCompletionOwner } from "../subagents/completion/session-followup-completion.types.js";
 import type { AgentStepSession } from "./agent-step.js";
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import {
   callAgentToolGatewayRequest,
+  getInProcessGatewayToolContext,
   runWithGatewayToolContinuationContext,
 } from "./in-process-gateway.js";
 import { recordSessionToolActionFact } from "./sessions-access.js";
@@ -33,7 +39,7 @@ const log = createSubsystemLogger("agents/sessions-send");
 
 /** Await custody transfer before returning the tool; result observation stays detached. */
 export function startSessionsSendReplyFlow(
-  params: Parameters<typeof runSessionsSendA2AFlow>[0] & {
+  params: Omit<Parameters<typeof runSessionsSendA2AFlow>[0], "readAcceptedReply"> & {
     skip: boolean;
     completion?: FollowupCompletionOwner;
   },
@@ -41,6 +47,23 @@ export function startSessionsSendReplyFlow(
   if (params.skip) {
     return Promise.resolve();
   }
+  // The sender's Gateway binds the accepted run's answer before the sender tool returns.
+  const resolverOwner = getGatewayToolCallerIdentity()?.gatewayContextResolver;
+  const resolveContext = () => getInProcessGatewayToolContext(resolverOwner);
+  const admittedContext = resolverOwner ? resolveContext() : undefined;
+  const acceptedRun = params.targetSession && {
+    runId: params.runId,
+    agentId: params.targetAgentId,
+    sessionKey: params.targetSessionKey,
+    sessionId: params.targetSession.sessionId,
+  };
+  const readAcceptedReply =
+    admittedContext && acceptedRun
+      ? () =>
+          resolveContext() === admittedContext
+            ? readAcceptedAgentRunReplyText(admittedContext, acceptedRun)
+            : undefined
+      : undefined;
   const { completion } = params;
   const continueOwned = async <T>(run: () => Promise<T>) =>
     completion ? completion.request.custody.run(run) : runWithGatewayToolContinuationContext(run);
@@ -181,6 +204,7 @@ export function startSessionsSendReplyFlow(
     return runSessionsSendA2AFlow({
       ...params,
       deliverRequesterReply,
+      readAcceptedReply,
       reply: settledReply,
     });
   };
@@ -412,13 +436,14 @@ export async function finishSessionsSendReply(params: {
       ...watchField,
     });
   }
-  const recovered = await recoverSessionsSendReply({
-    runId,
-    replyText: result.replyText,
-    sessionKey: acceptedTargetSessionKey,
-    agentId: replyContext.targetAgentId,
-    callGateway: replyContext.callGateway,
-  });
+  const recovered = await recoverSessionsSendReply(result.replyText, () =>
+    readLatestAssistantReply({
+      runId,
+      sessionKey: acceptedTargetSessionKey,
+      agentId: replyContext.targetAgentId,
+      callGateway: replyContext.callGateway,
+    }),
+  );
   return sendReplyResult(
     { runId, sessionKey: replyContext.displayKey, ...watchField },
     { ...result, ...recovered },

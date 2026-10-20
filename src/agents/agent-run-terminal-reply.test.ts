@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { prepareAgentRunTerminalReply } from "./agent-run-terminal-reply.js";
+import {
+  matchAgentRunTerminalReplyText,
+  prepareAgentRunTerminalReply,
+} from "./agent-run-terminal-reply.js";
 
 describe("prepareAgentRunTerminalReply", () => {
   it.each([
@@ -37,5 +40,16 @@ describe("prepareAgentRunTerminalReply", () => {
       text,
       terminalReply: { disposition: "visible", text: `${"A".repeat(4_095)}…` },
     });
+  });
+});
+
+describe("matchAgentRunTerminalReplyText", () => {
+  it("matches full prepared text against the sanitized bounded preview", () => {
+    const full = "A".repeat(5_000) + "UNIQUE_TAIL";
+    const preview = "A".repeat(4_095) + "…";
+    expect(matchAgentRunTerminalReplyText(preview, full)).toBe(full);
+    expect(matchAgentRunTerminalReplyText(preview, "different" + full)).toBeUndefined();
+    expect(matchAgentRunTerminalReplyText(preview, undefined)).toBeUndefined();
+    expect(matchAgentRunTerminalReplyText("", "")).toBeUndefined();
   });
 });

@@ -50,6 +50,8 @@ export async function runSessionsSendA2AFlow(params: {
   deliverRequesterReply?: (
     reply: Pick<Parameters<typeof runAgentStep>[0], "message" | "extraSystemPrompt">,
   ) => Promise<void>;
+  /** Host-bound reader for this accepted run's retained full answer. */
+  readAcceptedReply?: () => string | undefined;
 }) {
   const gatewayCall = params.callGateway ?? callAgentToolGatewayRequest;
   const child = params.replyMode === "one-way";
@@ -107,14 +109,7 @@ export async function runSessionsSendA2AFlow(params: {
       return;
     }
 
-    const recover = () =>
-      recoverSessionsSendReply({
-        runId: params.runId,
-        replyText: reply,
-        sessionKey: params.targetSessionKey,
-        agentId: params.targetAgentId,
-        callGateway: gatewayCall,
-      });
+    const recover = () => recoverSessionsSendReply(reply, params.readAcceptedReply);
 
     // Self-sends deliver the original output under its captured session generation.
     const requesterAgentId =

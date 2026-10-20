@@ -28,6 +28,20 @@ export function sanitizeAgentRunTerminalReply(rawText: string): AgentRunTerminal
   return { disposition: "visible", text };
 }
 
+/** Returns the full visible text behind a bounded snapshot only when it reproduces that snapshot. */
+export function matchAgentRunTerminalReplyText(
+  snapshotText: string,
+  fullText: string | undefined,
+): string | undefined {
+  if (fullText === undefined) {
+    return undefined;
+  }
+  const snapshot = sanitizeAgentRunTerminalReply(fullText);
+  return snapshot.disposition === "visible" && snapshot.text === snapshotText
+    ? fullText
+    : undefined;
+}
+
 export type PreparedAgentRunTerminalReply = {
   text: string;
   terminalReply: AgentRunTerminalReplySnapshot;

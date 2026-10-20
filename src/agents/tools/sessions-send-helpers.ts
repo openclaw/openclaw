@@ -6,8 +6,7 @@ import {
 import { resolveSessionConversationRef } from "../../channels/plugins/session-conversation.js";
 import { normalizeChatChannelId } from "../../channels/registry.js";
 import { parseSessionDeliveryRoute } from "../../sessions/session-key-utils.js";
-import { sanitizeAgentRunTerminalReply } from "../agent-run-terminal-reply.js";
-import { readLatestAssistantReply } from "../run-wait.js";
+import { matchAgentRunTerminalReplyText } from "../agent-run-terminal-reply.js";
 import { jsonResult } from "./tool-results.js";
 
 export type SessionDeliveryTarget = {
@@ -34,19 +33,22 @@ export function sendFailure(
 export const SESSIONS_SEND_TRUNCATION_NOTE =
   "The reply may be truncated. Ask the target for the missing section or a file containing the full reply; do not repeat the original task.";
 
+/** Replaces a bounded reply preview with the full answer that reproduces it, or marks it truncated. */
 export async function recoverSessionsSendReply(
-  params: Parameters<typeof readLatestAssistantReply>[0] & { runId: string; replyText?: string },
+  replyText: string | undefined,
+  readFullReply: (() => Promise<string | undefined> | string | undefined) | undefined,
 ): Promise<{ replyText?: string; replyTruncated?: true }> {
-  const { replyText, ...read } = params;
   // Whitespace trimming can shorten a truncated preview; its length is not evidence of completeness.
   if (!replyText?.endsWith("…")) {
     return { replyText };
   }
-  const stored = await readLatestAssistantReply(read).catch(() => undefined);
-  const snapshot = stored === undefined ? undefined : sanitizeAgentRunTerminalReply(stored);
-  return snapshot?.disposition === "visible" && snapshot.text === replyText
-    ? { replyText: stored }
-    : { replyText, replyTruncated: true };
+  const full = readFullReply
+    ? await Promise.resolve()
+        .then(readFullReply)
+        .catch(() => undefined)
+    : undefined;
+  const recovered = matchAgentRunTerminalReplyText(replyText, full);
+  return recovered === undefined ? { replyText, replyTruncated: true } : { replyText: recovered };
 }
 
 export function sendReplyResult(
