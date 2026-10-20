@@ -41,11 +41,10 @@ it("signs credential-free ingress connects and reconnects without reading or sto
   });
   const first = await startConnect(client, "synthetic-nonce");
   expect(first.connectFrame.params.auth).toBeUndefined();
-  expect(first.connectFrame.params.role).toBe("operator");
-  expect(first.connectFrame.params.scopes).toEqual([]);
-  expect(first.connectFrame.params.device).toMatchObject({
-    id: "device-1",
-    signature: "synthetic-signature",
+  expect(first.connectFrame.params).toMatchObject({
+    role: "operator",
+    scopes: [],
+    device: { id: "device-1", signature: "synthetic-signature" },
   });
   expectSignedPayloadFields(sign.mock.calls[0]?.[1], {
     scopes: [],
@@ -72,9 +71,11 @@ it("signs credential-free ingress connects and reconnects without reading or sto
     },
   });
   await vi.advanceTimersByTimeAsync(0);
-  expect(client.connected).toBe(true);
-  expect(client.scopeUpgradeReady).toBe(false);
-  expect(client.recoveryScope).toBe("grant-principal-recovery");
+  expect(client).toMatchObject({
+    connected: true,
+    scopeUpgradeReady: false,
+    recoveryScope: "grant-principal-recovery",
+  });
   expect(storeToken).not.toHaveBeenCalled();
 
   first.ws.emitClose(1006, "transport interrupted");
@@ -82,8 +83,7 @@ it("signs credential-free ingress connects and reconnects without reading or sto
   await vi.advanceTimersByTimeAsync(onReconnectScheduled.mock.calls[0]![0]);
   const next = await startConnect(client, "synthetic-nonce");
   expect(next.connectFrame.params.auth).toBeUndefined();
-  expect(next.connectFrame.params.scopes).toEqual([]);
-  expect(next.connectFrame.params.device?.id).toBe("device-1");
+  expect(next.connectFrame.params).toMatchObject({ scopes: [], device: { id: "device-1" } });
   expect(loadToken).not.toHaveBeenCalled();
   expect(storeToken).not.toHaveBeenCalled();
 });

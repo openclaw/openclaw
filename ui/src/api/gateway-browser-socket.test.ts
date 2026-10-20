@@ -17,7 +17,7 @@ class MockWebSocket extends EventTarget {
   });
   readyState = 0;
 
-  constructor(readonly url: string) {
+  constructor(_url: string) {
     super();
     sockets.push(this);
   }
@@ -52,55 +52,52 @@ describe("createBrowserGatewaySocket", () => {
     vi.unstubAllGlobals();
   });
 
-  it("closes a websocket that never finishes opening", async () => {
-    await vi.advanceTimersByTimeAsync(DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS);
+  it.each(["", "gateway supplied a close reason"])(
+    "closes a timed-out socket with reason %j",
+    async (reason) => {
+      await vi.advanceTimersByTimeAsync(DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS);
 
-    expect(handlers.error).toHaveBeenCalledExactlyOnceWith(new Error(timeoutReason));
-    expect(socket.close).toHaveBeenCalledOnce();
+      expect(handlers.error).toHaveBeenCalledExactlyOnceWith(new Error(timeoutReason));
+      expect(socket.close).toHaveBeenCalledOnce();
 
-    socket.emit("error");
-    socket.emit("close", { code: 1006, reason: "" });
-    expect(handlers.error).toHaveBeenCalledOnce();
-    expect(handlers.close).toHaveBeenCalledWith(1006, timeoutReason);
-  });
+      socket.emit("error");
+      socket.emit("close", { code: 1006, reason });
+      expect(handlers.error).toHaveBeenCalledOnce();
+      expect(handlers.close).toHaveBeenCalledWith(1006, reason || timeoutReason);
+    },
+  );
 
-  it("preserves a real close reason when an opening timeout also occurred", async () => {
-    await vi.advanceTimersByTimeAsync(DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS);
-    socket.emit("close", { code: 1006, reason: "gateway supplied a close reason" });
-
-    expect(handlers.close).toHaveBeenCalledWith(1006, "gateway supplied a close reason");
-  });
-
-  it("clears the opening deadline after the socket opens", async () => {
-    socket.readyState = MockWebSocket.OPEN;
-    socket.emit("open");
-    await vi.advanceTimersByTimeAsync(DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS);
-
-    expect(handlers.open).toHaveBeenCalledOnce();
-    expect(handlers.error).not.toHaveBeenCalled();
-    expect(socket.close).not.toHaveBeenCalled();
-  });
-
-  it("clears the opening deadline after a native transport failure", async () => {
-    socket.emit("error");
-    socket.emit("close", { code: 1006, reason: "" });
-    await vi.advanceTimersByTimeAsync(DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS);
-
-    expect(handlers.error).toHaveBeenCalledExactlyOnceWith(new Error("websocket error"));
-    expect(handlers.close).toHaveBeenCalledWith(1006, "");
-    expect(socket.close).not.toHaveBeenCalled();
-  });
-
-  it("clears the opening deadline when the client closes the socket", async () => {
-    socketAdapter.close(1000, "stopped");
-    await vi.advanceTimersByTimeAsync(DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS);
-
-    expect(socket.close).toHaveBeenCalledWith(1000, "stopped");
-    expect(handlers.error).not.toHaveBeenCalled();
-
-    socket.emit("close", { code: 1000, reason: "stopped" });
-    expect(handlers.close).toHaveBeenCalledWith(1000, "stopped");
-  });
+  it.each(["open", "error", "client-close"])(
+    "clears the opening deadline after %s",
+    async (cause) => {
+      if (cause === "open") {
+        socket.readyState = MockWebSocket.OPEN;
+        socket.emit("open");
+      } else if (cause === "error") {
+        socket.emit("error");
+        socket.emit("close", { code: 1006, reason: "" });
+      } else {
+        socketAdapter.close(1000, "stopped");
+      }
+      await vi.advanceTimersByTimeAsync(DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS);
+      expect(handlers.error.mock.calls).toEqual(
+        cause === "error" ? [[new Error("websocket error")]] : [],
+      );
+      if (cause === "error") {
+        expect(handlers.close).toHaveBeenCalledWith(1006, "");
+      }
+      if (cause === "client-close") {
+        expect(socket.close).toHaveBeenCalledWith(1000, "stopped");
+        socket.emit("close", { code: 1000, reason: "stopped" });
+        expect(handlers.close).toHaveBeenCalledWith(1000, "stopped");
+      } else {
+        expect(socket.close).not.toHaveBeenCalled();
+      }
+      if (cause === "open") {
+        expect(handlers.open).toHaveBeenCalledOnce();
+      }
+    },
+  );
 
   it("retires native listeners before delivering terminal close", () => {
     let retained: string[] | undefined;

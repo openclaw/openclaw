@@ -10,16 +10,12 @@ import {
 } from "./gateway-socket.test-support.ts";
 import { GatewayBrowserClient, type GatewayBrowserClientOptions } from "./gateway.ts";
 
-export function useHandshakeHarness(crypto: unknown = { randomUUID: () => "handshake-request" }) {
+export function useSocketHarness() {
   const clients: GatewayBrowserClient[] = [];
   beforeEach(() => {
     useNodeFakeTimers();
-    const storage = createStorageMock();
-    vi.stubGlobal("localStorage", storage);
-    stubWindowGlobals(storage);
+    stubWindowGlobals();
     vi.stubGlobal("WebSocket", MockWebSocket);
-    // Most handshake tests need IDs, not device-proof crypto.
-    vi.stubGlobal("crypto", crypto);
     wsInstances.length = 0;
   });
   afterEach(() => {
@@ -30,11 +26,22 @@ export function useHandshakeHarness(crypto: unknown = { randomUUID: () => "hands
     vi.useRealTimers();
     vi.unstubAllGlobals();
   });
-  return (options: GatewayBrowserClientOptions = { url: "ws://127.0.0.1:18789" }) => {
-    const client = new GatewayBrowserClient(options);
+  return (options: Partial<GatewayBrowserClientOptions> = {}) => {
+    const client = new GatewayBrowserClient({ url: "ws://127.0.0.1:18789", ...options });
     clients.push(client);
     return client;
   };
+}
+
+export function useHandshakeHarness(crypto: unknown = { randomUUID: () => "handshake-request" }) {
+  const createClient = useSocketHarness();
+  beforeEach(() => {
+    const storage = createStorageMock();
+    vi.stubGlobal("localStorage", storage);
+    stubWindowGlobals(storage);
+    vi.stubGlobal("crypto", crypto);
+  });
+  return createClient;
 }
 
 export async function startConnect(client: GatewayBrowserClient, nonce = "handshake-challenge") {
