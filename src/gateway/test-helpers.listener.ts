@@ -93,46 +93,40 @@ export async function reserveGatewayTestListener(port: number | TestPortClaim = 
       await claim.release();
     }
   };
-  try {
-    const address = listener.address();
-    assert(address && typeof address !== "string");
-    return {
-      port: address.port,
-      listener,
-      closeUnadopted,
-      async start<T>(run: () => Promise<T>): Promise<T> {
-        const owner = (activeDispatcher ??= { ready: createListenerDispatcher(), pending: 0 });
-        owner.pending++;
-        let dispatcher: Awaited<typeof owner.ready> | undefined;
+  // The reservation owner returns only after binding this exact claimed port.
+  return {
+    port: claim.port,
+    listener,
+    closeUnadopted,
+    async start<T>(run: () => Promise<T>): Promise<T> {
+      const owner = (activeDispatcher ??= { ready: createListenerDispatcher(), pending: 0 });
+      owner.pending++;
+      let dispatcher: Awaited<typeof owner.ready> | undefined;
+      try {
+        dispatcher = await owner.ready;
+        assert(
+          !dispatcher.listeners.has(claim.port),
+          "Reserved Gateway listener is already starting",
+        );
+        dispatcher.listeners.set(claim.port, {
+          listener,
+          adopt: () => {
+            adopted = true;
+          },
+        });
         try {
-          dispatcher = await owner.ready;
-          assert(
-            !dispatcher.listeners.has(address.port),
-            "Reserved Gateway listener is already starting",
-          );
-          dispatcher.listeners.set(address.port, {
-            listener,
-            adopt: () => {
-              adopted = true;
-            },
-          });
-          try {
-            const result = await run();
-            listener.off("connection", rejectEarlyConnection);
-            return result;
-          } finally {
-            dispatcher.listeners.delete(address.port);
-          }
+          const result = await run();
+          listener.off("connection", rejectEarlyConnection);
+          return result;
         } finally {
-          if (--owner.pending === 0) {
-            activeDispatcher = undefined;
-            dispatcher?.restore();
-          }
+          dispatcher.listeners.delete(claim.port);
         }
-      },
-    };
-  } catch (error) {
-    await closeUnadopted();
-    throw error;
-  }
+      } finally {
+        if (--owner.pending === 0) {
+          activeDispatcher = undefined;
+          dispatcher?.restore();
+        }
+      }
+    },
+  };
 }

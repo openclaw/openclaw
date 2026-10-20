@@ -1,3 +1,4 @@
+import { once } from "node:events";
 // Self-connect from the LAN address, not loopback; unavailable interfaces skip the suite.
 import net from "node:net";
 import { afterAll, beforeAll, describe } from "vitest";
@@ -11,59 +12,41 @@ import { connectReq, startServer, trackConnectChallengeNonce } from "./test-help
 
 const LAN_NODE_PAIRING_TOKEN = "secret";
 
-const NODE_CLIENT = {
-  id: GATEWAY_CLIENT_NAMES.NODE_HOST,
-  version: "1.0.0",
-  platform: "ios",
-  mode: GATEWAY_CLIENT_MODES.NODE,
-};
-
 async function canUseLanSelfConnect(host: string): Promise<boolean> {
-  return await new Promise<boolean>((resolve) => {
-    let settled = false;
-    let client: net.Socket | undefined;
-    const server = net.createServer((socket) => {
-      socket.on("error", () => {});
-      socket.end("ok");
-    });
-    const done = (ok: boolean) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timer);
-      client?.destroy();
-      server.close(() => resolve(ok));
-    };
-    const timer = setTimeout(() => done(false), 1_000);
-    server.once("error", () => done(false));
-    server.listen(0, "0.0.0.0", () => {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        done(false);
-        return;
-      }
-      let sawData = false;
-      client = net.connect({ host, port: address.port, localAddress: host });
-      client.on("data", () => {
-        sawData = true;
-      });
-      client.once("error", () => done(false));
-      client.once("close", () => done(sawData));
-    });
+  const server = net.createServer((socket) => {
+    socket.on("error", () => {});
+    socket.end("ok");
   });
+  const signal = AbortSignal.timeout(1_000);
+  let client: net.Socket | undefined;
+  try {
+    await once(server.listen(0, "0.0.0.0"), "listening", { signal });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      return false;
+    }
+    client = net.connect({ host, port: address.port, localAddress: host });
+    client.resume();
+    await once(client, "close", { signal });
+    return client.bytesRead > 0;
+  } catch {
+    return false;
+  } finally {
+    client?.destroy();
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
+  }
 }
-
-type LanNodePairingContext = {
-  lanIp: string;
-  loaded: ReturnType<typeof loadDeviceIdentity>;
-  connectNode: () => ReturnType<typeof connectReq>;
-};
 
 type LanNodePairingAttempt = (params: {
   identityName: string;
   configure?: (lanIp: string) => Promise<void>;
-  run: (ctx: LanNodePairingContext) => Promise<void>;
+  run: (ctx: {
+    lanIp: string;
+    loaded: ReturnType<typeof loadDeviceIdentity>;
+    connectNode: () => ReturnType<typeof connectReq>;
+  }) => Promise<void>;
 }) => Promise<void>;
 
 // Each new WebSocket observes config changes while sharing the suite Gateway.
@@ -118,7 +101,12 @@ export function describeWithLanNodePairingServer(
             token: LAN_NODE_PAIRING_TOKEN,
             role: "node",
             scopes: [],
-            client: NODE_CLIENT,
+            client: {
+              id: GATEWAY_CLIENT_NAMES.NODE_HOST,
+              version: "1.0.0",
+              platform: "ios",
+              mode: GATEWAY_CLIENT_MODES.NODE,
+            },
             deviceIdentityPath: loaded.identityPath,
           });
         } finally {

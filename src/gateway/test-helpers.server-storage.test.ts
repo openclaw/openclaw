@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { Worker } from "node:worker_threads";
 import { afterAll, expect, onTestFinished, test, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -115,25 +114,15 @@ test("joins external-store workers before deleting their Gateway lease coordinat
   });
   // Seed handles belong to this external fixture; the next operation retains only its Worker.
   await agentDb.closeOpenClawAgentDatabasesAsync(externalRoot);
-  const workers: Worker[] = [];
-  const create = archiveWorker.createSqliteTranscriptArchiveWorker;
-  const spawned = vi
-    .spyOn(archiveWorker, "createSqliteTranscriptArchiveWorker")
-    .mockImplementation((data) => {
-      const worker = create(data);
-      workers.push(worker);
-      return worker;
-    });
-  try {
-    await expect(runSqliteSessionReclamation({ plan })).resolves.toMatchObject({
-      kind: "lifecycle-artifacts",
-      value: { removedEntries: 1 },
-    });
-  } finally {
-    spawned.mockRestore();
-  }
-  expect(workers).toHaveLength(1);
-  expect(workers[0]?.threadId).toBeGreaterThan(0);
+  using spawned = vi.spyOn(archiveWorker, "createSqliteTranscriptArchiveWorker");
+  await expect(runSqliteSessionReclamation({ plan })).resolves.toMatchObject({
+    kind: "lifecycle-artifacts",
+    value: { removedEntries: 1 },
+  });
+  expect(spawned).toHaveBeenCalledOnce();
+  const [result] = spawned.mock.results;
+  const worker = result?.type === "return" ? result.value : undefined;
+  expect(worker?.threadId).toBeGreaterThan(0);
   expect(fs.existsSync(sharedStatePath)).toBe(true);
   const otherStateDir = path.join(externalRoot, "other-state");
   externalStatePath = stateDb.openOpenClawStateDatabase({
@@ -158,7 +147,7 @@ test("joins external-store workers before deleting their Gateway lease coordinat
   setTestEnvValue("OPENCLAW_STATE_DIR", otherStateDir);
   onTestFinished(() => {
     try {
-      expect(workers[0]?.threadId).toBe(-1);
+      expect(worker?.threadId).toBe(-1);
       expect(fs.existsSync(sharedStatePath)).toBe(false);
       expect(closedOwners[0]).toBe(identity.key);
     } finally {
