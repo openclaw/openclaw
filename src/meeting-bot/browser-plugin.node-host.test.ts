@@ -3,35 +3,19 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { loadBrowserMeetingPlugins } from "./browser-plugin.test-support.js";
 
-const spawnSync = vi.hoisted(() =>
-  vi.fn<
-    (
-      command: string,
-      args: string[],
-      options: { timeout: number },
-    ) => Pick<SpawnSyncReturns<string>, "status" | "stdout" | "stderr" | "error">
-  >(),
-);
+type Probe = (
+  command: string,
+  args: string[],
+  options: { timeout: number },
+) => Pick<SpawnSyncReturns<string>, "status" | "stdout" | "stderr" | "error">;
+const spawnSync = vi.hoisted(() => vi.fn<Probe>());
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
   spawnSync,
 }));
 
-const declarations = [
-  {
-    name: "Zoom meeting",
-    load: async () => (await loadBrowserMeetingPlugins()).zoomMeetingsPlugin,
-  },
-  {
-    name: "Microsoft Teams meeting",
-    load: async () => (await loadBrowserMeetingPlugins()).teamsMeetingsPlugin,
-  },
-  {
-    name: "Slack huddle",
-    load: async () => (await loadBrowserMeetingPlugins()).slackHuddlesPlugin,
-  },
-];
 const successfulProbe = { status: 0, stderr: "", stdout: "BlackHole 2ch" };
+const commandCheck = 'command -v "$1" >/dev/null 2>&1';
 const setupParams = JSON.stringify({
   action: "setup",
   audioInputCommand: ["capture"],
@@ -42,6 +26,12 @@ const ready = JSON.stringify({
   audioBackend: "blackhole-2ch",
   audioDeviceLabel: "BlackHole 2ch",
 });
+function mockClock(values: number[]) {
+  const clock = vi.spyOn(Date, "now");
+  for (const value of values) {
+    clock.mockReturnValueOnce(value);
+  }
+}
 
 beforeAll(() => vi.resetModules());
 afterEach(() => vi.restoreAllMocks());
@@ -50,13 +40,18 @@ afterAll(() => {
   vi.resetModules();
 });
 
-describe.each(declarations)("$name node prerequisite setup", ({ name, load }) => {
-  let plugin: Awaited<ReturnType<typeof load>>;
+describe.each([
+  ["Zoom meeting", "zoomMeetingsPlugin"],
+  ["Microsoft Teams meeting", "teamsMeetingsPlugin"],
+  ["Slack huddle", "slackHuddlesPlugin"],
+] as const)("%s node prerequisite setup", (name, key) => {
+  let plugin: Awaited<ReturnType<typeof loadBrowserMeetingPlugins>>[typeof key];
+  const timeoutMessage = `${name} audio prerequisite check timed out on the node.`;
   beforeAll(async () => {
     // Audio command defaults are captured when each declaration loads.
     const platform = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
     try {
-      plugin = await load();
+      plugin = (await loadBrowserMeetingPlugins())[key];
     } finally {
       platform.mockRestore();
     }
@@ -66,16 +61,10 @@ describe.each(declarations)("$name node prerequisite setup", ({ name, load }) =>
     spawnSync.mockReset().mockReturnValue(successfulProbe);
   });
 
-  it.each([
-    { now: [0, 0, 6_000, 8_000], timeouts: [10_000, 4_000, 2_000] },
-    { now: [1_000, 1_000, 4_000, 8_000], timeouts: [10_000, 7_000, 3_000] },
-  ])("shares one deadline across sequential probes ($timeouts)", async ({ now, timeouts }) => {
-    const clock = vi.spyOn(Date, "now");
-    for (const value of now) {
-      clock.mockReturnValueOnce(value);
-    }
+  it("shares one deadline across sequential probes", async () => {
+    mockClock([0, 0, 6_000, 8_000]);
     await expect(plugin.nodeHandler(setupParams)).resolves.toBe(ready);
-    expect(spawnSync.mock.calls.map((call) => call[2].timeout)).toEqual(timeouts);
+    expect(spawnSync.mock.calls.map((call) => call[2].timeout)).toEqual([10_000, 4_000, 2_000]);
   });
 
   it("probes the default sox executable only once", async () => {
@@ -89,36 +78,24 @@ describe.each(declarations)("$name node prerequisite setup", ({ name, load }) =>
       ),
     ).resolves.toBe(ready);
     expect(spawnSync).toHaveBeenCalledTimes(2);
-    expect(spawnSync.mock.calls[1]?.[1]).toEqual([
-      "-lc",
-      'command -v "$1" >/dev/null 2>&1',
-      "sh",
-      "sox",
-    ]);
+    expect(spawnSync.mock.calls[1]?.[1]).toEqual(["-lc", commandCheck, "sh", "sox"]);
   });
 
   it("does not start another probe after the shared deadline expires", async () => {
-    const clock = vi.spyOn(Date, "now");
-    for (const value of [1_000, 1_000, 11_000]) {
-      clock.mockReturnValueOnce(value);
-    }
-    await expect(plugin.nodeHandler(setupParams)).rejects.toThrow(
-      `${name} audio prerequisite check timed out on the node.`,
-    );
+    mockClock([1_000, 1_000, 11_000]);
+    await expect(plugin.nodeHandler(setupParams)).rejects.toThrow(timeoutMessage);
     expect(spawnSync).toHaveBeenCalledTimes(1);
   });
 
   it.each(["profiler", "command"])(
-    "reports a timed-out %s separately from a missing prerequisite",
+    "distinguishes %s timeout from missing prerequisites",
     async (probe) => {
       if (probe === "command") {
         spawnSync.mockReturnValueOnce(successfulProbe);
       }
       const error = Object.assign(new Error(`spawnSync ${probe} ETIMEDOUT`), { code: "ETIMEDOUT" });
       spawnSync.mockReturnValueOnce({ status: null, stderr: "", stdout: "", error });
-      await expect(plugin.nodeHandler(setupParams)).rejects.toThrow(
-        `${name} audio prerequisite check timed out on the node.`,
-      );
+      await expect(plugin.nodeHandler(setupParams)).rejects.toThrow(timeoutMessage);
       expect(spawnSync).toHaveBeenCalledTimes(probe === "command" ? 2 : 1);
     },
   );

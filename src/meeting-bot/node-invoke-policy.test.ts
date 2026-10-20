@@ -2,13 +2,22 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginNodeInvokePolicyContext } from "../plugins/plugin-registration.types.js";
 import { createMeetingBrowserNodeInvokePolicy } from "./node-invoke-policy.js";
 
-function createPolicy(
+const expectedAudio = {
+  audioBackend: "auto",
+  audioBufferBytes: 4_096,
+  audioFormat: "pcm16-24khz",
+  bargeInInputCommand: ["trusted-barge-in"],
+};
+
+async function expectForwarded(
+  params: Record<string, unknown>,
+  expected: Record<string, unknown>,
   audio: {
     audioInputCommandOverride?: string[];
     audioOutputCommandOverride?: string[];
   } = {},
 ) {
-  return createMeetingBrowserNodeInvokePolicy({
+  const policy = createMeetingBrowserNodeInvokePolicy({
     commandName: "testmeeting.chrome",
     deniedCode: "TEST_MEETING_DENIED",
     displayName: "Test meeting",
@@ -29,77 +38,60 @@ function createPolicy(
     supportedModes: new Set(["agent", "bidi", "transcribe"]),
     useConfiguredSetupCommands: true,
   });
-}
-
-function createContext(params: Record<string, unknown>) {
   const invokeNode = vi.fn(async () => ({ ok: true as const }));
-  return {
+  const context: OpenClawPluginNodeInvokePolicyContext = {
+    command: "testmeeting.chrome",
+    config: {},
     invokeNode,
-    context: {
-      command: "testmeeting.chrome",
-      config: {},
-      invokeNode,
-      nodeId: "node-1",
-      params,
-    } as OpenClawPluginNodeInvokePolicyContext,
+    nodeId: "node-1",
+    params,
   };
+  await policy.handle(context);
+  expect(invokeNode).toHaveBeenCalledWith({ params: expected });
 }
 
 describe("meeting browser node invoke policy audio", () => {
   it("forwards trusted declarations without gateway-generated command defaults", async () => {
-    const policy = createPolicy();
-    const { context, invokeNode } = createContext({
-      action: "start",
-      url: "https://meeting.test/call",
-      mode: "bidi",
-      audioBackend: "blackhole-2ch",
-      audioBufferBytes: 1,
-      audioFormat: "g711-ulaw-8khz",
-      audioInputCommand: ["caller-capture"],
-      audioOutputCommand: ["caller-playback"],
-    });
-
-    await policy.handle(context);
-
-    expect(invokeNode).toHaveBeenCalledWith({
-      params: {
+    await expectForwarded(
+      {
+        action: "start",
+        url: "https://meeting.test/call",
+        mode: "bidi",
+        audioBackend: "blackhole-2ch",
+        audioBufferBytes: 1,
+        audioFormat: "g711-ulaw-8khz",
+        audioInputCommand: ["caller-capture"],
+        audioOutputCommand: ["caller-playback"],
+      },
+      {
         action: "start",
         url: "https://meeting.test/call",
         mode: "bidi",
         launch: true,
         browserProfile: undefined,
         joinTimeoutMs: 30_000,
-        audioBackend: "auto",
-        audioBufferBytes: 4_096,
-        audioFormat: "pcm16-24khz",
-        bargeInInputCommand: ["trusted-barge-in"],
+        ...expectedAudio,
       },
-    });
+    );
   });
 
   it("forwards only trusted explicit command overrides for setup", async () => {
-    const policy = createPolicy({
-      audioInputCommandOverride: ["trusted-capture", "--raw"],
-      audioOutputCommandOverride: ["trusted-playback", "--raw"],
-    });
-    const { context, invokeNode } = createContext({
-      action: "setup",
-      audioInputCommand: ["caller-capture"],
-      audioOutputCommand: ["caller-playback"],
-    });
-
-    await policy.handle(context);
-
-    expect(invokeNode).toHaveBeenCalledWith({
-      params: {
+    await expectForwarded(
+      {
         action: "setup",
-        audioBackend: "auto",
-        audioBufferBytes: 4_096,
-        audioFormat: "pcm16-24khz",
+        audioInputCommand: ["caller-capture"],
+        audioOutputCommand: ["caller-playback"],
+      },
+      {
+        action: "setup",
+        ...expectedAudio,
         audioInputCommand: ["trusted-capture", "--raw"],
         audioOutputCommand: ["trusted-playback", "--raw"],
-        bargeInInputCommand: ["trusted-barge-in"],
       },
-    });
+      {
+        audioInputCommandOverride: ["trusted-capture", "--raw"],
+        audioOutputCommandOverride: ["trusted-playback", "--raw"],
+      },
+    );
   });
 });

@@ -1,5 +1,5 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestPluginApi } from "../plugin-sdk/plugin-test-api.js";
 import { loadBrowserMeetingPlugins } from "./browser-plugin.test-support.js";
 
@@ -17,11 +17,9 @@ afterEach(() => vi.restoreAllMocks());
 
 describe("shared browser meeting configuration and setup", () => {
   const resolveConfig = plugin.config.resolveConfig;
-  function setup(
-    options: { mode: "agent" | "bidi" | "transcribe"; transport?: "chrome" | "chrome-node" },
-    chrome = {},
-  ) {
-    const runtime = createTestPluginApi().runtime;
+  let runtime: ReturnType<typeof createTestPluginApi>["runtime"];
+  beforeEach(() => {
+    runtime = createTestPluginApi().runtime;
     runtime.nodes = {
       invoke: vi.fn(async () => ({ ok: true })),
       openDuplex: vi.fn(),
@@ -37,17 +35,17 @@ describe("shared browser meeting configuration and setup", () => {
         ],
       })),
     };
-    const config = resolveConfig({ chrome, chromeNode: { node: `${name}-node` } });
-    return {
+  });
+  function setup(
+    options: { mode: "agent" | "bidi" | "transcribe"; transport?: "chrome" | "chrome-node" },
+    chrome = {},
+  ) {
+    return plugin.setupStatus({
+      config: resolveConfig({ chrome, chromeNode: { node: `${name}-node` } }),
+      fullConfig: {},
       runtime,
-      run: () =>
-        plugin.setupStatus({
-          config,
-          fullConfig: {},
-          runtime,
-          options: { transport: "chrome-node", ...options },
-        }),
-    };
+      options: { transport: "chrome-node", ...options },
+    });
   }
 
   it.each<[string, string, string[], string[]]>([
@@ -64,45 +62,43 @@ describe("shared browser meeting configuration and setup", () => {
     expect(config.chrome.audioOutputCommand).toEqual(expect.arrayContaining(output));
   });
 
-  it.each(["overrides", "timer bounds"])("resolves explicit %s", (kind) => {
+  it("resolves explicit overrides", () => {
     const realtime = {
       voiceProvider: "google",
       model: "voice-model",
       providers: { google: { apiKey: "ref" } },
     };
-    if (kind === "overrides") {
-      expect(
-        resolveConfig({
-          defaultMode: "bidi",
-          chrome: commands,
-          chromeNode: { node: "mac-node" },
-          realtime,
-        }),
-      ).toMatchObject({
-        defaultMode: "bidi",
-        chrome: {
-          ...commands,
-          audioInputCommandOverride: commands.audioInputCommand,
-          audioOutputCommandOverride: commands.audioOutputCommand,
-        },
-        chromeNode: { node: "mac-node" },
-        realtime,
-      });
-    } else {
-      const config = resolveConfig({
-        chrome: { joinTimeoutMs: Number.MAX_VALUE, waitForInCallMs: Number.MAX_VALUE },
-      });
-      expect(config.chrome.joinTimeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
-      expect(config.chrome.waitForInCallMs).toBe(MAX_TIMER_TIMEOUT_MS);
-      expect(plugin.config.resolveGatewayOperationTimeoutMs(config)).toBe(MAX_TIMER_TIMEOUT_MS);
-    }
+    const selected = {
+      defaultMode: "bidi",
+      chrome: commands,
+      chromeNode: { node: "mac-node" },
+      realtime,
+    };
+    expect(resolveConfig(selected)).toMatchObject({
+      ...selected,
+      chrome: {
+        ...commands,
+        audioInputCommandOverride: commands.audioInputCommand,
+        audioOutputCommandOverride: commands.audioOutputCommand,
+      },
+    });
+  });
+
+  it("clamps explicit timer bounds", () => {
+    const config = resolveConfig({
+      chrome: { joinTimeoutMs: Number.MAX_VALUE, waitForInCallMs: Number.MAX_VALUE },
+    });
+    expect(config.chrome).toMatchObject({
+      joinTimeoutMs: MAX_TIMER_TIMEOUT_MS,
+      waitForInCallMs: MAX_TIMER_TIMEOUT_MS,
+    });
+    expect(plugin.config.resolveGatewayOperationTimeoutMs(config)).toBe(MAX_TIMER_TIMEOUT_MS);
   });
 
   it.each([false, true])(
     "probes selected-node talk-back prerequisites with overrides=%s",
     async (overrides) => {
-      const { runtime, run } = setup({ mode: "agent" }, overrides ? commands : {});
-      const status = await run();
+      const status = await setup({ mode: "agent" }, overrides ? commands : {});
       expect(runtime.nodes.invoke).toHaveBeenCalledWith({
         command,
         nodeId: "node-1",
@@ -119,8 +115,7 @@ describe("shared browser meeting configuration and setup", () => {
   );
 
   it("reports observe-only captions without probing audio", async () => {
-    const { runtime, run } = setup({ mode: "transcribe" });
-    const status = await run();
+    const status = await setup({ mode: "transcribe" });
     expect(status.checks).toContainEqual({
       id: "captions",
       message: `${name} live-caption capture is enabled and ready`,
@@ -133,15 +128,11 @@ describe("shared browser meeting configuration and setup", () => {
     "reports unavailable audio prerequisites on %s",
     async (transport) => {
       vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-      const { runtime, run } = setup({
-        mode: transport === "chrome" ? "agent" : "bidi",
-        transport,
-      });
       vi.mocked(runtime.nodes.invoke).mockRejectedValue(
         new Error("SoX audio command not found on the node."),
       );
       runtime.system = { ...runtime.system, runCommandWithTimeout: vi.fn() };
-      const status = await run();
+      const status = await setup({ mode: transport === "chrome" ? "agent" : "bidi", transport });
       expect(status.ok).toBe(false);
       expect(status.checks).toContainEqual({
         id:

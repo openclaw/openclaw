@@ -3,6 +3,18 @@ import { createMeetingOutputLoopbackVerifier } from "./output-loopback-verifier.
 
 afterEach(vi.restoreAllMocks);
 
+function createVerifier(
+  options: Partial<Parameters<typeof createMeetingOutputLoopbackVerifier>[0]> = {},
+  output?: Buffer,
+) {
+  const verifier = createMeetingOutputLoopbackVerifier({ audioFormat: "pcm16-24khz", ...options });
+  if (output) {
+    verifier.beginOutput();
+    verifier.recordOutput(output);
+  }
+  return verifier;
+}
+
 function pcmEnergyFrames(amplitudes: readonly number[]): Buffer {
   const samplesPerFrame = 240;
   const audio = Buffer.alloc(amplitudes.length * samplesPerFrame * 2);
@@ -26,10 +38,7 @@ describe("meeting output loopback verifier", () => {
   it("requires the current output energy envelope on the captured input", () => {
     let nowMs = 1_000;
     vi.spyOn(Date, "now").mockImplementation(() => nowMs);
-    const verifier = createMeetingOutputLoopbackVerifier({
-      audioFormat: "pcm16-24khz",
-    });
-
+    const verifier = createVerifier();
     verifier.recordInput(pcmEnergyFrames(outputEnvelope));
     verifier.recordOutput(pcmEnergyFrames(Array(80).fill(0)));
     verifier.recordInput(pcmEnergyFrames(outputEnvelope));
@@ -50,89 +59,75 @@ describe("meeting output loopback verifier", () => {
     expect(health.verifiedOutputGeneration).toBe(health.outputGeneration);
   });
 
-  it.each(["g711-ulaw-8khz"] as const)(
-    "keeps the rolling deadline after verification and starts fresh after expiry (%s)",
-    (audioFormat) => {
-      let nowMs = 0;
-      vi.spyOn(Date, "now").mockImplementation(() => nowMs);
-      const verifier = createMeetingOutputLoopbackVerifier({
-        audioFormat,
-      });
-      const output = Buffer.concat(
-        outputEnvelope.map((_, index) => Buffer.alloc(80, (index * 37) % 220)),
-      );
-      verifier.beginOutput();
-      verifier.recordOutput(output);
-      verifier.recordInput(output);
-      const verified = verifier.getHealth();
-      expect(verified.verifiedOutputGeneration).toBe(1);
+  it("keeps the rolling deadline after verification and starts fresh after expiry (g711-ulaw-8khz)", () => {
+    let nowMs = 0;
+    const output = Buffer.concat(
+      outputEnvelope.map((_, index) => Buffer.alloc(80, (index * 37) % 220)),
+    );
+    vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    const verifier = createVerifier({ audioFormat: "g711-ulaw-8khz" }, output);
+    verifier.recordInput(output);
+    const verified = verifier.getHealth();
+    expect(verified.verifiedOutputGeneration).toBe(1);
 
-      // Six seconds queued after the match keep the same generation past its original deadline.
-      verifier.recordOutput(Buffer.concat(Array<Buffer>(7).fill(output)));
-      verifier.recordOutput(output.subarray(0, output.byteLength / 2));
-      nowMs = 6_000;
-      verifier.recordOutput(output);
-      verifier.recordInput(output);
-      expect(verifier.getHealth()).toEqual(verified);
-      nowMs = 12_600;
-      verifier.recordOutput(Buffer.alloc(0));
-      expect(verifier.getHealth()).toEqual(verified);
+    // Six seconds queued after the match keep the same generation past its original deadline.
+    verifier.recordOutput(Buffer.concat(Array<Buffer>(7).fill(output)));
+    verifier.recordOutput(output.subarray(0, output.byteLength / 2));
+    nowMs = 6_000;
+    verifier.recordOutput(output);
+    verifier.recordInput(output);
+    expect(verifier.getHealth()).toEqual(verified);
+    nowMs = 12_600;
+    verifier.recordOutput(Buffer.alloc(0));
+    expect(verifier.getHealth()).toEqual(verified);
 
-      nowMs += 1;
-      verifier.recordOutput(output);
-      expect(verifier.getHealth().outputGeneration).toBe(2);
-      expect(verifier.getHealth().verifiedOutputGeneration).toBe(1);
-      verifier.recordInput(output);
-      expect(verifier.getHealth().verifiedOutputGeneration).toBe(2);
-      expect(verifier.getHealth().outputLoopbackSignalBytes).toBe(output.byteLength * 2);
-      const nextVerified = verifier.getHealth();
-      verifier.cancelOutput();
-      verifier.recordInput(output);
-      expect(verifier.getHealth()).toEqual(nextVerified);
-    },
-  );
+    nowMs += 1;
+    verifier.recordOutput(output);
+    expect(verifier.getHealth()).toMatchObject({
+      outputGeneration: 2,
+      verifiedOutputGeneration: 1,
+    });
+    verifier.recordInput(output);
+    expect(verifier.getHealth()).toMatchObject({
+      verifiedOutputGeneration: 2,
+      outputLoopbackSignalBytes: output.byteLength * 2,
+    });
+    const nextVerified = verifier.getHealth();
+    verifier.cancelOutput();
+    verifier.recordInput(output);
+    expect(verifier.getHealth()).toEqual(nextVerified);
+  });
 
   it("matches loopback delayed by a sub-frame sample offset", () => {
-    const verifier = createMeetingOutputLoopbackVerifier({ audioFormat: "pcm16-24khz" });
     const output = pcmEnergyFrames(outputEnvelope.slice(0, 30));
-    const fiveMsPreRoll = Buffer.alloc(120 * 2);
-    const capture = Buffer.concat([fiveMsPreRoll, output]);
-
-    verifier.beginOutput();
-    verifier.recordOutput(output);
+    const capture = Buffer.concat([Buffer.alloc(120 * 2), output]);
+    const verifier = createVerifier({}, output);
     verifier.recordInput(capture);
-
     expect(verifier.getHealth().outputLoopbackSignalBytes).toBe(capture.byteLength);
   });
 
   it("rejects a correlated waveform below the signal threshold", () => {
-    const verifier = createMeetingOutputLoopbackVerifier({ audioFormat: "pcm16-24khz" });
     const output = pcmEnergyFrames(outputEnvelope.slice(0, 20));
     const attenuated = pcmEnergyFrames(
       outputEnvelope.slice(0, 20).map((amplitude) => amplitude * 0.0005),
     );
     const unrelatedLoudAudio = pcmEnergyFrames(unrelatedEnvelope.slice(0, 20));
 
-    verifier.beginOutput();
-    verifier.recordOutput(output);
+    const verifier = createVerifier({}, output);
     verifier.recordInput(Buffer.concat([attenuated, unrelatedLoudAudio]));
-
     expect(verifier.getHealth().outputLoopbackSignalBytes).toBe(0);
   });
 
   it("preserves silent spacing between streamed output chunks", () => {
-    const verifier = createMeetingOutputLoopbackVerifier({ audioFormat: "pcm16-24khz" });
     const first = pcmEnergyFrames(outputEnvelope.slice(0, 30));
     const silence = pcmEnergyFrames(Array(30).fill(0));
     const second = pcmEnergyFrames(outputEnvelope.slice(30, 60));
     const expectedRecentReference = Buffer.concat([silence.subarray(4_800), second]);
 
-    verifier.beginOutput();
-    verifier.recordOutput(first);
+    const verifier = createVerifier({}, first);
     verifier.recordOutput(silence);
     verifier.recordOutput(second);
     verifier.recordInput(expectedRecentReference);
-
     expect(verifier.getHealth().outputLoopbackSignalBytes).toBe(expectedRecentReference.byteLength);
   });
 });
