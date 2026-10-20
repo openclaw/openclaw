@@ -20,6 +20,7 @@ import { loadSessionTranscriptEvents as transcript } from "./session-transcript-
 vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
   kickSessionEntryMaintenanceAfterWrite() {},
 }));
+// mock-isolation: Disk-budget maintenance must not evict histories while deletion fixtures assert them.
 vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMaintenance() {} }));
 afterEach(() => vi.restoreAllMocks());
 let state: OpenClawTestState;

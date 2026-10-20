@@ -6,6 +6,7 @@ import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./reply-agent-t
 
 const mocks = vi.hoisted(() => ({ refreshQueuedFollowupSession: vi.fn() }));
 
+// mock-isolation: Queue accounting uses a fixed context limit without the process-wide model cache.
 vi.mock("../../agents/context.js", () => ({
   resolveContextTokensForModel: () => 200_000,
 }));

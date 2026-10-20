@@ -9,6 +9,7 @@ import {
 } from "./services.test-support.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 
+// mock-isolation: Service cleanup failures must not write to process-wide log sinks.
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () =>
     Object.fromEntries(["info", "warn", "error", "debug"].map((method) => [method, vi.fn()])),
