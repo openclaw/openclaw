@@ -1,6 +1,27 @@
 import { describe, expect, it } from "vitest";
 import { validateJsonSchemaValue } from "./schema-validator.js";
 
+function diagnostic(
+  path: string,
+  valuePath: string[],
+  message: string,
+  text = `${path}: ${message}`,
+) {
+  return { path, valuePath, message, text };
+}
+
+function required(path: string, valuePath: string[], name: string) {
+  return diagnostic(path, valuePath, `must have required property '${name}'`);
+}
+
+function dependency(path: string, valuePath: string[], trigger: string, names = "left, right") {
+  return diagnostic(
+    path,
+    valuePath,
+    `must have properties ${names} when property ${trigger} is present`,
+  );
+}
+
 function expectValidationFailure(
   params: Parameters<typeof validateJsonSchemaValue>[0],
 ): Extract<ReturnType<typeof validateJsonSchemaValue>, { ok: false }> {
@@ -61,18 +82,8 @@ describe("schema validator", () => {
       },
       value: { settings: {} },
       expectedErrors: [
-        {
-          path: "settings.endpoint",
-          valuePath: ["settings", "endpoint"],
-          message: "must have required property 'endpoint'",
-          text: "settings.endpoint: must have required property 'endpoint'",
-        },
-        {
-          path: "settings.token",
-          valuePath: ["settings", "token"],
-          message: "must have required property 'token'",
-          text: "settings.token: must have required property 'token'",
-        },
+        required("settings.endpoint", ["settings", "endpoint"], "endpoint"),
+        required("settings.token", ["settings", "token"], "token"),
       ],
     },
     {
@@ -80,18 +91,13 @@ describe("schema validator", () => {
       schema: { type: "object", required: ["endpoint", "evil\nkey\t\x1b[31mred\x1b[0m"] },
       value: {},
       expectedErrors: [
-        {
-          path: "endpoint",
-          valuePath: ["endpoint"],
-          message: "must have required property 'endpoint'",
-          text: "endpoint: must have required property 'endpoint'",
-        },
-        {
-          path: "evil\nkey\t\x1b[31mred\x1b[0m",
-          valuePath: ["evil\nkey\t\x1b[31mred\x1b[0m"],
-          message: "must have required property 'evil\nkey\t\x1b[31mred\x1b[0m'",
-          text: "evil\\nkey\\tred: must have required property 'evil\\nkey\\tred'",
-        },
+        required("endpoint", ["endpoint"], "endpoint"),
+        diagnostic(
+          "evil\nkey\t\x1b[31mred\x1b[0m",
+          ["evil\nkey\t\x1b[31mred\x1b[0m"],
+          "must have required property 'evil\nkey\t\x1b[31mred\x1b[0m'",
+          "evil\\nkey\\tred: must have required property 'evil\\nkey\\tred'",
+        ),
       ],
     },
     {
@@ -107,36 +113,11 @@ describe("schema validator", () => {
       },
       value: { settings: {} },
       expectedErrors: [
-        {
-          path: "settings.dot.name",
-          valuePath: ["settings", "dot.name"],
-          message: "must have required property 'dot.name'",
-          text: "settings.dot.name: must have required property 'dot.name'",
-        },
-        {
-          path: "settings.slash/name",
-          valuePath: ["settings", "slash/name"],
-          message: "must have required property 'slash/name'",
-          text: "settings.slash/name: must have required property 'slash/name'",
-        },
-        {
-          path: "settings.tilde~1name",
-          valuePath: ["settings", "tilde~1name"],
-          message: "must have required property 'tilde~1name'",
-          text: "settings.tilde~1name: must have required property 'tilde~1name'",
-        },
-        {
-          path: "settings",
-          valuePath: ["settings", ""],
-          message: "must have required property ''",
-          text: "settings: must have required property ''",
-        },
-        {
-          path: "settings.<root>",
-          valuePath: ["settings", "<root>"],
-          message: "must have required property '<root>'",
-          text: "settings.<root>: must have required property '<root>'",
-        },
+        required("settings.dot.name", ["settings", "dot.name"], "dot.name"),
+        required("settings.slash/name", ["settings", "slash/name"], "slash/name"),
+        required("settings.tilde~1name", ["settings", "tilde~1name"], "tilde~1name"),
+        required("settings", ["settings", ""], ""),
+        required("settings.<root>", ["settings", "<root>"], "<root>"),
       ],
     },
   ])(
@@ -158,27 +139,13 @@ describe("schema validator", () => {
         title: "all dependencies missing in one condition",
         schema: { type: "object", dependentRequired: { a: ["b", "c"] } },
         value: { a: true },
-        expectedErrors: [
-          {
-            path: "<root>",
-            valuePath: [],
-            message: "must have properties b, c when property a is present",
-            text: "<root>: must have properties b, c when property a is present",
-          },
-        ],
+        expectedErrors: [dependency("<root>", [], "a", "b, c")],
       },
       {
         title: "root with the first dependency already present",
         schema: { type: "object", dependencies: { a: ["b", "c"] } },
         value: { a: true, b: "present" },
-        expectedErrors: [
-          {
-            path: "<root>",
-            valuePath: [],
-            message: "must have properties b, c when property a is present",
-            text: "<root>: must have properties b, c when property a is present",
-          },
-        ],
+        expectedErrors: [dependency("<root>", [], "a", "b, c")],
       },
       {
         title: "literal and nested containers with distinct conditions",
@@ -203,30 +170,10 @@ describe("schema validator", () => {
           "room%2Fone": { percent: true, right: "present" },
         },
         expectedErrors: [
-          {
-            path: "room.one",
-            valuePath: ["room/one"],
-            message: "must have properties left, right when property literal is present",
-            text: "room.one: must have properties left, right when property literal is present",
-          },
-          {
-            path: "room.one",
-            valuePath: ["room", "one"],
-            message: "must have properties left, right when property nested is present",
-            text: "room.one: must have properties left, right when property nested is present",
-          },
-          {
-            path: "room~1one",
-            valuePath: ["room~1one"],
-            message: "must have properties left, right when property tilde is present",
-            text: "room~1one: must have properties left, right when property tilde is present",
-          },
-          {
-            path: "room%2Fone",
-            valuePath: ["room%2Fone"],
-            message: "must have properties left, right when property percent is present",
-            text: "room%2Fone: must have properties left, right when property percent is present",
-          },
+          dependency("room.one", ["room/one"], "literal"),
+          dependency("room.one", ["room", "one"], "nested"),
+          dependency("room~1one", ["room~1one"], "tilde"),
+          dependency("room%2Fone", ["room%2Fone"], "percent"),
         ],
       },
     ])(
