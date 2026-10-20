@@ -1,32 +1,18 @@
-// Matrix tests cover resolve targets plugin behavior.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelDirectoryEntry } from "../runtime-api.js";
+import { listMatrixDirectoryGroupsLive, listMatrixDirectoryPeersLive } from "./directory-live.js";
+import { resolveMatrixTargets } from "./resolve-targets.js";
 
 vi.mock("./directory-live.js", () => ({
   listMatrixDirectoryPeersLive: vi.fn(),
   listMatrixDirectoryGroupsLive: vi.fn(),
 }));
 
-let listMatrixDirectoryGroupsLive: typeof import("./directory-live.js").listMatrixDirectoryGroupsLive;
-let listMatrixDirectoryPeersLive: typeof import("./directory-live.js").listMatrixDirectoryPeersLive;
-let resolveMatrixTargets: typeof import("./resolve-targets.js").resolveMatrixTargets;
-
-async function resolveUserTarget(input = "Alice") {
-  const [result] = await resolveMatrixTargets({
-    cfg: {},
-    inputs: [input],
-    kind: "user",
-  });
-  return result;
+function resolve(kind: "user" | "group", inputs: string[], accountId?: string) {
+  return resolveMatrixTargets({ cfg: {}, inputs, kind, accountId });
 }
 
 describe("resolveMatrixTargets (users)", () => {
-  beforeAll(async () => {
-    ({ listMatrixDirectoryGroupsLive, listMatrixDirectoryPeersLive } =
-      await import("./directory-live.js"));
-    ({ resolveMatrixTargets } = await import("./resolve-targets.js"));
-  });
-
   beforeEach(() => {
     vi.mocked(listMatrixDirectoryPeersLive).mockReset();
     vi.mocked(listMatrixDirectoryGroupsLive).mockReset();
@@ -39,7 +25,7 @@ describe("resolveMatrixTargets (users)", () => {
     ];
     vi.mocked(listMatrixDirectoryPeersLive).mockResolvedValue(matches);
 
-    const result = await resolveUserTarget();
+    const [result] = await resolve("user", ["Alice"]);
 
     expect(result?.resolved).toBe(false);
     expect(result?.note).toMatch(/use full Matrix ID/i);
@@ -52,11 +38,7 @@ describe("resolveMatrixTargets (users)", () => {
     ];
     vi.mocked(listMatrixDirectoryGroupsLive).mockResolvedValue(matches);
 
-    const [result] = await resolveMatrixTargets({
-      cfg: {},
-      inputs: ["#team"],
-      kind: "group",
-    });
+    const [result] = await resolve("group", ["#team"]);
 
     expect(result?.resolved).toBe(true);
     expect(result?.id).toBe("!two:example.org");
@@ -77,18 +59,8 @@ describe("resolveMatrixTargets (users)", () => {
       { kind: "group", id: "!team:example.org", name: "Team", handle: "#team" },
     ]);
 
-    const userResults = await resolveMatrixTargets({
-      cfg: {},
-      accountId: "ops",
-      inputs: ["Alice", " alice "],
-      kind: "user",
-    });
-    const groupResults = await resolveMatrixTargets({
-      cfg: {},
-      accountId: "ops",
-      inputs: ["#team", "#team"],
-      kind: "group",
-    });
+    const userResults = await resolve("user", ["Alice", " alice "], "ops");
+    const groupResults = await resolve("group", ["#team", "#team"], "ops");
 
     expect(userResults).toEqual([
       { input: "Alice", resolved: true, id: "@alice:example.org", name: "Alice", note: undefined },
@@ -118,16 +90,8 @@ describe("resolveMatrixTargets (users)", () => {
   });
 
   it("accepts prefixed fully qualified ids without directory lookups", async () => {
-    const userResults = await resolveMatrixTargets({
-      cfg: {},
-      inputs: ["matrix:user:@alice:example.org"],
-      kind: "user",
-    });
-    const groupResults = await resolveMatrixTargets({
-      cfg: {},
-      inputs: ["matrix:room:!team:example.org"],
-      kind: "group",
-    });
+    const userResults = await resolve("user", ["matrix:user:@alice:example.org"]);
+    const groupResults = await resolve("group", ["matrix:room:!team:example.org"]);
 
     expect(userResults).toEqual([
       {

@@ -28,9 +28,21 @@ import {
 } from "./plugin-entry.runtime.js";
 import { applyMatrixProfileUpdate } from "./profile-update.js";
 
-const cfg: CoreConfig = {
-  channels: { matrix: { accounts: { ops: { homeserver: "https://matrix.example.org" } } } },
-};
+const account = { homeserver: "https://matrix.example.org" };
+function config(ops = account): CoreConfig {
+  return { channels: { matrix: { accounts: { ops } } } };
+}
+const cfg = config();
+const context = { getRuntimeConfig: () => cfg };
+
+async function invoke(
+  handle: typeof handleVerificationBootstrap,
+  params: Parameters<typeof handleVerificationBootstrap>[0]["params"],
+) {
+  const respond = vi.fn();
+  await handle({ params, respond, context });
+  return respond;
+}
 
 describe("Matrix command config handoff", () => {
   beforeEach(() => {
@@ -57,9 +69,7 @@ describe("Matrix command config handoff", () => {
   });
 
   it.each([false, true])("updates the profile with explicit config=%s", async (explicit) => {
-    const supplied: CoreConfig = {
-      channels: { matrix: { accounts: { ops: { homeserver: "https://tool.example.org" } } } },
-    };
+    const supplied = config({ homeserver: "https://tool.example.org" });
     const result = await applyMatrixProfileUpdate({
       account: "ops",
       displayName: "Ops Bot",
@@ -73,23 +83,16 @@ describe("Matrix command config handoff", () => {
     expect(mocks.acquire).toHaveBeenCalledWith(
       expect.objectContaining({ cfg: explicit ? supplied : cfg }),
     );
+    const ops = {
+      ...account,
+      enabled: true,
+      name: "Ops Bot",
+      avatarUrl: "mxc://example.org/avatar",
+    };
+    const nextConfig = { channels: { matrix: { enabled: true, accounts: { ops } } } };
     expect(mocks.replaceConfigFile).toHaveBeenCalledWith(
       expect.objectContaining({
-        nextConfig: expect.objectContaining({
-          channels: {
-            matrix: {
-              enabled: true,
-              accounts: {
-                ops: {
-                  homeserver: "https://matrix.example.org",
-                  enabled: true,
-                  name: "Ops Bot",
-                  avatarUrl: "mxc://example.org/avatar",
-                },
-              },
-            },
-          },
-        }),
+        nextConfig: expect.objectContaining(nextConfig),
       }),
     );
     expect(mocks.release).toHaveBeenCalledWith({ mode: "persist" });
@@ -103,17 +106,12 @@ describe("Matrix command config handoff", () => {
     "runs %s verification with Gateway config",
     async (_label, handle, params, result) => {
       for (const routed of [false, true]) {
-        const respond = vi.fn();
-        await handle({
-          params: {
-            accountId: "ops",
-            ...params,
-            ...(routed ? { expectedOwnerId: "owner-fixture" } : {}),
-          },
-          respond,
-          context: { getRuntimeConfig: () => cfg },
+        const response = await invoke(handle, {
+          accountId: "ops",
+          ...params,
+          ...(routed ? { expectedOwnerId: "owner-fixture" } : {}),
         });
-        expect(respond).toHaveBeenCalledWith(true, routed ? { result, accountId: "ops" } : result);
+        expect(response).toHaveBeenCalledWith(true, routed ? { result, accountId: "ops" } : result);
       }
       expect(mocks.acquire).toHaveBeenCalledWith(
         expect.objectContaining({ cfg, accountId: "ops" }),
@@ -125,13 +123,11 @@ describe("Matrix command config handoff", () => {
   it("preserves structured verification failure for CLI rendering and legacy RPCs", async () => {
     mocks.bootstrap.mockResolvedValue({ success: false });
     for (const routed of [false, true]) {
-      const respond = vi.fn();
-      await handleVerificationBootstrap({
-        params: routed ? { expectedOwnerId: "owner-fixture" } : {},
-        respond,
-        context: { getRuntimeConfig: () => cfg },
-      });
-      expect(respond).toHaveBeenCalledWith(
+      const response = await invoke(
+        handleVerificationBootstrap,
+        routed ? { expectedOwnerId: "owner-fixture" } : {},
+      );
+      expect(response).toHaveBeenCalledWith(
         routed,
         routed ? { result: { success: false }, accountId: "ops" } : { success: false },
       );
@@ -141,17 +137,12 @@ describe("Matrix command config handoff", () => {
   it.each([false, true])(
     "includes the stored recovery key only when explicitly requested (%s)",
     async (includeRecoveryKey) => {
-      const respond = vi.fn();
-      await handleVerificationStatus({
-        params: {
-          expectedOwnerId: "owner-fixture",
-          includeRecoveryKey,
-          allowDegradedLocalState: true,
-        },
-        respond,
-        context: { getRuntimeConfig: () => cfg },
+      const response = await invoke(handleVerificationStatus, {
+        expectedOwnerId: "owner-fixture",
+        includeRecoveryKey,
+        allowDegradedLocalState: true,
       });
-      expect(respond).toHaveBeenCalledWith(true, {
+      expect(response).toHaveBeenCalledWith(true, {
         accountId: "ops",
         result: {
           serverDeviceKnown: false,
