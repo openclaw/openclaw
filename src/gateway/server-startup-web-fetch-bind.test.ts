@@ -3,10 +3,10 @@ import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { installGatewayTestHooks, startTestGatewayServer } from "./test-helpers.js";
 
 const webFetchProviderDiscovery = vi.hoisted(() => ({
-  resolveBundledWebFetchProvidersFromPublicArtifactsMock: vi.fn(() => {
+  bundled: vi.fn(() => {
     throw new Error("gateway startup must not discover bundled web fetch providers before bind");
   }),
-  resolvePluginWebFetchProvidersMock: vi.fn(() => {
+  plugin: vi.fn(() => {
     throw new Error("gateway startup must not discover plugin web fetch providers before bind");
   }),
 }));
@@ -41,7 +41,7 @@ vi.mock("../secrets/runtime-web-tools-fallback.runtime.js", async () => {
     ...actual,
     runtimeWebToolsFallbackProviders: {
       ...actual.runtimeWebToolsFallbackProviders,
-      resolvePluginWebFetchProviders: webFetchProviderDiscovery.resolvePluginWebFetchProvidersMock,
+      resolvePluginWebFetchProviders: webFetchProviderDiscovery.plugin,
     },
   };
 });
@@ -52,16 +52,15 @@ vi.mock("../plugins/web-provider-public-artifacts.js", async () => {
   >("../plugins/web-provider-public-artifacts.js");
   return {
     ...actual,
-    resolveBundledWebFetchProvidersFromPublicArtifacts:
-      webFetchProviderDiscovery.resolveBundledWebFetchProvidersFromPublicArtifactsMock,
+    resolveBundledWebFetchProvidersFromPublicArtifacts: webFetchProviderDiscovery.bundled,
   };
 });
 
 installGatewayTestHooks({ scope: "suite" });
 
 afterEach(() => {
-  webFetchProviderDiscovery.resolveBundledWebFetchProvidersFromPublicArtifactsMock.mockClear();
-  webFetchProviderDiscovery.resolvePluginWebFetchProvidersMock.mockClear();
+  webFetchProviderDiscovery.bundled.mockClear();
+  webFetchProviderDiscovery.plugin.mockClear();
 });
 
 describe("gateway startup web fetch config", () => {
@@ -76,28 +75,16 @@ describe("gateway startup web fetch config", () => {
     await writeConfigFile({
       gateway: { mode: "local", bind: "loopback", auth: { mode: "none" } },
       plugins: { enabled: true, allow: [], entries: {} },
-      tools: {
-        web: {
-          fetch: {
-            enabled: true,
-            maxChars: 200_000,
-            maxCharsCap: 2_000_000,
-          },
-        },
-      },
+      tools: { web: { fetch: { enabled: true, maxChars: 200_000, maxCharsCap: 2_000_000 } } },
     });
 
     const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
     port = portClaim.port;
-    server = await startTestGatewayServer(portClaim, {
-      auth: { mode: "none" },
-    });
+    server = await startTestGatewayServer(portClaim, { auth: { mode: "none" } });
   });
 
   afterAll(async () => {
-    if (server) {
-      await server.close();
-    }
+    await server?.close();
     if (previousMinimal === undefined) {
       delete process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
     } else {
@@ -111,9 +98,9 @@ describe("gateway startup web fetch config", () => {
     });
     await response.text();
     expect(response.status).toBe(200);
-    expect(
-      webFetchProviderDiscovery.resolveBundledWebFetchProvidersFromPublicArtifactsMock,
-    ).not.toHaveBeenCalled();
-    expect(webFetchProviderDiscovery.resolvePluginWebFetchProvidersMock).not.toHaveBeenCalled();
+    expect([
+      webFetchProviderDiscovery.bundled.mock.calls,
+      webFetchProviderDiscovery.plugin.mock.calls,
+    ]).toEqual([[], []]);
   });
 });

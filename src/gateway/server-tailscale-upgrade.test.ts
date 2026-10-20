@@ -15,13 +15,11 @@ describe("managed Tailscale upgrade", () => {
     funnel = false,
     proxyPort = 18789,
     paths: Record<string, ReturnType<typeof handler>> = { "/": handler(proxyPort) },
-  ) => {
-    return {
-      TCP: { "443": { HTTPS: true } },
-      Web: { [host]: { Handlers: paths } },
-      ...(funnel ? { AllowFunnel: { [host]: true } } : {}),
-    };
-  };
+  ) => ({
+    TCP: { "443": { HTTPS: true } },
+    Web: { [host]: { Handlers: paths } },
+    ...(funnel ? { AllowFunnel: { [host]: true } } : {}),
+  });
 
   const installFixture = async (config: object, mode: "serve" | "funnel") => {
     const fixture = fileURLToPath(
@@ -36,23 +34,34 @@ describe("managed Tailscale upgrade", () => {
     return marker;
   };
 
+  let exposure: ReturnType<typeof startGatewayTailscaleExposure> | undefined;
   beforeEach(() => {
+    exposure = undefined;
     const env = captureEnv([
       "OPENCLAW_TEST_TAILSCALE_BINARY",
       "OPENCLAW_TEST_TAILSCALE_FIXTURE_MARKER",
       "OPENCLAW_TEST_TAILSCALE_FIXTURE_MODE",
       "VITEST",
     ]);
-    return () => env.restore();
+    return async () => {
+      try {
+        await exposure?.then(
+          (cleanup) => cleanup?.(),
+          () => undefined,
+        );
+      } finally {
+        env.restore();
+      }
+    };
   });
 
   const expose = (mode: "serve" | "funnel", port = 18789, info = vi.fn()) =>
-    startGatewayTailscaleExposure({
+    (exposure = startGatewayTailscaleExposure({
       tailscaleMode: mode,
       port,
       backend: { host: "127.0.0.1", port: 19000 },
       logTailscale: { info, warn: () => undefined },
-    });
+    }));
 
   it.each([
     ["serve", 443],
@@ -61,15 +70,11 @@ describe("managed Tailscale upgrade", () => {
   ] as const)("adopts a predecessor %s route to Gateway port %s", async (mode, port) => {
     const marker = await installFixture(legacyRoute(mode === "funnel", port), mode);
     const info = vi.fn();
-    const cleanup = await expose(mode, port, info);
-    try {
-      expect(JSON.parse(await readFile(marker, "utf8"))).toEqual({});
-      expect(info).toHaveBeenCalledWith(
-        expect.stringContaining("adopted from a previous OpenClaw release"),
-      );
-    } finally {
-      await cleanup?.();
-    }
+    await expose(mode, port, info);
+    expect(JSON.parse(await readFile(marker, "utf8"))).toEqual({});
+    expect(info).toHaveBeenCalledWith(
+      expect.stringContaining("adopted from a previous OpenClaw release"),
+    );
   });
 
   it.each([
@@ -96,27 +101,15 @@ describe("managed Tailscale upgrade", () => {
   ])("does not modify a %s", async (_label, config, recovery = /--https=443 --set-path=\/ off/) => {
     const marker = await installFixture(config, "serve");
     const before = await readFile(marker, "utf8");
-    const exposure = expose("serve");
-    try {
-      await expect(exposure).rejects.toThrow(recovery);
-      expect(await readFile(marker, "utf8")).toBe(before);
-    } finally {
-      await exposure.then(
-        (cleanup) => cleanup?.(),
-        () => undefined,
-      );
-    }
+    await expect(expose("serve")).rejects.toThrow(recovery);
+    expect(await readFile(marker, "utf8")).toBe(before);
   });
 
   it("does not mutate an independent Tailscale Service", async () => {
     const marker = await installFixture({ Services: { "svc:other": legacyRoute() } }, "serve");
     const before = await readFile(marker, "utf8");
 
-    const cleanup = await expose("serve");
-    try {
-      expect(await readFile(marker, "utf8")).toBe(before);
-    } finally {
-      await cleanup?.();
-    }
+    await expose("serve");
+    expect(await readFile(marker, "utf8")).toBe(before);
   });
 });

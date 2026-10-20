@@ -64,37 +64,25 @@ beforeAll(async () => {
     },
   });
 
-  const [
-    cliShim,
-    githubCleanup,
-    plugins,
-    workers,
-    projection,
-    lifetime,
-    discovery,
-    skills,
-    subagents,
-  ] = await Promise.all([
-    import("../infra/openclaw-cli-shim.js"),
-    import("../agents/github-tool-profile-cleanup.js"),
-    import("./server-startup-plugins.js"),
-    import("./server-worker-environment-startup.js"),
-    import("./session-row-projection.js"),
-    import("./server-lifetime-sidecars.js"),
-    import("./server-discovery-runtime.js"),
-    import("../skills/runtime/remote.js"),
-    import("../agents/subagents/registry/subagent-registry.js"),
-  ]);
+  const [cli, gh, plugins, workers, rows, sidecars, discovery, skills, subagents] =
+    await Promise.all([
+      import("../infra/openclaw-cli-shim.js"),
+      import("../agents/github-tool-profile-cleanup.js"),
+      import("./server-startup-plugins.js"),
+      import("./server-worker-environment-startup.js"),
+      import("./session-row-projection.js"),
+      import("./server-lifetime-sidecars.js"),
+      import("./server-discovery-runtime.js"),
+      import("../skills/runtime/remote.js"),
+      import("../agents/subagents/registry/subagent-registry.js"),
+    ]);
   for (const [spy, name] of [
-    [vi.spyOn(cliShim, "prepareGatewayAgentCliShim"), "agent CLI shim"],
-    [
-      vi.spyOn(githubCleanup, "cleanupRetiredManagedGitHubProfiles"),
-      "managed GitHub profile cleanup",
-    ],
+    [vi.spyOn(cli, "prepareGatewayAgentCliShim"), "agent CLI shim"],
+    [vi.spyOn(gh, "cleanupRetiredManagedGitHubProfiles"), "managed GitHub profile cleanup"],
     [vi.spyOn(plugins, "runGatewayPostReadyStartupMaintenance"), "channel and session maintenance"],
     [vi.spyOn(workers, "loadGatewayWorkerEnvironmentStartupState"), "worker environment recovery"],
-    [vi.spyOn(projection, "createSessionRowProjection"), "session catalog hydration"],
-    [vi.spyOn(lifetime, "attachInitialGatewayLifetimeSidecars"), "initial lifetime sidecars"],
+    [vi.spyOn(rows, "createSessionRowProjection"), "session catalog hydration"],
+    [vi.spyOn(sidecars, "attachInitialGatewayLifetimeSidecars"), "initial lifetime sidecars"],
     [vi.spyOn(discovery, "startGatewayDiscovery"), "discovery"],
     [vi.spyOn(skills, "primeRemoteSkillsCache"), "remote skills warmup"],
     [vi.spyOn(subagents, "initSubagentRegistry"), "subagent recovery hydration"],
@@ -141,12 +129,12 @@ afterAll(async () => {
 });
 
 it("serves candidate readiness without starting normal Gateway maintenance", async () => {
-  const startup = await fetch(`http://127.0.0.1:${claim!.port}/startupz`);
-  expect(startup.status).toBe(200);
-  await expect(startup.json()).resolves.toMatchObject({ status: "started" });
-  const readiness = await fetch(`http://127.0.0.1:${claim!.port}/readyz`);
-  expect(readiness.status).toBe(200);
-  await expect(readiness.json()).resolves.toMatchObject({ ready: true });
+  const health = { startupz: { status: "started" }, readyz: { ready: true } };
+  for (const [route, body] of Object.entries(health)) {
+    const response = await fetch(`http://127.0.0.1:${claim!.port}/${route}`);
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject(body);
+  }
   expect(loadedPlugins).toContain("canary-startup-fixture");
   expect(deferredCalls).toEqual([]);
 });
