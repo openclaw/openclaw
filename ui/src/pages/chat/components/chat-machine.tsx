@@ -1,4 +1,5 @@
 import { For, Show } from "solid-js";
+import { ElapsedTime } from "../../../components/elapsed-time.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import {
@@ -97,7 +98,7 @@ export function ChatMachine(props: ChatMachineProps) {
               {t("sessionsView.syncingCloudFilesDetail")}
               <Show when={view().syncElapsed !== undefined}>
                 {" "}
-                · <openclaw-elapsed-time prop:startMs={view().syncElapsed} />
+                · <ElapsedTime startMs={view().syncElapsed} />
               </Show>
             </p>
           </Show>
