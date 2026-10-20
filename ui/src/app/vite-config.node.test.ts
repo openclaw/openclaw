@@ -22,7 +22,6 @@ import { controlUiLocaleModulesPlugin } from "../../config/control-ui-locales.ts
 import controlUiViteConfig, {
   createControlUiPrecompressedAssetVariants,
   resolveControlUiBuildInfo,
-  resolveControlUiModulePreloadDependencies,
   resolveExternalPackageAliasesForVite,
   resolveSourcePackageAliasesForVite,
   resolveTsconfigPathAliasesForVite,
@@ -183,71 +182,6 @@ describe("Control UI Vite config", () => {
     expect(await createControlUiPrecompressedAssetVariants("assets/app.js.map", source)).toEqual(
       [],
     );
-  });
-
-  it("filters only a locale target and its matching config-hint preload", () => {
-    const filename = "assets/zh-TW-Qr78St90.js";
-    const deps = [
-      filename,
-      "assets/lit-runtime-Ef56Gh78.js",
-      "assets/locale-config-hints-zh-TW-D1.js",
-      "assets/locale-config-hints-de-D2.js",
-      "assets/styles.css",
-    ];
-
-    expect(
-      resolveControlUiModulePreloadDependencies(filename, deps, {
-        hostId: "assets/control-ui-core-Ab12Cd34.js",
-        hostType: "js",
-      }),
-    ).toEqual([
-      "assets/lit-runtime-Ef56Gh78.js",
-      "assets/locale-config-hints-de-D2.js",
-      "assets/styles.css",
-    ]);
-    expect(
-      resolveControlUiModulePreloadDependencies("assets/control-ui-core-Ab12Cd34.js", deps, {
-        hostId: "assets/index-Ab12Cd34.js",
-        hostType: "js",
-      }),
-    ).toBe(deps);
-    expect(
-      resolveControlUiModulePreloadDependencies(filename, deps, {
-        hostId: "index.html",
-        hostType: "html",
-      }),
-    ).toBe(deps);
-  });
-
-  it("keeps locale targets unchanged without a matching config-hint preload", () => {
-    const filename = "assets/zh-TW-Qr78St90.js";
-    const deps = [filename, "assets/locale-config-hints-de-D2.js"];
-
-    expect(
-      resolveControlUiModulePreloadDependencies(filename, deps, {
-        hostId: "assets/control-ui-core-Ab12Cd34.js",
-        hostType: "js",
-      }),
-    ).toBe(deps);
-
-    const hintWithoutTarget = ["assets/locale-config-hints-zh-TW-D1.js"];
-    expect(
-      resolveControlUiModulePreloadDependencies(filename, hintWithoutTarget, {
-        hostId: "assets/control-ui-core-Ab12Cd34.js",
-        hostType: "js",
-      }),
-    ).toEqual([]);
-
-    const nestedTarget = [
-      "assets/nested/zh-TW-Qr78St90.js",
-      "assets/locale-config-hints-zh-TW-D1.js",
-    ];
-    expect(
-      resolveControlUiModulePreloadDependencies(nestedTarget[0]!, nestedTarget, {
-        hostId: "assets/control-ui-core-Ab12Cd34.js",
-        hostType: "js",
-      }),
-    ).toBe(nestedTarget);
   });
 
   it("uses the supplied artifact identity without reading Git metadata", () => {

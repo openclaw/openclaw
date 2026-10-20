@@ -34,7 +34,7 @@ const CONTROL_UI_CSS_GZIP_GROWTH_BYTES = 1.5 * KIB;
 const MERMAID_RENDERER_ASSET = /^assets\/mermaid\.min-[\w-]+\.js$/u;
 const MERMAID_RENDERER_GZIP_BYTES = 960 * KIB;
 // Locale catalogs are named Vite chunks loaded only after a language selection.
-// Base and config-hint chunks share one budget because they activate atomically.
+// Keep one combined cap for base and on-demand config hints in every locale.
 const CONTROL_UI_LOCALE_ASSET_PATTERNS = CONTROL_UI_LOCALE_ENTRIES.flatMap(({ locale }) => [
   {
     locale,
