@@ -17,6 +17,27 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { prepareAgentRequestRouting } from "./agent-request-routing.js";
 
+async function route(
+  cfg: OpenClawConfig,
+  request: Parameters<typeof prepareAgentRequestRouting>[0]["request"],
+) {
+  const respond = vi.fn();
+  const routing = await prepareAgentRequestRouting({
+    cfg,
+    request,
+    runId: request.idempotencyKey,
+    context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
+    respond,
+    isRawModelRun: false,
+    agentDedupeKeys: [`agent:${request.idempotencyKey}`],
+    reserveDedupe: vi.fn(),
+    bindDedupeSessionTarget: vi.fn(),
+    clearDedupe: vi.fn(),
+  });
+  expect(respond).not.toHaveBeenCalled();
+  return routing;
+}
+
 it.each([false, true])(
   "creates a missing session-ID target only when requested (createSessionIfMissing=%s)",
   async (createSessionIfMissing) => {
@@ -32,27 +53,14 @@ it.each([false, true])(
         { agentId: "main", storePath, sessionKey: "agent:main:existing" },
         { sessionId: "existing-id", updatedAt: 1 },
       );
-      const respond = vi.fn();
       try {
-        const routing = await prepareAgentRequestRouting({
-          cfg,
-          request: {
-            message: "start a named session",
-            agentId: "main",
-            sessionId: "new-id",
-            createSessionIfMissing,
-            idempotencyKey: "creation",
-          },
-          runId: "creation",
-          context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
-          respond,
-          isRawModelRun: false,
-          agentDedupeKeys: ["agent:creation"],
-          reserveDedupe: vi.fn(),
-          bindDedupeSessionTarget: vi.fn(),
-          clearDedupe: vi.fn(),
+        const routing = await route(cfg, {
+          message: "start a named session",
+          agentId: "main",
+          sessionId: "new-id",
+          createSessionIfMissing,
+          idempotencyKey: "creation",
         });
-        expect(respond).not.toHaveBeenCalled();
         expect(routing).toMatchObject({
           agentId: "main",
           requestedSessionId: "new-id",
@@ -94,25 +102,12 @@ it.each([
       const openDatabase = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
       try {
         if (caller === "Gateway") {
-          const respond = vi.fn();
-          const routing = await prepareAgentRequestRouting({
-            cfg,
-            request: {
-              message: "resume",
-              sessionId: "ops-session",
-              createSessionIfMissing,
-              idempotencyKey: "lookup",
-            },
-            runId: "lookup",
-            context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
-            respond,
-            isRawModelRun: false,
-            agentDedupeKeys: ["agent:lookup"],
-            reserveDedupe: vi.fn(),
-            bindDedupeSessionTarget: vi.fn(),
-            clearDedupe: vi.fn(),
+          const routing = await route(cfg, {
+            message: "resume",
+            sessionId: "ops-session",
+            createSessionIfMissing,
+            idempotencyKey: "lookup",
           });
-          expect(respond).not.toHaveBeenCalled();
           expect(routing).toMatchObject({ agentId: "ops", requestedSessionKey: sessionKey });
         } else {
           const prepared = await prepareEmbeddedRunSession({

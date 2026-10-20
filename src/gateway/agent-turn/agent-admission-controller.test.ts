@@ -14,6 +14,47 @@ vi.mock("../session-utils-store-worker.js", () => ({
   loadGatewaySessionEntryReadOnlyInWorker: readEntry,
 }));
 
+function admission(sessionKey: string, runId: string, sessionId: string, expected = false) {
+  const state: { entry: SessionEntry | undefined; admittedSessionId: string } = {
+    entry: { sessionId, updatedAt: 1 },
+    admittedSessionId: sessionId,
+  };
+  const context = createDirectChatContext({ getRuntimeConfig: () => ({}) });
+  const io = createAgentTurnIo(vi.fn());
+  const agentDedupeKeys = [runId];
+  const controller = createAgentAdmissionController({
+    runId,
+    agentDedupeKeys,
+    expectedSession: expected ? { sessionId } : undefined,
+    context,
+    io,
+    dedupeLifecycle: createAgentDedupeLifecycle({
+      cfg: {},
+      request: { message: "continue", idempotencyKey: runId },
+      runId,
+      agentDedupeKeys,
+      suppressVisibleSessionEffects: false,
+      context,
+      io,
+    }),
+    getRequestedSessionKey: () => sessionKey,
+    getResolvedSessionKey: () => sessionKey,
+    getResolvedSessionId: () => state.admittedSessionId,
+    getSessionEntry: () => state.entry,
+    setSessionEntry: (current) => {
+      state.entry = current;
+    },
+    getResolvedSessionAgentId: () => "main",
+    getAgentId: () => "main",
+    getSessionPersisted: () => true,
+    getSupersededSessionId: () => undefined,
+    setAdmittedSessionId: (current) => {
+      state.admittedSessionId = current;
+    },
+  });
+  return { controller, state };
+}
+
 describe("agent admission session ownership", () => {
   it.for(["other session", "same session"])(
     "orders marker admission against pending replay for %s",
@@ -33,40 +74,9 @@ describe("agent admission session ownership", () => {
           await releaseReplay.promise;
         },
       });
-      let entry: SessionEntry | undefined = { sessionId: "marker", updatedAt: 1 };
-      readEntry.mockReset().mockResolvedValue({ entry });
-      const context = createDirectChatContext({ getRuntimeConfig: () => ({}) });
-      const io = createAgentTurnIo(vi.fn());
+      readEntry.mockReset().mockResolvedValue({ entry: { sessionId: "marker", updatedAt: 1 } });
       const runId = `marker-${replay}`;
-      const agentDedupeKeys = [runId];
-      const dedupeLifecycle = createAgentDedupeLifecycle({
-        cfg: {},
-        request: { message: "marker", idempotencyKey: runId },
-        runId,
-        agentDedupeKeys,
-        suppressVisibleSessionEffects: false,
-        context,
-        io,
-      });
-      const controller = createAgentAdmissionController({
-        runId,
-        agentDedupeKeys,
-        context,
-        io,
-        dedupeLifecycle,
-        getRequestedSessionKey: () => sessionKey,
-        getResolvedSessionKey: () => sessionKey,
-        getResolvedSessionId: () => "marker",
-        getSessionEntry: () => entry,
-        setSessionEntry: (current) => {
-          entry = current;
-        },
-        getResolvedSessionAgentId: () => "main",
-        getAgentId: () => "main",
-        getSessionPersisted: () => true,
-        getSupersededSessionId: () => undefined,
-        setAdmittedSessionId: () => {},
-      });
+      const { controller } = admission(sessionKey, runId, "marker");
       let marker: Promise<void> | undefined;
       try {
         await withinTest(replayEntered.promise, signal);
@@ -101,57 +111,22 @@ describe("agent admission session ownership", () => {
     "refreshes after acquiring the lifecycle lease and keeps committed state (expected=%s)",
     async (expected) => {
       const sessionKey = `agent:main:admission-owner-${expected}`;
-      let entry: SessionEntry | undefined = { sessionId: "prepared", updatedAt: 1 };
-      let admittedSessionId = "prepared";
       readEntry.mockReset().mockResolvedValue({
         entry: { sessionId: "replacement", updatedAt: 2 },
       });
-      const context = createDirectChatContext({ getRuntimeConfig: () => ({}) });
-      const io = createAgentTurnIo(vi.fn());
       const runId = `admission-owner-${expected}`;
-      const agentDedupeKeys = [runId];
-      const dedupeLifecycle = createAgentDedupeLifecycle({
-        cfg: {},
-        request: { message: "continue", idempotencyKey: runId },
-        runId,
-        agentDedupeKeys,
-        suppressVisibleSessionEffects: false,
-        context,
-        io,
-      });
-      const controller = createAgentAdmissionController({
-        runId,
-        agentDedupeKeys,
-        expectedSession: expected ? { sessionId: "prepared" } : undefined,
-        context,
-        io,
-        dedupeLifecycle,
-        getRequestedSessionKey: () => sessionKey,
-        getResolvedSessionKey: () => sessionKey,
-        getResolvedSessionId: () => admittedSessionId,
-        getSessionEntry: () => entry,
-        setSessionEntry: (current) => {
-          entry = current;
-        },
-        getResolvedSessionAgentId: () => "main",
-        getAgentId: () => "main",
-        getSessionPersisted: () => true,
-        getSupersededSessionId: () => undefined,
-        setAdmittedSessionId: (sessionId) => {
-          admittedSessionId = sessionId;
-        },
-      });
+      const { controller, state } = admission(sessionKey, runId, "prepared", expected);
       try {
         if (expected) {
           await expect(controller.acquire(runId)).rejects.toThrow("changed while starting");
         } else {
           await controller.acquire(runId);
-          expect(admittedSessionId).toBe("replacement");
+          expect(state.admittedSessionId).toBe("replacement");
           // The committing owner installs its postimage before the next synchronous guard.
-          entry = { sessionId: "committed", updatedAt: 3 };
+          state.entry = { sessionId: "committed", updatedAt: 3 };
           controller.assertAllowed();
-          expect(admittedSessionId).toBe("committed");
-          entry = { ...entry, archivedAt: 4 };
+          expect(state.admittedSessionId).toBe("committed");
+          state.entry = { ...state.entry, archivedAt: 4 };
           expect(() => controller.assertAllowed()).toThrow(/archived/i);
         }
         expect(readEntry).toHaveBeenCalledTimes(1);

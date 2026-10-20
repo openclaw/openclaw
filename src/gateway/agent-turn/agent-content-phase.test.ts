@@ -23,6 +23,60 @@ afterEach(async () => {
   await state?.cleanup();
 });
 
+function contentFixture(
+  cfg: OpenClawConfig,
+  testState: OpenClawTestState,
+  agentId: string,
+  useRequestedAgent = false,
+) {
+  const loadGatewayModelCatalogSnapshot = vi.fn<
+    AgentTurnContext["loadGatewayModelCatalogSnapshot"]
+  >(async (params) => ({
+    agentId: useRequestedAgent ? (params?.agentId ?? agentId) : agentId,
+    agentDir: testState.stateDir,
+    workspaceDir: testState.workspaceDir,
+    catalogComplete: true,
+    config: cfg,
+    entries: [
+      { id: "text-only", name: "Synthetic text model", provider: "mock-openai", input: ["text"] },
+      {
+        id: `${useRequestedAgent ? params?.agentId : agentId}-vision`,
+        name: "Synthetic vision model",
+        provider: "mock-openai",
+        input: ["text", "image"],
+      },
+    ] satisfies ModelCatalogEntry[],
+    routeVariants: [],
+  }));
+  const context: AgentTurnContext = {
+    addChatRun: vi.fn(),
+    agentRunSeq: new Map(),
+    broadcast: vi.fn(),
+    broadcastToConnIds: vi.fn(),
+    chatRunState: createChatRunState(),
+    dedupe: new Map(),
+    deps: {},
+    getRuntimeConfig: () => cfg,
+    trackExecution: async (work) => await work(),
+    getSessionEventSubscriberConnIds: () => new Set(),
+    loadGatewayModelCatalog: vi.fn(async () => []),
+    loadGatewayModelCatalogSnapshot,
+    logGateway: createSubsystemLogger("test/agent-content"),
+    nodeSendToSession: vi.fn(),
+    removeChatRun: vi.fn(() => undefined),
+  };
+  return {
+    cfg,
+    context,
+    respond: vi.fn(),
+    isRawModelRun: false,
+    agentId,
+    normalizedAttachments: [
+      { type: "file", mimeType: "image/png", fileName: "pixel.png", content: SYNTHETIC_PIXEL },
+    ],
+  };
+}
+
 it.each([
   { name: "main", agentId: "main", replaceDuringRead: false, targetAccepted: true },
   { name: "work", agentId: "work", replaceDuringRead: false, targetAccepted: true },
@@ -32,7 +86,6 @@ it.each([
   "resolves image admission using the explicit $name global session owner",
   async ({ agentId, replaceDuringRead, targetAccepted }) => {
     state = await createOpenClawTestState({ label: "agent-content-owner" });
-    const { stateDir, workspaceDir } = state;
     const cfg: OpenClawConfig = {
       agents: {
         ownership: "explicit",
@@ -70,49 +123,11 @@ it.each([
         },
       );
     }
-    const loadGatewayModelCatalogSnapshot = vi.fn<
-      AgentTurnContext["loadGatewayModelCatalogSnapshot"]
-    >(async (params) => ({
-      agentId: params?.agentId ?? agentId,
-      agentDir: stateDir,
-      workspaceDir,
-      catalogComplete: true,
-      config: cfg,
-      entries: [
-        {
-          id: "text-only",
-          name: "Synthetic text model",
-          provider: "mock-openai",
-          input: ["text"],
-        } satisfies ModelCatalogEntry,
-        {
-          id: `${params?.agentId}-vision`,
-          name: "Synthetic vision model",
-          provider: "mock-openai",
-          input: ["text", "image"],
-        } satisfies ModelCatalogEntry,
-      ],
-      routeVariants: [],
-    }));
-    const context: AgentTurnContext = {
-      addChatRun: vi.fn(),
-      agentRunSeq: new Map(),
-      broadcast: vi.fn(),
-      broadcastToConnIds: vi.fn(),
-
-      chatRunState: createChatRunState(),
-      dedupe: new Map(),
-      deps: {},
-      getRuntimeConfig: () => cfg,
-      trackExecution: async (work) => await work(),
-      getSessionEventSubscriberConnIds: () => new Set(),
-      loadGatewayModelCatalog: vi.fn(async () => []),
-      loadGatewayModelCatalogSnapshot,
-      logGateway: createSubsystemLogger("test/agent-content"),
-      nodeSendToSession: vi.fn(),
-      removeChatRun: vi.fn(() => undefined),
-    };
-    const respond = vi.fn();
+    const fixture = contentFixture(cfg, state, agentId, true);
+    const {
+      respond,
+      context: { loadGatewayModelCatalogSnapshot },
+    } = fixture;
     const targetEntered = createDeferred();
     const targetResolution = createDeferred<boolean>();
     const onTargetResolved = vi.fn(async () => {
@@ -120,29 +135,17 @@ it.each([
       return await targetResolution.promise;
     });
     const preparation = prepareAgentContentPhase({
+      ...fixture,
       request: {
         message: "Inspect this synthetic pixel",
         agentId,
         sessionKey: "global",
         idempotencyKey: `image-${agentId}`,
       },
-      cfg,
-      context,
-      respond,
-      isRawModelRun: false,
       requestedSessionKeyRaw: "global",
       requestedSessionKey: "global",
-      agentId,
       knownAgents: ["main", "work"],
       onTargetResolved,
-      normalizedAttachments: [
-        {
-          type: "file",
-          mimeType: "image/png",
-          fileName: "pixel.png",
-          content: SYNTHETIC_PIXEL,
-        },
-      ],
     });
     await targetEntered.promise;
     try {
@@ -230,70 +233,20 @@ it.each(modelSelectionCases)(
         },
       );
     }
-    const context: AgentTurnContext = {
-      addChatRun: vi.fn(),
-      agentRunSeq: new Map(),
-      broadcast: vi.fn(),
-      broadcastToConnIds: vi.fn(),
-      chatRunState: createChatRunState(),
-      dedupe: new Map(),
-      deps: {},
-      getRuntimeConfig: () => cfg,
-      trackExecution: async (work) => await work(),
-      getSessionEventSubscriberConnIds: () => new Set(),
-      loadGatewayModelCatalog: vi.fn(async () => []),
-      loadGatewayModelCatalogSnapshot: vi.fn(async () => ({
-        agentId: "main",
-        agentDir: testState.stateDir,
-        workspaceDir: testState.workspaceDir,
-        catalogComplete: true,
-        config: cfg,
-        entries: [
-          {
-            id: "text-only",
-            name: "Synthetic text model",
-            provider: "mock-openai",
-            input: ["text"],
-          } satisfies ModelCatalogEntry,
-          {
-            id: "main-vision",
-            name: "Synthetic vision model",
-            provider: "mock-openai",
-            input: ["text", "image"],
-          } satisfies ModelCatalogEntry,
-        ],
-        routeVariants: [],
-      })),
-      logGateway: createSubsystemLogger("test/agent-content"),
-      nodeSendToSession: vi.fn(),
-      removeChatRun: vi.fn(() => undefined),
-    };
-    const respond = vi.fn();
+    const fixture = contentFixture(cfg, testState, "main");
     const result = await prepareAgentContentPhase({
+      ...fixture,
       request: {
         message: "Inspect this synthetic pixel",
         agentId: "main",
         model: modelOverride,
         idempotencyKey: "image-offload",
       },
-      cfg,
-      context,
-      respond,
-      isRawModelRun: false,
       requestedSessionKey,
       modelOverride,
-      agentId: "main",
       knownAgents: ["main"],
-      normalizedAttachments: [
-        {
-          type: "file",
-          mimeType: "image/png",
-          fileName: "pixel.png",
-          content: SYNTHETIC_PIXEL,
-        },
-      ],
     });
-    expect(respond).not.toHaveBeenCalled();
+    expect(fixture.respond).not.toHaveBeenCalled();
     expect(result).toMatchObject({
       agentId: "main",
       effectiveTranscriptInputText: "Inspect this synthetic pixel",

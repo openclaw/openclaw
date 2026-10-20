@@ -24,6 +24,25 @@ vi.mock("../../infra/outbound/channel-selection.js", () => ({
 
 const { resolveAgentDeliveryPhase } = await import("./agent-delivery-phase.js");
 
+function deliveryParams(
+  overrides: Partial<Parameters<typeof resolveAgentDeliveryPhase>[0]>,
+): Parameters<typeof resolveAgentDeliveryPhase>[0] {
+  return {
+    request: { message: "synthetic prompt", deliver: true, idempotencyKey: "private-delivery" },
+    cfg: {},
+    agentId: "main",
+    replyTo: "",
+    to: "",
+    bestEffortDeliver: false,
+    runId: "private-delivery",
+    client: null,
+    context: {} as never,
+    respond: vi.fn(),
+    isWebchatConnect: () => false,
+    ...overrides,
+  };
+}
+
 describe("resolveAgentDeliveryPhase", () => {
   beforeEach(() => {
     mocks.resolveAgentDeliveryPlanWithSessionRoute.mockReset();
@@ -81,22 +100,17 @@ describe("resolveAgentDeliveryPhase", () => {
       mocks.resolveAgentDeliveryPlanWithSessionRoute.mockResolvedValue({ baseDelivery: {} });
       try {
         await withinTest(entered.promise, signal);
-        await resolveAgentDeliveryPhase({
-          request: { message: "observe", idempotencyKey: "new-delivery-run" },
-          cfg: {},
-          resolvedSessionKey: sessionKey,
-          resolvedSessionAgentId: "main",
-          storePath,
-          replyTo: "",
-          to: "",
-          bestEffortDeliver: false,
-          runId: "new-delivery-run",
-          client: null,
-          context,
-          respond: vi.fn(),
-          isWebchatConnect: () => false,
-          onRunObserved,
-        });
+        await resolveAgentDeliveryPhase(
+          deliveryParams({
+            request: { message: "observe", idempotencyKey: "new-delivery-run" },
+            resolvedSessionKey: sessionKey,
+            resolvedSessionAgentId: "main",
+            storePath,
+            runId: "new-delivery-run",
+            context,
+            onRunObserved,
+          }),
+        );
         expect(onRunObserved.mock.calls.map(([runId]) => runId)).toEqual(
           scope === "local" ? ["new-delivery-run", "active-delivery-run"] : ["new-delivery-run"],
         );
@@ -122,23 +136,18 @@ describe("resolveAgentDeliveryPhase", () => {
     });
     const respond = vi.fn();
 
-    await resolveAgentDeliveryPhase({
-      request: {
-        message: "strict delivery",
-        deliver: true,
-        idempotencyKey: "strict-target-resolution",
-      },
-      cfg: {},
-      agentId: "main",
-      replyTo: "",
-      to: "current",
-      bestEffortDeliver: false,
-      runId: "strict-target-resolution",
-      client: null,
-      context: {} as never,
-      respond,
-      isWebchatConnect: () => false,
-    });
+    await resolveAgentDeliveryPhase(
+      deliveryParams({
+        request: {
+          message: "strict delivery",
+          deliver: true,
+          idempotencyKey: "strict-target-resolution",
+        },
+        to: "current",
+        runId: "strict-target-resolution",
+        respond,
+      }),
+    );
 
     expect(respond).toHaveBeenCalledWith(false, undefined, {
       code: ErrorCodes.INVALID_REQUEST,
@@ -171,29 +180,16 @@ describe("resolveAgentDeliveryPhase", () => {
         mocks.resolveMessageChannelSelection.mockRejectedValue(failure);
         const respond = vi.fn();
         const info = vi.fn();
-        const params = {
-          request: {
-            message: "synthetic prompt",
-            deliver: true,
-            idempotencyKey: "private-delivery",
-          },
-          cfg: {},
-          agentId: "main",
+        const params = deliveryParams({
           sessionEntry: {
             sessionId: "private-session",
             updatedAt: 1,
             ...(incognito ? { incognito: true as const } : {}),
           },
           resolvedSessionKey: sessionKey,
-          replyTo: "",
-          to: "",
-          bestEffortDeliver: false,
-          runId: "private-delivery",
-          client: null,
           context: { logGateway: { info } } as never,
           respond,
-          isWebchatConnect: () => false,
-        };
+        });
 
         expect(await resolveAgentDeliveryPhase(params)).toBeUndefined();
         const response = respond.mock.calls[0];
