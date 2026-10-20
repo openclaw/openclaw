@@ -131,6 +131,13 @@ suite.define(() => {
             : {}),
         },
         async ({ page }) => {
+          const text = (selector: string) =>
+            expect.poll(() => page.locator(selector).textContent());
+          const screenshot = async (name: string) => {
+            if (proofDir) {
+              await page.screenshot({ animations: "disabled", path: path.join(proofDir, name) });
+            }
+          };
           const url = new URL("settings/profile", suite.server.baseUrl);
           url.hash = new URLSearchParams({ gatewayUrl: gatewayUrl.href }).toString();
           const response = await page.goto(url.href);
@@ -140,21 +147,10 @@ suite.define(() => {
           await confirmation
             .getByRole("button", { name: `Switch to ${gatewayUrl.host}`, exact: true })
             .click();
-          await expect
-            .poll(() => page.locator(".profile-hero__name").textContent())
-            .toBe("Test Person");
-          await expect
-            .poll(() => page.locator(".profile-hero__handle").textContent())
-            .toContain(authenticatedUser);
-          await expect
-            .poll(() => page.locator(".profile-hero").textContent())
-            .not.toContain("Clipper");
-          if (proofDir) {
-            await page.screenshot({
-              animations: "disabled",
-              path: path.join(proofDir, "01-real-gateway-authenticated-profile.png"),
-            });
-          }
+          await text(".profile-hero__name").toBe("Test Person");
+          await text(".profile-hero__handle").toContain(authenticatedUser);
+          await text(".profile-hero").not.toContain("Clipper");
+          await screenshot("01-real-gateway-authenticated-profile.png");
           await page.locator(".identity-name-control input").fill("Local draft");
           const editor = await page.context().newPage();
           await editor.goto(new URL("settings/profile", suite.server.baseUrl).href);
@@ -162,23 +158,14 @@ suite.define(() => {
           await expect.poll(() => nameInput.inputValue()).toBe("Test Person");
           await nameInput.fill("Remote Person");
           await nameInput.press("Enter");
-          await expect
-            .poll(() => page.locator(".profile-hero__name").textContent())
-            .toBe("Remote Person");
+          await text(".profile-hero__name").toBe("Remote Person");
           await nameInput.fill("");
           await nameInput.press("Enter");
-          await expect
-            .poll(() => page.locator(".profile-hero__name").textContent())
-            .toBe(authenticatedUser);
+          await text(".profile-hero__name").toBe(authenticatedUser);
           await expect
             .poll(() => page.locator(".identity-name-control input").inputValue())
             .toBe("Local draft");
-          if (proofDir) {
-            await page.screenshot({
-              animations: "disabled",
-              path: path.join(proofDir, "02-real-gateway-cleared-profile.png"),
-            });
-          }
+          await screenshot("02-real-gateway-cleared-profile.png");
         },
       );
     } finally {

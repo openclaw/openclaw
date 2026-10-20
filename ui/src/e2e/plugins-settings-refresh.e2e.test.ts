@@ -6,6 +6,7 @@ import { configMocks, inspection, workboard } from "./plugins-settings-admin.tes
 
 const suite = createControlUiE2eSuite({ name: "Plugin settings background refresh" });
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+const objectSchema = (properties: Record<string, unknown>) => ({ type: "object", properties });
 
 suite.define(() => {
   it.each(["github", "workboard"])(
@@ -27,7 +28,9 @@ suite.define(() => {
           };
           const entry = { enabled: true, hooks: { allowPromptInjection: false } };
           const config = { plugins: { entries: { [pluginId]: entry } } };
-          const schema = configMocks["config.schema"].schema;
+          const entrySchema =
+            configMocks["config.schema"].schema.properties.plugins.properties.entries.properties
+              .workboard;
           const gateway = await installMockGateway(page, {
             operatorScopes: ["operator.read", "operator.admin"],
             methodResponses: {
@@ -41,34 +44,19 @@ suite.define(() => {
               "config.schema": {
                 ...configMocks["config.schema"],
                 uiHints: {},
-                schema: {
-                  type: "object",
-                  properties: {
-                    plugins: {
-                      type: "object",
-                      properties: {
-                        entries: {
-                          type: "object",
-                          properties: {
-                            [pluginId]: {
-                              ...schema.properties.plugins.properties.entries.properties.workboard,
-                              properties: {
-                                hooks:
-                                  schema.properties.plugins.properties.entries.properties.workboard
-                                    .properties.hooks,
-                                config: {
-                                  type: "object",
-                                  additionalProperties: false,
-                                  properties: {},
-                                },
-                              },
-                            },
-                          },
+                schema: objectSchema({
+                  plugins: objectSchema({
+                    entries: objectSchema({
+                      [pluginId]: {
+                        ...entrySchema,
+                        properties: {
+                          hooks: entrySchema.properties.hooks,
+                          config: { ...objectSchema({}), additionalProperties: false },
                         },
                       },
-                    },
-                  },
-                },
+                    }),
+                  }),
+                }),
               },
             },
           });
