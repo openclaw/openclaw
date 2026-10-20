@@ -30,7 +30,9 @@ const graph = vi.hoisted(() => ({
   resolveTeamGroupId: vi.fn(
     async (params: { aadGroupId?: string }) => params.aadGroupId?.trim() || "group-1",
   ),
-  fetchChannelMessage: vi.fn<() => Promise<GraphThreadMessage | undefined>>(async () => undefined),
+  fetchChannelMessage: vi.fn<typeof import("../graph-thread.js").fetchChannelMessage>(
+    async () => undefined,
+  ),
   fetchThreadReplies: vi.fn<() => Promise<GraphThreadMessage[]>>(async () => []),
   fetchChatMessageText: vi.fn<() => Promise<string | undefined>>(async () => undefined),
 }));
@@ -264,6 +266,76 @@ describe("msteams message authorization and supplemental context", () => {
     graph.fetchThreadReplies.mockReset().mockResolvedValue([]);
     graph.fetchChatMessageText.mockReset();
   });
+
+  it.each([true, false])(
+    "keeps cached Graph parent access scoped to the bot credential (first can read: %s)",
+    async (firstCanRead) => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          msteams: {
+            enabled: true,
+            accounts: {
+              support: { appId: "support-app", groupPolicy: "open", requireMention: false },
+              sales: { appId: "sales-app", groupPolicy: "open", requireMention: false },
+            },
+          },
+        },
+      };
+      setRuntimeConfigSnapshot(cfg);
+      const botHandler = (accountId: "support" | "sales") => {
+        const { deps } = createMessageHandlerDeps(cfg, {
+          accountId,
+          resolveAgentRoute: ({ accountId: routeAccountId = "default", peer }) => ({
+            sessionKey: `agent:main:msteams:${routeAccountId}:${peer.kind}:${peer.id}`,
+            agentId: "main",
+            accountId: routeAccountId,
+          }),
+        });
+        deps.appId = `${accountId}-app`;
+        vi.mocked(deps.tokenProvider.getAccessToken).mockResolvedValue(
+          `fixture-${accountId}-token`,
+        );
+        return createMSTeamsMessageHandler(deps);
+      };
+      try {
+        const support = botHandler("support");
+        const sales = botHandler("sales");
+        graph.fetchChannelMessage.mockImplementation(async (token) => {
+          if (token === "fixture-support-token") {
+            return firstCanRead
+              ? threadMessage(parentId, { displayName: "Alice" }, "Support-only parent")
+              : undefined;
+          }
+          return firstCanRead
+            ? undefined
+            : threadMessage(parentId, { displayName: "Alice" }, "Sales-only parent");
+        });
+
+        await support(threadActivity());
+        expect(dispatch.mock.calls.at(-1)?.[0].ctx.AccountId).toBe("support");
+        for (let attempt = 0; attempt < 2; attempt++) {
+          dispatch.mockClear();
+          const input = threadActivity();
+          input.activity.id = `sales-reply-${attempt}`;
+          await sales(input);
+          expect(dispatch.mock.calls.at(-1)?.[0].ctx.AccountId).toBe("sales");
+          if (firstCanRead) {
+            expect(context().ChannelStructuredContext).toBeUndefined();
+          } else {
+            expectThreadContext([
+              { message_id: parentId, sender: "Alice", body: "Sales-only parent" },
+            ]);
+          }
+        }
+        expect(graph.fetchChannelMessage.mock.calls.map(([token]) => token)).toEqual([
+          "fixture-support-token",
+          "fixture-sales-token",
+        ]);
+      } finally {
+        clearRuntimeConfigSnapshot();
+      }
+    },
+  );
 
   it.each(["revoked", "disabled", "removed"])(
     "rechecks a %s named account after reload without blocking a sibling",

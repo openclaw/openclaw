@@ -1,5 +1,6 @@
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createTavilyExtractTool } from "./tavily-extract-tool.js";
 import { createTavilyWebSearchProvider } from "./tavily-search-provider.js";
 import { createTavilySearchTool } from "./tavily-search-tool.js";
 
@@ -73,3 +74,61 @@ describe("Tavily search cache TTL", () => {
     },
   );
 });
+
+it.each(["web_search", "tavily_search", "tavily_extract"] as const)(
+  "%s shares cached content only with the same resolved credential",
+  async (kind) => {
+    const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+      const content =
+        new Headers(init?.headers).get("Authorization") === "Bearer fixture-tavily-a"
+          ? "Account A content"
+          : "Account B content";
+      return Response.json({
+        results: [
+          { url: "https://example.com/shared", title: content, content, raw_content: content },
+        ],
+      });
+    });
+    const run = async (apiKey: string) => {
+      const config = {
+        plugins: { entries: { tavily: { config: { webSearch: { apiKey } } } } },
+      };
+      const args =
+        kind === "tavily_extract"
+          ? { urls: ["https://example.com/shared"] }
+          : { query: `Tavily ${kind} credential cache isolation` };
+      if (kind !== "web_search") {
+        return (
+          await (
+            kind === "tavily_extract"
+              ? createTavilyExtractTool(createTestPluginApi({ config }))
+              : createTavilySearchTool(createTestPluginApi({ config }))
+          ).execute("credential-cache", args)
+        ).details;
+      }
+      const tool = createTavilyWebSearchProvider().createTool({ config, searchConfig: {} });
+      if (!tool) {
+        throw new Error("Expected Tavily search tool");
+      }
+      return await tool.execute(args);
+    };
+    const first = await run("fixture-tavily-a");
+    const other = await run("fixture-tavily-b");
+    const repeated = await run("fixture-tavily-a");
+    const contentField = kind === "tavily_extract" ? "rawContent" : "snippet";
+
+    expect(first).toMatchObject({
+      results: [{ [contentField]: expect.stringContaining("Account A content") }],
+    });
+    expect(other).toMatchObject({
+      results: [{ [contentField]: expect.stringContaining("Account B content") }],
+    });
+    expect(repeated).toMatchObject({
+      cached: true,
+      results: [{ [contentField]: expect.stringContaining("Account A content") }],
+    });
+    expect(
+      fetch.mock.calls.map(([, init]) => new Headers(init?.headers).get("Authorization")),
+    ).toEqual(["Bearer fixture-tavily-a", "Bearer fixture-tavily-b"]);
+  },
+);

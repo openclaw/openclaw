@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   parseDateStringTimestampMs,
@@ -169,6 +170,7 @@ export async function runTavilySearch(
   const cacheKey = normalizeCacheKey(
     JSON.stringify({
       type: "tavily-search",
+      credential: createHash("sha256").update(apiKey).digest("hex"),
       q: params.query,
       count,
       baseUrl,
@@ -282,6 +284,7 @@ export async function runTavilyExtract(
   const cacheKey = normalizeCacheKey(
     JSON.stringify({
       type: "tavily-extract",
+      credential: createHash("sha256").update(apiKey).digest("hex"),
       urls: params.urls,
       baseUrl,
       query: params.query,
