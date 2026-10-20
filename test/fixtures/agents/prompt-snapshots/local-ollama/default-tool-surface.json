@@ -36,9 +36,7 @@
                 "type": "array",
                 "items": {
                   "type": "object",
-                  "required": [
-                    "query"
-                  ],
+                  "required": ["query"],
                   "properties": {
                     "query": {
                       "type": "string",
@@ -69,9 +67,7 @@
       "description": "Load the full schema and metadata, including complete server instructions, for one tool id or name. Use this when the input is not already clear or when discovery returned instructionsHint.",
       "parameters": {
         "type": "object",
-        "required": [
-          "id"
-        ],
+        "required": ["id"],
         "properties": {
           "id": {
             "type": "string",
@@ -85,9 +81,7 @@
       "description": "Call an exact Tool Search result id or name through OpenClaw. If arguments are not already clear, call tool_describe with the same id for the full description and schema; do not guess omitted fields from compact input hints.",
       "parameters": {
         "type": "object",
-        "required": [
-          "id"
-        ],
+        "required": ["id"],
         "properties": {
           "id": {
             "type": "string",
