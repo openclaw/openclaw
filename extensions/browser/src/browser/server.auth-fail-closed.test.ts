@@ -35,8 +35,11 @@ vi.mock("./control-auth.js", () => ({
   resolveBrowserControlAuth: mocks.resolveBrowserControlAuth,
   shouldAutoGenerateBrowserAuth: mocks.shouldAutoGenerateBrowserAuth,
 }));
+// mock-isolation: Auth bootstrap failures do not need real browser routes.
 vi.mock("./routes/index.js", () => ({ registerBrowserRoutes: vi.fn(() => {}) }));
+// mock-isolation: Keep auth bootstrap independent of browser profile state.
 vi.mock("./server-context.js", () => ({ createBrowserRouteContext: vi.fn(() => ({})) }));
+// mock-isolation: Server cleanup must not stop real browser profiles.
 vi.mock("./server-lifecycle.js", () => ({ stopKnownBrowserProfiles: vi.fn(async () => {}) }));
 
 describe("browser control auth bootstrap failures", () => {

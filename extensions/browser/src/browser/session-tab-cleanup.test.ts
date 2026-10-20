@@ -6,6 +6,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const sweep = vi.hoisted(() => vi.fn());
+// mock-isolation: Timer tests control sweep settlement without opening the tab registry.
 vi.mock("./session-tab-registry.js", () => ({ sweepTrackedBrowserTabs: sweep }));
 
 import { startTrackedBrowserTabCleanupTimer as startTimer } from "./session-tab-cleanup.js";

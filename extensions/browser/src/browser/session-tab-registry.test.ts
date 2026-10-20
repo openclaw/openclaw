@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CloseTab } from "./session-tab-registry.sqlite.test-helpers.js";
 
 const closeClient = vi.hoisted(() => vi.fn(async () => {}));
+// mock-isolation: Registry tests control close outcomes without contacting a browser.
 vi.mock("./client-tab-close.runtime.js", () => ({ browserCloseTabByRawTargetId: closeClient }));
 
 import {

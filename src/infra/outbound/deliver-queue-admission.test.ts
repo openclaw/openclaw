@@ -18,8 +18,11 @@ const { spool, retention, storage } = vi.hoisted(() => ({
   },
 }));
 
+// mock-isolation: Admission tests control media staging and cleanup without filesystem effects.
 vi.mock("./delivery-queue-media-spool.js", () => spool);
+// mock-isolation: Retention failures are injected without starting media-retention workers.
 vi.mock("./delivery-queue-media-staging.js", () => retention);
+// mock-isolation: Admission ordering is checked against controlled storage receipts, not a database.
 vi.mock("./delivery-queue-storage.js", () => storage);
 
 const counters = { enqueuedAt: 1, retryCount: 0, attemptCount: 0 };
