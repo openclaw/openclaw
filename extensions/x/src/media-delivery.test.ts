@@ -5,15 +5,8 @@ import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-s
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createXApiClient } from "./api.js";
 import { xPlugin } from "./channel.js";
-import {
-  client,
-  config,
-  fixture,
-  page,
-  post,
-  type Payload,
-} from "./test-support/monitor-fixture.js";
-import { createQueue } from "./test-support/monitor.js";
+import { completedMonitor } from "./test-support/completed-monitor.js";
+import { client, config, fixture, page, post } from "./test-support/monitor-fixture.js";
 import { createXTestSpend } from "./test-support/spend.js";
 
 vi.mock("./client.js", async (importOriginal) => ({
@@ -127,9 +120,7 @@ describe("X native attachment delivery", () => {
     } else if (route === "message") {
       await xPlugin.message!.send!.media!({ ...ctx, mediaUrl: test.file });
     } else if (route === "monitor-mediaUrl" || route === "monitor-mediaUrls") {
-      const completed = Promise.withResolvers<void>();
-      const monitor = fixture({
-        posts: [post("501", "10")],
+      const monitor = completedMonitor({
         cfg: {
           ...config,
           agents: { entries: { maintainer: { workspace: test.root } } },
@@ -143,16 +134,10 @@ describe("X native attachment delivery", () => {
               : { mediaUrls: [test.file] }),
           },
         ],
-        queue: createQueue<Payload>({ onCompleted: () => completed.resolve() }),
       });
       monitor.api.uploadMedia.mockImplementation((params) => test.api.uploadMedia(params));
       monitor.api.reply.mockImplementation((params) => test.api.reply(params));
-      monitor.start();
-      try {
-        await completed.promise;
-      } finally {
-        await monitor.stop();
-      }
+      await monitor.run();
     } else {
       const result = await test.sendMedia();
       expect(result.receipt?.parts[0]?.kind).toBe("media");

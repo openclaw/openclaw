@@ -9,11 +9,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { openXGuestUsage, XGuestUsageUnavailableError } from "./guest-usage.js";
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
+function beforeMidnight() {
+  const midnight = Math.floor(Date.now() / DAY_MS) * DAY_MS + DAY_MS;
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(midnight - 1);
+  return midnight;
+}
 
-function runtime(
-  state: OpenClawTestState,
-  capacity?: number,
-): Parameters<typeof openXGuestUsage>[0] {
+function runtime(state: OpenClawTestState, capacity?: number) {
   return {
     state: {
       resolveStateDir: () => state.stateDir,
@@ -44,9 +47,7 @@ afterEach(() => {
 describe("X guest daily usage", () => {
   it("keeps concurrent admissions within quota, deduplicates retries, and resets at UTC midnight", async () => {
     await withOpenClawTestState({ label: "x-guest-daily-usage" }, async (state) => {
-      const midnight = Math.floor(Date.now() / DAY_MS) * DAY_MS + DAY_MS;
-      vi.useFakeTimers({ toFake: ["Date"] });
-      vi.setSystemTime(midnight - 1);
+      const midnight = beforeMidnight();
       const host = runtime(state);
       const usage = openXGuestUsage(host);
       const settled = await Promise.allSettled(
@@ -105,9 +106,7 @@ describe("X guest daily usage", () => {
     ["UTC rollover", "usage day changed"],
   ])("does not spend stale quota after %s during a state read", async (change, message) => {
     await withOpenClawTestState({ label: "x-guest-usage-authority" }, async (state) => {
-      const midnight = Math.floor(Date.now() / DAY_MS) * DAY_MS + DAY_MS;
-      vi.useFakeTimers({ toFake: ["Date"] });
-      vi.setSystemTime(midnight - 1);
+      const midnight = beforeMidnight();
       const host = runtime(state);
       const open = host.state.openKeyedStore;
       const observed = Promise.withResolvers<void>();
@@ -117,10 +116,7 @@ describe("X guest daily usage", () => {
         return {
           ...store,
           withCurrent(authority) {
-            const bound = store.withCurrent?.(authority);
-            if (!bound) {
-              throw new Error("Missing real action-bound state capability");
-            }
+            const bound = store.withCurrent!(authority);
             return {
               ...bound,
               async observe(key) {

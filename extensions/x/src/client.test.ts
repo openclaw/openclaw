@@ -15,17 +15,16 @@ const fixture = vi.hoisted(() => {
     },
   };
   let generation = 0;
-  let stateDir = "synthetic-x-client:0";
-  const state = { openKeyedStore: () => store, resolveStateDir: () => stateDir };
+  const state = {
+    openKeyedStore: () => store,
+    resolveStateDir: () => `synthetic-x-client:${generation}`,
+  };
   const logging = { getChildLogger: () => ({ warn: vi.fn() }) };
   return {
-    logging,
     nextTest: () => {
-      stateDir = `synthetic-x-client:${++generation}`;
+      generation++;
     },
-    state,
     rows,
-    store,
     runtime: { state, logging },
     fetch: vi.fn<(input: string, init?: RequestInit) => Promise<Response>>(),
   };
@@ -63,7 +62,7 @@ function config(overrides: Partial<XAccountConfig> = {}): OpenClawConfig {
 }
 
 function restartRuntime() {
-  fixture.runtime = { state: fixture.state, logging: fixture.logging };
+  fixture.runtime = { ...fixture.runtime };
 }
 
 function requestBody(init?: RequestInit): string {
@@ -80,9 +79,10 @@ beforeEach(() => {
   restartRuntime();
 });
 
-afterEach(() => {
-  vi.useRealTimers();
-});
+afterEach(() => vi.useRealTimers());
+
+const tokenResponse = (refresh_token: string, expires_in?: number) =>
+  Response.json({ access_token: "access", refresh_token, expires_in });
 
 describe("X OAuth client ownership", () => {
   it("shares an active refresh across transport rotation and preserves its grant across restart", async () => {
@@ -92,8 +92,7 @@ describe("X OAuth client ownership", () => {
     const refreshes: { token: string | null; auth: string | null }[] = [];
     const bearerHeaders: (string | null)[] = [];
     fixture.fetch.mockImplementation(async (input, init) => {
-      const url = input;
-      if (url.endsWith("/oauth2/token")) {
+      if (input.endsWith("/oauth2/token")) {
         refreshes.push({
           token: new URLSearchParams(requestBody(init)).get("refresh_token"),
           auth: new Headers(init?.headers).get("authorization"),
@@ -102,13 +101,9 @@ describe("X OAuth client ownership", () => {
           refreshStarted.resolve();
           await releaseRefresh.promise;
         }
-        return Response.json({
-          access_token: "access",
-          refresh_token: `rotated-${refreshes.length}`,
-          expires_in: 3600,
-        });
+        return tokenResponse(`rotated-${refreshes.length}`, 3600);
       }
-      if (url.endsWith("/activity/subscriptions")) {
+      if (input.endsWith("/activity/subscriptions")) {
         bearerHeaders.push(new Headers(init?.headers).get("authorization"));
         return Response.json({
           data: [{ event_type: "post.mention.create", filter: { user_id: "9" } }],
@@ -155,10 +150,7 @@ describe("X OAuth client ownership", () => {
           staleStarted.resolve();
           await releaseStale.promise;
         }
-        return Response.json({
-          access_token: "access",
-          refresh_token: token === "seed-initial" ? "rotated-stale" : "rotated-current",
-        });
+        return tokenResponse(token === "seed-initial" ? "rotated-stale" : "rotated-current");
       }
       return Response.json({ data: [] });
     });

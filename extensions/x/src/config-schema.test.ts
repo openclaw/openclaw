@@ -8,6 +8,7 @@ import { channelSecrets } from "./secret-contract.js";
 const xConfig = (x: NonNullable<OpenClawConfig["channels"]>["x"]): OpenClawConfig => ({
   channels: { x },
 });
+const costs = (cfg: OpenClawConfig = {}, id?: string) => resolveXAccount(cfg, id).costLimits;
 
 describe("X GitHub verification configuration", () => {
   it("is off by default and inherits individual GitHub settings through account overrides", () => {
@@ -69,22 +70,12 @@ describe("X GitHub verification configuration", () => {
     ]);
     context.assignments[0]?.apply("resolved-shared-token");
     context.assignments[1]?.apply("resolved-own-token");
-    expect(resolveXAccount(config, "team").config.verifiedFromGitHub?.token).toBe(
-      "resolved-shared-token",
-    );
-    expect(resolveXAccount(config, "own").config.verifiedFromGitHub?.token).toBe(
-      "resolved-own-token",
-    );
+    expect(
+      ["team", "own"].map((id) => resolveXAccount(config, id).config.verifiedFromGitHub?.token),
+    ).toEqual(["resolved-shared-token", "resolved-own-token"]);
   });
-});
-
-describe("X cost limit configuration", () => {
   it("resolves defaults and inherits individual limits through account overrides", () => {
-    expect(resolveXAccount({}).costLimits).toEqual({
-      dailyUsd: 100,
-      monthlyUsd: 1_000,
-      cycleStartDay: 1,
-    });
+    expect(costs()).toEqual({ dailyUsd: 100, monthlyUsd: 1_000, cycleStartDay: 1 });
     const cfg = xConfig({
       costLimits: { dailyUsd: 30, monthlyUsd: 300, cycleStartDay: 20 },
       accounts: {
@@ -92,12 +83,8 @@ describe("X cost limit configuration", () => {
         paused: { costLimits: { dailyUsd: 0 } },
       },
     });
-    expect(resolveXAccount(cfg, "team").costLimits).toEqual({
-      dailyUsd: 5,
-      monthlyUsd: 300,
-      cycleStartDay: 20,
-    });
-    expect(resolveXAccount(cfg, "paused").costLimits.dailyUsd).toBe(0);
+    expect(costs(cfg, "team")).toEqual({ dailyUsd: 5, monthlyUsd: 300, cycleStartDay: 20 });
+    expect(costs(cfg, "paused").dailyUsd).toBe(0);
     expect(XConfigSchema.safeParse(cfg.channels?.x).success).toBe(true);
   });
 

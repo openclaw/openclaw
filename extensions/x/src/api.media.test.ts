@@ -4,6 +4,7 @@ import { createXApiClient, type XFetch } from "./api.js";
 import { createXTestSpend } from "./test-support/spend.js";
 
 type ClientOptions = Parameters<typeof createXApiClient>[0];
+type Media = Parameters<ReturnType<typeof createXApiClient>["uploadMedia"]>[0];
 function rawClient(fetch: XFetch, options: Partial<ClientOptions> = {}) {
   return createXApiClient({
     spend: createXTestSpend(),
@@ -26,15 +27,16 @@ function client(fetch: XFetch, options: Partial<ClientOptions> = {}) {
 }
 
 const mediaResponse = (data: object = { id: "101" }) => Response.json({ data });
+const processing = (state: string, check_after_secs?: number, id = "101") => ({
+  id,
+  processing_info: { state, check_after_secs },
+});
 const uploadPaths = [
   "/2/media/upload/initialize",
   "/2/media/upload/101/append",
   "/2/media/upload/101/finalize",
 ];
-const uploadThenReply = (
-  api: ReturnType<typeof client>,
-  media: Parameters<ReturnType<typeof client>["uploadMedia"]>[0] = image,
-) =>
+const uploadThenReply = (api: ReturnType<typeof client>, media: Media = image) =>
   api
     .uploadMedia(media)
     .then((id) => api.reply({ text: "Never text-only", inReplyToId: "20", mediaIds: [id] }));
@@ -55,148 +57,142 @@ async function readMedia(request: Request) {
   return { file, index: form.get("segment_index") };
 }
 
+function processingFixture(options: {
+  id?: string;
+  finalize: object;
+  signal?: AbortSignal;
+  append?: () => Response;
+  statuses?: object[];
+}) {
+  const id = options.id ?? "101";
+  const finalized = Promise.withResolvers<void>();
+  const calls: string[] = [],
+    polls: number[] = [],
+    requests: Request[] = [];
+  let post: unknown;
+  const api = client(
+    async (url, init) => {
+      const request = new Request(url, init),
+        parsed = new URL(url);
+      calls.push(parsed.pathname);
+      requests.push(request);
+      if (parsed.pathname.endsWith("/initialize")) {
+        return mediaResponse({ id });
+      }
+      if (parsed.pathname.endsWith("/append")) {
+        return options.append?.() ?? mediaResponse({ id });
+      }
+      if (parsed.pathname.endsWith("/finalize")) {
+        finalized.resolve();
+        return mediaResponse(options.finalize);
+      }
+      if (parsed.pathname === "/2/media/upload") {
+        polls.push(Date.now());
+        const states = options.statuses;
+        return mediaResponse(
+          states?.[Math.min(polls.length - 1, states.length - 1)] ?? options.finalize,
+        );
+      }
+      post = await request.json();
+      return mediaResponse({ id: "900" });
+    },
+    { signal: options.signal },
+  );
+  return { api, calls, requests, polls, finalized: finalized.promise, post: () => post };
+}
+
 afterEach(() => vi.useRealTimers());
 
 describe("X native media request boundary", () => {
-  it.each([
-    image,
-    {
-      ...image,
-      contentType: "image/gif",
-      fileName: "animation.gif",
-      mediaCategory: "tweet_gif" as const,
-    },
-  ])(
-    "uploads $mediaCategory as authenticated binary multipart before attaching it",
-    async (media) => {
-      const requests: string[] = [];
-      const api = client(async (url, init) => {
-        const request = new Request(url, init);
-        const path = new URL(url).pathname;
-        requests.push(`${request.method} ${path}`);
+  it.each(["image", "gif", "video"] as const)(
+    "uploads authenticated %s bytes before posting",
+    async (kind) => {
+      const video = kind === "video",
+        id = video ? "201" : "101";
+      if (video) {
+        vi.useFakeTimers();
+      }
+      const media: Media = {
+        buffer: video
+          ? Buffer.concat([Buffer.alloc(4 * 1024 * 1024, 0x41), Buffer.alloc(7, 0x42)])
+          : image.buffer,
+        contentType: video ? "video/mp4" : kind === "gif" ? "image/gif" : image.contentType,
+        fileName: video ? "clip.mp4" : kind === "gif" ? "animation.gif" : image.fileName,
+        mediaCategory: video ? "tweet_video" : kind === "gif" ? "tweet_gif" : image.mediaCategory,
+      };
+      const test = processingFixture({
+        id,
+        finalize: video ? processing("pending", 2, id) : { id },
+        append: () =>
+          video ? new Response(null, { status: 204 }) : mediaResponse({ expires_at: 86400 }),
+        statuses: [processing("in_progress", 3, id), processing("succeeded", undefined, id)],
+      });
+      const started = Date.now();
+      const pending = test.api
+        .uploadMedia(media)
+        .then((mediaId) =>
+          test.api.reply({ text: "Video", inReplyToId: "20", mediaIds: [mediaId] }),
+        );
+      await test.finalized;
+      if (video) {
+        await vi.advanceTimersByTimeAsync(1999);
+        expect(test.polls).toEqual([]);
+        expect(test.post()).toBeUndefined();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(test.polls).toEqual([started + 2000]);
+        await vi.advanceTimersByTimeAsync(2999);
+        expect(test.post()).toBeUndefined();
+        await vi.advanceTimersByTimeAsync(1);
+      }
+      await expect(pending).resolves.toBe("900");
+      expect(test.polls).toEqual(video ? [started + 2000, started + 5000] : []);
+      const chunks: { index: FormDataEntryValue | null; bytes: Buffer }[] = [];
+      for (const request of test.requests) {
         expect(request.headers.get("authorization")).toBe("Bearer test-access");
-        if (path.endsWith("/initialize")) {
+        const url = new URL(request.url);
+        if (url.pathname.endsWith("/initialize")) {
           expect(await request.json()).toEqual({
             media_type: media.contentType,
             total_bytes: media.buffer.length,
             media_category: media.mediaCategory,
           });
-          return mediaResponse();
-        }
-        if (path.endsWith("/append")) {
+        } else if (url.pathname.endsWith("/append")) {
           expect(request.headers.get("content-type")).toContain("multipart/form-data; boundary=");
           const { file, index } = await readMedia(request);
-          expect(index).toBe("0");
           expect(file).toMatchObject({ name: media.fileName, type: media.contentType });
-          expect(Buffer.from(await file.arrayBuffer())).toEqual(media.buffer);
-          return mediaResponse({ expires_at: 86400 });
-        }
-        if (path.endsWith("/finalize")) {
+          chunks.push({ index, bytes: Buffer.from(await file.arrayBuffer()) });
+        } else if (url.pathname.endsWith("/finalize")) {
           expect(await request.text()).toBe("");
-          return mediaResponse();
+        } else if (url.pathname === "/2/media/upload") {
+          expect({
+            method: request.method,
+            command: url.searchParams.get("command"),
+            id: url.searchParams.get("media_id"),
+          }).toEqual({ method: "GET", command: "STATUS", id });
         }
-        expect(await request.json()).toEqual({
-          text: "Ready",
-          reply: { in_reply_to_tweet_id: "20" },
-          media: { media_ids: ["101"] },
-        });
-        return Response.json({ data: { id: "900" } });
+      }
+      expect(chunks.map(({ index, bytes }) => [index, bytes.length])).toEqual(
+        video
+          ? [
+              ["0", 4194304],
+              ["1", 7],
+            ]
+          : [["0", media.buffer.length]],
+      );
+      expect(Buffer.concat(chunks.map(({ bytes }) => bytes))).toEqual(media.buffer);
+      expect(test.post()).toEqual({
+        text: "Video",
+        reply: { in_reply_to_tweet_id: "20" },
+        media: { media_ids: [id] },
       });
-      const mediaId = await api.uploadMedia(media);
-      await expect(
-        api.reply({ text: "Ready", inReplyToId: "20", mediaIds: [mediaId] }),
-      ).resolves.toBe("900");
-      expect(requests).toEqual([
-        "POST /2/media/upload/initialize",
-        "POST /2/media/upload/101/append",
-        "POST /2/media/upload/101/finalize",
-        "POST /2/tweets",
-      ]);
-      expect(await api.spend.status()).toMatchObject({ dayUsd: 0.02 });
+      if (!video) {
+        expect(
+          test.requests.map((request) => `${request.method} ${new URL(request.url).pathname}`),
+        ).toEqual([...uploadPaths.map((path) => "POST " + path), "POST /2/tweets"]);
+      }
+      expect(await test.api.spend.status()).toMatchObject({ dayUsd: 0.02 });
     },
   );
-
-  it("appends ordered video chunks and waits for X processing before posting", async () => {
-    vi.useFakeTimers();
-    const buffer = Buffer.alloc(4 * 1024 * 1024 + 7, 0x41);
-    buffer.fill(0x42, 4 * 1024 * 1024);
-    const chunks: { index: string | null; bytes: Buffer }[] = [];
-    const finalized = Promise.withResolvers<void>();
-    const polls: number[] = [];
-    let post: unknown;
-    const api = client(async (url, init) => {
-      const request = new Request(url, init);
-      const parsed = new URL(url);
-      if (parsed.pathname.endsWith("/initialize")) {
-        expect(await request.json()).toEqual({
-          media_type: "video/mp4",
-          total_bytes: buffer.length,
-          media_category: "tweet_video",
-        });
-        return Response.json({ data: { id: "201" } });
-      }
-      if (parsed.pathname.endsWith("/append")) {
-        const { file, index } = await readMedia(request);
-        if (typeof index !== "string") {
-          throw new Error("Expected a multipart segment index");
-        }
-        chunks.push({ index, bytes: Buffer.from(await file.arrayBuffer()) });
-        return new Response(null, { status: 204 });
-      }
-      if (parsed.pathname.endsWith("/finalize")) {
-        finalized.resolve();
-        return mediaResponse({
-          id: "201",
-          processing_info: { state: "pending", check_after_secs: 2 },
-        });
-      }
-      if (parsed.pathname === "/2/media/upload") {
-        expect(request.method).toBe("GET");
-        expect(parsed.searchParams.get("command")).toBe("STATUS");
-        expect(parsed.searchParams.get("media_id")).toBe("201");
-        polls.push(Date.now());
-        return mediaResponse({
-          id: "201",
-          processing_info:
-            polls.length === 1
-              ? { state: "in_progress", check_after_secs: 3 }
-              : { state: "succeeded" },
-        });
-      }
-      post = await request.json();
-      return Response.json({ data: { id: "900" } });
-    });
-    const started = Date.now();
-    const pending = api
-      .uploadMedia({
-        buffer,
-        contentType: "video/mp4",
-        fileName: "clip.mp4",
-        mediaCategory: "tweet_video",
-      })
-      .then((id) => api.reply({ text: "Video", inReplyToId: "20", mediaIds: [id] }));
-    await finalized.promise;
-    await vi.advanceTimersByTimeAsync(1999);
-    expect(polls).toEqual([]);
-    expect(post).toBeUndefined();
-    await vi.advanceTimersByTimeAsync(1);
-    expect(polls).toEqual([started + 2000]);
-    await vi.advanceTimersByTimeAsync(2999);
-    expect(post).toBeUndefined();
-    await vi.advanceTimersByTimeAsync(1);
-    await expect(pending).resolves.toBe("900");
-    expect(polls).toEqual([started + 2000, started + 5000]);
-    expect(chunks.map(({ index, bytes }) => [index, bytes.length])).toEqual([
-      ["0", 4194304],
-      ["1", 7],
-    ]);
-    expect(Buffer.concat(chunks.map(({ bytes }) => bytes)).equals(buffer)).toBe(true);
-    expect(post).toEqual({
-      text: "Video",
-      reply: { in_reply_to_tweet_id: "20" },
-      media: { media_ids: ["201"] },
-    });
-  });
 
   it.each([
     [
@@ -240,18 +236,9 @@ describe("X native media request boundary", () => {
   );
 
   it.each([
-    ["failed processing", { id: "101", processing_info: { state: "failed" } }, "processing failed"],
-    [
-      "unknown processing",
-      { id: "101", processing_info: { state: "unknown" } },
-      "invalid processing state",
-    ],
+    ["unknown processing", processing("unknown"), "invalid processing state"],
     ["wrong media ID", { id: "102" }, "invalid media result"],
-    [
-      "unbounded processing delay",
-      { id: "101", processing_info: { state: "pending", check_after_secs: 3600 } },
-      "timed out",
-    ],
+    ["unbounded processing delay", processing("pending", 3600), "timed out"],
   ] as const)("refuses %s before the caller can post", async (_label, data, message) => {
     const calls: string[] = [];
     const api = client(async (url) => {
@@ -264,33 +251,17 @@ describe("X native media request boundary", () => {
 
   it("bounds repeated pending processing responses without shortening X polling delays", async () => {
     vi.useFakeTimers();
-    const finalized = Promise.withResolvers<void>();
-    const polls: number[] = [];
-    const api = client(async (url) => {
-      const path = new URL(url).pathname;
-      if (path.endsWith("/finalize") || path === "/2/media/upload") {
-        if (path.endsWith("/finalize")) {
-          finalized.resolve();
-        } else {
-          polls.push(Date.now());
-        }
-        return mediaResponse({
-          id: "101",
-          processing_info: { state: "pending", check_after_secs: 60 },
-        });
-      }
-      return mediaResponse();
-    });
+    const test = processingFixture({ finalize: processing("pending", 60) });
     const started = Date.now();
-    const result = api.uploadMedia(image).catch((cause: unknown) => cause);
-    await finalized.promise;
+    const result = test.api.uploadMedia(image).catch((cause: unknown) => cause);
+    await test.finalized;
     await vi.advanceTimersByTimeAsync(300_000);
     expect(await result).toMatchObject({
       code: "OPENCLAW_PLATFORM_MESSAGE_NOT_DISPATCHED",
       retryable: true,
       message: expect.stringContaining("processing timed out"),
     });
-    expect(polls.map((time) => time - started)).toEqual([60_000, 120_000, 180_000, 240_000]);
+    expect(test.polls.map((time) => time - started)).toEqual([60_000, 120_000, 180_000, 240_000]);
   });
 
   it.each(["caller abort", "account abort", "revoked authority", "missing processing status"])(
@@ -298,29 +269,17 @@ describe("X native media request boundary", () => {
     async (failure) => {
       vi.useFakeTimers();
       const controller = new AbortController();
-      const finalized = Promise.withResolvers<void>();
-      const calls: string[] = [];
       let active = true;
       const rejected = new PlatformMessageNotDispatchedError("X account authority revoked", {
         cause: undefined,
         retryable: false,
       });
-      const api = client(
-        async (url) => {
-          const path = new URL(url).pathname;
-          calls.push(path);
-          if (path.endsWith("/finalize")) {
-            finalized.resolve();
-            return mediaResponse({
-              id: "101",
-              processing_info: { state: "pending", check_after_secs: 2 },
-            });
-          }
-          return mediaResponse();
-        },
-        { signal: failure === "account abort" ? controller.signal : undefined },
-      );
-      const result = uploadThenReply(api, {
+      const test = processingFixture({
+        finalize: processing("pending", 2),
+        signal: failure === "account abort" ? controller.signal : undefined,
+        statuses: [{ id: "101" }],
+      });
+      const result = uploadThenReply(test.api, {
         ...image,
         signal: failure === "caller abort" ? controller.signal : undefined,
         assertActive: () => () => {
@@ -329,7 +288,7 @@ describe("X native media request boundary", () => {
           }
         },
       }).catch((cause: unknown) => cause);
-      await finalized.promise;
+      await test.finalized;
       await vi.advanceTimersByTimeAsync(0);
       if (failure.includes("abort")) {
         controller.abort();
@@ -343,7 +302,7 @@ describe("X native media request boundary", () => {
       if (failure === "revoked authority") {
         expect(error).toBe(rejected);
       }
-      expect(calls).toEqual([
+      expect(test.calls).toEqual([
         ...uploadPaths,
         ...(failure === "missing processing status" ? ["/2/media/upload"] : []),
       ]);
