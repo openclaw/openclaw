@@ -3,8 +3,8 @@ import { createPersistentDedupeCache } from "./dedupe-runtime.js";
 
 type Record = { at: number };
 
-function createMemoryStore() {
-  const entries = new Map<string, Record>();
+function createMemoryStore(seedKey?: string) {
+  const entries = new Map<string, Record>(seedKey ? [[seedKey, { at: 1_000_000 }]] : []);
   return {
     entries,
     store: {
@@ -16,23 +16,30 @@ function createMemoryStore() {
   };
 }
 
+function metadataStore(key: string, expiresAt?: number) {
+  const { entries, store } = createMemoryStore(key);
+  const record = entries.get(key)!;
+  return {
+    ...store,
+    entries: vi.fn(async () => [{ key, value: record, createdAt: record.at, expiresAt }]),
+  };
+}
+
 function createCache(params?: {
   openStore?: () => ReturnType<typeof createMemoryStore>["store"] | undefined;
   logError?: (error: unknown) => void;
   readTimestamp?: (record: Record) => number | undefined;
   ttlMs?: number;
-  maxSize?: number;
-  persistentMaxEntries?: number;
 }) {
   const backing = createMemoryStore();
   const cache = createPersistentDedupeCache<Record>({
     // Plain Symbol() is unique per cache, so parallel tests never share memory layers.
     globalKey: Symbol("test.persistent-dedupe"),
     ttlMs: params?.ttlMs ?? 60_000,
-    maxSize: params?.maxSize ?? 100,
+    maxSize: 100,
     persistent: {
       namespace: "test.persistent-dedupe",
-      maxEntries: params?.persistentMaxEntries ?? 100,
+      maxEntries: 100,
       openStore: params?.openStore ?? (() => backing.store),
       logError: params?.logError,
       readTimestamp: params?.readTimestamp,
@@ -61,18 +68,13 @@ describe("createPersistentDedupeCache", () => {
   it("keeps legacy persistent expirations authoritative in non-expiring memory", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000_000);
-    const backing = createMemoryStore();
-    const record = { at: Date.now() };
     const expiresAt = Date.now() + 60_000;
-    backing.entries.set("legacy", record);
+    const backing = metadataStore("legacy", expiresAt);
     const store = {
-      ...backing.store,
+      ...backing,
       lookup: vi.fn(async (key: string) =>
-        Date.now() < expiresAt ? backing.entries.get(key) : undefined,
+        Date.now() < expiresAt ? backing.lookup(key) : undefined,
       ),
-      entries: vi.fn(async () => [
-        { key: "legacy", value: record, createdAt: record.at, expiresAt },
-      ]),
     };
     const { cache } = createCache({ ttlMs: 0, openStore: () => store });
 
@@ -86,13 +88,7 @@ describe("createPersistentDedupeCache", () => {
   });
 
   it("re-primes non-expiring memory only for durable persistent entries", async () => {
-    const backing = createMemoryStore();
-    const record = { at: 1_000_000 };
-    backing.entries.set("durable", record);
-    const store = {
-      ...backing.store,
-      entries: vi.fn(async () => [{ key: "durable", value: record, createdAt: record.at }]),
-    };
+    const store = metadataStore("durable");
     const { cache } = createCache({ ttlMs: 0, openStore: () => store });
 
     expect(await cache.lookup("durable")).toBe(true);
@@ -102,10 +98,8 @@ describe("createPersistentDedupeCache", () => {
   });
 
   it("rejects a persistent hit that disappears before its expiration metadata is read", async () => {
-    const backing = createMemoryStore();
-    backing.entries.set("missing", { at: 1_000_000 });
     const store = {
-      ...backing.store,
+      ...createMemoryStore("missing").store,
       entries: vi.fn(async () => []),
     };
     const { cache } = createCache({ ttlMs: 0, openStore: () => store });
@@ -116,11 +110,9 @@ describe("createPersistentDedupeCache", () => {
 
   it("disables persistence after an expiration metadata read fails", async () => {
     const logError = vi.fn();
-    const backing = createMemoryStore();
-    backing.entries.set("legacy", { at: 1_000_000 });
     const error = new Error("metadata read failed");
     const store = {
-      ...backing.store,
+      ...createMemoryStore("legacy").store,
       entries: vi.fn(async () => {
         throw error;
       }),

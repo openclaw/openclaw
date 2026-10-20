@@ -1,6 +1,3 @@
-/**
- * Tests channel send result normalization and adapter wrapping helpers.
- */
 import { describe, expect, it } from "vitest";
 import {
   attachChannelToResult,
@@ -13,13 +10,8 @@ import {
 
 describe("attachChannelToResult(s)", () => {
   it("stamps channel metadata on single and batch results", () => {
-    expect(
-      attachChannelToResult("discord", {
-        messageId: "m1",
-        ok: true,
-        extra: "value",
-      }),
-    ).toEqual({
+    const result = { messageId: "m1", ok: true, extra: "value" };
+    expect(attachChannelToResult("discord", result)).toEqual({
       channel: "discord",
       messageId: "m1",
       ok: true,
@@ -46,10 +38,7 @@ describe("buildChannelSendResult", () => {
       error: "boom",
     });
 
-    expect(result.channel).toBe("zalo");
-    expect(result.ok).toBe(false);
-    expect(result.messageId).toBe("");
-    expect(result.error).toEqual(new Error("boom"));
+    expect(result).toEqual({ channel: "zalo", ok: false, messageId: "", error: new Error("boom") });
   });
 });
 
@@ -75,43 +64,16 @@ describe("createAttachedChannelResultAdapter", () => {
       sendPoll: async () => ({ messageId: "m3", pollId: "p1" }),
     });
 
-    const sendCases = [
-      {
-        name: "sendText",
-        run: () => adapter.sendText!({ cfg: {} as never, to: "x", text: "hi" }),
-        expected: {
-          channel: "discord",
-          messageId: "m1",
-          target: { kind: "channel", id: "c1" },
-        },
-      },
-      {
-        name: "sendMedia",
-        run: () => adapter.sendMedia!({ cfg: {} as never, to: "x", text: "hi" }),
-        expected: {
-          channel: "discord",
-          messageId: "m2",
-        },
-      },
-      {
-        name: "sendPoll",
-        run: () =>
-          adapter.sendPoll!({
-            cfg: {} as never,
-            to: "x",
-            poll: { question: "t", options: ["a", "b"] },
-          }),
-        expected: {
-          channel: "discord",
-          messageId: "m3",
-          pollId: "p1",
-        },
-      },
-    ];
-
-    for (const testCase of sendCases) {
-      await expect(testCase.run()).resolves.toEqual(testCase.expected);
-    }
+    const ctx = { cfg: {}, to: "x", text: "hi" };
+    await expect(adapter.sendText!(ctx)).resolves.toEqual({
+      channel: "discord",
+      messageId: "m1",
+      target: { kind: "channel", id: "c1" },
+    });
+    await expect(adapter.sendMedia!(ctx)).resolves.toEqual({ channel: "discord", messageId: "m2" });
+    await expect(
+      adapter.sendPoll!({ ...ctx, poll: { question: "t", options: ["a", "b"] } }),
+    ).resolves.toEqual({ channel: "discord", messageId: "m3", pollId: "p1" });
   });
 });
 

@@ -21,6 +21,25 @@ function createContext(): ResolverContext {
   };
 }
 
+function fieldParams(
+  channel: Record<string, unknown>,
+  context = createContext(),
+  channelKey = "example",
+) {
+  return {
+    channelKey,
+    field: "token",
+    channel,
+    context,
+    surface: resolveChannelAccountSurface(channel),
+    defaults: undefined,
+    topInactiveReason: "inactive",
+    accountInactiveReason: "inactive account",
+  };
+}
+
+const envRef = (id: string) => ({ source: "env" as const, provider: "default", id });
+
 describe("channel secret assignments", () => {
   it("keeps providerless refs accepted by the public assignment collector", () => {
     const context = createContext();
@@ -39,30 +58,20 @@ describe("channel secret assignments", () => {
 
   it("keeps inherited webhook credentials owned only by webhook-mode accounts", () => {
     const channel = {
-      webhookSecret: { source: "env" as const, provider: "default", id: "FIXTURE_WEBHOOK" },
+      webhookSecret: envRef("FIXTURE_WEBHOOK"),
       accounts: {
         webhook: { mode: "webhook" },
         polling: { mode: "polling" },
         override: {
           mode: "webhook",
-          webhookSecret: {
-            source: "env" as const,
-            provider: "default",
-            id: "FIXTURE_OVERRIDE",
-          },
+          webhookSecret: envRef("FIXTURE_OVERRIDE"),
         },
       },
     };
     const context = createContext();
-    const surface = resolveChannelAccountSurface(channel);
-
     collectConditionalChannelFieldAssignments({
-      channelKey: "example",
+      ...fieldParams(channel, context),
       field: "webhookSecret",
-      channel,
-      surface,
-      defaults: undefined,
-      context,
       topLevelActiveWithoutAccounts: true,
       topLevelInheritedAccountActive: ({ account, enabled }) =>
         enabled && account.mode === "webhook" && !Object.hasOwn(account, "webhookSecret"),
@@ -87,22 +96,13 @@ describe("channel secret assignments", () => {
         beta: { endpoint: betaEndpoint },
       };
       const channel = {
-        token: { source: "env" as const, provider: "default", id: "FIXTURE_SHARED" },
+        token: envRef("FIXTURE_SHARED"),
         accounts: reverseAccounts
           ? { beta: accounts.beta, alpha: accounts.alpha }
           : { alpha: accounts.alpha, beta: accounts.beta },
       };
       const context = createContext();
-      collectSimpleChannelFieldAssignments({
-        channelKey: "example",
-        field: "token",
-        channel,
-        surface: resolveChannelAccountSurface(channel),
-        defaults: undefined,
-        context,
-        topInactiveReason: "inactive",
-        accountInactiveReason: "inactive account",
-      });
+      collectSimpleChannelFieldAssignments(fieldParams(channel, context));
       return context.assignments.map((assignment) => assignment.ownerContractDigest);
     };
 
@@ -116,52 +116,27 @@ describe("channel secret assignments", () => {
   });
 
   it("finds authored env refs for account keys that need bracket quoting", () => {
-    const read = resolveConfigForRead(
-      {
-        channels: {
-          discord: {
-            accounts: {
-              "0": { token: "${ACCOUNT_ZERO_TOKEN}" },
-              "prod.guild": { token: "${ACCOUNT_DOTTED_TOKEN}" },
-            },
-          },
-        },
-      },
-      {},
-    );
+    const accounts = {
+      "0": { token: "${ACCOUNT_ZERO_TOKEN}" },
+      "prod.guild": { token: "${ACCOUNT_DOTTED_TOKEN}" },
+    };
+    const read = resolveConfigForRead({ channels: { discord: { accounts } } }, {});
     const sourceConfig = coerceConfig(read.resolvedConfigRaw);
     setConfigResolutionFacts(sourceConfig, read.resolutionFacts);
     const channel = asOptionalRecord(sourceConfig.channels?.discord);
     assert(channel);
     const context = { ...createContext(), sourceConfig };
 
-    collectSimpleChannelFieldAssignments({
-      channelKey: "discord",
-      field: "token",
-      channel,
-      surface: resolveChannelAccountSurface(channel),
-      defaults: undefined,
-      context,
-      topInactiveReason: "inactive",
-      accountInactiveReason: "inactive account",
-    });
+    collectSimpleChannelFieldAssignments(fieldParams(channel, context, "discord"));
 
     const refByPath = new Map(
       context.assignments.map((assignment) => [assignment.path, assignment.ref]),
     );
-    expect([...refByPath.keys()].toSorted()).toEqual([
-      'channels.discord.accounts["0"].token',
-      'channels.discord.accounts["prod.guild"].token',
-    ]);
-    expect(refByPath.get('channels.discord.accounts["0"].token')).toEqual({
-      source: "env",
-      provider: "default",
-      id: "ACCOUNT_ZERO_TOKEN",
-    });
-    expect(refByPath.get('channels.discord.accounts["prod.guild"].token')).toEqual({
-      source: "env",
-      provider: "default",
-      id: "ACCOUNT_DOTTED_TOKEN",
-    });
+    expect(refByPath).toEqual(
+      new Map([
+        ['channels.discord.accounts["0"].token', envRef("ACCOUNT_ZERO_TOKEN")],
+        ['channels.discord.accounts["prod.guild"].token', envRef("ACCOUNT_DOTTED_TOKEN")],
+      ]),
+    );
   });
 });
