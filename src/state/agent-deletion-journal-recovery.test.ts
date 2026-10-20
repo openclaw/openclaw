@@ -2,6 +2,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import {
   reconstructAgentDeletionJournal as reconstruct,
   recordAgentDeletionRecoveryHolds as record,
@@ -37,16 +38,8 @@ beforeEach(() => {
 });
 afterEach(() => database.db.close());
 
-function transaction(operation: () => unknown) {
-  database.db.exec("BEGIN IMMEDIATE");
-  try {
-    operation();
-    database.db.exec("COMMIT");
-  } catch (error) {
-    database.db.exec("ROLLBACK");
-    throw error;
-  }
-}
+const transaction = (operation: () => unknown) =>
+  runSqliteImmediateTransactionSync(database.db, operation);
 
 function updateReport(patch: Record<string, unknown>, report = readReport(database)) {
   database.db

@@ -66,13 +66,11 @@ for (const legacy of ["legacy-birthtime", "missing-column"] as const) {
         ["TEXT", 0, null, 0],
       );
       const previousSchema = OPENCLAW_AGENT_SCHEMA_SQL.replace(/^\s*canonical_ready TEXT,\n/mu, "");
-      assert.doesNotThrow(() =>
-        assertSqliteSchemaContains(
-          sqlPublicationAnchor(database.db),
-          database.path,
-          previousSchema,
-          AGENT_SCHEMA_COMPATIBILITY,
-        ),
+      assertSqliteSchemaContains(
+        sqlPublicationAnchor(database.db),
+        database.path,
+        previousSchema,
+        AGENT_SCHEMA_COMPATIBILITY,
       );
       const completeSchema = database.db.prepare("PRAGMA schema_version").get();
       writeTransaction(recordReceipt, options);
@@ -94,17 +92,12 @@ await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
   // oxlint-disable-next-line typescript/unbound-method -- The proxy forwards the native receiver with Reflect.apply.
   const original = { get: prototype.get, all: prototype.all, iterate: prototype.iterate };
   let receiptReads = 0;
-  const observe = <
-    Read extends StatementSync["get"] | StatementSync["all"] | StatementSync["iterate"],
-  >(
-    read: Read,
-  ): Read =>
+  type Read = (typeof original)[keyof typeof original];
+  const observe = <T extends Read>(read: T): T =>
     new Proxy(read, {
       apply(target, receiver: StatementSync, args) {
         assert.doesNotMatch(receiver.sourceSQL, /^PRAGMA table_info\(session_key_contract\)/iu);
-        if (/^select "canonical_ready" /iu.test(receiver.sourceSQL)) {
-          receiptReads += 1;
-        }
+        receiptReads += Number(/^select "canonical_ready" /iu.test(receiver.sourceSQL));
         return Reflect.apply(target, receiver, args);
       },
     });

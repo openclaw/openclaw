@@ -66,15 +66,13 @@ afterAll(() => {
   vi.restoreAllMocks();
 });
 function expectNoChecks(databases: EngineConnection[]) {
-  expect(
-    trace.execute.mock.calls.filter(
-      ([db, sql]) =>
-        databases.includes(db) &&
-        (/^PRAGMA user_version\b/i.test(sql) ||
-          /\bsqlite_(master|schema)\b/i.test(sql) ||
-          trace.isVersionProbe(sql)),
-    ),
-  ).toEqual([]);
+  const schemaOrFreshness =
+    /^PRAGMA (?:user_version|data_version)\b|\bsqlite_(?:master|schema)\b|FROM main\.pragma_data_version\(\)\s*$/iu;
+  for (const [db, sql] of trace.execute.mock.calls) {
+    if (databases.includes(db)) {
+      expect(sql).not.toMatch(schemaOrFreshness);
+    }
+  }
 }
 
 it("keeps admitted reads free of schema checks and freshness probes", async () => {
