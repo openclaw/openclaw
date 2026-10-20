@@ -2,30 +2,20 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, assert, describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 import { getApfsCloneId } from "../../../test/helpers/apfs.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { detectWorktreeFilesystemBackend } from "./filesystem-backend.js";
+import {
+  cloneOptions as options,
+  revocableAuthority,
+  useCloneFixture,
+} from "./filesystem-clone.test-support.js";
 import { nativeWorktreeFilesystem } from "./filesystem-native.js";
 
 describe.skipIf(process.platform !== "darwin")("APFS worktree filesystem", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-  const options = { commitGuard: () => {} };
-  afterEach(() => vi.restoreAllMocks());
-
-  async function template() {
-    const root = tempDirs.make("openclaw-apfs-");
-    const source = path.join(root, "source");
-    const destination = path.join(root, "destination");
-    const backend = await detectWorktreeFilesystemBackend(root, options);
-    assert(backend);
-    expect(backend.id).toBe("apfs");
-    await backend.createTemplate(source, options);
-    return { source, destination, backend };
-  }
+  const { create: template, makeRoot } = useCloneFixture("apfs");
 
   it("distinguishes empty, inheritable and unreadable directory ACLs", async () => {
-    const root = tempDirs.make("openclaw-apfs-acl-");
+    const root = makeRoot();
     const { apfsFilesystem } = await import("./filesystem-apfs.native.js");
     expect(await apfsFilesystem.readDirectoryAcl(root, options)).toBe("none");
     expect(
@@ -44,22 +34,21 @@ describe.skipIf(process.platform !== "darwin")("APFS worktree filesystem", () =>
   });
 
   it("shares file data while preserving modes, dotfiles, and literal symlinks", async () => {
-    const { source, destination, backend } = await template();
+    const { source, destination, backend, from, to, clone } = await template();
+    const original = from("nested/.payload");
+    const cloned = to("nested/.payload");
     expect((await fs.stat(source)).mode & 0o777).toBe(0o777 & ~process.umask());
-    await fs.mkdir(path.join(source, "nested"));
-    await fs.writeFile(path.join(source, "nested", ".payload"), Buffer.alloc(1024 * 1024, 0x5a));
-    await fs.chmod(path.join(source, "nested", ".payload"), 0o751);
-    await fs.chmod(path.join(source, "nested"), 0o750);
-    await fs.symlink("nested/.payload", path.join(source, "link"));
-
-    await backend.cloneTemplate(source, destination, options);
-    const original = path.join(source, "nested", ".payload");
-    const cloned = path.join(destination, "nested", ".payload");
+    await fs.mkdir(from("nested"));
+    await fs.writeFile(original, Buffer.alloc(1024 * 1024, 0x5a));
+    await fs.chmod(original, 0o751);
+    await fs.chmod(from("nested"), 0o750);
+    await fs.symlink("nested/.payload", from("link"));
+    await clone();
     expect(await getApfsCloneId(cloned)).toBe(await getApfsCloneId(original));
     expect((await fs.stat(cloned)).ino).not.toBe((await fs.stat(original)).ino);
     expect((await fs.stat(cloned)).mode & 0o777).toBe(0o751);
-    expect((await fs.stat(path.join(destination, "nested"))).mode & 0o777).toBe(0o750);
-    expect(await fs.readlink(path.join(destination, "link"))).toBe("nested/.payload");
+    expect((await fs.stat(to("nested"))).mode & 0o777).toBe(0o750);
+    expect(await fs.readlink(to("link"))).toBe("nested/.payload");
     const [metadata] = await nativeWorktreeFilesystem.readMetadata([cloned], options);
     assert(metadata);
     const stat = await fs.lstat(cloned, { bigint: true });
@@ -77,9 +66,7 @@ describe.skipIf(process.platform !== "darwin")("APFS worktree filesystem", () =>
     expect((await fs.readFile(original)).equals(Buffer.alloc(1024 * 1024, 0x5a))).toBe(true);
     expect(await getApfsCloneId(cloned)).not.toBe(await getApfsCloneId(original));
 
-    await expect(backend.cloneTemplate(source, destination, options)).rejects.toMatchObject({
-      code: "EEXIST",
-    });
+    await expect(clone()).rejects.toMatchObject({ code: "EEXIST" });
     await expect(backend.createTemplate(destination, options)).rejects.toMatchObject({
       code: "EEXIST",
     });
@@ -89,32 +76,30 @@ describe.skipIf(process.platform !== "darwin")("APFS worktree filesystem", () =>
   it.each(["abort", "authority"])(
     "joins an admitted clone before reporting %s loss",
     async (reason) => {
-      const { source, destination, backend } = await template();
-      await fs.writeFile(path.join(source, "a"), "first");
-      await fs.writeFile(path.join(source, "b"), "second");
+      const { source, destination, from, clone } = await template();
+      await fs.writeFile(from("a"), "first");
+      await fs.writeFile(from("b"), "second");
       const copy = nativeWorktreeFilesystem.copy;
-      let authorized = true;
+      const authority = revocableAuthority();
       let finished = false;
       const abort = new AbortController();
-      vi.spyOn(nativeWorktreeFilesystem, "copy").mockImplementation(async (from, to) => {
-        // Model an admitted bulk operation that can no longer be interrupted.
-        const pending = copy(from, to, { commitGuard: () => {} });
-        authorized = false;
-        if (reason === "abort") {
-          abort.abort(new Error("allocation canceled"));
-        }
-        await pending;
-        finished = true;
-      });
+      vi.spyOn(nativeWorktreeFilesystem, "copy").mockImplementation(
+        async (sourcePath, targetPath) => {
+          // Model an admitted bulk operation that can no longer be interrupted.
+          const pending = copy(sourcePath, targetPath, { commitGuard: () => {} });
+          authority.revoke();
+          if (reason === "abort") {
+            abort.abort(new Error("allocation canceled"));
+          }
+          await pending;
+          finished = true;
+        },
+      );
 
       await expect(
-        backend.cloneTemplate(source, destination, {
+        clone({
           signal: abort.signal,
-          commitGuard: () => {
-            if (!authorized) {
-              throw new Error("allocation lease lost");
-            }
-          },
+          commitGuard: authority.commitGuard,
         }),
       ).rejects.toThrow(reason === "abort" ? "allocation canceled" : "allocation lease lost");
       expect(finished).toBe(true);
@@ -124,23 +109,15 @@ describe.skipIf(process.platform !== "darwin")("APFS worktree filesystem", () =>
   );
 
   it("does not dispatch a clone after authority is revoked during ACL inspection", async () => {
-    const { source, destination, backend } = await template();
+    const { destination, clone } = await template();
     const { apfsFilesystem } = await import("./filesystem-apfs.native.js");
     const readAcl = apfsFilesystem.readDirectoryAcl;
-    let authorized = true;
+    const authority = revocableAuthority();
     vi.spyOn(apfsFilesystem, "readDirectoryAcl").mockImplementationOnce((directory, aclOptions) => {
-      authorized = false;
+      authority.revoke();
       return readAcl(directory, aclOptions);
     });
-    await expect(
-      backend.cloneTemplate(source, destination, {
-        commitGuard() {
-          if (!authorized) {
-            throw new Error("allocation lease lost");
-          }
-        },
-      }),
-    ).rejects.toThrow("allocation lease lost");
+    await expect(clone(authority)).rejects.toThrow("allocation lease lost");
     await expect(fs.access(destination)).rejects.toMatchObject({ code: "ENOENT" });
   });
 });

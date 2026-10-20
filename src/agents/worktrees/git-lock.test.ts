@@ -1,19 +1,17 @@
-import { execFile, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { lockState, lockWorktreeForProcess } from "./git-lock.js";
 import { listGitWorktrees } from "./git.js";
+import {
+  git,
+  makeWorktreeRecord,
+  useManagedWorktreeTestRepository,
+} from "./service.test-support.js";
 import type { ManagedWorktreeRecord } from "./types.js";
-
-const execFileAsync = promisify(execFile);
-
-async function git(cwd: string, ...args: string[]): Promise<void> {
-  await execFileAsync("git", ["-C", cwd, ...args]);
-}
 
 /** A pid that has exited, so isPidDefinitelyDead reports ESRCH for it. */
 async function exitedPid(): Promise<number> {
@@ -38,31 +36,19 @@ function setLock(record: ManagedWorktreeRecord, reason: string) {
 
 describe("lockWorktreeForProcess", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  const initialize = useManagedWorktreeTestRepository();
 
   async function setupWorktree(): Promise<ManagedWorktreeRecord> {
     const root = await fs.realpath(tempDirs.make("openclaw-git-lock-"));
-    const repo = path.join(root, "repo");
-    await fs.mkdir(repo, { recursive: true });
-    await git(repo, "init", "-b", "main");
-    await git(repo, "config", "user.name", "OpenClaw Test");
-    await git(repo, "config", "user.email", "openclaw-test@example.invalid");
-    await fs.writeFile(path.join(repo, "README.md"), "base\n");
-    await git(repo, "add", "README.md");
-    await git(repo, "commit", "-m", "initial");
+    const repo = await initialize(root);
     const worktreePath = path.join(root, "wt-lock");
     await git(repo, "worktree", "add", "-b", "wt-lock", worktreePath, "HEAD");
-    return {
-      id: "wt-lock",
-      name: "wt-lock",
-      repoFingerprint: "fingerprint",
-      repoRoot: repo,
+    return makeWorktreeRecord(repo, "wt-lock", {
       path: worktreePath,
-      branch: "wt-lock",
       baseRef: "main",
-      ownerKind: "session",
       createdAt: 0,
       lastActiveAt: 0,
-    };
+    });
   }
 
   it("reclaims a lock left behind by a dead OpenClaw process", async () => {

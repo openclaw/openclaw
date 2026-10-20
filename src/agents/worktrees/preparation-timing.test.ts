@@ -27,10 +27,12 @@ it("attributes nested preparation once per owner and retains failed phase time",
   let clock = 0;
   vi.spyOn(performance, "now").mockImplementation(() => clock);
   const failure = new Error("synthetic private setup output");
+  const warm = Object.freeze({ reason: "ready", backend: "btrfs", cloneBytes: 42 });
+  const phases = { templateApply: 52, containerStart: 8 };
   await expect(
     withWorktreePreparationTiming("sandbox", async () => {
       markManagedWorktreePreparation();
-      setWorktreePreparationTemplate("warm", { reason: "ready", backend: "btrfs", cloneBytes: 42 });
+      setWorktreePreparationTemplate("warm", warm);
       await timeWorktreePreparationPhase("templateApply", async () => {
         clock += 12;
         await withWorktreePreparationTiming("managed", async () => {
@@ -45,36 +47,27 @@ it("attributes nested preparation once per owner and retains failed phase time",
       });
     }),
   ).rejects.toBe(failure);
-  expect(observations.log.mock.calls).toEqual([
-    [
+  const receipts = [
+    ["managed", "unavailable", { reason: "not-requested" }, "returned", 40, { checkout: 40 }],
+    ["sandbox", "warm", warm, "threw", 60, phases],
+  ] as const;
+  expect(observations.log.mock.calls).toEqual(
+    receipts.map(([kind, template, templateDetails, outcome, durationMs, phaseDurationsMs]) => [
       "managed worktree preparation",
       {
-        consoleMessage: expect.stringContaining('phaseDurationsMs={"checkout":40}'),
-        kind: "managed",
-        template: "unavailable",
-        templateDetails: { reason: "not-requested" },
-        outcome: "returned",
-        durationMs: 40,
+        kind,
+        template,
+        templateDetails,
+        outcome,
+        durationMs,
+        phaseDurationsMs,
         unattributedMs: 0,
-        phaseDurationsMs: { checkout: 40 },
-      },
-    ],
-    [
-      "managed worktree preparation",
-      {
         consoleMessage: expect.stringContaining(
-          'phaseDurationsMs={"templateApply":52,"containerStart":8}',
+          `phaseDurationsMs=${JSON.stringify(phaseDurationsMs)}`,
         ),
-        kind: "sandbox",
-        template: "warm",
-        templateDetails: { reason: "ready", backend: "btrfs", cloneBytes: 42 },
-        outcome: "threw",
-        durationMs: 60,
-        unattributedMs: 0,
-        phaseDurationsMs: { templateApply: 52, containerStart: 8 },
       },
-    ],
-  ]);
+    ]),
+  );
   expect(observations.event).toHaveBeenCalledTimes(2);
   expect(observations.event.mock.calls[1]?.[0]).toMatchObject({
     name: "worktree.preparation",
@@ -82,12 +75,9 @@ it("attributes nested preparation once per owner and retains failed phase time",
     details: {
       kind: "sandbox",
       template: "warm",
-      "template.reason": "ready",
-      "template.backend": "btrfs",
-      "template.cloneBytes": 42,
       outcome: "threw",
-      templateApply: 52,
-      containerStart: 8,
+      ...phases,
+      ...Object.fromEntries(Object.entries(warm).map(([key, value]) => [`template.${key}`, value])),
     },
   });
   expect(JSON.stringify(observations.log.mock.calls)).not.toContain(failure.message);

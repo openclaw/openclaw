@@ -39,15 +39,14 @@ async function write(relative: string, content: string) {
   await fs.writeFile(target, content);
 }
 
-async function snapshot() {
-  return await Promise.all(
+const snapshot = () =>
+  Promise.all(
     promptFiles.map(async (relative) => {
       const target = path.join(destination, relative);
       const stat = await fs.stat(target);
       return { relative, bytes: await fs.readFile(target), ino: stat.ino, mtimeMs: stat.mtimeMs };
     }),
   );
-}
 
 async function create(onPromptReady: (commit: string) => Promise<void>) {
   return await addManagedWorktree({
@@ -83,49 +82,46 @@ beforeEach(async () => {
 
 afterEach(() => vi.unstubAllEnvs());
 
-it.each(["lf", "crlf"])(
-  "preserves %s project and personal prompt bytes and stat data across complete materialization",
-  async (eol) => {
-    await write(".gitattributes", `* text=auto eol=${eol}\n`);
-    await git("config", "filter.unused.smudge", "unused-filter-must-not-run");
-    await write(".agents/.gitattributes", "* text eol=lf\n");
-    await write("users/.gitattributes", "* text eol=crlf\n");
-    await write("users/Profile_123/.gitattributes", "USER.md text eol=lf\n");
-    await save("prompt line endings");
-    const dirty = {
-      "AGENTS.md": "uncommitted instructions must not reach the model\n",
-      "users/Profile_123/USER.md": "uncommitted personal instructions\n",
-    };
-    for (const [relative, content] of Object.entries(dirty)) {
-      await write(relative, content);
-    }
-    let early: Awaited<ReturnType<typeof snapshot>> | undefined;
-    const result = await create(async (preparedCommit) => {
-      expect(preparedCommit).toBe(commit);
-      expect(await requireGit(destination, ["symbolic-ref", "--short", "HEAD"])).toBe("prompt");
-      await expectPendingCheckout();
-      early = await snapshot();
-      expect(early.map((file) => file.bytes.toString())).toEqual(
-        promptFiles.map(
-          (relative) =>
-            `committed ${relative}${eol === "crlf" && !relative.startsWith(".agents/") && !relative.startsWith("users/") ? "\r\n" : "\n"}`,
-        ),
-      );
-    });
-    expect(result.code).toBe(0);
-    expect(await snapshot()).toEqual(early);
-    expect(await read(destination, "src/main.ts")).toBe(
-      `remaining checkout${eol === "crlf" ? "\r\n" : "\n"}`,
+it.each(["lf", "crlf"])("preserves %s prompt bytes and stat data after checkout", async (eol) => {
+  await write(".gitattributes", `* text=auto eol=${eol}\n`);
+  await git("config", "filter.unused.smudge", "unused-filter-must-not-run");
+  await write(".agents/.gitattributes", "* text eol=lf\n");
+  await write("users/.gitattributes", "* text eol=crlf\n");
+  await write("users/Profile_123/.gitattributes", "USER.md text eol=lf\n");
+  await save("prompt line endings");
+  const dirty = {
+    "AGENTS.md": "uncommitted instructions must not reach the model\n",
+    "users/Profile_123/USER.md": "uncommitted personal instructions\n",
+  };
+  for (const [relative, content] of Object.entries(dirty)) {
+    await write(relative, content);
+  }
+  let early: Awaited<ReturnType<typeof snapshot>> | undefined;
+  const result = await create(async (preparedCommit) => {
+    expect(preparedCommit).toBe(commit);
+    expect(await requireGit(destination, ["symbolic-ref", "--short", "HEAD"])).toBe("prompt");
+    await expectPendingCheckout();
+    early = await snapshot();
+    expect(early.map((file) => file.bytes.toString())).toEqual(
+      promptFiles.map(
+        (relative) =>
+          `committed ${relative}${eol === "crlf" && !relative.startsWith(".agents/") && !relative.startsWith("users/") ? "\r\n" : "\n"}`,
+      ),
     );
-    expect(await requireGit(destination, ["status", "--porcelain"])).toBe("");
-    for (const [relative, content] of Object.entries(dirty)) {
-      expect(await read(repo, relative)).toBe(content);
-    }
-  },
-);
+  });
+  expect(result.code).toBe(0);
+  expect(await snapshot()).toEqual(early);
+  expect(await read(destination, "src/main.ts")).toBe(
+    `remaining checkout${eol === "crlf" ? "\r\n" : "\n"}`,
+  );
+  expect(await requireGit(destination, ["status", "--porcelain"])).toBe("");
+  for (const [relative, content] of Object.entries(dirty)) {
+    expect(await read(repo, relative)).toBe(content);
+  }
+});
 
 it.each([".gitattributes", ".codex/config.toml", ".CODEX/config.toml"])(
-  "retains ordinary materialization when %s can change prompt inputs",
+  "falls back for prompt-changing %s",
   async (relative) => {
     await write(
       relative,
@@ -140,7 +136,7 @@ it.each([".gitattributes", ".codex/config.toml", ".CODEX/config.toml"])(
 );
 
 it.skipIf(process.platform === "win32")(
-  "prepares mixed-case skills and raw prompt paths without scanning unrelated attributes",
+  "selects raw/mixed-case prompts, not unrelated attributes",
   async () => {
     const inputs = [
       "Skills/nested/example/SKILL.md",
