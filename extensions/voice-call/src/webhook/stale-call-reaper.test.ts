@@ -62,44 +62,63 @@ describe("startStaleCallReaper", () => {
     await stop?.();
   });
 
-  it("does not overlap reaps and retries after settlement", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const firstEndCall = createDeferred<{ success: false; error: string }>();
-    const secondEndCall = createDeferred<{ success: true }>();
-    const endCall = vi
-      .fn()
-      .mockImplementationOnce(() => firstEndCall.promise)
-      .mockImplementationOnce(() => secondEndCall.promise);
-    const stop = startReaper(endCall);
+  it.each([false, true])(
+    "does not overlap reaps and retries after settlement (throws=%s)",
+    async (throws) => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const failure = new Error("network");
+      const firstEndCall = createDeferred<{ success: false; error: string }>();
+      const secondEndCall = createDeferred<{ success: true }>();
+      const endCall = vi
+        .fn()
+        .mockImplementationOnce(() => firstEndCall.promise)
+        .mockImplementationOnce(() => secondEndCall.promise);
+      const stop = startReaper(endCall);
 
-    await vi.advanceTimersByTimeAsync(30_000);
-    await vi.advanceTimersByTimeAsync(30_000);
+      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.advanceTimersByTimeAsync(30_000);
 
-    expect(endCall).toHaveBeenCalledTimes(1);
+      expect(endCall).toHaveBeenCalledTimes(1);
 
-    firstEndCall.resolve({ success: false, error: "network" });
-    await firstEndCall.promise;
-    await Promise.resolve();
-    expect(warn).toHaveBeenCalledWith("[voice-call] Reaper failed to end call call-stale: network");
-    await vi.advanceTimersByTimeAsync(30_000);
+      if (throws) {
+        firstEndCall.reject(failure);
+      } else {
+        firstEndCall.resolve({ success: false, error: "network" });
+      }
+      await firstEndCall.promise.catch(() => {});
+      await Promise.resolve();
+      expect(warn.mock.calls).toEqual([
+        throws
+          ? ["[voice-call] Reaper failed to end call call-stale:", failure]
+          : ["[voice-call] Reaper failed to end call call-stale: network"],
+      ]);
+      await vi.advanceTimersByTimeAsync(30_000);
 
-    expect(endCall).toHaveBeenCalledTimes(2);
-    expect(endCall).toHaveBeenNthCalledWith(2, "call-stale");
-
-    let stopped = false;
-    const stopping = stop?.().then(() => {
-      stopped = true;
-    });
-    try {
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(stopped).toBe(false);
       expect(endCall).toHaveBeenCalledTimes(2);
-    } finally {
-      secondEndCall.resolve({ success: true });
-      await stopping;
-    }
-    expect(stopped).toBe(true);
-  });
+      expect(endCall).toHaveBeenNthCalledWith(2, "call-stale");
+
+      let stopped = false;
+      const stopping = stop?.().then(() => {
+        stopped = true;
+      });
+      try {
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(stopped).toBe(false);
+        expect(endCall).toHaveBeenCalledTimes(2);
+      } finally {
+        if (throws) {
+          secondEndCall.reject(failure);
+        } else {
+          secondEndCall.resolve({ success: true });
+        }
+        await stopping;
+      }
+      expect(stopped).toBe(true);
+      if (throws) {
+        expect(warn).toHaveBeenCalledTimes(2);
+      }
+    },
+  );
 
   it.each(["speaking", "listening"] as const)(
     "does not reap live %s calls without answeredAt",
@@ -116,29 +135,4 @@ describe("startStaleCallReaper", () => {
       await stop?.();
     },
   );
-
-  it("logs and swallows endCall failures", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const endCallError = new Error("network");
-    const endCall = vi.fn(async () => {
-      throw endCallError;
-    });
-    const stop = startReaper(endCall);
-
-    await vi.advanceTimersByTimeAsync(30_000);
-    await Promise.resolve();
-
-    expect(warn).toHaveBeenCalledWith(
-      "[voice-call] Reaper failed to end call call-stale:",
-      endCallError,
-    );
-
-    await vi.advanceTimersByTimeAsync(30_000);
-    await Promise.resolve();
-
-    expect(endCall).toHaveBeenCalledTimes(2);
-    expect(warn).toHaveBeenCalledTimes(2);
-
-    await stop?.();
-  });
 });

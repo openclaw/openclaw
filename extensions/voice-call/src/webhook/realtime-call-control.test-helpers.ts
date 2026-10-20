@@ -3,7 +3,6 @@ import type {
   RealtimeVoiceProviderPlugin,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { vi } from "vitest";
-import type { VoiceCallRealtimeConfig } from "../config.js";
 import type { CallManager } from "../manager.js";
 import { createVoiceCallBaseConfig } from "../test-fixtures.js";
 import type { CallRecord } from "../types.js";
@@ -52,7 +51,7 @@ export function makeHandler(params: {
     enabled: true,
     instructions: "Be helpful.",
     ...(params.idleHangupMs ? { idleHangupMs: params.idleHangupMs } : {}),
-  } satisfies VoiceCallRealtimeConfig;
+  };
   const provider: RealtimeVoiceProviderPlugin = {
     id: "openai",
     label: "OpenAI",
@@ -89,7 +88,6 @@ export function makeHandler(params: {
     }),
     "/voice/webhook",
     { connect: () => {}, disconnect: () => {}, retire: () => {} },
-    undefined,
   );
   handler.setPublicUrl("https://public.example/voice/webhook");
   return { handler, manager, processEvent, endCall };

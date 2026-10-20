@@ -6,7 +6,6 @@ import type { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { onTestFinished, vi } from "vitest";
 import type { CallManager } from "../manager.js";
 import { createVoiceCallBaseConfig } from "../test-fixtures.js";
-import type { HangupCallInput } from "../types.js";
 import { connectWs, startUpgradeWsServer } from "../websocket-test-support.js";
 import { makeBridge, makeCall } from "./realtime-call-control.test-helpers.js";
 import { RealtimeCallHandler, type ResolveRealtimeCallRegistration } from "./realtime-handler.js";
@@ -26,11 +25,7 @@ export function createBridge(
   close: RealtimeVoiceBridge["close"],
   overrides: Partial<RealtimeVoiceBridge> = {},
 ): RealtimeVoiceBridge {
-  return makeBridge({
-    submitToolResult: () => {},
-    close,
-    ...overrides,
-  });
+  return makeBridge({ submitToolResult: () => {}, close, ...overrides });
 }
 
 export function makeRealtimeProvider(
@@ -59,18 +54,16 @@ export function createCarrierLifecycleHarness(
   const realtimeProvider = makeRealtimeProvider(createBridgeForCall);
   const call = makeCall("CA-startup", {
     callId: "call-startup",
-    from: "+15550001111",
-    to: "+15550002222",
     metadata: options.initialMessage ? { initialMessage: options.initialMessage } : undefined,
   });
   const processEvent = vi.fn<CallManager["processEvent"]>(async () => ({ kind: "processed" }));
-  const hangupCall = vi.fn(async (_input: HangupCallInput) => {});
   const endCall = vi.fn(
     options.endCall ??
       (async (callId: string, endOptions?: { reason?: "completed" | "error" | "timeout" }) => {
         const reason = endOptions?.reason ?? "hangup-bot";
         try {
-          await hangupCall({ callId, providerCallId: call.providerCallId!, reason });
+          // Preserve the carrier-settlement tick before publishing the terminal event.
+          await Promise.resolve();
           await processEvent({
             id: `manager-ended-${call.providerCallId}`,
             type: "call.ended",
@@ -106,7 +99,7 @@ export function createCarrierLifecycleHarness(
     "/voice/webhook",
     options.streamDisconnectLifecycle ?? { connect() {}, disconnect() {}, retire() {} },
   );
-  return { call, endCall, handler, hangupCall, processEvent };
+  return { call, endCall, handler, processEvent };
 }
 
 export async function connectCarrierStream(handler: RealtimeCallHandler) {
