@@ -8,13 +8,12 @@ import {
   createHarness,
   flushObserver,
   modelMessage,
+  preparedModel,
   resetSessionObserverEventSequence,
   startAndAddToolNotes,
 } from "./session-observer.test-utils.js";
 
-beforeEach(() => {
-  vi.useFakeTimers();
-});
+beforeEach(() => vi.useFakeTimers());
 
 afterEach(() => {
   vi.useRealTimers();
@@ -27,12 +26,7 @@ describe("session observer completion", () => {
     const password = `synthetic-${"x".repeat(200)}-credential`;
     const registered = `registered-${"q".repeat(200)}-fixture`;
     registerSecretValueForRedaction(registered);
-    const result = {
-      text: "first rejected output",
-      provider: "openai",
-      model: "gpt-test",
-      owner: { kind: "harness" as const, id: "openclaw" },
-    };
+    const result = { ...modelMessage({}), text: "first rejected output" };
     const completeModel = vi
       .fn<NonNullable<SessionObserverDeps["completeModel"]>>()
       .mockResolvedValueOnce(result)
@@ -42,16 +36,7 @@ describe("session observer completion", () => {
       });
     const request = createSessionObserverCompletion({
       getConfig: () => ({}),
-      prepareModel: vi.fn(async () => ({
-        config: {},
-        provider: "openai",
-        model: "gpt-test",
-        authProfileId: undefined,
-        outputTextPolicy: "strict-visible" as const,
-        thinkLevel: "off" as const,
-        agentId: "main",
-        agentDir: "/tmp/agent",
-      })),
+      prepareModel: vi.fn(async () => ({ ...preparedModel(), config: {} })),
       completeModel,
       isCurrent: () => true,
     });
@@ -90,23 +75,18 @@ describe("session observer completion", () => {
   it("publishes a digest from a utility model that answers after 15s", async () => {
     vi.setSystemTime(0);
     // CLI-backed utility models (for example claude-cli Haiku) take 9-16s per call.
+    const reply = modelMessage({
+      headline: "Reviewing the implementation",
+      assessment: "The work is progressing steadily.",
+      health: "on-track",
+    });
     const completeModel = vi.fn(
       (params: { timeoutMs?: number; abortSignal?: AbortSignal }) =>
         new Promise((resolve, reject) => {
           params.abortSignal?.addEventListener("abort", () => reject(new Error("aborted")), {
             once: true,
           });
-          setTimeout(
-            () =>
-              resolve(
-                modelMessage({
-                  headline: "Reviewing the implementation",
-                  assessment: "The work is progressing steadily.",
-                  health: "on-track",
-                }),
-              ),
-            15_000,
-          );
+          setTimeout(() => resolve(reply), 15_000);
         }),
     );
     const harness = createHarness({ completeModel });
@@ -129,25 +109,24 @@ describe("session observer completion", () => {
 
   it("aborts stuck completions at the cap and disables the run after two failures", async () => {
     vi.setSystemTime(0);
-    const signals: AbortSignal[] = [];
     const completeModel = vi.fn(
       (params: { abortSignal?: AbortSignal }) =>
         new Promise<never>((_resolve, reject) => {
           const signal = params.abortSignal!;
-          signals.push(signal);
           signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
         }),
     );
+    const signal = (index: number) => completeModel.mock.calls[index]?.[0].abortSignal;
     const harness = createHarness({ completeModel });
     await startAndAddToolNotes(harness.observer);
     await vi.advanceTimersByTimeAsync(12_000);
     await vi.advanceTimersByTimeAsync(29_999);
-    expect(signals[0]?.aborted).toBe(false);
+    expect(signal(0)?.aborted).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
-    expect(signals[0]?.aborted).toBe(true);
+    expect(signal(0)?.aborted).toBe(true);
     expect(completeModel).toHaveBeenCalledTimes(2);
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(signals[1]?.aborted).toBe(true);
+    expect(signal(1)?.aborted).toBe(true);
     await vi.advanceTimersByTimeAsync(60_000);
     expect(completeModel).toHaveBeenCalledTimes(2);
     expect(harness.broadcastToConnIds).not.toHaveBeenCalled();

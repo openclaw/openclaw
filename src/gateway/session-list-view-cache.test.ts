@@ -9,67 +9,75 @@ import { SessionListViewCache } from "./session-list-view-cache.js";
 import { serializeSessionRow } from "./session-row-serialization.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
-it("charges shared current encodings once and replaces their cost with identity vectors on retirement", async () => {
+const row: GatewaySessionRow = { key: "one", kind: "direct", updatedAt: 1, rowMode: "sidebar" };
+type Counters = { views: number; refs: number; estimatedBytes: number };
+async function flushReports() {
+  await setImmediate();
+  await waitForDiagnosticEventsDrained();
+}
+async function withCache(
+  run: (fixture: {
+    cache: SessionListViewCache;
+    retained: Counters;
+    reports: Counters[];
+    retirements: string[];
+  }) => Promise<void>,
+) {
   const cache = new SessionListViewCache();
-  const view = cache.get("encoded");
-  const emptyBytes = view.bytes;
-  const row: GatewaySessionRow = {
-    key: "one",
-    kind: "direct",
-    updatedAt: 1,
-    rowMode: "sidebar",
-    label: "é".repeat(1_024),
-  };
-  const rows = [row];
-  const encoded = serializeSessionRow(row);
-  registerSerializedJsonArray(rows, [encoded]);
-  let retainedBytes = 0;
+  const retained = { views: 0, refs: 0, estimatedBytes: 0 };
+  const reports: Counters[] = [];
+  const retirements: string[] = [];
   const stop = onTrustedInternalDiagnosticEvent((event) => {
     if (event.type === "sessions.list.retention") {
-      retainedBytes = event.estimatedBytes;
+      const counters = {
+        views: event.views,
+        refs: event.refs,
+        estimatedBytes: event.estimatedBytes,
+      };
+      Object.assign(retained, counters);
+      reports.push(counters);
+    } else if (event.type === "sessions.list.baseline.retired") {
+      retirements.push(event.cause);
     }
   });
   try {
+    await run({ cache, retained, reports, retirements });
+  } finally {
+    cache.clear();
+    await flushReports();
+    stop();
+  }
+  return { retained, reports, retirements };
+}
+
+it("charges shared current encodings once and replaces their cost with identity vectors on retirement", async () => {
+  const encodedRow = { ...row, label: "é".repeat(1_024) };
+  const rows = [encodedRow];
+  const encoded = serializeSessionRow(encodedRow);
+  registerSerializedJsonArray(rows, [encoded]);
+  const fixture = await withCache(async ({ cache, retained }) => {
+    const view = cache.get("encoded");
+    const emptyBytes = view.bytes;
     cache.setRows(view, rows, true);
     expect(view.bytes - emptyBytes).toBe(
       8 + encoded.length * 2 + Buffer.byteLength(`[${encoded}]`),
     );
     const shared = cache.get("shared");
-    cache.setRows(shared, [row], true);
-    await setImmediate();
-    await waitForDiagnosticEventsDrained();
-    expect(retainedBytes).toBe(view.bytes + shared.bytes - encoded.length * 2);
+    cache.setRows(shared, [encodedRow], true);
+    await flushReports();
+    expect(retained.estimatedBytes).toBe(view.bytes + shared.bytes - encoded.length * 2);
     cache.retireRows(view);
     expect(view.bytes - emptyBytes).toBe(8 + 160);
     expect(view.rows).toBeUndefined();
     expect(view.rowHistory?.[0]?.ids).toHaveLength(1);
-    await setImmediate();
-    await waitForDiagnosticEventsDrained();
-    expect(retainedBytes).toBe(view.bytes + shared.bytes);
-  } finally {
-    cache.clear();
-    await setImmediate();
-    await waitForDiagnosticEventsDrained();
-    stop();
-  }
-  expect(retainedBytes).toBe(0);
+    await flushReports();
+    expect(retained.estimatedBytes).toBe(view.bytes + shared.bytes);
+  });
+  expect(fixture.retained.estimatedBytes).toBe(0);
 });
 
 it("coalesces a turn of retention updates into one report with the final counters", async () => {
-  const cache = new SessionListViewCache();
-  const reports: { views: number; refs: number; estimatedBytes: number }[] = [];
-  const stop = onTrustedInternalDiagnosticEvent((event) => {
-    if (event.type === "sessions.list.retention") {
-      reports.push({ views: event.views, refs: event.refs, estimatedBytes: event.estimatedBytes });
-    }
-  });
-  const row: GatewaySessionRow = {
-    key: "one",
-    kind: "direct",
-    updatedAt: 1,
-    rowMode: "sidebar",
-  };
-  try {
+  await withCache(async ({ cache, reports }) => {
     for (let index = 0; index < 40; index++) {
       const view = cache.get(`view-${index}`);
       cache.setRows(view, [row], true);
@@ -77,38 +85,21 @@ it("coalesces a turn of retention updates into one report with the final counter
     }
     cache.clear();
     cache.setRows(cache.get("final"), [row, row], false);
-    await setImmediate();
-    await waitForDiagnosticEventsDrained();
+    await flushReports();
     expect(reports).toEqual([{ views: 1, refs: 2, estimatedBytes: 1_050 }]);
     cache.clear();
-    await setImmediate();
-    await waitForDiagnosticEventsDrained();
+    await flushReports();
     expect(reports).toEqual([
       { views: 1, refs: 2, estimatedBytes: 1_050 },
       { views: 0, refs: 0, estimatedBytes: 0 },
     ]);
-  } finally {
-    cache.clear();
-    await setImmediate();
-    await waitForDiagnosticEventsDrained();
-    stop();
-  }
+  });
 });
 
 it("evicts least recently used views under byte pressure and releases all accounting", async () => {
-  const cache = new SessionListViewCache();
-  let retained = { views: 0, refs: 0, estimatedBytes: 0 };
-  const retirements: string[] = [];
-  const stop = onTrustedInternalDiagnosticEvent((event) => {
-    if (event.type === "sessions.list.retention") {
-      retained = { views: event.views, refs: event.refs, estimatedBytes: event.estimatedBytes };
-    } else if (event.type === "sessions.list.baseline.retired") {
-      retirements.push(event.cause);
-    }
-  });
-  const row: GatewaySessionRow = { key: "one", kind: "direct", updatedAt: 1 };
-  const rows = Array.from({ length: 1_000_000 }, () => row);
-  try {
+  const fixture = await withCache(async ({ cache, retained, retirements }) => {
+    const evictionRow: GatewaySessionRow = { key: "one", kind: "direct", updatedAt: 1 };
+    const rows = Array.from({ length: 1_000_000 }, () => evictionRow);
     const cold = cache.get("cold");
     cache.setRows(cold, rows, true);
     const hot = cache.get("hot");
@@ -117,8 +108,7 @@ it("evicts least recently used views under byte pressure and releases all accoun
     expect(cache.get("hot").rows).toBe(rows);
     cache.setRows(cache.get("new"), rows, true);
     cache.setRows(cache.get("newer"), rows, true);
-    await setImmediate();
-    await waitForDiagnosticEventsDrained();
+    await flushReports();
     expect(retained.views).toBe(4);
     expect(retained.estimatedBytes).toBeLessThanOrEqual(32 * 1024 * 1024);
     expect(retirements).toEqual(["view-evicted"]);
@@ -128,17 +118,12 @@ it("evicts least recently used views under byte pressure and releases all accoun
     const oversized = cache.get("oversized");
     cache.setRows(
       oversized,
-      Array.from({ length: 4_194_304 }, () => row),
+      Array.from({ length: 4_194_304 }, () => evictionRow),
       true,
     );
     expect(cache.get("oversized").rows).toBeUndefined();
     expect(cache.get("hot").rows).toBe(rows);
-  } finally {
-    cache.clear();
-    await setImmediate();
-    await waitForDiagnosticEventsDrained();
-    stop();
-  }
-  expect(retained).toMatchObject({ views: 0, refs: 0, estimatedBytes: 0 });
-  expect(retirements).toEqual(["view-evicted", "view-evicted"]);
+  });
+  expect(fixture.retained).toMatchObject({ views: 0, refs: 0, estimatedBytes: 0 });
+  expect(fixture.retirements).toEqual(["view-evicted", "view-evicted"]);
 });

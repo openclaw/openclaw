@@ -49,26 +49,56 @@ import { claimRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 afterEach(() => vi.restoreAllMocks());
 
+function readList(
+  context: ReturnType<typeof requestContext>,
+  client: ReturnType<typeof roleClient>,
+  request: Parameters<typeof listSessions>[0]["request"],
+  acceptsSerializedJson = true,
+) {
+  return listSessions({ context, client, request, acceptsSerializedJson });
+}
+
+async function withListReader(
+  id: string,
+  run: (state: {
+    context: ReturnType<typeof requestContext>;
+    client: ReturnType<typeof roleClient>;
+    cfg: ReturnType<typeof rolePolicyConfig>;
+  }) => Promise<void>,
+) {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+    const cfg = rolePolicyConfig();
+    const context = requestContext(cfg);
+    const client = roleClient("view", id);
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    prepareGatewayRecipientProfile(client);
+    await run({ context, client, cfg });
+  });
+}
+
+function retainList(context: ReturnType<typeof requestContext>) {
+  const release = retainSessionListForegroundWork();
+  return {
+    [Symbol.dispose]() {
+      getSessionRowProjection(context)?.dispose();
+      release();
+    },
+  };
+}
+
 it("packs equal fields by their recipient rows without changing the input or wire facts", () => {
+  const sharedRow = (key: string, updatedAt: number, lastMessagePreview?: string) => ({
+    key,
+    kind: "direct" as const,
+    updatedAt,
+    label: "Shared",
+    pinned: false,
+    origin: { provider: "fixture" },
+    lastMessagePreview,
+  });
   const rows = [
-    {
-      key: "one",
-      kind: "direct" as const,
-      updatedAt: 1,
-      label: "Shared",
-      pinned: false,
-      origin: { provider: "fixture" },
-      lastMessagePreview: undefined,
-    },
-    {
-      key: "two",
-      kind: "direct" as const,
-      updatedAt: 2,
-      label: "Shared",
-      pinned: false,
-      origin: { provider: "fixture" },
-      lastMessagePreview: "Unique",
-    },
+    sharedRow("one", 1),
+    sharedRow("two", 2, "Unique"),
     { key: "three", kind: "direct" as const, updatedAt: 3, label: "Other", pinned: false },
   ];
   const original = structuredClone(rows);
@@ -116,13 +146,9 @@ it("packs equal fields by their recipient rows without changing the input or wir
 });
 
 it("keeps sidebar display facts while bounding the wire payload", async () => {
-  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+  await withListReader("sidebar-reader", async ({ context, client }) => {
     const benchmark = process.env.OPENCLAW_SIDEBAR_BENCH === "1";
     const count = benchmark ? 5_000 : 8;
-    const context = requestContext(rolePolicyConfig());
-    const client = roleClient("view", "sidebar-reader");
-    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-    prepareGatewayRecipientProfile(client);
     const profiles = Array.from({ length: 4 }, (_value, index) =>
       ensureProfileForEmail(`sidebar-${index}@example.test`),
     );
@@ -162,103 +188,88 @@ it("keeps sidebar display facts while bounding the wire payload", async () => {
         }
       }
     }
-    const release = retainSessionListForegroundWork();
+    using _ = retainList(context);
     const read = (rowMode: "compact" | "sidebar") =>
-      listSessions({
-        context,
-        client,
-        acceptsSerializedJson: true,
-        request: { source: "sidebar", rowMode, limit: 200, agentId: "main" },
-      });
-    try {
-      const compact = await read("compact");
-      const result = await read("sidebar");
-      const rows = expandSessionRowFacts(result.sessions, result.sharedFacts);
-      expect(result.sessions).toHaveLength(Math.min(count, 200));
-      expect(rows[0]).toMatchObject({
-        label: `Review the synthetic workspace change ${count - 1}`,
-        owner: { actor: { id: profiles[(count - 1) % profiles.length]!.id } },
-        participants: expect.arrayContaining(
-          profiles
-            .filter((_value, index) => index !== (count - 1) % profiles.length)
-            .map((profile) =>
-              expect.objectContaining({ identity: { type: "profile", id: profile.id } }),
-            ),
-        ),
-      });
-      for (const [index, row] of rows.entries()) {
-        expect(row.createdActor).toEqual(compact.sessions[index]!.createdActor);
-        expect(row.expandedParticipants).toEqual(compact.sessions[index]!.expandedParticipants);
-        expect(row).not.toHaveProperty("model");
-        expect(row).not.toHaveProperty("totalTokens");
-        expect(row).not.toHaveProperty("sharedFacts");
-      }
-      expect(result.sessions[0]).not.toHaveProperty("createdActor");
-      expect(result.sharedFacts).toBeDefined();
-      const frame = JSON.parse(serializeGatewayFrame({ type: "res", payload: result }).toString());
-      expect(frame.payload).not.toHaveProperty("rowsFullReason");
-      expect(
-        JSON.stringify(expandSessionRowFacts(frame.payload.sessions, frame.payload.sharedFacts)),
-      ).toBe(JSON.stringify(rows));
-      expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(
-        Buffer.byteLength(JSON.stringify(compact)) * 0.5,
-      );
-      if (benchmark) {
-        for (const rowMode of ["compact", "sidebar"] as const) {
-          const page = await read(rowMode);
-          if (process.env.OPENCLAW_SIDEBAR_BENCH_DIR) {
-            const { writeFile } = await import("node:fs/promises");
-            await writeFile(
-              `${process.env.OPENCLAW_SIDEBAR_BENCH_DIR}/${rowMode}.json`,
-              JSON.stringify(page),
-            );
-          }
-          const fields: Record<string, number> = {};
-          for (const row of page.sessions) {
-            for (const [key, value] of Object.entries(row)) {
-              fields[key] =
-                (fields[key] ?? 0) + Buffer.byteLength(JSON.stringify({ [key]: value }));
-            }
-          }
-          const samples = [];
-          for (let round = 0; round < 30; round++) {
-            const start = performance.now();
-            const payload = await read(rowMode);
-            const presented = performance.now();
-            const wire = serializeGatewayFrame({
-              type: "res",
-              id: "sidebar",
-              ok: true,
-              payload,
-            }).toString();
-            const serialized = performance.now();
-            const parsed = JSON.parse(wire);
-            expandSessionRowFacts(parsed.payload.sessions, parsed.payload.sharedFacts);
-            samples.push({
-              presentMs: presented - start,
-              serializeMs: serialized - presented,
-              parseMs: performance.now() - serialized,
-              bytes: Buffer.byteLength(wire),
-            });
-          }
-          console.log(
-            JSON.stringify({ benchmark: "sidebar-payload", rowMode, count, fields, samples }),
+      readList(context, client, { source: "sidebar", rowMode, limit: 200, agentId: "main" });
+    const compact = await read("compact");
+    const result = await read("sidebar");
+    const rows = expandSessionRowFacts(result.sessions, result.sharedFacts);
+    expect(result.sessions).toHaveLength(Math.min(count, 200));
+    expect(rows[0]).toMatchObject({
+      label: `Review the synthetic workspace change ${count - 1}`,
+      owner: { actor: { id: profiles[(count - 1) % profiles.length]!.id } },
+      participants: expect.arrayContaining(
+        profiles
+          .filter((_value, index) => index !== (count - 1) % profiles.length)
+          .map((profile) =>
+            expect.objectContaining({ identity: { type: "profile", id: profile.id } }),
+          ),
+      ),
+    });
+    for (const [index, row] of rows.entries()) {
+      expect(row.createdActor).toEqual(compact.sessions[index]!.createdActor);
+      expect(row.expandedParticipants).toEqual(compact.sessions[index]!.expandedParticipants);
+      expect(row).not.toHaveProperty("model");
+      expect(row).not.toHaveProperty("totalTokens");
+      expect(row).not.toHaveProperty("sharedFacts");
+    }
+    expect(result.sessions[0]).not.toHaveProperty("createdActor");
+    expect(result.sharedFacts).toBeDefined();
+    const frame = JSON.parse(serializeGatewayFrame({ type: "res", payload: result }).toString());
+    expect(frame.payload).not.toHaveProperty("rowsFullReason");
+    expect(
+      JSON.stringify(expandSessionRowFacts(frame.payload.sessions, frame.payload.sharedFacts)),
+    ).toBe(JSON.stringify(rows));
+    expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(
+      Buffer.byteLength(JSON.stringify(compact)) * 0.5,
+    );
+    if (benchmark) {
+      for (const rowMode of ["compact", "sidebar"] as const) {
+        const page = await read(rowMode);
+        if (process.env.OPENCLAW_SIDEBAR_BENCH_DIR) {
+          const { writeFile } = await import("node:fs/promises");
+          await writeFile(
+            `${process.env.OPENCLAW_SIDEBAR_BENCH_DIR}/${rowMode}.json`,
+            JSON.stringify(page),
           );
         }
+        const fields: Record<string, number> = {};
+        for (const row of page.sessions) {
+          for (const [key, value] of Object.entries(row)) {
+            fields[key] = (fields[key] ?? 0) + Buffer.byteLength(JSON.stringify({ [key]: value }));
+          }
+        }
+        const samples = [];
+        for (let round = 0; round < 30; round++) {
+          const start = performance.now();
+          const payload = await read(rowMode);
+          const presented = performance.now();
+          const wire = serializeGatewayFrame({
+            type: "res",
+            id: "sidebar",
+            ok: true,
+            payload,
+          }).toString();
+          const serialized = performance.now();
+          const parsed = JSON.parse(wire);
+          expandSessionRowFacts(parsed.payload.sessions, parsed.payload.sharedFacts);
+          samples.push({
+            presentMs: presented - start,
+            serializeMs: serialized - presented,
+            parseMs: performance.now() - serialized,
+            bytes: Buffer.byteLength(wire),
+          });
+        }
+        console.log(
+          JSON.stringify({ benchmark: "sidebar-payload", rowMode, count, fields, samples }),
+        );
       }
-    } finally {
-      getSessionRowProjection(context)?.dispose();
-      release();
     }
   });
 });
 
 it("keeps a sidebar page revision across off-page facts and replaces it for selected facts", async () => {
-  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
-    const context = requestContext(rolePolicyConfig());
-    const client = roleClient("view", "page-reader");
-    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-    prepareGatewayRecipientProfile(client);
+  await withListReader("page-reader", async ({ context, client }) => {
     const keys = ["agent:main:off-page", "agent:main:selected-page"];
     for (const [index, sessionKey] of keys.entries()) {
       replaceSessionEntrySync(
@@ -266,42 +277,28 @@ it("keeps a sidebar page revision across off-page facts and replaces it for sele
         { sessionId: sessionKey, updatedAt: index + 1, visibility: "shared" },
       );
     }
-    const release = retainSessionListForegroundWork();
+    using _ = retainList(context);
     const read = (ifRowsRevision?: string) =>
-      listSessions({
-        context,
-        client,
-        acceptsSerializedJson: true,
-        request: { rowMode: "sidebar", limit: 1, ifRowsRevision },
-      });
-    try {
-      const first = await read();
-      expect(first.sessions.map((row) => row.key)).toEqual([keys[1]]);
-      sessionChanges.emit({ sessionKey: keys[0]!, scope: "runtime" });
-      const unchanged = await read(first.rowsRevision);
-      expect(unchanged.rowsRevision).toBe(first.rowsRevision);
-      expect(unchanged.rowsUnchanged).toBe(true);
-      expect(unchanged.sessions).toEqual([]);
-      sessionChanges.emit({ sessionKey: keys[1]!, scope: "runtime" });
-      const changed = await read(first.rowsRevision);
-      expect(changed.rowsRevision).not.toBe(first.rowsRevision);
-      expect(changed.rowsUnchanged).toBeUndefined();
-      expect(changed.sessions.map((row) => row.key)).toEqual([keys[1]]);
-    } finally {
-      getSessionRowProjection(context)?.dispose();
-      release();
-    }
+      readList(context, client, { rowMode: "sidebar", limit: 1, ifRowsRevision });
+    const first = await read();
+    expect(first.sessions.map((row) => row.key)).toEqual([keys[1]]);
+    sessionChanges.emit({ sessionKey: keys[0]!, scope: "runtime" });
+    const unchanged = await read(first.rowsRevision);
+    expect(unchanged.rowsRevision).toBe(first.rowsRevision);
+    expect(unchanged.rowsUnchanged).toBe(true);
+    expect(unchanged.sessions).toEqual([]);
+    sessionChanges.emit({ sessionKey: keys[1]!, scope: "runtime" });
+    const changed = await read(first.rowsRevision);
+    expect(changed.rowsRevision).not.toBe(first.rowsRevision);
+    expect(changed.rowsUnchanged).toBeUndefined();
+    expect(changed.sessions.map((row) => row.key)).toEqual([keys[1]]);
   });
 });
 
 it("projects dashboard cards without sending session execution details", async () => {
-  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+  await withListReader("gallery-reader", async ({ context, client }) => {
     const benchmark = process.env.OPENCLAW_DASHBOARD_BENCH === "1";
     const count = benchmark ? 200 : 2;
-    const context = requestContext(rolePolicyConfig());
-    const client = roleClient("view", "gallery-reader");
-    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-    prepareGatewayRecipientProfile(client);
     ensureBoardSchema(openOpenClawAgentDatabase({ agentId: "main" }));
     for (let index = 0; index < count; index++) {
       const sessionKey = `agent:main:dashboard-${index}`;
@@ -342,94 +339,79 @@ it("projects dashboard cards without sending session execution details", async (
         { agentId: "main" },
       );
     }
-    const release = retainSessionListForegroundWork();
+    using _ = retainList(context);
     const read = (rowMode: "compact" | "dashboard") =>
-      listSessions({
-        context,
-        client,
-        acceptsSerializedJson: true,
-        request: {
-          source: "dashboard",
-          rowMode,
-          limit: count,
-          hasBoard: true,
-          archived: "all",
-          excludeDock: true,
-          agentId: "main",
-        },
+      readList(context, client, {
+        source: "dashboard",
+        rowMode,
+        limit: count,
+        hasBoard: true,
+        archived: "all",
+        excludeDock: true,
+        agentId: "main",
       });
     const wire = (payload: unknown) =>
       serializeGatewayFrame({ type: "res", id: "gallery", ok: true, payload }).toString();
-    try {
-      const compact = await read("compact");
-      const dashboard = await read("dashboard");
-      expect(dashboard.sessions).toHaveLength(count);
-      expect(dashboard.sessions[0]).toMatchObject({
-        key: `agent:main:dashboard-${count - 1}`,
-        sessionId: `dashboard-${count - 1}`,
-        rowMode: "dashboard",
-        label: `Dashboard ${count - 1}`,
-        createdActor: { type: "system" },
-        boardFace: "dashboard",
-        hasBoard: true,
-      });
-      for (const field of [
-        "model",
-        "modelProvider",
-        "inputTokens",
-        "outputTokens",
-        "totalTokens",
-        "permissionMode",
-        "participants",
-      ]) {
-        expect(dashboard.sessions[0]).not.toHaveProperty(field);
-      }
-      expect(compact.sessions[0]).toMatchObject({
-        model: "test-model",
-        totalTokens: 1500,
-        permissionMode: "full",
-      });
-      expect((await read("compact")).sessions).toEqual(compact.sessions);
-      expect(Buffer.byteLength(wire(dashboard))).toBeLessThan(
-        Buffer.byteLength(wire(compact)) * 0.75,
-      );
-      if (benchmark) {
-        for (const rowMode of ["compact", "dashboard"] as const) {
-          const samples = [];
-          for (let round = 0; round < 5; round++) {
-            const cpu = process.threadCpuUsage();
-            const start = performance.now();
-            let bytes = 0;
-            for (let request = 0; request < 25; request++) {
-              bytes = Buffer.byteLength(wire(await read(rowMode)));
-            }
-            const elapsed = process.threadCpuUsage(cpu);
-            samples.push({
-              cpuMs: (elapsed.user + elapsed.system) / 25_000,
-              wallMs: (performance.now() - start) / 25,
-              bytes,
-            });
+    const compact = await read("compact");
+    const dashboard = await read("dashboard");
+    expect(dashboard.sessions).toHaveLength(count);
+    expect(dashboard.sessions[0]).toMatchObject({
+      key: `agent:main:dashboard-${count - 1}`,
+      sessionId: `dashboard-${count - 1}`,
+      rowMode: "dashboard",
+      label: `Dashboard ${count - 1}`,
+      createdActor: { type: "system" },
+      boardFace: "dashboard",
+      hasBoard: true,
+    });
+    for (const field of [
+      "model",
+      "modelProvider",
+      "inputTokens",
+      "outputTokens",
+      "totalTokens",
+      "permissionMode",
+      "participants",
+    ]) {
+      expect(dashboard.sessions[0]).not.toHaveProperty(field);
+    }
+    expect(compact.sessions[0]).toMatchObject({
+      model: "test-model",
+      totalTokens: 1500,
+      permissionMode: "full",
+    });
+    expect((await read("compact")).sessions).toEqual(compact.sessions);
+    expect(Buffer.byteLength(wire(dashboard))).toBeLessThan(
+      Buffer.byteLength(wire(compact)) * 0.75,
+    );
+    if (benchmark) {
+      for (const rowMode of ["compact", "dashboard"] as const) {
+        const samples = [];
+        for (let round = 0; round < 5; round++) {
+          const cpu = process.threadCpuUsage();
+          const start = performance.now();
+          let bytes = 0;
+          for (let request = 0; request < 25; request++) {
+            bytes = Buffer.byteLength(wire(await read(rowMode)));
           }
-          console.log(
-            JSON.stringify({ benchmark: "dashboard-sessions-list", rowMode, count, samples }),
-          );
+          const elapsed = process.threadCpuUsage(cpu);
+          samples.push({
+            cpuMs: (elapsed.user + elapsed.system) / 25_000,
+            wallMs: (performance.now() - start) / 25,
+            bytes,
+          });
         }
+        console.log(
+          JSON.stringify({ benchmark: "dashboard-sessions-list", rowMode, count, samples }),
+        );
       }
-    } finally {
-      getSessionRowProjection(context)?.dispose();
-      release();
     }
   });
 });
 
 it("coalesces cold sidebar selection across row slices only for the same principal and filter", async () => {
-  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
-    const cfg = rolePolicyConfig();
-    const context = requestContext(cfg);
-    const alice = roleClient("view", "cold-alice");
+  await withListReader("cold-alice", async ({ context, client: alice }) => {
     const bob = roleClient("view", "cold-bob");
-    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-    prepareGatewayRecipientProfile(alice);
     prepareGatewayRecipientProfile(bob);
     const rows = 130;
     for (let index = 0; index < rows; index++) {
@@ -447,53 +429,39 @@ it("coalesces cold sidebar selection across row slices only for the same princip
         },
       );
     }
-    const release = retainSessionListForegroundWork();
-    try {
-      await initializeSessionReadContext(context);
-      const projection = getSessionRowProjection(context)!;
-      await projection.withSelectionPreparation(async () => {
-        await projection.prepareSelection();
-        const read = (client: typeof alice, limit = 100) =>
-          listSessions({
-            context,
-            client,
-            acceptsSerializedJson: true,
-            request: { limit, rowMode: "compact" },
-          });
-        const results = await Promise.all(
-          Array.from({ length: 6 }, (_value, index) =>
-            read({ ...alice, connId: `reconnect-${index}` }),
-          ),
-        );
-        expect(results[0]!.sessions).toHaveLength(100);
-        expect(results[0]!.totalCount).toBe(rows);
-        expect(results[0]!.sessions[0]!.sessionId).toBe("cold-129");
-        for (const result of results) {
-          expect(result.sessions).toEqual(results[0]!.sessions);
-          expect(result.owners).toBe(results[0]!.owners);
-        }
-        const other = await read(bob);
-        expect(other.totalCount).toBe(rows - 1);
-        expect(other.sessions[0]!.sessionId).toBe("cold-128");
-        expect(other.owners).not.toBe(results[0]!.owners);
-        expect((await read(alice, 1)).sessions).toHaveLength(1);
-      });
-    } finally {
-      getSessionRowProjection(context)?.dispose();
-      release();
-    }
+    using _ = retainList(context);
+    await initializeSessionReadContext(context);
+    const projection = getSessionRowProjection(context)!;
+    await projection.withSelectionPreparation(async () => {
+      await projection.prepareSelection();
+      const read = (client: typeof alice, limit = 100) =>
+        readList(context, client, { limit, rowMode: "compact" });
+      const results = await Promise.all(
+        Array.from({ length: 6 }, (_value, index) =>
+          read({ ...alice, connId: `reconnect-${index}` }),
+        ),
+      );
+      expect(results[0]!.sessions).toHaveLength(100);
+      expect(results[0]!.totalCount).toBe(rows);
+      expect(results[0]!.sessions[0]!.sessionId).toBe("cold-129");
+      for (const result of results) {
+        expect(result.sessions).toEqual(results[0]!.sessions);
+        expect(result.owners).toBe(results[0]!.owners);
+      }
+      const other = await read(bob);
+      expect(other.totalCount).toBe(rows - 1);
+      expect(other.sessions[0]!.sessionId).toBe("cold-128");
+      expect(other.owners).not.toBe(results[0]!.owners);
+      expect((await read(alice, 1)).sessions).toHaveLength(1);
+    });
   });
 });
 
 it("shares encoded socket lists by identity and refreshes compact, published, and clock facts", async () => {
   const start = 1_800_000_000_000;
   const clock = vi.spyOn(Date, "now").mockReturnValue(start);
-  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
-    const cfg = rolePolicyConfig();
-    const context = requestContext(cfg);
-    const client = roleClient("view", "first-list");
+  await withListReader("first-list", async ({ cfg, context, client }) => {
     const clients = [client, { ...client }, roleClient("view", "second-identity")];
-    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
     for (const recipient of clients) {
       prepareGatewayRecipientProfile(recipient);
     }
@@ -508,12 +476,7 @@ it("shares encoded socket lists by identity and refreshes compact, published, an
     };
     replaceSessionEntrySync(scope, entry);
     const read = (index: number, compact = true) =>
-      listSessions({
-        client: clients[index]!,
-        context,
-        request: compact ? { rowMode: "compact" } : {},
-        acceptsSerializedJson: true,
-      });
+      readList(context, clients[index]!, compact ? { rowMode: "compact" } : {});
     // Admission work is not part of response encoding.
     await read(0, false);
     const stringify = vi.spyOn(JSON, "stringify");
@@ -615,13 +578,7 @@ it("shares encoded socket lists by identity and refreshes compact, published, an
       snapshotAt: start + 103,
     });
     clock.mockReturnValue(start + 104);
-    const readActive = () =>
-      listSessions({
-        client: clients[0]!,
-        context,
-        request: { activeOnly: true },
-        acceptsSerializedJson: true,
-      });
+    const readActive = () => readList(context, clients[0]!, { activeOnly: true });
     expect((await readActive()).sessions).toHaveLength(0);
     const run = registerRpcSourceForTest({
       storeScope: resolveSessionStorePathCore(cfg.session?.store, { agentId: scope.agentId }),
@@ -704,12 +661,7 @@ it("shares encoded socket lists by identity and refreshes compact, published, an
       // Creation also dirties the parent; only the clock may change between measured reads.
       await projection.ensureMaterialized();
       const readChildren = () =>
-        listSessions({
-          client: clients[0]!,
-          context,
-          request: { rowMode: "compact", spawnedBy: scope.sessionKey },
-          acceptsSerializedJson: true,
-        });
+        readList(context, clients[0]!, { rowMode: "compact", spawnedBy: scope.sessionKey });
       clock.mockReturnValue(start + 1_000);
       await readChildren();
       const revision = projection.sharingRevision;
@@ -736,12 +688,7 @@ it("shares encoded socket lists by identity and refreshes compact, published, an
 });
 
 it("refreshes shared socket selection when the same viewer changes roles", async () => {
-  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
-    const cfg = rolePolicyConfig();
-    const context = requestContext(cfg);
-    const client = roleClient("view", "selection-viewer");
-    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-    prepareGatewayRecipientProfile(client);
+  await withListReader("selection-viewer", async ({ context, client }) => {
     const profileId = client.authenticatedUserProfile!.profileId;
     for (const [suffix, creator] of [
       ["owned", profileId],
@@ -756,13 +703,7 @@ it("refreshes shared socket selection when the same viewer changes roles", async
         },
       );
     }
-    const read = () =>
-      listSessions({
-        client,
-        context,
-        request: { rowMode: "compact" },
-        acceptsSerializedJson: true,
-      });
+    const read = () => readList(context, client, { rowMode: "compact" });
     expect((await read()).totalCount).toBe(2);
     setUserProfileRole(profileId, "none");
     expect((await read()).sessions.map((row) => row.key)).toEqual(["agent:main:selection-owned"]);
@@ -772,11 +713,8 @@ it("refreshes shared socket selection when the same viewer changes roles", async
 });
 
 it("retains each embedded reader's identity when their shared row presentation is identical", async () => {
-  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
-    const cfg = rolePolicyConfig();
-    const context = requestContext(cfg);
-    const clients = [roleClient("view", "reader-a"), roleClient("view", "reader-b")];
-    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+  await withListReader("reader-a", async ({ context, client: firstClient }) => {
+    const clients = [firstClient, roleClient("view", "reader-b")];
     for (const recipient of clients) {
       prepareGatewayRecipientProfile(recipient);
     }
@@ -788,12 +726,7 @@ it("retains each embedded reader's identity when their shared row presentation i
     });
     const rows = [];
     for (const client of clients) {
-      const result = await listSessions({
-        client,
-        context,
-        request: { rowMode: "compact" },
-        acceptsSerializedJson: false,
-      });
+      const result = await readList(context, client, { rowMode: "compact" }, false);
       expect(result.sessions).toHaveLength(1);
       rows.push(result.sessions[0]!);
     }
@@ -847,14 +780,9 @@ it("omits swarm detail reads from sidebar and dashboard pages while authorizing 
         }),
       );
     }
-    const release = retainSessionListForegroundWork();
+    const foreground = retainList(context);
     const read = (rowMode: "sidebar" | "dashboard" | "compact") =>
-      listSessions({
-        context,
-        client,
-        acceptsSerializedJson: true,
-        request: { rowMode, excludeSubagents: true },
-      });
+      readList(context, client, { rowMode, excludeSubagents: true });
     try {
       await initializeSessionReadContext(context);
       const projection = getSessionRowProjection(context)!;
@@ -882,8 +810,7 @@ it("omits swarm detail reads from sidebar and dashboard pages while authorizing 
       expect(compact.sessions[0]?.swarm?.groups[0]?.children).toHaveLength(1);
       expect((await read("sidebar")).sessions).toBe(sidebar.sessions);
     } finally {
-      getSessionRowProjection(context)?.dispose();
-      release();
+      foreground[Symbol.dispose]();
       for (let index = 0; index < children.length; index++) {
         subagentRuns.delete(`swarm-list-${index}`);
       }
