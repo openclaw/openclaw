@@ -44,10 +44,7 @@ afterEach(() => {
   roots.cleanup();
 });
 
-function readUserProfileEmailBindingIds(
-  profileId: string,
-  options: ReturnType<typeof stateOptions>,
-): string[] {
+function bindingIds(profileId: string, options: ReturnType<typeof stateOptions>): string[] {
   ensureUserProfilesSchema(options);
   return readUserProfileEmailBindings(openOpenClawStateDatabase(options).db, profileId)
     .map(({ bindingId }) => {
@@ -77,8 +74,8 @@ describe("profile alias reader lifecycle", () => {
           options,
         );
       }
-      const sourceBindings = readUserProfileEmailBindingIds(source.id, options);
-      const targetBindings = readUserProfileEmailBindingIds(target.id, options);
+      const sourceBindings = bindingIds(source.id, options);
+      const targetBindings = bindingIds(target.id, options);
       catalogReleases.push((await prepareUserProfileCatalog(options)).release);
       const merge = () =>
         producer === "email"
@@ -99,21 +96,30 @@ describe("profile alias reader lifecycle", () => {
         aliasRevision: readUserProfileAliasRevision(),
       }));
       const stop = onUserProfilesChanged(published);
+      const expectUnpublished = () => {
+        expect(read()).toEqual(new Set([target.id]));
+        expect(readUserProfileAliasRevision()).toBe(aliasRevision);
+        expect(published).not.toHaveBeenCalled();
+      };
+      const expectRollback = () => {
+        expectUnpublished();
+        expect(bindingIds(source.id, options)).toEqual(sourceBindings);
+        expect(bindingIds(target.id, options)).toEqual(targetBindings);
+      };
+      const expectPublished = () => {
+        expect(published).toHaveBeenCalledOnce();
+        expect(readUserProfileAliasRevision()).toBe(aliasRevision + 1);
+        expect(readUserProfileVersion()).toBe(profileVersion + 1);
+      };
       try {
         expect(() =>
           runOpenClawStateWriteTransaction(() => {
             merge();
-            expect(read()).toEqual(new Set([target.id]));
-            expect(readUserProfileAliasRevision()).toBe(aliasRevision);
-            expect(published).not.toHaveBeenCalled();
+            expectUnpublished();
             throw new Error("rollback");
           }, options),
         ).toThrow("rollback");
-        expect(read()).toEqual(new Set([target.id]));
-        expect(readUserProfileAliasRevision()).toBe(aliasRevision);
-        expect(published).not.toHaveBeenCalled();
-        expect(readUserProfileEmailBindingIds(source.id, options)).toEqual(sourceBindings);
-        expect(readUserProfileEmailBindingIds(target.id, options)).toEqual(targetBindings);
+        expectRollback();
         runOpenClawStateWriteTransaction(() => {
           expect(() =>
             runOpenClawStateWriteTransaction(() => {
@@ -122,31 +128,25 @@ describe("profile alias reader lifecycle", () => {
             }, options),
           ).toThrow("nested rollback");
         }, options);
-        expect(read()).toEqual(new Set([target.id]));
-        expect(readUserProfileAliasRevision()).toBe(aliasRevision);
-        expect(published).not.toHaveBeenCalled();
-        expect(readUserProfileEmailBindingIds(source.id, options)).toEqual(sourceBindings);
-        expect(readUserProfileEmailBindingIds(target.id, options)).toEqual(targetBindings);
+        expectRollback();
         runOpenClawStateWriteTransaction(() => {
           merge();
           expect(read()).toEqual(new Set([target.id]));
           expect(readUserProfileAliasRevision()).toBe(aliasRevision);
         }, options);
-        expect(published).toHaveBeenCalledOnce();
+        expectPublished();
         expect(published.mock.results[0]?.value).toEqual({
           aliases: new Set([source.id, target.id]),
           aliasRevision: aliasRevision + 1,
         });
-        const mergedBindings = readUserProfileEmailBindingIds(target.id, options);
+        const mergedBindings = bindingIds(target.id, options);
         expect(mergedBindings).toHaveLength(sourceBindings.length + targetBindings.length);
         expect(new Set(mergedBindings).size).toBe(mergedBindings.length);
         expect(mergedBindings).toEqual(expect.arrayContaining(targetBindings));
         for (const binding of sourceBindings) {
           expect(mergedBindings).not.toContain(binding);
         }
-        expect(readUserProfileEmailBindingIds(source.id, options)).toEqual([]);
-        expect(readUserProfileAliasRevision()).toBe(aliasRevision + 1);
-        expect(readUserProfileVersion()).toBe(profileVersion + 1);
+        expect(bindingIds(source.id, options)).toEqual([]);
         expect(linkEmail("source@aliases.test", source.id, options)).toMatchObject({
           id: target.id,
           mergedInto: null,
@@ -157,10 +157,8 @@ describe("profile alias reader lifecycle", () => {
           hasAvatar: false,
         });
         expect(ensureProfileForEmail("source@aliases.test", options).id).toBe(target.id);
-        expect(readUserProfileEmailBindingIds(target.id, options)).toEqual(mergedBindings);
-        expect(published).toHaveBeenCalledOnce();
-        expect(readUserProfileAliasRevision()).toBe(aliasRevision + 1);
-        expect(readUserProfileVersion()).toBe(profileVersion + 1);
+        expect(bindingIds(target.id, options)).toEqual(mergedBindings);
+        expectPublished();
         expect(read()).toEqual(new Set([source.id, target.id]));
         expect(readUserProfileAliases(source.id, options)).toEqual(new Set([source.id, target.id]));
         expect(readUserProfileSnapshotSync(options).profiles).toEqual(
@@ -180,11 +178,11 @@ describe("profile alias reader lifecycle", () => {
     const source = ensureProfileForEmail("source@aliases.test", options);
     const target = ensureProfileForEmail("target@aliases.test", options);
     catalogReleases.push((await prepareUserProfileCatalog(options)).release);
-    const originalBindings = readUserProfileEmailBindingIds(source.id, options);
-    const targetBindings = readUserProfileEmailBindingIds(target.id, options);
+    const originalBindings = bindingIds(source.id, options);
+    const targetBindings = bindingIds(target.id, options);
     const aliasRevision = readUserProfileAliasRevision();
     linkEmail("retained@aliases.test", source.id, options);
-    const retainedBindings = readUserProfileEmailBindingIds(source.id, options).filter(
+    const retainedBindings = bindingIds(source.id, options).filter(
       (binding) => !originalBindings.includes(binding),
     );
     expect(retainedBindings).toHaveLength(1);
@@ -193,24 +191,24 @@ describe("profile alias reader lifecycle", () => {
     expect(readUserProfileAliases(target.id, options)).toEqual(new Set([target.id]));
     expect(readUserProfileAliases(source.id, options)).toEqual(new Set([source.id]));
     expect(readUserProfileAliasRevision()).toBe(aliasRevision);
-    expect(readUserProfileEmailBindingIds(source.id, options)).toEqual(retainedBindings);
-    const movedBindings = readUserProfileEmailBindingIds(target.id, options);
+    expect(bindingIds(source.id, options)).toEqual(retainedBindings);
+    const movedBindings = bindingIds(target.id, options);
     expect(movedBindings).toHaveLength(2);
     expect(movedBindings).toEqual(expect.arrayContaining(targetBindings));
     expect(movedBindings).not.toContain(originalBindings[0]);
 
     linkEmail("source@aliases.test", source.id, options);
-    const returnedBindings = readUserProfileEmailBindingIds(source.id, options);
+    const returnedBindings = bindingIds(source.id, options);
     expect(returnedBindings).toHaveLength(2);
     expect(returnedBindings).toEqual(expect.arrayContaining(retainedBindings));
     expect(returnedBindings).not.toContain(originalBindings[0]);
     for (const binding of movedBindings) {
       expect(returnedBindings).not.toContain(binding);
     }
-    expect(readUserProfileEmailBindingIds(target.id, options)).toEqual(targetBindings);
+    expect(bindingIds(target.id, options)).toEqual(targetBindings);
     closeOpenClawStateDatabaseByPath(options.path);
-    expect(readUserProfileEmailBindingIds(source.id, options)).toEqual(returnedBindings);
-    expect(readUserProfileEmailBindingIds(target.id, options)).toEqual(targetBindings);
+    expect(bindingIds(source.id, options)).toEqual(returnedBindings);
+    expect(bindingIds(target.id, options)).toEqual(targetBindings);
   });
 
   it("renews an email binding when verified GitHub ownership moves away and back", () => {
@@ -222,17 +220,17 @@ describe("profile alias reader lifecycle", () => {
         options,
       );
     const first = sync(10);
-    const originalBindings = readUserProfileEmailBindingIds(first.id, options);
+    const originalBindings = bindingIds(first.id, options);
     expect(originalBindings).toEqual([expect.any(String)]);
     const second = sync(20);
     expect(second.id).not.toBe(first.id);
-    expect(readUserProfileEmailBindingIds(first.id, options)).toEqual([]);
-    const movedBindings = readUserProfileEmailBindingIds(second.id, options);
+    expect(bindingIds(first.id, options)).toEqual([]);
+    const movedBindings = bindingIds(second.id, options);
     expect(movedBindings).toEqual([expect.any(String)]);
     expect(movedBindings).not.toEqual(originalBindings);
 
     expect(sync(10).id).toBe(first.id);
-    const returnedBindings = readUserProfileEmailBindingIds(first.id, options);
+    const returnedBindings = bindingIds(first.id, options);
     expect(returnedBindings).toEqual([expect.any(String)]);
     expect(returnedBindings).not.toEqual(originalBindings);
     expect(returnedBindings).not.toEqual(movedBindings);
@@ -242,14 +240,14 @@ describe("profile alias reader lifecycle", () => {
     const options = stateOptions();
     const provider = ensureProfileForEmail("user@github", options);
     const email = ensureProfileForEmail("person@aliases.test", options);
-    const providerBindings = readUserProfileEmailBindingIds(provider.id, options);
-    const emailBindings = readUserProfileEmailBindingIds(email.id, options);
+    const providerBindings = bindingIds(provider.id, options);
+    const emailBindings = bindingIds(email.id, options);
     expect(migrateLegacyTailscaleProfileIdentities(options).warnings).toEqual([]);
-    expect(readUserProfileEmailBindingIds(provider.id, options)).toEqual([]);
-    expect(readUserProfileEmailBindingIds(email.id, options)).toEqual(emailBindings);
+    expect(bindingIds(provider.id, options)).toEqual([]);
+    expect(bindingIds(email.id, options)).toEqual(emailBindings);
 
     linkEmail("user@github", provider.id, options);
-    const recreatedBindings = readUserProfileEmailBindingIds(provider.id, options);
+    const recreatedBindings = bindingIds(provider.id, options);
     expect(recreatedBindings).toEqual([expect.any(String)]);
     expect(recreatedBindings).not.toEqual(providerBindings);
   });
@@ -259,7 +257,7 @@ describe("profile alias reader lifecycle", () => {
     const aliasRevision = readUserProfileAliasRevision();
     const profile = ensureProfileForEmail("cosmetic@aliases.test", options);
     catalogReleases.push((await prepareUserProfileCatalog(options)).release);
-    const bindings = readUserProfileEmailBindingIds(profile.id, options);
+    const bindings = bindingIds(profile.id, options);
     expect(bindings).toEqual([expect.any(String)]);
     linkEmail("cosmetic@aliases.test", profile.id, options);
     setDisplayName(profile.id, "Updated name", options);
@@ -273,7 +271,7 @@ describe("profile alias reader lifecycle", () => {
     );
     expect(readUserProfileAliases(profile.id, options)).toEqual(new Set([profile.id]));
     expect(readUserProfileAliasRevision()).toBe(aliasRevision);
-    expect(readUserProfileEmailBindingIds(profile.id, options)).toEqual(bindings);
+    expect(bindingIds(profile.id, options)).toEqual(bindings);
   });
 
   it("compresses tombstones so durable profile references resolve to the merge head", async () => {
@@ -291,7 +289,6 @@ describe("profile alias reader lifecycle", () => {
 
     expect(setDisplayName(a.id, "Durable A", options)).toMatchObject({ id: c.id });
     const { profiles } = readUserProfileSnapshotSync(options);
-    expect(profiles.find(({ id }) => id === a.id)?.mergedInto).toBe(c.id);
     expect(profiles).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: a.id, mergedInto: c.id }),

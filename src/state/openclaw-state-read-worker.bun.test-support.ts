@@ -45,7 +45,7 @@ for (const location of [filename, privateLocation]) {
   seed.close();
 }
 
-function lifecycle() {
+function assertLifecycle(expected: [number, number, number], message: string) {
   const snapshot = getTrackedWorkerLifecycleSnapshot();
   const worker = snapshot.workerLifecycle.find(
     ({ script }) => script === "openclaw-state-read.worker.js",
@@ -81,7 +81,7 @@ function lifecycle() {
     0,
   );
   assert.equal(snapshot.workerCount, live + supervisor.started - supervisorRetired + liveProbes);
-  return { started: worker.started, retired, live };
+  assert.deepEqual([worker.started, retired, live], expected, message);
 }
 
 async function read(location = filename, checkFreshAdmission = false) {
@@ -110,35 +110,22 @@ try {
   for (let index = 0; index < 5; index++) {
     await read();
   }
-  assert.deepEqual(lifecycle(), { started: 1, retired: 0, live: 1 }, "successful reads reuse");
+  assertLifecycle([1, 0, 1], "successful reads reuse");
   await closeOpenClawStateDatabaseByPathAsync(filename);
-  assert.deepEqual(
-    lifecycle(),
-    { started: 1, retired: capable ? 0 : 1, live: capable ? 1 : 0 },
+  assertLifecycle(
+    [1, capable ? 0 : 1, capable ? 1 : 0],
     "host close joins native cleanup and retains capable workers",
   );
   await read();
-  assert.deepEqual(
-    lifecycle(),
-    { started: capable ? 1 : 2, retired: capable ? 0 : 1, live: 1 },
-    "closed reader reopens",
-  );
+  assertLifecycle([capable ? 1 : 2, capable ? 0 : 1, 1], "closed reader reopens");
   await read(privateLocation);
-  assert.deepEqual(
-    lifecycle(),
-    { started: capable ? 1 : 2, retired: capable ? 0 : 2, live: capable ? 1 : 0 },
-    "internal close settles",
-  );
+  assertLifecycle([capable ? 1 : 2, capable ? 0 : 2, capable ? 1 : 0], "internal close settles");
   fs.mkdirSync(path.join(root, "state"));
   const quarantine = openNodeSqliteDatabase(path.join(root, "state", "openclaw-quarantine.sqlite"));
   quarantine.exec("PRAGMA user_version = 0");
   quarantine.close();
   await read(filename, true);
-  assert.deepEqual(
-    lifecycle(),
-    { started: capable ? 1 : 3, retired: capable ? 0 : 3, live: capable ? 1 : 0 },
-    "admission close settles",
-  );
+  assertLifecycle([capable ? 1 : 3, capable ? 0 : 3, capable ? 1 : 0], "admission close settles");
   console.log(`Bun shared-state worker reuse and native cleanup passed (capable=${capable})`);
 } finally {
   await closeOpenClawStateDatabaseAsync();

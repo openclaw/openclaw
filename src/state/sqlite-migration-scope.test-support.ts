@@ -22,16 +22,17 @@ function captureUndeclaredTables(
     )
     .all();
   const snapshots = new Map<string, TableSnapshot>();
+  const schemaFor = (name: string) =>
+    JSON.stringify(
+      objects.filter(
+        (object) =>
+          foldSqliteIdentifierCase(String(object.tbl_name)) === foldSqliteIdentifierCase(name),
+      ),
+    );
   // Table scopes cannot restore views, including views over declared tables.
   for (const object of objects.filter((entry) => entry.type === "view")) {
     snapshots.set(String(object.name), {
-      schema: JSON.stringify(
-        objects.filter(
-          (entry) =>
-            foldSqliteIdentifierCase(String(entry.tbl_name)) ===
-            foldSqliteIdentifierCase(String(object.name)),
-        ),
-      ),
+      schema: schemaFor(String(object.name)),
       content: "",
     });
   }
@@ -94,12 +95,7 @@ function captureUndeclaredTables(
       hash.update("\n");
     }
     snapshots.set(name, {
-      schema: JSON.stringify(
-        objects.filter(
-          (object) =>
-            foldSqliteIdentifierCase(String(object.tbl_name)) === foldSqliteIdentifierCase(name),
-        ),
-      ),
+      schema: schemaFor(name),
       content: hash.digest("hex"),
     });
   }

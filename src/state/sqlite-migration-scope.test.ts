@@ -22,6 +22,17 @@ function createFixture() {
   return database;
 }
 
+async function rejectsMutation(
+  mutation: string,
+  message: string,
+  declared = ["changed", "schema_meta"],
+) {
+  using database = createFixture();
+  await expect(
+    assertSqliteMigrationScopePreserved(database, declared, () => database.exec(mutation)),
+  ).rejects.toThrow(message);
+}
+
 describe("declared SQLite migration scope", () => {
   it("does not conflate a declared table with an undeclared Unicode name", async () => {
     using database = createFixture();
@@ -64,24 +75,16 @@ describe("declared SQLite migration scope", () => {
     ],
     ["deleted row", "DELETE FROM retained WHERE rowid = 1"],
     ["new row", "INSERT INTO retained VALUES (NULL)"],
-  ])("rejects an undeclared %s change", async (_kind, mutation) => {
-    using database = createFixture();
-    await expect(
-      assertSqliteMigrationScopePreserved(database, ["changed", "schema_meta"], () => {
-        database.exec(mutation);
-      }),
-    ).rejects.toThrow("retained: content changed");
-  });
+  ])("rejects an undeclared %s change", (_kind, mutation) =>
+    rejectsMutation(mutation, "retained: content changed"),
+  );
 
   it("rejects undeclared mixed-case trigger DDL changes", async () => {
-    using database = createFixture();
-    await expect(
-      assertSqliteMigrationScopePreserved(database, ["changed"], () =>
-        database.exec(
-          "CREATE TRIGGER retained_update AFTER UPDATE ON ReTaInEd BEGIN SELECT 1; END",
-        ),
-      ),
-    ).rejects.toThrow("retained: schema changed");
+    await rejectsMutation(
+      "CREATE TRIGGER retained_update AFTER UPDATE ON ReTaInEd BEGIN SELECT 1; END",
+      "retained: schema changed",
+      ["changed"],
+    );
   });
 
   it.each([
@@ -97,14 +100,9 @@ describe("declared SQLite migration scope", () => {
       "CREATE TRIGGER view_delete INSTEAD OF DELETE ON retained_view BEGIN DELETE FROM retained; END",
       "retained_view",
     ],
-  ])("rejects a view that is %s (%s)", async (change, mutation, view) => {
-    using database = createFixture();
-    await expect(
-      assertSqliteMigrationScopePreserved(database, ["changed", view], () =>
-        database.exec(mutation),
-      ),
-    ).rejects.toThrow(`${view}: ${change}`);
-  });
+  ])("rejects a view that is %s (%s)", (change, mutation, view) =>
+    rejectsMutation(mutation, `${view}: ${change}`, ["changed", view]),
+  );
 
   it("refuses proof when every implicit rowid alias is hidden", async () => {
     using database = createFixture();
