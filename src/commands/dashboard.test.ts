@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import type { GatewayBindMode } from "../config/types.gateway.js";
 import { dashboardCommand } from "./dashboard.js";
 import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
@@ -9,7 +9,6 @@ const mocks = vi.hoisted(() => ({
   resolveControlUiLinks: vi.fn(),
   copyToClipboard: vi.fn(),
   issueDeviceBootstrapToken: vi.fn(),
-  openUrl: vi.fn(),
   openUrlPrivately: vi.fn(),
   detectBrowserOpenSupport: vi.fn(),
   inspectPortUsage: vi.fn(),
@@ -26,7 +25,6 @@ vi.mock("./onboard-helpers.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./onboard-helpers.js")>()),
   resolveControlUiLinks: mocks.resolveControlUiLinks,
   detectBrowserOpenSupport: mocks.detectBrowserOpenSupport,
-  openUrl: mocks.openUrl,
   formatControlUiSshHint: vi.fn(() => "ssh hint"),
 }));
 
@@ -70,7 +68,7 @@ function createSnapshot({ bind, customBindHost }: SnapshotParams = {}) {
   };
 }
 
-function mockSnapshot(params?: SnapshotParams) {
+function mockSnapshot(params: SnapshotParams = { bind: "custom", customBindHost: "10.0.0.5" }) {
   mocks.readConfigFileSnapshot.mockResolvedValue(createSnapshot(params));
   mocks.resolveGatewayPort.mockReturnValue(18789);
   mocks.resolveControlUiLinks.mockReturnValue(loopbackLinks);
@@ -99,11 +97,6 @@ function mockAliasOwnership(host: string, loopbackPid = 4242) {
   });
 }
 
-function mockCustomBind() {
-  mockSnapshot({ bind: "custom", customBindHost: "10.0.0.5" });
-  mockCustomLinks();
-}
-
 function expectNoCalls(...mocksToCheck: unknown[]) {
   for (const mock of mocksToCheck) {
     expect(mock).not.toHaveBeenCalled();
@@ -115,133 +108,109 @@ function expectNoCredentials() {
   expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("Dashboard URL:"));
 }
 
-describe("dashboardCommand bind selection", () => {
-  beforeEach(() => {
-    for (const mock of [...Object.values(mocks), ...Object.values(runtime)]) {
-      mock.mockClear();
+beforeEach(() => {
+  for (const mock of [...Object.values(mocks), ...Object.values(runtime)]) {
+    mock.mockClear();
+  }
+  mocks.issueDeviceBootstrapToken
+    .mockReset()
+    .mockResolvedValue({ token: "browser-bootstrap", expiresAtMs: 123_456 });
+  mocks.openUrlPrivately.mockReset().mockResolvedValue(true);
+  mocks.detectBrowserOpenSupport.mockReset().mockResolvedValue({ ok: false });
+  mocks.inspectPortUsage.mockReset();
+  mocks.ensureDashboardGatewayReady
+    .mockReset()
+    .mockResolvedValue({ ready: true, status: {}, recovered: false });
+  mocks.waitForControlUiDocument.mockReset().mockResolvedValue({ ready: true });
+  mockSnapshot();
+  mockCustomLinks();
+});
+
+it("maps plain-http custom bind to a verified loopback URL", async () => {
+  mockAliasOwnership("10.0.0.5");
+
+  await dashboardCommand(runtime, { noOpen: true });
+
+  expect(mocks.ensureDashboardGatewayReady).toHaveBeenCalledWith(
+    expect.objectContaining({ probeUrl: "ws://10.0.0.5:18789" }),
+  );
+  expect(mocks.ensureDashboardGatewayReady.mock.invocationCallOrder[0]).toBeLessThan(
+    mocks.inspectPortUsage.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+  );
+  expect(mocks.resolveControlUiLinks).toHaveBeenCalledWith({
+    port: 18789,
+    bind: "loopback",
+    customBindHost: "10.0.0.5",
+    basePath: undefined,
+    tlsEnabled: false,
+  });
+  expect(mocks.copyToClipboard).toHaveBeenCalledWith(
+    "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner&gatewayUrl=ws%3A%2F%2F127.0.0.1%3A18789",
+  );
+});
+
+it.each(["different process", "inspection failure"])(
+  "refuses URL delivery on %s",
+  async (cause) => {
+    if (cause === "different process") {
+      mockAliasOwnership("10.0.0.5", 4343);
+    } else {
+      mocks.inspectPortUsage.mockRejectedValue(new Error("inspection unavailable"));
     }
-    mocks.issueDeviceBootstrapToken
-      .mockReset()
-      .mockResolvedValue({ token: "browser-bootstrap", expiresAtMs: 123_456 });
-    mocks.openUrlPrivately.mockReset().mockResolvedValue(true);
-    mocks.detectBrowserOpenSupport.mockReset().mockResolvedValue({ ok: false });
-    mocks.inspectPortUsage.mockReset();
-    mocks.ensureDashboardGatewayReady
-      .mockReset()
-      .mockResolvedValue({ ready: true, status: {}, recovered: false });
-    mocks.waitForControlUiDocument.mockReset().mockResolvedValue({ ready: true });
-  });
-
-  it("maps plain-http custom bind to a verified loopback URL", async () => {
-    mockCustomBind();
-    mockAliasOwnership("10.0.0.5");
-
-    await dashboardCommand(runtime, { noOpen: true });
-
-    expect(mocks.ensureDashboardGatewayReady).toHaveBeenCalledWith(
-      expect.objectContaining({
-        probeUrl: "ws://10.0.0.5:18789",
-      }),
-    );
-    expect(mocks.ensureDashboardGatewayReady.mock.invocationCallOrder[0]).toBeLessThan(
-      mocks.inspectPortUsage.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-    );
-    expect(mocks.resolveControlUiLinks).toHaveBeenCalledWith({
-      port: 18789,
-      bind: "loopback",
-      customBindHost: "10.0.0.5",
-      basePath: undefined,
-      tlsEnabled: false,
-    });
-    expect(mocks.copyToClipboard).toHaveBeenCalledWith(
-      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner&gatewayUrl=ws%3A%2F%2F127.0.0.1%3A18789",
-    );
-  });
-
-  it("refuses an authenticated loopback URL owned by a different process", async () => {
-    mockCustomBind();
-    mockAliasOwnership("10.0.0.5", 4343);
-
-    await dashboardCommand(runtime, { noOpen: true });
-
+    await dashboardCommand(runtime, cause === "different process" ? { noOpen: true } : {});
     expectNoCredentials();
+    expect(mocks.openUrlPrivately).not.toHaveBeenCalled();
     expect(runtime.error).toHaveBeenCalledWith(
       expect.stringContaining("refusing to copy or open an authenticated URL"),
     );
-    expect(mocks.openUrl).not.toHaveBeenCalled();
-  });
+  },
+);
 
-  it("refuses URL delivery when loopback ownership inspection fails", async () => {
-    mockCustomBind();
-    mocks.inspectPortUsage.mockRejectedValue(new Error("inspection unavailable"));
-
+it.each(["document unavailable", "invalid config"])(
+  "rejects %s before credentials",
+  async (cause) => {
+    const missingDocument = cause === "document unavailable";
+    const reason = "Control UI assets are missing from the configured root.";
+    if (missingDocument) {
+      mockSnapshot({});
+      mocks.waitForControlUiDocument.mockResolvedValue({ ready: false, reason, status: 503 });
+    } else {
+      mocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot, valid: false });
+    }
     await dashboardCommand(runtime);
-
-    expectNoCredentials();
-    expect(mocks.openUrlPrivately).not.toHaveBeenCalled();
-  });
-
-  it("does not issue browser credentials when the dashboard document is unavailable", async () => {
-    mockSnapshot();
-    mocks.waitForControlUiDocument.mockResolvedValue({
-      ready: false,
-      reason: "Control UI assets are missing from the configured root.",
-      status: 503,
-    });
-
-    await dashboardCommand(runtime);
-
-    expectNoCalls(mocks.issueDeviceBootstrapToken, mocks.copyToClipboard, mocks.openUrl);
+    const untouched = missingDocument
+      ? [mocks.copyToClipboard, mocks.openUrlPrivately]
+      : [mocks.ensureDashboardGatewayReady];
+    expectNoCalls(mocks.issueDeviceBootstrapToken, ...untouched);
     expect(runtime.error).toHaveBeenCalledWith(
-      "Control UI assets are missing from the configured root.",
+      missingDocument ? reason : expect.stringContaining("openclaw doctor --fix"),
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
-  });
+  },
+);
 
-  it("rejects invalid configuration before probing or issuing browser credentials", async () => {
-    mocks.readConfigFileSnapshot.mockResolvedValue({
-      exists: true,
-      valid: false,
-      path: "/tmp/openclaw.json",
-    });
+it("re-probes a changed endpoint after recovery before URL delivery", async () => {
+  mocks.readConfigFileSnapshot
+    .mockResolvedValueOnce(createSnapshot({ bind: "custom", customBindHost: "10.0.0.5" }))
+    .mockResolvedValueOnce(createSnapshot({ bind: "custom", customBindHost: "10.0.0.6" }));
+  mocks.ensureDashboardGatewayReady
+    .mockResolvedValueOnce({ ready: true, status: {}, recovered: true })
+    .mockResolvedValueOnce({ ready: false, status: {}, reason: "failed", recoverable: false });
 
-    await dashboardCommand(runtime);
+  await dashboardCommand(runtime, { noOpen: true, yes: true });
 
-    expectNoCalls(mocks.ensureDashboardGatewayReady, mocks.issueDeviceBootstrapToken);
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("openclaw doctor --fix"));
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-  });
-
-  it("re-probes a changed endpoint after recovery before URL delivery", async () => {
-    mockSnapshot({ bind: "custom", customBindHost: "10.0.0.5" });
-    mocks.readConfigFileSnapshot
-      .mockResolvedValueOnce(createSnapshot({ bind: "custom", customBindHost: "10.0.0.5" }))
-      .mockResolvedValueOnce(createSnapshot({ bind: "custom", customBindHost: "10.0.0.6" }));
-    mockCustomLinks();
-    mocks.ensureDashboardGatewayReady
-      .mockResolvedValueOnce({ ready: true, status: {}, recovered: true })
-      .mockResolvedValueOnce({
-        ready: false,
-        status: {},
-        reason: "Gateway probe failed",
-        recoverable: false,
-      });
-
-    await dashboardCommand(runtime, { noOpen: true, yes: true });
-
-    expect(mocks.ensureDashboardGatewayReady).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ probeUrl: "ws://10.0.0.5:18789" }),
-    );
-    expect(mocks.ensureDashboardGatewayReady).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        probeUrl: "ws://10.0.0.6:18789",
-        allowInstall: false,
-        interactive: false,
-      }),
-    );
-    expectNoCredentials();
-    expectNoCalls(mocks.inspectPortUsage, runtime.exit);
-  });
+  expect(mocks.ensureDashboardGatewayReady).toHaveBeenNthCalledWith(
+    1,
+    expect.objectContaining({ probeUrl: "ws://10.0.0.5:18789" }),
+  );
+  expect(mocks.ensureDashboardGatewayReady).toHaveBeenNthCalledWith(
+    2,
+    expect.objectContaining({
+      probeUrl: "ws://10.0.0.6:18789",
+      allowInstall: false,
+      interactive: false,
+    }),
+  );
+  expectNoCredentials();
+  expectNoCalls(mocks.inspectPortUsage, runtime.exit);
 });

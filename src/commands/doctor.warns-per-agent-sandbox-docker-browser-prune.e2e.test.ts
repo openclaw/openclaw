@@ -32,13 +32,7 @@ describe("doctor command", () => {
         agents: {
           defaults: { sandbox },
           entries: {
-            work: {
-              workspace: "~/openclaw-work",
-              sandbox: {
-                ...sandbox,
-                docker: { setupCommand: "echo work" },
-              },
-            },
+            work: { sandbox: { docker: { setupCommand: "echo work" } } },
           },
         },
       },
@@ -51,8 +45,8 @@ describe("doctor command", () => {
         ([message, title]) =>
           title === "Sandbox" &&
           typeof message === "string" &&
-          ["agents.entries.work sandbox docker", 'scope resolves to "shared"'].every((text) =>
-            message.replace(/\s+/g, " ").trim().includes(text),
+          /(?=[\s\S]*agents\.entries\.work\s+sandbox\s+docker)(?=[\s\S]*scope\s+resolves\s+to\s+"shared")/.test(
+            message,
           ),
       ),
     ).toBe(true);

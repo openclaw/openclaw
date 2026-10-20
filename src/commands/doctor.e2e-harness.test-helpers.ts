@@ -1,16 +1,10 @@
-/** Small runtime and orchestration helpers for the doctor E2E harness. */
 import { vi } from "vitest";
+import type { readConfigFileSnapshot, transformConfigFile } from "../config/config.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
-import { createDoctorConfigSnapshot } from "./doctor-config-snapshot.test-helpers.js";
-import { createTestConfigFileStore } from "./test-runtime-config-helpers.js";
+import { createDoctorConfigSnapshot as snapshotFixture } from "./doctor-config-snapshot.test-helpers.js";
+import { baseConfigSnapshot, createTestConfigFileStore } from "./test-runtime-config-helpers.js";
 
-export type DoctorConfigSnapshotFixtureParams = {
-  config?: Record<string, unknown>;
-  parsed?: Record<string, unknown>;
-  valid?: boolean;
-  issues?: Array<{ path: string; message: string }>;
-  legacyIssues?: Array<{ path: string; message: string }>;
-};
+export type DoctorConfigSnapshotFixtureParams = NonNullable<Parameters<typeof snapshotFixture>[0]>;
 
 export function setDoctorStdinTty(value: boolean | undefined): void {
   try {
@@ -20,21 +14,12 @@ export function setDoctorStdinTty(value: boolean | undefined): void {
   }
 }
 
-export function createCommandWithTimeoutResult() {
-  return { stdout: "", stderr: "", code: 0, signal: null, killed: false } as const;
+export function createCommandWithTimeoutResult(stdout = "") {
+  return { stdout, stderr: "", code: 0, signal: null, killed: false } as const;
 }
 
 export function createLegacyConfigSnapshot() {
-  return {
-    path: "/tmp/openclaw.json",
-    exists: false,
-    raw: null,
-    parsed: {},
-    valid: true,
-    config: {},
-    issues: [],
-    legacyIssues: [],
-  } as const;
+  return { ...structuredClone(baseConfigSnapshot), exists: false, raw: null } as const;
 }
 
 export function createDoctorServiceMocks() {
@@ -68,52 +53,44 @@ export function applyMockDoctorConfigSnapshot(
   readConfigFileSnapshot: MockFn,
   params: DoctorConfigSnapshotFixtureParams = {},
 ): void {
-  readConfigFileSnapshot.mockResolvedValue(createDoctorConfigSnapshot(params));
+  readConfigFileSnapshot.mockResolvedValue(snapshotFixture(params));
 }
 
-export function createDoctorConfigTransform(
-  readConfigFileSnapshot: MockFn<typeof import("../config/config.js").readConfigFileSnapshot>,
-) {
+export function createDoctorConfigTransform(read: MockFn<typeof readConfigFileSnapshot>) {
   const committedConfigFiles = createTestConfigFileStore();
-  return async (
-    params: Parameters<typeof import("../config/config.js").transformConfigFile>[0],
-  ) => {
+  return async (params: Parameters<typeof transformConfigFile>[0]) => {
+    const { base, baseHash, transform, writeOptions: write } = params;
     const { ConfigMutationConflictError } = await import("../config/config.js");
     const { hashConfigRaw, resolveConfigSnapshotHash } =
       await import("../config/io.read-helpers.js");
-    const snapshot = await readConfigFileSnapshot();
+    const snapshot = await read();
     const previousHash = resolveConfigSnapshotHash(snapshot);
-    if (params.baseHash !== undefined && params.baseHash !== previousHash) {
+    if (baseHash !== undefined && baseHash !== previousHash) {
       throw new ConfigMutationConflictError("config changed since last load");
     }
-    if (
-      params.writeOptions?.expectedConfigPath !== undefined &&
-      params.writeOptions.expectedConfigPath !== snapshot.path
-    ) {
+    if (write?.expectedConfigPath !== undefined && write.expectedConfigPath !== snapshot.path) {
       throw new ConfigMutationConflictError("config path changed since last load");
     }
-    params.writeOptions?.assertCurrent?.();
-    const transformed = await params.transform(
-      params.base === "runtime" ? snapshot.runtimeConfig : snapshot.sourceConfig,
+    write?.assertCurrent?.();
+    const transformed = await transform(
+      base === "runtime" ? snapshot.runtimeConfig : snapshot.sourceConfig,
       { snapshot, previousHash, attempt: 0 },
       {},
     );
-    await params.writeOptions?.beforeCommit?.();
-    params.writeOptions?.assertCurrent?.();
+    await write?.beforeCommit?.();
+    write?.assertCurrent?.();
     const committed = committedConfigFiles.write(transformed.nextConfig, snapshot.path);
-    const persistedSnapshot = committed.snapshot;
-    persistedSnapshot.raw = JSON.stringify(committed.nextConfig);
-    persistedSnapshot.parsed = structuredClone(committed.nextConfig);
-    persistedSnapshot.hash = hashConfigRaw(persistedSnapshot.raw);
-    readConfigFileSnapshot.mockImplementation(
-      async () => committedConfigFiles.read(snapshot.path).snapshot,
-    );
+    const persisted = committed.snapshot;
+    persisted.raw = JSON.stringify(committed.nextConfig);
+    persisted.parsed = structuredClone(committed.nextConfig);
+    persisted.hash = hashConfigRaw(persisted.raw);
+    read.mockImplementation(async () => committedConfigFiles.read(snapshot.path).snapshot);
     return {
       ...committed,
       snapshot,
       previousHash,
-      persistedHash: persistedSnapshot.hash,
-      persistedSourceConfig: persistedSnapshot.sourceConfig,
+      persistedHash: persisted.hash,
+      persistedSourceConfig: persisted.sourceConfig,
       result: transformed.result,
     };
   };
@@ -130,27 +107,27 @@ export async function arrangeLegacyStateMigrationFixture(deps: {
   mockDoctorConfigSnapshot: () => void;
   runLegacyStateMigrations: MockFn;
 }) {
+  const { confirm, createDetection, detectLegacyStateMigrations, runLegacyStateMigrations } = deps;
   deps.mockDoctorConfigSnapshot();
 
   const { doctorCommand } = await import("./doctor.js");
   const runtime = createDoctorRuntime();
 
-  deps.detectLegacyStateMigrations.mockClear();
-  deps.runLegacyStateMigrations.mockClear();
-  deps.detectLegacyStateMigrations.mockResolvedValue(
-    deps.createDetection({ hasLegacySessions: true, preview: ["- Legacy sessions detected"] }),
+  detectLegacyStateMigrations.mockClear();
+  detectLegacyStateMigrations.mockResolvedValue(
+    createDetection({ hasLegacySessions: true, preview: ["- Legacy sessions detected"] }),
   );
-  deps.runLegacyStateMigrations.mockResolvedValueOnce({
+  runLegacyStateMigrations.mockClear().mockResolvedValueOnce({
     changes: ["migrated"],
     warnings: [],
     stepReceipts: [],
   });
-  deps.confirm.mockClear();
+  confirm.mockClear();
 
   return {
     doctorCommand,
     runtime,
-    detectLegacyStateMigrations: deps.detectLegacyStateMigrations,
-    runLegacyStateMigrations: deps.runLegacyStateMigrations,
+    detectLegacyStateMigrations,
+    runLegacyStateMigrations,
   };
 }
