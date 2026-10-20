@@ -16,10 +16,8 @@ export function createDefaultAgentResult(params?: {
   sessionId?: string;
 }) {
   const { payloads = [{ text: "ok" }], durationMs = 5, sessionId = "s" } = params ?? {};
-  return {
-    payloads,
-    meta: { durationMs, agentMeta: { sessionId, provider: "p", model: "m" } },
-  };
+  const agentMeta = { sessionId, provider: "p", model: "m" };
+  return { payloads, meta: { durationMs, agentMeta } };
 }
 
 export async function useRealCommandSessionPersistence(): Promise<void> {

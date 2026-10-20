@@ -11,11 +11,7 @@ import type { RespondFn } from "../gateway/server-methods/types.js";
 import { acquireGatewayLock, type GatewayLockHandle } from "../infra/gateway-lock.js";
 import * as stateOwner from "../infra/gateway-state-owner.js";
 import { readBackupRuns } from "../state/backup-run-records.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
+import * as stateDb from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { backupRecordCommand } from "./backup-record.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
@@ -29,8 +25,8 @@ vi.mock("../gateway/call.js", async (importOriginal) => ({
 let lock: GatewayLockHandle | null = null;
 const roots = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
+    await stateDb.closeOpenClawStateDatabaseAsync();
+    stateDb.closeOpenClawStateDatabaseForTest();
     await lock?.release();
     lock = null;
     resetConfigRuntimeState();
@@ -47,7 +43,7 @@ async function fixture(bootstrap = true) {
   vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(root, "openclaw.json"));
   if (bootstrap) {
     await fs.writeFile(path.join(root, "openclaw.json"), "{}");
-    runOpenClawStateWriteTransaction(() => undefined);
+    stateDb.runOpenClawStateWriteTransaction(() => undefined);
   }
   return { databasePath: resolveOpenClawStateSqlitePath(), runtime: createTestRuntime() };
 }
@@ -67,21 +63,16 @@ async function receive(params: Record<string, unknown>, authority = true) {
 }
 
 const ownerChanged = { reason: "STATE_OWNER_CHANGED", mutationAccepted: false };
+const ownerChangedError = expect.objectContaining({ details: ownerChanged });
 function expectOwnerChanged(response: Awaited<ReturnType<typeof receive>>) {
-  expect(response).toHaveBeenCalledWith(
-    false,
-    undefined,
-    expect.objectContaining({
-      details: ownerChanged,
-    }),
-  );
+  expect(response).toHaveBeenCalledWith(false, undefined, ownerChangedError);
 }
 
 it("records offline under exclusive custody and leaves an absent database absent", async () => {
   const { databasePath, runtime } = await fixture(false);
   await backupRecordCommand(runtime, { status: "ok", target: "missing", json: true });
   await expect(fs.access(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
-  runOpenClawStateWriteTransaction(() => undefined);
+  stateDb.runOpenClawStateWriteTransaction(() => undefined);
   await backupRecordCommand(runtime, { status: "ok", target: "offline", json: true });
   expect(await readBackupRuns(process.env)).toMatchObject([{ target: "offline", status: "ok" }]);
   expect(stateOwner.captureGatewayStateOwner(databasePath)).toBeUndefined();
@@ -94,8 +85,8 @@ it.each(["accepted", "reply-lost", "refused"])(
   async (outcome) => {
     const { databasePath, runtime } = await fixture();
     if (outcome === "refused") {
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
+      await stateDb.closeOpenClawStateDatabaseAsync();
+      stateDb.closeOpenClawStateDatabaseForTest();
     }
     lock = await acquireGatewayLock({ allowInTests: true, port: 18789 });
     const owner = stateOwner.captureGatewayStateOwner(databasePath)!;

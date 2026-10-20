@@ -9,6 +9,7 @@ import type { CallGatewayOptions } from "../gateway/call.js";
 import { resetDatabaseEngineSelectionForTest } from "../infra/database-engine/context.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { agentCliCommand } from "./agent-via-gateway.js";
+import { gatewaySuccessReply, remoteGatewayConfig } from "./agent-via-gateway.test-support.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const { loadConfig, callGateway } = vi.hoisted(() => ({
@@ -32,7 +33,6 @@ vi.mock("../gateway/call.js", () => ({
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const runtime = createTestRuntime();
-const remoteGateway = { mode: "remote", remote: { url: "wss://gateway.example" } } as const;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -57,7 +57,7 @@ it.each(["agents.list", "agent"])(
         },
         plugins: { enabled: false },
         agents: { entries: { main: {} } },
-        gateway: remoteGateway,
+        ...remoteGatewayConfig,
       };
       await state.writeConfig(config);
       delete process.env.MISSING_AGENT_CLI_DSN;
@@ -94,31 +94,25 @@ it.each(["local", "remote"] as const)(
     const config: OpenClawConfig = {
       agents: { entries: { main: {} } },
       session: { store: path.join(dir, "agents", "main", "sessions", "sessions.json") },
-      ...(mode === "remote" ? { gateway: remoteGateway } : {}),
+      ...(mode === "remote" ? remoteGatewayConfig : {}),
     };
     loadConfig.mockReturnValue(config);
-    callGateway.mockResolvedValue({
-      runId: "idem-1",
-      status: "ok",
-      result: { payloads: [{ text: "resumed by Gateway" }] },
-    });
+    callGateway.mockResolvedValue(gatewaySuccessReply("resumed by Gateway"));
 
     await agentCliCommand({ message: "resume", agent: "main", sessionId: "saved-id" }, runtime);
 
     expect(runtime.log).toHaveBeenCalledWith("resumed by Gateway");
-    expect(callGateway.mock.calls).toMatchObject([
-      [
-        {
-          method: "agent",
-          requiredCapabilities: ["agent-session-id-create-v1"],
-          params: {
-            agentId: "main",
-            sessionId: "saved-id",
-            sessionKey: undefined,
-            createSessionIfMissing: true,
-          },
-        },
-      ],
-    ]);
+    expect(callGateway).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        method: "agent",
+        requiredCapabilities: ["agent-session-id-create-v1"],
+        params: expect.objectContaining({
+          agentId: "main",
+          sessionId: "saved-id",
+          sessionKey: undefined,
+          createSessionIfMissing: true,
+        }),
+      }),
+    );
   },
 );

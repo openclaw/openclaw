@@ -21,8 +21,7 @@ function accountPayload(channel: string, label: string, account: Record<string, 
 }
 
 beforeEach(() => {
-  vi.useFakeTimers();
-  vi.setSystemTime(now);
+  vi.useFakeTimers({ now });
   setActivePluginRegistry(
     createTestRegistry([{ pluginId: "signal", source: "test", plugin: signalPlugin }]),
   );
@@ -36,8 +35,7 @@ const cases: {
   name: string;
   payload: Record<string, unknown>;
   contains?: (string | RegExp)[];
-  absent?: string;
-  exactLine?: string;
+  verify?: (lines: string[], output: string) => void;
 }[] = [
   {
     name: "Signal runtime errors",
@@ -93,7 +91,7 @@ const cases: {
       ],
     },
     contains: ["running", "configuration reload is deferred", "Wait for active work to finish"],
-    absent: "status is partial",
+    verify: (_lines, output) => expect(output).not.toContain("status is partial"),
   },
   {
     name: "transport liveness timestamps",
@@ -111,8 +109,10 @@ const cases: {
       configured: true,
       allowFrom: ["+442079460018", "uuid:123e4567-e89b-12d3-a456-426614174000"],
     }),
-    exactLine:
-      "- Signal work (+12133734253): configured, allow:+44 20 7946 0018 (id: +442079460018),uuid:123e4567-e89b-12d3-a456-426614174000",
+    verify: (lines) =>
+      expect(lines).toContain(
+        "- Signal work (+12133734253): configured, allow:+44 20 7946 0018 (id: +442079460018),uuid:123e4567-e89b-12d3-a456-426614174000",
+      ),
   },
   {
     name: "Telegram bot username from probe data",
@@ -135,17 +135,9 @@ const cases: {
     contains: [/disconnected/i],
   },
 ];
-it.each(cases)(
-  "renders $name in channel status",
-  ({ payload, contains = [], absent, exactLine }) => {
-    const lines = formatGatewayChannelsStatusLines(payload);
-    const output = lines.join("\n");
-    contains.forEach((fragment) => expect(output).toMatch(fragment));
-    if (absent) {
-      expect(output).not.toContain(absent);
-    }
-    if (exactLine) {
-      expect(lines).toContain(exactLine);
-    }
-  },
-);
+it.each(cases)("renders $name in channel status", ({ payload, contains = [], verify }) => {
+  const lines = formatGatewayChannelsStatusLines(payload);
+  const output = lines.join("\n");
+  contains.forEach((fragment) => expect(output).toMatch(fragment));
+  verify?.(lines, output);
+});
