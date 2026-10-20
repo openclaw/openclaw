@@ -2990,20 +2990,23 @@ try {
     console.log("PHASE fingerprint-retention-idle");
     await delay(durationMs);
     assertGatewayAlive();
-    const before = await readGatewayResources(gateway, {
+    const censusResources = await readGatewayResources(gateway, {
       collectGarbage: true,
       sessionCensus: true,
     });
-    console.log(`FINGERPRINT_RETENTION_BEFORE ${JSON.stringify(before)}`);
-    const census = before.sessionCensus;
+    console.log(`FINGERPRINT_RETENTION_CENSUS ${JSON.stringify(censusResources)}`);
+    const census = censusResources.sessionCensus;
     if (!census || census.SessionManager || census.AgentSession || census.Agent) {
       throw new Error("Fingerprint retention requires all session runtime objects to be disposed");
     }
+    // Keep census allocations out of the like-for-like forced-GC memory samples.
+    const before = await readGatewayResources(gateway, { collectGarbage: true });
     const after = await readGatewayResources(gateway, {
       collectGarbage: true,
       clearPromptCacheObservations: true,
     });
     fingerprintRetention = {
+      censusResources,
       before,
       after,
       heapBytes: before.memory.heapUsed - after.memory.heapUsed,
