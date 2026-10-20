@@ -24,6 +24,7 @@ import { parseOpaqueLeafEntry } from "./session-manager-codec.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
 
 const tempDirs = createTempDirTracker();
+const replayLimits = { maxBytes: 100_000, maxEvents: 100 };
 afterEach(async () => {
   for (const stateDir of tempDirs.dirs) {
     await cleanupSessionStateForTest({ stateDir });
@@ -295,6 +296,17 @@ async function userSession() {
   return { dir, scope, user, persist };
 }
 
+async function appendSetupMetadata(manager: SessionManager) {
+  const modelId = await manager.appendModelChange("openai", "gpt-5.5");
+  const thinkingId = await manager.appendThinkingLevelChange("off");
+  const metadataId = manager.appendCustomEntry("model-snapshot", {
+    modelApi: "openai-responses",
+    modelId: "gpt-5.5",
+    provider: "openai",
+  });
+  return { modelId, thinkingId, metadataId };
+}
+
 function expectSingleUser(events: unknown[], key: string) {
   expect(
     events.filter(
@@ -323,11 +335,7 @@ describe("SessionManager user idempotency", () => {
         ...(kind ? { deliveryMirror: { kind } } : {}),
       }),
     ).toMatchObject({ ok: true });
-    const manager = await SessionManager.openBoundedAsync(scope, {
-      cwd: dir,
-      maxBytes: 100_000,
-      maxEvents: 100,
-    });
+    const manager = await SessionManager.openBoundedAsync(scope, { cwd: dir, ...replayLimits });
     if (adopts) {
       expect(await manager.appendMessageAsync(user)).toBe("wake-user");
       expect(manager.appendMessage(user)).toBe("wake-user");
@@ -362,11 +370,7 @@ describe("SessionManager user idempotency", () => {
       { ...buildAssistantMessage("answer"), excludeFromContext: true },
       "pre-persisted-user",
     );
-    const manager = SessionManager.openBounded(scope, {
-      cwd: dir,
-      maxBytes: 100_000,
-      maxEvents: 100,
-    });
+    const manager = SessionManager.openBounded(scope, { cwd: dir, ...replayLimits });
     expect(() => manager.appendMessage(excluded)).toThrow(
       "Session transcript keyed user is outside the current turn",
     );
@@ -380,13 +384,7 @@ describe("SessionManager user idempotency", () => {
     await persist("existing-assistant", buildAssistantMessage("previous answer"));
     const manager = SessionManager.open(scope, dir);
     await persist("ingress-persisted-user", user, "existing-assistant");
-    const modelId = await manager.appendModelChange("openai", "gpt-5.5");
-    const thinkingId = await manager.appendThinkingLevelChange("off");
-    const metadataId = manager.appendCustomEntry("model-snapshot", {
-      modelApi: "openai-responses",
-      modelId: "gpt-5.5",
-      provider: "openai",
-    });
+    const { modelId, thinkingId, metadataId } = await appendSetupMetadata(manager);
     expect(manager.appendMessage(user)).toBe("ingress-persisted-user");
     expect(manager.getAppendParentId()).toBe(metadataId);
     const assistantId = manager.appendMessage(buildAssistantMessage("answer"));
@@ -407,18 +405,8 @@ describe("SessionManager user idempotency", () => {
     const { dir, scope, user, persist } = await userSession();
     const excluded = { ...user, excludeFromContext: true };
     await persist("pre-persisted-user", excluded);
-    const manager = SessionManager.openBounded(scope, {
-      cwd: dir,
-      maxBytes: 100_000,
-      maxEvents: 100,
-    });
-    await manager.appendModelChange("openai", "gpt-5.5");
-    await manager.appendThinkingLevelChange("off");
-    const metadataId = manager.appendCustomEntry("model-snapshot", {
-      modelApi: "openai-responses",
-      modelId: "gpt-5.5",
-      provider: "openai",
-    });
+    const manager = SessionManager.openBounded(scope, { cwd: dir, ...replayLimits });
+    const { metadataId } = await appendSetupMetadata(manager);
     expect(manager.appendMessageWithTranscriptAnchor({ ...excluded, timestamp: 2 })).toMatchObject({
       entryId: "pre-persisted-user",
       message: excluded,
