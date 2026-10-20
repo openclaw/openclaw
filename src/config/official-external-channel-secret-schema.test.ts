@@ -23,20 +23,11 @@ describe("official external channel secret schema", () => {
       },
     });
 
-    const root = schema?.properties as Record<string, Record<string, unknown>> | undefined;
-    if (!root?.clientSecret || !root.accounts) {
-      throw new Error("expected root QQBot secret schema properties");
-    }
-    expect(root.clientSecret.anyOf).toHaveLength(2);
-    const accounts = root.accounts.additionalProperties as
-      | {
-          properties?: Record<string, { anyOf?: unknown[] }>;
-        }
-      | undefined;
-    if (!accounts?.properties?.clientSecret) {
-      throw new Error("expected account QQBot secret schema properties");
-    }
-    expect(accounts.properties.clientSecret.anyOf).toHaveLength(2);
+    expect(schema).toHaveProperty("properties.clientSecret.anyOf.length", 2);
+    expect(schema).toHaveProperty(
+      "properties.accounts.additionalProperties.properties.clientSecret.anyOf.length",
+      2,
+    );
   });
 
   it("does not widen channels without a catalog secret contract", () => {
@@ -66,13 +57,7 @@ describe("official external channel secret schema", () => {
     } as unknown as PluginManifestRegistry;
 
     const [metadata] = collectChannelSchemaMetadataWithOwnership(registry);
-    const properties = metadata?.configSchema?.properties as
-      | Record<string, { anyOf?: unknown[] }>
-      | undefined;
-    if (!properties?.clientSecret) {
-      throw new Error("expected installed QQBot secret schema properties");
-    }
-    expect(properties.clientSecret.anyOf).toHaveLength(2);
+    expect(metadata?.configSchema).toHaveProperty("properties.clientSecret.anyOf.length", 2);
     expect(metadata?.configSchema?.allOf).toHaveLength(1);
   });
 
