@@ -1053,7 +1053,7 @@ export function createAuthProfileStoreRuntime(
       return createEmptyAuthProfileStore();
     }
     if (options?.profileId && isUserModelAuthProfileId(options.profileId)) {
-      const shared = runtimeReads.loadAuthProfileStoreForRuntime(
+      const shared = loadAuthProfileStoreForRuntime(
         agentDir,
         { ...options, profileId: undefined },
         env,
@@ -1107,7 +1107,7 @@ export function createAuthProfileStoreRuntime(
     );
   }
 
-  const { withPreparedAuthProfileStoreReads, ...runtimeReads } =
+  const { loadAuthProfileStoreForRuntime, withPreparedAuthProfileStoreReads, ...runtimeReads } =
     createAuthProfileStoreRuntimeReader({
       isEnvOnlyAuthProfileRuntime,
       getScopedAuthProfileEnv,
@@ -1346,7 +1346,7 @@ export function createAuthProfileStoreRuntime(
     };
     const read = (): AuthProfileStore => {
       const store = runInScope(() =>
-        runtimeReads.loadAuthProfileStoreForRuntime(effectiveAgentDir, readOptions, env),
+        loadAuthProfileStoreForRuntime(effectiveAgentDir, readOptions, env),
       );
       assertReadOwners();
       return store;
@@ -1432,7 +1432,7 @@ export function createAuthProfileStoreRuntime(
       replacement:
         "loadAuthProfileStoreForRuntimeAsync from openclaw/plugin-sdk/agent-runtime with readOnly: true and allowKeychainPrompt: false",
     });
-    return runtimeReads.loadAuthProfileStoreForRuntime(agentDir, {
+    return loadAuthProfileStoreForRuntime(agentDir, {
       ...options,
       readOnly: true,
       allowKeychainPrompt: false,
@@ -1740,8 +1740,8 @@ export function createAuthProfileStoreRuntime(
     );
     return {
       owned,
-      publishRuntimeSnapshots: () => {
-        return publishRuntimeSnapshotsAfterCommit({
+      publishRuntimeSnapshots: () =>
+        publishRuntimeSnapshotsAfterCommit({
           ...publication,
           publish: () => {
             const owner = owned.owner;
@@ -1756,14 +1756,14 @@ export function createAuthProfileStoreRuntime(
             );
             return converged;
           },
-        });
-      },
+        }),
     };
   }
 
   return {
     prepareAuthProfileStoreForModelRuntime,
     ...runtimeReads,
+    loadAuthProfileStoreForRuntime,
     createAuthProfileStoreReadScope,
     createAuthProfileStoreReadScopeAsync,
     updateAuthProfileStoreWithLock,

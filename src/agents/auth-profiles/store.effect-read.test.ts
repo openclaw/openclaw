@@ -67,7 +67,7 @@ it.each(["agent", "shared", "agent+shared"] as const)(
 );
 
 it.each(["agent", "shared"] as const)(
-  "refuses disclosure after the %s owner revokes a prepared credential",
+  "refuses disclosure without rereading after the %s owner revokes a prepared credential",
   async (kind) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const agentDir = kind === "agent" ? state.agentDir("effect") : undefined;
@@ -91,7 +91,6 @@ it.each(["agent", "shared"] as const)(
                   return true;
                 },
               });
-              await reader.read();
               reader.assertCurrent();
               disclosed = true;
             },
