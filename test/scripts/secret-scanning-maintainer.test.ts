@@ -1,4 +1,3 @@
-// Secret Scanning Maintainer tests cover secret scanning maintainer script behavior.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -7,6 +6,32 @@ import { createScriptTestHarness } from "./test-helpers.js";
 
 const scriptPath = ".agents/skills/openclaw-secret-scanning-maintainer/scripts/secret-scanning.mjs";
 const { createTempDir } = createScriptTestHarness();
+
+function run(args: string[], env?: NodeJS.ProcessEnv) {
+  return execFileSync(process.execPath, [scriptPath, ...args], {
+    encoding: "utf8",
+    stdio: "pipe",
+    env,
+  });
+}
+
+function redactionFixture(current: string, redacted: string) {
+  const root = createTempDir("openclaw-secret-scan-");
+  const currentBody = path.join(root, "current.md");
+  const redactedBody = path.join(root, "redacted.md");
+  const resultFile = path.join(root, "redaction-result.json");
+  fs.writeFileSync(currentBody, current);
+  fs.writeFileSync(redactedBody, redacted);
+  return {
+    root,
+    redactedBody,
+    resultFile,
+    redact: (env?: NodeJS.ProcessEnv) =>
+      JSON.parse(
+        run(["redact-body-if-needed", "issue", "123", currentBody, redactedBody, resultFile], env),
+      ),
+  };
+}
 
 describe("secret scanning maintainer script", () => {
   it.each([
@@ -49,23 +74,18 @@ if (args[1] === "graphql") {
 `,
         { mode: 0o755 },
       );
-      const output = execFileSync(
-        process.execPath,
+      const output = run(
         [
-          scriptPath,
           "fetch-content",
           JSON.stringify({ type, details: { [`${type}_url`]: "https://api.github.com/fixture" } }),
         ],
         {
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            TMPDIR: tempDir,
-            OPENCLAW_GH_BIN: ghPath,
-            PATH: `${tempDir}${path.delimiter}${process.env.PATH ?? ""}`,
-            EXPECTED_NODE_TYPE: nodeType,
-            CONTENT_FIXTURE: fixturePath,
-          },
+          ...process.env,
+          TMPDIR: tempDir,
+          OPENCLAW_GH_BIN: ghPath,
+          PATH: `${tempDir}${path.delimiter}${process.env.PATH ?? ""}`,
+          EXPECTED_NODE_TYPE: nodeType,
+          CONTENT_FIXTURE: fixturePath,
         },
       );
       const result = JSON.parse(output);
@@ -87,20 +107,9 @@ if (args[1] === "graphql") {
   );
 
   it("marks body alerts as not requiring notification when redaction is unchanged", () => {
-    const tempDir = createTempDir("openclaw-secret-scan-");
-    const currentBody = path.join(tempDir, "current.md");
-    const redactedBody = path.join(tempDir, "redacted.md");
-    const resultFile = path.join(tempDir, "redaction-result.json");
-    fs.writeFileSync(currentBody, "token: [REDACTED Discord Bot Token]\n");
-    fs.writeFileSync(redactedBody, "token: [REDACTED Discord Bot Token]\n");
-
-    const output = execFileSync(
-      process.execPath,
-      [scriptPath, "redact-body-if-needed", "issue", "123", currentBody, redactedBody, resultFile],
-      { encoding: "utf8" },
-    );
-
-    expect(JSON.parse(output)).toMatchObject({
+    const body = "token: [REDACTED Discord Bot Token]\n";
+    const { redact, resultFile } = redactionFixture(body, body);
+    expect(redact()).toMatchObject({
       body_changed: false,
       notify_required: false,
       reason: "current_body_already_redacted",
@@ -112,37 +121,25 @@ if (args[1] === "graphql") {
   });
 
   it("patches body alerts and requires notification when redaction changes the current body", () => {
-    const tempDir = createTempDir("openclaw-secret-scan-");
-    const binDir = path.join(tempDir, "bin");
-    const ghLog = path.join(tempDir, "gh.log");
-    const ghPath = path.join(binDir, "gh");
-    fs.mkdirSync(binDir);
+    const { root, redactedBody, redact } = redactionFixture(
+      "token: plaintext-secret\n",
+      "token: [REDACTED Discord Bot Token]\n",
+    );
+    const ghLog = path.join(root, "gh.log");
+    const ghPath = path.join(root, "gh");
     fs.writeFileSync(
       ghPath,
       `#!/usr/bin/env bash\nprintf '%s\\n' "$*" >> "${ghLog}"\nprintf '{}\\n'\n`,
       { mode: 0o755 },
     );
 
-    const currentBody = path.join(tempDir, "current.md");
-    const redactedBody = path.join(tempDir, "redacted.md");
-    const resultFile = path.join(tempDir, "redaction-result.json");
-    fs.writeFileSync(currentBody, "token: plaintext-secret\n");
-    fs.writeFileSync(redactedBody, "token: [REDACTED Discord Bot Token]\n");
-
-    const output = execFileSync(
-      process.execPath,
-      [scriptPath, "redact-body-if-needed", "issue", "123", currentBody, redactedBody, resultFile],
-      {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          OPENCLAW_GH_BIN: ghPath,
-          PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
-        },
-      },
-    );
-
-    expect(JSON.parse(output)).toMatchObject({
+    expect(
+      redact({
+        ...process.env,
+        OPENCLAW_GH_BIN: ghPath,
+        PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
+      }),
+    ).toMatchObject({
       body_changed: true,
       notify_required: true,
       redacted: true,
@@ -163,11 +160,14 @@ if (args[1] === "graphql") {
       }),
     );
 
-    const output = execFileSync(
-      process.execPath,
-      [scriptPath, "notify", "123", "contributor", "issue_body", "Discord Bot Token", resultFile],
-      { encoding: "utf8" },
-    );
+    const output = run([
+      "notify",
+      "123",
+      "contributor",
+      "issue_body",
+      "Discord Bot Token",
+      resultFile,
+    ]);
 
     expect(JSON.parse(output)).toStrictEqual({
       ok: true,
@@ -177,12 +177,8 @@ if (args[1] === "graphql") {
   });
 
   it("requires body notifications to include a redaction result file", () => {
-    expect(() =>
-      execFileSync(
-        process.execPath,
-        [scriptPath, "notify", "123", "contributor", "issue_body", "Discord Bot Token"],
-        { encoding: "utf8", stdio: "pipe" },
-      ),
-    ).toThrow(/Body notifications require a redaction result file/);
+    expect(() => run(["notify", "123", "contributor", "issue_body", "Discord Bot Token"])).toThrow(
+      /Body notifications require a redaction result file/,
+    );
   });
 });

@@ -5,19 +5,22 @@ import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const helper = path.resolve(".github/actions/setup-node-env/dependency-fingerprint.mjs");
+
+function dependencyFingerprint(root: string, frozenLockfile = true) {
+  return execFileSync(
+    process.execPath,
+    [helper, "--workspace", root, "--frozen-lockfile", String(frozenLockfile)],
+    { encoding: "utf8" },
+  ).trim();
+}
 
 it("fingerprints dependency install inputs without ordinary script churn", () => {
   const root = tempDirs.make("openclaw-dependency-fingerprint-");
-  const helper = path.resolve(".github/actions/setup-node-env/dependency-fingerprint.mjs");
   const writeManifest = (manifest: Record<string, unknown>) => {
     writeFileSync(path.join(root, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`);
   };
-  const fingerprint = (frozenLockfile = true) =>
-    execFileSync(
-      process.execPath,
-      [helper, "--workspace", root, "--frozen-lockfile", frozenLockfile ? "true" : "false"],
-      { encoding: "utf8" },
-    ).trim();
+  const fingerprint = (frozenLockfile = true) => dependencyFingerprint(root, frozenLockfile);
 
   execFileSync("git", ["init", "-q"], { cwd: root });
   const lifecycleScripts = {
@@ -144,10 +147,7 @@ it("fingerprints dependency install inputs without ordinary script churn", () =>
     devDependencies: { vitest: "1.0.0" },
     scripts: {
       test: "vitest run --reporter=dot",
-      prepare: "node scripts/prepare-git-hooks.mjs",
-      "pnpm:devPreinstall": "node scripts/check-install-dependency-ownership.mjs",
-      postinstall: "node scripts/postinstall-bundled-plugins.mjs",
-      preinstall: "node scripts/preinstall-package-manager-warning.mjs",
+      ...Object.fromEntries(Object.entries(lifecycleScripts).toReversed()),
     },
     name: "fixture",
   });
@@ -196,8 +196,7 @@ it("fingerprints dependency install inputs without ordinary script churn", () =>
 });
 
 it.each([false, true])("preserves sparse install inputs with sparse-index=%s", (sparseIndex) => {
-  const fixture = createSparseFingerprintFixture();
-  const { root, git, write, fingerprint } = fixture;
+  const { root, git, write, fingerprint } = createSparseFingerprintFixture();
   const initial = fingerprint();
   const stagedManifest = '{"name":"worker","version":"2.0.0"}\n';
   write("packages/worker/package.json", stagedManifest);
@@ -287,21 +286,7 @@ it("rejects unmerged and unavailable sparse index inputs", () => {
   const oid = git(["rev-parse", ":" + file]);
   git(
     ["update-index", "--index-info"],
-    "0 " +
-      "0".repeat(40) +
-      "\t" +
-      file +
-      "\n" +
-      "100644 " +
-      oid +
-      " 1\t" +
-      file +
-      "\n" +
-      "100644 " +
-      oid +
-      " 2\t" +
-      file +
-      "\n",
+    `0 ${"0".repeat(40)}\t${file}\n100644 ${oid} 1\t${file}\n100644 ${oid} 2\t${file}\n`,
   );
   expect(() => fingerprint()).toThrow(/requires resolved file index entries/);
   git(["update-index", "--force-remove", file]);
@@ -349,17 +334,10 @@ function createSparseFingerprintFixture() {
     "-qm",
     "fixture",
   ]);
-  const fingerprint = () =>
-    execFileSync(
-      process.execPath,
-      [
-        path.resolve(".github/actions/setup-node-env/dependency-fingerprint.mjs"),
-        "--workspace",
-        root,
-        "--frozen-lockfile",
-        "true",
-      ],
-      { encoding: "utf8" },
-    ).trim();
-  return { root, git, write, fingerprint };
+  return {
+    root,
+    git,
+    write,
+    fingerprint: () => dependencyFingerprint(root),
+  };
 }
