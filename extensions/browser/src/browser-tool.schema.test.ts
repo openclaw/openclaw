@@ -39,14 +39,12 @@ describe("browser tool schema", () => {
     expect(projection.violations).toEqual([]);
     // Codex strips parameter descriptions above 5,000 bytes after schema normalization.
     expect(Buffer.byteLength(JSON.stringify(projection.schema))).toBeLessThanOrEqual(5_000);
-    expect(projection.schema).toHaveProperty(
-      "properties.key.description",
-      expect.stringContaining("aliases Esc, Return, Del, Ctrl, Cmd"),
-    );
-    expect(projection.schema).toHaveProperty(
-      "properties.request.properties.key.description",
-      expect.stringContaining("aliases Esc, Return, Del, Ctrl, Cmd"),
-    );
+    for (const scope of ["properties", "properties.request.properties"]) {
+      expect(projection.schema).toHaveProperty(
+        `${scope}.key.description`,
+        expect.stringContaining("aliases Esc, Return, Del, Ctrl, Cmd"),
+      );
+    }
   });
 
   it("hides Playwright-only actions for an existing-session binding", () => {
@@ -73,8 +71,7 @@ describe("browser tool schema", () => {
     ]) {
       expect(capabilities.actions).not.toContain(action);
     }
-    expect(capabilities.actions).toContain("snapshot");
-    expect(capabilities.actions).toContain("console");
+    expect(capabilities.actions).toEqual(expect.arrayContaining(["snapshot", "console"]));
     const schema = createBrowserToolSchema(capabilities);
     for (const scope of ["properties", "properties.request.properties"]) {
       expect(schema).toHaveProperty(`${scope}.kind.enum`, expect.not.arrayContaining(["batch"]));
@@ -94,11 +91,7 @@ describe("browser tool schema", () => {
       resolveProfile(
         resolveBrowserConfig({
           profiles: {
-            lightweight: {
-              engine: "lightpanda",
-              cdpUrl: "ws://127.0.0.1:9222/",
-              attachOnly: true,
-            },
+            lightweight: { engine: "lightpanda", cdpUrl: "ws://127.0.0.1:9222/", attachOnly: true },
           },
         }),
         "lightweight",

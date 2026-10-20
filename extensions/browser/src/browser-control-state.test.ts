@@ -1,4 +1,3 @@
-// Browser tests cover shared browser-control lifecycle serialization.
 import type { Server } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { markBrowserRuntimeStopping } from "./browser/server-context.lifecycle.js";
@@ -12,12 +11,7 @@ vi.mock("./browser/runtime-lifecycle.js", () => ({
     server: Server | null;
     port: number;
     resolved: unknown;
-  }) => ({
-    server: params.server,
-    port: params.port,
-    resolved: params.resolved,
-    profiles: new Map(),
-  }),
+  }) => ({ ...params, profiles: new Map() }),
   stopBrowserRuntime: runtimeMocks.stopBrowserRuntime,
 }));
 
@@ -31,11 +25,10 @@ const {
 
 const resolved = { profiles: {}, controlPort: 18_791 } as never;
 const onWarn = vi.fn();
+const runtimeParams = { server: null, port: 18_791, resolved };
 
 function start(server: Server | null = null) {
-  return withBrowserControlStart(() =>
-    ensureBrowserControlRuntime({ server, port: 18_791, resolved }),
-  );
+  return withBrowserControlStart(() => ensureBrowserControlRuntime({ ...runtimeParams, server }));
 }
 
 function stop(requestedBy: "server" | "service") {
@@ -108,22 +101,15 @@ describe("browser control lifecycle", () => {
 
   it("orders a queued stop after an in-progress cold start", async () => {
     expect(hasBrowserControlWork()).toBe(false);
-    let releaseStart!: () => void;
-    const startGate = new Promise<void>((resolve) => {
-      releaseStart = resolve;
-    });
+    const startGate = Promise.withResolvers<void>();
     const starting = withBrowserControlStart(async () => {
-      await startGate;
-      return await ensureBrowserControlRuntime({
-        server: null,
-        port: 18_791,
-        resolved,
-      });
+      await startGate.promise;
+      return await ensureBrowserControlRuntime(runtimeParams);
     });
     expect(getBrowserControlState()).toBeNull();
     expect(hasBrowserControlWork()).toBe(true);
     const stopping = stop("service");
-    releaseStart();
+    startGate.resolve();
 
     await starting;
     await stopping;

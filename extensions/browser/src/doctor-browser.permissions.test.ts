@@ -84,6 +84,13 @@ async function protectedProfiles(platform: NodeJS.Platform, installed: boolean) 
     }
     return await readdir(...args);
   });
+  for (const [key, entry] of Object.entries(value.deps.env)) {
+    vi.stubEnv(key, entry);
+  }
+  vi.stubEnv("OPENCLAW_STATE_DIR", value.stateDir);
+  for (const key of ["CHROME_CONFIG_HOME", "XDG_CONFIG_HOME"]) {
+    vi.stubEnv(key, path.join(value.homeDir, ".config"));
+  }
   return { ...value, accesses };
 }
 
@@ -98,12 +105,6 @@ describe("general Doctor browser profile permission boundary", () => {
     async ({ platform, installed }) => {
       const value = await protectedProfiles(platform, installed);
       Object.defineProperty(process, "platform", { ...platformDescriptor, value: platform });
-      for (const [key, entry] of Object.entries(value.deps.env)) {
-        vi.stubEnv(key, entry);
-      }
-      vi.stubEnv("OPENCLAW_STATE_DIR", value.stateDir);
-      vi.stubEnv("CHROME_CONFIG_HOME", path.join(value.homeDir, ".config"));
-      vi.stubEnv("XDG_CONFIG_HOME", path.join(value.homeDir, ".config"));
       for (const allowSystemProfileImport of [false, undefined, true]) {
         const noteFn = vi.fn();
         await noteChromeMcpBrowserReadiness(
@@ -134,12 +135,6 @@ describe("general Doctor browser profile permission boundary", () => {
   it("reports native-host repair as skipped without discovering profiles or claiming changes", async () => {
     const value = await protectedProfiles(process.platform, true);
     vi.spyOn(os, "homedir").mockReturnValue(value.homeDir);
-    for (const [key, entry] of Object.entries(value.deps.env)) {
-      vi.stubEnv(key, entry);
-    }
-    vi.stubEnv("OPENCLAW_STATE_DIR", value.stateDir);
-    vi.stubEnv("CHROME_CONFIG_HOME", path.join(value.homeDir, ".config"));
-    vi.stubEnv("XDG_CONFIG_HOME", path.join(value.homeDir, ".config"));
     const result = await maybeRepairOwnedChromeExtensionNativeHosts();
     expect(value.accesses).toEqual([]);
     expect(result.changes).toEqual([]);
