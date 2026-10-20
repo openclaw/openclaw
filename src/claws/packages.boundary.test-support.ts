@@ -11,6 +11,7 @@ import {
   rollbackStatelessClawPackages as rollbackPackages,
 } from "./packages.js";
 import * as pluginProbe from "./plugin-capability-probe.js";
+import type { ClawPluginProbeDeps } from "./plugin-capability-probe.js";
 import type { readClawPackageRefs } from "./provenance.js";
 
 type PackageBoundaryFixtures = {
@@ -20,9 +21,7 @@ type PackageBoundaryFixtures = {
   uninstallPlugin?: (
     params: Parameters<typeof managedUninstall.uninstallPluginWithPolicy>[0],
   ) => Promise<void>;
-  probePlugin?: NonNullable<
-    Parameters<typeof pluginProbe.probeClawPluginArtifact>[2]
-  >["probePlugin"];
+  probePlugin?: ClawPluginProbeDeps["probePlugin"];
   inspectPluginCapabilities?: typeof pluginProbe.inspectClawPluginCapabilities;
   installSkill?: typeof skillLifecycle.installSkillFromClawHub;
   preflightPlugin?: typeof pluginPreflight.preflightPluginInstall;
@@ -43,12 +42,23 @@ export async function withPackageBoundaries<T>(
   deps: PackageBoundaryFixtures = {},
 ): Promise<T> {
   const mocks: Array<{ mockRestore(): void }> = [];
+  const { installPlugin, uninstallPlugin, readPackageRefs } = deps;
+  function mock<K extends string, A extends unknown[], R>(
+    owner: Record<K, (...args: A) => R>,
+    key: K,
+    implementation: NoInfer<(...args: A) => R> | undefined,
+  ) {
+    if (implementation) {
+      mocks.push(vi.spyOn(owner, key).mockImplementation(implementation));
+    }
+  }
   try {
-    if (deps.installPlugin) {
-      const install = deps.installPlugin;
-      mocks.push(
-        vi.spyOn(managedInstall, "installManagedPlugin").mockImplementation(async (params) => {
-          await install(params);
+    mock(
+      managedInstall,
+      "installManagedPlugin",
+      installPlugin &&
+        (async (params) => {
+          await installPlugin(params);
           return {
             plugin: {
               id: "fixture-plugin",
@@ -59,69 +69,41 @@ export async function withPackageBoundaries<T>(
             },
           };
         }),
-      );
-    }
-    if (deps.uninstallPlugin) {
-      const uninstall = deps.uninstallPlugin;
-      mocks.push(
-        vi
-          .spyOn(managedUninstall, "uninstallPluginWithPolicy")
-          .mockImplementation(async (params) => {
-            await uninstall(params);
-            return {
-              ok: true,
-              value: {
-                pluginId: params.pluginId,
-                requestedPluginId: params.pluginId,
-                pluginIds: [params.pluginId],
-                removed: [],
-                warnings: [],
-              },
-            };
-          }),
-      );
-    }
-    if (deps.preflightPlugin) {
-      mocks.push(
-        vi
-          .spyOn(pluginPreflight, "preflightPluginInstall")
-          .mockImplementation(deps.preflightPlugin),
-      );
-    }
-    if (deps.installSkill) {
-      mocks.push(
-        vi.spyOn(skillLifecycle, "installSkillFromClawHub").mockImplementation(deps.installSkill),
-      );
-    }
-    if (deps.preflightSkill) {
-      mocks.push(
-        vi
-          .spyOn(skillLifecycle, "preflightSkillFromClawHub")
-          .mockImplementation(deps.preflightSkill),
-      );
-    }
-    if (deps.readPackageRefs) {
-      const read = deps.readPackageRefs;
-      mocks.push(
-        vi
-          .spyOn(addState, "readClawPackageRefsForAdd")
-          .mockImplementation(async (...args) => await read(...args)),
-      );
-    }
-    if (deps.acquirePackageLease) {
-      mocks.push(
-        vi
-          .spyOn(packageLease, "acquireClawPackageLifecycleLease")
-          .mockImplementation(deps.acquirePackageLease),
-      );
-    }
-    if (deps.resolvePlugin || deps.installPlugin) {
-      mocks.push(
-        vi
-          .spyOn(pluginPreflight, "resolveInstalledClawHubPlugin")
-          .mockImplementation(deps.resolvePlugin ?? (async () => ({ status: "missing" }))),
-      );
-    }
+    );
+    mock(
+      managedUninstall,
+      "uninstallPluginWithPolicy",
+      uninstallPlugin &&
+        (async (params) => {
+          await uninstallPlugin(params);
+          return {
+            ok: true,
+            value: {
+              pluginId: params.pluginId,
+              requestedPluginId: params.pluginId,
+              pluginIds: [params.pluginId],
+              removed: [],
+              warnings: [],
+            },
+          };
+        }),
+    );
+    mock(pluginPreflight, "preflightPluginInstall", deps.preflightPlugin);
+    mock(skillLifecycle, "installSkillFromClawHub", deps.installSkill);
+    mock(skillLifecycle, "preflightSkillFromClawHub", deps.preflightSkill);
+    mock(
+      addState,
+      "readClawPackageRefsForAdd",
+      readPackageRefs &&
+        (async (...args: Parameters<typeof readPackageRefs>) => await readPackageRefs(...args)),
+    );
+    mock(packageLease, "acquireClawPackageLifecycleLease", deps.acquirePackageLease);
+    mock(
+      pluginPreflight,
+      "resolveInstalledClawHubPlugin",
+      deps.resolvePlugin ??
+        (installPlugin ? async () => ({ status: "missing" as const }) : undefined),
+    );
     if (deps.probePlugin || deps.inspectPluginCapabilities) {
       const probe = pluginProbe.probeClawPluginArtifact;
       mocks.push(
@@ -138,8 +120,8 @@ export async function withPackageBoundaries<T>(
     }
     return await run();
   } finally {
-    for (const mock of mocks.toReversed()) {
-      mock.mockRestore();
+    for (const installed of mocks.toReversed()) {
+      installed.mockRestore();
     }
   }
 }
@@ -153,10 +135,12 @@ export function installClawPackages(
 
 export function rollbackStatelessClawPackages(
   refs: Parameters<typeof rollbackPackages>[0],
-  {
-    deps,
-    ...options
-  }: Pick<PackageInstallFixtureOptions, "assertCurrent" | "deps" | "env" | "path" | "runtime"> = {},
+  { deps, ...options }: RollbackOptions = {},
 ) {
   return withPackageBoundaries(() => rollbackPackages(refs, options), deps);
 }
+
+type RollbackOptions = Pick<
+  PackageInstallFixtureOptions,
+  "assertCurrent" | "deps" | "env" | "path" | "runtime"
+>;

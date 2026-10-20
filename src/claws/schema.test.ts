@@ -13,17 +13,14 @@ const minimalManifest = { schemaVersion: 1, agent: { id: "triage" } };
 const emptyGroups = "workspace: {}\npackages: []\nmcpServers: {}\ncronJobs: []";
 const markdown = (agent = "agent: { id: triage }", body = "", groups = emptyGroups) =>
   `---\nschemaVersion: 1\n${agent}\n${groups}\n---${body}`;
+const writeJson = (path: string, value: unknown) => writeFile(path, JSON.stringify(value), "utf8");
 
 async function writePackage(root: string, claw = "CLAW.md") {
-  await writeFile(
-    join(root, "package.json"),
-    JSON.stringify({
-      name: "@acme/github-triage",
-      version: "3.2.1",
-      openclaw: { claw },
-    }),
-    "utf8",
-  );
+  await writeJson(join(root, "package.json"), {
+    name: "@acme/github-triage",
+    version: "3.2.1",
+    openclaw: { claw },
+  });
 }
 
 async function readFixture(content: string | Buffer, filename = "CLAW.md") {
@@ -48,9 +45,7 @@ const baseManifest = {
   },
   metadata: { "openclaw.config": "profiles/openclaw.yml" },
   workspace: {
-    bootstrapFiles: {
-      "AGENTS.md": { source: "workspace/AGENTS.md" },
-    },
+    bootstrapFiles: { "AGENTS.md": { source: "workspace/AGENTS.md" } },
     files: [{ source: "workspace/reference/policy.md", path: "reference/policy.md" }],
   },
   packages: [
@@ -101,9 +96,7 @@ const baseOpenClawProfile: ClawOpenClawProfile = {
 
 function requireManifest(value: unknown = baseManifest): ClawManifest {
   const result = parseClawManifest(value);
-  if (!result.ok) {
-    throw new Error(JSON.stringify(result.diagnostics));
-  }
+  assert(result.ok, JSON.stringify(result.diagnostics));
   return result.manifest;
 }
 
@@ -184,24 +177,17 @@ describe("parseClawManifest", () => {
   });
 
   it("accepts credential-free remote MCP with local OAuth completion", () => {
-    const manifest = requireManifest({
-      ...baseManifest,
-      mcpServers: {
-        linear: {
-          url: "https://mcp.linear.app/mcp",
-          transport: "streamable-http",
-          auth: "oauth",
-          toolFilter: { include: ["list_issues"] },
-        },
-      },
-    });
-
-    expect(manifest.mcpServers.linear).toEqual({
+    const linear = {
       url: "https://mcp.linear.app/mcp",
       transport: "streamable-http",
       auth: "oauth",
       toolFilter: { include: ["list_issues"] },
+    };
+    const manifest = requireManifest({
+      ...baseManifest,
+      mcpServers: { linear },
     });
+    expect(manifest.mcpServers.linear).toEqual(linear);
   });
 
   it.each([
@@ -286,7 +272,7 @@ describe("readClawManifestFile", () => {
   it("takes published identity from package.json", async () => {
     const root = tempDirs.make("openclaw-claw-package-");
     await writePackage(root, "openclaw.claw.json");
-    await writeFile(join(root, "openclaw.claw.json"), JSON.stringify(minimalManifest), "utf8");
+    await writeJson(join(root, "openclaw.claw.json"), minimalManifest);
 
     const result = await readClawManifestFile(root);
 
@@ -417,15 +403,11 @@ describe("readClawManifestFile", () => {
       process.platform === "win32" ? "junction" : "dir",
     );
     const manifestPath = join(root, "demo.claw.json");
-    await writeFile(
-      manifestPath,
-      JSON.stringify({
-        schemaVersion: 1,
-        agent: { id: "symlink-agent" },
-        workspace: { bootstrapFiles: { "AGENTS.md": { source: "workspace-link/AGENTS.md" } } },
-      }),
-      "utf8",
-    );
+    await writeJson(manifestPath, {
+      schemaVersion: 1,
+      agent: { id: "symlink-agent" },
+      workspace: { bootstrapFiles: { "AGENTS.md": { source: "workspace-link/AGENTS.md" } } },
+    });
 
     const result = await readClawManifestFile(manifestPath);
 
@@ -436,15 +418,11 @@ describe("readClawManifestFile", () => {
     const root = tempDirs.make("openclaw-claw-reader-file-limit-");
     await writeFile(join(root, "large.md"), Buffer.alloc(1024 * 1024 + 1));
     const manifestPath = join(root, "demo.claw.json");
-    await writeFile(
-      manifestPath,
-      JSON.stringify({
-        schemaVersion: 1,
-        agent: { id: "large-agent" },
-        workspace: { files: [{ source: "large.md", path: "large.md" }] },
-      }),
-      "utf8",
-    );
+    await writeJson(manifestPath, {
+      schemaVersion: 1,
+      agent: { id: "large-agent" },
+      workspace: { files: [{ source: "large.md", path: "large.md" }] },
+    });
 
     const result = await readClawManifestFile(manifestPath);
 
@@ -460,15 +438,11 @@ describe("readClawManifestFile", () => {
       files.push({ source, path: source });
     }
     const manifestPath = join(root, "demo.claw.json");
-    await writeFile(
-      manifestPath,
-      JSON.stringify({
-        schemaVersion: 1,
-        agent: { id: "large-agent" },
-        workspace: { files },
-      }),
-      "utf8",
-    );
+    await writeJson(manifestPath, {
+      schemaVersion: 1,
+      agent: { id: "large-agent" },
+      workspace: { files },
+    });
 
     const result = await readClawManifestFile(manifestPath);
 
@@ -497,20 +471,12 @@ describe("readClawManifestFile", () => {
     const parent = tempDirs.make("openclaw-claw-escape-");
     const root = join(parent, "package");
     await mkdir(root);
-    await writeFile(
-      join(parent, "outside.json"),
-      JSON.stringify({ schemaVersion: 1, agent: { id: "outside" } }),
-      "utf8",
-    );
-    await writeFile(
-      join(root, "package.json"),
-      JSON.stringify({
-        name: "@acme/escape",
-        version: "1.0.0",
-        openclaw: { claw: "../outside.json" },
-      }),
-      "utf8",
-    );
+    await writeJson(join(parent, "outside.json"), { schemaVersion: 1, agent: { id: "outside" } });
+    await writeJson(join(root, "package.json"), {
+      name: "@acme/escape",
+      version: "1.0.0",
+      openclaw: { claw: "../outside.json" },
+    });
 
     const result = await readClawManifestFile(root);
 
@@ -815,9 +781,7 @@ describe("buildClawAddPlan", () => {
     expect(workspaceFileActions.every((action) => !Object.hasOwn(action, "digest"))).toBe(true);
   });
   it("binds plan integrity to the source and planned mutations", async () => {
-    const input = {
-      openClawProfile: baseOpenClawProfile,
-    };
+    const input = { openClawProfile: baseOpenClawProfile };
     const first = await buildPlan(input);
     const repeated = await buildPlan(input);
     const changed = await buildPlan({

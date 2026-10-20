@@ -1,6 +1,6 @@
 import { link, realpath, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, assert, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import { readClawManifestFile } from "./reader.js";
@@ -11,6 +11,9 @@ const markdown = (content: string) => `---\nschemaVersion: 1\nagent: { id: triag
 function expectReadError(result: Awaited<ReturnType<typeof readClawManifestFile>>, code: string) {
   expect(result.ok).toBe(false);
   expect(result.diagnostics).toContainEqual(expect.objectContaining({ code }));
+}
+function jsonFailure(code: string, message: string | ReturnType<typeof expect.stringContaining>) {
+  return { ok: false, diagnostics: [{ level: "error", code, phase: "parse", path: "$", message }] };
 }
 const manifestJson = JSON.stringify({
   schemaVersion: 1,
@@ -42,18 +45,12 @@ describe("Claw source reader", () => {
       const { path, source, json } = await jsonSource(kind);
       await writeFile(path, `\uFEFF${json}`);
 
-      expect(await readClawManifestFile(source)).toEqual({
-        ok: false,
-        diagnostics: [
-          {
-            level: "error",
-            code: "invalid_json",
-            phase: "parse",
-            path: "$",
-            message: expect.stringContaining(`Could not parse ${await realpath(path)}:`),
-          },
-        ],
-      });
+      expect(await readClawManifestFile(source)).toEqual(
+        jsonFailure(
+          "invalid_json",
+          expect.stringContaining(`Could not parse ${await realpath(path)}:`),
+        ),
+      );
     },
   );
 
@@ -72,18 +69,9 @@ describe("Claw source reader", () => {
     });
 
     await writeFile(path, Buffer.concat([raw, Buffer.from(" ")]));
-    expect(await readClawManifestFile(source)).toEqual({
-      ok: false,
-      diagnostics: [
-        {
-          level: "error",
-          code,
-          phase: "parse",
-          path: "$",
-          message: `${await realpath(path)} exceeds ${maxBytes} bytes.`,
-        },
-      ],
-    });
+    expect(await readClawManifestFile(source)).toEqual(
+      jsonFailure(code, `${await realpath(path)} exceeds ${maxBytes} bytes.`),
+    );
   });
 
   it("binds package whitespace bytes even when identity and byte length are unchanged", async () => {
@@ -93,15 +81,14 @@ describe("Claw source reader", () => {
     await writeFile(packagePath, `${packageJson} `);
     const second = await readClawManifestFile(source);
 
-    if (!first.ok || !second.ok) {
-      throw new Error("expected both package documents to parse");
-    }
-    expect(second.manifest).toEqual(first.manifest);
-    expect(second.snapshot).toEqual(first.snapshot);
-    expect(second.source).toEqual({
-      ...first.source,
-      integrity: expect.any(String),
-    });
+    assert(first.ok && second.ok, "expected both package documents to parse");
+    expect({ manifest: second.manifest, snapshot: second.snapshot, source: second.source }).toEqual(
+      {
+        manifest: first.manifest,
+        snapshot: first.snapshot,
+        source: { ...first.source, integrity: expect.any(String) },
+      },
+    );
     expect(second.source.integrity).not.toBe(first.source.integrity);
   });
 
@@ -145,9 +132,7 @@ describe("Claw source reader", () => {
       agent: { id: "triage" },
       workspace: { files: [{ source: "package.json", path: "SOUL.md/child" }] },
     });
-    if (!parsed.ok) {
-      throw new Error("expected fixture manifest to parse");
-    }
+    assert(parsed.ok, "expected fixture manifest to parse");
     const root = tempDirs.make("openclaw-claw-markdown-soul-direct-plan-");
     await writeFile(join(root, "package.json"), "{}", "utf8");
     const plan = await buildClawAddPlan({
