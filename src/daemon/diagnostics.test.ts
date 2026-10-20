@@ -8,6 +8,8 @@ import { resolveGatewayLogPaths, resolveGatewaySupervisorLogPaths } from "./rest
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const DIAGNOSTIC_TAIL_BYTES = 256 * 1024;
+const blocked = "gateway start blocked";
+const bindError = "failed to bind gateway socket";
 type PositionalRead = (
   buffer: Buffer,
   offset: number,
@@ -44,32 +46,20 @@ it("reads the launchd supervisor log instead of a state-dir stderr file on darwi
   );
 });
 
-it("prefers the current stderr error over a stale stdout match on linux", async () => {
-  const env = logs(
-    "gateway start blocked: stale prior reason\n",
-    "failed to bind gateway socket EADDRINUSE\n",
+it.each([
+  ["stderr wins", blocked, bindError, bindError],
+  ["outside tail", `${blocked}\n${"filler\n".repeat(50_000)}current\n`, undefined, null],
+  [
+    "partial boundary",
+    `${"x".repeat(DIAGNOSTIC_TAIL_BYTES + 1)} ${blocked}\ncurrent\n`,
+    undefined,
+    null,
+  ],
+  ["ENOSPC over generic stderr", "ENOSPC", "generic stderr", "ENOSPC"],
+] as const)("linux diagnostic tail: %s", async (_name, stdout, stderr, expected) => {
+  await expect(readLastGatewayErrorLine(logs(stdout, stderr), { platform: "linux" })).resolves.toBe(
+    expected,
   );
-
-  await expect(readLastGatewayErrorLine(env, { platform: "linux" })).resolves.toBe(
-    "failed to bind gateway socket EADDRINUSE",
-  );
-});
-
-it("ignores stale stdout errors outside the bounded diagnostic tail", async () => {
-  const env = logs(
-    `gateway start blocked: stale prior reason\n${"non-error filler line\n".repeat(20_000)}\ngateway stdout current\n`,
-  );
-
-  await expect(readLastGatewayErrorLine(env, { platform: "linux" })).resolves.toBeNull();
-});
-
-it("ignores a matching partial line at the bounded tail boundary", async () => {
-  const env = logs(
-    `${"x".repeat(DIAGNOSTIC_TAIL_BYTES + 1)} gateway start blocked: partial stale reason\n` +
-      "gateway stdout current\n",
-  );
-
-  await expect(readLastGatewayErrorLine(env, { platform: "linux" })).resolves.toBeNull();
 });
 
 it("fills short positional reads before decoding the tail", async () => {
@@ -91,15 +81,4 @@ it("fills short positional reads before decoding the tail", async () => {
     "recent one",
     "recent two",
   ]);
-});
-
-it("surfaces ENOSPC from stdout ahead of a generic stderr tail on linux", async () => {
-  const env = logs(
-    "parse/handle error: Error: ENOSPC: no space left on device, write\n",
-    "gateway stderr tail without a known pattern\n",
-  );
-
-  await expect(readLastGatewayErrorLine(env, { platform: "linux" })).resolves.toBe(
-    "parse/handle error: Error: ENOSPC: no space left on device, write",
-  );
 });

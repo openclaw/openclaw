@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildLaunchAgentPlist, readLaunchAgentProgramArgumentsFromFile } from "./launchd-plist.js";
 import { decodeLaunchAgentPlistFixture } from "./launchd-plist.test-support.js";
@@ -42,43 +42,41 @@ it("gives the installed Gateway 330 seconds to drain and exit", () => {
   expect(buildPlist()).toMatch(/<key>ExitTimeOut<\/key>\s*<integer>330<\/integer>/u);
 });
 
-describe("LaunchAgent environment round-trip", () => {
-  it("keeps lenient hand-edited expressions from consuming following assignments", async () => {
-    const { plistPath } = await environmentFixture("export EDITED=$(id)\nexport NEXT='retained'\n");
-    await expect(readLaunchAgentProgramArgumentsFromFile(plistPath)).resolves.toMatchObject({
-      environment: { EDITED: "$(id)", NEXT: "retained" },
-    });
+it("keeps lenient hand-edited expressions from consuming following assignments", async () => {
+  const { plistPath } = await environmentFixture("export EDITED=$(id)\nexport NEXT='retained'\n");
+  await expect(readLaunchAgentProgramArgumentsFromFile(plistPath)).resolves.toMatchObject({
+    environment: { EDITED: "$(id)", NEXT: "retained" },
   });
-
-  it("preserves inline, file, and overlapping provenance after merging generated environment", async () => {
-    const { plistPath, envFile, wrapper } = await environmentFixture(
-      "export FILE='file'\nexport SHARED='file wins'\n",
-      { INLINE: "inline", SHARED: "original" },
-    );
-    const command = await readLaunchAgentProgramArgumentsFromFile(plistPath, {
-      requireEffective: true,
-      expectedEnvironmentWrapperPath: wrapper,
-      expectedEnvironmentFilePath: envFile,
-    });
-    expect(command).toMatchObject({
-      programArguments: ["openclaw", "gateway"],
-      environment: { INLINE: "inline", SHARED: "file wins", FILE: "file" },
-      environmentValueSources: { INLINE: "inline", SHARED: "inline-and-file", FILE: "file" },
-    });
-  });
-
-  it.each(["", "--max-old-space-size=24576"])(
-    "preserves explicit NODE_OPTIONS=%j while omitting other empty values",
-    async (nodeOptions) => {
-      const plistPath = path.join(dirs.make("openclaw-plist-env-"), "gateway.plist");
-      const programArguments = ["/usr/bin/node", "--max-old-space-size=16384", "gateway.js"];
-      await writePlist(plistPath, {
-        programArguments,
-        environment: { NODE_OPTIONS: nodeOptions, UNUSED: "", MISSING: undefined },
-      });
-      const command = await readLaunchAgentProgramArgumentsFromFile(plistPath);
-      expect(command?.environment).toEqual({ NODE_OPTIONS: nodeOptions });
-      expect(command?.programArguments).toEqual(programArguments);
-    },
-  );
 });
+
+it("preserves inline, file, and overlapping provenance after merging generated environment", async () => {
+  const { plistPath, envFile, wrapper } = await environmentFixture(
+    "export FILE='file'\nexport SHARED='file wins'\n",
+    { INLINE: "inline", SHARED: "original" },
+  );
+  const command = await readLaunchAgentProgramArgumentsFromFile(plistPath, {
+    requireEffective: true,
+    expectedEnvironmentWrapperPath: wrapper,
+    expectedEnvironmentFilePath: envFile,
+  });
+  expect(command).toMatchObject({
+    programArguments: ["openclaw", "gateway"],
+    environment: { INLINE: "inline", SHARED: "file wins", FILE: "file" },
+    environmentValueSources: { INLINE: "inline", SHARED: "inline-and-file", FILE: "file" },
+  });
+});
+
+it.each(["", "--max-old-space-size=24576"])(
+  "round-trips NODE_OPTIONS=%j, omitting other empty values",
+  async (nodeOptions) => {
+    const plistPath = path.join(dirs.make("openclaw-plist-env-"), "gateway.plist");
+    const programArguments = ["/usr/bin/node", "--max-old-space-size=16384", "gateway.js"];
+    await writePlist(plistPath, {
+      programArguments,
+      environment: { NODE_OPTIONS: nodeOptions, UNUSED: "", MISSING: undefined },
+    });
+    const command = await readLaunchAgentProgramArgumentsFromFile(plistPath);
+    expect(command?.environment).toEqual({ NODE_OPTIONS: nodeOptions });
+    expect(command?.programArguments).toEqual(programArguments);
+  },
+);
