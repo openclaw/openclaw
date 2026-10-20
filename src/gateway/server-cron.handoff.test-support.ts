@@ -29,10 +29,10 @@ type GatewayCronHandoffTestHarness = {
     overrides?: { scheduler: GatewayScheduler },
   ) => CronFixture;
   getConcreteCron: (service: CronFixture) => CronService;
-  addCronJob: (
+  addSystemEventJob: (
     service: CronFixture,
     name: string,
-    payload: CronJobCreate["payload"],
+    text: string,
     overrides?: Partial<Omit<CronJobCreate, "name" | "payload">>,
   ) => ReturnType<CronFixture["cron"]["add"]>;
   runExit: (overrides?: Partial<RunExit>) => RunExit;
@@ -44,7 +44,7 @@ export function registerGatewayCronHandoffTests({
   createCronConfig,
   loadCronService,
   getConcreteCron,
-  addCronJob,
+  addSystemEventJob,
   runExit,
   requestHeartbeatAndWaitMock,
   enqueueSystemEventMock,
@@ -62,18 +62,18 @@ export function registerGatewayCronHandoffTests({
       const releaseFirst = createDeferred();
       const releaseSecond = createDeferred();
       const { spawn } = mockCronSupervisor(...watched);
+      const holdHeartbeat = async (
+        entered: ReturnType<typeof createDeferred<void>>,
+        release: ReturnType<typeof createDeferred<void>>,
+      ) => {
+        entered.resolve();
+        await release.promise;
+        return { status: "ran" as const, durationMs: 1 };
+      };
       requestHeartbeatAndWaitMock
         .mockReset()
-        .mockImplementationOnce(async () => {
-          firstStarted.resolve();
-          await releaseFirst.promise;
-          return { status: "ran", durationMs: 1 };
-        })
-        .mockImplementationOnce(async () => {
-          secondStarted.resolve();
-          await releaseSecond.promise;
-          return { status: "ran", durationMs: 1 };
-        });
+        .mockImplementationOnce(() => holdHeartbeat(firstStarted, releaseFirst))
+        .mockImplementationOnce(() => holdHeartbeat(secondStarted, releaseSecond));
       const cfg = createCronConfig("server-cron-on-exit-handoff");
       // Only the two on-exit wakes belong to this handoff fixture.
       cfg.agents = { defaults: { heartbeat: { every: "0m" } } };
@@ -91,16 +91,11 @@ export function registerGatewayCronHandoffTests({
         const jobs = [];
         for (const name of ["first", "second"]) {
           jobs.push(
-            await addCronJob(
-              previous,
-              name,
-              { kind: "systemEvent", text: "done" },
-              {
-                schedule: { kind: "on-exit", command: "true" },
-                sessionTarget: "main",
-                wakeMode: "now",
-              },
-            ),
+            await addSystemEventJob(previous, name, "done", {
+              schedule: { kind: "on-exit", command: "true" },
+              sessionTarget: "main",
+              wakeMode: "now",
+            }),
           );
         }
         await previous.reconcileExitWatchers();
