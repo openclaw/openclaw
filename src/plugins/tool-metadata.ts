@@ -69,18 +69,6 @@ export function classifyAgentToolSource(tool: object): {
   return { source: "openclaw", sourceName: pluginId || "core" };
 }
 
-/**
- * Reads plugin ownership metadata from a prompt tool descriptor. Prompt inputs only carry the
- * name/schema pair, while the metadata itself stays keyed by the concrete tool instance.
- */
-export function getPluginToolMetaForPromptTool(tool: {
-  name: string;
-  parameters: unknown;
-}): PluginToolMeta | undefined {
-  // SAFETY: this is a read-only WeakMap lookup; a non-tool descriptor simply misses.
-  return pluginToolMeta.get(tool as AnyAgentTool);
-}
-
 /** Copies plugin ownership metadata when wrappers replace a tool object. */
 export function copyPluginToolMeta(source: AnyAgentTool, target: AnyAgentTool): void {
   const meta = pluginToolMeta.get(source);

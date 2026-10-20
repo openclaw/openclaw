@@ -73,10 +73,6 @@ type ToolSearchExactCallOptions = Pick<
   "parentToolCallId" | "signal" | "onUpdate" | "recoverySurface" | "mcpNamespaceGuest"
 >;
 
-function describeEntry(entry: ToolSearchCatalogEntry) {
-  return describeToolSearchCatalogEntry(entry);
-}
-
 function findEntry(
   catalog: ToolSearchCatalogSession,
   id: string,
@@ -303,7 +299,7 @@ export class ToolSearchRuntime {
     if (entry.source !== "openclaw" && options?.parentToolCallId) {
       this.observeNetworkContent(options.parentToolCallId);
     }
-    return describeEntry(entry);
+    return describeToolSearchCatalogEntry(entry);
   };
 
   call = async (id: string, input?: unknown, options?: ToolSearchCallOptions) =>

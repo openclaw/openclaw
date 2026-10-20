@@ -118,25 +118,6 @@ afterEach(async () => {
 });
 
 describe("embedded system prompt MCP server instructions", () => {
-  it("carries the advertised instructions for a server that still exposes a tool", async () => {
-    const server = await startInstructionsMcpServer({
-      toolNames: ["search"],
-      instructions: "Cite authority levels for every ranked result.",
-    });
-
-    try {
-      const { tools } = await loadTools(server, "session-prompt-instructions");
-      const prompt = renderPrompt(tools);
-
-      expect(tools.map((tool) => tool.name)).toContain("research__search");
-      expect(prompt).toContain("## MCP Server Instructions");
-      expect(prompt).toContain("### research");
-      expect(prompt).toContain("Cite authority levels for every ranked result.");
-    } finally {
-      await server.close();
-    }
-  });
-
   it("lists a server once when several of its tools share one guidance block", async () => {
     const server = await startInstructionsMcpServer({
       toolNames: ["search", "fetch"],

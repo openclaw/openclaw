@@ -132,17 +132,9 @@ export function buildSystemPromptToolingSection(params: {
   ];
 }
 
-/**
- * Renders the server-level guidance of the MCP servers that still expose an admitted
- * tool. Callers derive the list from the effective tool set, so a server whose tools
- * were all filtered out never reaches this section.
- */
-export function buildMcpServerInstructionsSection(
-  instructions: readonly McpServerInstruction[] | undefined,
+function buildMcpServerInstructionsSection(
+  entries: readonly McpServerInstruction[] = [],
 ): string[] {
-  const entries = (instructions ?? [])
-    .map((entry) => ({ server: entry.server.trim(), text: entry.instructions.trim() }))
-    .filter((entry) => entry.server.length > 0 && entry.text.length > 0);
   if (entries.length === 0) {
     return [];
   }
@@ -150,6 +142,6 @@ export function buildMcpServerInstructionsSection(
     "",
     "## MCP Server Instructions",
     "Server-wide guidance published by the MCP servers behind the tools above; it applies to that server's tools.",
-    ...entries.flatMap((entry) => [`### ${entry.server}`, entry.text]),
+    ...entries.flatMap((entry) => [`### ${entry.server}`, entry.instructions]),
   ];
 }

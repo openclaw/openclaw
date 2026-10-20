@@ -5,7 +5,7 @@
  * prompt so callers do not duplicate owner, TTS, alias, memory, or FS policy.
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { getPluginToolMetaForPromptTool } from "../plugins/tool-metadata.js";
+import { classifyAgentToolSource } from "../plugins/tool-metadata.js";
 import type { PreparedTtsPreferences } from "../tts/tts-preferences.js";
 import { buildTtsSystemPromptHint } from "../tts/tts-settings.js";
 import { resolveMainSessionDelegationMode } from "./delegation-guidance.js";
@@ -32,7 +32,7 @@ function collectMcpServerInstructions(
 ): McpServerInstruction[] {
   const byServer = new Map<string, string>();
   for (const tool of tools) {
-    const mcp = getPluginToolMetaForPromptTool(tool)?.mcp;
+    const mcp = classifyAgentToolSource(tool).mcp;
     const server = mcp?.serverName?.trim();
     const instructions = mcp?.instructions?.trim();
     if (!server || !instructions || byServer.has(server)) {
