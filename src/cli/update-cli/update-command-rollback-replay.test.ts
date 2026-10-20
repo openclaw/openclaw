@@ -45,10 +45,12 @@ async function fixture() {
     throw new Error("legacy rollback must not run");
   });
   const complete = vi.fn();
-  const invoke = (
+  const invoke = async (
     preManagedServiceStop?: Parameters<typeof rollbackFailedUpdate>[0]["preManagedServiceStop"],
-  ) =>
-    rollbackFailedUpdate({
+    files = [f.file],
+  ) => {
+    const before = files.map((file) => fs.readFileSync(file));
+    const result = await rollbackFailedUpdate({
       definitionRecovery: {},
       result: {
         status: "error",
@@ -65,25 +67,35 @@ async function fixture() {
       packageTransaction: { rollback, complete, backupRoot: path.join(f.root, "retained") },
       preManagedServiceStop,
     });
-  return { ...f, opts, rollback, complete, invoke };
+    expect(files.map((file) => fs.readFileSync(file))).toEqual(before);
+    expect(rollback).not.toHaveBeenCalled();
+    expect(complete).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      rolledBack: false,
+      pendingRecoveryReason: expect.any(String),
+    });
+    return result;
+  };
+  return { ...f, opts, invoke };
 }
+
+const deferred = {
+  result: { reason: "candidate-failed", recovery: { serviceRestartSafe: false } },
+};
 
 describe("retained full-state recovery is read-only", () => {
   it("refuses checkpoint recovery before package mutation and preserves the primary failure", async () => {
     const f = await fixture();
-    const before = fs.readFileSync(f.file);
-    const manifest = fs.readFileSync(f.record.checkpoint!.ref.manifestPath);
-    const plan = fs.readFileSync(f.record.restore!.planPath);
-    expect(await f.invoke()).toMatchObject({
-      rolledBack: false,
-      result: { reason: "candidate-failed", recovery: { serviceRestartSafe: false } },
+    expect(
+      await f.invoke(undefined, [
+        f.file,
+        f.record.checkpoint!.ref.manifestPath,
+        f.record.restore!.planPath,
+      ]),
+    ).toMatchObject({
+      ...deferred,
       pendingRecoveryReason: expect.stringContaining("deferred"),
     });
-    expect(fs.readFileSync(f.file)).toEqual(before);
-    expect(fs.readFileSync(f.record.checkpoint!.ref.manifestPath)).toEqual(manifest);
-    expect(fs.readFileSync(f.record.restore!.planPath)).toEqual(plan);
-    expect(f.rollback).not.toHaveBeenCalled();
-    expect(f.complete).not.toHaveBeenCalled();
     expect(loadUpdateRecovery(f.run.runId, f.options)).toEqual(f.record);
     expect(getUpdateRun(f.run.runId, f.options)?.status).toBe("running");
   });
@@ -97,17 +109,7 @@ describe("retained full-state recovery is read-only", () => {
         f.opts.run = undefined;
         vi.stubEnv("OPENCLAW_STATE_DIR", f.root);
       }
-      const before = fs.readFileSync(f.file);
-      const config = fs.readFileSync(f.configPath);
-      expect(await f.invoke()).toMatchObject({
-        rolledBack: false,
-        result: { reason: "candidate-failed", recovery: { serviceRestartSafe: false } },
-        pendingRecoveryReason: expect.any(String),
-      });
-      expect(fs.readFileSync(f.file)).toEqual(before);
-      expect(fs.readFileSync(f.configPath)).toEqual(config);
-      expect(f.rollback).not.toHaveBeenCalled();
-      expect(f.complete).not.toHaveBeenCalled();
+      expect(await f.invoke(undefined, [f.file, f.configPath])).toMatchObject(deferred);
     },
   );
 
@@ -115,15 +117,8 @@ describe("retained full-state recovery is read-only", () => {
     const f = await fixture();
     f.displace();
     f.opts.recovery = undefined;
-    const before = fs.readFileSync(f.displaced);
-    expect(await f.invoke()).toMatchObject({
-      rolledBack: false,
-      pendingRecoveryReason: expect.any(String),
-    });
+    await f.invoke(undefined, [f.displaced]);
     expect(fs.existsSync(f.file)).toBe(false);
-    expect(fs.readFileSync(f.displaced)).toEqual(before);
-    expect(f.rollback).not.toHaveBeenCalled();
-    expect(f.complete).not.toHaveBeenCalled();
   });
 
   it.each(["service", "admitted"] as const)(
@@ -133,7 +128,6 @@ describe("retained full-state recovery is read-only", () => {
       f.opts.recovery = undefined;
       const cleanEnv = { OPENCLAW_STATE_DIR: dirs.make("rollback-other-root-") };
       f.opts.run = { ...f.run, env: pendingRoot === "admitted" ? f.env : cleanEnv };
-      const before = fs.readFileSync(f.file);
       expect(
         await f.invoke({
           stopped: false,
@@ -143,13 +137,8 @@ describe("retained full-state recovery is read-only", () => {
           serviceEnv: pendingRoot === "service" ? f.env : cleanEnv,
         }),
       ).toMatchObject({
-        rolledBack: false,
         result: { reason: "candidate-failed" },
-        pendingRecoveryReason: expect.any(String),
       });
-      expect(fs.readFileSync(f.file)).toEqual(before);
-      expect(f.rollback).not.toHaveBeenCalled();
-      expect(f.complete).not.toHaveBeenCalled();
     },
   );
 });

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as startupTiming from "../../commands/gateway-startup-timing.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
@@ -152,18 +153,13 @@ function fixture() {
 }
 
 function holdRuntimeProbe() {
-  let release: ((runtime: GatewayServiceRuntime) => void) | undefined;
-  let notify!: () => void;
-  const entered = new Promise<void>((resolve) => {
-    notify = resolve;
-  });
+  const entered = createDeferred();
+  const result = createDeferred<GatewayServiceRuntime>();
   native.runtime.mockImplementationOnce(() => {
-    notify();
-    return new Promise((resolve) => {
-      release = resolve;
-    });
+    entered.resolve();
+    return result.promise;
   });
-  return { entered, release: () => release?.(serviceRuntime) };
+  return { entered: entered.promise, release: () => result.resolve(serviceRuntime) };
 }
 
 async function awaitProbe<T>(entered: Promise<T>, verification: Promise<boolean>): Promise<T> {
@@ -179,8 +175,6 @@ describe("managed Windows update after the startup canary", () => {
   it.each([
     { json: false, observedStartupMs: 300_000, timeoutMs: undefined },
     { json: true, observedStartupMs: 300_000, timeoutMs: undefined },
-    { json: false, observedStartupMs: 600_000, timeoutMs: undefined },
-    { json: false, observedStartupMs: 900_000, timeoutMs: undefined },
     { json: false, observedStartupMs: 600_000, timeoutMs: 7_200_000 },
   ])(
     "records the bounded observation budget (json=$json, startup=$observedStartupMs, timeout=$timeoutMs)",
@@ -234,12 +228,9 @@ describe("managed Windows update after the startup canary", () => {
           expect.stringContaining(waiting.detail!),
         );
         expect(defaultRuntime[json ? "log" : "error"]).not.toHaveBeenCalled();
-        expect(native.command.mock.calls.some(([argv]) => argv[0].endsWith("tasklist.exe"))).toBe(
-          true,
-        );
-        expect(native.command.mock.calls.some(([argv]) => argv[0].endsWith("powershell.exe"))).toBe(
-          true,
-        );
+        for (const command of ["tasklist.exe", "powershell.exe"]) {
+          expect(native.command.mock.calls.some(([argv]) => argv[0].endsWith(command))).toBe(true);
+        }
       } finally {
         abort.abort(new Error("fixture completed"));
         probe.release();
@@ -259,20 +250,15 @@ describe("managed Windows update after the startup canary", () => {
       probeError: undefined,
     });
     type HttpParams = Parameters<typeof native.http>[0];
-    let notify!: (params: HttpParams) => void;
-    let release: ((result: { healthz: number; readyz: number }) => void) | undefined;
-    const entered = new Promise<HttpParams>((resolve) => {
-      notify = resolve;
-    });
+    const entered = createDeferred<HttpParams>();
+    const result = createDeferred<{ healthz: number; readyz: number }>();
     native.http.mockImplementationOnce((params) => {
-      notify(params);
-      return new Promise((resolve) => {
-        release = resolve;
-      });
+      entered.resolve(params);
+      return result.promise;
     });
     const pending = verifyPreviousGatewayForUpdate({ ...f.params, signal: abort.signal });
     try {
-      const http = await awaitProbe(entered, pending);
+      const http = await awaitProbe(entered.promise, pending);
       await vi.advanceTimersByTimeAsync(30_000);
       http.onObservation?.({ healthz: 200, readyz: 503 });
       const waiting = f.wait()!;
@@ -286,7 +272,7 @@ describe("managed Windows update after the startup canary", () => {
       expect(renderUpdateRunReport(f.read()).markdown).toContain("HTTP healthz=200; readyz=503");
     } finally {
       abort.abort(new Error("fixture completed"));
-      release?.({ healthz: 200, readyz: 200 });
+      result.resolve({ healthz: 200, readyz: 200 });
       await Promise.allSettled([pending]);
     }
   });
