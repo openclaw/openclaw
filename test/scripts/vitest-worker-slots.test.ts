@@ -1,38 +1,23 @@
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
-import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
 import { runNodeScript } from "../helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "../vitest/vitest.timeouts.js";
+import { copyWorkerRunFixture, writeFixture } from "./vitest-worker-artifacts.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
-const ownerPath = "scripts/lib/vitest-worker-run.mts";
-let ownerInputs: string[] | undefined;
 
 function fixture(lateMetadata = false) {
   const root = tempDirs.make("vitest-worker-slots-");
-  ownerInputs ??= collectRuntimeImportClosure(repoRoot, [ownerPath], {
-    includeDynamicImports: true,
-  });
-  for (const input of new Set([...ownerInputs, "package.json", "tsconfig.json"])) {
-    const destination = path.join(root, input);
-    fs.mkdirSync(path.dirname(destination), { recursive: true });
-    fs.copyFileSync(path.join(repoRoot, input), destination);
-  }
-  fs.symlinkSync(
-    fs.realpathSync(path.join(repoRoot, "node_modules")),
-    path.join(root, "node_modules"),
-    process.platform === "win32" ? "junction" : "dir",
-  );
+  const ownerUrl = copyWorkerRunFixture(root);
   const occupied = path.join(root, ".artifacts/vitest-workers/run-cache-0");
   fs.mkdirSync(occupied, { recursive: true });
   fs.writeFileSync(path.join(occupied, "retained"), "uncertain borrower still owns this directory");
-  const probe = path.join(root, "slot-probe.mjs");
-  fs.writeFileSync(
-    probe,
+  const probe = writeFixture(
+    root,
+    "slot-probe.mjs",
     `import fs from 'node:fs';
 import path from 'node:path';
 const originalRmdir = fs.rmdir;
@@ -47,7 +32,7 @@ if (${JSON.stringify(lateMetadata)}) {
     return originalRmdir(target, ...args);
   };
 }
-const { createVitestWorkerRun } = await import(${JSON.stringify(pathToFileURL(path.join(root, ownerPath)).href)});
+const { createVitestWorkerRun } = await import(${JSON.stringify(ownerUrl)});
 const owners = [];
 let observed;
 try {
@@ -80,8 +65,7 @@ try {
 console.log(JSON.stringify(observed));
 `,
   );
-  const preload = path.join(root, "preload.mjs");
-  fs.writeFileSync(preload, "export {};\n");
+  const preload = writeFixture(root, "preload.mjs", "export {};\n");
   return { root, occupied, probe, preload };
 }
 
@@ -118,12 +102,14 @@ it.each([
       secondAlive: boolean;
       metadataInjected: boolean;
     };
-    expect(observed.firstReleased).toBe(true);
-    expect(observed.metadataInjected).toBe(label === "late metadata");
+    expect(observed).toMatchObject({
+      firstReleased: true,
+      secondAlive: true,
+      metadataInjected: label === "late metadata",
+    });
     if (process.platform !== "win32") {
       expect(observed.firstMode).toBe(0o700 & ~process.umask());
     }
-    expect(observed.secondAlive).toBe(true);
     expect(observed.first).not.toBe(observed.second);
     expect(observed.third).not.toBe(observed.second);
     if (reusesReleasedSlot) {

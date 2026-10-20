@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { convertPathToPattern } from "tinyglobby";
 import { expect, it, vi, type TestContext } from "vitest";
+import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
 import type { VitestWorkerManifest } from "../../scripts/lib/vitest-worker-artifacts.mts";
 import {
   createVitestWorkerRun,
@@ -68,36 +69,33 @@ function createWorkerArtifactFixtures(
       return joined;
     }
 
-    function node(
+    function run(
       args: Parameters<typeof runNodeScript>[0],
-      cwd = root,
-      env = testRunnerFixtureEnv(),
+      cwd: string,
+      env: NodeJS.ProcessEnv,
+      runtime: "node" | "bun",
+      executable?: string,
     ) {
       const completion = fixtureLifetime.track(
-        runNodeScript(args, compilerEnv(env, "node"), undefined, {
+        runNodeScript(args, compilerEnv(env, runtime), undefined, {
           cwd,
           signal: commandSignal,
           maxBuffer: 2 * 1024 * 1024,
           requireProcessTreeExit: process.platform !== "win32",
+          ...(executable ? { executable } : {}),
         }).then((result) => ({ ...result, code: result.status })),
       );
       commands.push(completion);
       return completion;
     }
 
-    function runtime(args: string[], cwd = root, env = testRunnerFixtureEnv()) {
-      const completion = fixtureLifetime.track(
-        runNodeScript(args, compilerEnv(env, currentRuntime), undefined, {
-          cwd,
-          signal: commandSignal,
-          maxBuffer: 2 * 1024 * 1024,
-          requireProcessTreeExit: process.platform !== "win32",
-          executable: process.execPath,
-        }).then((result) => ({ ...result, code: result.status })),
-      );
-      commands.push(completion);
-      return completion;
-    }
+    const node = (
+      args: Parameters<typeof runNodeScript>[0],
+      cwd = root,
+      env = testRunnerFixtureEnv(),
+    ) => run(args, cwd, env, "node");
+    const runtime = (args: string[], cwd = root, env = testRunnerFixtureEnv()) =>
+      run(args, cwd, env, currentRuntime, process.execPath);
 
     function startBorrower(owner: VitestWorkerRun, args: string[], nodeArgs: string[] = []) {
       commandSignal.throwIfAborted();
@@ -250,6 +248,28 @@ export function writeFixture(directory: string, name: string, source: string) {
   fs.mkdirSync(path.dirname(filename), { recursive: true });
   fs.writeFileSync(filename, source);
   return filename;
+}
+
+const ownerPath = "scripts/lib/vitest-worker-run.mts";
+let ownerInputs: string[] | undefined;
+
+/** Copy the real owner and its imports; each subprocess still gets isolated state. */
+export function copyWorkerRunFixture(directory: string) {
+  const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
+  ownerInputs ??= collectRuntimeImportClosure(repoRoot, [ownerPath], {
+    includeDynamicImports: true,
+  });
+  for (const file of new Set([...ownerInputs, "package.json", "tsconfig.json"])) {
+    const destination = path.join(directory, file);
+    fs.mkdirSync(path.dirname(destination), { recursive: true });
+    fs.copyFileSync(path.join(repoRoot, file), destination);
+  }
+  fs.symlinkSync(
+    fs.realpathSync(path.join(repoRoot, "node_modules")),
+    path.join(directory, "node_modules"),
+    process.platform === "win32" ? "junction" : "dir",
+  );
+  return pathToFileURL(path.join(directory, ownerPath)).href;
 }
 
 // Fixture records precede receipts and child completion; separate pipes can deliver them out of order.

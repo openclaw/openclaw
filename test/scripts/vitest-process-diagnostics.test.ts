@@ -53,15 +53,7 @@ describe("vitest process diagnostics", () => {
         return "42\n43\n44\n";
       }
       if (command === "lsof") {
-        return [
-          "p42",
-          "f0",
-          "tCHR",
-          "n/Users/alice/private-token",
-          "f1",
-          "tREG",
-          "nhttps://internal.example/SECRET_TOKEN",
-        ].join("\n");
+        return "p42\nf0\ntCHR\nn/Users/alice/private-token\nf1\ntREG\nnhttps://internal.example/SECRET_TOKEN";
       }
       if (command === "ps" && args.at(-1) === "42") {
         return "42 7 42 01:02 S 87.5 204800 wait /Users/alice/private/node --token SECRET_TOKEN";
