@@ -146,8 +146,9 @@ export async function runAnnounceAgentCall(params: {
           params.onAccepted?.(payload);
         },
         onStartOwner: (owner) => {
-          // Registered controller custody includes preparation before the RPC acceptance frame.
-          if (owner.observe()) {
+          // Private callers still time out their observation while admission keeps custody.
+          // Public handoffs transfer their cancelling deadline at source registration.
+          if (!params.privateCompletion && owner.observe()) {
             clearTimeout(timer);
           }
         },
