@@ -501,8 +501,11 @@ export async function prepareSessionsSendCommunication(params: {
         entry.sessionId !== transition.current.sessionId ||
         entry.lifecycleRevision !== transition.current.lifecycleRevision ||
         entry.lifecycleRevision !== expected.lifecycleRevision ||
-        communicationEntryBinding({ ...entry, sessionId: expected.sessionId }) !==
-          communicationEntryBinding(expected) ||
+        communicationEntryBinding({
+          ...entry,
+          sessionId: expected.sessionId,
+          previousSessionId: expected.previousSessionId,
+        }) !== communicationEntryBinding(expected) ||
         (expected.sessionId !== entry.sessionId &&
           (transition.previous?.sessionId !== expected.sessionId ||
             transition.previous.lifecycleRevision !== expected.lifecycleRevision))
@@ -515,7 +518,7 @@ export async function prepareSessionsSendCommunication(params: {
         if (communicationEndpointBinding(endpoint) !== previousBinding) {
           return endpoint;
         }
-        // The compaction owner alone authorizes this identity change. Other facts stay sticky.
+        // Only compaction can advance this identity and its predecessor; policy changes stay sticky.
         if (changedBindings.get(endpoint) === committedBinding) {
           changedBindings.delete(endpoint);
         }

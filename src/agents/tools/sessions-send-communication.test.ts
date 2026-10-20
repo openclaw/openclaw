@@ -13,6 +13,7 @@ import {
 import { sessionChanges, type SessionRowChange } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import { acceptCompactionSuccessor } from "../embedded-agent-runner/compaction-successor.js";
 import { callAgentToolGatewayRequest } from "./in-process-gateway.js";
 import { prepareSessionsSendCommunication } from "./sessions-send-communication.js";
 const tempDirs = useSessionStoreTempDirs(afterAll, "sessions-send-lineage-");
@@ -71,6 +72,20 @@ function endpoint(name: string, entry: Partial<SessionEntry> = {}): Communicatio
   };
   state.rows.set(row.sessionKey, row);
   return row;
+}
+async function rotatedParent() {
+  const parent = endpoint("parent");
+  parent.storePath = path.join(tempDirs.make(), "sessions.sqlite");
+  for (const sessionId of ["original", "rollover", "recovered"]) {
+    await upsertSessionEntryCore(parent, { sessionId, updatedAt: 1 });
+  }
+  const entry: SessionEntry = {
+    sessionId: "recovered",
+    previousSessionId: "rollover",
+    updatedAt: 1,
+  };
+  parent.entry = entry;
+  return { parent, entry };
 }
 function operation(source = endpoint("source"), target = endpoint("target")) {
   const callGateway = vi.mocked(callAgentToolGatewayRequest);
@@ -283,13 +298,7 @@ describe("sessions_send communication boundary", () => {
     await expect(prepareSessionsSendCommunication(input)).rejects.toThrow("disabled");
   });
   it("delivers parent and peer sends through recorded same-key rollover/recovery lineage", async () => {
-    const parent = endpoint("parent");
-    parent.storePath = path.join(tempDirs.make(), "sessions.sqlite");
-    for (const sessionId of ["original", "rollover", "recovered"]) {
-      await upsertSessionEntryCore(parent, { sessionId, updatedAt: 1 });
-    }
-    const parentEntry: SessionEntry = { sessionId: "recovered", updatedAt: 1 };
-    parent.entry = parentEntry;
+    const { parent, entry: parentEntry } = await rotatedParent();
     const target = endpoint("child", {
       spawnedBy: parent.sessionKey,
       parentSessionId: "original",
@@ -305,6 +314,52 @@ describe("sessions_send communication boundary", () => {
     parentEntry.communication = { receive: "never" };
     vi.mocked(callAgentToolGatewayRequest).mockClear();
     await denied(operation(undefined, target), "disabled");
+  });
+  it("refuses delivery when parent lineage changes during approval", async () => {
+    const { parent, entry } = await rotatedParent();
+    const input = operation(
+      undefined,
+      endpoint("child", {
+        spawnedBy: parent.sessionKey,
+        parentSessionId: "original",
+        ...askReceive,
+      }),
+    );
+    state.approve.mockImplementation(async () => {
+      await upsertSessionEntryCore(parent, { previousSessionId: undefined });
+      entry.previousSessionId = undefined;
+    });
+    await denied(input, "changed before delivery");
+  });
+  it("keeps owner-committed compaction lineage changes admissible", async () => {
+    const input = operation();
+    input.target.storePath = path.join(tempDirs.make(), "sessions.sqlite");
+    await upsertSessionEntryCore(input.target, input.target.entry!);
+    await withGate(input, async (gate) => {
+      await acceptCompactionSuccessor({
+        currentTarget: { ...input.target, sessionId: "target" },
+        expectedEntry: {
+          sessionId: "target",
+          lifecycleRevision: undefined,
+          activeWriterRunId: undefined,
+        },
+        assertActive: gate.assertCurrent,
+        result: {
+          ok: true,
+          compacted: true,
+          result: {
+            summary: "Compacted context",
+            tokensBefore: 2,
+            tokensAfter: 1,
+            sessionId: "compacted",
+          },
+        },
+        onCommitted: ({ entry }) =>
+          state.rows.set(input.target.sessionKey, { ...input.target, entry }),
+      });
+      await gate.callGateway(agentRequest(input));
+      expect(input.callGateway).toHaveBeenCalledOnce();
+    });
   });
   it.each([undefined, "missing-original", "foreign-original"])(
     "refuses unconnected parent lineage (predecessor=%s) with respawn guidance",
