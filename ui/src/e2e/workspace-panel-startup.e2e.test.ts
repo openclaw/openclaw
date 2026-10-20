@@ -27,16 +27,25 @@ suite.define(() => {
         async ({ page }) => {
           if (panel.name === "terminal") {
             await page.addInitScript(() => {
-              const getItem = Storage.prototype.getItem;
+              const local = window.localStorage;
+              const session = window.sessionStorage;
+              const readLocal = local.getItem.bind(local);
+              const readSession = session.getItem.bind(session);
               Object.defineProperty(Storage.prototype, "getItem", {
                 value(this: Storage, key: string) {
                   if (
-                    this === window.localStorage &&
+                    this === local &&
                     /^openclaw\.(terminal|browser|custodian)\.panel\.v1$/.test(key)
                   ) {
                     performance.mark(`panel-layout-read:${key}`);
                   }
-                  return getItem.call(this, key);
+                  if (this === local) {
+                    return readLocal(key);
+                  }
+                  if (this === session) {
+                    return readSession(key);
+                  }
+                  throw new TypeError("Illegal storage receiver");
                 },
               });
             });

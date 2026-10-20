@@ -25,7 +25,7 @@ function renderComposer(overrides: Parameters<typeof props>[0], attached = false
   }
   const composerProps = props(overrides);
   renderComposerInto(container, composerProps);
-  const query = <T extends Element = HTMLElement>(selector: string) =>
+  const query = <T extends Element = HTMLElement>(selector: string): T | null =>
     container.querySelector<T>(selector);
   return {
     container,
@@ -482,7 +482,7 @@ it("keeps the microphone picker open without leaking an unavailable hold into Ta
   const microphone = button(container, t("chat.composer.startVoiceInput"));
   microphone.dispatchEvent(dictationPointer("pointerdown", 10));
   await vi.advanceTimersByTimeAsync(801);
-  const dropdown = query<HTMLElement>(".chat-talk-input-picker");
+  const dropdown = query(".chat-talk-input-picker");
   expect(dropdown?.hasAttribute("open")).toBe(true);
   await vi.waitFor(() =>
     expect(

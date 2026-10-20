@@ -19,6 +19,7 @@ suite.define(() => {
       agentId: "main",
       kind: "direct",
       sessionId: "synthetic-provider-review",
+      label: "Project cleanup",
       updatedAt: Date.now(),
       snapshotAt: Date.now(),
     };

@@ -42,7 +42,7 @@ function mountGoal(initial: SessionGoal, options: Partial<GoalProps> = {}) {
     container: view.container,
     draw: (value: SessionGoal | undefined) => update({ goal: value }),
     update,
-    query: <T extends Element = HTMLElement>(selector: string) =>
+    query: <T extends Element = HTMLElement>(selector: string): T | null =>
       view.container.querySelector<T>(selector),
     unmount: view.unmount,
     elapsed: () => view.container.querySelector(".agent-chat__goal-elapsed")?.textContent,

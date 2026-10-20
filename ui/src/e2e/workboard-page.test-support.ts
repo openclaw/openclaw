@@ -11,15 +11,8 @@ export async function installWorkboardPage(
   baseUrl: string,
   boardId: string,
   methodResponses: ControlUiMockGatewayScenario["methodResponses"],
-  locale?: string,
 ) {
   const gateway = await installMockGateway(page, { ...workboardUi, methodResponses });
-  if (locale) {
-    await page.addInitScript(
-      (value) => localStorage.setItem("openclaw.i18n.locale", value),
-      locale,
-    );
-  }
   await seedChatSettings(page, baseUrl, {
     railShortcuts: ["route:agents-home", `plugin:workboard/board-${boardId}`],
   });

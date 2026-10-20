@@ -46,6 +46,7 @@ it("keeps the focused action through a banner refresh and uses the current actio
     disabledBanner: {
       ...props.disabledBanner!,
       text,
+      actionLabel: "Unarchive",
       onAction: refreshedAction,
     },
   });

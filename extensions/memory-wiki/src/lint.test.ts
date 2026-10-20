@@ -32,7 +32,7 @@ async function createLintVault(options: Parameters<typeof createVault>[0] = {}) 
   };
   const page = (
     relativePath: string,
-    frontmatter: Record<string, unknown>,
+    frontmatter: Record<string, unknown> & { title: string },
     body = `# ${frontmatter.title}\n`,
   ) => write(relativePath, renderWikiMarkdown({ frontmatter, body }));
   return { ...vault, write, page };

@@ -28,11 +28,13 @@ export async function withStateDirEnv<T>(
   prefix: string,
   fn: (ctx: { tempRoot: string; stateDir: string }) => Promise<T>,
 ): Promise<T> {
-  return withRawStateDirEnv(prefix, (ctx) =>
-    Promise.resolve()
-      .then(() => fn(ctx))
-      .finally(closeSessionSqliteDatabasesForTest),
-  );
+  return withRawStateDirEnv(prefix, async (ctx) => {
+    try {
+      return await fn(ctx);
+    } finally {
+      await closeSessionSqliteDatabasesForTest();
+    }
+  });
 }
 
 export function useSessionStoreFixture(prefix: string): () => string {
