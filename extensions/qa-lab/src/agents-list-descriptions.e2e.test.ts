@@ -156,7 +156,7 @@ it(
         );
       },
       async () => {
-        await stopQaGatewayFixture(owner, { label: "agents-description-gateway" });
+        await stopQaGatewayFixture(owner);
       },
     );
   },
