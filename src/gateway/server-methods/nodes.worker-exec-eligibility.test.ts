@@ -57,6 +57,7 @@ it("scopes an outdated v6 host to OpenClaw and refreshes eligibility from curren
   vi.mocked(readDevicePairingNodeSnapshot).mockResolvedValue(snapshot);
   const binding = expectDefined(snapshot.bindings.get("node-1"), "paired node binding");
   const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
+  const transport = runtime.nodeWorkerSupervisorTransport;
   const client = createWorkerSupervisorNodeClient();
   client.connect.commands = [CODEX_COMMAND];
   const register = () =>
@@ -74,13 +75,12 @@ it("scopes an outdated v6 host to OpenClaw and refreshes eligibility from curren
   };
   const environmentService = {};
   const devices = createDeviceWorkerRuntime({ getPairedDevice: async () => paired });
-  devices.bindNodeTransport(runtime.nodeWorkerSupervisorTransport);
+  devices.bindNodeTransport(transport);
   bindDeviceWorkerAvailability(environmentService, devices.resolveAvailability);
-  const isPlacementCurrent = createDevicePlacementAuthority(
-    () => runtime.nodeWorkerSupervisorTransport,
-  );
+  const isPlacementCurrent = createDevicePlacementAuthority(() => transport);
   const openclawRequirement = { requiredNodeCommands: [], consumesWorkerSlot: true };
   const codexRequirement = { requiredNodeCommands: [CODEX_COMMAND], consumesWorkerSlot: false };
+  const eligible = { ok: true, candidates: [{ deviceId: "node-1", availableSlots: 2 }] };
   const publish = async (capturedExecPolicy = false) => {
     const respond = vi.fn();
     await nodeHandlers["node.runnerInventory.update"]!({
@@ -145,31 +145,20 @@ it("scopes an outdated v6 host to OpenClaw and refreshes eligibility from curren
     for (const runtimeId of [undefined, "codex"]) {
       expect(await node(runtimeId)).not.toHaveProperty("issues");
     }
-    expect(await select("codex")).toEqual({
-      ok: true,
-      candidates: [{ deviceId: "node-1", availableSlots: 2 }],
-    });
+    expect(await select("codex")).toEqual(eligible);
     expect(await node("codex")).toMatchObject({
       requiredNodeCommand: { command: CODEX_COMMAND, state: "invocable" },
     });
 
     await publish(true);
-    const admitted = expectDefined(
-      await runtime.nodeWorkerSupervisorTransport.getCurrentNode("node-1"),
-      "current node proof",
-    );
+    const admitted = expectDefined(await transport.getCurrentNode("node-1"), "current node proof");
     const admittedRequirement = { requiredNodeCommands: [], consumesWorkerSlot: false };
     expect(isPlacementCurrent(admitted, admittedRequirement, "worker-turn")).toBe(true);
     expect(await node("openclaw")).not.toHaveProperty("issues");
-    expect(await select("openclaw")).toEqual({
-      ok: true,
-      candidates: [{ deviceId: "node-1", availableSlots: 2 }],
-    });
+    expect(await select("openclaw")).toEqual(eligible);
     await publish();
     expect(isPlacementCurrent(admitted, admittedRequirement, "worker-turn")).toBe(false);
-    expect(runtime.nodeWorkerSupervisorTransport.isCurrent(admitted, false, [CODEX_COMMAND])).toBe(
-      true,
-    );
+    expect(transport.isCurrent(admitted, false, [CODEX_COMMAND])).toBe(true);
     expect(await select("openclaw")).toMatchObject({ ok: false });
     await publish(true);
     runtime.nodeRegistry.unregister(client.connId);

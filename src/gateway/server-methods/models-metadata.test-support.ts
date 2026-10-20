@@ -7,18 +7,17 @@ export async function createModelPluginMetadataSnapshot() {
   const { makeEmptyPluginMetadataOwners } =
     await import("../../plugins/current-plugin-metadata.test-support.js");
   const { buildDeclaredProviderOwnerIndex } = await import("../../plugins/provider-owner-index.js");
+  const { createPluginManifestRecordFixture, createPluginMetadataSnapshotFixture } =
+    await import("../../plugins/plugin-metadata.test-support.js");
   const bundled = (id: string) => ({
-    id,
-    channels: [],
+    ...createPluginManifestRecordFixture({ id, rootDir: `/test/${id}` }),
     providers: [id],
-    cliBackends: [],
     syntheticAuthRefs: [],
-    skills: [],
-    hooks: [],
-    origin: "bundled" as const,
-    rootDir: `/test/${id}`,
-    source: `/test/${id}/index.js`,
-    manifestPath: `/test/${id}/openclaw.plugin.json`,
+  });
+  const choice = (provider: string, method: string, choiceId: string) => ({
+    provider,
+    method,
+    choiceId,
   });
   const plugins: PluginMetadataSnapshot["manifestRegistry"]["plugins"] = [
     {
@@ -27,13 +26,11 @@ export async function createModelPluginMetadataSnapshot() {
       syntheticAuthRefs: ["claude-cli"],
       providerAuthChoices: [
         {
-          provider: "anthropic",
-          method: "cli",
-          choiceId: "anthropic-cli",
+          ...choice("anthropic", "cli", "anthropic-cli"),
           deprecatedChoiceIds: ["claude-cli"],
         },
-        { provider: "anthropic", method: "setup-token", choiceId: "setup-token" },
-        { provider: "anthropic", method: "api-key", choiceId: "apiKey" },
+        choice("anthropic", "setup-token", "setup-token"),
+        choice("anthropic", "api-key", "apiKey"),
       ],
       modelSupport: { modelPrefixes: ["claude-"] },
       enabledByDefault: true,
@@ -42,43 +39,30 @@ export async function createModelPluginMetadataSnapshot() {
       ...bundled("byteplus"),
       providers: ["byteplus", "byteplus-plan"],
       providerAuthAliases: { "byteplus-plan": "byteplus" },
-      providerAuthChoices: [
-        { provider: "byteplus", method: "api-key", choiceId: "byteplus-api-key" },
-      ],
+      providerAuthChoices: [choice("byteplus", "api-key", "byteplus-api-key")],
     },
     {
       ...bundled("github-copilot"),
       providerAuthChoices: [
-        { provider: "github-copilot", method: "device", choiceId: "github-copilot" },
-        {
-          provider: "github-copilot",
-          method: "device-enterprise",
-          choiceId: "github-copilot-enterprise",
-        },
+        choice("github-copilot", "device", "github-copilot"),
+        choice("github-copilot", "device-enterprise", "github-copilot-enterprise"),
       ],
     },
   ];
-  const index: PluginMetadataSnapshot["index"] = {
-    version: 1,
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
+  const empty = createPluginMetadataSnapshotFixture();
+  const index = {
+    ...empty.index,
     policyHash: "models-test-plugin-policy",
-    generatedAtMs: 0,
-    installRecords: {},
     // A real isolated bundled snapshot has no installed-index rows; bundled
     // manifest records remain the authoritative graph for this fixture.
-    plugins: [],
-    diagnostics: [],
   };
   return {
+    ...empty,
     policyHash: "models-test-plugin-policy",
     index,
     registryIndex: index,
-    registryDiagnostics: [],
     manifestRegistry: { plugins, diagnostics: [] },
     plugins,
-    diagnostics: [],
     byPluginId: new Map(plugins.map((plugin) => [plugin.id, plugin])),
     normalizePluginId: (pluginId: string) => pluginId,
     declaredProviderOwners: buildDeclaredProviderOwnerIndex(plugins),
@@ -95,11 +79,7 @@ export async function createModelPluginMetadataSnapshot() {
       cliBackends: new Map([["claude-cli", ["anthropic"]]]),
     },
     metrics: {
-      registrySnapshotMs: 0,
-      manifestRegistryMs: 0,
-      ownerMapsMs: 0,
-      totalMs: 0,
-      indexPluginCount: 0,
+      ...empty.metrics,
       manifestPluginCount: plugins.length,
     },
   };

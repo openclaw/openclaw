@@ -91,6 +91,33 @@ it.for([false, true])(
       name,
       nativeRuntime: harness,
     });
+    const nativeRows = () => {
+      if (emptyNativeCatalog) {
+        return [];
+      }
+      const rows = [
+        nativeRow(nativeModelId, "Native account model"),
+        nativeRow("configured-native", "Configured native model"),
+        { provider, id: "harness-host-row", name: "Harness host model" },
+      ];
+      if (withProviderCredentials) {
+        rows.push(
+          nativeRow(
+            "unrelated-native-model",
+            nativeModelId === "native-account-only"
+              ? "Unrelated native model"
+              : "Outside-scope replacement",
+            "unrelated-native-fixture",
+          ),
+        );
+        if (nativeModelId !== "native-account-only") {
+          rows.push(
+            nativeRow("outside-scope-new", "Outside-scope new model", "unrelated-native-fixture"),
+          );
+        }
+      }
+      return rows;
+    };
     const endpoint = createServer((request, response) => {
       requests.push(request.url ?? "");
       response.setHeader("Content-Type", "application/json");
@@ -104,43 +131,7 @@ it.for([false, true])(
           return;
         }
         nativeRequested.resolve();
-        void nativeReleased.promise.then(() =>
-          response.end(
-            JSON.stringify(
-              emptyNativeCatalog
-                ? []
-                : [
-                    nativeRow(nativeModelId, "Native account model"),
-                    nativeRow("configured-native", "Configured native model"),
-                    {
-                      provider,
-                      id: "harness-host-row",
-                      name: "Harness host model",
-                    },
-                    ...(withProviderCredentials
-                      ? [
-                          nativeRow(
-                            "unrelated-native-model",
-                            nativeModelId === "native-account-only"
-                              ? "Unrelated native model"
-                              : "Outside-scope replacement",
-                            "unrelated-native-fixture",
-                          ),
-                          ...(nativeModelId === "native-account-only"
-                            ? []
-                            : [
-                                nativeRow(
-                                  "outside-scope-new",
-                                  "Outside-scope new model",
-                                  "unrelated-native-fixture",
-                                ),
-                              ]),
-                        ]
-                      : []),
-                  ],
-            ),
-          ),
-        );
+        void nativeReleased.promise.then(() => response.end(JSON.stringify(nativeRows())));
       } else if (request.url === "/provider/models" || request.url === "/other/models") {
         if (failedProviderCatalog && request.url === "/provider/models") {
           response.writeHead(503).end();
@@ -303,6 +294,12 @@ it.for([false, true])(
           expect(result.models).toEqual(
             expect.arrayContaining(ids.map((id) => modelRow(rowProvider, id))),
           );
+        const cachedReads = async (check: (result: ModelsListResult) => void) => {
+          const before = requests.length;
+          const results = await Promise.all([list(), list()]);
+          expect(requests).toHaveLength(before);
+          results.forEach(check);
+        };
         expect(nativeRequests()).toHaveLength(0);
         const firstReads = await Promise.all([list(), list()]);
         await withinTest(nativeRequested.promise, signal);
@@ -388,15 +385,12 @@ it.for([false, true])(
             .soft(request({ provider, refresh: true }))
             .rejects.toThrow("Native catalog fixture unavailable");
           expect(requests.slice(beforeFailure)).toEqual(["/provider/models", "/native/models"]);
-          const beforeFailureReads = requests.length;
-          const failedReads = await Promise.all([list(), list()]);
-          expect(requests).toHaveLength(beforeFailureReads);
-          for (const failed of failedReads) {
+          await cachedReads((failed) => {
             expect.soft(failed.refreshFailed).toBe(true);
             expect(failed.pendingProviders ?? []).not.toContain(provider);
             contains(failed, ["native-account-only", "configured-native"]);
             contains(failed, ["unrelated-native-model"], "unrelated-native-fixture");
-          }
+          });
           failedNativeCatalog = false;
           const beforeRecovery = requests.length;
           await request({ provider, refresh: true });
@@ -457,23 +451,17 @@ it.for([false, true])(
           await expect
             .poll(() => nativeRequests(beforeFullFailure).length, { timeout: 15_000 })
             .toBe(1);
-          const beforeFullReads = requests.length;
-          const fullPending = await Promise.all([list(), list()]);
-          expect(requests).toHaveLength(beforeFullReads);
-          for (const fullResult of fullPending) {
+          await cachedReads((fullResult) => {
             expect(fullResult.pendingProviders).toContain(provider);
             expect.soft(fullResult.models).toContainEqual(modelRow(provider, nativeModelId));
-          }
+          });
           nativeReleased.resolve();
           await fullFailure;
-          const beforeFullFailedReads = requests.length;
-          const fullFailed = await Promise.all([list(), list()]);
-          expect(requests).toHaveLength(beforeFullFailedReads);
-          for (const failed of fullFailed) {
+          await cachedReads((failed) => {
             expect(failed.refreshFailed).toBe(true);
             expect(failed.pendingProviders ?? []).not.toContain(provider);
             expect.soft(failed.models).toContainEqual(modelRow(provider, nativeModelId));
-          }
+          });
           failedNativeCatalog = false;
           await request({ refresh: true });
           const fullRecovered = await list();
@@ -488,14 +476,11 @@ it.for([false, true])(
           await expect
             .poll(() => nativeRequests(beforeRenewal).length, { timeout: 15_000 })
             .toBe(1);
-          const beforeRenewalReads = requests.length;
-          const renewalPending = await Promise.all([list(), list()]);
-          expect(requests).toHaveLength(beforeRenewalReads);
-          for (const result of renewalPending) {
+          await cachedReads((result) => {
             expect(result.pendingProviders).toContain(provider);
             expect.soft(result.models).toContainEqual(modelRow(provider, "native-new-release"));
             expect(result.models).not.toContainEqual(modelRow(provider, "harness-host-row"));
-          }
+          });
           nativeReleased.resolve();
           await expect
             .poll(async () => (await list()).pendingProviders ?? [], { timeout: 15_000 })
