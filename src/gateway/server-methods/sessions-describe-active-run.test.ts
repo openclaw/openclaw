@@ -37,7 +37,18 @@ import {
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 const key = "agent:main:active";
-const identity = { sessionKey: key, sessionId: "main-active", agentId: "main" };
+const scope = { sessionKey: key, agentId: "main" };
+const identity = { ...scope, sessionId: "main-active" };
+function registerSource(runId: string, target = captureRpcTargetForTest(identity)) {
+  return registerChatAbortController({
+    target,
+    runId,
+    ...identity,
+    timeoutMs: 60_000,
+    kind: "agent",
+  });
+}
+
 function activityReader(
   context: GatewayRequestContext,
   client: GatewayClient,
@@ -79,63 +90,46 @@ it.each(["chat", "projected"] as const)(
       const context = requestContext(cfg);
       const client = identifiedClient("owner@example.com");
       const runId = `describe-${owner}-run`;
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: key },
-        {
-          status: "done",
-          goal: {
-            schemaVersion: 1,
-            id: "active-goal",
-            objective: "Finish the task",
-            status: "active",
-            createdAt: 1,
-            updatedAt: 1,
-            tokenStart: 0,
-            tokensUsed: 0,
-            continuationTurns: 0,
-          },
+      await upsertSessionEntryCore(scope, {
+        status: "done",
+        goal: {
+          schemaVersion: 1,
+          id: "active-goal",
+          objective: "Finish the task",
+          status: "active",
+          createdAt: 1,
+          updatedAt: 1,
+          tokenStart: 0,
+          tokensUsed: 0,
+          continuationTurns: 0,
         },
-      );
+      });
       await initializeSessionReadContext(context);
       const assertActivity = activityReader(context, client, runId, owner === "projected");
-      const chat =
-        owner === "chat"
-          ? registerChatAbortController({
-              target: captureRpcTargetForTest(identity),
-              runId,
-              ...identity,
-              timeoutMs: 60_000,
-              kind: "agent",
-            })
-          : undefined;
+      const chat = owner === "chat" ? registerSource(runId) : undefined;
       const releaseSource = chat?.entry ? await claimRpcSourceForTest(chat.entry) : undefined;
       registerAgentRunContext(runId, {
         ...identity,
         ...(owner === "projected" ? { projectSessionActive: true } : {}),
       });
-      const releaseCapacityWait = registerAgentRunCapacityWait(
-        runId,
-        getAgentRunLifecycleGeneration(),
-      );
-      try {
-        await assertActivity("queued", true);
-        releaseCapacityWait?.();
-        await assertActivity("running", true);
+      const releaseWait = registerAgentRunCapacityWait(runId, getAgentRunLifecycleGeneration());
+      const cleanup = () => {
         releaseSource?.();
         chat?.cleanup();
         clearAgentRunContext(runId);
+      };
+      try {
+        await assertActivity("queued", true);
+        releaseWait?.();
+        await assertActivity("running", true);
+        cleanup();
         await assertActivity("done", false);
-        await upsertSessionEntryCore(
-          { agentId: "main", sessionKey: key },
-          { status: "done", endedAt: Date.now() },
-        );
+        await upsertSessionEntryCore(scope, { status: "done", endedAt: Date.now() });
         // A yielded task may retain an active goal without owning a live turn.
         await assertActivity("done", false);
       } finally {
-        releaseCapacityWait?.();
-        releaseSource?.();
-        chat?.cleanup();
-        clearAgentRunContext(runId);
+        releaseWait?.();
+        cleanup();
       }
     });
   },
@@ -153,26 +147,21 @@ it("projects configured-locator admissions through preparation and queuing witho
     const runId = "configured-admission";
     const sourceWork = createDeferred();
     const registrations: ReturnType<typeof registerChatAbortController>[] = [];
-    await upsertSessionEntryCore({ agentId: "main", sessionKey: key }, { status: "done" });
+    await upsertSessionEntryCore(scope, { status: "done" });
     await initializeSessionReadContext(context);
     const foreign = withPluginRuntimeGatewayContextResolver(resolveGatewayContext, () =>
-      registerChatAbortController({
-        target: captureSessionTarget({
+      registerSource(
+        "foreign-admission",
+        captureSessionTarget({
           storeScope: state.statePath("foreign.sqlite"),
-          sessionKey: key,
+          ...scope,
           incarnation: identity.sessionId,
-          agentId: "main",
         }),
-        runId: "foreign-admission",
-        ...identity,
-        timeoutMs: 60_000,
-        kind: "agent",
-      }),
+      ),
     );
     expect(foreign.registered).toBe(true);
-    expect(getGatewayContextResolver(expectDefined(foreign.entry, "foreign source").input)).toBe(
-      resolveGatewayContext,
-    );
+    const foreignInput = expectDefined(foreign.entry, "foreign source").input;
+    expect(getGatewayContextResolver(foreignInput)).toBe(resolveGatewayContext);
     const readActivity = activityReader(context, client, runId);
     const assertActivity = (active: boolean) =>
       readActivity(active ? "queued" : "done", active, true);
@@ -204,8 +193,7 @@ it("projects configured-locator admissions through preparation and queuing witho
         }),
       );
       expect(io.emitAcceptance).not.toHaveBeenCalled();
-      const registration = expectDefined(registrations[0], "configured admission");
-      const entry = expectDefined(registration.entry, "configured source");
+      const entry = expectDefined(registrations[0]?.entry, "configured source");
       expect(getGatewayContextResolver(entry.input)).toBe(resolveGatewayContext);
       const projection = expectDefined(getSessionRowProjection(context), "row projection");
       const row = expectDefined(projection.capture({ key, agentId: "main" }), "physical row");
@@ -228,7 +216,7 @@ it("projects configured-locator admissions through preparation and queuing witho
       sourceWork.resolve();
       await withinTest(entry.input.settlement.promise, signal);
       // The foreign source remains registered after the visible source settles.
-      expect(foreign.entry?.input.phase).toBe("preparing");
+      expect(foreignInput.phase).toBe("preparing");
       await assertActivity(false);
     } finally {
       sourceWork.resolve();
@@ -241,9 +229,7 @@ it("projects configured-locator admissions through preparation and queuing witho
       foreign.cleanup();
       await withinTest(
         Promise.all(
-          [...registrations, foreign].flatMap((registration) =>
-            registration.entry ? [registration.entry.input.settlement.promise] : [],
-          ),
+          [...registrations, foreign].map(({ entry }) => entry?.input.settlement.promise),
         ),
         signal,
       );
