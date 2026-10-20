@@ -560,6 +560,8 @@ Gemini CLI output notes:
 - The default `stream-json` parser reads assistant `message` events, tool events, final `result` usage, and fatal Gemini error events.
 - Usage falls back to `stats` when `usage` is absent or empty. `stats.cached` normalizes into OpenClaw `cacheRead`, and if `stats.input` is missing, input tokens derive from `stats.input_tokens - stats.cached`.
 
+<a id="text-transform-overlays" />
+
 ## Backend text transforms
 
 Declare bidirectional `textTransforms` on the CLI backend that owns the compatibility rewrite:

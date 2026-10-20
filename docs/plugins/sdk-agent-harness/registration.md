@@ -53,6 +53,8 @@ export default definePluginEntry({
 `authBootstrap: "harness"` only when the harness meets the
 [harness-owned auth bootstrap contract](/plugins/sdk-agent-harness/core-ownership#harness-owned-auth-bootstrap).
 
+<a id="executor-controller-plugins" />
+
 ### Hosted workspaces and executor lifecycle
 
 A harness with a provider-managed workspace may declare
