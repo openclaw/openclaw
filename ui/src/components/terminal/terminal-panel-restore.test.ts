@@ -6,9 +6,9 @@ import { i18n } from "../../i18n/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
+import { mountPanel as mount, panelButton } from "./terminal-panel-lifecycle.test-support.ts";
 import {
   createTerminalController,
-  createTestTerminalPanel,
   defineTestTerminalPanelElement,
   terminalOpenResult,
   type CreateGhosttyTerminalMock,
@@ -35,15 +35,8 @@ const pendingAttaches: PendingAttach[] = [];
 
 function createGateway(sessionIds = ["session-a", "session-b"]) {
   const attaches: PendingAttach[] = [];
-  const admissions = new Map<number, ReturnType<typeof createDeferred<PendingAttach>>>();
-  const admission = (index: number) => {
-    let gate = admissions.get(index);
-    if (!gate) {
-      gate = createDeferred<PendingAttach>();
-      admissions.set(index, gate);
-    }
-    return gate;
-  };
+  const admissions: ReturnType<typeof createDeferred<PendingAttach>>[] = [];
+  const admission = (index: number) => (admissions[index] ??= createDeferred<PendingAttach>());
   const requests: Array<{ method: string; params: unknown }> = [];
   const listeners = new Set<Parameters<TerminalGatewayClient["addEventListener"]>[0]>();
   const list = vi.fn(async () => ({
@@ -91,19 +84,9 @@ function createGateway(sessionIds = ["session-a", "session-b"]) {
   };
 }
 
-function mountPanel(
-  client: TerminalGatewayClient,
-  options: { page?: boolean; open?: boolean } = {},
-) {
-  const panel = createTestTerminalPanel(PANEL_TAG);
-  panel.client = client;
-  panel.available = true;
-  panel.page = panel.fullscreen = panel.embedded = options.page === true;
+function mountPanel(client: TerminalGatewayClient) {
+  const panel = mount(PANEL_TAG, { client, available: true });
   mounted.push(panel);
-  document.body.append(panel);
-  if (!panel.terminalPanelOpen && options.open !== false) {
-    panel.toggle();
-  }
   return { panel };
 }
 
@@ -152,9 +135,7 @@ function recordSessionWrites() {
 }
 
 async function settled(panel: OpenClawTerminalPanel) {
-  await waitForFast(() =>
-    expect(panel.querySelector<HTMLButtonElement>(".tabstrip-new")?.disabled).toBe(false),
-  );
+  await waitForFast(() => expect(panelButton(panel)?.disabled).toBe(false));
 }
 
 describe("terminal persisted restore", () => {
@@ -311,7 +292,7 @@ describe("terminal persisted restore", () => {
     const gateway = createGateway(["session-a"]);
     const { panel } = mountPanel(gateway.client);
     const first = await waitForAttach(gateway, 0, signal);
-    panel.querySelector<HTMLButtonElement>(".tabstrip-tab__close")!.click();
+    panelButton(panel, ".tabstrip-tab__close")!.click();
     first.resolve(attachResult(first.sessionId));
     await waitForFast(() =>
       expect(gateway.requests.filter(({ method }) => method === "terminal.open")).toHaveLength(1),
@@ -320,9 +301,7 @@ describe("terminal persisted restore", () => {
       event: "terminal.data",
       payload: { sessionId: "replacement", seq: 5, data: "ready" },
     });
-    await waitForFast(() =>
-      expect(panel.querySelector<HTMLButtonElement>(".tabstrip-new")?.disabled).toBe(false),
-    );
+    await settled(panel);
     expect(gateway.requests).toContainEqual({
       method: "terminal.open",
       params: { agentId: "agent-a", catalog, cols: 100, rows: 30 },
@@ -344,7 +323,7 @@ describe("terminal persisted restore", () => {
           detail: { open: true, terminalSessionId: "session-b" },
         }),
       );
-      panel.querySelector<HTMLButtonElement>(".tabstrip-tab__close")!.click();
+      panelButton(panel, ".tabstrip-tab__close")!.click();
       first.resolve(attachResult(first.sessionId));
       const follower = await waitForAttach(gateway, 1, signal);
       if (outcome === "resolve") {
@@ -352,9 +331,7 @@ describe("terminal persisted restore", () => {
       } else {
         follower.reject(new Error("queued attach failed"));
       }
-      await waitForFast(() =>
-        expect(panel.querySelector<HTMLButtonElement>(".tabstrip-new")?.disabled).toBe(false),
-      );
+      await settled(panel);
       expect(panel.terminalPanelOpen).toBe(true);
       expect(gateway.attaches.map((request) => request.sessionId)).toEqual([
         "session-a",

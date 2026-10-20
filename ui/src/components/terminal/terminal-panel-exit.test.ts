@@ -1,13 +1,15 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { i18n } from "../../i18n/index.ts";
-import { createStorageMock } from "../../test-helpers/storage.ts";
+import { describe, expect, it, vi } from "vitest";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import type { TerminalGatewayClient } from "./terminal-connection.ts";
+import {
+  eventGateway,
+  mountPanel,
+  panelTestStorage,
+  togglePanel,
+} from "./terminal-panel-lifecycle.test-support.ts";
 import {
   createTerminalController,
-  createTestTerminalPanel,
   defineTestTerminalPanelElement,
   terminalOpenResult,
   type CreateGhosttyTerminalMock,
@@ -17,6 +19,7 @@ type Exit = { reason?: string; exitCode: number | null; signal?: number | null; 
 const normalExit: Exit = { reason: "process_exit", exitCode: 0, signal: null };
 const createTerminal: CreateGhosttyTerminalMock = vi.fn();
 const tag = defineTestTerminalPanelElement(createTerminal);
+panelTestStorage(createTerminal);
 
 async function mount(options: { fullscreen?: boolean; earlyExit?: Exit } = {}) {
   const controllers: ReturnType<typeof createTerminalController>[] = [];
@@ -25,14 +28,8 @@ async function mount(options: { fullscreen?: boolean; earlyExit?: Exit } = {}) {
     controllers.push(controller);
     return controller;
   });
-  const listeners = new Set<Parameters<TerminalGatewayClient["addEventListener"]>[0]>();
-  const emit = (event: string, payload: unknown) => {
-    for (const listener of listeners) {
-      listener({ event, payload });
-    }
-  };
   let sequence = 0;
-  const request = vi.fn(async (method: string) => {
+  const { client, request, emit } = eventGateway((method) => {
     if (method === "terminal.open") {
       const sessionId = `session-${++sequence}`;
       if (options.earlyExit) {
@@ -42,21 +39,15 @@ async function mount(options: { fullscreen?: boolean; earlyExit?: Exit } = {}) {
     }
     return method === "terminal.list" ? { sessions: [] } : { ok: true };
   });
-  const panel = createTestTerminalPanel(tag);
-  panel.client = {
-    forceReconnect: vi.fn(),
-    request: request as TerminalGatewayClient["request"],
-    addEventListener: (listener) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
+  const panel = mountPanel(
+    tag,
+    {
+      client,
+      available: true,
+      fullscreen: options.fullscreen ?? false,
     },
-  };
-  panel.available = true;
-  panel.fullscreen = options.fullscreen ?? false;
-  document.body.append(panel);
-  if (!panel.fullscreen) {
-    panel.toggle();
-  }
+    !options.fullscreen,
+  );
   await waitForFast(() =>
     expect(request).toHaveBeenCalledWith("terminal.open", expect.anything(), expect.anything()),
   );
@@ -66,21 +57,6 @@ async function mount(options: { fullscreen?: boolean; earlyExit?: Exit } = {}) {
 }
 
 describe("terminal process exit", () => {
-  beforeAll(async () => {
-    await import("@openclaw/libterminal/browser");
-  });
-  beforeEach(async () => {
-    vi.stubGlobal("localStorage", createStorageMock());
-    vi.stubGlobal("sessionStorage", createStorageMock());
-    await i18n.setLocale("en");
-  });
-  afterEach(async () => {
-    document.body.replaceChildren();
-    await Promise.resolve();
-    createTerminal.mockReset();
-    vi.unstubAllGlobals();
-  });
-
   it("closes the last normally exited shell without another close RPC and reopens fresh", async () => {
     const { panel, controllers, request, emit } = await mount();
     emit("terminal.exit", { sessionId: "session-1", ...normalExit });
@@ -101,9 +77,7 @@ describe("terminal process exit", () => {
   it("selects the remaining shell instead of closing the panel", async () => {
     const { panel, emit } = await mount();
     const remaining = panel.activeHostedTabId;
-    panel.handleToggleRequest(
-      new CustomEvent("openclaw:terminal-toggle", { detail: { newSession: true } }),
-    );
+    togglePanel(panel, { newSession: true });
     await waitForFast(() => expect(panel.hostedTabs).toHaveLength(2));
     await waitForFast(() => expect(panel.hostedTabs[1]?.className).toBe("is-live"));
     emit("terminal.exit", { sessionId: "session-2", ...normalExit });
