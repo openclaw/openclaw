@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readGatewayLockProcessNamespace } from "./gateway-lock-payload.js";
 import { inspectGatewayLockRecovery, recoverGatewayLock } from "./gateway-lock-recovery.js";
@@ -9,6 +9,7 @@ import { defaultPayload } from "./gateway-state-owner-record.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.restoreAllMocks());
 
 function fixture() {
   const root = tempDirs.make("gateway-lock-recovery-");
@@ -85,12 +86,25 @@ describe("explicit Gateway lock recovery", () => {
     const stamp = new Date("2026-01-01T00:00:00.000Z");
     fs.utimesSync(paths.ownerLockPath, stamp, stamp);
     const original = fs.readFileSync(paths.ownerLockPath, "utf8");
+    const identity = fs.statSync(paths.ownerLockPath, { bigint: true });
+    let ctime = identity.ctimeNs;
+    const fstat = fs.fstatSync;
+    // Model separate timestamp ticks without depending on kernel ctime granularity.
+    vi.spyOn(fs, "fstatSync").mockImplementation((...args) => {
+      if (!args[1]?.bigint) {
+        return fstat(...args);
+      }
+      const result = fstat(args[0], { bigint: true });
+      if (result.dev === identity.dev && result.ino === identity.ino) {
+        Object.defineProperty(result, "ctimeNs", { value: ctime });
+      }
+      return result;
+    });
     const inspection = await inspectGatewayLockRecovery({ env });
-    const ctime = fs.statSync(paths.ownerLockPath, { bigint: true }).ctimeNs;
     fs.writeFileSync(paths.ownerLockPath, "changed");
     fs.writeFileSync(paths.ownerLockPath, original);
     fs.utimesSync(paths.ownerLockPath, stamp, stamp);
-    expect(fs.statSync(paths.ownerLockPath, { bigint: true }).ctimeNs).not.toBe(ctime);
+    ctime += 1_000_000n;
     await expect(
       recoverGatewayLock({ env, confirmation: inspection.confirmation }),
     ).rejects.toThrow("changed since inspection");

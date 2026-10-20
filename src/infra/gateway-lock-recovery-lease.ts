@@ -1,11 +1,12 @@
 import fs from "node:fs";
 import { isStatePostgres } from "../state/openclaw-state-db-engine.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
-import type { DB } from "../state/openclaw-state-db.generated.js";
-import { readOpenClawStateLease } from "../state/openclaw-state-lease-store.js";
+import {
+  readOpenClawStateLease,
+  releaseOpenClawStateLeaseInTransaction,
+} from "../state/openclaw-state-lease-store.js";
 import { gatewayOwnerKey, decodeGatewayOwnerLease } from "./gateway-owner-lease.read.js";
 import type { StateDatabaseSchemaLease } from "./gateway-state-owner.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "./node-sqlite.js";
 import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
 import { prepareSqliteReadOnlyLocation } from "./sqlite-snapshot-source.js";
@@ -87,14 +88,7 @@ export function removeGatewayRecoveryLease(
         }
         assertGatewayRecoveryLeaseNotLive(actual);
         if (actual) {
-          executeSqliteQuerySync(
-            db,
-            getNodeSqliteKysely<Pick<DB, "state_leases">>(db)
-              .deleteFrom("state_leases")
-              .where("scope", "=", gatewayOwnerKey.scope)
-              .where("lease_key", "=", gatewayOwnerKey.key)
-              .where("owner", "=", actual.owner),
-          );
+          releaseOpenClawStateLeaseInTransaction(db, { ...gatewayOwnerKey, owner: actual.owner });
         }
       },
       { databaseLabel: databasePath, operationLabel: "gateway.lock-recovery" },

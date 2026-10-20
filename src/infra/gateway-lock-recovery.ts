@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { acquireFileLockSync } from "./file-lock-manager.js";
 import {
@@ -25,7 +26,7 @@ function readObservedFile(pathname: string): ObservedFile | null {
   try {
     fd = fs.openSync(pathname, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+    if (extractErrorCode(error) === "ENOENT") {
       return null;
     }
     throw error;
