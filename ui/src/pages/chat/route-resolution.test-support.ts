@@ -24,12 +24,14 @@ export function canonicalSession(loaded: Awaited<ReturnType<typeof loadChatRoute
   return { ...loaded, canonicalLocation: loaded.canonicalLocation };
 }
 
-const uuid = "12345678-90ab-cdef-1234-567890abcdef";
-const sessionKey = `agent:roboclaw:thread:${uuid}`;
+export const sessionRouteUuid = "12345678-90ab-cdef-1234-567890abcdef";
+export const sessionRouteKey = `agent:roboclaw:thread:${sessionRouteUuid}`;
 
-function row(overrides: Partial<GatewaySessionRow> = {}): GatewaySessionRow {
+export function createSessionRouteRow(
+  overrides: Partial<GatewaySessionRow> = {},
+): GatewaySessionRow {
   return {
-    key: sessionKey,
+    key: sessionRouteKey,
     kind: "direct",
     updatedAt: 1,
     displayName: "Default mode with rare surprises",
@@ -38,7 +40,7 @@ function row(overrides: Partial<GatewaySessionRow> = {}): GatewaySessionRow {
   };
 }
 
-function result(sessions: GatewaySessionRow[]): SessionsListResult {
+export function sessionRouteListResult(sessions: GatewaySessionRow[]): SessionsListResult {
   return {
     ts: 1,
     path: "sessions.json",
@@ -48,7 +50,7 @@ function result(sessions: GatewaySessionRow[]): SessionsListResult {
   };
 }
 
-function contextFor(
+export function createSessionRouteContext(
   resolution: SessionsResolveResult | Error = { ok: false },
   cachedSessions: GatewaySessionRow[] = [],
 ) {
@@ -60,8 +62,7 @@ function contextFor(
     lifecycle.abort();
     router.stop();
     sessions.dispose();
-    expect(gatewayListeners.size).toBe(0);
-    expect(eventListeners.size).toBe(0);
+    expect([gatewayListeners.size, eventListeners.size]).toEqual([0, 0]);
   });
   const request = vi.fn(async (method: string, _params?: unknown): Promise<unknown> => {
     if (method !== "sessions.resolve") {
@@ -72,7 +73,6 @@ function contextFor(
     }
     return resolution;
   });
-  const client = { request };
   const context = {
     basePath: "",
     chatSubmissions: createChatSubmissions(),
@@ -83,7 +83,7 @@ function contextFor(
     gateway: {
       snapshot: {
         phase: "connected",
-        client,
+        client: { request },
         hello: null,
         sessionKey: "agent:roboclaw:main",
       },
@@ -100,11 +100,10 @@ function contextFor(
     agentSelection: { state: { selectedId: "roboclaw" } },
   } as unknown as ApplicationContext;
   const sessions = createTestSessionCapability(context.gateway, "roboclaw");
-  sessions.state.result = result(cachedSessions);
-  const list = vi.spyOn(sessions, "list");
+  sessions.state.result = sessionRouteListResult(cachedSessions);
   return {
     context: { ...context, sessions },
-    list,
+    list: vi.spyOn(sessions, "list"),
     request,
     listenerCounts: () => ({ gateway: gatewayListeners.size, events: eventListeners.size }),
     publishGateway: (patch: Partial<ApplicationContext["gateway"]["snapshot"]>) => {
@@ -122,7 +121,7 @@ function contextFor(
   };
 }
 
-function installShortResolver(
+export function installShortSessionResolver(
   context: ApplicationContext,
   rows: GatewaySessionRow[],
   resolved: { ok: true; key: string } | { ok: false; candidates?: Array<{ key: string }> } = rows[0]
@@ -140,13 +139,12 @@ function installShortResolver(
           ...(session?.boardFace ? { boardFace: session.boardFace } : {}),
         };
       };
-      const resolution = resolved.ok
+      return resolved.ok
         ? { ok: true, ...present(resolved) }
         : {
             ok: false,
             ...(resolved.candidates ? { candidates: resolved.candidates.map(present) } : {}),
           };
-      return resolution;
     }
     throw new Error(`Unexpected gateway request: ${method}`);
   });
@@ -156,16 +154,6 @@ function installShortResolver(
 
 // The router navigates with `options`, not the shareable `href`, so route-loader
 // coverage has to start from the same location the app actually pushes.
-function targetLocation(target: ReturnType<typeof sessionNavigationTarget>) {
+export function sessionRouteLocation(target: ReturnType<typeof sessionNavigationTarget>) {
   return { pathname: target.options.pathname, search: target.options.search ?? "", hash: "" };
 }
-
-export {
-  contextFor as createSessionRouteContext,
-  row as createSessionRouteRow,
-  installShortResolver as installShortSessionResolver,
-  result as sessionRouteListResult,
-  targetLocation as sessionRouteLocation,
-  sessionKey as sessionRouteKey,
-  uuid as sessionRouteUuid,
-};

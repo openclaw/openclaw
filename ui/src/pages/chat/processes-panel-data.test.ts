@@ -38,9 +38,12 @@ function fixture(read: (method: string, params: unknown) => unknown) {
   const sessions = createTestSessionCapability(connection.gateway);
   const context = createContext(connection.gateway, sessions);
   const panels: ProcessesPanelData[] = [];
-  const addPanel = () => {
+  const addPanel = (sessionKey?: string, agentId = "main") => {
     const panel = new ProcessesPanelData(context, vi.fn());
     panels.push(panel);
+    if (sessionKey) {
+      panel.sync({ sessionKey, agentId, presented: true });
+    }
     return panel;
   };
   const data = addPanel();
@@ -52,7 +55,17 @@ function fixture(read: (method: string, params: unknown) => unknown) {
   });
   const open = (sessionKey = key, presented = true) =>
     data.sync({ sessionKey, agentId: "main", presented });
-  return { data, open, request, connection, addPanel };
+  const load = async (sessionKey = key) => {
+    open(sessionKey);
+    await data.refresh();
+  };
+  const advance = async (milliseconds: number, calls: number) => {
+    await vi.advanceTimersByTimeAsync(milliseconds);
+    expect(request).toHaveBeenCalledTimes(calls);
+  };
+  const stopCalls = () =>
+    request.mock.calls.filter(([method]) => method === "sessions.processes.stop");
+  return { data, open, load, advance, stopCalls, request, connection, addPanel };
 }
 
 describe("process panel observation ownership", () => {
@@ -61,13 +74,11 @@ describe("process panel observation ownership", () => {
     const stale = createDeferred<SessionsProcessesListResult>();
     let current = process();
     const f = fixture(() => (current.instanceId === "pending" ? stale.promise : page(current)));
-    f.open();
-    await f.data.refresh();
+    await f.load();
     const changed = (sessionKey = key, agentId = "main") =>
       f.connection.publishEvent("sessions.processes.changed", { sessionKey, agentId });
     changed("agent:other:parent", "other");
-    await vi.advanceTimersByTimeAsync(59_000);
-    expect(f.request).toHaveBeenCalledTimes(1);
+    await f.advance(59_000, 1);
 
     current = process("pending");
     changed();
@@ -76,45 +87,37 @@ describe("process panel observation ownership", () => {
     changed();
     changed();
     stale.resolve(page(process("pending")));
-    await vi.advanceTimersByTimeAsync(0);
-    expect(f.request).toHaveBeenCalledTimes(3);
+    await f.advance(0, 3);
     expect(f.data.snapshot.rows[0]?.tail).toBe("Build complete");
     f.open(key, false);
     changed();
-    await vi.advanceTimersByTimeAsync(120_000);
-    expect(f.request).toHaveBeenCalledTimes(3);
+    await f.advance(120_000, 3);
   });
 
   it("shares a live observation across visible panels and releases it with the last panel", async () => {
     vi.useFakeTimers();
     const first = createDeferred<SessionsProcessesListResult>();
     const f = fixture(() => first.promise);
-    const second = f.addPanel();
     f.open();
-    second.sync({ sessionKey: key, agentId: "main", presented: true });
+    const second = f.addPanel(key);
     expect(f.request).toHaveBeenCalledTimes(1);
     first.resolve(page());
     await f.data.refresh();
     expect(second.snapshot.rows[0]?.tail).toBe("Compiling");
-    const settled = f.addPanel();
-    settled.sync({ sessionKey: key, agentId: "main", presented: true });
+    const settled = f.addPanel(key);
     expect(settled.snapshot.rows[0]?.tail).toBe("Compiling");
     expect(f.request).toHaveBeenCalledTimes(1);
     settled.dispose();
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(f.request).toHaveBeenCalledTimes(2);
+    await f.advance(60_000, 2);
     expect(f.request.mock.calls.every(([method]) => method === "sessions.processes.list")).toBe(
       true,
     );
     f.open(key, false);
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(f.request).toHaveBeenCalledTimes(3);
+    await f.advance(60_000, 3);
     second.dispose();
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(f.request).toHaveBeenCalledTimes(3);
+    await f.advance(60_000, 3);
     expect(f.data.snapshot.rows).toEqual([]);
-    f.open();
-    await f.data.refresh();
+    await f.load();
     expect(f.request).toHaveBeenCalledTimes(4);
     expect(f.data.snapshot.rows[0]?.tail).toBe("Compiling");
   });
@@ -124,14 +127,12 @@ describe("process panel observation ownership", () => {
     const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
     onTestFinished(() => visibility.mockRestore());
     const f = fixture(() => page());
-    const second = f.addPanel();
     f.open();
-    second.sync({ sessionKey: key, agentId: "main", presented: true });
+    const second = f.addPanel(key);
     await f.data.refresh();
     visibility.mockReturnValue("hidden");
     document.dispatchEvent(new Event("visibilitychange"));
-    await vi.advanceTimersByTimeAsync(15_000);
-    expect(f.request).toHaveBeenCalledTimes(1);
+    await f.advance(15_000, 1);
     expect(f.data.snapshot.rows).toEqual([]);
     expect(second.snapshot.rows).toEqual([]);
     visibility.mockReturnValue("visible");
@@ -145,10 +146,8 @@ describe("process panel observation ownership", () => {
     vi.useFakeTimers();
     const f = fixture(() => page());
     f.open("global");
-    const otherAgent = f.addPanel();
-    otherAgent.sync({ sessionKey: "global", agentId: "other", presented: true });
-    const otherSession = f.addPanel();
-    otherSession.sync({ sessionKey: key, agentId: "main", presented: true });
+    f.addPanel("global", "other");
+    f.addPanel(key);
     const otherConnection = fixture(() => page(process("other-connection")));
     otherConnection.open("global");
     await Promise.all([f.data.refresh(), otherConnection.data.refresh()]);
@@ -156,8 +155,7 @@ describe("process panel observation ownership", () => {
     expect(otherConnection.request).toHaveBeenCalledTimes(1);
     expect(f.data.snapshot.rows[0]?.instanceId).toBe("first");
     expect(otherConnection.data.snapshot.rows[0]?.instanceId).toBe("other-connection");
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(f.request).toHaveBeenCalledTimes(6);
+    await f.advance(60_000, 6);
     expect(otherConnection.request).toHaveBeenCalledTimes(2);
   });
 
@@ -187,8 +185,7 @@ describe("process panel observation ownership", () => {
     const f = fixture((method) =>
       method === "sessions.processes.list" ? page(current) : { requested: true },
     );
-    f.open();
-    await f.data.refresh();
+    await f.load();
     const previous = f.data.snapshot.rows[0]!;
     current = process("replacement");
     f.connection.publishEvent("sessions.changed", {
@@ -199,16 +196,11 @@ describe("process panel observation ownership", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(f.data.snapshot.rows[0]?.instanceId).toBe("replacement");
     await f.data.stop(previous);
-    expect(f.request.mock.calls.filter(([method]) => method === "sessions.processes.stop")).toEqual(
-      [],
-    );
+    expect(f.stopCalls()).toEqual([]);
     await f.data.stop(f.data.snapshot.rows[0]!);
-    const second = f.addPanel();
-    second.sync({ sessionKey: key, agentId: "main", presented: true });
+    const second = f.addPanel(key);
     await second.stop(second.snapshot.rows[0]!);
-    expect(
-      f.request.mock.calls.filter(([method]) => method === "sessions.processes.stop"),
-    ).toHaveLength(1);
+    expect(f.stopCalls()).toHaveLength(1);
     expect(f.request).toHaveBeenCalledWith("sessions.processes.stop", {
       key,
       agentId: "main",
@@ -232,8 +224,7 @@ describe("process panel observation ownership", () => {
       }
       return page();
     });
-    f.open();
-    await f.data.refresh();
+    await f.load();
     denied = true;
     f.connection.publishEvent("sessions.changed", { reason: "sharing" });
     await vi.advanceTimersByTimeAsync(0);

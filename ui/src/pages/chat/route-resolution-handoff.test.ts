@@ -92,70 +92,61 @@ describe("session route navigation handoffs", () => {
   });
 
   it.each([
-    {
-      connectionChange: "gateway client replacement",
-      replaceConnection: (snapshot: ApplicationContext["gateway"]["snapshot"]) => {
-        const request = (snapshot.client as { request?: unknown } | null)?.request;
-        snapshot.client = { request } as NonNullable<typeof snapshot.client>;
-      },
-    },
-    {
-      connectionChange: "hello replacement on the same gateway client",
-      replaceConnection: (snapshot: ApplicationContext["gateway"]["snapshot"]) => {
-        snapshot.hello = {
-          snapshot: { sessionDefaults: { mainKey: "main" } },
-        } as NonNullable<typeof snapshot.hello>;
-      },
-    },
-  ])("does not trust a carried session after $connectionChange", async ({ replaceConnection }) => {
-    const oldSession = monitor("0aaa-4000-8000-000000000001");
-    const currentSession = monitor("0bbb-4000-8000-000000000002");
-    const { context, list } = contextFor({ ok: true, ...oldSession, agentId: "roboclaw" });
-    context.gateway.snapshot.hello = {
-      snapshot: { sessionDefaults: { mainKey: "main" } },
-    } as NonNullable<typeof context.gateway.snapshot.hello>;
-    const resolved = canonicalSession(
-      await load(context, location("/chat/roboclaw/deploy-monitor")),
-    );
-    const request = installShortResolver(context, [currentSession]);
-    replaceConnection(context.gateway.snapshot);
-
-    const loaded = await load(context, resolved.canonicalLocation);
-
-    expect(loaded).toMatchObject({ kind: "session", sessionKey: currentSession.key });
-    expect(list).not.toHaveBeenCalled();
-    expect(request).toHaveBeenCalledOnce();
-  });
-
-  it.each(["client", "hello"] as const)(
-    "does not rebind an in-flight short result after %s replacement",
-    async (replaced) => {
+    { replaced: "client", pending: false },
+    { replaced: "hello", pending: false },
+    { replaced: "client", pending: true },
+    { replaced: "hello", pending: true },
+  ])(
+    "rejects old resolution after $replaced replacement (in-flight: $pending)",
+    async ({ replaced, pending }) => {
       const oldSession = monitor("0aaa-4000-8000-000000000001");
       const currentSession = monitor("0bbb-4000-8000-000000000002");
-      const { context, request } = contextFor({ ok: true, ...currentSession, agentId: "roboclaw" });
-      const pending = createDeferred<SessionsResolveResult>();
-      request.mockImplementationOnce(() => pending.promise);
+      const h = contextFor({
+        ok: true,
+        ...(pending ? currentSession : oldSession),
+        agentId: "roboclaw",
+      });
+      const { context, list } = h;
+      const snapshot = context.gateway.snapshot;
+      const hello = () =>
+        ({ snapshot: { sessionDefaults: { mainKey: "main" } } }) as NonNullable<
+          ApplicationContext["gateway"]["snapshot"]["hello"]
+        >;
+      const deferred = createDeferred<SessionsResolveResult>();
+      const face = pending ? "dashboard" : "chat";
+      if (pending) {
+        h.request.mockImplementationOnce(() => deferred.promise);
+      } else {
+        snapshot.hello = hello();
+      }
       const navigation = load(
         context,
-        location("/dashboard/roboclaw/old-name-12345678"),
-        "dashboard",
+        location(
+          pending ? "/dashboard/roboclaw/old-name-12345678" : "/chat/roboclaw/deploy-monitor",
+        ),
+        face,
       );
-      await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-      if (replaced === "client") {
-        context.gateway.snapshot.client = createTestGatewayClient(request);
-      } else {
-        context.gateway.snapshot.hello = {
-          snapshot: { sessionDefaults: { mainKey: "main" } },
-        } as NonNullable<typeof context.gateway.snapshot.hello>;
+      const completed = pending ? null : canonicalSession(await navigation);
+      if (pending) {
+        await vi.waitFor(() => expect(h.request).toHaveBeenCalledOnce());
       }
-      pending.resolve({ ok: true, ...oldSession, agentId: "roboclaw" });
-      const resolved = canonicalSession(await navigation);
+      const request = pending ? h.request : installShortResolver(context, [currentSession]);
+      if (replaced === "hello") {
+        snapshot.hello = hello();
+      } else {
+        snapshot.client = pending
+          ? createTestGatewayClient(h.request)
+          : ({ request } as NonNullable<typeof snapshot.client>);
+      }
+      deferred.resolve({ ok: true, ...oldSession, agentId: "roboclaw" });
+      const resolved = completed ?? canonicalSession(await navigation);
       expect(resolved.sessionKey).toBe(oldSession.key);
-      await expect(load(context, resolved.canonicalLocation, "dashboard")).resolves.toMatchObject({
+      await expect(load(context, resolved.canonicalLocation, face)).resolves.toMatchObject({
         kind: "session",
         sessionKey: currentSession.key,
       });
-      expect(request).toHaveBeenCalledTimes(2);
+      expect(request).toHaveBeenCalledTimes(pending ? 2 : 1);
+      expect(list).not.toHaveBeenCalled();
     },
   );
 

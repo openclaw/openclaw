@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  projectSessionApprovalReplay,
-  reconcileSessionApprovalEvent,
+  projectSessionApprovalReplay as project,
+  reconcileSessionApprovalEvent as reconcile,
 } from "./session-approval-projection.ts";
 
 const pendingPluginApproval = {
@@ -36,53 +36,43 @@ const event = (sessionKey = host) => ({
   updatedAtMs: 2_000,
   approval: pendingPluginApproval,
 });
-const projected = (sessionKey = host) =>
-  expect.objectContaining({
-    id: "plugin:approval-1",
-    request: expect.objectContaining({ sessionKey }),
-  });
+const projected = (sessionKey = host) => ({
+  id: "plugin:approval-1",
+  request: { sessionKey },
+});
+const ancestorProjection = {
+  ...projected(),
+  kind: "plugin",
+  pluginTitle: "Run Codex execution on node",
+  pluginDetail: pendingPluginApproval.presentation.detail,
+  sourceSessionKey,
+};
 
 describe("session approval projection", () => {
   it("projects replay into the subscribed host session", () => {
-    const queue = projectSessionApprovalReplay(
+    const queue = project(
       { ...replay(), approvals: [{ ...pendingPluginApproval, sourceSessionKey }] },
       host,
     );
 
-    expect(queue).toEqual([
-      expect.objectContaining({
-        id: "plugin:approval-1",
-        kind: "plugin",
-        pluginTitle: "Run Codex execution on node",
-        pluginDetail: pendingPluginApproval.presentation.detail,
-        sourceSessionKey,
-        request: expect.objectContaining({ sessionKey: host }),
-      }),
-    ]);
+    expect(queue).toMatchObject([ancestorProjection]);
   });
 
   it("ignores malformed replay and live events", () => {
-    expect(projectSessionApprovalReplay({ approvals: [{}] }, host)).toEqual([]);
-    expect(reconcileSessionApprovalEvent([], { sessionKey: host })).toBeNull();
+    expect(project({ approvals: [{}] }, host)).toEqual([]);
+    expect(reconcile([], { sessionKey: host })).toBeNull();
   });
 
   it("ignores replay for a different session", () => {
-    expect(projectSessionApprovalReplay(replay("agent:main:other"), host)).toEqual([]);
+    expect(project(replay("agent:main:other"), host)).toEqual([]);
   });
 
   it("tracks the source session for a live ancestor projection and removes terminal state", () => {
-    const pending = reconcileSessionApprovalEvent([], { ...event(), sourceSessionKey });
+    const pending = reconcile([], { ...event(), sourceSessionKey });
 
-    expect(pending).toEqual([
-      expect.objectContaining({
-        id: "plugin:approval-1",
-        sourceSessionKey,
-        pluginDetail: pendingPluginApproval.presentation.detail,
-        request: expect.objectContaining({ sessionKey: host }),
-      }),
-    ]);
+    expect(pending).toMatchObject([ancestorProjection]);
     expect(
-      reconcileSessionApprovalEvent(pending ?? [], {
+      reconcile(pending ?? [], {
         ...event(),
         sourceSessionKey,
         phase: "terminal",
@@ -100,13 +90,9 @@ describe("session approval projection", () => {
 
   it("projects only the selected agent's qualified global approval stream", () => {
     const stream = "agent:research:global";
-    expect(projectSessionApprovalReplay(replay(stream), "global", "research")).toEqual([
-      projected("global"),
-    ]);
-    expect(projectSessionApprovalReplay(replay(stream), "global", "main")).toEqual([]);
-    expect(reconcileSessionApprovalEvent([], event(stream), "global", "research")).toEqual([
-      projected("global"),
-    ]);
-    expect(reconcileSessionApprovalEvent([], event(stream), "global", "main")).toBeNull();
+    expect(project(replay(stream), "global", "research")).toMatchObject([projected("global")]);
+    expect(project(replay(stream), "global", "main")).toEqual([]);
+    expect(reconcile([], event(stream), "global", "research")).toMatchObject([projected("global")]);
+    expect(reconcile([], event(stream), "global", "main")).toBeNull();
   });
 });

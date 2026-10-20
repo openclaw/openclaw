@@ -51,10 +51,9 @@ describe("resolved exact session identity", () => {
         displayName: "Shared session title",
       });
       const selected = session("aaaa-4000-8000-000000000001");
-      const other = session("bbbb-4000-8000-000000000002");
       const fixtures = createControlUiSessionFixtures(
         {
-          rows: [selected, other],
+          rows: [selected, session("bbbb-4000-8000-000000000002")],
           mainKey: "agent:main:main",
         },
         isRecord,
@@ -63,10 +62,10 @@ describe("resolved exact session identity", () => {
         const result = contextFor();
         result.request.mockImplementation(async (method, params) => {
           expect(method).toBe("sessions.resolve");
-          if (!params || typeof params !== "object") {
+          if (!isRecord(params)) {
             throw new Error("Missing resolution parameters");
           }
-          if ("shortId" in params && typeof params.shortId === "string") {
+          if (typeof params.shortId === "string") {
             return fixtures.resolve({ shortId: params.shortId, agentId: "main" });
           }
           expect(params).toMatchObject({ reference: { key: selected.key }, agentId: "main" });
@@ -98,8 +97,7 @@ describe("resolved exact session identity", () => {
         "sessions.resolve",
         expect.objectContaining({ shortId: "12345678aaaa40008000000000000001", agentId: "main" }),
       );
-      expect(opened.list).not.toHaveBeenCalled();
-      expect(reloaded.list).not.toHaveBeenCalled();
+      expect([opened.list.mock.calls, reloaded.list.mock.calls]).toEqual([[], []]);
     },
   );
 });
