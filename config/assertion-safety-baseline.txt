@@ -233,12 +233,12 @@ extensions/discord/src/monitor/message-text.ts	1
 extensions/discord/src/monitor/model-picker-preferences.ts	1
 extensions/discord/src/monitor/native-command-reply.ts	2
 extensions/discord/src/monitor/presence.ts	1
-extensions/discord/src/monitor/provider.deploy-errors.ts	9
+extensions/discord/src/monitor/provider.deploy-errors.ts	6
 extensions/discord/src/monitor/provider.deploy.ts	3
 extensions/discord/src/monitor/provider.lifecycle.ts	2
 extensions/discord/src/monitor/reply-safety.ts	1
 extensions/discord/src/monitor/rest-fetch.ts	3
-extensions/discord/src/monitor/thread-bindings.discord-api.ts	2
+extensions/discord/src/monitor/thread-bindings.discord-api.ts	1
 extensions/discord/src/monitor/thread-bindings.state.ts	1
 extensions/discord/src/monitor/thread-channel-context.ts	1
 extensions/discord/src/monitor/threading.starter.ts	1
@@ -250,7 +250,6 @@ extensions/discord/src/pluralkit.ts	1
 extensions/discord/src/probe.ts	1
 extensions/discord/src/security-audit.ts	5
 extensions/discord/src/send.messages.ts	2
-extensions/discord/src/send.shared.ts	1
 extensions/discord/src/setup-core.ts	1
 extensions/discord/src/target-parsing.ts	1
 extensions/discord/src/token.ts	2
@@ -598,7 +597,7 @@ extensions/qa-lab/src/bus-server.ts	3
 extensions/qa-lab/src/bus-state.ts	1
 extensions/qa-lab/src/character-eval.ts	2
 extensions/qa-lab/src/ci-smoke-plan.ts	1
-extensions/qa-lab/src/cli.runtime.ts	4
+extensions/qa-lab/src/cli.runtime.ts	2
 extensions/qa-lab/src/codex-plugin.fixture.ts	2
 extensions/qa-lab/src/crabline-transport.ts	4
 extensions/qa-lab/src/cron-run-wait.ts	1
@@ -1704,7 +1703,6 @@ src/config/sessions/skill-prompt-blobs.ts	5
 src/config/sessions/store-entry-shape.ts	1
 src/config/sessions/transcript-assistant-message.ts	2
 src/config/sessions/transcript-replay.ts	1
-src/config/sessions/transcript-stream.ts	1
 src/config/sessions/transcript-tree.ts	3
 src/config/sessions/transcript.ts	8
 src/config/sessions/types.ts	1

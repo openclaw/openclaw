@@ -174,8 +174,10 @@ same diagnostics locally:
 OPENCLAW_SNAPSHOT_DIAGNOSTICS=1 pnpm ios:screenshots
 ```
 
-Sanitized startup, resource, and crash facts are recorded in
-`apps/ios/build/screenshot-diagnostics.json`. The separate
+Phase timings, simulator counts, and sanitized startup and crash facts are recorded in
+`apps/ios/build/screenshot-diagnostics.json`. Resource observations come from the
+separate [background timeline](fastlane/SETUP.md#temporary-resource-investigation),
+without blocking screenshot phases on native resource probes. The separate
 `capture-attempts.json` ledger keeps its existing schema for release evidence.
 GitHub retains both files and fixture PNGs in
 `ios-screenshots-<run-id>-<run-attempt>`. Raw Xcode logs and XCTest result bundles

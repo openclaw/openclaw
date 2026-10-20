@@ -220,17 +220,7 @@ function createQaSuiteScenarioDeps(
       scanGatewayLogSentinels(readGatewayLogs(options?.since), { ...options, since: 0 }),
     assertNoGatewayLogSentinels: (options?: Parameters<typeof assertNoGatewayLogSentinels>[1]) =>
       assertNoGatewayLogSentinels(readGatewayLogs(options?.since), { ...options, since: 0 }),
-    runRuntimeToolFixture: async (
-      envArg: QaSuiteScenarioFlowEnv,
-      configArg: Record<string, unknown>,
-    ) =>
-      runtimeToolFixture.runRuntimeToolFixture(envArg, configArg, {
-        createSession: suiteRuntimeAgentSession.createSession,
-        readEffectiveTools: suiteRuntimeAgentSession.readEffectiveTools,
-        runAgentPrompt: suiteRuntimeAgentProcess.runAgentPrompt,
-        fetchJson: suiteRuntimeGateway.fetchJson,
-        ensureImageGenerationConfigured: suiteRuntimeAgentMedia.ensureImageGenerationConfigured,
-      }),
+    runRuntimeToolFixture: runtimeToolFixture.runRuntimeToolFixture,
     formatErrorMessage: formatQaErrorMessage,
     liveTurnTimeoutMs: resolveQaLiveTurnTimeoutMs,
     resolveQaLiveTurnTimeoutMs,

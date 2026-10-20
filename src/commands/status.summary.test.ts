@@ -7,6 +7,7 @@ import {
   recordReasoningSuppressedDiagnostic,
   resetDiagnosticSessionStateForTest,
 } from "../logging/diagnostic-session-state.js";
+import type { CliBackendPlugin } from "../plugins/cli-backend.types.js";
 import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import {
@@ -527,6 +528,69 @@ describe("getStatusSummary", () => {
       ["telegram:work", "cold", "secret resolution failed"],
     ]);
     expect(JSON.stringify(summary.degradedSecretOwners)).not.toContain("PRIVATE_REF_ID");
+  });
+
+  it("reports utility capability warnings with details only for configuration access", async () => {
+    const backend: CliBackendPlugin = {
+      id: "fixture-cli",
+      config: { command: "fixture" },
+      nativeToolMode: "always-on",
+      ownsNativeCompaction: false,
+      runtimeArtifact: {
+        kind: "bundled-package-tree",
+        packageName: "@fixture/cli",
+        entrypoint: "command",
+      },
+    };
+    const setup = vi
+      .spyOn(await import("../plugins/setup-registry.js"), "resolvePluginSetupCliBackend")
+      .mockImplementation(({ backend: id }) =>
+        id === backend.id ? { pluginId: "fixture", backend } : undefined,
+      );
+    const registered = vi
+      .spyOn(await import("../plugins/cli-backends.runtime.js"), "resolveRuntimeCliBackends")
+      .mockReturnValue([]);
+    const config = {
+      agents: {
+        defaults: { utilityModel: "fixture-cli/small" },
+        entries: { worker: {} },
+      },
+    };
+    try {
+      const visible = await getStatusSummary({ config, includeChannelSummary: false });
+      expect(visible.utilityModelWarnings).toEqual([
+        expect.objectContaining({
+          path: "agents.defaults.utilityModel",
+          message: expect.stringContaining('Utility model "fixture-cli/small"'),
+        }),
+      ]);
+      const redacted = await getStatusSummary({
+        config,
+        includeSensitive: false,
+        includeChannelSummary: false,
+      });
+      expect(redacted.utilityModelWarnings).toEqual([
+        expect.objectContaining({
+          message: expect.stringContaining(
+            "Choose a capable utility model or add capable utilityModel fallbacks",
+          ),
+        }),
+      ]);
+      expect(JSON.stringify(redacted.utilityModelWarnings)).not.toMatch(
+        /fixture-cli|small|worker|agents\./,
+      );
+      for (const includeSensitive of [true, false]) {
+        const capable = await getStatusSummary({
+          config: { agents: { ...config.agents, defaults: { utilityModel: "local/capable" } } },
+          includeSensitive,
+          includeChannelSummary: false,
+        });
+        expect(capable.utilityModelWarnings).toBeUndefined();
+      }
+    } finally {
+      setup.mockRestore();
+      registered.mockRestore();
+    }
   });
 
   it("reports every plugin configured unavailable by startup verification", async () => {

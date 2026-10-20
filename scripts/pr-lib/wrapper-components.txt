@@ -1606,6 +1606,7 @@ src/plugins/plugin-registry-contributions.ts
 src/plugins/plugin-registry-id-normalizer.ts
 src/plugins/plugin-registry-snapshot.ts
 src/plugins/plugin-registry.ts
+src/plugins/plugin-retention-diagnostics.ts
 src/plugins/plugin-return-value.ts
 src/plugins/plugin-tool-execution.ts
 src/plugins/plugin-runtime-artifact-identity.ts
@@ -2654,3 +2655,17 @@ src/infra/session-sqlite-migration-manifest.ts
 src/infra/sqlite-integrity-operation.ts
 src/infra/sqlite-migration-scoped-snapshot.ts
 src/infra/update-candidate-plugin-code-links.ts
+src/agents/cli-backends.ts
+src/agents/plugin-text-transforms.ts
+src/agents/stream-iterator-wrapper.ts
+src/llm/utils/stream-wrapper.ts
+src/plugins/api-builder.ts
+src/plugins/api-facades.ts
+src/plugins/api-lifecycle.ts
+src/plugins/cli-backend-registration.ts
+src/plugins/cli-backends.runtime.ts
+src/plugins/cli-callback-binding.ts
+src/plugins/service-scheduler-binding.ts
+src/plugins/setup-registry.ts
+src/shared/map-nested-strings.ts
+src/status/utility-model-warnings.ts

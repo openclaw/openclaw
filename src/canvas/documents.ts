@@ -8,6 +8,7 @@ import { root as fsRoot } from "../infra/fs-safe.js";
 import { CANVAS_DOCUMENTS_PATH } from "./constants.js";
 
 const CANVAS_DOCUMENT_MANIFEST_MAX_BYTES = 2 * 1024 * 1024;
+const WIDGET_MAX_PER_SCOPE = 32;
 
 type CanvasDocumentKind = "html_bundle" | "url_embed" | "document" | "image" | "video_asset";
 
@@ -74,11 +75,10 @@ export function resolveCanvasDocumentsDir(stateDir = resolveStateDir()): string 
 
 export async function readCanvasDocumentHtmlSource(
   documentId: string,
-  options?: { stateDir?: string; maxBytes?: number },
 ): Promise<{ html: string; cspSandbox?: "scripts" }> {
   const id = normalizeCanvasDocumentId(documentId);
   // Keep the document directory inside the guarded root so aliases cannot select another document.
-  const root = await fsRoot(resolveCanvasDocumentsDir(options?.stateDir), {
+  const root = await fsRoot(resolveCanvasDocumentsDir(), {
     maxBytes: CANVAS_DOCUMENT_MANIFEST_MAX_BYTES,
   });
   const manifest = await root.readJson<Partial<CanvasDocumentManifest>>(`${id}/manifest.json`);
@@ -91,7 +91,7 @@ export async function readCanvasDocumentHtmlSource(
   }
   return {
     html: await root.readText(`${id}/${entrypoint}`, {
-      maxBytes: options?.maxBytes ?? WIDGET_HTML_MAX_UTF8_BYTES,
+      maxBytes: WIDGET_HTML_MAX_UTF8_BYTES,
     }),
     ...(manifest.cspSandbox === "scripts" ? { cspSandbox: "scripts" as const } : {}),
   };
@@ -100,7 +100,6 @@ export async function readCanvasDocumentHtmlSource(
 async function pruneCanvasDocumentsForScope(params: {
   documentsDir: string;
   retentionScope: string;
-  maxDocuments: number;
 }): Promise<void> {
   const entries = await fs.readdir(params.documentsDir, { withFileTypes: true });
   const scopedDocuments = (
@@ -128,7 +127,7 @@ async function pruneCanvasDocumentsForScope(params: {
         }),
     )
   ).filter((entry): entry is { id: string; createdAt: string } => entry !== null);
-  const deleteCount = Math.max(0, scopedDocuments.length - params.maxDocuments);
+  const deleteCount = Math.max(0, scopedDocuments.length - WIDGET_MAX_PER_SCOPE);
   const oldest = scopedDocuments
     .toSorted(
       (left, right) =>
@@ -142,10 +141,7 @@ async function pruneCanvasDocumentsForScope(params: {
   );
 }
 
-export function resolveCanvasHttpPathToLocalPath(
-  requestPath: string,
-  options?: { stateDir?: string },
-): string | null {
+export function resolveCanvasHttpPathToLocalPath(requestPath: string): string | null {
   const trimmed = requestPath.trim();
   const prefix = `${CANVAS_DOCUMENTS_PATH}/`;
   if (!trimmed.startsWith(prefix)) {
@@ -163,7 +159,7 @@ export function resolveCanvasHttpPathToLocalPath(
     }
     const documentId = normalizeCanvasDocumentId(rawDocumentId);
     const normalizedEntrypoint = normalizeLogicalPath(entrySegments.join("/"));
-    const documentsDir = resolveCanvasDocumentsDir(options?.stateDir);
+    const documentsDir = resolveCanvasDocumentsDir();
     const candidatePath = path.resolve(documentsDir, documentId, normalizedEntrypoint);
     if (!candidatePath.startsWith(`${documentsDir}${path.sep}`)) {
       return null;
@@ -178,7 +174,6 @@ export async function createCanvasDocument(
   input: CanvasDocumentCreateInput,
   options?: {
     stateDir?: string;
-    maxDocumentsPerScope?: number;
   },
 ): Promise<CanvasDocumentManifest> {
   const id = input.id?.trim()
@@ -202,12 +197,11 @@ export async function createCanvasDocument(
     assets: [],
   };
   await root.writeJson("manifest.json", manifest, { space: 2 });
-  if (input.retentionScope && options?.maxDocumentsPerScope) {
+  if (input.retentionScope) {
     // Bounded transcript widgets cannot grow managed Canvas storage without limit.
     await pruneCanvasDocumentsForScope({
-      documentsDir: resolveCanvasDocumentsDir(options.stateDir),
+      documentsDir: resolveCanvasDocumentsDir(options?.stateDir),
       retentionScope: input.retentionScope,
-      maxDocuments: options.maxDocumentsPerScope,
     });
   }
   return manifest;
