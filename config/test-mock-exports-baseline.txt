@@ -6931,7 +6931,6 @@
 ["src/infra/update-immutable-install.adoption.test.ts","../daemon/service-operation-lock.js","e2dfab11fb82a5cc919c55a792a8ba5f37cba675e82d2527f4f372191e4f64e7",1]
 ["src/infra/update-immutable-install.adoption.test.ts","./update-immutable-install-record.js","eb509461b62be1d63e0f9cfacabaa337864fa514f18c6fb6f750aad20a221eaf",1]
 ["src/infra/update-immutable-install.adoption.test.ts","./update-immutable-owner.js","51eccecb1a5de1c08486d1dcd0e446174a0bd9da4e7260653dc95dce12adf9d4",1]
-["src/infra/update-immutable-install.adoption.test.ts","./update-immutable-service.js","8be98bf8840998b3c7a3ebf72358867a3e7e9635eccc824b2b5616d4e33bb1fb",1]
 ["src/infra/update-immutable-install.test.ts","./package-update-activation-immutable.js","eebe9d1d01c87b018fc3db6abf418f7faa1f99364b25e43954e263e0d22bbba6",1]
 ["src/infra/update-immutable-install.test.ts","./update-immutable-install-record.js","eb509461b62be1d63e0f9cfacabaa337864fa514f18c6fb6f750aad20a221eaf",1]
 ["src/infra/update-immutable-owner.test.ts","../cli/update-cli/update-command-executor.js","85edcbd3956baf7dd5eec281f98775e33f3f199555595f3869efbe79daa8fa57",1]
