@@ -1,12 +1,12 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
+import { runWithTrackedCancellation } from "./async-work-resources.js";
 import {
   AsyncWorkScope,
   captureAsyncWorkTracker,
   getAsyncWorkSignal,
   isAsyncWorkScopeActiveHere,
-  runWithTrackedCancellation,
   trackAsyncWork,
 } from "./async-work-scope.js";
 import { createDeferredCore, type Deferred } from "./deferred.js";
