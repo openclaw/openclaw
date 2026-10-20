@@ -39,6 +39,49 @@ import {
 
 customElements.define("scroll-restore-test-host", TranscriptTestHost);
 
+function geometry(
+  element: Element,
+  values: Partial<
+    Record<"clientHeight" | "scrollHeight" | "offsetHeight", number | (() => number)>
+  >,
+) {
+  Object.defineProperties(
+    element,
+    Object.fromEntries(
+      Object.entries(values).map(([key, value]) => [
+        key,
+        { configurable: true, ...(typeof value === "function" ? { get: value } : { value }) },
+      ]),
+    ),
+  );
+}
+
+function emitSize(target: Element, height: number) {
+  for (const observer of resizeObservers) {
+    observer.emitTarget(target, 800, height);
+  }
+}
+
+function emitRowSizes(rows: HTMLElement[], height: number) {
+  for (const observer of resizeObservers) {
+    for (const row of rows) {
+      observer.emitTarget(row, 800, height);
+    }
+  }
+}
+
+function applyScroll(element: HTMLElement, options?: ScrollToOptions | number) {
+  if (typeof options === "object") {
+    element.scrollTop = options.top ?? element.scrollTop;
+  }
+}
+
+const contentRow = (key: string, content: TestContentRow["content"]): TestContentRow => ({
+  kind: "content",
+  key,
+  content,
+});
+
 describe("chat transcript controller", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
@@ -101,11 +144,7 @@ describe("chat transcript controller", () => {
     transcript.start();
     transcript.update();
     await flushDeferredRowPrune();
-    for (const observer of resizeObservers) {
-      for (const row of transcriptRows(container)) {
-        observer.emitTarget(row, 800, 100);
-      }
-    }
+    emitRowSizes(transcriptRows(container), 100);
     render(renderChatThread(props, transcript), container);
 
     expect(transcriptSize(container)).toBe(200);
@@ -156,25 +195,17 @@ describe("chat transcript controller", () => {
     const teardownPending = createDeferred();
     transcriptDomState.measuredRowHeight = 180;
     const initialRows = [
-      { kind: "content" as const, key: "app", content: <mcp-app-view /> },
-      { kind: "content" as const, key: "group:tool", content: <div>tool</div> },
-      { kind: "content" as const, key: "group:reply", content: <div>reply</div> },
+      contentRow("app", <mcp-app-view />),
+      contentRow("group:tool", <div>tool</div>),
+      contentRow("group:reply", <div>reply</div>),
     ];
     const regroupedRows = [
-      { kind: "content" as const, key: "history", content: <div>history</div> },
-      {
-        kind: "content" as const,
-        key: "group:reply",
-        content: <div>regrouped</div>,
-      },
-      { kind: "content" as const, key: "group:next", content: <div>next</div> },
+      contentRow("history", <div>history</div>),
+      contentRow("group:reply", <div>regrouped</div>),
+      contentRow("group:next", <div>next</div>),
     ];
     const { container, renderRows } = await mountTestTranscript("pane-mcp-rows", initialRows);
-    for (const observer of resizeObservers) {
-      for (const row of transcriptRows(container)) {
-        observer.emitTarget(row, 800, 180);
-      }
-    }
+    emitRowSizes(transcriptRows(container), 180);
     renderRows(initialRows);
     expect(transcriptSize(container)).toBe(540);
     stubMcpAppLifecycle(container, () => teardownPending.promise);
@@ -189,10 +220,8 @@ describe("chat transcript controller", () => {
 
     // Deliver an old-tree resize while teardown keeps that tree connected.
     // Its data-index values must still resolve through the old key model.
-    Object.defineProperty(retainedRows[1]!, "offsetHeight", { configurable: true, value: 40 });
-    for (const observer of resizeObservers) {
-      observer.emitTarget(retainedRows[1]!, 800, 40);
-    }
+    geometry(retainedRows[1]!, { offsetHeight: 40 });
+    emitSize(retainedRows[1]!, 40);
     teardownPending.resolve();
     await teardownPending.promise;
     await Promise.resolve();
@@ -207,13 +236,10 @@ describe("chat transcript controller", () => {
       "group:next",
     ]);
     // New rows receive their first sizes; the retained reply must keep its own.
-    for (const observer of resizeObservers) {
-      for (const row of committedRows) {
-        if (row.dataset.virtualRowKey !== "group:reply") {
-          observer.emitTarget(row, 800, 180);
-        }
-      }
-    }
+    emitRowSizes(
+      committedRows.filter((row) => row.dataset.virtualRowKey !== "group:reply"),
+      180,
+    );
     renderRows(regroupedRows);
     // The old tool's 40px delivery must not resize the retained reply key.
     expect(transcriptSize(container)).toBe(540);
@@ -225,14 +251,7 @@ describe("chat transcript controller", () => {
       const focused = change === "focused reorder";
       const initialRows =
         change === "append"
-          ? [
-              {
-                kind: "content" as const,
-                key: "app",
-                content: <mcp-app-view />,
-              },
-              { kind: "content" as const, key: "reply", content: <div>reply</div> },
-            ]
+          ? [contentRow("app", <mcp-app-view />), contentRow("reply", <div>reply</div>)]
           : mcpRangeRows(
               focused ? (
                 <mcp-app-view>
@@ -256,7 +275,7 @@ describe("chat transcript controller", () => {
       }
       renderRows(
         change === "append"
-          ? [...initialRows, { kind: "content", key: "next", content: <div>next</div> }]
+          ? [...initialRows, contentRow("next", <div>next</div>)]
           : [initialRows.at(-1)!, ...initialRows.slice(0, -1)],
       );
       if (change === "reorder") {
@@ -289,10 +308,7 @@ describe("chat transcript controller", () => {
     flush();
     const scrollElement = container.querySelector<HTMLElement>(".chat-thread");
     expect(scrollElement).not.toBeNull();
-    Object.defineProperties(scrollElement, {
-      clientHeight: { configurable: true, value: 600 },
-      scrollHeight: { configurable: true, value: 600 },
-    });
+    geometry(scrollElement!, { clientHeight: 600, scrollHeight: 600 });
 
     transcript.start();
     transcript.scrollToEnd({ source: "auto" });
@@ -357,10 +373,7 @@ describe("chat transcript controller", () => {
     const container = document.body.appendChild(document.createElement("div"));
     const props = threadProps("cold-load-tail", "agent:main:cold-load-tail", []);
     render(renderChatThread(props, transcript), container);
-    Object.defineProperties(container.querySelector(".chat-thread"), {
-      clientHeight: { configurable: true, value: 600 },
-      scrollHeight: { configurable: true, value: 600 },
-    });
+    geometry(container.querySelector(".chat-thread")!, { clientHeight: 600, scrollHeight: 600 });
     transcript.start();
     transcript.update();
     flushFrames();
@@ -394,10 +407,7 @@ describe("chat transcript controller", () => {
     };
     renderWindow(loading);
     if (!loading) {
-      Object.defineProperty(container.querySelector(".chat-thread")!, "clientHeight", {
-        configurable: true,
-        value: 600,
-      });
+      geometry(container.querySelector(".chat-thread")!, { clientHeight: 600 });
     }
     transcript.start();
     transcript.update();
@@ -440,15 +450,8 @@ describe("chat transcript controller", () => {
     }));
     const rows = numberedContentRows(40);
     let scrollHeight = 600;
-    Object.defineProperties(container, {
-      clientHeight: { configurable: true, value: 600 },
-      scrollHeight: { configurable: true, get: () => scrollHeight },
-    });
-    container.scrollTo = (options?: ScrollToOptions | number) => {
-      if (typeof options === "object") {
-        container.scrollTop = options.top ?? container.scrollTop;
-      }
-    };
+    geometry(container, { clientHeight: 600, scrollHeight: () => scrollHeight });
+    container.scrollTo = (options?: ScrollToOptions | number) => applyScroll(container, options);
     host.renderTranscript = () =>
       transcript.renderSession("agent:main:restore-retry", (session) => {
         session.setContentReady(true);
@@ -516,15 +519,10 @@ describe("chat transcript controller", () => {
         rows,
       );
       let scrollHeight = range === "measurable" ? 2000 : 900;
-      Object.defineProperties(container, {
-        clientHeight: { configurable: true, value: 600 },
-        scrollHeight: { configurable: true, get: () => scrollHeight },
-      });
-      const scrollTo = vi.fn((options?: ScrollToOptions | number) => {
-        if (typeof options === "object") {
-          container.scrollTop = options.top ?? container.scrollTop;
-        }
-      });
+      geometry(container, { clientHeight: 600, scrollHeight: () => scrollHeight });
+      const scrollTo = vi.fn((options?: ScrollToOptions | number) =>
+        applyScroll(container, options),
+      );
       container.scrollTo = scrollTo;
       const onSettled = vi.fn();
       const frames = (count: number) => {
@@ -604,13 +602,8 @@ describe("chat transcript controller", () => {
             container.scrollTop = options.top ?? container.scrollTop;
           }
         };
-        Object.defineProperties(container, {
-          clientHeight: { configurable: true, value: 600 },
-          scrollHeight: { configurable: true, value: 4000 },
-        });
-        for (const observer of resizeObservers) {
-          observer.emitTarget(container, 800, 600);
-        }
+        geometry(container, { clientHeight: 600, scrollHeight: 4000 });
+        emitSize(container, 600);
         transcript.scrollToOffset(0);
         renderRows(rows);
         container.dispatchEvent(new Event("scroll"));
@@ -624,10 +617,8 @@ describe("chat transcript controller", () => {
         );
         const initialSize = transcriptSize(container);
         const resize = () => {
-          Object.defineProperty(first, "offsetHeight", { configurable: true, value: 200 });
-          for (const observer of resizeObservers) {
-            observer.emitTarget(first, 800, 200);
-          }
+          geometry(first, { offsetHeight: 200 });
+          emitSize(first, 200);
         };
         transcript.scrollToEnd({ behavior });
         if (observerLate) {
@@ -679,20 +670,16 @@ describe("chat transcript controller", () => {
         canFollowEnd: () => false,
       });
       const content = numberedContentRows(12);
-      const typing: TestContentRow = {
-        kind: "content",
-        key: "presence:typing",
-        content: <div>Typing</div>,
-      };
+      const typing = contentRow("presence:typing", <div>Typing</div>);
       const { container, renderRows } = await mountTestTranscript(
         "retired-end-index",
         [...content, typing],
         transcript,
       );
       let extraExtent = 0;
-      Object.defineProperties(container, {
-        clientHeight: { configurable: true, value: 600 },
-        scrollHeight: { configurable: true, get: () => transcriptSize(container) + extraExtent },
+      geometry(container, {
+        clientHeight: 600,
+        scrollHeight: () => transcriptSize(container) + extraExtent,
       });
       container.scrollTo = vi.fn((options?: ScrollToOptions | number, y?: number) => {
         container.scrollTop = typeof options === "number" ? (y ?? 0) : (options?.top ?? 0);
@@ -701,7 +688,7 @@ describe("chat transcript controller", () => {
         container.querySelector<HTMLElement>('[data-virtual-row-key="presence:typing"]'),
         "typing row",
       );
-      Object.defineProperty(typingRow, "offsetHeight", { configurable: true, value: 30 });
+      geometry(typingRow, { offsetHeight: 30 });
       for (const observer of resizeObservers) {
         observer.emitTarget(container, 800, 600);
         observer.emitTarget(typingRow, 800, 30);
@@ -724,11 +711,7 @@ describe("chat transcript controller", () => {
         // Reader takeover cancels following after the UI considers the command settled.
         transcript.cancelScroll();
         transcriptDomState.measuredRowHeight = 120;
-        const next: TestContentRow[] = [
-          ...content,
-          { kind: "content", key: "peer", content: <div>Peer</div> },
-          typing,
-        ];
+        const next: TestContentRow[] = [...content, contentRow("peer", <div>Peer</div>), typing];
         renderRows(next);
         await Promise.resolve();
         renderRows(next);
@@ -747,10 +730,7 @@ describe("chat transcript controller", () => {
     transcriptDomState.measuredRowHeight = 120;
     const rows = numberedContentRows(40);
     const { container, transcript } = await mountTestTranscript("idle-latest", rows);
-    Object.defineProperties(container, {
-      clientHeight: { configurable: true, value: 600 },
-      scrollHeight: { configurable: true, value: 4800 },
-    });
+    geometry(container, { clientHeight: 600, scrollHeight: 4800 });
     const scrollTo = vi.fn();
     container.scrollTo = scrollTo;
     vi.useFakeTimers();
@@ -763,7 +743,7 @@ describe("chat transcript controller", () => {
       expect(scrollTo).toHaveBeenLastCalledWith({ top: 4200, behavior: "smooth" });
       container.scrollTop = 1500;
       container.dispatchEvent(new Event("scroll"));
-      Object.defineProperty(container, "scrollHeight", { configurable: true, value: 4900 });
+      geometry(container, { scrollHeight: 4900 });
       vi.advanceTimersByTime(16);
       expect(scrollTo).toHaveBeenLastCalledWith({ top: 4300, behavior: "smooth" });
       scrollTo.mockClear();
@@ -809,19 +789,13 @@ describe("chat transcript controller", () => {
       const { container } = await mountTestTranscript(`height-resize-${locked}`, rows, transcript);
       try {
         const total = transcriptSize(container);
-        Object.defineProperties(container, {
-          clientHeight: { configurable: true, value: 600 },
-          // Real container padding leaves the reader 88px above the actual end,
-          // even though the virtual rows alone appear to be end-pinned.
-          scrollHeight: { configurable: true, value: total + 88 },
-        });
+        // Padding leaves the reader 88px above the actual, not virtual, end.
+        geometry(container, { clientHeight: 600, scrollHeight: total + 88 });
         const scrollTo = vi.fn();
         container.scrollTo = scrollTo;
         policy.chatScrollElement = () => container;
         policy.chatScrollToEnd = (options) => transcript.scrollToEnd(options);
-        for (const observer of resizeObservers) {
-          observer.emitTarget(container, 800, 600);
-        }
+        emitSize(container, 600);
         container.scrollTop = total - 600;
         container.dispatchEvent(new Event("scroll"));
         if (locked) {
@@ -831,10 +805,8 @@ describe("chat transcript controller", () => {
         scrollTo.mockClear();
 
         for (const height of [560, 640]) {
-          Object.defineProperty(container, "clientHeight", { configurable: true, value: height });
-          for (const observer of resizeObservers) {
-            observer.emitTarget(container, 800, height);
-          }
+          geometry(container, { clientHeight: height });
+          emitSize(container, height);
           // The observer only reports geometry; follow waits for the policy frame.
           expect(scrollTo).not.toHaveBeenCalled();
           flushFrames();
@@ -867,18 +839,9 @@ describe("chat transcript controller", () => {
     try {
       const total = transcriptSize(container);
       container.style.padding = "28px 0 56px";
-      container.scrollTo = (options?: ScrollToOptions | number) => {
-        if (typeof options === "object") {
-          container.scrollTop = options.top ?? container.scrollTop;
-        }
-      };
-      Object.defineProperties(container, {
-        clientHeight: { configurable: true, value: 600 },
-        scrollHeight: { configurable: true, value: total + 84 },
-      });
-      for (const observer of resizeObservers) {
-        observer.emitTarget(container, 800, 600);
-      }
+      container.scrollTo = (options?: ScrollToOptions | number) => applyScroll(container, options);
+      geometry(container, { clientHeight: 600, scrollHeight: total + 84 });
+      emitSize(container, 600);
       container.scrollTop = container.scrollHeight - container.clientHeight - 44;
       container.dispatchEvent(new Event("scroll"));
       const readerOffset = container.scrollTop;
@@ -889,14 +852,9 @@ describe("chat transcript controller", () => {
       );
       expect(observedElements.has(row)).toBe(true);
 
-      Object.defineProperty(row, "offsetHeight", { configurable: true, value: 192 });
-      Object.defineProperty(container, "scrollHeight", {
-        configurable: true,
-        value: total + 84 + 72,
-      });
-      for (const observer of resizeObservers) {
-        observer.emitTarget(row, 800, 192);
-      }
+      geometry(row, { offsetHeight: 192 });
+      geometry(container, { scrollHeight: total + 84 + 72 });
+      emitSize(row, 192);
       renderRows(rows);
       expect(transcriptSize(container)).toBe(total + 72);
       expect(container.scrollTop).toBe(readerOffset);
@@ -913,11 +871,7 @@ describe("chat transcript controller", () => {
         geometryEventTarget,
       });
       const rows: TestContentRow[] = [
-        {
-          kind: "content",
-          key: "disclosure",
-          content: <button aria-expanded="false">Expand</button>,
-        },
+        contentRow("disclosure", <button aria-expanded="false">Expand</button>),
       ];
       const { container } = await mountTestTranscript(`disclosure-${interrupt}`, rows, transcript);
       geometryEventTarget.append(container);
@@ -958,17 +912,14 @@ describe("chat transcript controller", () => {
       anchorToEnd: false,
     });
     const rows: TestContentRow[] = [
-      { kind: "content", key: "history", content: <div>History</div> },
-      { kind: "content", key: "presence:typing", content: <div>Typing</div> },
+      contentRow("history", <div>History</div>),
+      contentRow("presence:typing", <div>Typing</div>),
     ];
     const { container, transcript, renderRows } = await mountTestTranscript(paneId, rows);
     try {
       // The saved offset initially encounters an unmeasurable DOM. Once the
       // viewport commits, automatic typing follow must not have retired it.
-      Object.defineProperties(container, {
-        clientHeight: { configurable: true, value: 600 },
-        scrollHeight: { configurable: true, value: 2000 },
-      });
+      geometry(container, { clientHeight: 600, scrollHeight: 2000 });
       renderRows(rows);
       for (let frame = 0; frame < 3; frame += 1) {
         await Promise.resolve();

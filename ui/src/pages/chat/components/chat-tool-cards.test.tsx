@@ -26,6 +26,13 @@ import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 const canvas = { kind: "canvas", surface: "assistant_message", render: "url" } as const;
 
 const textOf = (root: ParentNode, selector: string) => root.querySelector(selector)?.textContent;
+const change = (path: string, diff: string, type = "update") => ({ path, kind: { type }, diff });
+const patchCard = (args: ToolCard["args"], extra: Partial<ToolCard> = {}): ToolCard => ({
+  id: "patch",
+  name: "apply_patch",
+  args,
+  ...extra,
+});
 
 describe("tool-cards", () => {
   it("routes MCP App previews through the dedicated double-iframe host", async () => {
@@ -46,33 +53,16 @@ describe("tool-cards", () => {
   });
 
   it("switches a completed patch between mutually exclusive diff and raw bodies", async () => {
-    const container = document.body.appendChild(document.createElement("div"));
-    await mountCard(
+    const card = patchCard(
       {
-        id: "msg:patch:multi",
-        name: "apply_patch",
-        args: {
-          changes: [
-            {
-              path: "src/a.ts",
-              kind: { type: "update" },
-              diff: [
-                "--- a/src/a.ts",
-                "+++ b/src/a.ts",
-                "@@ -1 +1 @@",
-                "-old a",
-                "+new a",
-                "",
-              ].join("\n"),
-            },
-            { path: "src/b.ts", kind: { type: "add" }, diff: "new b\n" },
-          ],
-        },
-        outputText: "Applied patch",
+        changes: [
+          change("src/a.ts", "--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-old a\n+new a\n"),
+          change("src/b.ts", "new b\n", "add"),
+        ],
       },
-      {},
-      container,
+      { id: "msg:patch:multi", outputText: "Applied patch" },
     );
+    const container = await mountCard(card);
 
     const diff = container.querySelector(".chat-diff");
     expect(diff?.getAttribute("aria-label")).toBe("File changes");
@@ -116,15 +106,9 @@ describe("tool-cards", () => {
 
     await mountCard(
       {
-        id: "msg:patch:multi",
-        name: "apply_patch",
-        args: {
-          changes: [
-            { path: "src/a.ts", kind: { type: "update" }, diff: "@@ -1 +1 @@\n-old\n+new\n" },
-          ],
-        },
+        ...card,
+        args: { changes: [change("src/a.ts", "@@ -1 +1 @@\n-old\n+new\n")] },
         completed: true,
-        outputText: "Applied patch",
       },
       {},
       container,
@@ -147,20 +131,15 @@ describe("tool-cards", () => {
   ])(
     "shows $outcome edit output before the attempted diff",
     async ({ outcome, outputText, details }) => {
-      const container = document.body.appendChild(document.createElement("div"));
-      await mountCard(
-        {
-          id: "msg:edit:failed",
-          name: "edit",
-          args: { path: "src/a.ts", oldText: "before", newText: "after" },
-          outputText,
-          details,
-          completed: true,
-          isError: outcome === "failed",
-        },
-        {},
-        container,
-      );
+      const container = await mountCard({
+        id: "msg:edit:failed",
+        name: "edit",
+        args: { path: "src/a.ts", oldText: "before", newText: "after" },
+        outputText,
+        details,
+        completed: true,
+        isError: outcome === "failed",
+      });
 
       const rawTab = container.querySelector('[role="tab"][data-tab-value="raw"]');
       await waitForSolid(() => expect(rawTab?.getAttribute("aria-selected")).toBe("true"));
@@ -175,16 +154,10 @@ describe("tool-cards", () => {
     const onOpenWorkspaceFile = vi.fn();
     const onToggleExpanded = vi.fn();
     const container = await mountCard(
-      {
-        id: "msg:patch:add",
-        name: "apply_patch",
-        args: {
-          changes: [
-            { path: "src/new.ts", kind: { type: "add" }, diff: "export const created = true;\n" },
-          ],
-        },
-        completed: true,
-      },
+      patchCard(
+        { changes: [change("src/new.ts", "export const created = true;\n", "add")] },
+        { id: "msg:patch:add", completed: true },
+      ),
       { expanded: false, onOpenWorkspaceFile, onToggleExpanded },
     );
 
@@ -205,43 +178,28 @@ describe("tool-cards", () => {
   it.each([
     {
       label: "multi-file",
-      patch: [
-        "*** Begin Patch",
-        "*** Update File: src/a.ts",
-        "@@",
-        "-old",
-        "+new",
-        "*** Add File: src/b.ts",
-        "+added",
-        "*** End Patch",
-      ].join("\n"),
+      patch:
+        "*** Begin Patch\n*** Update File: src/a.ts\n@@\n-old\n+new\n*** Add File: src/b.ts\n+added\n*** End Patch",
       target: "2 files",
     },
     {
       label: "moved",
-      patch: [
-        "*** Begin Patch",
-        "*** Update File: src/old.ts",
-        "*** Move to: src/new.ts",
-        "@@",
-        "-old",
-        "+new",
-        "*** End Patch",
-      ].join("\n"),
+      patch:
+        "*** Begin Patch\n*** Update File: src/old.ts\n*** Move to: src/new.ts\n@@\n-old\n+new\n*** End Patch",
       target: "old.ts → new.ts",
     },
     {
       // A successful delete removes its own target, so the workspace loader
       // would only ever report "Failed to load".
       label: "deleted",
-      patch: ["*** Begin Patch", "*** Delete File: src/gone.ts", "*** End Patch"].join("\n"),
+      patch: "*** Begin Patch\n*** Delete File: src/gone.ts\n*** End Patch",
       target: "gone.ts",
     },
   ])("keeps $label patch summaries non-navigable", async ({ patch, target }) => {
     const onOpenWorkspaceFile = vi.fn();
     const onToggleExpanded = vi.fn();
     const container = await mountCard(
-      { id: `msg:patch:${target}`, name: "apply_patch", args: { patch }, completed: true },
+      patchCard({ patch }, { id: `msg:patch:${target}`, completed: true }),
       { expanded: false, onOpenWorkspaceFile, onToggleExpanded },
     );
 
@@ -303,20 +261,17 @@ describe("tool-cards", () => {
     const onOpenSidebar = vi.fn();
     try {
       await mountCard(
-        {
-          id: "copy",
-          name: "apply_patch",
-          completed: true,
-          args: {
+        patchCard(
+          {
             changes: [
-              {
-                path: "src/patch.ts",
-                kind: { type: "update" },
-                diff: "--- a/src/patch.ts\n+++ b/src/patch.ts\n@@ -1 +1 @@\n-old patch\n+new patch\n",
-              },
+              change(
+                "src/patch.ts",
+                "--- a/src/patch.ts\n+++ b/src/patch.ts\n@@ -1 +1 @@\n-old patch\n+new patch\n",
+              ),
             ],
           },
-        },
+          { id: "copy", completed: true },
+        ),
         { onOpenSidebar },
         container,
       );
@@ -343,14 +298,10 @@ describe("tool-cards", () => {
   });
 
   it("opens the raw file path from an expanded read card", async () => {
-    const { name, args, path } = {
-      name: "read",
-      args: { path: "packages/app/src/read.ts" },
-      path: "packages/app/src/read.ts",
-    };
+    const path = "packages/app/src/read.ts";
     const onOpenWorkspaceFile = vi.fn();
     const container = await mountCard(
-      { id: `msg:${name}:open`, name, args, completed: true },
+      { id: "msg:read:open", name: "read", args: { path }, completed: true },
       { onOpenWorkspaceFile },
     );
 
@@ -363,11 +314,12 @@ describe("tool-cards", () => {
   });
 
   it("keeps read offsets and limits visible in expanded args", async () => {
+    const args = { path: "/repo/src/a.ts", offset: 40, limit: 20 };
     const container = await mountCard({
       id: "msg:read:range",
       name: "read",
-      args: { path: "/repo/src/a.ts", offset: 40, limit: 20 },
-      inputText: JSON.stringify({ path: "/repo/src/a.ts", offset: 40, limit: 20 }),
+      args,
+      inputText: JSON.stringify(args),
     });
 
     expect(textOf(container, ".chat-tool-row__verb")).toBe("Read");
@@ -818,15 +770,15 @@ describe("tool-card source highlighting", () => {
     return container;
   }
   it("highlights edit previews using their file languages", async () => {
-    const card = {
+    const container = await highlighted({
+      id: "highlight",
       name: "edit",
       args: {
         path: "example.ts",
         oldText: "/* removed comment\ncontinued",
         newText: 'const value = "new";',
       },
-    };
-    const container = await highlighted({ id: "highlight", ...card });
+    });
     await vi.waitFor(() => expect(textOf(container, ".tok-keyword")).toBe("const"));
     expect(textOf(container, ".tok-string")).toMatch(/"(?:old|new)"/);
   });
@@ -864,12 +816,12 @@ describe("tool-card source highlighting", () => {
                 },
               ],
             };
-      const container = await highlighted({
-        id: "rename",
-        name: "apply_patch",
-        args,
-        ...(format === "structured" ? { outputText: "Applied patch" } : {}),
-      });
+      const container = await highlighted(
+        patchCard(args, {
+          id: "rename",
+          ...(format === "structured" ? { outputText: "Applied patch" } : {}),
+        }),
+      );
       await vi.waitFor(() => {
         expect(textOf(container, ".chat-diff__row--del .tok-propertyName")).toBe("data-mode");
         expect(textOf(container, ".chat-diff__row--add .tok-keyword")).toBe("const");
@@ -945,9 +897,19 @@ function restoreActiveElement() {
   delete (document as unknown as Record<string, unknown>).activeElement;
 }
 
+function promptFixture(url: string, external = false) {
+  const { container, frame } = renderWidgetPreviewFrame(url, external);
+  const received = collectPromptEvents(container);
+  onTestFinished(() => {
+    restoreActiveElement();
+    container.remove();
+  });
+  return { frame, received };
+}
+
 describe("URL-only widget prompts", () => {
   it("adopts the bridge's prompt port offer and enforces the prompt contract", async () => {
-    const { container, frame } = renderWidgetPreviewFrame(
+    const { frame, received } = promptFixture(
       "/__openclaw__/canvas/documents/cv_prompt/index.html",
     );
     // The bridge posts its offer at parse time, before the frame's load event.
@@ -959,78 +921,60 @@ describe("URL-only widget prompts", () => {
     await flushPorts();
     expect(hostMessages).toContainEqual({ type: "openclaw:widget-prompt-host-ready" });
     emulateInteractableFrame(frame);
-    const received = collectPromptEvents(container);
-    try {
-      postPrompt(port, "  Show details  ");
-      await flushPorts();
-      expect(received).toEqual(["Show details"]);
-      // Slash and bang commands would run host commands on the widget's behalf;
-      // the send path must only ever receive conversational text.
-      postPrompt(port, "/approve");
-      postPrompt(port, "!pwd");
-      postPrompt(port, "   ");
-      postPrompt(port, 42);
-      postPrompt(port, "x".repeat(4_001));
-      await flushPorts();
-      expect(received).toEqual(["Show details"]);
-      // A replacement document's later offer must not displace or re-arm the
-      // adopted grant, even across another load event.
-      const lateOfferPort = offerPromptPort(frame);
-      frame.dispatchEvent(new Event("load"));
-      postPrompt(lateOfferPort, "From takeover");
-      await flushPorts();
-      expect(received).toEqual(["Show details"]);
-      // Without focus on the frame there is no user-activation signal; drop.
-      restoreActiveElement();
-      postPrompt(port, "Auto send");
-      await flushPorts();
-      expect(received).toEqual(["Show details"]);
-      // Rate limit: 10 accepted prompts per rolling minute per widget document.
-      emulateInteractableFrame(frame);
-      for (let index = 2; index <= 12; index += 1) {
-        postPrompt(port, `Prompt ${index}`);
-      }
-      await flushPorts();
-      expect(received).toHaveLength(10);
-      expect(received.at(-1)).toBe("Prompt 10");
-    } finally {
-      restoreActiveElement();
-      container.remove();
+    postPrompt(port, "  Show details  ");
+    await flushPorts();
+    expect(received).toEqual(["Show details"]);
+    // Slash and bang commands would run host commands on the widget's behalf;
+    // the send path must only ever receive conversational text.
+    postPrompt(port, "/approve");
+    postPrompt(port, "!pwd");
+    postPrompt(port, "   ");
+    postPrompt(port, 42);
+    postPrompt(port, "x".repeat(4_001));
+    await flushPorts();
+    expect(received).toEqual(["Show details"]);
+    // A replacement document's later offer must not displace or re-arm the
+    // adopted grant, even across another load event.
+    const lateOfferPort = offerPromptPort(frame);
+    frame.dispatchEvent(new Event("load"));
+    postPrompt(lateOfferPort, "From takeover");
+    await flushPorts();
+    expect(received).toEqual(["Show details"]);
+    // Without focus on the frame there is no user-activation signal; drop.
+    restoreActiveElement();
+    postPrompt(port, "Auto send");
+    await flushPorts();
+    expect(received).toEqual(["Show details"]);
+    // Rate limit: 10 accepted prompts per rolling minute per widget document.
+    emulateInteractableFrame(frame);
+    for (let index = 2; index <= 12; index += 1) {
+      postPrompt(port, `Prompt ${index}`);
     }
+    await flushPorts();
+    expect(received).toHaveLength(10);
+    expect(received.at(-1)).toBe("Prompt 10");
   });
 
   it("adopts a prompt offer that arrives after the frame's load event", async () => {
-    const { container, frame } = renderWidgetPreviewFrame(
+    const { frame, received } = promptFixture(
       "/__openclaw__/canvas/documents/cv_late_offer/index.html",
     );
     // Posted-message and load tasks have no guaranteed ordering; here load wins.
     frame.dispatchEvent(new Event("load"));
     const port = offerPromptPort(frame);
     emulateInteractableFrame(frame);
-    const received = collectPromptEvents(container);
-    try {
-      postPrompt(port, "Late but valid");
-      await flushPorts();
-      expect(received).toEqual(["Late but valid"]);
-    } finally {
-      restoreActiveElement();
-      container.remove();
-    }
+    postPrompt(port, "Late but valid");
+    await flushPorts();
+    expect(received).toEqual(["Late but valid"]);
   });
 
   it("never adopts prompt offers from externally allowed embed URLs", async () => {
-    const { container, frame } = renderWidgetPreviewFrame("https://canvas.example/widget", true);
+    const { frame, received } = promptFixture("https://canvas.example/widget", true);
     const port = offerPromptPort(frame);
     frame.dispatchEvent(new Event("load"));
     emulateInteractableFrame(frame);
-    const received = collectPromptEvents(container);
-    try {
-      postPrompt(port, "External send");
-      await flushPorts();
-      expect(received).toEqual([]);
-    } finally {
-      restoreActiveElement();
-      container.remove();
-    }
+    postPrompt(port, "External send");
+    await flushPorts();
+    expect(received).toEqual([]);
   });
 });

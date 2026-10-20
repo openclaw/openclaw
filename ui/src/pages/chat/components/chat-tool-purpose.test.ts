@@ -1,7 +1,10 @@
 /* @vitest-environment jsdom */
 
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { mountCard } from "./chat-tool-cards.test-support.tsx";
+
+const text = (container: ParentNode, selector: string) =>
+  container.querySelector(selector)?.textContent;
 
 describe("execution purpose cards", () => {
   it.each([
@@ -17,25 +20,19 @@ describe("execution purpose cards", () => {
     for (const expanded of [false, true]) {
       await mountCard(
         { id: "no-detail", name, args, completed: true },
-        { messageKey: "no-detail", expanded, onToggleExpanded: vi.fn() },
+        { messageKey: "no-detail", expanded },
         container,
       );
-      expect(container.querySelector(".chat-tool-disclosure__content")?.textContent?.trim()).toBe(
-        label,
-      );
+      expect(text(container, ".chat-tool-disclosure__content")?.trim()).toBe(label);
     }
   });
 
   it("keeps the tool name icon-only when a distinct preview identifies the operation", async () => {
-    const container = document.createElement("div");
-    await mountCard(
+    const container = await mountCard(
       { id: "with-detail", name: "custom_tool", args: { text: "Inspect the workspace" } },
-      { messageKey: "with-detail", expanded: false, onToggleExpanded: vi.fn() },
-      container,
+      { messageKey: "with-detail", expanded: false },
     );
-    expect(container.querySelector(".chat-tool-disclosure__content")?.textContent?.trim()).toBe(
-      "Inspect the workspace",
-    );
+    expect(text(container, ".chat-tool-disclosure__content")?.trim()).toBe("Inspect the workspace");
     expect(container.querySelector(".chat-tool-msg-summary__label")).toBeNull();
   });
 
@@ -57,65 +54,44 @@ describe("execution purpose cards", () => {
         messageKey: "purpose",
         expanded: false,
         runActive: true,
-        onToggleExpanded: vi.fn(),
       };
       await mountCard(card, options, container);
-      expect(container.querySelector(".chat-tool-row__title")?.textContent).toBe(
-        "Check the workspace",
-      );
+      expect(text(container, ".chat-tool-row__title")).toBe("Check the workspace");
       expect(container.querySelector(".chat-tool-row__cmd")).toBeNull();
       expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
 
       await mountCard({ ...card, completed: true }, { ...options, expanded: true }, container);
-      expect(container.querySelector(".chat-tool-row__title")?.textContent).toBe(
-        "Check the workspace",
-      );
+      expect(text(container, ".chat-tool-row__title")).toBe("Check the workspace");
       for (const source of Object.values(args)) {
-        expect(container.querySelector(".chat-tool-msg-body")?.textContent).toContain(source);
+        expect(text(container, ".chat-tool-msg-body")).toContain(source);
       }
       if (args.code) {
         expect(container.querySelector(".chat-tool-term")).toBeNull();
       }
-      expect(container.querySelector(".chat-tool-msg-body")?.textContent).toContain(
-        "workspace checked",
-      );
+      expect(text(container, ".chat-tool-msg-body")).toContain("workspace checked");
     },
   );
 
-  it.each([{ name: "calendar_create", args: { title: "Team meeting", command: "create" } }])(
-    "does not treat $name business title arguments as activity descriptions",
-    async ({ name, args }) => {
-      const container = document.createElement("div");
-      await mountCard(
-        { id: "business-title", name, args },
-        {
-          messageKey: "business-title",
-          expanded: false,
-          onToggleExpanded: vi.fn(),
-        },
-        container,
-      );
-      expect(container.querySelector(".chat-tool-row__title")).toBeNull();
-    },
-  );
+  it("does not treat business title arguments as activity descriptions", async () => {
+    const container = await mountCard(
+      {
+        id: "business-title",
+        name: "calendar_create",
+        args: { title: "Team meeting", command: "create" },
+      },
+      { messageKey: "business-title", expanded: false },
+    );
+    expect(container.querySelector(".chat-tool-row__title")).toBeNull();
+  });
 
   it("keeps multiline command previews readable and bounded without changing the source", async () => {
-    const container = document.createElement("div");
     const command =
       "printf '\n--- recovery ---\n'\ncat recovery.md\n" + "echo example\n".repeat(100);
     const card = { id: "multiline-command", name: "exec", args: { command } };
-    await mountCard(
-      card,
-      {
-        messageKey: "multiline-command",
-        expanded: true,
-        onToggleExpanded: vi.fn(),
-      },
-      container,
-    );
-    const preview = container.querySelector(".chat-tool-row__cmd")?.textContent ?? "";
+    const container = await mountCard(card, { messageKey: "multiline-command" });
+    const preview = text(container, ".chat-tool-row__cmd") ?? "";
     expect(preview).toContain("printf ' --- recovery --- ' cat recovery.md");
     expect(preview.length).toBeLessThanOrEqual(200);
-    expect(container.querySelector(".chat-tool-msg-body")?.textContent).toContain(command);
+    expect(text(container, ".chat-tool-msg-body")).toContain(command);
   });
 });
