@@ -4,58 +4,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadControlUiGitHubPreview as loadPreview } from "./preview.js";
 import {
   avatarDataUrl,
-  coauthorTrailers,
-  conditionalJson,
+  conditionalPreviewFixture,
   githubJson,
   managedIdentity,
   pngResponse,
   previewPayload,
   previewFetch,
   previewTarget,
-  publicRepository,
   requestUrl,
 } from "./preview.test-support.js";
-
-function decorationFixture(kind: "issue" | "pull", number: number, authors: [string, number][]) {
-  const state = { item: 1, commits: 1, avatar: 1, login: "steipete", metadataReads: 0 };
-  const avatars: string[] = [];
-  const refreshed = createDeferred<void>();
-  const transport = previewFetch(async (url, init) => {
-    if (url.includes("avatars.githubusercontent.com")) {
-      avatars.push(url);
-      if (state.avatar === 2) {
-        await refreshed.promise;
-      }
-      return new Response(new Uint8Array([state.avatar]), {
-        headers: { "Content-Type": "image/png" },
-      });
-    }
-    if (url.endsWith("/repos/openclaw/openclaw")) {
-      return publicRepository();
-    }
-    state.metadataReads += 1;
-    const commits = url.includes("/commits");
-    const etag = `"${commits ? "commits" : "item"}-${commits ? state.commits : state.item}"`;
-    if (new Headers(init?.headers).get("If-None-Match") === etag) {
-      return new Response(null, { status: 304 });
-    }
-    return conditionalJson(
-      commits
-        ? coauthorTrailers(...authors)
-        : previewPayload({
-            title: `Version ${state.item}`,
-            user: {
-              login: state.login,
-              avatar_url: "https://avatars.githubusercontent.com/u/58493",
-            },
-          }),
-      etag,
-    );
-  });
-  const target = previewTarget(number, kind);
-  const identity = managedIdentity(`decoration-${number}`);
-  return { state, avatars, refreshed, load: () => loadPreview(target, identity, transport, true) };
-}
 
 describe("GitHub preview decoration cache", () => {
   afterEach(() => {
@@ -196,12 +153,15 @@ describe("GitHub preview decoration cache", () => {
       vi.useFakeTimers();
       let now = Date.now();
       vi.spyOn(Date, "now").mockImplementation(() => now);
-      const { state, avatars, refreshed, load } = decorationFixture(kind, 940005, [
-        ["Ada", 20],
-        ["Mira", 7],
-        ["Alan", 31],
-        ["Grace", 99],
-      ]);
+      const f = conditionalPreviewFixture(kind, 940005, {
+        authors: [
+          ["Ada", 20],
+          ["Mira", 7],
+          ["Alan", 31],
+          ["Grace", 99],
+        ],
+      });
+      const { state, avatars, refreshed, load } = f;
       const first = await load();
       const coldReads = kind === "pull" ? 4 : 1;
       expect(avatars).toHaveLength(coldReads);
@@ -240,12 +200,14 @@ describe("GitHub preview decoration cache", () => {
           : {}),
       });
       expect(avatars).toHaveLength(2 * coldReads);
-      expect(state.metadataReads).toBe(kind === "pull" ? 14 : 7);
+      expect(f.itemHeaders.length + f.commitsHeaders.length).toBe(kind === "pull" ? 14 : 7);
     },
   );
 
   it("reuses avatars across metadata changes and excludes a changed author", async () => {
-    const { state, avatars, load } = decorationFixture("pull", 940006, [["Ada", 20]]);
+    const { state, avatars, load } = conditionalPreviewFixture("pull", 940006, {
+      authors: [["Ada", 20]],
+    });
     const first = await load();
     expect(avatars.splice(0)).toEqual([
       "https://avatars.githubusercontent.com/u/58493?s=64",
