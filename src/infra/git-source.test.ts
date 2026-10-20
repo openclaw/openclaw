@@ -6,8 +6,15 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { acquireGitSource } from "./git-source.js";
 
+type SourceOptions = Omit<Parameters<typeof acquireGitSource>[0], "repoDir" | "url" | "label">;
+const gitConfig = [
+  "user.name=Test",
+  "user.email=test@openclaw.invalid",
+  "commit.gpgsign=false",
+].flatMap((value) => ["-c", value]);
 async function git(cwd: string, ...args: string[]): Promise<string> {
-  const result = await runCommandWithTimeout(["git", ...args], { cwd, timeoutMs: 30_000 });
+  const argv = ["git", ...gitConfig, ...args];
+  const result = await runCommandWithTimeout(argv, { cwd, timeoutMs: 30_000 });
   if (result.code !== 0) {
     throw new Error(result.stderr || result.stdout);
   }
@@ -22,18 +29,7 @@ it("preserves each caller's ref selection against a local repository", async () 
     const commit = async (contents: string) => {
       await fs.writeFile(path.join(sourceDir, "payload.txt"), contents);
       await git(sourceDir, "add", "payload.txt");
-      await git(
-        sourceDir,
-        "-c",
-        "user.name=OpenClaw Test",
-        "-c",
-        "user.email=test@openclaw.invalid",
-        "-c",
-        "commit.gpgsign=false",
-        "commit",
-        "-m",
-        contents,
-      );
+      await git(sourceDir, "commit", "-m", contents);
       return await git(sourceDir, "rev-parse", "HEAD");
     };
     const mainCommit = await commit("main");
@@ -42,16 +38,9 @@ it("preserves each caller's ref selection against a local repository", async () 
     await git(sourceDir, "tag", "v1");
     await git(sourceDir, "switch", "main");
 
-    const acquire = (
-      repoDir: string,
-      options: Omit<Parameters<typeof acquireGitSource>[0], "repoDir" | "url" | "label">,
-    ) =>
-      acquireGitSource({
-        url: pathToFileURL(sourceDir).href,
-        label: "fixture",
-        repoDir,
-        ...options,
-      });
+    const source = { url: pathToFileURL(sourceDir).href, label: "fixture" };
+    const acquire = (repoDir: string, options: SourceOptions) =>
+      acquireGitSource({ ...source, repoDir, ...options });
     const cases = [
       [undefined, "detached"],
       ["feature/skill", "resolve-remote"],

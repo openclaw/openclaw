@@ -25,6 +25,7 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => {
 
 afterEach(async () => {
   await drainGlobalSingletonLifecycleState();
+  vi.useRealTimers();
   vi.restoreAllMocks();
   logs.info.mockClear();
 });
@@ -46,22 +47,17 @@ it("reuses concurrent Git readers across polling intervals and releases them whe
       ),
     );
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
-  try {
+  await expect(poll()).resolves.toEqual([[], []]);
+  expect(starts() - before).toBe(2);
+  for (const pollMs of [45_000, 60_001, 90_000]) {
+    await vi.advanceTimersByTimeAsync(pollMs);
     await expect(poll()).resolves.toEqual([[], []]);
     expect(starts() - before).toBe(2);
-    for (const pollMs of [45_000, 60_001, 90_000]) {
-      await vi.advanceTimersByTimeAsync(pollMs);
-      await expect(poll()).resolves.toEqual([[], []]);
-      expect(starts() - before).toBe(2);
-    }
-    await vi.advanceTimersByTimeAsync(120_000);
-    await vi.waitFor(() => expect(idleExits() - exitsBefore).toBe(2));
-    await expect(poll()).resolves.toEqual([[], []]);
-    expect(starts() - before).toBe(4);
-  } finally {
-    await drainGlobalSingletonLifecycleState();
-    vi.useRealTimers();
   }
+  await vi.advanceTimersByTimeAsync(120_000);
+  await vi.waitFor(() => expect(idleExits() - exitsBefore).toBe(2));
+  await expect(poll()).resolves.toEqual([[], []]);
+  expect(starts() - before).toBe(4);
 });
 
 it.each([
@@ -154,6 +150,7 @@ it.each([
     expect(JSON.parse(message.slice("slow Git content read ".length))).toEqual(fields);
     expect(fields).toMatchObject({
       operation,
+      ...(operation === "checkout.diff" ? { scope: "all", summaryOnly: true } : {}),
       checkoutId: expect.stringMatching(/^[a-f0-9]{16}$/),
       checkoutClass: operation === "checkout.diff" ? "unspecified" : "managed",
       workerQueueWaitMs: 400,
@@ -174,9 +171,7 @@ it.each([
       },
       outcome: "returned",
     });
-    if (operation === "checkout.diff") {
-      expect(fields).toMatchObject({ scope: "all", summaryOnly: true });
-    } else {
+    if (operation !== "checkout.diff") {
       expect(fields).not.toHaveProperty("scope");
       expect(fields).not.toHaveProperty("summaryOnly");
     }
