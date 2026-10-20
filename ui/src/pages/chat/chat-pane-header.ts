@@ -515,9 +515,9 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               showOwner: showOwnerChip && !this.mergedChrome,
               onOpen: () => void this.loadSessionSharing(row),
               onVisibilityChange: (visibility: SessionVisibility) =>
-                void this.setSessionVisibility(row, visibility),
+                void this.mutateSessionSharing(row, { visibility }),
               onMemberChange: (identityId: string, member: boolean) =>
-                void this.setSessionMember(row, identityId, member),
+                void this.mutateSessionSharing(row, { identityId, member }),
             }
           : null,
     );

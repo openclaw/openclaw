@@ -19,6 +19,7 @@ import { SidebarCollapseToggle } from "./sidebar-collapse-toggle.tsx";
 import { sidebarOnlineCountFor, SidebarOnlineOrder } from "./sidebar-online-order.ts";
 import { Icon } from "./solid/icon.tsx";
 import { Picker } from "./solid/select-picker.tsx";
+import { ViewerAvatar } from "./solid/viewer-facepile.tsx";
 
 const onlineOrders = new WeakMap<
   HTMLElement,
@@ -202,11 +203,7 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost): JSX.Element 
                   })}
                 >
                   <span class="sidebar-online__avatar" aria-hidden="true">
-                    <openclaw-viewer-avatar
-                      prop:user={user()}
-                      prop:markAsViewer={false}
-                      variant="footer"
-                    />
+                    <ViewerAvatar user={user()} markAsViewer={false} variant="footer" />
                   </span>
                   <span class="sidebar-online__person-name">{presenceViewerLabel(user())}</span>
                   {workload() && (workload()!.open > 0 || workload()!.running > 0) ? (

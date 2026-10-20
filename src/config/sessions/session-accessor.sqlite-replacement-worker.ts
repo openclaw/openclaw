@@ -599,6 +599,7 @@ export async function runSessionEntryWorkerMutation<T>(
             ([key]) => !committed.unavailableParticipantKeys?.includes(key),
           ),
         ),
+        committed.conversationPublication,
       );
     },
     executionOptions.retainedExecution,

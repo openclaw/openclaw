@@ -113,19 +113,19 @@ export function withDaemonRuntimePinStore<T>(
           return undefined;
         }
         db.exec("PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL");
-        runSqliteImmediateTransactionSync(db, () => {
+        return runSqliteImmediateTransactionSync(db, () => {
           db.exec(DAEMON_RUNTIME_PIN_SCHEMA_SQL);
           writeSqliteUserVersion(db, DAEMON_RUNTIME_PIN_SCHEMA_VERSION);
+          publishSqliteDatabaseAdmission(db, schemaAdmission, true);
+          return operation(db);
         });
       } else if (version !== DAEMON_RUNTIME_PIN_SCHEMA_VERSION) {
         throw new Error(
           `Runtime pin store has unsupported schema version ${String(version)}. Use a compatible OpenClaw version.`,
         );
       }
-      if (version !== 0) {
-        assertSqliteSchemaContains(db, "Runtime pin store", DAEMON_RUNTIME_PIN_SCHEMA_SQL);
-        assertSqliteIntegrity(db, "Runtime pin store");
-      }
+      assertSqliteSchemaContains(db, "Runtime pin store", DAEMON_RUNTIME_PIN_SCHEMA_SQL);
+      assertSqliteIntegrity(db, "Runtime pin store");
       publishSqliteDatabaseAdmission(db, schemaAdmission, true);
     }
     return writable ? runSqliteImmediateTransactionSync(db, () => operation(db)) : operation(db);

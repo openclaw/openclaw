@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { loadCommandPaletteCatalogItems } from "../components/command-palette-catalog-search.ts";
+import { isGatewayConnectionAttemptPending } from "../lib/gateway-status.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
 import { resolveAvatar } from "../lib/identity-avatar.ts";
 import { invalidateModelCatalogCache } from "../lib/model-catalog-cache.ts";
@@ -63,6 +64,27 @@ describe("createApplicationGateway connection ownership", () => {
     gateway.start();
     current().opts.onHello?.(HELLO);
   }
+
+  it("retires attempt feedback on stop and ignores callbacks from a replaced client", () => {
+    connect();
+    const previous = current();
+    previous.opts.onClose?.({ code: 1006, reason: "lost transport", willRetry: true });
+    previous.opts.onConnecting?.();
+    expect(isGatewayConnectionAttemptPending(gateway.snapshot)).toBe(true);
+    gateway.connect();
+    const replacement = current();
+    replacement.opts.onConnecting?.();
+    previous.opts.onReconnectScheduled?.(800);
+    previous.opts.onClose?.({ code: 1006, reason: "retired attempt", willRetry: true });
+    expect(isGatewayConnectionAttemptPending(gateway.snapshot)).toBe(true);
+    replacement.opts.onHello?.(HELLO);
+    expect(isGatewayConnectionAttemptPending(gateway.snapshot)).toBe(false);
+    replacement.opts.onConnecting?.();
+    gateway.stop();
+    replacement.opts.onConnecting?.();
+    expect(isGatewayConnectionAttemptPending(gateway.snapshot)).toBe(false);
+    expect(gateway.snapshot.phase).toBe("stopped");
+  });
 
   it.each(["session", "agent", "short", "late"])(
     "shares the connect %s catalog across cold readers and returns",

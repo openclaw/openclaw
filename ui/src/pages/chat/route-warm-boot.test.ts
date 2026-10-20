@@ -112,7 +112,7 @@ it.each([
     expect(await Promise.race([pending, waiting.then(() => "waiting for Gateway")])).toMatchObject({
       kind: "session",
       sessionKey: row.key,
-      ...(!exact && !literal ? { sessionResolutionFromCache: "roster" } : {}),
+      ...(!exact && !literal ? { sessionResolutionFromCache: true } : {}),
     });
     expect(context.agents.state.agentsList).toBeNull();
     expect(request).not.toHaveBeenCalled();

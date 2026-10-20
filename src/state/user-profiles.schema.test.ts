@@ -1,7 +1,7 @@
 import { copyFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
@@ -97,6 +97,34 @@ function readUserProfileEmailBindingIds(
     })
     .toSorted();
 }
+
+it("creates identity tables once before adding indexes and preserves subsequent profile writes", () => {
+  const options = stateOptions();
+  const { db } = openOpenClawStateDatabase(options);
+  const exec = vi.spyOn(db, "exec");
+  try {
+    const profile = ensureProfileForEmail("new@example.test", options);
+    const ddl = exec.mock.calls.flatMap(([sql]) => sql.split(";"));
+    expect(
+      ddl.filter((sql) => /CREATE TABLE IF NOT EXISTS user_profile_identities\b/.test(sql)),
+    ).toHaveLength(1);
+    expect(
+      db
+        .prepare(
+          "SELECT name FROM sqlite_schema WHERE name LIKE 'idx_user_profile_identities_%' ORDER BY name",
+        )
+        .all(),
+    ).toEqual([
+      { name: "idx_user_profile_identities_authorization" },
+      { name: "idx_user_profile_identities_profile_id" },
+    ]);
+    setUserProfileRole(profile.id, "maintainer", options);
+    expect(getUserProfileListItem(profile.id, options)).toMatchObject({ role: "maintainer" });
+    expect(ensureProfileForEmail("new@example.test", options).id).toBe(profile.id);
+  } finally {
+    exec.mockRestore();
+  }
+});
 
 describe("user profile email binding schema", () => {
   it.each(["outer", "savepoint"] as const)(

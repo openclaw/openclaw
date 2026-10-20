@@ -2,10 +2,7 @@ import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { For, Show, createMemo } from "solid-js";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayHelloOk } from "../../api/gateway.ts";
-import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 import { isRemoteControlUiIngress } from "../../app/remote-ingress.ts";
-import type { UiSettings } from "../../app/settings.ts";
-import type { GatewayStatusSample } from "../../components/gateway-vitals.ts";
 import { GatewayVitals } from "../../components/solid/gateway-vitals.tsx";
 import {
   SettingsPage,
@@ -14,7 +11,6 @@ import {
   SettingsSection,
   SettingsStatus,
 } from "../../components/solid/settings-ui.tsx";
-import type { SparklineSample } from "../../components/sparkline-tile.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
 import { formatDurationHuman } from "../../lib/format-duration.ts";
@@ -22,45 +18,13 @@ import { formatGatewayHost } from "../../lib/gateway-host.ts";
 import { classifyGatewaySecret } from "../../lib/gateway-secret-shape.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { CONNECTION_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
-import type { ConnectionPingSummary } from "./latency.ts";
+import type { ConnectionDraft } from "./connection-draft.ts";
 
 registerEnglishCatalog(registerSettingsEnglish);
 
 type GatewayAuthMode = NonNullable<NonNullable<GatewayHelloOk["snapshot"]>["authMode"]>;
 
-export type ConnectionProps = {
-  phase: ApplicationGatewayPhase;
-  hello: GatewayHelloOk | null;
-  settings: UiSettings;
-  /** URL of the live connection; the draft in `settings` may differ until Connect. */
-  liveGatewayUrl: string;
-  secret: string;
-  lastError: string | null;
-  systemInfo: SystemInfoResult | null;
-  systemInfoUnavailable: boolean;
-  systemInfoLoading: boolean;
-  ping: ConnectionPingSummary | null;
-  pingFailed: boolean;
-  pingSamples: readonly SparklineSample[];
-  statusHistory: readonly GatewayStatusSample[];
-  statusFailed: boolean;
-  /** True when the draft differs from the live connection. */
-  dirty: boolean;
-  sessionDirty: boolean;
-  sessionSaved: boolean;
-  showGatewaySecret: boolean;
-  canForgetDevice: boolean;
-  onForgetDevice: () => void;
-  onConnectionChange: (patch: Partial<Pick<UiSettings, "gatewayUrl" | "token">>) => void;
-  onSecretChange: (next: string) => void;
-  onSessionKeyChange: (next: string) => void;
-  onToggleGatewaySecretVisibility: () => void;
-  onConnect: () => void;
-  onDiscardConnection: () => void;
-  onReconnect: () => void;
-  onSaveSession: () => void;
-  onDiscardSession: () => void;
-};
+export type ConnectionProps = ReturnType<ConnectionDraft["viewProps"]>;
 
 const AUTH_MODE_KEYS: Record<GatewayAuthMode, string> = {
   none: "connection.access.auth.none",
@@ -454,10 +418,6 @@ function Placeholder(props: { loading: boolean | undefined }) {
   );
 }
 
-function formatUsedPercent(fraction: number) {
-  return `${Math.round(Math.min(Math.max(fraction, 0), 1) * 100)}%`;
-}
-
 function resourceStat(
   kind: "memory" | "disk",
   totalBytes: number | undefined,
@@ -470,7 +430,7 @@ function resourceStat(
       : (totalBytes - freeBytes) / totalBytes;
   return {
     label: t(`quickSettings.system.${kind}`),
-    value: used == null ? "—" : formatUsedPercent(used),
+    value: used == null ? "—" : `${Math.round(Math.min(Math.max(used, 0), 1) * 100)}%`,
     unit: used == null ? undefined : t("quickSettings.system.used"),
     detail: t("quickSettings.system.freeOf", {
       free: formatBytes(freeBytes),

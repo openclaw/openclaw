@@ -49,10 +49,6 @@ function normalizeSecurity(value?: string): ExecSecurity {
   return SECURITY_OPTIONS.find((option) => option.value === value)?.value ?? "deny";
 }
 
-function normalizeAsk(value?: string): ExecAsk {
-  return ASK_OPTIONS.find((option) => option.value === value)?.value ?? "on-miss";
-}
-
 function resolveExecApprovalsDefaults(
   form: ExecApprovalsFile | null,
   reported: ExecApprovalsResolvedDefaults | undefined,
@@ -60,9 +56,10 @@ function resolveExecApprovalsDefaults(
 ): ExecApprovalsResolvedDefaults {
   const defaults = form?.defaults ?? {};
   const wildcard = includeWildcard ? (form?.agents?.["*"] ?? {}) : {};
+  const ask = wildcard.ask ?? defaults.ask ?? reported?.ask;
   return {
     security: normalizeSecurity(wildcard.security ?? defaults.security ?? reported?.security),
-    ask: normalizeAsk(wildcard.ask ?? defaults.ask ?? reported?.ask),
+    ask: ASK_OPTIONS.find((option) => option.value === ask)?.value ?? "on-miss",
     askFallback: normalizeSecurity(
       wildcard.askFallback ?? defaults.askFallback ?? reported?.askFallback ?? "deny",
     ),

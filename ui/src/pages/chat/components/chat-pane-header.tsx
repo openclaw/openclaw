@@ -47,12 +47,12 @@ import { nativeListener } from "../../../lib/solid-native-listener.ts";
 import {
   PaneDetails,
   PaneHeaderPresence,
-  PaneHeaderSessionMenu,
   PaneSubagentStop,
   type PaneDetailsProps,
 } from "../chat-pane-header-view.tsx";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
 import { ChatPaneLayoutMenu, type ChatPaneLayoutMenuProps } from "./chat-header-panel-actions.tsx";
+import { ChatHeaderSessionMenu } from "./chat-header-session-menu.tsx";
 import { ChatPanePlacement } from "./chat-pane-placement.tsx";
 import { ChatPaneVersionsMenu } from "./chat-pane-versions-menu.tsx";
 import {
@@ -118,7 +118,7 @@ export type ChatPaneHeaderProps = ChatPaneLayoutMenuProps & {
   sharingControl?: ChatSessionSharingProps;
   publicAccessIndicator?: ChatSessionSharingProps;
   placementControl?: Parameters<typeof ChatPanePlacement>[0];
-  sessionMenuAction?: Parameters<typeof PaneHeaderSessionMenu>[0];
+  sessionMenuAction?: Parameters<typeof ChatHeaderSessionMenu>[0];
   onBeginRename: () => void;
   onRenameInput: (value: string) => void;
   onCommitRename: () => void;
@@ -622,13 +622,13 @@ export function ChatPaneHeader(props: ChatPaneHeaderProps) {
             </Show>
             <Show when={props.mergedChrome}>
               <Show when={props.sessionMenuAction}>
-                {(menu) => <PaneHeaderSessionMenu {...menu()} />}
+                {(menu) => <ChatHeaderSessionMenu {...menu()} />}
               </Show>
             </Show>
             <ChatPaneLayoutMenu {...props} mobile={props.mergedChrome} />
             <Show when={!props.mergedChrome}>
               <Show when={props.sessionMenuAction}>
-                {(menu) => <PaneHeaderSessionMenu {...menu()} />}
+                {(menu) => <ChatHeaderSessionMenu {...menu()} />}
               </Show>
             </Show>
           </div>

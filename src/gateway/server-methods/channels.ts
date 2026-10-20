@@ -454,15 +454,15 @@ export const channelsHandlers: GatewayRequestHandlers = {
     };
     const { results: channelResults } = await runTasksWithConcurrency({
       tasks: statusPlugins.map((plugin) => async () => {
-        const deadline = Date.now() + timeoutMs;
+        const deadline = performance.now() + timeoutMs;
         const abort = probe ? new AbortController() : undefined;
         const remainingBudget = () => {
           abort?.signal.throwIfAborted();
-          const remaining = deadline - Date.now();
+          const remaining = deadline - performance.now();
           if (remaining <= 0) {
             throw new Error(`status timed out after ${timeoutMs}ms`);
           }
-          return remaining;
+          return Math.floor(remaining);
         };
         const build = async (live: boolean, error?: string) => {
           const { accounts, defaultAccountId, defaultAccount, resolvedAccounts } =
@@ -479,7 +479,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
           });
           let summary: unknown = fallbackSummary();
           if (
-            Date.now() < deadline &&
+            performance.now() < deadline &&
             plugin.status?.buildChannelSummary &&
             Object.hasOwn(resolvedAccounts, defaultAccountId)
           ) {
@@ -514,7 +514,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
           warnings: statusWarnings,
           run: () => build(true),
         });
-        if (result.ok && Date.now() < deadline) {
+        if (result.ok && performance.now() < deadline) {
           return result.value;
         }
         abort?.abort();

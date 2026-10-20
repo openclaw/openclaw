@@ -4,7 +4,6 @@ import { nativeListener } from "../../lib/solid-native-listener.ts";
 import { createTabFocus } from "../../lib/tabs.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { DockResizer } from "../dock-layout-solid.tsx";
-import type { DockLayout } from "../dock-layout.ts";
 import { PanelTabStrip } from "../panel-tab-strip-solid.tsx";
 import { Icon } from "../solid/icon.tsx";
 import type { PanelEmptyStateElement, PanelEmptyStateProps } from "../solid/panel-empty-state.tsx";
@@ -12,13 +11,8 @@ import "../solid/panel-empty-state.tsx";
 import { PanelIconButton } from "../solid/panel-icon-button.tsx";
 import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
 import "../tooltip.ts";
-import {
-  terminalPanelTabIcon,
-  terminalPanelHostedTabs,
-  type TerminalPanelTab,
-} from "./terminal-panel-tabs.tsx";
-import type { TerminalPanelUpload } from "./terminal-panel-upload.ts";
-import type { createTerminalSessionPicker } from "./terminal-session-picker.ts";
+import { terminalPanelTabIcon, terminalPanelHostedTabs } from "./terminal-panel-tabs.tsx";
+import type { TerminalPanelOwner } from "./terminal-panel.ts";
 
 declare module "@solidjs/web" {
   namespace JSX {
@@ -31,34 +25,8 @@ declare module "@solidjs/web" {
   }
 }
 
-type TerminalSessionPickerState = ReturnType<typeof createTerminalSessionPicker>;
-
-export type TerminalPanelViewState = {
-  open: boolean;
-  embedded: boolean;
-  fullscreen: boolean;
-  hosted: boolean;
-  mode: string;
-  style: string | undefined;
-  dockLayout: DockLayout<"bottom" | "right" | "main">;
-  tabs: TerminalPanelTab[];
-  activeId: string | null;
-  booting: boolean;
-  connected: boolean;
-  connecting: boolean;
-  error: { text: string; retry?: () => void } | null;
-  dockDisabled: boolean;
-  picker: TerminalSessionPickerState;
-  upload: TerminalPanelUpload;
-  fileInputRef: (element: HTMLInputElement) => void;
-  viewportRef: (element: HTMLDivElement) => void;
-  onSelect: (id: string) => void;
-  onClose: (id: string) => Promise<void>;
-  onNew: () => void;
-  onDock: (dock: "bottom" | "right" | "main") => void;
-  onOpenFullscreen: () => void;
-  onHide: () => void;
-};
+export type TerminalPanelViewState = TerminalPanelOwner["viewState"];
+type TerminalSessionPickerState = TerminalPanelViewState["picker"];
 
 function SessionPickerTrigger(props: { state: TerminalSessionPickerState; dialogId: string }) {
   return (

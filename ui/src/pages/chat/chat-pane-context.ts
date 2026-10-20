@@ -9,6 +9,7 @@ import {
 } from "../../app/panel-availability.ts";
 import { canUseQuestionPrompts } from "../../app/question-prompt-client.ts";
 import {
+  listQuestionPrompts,
   refreshPendingQuestionsWithRetry,
   setQuestionPromptClient,
   type QuestionPrompt,
@@ -330,7 +331,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       agentId?: string | null;
     }) =>
       uiConversationMatches(state, state.sessionKey, request.sessionKey, request.agentId, agentId);
-    const questions = visible ? this.questionPrompts.filter(matchesConversation) : [];
+    const questions = visible
+      ? listQuestionPrompts(this.questionPromptState).filter(matchesConversation)
+      : [];
     // Question records mutate in place; their revisions own transcript-cache invalidation.
     if (
       questions.length !== this.questionProjection.prompts.length ||
