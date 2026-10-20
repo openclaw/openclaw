@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import path from "node:path";
 import * as timers from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -81,18 +80,9 @@ it("avoids redundant recovery snapshots while readiness waits without warnings",
 it("refuses recovery committed while the readiness probe is awaiting its reply", async () => {
   const f = await fixture();
   const fetch = vi.fn(async () => {
-    const from = {
-      root: path.join(f.root, "previous"),
-      nodePath: process.execPath,
-      version: "1.0.0",
-      buildId: "previous-build",
-    };
+    const runtime = { root: f.root, nodePath: process.execPath, version: "1.0.0", buildId: null };
     createRetainedUpdateRecovery(
-      {
-        runId: f.run.runId,
-        from,
-        to: { ...from, root: path.join(f.root, "candidate"), version: "2.0.0" },
-      },
+      { runId: f.run.runId, from: runtime, to: runtime },
       { env: f.env },
     );
     await closeOpenClawStateDatabaseAsync();

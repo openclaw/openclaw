@@ -1,3 +1,5 @@
+import assert from "node:assert/strict";
+import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -5,12 +7,7 @@ import * as startupTiming from "../../commands/gateway-startup-timing.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import type { GatewayService } from "../../daemon/service.js";
 import { STARTUP_MIGRATION_LEASE_TTL_MS } from "../../infra/startup-migration-checkpoint.js";
-import {
-  createUpdateRun,
-  getUpdateRun,
-  recordUpdateRunPhase,
-  recordUpdateRunStep,
-} from "../../infra/update-run-ledger.js";
+import * as ledger from "../../infra/update-run-ledger.js";
 import { toPublicUpdateRun } from "../../infra/update-run-record.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -29,7 +26,6 @@ const native = vi.hoisted(() => ({
 
 vi.mock("../../daemon/service.js", () => ({
   resolveGatewayService: () => ({
-    isLoaded: async () => false,
     readCommand: async () => null,
     readRuntime: native.runtime,
   }),
@@ -75,13 +71,14 @@ const dirs = useAutoCleanupTempDirTracker(afterEach);
 const cleanups: (() => Promise<void>)[] = [];
 const startedAt = Date.parse("2026-09-24T00:49:43Z");
 const serviceRuntime = { status: "running", pid: 4242 } as const;
+const census: Record<string, string> = {
+  "netstat.exe": "  TCP    127.0.0.1:18789    0.0.0.0:0    LISTENING    4242\r\n",
+  "tasklist.exe": '"node.exe","4242","Console","1","10,000 K"\r\n',
+  "powershell.exe": "node.exe C:\\openclaw\\dist\\index.js gateway run\r\n",
+};
 const unreachable = {
   reachable: false,
   gatewayVersion: null,
-  gatewayBuildId: undefined,
-  activatedPluginErrors: [],
-  unavailablePlugins: [],
-  channelProbeErrors: [],
   probeError: "Gateway RPC health probe timed out",
 };
 
@@ -95,22 +92,9 @@ beforeEach(() => {
   native.runtime.mockReset().mockResolvedValue(serviceRuntime);
   native.reachable.mockReset().mockResolvedValue(unreachable);
   native.http.mockReset().mockResolvedValue({ healthz: 200, readyz: 200 });
-  native.command.mockReset().mockImplementation(async (argv: string[]) => {
-    const executable = argv[0];
-    if (!executable) {
-      throw new Error("Expected a native census command");
-    }
-    const command = executable.toLowerCase();
-    const stdout = command.endsWith("netstat.exe")
-      ? "  TCP    127.0.0.1:18789    0.0.0.0:0    LISTENING    4242\r\n"
-      : command.endsWith("tasklist.exe")
-        ? '"node.exe","4242","Console","1","10,000 K"\r\n'
-        : command.endsWith("powershell.exe")
-          ? "node.exe C:\\openclaw\\dist\\index.js gateway run\r\n"
-          : undefined;
-    if (stdout === undefined) {
-      throw new Error(`Unexpected fixture command: ${argv[0]}`);
-    }
+  native.command.mockReset().mockImplementation(async ([executable]: string[]) => {
+    const stdout = census[path.win32.basename(executable ?? "").toLowerCase()];
+    assert(stdout !== undefined, `Unexpected fixture command: ${executable}`);
     return { stdout, stderr: "", code: 0 };
   });
   vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
@@ -128,14 +112,14 @@ afterEach(async () => {
 
 function fixture() {
   const env = { OPENCLAW_STATE_DIR: dirs.make("update-readiness-windows-") };
-  const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
-  recordUpdateRunPhase(run.runId, "validating", {}, { env });
-  recordUpdateRunStep(
+  const run = { runId: ledger.createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+  ledger.recordUpdateRunPhase(run.runId, "validating", {}, { env });
+  ledger.recordUpdateRunStep(
     run.runId,
     { step: "Checking Gateway startup", status: "completed", endedAtMs: startedAt, exitCode: 0 },
     { env },
   );
-  const read = () => getUpdateRun(run.runId, { env })!;
+  const read = () => ledger.getUpdateRun(run.runId, { env })!;
   const wait = (prefix = "") =>
     read().steps.find((step) => step.step === `${prefix}previous gateway verification`);
   return {

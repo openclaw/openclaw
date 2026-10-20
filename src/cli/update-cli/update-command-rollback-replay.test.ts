@@ -23,10 +23,8 @@ function refuse(message: string): never {
 
 async function fixture() {
   const f = createRetainedCheckpointFixture(fs.realpathSync(dirs.make("rollback-retained-")), true);
-  const configSnapshot = await createConfigIO({
-    env: f.env,
-    configPath: f.configPath,
-  }).readConfigFileSnapshot();
+  const { env, configPath } = f;
+  const configSnapshot = await createConfigIO({ env, configPath }).readConfigFileSnapshot();
   const opts: UpdateCommandOptions = {
     run: f.run,
     recovery: {
@@ -79,13 +77,8 @@ const deferred = {
 
 it("refuses checkpoint recovery before package mutation and preserves the primary failure", async () => {
   const f = await fixture();
-  expect(
-    await f.invoke(undefined, [
-      f.file,
-      f.record.checkpoint!.ref.manifestPath,
-      f.record.restore!.planPath,
-    ]),
-  ).toMatchObject({
+  const files = [f.file, f.record.checkpoint!.ref.manifestPath, f.record.restore!.planPath];
+  expect(await f.invoke(undefined, files)).toMatchObject({
     ...deferred,
     pendingRecoveryReason: expect.stringContaining("deferred"),
   });
@@ -119,16 +112,13 @@ it.each(["service", "admitted"] as const)(
     f.opts.recovery = undefined;
     const cleanEnv = { OPENCLAW_STATE_DIR: dirs.make("rollback-other-root-") };
     f.opts.run = { ...f.run, env: pendingRoot === "admitted" ? f.env : cleanEnv };
-    expect(
-      await f.invoke({
-        stopped: false,
-        inspected: true,
-        runtimeInspected: true,
-        running: false,
-        serviceEnv: pendingRoot === "service" ? f.env : cleanEnv,
-      }),
-    ).toMatchObject({
-      result: { reason: "candidate-failed" },
+    const { result } = await f.invoke({
+      stopped: false,
+      inspected: true,
+      runtimeInspected: true,
+      running: false,
+      serviceEnv: pendingRoot === "service" ? f.env : cleanEnv,
     });
+    expect(result.reason).toBe("candidate-failed");
   },
 );

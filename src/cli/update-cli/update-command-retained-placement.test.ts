@@ -1,14 +1,8 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { execFileUtf8 } from "../../daemon/exec-file.js";
-import {
-  withGatewayServiceOperationLock,
-  withSystemdServiceReadBinding,
-} from "../../daemon/service-operation-lock.js";
-import {
-  assertGatewayServiceUpdateCurrent,
-  withGatewayServiceUpdateAuthority,
-} from "../../daemon/service-update-authority.js";
+import * as locks from "../../daemon/service-operation-lock.js";
+import * as authority from "../../daemon/service-update-authority.js";
 import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 
 // Real scopes and read lifetime; inert external owners (not custody proof).
@@ -42,10 +36,10 @@ it.each([false, true])(
       unit: "retained.service",
       managerUid: 1000,
       destination: ":1.0",
-      verify: vi.fn(() => assertGatewayServiceUpdateCurrent()),
+      verify: vi.fn(() => authority.assertGatewayServiceUpdateCurrent()),
       query: vi.fn(async () => []),
       close: vi.fn(async () => {
-        assertGatewayServiceUpdateCurrent();
+        authority.assertGatewayServiceUpdateCurrent();
         closing.resolve();
         await release.promise;
         if (failClose) {
@@ -54,38 +48,34 @@ it.each([false, true])(
       }),
     };
     const create = vi.fn(async () => binding);
-    const native = vi.fn(async () => createCommandResult({ stdout: "current string output" }));
-    let settled = false;
-    const settle = (value: string | undefined, error: unknown) => {
-      settled = true;
-      return { value, error };
-    };
-    const result = withGatewayServiceUpdateAuthority(
-      () => undefined,
-      () =>
-        withGatewayServiceOperationLock(env, async () => {
-          await withSystemdServiceReadBinding(env, create, async (selected) => {
-            expect(selected).toBe(binding);
-            expect(await execFileUtf8("inert-current-command", [], { env })).toMatchObject({
-              stdout: "current string output",
-              code: 0,
+    const native = vi.fn(async () => createCommandResult({ stdout: "native output" }));
+    const settle = vi.fn((value: string | undefined, error: unknown) => ({ value, error }));
+    const result = authority
+      .withGatewayServiceUpdateAuthority(
+        () => undefined,
+        () =>
+          locks.withGatewayServiceOperationLock(env, async () => {
+            await locks.withSystemdServiceReadBinding(env, create, async (selected) => {
+              expect(selected).toBe(binding);
+              expect(await execFileUtf8("inert", [], { env })).toMatchObject({
+                stdout: "native output",
+                code: 0,
+              });
             });
-          });
-          if (failClose) {
-            throw original;
-          }
-          return "current scope completed";
-        }),
-      { nativeCommand: native },
-    ).then(
-      (value) => settle(value, undefined),
-      (error: unknown) => settle(undefined, error),
-    );
+            if (failClose) {
+              throw original;
+            }
+            return "current scope completed";
+          }),
+        { nativeCommand: native },
+      )
+      .then(
+        (value) => settle(value, undefined),
+        (error: unknown) => settle(undefined, error),
+      );
     await closing.promise;
-    expect(settled).toBe(false);
-    expect(native).toHaveBeenCalledOnce();
-    expect(create).toHaveBeenCalledOnce();
-    expect(binding.verify).toHaveBeenCalledOnce();
+    expect(settle).not.toHaveBeenCalled();
+    expect([native, create, binding.verify].map((fn) => fn.mock.calls.length)).toEqual([1, 1, 1]);
     release.resolve();
     const outcome = await result;
     if (failClose) {

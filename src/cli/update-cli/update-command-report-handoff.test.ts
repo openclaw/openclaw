@@ -1,5 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
+import * as prompts from "../../commands/configure.shared.js";
 import { withTriageTerminal } from "../../commands/triage.test-support.js";
+import * as contributions from "../../flows/doctor-health-contributions.js";
 import * as processAncestors from "../../infra/restart-stale-pids.js";
 import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
@@ -12,33 +14,8 @@ import { handoffUpdateFromGateway } from "./update-command-handoff.js";
 import { resolveMutableUpdateFailure, UpdateCommandFailure } from "./update-command-result.js";
 import { withUpdateFailureTriage } from "./update-command-triage.js";
 
-const metadata = vi.hoisted(() => ({ unavailable: false }));
-vi.mock("../../flows/doctor-health-contributions.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../flows/doctor-health-contributions.js")>();
-  return {
-    ...actual,
-    resolveDoctorContributionHealthChecks: async () => {
-      if (metadata.unavailable) {
-        throw new Error("Installation metadata is unavailable after activation");
-      }
-      return actual.resolveDoctorContributionHealthChecks();
-    },
-  };
-});
-
-const prompts = vi.hoisted(() => ({
-  select: vi.fn<() => Promise<string>>(),
-  confirm: vi.fn<() => Promise<boolean>>(),
-}));
-vi.mock("../../commands/configure.shared.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../commands/configure.shared.js")>()),
-  ...prompts,
-}));
-
 let home: TempHomeEnv | undefined;
 afterEach(async () => {
-  metadata.unavailable = false;
   process.exitCode = undefined;
   closeOpenClawStateDatabaseForTest();
   await home?.restore();
@@ -55,8 +32,8 @@ it.each(["runtime", "missing updater"] as const)(
     vi.stubEnv(POST_CORE_UPDATE_ENV, undefined);
     const output = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
     vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
-    prompts.select.mockReset().mockResolvedValue("report");
-    prompts.confirm.mockReset().mockResolvedValue(false);
+    vi.spyOn(prompts, "select").mockResolvedValue("report");
+    const confirm = vi.spyOn(prompts, "confirm").mockResolvedValue(false);
     const message =
       failure === "runtime"
         ? "Target package: openclaw@2026.9.4; Minimum Node engine: 24.16.0; Running Node: 22.23.2"
@@ -65,7 +42,9 @@ it.each(["runtime", "missing updater"] as const)(
     await withTriageTerminal(true, () =>
       expect(
         withUpdateFailureTriage({}, { root, env: { ...process.env } }, async () => {
-          metadata.unavailable = true;
+          vi.spyOn(contributions, "resolveDoctorContributionHealthChecks").mockRejectedValue(
+            new Error("Installation metadata is unavailable after activation"),
+          );
           if (failure === "missing updater") {
             mockProcessPlatform("linux");
             vi.spyOn(processAncestors, "inspectSelfAndAncestorPidsSync").mockReturnValue({
@@ -147,8 +126,8 @@ it.each(["runtime", "missing updater"] as const)(
       expect(previews[0]).not.toContain("[redacted-diagnostic]");
     }
     expect(previews[0]).not.toContain("customer-runtime");
-    expect(prompts.confirm).toHaveBeenCalledOnce();
-    expect(prompts.confirm).toHaveBeenCalledWith(expect.objectContaining({ initialValue: false }));
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(confirm).toHaveBeenCalledWith(expect.objectContaining({ initialValue: false }));
     expect(output).toHaveBeenCalledWith("Update failure report cancelled.");
   },
 );
