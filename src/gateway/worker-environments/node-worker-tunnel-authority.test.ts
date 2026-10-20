@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createReadBarrier } from "../../infra/sqlite-readonly.test-support.js";
 import type { NodeWorkerWorkspaceExecInput } from "../../worker/node-workspace-protocol.js";
 import {
   createManager,
@@ -14,28 +14,18 @@ import {
 
 afterEach(() => vi.restoreAllMocks());
 
-function pendingWorkspaceBinding(record = environment(), transfer = workspaceTransfer()) {
-  const binding = createDeferred<undefined>();
-  const resolving = createDeferred();
-  const manager = createManager(record, { workspaceTransfer: transfer });
-  const resolveBinding = vi.fn(async () => {
-    resolving.resolve();
-    return await binding.promise;
-  });
-  manager.bindWorkspaceBindingResolver(resolveBinding);
-  return { manager, binding, resolving, resolveBinding };
-}
-
 it.each(["start", "session-command", "aborted-session-command", "joining-start"] as const)(
   "revalidates %s authority across pending workspace binding",
   async (operation) => {
     const joining = operation === "joining-start";
     const record = { ...environment(), sharedHost: joining };
     const prepareSync = vi.fn();
-    const { manager, binding, resolving, resolveBinding } = pendingWorkspaceBinding(
-      record,
-      joining ? workspaceTransfer() : workspaceTransfer({ prepareSync }),
-    );
+    const binding = createReadBarrier();
+    const manager = createManager(record, {
+      workspaceTransfer: joining ? workspaceTransfer() : workspaceTransfer({ prepareSync }),
+    });
+    const resolveBinding = vi.fn(() => binding.hold(undefined));
+    manager.bindWorkspaceBindingResolver(resolveBinding);
     let authorized = true;
     const controller = new AbortController();
     const closed = new Error("session dispatch authority closed");
@@ -46,7 +36,7 @@ it.each(["start", "session-command", "aborted-session-command", "joining-start"]
     };
     const owners = joining ? [manager.start(startRequest())] : [];
     if (joining) {
-      await resolving.promise;
+      await binding.entered.promise;
       owners.push(manager.start(startRequest()));
     }
     const starting =
@@ -62,13 +52,13 @@ it.each(["start", "session-command", "aborted-session-command", "joining-start"]
             },
           );
     try {
-      await resolving.promise;
+      await binding.entered.promise;
       if (operation === "aborted-session-command") {
         controller.abort(closed);
       } else {
         authorized = false;
       }
-      binding.resolve(undefined);
+      binding.resume.resolve();
 
       if (joining) {
         await expect(starting).rejects.toBe(closed);
@@ -82,7 +72,7 @@ it.each(["start", "session-command", "aborted-session-command", "joining-start"]
       }
       expect(manager.status(record.environmentId)).toBe(joining ? "connected" : "stopped");
     } finally {
-      binding.resolve(undefined);
+      binding.resume.resolve();
       await Promise.allSettled([...owners, starting]);
       await manager.stop(record.environmentId, record.ownerEpoch);
     }

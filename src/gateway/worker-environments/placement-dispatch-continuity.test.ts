@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { REQUEST } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import { placementClaim } from "./placement-suite.test-support.js";
 import * as support from "./service.test-support.js";
 
 describe("worker placement restart continuity", () => {
@@ -16,16 +17,9 @@ describe("worker placement restart continuity", () => {
     if (active.state !== "active") {
       throw new Error("active placement fixture was not active");
     }
-    const claim = await store.claimTurn({
-      ...REQUEST,
-      claimId: pending ? "surviving-node-claim" : "claim-1",
-      runId: pending ? "surviving-node-run" : "run-1",
-      owner: {
-        kind: "worker",
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      },
-    });
+    const claim = await store.claimTurn(
+      placementClaim(active, pending ? "surviving-node" : "interrupted"),
+    );
     if (pending) {
       await store.markWorkspaceResultPending(claim);
     } else {

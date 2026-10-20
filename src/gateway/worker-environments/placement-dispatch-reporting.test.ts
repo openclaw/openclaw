@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { createDeferredCore } from "../../shared/deferred.js";
+import { createReadBarrier, observeSettlement } from "../../infra/sqlite-readonly.test-support.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
 import {
   admittedRecovery,
@@ -10,11 +10,9 @@ import {
 it.each([false, true])(
   "reports the sweep without fencing independent recovery behind its baseline (report fails=%s)",
   async (reportFails) => {
-    const reading = createDeferredCore();
-    const finishRead = createDeferredCore();
+    const baseline = createReadBarrier();
     const reportError = new Error("synthetic reporting failure");
     const states = ["provisioning"];
-    let reported = false;
     const coordinated = coordinateWorkerPlacementDispatch(
       createCoordinatorTestService({
         resumeProvisioning: admittedRecovery(async (_placement, core) => await core()),
@@ -25,57 +23,46 @@ it.each([false, true])(
       (_request, run) => run(),
       undefined,
       async (operation) => {
-        reading.resolve();
-        await finishRead.promise;
+        await baseline.hold(undefined);
         if (reportFails) {
           throw reportError;
         }
-        const before = states.length;
         await operation();
-        reported = before !== states.length;
       },
     );
     const sweep = coordinated.reconcile();
-    const sweepOutcome = reportFails
-      ? expect(sweep).rejects.toBe(reportError)
-      : expect(sweep).resolves.toBeUndefined();
-    await reading.promise;
+    const sweepOutcome = sweep.catch((error: unknown) => error);
+    await baseline.entered.promise;
     const recovery = coordinated.resumeProvisioning(PROVISIONING_PLACEMENT, async () => {
       states.push("active");
     });
     try {
       await recovery;
       expect(states).toEqual(["provisioning", "active"]);
-      finishRead.resolve();
-      await sweepOutcome;
+      baseline.resume.resolve();
+      expect(await sweepOutcome).toBe(reportFails ? reportError : undefined);
       expect(states).toEqual(
         reportFails ? ["provisioning", "active"] : ["provisioning", "active", "reclaimed"],
       );
-      expect(reported).toBe(!reportFails);
     } finally {
-      finishRead.resolve();
+      baseline.resume.resolve();
       await Promise.all([sweepOutcome, recovery]);
     }
   },
 );
 
 it("reports completed sweep work while independent recovery and destruction settle", async () => {
-  const operationStarted = createDeferredCore();
-  const finishOperation = createDeferredCore();
-  const recoveryStarted = createDeferredCore();
-  const finishRecovery = createDeferredCore();
-  const reportCaptured = createDeferredCore();
-  const finishReport = createDeferredCore();
+  const operation = createReadBarrier();
+  const recoveryGate = createReadBarrier();
+  const report = createReadBarrier();
   const events: string[] = [];
   let reported: string[] | undefined;
-  let sweepSettled = false;
   const destructionError = new Error("synthetic environment teardown failure");
   const coordinated = coordinateWorkerPlacementDispatch(
     createCoordinatorTestService({
       resumeProvisioning: admittedRecovery(async (_placement, core) => await core()),
       reconcile: async () => {
-        operationStarted.resolve();
-        await finishOperation.promise;
+        await operation.hold(undefined);
         events.push("sweep");
       },
       forceDestroyEnvironment: async () => {
@@ -85,41 +72,38 @@ it("reports completed sweep work while independent recovery and destruction sett
     }),
     (_request, run) => run(),
     undefined,
-    async (operation) => {
+    async (run) => {
       try {
-        await operation();
+        await run();
       } finally {
         reported = [...events];
-        reportCaptured.resolve();
-        await finishReport.promise;
+        await report.hold(undefined);
       }
     },
   );
-  const sweep = coordinated.reconcile().then(() => {
-    sweepSettled = true;
-  });
-  await operationStarted.promise;
+  const sweep = coordinated.reconcile();
+  const sweepOutcome = observeSettlement(sweep);
+  await operation.entered.promise;
   const recovery = coordinated.resumeProvisioning(PROVISIONING_PLACEMENT, async () => {
-    recoveryStarted.resolve();
-    await finishRecovery.promise;
+    await recoveryGate.hold(undefined);
     events.push("recovery");
   });
   const destroying = coordinated.forceDestroyEnvironment("worker-other");
   const destructionOutcome = expect(destroying).rejects.toBe(destructionError);
   try {
-    await recoveryStarted.promise;
+    await recoveryGate.entered.promise;
     await destructionOutcome;
     expect(events).toEqual(["destroy"]);
-    finishOperation.resolve();
-    await reportCaptured.promise;
+    operation.resume.resolve();
+    await report.entered.promise;
     expect(reported).toEqual(["destroy", "sweep"]);
-    finishRecovery.resolve();
+    recoveryGate.resume.resolve();
     await recovery;
-    expect(sweepSettled).toBe(false);
+    expect(sweepOutcome.settled).toBe(false);
   } finally {
-    finishOperation.resolve();
-    finishRecovery.resolve();
-    finishReport.resolve();
+    operation.resume.resolve();
+    recoveryGate.resume.resolve();
+    report.resume.resolve();
     await Promise.all([sweep, recovery, destructionOutcome]);
   }
   expect(events).toEqual(["destroy", "sweep", "recovery"]);

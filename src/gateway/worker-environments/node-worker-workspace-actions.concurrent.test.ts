@@ -4,46 +4,38 @@ import {
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
+import { observeSettlement } from "../../infra/sqlite-readonly.test-support.js";
 import { workspaceCommandResult, workspaceTransfer } from "./node-worker-tunnel.test-support.js";
 import { createNodeWorkerWorkspaceActions } from "./node-worker-workspace-actions.js";
-
-function trackedDeferred<T = void>() {
-  const deferred = createDeferred<T>();
-  const tracked = { ...deferred, settled: false };
-  tracked.promise = deferred.promise.finally(() => {
-    tracked.settled = true;
-  });
-  return tracked;
-}
+import { emptyJournal } from "./workspace-manifest-fixtures.test-support.js";
 
 it.for(["journal", "upload", "both", "authority"] as const)(
   "joins local recovery and remote upload before releasing a failed %s preparation",
   async (failedSide, { signal }) => {
-    const journal = trackedDeferred<undefined>();
-    const upload = trackedDeferred();
+    const journal = createDeferred<undefined>();
+    const upload = createDeferred();
+    const settlements = [journal, upload].map(({ promise }) => observeSettlement(promise));
     const uploadStarted = createDeferred();
-    let current = true;
+    const authority = new AbortController();
     const failure = new Error(`${failedSide} failed`);
     const takeUpload = vi.fn((): never => {
       throw new Error("failed preparation must not consume staging");
     });
     const revoke = vi.fn(async () => {
-      expect([journal.settled, upload.settled]).toEqual([true, true]);
+      expect(settlements.map(({ settled }) => settled)).toEqual([true, true]);
     });
-    const manifestRef = "sha256:" + "a".repeat(64);
-    const source = { kind: "local" as const, path: "/gateway/workspace" };
-    const remoteWorkspaceDir = "/worker/workspace";
+    const binding = {
+      manifestRef: "sha256:" + "a".repeat(64),
+      source: { kind: "local" as const, path: "/gateway/workspace" },
+      remoteWorkspaceDir: "/worker/workspace",
+    };
     const actions = createNodeWorkerWorkspaceActions({
       environmentId: "environment-1",
       ownerEpoch: 1,
       sessionId: "session-1",
       ownerSignal: new AbortController().signal,
       isOwnerCurrent: () => true,
-      restoredWorkspace: {
-        source,
-        remoteWorkspaceDir,
-        manifestRef,
-      },
+      restoredWorkspace: binding,
       workspaceTransfer: workspaceTransfer({
         prepareUpload: () => "upload-token",
         takeUpload,
@@ -52,25 +44,16 @@ it.for(["journal", "upload", "both", "authority"] as const)(
       runWorkspaceCommand: async () => {
         uploadStarted.resolve();
         await upload.promise;
-        return workspaceCommandResult(remoteWorkspaceDir);
+        return workspaceCommandResult(binding.remoteWorkspaceDir);
       },
     });
     const operation = actions.reconcileWorkspace({
-      remoteWorkspaceDir,
-      baseManifestRef: manifestRef,
+      remoteWorkspaceDir: binding.remoteWorkspaceDir,
+      baseManifestRef: binding.manifestRef,
       source: {
-        ...source,
-        assertCurrent: () => {
-          if (!current) {
-            throw failure;
-          }
-        },
-        journal: {
-          load: () => journal.promise,
-          begin: async () => {},
-          commit: async () => {},
-          abort: async () => {},
-        },
+        ...binding.source,
+        assertCurrent: () => authority.signal.throwIfAborted(),
+        journal: emptyJournal({ load: () => journal.promise }),
         stagedResult: { ref: "refs/openclaw/worker-results/overlap", record: () => {} },
       },
     });
@@ -85,10 +68,8 @@ it.for(["journal", "upload", "both", "authority"] as const)(
         awaitGateBeforeSettlement(uploadStarted.promise, operation, "upload never started"),
         signal,
       );
-      expect(takeUpload).not.toHaveBeenCalled();
-      expect(revoke).not.toHaveBeenCalled();
       if (failedSide === "authority") {
-        current = false;
+        authority.abort(failure);
       }
       if (failedSide === "upload" || failedSide === "both") {
         upload.reject(failedSide === "both" ? new Error("upload failed first") : failure);

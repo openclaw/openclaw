@@ -9,6 +9,7 @@ import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-d
 import { MANIFEST_REF, REQUEST } from "./placement-dispatch-test-fixtures.js";
 import { createHarness as createPlacementHarness } from "./placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import { placementClaim } from "./placement-suite.test-support.js";
 
 const { workerPlacementWarn } = vi.hoisted(() => ({ workerPlacementWarn: vi.fn() }));
 
@@ -55,16 +56,7 @@ it.each([
       if (active.state !== "active") {
         throw new Error("active placement fixture was not active");
       }
-      const claim = await store.claimTurn({
-        ...REQUEST,
-        claimId: "restarted-turn-claim",
-        runId: "restarted-turn-run",
-        owner: {
-          kind: "worker",
-          environmentId: active.environmentId,
-          ownerEpoch: active.activeOwnerEpoch,
-        },
-      });
+      const claim = await store.claimTurn(placementClaim(active, "restarted-turn"));
       await store.markWorkspaceResultPending(claim);
       store = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
       harness = await createPlacementHarness(database, store, options);

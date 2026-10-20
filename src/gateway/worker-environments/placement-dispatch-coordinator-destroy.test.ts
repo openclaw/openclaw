@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { createDeferredCore } from "../../shared/deferred.js";
+import { createReadBarrier } from "../../infra/sqlite-readonly.test-support.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
 import {
   ACTIVE_PLACEMENT,
@@ -12,8 +12,7 @@ import { createDispatchEnvironmentFixtures } from "./placement-dispatch-test-fix
 it.each(["in-flight", "success", "failure", "discovery failure"] as const)(
   "holds forced-destroy admission while unrelated sessions proceed: %s",
   async (scenario) => {
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
+    const blocked = createReadBarrier();
     const failure = new Error(scenario);
     const inFlight = scenario === "in-flight";
     const dispatched: string[] = [];
@@ -28,8 +27,7 @@ it.each(["in-flight", "success", "failure", "discovery failure"] as const)(
           dispatched.push(request.sessionId);
           if (inFlight && request.sessionId === REQUEST.sessionId) {
             report?.({ ...PROVISIONING_PLACEMENT, ...request });
-            entered.resolve();
-            await release.promise;
+            await blocked.hold(undefined);
             finished = true;
           }
           return { ...ACTIVE_PLACEMENT, ...request };
@@ -45,8 +43,7 @@ it.each(["in-flight", "success", "failure", "discovery failure"] as const)(
           if (inFlight) {
             expect(finished).toBe(true);
           } else {
-            entered.resolve();
-            await release.promise;
+            await blocked.hold(undefined);
             if (scenario === "failure") {
               throw failure;
             }
@@ -62,33 +59,28 @@ it.each(["in-flight", "success", "failure", "discovery failure"] as const)(
       expect(destroyed).toBe(false);
       return;
     }
-    const dispatching = inFlight ? coordinated.dispatch(REQUEST) : undefined;
-    if (inFlight) {
-      await entered.promise;
-    }
-    const destroying = coordinated
-      .forceDestroyEnvironment(environmentId)
-      .catch((error: unknown) => error);
-    if (!inFlight) {
-      await entered.promise;
-    }
-    const owner = inFlight ? undefined : coordinated.dispatch(REQUEST);
+    const destroy = () =>
+      coordinated.forceDestroyEnvironment(environmentId).catch((error: unknown) => error);
+    const first = inFlight ? coordinated.dispatch(REQUEST) : destroy();
+    await blocked.entered.promise;
+    const second = inFlight ? destroy() : coordinated.dispatch(REQUEST);
     try {
       await coordinated.dispatch({ ...REQUEST, sessionId: "unrelated" });
       if (!inFlight) {
         expect(dispatched).toEqual(["unrelated"]);
       }
     } finally {
-      release.resolve();
-      await Promise.all([dispatching, owner, destroying]);
+      blocked.resume.resolve();
+      await Promise.all([first, second]);
     }
     if (!inFlight) {
       expect(dispatched).toEqual(["unrelated", REQUEST.sessionId]);
     }
+    const result = await (inFlight ? second : first);
     if (scenario === "failure") {
-      expect(await destroying).toBe(failure);
+      expect(result).toBe(failure);
     } else {
-      expect(await destroying).toMatchObject({ state: "destroyed" });
+      expect(result).toMatchObject({ state: "destroyed" });
     }
   },
 );

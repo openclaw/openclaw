@@ -19,8 +19,9 @@ afterEach(() => vi.restoreAllMocks());
 it("negotiates gzip only for authorized manifests while retaining identity peers", async () => {
   const root = tempDirs.make("workspace-transfer-encoding-");
   const localPath = path.join(root, "source");
+  const content = "transfer content\n";
   await fs.mkdir(localPath);
-  await fs.writeFile(path.join(localPath, "input.txt"), "transfer content\n");
+  await fs.writeFile(path.join(localPath, "input.txt"), content);
   const service = createNodeWorkspaceTransferService({
     temporaryRoot: path.join(root, "transfers"),
     getOwner: () => transferOwner("session"),
@@ -44,8 +45,9 @@ it("negotiates gzip only for authorized manifests while retaining identity peers
           headers: header ? { "accept-encoding": header } : undefined,
         },
         async (response) => ({
-          statusCode: response.statusCode,
-          headers: response.headers,
+          code: response.statusCode,
+          encoding: response.headers["content-encoding"],
+          vary: response.headers.vary,
           bytes: await buffer(response),
         }),
       );
@@ -62,9 +64,7 @@ it("negotiates gzip only for authorized manifests while retaining identity peers
       { header: "gzip;q=0, identity;q=0", encoding: undefined, code: 406 },
     ]) {
       const response = await requestManifest(header);
-      expect(response.statusCode).toBe(code);
-      expect(response.headers["content-encoding"]).toBe(encoding);
-      expect(response.headers.vary).toBe("Accept-Encoding");
+      expect(response).toMatchObject({ code, encoding, vary: "Accept-Encoding" });
       if (code === 200) {
         const bytes = response.bytes;
         expect((encoding === "gzip" ? gunzipSync(bytes) : bytes).toString()).toBe(
@@ -73,8 +73,7 @@ it("negotiates gzip only for authorized manifests while retaining identity peers
       }
     }
     const invalid = await requestManifest("gzip", "invalid-token");
-    expect(invalid.statusCode).toBe(404);
-    expect(invalid.headers["content-encoding"]).toBeUndefined();
+    expect(invalid).toMatchObject({ code: 404, encoding: undefined });
 
     const workspaceDir = path.join(root, "download");
     await expect(
@@ -86,9 +85,7 @@ it("negotiates gzip only for authorized manifests while retaining identity peers
         transfer: { direction: "download", token, manifestRef: snapshot.manifestRef },
       }),
     ).resolves.toBe(snapshot.manifestRef);
-    expect(await fs.readFile(path.join(workspaceDir, "input.txt"), "utf8")).toBe(
-      "transfer content\n",
-    );
+    expect(await fs.readFile(path.join(workspaceDir, "input.txt"), "utf8")).toBe(content);
 
     const snapshotFor = service.snapshot.bind(service);
     vi.spyOn(service, "snapshot").mockImplementation((authorization) => {
@@ -99,8 +96,7 @@ it("negotiates gzip only for authorized manifests while retaining identity peers
       return captured;
     });
     const revoked = await requestManifest("gzip");
-    expect(revoked.statusCode).toBe(404);
-    expect(revoked.headers["content-encoding"]).toBeUndefined();
+    expect(revoked).toMatchObject({ code: 404, encoding: undefined });
   } finally {
     await service.closeAll();
     await server.close();
