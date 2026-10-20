@@ -58,12 +58,6 @@ vi.mock("../infra/state-migrations.messages.js", () => ({
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
 let stateDir: string;
-let authorityLive = false;
-const assertCurrent = () => {
-  if (!authorityLive) {
-    throw new Error("maintenance authority expired");
-  }
-};
 
 beforeEach(async () => {
   vi.resetAllMocks();
@@ -80,11 +74,11 @@ beforeEach(async () => {
   mocks.verify.mockResolvedValue({ quarantinedPlugins: [] });
   mocks.prune.mockResolvedValue({ removed: [], warnings: [] });
   mocks.maintenance.mockImplementation(async ({ run }) => {
-    authorityLive = true;
+    const authority = new AbortController();
     try {
-      return await run({ assertCurrent });
+      return await run({ assertCurrent: () => authority.signal.throwIfAborted() });
     } finally {
-      authorityLive = false;
+      authority.abort(new Error("maintenance authority expired"));
     }
   });
   vi.spyOn(process, "emitWarning").mockImplementation(mocks.warning);
