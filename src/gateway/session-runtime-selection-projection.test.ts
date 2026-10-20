@@ -95,9 +95,9 @@ it.each([
         });
         expect(row).toMatchObject({
           runtimeSelectionLocked: locked,
-          modelSelectionLocked: modelLocked ? true : undefined,
           thinkingLevel: "high",
         });
+        expect(row.modelSelectionLocked).toBe(modelLocked ? true : undefined);
         if (kind === "runtime-pin") {
           expect(row.agentRuntime?.source).toBe("session-key");
         }

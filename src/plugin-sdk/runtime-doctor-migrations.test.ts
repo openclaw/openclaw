@@ -64,7 +64,10 @@ describe("defineLegacyJsonStateMigration retention", () => {
         parse: (value) => value as typeof rows,
         namespace: "entries",
         maxEntries: 2,
-        describeEntries: () => ({ preview: ["legacy entries"], change: () => null }),
+        describeEntries: () => ({
+          preview: ["legacy entries"],
+          change: ({ imported }) => `Migrated ${imported} entries`,
+        }),
         toRows: (entries) => entries,
       });
       const params = { config: {}, env, stateDir, oauthDir: stateDir, context };

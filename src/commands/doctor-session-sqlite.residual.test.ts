@@ -66,7 +66,13 @@ it.each(["matching", "conflicting", "malformed", "pending-plugin"] as const)(
     const siblingStore = path.join(siblingDir, "sessions.json");
     writeJson(siblingStore, { "agent:other:main": { sessionId: "new-session", updatedAt: 1000 } });
     const newEvents = [
-      { type: "session", version: 3, id: "new-session" },
+      {
+        type: "session",
+        version: 3,
+        id: "new-session",
+        cwd: "/fixture",
+        timestamp: "2026-08-30T00:00:00Z",
+      },
       messageEvent("new", "user", "new"),
     ];
     const index = JSON.parse(fs.readFileSync(store.storePath, "utf8"));
