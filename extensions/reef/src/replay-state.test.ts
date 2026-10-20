@@ -59,20 +59,19 @@ function fixture(maxEntries = REEF_REPLAY_MAX_ENTRIES) {
   };
   const identity = generateIdentity();
   const replayKey = new Uint8Array(32).fill(2);
-  const open = () => new ReefSqliteReplayStore(runtime, replayKey, randomBytes, maxEntries);
-  const openWithRng = (rng: (length: number) => Uint8Array) =>
+  const open = (rng: (length: number) => Uint8Array = randomBytes) =>
     new ReefSqliteReplayStore(runtime, replayKey, rng, maxEntries);
+  const update = (patch: Partial<ReefReplayRecord>) =>
+    store.register(key, { ...raw.lookup(key)!, ...patch });
   const receipt = signReceipt(
     { id, bodyHash: "b".repeat(64), auditHead: "c".repeat(64), status: "accepted" },
     identity.signing.secretKey,
   );
-  return { store, raw, runtime, open, openWithRng, receipt, env };
+  return { store, raw, open, update, receipt };
 }
 
 describe("Reef replay worker ownership", () => {
-  beforeEach(() => {
-    resetPluginStateStoreForTests();
-  });
+  beforeEach(resetPluginStateStoreForTests);
   afterEach(async () => {
     vi.restoreAllMocks();
     await closeOpenClawStateDatabaseAsync();
@@ -138,14 +137,14 @@ describe("Reef replay worker ownership", () => {
     f.store.compareAndApply = async (...args) => {
       if (takeover) {
         takeover = false;
-        await f.store.register(key, { ...f.raw.lookup(key)!, claimExpiresAt: Date.now() - 1 });
+        await f.update({ claimExpiresAt: Date.now() - 1 });
         await successor.claim("alice", id, hash);
       }
       return compare(...args);
     };
     // A fresh handle captures the instrumented worker method but owns its own claim.
     const stale = f.open();
-    await f.store.register(key, { ...f.raw.lookup(key)!, claimExpiresAt: Date.now() - 1 });
+    await f.update({ claimExpiresAt: Date.now() - 1 });
     takeover = false;
     await stale.claim("alice", id, hash);
     takeover = true;
@@ -182,7 +181,7 @@ describe("Reef replay worker ownership", () => {
       if (!changed) {
         changed = true;
         expect(args[2]).toMatchObject({ action: "set", value: { claimOwner: "previous" } });
-        await f.store.register(key, { ...f.raw.lookup(key)!, claimExpiresAt: deadline + 1 });
+        await f.update({ claimExpiresAt: deadline + 1 });
         clock.mockReturnValue(deadline + 2);
       }
       return compare(...args);
@@ -199,7 +198,7 @@ describe("Reef replay worker ownership", () => {
     const rng = vi.fn<(length: number) => Uint8Array>(() => {
       throw failure;
     });
-    const replay = f.openWithRng(rng);
+    const replay = f.open(rng);
     await replay.claim("alice", id, hash);
     await expect(replay.complete("alice", id, f.receipt, { text: "body" })).rejects.toBe(failure);
     expect(rng.mock.calls).toEqual([[12]]);
@@ -216,16 +215,13 @@ describe("Reef replay worker ownership", () => {
         ciphertexts.push(intent.value.body!.enc);
         if (ciphertexts.length === 1) {
           const current = f.raw.lookup(entryKey)!;
-          await f.store.register(entryKey, {
-            ...current,
-            claimExpiresAt: current.claimExpiresAt! + 1,
-          });
+          await f.update({ claimExpiresAt: current.claimExpiresAt! + 1 });
         }
       }
       return compare(entryKey, comparison, intent);
     };
     const rng = vi.fn(randomBytes);
-    const replay = f.openWithRng(rng);
+    const replay = f.open(rng);
     await replay.claim("alice", id, hash);
     const receipt = structuredClone(f.receipt);
     const body = { text: "original" };
@@ -258,7 +254,7 @@ describe("Reef replay worker ownership", () => {
   it("validates completion only after matching the live claim", async () => {
     const f = fixture();
     const rng = vi.fn(randomBytes);
-    const replay = f.openWithRng(rng);
+    const replay = f.open(rng);
     await expect(
       replay.complete("alice", id, { ...f.receipt, id: "wrong" }, { text: "body" }),
     ).rejects.toThrow("receipt id does not match");

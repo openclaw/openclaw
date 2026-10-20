@@ -67,30 +67,24 @@ describe("ReefMessageFlow send recovery", () => {
     expect(fetcher).not.toHaveBeenCalled();
   });
 
-  it("persists automatic resends as non-resendable deliveries", async () => {
-    const { flow, trusted, trustedPeer, relay } = await fixture();
-
-    const id = await flow.send("bob", " rephrased coordination ", { resendDisabled: true });
-
-    expect((await trusted.readOutboundDelivery("bob", id))?.delivery).toEqual({
-      bodyHash: expect.any(String),
-      textHash: reefMessageTextHash("rephrased coordination"),
-      recipient: reefPeerIdentity(trustedPeer),
-      resendDisabled: true,
-      sentAt: expect.any(Number),
-    });
-    expect(relay.sendEnvelope).toHaveBeenCalledOnce();
-  });
-
-  it("classifies under the rules-bound effective guard policy version", async () => {
-    const { flow, guardMock, relay, policyVersion } = await fixture({
-      outbound: "Never mention project Nightjar.",
-    });
-    expect(policyVersion).toMatch(/^v1\+[0-9a-f]{64}$/);
-
-    await flow.send("bob", "meeting at ten");
-
-    expect(guardMock.classify).toHaveBeenCalledWith(expect.objectContaining({ policyVersion }));
+  it.each(["automatic resend", "rules-bound policy"] as const)("sends with %s", async (mode) => {
+    const resendDisabled = mode === "automatic resend" ? true : undefined;
+    const rules = resendDisabled ? undefined : { outbound: "Never mention project Nightjar." };
+    const { flow, trusted, trustedPeer, relay, guardMock, policyVersion } = await fixture(rules);
+    const text = resendDisabled ? " rephrased coordination " : "meeting at ten";
+    const id = await flow.send("bob", text, { resendDisabled });
+    if (resendDisabled) {
+      expect((await trusted.readOutboundDelivery("bob", id))?.delivery).toEqual({
+        bodyHash: expect.any(String),
+        textHash: reefMessageTextHash("rephrased coordination"),
+        recipient: reefPeerIdentity(trustedPeer),
+        resendDisabled: true,
+        sentAt: expect.any(Number),
+      });
+    } else {
+      expect(policyVersion).toMatch(/^v1\+[0-9a-f]{64}$/);
+      expect(guardMock.classify).toHaveBeenCalledWith(expect.objectContaining({ policyVersion }));
+    }
     expect(relay.sendEnvelope).toHaveBeenCalledOnce();
   });
 });

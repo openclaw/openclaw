@@ -7,7 +7,6 @@ import type {
   PluginStateOperationReceipt,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
-  createPluginStateKeyedStoreV2ForTests,
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
@@ -24,7 +23,7 @@ import { handleReefCommand } from "./commands.js";
 import { ReefChannelConfigSchema } from "./config-schema.js";
 import { ReefMessageFlow } from "./flow.js";
 import { ReefFriendManager } from "./friends.js";
-import { REEF_REPLAY_TTL_MS, reefReplayStoreKey } from "./replay-store.js";
+import { REEF_REPLAY_TTL_MS, reefReplayStoreKey, type ReefReplayRecord } from "./replay-store.js";
 import { createReefRuntimeAuthority } from "./runtime.js";
 import {
   assertReefIdentityBinding,
@@ -60,14 +59,28 @@ const receiptId = "01JZ0000000000000000000000";
 const identityBinding = (handle: string) => ({ handle, relayUrl: "https://reefwire.ai" });
 let stateDir = "";
 let runtime: ReturnType<typeof createRuntime>;
+const reopen = () => createRuntime(stateDir);
+const reserve = (handle: string) => reserveReefIdentityBinding(runtime, identityBinding(handle));
 
 beforeEach(() => {
   stateDir = createStateTestDirectory();
-  runtime = createRuntime(stateDir);
+  runtime = reopen();
 });
 afterEach(async () => {
   await cleanupStateTestDirectory(stateDir);
 });
+
+const rawStore = (namespace: string, maxEntries = 1) =>
+  runtime.state.openKeyedStoreV2({ namespace, maxEntries, overflowPolicy: "reject-new" });
+
+function assertNoHostSql(calls: ReturnType<typeof observeHostDataSql>["calls"], restore = false) {
+  for (const call of calls) {
+    expect(call).not.toHaveBeenCalled();
+    if (restore) {
+      call.mockRestore();
+    }
+  }
+}
 
 function reefKeys() {
   return { ...generateIdentity(), auditKey, replayKey, keyEpoch: 1 };
@@ -163,16 +176,16 @@ describe("Reef SQLite state", () => {
   it("persists a monotonic inbox cursor for the bound Reef identity", async () => {
     const binding = identityBinding("molty");
     const requested = { ...binding };
-    const store = new ReefInboxCursorStore(createRuntime(stateDir), requested);
+    const store = new ReefInboxCursorStore(reopen(), requested);
     requested.handle = "changed";
 
     expect(await store.load()).toBe(0);
     await store.advance(12);
     await store.advance(7);
 
-    expect(await new ReefInboxCursorStore(createRuntime(stateDir), binding).load()).toBe(12);
+    expect(await new ReefInboxCursorStore(reopen(), binding).load()).toBe(12);
     await expectReefStateOperationError(
-      new ReefInboxCursorStore(createRuntime(stateDir), identityBinding("clawd")).load(),
+      new ReefInboxCursorStore(reopen(), identityBinding("clawd")).load(),
       "Reef inbox cursor belongs to a different identity",
     );
   });
@@ -199,23 +212,11 @@ describe("Reef SQLite state", () => {
   ] as const)(
     "rechecks a concurrent %s guard before creating keys",
     async (namespace, key, value, error) => {
-      const guard = runtime.state.openKeyedStoreV2({
-        namespace,
-        maxEntries: namespace === "registration" ? 2 : 1,
-        overflowPolicy: "reject-new",
-      });
+      const guard = rawStore(namespace, namespace === "registration" ? 2 : 1);
       beforeNextStateOperation(runtime, () => guard.register(key, value));
 
       await expectReefStateOperationError(generateAndStoreKeys(runtime), error);
-      await expect(
-        runtime.state
-          .openKeyedStoreV2({
-            namespace: "identity",
-            maxEntries: 1,
-            overflowPolicy: "reject-new",
-          })
-          .lookup("keys"),
-      ).resolves.toBeUndefined();
+      expect(await rawStore("identity").lookup("keys")).toBeUndefined();
     },
   );
 
@@ -232,7 +233,7 @@ describe("Reef SQLite state", () => {
     const observation = observeHostDataSql();
     const sql = observation.calls;
     const keys = await generateAndStoreKeys(runtime);
-    expect(await loadKeys(createRuntime(stateDir))).toEqual(keys);
+    expect(await loadKeys(reopen())).toEqual(keys);
     await bindIdentity(runtime, "molty");
     await saveReefSetupSession(runtime, {
       session: "setup-secret",
@@ -240,15 +241,11 @@ describe("Reef SQLite state", () => {
       email: "molty@example.com",
     });
 
-    expect(await loadReefIdentityBinding(createRuntime(stateDir))).toEqual(
-      identityBinding("molty"),
-    );
-    expect((await loadReefSetupSession(createRuntime(stateDir)))?.session).toBe("setup-secret");
+    expect(await loadReefIdentityBinding(reopen())).toEqual(identityBinding("molty"));
+    expect((await loadReefSetupSession(reopen()))?.session).toBe("setup-secret");
     await clearReefSetupSession(runtime);
     expect(await loadReefSetupSession(runtime)).toBeUndefined();
-    for (const operation of sql) {
-      expect(operation).not.toHaveBeenCalled();
-    }
+    assertNoHostSql(sql);
     expect(fs.existsSync(path.join(stateDir, "state", "openclaw.sqlite"))).toBe(true);
     expect(fs.existsSync(path.join(stateDir, "data", "reef"))).toBe(false);
   });
@@ -256,9 +253,7 @@ describe("Reef SQLite state", () => {
   it("atomically rejects redirecting stored identity keys to another handle", async () => {
     await bindIdentity(runtime, "molty");
 
-    await expect(reserveReefIdentityBinding(runtime, identityBinding("other"))).rejects.toThrow(
-      "already holds the Reef identity @molty",
-    );
+    await expect(reserve("other")).rejects.toThrow("already holds the Reef identity @molty");
     expect(await loadReefIdentityBinding(runtime)).toEqual(identityBinding("molty"));
     await expect(assertReefIdentityBinding(runtime, identityBinding("other"))).rejects.toThrow(
       "already holds the Reef identity @molty",
@@ -266,22 +261,20 @@ describe("Reef SQLite state", () => {
   });
 
   it("conditionally releases or finalizes an identity reservation", async () => {
-    const released = await reserveReefIdentityBinding(runtime, identityBinding("first"));
+    const released = await reserve("first");
     await releaseReefIdentityReservation(runtime, released);
     expect(await loadReefIdentityBinding(runtime)).toBeUndefined();
 
-    const finalized = await reserveReefIdentityBinding(runtime, identityBinding("second"));
+    const finalized = await reserve("second");
     await finalizeReefIdentityBinding(runtime, finalized);
     await releaseReefIdentityReservation(runtime, finalized);
     expect(await loadReefIdentityBinding(runtime)).toEqual(identityBinding("second"));
   });
 
   it("does not transfer a live reservation to a concurrent retry", async () => {
-    const reservation = await reserveReefIdentityBinding(runtime, identityBinding("molty"));
+    const reservation = await reserve("molty");
 
-    await expect(reserveReefIdentityBinding(runtime, identityBinding("molty"))).rejects.toThrow(
-      "already holds the Reef identity @molty",
-    );
+    await expect(reserve("molty")).rejects.toThrow("already holds the Reef identity @molty");
     await finalizeReefIdentityBinding(runtime, reservation);
     expect((await loadReefIdentityBinding(runtime))?.handle).toBe("molty");
   });
@@ -289,13 +282,11 @@ describe("Reef SQLite state", () => {
   it("allows only the same binding to take over an expired reservation", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-16T00:00:00.000Z"));
-    const original = await reserveReefIdentityBinding(runtime, identityBinding("molty"));
+    const original = await reserve("molty");
     vi.advanceTimersByTime(10 * 60_000 + 1);
 
-    await expect(reserveReefIdentityBinding(runtime, identityBinding("other"))).rejects.toThrow(
-      "already holds the Reef identity @molty",
-    );
-    const retry = await reserveReefIdentityBinding(runtime, identityBinding("molty"));
+    await expect(reserve("other")).rejects.toThrow("already holds the Reef identity @molty");
+    const retry = await reserve("molty");
     await releaseReefIdentityReservation(runtime, original);
     await expect(finalizeReefIdentityBinding(runtime, original)).rejects.toThrow(
       "reservation was replaced",
@@ -307,7 +298,7 @@ describe("Reef SQLite state", () => {
   it("reserves only one identity when registrations overlap", async () => {
     const outcomes = await Promise.allSettled(
       ["first", "second"].map((handle) =>
-        reserveReefIdentityBinding(createRuntime(stateDir), identityBinding(handle)),
+        reserveReefIdentityBinding(reopen(), identityBinding(handle)),
       ),
     );
     expect(outcomes.filter((outcome) => outcome.status === "fulfilled")).toHaveLength(1);
@@ -316,20 +307,13 @@ describe("Reef SQLite state", () => {
     if (winner?.status !== "fulfilled") {
       throw new Error("expected one registration to reserve the identity");
     }
-    await finalizeReefIdentityBinding(createRuntime(stateDir), winner.value);
-    expect(await loadReefIdentityBinding(createRuntime(stateDir))).toEqual(winner.value.binding);
+    await finalizeReefIdentityBinding(reopen(), winner.value);
+    expect(await loadReefIdentityBinding(reopen())).toEqual(winner.value.binding);
   });
 
   it("does not steal a live replay claim owned by another process", async () => {
     const keys = reefKeys();
-    const raw = createPluginStateSyncKeyedStoreForTests<{
-      peer: string;
-      id: string;
-      envelopeHash: string;
-      state: "in_flight";
-      claimOwner: string;
-      claimExpiresAt: number;
-    }>("reef", {
+    const raw = createPluginStateSyncKeyedStoreForTests<ReefReplayRecord>("reef", {
       namespace: "replay",
       maxEntries: 3_000,
       overflowPolicy: "reject-new",
@@ -371,14 +355,14 @@ describe("Reef SQLite state", () => {
 
   it("persists review decisions and delivered ids", async () => {
     const keys = reefKeys();
-    const stores = await openStores(createRuntime(stateDir), keys);
+    const stores = await openStores(reopen(), keys);
     const review = reviewRequest();
 
     await expect(stores.reviews.request(review)).resolves.toBeUndefined();
     await expect(stores.reviews.lookupDecision(review.approvalDigest)).resolves.toBe("pending");
     await expect(stores.reviews.lookupDecision("c".repeat(64))).resolves.toBe("none");
     const commandAuthority = createReefRuntimeAuthority();
-    activateReviewStore(commandAuthority, createRuntime(stateDir), stores.reviews);
+    activateReviewStore(commandAuthority, reopen(), stores.reviews);
     try {
       for (const action of ["approve", "deny"]) {
         await expect(
@@ -402,7 +386,7 @@ describe("Reef SQLite state", () => {
     await expect(stores.reviews.decide("c".repeat(64), true)).resolves.toBeUndefined();
     const pendingReview = { ...review, id: "pending", approvalDigest: "d".repeat(64) };
     await stores.reviews.request(pendingReview);
-    const reopened = await openStores(createRuntime(stateDir), keys);
+    const reopened = await openStores(reopen(), keys);
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     const observation = observeHostDataSql();
@@ -417,7 +401,7 @@ describe("Reef SQLite state", () => {
     await expect(reopened.reviews.list()).resolves.toEqual([pendingReview]);
     const listReviews = registerReviewListCommand();
     const authority = createReefRuntimeAuthority();
-    activateReviewStore(authority, createRuntime(stateDir), reopened.reviews);
+    activateReviewStore(authority, reopen(), reopened.reviews);
     try {
       await expect(listReviews()).resolves.toEqual({
         text: `${pendingReview.approvalDigest} outbound alice#1 -> bob#1 ambiguous`,
@@ -425,18 +409,15 @@ describe("Reef SQLite state", () => {
     } finally {
       authority.release();
     }
-    for (const operation of sql) {
-      expect(operation).not.toHaveBeenCalled();
-      operation.mockRestore();
-    }
+    assertNoHostSql(sql, true);
     await expect(reopened.reviews.request(review)).resolves.toEqual({
       approved: true,
       approvalDigest: review.approvalDigest,
     });
     await stores.delivered.confirm(receiptId);
-    await expect(
-      (await openStores(createRuntime(stateDir), keys)).delivered.status(receiptId),
-    ).resolves.toBe("delivered");
+    await expect((await openStores(reopen(), keys)).delivered.status(receiptId)).resolves.toBe(
+      "delivered",
+    );
   });
 
   it.each(["keys", "lookup", "list"] as const)(
@@ -465,11 +446,7 @@ describe("Reef SQLite state", () => {
   it("never treats a malformed stored approval as owner authorization", async () => {
     const reviews = new ReviewApprovalStore(runtime);
     const review = reviewRequest();
-    const raw = runtime.state.openKeyedStoreV2({
-      namespace: REEF_REVIEWS_NAMESPACE,
-      maxEntries: 2_000,
-      overflowPolicy: "reject-new",
-    });
+    const raw = rawStore(REEF_REVIEWS_NAMESPACE, 2_000);
     const malformed = { review, approved: "false" };
     await raw.register(review.approvalDigest, malformed);
     for (const operation of [
@@ -488,11 +465,7 @@ describe("Reef SQLite state", () => {
     const next = reviewRequest("next", "2".repeat(64));
     await reviews.request(first);
     await reviews.decide(first.approvalDigest, true);
-    const raw = runtime.state.openKeyedStoreV2({
-      namespace: REEF_REVIEWS_NAMESPACE,
-      maxEntries: 1,
-      overflowPolicy: "reject-new",
-    });
+    const raw = rawStore(REEF_REVIEWS_NAMESPACE);
     beforeNextStateOperation(runtime, () => raw.register(first.approvalDigest, { review: first }));
 
     await expectReefStateOperationError(
@@ -533,7 +506,7 @@ describe("Reef SQLite state", () => {
           ? reviews.request(reviewRequest("next", "2".repeat(64)))
           : reviews.decide(first.approvalDigest, true, assertOwnerCurrent),
       ).rejects.toBe(revoked);
-      const reopened = new ReviewApprovalStore(createRuntime(stateDir), 1);
+      const reopened = new ReviewApprovalStore(reopen(), 1);
       await expect(reopened.lookupDecision(first.approvalDigest)).resolves.toEqual(
         action === "request" ? { approved: false } : "pending",
       );
@@ -572,10 +545,12 @@ describe("Reef SQLite state", () => {
       const finalRevocation = sibling.decide(review.approvalDigest, false);
       const observed = reviews.lookupDecision(review.approvalDigest);
       pending.push(reapproval, finalRevocation, observed);
-      await expect(revocation).resolves.toEqual(review);
-      await expect(reapproval).resolves.toEqual(review);
-      await expect(finalRevocation).resolves.toEqual(review);
-      await expect(observed).resolves.toEqual({ approved: false });
+      expect(await Promise.all([revocation, reapproval, finalRevocation, observed])).toEqual([
+        review,
+        review,
+        review,
+        { approved: false },
+      ]);
     } finally {
       await Promise.allSettled(pending);
     }
@@ -583,15 +558,7 @@ describe("Reef SQLite state", () => {
 
   it("preserves review source while an earlier acknowledgement waits", async () => {
     const env = { OPENCLAW_STATE_DIR: stateDir };
-    runtime.state.openKeyedStoreV2 = <T>(options: OpenAsyncKeyedStoreOptions) => {
-      const store = createPluginStateKeyedStoreV2ForTests<T>(
-        "reef",
-        { ...options, env },
-        { assertCurrent() {} },
-      );
-      runtime.stateStores.push(store);
-      return store;
-    };
+    runtime = createRuntime(env);
     const reviews = new ReviewApprovalStore(runtime);
     const review = reviewRequest();
     const original = structuredClone(review);
@@ -674,9 +641,7 @@ describe("Reef SQLite state", () => {
     );
 
     await expect(store.list()).resolves.toEqual([second]);
-    for (const operation of sql.calls) {
-      expect(operation).not.toHaveBeenCalled();
-    }
+    assertNoHostSql(sql.calls);
   });
 });
 
@@ -684,7 +649,7 @@ describe("Reef delivered markers", () => {
   it("confirms delivered markers idempotently", async () => {
     const observation = observeHostDataSql();
     const sql = observation.calls;
-    const delivered = new ReefDeliveredStore(createRuntime(stateDir));
+    const delivered = new ReefDeliveredStore(reopen());
     await expect(delivered.status("m1")).resolves.toBeUndefined();
     await delivered.confirm("m1");
     await expect(delivered.status("m1")).resolves.toBe("delivered");
@@ -692,16 +657,12 @@ describe("Reef delivered markers", () => {
     await expect(delivered.status("m1")).resolves.toBe("delivered");
     await delivered.confirm("m2");
     await expect(delivered.status("m2")).resolves.toBe("delivered");
-    await expect(new ReefDeliveredStore(createRuntime(stateDir)).status("m2")).resolves.toBe(
-      "delivered",
-    );
-    for (const operation of sql) {
-      expect(operation).not.toHaveBeenCalled();
-    }
+    await expect(new ReefDeliveredStore(reopen()).status("m2")).resolves.toBe("delivered");
+    assertNoHostSql(sql);
   });
 
   it("surfaces capacity as PLUGIN_STATE_LIMIT_EXCEEDED from confirm without touching existing markers", async () => {
-    const stores = await openStores(createRuntime(stateDir), reefKeys(), {
+    const stores = await openStores(reopen(), reefKeys(), {
       deliveredMaxEntries: 1,
     });
     await stores.delivered.confirm("first"); // delivered namespace full
