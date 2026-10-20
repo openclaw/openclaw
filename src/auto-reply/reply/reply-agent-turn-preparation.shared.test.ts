@@ -1,7 +1,7 @@
 import { assert, beforeEach, expect, it, vi } from "vitest";
 import type { ReplyOperation } from "../../sessions/session-controller.js";
 import type { SessionControllerMailboxClaim } from "../../sessions/session-controller.mailbox.js";
-import { createPreparationRun as createRun } from "./reply-agent-turn-preparation.test-fixtures.js";
+import { createPreparationRun as createRun } from "./reply-agent-turn-preparation.test-support.js";
 
 const state = vi.hoisted(() => ({
   admit: vi.fn(),

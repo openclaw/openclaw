@@ -24,7 +24,7 @@ import {
 } from "../command-owner-authority.js";
 import type { FollowupRun } from "./queue/types.js";
 import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
-import { createPreparationRun } from "./reply-agent-turn-preparation.test-fixtures.js";
+import { createPreparationRun } from "./reply-agent-turn-preparation.test-support.js";
 import { resolveReplyToolAuthorityContext } from "./reply-tool-authority.js";
 
 const state = vi.hoisted(() => ({
