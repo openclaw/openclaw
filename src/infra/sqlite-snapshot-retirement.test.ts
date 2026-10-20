@@ -8,6 +8,7 @@ import {
   removeTempDirectory,
   removeTempDirectoryAsync,
 } from "./sqlite-readonly-location-cleanup.js";
+import { defer, deferAsync } from "./sqlite-shard-lifecycle.test-support.js";
 import { beginSqliteSnapshotRetirement } from "./sqlite-snapshot-retirement.js";
 import {
   createSqliteSnapshotStagingDirectory,
@@ -37,87 +38,71 @@ function assertReadable(location: string) {
   expect(database.prepare("SELECT value FROM probe").get()).toEqual({ value: "preserved" });
 }
 
-it("preserves a live nested snapshot when its parent starts cleanup first", async () => {
+it("preserves a live child during parent cleanup", async () => {
   const { cache, source } = createFixture();
   const parent = await createSqliteSnapshotStagingDirectory(cache, false, undefined, true);
   const child = await createSqliteSnapshotStagingDirectory(parent, false, undefined, true);
   const location = path.join(child, "database.sqlite");
   fs.copyFileSync(source, location);
-  try {
-    expect(await removeTempDirectoryAsync(parent)).toBe(false);
-    assertReadable(location);
-    expect(await removeTempDirectoryAsync(child)).toBe(true);
-    expect(await removeTempDirectoryAsync(parent)).toBe(true);
-  } finally {
+  await using _ = deferAsync(async () => {
     await removeTempDirectoryAsync(child);
     await removeTempDirectoryAsync(parent);
-  }
+  });
+  expect(await removeTempDirectoryAsync(parent)).toBe(false);
+  assertReadable(location);
+  expect(await removeTempDirectoryAsync(child)).toBe(true);
+  expect(await removeTempDirectoryAsync(parent)).toBe(true);
 });
 
+const prefix = "openclaw-sqlite-readonly-v2-";
 it.each([
-  {
-    parentName: "openclaw-sqlite-readonly-v2-Parent",
-    layout: "",
-    artifact: "owner.sqlite-journal",
-    nested: true,
-  },
-  { parentName: "openclaw-sqlite-readonly-v2-Parent", layout: "other", nested: true },
-  { parentName: "generic", layout: "", nested: true },
-  { parentName: "openclaw-sqlite-readonly-v2-Orphan", layout: "", nested: false },
-])(
-  "refuses retirement without ownership ($parentName/$layout, $artifact)",
-  ({ parentName, layout, artifact, nested }) => {
-    const { cache, source } = createFixture();
-    const parent = path.join(cache, parentName);
-    const orphan = nested
-      ? path.join(parent, layout, "openclaw-sqlite-readonly-v2-Orphan")
-      : parent;
-    fs.mkdirSync(orphan, { recursive: true });
-    const payload = path.join(parent, "database.sqlite");
-    if (nested) {
-      fs.copyFileSync(source, payload);
-    }
-    if (artifact) {
-      fs.writeFileSync(path.join(orphan, artifact), "retain");
-    }
-    const token = nested ? acquireSqliteStagingToken(parent, "create") : undefined;
-    try {
-      expect(() => beginSqliteSnapshotRetirement(parent, { token })).toThrow(
-        "SQLite snapshot token ownership is unknown",
-      );
-      if (nested) {
-        assertReadable(payload);
-      }
-      expect(fs.existsSync(orphan)).toBe(true);
-    } finally {
-      token?.();
-    }
-  },
-);
+  [`${prefix}Parent`, "", "owner.sqlite-journal", true],
+  [`${prefix}Parent`, "other", undefined, true],
+  ["generic", "", undefined, true],
+  [`${prefix}Orphan`, "", undefined, false],
+] as const)("refuses unowned retirement: %s/%s, %s", (parentName, layout, artifact, nested) => {
+  const { cache, source } = createFixture();
+  const parent = path.join(cache, parentName);
+  const orphan = nested ? path.join(parent, layout, `${prefix}Orphan`) : parent;
+  fs.mkdirSync(orphan, { recursive: true });
+  const payload = path.join(parent, "database.sqlite");
+  if (nested) {
+    fs.copyFileSync(source, payload);
+  }
+  if (artifact) {
+    fs.writeFileSync(path.join(orphan, artifact), "retain");
+  }
+  const token = nested ? acquireSqliteStagingToken(parent, "create") : undefined;
+  using _ = defer(() => token?.());
+  expect(() => beginSqliteSnapshotRetirement(parent, { token })).toThrow(
+    "SQLite snapshot token ownership is unknown",
+  );
+  if (nested) {
+    assertReadable(payload);
+  }
+  expect(fs.existsSync(orphan)).toBe(true);
+});
 
-it.each([false, true])(
-  "cleans a fresh owned legacy staging directory (async: %s)",
-  async (asynchronous) => {
-    const { cache, source } = createFixture();
-    const directory = await createSqliteSnapshotStagingDirectory(
-      cache,
-      true,
-      undefined,
-      asynchronous,
-    );
-    fs.copyFileSync(source, path.join(directory, "database.sqlite"));
-    expect(
-      asynchronous ? await removeTempDirectoryAsync(directory) : removeTempDirectory(directory),
-    ).toBe(true);
-    expect(fs.existsSync(directory)).toBe(false);
-  },
-);
+it.each([false, true])("cleans owned legacy staging (async: %s)", async (asynchronous) => {
+  const { cache, source } = createFixture();
+  const directory = await createSqliteSnapshotStagingDirectory(
+    cache,
+    true,
+    undefined,
+    asynchronous,
+  );
+  fs.copyFileSync(source, path.join(directory, "database.sqlite"));
+  expect(
+    asynchronous ? await removeTempDirectoryAsync(directory) : removeTempDirectory(directory),
+  ).toBe(true);
+  expect(fs.existsSync(directory)).toBe(false);
+});
 
 it.each([
   "directory",
   "token",
   ...(process.platform === "win32" ? (["unknown"] as const) : []),
-] as const)("preserves payload when the %s identity changes before retirement", (kind) => {
+] as const)("preserves payload after %s identity drift", (kind) => {
   const { cache, source } = createFixture();
   const directory = createSqliteSnapshotStagingDirectorySync(cache);
   const location = path.join(directory, "database.sqlite");
@@ -131,11 +116,10 @@ it.each([
     }
     return stat;
   });
-  try {
-    expect(removeTempDirectory(directory)).toBe(false);
-    assertReadable(location);
-  } finally {
+  using _ = defer(() => {
     changed.mockRestore();
     expect(removeTempDirectory(directory)).toBe(true);
-  }
+  });
+  expect(removeTempDirectory(directory)).toBe(false);
+  assertReadable(location);
 });

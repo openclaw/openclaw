@@ -19,38 +19,14 @@ const directories = useAutoCleanupTempDirTracker((cleanup) => {
 });
 
 it.each([true, false])(
-  "services real snapshot production and cleanup without a caller event-loop turn (preserveSourceArtifacts=%s)",
+  "services snapshots without yielding (preserveSourceArtifacts=%s)",
   (preserveSourceArtifacts) => {
     const root = directories.make("sqlite-retained-source-");
     const source = path.join(root, "source.sqlite");
     const cache = path.join(root, "cache");
     fs.mkdirSync(cache);
-    const seeded = spawnSync(
-      process.execPath,
-      [
-        "--input-type=module",
-        "-e",
-        `import { DatabaseSync } from 'node:sqlite';
-         const database = new DatabaseSync(${JSON.stringify(source)});
-         try {
-           database.exec("CREATE TABLE probe(value TEXT); INSERT INTO probe VALUES('preserved');");
-         } finally {
-           database.close();
-         }`,
-      ],
-      { encoding: "utf8", timeout: 30_000 },
-    );
-    expect(seeded.error, seeded.stderr).toBeUndefined();
-    expect(seeded.status, seeded.stderr).toBe(0);
-    const original = fs.readFileSync(source);
-    const sourceFiles = fs.readdirSync(root).filter((name) => name.startsWith("source.sqlite"));
     const sourceUrl = resolveRuntimeWorkerUrl(sqliteSnapshotStagingEntrypoints.source);
     const cleanupUrl = resolveRuntimeWorkerUrl(sqliteSnapshotStagingEntrypoints.cleanup);
-    const nodeArguments = [
-      ...resolveRuntimeWorkerArgv(sourceUrl).slice(0, -1),
-      "--input-type=module",
-      "-e",
-    ];
     const script = `
       import assert from 'node:assert/strict';
       import fs from 'node:fs';
@@ -59,6 +35,14 @@ it.each([true, false])(
       import { startSqliteReadOnlyLocationAsync } from ${JSON.stringify(sourceUrl.href)};
       import { cleanupSnapshotOperations } from ${JSON.stringify(cleanupUrl.href)};
       const sqlite = createRequire(import.meta.url)('node:sqlite');
+      const source = ${JSON.stringify(source)};
+      const seed = new sqlite.DatabaseSync(source);
+      try {
+        seed.exec("CREATE TABLE probe(value TEXT); INSERT INTO probe VALUES('preserved');");
+      } finally { seed.close(); }
+      const original = fs.readFileSync(source);
+      const sourceFiles = () => fs.readdirSync(${JSON.stringify(root)}).filter(name => name.startsWith('source.sqlite'));
+      const originalFiles = sourceFiles();
       const originalConstructor = sqlite.DatabaseSync;
       let nativeConstructions = 0;
       sqlite.DatabaseSync = new Proxy(originalConstructor, {
@@ -85,28 +69,22 @@ it.each([true, false])(
       let timerRan = false;
       queueMicrotask(() => { microtaskRan = true; });
       const timer = setTimeout(() => { timerRan = true; }, 0);
-      let operation;
-      let joined;
-      let prepared;
-      let joinedSource;
+      let operation, joined, prepared, joinedSource;
       const failures = [];
       let cleanupJoined = false;
       try {
-        operation = startSqliteReadOnlyLocationAsync(${JSON.stringify(source)}, {
+        const start = () => startSqliteReadOnlyLocationAsync(source, {
           preserveSourceArtifacts: ${JSON.stringify(preserveSourceArtifacts)},
           signal: controller.signal,
         });
-        joined = startSqliteReadOnlyLocationAsync(${JSON.stringify(source)}, {
-          preserveSourceArtifacts: ${JSON.stringify(preserveSourceArtifacts)},
-          signal: controller.signal,
-        });
+        operation = start();
+        joined = start();
         prepared = serviceToCompletion(operation);
         joinedSource = serviceToCompletion(joined);
         assert.equal(joinedSource.location, prepared.location);
         assert.equal(joinedSource.privateFamily, prepared.privateFamily);
         assert.equal(Boolean(prepared.privateFamily), ${JSON.stringify(preserveSourceArtifacts)});
-        assert.equal(microtaskRan, false);
-        assert.equal(timerRan, false);
+        assert.deepEqual([microtaskRan, timerRan], [false, false]);
         assert.equal(fs.existsSync(prepared.location), true);
         const reader = spawnSync(process.execPath, ['--input-type=module', '-e',
           "import { DatabaseSync } from 'node:sqlite';" +
@@ -123,9 +101,7 @@ it.each([true, false])(
         assert.equal(fs.existsSync(prepared.cleanupRoot), true);
         assert.equal(serviceToCompletion(joinedSource.startCleanup()), true);
         assert.equal(fs.existsSync(prepared.cleanupRoot), false);
-        assert.equal(microtaskRan, false);
-        assert.equal(timerRan, false);
-        assert.equal(nativeConstructions, 0);
+        assert.deepEqual([microtaskRan, timerRan, nativeConstructions], [false, false, 0]);
       } catch (error) {
         failures.push(error);
       } finally {
@@ -145,6 +121,8 @@ it.each([true, false])(
           await joined?.startClose().result;
           await cleanupSnapshotOperations();
           cleanupJoined = !prepared || !fs.existsSync(prepared.cleanupRoot);
+          assert.deepEqual(fs.readFileSync(source), original);
+          assert.deepEqual(sourceFiles(), originalFiles);
         } catch (error) {
           failures.push(error);
         }
@@ -156,7 +134,13 @@ it.each([true, false])(
       if (failures.length || !cleanupJoined) process.exitCode = 1;
     `;
     unsettledDrivers.add(root);
-    const result = spawnSync(process.execPath, [...nodeArguments, script], {
+    const args = [
+      ...resolveRuntimeWorkerArgv(sourceUrl).slice(0, -1),
+      "--input-type=module",
+      "-e",
+      script,
+    ];
+    const result = spawnSync(process.execPath, args, {
       encoding: "utf8",
       timeout: 30_000,
       env: { ...process.env, XDG_CACHE_HOME: cache },
@@ -170,14 +154,11 @@ it.each([true, false])(
     if (driverSettled) {
       unsettledDrivers.delete(root);
     }
-    expect(result.error, result.stderr).toBeUndefined();
-    expect(result.signal, result.stderr).toBeNull();
-    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    expect(
+      [result.error, result.signal, result.status],
+      `${result.stderr}\n${result.stdout}`,
+    ).toEqual([undefined, null, 0]);
     // The child asserts the row, cleanup, idle event loop and zero native constructions.
     expect(receipt).toEqual({ cleanupJoined: true, errors: [] });
-    expect(fs.readFileSync(source)).toEqual(original);
-    expect(fs.readdirSync(root).filter((name) => name.startsWith("source.sqlite"))).toEqual(
-      sourceFiles,
-    );
   },
 );

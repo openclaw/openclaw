@@ -15,11 +15,7 @@ const fixture = vi.hoisted(() => {
     ports,
     register: vi.fn<(run: RunTask, options: Resource) => void>(),
     allocate: vi.fn<Runtime["allocate"]>(),
-    closeRuntime: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
     removed: vi.fn<(directory: string) => Promise<void>>().mockResolvedValue(undefined),
-    createSession: vi.fn(() => {
-      throw new Error("The controlled allocation fixture must not create a native child");
-    }),
   };
 });
 
@@ -34,12 +30,14 @@ vi.mock("./worker-task-server.js", () => ({ serveOwnedWorkerTasks: fixture.regis
 vi.mock("./sqlite-snapshot-staging-runtime.js", () => ({
   createSqliteSnapshotStagingRuntime: () => ({
     allocate: fixture.allocate,
-    close: fixture.closeRuntime,
+    close: async () => {},
   }),
 }));
 vi.mock("./sqlite-readonly-native-resource.client.js", () => ({
   createSqliteReadOnlyNativeResourceClient: () => ({
-    createSession: fixture.createSession,
+    createSession: () => {
+      throw new Error("Controlled allocation must not create a native child");
+    },
     removed: fixture.removed,
   }),
 }));
@@ -69,7 +67,6 @@ it("retries only the removal acknowledgement and preserves a replacement directo
   fixture.removed.mockRejectedValueOnce(failure);
   const remove = vi.spyOn(fs, "rm");
 
-  // Exercise the actual registered worker handlers; only allocation and ACK are controlled.
   await import("./sqlite-snapshot-staging.worker.js");
   const registration = fixture.register.mock.calls[0];
   if (!registration) {
@@ -88,15 +85,13 @@ it("retries only the removal acknowledgement and preserves a replacement directo
 
   await expect(resource.closeResource(directory)).rejects.toBe(failure);
   await expect(fs.stat(directory)).rejects.toHaveProperty("code", "ENOENT");
-  expect(retire).toHaveBeenCalledOnce();
-  expect(remove).toHaveBeenCalledOnce();
+  expect([retire.mock.calls.length, remove.mock.calls.length]).toEqual([1, 1]);
 
   await fs.mkdir(directory);
   await fs.writeFile(sentinel, "replacement must survive");
   await resource.closeResource(directory);
 
   expect(await fs.readFile(sentinel, "utf8")).toBe("replacement must survive");
-  expect(retire).toHaveBeenCalledOnce();
-  expect(remove).toHaveBeenCalledOnce();
+  expect([retire.mock.calls.length, remove.mock.calls.length]).toEqual([1, 1]);
   expect(fixture.removed.mock.calls).toEqual([[directory], [directory]]);
 });

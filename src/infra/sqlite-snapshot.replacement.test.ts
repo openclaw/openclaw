@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as durability from "./directory-durability.js";
+import { deferAsync } from "./sqlite-shard-lifecycle.test-support.js";
 import {
   prepareVerifiedSqliteFile,
   publishVerifiedSqliteFile,
@@ -52,7 +53,7 @@ async function fixture() {
 }
 
 it.skipIf(process.platform === "win32").each(["prepared", "direct"] as const)(
-  "atomically replaces existing SQLite with a verified %s image and receipt",
+  "replaces SQLite atomically with verified %s bytes and receipt",
   async (mode) => {
     const { original, source, options } = await fixture();
     let receipt;
@@ -73,61 +74,75 @@ it.skipIf(process.platform === "win32").each(["prepared", "direct"] as const)(
   },
 );
 
-it.skipIf(process.platform === "win32").each(["custody", "identity", "content"] as const)(
-  "refuses %s drift before replacing the original",
-  async (kind) => {
-    const { original, options } = await fixture();
-    const prepared = await prepareVerifiedSqliteFile(options);
-    try {
-      if (kind === "custody") {
-        options.replaceExisting.assertCustody = () => {
-          throw new Error("custody lost");
-        };
-      } else if (kind === "identity") {
-        await fs.rename(options.targetPath, `${options.targetPath}.original`);
-        await fs.writeFile(options.targetPath, original);
-      } else {
-        await fs.writeFile(options.targetPath, Buffer.alloc(original.length, 42));
-      }
-      const retained = await fs.readFile(options.targetPath);
-      await expect(prepared.publish()).rejects.toThrow();
-      expect(await fs.readFile(options.targetPath)).toEqual(retained);
-      expect(await fs.readFile(prepared.path)).toEqual(await fs.readFile(options.sourcePath));
-    } finally {
-      await prepared.cleanup();
-    }
-  },
-);
-
-it.skipIf(process.platform === "win32").each(["before", "after"] as const)(
-  "reports a failed rename %s its effect without deleting data",
-  async (phase) => {
-    const { original, source, options } = await fixture();
-    const prepared = await prepareVerifiedSqliteFile(options);
+it
+  .skipIf(process.platform === "win32")
+  .each([
+    "custody",
+    "identity",
+    "content",
+    "rename-before",
+    "rename-after",
+    "unsupported",
+    "sync-after",
+  ] as const)("retains recovery evidence after %s failure", async (kind) => {
+  const { original, source, options } = await fixture();
+  const prepared = await prepareVerifiedSqliteFile(options);
+  await using _ = deferAsync(() => prepared.cleanup());
+  if (kind === "custody") {
+    options.replaceExisting.assertCustody = () => {
+      throw new Error("custody lost");
+    };
+  } else if (kind === "identity") {
+    await fs.rename(options.targetPath, `${options.targetPath}.original`);
+    await fs.writeFile(options.targetPath, original);
+  } else if (kind === "content") {
+    await fs.writeFile(options.targetPath, Buffer.alloc(original.length, 42));
+  } else if (kind.startsWith("rename-")) {
     const rename = fsSync.renameSync;
     vi.spyOn(fsSync, "renameSync").mockImplementation((from, to) => {
       if (String(to) !== options.targetPath) {
         return rename(from, to);
       }
-      if (phase === "after") {
+      if (kind === "rename-after") {
         rename(from, to);
       }
       throw new Error("injected rename failure");
     });
-    try {
-      await expect(prepared.publish()).rejects.toMatchObject({
-        name: "SqliteReplacementOutcomeUnknownError",
-        receipt: { targetPath: options.targetPath, ...content(source) },
-      });
-      expect(await fs.readFile(options.targetPath)).toEqual(phase === "before" ? original : source);
-    } finally {
-      await prepared.cleanup();
+  } else {
+    const sync = vi.mocked(durability.syncDirectory);
+    if (kind === "unsupported") {
+      sync.mockResolvedValueOnce({ status: "unsupported", code: "ENOTSUP" });
+    } else {
+      sync
+        .mockResolvedValueOnce({ status: "synced" })
+        .mockRejectedValueOnce(new Error("fsync failed"));
     }
-  },
-);
+  }
+  const retained = await fs.readFile(options.targetPath);
+  const attempt = prepared.publish();
+  const uncertain = kind.startsWith("rename-") || kind === "sync-after";
+  await expect(attempt).rejects.toThrow(
+    uncertain
+      ? SqliteReplacementOutcomeUnknownError
+      : kind === "unsupported"
+        ? "requires directory synchronization"
+        : undefined,
+  );
+  if (kind.startsWith("rename-")) {
+    await expect(attempt).rejects.toMatchObject({
+      receipt: { targetPath: options.targetPath, ...content(source) },
+    });
+  }
+  expect(await fs.readFile(options.targetPath)).toEqual(
+    kind === "rename-after" || kind === "sync-after" ? source : retained,
+  );
+  if (["custody", "identity", "content"].includes(kind)) {
+    expect(await fs.readFile(prepared.path)).toEqual(await fs.readFile(options.sourcePath));
+  }
+});
 
 it.skipIf(process.platform === "win32")(
-  "reports uncertain post-rename verification without removing the new file",
+  "retains new bytes after uncertain verification",
   async () => {
     const { source, options } = await fixture();
     await expect(
@@ -153,32 +168,3 @@ it("leaves the absent-target mode exclusive", async () => {
     await publishVerifiedSqliteFile({ ...options, replaceExisting: undefined }),
   ).toBeUndefined();
 });
-
-it.skipIf(process.platform === "win32").each(["unsupported", "failed-after-rename"] as const)(
-  "keeps recovery evidence when directory sync is %s",
-  async (phase) => {
-    const { original, source, options } = await fixture();
-    const prepared = await prepareVerifiedSqliteFile(options);
-    const sync = vi.mocked(durability.syncDirectory);
-    if (phase === "unsupported") {
-      sync.mockResolvedValueOnce({ status: "unsupported", code: "ENOTSUP" });
-    } else {
-      sync
-        .mockResolvedValueOnce({ status: "synced" })
-        .mockRejectedValueOnce(new Error("fsync failed"));
-    }
-    try {
-      const attempt = prepared.publish();
-      if (phase === "unsupported") {
-        await expect(attempt).rejects.toThrow("requires directory synchronization");
-      } else {
-        await expect(attempt).rejects.toBeInstanceOf(SqliteReplacementOutcomeUnknownError);
-      }
-      expect(await fs.readFile(options.targetPath)).toEqual(
-        phase === "unsupported" ? original : source,
-      );
-    } finally {
-      await prepared.cleanup();
-    }
-  },
-);

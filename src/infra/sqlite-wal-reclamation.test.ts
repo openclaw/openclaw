@@ -17,6 +17,7 @@ function fixture(options: Parameters<typeof configureSqliteWalMaintenance>[1], p
     configureSqlitePreSchemaPragmas(writer);
   }
   const maintenance = configureSqliteWalMaintenance(writer, {
+    checkpointIntervalMs: 0,
     ...options,
     databasePath: pathname,
   });
@@ -32,11 +33,7 @@ function fixture(options: Parameters<typeof configureSqliteWalMaintenance>[1], p
 }
 
 it("keeps checkpoint-only reclamation nonblocking without changing the connection lock policy", () => {
-  using state = fixture({
-    autoCheckpointPages: 0,
-    busyTimeoutMs: 5_000,
-    checkpointIntervalMs: 0,
-  });
+  using state = fixture({ autoCheckpointPages: 0, busyTimeoutMs: 5_000 });
   const { writer, maintenance, pathname } = state;
   using peer = new (requireNodeSqlite().DatabaseSync)(pathname);
   writer.exec("CREATE TABLE payload (value TEXT); INSERT INTO payload VALUES ('before');");
@@ -50,8 +47,10 @@ it("keeps checkpoint-only reclamation nonblocking without changing the connectio
       maxPages: 0,
       beforeMutation: admission,
     });
-    expect(blocked.checkpoint?.health.state).toBe("blocked");
-    expect(blocked.vacuumPasses).toBe(0);
+    expect(blocked).toMatchObject({
+      checkpoint: { health: { state: "blocked" } },
+      vacuumPasses: 0,
+    });
     expect(admission).toHaveBeenCalledOnce();
     expect(observation.queries.filter((sql) => /busy_timeout/i.test(sql))).toEqual([]);
   } finally {
@@ -60,7 +59,6 @@ it("keeps checkpoint-only reclamation nonblocking without changing the connectio
   expect(writer.prepare("PRAGMA busy_timeout").get()?.timeout).toBe(5_000);
   expect(peer.prepare("SELECT COUNT(*) AS count FROM payload").get()?.count).toBe(1);
   peer.exec("ROLLBACK; BEGIN IMMEDIATE;");
-  // An active writer also cannot make PASSIVE wait for its lock to be released.
   expect(
     maintenance.reclaimFreePages({ checkpointMode: "PASSIVE", maxPages: 0 }).checkpoint?.health
       .state,
@@ -125,13 +123,7 @@ it("does not amplify a reader-held WAL on repeated periodic maintenance", async 
 
 it("reports bounded page progress and retains the native checkpoint outcome", () => {
   let admitted = true;
-  using state = fixture(
-    {
-      checkpointIntervalMs: 0,
-      runMaintenance: (operation) => admitted && operation(),
-    },
-    true,
-  );
+  using state = fixture({ runMaintenance: (operation) => admitted && operation() }, true);
   const { writer: database, maintenance } = state;
   database.exec(`CREATE TABLE payload (data BLOB);
       INSERT INTO payload VALUES (zeroblob(4194304));
