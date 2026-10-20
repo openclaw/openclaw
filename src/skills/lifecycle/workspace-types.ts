@@ -37,8 +37,6 @@ export type SkillRootInstallFiles = {
   rootMarkers?: readonly string[];
   /** Revalidate the caller at the workspace host's final filesystem publication. */
   beforePersistentApply?: () => void;
-  /** Authority check limited to displacement/publication, not later cleanup custody. */
-  assertPublicationAuthority?: () => void;
   /** Keep a deferred replacement bound to its current package lifecycle owner. */
   assertOwned?: () => void;
   /** Undefined skips the native update guard; null means the install was absent. */

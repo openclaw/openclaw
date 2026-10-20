@@ -155,7 +155,7 @@ it("publishes, tracks, updates and removes Skills on the paired host with Gatewa
   await fs.writeFile(path.join(source, "SKILL.md"), skill("v2"));
   // Revoke after the old target has moved to backup, before publishing its replacement.
   // Native rollback must preserve the old Skill even though the initial policy check passed.
-  const assertPublicationAuthority = vi.fn(() => {
+  const beforePersistentApply = vi.fn(() => {
     if (!current) {
       throw new Error("upload publication authority revoked");
     }
@@ -170,21 +170,19 @@ it("publishes, tracks, updates and removes Skills on the paired host with Gatewa
   expect(
     await access.applySkillRoot!({
       ...update,
-      beforePersistentApply: () => assertCurrent(current, "upload permission revoked"),
-      assertPublicationAuthority,
+      beforePersistentApply,
     }),
   ).toMatchObject({
     ok: false,
     error: expect.stringContaining("upload publication authority revoked"),
   });
-  expect(assertPublicationAuthority).toHaveBeenCalled();
+  expect(beforePersistentApply).toHaveBeenCalled();
   expect(await fs.readFile(path.join(targetDir, "SKILL.md"), "utf8")).toBe(skill("v1"));
   current = true;
   expect(
     await access.applySkillRoot!({
       ...update,
-      beforePersistentApply: () => assertCurrent(current, "upload permission revoked"),
-      assertPublicationAuthority,
+      beforePersistentApply,
     }),
   ).toMatchObject({ ok: true, mode: "update" });
   await record("2.0.0");

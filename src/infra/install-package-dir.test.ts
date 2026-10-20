@@ -341,7 +341,7 @@ describe("installPackageDir", () => {
       ...updateOptions(sourceDir, targetDir),
       sourceHardlinks: "reject",
       depsLogMessage: "Installing deps…",
-      assertPublicationAuthority: () => {
+      beforePersistentApply: () => {
         publicationChecks += 1;
         if (publicationChecks > 2) {
           throw new Error("publication authority was checked during cleanup");

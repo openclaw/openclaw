@@ -155,7 +155,6 @@ export function createNodeWorkspaceSkills(options: NodeWorkspaceWorkerOptions): 
       workspace(params.workspaceDir);
       const assertCurrent = () => {
         options.signal.throwIfAborted();
-        params.assertPublicationAuthority?.();
         params.beforePersistentApply?.();
       };
       assertCurrent();
@@ -172,7 +171,6 @@ export function createNodeWorkspaceSkills(options: NodeWorkspaceWorkerOptions): 
       const {
         beforeInstall,
         beforePersistentApply: _guard,
-        assertPublicationAuthority: _publicationAuthority,
         logger: _logger,
         extractedRoot: _source,
         ...files

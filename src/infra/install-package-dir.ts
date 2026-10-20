@@ -266,8 +266,6 @@ export async function installPackageDir<
   afterInstall?: (installedDir: string) => Promise<InstallPackageDirSuccess | TAfterInstallFailure>;
   afterBackup?: (backupDir: string) => Promise<InstallPackageDirSuccess | TAfterInstallFailure>;
   beforePersistentApply?: () => void;
-  /** Pre-publication authority check; never reused for post-publication cleanup custody. */
-  assertPublicationAuthority?: () => void;
   /** Remote owners answer before displacement/publication; local checks still run at the mutation. */
   authorizeMutation?: () => Promise<void>;
   requireExistingTarget?: boolean;
@@ -328,13 +326,12 @@ export async function installPackageDir<
     assertCurrent();
     assertDirectoryIdentity(installBaseRealPath, baseIdentity);
   };
-  const assertPersistentApply = retainMutationAuthority(() => {
+  const assertInstallCustody = retainMutationAuthority(() => {
     assertRollbackOwned();
-    return params.beforePersistentApply?.();
   });
-  const assertPublicationApply = retainMutationAuthority(() => {
-    assertPersistentApply();
-    return params.assertPublicationAuthority?.();
+  const assertPublicationAuthority = retainMutationAuthority(() => {
+    assertInstallCustody();
+    return params.beforePersistentApply?.();
   });
   const removeInstallTree = async (removal: {
     directory: string;
@@ -624,8 +621,8 @@ export async function installPackageDir<
         await params.authorizeMutation();
       }
       await movePathWithCopyFallback({
-        assertBeforeRename: assertPublicationApply,
-        assertBeforeMutation: assertPersistentApply,
+        assertBeforeRename: assertPublicationAuthority,
+        assertBeforeMutation: assertInstallCustody,
         onDestinationPublished: (receipt) => {
           published.backup = receipt;
         },
@@ -661,8 +658,8 @@ export async function installPackageDir<
       await params.authorizeMutation();
     }
     await movePathWithCopyFallback({
-      assertBeforeRename: assertPublicationApply,
-      assertBeforeMutation: assertPersistentApply,
+      assertBeforeRename: assertPublicationAuthority,
+      assertBeforeMutation: assertInstallCustody,
       onDestinationPublished: (receipt) => {
         published.install = receipt;
       },
@@ -695,7 +692,7 @@ export async function installPackageDir<
     await removeInstallTree({
       directory: published.backup.path,
       identity: published.backup,
-      assertOwner: assertPersistentApply,
+      assertOwner: assertInstallCustody,
       bestEffort: true,
     });
   }
