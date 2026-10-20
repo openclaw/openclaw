@@ -2702,166 +2702,128 @@ export const single = {
 });
 
 describe("changed export mock consumers", () => {
+  function exportChange(
+    name: string,
+    after: string,
+    before = "export const old = 1;",
+    selected = true,
+  ) {
+    return { name, before, after, selected };
+  }
+
+  function importChange(
+    name: string,
+    after: string,
+    before = 'import { old } from "./runtime.js";',
+    selected = true,
+  ) {
+    return exportChange(name, after, before, selected);
+  }
+
   it.each([
-    {
-      name: "member access cannot invent an export",
-      before: "export const old = 1; const api = { export: 0 }; api.export\nfunction added() {}",
-      after:
-        "export const old = 1; const api = { export: 0 }; api.export\nfunction added() {} export { added };",
-      selected: true,
-    },
-    {
-      name: "a preceding period literal is not member access",
-      before: "export const old = 1;",
-      after: 'export const old = 1; "."\nexport const added = 2;',
-      selected: true,
-    },
-    {
-      name: "empty-string export alias",
-      before: "export const old = 1; const value = 2;",
-      after: 'export const old = 1; const value = 2; export { value as "" };',
-      selected: true,
-    },
-    {
-      name: "quoted closing brace is an export name",
-      before: "export const old = 1;",
-      after: 'export const old = 1; export { "}" as added } from "./other.js";',
-      selected: true,
-    },
-    {
-      name: "erased default becomes a runtime export",
-      before: "export default interface API {}",
-      after: "export default class API {}",
-      selected: true,
-    },
-    {
-      name: "erased namespace gains a runtime member",
-      before: "export namespace API { export type Value = string; }",
-      after: "export namespace API { export const value = 1; }",
-      selected: true,
-    },
-    {
-      name: "const enums retain mock coverage",
-      before: "export const enum Old { Value = 1 }",
-      after: "export const enum Old { Value = 1 } export const enum Added { Value = 2 }",
-      selected: true,
-    },
-    {
-      name: "JSX text cannot hide a later export",
-      before: "function component() { return <div>}</div>; } export const old = 1;",
-      after:
-        "function component() { return <div>}</div>; } export const old = 1; export const added = 2;",
-      selected: true,
-    },
-    {
-      name: "Unicode names retain mock coverage",
-      before: "export function café() {}",
-      after: "export function cafè() {}",
-      selected: true,
-    },
-    {
-      name: "bracket CommonJS exports retain mock coverage",
-      before: 'module["exports"] = { old: 1 };',
-      after: 'module["exports"] = { old: 1, added: 2 };',
-      selected: true,
-    },
-    {
-      name: "CommonJS exports retain mock coverage",
-      before: "exports.old = 1;",
-      after: "exports.old = 1; exports.added = 2;",
-      selected: true,
-    },
-    {
-      name: "implicit statement does not hide a new export",
-      before: "export const old = 1\nconst hidden = 2, added = 3;",
-      after: "export const old = 1\nconst hidden = 2, added = 3; export { added };",
-      selected: true,
-    },
-    {
-      name: "namespace member does not hide a module export",
-      before: "export namespace API { export const added = 1; }",
-      after: "export namespace API { export const added = 1; } export const added = 2;",
-      selected: true,
-    },
-    {
-      name: "generic initializer does not hide a new export",
-      before: "class Handler {}; export const cache = new Map<string, Handler>();",
-      after:
-        "class Handler {}; export const cache = new Map<string, Handler>(); export { Handler };",
-      selected: true,
-    },
-    {
-      name: "added function",
-      before: "export const old = 1;",
-      after: "export const old = 1; export function added() {}",
-      selected: true,
-    },
-    {
-      name: "removed export",
-      before: "export const old = 1;",
-      after: "const old = 1;",
-      selected: true,
-    },
-    {
-      name: "renamed re-export",
-      before: 'export { original as old } from "./value.js";',
-      after: 'export { original as renamed } from "./value.js";',
-      selected: true,
-    },
-    {
-      name: "multiline export list",
-      before: "const old = 1; export { old };",
-      after: "const old = 1, added = 2; export {\n old,\n added\n };",
-      selected: true,
-    },
-    {
-      name: "second variable",
-      before: "export const old = 1;",
-      after: "export const old = 1, added = 2;",
-      selected: true,
-    },
-    {
-      name: "default export",
-      before: "export const old = 1;",
-      after: "export const old = 1; export default () => 2;",
-      selected: true,
-    },
-    {
-      name: "wildcard source",
-      before: 'export * from "./one.js";',
-      after: 'export * from "./two.js";',
-      selected: true,
-    },
-    {
-      name: "implementation only",
-      before: "export function old() { return 1; }",
-      after: "export function old() { return 2; }",
-      selected: false,
-    },
-    {
-      name: "initializer only",
-      before: "export const old = 1;",
-      after: "export const old = call(2, 3);",
-      selected: false,
-    },
-    {
-      name: "type only",
-      before: "export const old = 1;",
-      after: "export const old = 1; export type New = string; export interface Shape {}",
-      selected: false,
-    },
-    {
-      name: "comments and strings",
-      before: "export const old = 1;",
-      after: `export const old = 1; // export const added = 2;\nconst text = 'export { added }';`,
-      selected: false,
-    },
-    {
-      name: "unknown bindings",
-      before: "export const old = 1;",
-      after: "export const { old, added } = value;",
-      selected: true,
-    },
+    exportChange(
+      "member access cannot invent an export",
+      "export const old = 1; const api = { export: 0 }; api.export\nfunction added() {} export { added };",
+      "export const old = 1; const api = { export: 0 }; api.export\nfunction added() {}",
+    ),
+    exportChange(
+      "a preceding period literal is not member access",
+      'export const old = 1; "."\nexport const added = 2;',
+    ),
+    exportChange(
+      "empty-string export alias",
+      'export const old = 1; const value = 2; export { value as "" };',
+      "export const old = 1; const value = 2;",
+    ),
+    exportChange(
+      "quoted closing brace is an export name",
+      'export const old = 1; export { "}" as added } from "./other.js";',
+    ),
+    exportChange(
+      "erased default becomes a runtime export",
+      "export default class API {}",
+      "export default interface API {}",
+    ),
+    exportChange(
+      "erased namespace gains a runtime member",
+      "export namespace API { export const value = 1; }",
+      "export namespace API { export type Value = string; }",
+    ),
+    exportChange(
+      "const enums retain mock coverage",
+      "export const enum Old { Value = 1 } export const enum Added { Value = 2 }",
+      "export const enum Old { Value = 1 }",
+    ),
+    exportChange(
+      "JSX text cannot hide a later export",
+      "function component() { return <div>}</div>; } export const old = 1; export const added = 2;",
+      "function component() { return <div>}</div>; } export const old = 1;",
+    ),
+    exportChange(
+      "Unicode names retain mock coverage",
+      "export function cafè() {}",
+      "export function café() {}",
+    ),
+    exportChange(
+      "bracket CommonJS exports retain mock coverage",
+      'module["exports"] = { old: 1, added: 2 };',
+      'module["exports"] = { old: 1 };',
+    ),
+    exportChange(
+      "CommonJS exports retain mock coverage",
+      "exports.old = 1; exports.added = 2;",
+      "exports.old = 1;",
+    ),
+    exportChange(
+      "implicit statement does not hide a new export",
+      "export const old = 1\nconst hidden = 2, added = 3; export { added };",
+      "export const old = 1\nconst hidden = 2, added = 3;",
+    ),
+    exportChange(
+      "namespace member does not hide a module export",
+      "export namespace API { export const added = 1; } export const added = 2;",
+      "export namespace API { export const added = 1; }",
+    ),
+    exportChange(
+      "generic initializer does not hide a new export",
+      "class Handler {}; export const cache = new Map<string, Handler>(); export { Handler };",
+      "class Handler {}; export const cache = new Map<string, Handler>();",
+    ),
+    exportChange("added function", "export const old = 1; export function added() {}"),
+    exportChange("removed export", "const old = 1;"),
+    exportChange(
+      "renamed re-export",
+      'export { original as renamed } from "./value.js";',
+      'export { original as old } from "./value.js";',
+    ),
+    exportChange(
+      "multiline export list",
+      "const old = 1, added = 2; export {\n old,\n added\n };",
+      "const old = 1; export { old };",
+    ),
+    exportChange("second variable", "export const old = 1, added = 2;"),
+    exportChange("default export", "export const old = 1; export default () => 2;"),
+    exportChange("wildcard source", 'export * from "./two.js";', 'export * from "./one.js";'),
+    exportChange(
+      "implementation only",
+      "export function old() { return 2; }",
+      "export function old() { return 1; }",
+      false,
+    ),
+    exportChange("initializer only", "export const old = call(2, 3);", undefined, false),
+    exportChange(
+      "type only",
+      "export const old = 1; export type New = string; export interface Shape {}",
+      undefined,
+      false,
+    ),
+    exportChange(
+      "comments and strings",
+      `export const old = 1; // export const added = 2;\nconst text = 'export { added }';`,
+      undefined,
+      false,
+    ),
+    exportChange("unknown bindings", "export const { old, added } = value;"),
   ])("selects all mock owners on $name", ({ before, after, selected }) => {
     const producer = "src/owner/runtime.ts";
     const consumers = [
@@ -2920,91 +2882,60 @@ describe("changed export mock consumers", () => {
   });
 
   it.each([
-    {
-      name: "namespace re-export becomes star re-export",
-      before: 'export * as runtime from "./runtime.js";',
-      after: 'export * from "./runtime.js";',
-      selected: true,
-    },
-    {
-      name: "literal star becomes namespace consumption",
-      before: 'import { "*" as star } from "./runtime.js"; void star;',
-      after: 'import * as runtime from "./runtime.js"; void runtime.existing;',
-      selected: true,
-    },
-    {
-      name: "literal star becomes dynamic consumption",
-      before: 'import { "*" as star } from "./runtime.js"; void star;',
-      after: 'const runtime = await import("./runtime.js"); void runtime.existing;',
-      selected: true,
-    },
-    {
-      name: "literal star becomes re-export consumption",
-      before: 'export { "*" as star } from "./runtime.js";',
-      after: 'export * from "./runtime.js";',
-      selected: true,
-    },
-    {
-      name: "import after a period literal",
-      before: 'import { old } from "./runtime.js";',
-      after: '"."\nimport { existing } from "./runtime.js";',
-      selected: true,
-    },
-    {
-      name: "quoted closing brace is a consumed name",
-      before: 'import { old } from "./runtime.js";',
-      after: 'import { "}" as existing } from "./runtime.js";',
-      selected: true,
-    },
-    {
-      name: "named re-export switches consumed binding",
-      before: 'export { old as run } from "./runtime.js";',
-      after: 'export { existing as run } from "./runtime.js";',
-      selected: true,
-    },
-    {
-      name: "erased query becomes a runtime namespace import",
-      before: 'type Runtime = typeof import("./runtime.js");',
-      after:
-        'type Runtime = typeof import("./runtime.js"); import * as runtime from "./runtime.js";',
-      selected: true,
-    },
-    {
-      name: "default binding named type",
-      before: 'import { old } from "./runtime.js";',
-      after: 'import type from "./runtime.js";',
-      selected: true,
-    },
-    {
-      name: "default binding named type with named imports",
-      before: 'import { old } from "./runtime.js";',
-      after: 'import type, { old } from "./runtime.js";',
-      selected: true,
-    },
-    {
-      name: "new named import",
-      before: 'import { old } from "./runtime.js";',
-      after: 'import { old, existing } from "./runtime.js";',
-      selected: true,
-    },
-    {
-      name: "new default import",
-      before: 'import { old } from "./runtime.js";',
-      after: 'import value, { old } from "./runtime.js";',
-      selected: true,
-    },
-    {
-      name: "local rename",
-      before: 'import { old } from "./runtime.js";',
-      after: 'import { old as renamed } from "./runtime.js";',
-      selected: false,
-    },
-    {
-      name: "new erased binding",
-      before: 'import { old } from "./runtime.js";',
-      after: 'import { old, type Shape } from "./runtime.js";',
-      selected: false,
-    },
+    importChange(
+      "namespace re-export becomes star re-export",
+      'export * from "./runtime.js";',
+      'export * as runtime from "./runtime.js";',
+    ),
+    importChange(
+      "literal star becomes namespace consumption",
+      'import * as runtime from "./runtime.js"; void runtime.existing;',
+      'import { "*" as star } from "./runtime.js"; void star;',
+    ),
+    importChange(
+      "literal star becomes dynamic consumption",
+      'const runtime = await import("./runtime.js"); void runtime.existing;',
+      'import { "*" as star } from "./runtime.js"; void star;',
+    ),
+    importChange(
+      "literal star becomes re-export consumption",
+      'export * from "./runtime.js";',
+      'export { "*" as star } from "./runtime.js";',
+    ),
+    importChange("import after a period literal", '"."\nimport { existing } from "./runtime.js";'),
+    importChange(
+      "quoted closing brace is a consumed name",
+      'import { "}" as existing } from "./runtime.js";',
+    ),
+    importChange(
+      "named re-export switches consumed binding",
+      'export { existing as run } from "./runtime.js";',
+      'export { old as run } from "./runtime.js";',
+    ),
+    importChange(
+      "erased query becomes a runtime namespace import",
+      'type Runtime = typeof import("./runtime.js"); import * as runtime from "./runtime.js";',
+      'type Runtime = typeof import("./runtime.js");',
+    ),
+    importChange("default binding named type", 'import type from "./runtime.js";'),
+    importChange(
+      "default binding named type with named imports",
+      'import type, { old } from "./runtime.js";',
+    ),
+    importChange("new named import", 'import { old, existing } from "./runtime.js";'),
+    importChange("new default import", 'import value, { old } from "./runtime.js";'),
+    importChange(
+      "local rename",
+      'import { old as renamed } from "./runtime.js";',
+      undefined,
+      false,
+    ),
+    importChange(
+      "new erased binding",
+      'import { old, type Shape } from "./runtime.js";',
+      undefined,
+      false,
+    ),
   ])("protects existing exports on $name", ({ before, after, selected }) => {
     const producer = "src/owner/caller.ts";
     withTinyGitRepo(
@@ -3680,6 +3611,17 @@ describe("test selector native source facts", () => {
 });
 
 describe("scripts/test-projects full-suite sharding", () => {
+  function expectChunkedFiles(
+    plans: ReturnType<typeof buildFullSuiteVitestRunPlans>,
+    files: string[],
+    limit: number,
+  ) {
+    expect(plans.every((plan) => plan.forwardedArgs.length <= limit)).toBe(true);
+    expect(plans.flatMap((plan) => plan.forwardedArgs).toSorted()).toEqual(
+      [...new Set(files)].toSorted(),
+    );
+  }
+
   const fastTooling = {
     config: "test/vitest/vitest.tooling.config.ts",
     includePatterns: ["test/scripts/run-with-env.test.ts"],
@@ -3823,30 +3765,18 @@ describe("scripts/test-projects full-suite sharding", () => {
         expect(unitSrcPlans.every((plan) => plan.forwardedArgs.length <= 150)).toBe(true);
         const toolingPlans = targetedPlans("test/vitest/vitest.tooling.config.ts");
         expect(toolingPlans.length).toBeGreaterThan(1);
-        expect(toolingPlans.every((plan) => plan.forwardedArgs.length <= 8)).toBe(true);
         expect(toolingPlans).toHaveLength(Math.ceil(toolingFiles.length / 8));
-        expect(toolingPlans.flatMap((plan) => plan.forwardedArgs).toSorted()).toEqual(
-          [...new Set(toolingFiles)].toSorted(),
-        );
+        expectChunkedFiles(toolingPlans, toolingFiles, 8);
         const uiPlans = targetedPlans("test/vitest/vitest.ui.config.ts");
         expect(uiPlans).toHaveLength(Math.ceil(uiFiles.length / 8));
-        expect(uiPlans.every((plan) => plan.forwardedArgs.length <= 8)).toBe(true);
-        expect(uiPlans.flatMap((plan) => plan.forwardedArgs).toSorted()).toEqual(
-          [...new Set(uiFiles)].toSorted(),
-        );
+        expectChunkedFiles(uiPlans, uiFiles, 8);
         const gatewayPlans = targetedPlans("test/vitest/vitest.gateway-database-workers.config.ts");
         expect(gatewayPlans).toHaveLength(Math.ceil(gatewayFiles.length / 50));
-        expect(gatewayPlans.every((plan) => plan.forwardedArgs.length <= 50)).toBe(true);
-        expect(gatewayPlans.flatMap((plan) => plan.forwardedArgs).toSorted()).toEqual(
-          [...new Set(gatewayFiles)].toSorted(),
-        );
+        expectChunkedFiles(gatewayPlans, gatewayFiles, 50);
         const extensionDatabasePlans = targetedPlans(
           "test/vitest/vitest.extension-database-workers.config.ts",
         );
-        expect(extensionDatabasePlans.every((plan) => plan.forwardedArgs.length <= 20)).toBe(true);
-        expect(extensionDatabasePlans.flatMap((plan) => plan.forwardedArgs).toSorted()).toEqual(
-          [...new Set(extensionDatabaseFiles)].toSorted(),
-        );
+        expectChunkedFiles(extensionDatabasePlans, extensionDatabaseFiles, 20);
         expect(
           extensionDatabasePlans
             .filter((plan) =>
