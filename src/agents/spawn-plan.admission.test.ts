@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { assert, describe, expect, it } from "vitest";
 import {
   reserveChildAdmissionSlot,
   resolveChildAdmission,
@@ -23,55 +23,37 @@ const announce = (
 const collector = (
   overrides: Partial<Omit<CollectorAdmissionParams, "collect">> = {},
 ): CollectorAdmissionParams => ({
+  ...announce(),
   collect: true,
-  callerDepth: 0,
-  maxSpawnDepth: 2,
-  activeChildren: 0,
   maxActiveChildren: 50,
   totalChildren: 0,
   maxTotalChildren: 200,
   ...overrides,
 });
 
-const cases: Array<{
-  name: string;
-  params: AdmissionParams;
-  governingCap?: ChildAdmissionCap;
-}> = [
-  { name: "announce below depth", params: announce({ callerDepth: 1 }) },
-  {
-    name: "announce at depth",
-    params: announce({ callerDepth: 2 }),
-    governingCap: "subagents.maxSpawnDepth",
-  },
-  { name: "collector below depth", params: collector({ callerDepth: 1 }) },
-  {
-    name: "collector at depth",
-    params: collector({ callerDepth: 2 }),
-    governingCap: "subagents.maxSpawnDepth",
-  },
-  { name: "announce below session cap", params: announce({ activeChildren: 4 }) },
-  {
-    name: "announce at session cap",
-    params: announce({ activeChildren: 5 }),
-    governingCap: "subagents.maxChildrenPerAgent",
-  },
-  { name: "collector below live group cap", params: collector({ activeChildren: 49 }) },
-  {
-    name: "collector at live group cap",
-    params: collector({ activeChildren: 50 }),
-    governingCap: "tools.swarm.maxChildrenPerGroup",
-  },
-  { name: "collector below lifetime group cap", params: collector({ totalChildren: 199 }) },
-  {
-    name: "collector at lifetime group cap",
-    params: collector({ totalChildren: 200 }),
-    governingCap: "tools.swarm.maxTotalPerGroup",
-  },
+const cases: Array<[string, AdmissionParams, ChildAdmissionCap?]> = [
+  ["announce below depth", announce({ callerDepth: 1 })],
+  ["announce at depth", announce({ callerDepth: 2 }), "subagents.maxSpawnDepth"],
+  ["collector below depth", collector({ callerDepth: 1 })],
+  ["collector at depth", collector({ callerDepth: 2 }), "subagents.maxSpawnDepth"],
+  ["announce below session cap", announce({ activeChildren: 4 })],
+  ["announce at session cap", announce({ activeChildren: 5 }), "subagents.maxChildrenPerAgent"],
+  ["collector below live group cap", collector({ activeChildren: 49 })],
+  [
+    "collector at live group cap",
+    collector({ activeChildren: 50 }),
+    "tools.swarm.maxChildrenPerGroup",
+  ],
+  ["collector below lifetime group cap", collector({ totalChildren: 199 })],
+  [
+    "collector at lifetime group cap",
+    collector({ totalChildren: 200 }),
+    "tools.swarm.maxTotalPerGroup",
+  ],
 ];
 
 describe("resolveChildAdmission", () => {
-  it.each(cases)("decides $name", ({ params, governingCap }) => {
+  it.each(cases)("decides %s", (_name, params, governingCap) => {
     const result = resolveChildAdmission(params);
 
     if (!governingCap) {
@@ -99,9 +81,7 @@ describe("resolveChildAdmission", () => {
       });
     const first = reserve();
     const otherController = reserve("agent:main:other-controller");
-    if (!first.ok || !otherController.ok) {
-      throw new Error("Expected independent controller reservations");
-    }
+    assert(first.ok && otherController.ok, "Expected independent controller reservations");
 
     expect(reserve()).toMatchObject({
       ok: false,
@@ -112,9 +92,7 @@ describe("resolveChildAdmission", () => {
     otherController.release();
 
     const replacement = reserve();
-    if (!replacement.ok) {
-      throw new Error("Expected released controller capacity");
-    }
+    assert(replacement.ok, "Expected released controller capacity");
     registeredChildren += 1;
     replacement.release();
     expect(reserve()).toMatchObject({
@@ -134,9 +112,7 @@ describe("resolveChildAdmission", () => {
       });
 
     const accepted = reserve(true);
-    if (!accepted.ok) {
-      throw new Error("Expected accepted child reservation");
-    }
+    assert(accepted.ok, "Expected accepted child reservation");
     expect(accepted.maxSpawnDepth).toBe(2);
     accepted.release();
 

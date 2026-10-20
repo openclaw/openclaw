@@ -1,10 +1,13 @@
 import { text as readText } from "node:stream/consumers";
 import { configureAiTransportHost, getAiTransportHost } from "@openclaw/ai";
 import { assert, describe, expect, it } from "vitest";
-import type { Model } from "../llm/types.js";
 import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
 import "./ai-transport-runtime-host.js";
 import { completeWithPreparedSimpleCompletionModel } from "./simple-completion-execution.js";
+import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
+
+const successResponse =
+  'data: {"id":"custom-title","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"Custom provider title"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n';
 
 describe("custom simple completion thinking controls", () => {
   it.each([
@@ -48,16 +51,14 @@ describe("custom simple completion thinking controls", () => {
     },
   ])("preserves the off contract for $id at $baseUrl", async ({ control, ...route }) => {
     const requests: Record<string, unknown>[] = [];
-    const model: Model = {
+    const model = makeProviderModelFixture({
       ...route,
       name: "Custom model",
       api: "openai-completions",
       reasoning: true,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 128_000,
       maxTokens: 8192,
-    };
+    });
     await withServer(
       (request, response) => {
         void readText(request).then((raw) => {
@@ -81,19 +82,7 @@ describe("custom simple completion thinking controls", () => {
             return;
           }
           response.writeHead(200, { "content-type": "text/event-stream" });
-          response.end(
-            `data: ${JSON.stringify({
-              id: "custom-title",
-              object: "chat.completion.chunk",
-              choices: [
-                {
-                  index: 0,
-                  delta: { role: "assistant", content: "Custom provider title" },
-                  finish_reason: "stop",
-                },
-              ],
-            })}\n\ndata: [DONE]\n\n`,
-          );
+          response.end(successResponse);
         });
       },
       async (serverUrl) => {
