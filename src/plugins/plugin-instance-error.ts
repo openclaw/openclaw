@@ -12,6 +12,18 @@ export class PluginInstanceUnavailableError extends Error {
   }
 }
 
+/** A retired plugin inventory cannot admit new work; callers start a fresh plugin operation. */
+export const PluginInventoryRetiredError = resolveGlobalSingleton(
+  Symbol.for("openclaw.pluginInventoryRetiredError"),
+  () =>
+    class InventoryRetiredError extends Error {
+      constructor() {
+        super("Plugin inventory has retired; begin a new plugin operation.");
+        this.name = "PluginInventoryRetiredError";
+      }
+    },
+);
+
 export const PluginSourceRecoveryUnavailableError = resolveGlobalSingleton(
   Symbol.for("openclaw.pluginSourceRecoveryUnavailableError"),
   () =>

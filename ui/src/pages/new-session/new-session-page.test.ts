@@ -57,7 +57,7 @@ function message(page: NewSessionElement): string {
 
 afterEach(async () => {
   document.querySelectorAll("openclaw-new-session-page").forEach((element) => element.remove());
-  // Intent handlers preload the composer even when the test never submits.
+  // Keyboard intent prefetches custom elements; finish registration before the shared graph resets.
   await vi.dynamicImportSettled();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
