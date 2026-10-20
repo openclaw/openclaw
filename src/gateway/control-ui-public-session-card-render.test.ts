@@ -69,18 +69,16 @@ describe("public session preview card", () => {
   });
 
   it("omits unknown optional facts and includes only recorded checks", () => {
-    const headline = parse({ title: "A short session", host: "example.test", messageCount: 2 });
-    expect(headline.documentElement.textContent).toBe(
+    const card = { title: "A short session", host: "example.test", messageCount: 2 };
+    expect(parse(card).documentElement.textContent).toBe(
       "OpenClaw · Public sessionA short session2 messagesexample.test",
     );
-    const receipt = parse({
-      title: "A short session",
-      host: "example.test",
-      messageCount: 2,
+    const text = parse({
+      ...card,
       worktree: { branch: "feature", files: 1, checks: "All 4 checks passed" },
-    });
-    expect(receipt.documentElement.textContent).toContain("ChecksAll 4 checks passed");
-    expect(receipt.documentElement.textContent).not.toMatch(/undefined|Merged| min|by /u);
+    }).documentElement.textContent;
+    expect(text).toContain("ChecksAll 4 checks passed");
+    expect(text).not.toMatch(/undefined|Merged| min|by /u);
   });
 
   it("keeps untrusted text inert in every card field", () => {
@@ -116,19 +114,16 @@ describe("public session preview card", () => {
     expect(document.documentElement.textContent?.length).toBeLessThan(500);
   });
 
-  it.each(["A very long title ".repeat(30)])(
-    "keeps the opening quote directly below the title: %s",
-    (title) => {
-      const document = parse({ ...CARD, title });
-      const titleLines = [...document.querySelectorAll('text[font-size="56"]')];
-      const lastTitleY = Number(titleLines.at(-1)?.getAttribute("y"));
-      const quoteY = Number(
-        document.querySelector('text[font-family="Instrument Serif"]')?.getAttribute("y"),
-      );
-      expect(quoteY - lastTitleY).toBeGreaterThan(50);
-      expect(quoteY - lastTitleY).toBeLessThan(80);
-    },
-  );
+  it("keeps the opening quote directly below the title", () => {
+    const document = parse({ ...CARD, title: "A very long title ".repeat(30) });
+    const titleLines = [...document.querySelectorAll('text[font-size="56"]')];
+    const lastTitleY = Number(titleLines.at(-1)?.getAttribute("y"));
+    const quoteY = Number(
+      document.querySelector('text[font-family="Instrument Serif"]')?.getAttribute("y"),
+    );
+    expect(quoteY - lastTitleY).toBeGreaterThan(50);
+    expect(quoteY - lastTitleY).toBeLessThan(80);
+  });
 
   it("renders bundled fonts into a 1200 by 630 PNG through the worker", async () => {
     const renderer = createPublicSessionCardRenderer();
