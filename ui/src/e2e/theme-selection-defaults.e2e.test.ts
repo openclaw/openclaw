@@ -22,7 +22,6 @@ suite.define(() => {
         const profileId = "theme-defaults-user";
         const config = {
           ui: {
-            seamColor: "#123456",
             prefs: { theme: "claw", accent: "#abcdef", locale: "en", chatShowThinking: false },
           },
         };
@@ -61,22 +60,25 @@ suite.define(() => {
           await gateway.waitForRequest("users.prefs.get", { after });
           await gateway.resolveDeferred("users.prefs.get", { status: "ok", entries });
         };
-        const expectAppearance = (theme: string, accent: string, ui?: string, chat = ui) =>
-          expect.poll(read).toMatchObject({
-            theme,
-            accent,
-            ...(ui
-              ? { ui: expect.stringContaining(ui), chat: expect.stringContaining(chat ?? ui) }
-              : {}),
-          });
-        const expectCustomAppearance = () => expectAppearance("absolutely", "#5b9cf6", "Geist");
+        const fonts = (ui: string, chat = ui) => ({
+          ui: expect.stringContaining(ui),
+          chat: expect.stringContaining(chat),
+        });
+        const defaults = {
+          theme: "absolutely",
+          accent: "#d97757",
+          ...fonts("Space Grotesk", "Lora"),
+        };
+        const customized = { theme: "absolutely", accent: "#5b9cf6", ...fonts("Geist") };
         await page.goto(suite.server.baseUrl + "settings/appearance");
         await respondProfile(initialEntries);
         await waitForControlUiSettingsTakeover(page);
         // Boot and profile arrival retain existing customization.
-        await expectAppearance("dash", "#5b9cf6", "JetBrains Mono");
+        await expect
+          .poll(read)
+          .toMatchObject({ theme: "dash", accent: "#5b9cf6", ...fonts("JetBrains Mono") });
         await page.locator(".settings-theme-card--absolutely").click();
-        await expectAppearance("absolutely", "#d97757", "Space Grotesk", "Lora");
+        await expect.poll(read).toMatchObject(defaults);
         await expect
           .poll(async () => (await gateway.getRequests("themes.set")).map((r) => r.params))
           .toContainEqual({
@@ -111,16 +113,12 @@ suite.define(() => {
         await respondProfile(selected, reads);
         await page.reload();
         // The mirror already paints defaults while the profile read is held.
-        await expectAppearance("absolutely", "#d97757");
+        await expect.poll(read).toMatchObject({ theme: "absolutely", accent: "#d97757" });
         await respondProfile(selected);
         await waitForControlUiSettingsTakeover(page);
-        await expect.poll(read).toMatchObject({
-          ui: expect.stringContaining("Space Grotesk"),
-          chat: expect.stringContaining("Lora"),
-          accent: "#d97757",
-        });
+        await expect.poll(read).toMatchObject(defaults);
         await page.getByRole("radio", { name: "Light", exact: true }).click();
-        await expectAppearance("absolutely-light", "#a8452a");
+        await expect.poll(read).toMatchObject({ theme: "absolutely-light", accent: "#a8452a" });
 
         for (const field of ["ui", "chat"]) {
           await selectPickerValue(
@@ -131,7 +129,7 @@ suite.define(() => {
         await page.locator('[data-accent-preset="blue"]').click();
         await page.locator(".settings-theme-card--absolutely").click();
         await page.getByRole("radio", { name: "Dark", exact: true }).click();
-        await expectCustomAppearance();
+        await expect.poll(read).toMatchObject(customized);
         const custom = {
           ...selected,
           "ui.fontUi": "geist",
@@ -144,11 +142,11 @@ suite.define(() => {
         reads = await gateway.deferNext("users.prefs.get");
         await gateway.closeLatest();
         await respondProfile(custom, reads);
-        await expectCustomAppearance();
+        await expect.poll(read).toMatchObject(customized);
         await page.reload();
         await respondProfile(custom);
         await waitForControlUiSettingsTakeover(page);
-        await expectCustomAppearance();
+        await expect.poll(read).toMatchObject(customized);
         await expect.poll(mirror).toMatchObject({ locale: "en", chatShowThinking: false });
       },
     );

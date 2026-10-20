@@ -3,12 +3,15 @@ import { expect, it } from "vitest";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { recordedToolCall } from "./recorded-tool.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Tweet browser cards" });
 const url = "https://x.com/openclaw/status/1234567890123456789";
 const title = "OpenClaw (@openclaw) on X";
 const description =
   "Small details make a big difference. A readable preview keeps the conversation in context, so you can understand the post without opening another tab.";
+const imageData = (file: string) =>
+  `data:image/png;base64,${readFileSync(file).toString("base64")}`;
 
 suite.define(() => {
   it.each([
@@ -29,46 +32,25 @@ suite.define(() => {
           state === "long"
             ? description + " https://example.com/" + "long-path-".repeat(25)
             : description;
+        const preview =
+          state === "unavailable"
+            ? {}
+            : {
+                title: postTitle,
+                description: postText,
+                faviconDataUrl: imageData("ui/public/favicon-32.png"),
+                ...(state === "media"
+                  ? { imageDataUrl: imageData("docs/assets/openclaw-hero-dark.png") }
+                  : {}),
+              };
         const gateway = await installMockGateway(page, {
           automaticallyFetchFavicons: true,
           featureMethods: [],
           methodResponses: {
-            "controlUi.linkPreview":
-              state === "unavailable"
-                ? {}
-                : {
-                    title: postTitle,
-                    description: postText,
-                    ...(state === "media"
-                      ? {
-                          imageDataUrl:
-                            "data:image/png;base64," +
-                            readFileSync("docs/assets/openclaw-hero-dark.png").toString("base64"),
-                        }
-                      : {}),
-                    faviconDataUrl:
-                      "data:image/png;base64," +
-                      readFileSync("ui/public/favicon-32.png").toString("base64"),
-                  },
+            "controlUi.linkPreview": preview,
           },
           historyMessages: [
-            {
-              role: "user",
-              content: "Take a look at this post about keeping previews readable.",
-              timestamp: 1000,
-            },
-            {
-              role: "assistant",
-              timestamp: 2000,
-              content: [
-                {
-                  type: "toolCall",
-                  id: "tweet",
-                  name: "browser",
-                  arguments: { action: "open", url },
-                },
-              ],
-            },
+            { ...recordedToolCall("tweet", "browser", { action: "open", url }), timestamp: 2000 },
             {
               role: "toolResult",
               timestamp: 3000,

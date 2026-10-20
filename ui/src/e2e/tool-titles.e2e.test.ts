@@ -7,6 +7,7 @@ import {
   requireRecord,
   requireString,
 } from "./chat-flow.test-support.ts";
+import { recordedToolCall } from "./recorded-tool.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
@@ -23,17 +24,7 @@ suite.define(() => {
         const childArgs = { command: "printf '\n--- workspace ---\n'\nls" };
         const gateway = await installMockGateway(page, {
           historyMessages: [
-            {
-              role: "assistant",
-              content: [
-                {
-                  type: "toolCall",
-                  id: "history-check",
-                  name: "exec",
-                  arguments: { command, title: "Check the test suite" },
-                },
-              ],
-            },
+            recordedToolCall("history-check", "exec", { command, title: "Check the test suite" }),
             chatMessage("toolResult", "All tests passed.", {
               toolCallId: "history-check",
               toolName: "exec",

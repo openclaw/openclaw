@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import type { Locator } from "playwright";
-import { beforeEach, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   waitForControlUiGatewayReady,
@@ -19,18 +19,6 @@ const suite = createControlUiE2eSuite({
 });
 
 const requestedScreenshotPath = process.env.OPENCLAW_TERMINAL_REPAINT_SCREENSHOT?.trim();
-let screenshotPath: string | undefined;
-beforeEach(() => {
-  screenshotPath = requestedScreenshotPath
-    ? path.join(
-        createControlUiE2eArtifactDir("terminal-repaint", path.dirname(requestedScreenshotPath)),
-        path.basename(requestedScreenshotPath),
-      )
-    : undefined;
-  if (screenshotPath) {
-    console.info(`[control-ui-e2e] screenshot: ${screenshotPath}`);
-  }
-});
 
 async function terminalCanvasDigest(canvas: Locator): Promise<string> {
   const png = await canvas.screenshot({ animations: "disabled", caret: "hide" });
@@ -76,8 +64,12 @@ suite.define(() => {
         await expect.poll(() => terminalCanvasDigest(terminalCanvas)).not.toBe(blankCanvasDigest);
         const renderedCanvasDigest = await terminalCanvasDigest(terminalCanvas);
 
-        if (screenshotPath) {
-          await page.screenshot({ path: screenshotPath });
+        if (requestedScreenshotPath) {
+          const dir = createControlUiE2eArtifactDir(
+            "terminal-repaint",
+            path.dirname(requestedScreenshotPath),
+          );
+          await page.screenshot({ path: path.join(dir, path.basename(requestedScreenshotPath)) });
         }
 
         expect(openParams.cols).toBeTypeOf("number");
