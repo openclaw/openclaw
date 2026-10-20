@@ -100,29 +100,34 @@ it("preserves a replacement preamble when an older authority read finishes", asy
   }
 });
 
-it.each([
-  { headline: "Checking files", clear: false, calls: 0 },
-  { headline: "Earlier headline", clear: true, calls: 1 },
-])(
-  "does not replay a remembered preamble after replacing $headline",
-  async ({ headline, clear, calls }) => {
-    const { session, publish, publisher, send } = fixture(headline);
+it.each(["restored", "richer", "revived"] as const)(
+  "does not replay a remembered preamble after a %s digest",
+  async (mode) => {
+    const { session, publish, publisher, send } = fixture(
+      mode === "restored" ? "Checking files" : "Earlier headline",
+    );
     await send("Checking files");
-    if (clear) {
-      publisher.clear(session);
+    let target = session;
+    if (mode === "revived") {
+      target = state("Reviewing the implementation");
+      target.lastPreambleHeadline = session.lastPreambleHeadline;
+    } else {
+      if (mode === "richer") {
+        publisher.clear(session);
+      }
+      if (!session.previousDigest) {
+        throw new Error("expected previous digest");
+      }
+      session.previousDigest = {
+        ...session.previousDigest,
+        revision: 2,
+        headline: "Reviewing the implementation",
+        updatedAt: 2_000,
+      };
     }
-    if (!session.previousDigest) {
-      throw new Error("expected previous digest");
-    }
-    session.previousDigest = {
-      ...session.previousDigest,
-      revision: 2,
-      headline: "Reviewing the implementation",
-      updatedAt: 2_000,
-    };
-    await send("Checking files", session, 2_001);
-    expect(session.lastPreambleHeadline).toBe("Checking files");
-    expect(publish).toHaveBeenCalledTimes(calls);
+    await send("Checking files", target, mode === "revived" ? 2_000 : 2_001);
+    expect(target.lastPreambleHeadline).toBe("Checking files");
+    expect(publish).toHaveBeenCalledTimes(mode === "restored" ? 0 : 1);
   },
 );
 
@@ -141,15 +146,4 @@ it("replays a queued preamble after dormant-state revival", async () => {
 
   expect(publish).toHaveBeenCalledTimes(2);
   expect(revived.previousDigest?.headline).toBe("Queued headline");
-});
-
-it("preserves duplicate suppression across dormant-state revival", async () => {
-  const { session: original, publish, send } = fixture("Earlier headline");
-  await send("Checking files");
-
-  const revived = state("Reviewing the implementation");
-  revived.lastPreambleHeadline = original.lastPreambleHeadline;
-  await send("Checking files", revived, 2_000);
-
-  expect(publish).toHaveBeenCalledOnce();
 });

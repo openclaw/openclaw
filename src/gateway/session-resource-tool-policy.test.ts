@@ -69,15 +69,61 @@ afterEach(() => expect(storageRead).not.toHaveBeenCalled());
 const denyBrowser = { deny: ["browser"] };
 const providerPolicy = { byProvider: { openai: denyBrowser } };
 const defaults = { model: "openai/test-model" };
-it.each<OpenClawConfig>([
-  { tools: { profile: "minimal" } },
-  { tools: denyBrowser },
-  { tools: providerPolicy, agents: { defaults } },
-  { agents: { entries: { main: { tools: denyBrowser } } } },
-  { agents: { defaults, entries: { main: { tools: providerPolicy } } } },
-  { tools: { toolsBySender: { "*": denyBrowser } } },
-])("honors each canonical configured restriction: %j", (config) => {
-  expect(() => fixture({ config }).resolve()).toThrow("current tool policy");
+const parentKey = "agent:other:acp:parent";
+const childKey = "agent:main:acp:child";
+const unlocked = { sandboxRequired: false };
+type PolicyCase = NonNullable<Parameters<typeof fixture>[0]> & {
+  parent?: SessionEntry;
+  tool?: string;
+  result?: Partial<ReturnType<typeof resolveSessionResourceToolPolicy>>;
+};
+const inherited = {
+  tool: "portal",
+  result: unlocked,
+  entry: {
+    spawnDepth: 1,
+    subagentRole: "orchestrator",
+    spawnedBy: "agent:other:dashboard:parent",
+    inheritedToolPolicyVersion: 1,
+    inheritedToolAllow: ["browser", "portal"],
+    inheritedToolDeny: ["browser"],
+  },
+} satisfies PolicyCase;
+it.each<PolicyCase>([
+  { config: { tools: { profile: "minimal" } } },
+  { config: { tools: denyBrowser } },
+  { config: { tools: providerPolicy, agents: { defaults } } },
+  { config: { agents: { entries: { main: { tools: denyBrowser } } } } },
+  { config: { agents: { defaults, entries: { main: { tools: providerPolicy } } } } },
+  { config: { tools: { toolsBySender: { "*": denyBrowser } } } },
+  { key: "agent:main:dashboard:child", ...inherited },
+  { key: childKey, ...inherited },
+  {
+    key: childKey,
+    entry: { spawnedBy: parentKey },
+    result: unlocked,
+    parent: { sessionId: "parent", updatedAt: 1, subagentRole: "orchestrator", spawnDepth: 1 },
+  },
+  { key: childKey, entry: { spawnedBy: parentKey } },
+  {
+    entry: { sandbox: "required" },
+    config: { tools: { sandbox: { tools: { allow: ["browser"], deny: [] } } } },
+    result: { sandboxRequired: true, sandboxed: true },
+  },
+  { entry: { sandbox: "required" } },
+  { entry: { agentHarnessId: "test-harness" }, result: unlocked },
+])("enforces prepared resource policy %j", (options) => {
+  const test = fixture(options);
+  if (options.parent) {
+    test.entries.set(parentKey, options.parent);
+  }
+  if (!options.result || options.tool) {
+    expect(() => test.resolve()).toThrow("current tool policy");
+  }
+  if (options.result) {
+    expect(test.resolve(options.tool)).toMatchObject(options.result);
+  }
+  expect(runtimeOwnership).not.toHaveBeenCalled();
 });
 
 it("requires a live native owner for locked-session MCP App policy", () => {
@@ -107,59 +153,4 @@ it("rechecks selected model policy when the stored provider changes", () => {
     modelOverride: "test-model",
   });
   expect(() => test.resolve()).toThrow("current tool policy");
-});
-
-it.each(["agent:main:dashboard:child", "agent:main:acp:child"])(
-  "honors persisted inherited denial for %s",
-  (key) => {
-    const test = fixture({
-      key,
-      entry: {
-        spawnDepth: 1,
-        subagentRole: "orchestrator",
-        spawnedBy: "agent:other:dashboard:parent",
-        inheritedToolPolicyVersion: 1,
-        inheritedToolAllow: ["browser", "portal"],
-        inheritedToolDeny: ["browser"],
-      },
-    });
-    expect(() => test.resolve()).toThrow("current tool policy");
-    expect(test.resolve("portal")).toMatchObject({ sandboxRequired: false });
-  },
-);
-
-it.each([true, false])("uses only prepared cross-agent ACP parents (present: %s)", (present) => {
-  const parent = "agent:other:acp:parent";
-  const test = fixture({
-    key: "agent:main:acp:child",
-    entry: { spawnedBy: parent },
-  });
-  if (present) {
-    test.entries.set(parent, {
-      sessionId: "parent",
-      updatedAt: 1,
-      subagentRole: "orchestrator",
-      spawnDepth: 1,
-    });
-    expect(test.resolve()).toMatchObject({ sandboxRequired: false });
-  } else {
-    expect(() => test.resolve()).toThrow("current tool policy");
-  }
-});
-
-it("keeps sandbox requirements and sandbox tool restrictions visible to the resource owner", () => {
-  const test = fixture({
-    entry: { sandbox: "required" },
-    config: { tools: { sandbox: { tools: { allow: ["browser"], deny: [] } } } },
-  });
-  expect(test.resolve()).toMatchObject({ sandboxRequired: true, sandboxed: true });
-  expect(() => fixture({ entry: { sandbox: "required" } }).resolve()).toThrow(
-    "current tool policy",
-  );
-});
-
-it("supports ordinary unlocked native-harness sessions without native ownership reads", () => {
-  const test = fixture({ entry: { agentHarnessId: "test-harness" } });
-  expect(test.resolve()).toMatchObject({ sandboxRequired: false });
-  expect(runtimeOwnership).not.toHaveBeenCalled();
 });

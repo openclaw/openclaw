@@ -12,6 +12,7 @@ import {
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -80,6 +81,14 @@ function expectSummary(
   }
 }
 
+function sharedStoreAgents() {
+  return {
+    ownership: "explicit" as const,
+    entries: { main: {}, work: {} },
+    defaults: { sessionStore: { agentId: "work" } },
+  };
+}
+
 it("resolves agent-scoped legacy locators from resident topology for reads and dirty publications", () =>
   withProjectionState(async (create, state) => {
     const locator = state.statePath("shared", "sessions.json");
@@ -145,27 +154,14 @@ it("keeps session-ID aliases out of exact-key describe", () =>
     expect(projection.selectEntries().filter(ready)).toHaveLength(2);
   }));
 
-it("materializes the committed row through its main alias", () =>
+it.each([
+  ["agent:main:finishing-write", "agent:main:finishing-write"],
+  ["agent:main:main", "main"],
+])("settles queued commits through %s while prior materialization finishes", (key, readKey) =>
   withProjectionState(async (create) => {
-    const cfg = { agents: { entries: { main: {} } } };
-    const scope = { agentId: "main", sessionKey: "agent:main:main" };
-    replaceSessionEntrySync(scope, { sessionId: "old", updatedAt: 1, label: "before" });
-    const projection = await create({ cfg });
-    await projection.ensureMaterialized();
-    replaceSessionEntrySync(scope, { sessionId: "old", updatedAt: 2, label: "after" });
-    await projection.ensureMaterialized();
-    expect(snapshotRow(projection, "main")).toMatchObject({
-      sessionId: "old",
-      label: "after",
-    });
-  }));
-
-it("settles a committed write queued while the previous materialization is finishing", () =>
-  withProjectionState(async (create) => {
-    const key = "agent:main:finishing-write";
     const scope = { agentId: "main", sessionKey: key };
     const cfg = { agents: { entries: { main: {} } } };
-    const entry = { sessionId: "finishing-write", updatedAt: 1 };
+    const entry = { sessionId: "finishing-write", updatedAt: 1, label: "before" };
     replaceSessionEntrySync(scope, entry);
     const projection = await create({ cfg });
     await projection.ensureMaterialized();
@@ -186,60 +182,132 @@ it("settles a committed write queued while the previous materialization is finis
 
     expect(latestCommitted).toBe(true);
     expect(projection.dirtyRowCount).toBe(0);
-    expect(snapshotRow(projection, key)?.label).toBe("latest");
-  }));
+    expect(snapshotRow(projection, readKey)).toMatchObject({
+      sessionId: entry.sessionId,
+      label: "latest",
+    });
+  }),
+);
 
-it("reprocesses activity-summary policy when config changes during materialization", () =>
-  withProjectionState(async (create) => {
-    let cfg = {
-      agents: {
-        entries: { main: {}, work: {} },
-        defaults: { sessionStore: { agentId: "main" }, utilityModel: "unit-test/small" },
-      },
-    };
-    const targets = ["main", "work"].flatMap((agentId) =>
-      Array.from({ length: 80 }, (_, index) => ({
-        agentId,
-        key: `agent:${agentId}:policy-${index}`,
-      })),
-    );
-    for (const target of targets) {
-      replaceSessionEntrySync(
-        { agentId: target.agentId, sessionKey: target.key },
-        { sessionId: target.key, updatedAt: 1, displayName: "Policy fixture" },
-      );
-    }
-    const projection = await create({
-      cfg,
-      getConfig: () => cfg,
-      getModelCatalog: async () => [],
-    });
-    await projection.ensureMaterialized();
-    expectSummary(projection, targets, "stale");
-    const readInputs = rowInputs.readSessionRowInputs;
-    vi.spyOn(rowInputs, "readSessionRowInputs").mockImplementationOnce((params) => {
-      cfg = {
-        ...cfg,
-        agents: { ...cfg.agents, defaults: { ...cfg.agents.defaults, utilityModel: "" } },
+it.each(["config", "static", "unowned-map", "empty-map"] as const)(
+  "reprocesses activity-summary policy during %s publication",
+  (mode) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const fromConfig = mode === "config";
+      let cfg: OpenClawConfig = fromConfig
+        ? {
+            agents: {
+              entries: { main: {}, work: {} },
+              defaults: { sessionStore: { agentId: "main" }, utilityModel: "unit-test/small" },
+            },
+          }
+        : { agents: { entries: { main: {} }, defaults: { model: "fixture/primary" } } };
+      const publish = (enabled: boolean) => {
+        if (fromConfig) {
+          cfg = {
+            ...cfg,
+            agents: {
+              ...cfg.agents,
+              defaults: { ...cfg.agents?.defaults, utilityModel: enabled ? "unit-test/small" : "" },
+            },
+          };
+          sessionChanges.emit({ all: true, scope: "config" });
+        } else {
+          const snapshot = createPluginMetadataSnapshotFixture({
+            plugins: [
+              {
+                id: "fixture",
+                providers: ["fixture"],
+                modelCatalog: {
+                  providers: {
+                    fixture: {
+                      models: [{ id: "primary" }],
+                      ...(enabled ? { defaultUtilityModel: "small" } : {}),
+                    },
+                  },
+                },
+              },
+            ],
+          });
+          setCurrentPluginMetadataSnapshot(snapshot, { config: cfg, compatibleConfigs: [cfg] });
+        }
       };
-      sessionChanges.emit({ all: true, scope: "config" });
-      return readInputs(params);
-    });
-    sessionChanges.emit({ all: true, scope: "acp" });
-    await projection.ensureMaterialized();
-    expect(projection.dirtyRowCount).toBe(0);
-    expectSummary(projection, targets, "unavailable");
-    cfg = {
-      ...cfg,
-      agents: {
-        ...cfg.agents,
-        defaults: { ...cfg.agents.defaults, utilityModel: "unit-test/small" },
-      },
-    };
-    sessionChanges.emit({ all: true, scope: "config" });
-    await projection.ensureMaterialized();
-    expectSummary(projection, targets, "stale");
-  }));
+      const targets = fromConfig
+        ? ["main", "work"].flatMap((agentId) =>
+            Array.from({ length: 80 }, (_, index) => ({
+              agentId,
+              key: `agent:${agentId}:policy-${index}`,
+            })),
+          )
+        : ["first", "middle", "last"].map((name) => ({
+            agentId: "main",
+            key: `agent:main:publication-${name}`,
+          }));
+      if (!fromConfig) {
+        publish(true);
+      }
+      try {
+        for (const target of targets) {
+          replaceSessionEntrySync(
+            { agentId: target.agentId, sessionKey: target.key },
+            {
+              sessionId: target.key,
+              updatedAt: 1,
+              displayName: fromConfig ? "Policy fixture" : "Publication fixture",
+            },
+          );
+        }
+        const projection = await createSessionRowProjection({
+          cfg,
+          ...(fromConfig
+            ? { getConfig: () => cfg, getModelCatalog: async () => [] }
+            : mode === "static"
+              ? { modelCatalog: [] }
+              : {
+                  getModelCatalog: async () =>
+                    mode === "empty-map" ? new Map() : new Map([["main", { entries: [] }]]),
+                }),
+        });
+        try {
+          await projection.ensureMaterialized();
+          expectSummary(projection, targets, "stale");
+          // Catalog publication and the following rows must share one synchronous slice.
+          const clock = fromConfig ? undefined : vi.spyOn(performance, "now").mockReturnValue(0);
+          try {
+            const readInputs = rowInputs.readSessionRowInputs;
+            vi.spyOn(rowInputs, "readSessionRowInputs").mockImplementationOnce((params) => {
+              publish(false);
+              if (!fromConfig) {
+                notifyPreparedModelRuntimePublication({ phase: "catalog-published" });
+              }
+              return readInputs(params);
+            });
+            sessionChanges.emit({ all: true, scope: fromConfig ? "acp" : "catalog" });
+            if (fromConfig) {
+              await projection.ensureMaterialized();
+            } else {
+              await listProjectedSessions({ projection, opts: {} });
+            }
+          } finally {
+            clock?.mockRestore();
+          }
+          expect(projection.dirtyRowCount).toBe(0);
+          expectSummary(projection, targets, "unavailable");
+          if (fromConfig) {
+            publish(true);
+            await projection.ensureMaterialized();
+            expectSummary(projection, targets, "stale");
+          }
+        } finally {
+          projection.dispose();
+        }
+      } finally {
+        if (!fromConfig) {
+          setCurrentPluginMetadataSnapshot(undefined);
+        }
+      }
+    }),
+);
 
 it("retains config changes published while topology discovery is pending", ({ signal }) =>
   withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -295,84 +363,6 @@ it("retains config changes published while topology discovery is pending", ({ si
       projection.dispose();
     }
   }));
-
-it.each(["static", "unowned-map", "empty-map"] as const)(
-  "reprocesses utility policy after a synchronous model publication (catalog reader: %s)",
-  (catalogReader) =>
-    withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const cfg = {
-        agents: {
-          entries: { main: {} },
-          defaults: { model: "fixture/primary" },
-        },
-      };
-      const publish = (enabled: boolean) => {
-        const snapshot = createPluginMetadataSnapshotFixture({
-          plugins: [
-            {
-              id: "fixture",
-              providers: ["fixture"],
-              modelCatalog: {
-                providers: {
-                  fixture: {
-                    models: [{ id: "primary" }],
-                    ...(enabled ? { defaultUtilityModel: "small" } : {}),
-                  },
-                },
-              },
-            },
-          ],
-        });
-        setCurrentPluginMetadataSnapshot(snapshot, { config: cfg, compatibleConfigs: [cfg] });
-      };
-      publish(true);
-      const targets = ["first", "middle", "last"].map((name) => ({
-        agentId: "main",
-        key: `agent:main:publication-${name}`,
-      }));
-      try {
-        for (const target of targets) {
-          replaceSessionEntrySync(
-            { agentId: target.agentId, sessionKey: target.key },
-            { sessionId: target.key, updatedAt: 1, displayName: "Publication fixture" },
-          );
-        }
-        const projection = await createSessionRowProjection({
-          cfg,
-          ...(catalogReader === "static"
-            ? { modelCatalog: [] }
-            : {
-                getModelCatalog: async () =>
-                  catalogReader === "empty-map" ? new Map() : new Map([["main", { entries: [] }]]),
-              }),
-        });
-        await projection.ensureMaterialized();
-        try {
-          expectSummary(projection, targets, "stale");
-          // Keep the publication and following rows in one deterministic synchronous slice.
-          const clock = vi.spyOn(performance, "now").mockReturnValue(0);
-          try {
-            const readInputs = rowInputs.readSessionRowInputs;
-            vi.spyOn(rowInputs, "readSessionRowInputs").mockImplementationOnce((params) => {
-              publish(false);
-              notifyPreparedModelRuntimePublication({ phase: "catalog-published" });
-              return readInputs(params);
-            });
-            sessionChanges.emit({ all: true, scope: "catalog" });
-            await listProjectedSessions({ projection, opts: {} });
-          } finally {
-            clock.mockRestore();
-          }
-          expect(projection.dirtyRowCount).toBe(0);
-          expectSummary(projection, targets, "unavailable");
-        } finally {
-          projection.dispose();
-        }
-      } finally {
-        setCurrentPluginMetadataSnapshot(undefined);
-      }
-    }),
-);
 
 it("keeps cross-agent inheritance bound to a stored qualified parent", () =>
   withProjectionState(async (create) => {
@@ -444,11 +434,7 @@ it.each(["global", "unknown"])(
     withProjectionState(async (create, state) => {
       const storePath = state.statePath("shared.sqlite");
       let cfg = {
-        agents: {
-          ownership: "explicit" as const,
-          entries: { main: {}, work: {} },
-          defaults: { sessionStore: { agentId: "work" } },
-        },
+        agents: sharedStoreAgents(),
         session: { scope: "global" as const, store: storePath },
       };
       openOpenClawAgentDatabase({ agentId: "main", path: storePath });
@@ -491,11 +477,7 @@ it("assigns a newly committed unknown row to its logical store owner", async () 
   await withProjectionState(async (create, state) => {
     const storePath = state.statePath("shared.sqlite");
     const cfg = {
-      agents: {
-        ownership: "explicit" as const,
-        entries: { main: {}, work: {} },
-        defaults: { sessionStore: { agentId: "work" } },
-      },
+      agents: sharedStoreAgents(),
       session: { store: storePath },
     };
     replaceSessionEntrySync(
