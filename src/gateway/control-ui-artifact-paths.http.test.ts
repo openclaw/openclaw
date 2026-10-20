@@ -1,11 +1,9 @@
 import fs from "node:fs/promises";
-import { request, type IncomingMessage } from "node:http";
 import path from "node:path";
-import { buffer } from "node:stream/consumers";
 import { gzipSync } from "node:zlib";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { startControlUiFixture } from "./control-ui-fixture.test-support.js";
+import { readHttp, startControlUiFixture } from "./control-ui-fixture.test-support.js";
 
 const files = {
   "hello world.js": 'export const label = "space";\n',
@@ -40,18 +38,11 @@ describe.each(["", "/dashboard"])("Control UI artifact names under %j", (basePat
     await server.close().finally(() => tempDirs.cleanup());
   });
 
-  const read = async (pathname: string, method = "GET", encoding = "identity") => {
-    const res = await new Promise<IncomingMessage>((resolve, reject) => {
-      request(
-        `${server.origin}${basePath}${pathname}`,
-        { method, headers: { "Accept-Encoding": encoding }, agent: false },
-        resolve,
-      )
-        .on("error", reject)
-        .end();
+  const read = (pathname: string, method = "GET", encoding = "identity") =>
+    readHttp(`${server.origin}${basePath}${pathname}`, {
+      method,
+      headers: { "Accept-Encoding": encoding },
     });
-    return { status: res.statusCode, headers: res.headers, body: await buffer(res) };
-  };
 
   it.each(Object.entries(files))("decodes %s exactly once for GET and HEAD", async (name, body) => {
     for (const method of ["GET", "HEAD"]) {

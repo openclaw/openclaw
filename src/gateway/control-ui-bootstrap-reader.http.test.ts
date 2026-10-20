@@ -8,14 +8,14 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import type { ResolvedGatewayAuth } from "./auth.js";
+import type { ResolvedGatewayAuth as Auth } from "./auth.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE } from "./control-ui-bootstrap-contract.js";
 import { startControlUiFixture } from "./control-ui-fixture.test-support.js";
 
 afterEach(() => resetPluginRuntimeStateForTest());
 
-it("serves configured viewer policy without granting plugin or config access", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+it("serves configured viewer policy without granting plugin or config access", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const root = state.workspaceDir;
     await fs.writeFile(path.join(root, "index.html"), "<html><head></head><body></body></html>");
     await fs.mkdir(path.join(root, "dist/control-ui"), { recursive: true });
@@ -36,11 +36,7 @@ it("serves configured viewer policy without granting plugin or config access", a
     );
     setActivePluginRegistry(registry);
     const trustedProxy = { userHeader: "x-viewer-email", allowLoopback: true };
-    const auth: ResolvedGatewayAuth = {
-      mode: "trusted-proxy",
-      trustedProxy,
-      allowTailscale: false,
-    };
+    const auth: Auth = { mode: "trusted-proxy", trustedProxy, allowTailscale: false };
     const controlUi: GatewayControlUiConfig = { basePath: "/control", embedSandbox: "scripts" };
     const config: OpenClawConfig = {
       agents: { entries: { main: { workspace: root } } },
@@ -112,5 +108,4 @@ it("serves configured viewer policy without granting plugin or config access", a
       const document = await read("/", scopes);
       expect(await document.text()).not.toContain(CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE);
     }
-  });
-});
+  }));
