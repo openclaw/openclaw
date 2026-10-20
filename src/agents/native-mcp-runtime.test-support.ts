@@ -64,7 +64,6 @@ export async function writeNativeMcpFixture(
   await fs.writeFile(
     file,
     `import { appendFileSync } from "node:fs";
-import { createInterface } from "node:readline";
 ${fixtureReceiptClientSource(endpoint)}
 const source = ${JSON.stringify(file)};
 function record(line) {
@@ -102,6 +101,7 @@ if (era === "modern") {
     return server;
   }, { legacy: "reject" });
 } else {
+  let buffer = "";
   let capabilities = {};
   let roots = { roots: [] };
   let urlElicitationId;
@@ -189,8 +189,14 @@ if (era === "modern") {
       send({ id: message.id, error: { code: -32603, message: error.message } });
     }
   }
-  createInterface({ input: process.stdin }).on("line", (line) => {
-    if (line) void receive(JSON.parse(line));
+  process.stdin.setEncoding("utf8");
+  process.stdin.on("data", (chunk) => {
+    buffer += chunk;
+    let newline;
+    while ((newline = buffer.indexOf("\\n")) >= 0) {
+      const line = buffer.slice(0, newline); buffer = buffer.slice(newline + 1);
+      if (line) void receive(JSON.parse(line));
+    }
   });
 }
 `,

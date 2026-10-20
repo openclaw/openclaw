@@ -80,12 +80,6 @@ export async function assertSessionActorPathAliasReuse(
   });
   const historyReads = vi.spyOn(historyLane.pool, "run");
   const accountingOptions = { includeByteSize: true, includeUsage: true, includeTurnTaint: true };
-  const accounting = (current: typeof scope) =>
-    readSessionTranscriptAccountingAsync(current, accountingOptions);
-  const notes = async (current: typeof scope) =>
-    (await readActivitySummarySource({ scope: current, assertCurrent() {} }))?.notes;
-  const receiptAt = (storePath: string) =>
-    readSessionActorProjectionReceipt({ path: storePath, sessionKey, sessionId });
   try {
     await actor.read(authority);
     await withOwnedSessionTranscriptWrites(
@@ -108,16 +102,21 @@ export async function assertSessionActorPathAliasReuse(
 
         for (const current of [canonicalScope, scope]) {
           historyReads.mockClear();
-          expect(await accounting(current)).toMatchObject({
+          expect(
+            await readSessionTranscriptAccountingAsync(current, accountingOptions),
+          ).toMatchObject({
             eventCount: 2,
             usage: { promptTokens: 20, outputTokens: 3, trailingMessages: [] },
           });
-          expect(await notes(current)).toEqual([
-            "user: Aliased question",
-            "assistant: Aliased answer",
-          ]);
+          expect(
+            (await readActivitySummarySource({ scope: current, assertCurrent() {} }))?.notes,
+          ).toEqual(["user: Aliased question", "assistant: Aliased answer"]);
           expect(historyReads, `Warm reads through ${current.storePath}`).not.toHaveBeenCalled();
-          const receipt = receiptAt(current.storePath);
+          const receipt = readSessionActorProjectionReceipt({
+            path: current.storePath,
+            sessionKey,
+            sessionId,
+          });
           assert(receipt, "An admitted alias must select the actor projection receipt");
           withSessionTranscriptProjectionReceipt(receipt, () => {
             for (const spelling of [database.path, identity.canonicalPath]) {
@@ -132,42 +131,51 @@ export async function assertSessionActorPathAliasReuse(
         }
 
         historyReads.mockClear();
-        expect(receiptAt(otherDatabase.path)).toBeUndefined();
-        expect(await accounting(otherScope)).toMatchObject({ eventCount: 1 });
-        expect(await notes(otherScope)).toEqual(["user: Different database"]);
+        expect(
+          readSessionActorProjectionReceipt({ path: otherDatabase.path, sessionKey, sessionId }),
+        ).toBeUndefined();
+        expect(
+          await readSessionTranscriptAccountingAsync(otherScope, accountingOptions),
+        ).toMatchObject({ eventCount: 1 });
+        expect(
+          (await readActivitySummarySource({ scope: otherScope, assertCurrent() {} }))?.notes,
+        ).toEqual(["user: Different database"]);
         expect(historyReads).toHaveBeenCalled();
 
-        const appended = await actor.appendToolResult(
-          {
-            commandId: "pathalias-next-question",
-            phaseId: "turn",
-            turn: {
-              agentId: database.agentId,
-              sessionKey,
-              options: {
-                expectedSessionId: sessionId,
-                sessionFile: "synthetic.jsonl",
-                messages: [
-                  {
-                    eventId: "next-question",
-                    message: { role: "user", content: "Next question" },
-                    now: 3,
+        expect(
+          (
+            await actor.appendToolResult(
+              {
+                commandId: "pathalias-next-question",
+                phaseId: "turn",
+                turn: {
+                  agentId: database.agentId,
+                  sessionKey,
+                  options: {
+                    expectedSessionId: sessionId,
+                    sessionFile: "synthetic.jsonl",
+                    messages: [
+                      {
+                        eventId: "next-question",
+                        message: { role: "user", content: "Next question" },
+                        now: 3,
+                      },
+                    ],
                   },
-                ],
+                },
               },
-            },
-          },
-          authority,
-        );
-        expect(appended.kind).toBe("committed");
+              authority,
+            )
+          ).kind,
+        ).toBe("committed");
         historyReads.mockClear();
-        expect(await accounting(scope)).toMatchObject({
+        expect(await readSessionTranscriptAccountingAsync(scope, accountingOptions)).toMatchObject({
           eventCount: 3,
           usage: {
             trailingMessages: [expect.objectContaining({ role: "user", content: "Next question" })],
           },
         });
-        expect(await notes(scope)).toEqual([
+        expect((await readActivitySummarySource({ scope, assertCurrent() {} }))?.notes).toEqual([
           "user: Aliased question",
           "assistant: Aliased answer",
           "user: Next question",
