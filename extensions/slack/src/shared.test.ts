@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import { slackSetupPlugin } from "./channel.setup.js";
 import { setSlackChannelAllowlist } from "./setup-shared.js";
 import { slackPluginBase as plugin, slackConfigAdapter } from "./shared.js";
+type SlackConfig = NonNullable<OpenClawConfig["channels"]>["slack"];
+const config = (slack: SlackConfig): OpenClawConfig => ({ channels: { slack } });
 
 it("owns Slack native command name overrides", () => {
   const resolve = (commandKey: string) =>
@@ -28,23 +30,19 @@ it("writes canonical enabled entries for setup-generated channel allowlists", ()
 
 describe("slackConfigAdapter", () => {
   it("clears user-identity credentials when deleting the root account", () => {
-    const cfg = {
-      channels: {
-        slack: {
+    const cfg = config({
+      identity: "user",
+      mode: "http",
+      userToken: "test-user-token",
+      signingSecret: "test-signing-secret",
+      accounts: {
+        work: {
           identity: "user",
-          mode: "http",
-          userToken: "test-user-token",
-          signingSecret: "test-signing-secret",
-          accounts: {
-            work: {
-              identity: "user",
-              userToken: "test-work-user-token",
-              appToken: "test-work-app-token",
-            },
-          },
+          userToken: "test-work-user-token",
+          appToken: "test-work-app-token",
         },
       },
-    } as OpenClawConfig;
+    });
 
     const next = slackConfigAdapter.deleteAccount?.({ cfg, accountId: "default" });
 
@@ -58,9 +56,9 @@ describe("slackConfigAdapter", () => {
 
   it("keeps read-only accessors from resolving token SecretRefs", () => {
     const provider = (name: string) => ({
-      source: "file",
+      source: "file" as const,
       path: `/tmp/openclaw-missing-slack-${name}-token`,
-      mode: "singleValue",
+      mode: "singleValue" as const,
     });
     const cfg = {
       secrets: {
@@ -69,15 +67,13 @@ describe("slackConfigAdapter", () => {
           slack_app: provider("app"),
         },
       },
-      channels: {
-        slack: {
-          botToken: { source: "file", provider: "slack_bot", id: "value" },
-          appToken: { source: "file", provider: "slack_app", id: "value" },
-          allowFrom: ["U123"],
-          defaultTo: "C123",
-        },
-      },
-    } as unknown as OpenClawConfig;
+      ...config({
+        botToken: { source: "file", provider: "slack_bot", id: "value" },
+        appToken: { source: "file", provider: "slack_app", id: "value" },
+        allowFrom: ["U123"],
+        defaultTo: "C123",
+      }),
+    };
 
     for (const adapter of [slackConfigAdapter, slackSetupPlugin.config]) {
       expect(adapter.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual(["U123"]);
