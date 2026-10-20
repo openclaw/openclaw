@@ -1,6 +1,4 @@
 import { spawnSync } from "node:child_process";
-// Sandbox filesystem bridge boundary tests cover host validation before content
-// reads or mutations; container metadata resolves mount-aware aliases first.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -18,6 +16,11 @@ import {
   mockedOpenRootFile,
   withTempDir,
 } from "./fs-bridge.test-helpers.js";
+
+const bridgeFor = (workspaceDir: string) =>
+  createSandboxFsBridge({
+    sandbox: createSandbox({ workspaceDir, agentWorkspaceDir: workspaceDir }),
+  });
 
 describe("sandbox fs bridge boundary validation", () => {
   installFsBridgeTestHarness();
@@ -41,13 +44,7 @@ describe("sandbox fs bridge boundary validation", () => {
           path.join(workspaceDir, "link.txt"),
         );
 
-        const bridge = createSandboxFsBridge({
-          sandbox: createSandbox({
-            workspaceDir,
-            agentWorkspaceDir: workspaceDir,
-          }),
-        });
-
+        const bridge = bridgeFor(workspaceDir);
         await expect(
           kind === "directory"
             ? bridge.mkdirp({ filePath: "link.txt" })
@@ -63,8 +60,6 @@ describe("sandbox fs bridge boundary validation", () => {
   );
 
   it("rejects pre-existing host hardlink escapes before content access", async () => {
-    // Hardlinks can expose outside files without a symlink marker, so the bridge
-    // checks link metadata before any file contents are read.
     if (process.platform === "win32") {
       return;
     }
@@ -80,14 +75,9 @@ describe("sandbox fs bridge boundary validation", () => {
         throw err;
       }
 
-      const bridge = createSandboxFsBridge({
-        sandbox: createSandbox({
-          workspaceDir,
-          agentWorkspaceDir: workspaceDir,
-        }),
-      });
-
-      await expect(bridge.readFile({ filePath: "link.txt" })).rejects.toThrow(/hardlink|sandbox/i);
+      await expect(bridgeFor(workspaceDir).readFile({ filePath: "link.txt" })).rejects.toThrow(
+        /hardlink|sandbox/i,
+      );
       expectOnlyCanonicalPathCommands();
     });
   });
@@ -100,9 +90,7 @@ describe("sandbox fs bridge boundary validation", () => {
         const filePath = path.join(workspaceDir, "live.pipe");
         await fs.mkdir(workspaceDir, { recursive: true });
         await fs.writeFile(filePath, "regular");
-        const bridge = createSandboxFsBridge({
-          sandbox: createSandbox({ workspaceDir, agentWorkspaceDir: workspaceDir }),
-        });
+        const bridge = bridgeFor(workspaceDir);
         const realOpenSync = fsSync.openSync.bind(fsSync);
         const openSync = vi.spyOn(fsSync, "openSync").mockImplementation((target, flags, mode) => {
           if (path.resolve(String(target)) === filePath) {
@@ -141,7 +129,6 @@ describe("sandbox fs bridge boundary validation", () => {
       /hardlinked path/i,
     );
 
-    const scripts = getScriptsFromCalls();
-    expect(scripts.join("\n")).not.toContain("os.replace(");
+    expect(getScriptsFromCalls().join("\n")).not.toContain("os.replace(");
   });
 });

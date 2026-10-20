@@ -49,14 +49,13 @@ it("retains local-workspace authority through browser transaction and commit gra
   };
   await insertRegistryWorktree(process.env, worktree);
   const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
-  replaceSessionEntrySync(
-    { agentId: "main", sessionKey, storePath },
-    {
-      sessionId: "browser-session",
-      updatedAt: 1,
-      worktree: { id: worktree.id, branch: worktree.branch, repoRoot: worktree.repoRoot },
-    },
-  );
+  const sessionTarget = { agentId: "main", sessionKey, storePath };
+  const session = {
+    sessionId: "browser-session",
+    updatedAt: 1,
+    worktree: { id: worktree.id, branch: worktree.branch, repoRoot: worktree.repoRoot },
+  };
+  replaceSessionEntrySync(sessionTarget, session);
 
   class WorkspaceRevokedError extends Error {}
   const refusal = new WorkspaceRevokedError("Browser workspace authority revoked");
@@ -125,15 +124,11 @@ it("retains local-workspace authority through browser transaction and commit gra
   }
   expect(coldOpens).toEqual([]);
   revokeAt = undefined;
-  await replaceSessionEntry(
-    { agentId: "main", sessionKey, storePath },
-    {
-      sessionId: "browser-session",
-      lifecycleRevision: "replacement",
-      updatedAt: 2,
-      worktree: { id: worktree.id, branch: worktree.branch, repoRoot: worktree.repoRoot },
-    },
-  );
+  await replaceSessionEntry(sessionTarget, {
+    ...session,
+    lifecycleRevision: "replacement",
+    updatedAt: 2,
+  });
   expect(() => owner!.assertCurrent()).toThrow("Local sandbox workspace authority changed");
   using released = await resolveLocalWorkspaceOwner(ownerParams);
   released![Symbol.dispose]();
