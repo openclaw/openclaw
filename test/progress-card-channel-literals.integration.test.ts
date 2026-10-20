@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, expect, it, vi } from "vitest";
 import { loadDiscordDraftPreview, RequestClient } from "../extensions/discord/test-api.js";
 import {
   renderTelegramProgressDraftPreview,
@@ -23,21 +23,10 @@ afterEach(() => vi.clearAllMocks());
 
 const literal = (markdown: string, text: string, html = text) => ({ markdown, text, html });
 const cases = [
-  literal("Use `**literal**` now.", "Use **literal** now."),
-  literal(
-    "Use `[label](https://example.com)` literally.",
-    "Use [label](https://example.com) literally.",
-  ),
-  literal(
-    "Use `<b>literal</b>` now.",
-    "Use <b>literal</b> now.",
-    "Use &lt;b&gt;literal&lt;/b&gt; now.",
-  ),
-  literal(
-    "Use &lt;b&gt;literal&lt;/b&gt; now.",
-    "Use <b>literal</b> now.",
-    "Use &lt;b&gt;literal&lt;/b&gt; now.",
-  ),
+  literal("A `**B**` C", "A **B** C"),
+  literal("A `[B](https://example.com)` C", "A [B](https://example.com) C"),
+  literal("A `<b>B</b>` C", "A <b>B</b> C", "A &lt;b&gt;B&lt;/b&gt; C"),
+  literal("A &lt;b&gt;B&lt;/b&gt; C", "A <b>B</b> C", "A &lt;b&gt;B&lt;/b&gt; C"),
 ];
 
 async function runRegisteredCard(
@@ -51,10 +40,7 @@ async function runRegisteredCard(
     agentSessionKey: "agent:main:literal-test",
     config: { tools: { allow: ["progress_card"] } },
   }).find((entry) => entry.name === "progress_card");
-  expect(tool).toBeDefined();
-  if (!tool) {
-    throw new Error("progress_card is not registered");
-  }
+  assert(tool, "progress_card is not registered");
   const { emit, subscription } = createSubscribedSessionHarness({
     runId: "literal-test",
     sessionPersistence: "detached",
@@ -94,102 +80,93 @@ async function runRegisteredCard(
   }
 }
 
-describe("registered progress cards at the final channel renderer", () => {
-  it.each(cases)(
-    "keeps Discord code and decoded text literal: $markdown",
-    async ({ markdown, text }) => {
-      const messages: string[] = [];
-      const rest = new RequestClient("test-token", {
-        queueRequests: false,
-        fetch: async (_input, init) => {
-          if (init?.method === "DELETE") {
-            return new Response(null, { status: 204 });
-          }
-          if (typeof init?.body !== "string") {
-            throw new Error("Expected a serialized message");
-          }
-          const body: unknown = JSON.parse(init.body);
-          if (
-            !body ||
-            typeof body !== "object" ||
-            !("content" in body) ||
-            typeof body.content !== "string"
-          ) {
-            throw new Error("Expected Discord message content");
-          }
-          messages.push(body.content);
-          return Response.json({ id: "literal-draft" });
-        },
-      });
-      const controller = createDiscordDraftPreviewController({
-        cfg: {},
-        discordConfig: { streaming: { mode: "progress", progress: { label: false } } },
-        accountId: "default",
-        sourceRepliesAreToolOnly: false,
-        textLimit: 2000,
-        deliveryRest: rest,
-        deliverChannelId: "test-channel",
-        replyReference: { peek: () => undefined },
-        log: () => {},
-      });
-      try {
-        await runRegisteredCard(markdown, controller.pushPlanProgress);
-        await controller.flush();
-        expect(messages).toHaveLength(1);
-        const rendered = markdownToIR(messages[0] ?? "", { autolink: true, linkify: true });
-        expect(rendered.text.trim()).toBe(text);
-        expect(rendered.styles).toEqual([]);
-        expect(rendered.links).toEqual([]);
-        expect(messages[0]).not.toContain("https://");
-      } finally {
-        await controller.cleanup();
-      }
-    },
-  );
-
-  it.each(
-    cases.flatMap(({ markdown, text, html }) =>
-      [false, true].map((richMessages) => ({ markdown, text, html, richMessages })),
-    ),
-  )(
-    "keeps Telegram notes literal with headline styling (rich=$richMessages): $markdown",
-    async ({ markdown, text, html, richMessages }) => {
-      const previews: ReturnType<typeof renderTelegramProgressDraftPreview>[] = [];
-      const progress = createChannelProgressDraftCompositor({
-        entry: { streaming: { mode: "progress", progress: { label: false } } },
-        mode: "progress",
-        active: true,
-        seed: "literal-test",
-        update: (_text, { snapshot }) => {
-          previews.push(
-            renderTelegramProgressDraftPreview(snapshot, {
-              richMessages,
-              toolProgress: true,
-              maxLines: 8,
-              maxLineChars: 240,
-            }),
-          );
-          return true;
-        },
-      });
-      try {
-        await runRegisteredCard(markdown, progress.pushPlanProgress.bind(progress));
-        expect(previews).toHaveLength(1);
-        const preview = previews[0];
-        if (richMessages) {
-          expect(preview?.text).toBe(text);
-          expect(preview?.richMessage).toEqual({
-            blocks: [{ type: "paragraph", text: { type: "bold", text } }],
-            skip_entity_detection: true,
-          });
-        } else {
-          expect(preview?.text).toBe(`<b>${html}</b>`);
-          expect(telegramHtmlToPlainTextFallback(preview?.text ?? "")).toBe(text);
-          expect(preview?.text).not.toContain("href=");
+it.each(cases)(
+  "keeps Discord code and decoded text literal: $markdown",
+  async ({ markdown, text }) => {
+    const messages: string[] = [];
+    const rest = new RequestClient("test-token", {
+      queueRequests: false,
+      fetch: async (_input, init) => {
+        if (init?.method === "DELETE") {
+          return new Response(null, { status: 204 });
         }
-      } finally {
-        progress.cancel();
+        assert(typeof init?.body === "string", "Expected a serialized message");
+        const body: unknown = JSON.parse(init.body);
+        assert(
+          body && typeof body === "object" && "content" in body && typeof body.content === "string",
+          "Expected Discord message content",
+        );
+        messages.push(body.content);
+        return Response.json({ id: "literal-draft" });
+      },
+    });
+    const controller = createDiscordDraftPreviewController({
+      cfg: {},
+      discordConfig: { streaming: { mode: "progress", progress: { label: false } } },
+      accountId: "default",
+      sourceRepliesAreToolOnly: false,
+      textLimit: 2000,
+      deliveryRest: rest,
+      deliverChannelId: "test-channel",
+      replyReference: { peek: () => undefined },
+      log: () => {},
+    });
+    try {
+      await runRegisteredCard(markdown, controller.pushPlanProgress);
+      await controller.flush();
+      expect(messages).toHaveLength(1);
+      const rendered = markdownToIR(messages[0] ?? "", { autolink: true, linkify: true });
+      const { text: plain, styles, links } = rendered;
+      expect({ text: plain.trim(), styles, links }).toEqual({ text, styles: [], links: [] });
+      expect(messages[0]).not.toContain("https://");
+    } finally {
+      await controller.cleanup();
+    }
+  },
+);
+
+it.each(
+  cases.flatMap(({ markdown, text, html }) =>
+    [false, true].map((richMessages) => ({ markdown, text, html, richMessages })),
+  ),
+)(
+  "keeps Telegram notes literal with headline styling (rich=$richMessages): $markdown",
+  async ({ markdown, text, html, richMessages }) => {
+    const previews: ReturnType<typeof renderTelegramProgressDraftPreview>[] = [];
+    const progress = createChannelProgressDraftCompositor({
+      entry: { streaming: { mode: "progress", progress: { label: false } } },
+      mode: "progress",
+      active: true,
+      seed: "literal-test",
+      update: (_text, { snapshot }) => {
+        previews.push(
+          renderTelegramProgressDraftPreview(snapshot, {
+            richMessages,
+            toolProgress: true,
+            maxLines: 8,
+            maxLineChars: 240,
+          }),
+        );
+        return true;
+      },
+    });
+    try {
+      await runRegisteredCard(markdown, progress.pushPlanProgress.bind(progress));
+      expect(previews).toHaveLength(1);
+      const preview = previews[0];
+      if (richMessages) {
+        expect(preview?.text).toBe(text);
+        expect(preview?.richMessage).toEqual({
+          blocks: [{ type: "paragraph", text: { type: "bold", text } }],
+          skip_entity_detection: true,
+        });
+      } else {
+        expect(preview?.text).toBe(`<b>${html}</b>`);
+        expect(telegramHtmlToPlainTextFallback(preview?.text ?? "")).toBe(text);
+        expect(preview?.text).not.toContain("href=");
       }
-    },
-  );
-});
+    } finally {
+      progress.cancel();
+    }
+  },
+);

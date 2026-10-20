@@ -19,19 +19,8 @@ const publishedScript = path.join(source, "test/scripts/fixtures/update-gateway-
 const publishedSha256 = "944d24f53a4f6b4134326d6d3dc5fe135ab5524d7fdccd2af5b85572e00db652";
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-c", "core.hooksPath=/dev/null", ...args], { cwd, encoding: "utf8" });
-function commitFixture(cwd: string, message: string) {
-  git(
-    cwd,
-    "-c",
-    "user.name=Fixture",
-    "-c",
-    "user.email=fixture@example.invalid",
-    "commit",
-    "--no-gpg-sign",
-    "-qm",
-    message,
-  );
-}
+const commitFixture = (cwd: string, message: string) =>
+  git(cwd, "commit", "--no-gpg-sign", "-qm", message);
 let preparedCheckout: string;
 
 beforeAll(() => {
@@ -52,6 +41,8 @@ beforeAll(() => {
     "dist/\n.artifacts/\n.update-build-backup.*/\nforeign/\nevents\nstopped\nbuild-env.json\n",
   );
   git(seed, "init", "-q", "-b", "main");
+  git(seed, "config", "user.name", "Fixture");
+  git(seed, "config", "user.email", "fixture@example.invalid");
   git(seed, "add", ".");
   commitFixture(seed, "published shell");
   // Each copied checkout starts behind the same immutable origin and still performs the real update.
@@ -158,12 +149,15 @@ exec "$LEGACY_FIXTURE_NODE" --import "$LEGACY_FIXTURE_SOURCE/scripts/tsx.mjs" --
         expect(
           fs.readdirSync(checkout).some((name) => name.startsWith(".update-build-backup.")),
         ).toBe(present);
+      const expectRuntime = (backups: boolean) => {
+        expect(read("dist/entry.js")).toBe("old runtime\n");
+        expectBackups(backups);
+      };
+      const exists = (file: string) => fs.existsSync(path.join(checkout, file));
       expect(result.code, result.stderr).toBe(code);
-      const events = fs.existsSync(path.join(checkout, "events"))
-        ? read("events").trim().split("\n")
-        : [];
-      const expectEvents = (sequence: string) => expect(events).toEqual(sequence.split(" "));
-      expect(events.filter((event) => event === "stop")).toHaveLength(owns ? 1 : 0);
+      const events = exists("events") ? read("events").trim().split("\n") : [];
+      const expectEvents = (sequence: string) =>
+        expect(events, result.stderr).toEqual(sequence.split(" "));
       if (["manual", "whitespace", "sibling", "unavailable", "explicit-profile"].includes(mode)) {
         expect(result.stderr).toContain("Refusing to rebuild artifacts");
         expect(events).toEqual([]);
@@ -189,56 +183,41 @@ exec "$LEGACY_FIXTURE_NODE" --import "$LEGACY_FIXTURE_SOURCE/scripts/tsx.mjs" --
         }
       } else if (mode.startsWith("begin-")) {
         expect(result.stderr).toContain("openclaw-update-abort");
-        expect(read("dist/entry.js")).toBe("old runtime\n");
-        expectBackups(false);
+        expectRuntime(false);
         if (mode === "begin-abort") {
           expectEvents("stop mutation enable native-admission native-restart complete:true");
         } else if (mode === "begin-unjoined") {
           expectEvents(
             "stop mutation enable native-admission restart-unjoined complete:false disable",
           );
-          expect(
-            fs.existsSync(path.join(checkout, ".artifacts/dist-artifacts.lock/owner.json")),
-          ).toBe(true);
+          expect(exists(".artifacts/dist-artifacts.lock/owner.json")).toBe(true);
         } else {
-          expect(events).toEqual([
-            "stop",
-            "mutation",
-            mode === "begin-lost" ? "complete:false" : "complete:true",
-          ]);
+          expectEvents(
+            "stop mutation " + (mode === "begin-lost" ? "complete:false" : "complete:true"),
+          );
           expect(result.stderr).toContain(`fixture recovery ${mode.slice(6)}`);
         }
       } else if (mode === "native-unjoined") {
         expectEvents("stop");
         expect(result.stderr).toContain("Native source-update cleanup is unverified");
-        expect(
-          fs.existsSync(path.join(checkout, ".artifacts/dist-artifacts.lock/owner.json")),
-        ).toBe(true);
+        expect(exists(".artifacts/dist-artifacts.lock/owner.json")).toBe(true);
       } else if (mode.startsWith("partial-stop")) {
-        expect(events, result.stderr).toEqual([
-          "stop",
-          "native-admission",
-          ...(mode === "partial-stop-drift" ? [] : ["native-restart"]),
-        ]);
+        expectEvents(
+          "stop native-admission" + (mode === "partial-stop-drift" ? "" : " native-restart"),
+        );
         expect(result.stderr).toContain("fixture stop rejected after native mutation");
         if (mode === "partial-stop-drift") {
           expect(result.stderr).toContain("native fingerprint changed");
         } else if (mode === "partial-stop-scheduled") {
           expect(result.stderr).toMatch(/scheduled|not completed/i);
         }
-        expect(read("dist/entry.js")).toBe("old runtime\n");
-        expectBackups(false);
+        expectRuntime(false);
       } else if (mode.startsWith("failure-")) {
-        expect(events).toEqual([
-          "stop",
-          "mutation",
-          "build",
-          "enable",
-          "native-admission",
-          ...(mode === "failure-scheduled" ? ["native-restart"] : []),
-          "complete:false",
-          "disable",
-        ]);
+        expectEvents(
+          "stop mutation build enable native-admission " +
+            (mode === "failure-scheduled" ? "native-restart " : "") +
+            "complete:false disable",
+        );
         expect(result.stderr).toContain("Source build failed (exit 17)");
         expect(result.stderr).toContain(
           mode === "failure-drift"
@@ -247,41 +226,35 @@ exec "$LEGACY_FIXTURE_NODE" --import "$LEGACY_FIXTURE_SOURCE/scripts/tsx.mjs" --
               ? "fixture recovery revoked"
               : "restart was not completed",
         );
-        expect(fs.existsSync(path.join(checkout, "stopped"))).toBe(true);
-        expect(read("dist/entry.js")).toBe("old runtime\n");
-        expectBackups(true);
-      } else if (mode === "drift") {
+        expect(exists("stopped")).toBe(true);
+        expectRuntime(true);
+      } else if (mode === "drift" || mode === "unjoined") {
         expectEvents("stop mutation build complete:false");
-        expect(result.stderr).toContain("native fingerprint changed");
-        expectBackups(true);
-      } else if (mode === "unjoined") {
-        expectEvents("stop mutation build complete:false");
+        if (mode === "drift") {
+          expect(result.stderr).toContain("native fingerprint changed");
+        }
         expectBackups(true);
       } else if (mode === "enable-failure") {
         expectEvents("stop mutation build enable complete:false disable");
         expectBackups(true);
       } else {
-        expect(events).toEqual(
-          owns
-            ? [
-                "stop",
-                "mutation",
-                "build",
-                "enable",
-                ...(mode === "failure"
-                  ? ["native-admission", "native-restart", "complete:true"]
-                  : ["complete:true", "restart"]),
-              ]
-            : ["build", "restart"],
+        expectEvents(
+          !owns
+            ? "build restart"
+            : "stop mutation build enable " +
+                (mode === "failure"
+                  ? "native-admission native-restart complete:true"
+                  : "complete:true restart"),
         );
         expect(read("dist/entry.js")).toBe(mode === "failure" ? "old runtime\n" : "new runtime\n");
         if (mode === "failure") {
           expect(fs.existsSync(path.join(checkout, "stopped"))).toBe(false);
           expectBackups(false);
         }
-        const buildEnv = JSON.parse(read("build-env.json"));
-        expect(buildEnv.npm_execpath).toBe(path.join(bin, "pnpm.cjs"));
-        expect(buildEnv.workspace).toBe(checkout);
+        expect(JSON.parse(read("build-env.json"))).toMatchObject({
+          npm_execpath: path.join(bin, "pnpm.cjs"),
+          workspace: checkout,
+        });
       }
     });
   },

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { normalizeCredentialPayloadForKind } from "../qa/convex-credential-broker/convex/payload_validation.js";
 
 const BUZZ_DRIVER_PRIVATE_KEY = "01".repeat(32);
@@ -46,72 +46,55 @@ const telegram = (overrides: Record<string, unknown>) =>
     ...overrides,
   });
 
-describe("QA Convex credential payload validation", () => {
-  it("allows plaintext loopback Buzz relay URLs", () => {
-    const relayUrl = "ws://127.0.0.1:8080";
-    expect(buzz({ relayUrl })).toMatchObject({ relayUrl });
-  });
+it("allows plaintext loopback Buzz relay URLs", () => {
+  const relayUrl = "ws://127.0.0.1:8080";
+  expect(buzz({ relayUrl })).toMatchObject({ relayUrl });
+});
 
-  it("rejects plaintext remote Buzz relay URLs", () => {
-    expect(() => buzz({ relayUrl: "ws://relay.qa.example" })).toThrow(/wss:\/\//u);
-  });
+it.each([
+  [{ relayUrl: "ws://relay.qa.example" }, /wss:\/\//u],
+  [{ sutPrivateKey: BUZZ_DRIVER_NSEC }, /distinct driver and SUT identities/u],
+  [{ driverPrivateKey: "not-a-private-key" }, /nsec or 64-character hex private key/u],
+  [{ driverAuthTag: "not-an-auth-tag" }, /auth tag JSON array/u],
+] as const)("rejects invalid Buzz credentials: %j", (overrides, error) => {
+  expect(() => buzz(overrides)).toThrow(error);
+});
 
-  it("rejects malformed Buzz credential payloads without echoing values", () => {
-    const privateKey = BUZZ_DRIVER_PRIVATE_KEY;
-    const invalidRelay = "https://relay.qa.example/private-path";
-    expect(() =>
-      buzz({
-        relayUrl: invalidRelay,
-        driverPrivateKey: privateKey,
-        sutPrivateKey: privateKey,
-      }),
-    ).toThrow(/wss:\/\//u);
-    try {
-      buzz({
-        driverPrivateKey: privateKey,
-        sutPrivateKey: privateKey,
-      });
-    } catch (error) {
-      expect(String(error)).not.toContain(privateKey);
-    }
-  });
+it("rejects malformed Buzz credential payloads without echoing values", () => {
+  const privateKey = BUZZ_DRIVER_PRIVATE_KEY;
+  const identities = { driverPrivateKey: privateKey, sutPrivateKey: privateKey };
+  expect(() => buzz({ ...identities, relayUrl: "https://relay.qa.example/private-path" })).toThrow(
+    /wss:\/\//u,
+  );
+  try {
+    buzz(identities);
+  } catch (error) {
+    expect(String(error)).not.toContain(privateKey);
+  }
+});
 
-  it("rejects runtime-invalid Buzz secrets and equivalent key encodings", () => {
-    expect(() => buzz({ sutPrivateKey: BUZZ_DRIVER_NSEC })).toThrow(
-      /distinct driver and SUT identities/u,
-    );
-    expect(() => buzz({ driverPrivateKey: "not-a-private-key" })).toThrow(
-      /nsec or 64-character hex private key/u,
-    );
-    expect(() => buzz({ driverAuthTag: "not-an-auth-tag" })).toThrow(/auth tag JSON array/u);
-  });
+it.each([
+  [{ forumTopicId: 0 }, /invalid forumTopicId/u],
+  [
+    {
+      participants: [
+        { ...buildTelegramTestUserbotPayload().participants[0], testerUserId: "700000002" },
+      ],
+    },
+    /distinct participant identities/u,
+  ],
+  [{ environment: "production" }, /telegram-test-userbot/u],
+] as const)("rejects invalid Telegram userbot credentials: %j", (overrides, error) => {
+  expect(() => telegram(overrides)).toThrow(error);
+});
 
-  it("rejects invalid Telegram forum selectors and duplicate participant authority", () => {
-    expect(() => telegram({ forumTopicId: 0 })).toThrow(/invalid forumTopicId/u);
-    expect(() =>
-      telegram({
-        participants: [
-          {
-            ...buildTelegramTestUserbotPayload().participants[0],
-            testerUserId: "700000002",
-          },
-        ],
-      }),
-    ).toThrow(/distinct participant identities/u);
-  });
-
-  it("rejects production Telegram Test Server userbot credentials", () => {
-    expect(() => telegram({ environment: "production" })).toThrow(/telegram-test-userbot/u);
-  });
-
-  it("rejects WhatsApp payloads with duplicate phone numbers", () => {
-    expect(() =>
-      normalizeCredentialPayloadForKind("whatsapp", {
-        driverPhoneE164: "+15550000001",
-        sutPhoneE164: "+15550000001",
-        driverAuthArchiveBase64: "driver-archive",
-        sutAuthArchiveBase64: "sut-archive",
-      }),
-    ).toThrow("distinct driverPhoneE164 and sutPhoneE164");
-  });
+it("rejects WhatsApp payloads with duplicate phone numbers", () => {
+  expect(() =>
+    normalizeCredentialPayloadForKind("whatsapp", {
+      driverPhoneE164: "+15550000001",
+      sutPhoneE164: "+15550000001",
+      driverAuthArchiveBase64: "driver-archive",
+      sutAuthArchiveBase64: "sut-archive",
+    }),
+  ).toThrow("distinct driverPhoneE164 and sutPhoneE164");
 });
