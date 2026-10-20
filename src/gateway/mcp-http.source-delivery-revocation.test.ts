@@ -177,7 +177,7 @@ it.each(["revoked", "replaced"] as const)(
       await sendToCurrentSource(grant.token, captureKey, "control"),
     );
     expect(control.result?.isError).not.toBe(true);
-    expect(channel.sends).toEqual([{ to: "native-conversation-1", text: "control" }]);
+    expect(channel.sends).toEqual([{ to: "user:alice-1", text: "control" }]);
 
     // The delayed send is held in payload preparation while the grant changes.
     const paused = channel.pauseNextSend();
@@ -211,7 +211,7 @@ it.each(["revoked", "replaced"] as const)(
     paused.release();
     const delayed = await readOkMcpPayload(await pending);
     expect(delayed.result?.isError).toBe(true);
-    expect(channel.sends).toEqual([{ to: "native-conversation-1", text: "control" }]);
+    expect(channel.sends).toEqual([{ to: "user:alice-1", text: "control" }]);
 
     if (change === "replaced") {
       // The replacement turn still sends, and only to its own source.
@@ -220,8 +220,8 @@ it.each(["revoked", "replaced"] as const)(
       );
       expect(fresh.result?.isError).not.toBe(true);
       expect(channel.sends).toEqual([
-        { to: "native-conversation-1", text: "control" },
-        { to: "native-conversation-2", text: "fresh" },
+        { to: "user:alice-1", text: "control" },
+        { to: "user:alice-2", text: "fresh" },
       ]);
     }
   },

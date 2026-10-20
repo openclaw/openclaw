@@ -210,7 +210,6 @@ describe("per-turn send budget", () => {
       agentSessionKey: sessionKey,
       runId: params?.runId ?? "run-budget-1",
       sourceReplyDeliveryMode: "message_tool_only",
-      runMessageAction: mocks.runMessageAction as never,
       ...(config ? { config } : {}),
     });
   }
@@ -508,7 +507,6 @@ describe("per-turn send budget", () => {
         channels: { imessage: { enabled: true } },
         tools: { message: { maxMessagesPerTurnPerTarget: 1 } },
       } as never,
-      runMessageAction: mocks.runMessageAction as never,
     });
     const args = {
       action: "send",
@@ -568,7 +566,6 @@ describe("per-turn send budget", () => {
       agentSessionKey: sessionKey,
       runId,
       sourceReplyDeliveryMode: "message_tool_only",
-      runMessageAction: mocks.runMessageAction as never,
       config: { tools: { message: { maxMessagesPerTurnPerTarget: 1 } } } as never,
     });
     const args = { action: "send", channel: "imessage", message: "only" };
@@ -650,7 +647,6 @@ describe("per-turn send budget", () => {
         agentSessionKey: sessionKey,
         runId,
         sourceReplyDeliveryMode: "message_tool_only",
-        runMessageAction: mocks.runMessageAction as never,
         config: { tools: { message: { maxMessagesPerTurnPerTarget: 1 } } } as never,
       });
       const args = { action: "send", channel: "imessage", message: "once", idempotencyKey: "k1" };
@@ -705,7 +701,6 @@ describe("per-turn send budget", () => {
         agentSessionKey: sessionKey,
         runId,
         sourceReplyDeliveryMode: "message_tool_only",
-        runMessageAction: mocks.runMessageAction as never,
         config: { tools: { message: { maxMessagesPerTurnPerTarget: 1 } } } as never,
       });
     }

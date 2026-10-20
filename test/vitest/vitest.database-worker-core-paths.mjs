@@ -655,6 +655,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/reply/agent-runner-execution-state.test.ts",
   "src/auto-reply/reply/agent-runner-execution-terminal-failures.test.ts",
   "src/auto-reply/reply/agent-runner-execution-timing.test.ts",
+  "src/auto-reply/reply/agent-runner-execution-turn-send-ledger.test.ts",
   "src/auto-reply/reply/channel-run-admission.x-recovery.test.ts",
   "src/auto-reply/reply/agent-runner-source-identity.test.ts",
   "src/auto-reply/reply/agent-runner.private-final.runreplyagent.test.ts",

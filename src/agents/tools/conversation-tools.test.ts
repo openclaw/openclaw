@@ -6,12 +6,15 @@ import {
   ConversationTurnResultSchema,
 } from "../../../packages/gateway-protocol/src/schema/agent.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
+import * as commandSecretGateway from "../../cli/command-secret-gateway.js";
+import * as commandSecretTargets from "../../cli/command-secret-targets.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import * as registry from "../../config/sessions/conversation-registry.js";
 import type { MessageActionResult } from "../../infra/outbound/message-action-contracts.js";
+import * as messageActionRunner from "../../infra/outbound/message-action-runner.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   DEFAULT_GATEWAY_HTTP_TOOL_DENY,
@@ -82,16 +85,17 @@ beforeEach(() => {
   registerReefTestPlugin();
 });
 
-const conversation = {
+const listedConversation = {
   conversationRef: "conv_0123456789abcdef0123456789abcdef",
   channel: "reef",
   accountId: "default",
   kind: "direct" as const,
-  peerId: "peer-agent",
   target: "reef:peer-agent",
   firstSeenAt: 100,
   lastSeenAt: 200,
 };
+// The registry record also carries the peer id; conversations.list projects it away.
+const conversation = { ...listedConversation, peerId: "peer-agent" };
 const message = { conversationRef: conversation.conversationRef, message: "please acknowledge" };
 const sent = {
   conversationRef: conversation.conversationRef,
@@ -104,7 +108,7 @@ function mockConversationOwners() {
     .spyOn(gateway, "callAgentToolGatewayRequest")
     .mockImplementation(async ({ method }) => {
       if (method === "conversations.list") {
-        return { conversations: [conversation] };
+        return { conversations: [listedConversation] };
       }
       if (method === "conversations.send") {
         return { status: "sent" as const, ...sent, queueId: "queue-1" };
@@ -126,6 +130,33 @@ function mockConversationOwners() {
   // route; the budget ledger keys on that route, not the raw conversationRef.
   vi.spyOn(registry, "readConversation").mockResolvedValue(conversation);
   return callGateway;
+}
+
+// The message tool dispatches through the message-action runner and resolves channel
+// secrets through the command secret owners; stub those owners so a send lands as a
+// plugin-handled delivery to the given peer without a live channel.
+function stubMessageToolDispatch(to: string, toolResult?: AgentToolResult<unknown>) {
+  vi.spyOn(messageActionRunner, "runMessageAction").mockResolvedValue({
+    kind: "send",
+    action: "send",
+    channel: "reef",
+    to,
+    handledBy: "plugin",
+    payload: {},
+    ...(toolResult ? { toolResult } : {}),
+    dryRun: false,
+  } satisfies MessageActionResult);
+  vi.spyOn(commandSecretGateway, "resolveCommandSecretRefsViaGateway").mockImplementation(
+    async ({ config: resolvedConfig }) => ({
+      resolvedConfig,
+      diagnostics: [],
+      targetStatesByPath: {},
+      hadUnresolvedTargets: false,
+    }),
+  );
+  vi.spyOn(commandSecretTargets, "getScopedChannelsCommandSecretTargets").mockReturnValue({
+    targetIds: new Set<string>(),
+  });
 }
 
 describe("conversation tools", () => {
@@ -202,7 +233,7 @@ describe("conversation tools", () => {
       method: "conversations.list",
       params: { agentId: "main", channel: "reef", query: "@peer-agent", limit: 50 },
     });
-    expect(result.details).toEqual({ conversations: [conversation] });
+    expect(result.details).toEqual({ conversations: [listedConversation] });
   });
 
   it("routes sends through the Gateway with a stable operation id", async () => {
@@ -623,6 +654,7 @@ describe("message and conversations_send share the per-turn budget", () => {
   function createMixedMessageTool(config: Record<string, unknown>) {
     // The Gateway option resolver reads the runtime snapshot; keep it on the tool's config.
     setRuntimeConfigSnapshot(config as never);
+    stubMessageToolDispatch(peerTarget);
     return createMessageTool({
       currentChannelProvider: "reef",
       currentChannelId: "reef:operator",
@@ -631,30 +663,15 @@ describe("message and conversations_send share the per-turn budget", () => {
       runId,
       sourceReplyDeliveryMode: "message_tool_only",
       config: config as never,
-      runMessageAction: (async () =>
-        ({
-          kind: "send",
-          action: "send",
-          channel: "reef",
-          to: peerTarget,
-          handledBy: "plugin",
-          payload: {},
-          dryRun: false,
-        }) satisfies MessageActionResult) as never,
-      resolveCommandSecretRefsViaGateway: (async ({ config: cfg }: { config: unknown }) => ({
-        resolvedConfig: cfg,
-        diagnostics: [],
-      })) as never,
-      getScopedChannelsCommandSecretTargets: (() => ({ targetIds: new Set<string>() })) as never,
     });
   }
 
-  async function sendViaMessageTool(tool: ReturnType<typeof createMessageTool>, message: string) {
-    return tool.execute(`msg-${message}`, {
+  async function sendViaMessageTool(tool: ReturnType<typeof createMessageTool>, text: string) {
+    return tool.execute(`msg-${text}`, {
       action: "send",
       channel: "reef",
       to: peerTarget,
-      message,
+      message: text,
     });
   }
 
@@ -697,6 +714,7 @@ describe("message and conversations_send share the per-turn budget", () => {
   function createSourceReplyMessageTool(config: Record<string, unknown>) {
     // The Gateway option resolver reads the runtime snapshot; keep it on the tool's config.
     setRuntimeConfigSnapshot(config as never);
+    stubMessageToolDispatch(peerTarget);
     return createMessageTool({
       currentChannelProvider: "reef",
       currentChannelId: "reef:operator",
@@ -707,21 +725,6 @@ describe("message and conversations_send share the per-turn budget", () => {
       runId,
       sourceReplyDeliveryMode: "message_tool_only",
       config: config as never,
-      runMessageAction: (async () =>
-        ({
-          kind: "send",
-          action: "send",
-          channel: "reef",
-          to: peerTarget,
-          handledBy: "plugin",
-          payload: {},
-          dryRun: false,
-        }) satisfies MessageActionResult) as never,
-      resolveCommandSecretRefsViaGateway: (async ({ config: cfg }: { config: unknown }) => ({
-        resolvedConfig: cfg,
-        diagnostics: [],
-      })) as never,
-      getScopedChannelsCommandSecretTargets: (() => ({ targetIds: new Set<string>() })) as never,
     });
   }
 
@@ -790,7 +793,9 @@ describe("Code Mode bridge projects the send-budget notice into the guest value"
     input: unknown;
   }): Promise<{ ok: true; value: unknown } | { ok: false; error: string }> {
     const projection = createCodeModeCatalogProjection(
-      (params.catalogRef.current?.entries ?? []).map(compactToolSearchCatalogEntry),
+      (params.catalogRef.current?.entries ?? []).map((entry) =>
+        compactToolSearchCatalogEntry(entry),
+      ),
     );
     const binding = projection.bindings.find((entry) => entry.name === params.toolName);
     if (!binding) {
@@ -846,6 +851,7 @@ describe("Code Mode bridge projects the send-budget notice into the guest value"
     options: { toolResult?: AgentToolResult<unknown> } = {},
   ) {
     setRuntimeConfigSnapshot(config as never);
+    stubMessageToolDispatch(peerTarget, options.toolResult);
     return createMessageTool({
       currentChannelProvider: "reef",
       currentChannelId: "reef:operator",
@@ -854,22 +860,6 @@ describe("Code Mode bridge projects the send-budget notice into the guest value"
       runId,
       sourceReplyDeliveryMode: "message_tool_only",
       config: config as never,
-      runMessageAction: (async () =>
-        ({
-          kind: "send",
-          action: "send",
-          channel: "reef",
-          to: peerTarget,
-          handledBy: "plugin",
-          payload: {},
-          ...(options.toolResult ? { toolResult: options.toolResult } : {}),
-          dryRun: false,
-        }) satisfies MessageActionResult) as never,
-      resolveCommandSecretRefsViaGateway: (async ({ config: cfg }: { config: unknown }) => ({
-        resolvedConfig: cfg,
-        diagnostics: [],
-      })) as never,
-      getScopedChannelsCommandSecretTargets: (() => ({ targetIds: new Set<string>() })) as never,
     });
   }
 

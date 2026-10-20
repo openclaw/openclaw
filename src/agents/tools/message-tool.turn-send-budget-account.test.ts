@@ -4,6 +4,8 @@
 // runMessageAction -> outbound adapter path; the adapter records the delivering account.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
+import * as commandSecretGateway from "../../cli/command-secret-gateway.js";
+import * as commandSecretTargets from "../../cli/command-secret-targets.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -88,16 +90,22 @@ function createConfig(extra: Record<string, unknown> = {}) {
 function createSourcelessMessageTool(config: Record<string, unknown>, sessionKey = SESSION_KEY) {
   // The Gateway option resolver reads the runtime snapshot; keep it on the tool's config.
   setRuntimeConfigSnapshot(config as never);
+  vi.spyOn(commandSecretGateway, "resolveCommandSecretRefsViaGateway").mockImplementation(
+    async ({ config: resolvedConfig }) => ({
+      resolvedConfig,
+      diagnostics: [],
+      targetStatesByPath: {},
+      hadUnresolvedTargets: false,
+    }),
+  );
+  vi.spyOn(commandSecretTargets, "getScopedChannelsCommandSecretTargets").mockReturnValue({
+    targetIds: new Set<string>(),
+  });
   return createMessageTool({
     agentId: "test",
     agentSessionKey: sessionKey,
     runId: RUN_ID,
     config: config as never,
-    resolveCommandSecretRefsViaGateway: (async ({ config: cfg }: { config: unknown }) => ({
-      resolvedConfig: cfg,
-      diagnostics: [],
-    })) as never,
-    getScopedChannelsCommandSecretTargets: (() => ({ targetIds: new Set<string>() })) as never,
   });
 }
 

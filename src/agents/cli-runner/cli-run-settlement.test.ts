@@ -19,8 +19,8 @@ import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
 import { applyCliSessionBindingResult, getCliSessionBinding } from "../cli-session.js";
 import * as cliTranscript from "../command/attempt-execution.helpers.js";
 import { resolveDiagnosticModelResponse } from "../diagnostic-model-response.js";
-import { classifyEmbeddedAgentRunResultForModelFallback } from "../embedded-agent-runner/result-fallback-classifier.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent-runner.js";
+import { classifyEmbeddedAgentRunResultForModelFallback } from "../embedded-agent-runner/result-fallback-classifier.js";
 import {
   buildTurnSendLedgerSessionKey,
   clearTurnSendLedgerForRun,

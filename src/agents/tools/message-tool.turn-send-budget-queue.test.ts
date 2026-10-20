@@ -13,6 +13,8 @@
 import { expect, it, vi } from "vitest";
 import type { ChannelOutboundContext } from "../../channels/plugins/outbound.types.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
+import * as commandSecretGateway from "../../cli/command-secret-gateway.js";
+import * as commandSecretTargets from "../../cli/command-secret-targets.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -33,7 +35,7 @@ import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { recoverPendingDeliveries } from "../../infra/outbound/delivery-queue-recovery.js";
 import { loadUnfinishedDeliveries } from "../../infra/outbound/delivery-queue-storage.js";
-import { runMessageAction } from "../../infra/outbound/message-action-runner.js";
+import * as messageActionRunner from "../../infra/outbound/message-action-runner.js";
 import {
   captureActivePluginRegistrySnapshot,
   restoreActivePluginRegistrySnapshot,
@@ -121,22 +123,27 @@ it("keeps the cap charge while the Gateway queue owns a failed send, and recover
       trackExecution: <T>(run: () => Promise<T>) => run(),
       dedupe: new Map(),
     } as GatewayRequestContext;
-    const toolRunMessageAction = vi.fn(runMessageAction);
-    const tool = createMessageTool({
-      config,
-      getRuntimeConfig: () => config,
-      runMessageAction: toolRunMessageAction,
-      agentId: "ops",
-      agentAccountId: "default",
-      agentSessionKey: sessionKey,
-      runId,
-      getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-      resolveCommandSecretRefsViaGateway: async ({ config: resolvedConfig }) => ({
+    const runRealMessageAction = messageActionRunner.runMessageAction;
+    const toolRunMessageAction = vi
+      .spyOn(messageActionRunner, "runMessageAction")
+      .mockImplementation((input) => runRealMessageAction(input));
+    vi.spyOn(commandSecretTargets, "getScopedChannelsCommandSecretTargets").mockReturnValue({
+      targetIds: new Set<string>(),
+    });
+    vi.spyOn(commandSecretGateway, "resolveCommandSecretRefsViaGateway").mockImplementation(
+      async ({ config: resolvedConfig }) => ({
         resolvedConfig,
         diagnostics: [],
         targetStatesByPath: {},
         hadUnresolvedTargets: false,
       }),
+    );
+    const tool = createMessageTool({
+      config,
+      agentId: "ops",
+      agentAccountId: "default",
+      agentSessionKey: sessionKey,
+      runId,
     });
     const send = (callId: string, message: string) =>
       withGatewayToolCallerIdentity(
@@ -212,6 +219,7 @@ it("keeps the cap charge while the Gateway queue owns a failed send, and recover
     expect(delivered).toEqual(["answer"]);
     expect(await loadUnfinishedDeliveries(state.stateDir)).toEqual([]);
   } finally {
+    vi.restoreAllMocks();
     vi.useRealTimers();
     releaseAgentRunDelegatedAuthority(authority);
     restoreActivePluginRegistrySnapshot(registry);
