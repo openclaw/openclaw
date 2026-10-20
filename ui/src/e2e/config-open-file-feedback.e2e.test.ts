@@ -1,8 +1,11 @@
-import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  configSnapshot,
+  objectSchema,
+  pageRunner,
+} from "./config-composer-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -10,7 +13,8 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
 });
 const configPath = "/tmp/openclaw-config-open-feedback/openclaw.json";
-const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+const withPage = pageRunner(suite, { serviceWorkers: "block" });
+const openButton = (page: Page) => page.getByRole("button", { name: "Open", exact: true });
 
 async function installClipboardProof(page: Page): Promise<void> {
   await page.addInitScript(() => {
@@ -33,24 +37,11 @@ async function openRawSettings(page: Page, response?: unknown) {
   const gateway = await installMockGateway(page, {
     featureMethods: ["config.openFile"],
     methodResponses: {
-      "config.get": {
-        config,
-        hash: "config-open-file-feedback",
-        issues: [],
-        path: configPath,
-        raw: JSON.stringify(config),
-        valid: true,
-      },
+      "config.get": { ...configSnapshot(config, "config-open-file-feedback"), path: configPath },
       "config.schema": {
-        schema: {
-          type: "object",
-          properties: {
-            laboratory: {
-              type: "object",
-              properties: { enabled: { type: "boolean" } },
-            },
-          },
-        },
+        schema: objectSchema("", {
+          laboratory: objectSchema("", { enabled: { type: "boolean" } }),
+        }),
         uiHints: {},
         version: "config-open-file-feedback",
       },
@@ -79,17 +70,9 @@ async function expectOpenFailure(page: Page, message: string): Promise<void> {
 
 suite.define(() => {
   it("announces when the host opener succeeds", async () => {
-    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+    await withPage(async ({ page }) => {
       await openRawSettings(page, { ok: true, path: configPath });
-      const proofDir = captureProof
-        ? createControlUiE2eArtifactDir("config-open-file-feedback")
-        : null;
-      if (proofDir) {
-        const proofPath = path.join(proofDir, "initial.png");
-        await page.screenshot({ animations: "disabled", fullPage: true, path: proofPath });
-      }
-
-      await page.getByRole("button", { name: "Open", exact: true }).click();
+      await openButton(page).click();
 
       const status = page
         .getByRole("status")
@@ -99,40 +82,29 @@ suite.define(() => {
       expect(await page.evaluate(() => Reflect.get(globalThis, "configOpenFileCopied"))).toEqual(
         [],
       );
-      if (proofDir) {
-        const proofPath = path.join(proofDir, "success-after.png");
-        await page.screenshot({ animations: "disabled", fullPage: true, path: proofPath });
-      }
     });
   });
 
   it("announces the path fallback when the host opener returns a failure", async () => {
-    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+    await withPage(async ({ page }) => {
       await openRawSettings(page, {
         ok: false,
         path: configPath,
         error: "No desktop opener is available.",
       });
 
-      await page.getByRole("button", { name: "Open", exact: true }).click();
+      await openButton(page).click();
 
       await expectOpenFailure(page, "No desktop opener is available.");
-      if (captureProof) {
-        const proofPath = path.join(
-          createControlUiE2eArtifactDir("config-open-file-feedback"),
-          "after.png",
-        );
-        await page.screenshot({ animations: "disabled", fullPage: true, path: proofPath });
-      }
     });
   });
 
   it("announces the path fallback when the open request rejects", async () => {
-    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+    await withPage(async ({ page }) => {
       const gateway = await openRawSettings(page);
       await gateway.deferNext("config.openFile");
 
-      await page.getByRole("button", { name: "Open", exact: true }).click();
+      await openButton(page).click();
       await gateway.waitForRequest("config.openFile");
       await gateway.rejectDeferred("config.openFile", {
         code: "UNAVAILABLE",

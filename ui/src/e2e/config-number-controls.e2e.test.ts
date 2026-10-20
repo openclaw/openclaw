@@ -1,7 +1,6 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { configSnapshot, objectSchema } from "./config-composer-fixtures.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -21,30 +20,19 @@ suite.define(() => {
       const config = { laboratory: {} };
       const gateway = await installMockGateway(page, {
         methodResponses: {
-          "config.get": {
-            config,
-            raw: JSON.stringify(config),
-            hash: "numeric-endpoints",
-            appliedConfigHash: "numeric-endpoints",
-            configRevisionHash: "numeric-endpoints",
-            valid: true,
-            issues: [],
-          },
+          "config.get": configSnapshot(config, "numeric-endpoints", true),
           "config.schema": {
-            schema: {
-              type: "object",
-              properties: {
-                laboratory: {
-                  type: "object",
-                  properties: Object.fromEntries(
-                    cases.map(({ key, direction: _direction, ...schema }) => [
-                      key,
-                      { type: "integer", ...schema },
-                    ]),
-                  ),
-                },
-              },
-            },
+            schema: objectSchema("", {
+              laboratory: objectSchema(
+                "",
+                Object.fromEntries(
+                  cases.map(({ key, direction: _direction, ...schema }) => [
+                    key,
+                    { type: "integer", ...schema },
+                  ]),
+                ),
+              ),
+            }),
             uiHints: {},
             version: "numeric-endpoints",
           },
@@ -66,9 +54,6 @@ suite.define(() => {
         buttonValues[field.key] = submitted.laboratory[field.key]!;
         await expect.poll(() => input.inputValue()).toBe(String(buttonValues[field.key]));
       }
-      await page.locator("#config-section-panel").screenshot({
-        path: path.join(suite.artifactDir, "numeric-buttons.png"),
-      });
       for (const field of cases) {
         const input = page.getByRole("spinbutton", { name: field.title, exact: true });
         const before = (await gateway.getRequests("config.set")).length;
@@ -87,10 +72,6 @@ suite.define(() => {
         };
         keyboardValues[field.key] = stepped.laboratory[field.key]!;
       }
-      await writeFile(
-        path.join(suite.artifactDir, "numeric-step-values.json"),
-        JSON.stringify({ buttonValues, keyboardValues }, null, 2),
-      );
       expect(keyboardValues).toEqual({
         positive: 1,
         positiveEven: 2,

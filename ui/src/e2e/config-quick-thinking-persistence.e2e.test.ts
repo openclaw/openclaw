@@ -1,17 +1,17 @@
-// Control UI tests cover shared model-behavior persistence through the mocked Gateway.
+import type { BrowserContext, Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway, type MockGatewayRequest } from "../test-helpers/control-ui-e2e.ts";
 import {
-  createControlUiE2eContextOptions,
-  createControlUiE2eSuite,
-} from "./control-ui-e2e-suite.test-support.ts";
+  configSnapshot,
+  createConfigSuite,
+  pageRunner,
+} from "./config-composer-fixtures.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
-const suite = createControlUiE2eSuite({
-  name: "Control UI Models settings behavior persistence mocked Gateway E2E",
-  startServerBeforeBrowser: true,
-  unavailableMessage: (executablePath) =>
-    `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
-});
+const suite = createConfigSuite(
+  "Control UI Models settings behavior persistence mocked Gateway E2E",
+);
+const withPage = pageRunner(suite, createControlUiE2eContextOptions);
 
 const models = [
   {
@@ -42,13 +42,47 @@ function configResponse(
       },
     },
   };
-  return {
-    config,
-    hash,
-    issues: [],
-    raw: JSON.stringify(config),
-    valid: true,
-  };
+  return configSnapshot(config, hash);
+}
+
+const modelUrl = () => `${suite.server.baseUrl}settings/model-providers`;
+const behavior = (page: Page) => page.locator("#settings-model-behavior");
+const radio = (group: ReturnType<typeof behavior>, name: string) =>
+  group.getByRole("radio", { name, exact: true });
+async function expectChecked(button: ReturnType<typeof radio>) {
+  await button.waitFor();
+  expect(await button.isChecked()).toBe(true);
+}
+async function openModels(page: Page) {
+  expect((await page.goto(modelUrl()))?.status()).toBe(200);
+}
+async function installSavingGateway(
+  page: Page,
+  initial: ReturnType<typeof configResponse>,
+  saved: ReturnType<typeof configResponse>,
+) {
+  return installMockGateway(page, {
+    models,
+    methodResponses: { "config.get": { sequence: [initial, saved] }, "config.patch": saved },
+  });
+}
+async function reopenModels(context: BrowserContext, saved: ReturnType<typeof configResponse>) {
+  const page = await context.newPage();
+  await installMockGateway(page, { models, methodResponses: { "config.get": saved } });
+  await openModels(page);
+  return behavior(page);
+}
+function expectPatch(
+  raw: Record<string, unknown>,
+  thinkingDefault: string,
+  fastModeDefault: unknown,
+) {
+  expect(raw).toEqual({
+    agents: {
+      defaults: { model: "openai/gpt-5.5", utilityModel: null, thinkingDefault, fastModeDefault },
+    },
+  });
+  expect(raw.agents).not.toHaveProperty("defaults.fastMode");
 }
 
 function requestRaw(request: MockGatewayRequest): Record<string, unknown> {
@@ -61,7 +95,7 @@ function requestRaw(request: MockGatewayRequest): Record<string, unknown> {
 
 suite.define(() => {
   it("redirects the legacy General model deep link to Models", async () => {
-    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+    await withPage(async ({ page }) => {
       const gateway = await installMockGateway(page);
 
       const response = await page.goto(
@@ -75,52 +109,21 @@ suite.define(() => {
   });
 
   it("persists agents.defaults.thinkingDefault through autosave", async () => {
-    await suite.withPage(createControlUiE2eContextOptions(), async ({ context, page }) => {
-      const initialConfig = configResponse("low", "hash-1");
+    await withPage(async ({ context, page }) => {
       const savedConfig = configResponse("high", "hash-2");
-      const gateway = await installMockGateway(page, {
-        models,
-        methodResponses: {
-          "config.get": { sequence: [initialConfig, savedConfig] },
-          "config.patch": savedConfig,
-        },
-      });
-
-      const response = await page.goto(`${suite.server.baseUrl}settings/model-providers`);
-      expect(response?.status()).toBe(200);
-
-      const modelCard = page.locator("#settings-model-behavior");
-      const lowButton = modelCard.getByRole("radio", { name: "Low", exact: true });
-      await lowButton.waitFor();
-      expect(await lowButton.isChecked()).toBe(true);
-
-      await modelCard.getByRole("radio", { name: "High", exact: true }).click();
+      const gateway = await installSavingGateway(
+        page,
+        configResponse("low", "hash-1"),
+        savedConfig,
+      );
+      await openModels(page);
+      await expectChecked(radio(behavior(page), "Low"));
+      await radio(behavior(page), "High").click();
 
       const raw = requestRaw(await gateway.waitForRequest("config.patch"));
-      expect(raw).toEqual({
-        agents: {
-          defaults: {
-            model: "openai/gpt-5.5",
-            utilityModel: null,
-            thinkingDefault: "high",
-            fastModeDefault: null,
-          },
-        },
-      });
+      expectPatch(raw, "high", null);
       expect(JSON.stringify(raw)).not.toContain("thinkingLevel");
-      expect(raw.agents).not.toHaveProperty("defaults.fastMode");
-
-      const freshPage = await context.newPage();
-      await installMockGateway(freshPage, {
-        models,
-        methodResponses: { "config.get": savedConfig },
-      });
-      await freshPage.goto(`${suite.server.baseUrl}settings/model-providers`);
-      const highButton = freshPage
-        .locator("#settings-model-behavior")
-        .getByRole("radio", { name: "High", exact: true });
-      await highButton.waitFor();
-      expect(await highButton.isChecked()).toBe(true);
+      await expectChecked(radio(await reopenModels(context, savedConfig), "High"));
     });
   });
 
@@ -131,62 +134,22 @@ suite.define(() => {
   ])(
     "persists agents.defaults.fastModeDefault from $initialLabel to $nextLabel",
     async ({ initial, initialLabel, next, nextLabel }) => {
-      await suite.withPage(createControlUiE2eContextOptions(), async ({ context, page }) => {
-        const initialConfig = configResponse("low", "hash-1", initial);
+      await withPage(async ({ context, page }) => {
         const savedConfig = configResponse("low", "hash-2", next);
-        const gateway = await installMockGateway(page, {
-          models,
-          methodResponses: {
-            "config.get": { sequence: [initialConfig, savedConfig] },
-            "config.patch": savedConfig,
-          },
-        });
-
-        const response = await page.goto(`${suite.server.baseUrl}settings/model-providers`);
-        expect(response?.status()).toBe(200);
-
-        const modelCard = page.locator("#settings-model-behavior");
-        const fastModeGroup = modelCard.getByRole("radiogroup").nth(1);
-        const initialButton = fastModeGroup.getByRole("radio", {
-          name: initialLabel,
-          exact: true,
-        });
-        await initialButton.waitFor();
-        expect(await initialButton.isChecked()).toBe(true);
-
-        await fastModeGroup.getByRole("radio", { name: nextLabel, exact: true }).click();
-
-        const raw = requestRaw(await gateway.waitForRequest("config.patch"));
-        expect(raw).toEqual({
-          agents: {
-            defaults: {
-              model: "openai/gpt-5.5",
-              utilityModel: null,
-              thinkingDefault: "low",
-              fastModeDefault: next,
-            },
-          },
-        });
-        expect(raw.agents).not.toHaveProperty("defaults.fastMode");
-
-        const freshPage = await context.newPage();
-        await installMockGateway(freshPage, {
-          models,
-          methodResponses: { "config.get": savedConfig },
-        });
-        const reloadResponse = await freshPage.goto(
-          `${suite.server.baseUrl}settings/model-providers`,
+        const gateway = await installSavingGateway(
+          page,
+          configResponse("low", "hash-1", initial),
+          savedConfig,
         );
-        expect(reloadResponse?.status()).toBe(200);
-        const persistedButton = freshPage
-          .locator('#settings-model-behavior [role="radiogroup"]')
-          .nth(1)
-          .getByRole("radio", {
-            name: nextLabel,
-            exact: true,
-          });
-        await persistedButton.waitFor();
-        expect(await persistedButton.isChecked()).toBe(true);
+        await openModels(page);
+        const fastModeGroup = behavior(page).getByRole("radiogroup").nth(1);
+        await expectChecked(radio(fastModeGroup, initialLabel));
+        await radio(fastModeGroup, nextLabel).click();
+        expectPatch(requestRaw(await gateway.waitForRequest("config.patch")), "low", next);
+        const persistedGroup = (await reopenModels(context, savedConfig))
+          .getByRole("radiogroup")
+          .nth(1);
+        await expectChecked(radio(persistedGroup, nextLabel));
       });
     },
   );

@@ -1,8 +1,6 @@
-import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { NativeGatewaysSnapshot } from "../app/native-gateways.runtime.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -87,16 +85,7 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}new`);
         await waitForControlUiGatewayReady(page);
         let menu = await openMenu(page);
-        const proof = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()
-          ? createControlUiE2eArtifactDir("compact-identity-menu")
-          : undefined;
         await page.mouse.move(1100, 850);
-        if (proof) {
-          await page.screenshot({
-            path: path.join(proof, "account-menu.png"),
-            animations: "disabled",
-          });
-        }
         for (const action of [
           "settings",
           "updates",
@@ -120,12 +109,6 @@ suite.define(() => {
         expect(await submenu.locator('[aria-checked="true"]').textContent()).toContain("Gateway 1");
         await expectUnclipped(submenu.locator('[data-value="gateway:gateway-9"]'));
         await expectUnclipped(submenu.locator('[data-value="command:gateway-settings"]'));
-        if (proof) {
-          await page.screenshot({
-            path: path.join(proof, "gateway-submenu.png"),
-            animations: "disabled",
-          });
-        }
         await page.keyboard.press("Escape");
         await expect
           .poll(() => switcher.evaluate((element) => document.activeElement === element))
@@ -140,12 +123,6 @@ suite.define(() => {
         await submenu.waitFor({ state: "visible" });
         await expectUnclipped(submenu.locator('[data-value="gateway:gateway-9"]'));
         await expectUnclipped(submenu.locator('[data-value="command:gateway-settings"]'));
-        if (proof) {
-          await page.screenshot({
-            path: path.join(proof, "narrow-submenu.png"),
-            animations: "disabled",
-          });
-        }
         await submenu.locator('[data-value="gateway:gateway-2"]').click();
         menu = await openMenu(page);
         await menu.locator('[data-value="command:gateways"]').click();
