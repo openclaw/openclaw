@@ -32,24 +32,6 @@ const distExcludedExtensionDirs = new Set(
   }),
 );
 
-function listCatalogManifestsByPluginId(): Map<string, Record<string, unknown>> {
-  const byPluginId = new Map<string, Record<string, unknown>>();
-  for (const entry of officialExternalProviderCatalog.entries) {
-    if (!isRecord(entry)) {
-      continue;
-    }
-    const manifest = entry.openclaw;
-    if (!isRecord(manifest) || !isRecord(manifest.plugin)) {
-      continue;
-    }
-    const pluginId = manifest.plugin.id;
-    if (typeof pluginId === "string" && pluginId.trim()) {
-      byPluginId.set(pluginId, manifest);
-    }
-  }
-  return byPluginId;
-}
-
 function expectEndpoints(
   catalog: Record<string, unknown> | undefined,
   manifest: Record<string, unknown>,
@@ -63,7 +45,9 @@ function expectEndpoints(
 
 describe("official external provider endpoint catalog mirror", () => {
   const extensionManifests = listExtensionManifests();
-  const catalogManifestsByPluginId = listCatalogManifestsByPluginId();
+  const catalogManifestsByPluginId = new Map<string, Record<string, unknown>>(
+    officialExternalProviderCatalog.entries.map(({ openclaw }) => [openclaw.plugin.id, openclaw]),
+  );
 
   it("mirrors providerEndpoints for every dist-excluded plugin manifest that declares them", () => {
     const checkedPluginIds: string[] = [];
@@ -79,8 +63,7 @@ describe("official external provider endpoint catalog mirror", () => {
       }
     }
     // Keep the scan from passing vacuously.
-    expect(checkedPluginIds).toContain("qwen");
-    expect(checkedPluginIds).toContain("moonshot");
+    expect(checkedPluginIds).toEqual(expect.arrayContaining(["qwen", "moonshot"]));
   });
 
   it("keeps catalog providerEndpoints in sync with local plugin manifests", () => {

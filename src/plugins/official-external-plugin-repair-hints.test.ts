@@ -36,9 +36,7 @@ function channelHint(channelId: string, effective: boolean, blockedReasons: stri
 }
 
 describe("resolveMissingOfficialExternalChannelPluginRepairHint", () => {
-  beforeEach(() => {
-    resolvePresence.mockReset();
-  });
+  beforeEach(() => resolvePresence.mockReset());
 
   it("returns an install hint when a configured official external channel has no owner", () => {
     expect(channelHint("feishu", false, ["no-channel-owner"])).toEqual({
@@ -122,25 +120,17 @@ describe("resolveExternalPluginRuntimeDependencyRepairHint", () => {
 });
 
 describe("tracksPluginDependencyStatus", () => {
-  it("keeps dependency checks for a config install that claims bundled distribution", () => {
+  it.each([
+    ["config", "@example/cua-computer", true],
+    ["bundled", "@openclaw/cua-computer", false],
+  ] as const)("tracks %s CUA dependency ownership: %s → %s", (origin, packageName, expected) => {
     expect(
       tracksPluginDependencyStatus({
-        origin: "config",
+        origin,
         pluginId: "cua-computer",
-        packageName: "@example/cua-computer",
+        packageName,
         packageBuild: { bundledDist: true },
       }),
-    ).toBe(true);
-  });
-
-  it("keeps staged CUA dependency ownership with the bundled host", () => {
-    expect(
-      tracksPluginDependencyStatus({
-        origin: "bundled",
-        pluginId: "cua-computer",
-        packageName: "@openclaw/cua-computer",
-        packageBuild: { bundledDist: true },
-      }),
-    ).toBe(false);
+    ).toBe(expected);
   });
 });

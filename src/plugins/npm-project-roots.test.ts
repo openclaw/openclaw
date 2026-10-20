@@ -3,11 +3,11 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
-  resolvePluginNpmGenerationProjectDir,
+  resolvePluginNpmGenerationProjectDir as generationDir,
   resolvePluginNpmProjectDir,
   resolvePluginNpmProjectsDir,
 } from "./install-paths.js";
-import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
+import { loadInstalledPluginIndexInstallRecordsSync as readInstallRecords } from "./installed-plugin-index-record-reader.js";
 import { listManagedPluginNpmRootsForInstallRecords } from "./installed-plugin-npm-roots.js";
 import { listManagedPluginNpmRootsSync } from "./npm-project-roots.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
@@ -17,42 +17,32 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 let stateDir: string;
 let npmRoot: string;
+let projectsDir: string;
 beforeEach(() => {
   stateDir = tempDirs.make("openclaw-npm-project-roots-");
   npmRoot = path.join(stateDir, "npm");
+  projectsDir = resolvePluginNpmProjectsDir(npmRoot);
 });
 
-function writePlugin(
-  packageName: string,
-  options: { pluginId?: string; version?: string; layout?: "legacy" } = {},
-) {
-  return writeManagedNpmPlugin({
-    stateDir,
-    packageName,
-    pluginId: options.pluginId ?? packageName,
-    version: "1.0.0",
-    ...options,
-  });
+function writePlugin(packageName: string, layout?: "legacy", version = "1.0.0") {
+  const pluginId = path.posix.basename(packageName);
+  return writeManagedNpmPlugin({ stateDir, packageName, pluginId, version, layout });
 }
 
 function readRecords() {
-  return withPluginCache(createPluginCache(), () =>
-    loadInstalledPluginIndexInstallRecordsSync({ stateDir }),
-  );
+  return withPluginCache(createPluginCache(), () => readInstallRecords({ stateDir }));
 }
 
-afterEach(() => {
-  vi.restoreAllMocks();
-});
+function projectDir(packageName: string) {
+  return resolvePluginNpmProjectDir({ npmDir: npmRoot, packageName });
+}
+afterEach(() => vi.restoreAllMocks());
 
 describe("managed npm project roots", () => {
   it("selects and deduplicates managed record paths, including legacy and scoped packages", () => {
-    const legacy = writePlugin("legacy", { layout: "legacy" });
-    const scoped = writePlugin("@fixture/scoped", { pluginId: "scoped" });
-    const projectRoot = resolvePluginNpmProjectDir({
-      npmDir: npmRoot,
-      packageName: "@fixture/scoped",
-    });
+    const legacy = writePlugin("legacy", "legacy");
+    const scoped = writePlugin("@fixture/scoped");
+    const projectRoot = projectDir("@fixture/scoped");
     expect(
       listManagedPluginNpmRootsForInstallRecords({
         npmRoot,
@@ -80,7 +70,7 @@ describe("managed npm project roots", () => {
     expect(warning).not.toHaveBeenCalled();
     expect(listManagedPluginNpmRootsForInstallRecords({ npmRoot, installRecords: null })).toEqual([
       npmRoot,
-      resolvePluginNpmProjectDir({ npmDir: npmRoot, packageName: "stale" }),
+      projectDir("stale"),
     ]);
     expect(warning).toHaveBeenCalledWith(expect.stringContaining("could not be read"), {
       code: "OPENCLAW_PLUGIN_NPM_ROOTS_FALLBACK",
@@ -91,41 +81,34 @@ describe("managed npm project roots", () => {
     const projects = ["zulu", "alpha"]
       .map((packageName) => {
         writePlugin(packageName);
-        return resolvePluginNpmProjectDir({ npmDir: npmRoot, packageName });
+        return projectDir(packageName);
       })
       .toSorted((left, right) => left.localeCompare(right));
-    fs.writeFileSync(path.join(resolvePluginNpmProjectsDir(npmRoot), "metadata.json"), "{}");
+    fs.writeFileSync(path.join(projectsDir, "metadata.json"), "{}");
 
     expect(listManagedPluginNpmRootsSync(npmRoot)).toEqual([npmRoot, ...projects]);
   });
 
   it.each(["flat", "generation"] as const)(
-    "recovers identical package bytes only after publication into a %s project",
+    "recovers bytes from published %s projects",
     (layout) => {
       const packageName = "@fixture/published";
-      const packageDir = writePlugin(packageName, { pluginId: "published" });
-      const flatRoot = resolvePluginNpmProjectDir({ npmDir: npmRoot, packageName });
-      const stageRoot = path.join(
-        resolvePluginNpmProjectsDir(npmRoot),
-        ".openclaw-install-stage-fixture",
-      );
+      const packageDir = writePlugin(packageName);
+      const flatRoot = projectDir(packageName);
+      const stageRoot = path.join(projectsDir, ".openclaw-install-stage-fixture");
       const packageRelative = path.relative(flatRoot, packageDir);
+      const readBytes = (root: string) =>
+        fs.readFileSync(path.join(root, packageRelative, "package.json"));
       const packageBytes = fs.readFileSync(path.join(packageDir, "package.json"));
       fs.renameSync(flatRoot, stageRoot);
       expect(listManagedPluginNpmRootsSync(npmRoot)).toEqual([npmRoot]);
       expect(readRecords()).toEqual({});
-      expect(fs.readFileSync(path.join(stageRoot, packageRelative, "package.json"))).toEqual(
-        packageBytes,
-      );
+      expect(readBytes(stageRoot)).toEqual(packageBytes);
 
       const publishedRoot =
         layout === "flat"
           ? flatRoot
-          : resolvePluginNpmGenerationProjectDir({
-              npmDir: npmRoot,
-              packageName,
-              generationKey: "published-1.0.0",
-            });
+          : generationDir({ npmDir: npmRoot, packageName, generationKey: "published-1.0.0" });
       fs.renameSync(stageRoot, publishedRoot);
       expect(listManagedPluginNpmRootsSync(npmRoot)).toEqual([npmRoot, publishedRoot]);
       expect(readRecords()).toEqual({
@@ -139,17 +122,14 @@ describe("managed npm project roots", () => {
           resolvedSpec: "@fixture/published@1.0.0",
         },
       });
-      expect(fs.readFileSync(path.join(publishedRoot, packageRelative, "package.json"))).toEqual(
-        packageBytes,
-      );
+      expect(readBytes(publishedRoot)).toEqual(packageBytes);
     },
   );
 
   it("retains legacy recovery and excludes complete custody directories and substituted projects", () => {
     const packageName = "@fixture/custody";
-    const packageDir = writePlugin(packageName, { pluginId: "custody" });
-    const projectRoot = resolvePluginNpmProjectDir({ npmDir: npmRoot, packageName });
-    const projectsDir = resolvePluginNpmProjectsDir(npmRoot);
+    const packageDir = writePlugin(packageName);
+    const projectRoot = projectDir(packageName);
     for (const name of [
       ".openclaw-install-backup-fixture",
       "_openclaw-quarantined-npm-projects",
@@ -160,7 +140,7 @@ describe("managed npm project roots", () => {
     const outside = path.join(stateDir, "outside-project");
     fs.renameSync(projectRoot, outside);
     fs.symlinkSync(outside, projectRoot, "junction");
-    const legacyDir = writePlugin("legacy", { version: "2.0.0", layout: "legacy" });
+    const legacyDir = writePlugin("legacy", "legacy", "2.0.0");
     expect(listManagedPluginNpmRootsSync(npmRoot)).toEqual([npmRoot]);
     const records = readRecords();
     expect(Object.keys(records)).toEqual(["legacy"]);
@@ -168,14 +148,11 @@ describe("managed npm project roots", () => {
     expect(fs.existsSync(path.join(outside, path.relative(projectRoot, packageDir)))).toBe(true);
   });
 
-  it("treats a missing projects directory as empty", () => {
-    expect(listManagedPluginNpmRootsSync(npmRoot)).toEqual([npmRoot]);
-  });
-
-  it("treats a projects path that is a file as unavailable", () => {
-    fs.mkdirSync(npmRoot, { recursive: true });
-    fs.writeFileSync(resolvePluginNpmProjectsDir(npmRoot), "not a directory", "utf8");
-
+  it.each(["missing", "file"])("treats a %s projects path as unavailable", (kind) => {
+    if (kind === "file") {
+      fs.mkdirSync(npmRoot, { recursive: true });
+      fs.writeFileSync(projectsDir, "not a directory", "utf8");
+    }
     expect(listManagedPluginNpmRootsSync(npmRoot)).toEqual([npmRoot]);
   });
 

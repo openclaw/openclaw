@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { checkMinHostVersion, parseMinHostVersionRequirement } from "./min-host-version.js";
 
-const MIN_HOST_REQUIREMENT = {
-  raw: ">=2026.3.22",
-  minimumLabel: "2026.3.22",
-};
+const MIN_HOST_REQUIREMENT = { raw: ">=2026.3.22", minimumLabel: "2026.3.22" };
 describe("min-host-version", () => {
   it("accepts empty metadata", () => {
     expect(parseMinHostVersionRequirement(undefined)).toBeNull();
@@ -47,28 +44,14 @@ describe("min-host-version", () => {
   });
 
   it.each([
-    {
-      name: "reports unknown host versions distinctly",
-      currentVersion: "unknown",
-      expected: {
-        ok: false,
-        kind: "unknown_host_version",
-        requirement: MIN_HOST_REQUIREMENT,
-      },
-    },
-    {
-      name: "reports incompatible hosts",
-      currentVersion: "2026.3.21",
-      expected: {
-        ok: false,
-        kind: "incompatible",
-        currentVersion: "2026.3.21",
-        requirement: MIN_HOST_REQUIREMENT,
-      },
-    },
-  ] as const)("$name", ({ currentVersion, expected }) => {
-    expect(checkMinHostVersion({ currentVersion, minHostVersion: ">=2026.3.22" })).toEqual(
-      expected,
-    );
+    ["unknown", "unknown_host_version"],
+    ["2026.3.21", "incompatible"],
+  ] as const)("reports %s as %s", (currentVersion, kind) => {
+    expect(checkMinHostVersion({ currentVersion, minHostVersion: ">=2026.3.22" })).toEqual({
+      ok: false,
+      kind,
+      requirement: MIN_HOST_REQUIREMENT,
+      ...(kind === "incompatible" ? { currentVersion } : {}),
+    });
   });
 });
