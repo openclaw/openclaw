@@ -6,40 +6,32 @@ import {
 import { resolveProjectedAgentRunProgressState } from "./agent-run-registry.js";
 import type { AgentRunContext } from "./agent-run-registry.types.js";
 
-it("enumerates active session keys only for their encoded owner and current lifecycle", () => {
-  const contexts: AgentRunContext[] = [
-    { agentId: "MAIN", sessionKey: "agent:main:running", projectSessionActive: true },
-    { agentId: "main", sessionKey: "agent:main:running", projectSessionActive: true },
-    {
-      agentId: "main",
-      sessionKey: "agent:main:queued",
-      projectSessionActive: true,
-      capacityWaits: new Set([Symbol("queued")]),
-    },
-    {
-      agentId: "main",
-      sessionKey: "agent:main:capacity-wait",
-      capacityWaits: new Set([Symbol("capacity-wait")]),
-    },
-    { agentId: "other", sessionKey: "agent:main:wrong-owner", projectSessionActive: true },
-    { sessionKey: "ownerless", projectSessionActive: true },
-    { agentId: "main", sessionKey: "unscoped", projectSessionActive: true },
-    { agentId: "main", sessionId: "agent:main:id-only", projectSessionActive: true },
-    { agentId: "main", sessionKey: "agent:main:hidden", projectSessionActive: false },
-    {
-      agentId: "main",
-      sessionKey: "agent:main:previous-generation",
-      projectSessionActive: true,
-      lifecycleGeneration: "previous",
-    },
-  ];
-  for (const context of contexts) {
-    context.lifecycleGeneration ??= "current";
-  }
-  const index = buildAgentRunProjectionIndex({
-    contexts,
+function projection(contexts: AgentRunContext[]) {
+  return buildAgentRunProjectionIndex({
+    contexts: contexts.map((context) => ({ lifecycleGeneration: "current", ...context })),
     lifecycleGeneration: "current",
   });
+}
+const active = { agentId: "main", projectSessionActive: true };
+const capacityWaits = new Set([Symbol("wait")]);
+
+it("enumerates active session keys only for their encoded owner and current lifecycle", () => {
+  const index = projection([
+    { ...active, agentId: "MAIN", sessionKey: "agent:main:running" },
+    { ...active, sessionKey: "agent:main:running" },
+    { ...active, sessionKey: "agent:main:queued", capacityWaits },
+    { agentId: "main", sessionKey: "agent:main:capacity-wait", capacityWaits },
+    { ...active, agentId: "other", sessionKey: "agent:main:wrong-owner" },
+    { sessionKey: "ownerless", projectSessionActive: true },
+    { ...active, sessionKey: "unscoped" },
+    { ...active, sessionId: "agent:main:id-only" },
+    { ...active, sessionKey: "agent:main:hidden", projectSessionActive: false },
+    {
+      ...active,
+      sessionKey: "agent:main:previous-generation",
+      lifecycleGeneration: "previous",
+    },
+  ]);
   expect([...iterateProjectedAgentRunSessionKeys(index)]).toEqual([
     "agent:main:running",
     "agent:main:queued",
@@ -48,26 +40,13 @@ it("enumerates active session keys only for their encoded owner and current life
 });
 
 it("resolves progress across aliases and session IDs within the selected agent", () => {
-  const wait = new Set([Symbol("wait")]);
-  const contexts: AgentRunContext[] = [
-    {
-      agentId: "ops",
-      sessionKey: "incident:AbC",
-      projectSessionActive: true,
-      capacityWaits: wait,
-    },
-    { agentId: "ops", sessionKey: "agent:ops:waiting", capacityWaits: wait },
-    { agentId: "other", sessionKey: "incident:AbC", projectSessionActive: true },
-    { agentId: "ops", sessionId: "running-id", projectSessionActive: true },
+  const index = projection([
+    { ...active, agentId: "ops", sessionKey: "incident:AbC", capacityWaits },
+    { agentId: "ops", sessionKey: "agent:ops:waiting", capacityWaits },
+    { ...active, agentId: "other", sessionKey: "incident:AbC" },
+    { ...active, agentId: "ops", sessionId: "running-id" },
     { sessionKey: "legacy", projectSessionActive: true },
-  ];
-  for (const context of contexts) {
-    context.lifecycleGeneration = "current";
-  }
-  const index = buildAgentRunProjectionIndex({
-    contexts,
-    lifecycleGeneration: "current",
-  });
+  ]);
   const state = (
     params: Omit<Parameters<typeof resolveProjectedAgentRunProgressState>[0], "index">,
   ) => resolveProjectedAgentRunProgressState({ ...params, index });
