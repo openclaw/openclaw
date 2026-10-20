@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { resolveClaudeCliExecutionArgs } from "../../../extensions/anthropic/cli-shared.js";
 import { invokeNodeClaudeCliRun } from "../../gateway/node-agent-cli-runtime.js";
 import { resetAgentEventsForTest } from "../../infra/agent-events.js";
 import { setDiagnosticsEnabledForProcess } from "../../infra/diagnostic-events.js";
@@ -33,19 +34,20 @@ afterEach(() => {
   resetDiagnosticRunActivityForTest();
 });
 
-it("passes native compaction through to backend argument resolution", async () => {
-  const context = buildPreparedCliRunContext({ provider: "claude-cli" });
-  context.params.controlOperation = "compact";
-  context.backendResolved.manualCompaction = {
-    input: "arg",
-    buildPrompt: () => "/compact",
-    validateOutput: () => ({ ok: true }),
-  };
-  const resolveExecutionArgs = vi.fn(
-    (args: Parameters<NonNullable<typeof context.backendResolved.resolveExecutionArgs>>[0]) =>
-      args.baseArgs,
-  );
-  context.backendResolved.resolveExecutionArgs = resolveExecutionArgs;
+async function runCli(controlOperation?: "compact") {
+  const context = buildPreparedCliRunContext({
+    provider: "claude-cli",
+    config: { tools: { exec: { mode: "full" } } },
+    resolveExecutionArgs: resolveClaudeCliExecutionArgs,
+  });
+  if (controlOperation) {
+    context.params.controlOperation = controlOperation;
+    context.backendResolved.manualCompaction = {
+      input: "arg",
+      buildPrompt: () => "/compact",
+      validateOutput: () => ({ ok: true }),
+    };
+  }
   supervisorSpawnMock.mockResolvedValueOnce(
     createManagedRun({
       ...createSuccessfulProcessExit(),
@@ -55,10 +57,13 @@ it("passes native compaction through to backend argument resolution", async () =
 
   await execute(context);
 
-  expect(resolveExecutionArgs).toHaveBeenCalledWith(
-    expect.objectContaining({
-      agentId: context.params.agentId,
-      controlOperation: "compact",
-    }),
-  );
+  return supervisorSpawnMock.mock.calls.at(-1)?.[0].argv ?? [];
+}
+
+it("keeps policy-derived bypass on ordinary turns and omits it from native compact argv", async () => {
+  const ordinaryArgs = await runCli();
+  const compactArgs = await runCli("compact");
+
+  expect(ordinaryArgs).toContain("bypassPermissions");
+  expect(compactArgs).not.toContain("bypassPermissions");
 });
