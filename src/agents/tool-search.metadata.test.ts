@@ -116,8 +116,8 @@ it("keeps batch candidates when MCP instructions exceed the metadata budget", as
     instructions: expect.stringMatching(/\.\.\.$/u),
   });
   expect(
-    (details.results[0]?.candidates[0]?.mcp as { instructions?: string } | undefined)
-      ?.instructions?.length,
+    (details.results[0]?.candidates[0]?.mcp as { instructions?: string } | undefined)?.instructions
+      ?.length,
   ).toBeLessThanOrEqual(512);
   expect(details.results[0]?.candidates[0]?.instructionsHint).toBe(
     "Call tool_describe before use to load the complete server instructions.",
