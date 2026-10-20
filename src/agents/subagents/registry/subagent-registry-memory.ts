@@ -720,12 +720,12 @@ export function getSubagentChildSessionCandidates(
 }
 
 /** Iterate live generations for one child session without scanning the registry. */
-export function getSubagentRunsForChildSession(
+export function* getSubagentRunsForChildSession(
   childSessionKey: string,
   childAgentId?: string,
 ): Iterable<SubagentRunRecord> {
   const key = childSessionOwnerKey({ childSessionKey, childAgentId });
-  return (key ? runsByChildSessionOwner.get(key)?.values() : undefined) ?? [];
+  yield* (key ? runsByChildSessionOwner.get(key)?.values() : undefined) ?? [];
 }
 
 /** Current requester-owned generations, without restoring or scanning retained rows. */
