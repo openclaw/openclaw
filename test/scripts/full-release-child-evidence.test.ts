@@ -337,18 +337,18 @@ describe("full release child evidence producer", () => {
       publisher: { jobId: "4" },
     });
     expect(endpoints.filter((endpoint) => endpoint.includes("/jobs?"))).toEqual([
-      "repos/openclaw/openclaw/actions/runs/101/attempts/1/jobs?per_page=100",
-      "repos/openclaw/openclaw/actions/runs/101/attempts/1/jobs?per_page=50",
-      "repos/openclaw/openclaw/actions/runs/101/attempts/2/jobs?per_page=100",
-      "repos/openclaw/openclaw/actions/runs/101/attempts/2/jobs?per_page=50",
+      "repos/openclaw/openclaw/actions/runs/101/attempts/1/jobs?page=1&per_page=100",
+      "repos/openclaw/openclaw/actions/runs/101/attempts/1/jobs?page=1&per_page=50",
+      "repos/openclaw/openclaw/actions/runs/101/attempts/2/jobs?page=1&per_page=100",
+      "repos/openclaw/openclaw/actions/runs/101/attempts/2/jobs?page=1&per_page=50",
     ]);
   });
 
   it.each([
-    { jobs: 2000, accepted: true },
-    { jobs: 2001, accepted: false },
+    { jobs: 1000, accepted: true },
+    { jobs: 1001, accepted: false },
   ])(
-    "keeps the 2,000-job attempt ceiling after falling back to 30-job pages: $jobs jobs",
+    "keeps the 1,000-job attempt ceiling after falling back to 30-job pages: $jobs jobs",
     ({ jobs, accepted }) => {
       const data = fixture();
       data.maxPageSize = 30;
@@ -366,13 +366,18 @@ describe("full release child evidence producer", () => {
       const { result, endpoints } = seal(data);
       expect(result.status, result.stderr).toBe(accepted ? 0 : 1);
       if (!accepted) {
-        expect(result.stderr).toContain("Child evidence job inventory is incomplete");
+        expect(result.stderr).toContain("publication original jobs enumeration is incomplete");
       }
-      expect(endpoints.filter((endpoint) => endpoint.includes("/jobs?"))).toEqual(
+      const jobEndpoints = endpoints.filter((endpoint) => endpoint.includes("/jobs?"));
+      expect(jobEndpoints.slice(0, 3)).toEqual(
         [100, 50, 30].map(
           (perPage) =>
-            `repos/openclaw/openclaw/actions/runs/101/attempts/1/jobs?per_page=${perPage}`,
+            `repos/openclaw/openclaw/actions/runs/101/attempts/1/jobs?page=1&per_page=${perPage}`,
         ),
+      );
+      expect(jobEndpoints).toHaveLength(36);
+      expect(jobEndpoints.at(-1)).toBe(
+        "repos/openclaw/openclaw/actions/runs/101/attempts/1/jobs?page=34&per_page=30",
       );
     },
   );

@@ -112,8 +112,8 @@ by profile and how to interpret the results.
 
 Repository write access, organization membership, branch-policy reads, CI bypass,
 release environment approval, and production deployment are separate capabilities.
-An unavailable [prior-CI exception](/reference/scripts/prior-ci) is not a blanket
-release blocker or proof that environment approval is unavailable. Conversely,
+An unavailable prior-CI exception is not a blanket release blocker or proof that
+environment approval is unavailable. Conversely,
 repository MAINTAIN access or CI-bypass authority does not authorize an environment
 approval or production deployment.
 
