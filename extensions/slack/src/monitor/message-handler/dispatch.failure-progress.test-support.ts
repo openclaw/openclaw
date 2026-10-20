@@ -138,18 +138,25 @@ export function registerSlackFailureProgressTests({
     },
   );
 
-  it.each([false, true])(
-    "keeps native progress from authorizing an unaddressed error (useful reply=%s)",
-    async (usefulReply) => {
+  it.each([
+    { outcome: "failed", usefulReply: false },
+    { outcome: "failed", usefulReply: true },
+    { outcome: "completed", usefulReply: false },
+    { outcome: "completed", usefulReply: true },
+  ] as const)(
+    "keeps native progress from overriding passive silence (outcome=$outcome, useful reply=$usefulReply)",
+    async ({ outcome, usefulReply }) => {
       setScenario({
         nativeStreaming: true,
-        outcome: "failed",
+        outcome,
         events: [{ kind: "item", progressText: "Working" }],
         sequence: [
           ...(usefulReply
             ? [{ kind: "final" as const, payload: { text: "The query returned three results" } }]
             : []),
-          { kind: "final", payload: { text: "Backend unavailable", isError: true } },
+          ...(outcome === "failed"
+            ? [{ kind: "final" as const, payload: { text: "Backend unavailable", isError: true } }]
+            : []),
         ],
       });
       deliverRepliesMock.mockResolvedValue(normalDeliveryResult);
@@ -171,10 +178,14 @@ export function registerSlackFailureProgressTests({
       expect(stopSlackStreamMock).toHaveBeenCalled();
       if (usefulReply) {
         expect(deleteSlackMessageMock).not.toHaveBeenCalled();
-        expect(deliverRepliesMock).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({ replies: [{ text: "Backend unavailable", isError: true }] }),
-        );
-        expect(statusReactionControllerMock.setError).toHaveBeenCalledOnce();
+        if (outcome === "failed") {
+          expect(deliverRepliesMock).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({ replies: [{ text: "Backend unavailable", isError: true }] }),
+          );
+          expect(statusReactionControllerMock.setError).toHaveBeenCalledOnce();
+        } else {
+          expect(statusReactionControllerMock.setError).not.toHaveBeenCalled();
+        }
       } else {
         expect(deleteSlackMessageMock).toHaveBeenCalledExactlyOnceWith(
           "C123",

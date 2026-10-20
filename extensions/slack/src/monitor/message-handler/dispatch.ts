@@ -522,7 +522,7 @@ async function dispatchSlackMessageWithSetup(
   if (completionChunks?.length) {
     progress.nativeProgressCompletionSent = true;
   }
-  await delivery.finishStream(completionChunks, failed && !reportFailure);
+  await delivery.finishStream(completionChunks, !reportFailure);
 
   const anyReplyDelivered = hasVisibleInboundReplyDispatch(settledDispatchResult, {
     observedReplyDelivery: delivery.observedReplyDelivery || previewLifecycle.finalDelivered,

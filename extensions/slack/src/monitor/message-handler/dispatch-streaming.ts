@@ -246,7 +246,7 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
           });
           if (discard && session.streamer.ts) {
             // Stopping native task updates leaves their message in Slack.
-            // A silent failure must remove a progress-only message, just as
+            // A silent turn must remove a progress-only message, just as
             // draft progress cleanup does, without deleting a real reply.
             await deleteSlackMessage(session.channel, session.streamer.ts, { client: slackClient });
             state.streamSession = null;
