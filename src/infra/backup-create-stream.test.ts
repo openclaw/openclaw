@@ -26,6 +26,16 @@ vi.mock("node:fs", async (importOriginal) => {
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const archivePathFor = (prefix: string) => path.join(tempDirs.make(prefix), "partial.tar.gz");
+function writeStream(
+  archivePath: string,
+  createArchiveStream: Parameters<typeof writeArchiveStreamToFile>[0]["createArchiveStream"],
+  controller?: AbortController,
+) {
+  const run = () =>
+    writeArchiveStreamToFile({ archivePath, createArchiveStream, onPartialArchive() {} });
+  return controller ? withCommandProcessScope(run, controller.signal) : run();
+}
 
 it("cancels an EOF retry backoff without starting another archive", async () => {
   vi.useFakeTimers();
@@ -55,7 +65,7 @@ it("cancels an EOF retry backoff without starting another archive", async () => 
 });
 
 it("retains bounded progress through cancellation, retry, and CLI error formatting", async () => {
-  const archivePath = path.join(tempDirs.make("backup-cancel-"), "partial.tar.gz");
+  const archivePath = archivePathFor("backup-cancel-");
   const source = new PassThrough();
   const read = once(source, "data");
   const controller = new AbortController();
@@ -106,22 +116,18 @@ it("retains bounded progress through cancellation, retry, and CLI error formatti
 });
 
 it("preserves a shared abort reason and its numeric code before the output opens", async () => {
-  const archivePath = path.join(tempDirs.make("backup-sync-cancel-"), "partial.tar.gz");
+  const archivePath = archivePathFor("backup-sync-cancel-");
   const controller = new AbortController();
   const reason = Object.freeze(new DOMException("Owner stopped backup", "AbortError"));
-  const writing = withCommandProcessScope(
-    () =>
-      writeArchiveStreamToFile({
-        archivePath,
-        createArchiveStream(report, signal) {
-          report({ phase: "traversal", entryPath: "/source/workspace" });
-          controller.abort(reason);
-          signal.throwIfAborted();
-          throw new Error("Expected cancellation");
-        },
-        onPartialArchive() {},
-      }),
-    controller.signal,
+  const writing = writeStream(
+    archivePath,
+    (report, signal) => {
+      report({ phase: "traversal", entryPath: "/source/workspace" });
+      controller.abort(reason);
+      signal.throwIfAborted();
+      throw new Error("Expected cancellation");
+    },
+    controller,
   );
   const error: unknown = await writing.catch((caught: unknown) => caught);
   expect(error).not.toBe(reason);
@@ -132,44 +138,33 @@ it("preserves a shared abort reason and its numeric code before the output opens
     message:
       'Owner stopped backup (phase=traversal, entry="/source/workspace", rawBytes=0, outputBytes=0)',
   });
-  expect(reason.message).toBe("Owner stopped backup");
-  expect(reason.code).toBe(20);
+  expect(reason).toMatchObject({ message: "Owner stopped backup", code: 20 });
   await expect(fs.lstat(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
 });
 
 it("preserves an existing archive when exclusive creation is refused", async () => {
-  const archivePath = path.join(tempDirs.make("backup-existing-"), "existing.tar.gz");
+  const archivePath = archivePathFor("backup-existing-");
   await fs.writeFile(archivePath, "existing archive");
   const source = new PassThrough();
   source.end("new archive");
-  await expect(
-    writeArchiveStreamToFile({
-      archivePath,
-      createArchiveStream: () => source,
-      onPartialArchive() {},
-    }),
-  ).rejects.toMatchObject({ code: "EEXIST" });
+  await expect(writeStream(archivePath, () => source)).rejects.toMatchObject({ code: "EEXIST" });
   await expect(fs.readFile(archivePath, "utf8")).resolves.toBe("existing archive");
 });
 
 it("joins a pending output open before cleaning up a synchronous producer failure", async () => {
-  const archivePath = path.join(tempDirs.make("backup-producer-failed-"), "partial.tar.gz");
+  const archivePath = archivePathFor("backup-producer-failed-");
   const previousOutputs = outputs.length;
   const controller = new AbortController();
   const failure = Object.assign(new Error("Producer failed before returning a stream"), {
     code: "EACCES",
   });
-  const writing = withCommandProcessScope(
-    () =>
-      writeArchiveStreamToFile({
-        archivePath,
-        createArchiveStream() {
-          controller.abort();
-          throw failure;
-        },
-        onPartialArchive() {},
-      }),
-    controller.signal,
+  const writing = writeStream(
+    archivePath,
+    () => {
+      controller.abort();
+      throw failure;
+    },
+    controller,
   );
   const output = outputs[previousOutputs]!;
   try {

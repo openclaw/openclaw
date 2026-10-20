@@ -16,6 +16,7 @@ import {
   createVerifiedBackup,
   expectAbsent,
   expectDatabaseRows,
+  mkdirs,
   restoreBackup,
   withDatabase,
 } from "./backup-create-family.test-support.js";
@@ -45,9 +46,7 @@ describe("backup managed workspaces", () => {
       const databasePath = resolveOpenClawStateSqlitePath(state.env);
       const live = state.statePath("checkouts", "live");
       const removed = state.statePath("checkouts", "removed");
-      await fs.mkdir(path.dirname(databasePath), { recursive: true });
-      await fs.mkdir(live, { recursive: true });
-      await fs.mkdir(removed, { recursive: true });
+      await mkdirs(path.dirname(databasePath), live, removed);
       await fs.writeFile(path.join(live, "source.txt"), "live checkout\n");
       await fs.writeFile(path.join(removed, "source.txt"), "reused path\n");
       createOwnedSqliteDatabase({ sqlitePath: databasePath, role: "global", schemaVersion });
@@ -91,16 +90,13 @@ describe("backup managed workspaces", () => {
       const restored = await restoreBackup(state, archive);
       const restoredPath = (source: string) =>
         path.join(restored.targetPath, buildBackupArchivePath(archive.archiveRoot, source));
+      const readRestored = (source: string) => fs.readFile(restoredPath(source), "utf8");
       if (schemaVersion === 17) {
         await expectAbsent(restoredPath(path.join(live, "source.txt")));
       } else {
-        expect(await fs.readFile(restoredPath(path.join(live, "source.txt")), "utf8")).toBe(
-          "live checkout\n",
-        );
+        await expect(readRestored(path.join(live, "source.txt"))).resolves.toBe("live checkout\n");
       }
-      expect(await fs.readFile(restoredPath(path.join(removed, "source.txt")), "utf8")).toBe(
-        "reused path\n",
-      );
+      await expect(readRestored(path.join(removed, "source.txt"))).resolves.toBe("reused path\n");
       expectDatabaseRows(restoredPath(databasePath), "PRAGMA user_version", [
         { user_version: schemaVersion },
       ]);
@@ -118,8 +114,7 @@ describe("backup managed workspaces", () => {
       const protectedAgent = path.join(oldRoot, "durable-agent");
       const credentials = path.join(oldRoot, "credentials");
       const includePath = path.join(oldRoot, "settings.json");
-      await fs.mkdir(protectedAgent, { recursive: true });
-      await fs.mkdir(credentials, { recursive: true });
+      await mkdirs(protectedAgent, credentials);
       await fs.writeFile(includePath, JSON.stringify({ identity: { name: "Kept" } }));
       await fs.writeFile(path.join(credentials, "credential.txt"), "synthetic credential\n");
       Object.assign(state.envVars, {
@@ -162,20 +157,19 @@ describe("backup managed workspaces", () => {
       const restored = await restoreBackup(state, archive);
       const restoredPath = (source: string) =>
         path.join(restored.targetPath, buildBackupArchivePath(archive.archiveRoot, source));
+      const readRestored = (source: string) => fs.readFile(restoredPath(source), "utf8");
       for (const root of [oldRoot, customRoot, pendingRoot]) {
         await expectAbsent(restoredPath(path.join(root, "build-output.bin")));
         expect(await fs.readFile(path.join(root, "build-output.bin"), "utf8")).toMatch(/bytes/);
       }
-      expect(
-        await fs.readFile(restoredPath(path.join(retiredRoot, "build-output.bin")), "utf8"),
-      ).toBe("workspace bytes\n");
-      expect(await fs.readFile(restoredPath(adjacent), "utf8")).toBe("keep notes\n");
-      expect(await fs.readFile(restoredPath(includePath), "utf8")).toBe(
-        JSON.stringify({ identity: { name: "Kept" } }),
-      );
-      expect(
-        await fs.readFile(restoredPath(path.join(credentials, "credential.txt")), "utf8"),
-      ).toBe("synthetic credential\n");
+      for (const [file, contents] of [
+        [path.join(retiredRoot, "build-output.bin"), "workspace bytes\n"],
+        [adjacent, "keep notes\n"],
+        [includePath, JSON.stringify({ identity: { name: "Kept" } })],
+        [path.join(credentials, "credential.txt"), "synthetic credential\n"],
+      ] as const) {
+        await expect(readRestored(file)).resolves.toBe(contents);
+      }
       expectDatabaseRows(
         restoredPath(agentPath),
         "SELECT role, agent_id FROM schema_meta WHERE meta_key = 'primary'",

@@ -16,12 +16,8 @@ import type { BackupCreateOptions, BackupCreateResult } from "./backup-create.js
 import { requireNodeSqlite } from "./node-sqlite.js";
 
 export function withDatabase<T>(pathname: string, run: (db: DatabaseSync) => T): T {
-  const db = new (requireNodeSqlite().DatabaseSync)(pathname);
-  try {
-    return run(db);
-  } finally {
-    db.close();
-  }
+  using db = new (requireNodeSqlite().DatabaseSync)(pathname);
+  return run(db);
 }
 
 export async function mkdirs(...directories: string[]) {
@@ -97,12 +93,8 @@ export async function declarePluginSqliteResources(
 }
 
 export function inspectDatabase(databasePath: string, inspect: (database: DatabaseSync) => void) {
-  const database = new (requireNodeSqlite().DatabaseSync)(databasePath, { readOnly: true });
-  try {
-    inspect(database);
-  } finally {
-    database.close();
-  }
+  using database = new (requireNodeSqlite().DatabaseSync)(databasePath, { readOnly: true });
+  inspect(database);
 }
 
 export function expectDatabaseRows(databasePath: string, sql: string, rows: unknown) {
@@ -115,22 +107,18 @@ export function createOwnedSqliteDatabase(params: {
   agentId?: string;
   schemaVersion?: number;
 }): void {
-  const database = new (requireNodeSqlite().DatabaseSync)(params.sqlitePath);
+  using database = new (requireNodeSqlite().DatabaseSync)(params.sqlitePath);
   const schemaVersion = params.schemaVersion ?? 1;
-  try {
-    database.exec(`
+  database.exec(`
       CREATE TABLE schema_meta (
         meta_key TEXT NOT NULL PRIMARY KEY, role TEXT NOT NULL, schema_version INTEGER NOT NULL,
         agent_id TEXT, app_version TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
       );
       PRAGMA user_version = ${schemaVersion};
     `);
-    database
-      .prepare(`INSERT INTO schema_meta
+  database
+    .prepare(`INSERT INTO schema_meta
       (meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
       VALUES ('primary', ?, ?, ?, NULL, 1, 1)`)
-      .run(params.role, schemaVersion, params.agentId ?? null);
-  } finally {
-    database.close();
-  }
+    .run(params.role, schemaVersion, params.agentId ?? null);
 }
