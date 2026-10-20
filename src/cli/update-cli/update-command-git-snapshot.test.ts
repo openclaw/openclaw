@@ -45,7 +45,7 @@ it.each([
       await fs.writeFile(env.OPENCLAW_CONFIG_PATH, "{}\n");
       await fs.writeFile(
         path.join(root, "package.json"),
-        '{"name":"openclaw","version":"2026.9.1"}',
+        JSON.stringify({ name: "openclaw", version: "2026.9.1" }),
       );
       await fs.writeFile(path.join(root, "openclaw.mjs"), "export {};\n");
       await fs.writeFile(path.join(root, ".gitignore"), "dist/\nnode_modules/\n.artifacts/\n");
@@ -74,10 +74,7 @@ it.each([
       }));
       const runCommand = processRunner.runCommandWithTimeout;
       const candidateCommand = vi.fn(() =>
-        createCommandResult({
-          stderr: "synthetic stop before candidate package commands",
-          code: 1,
-        }),
+        createCommandResult({ stderr: "unexpected candidate command", code: 1 }),
       );
       vi.spyOn(processRunner, "runCommandWithTimeout").mockImplementation((argv, options) =>
         argv[0] === "git" ? runCommand(argv, options) : Promise.resolve(candidateCommand()),
@@ -95,11 +92,11 @@ it.each([
         },
       );
       vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-      const originalArgv = process.argv;
       const capacityStep = { name: "snapshot-space-preflight", exitCode: 1 };
+      const originalArgv = process.argv;
       process.argv = [process.execPath, path.join(root, "openclaw.mjs")];
       try {
-        const outcome = await updateGitInstall({
+        const update = updateGitInstall({
           root,
           switchToGit: false,
           installKind: "git",
@@ -114,23 +111,9 @@ it.each([
           getManagedServiceEnv: () => undefined,
           getSnapshotSource,
           jsonMode: true,
-        }).then(
-          (result) => ({ result }),
-          (error: unknown) => ({ error }),
-        );
-        const headCommandOptions = vi
-          .mocked(processRunner.runCommandWithTimeout)
-          .mock.calls.find(([argv]) => argv.join(" ") === `git -C ${root} rev-parse HEAD`)?.[1];
-        expect(
-          typeof headCommandOptions === "number"
-            ? headCommandOptions
-            : headCommandOptions?.timeoutMs,
-        ).toBe(20 * 60_000);
+        });
         if (reportingFails) {
-          expect("error" in outcome).toBe(true);
-          const errors = collectNestedErrorCandidates(
-            "error" in outcome ? outcome.error : undefined,
-          );
+          const errors = await update.then(() => [], collectNestedErrorCandidates);
           expect(errors).toContain(reportingError);
           expect(onStepComplete).toHaveBeenCalledWith(expect.objectContaining(capacityStep));
           expect(errors).toContainEqual(
@@ -150,10 +133,7 @@ it.each([
             }),
           );
         } else {
-          if ("error" in outcome) {
-            throw outcome.error;
-          }
-          const { result } = outcome;
+          const result = await update;
           expect(result).toMatchObject(
             noOp
               ? { status: "skipped", reason: "already-current" }
@@ -163,6 +143,14 @@ it.each([
             expect(result.steps).toContainEqual(expect.objectContaining(capacityStep));
           }
         }
+        const headCommandOptions = vi
+          .mocked(processRunner.runCommandWithTimeout)
+          .mock.calls.find(([argv]) => argv.join(" ") === `git -C ${root} rev-parse HEAD`)?.[1];
+        expect(
+          typeof headCommandOptions === "number"
+            ? headCommandOptions
+            : headCommandOptions?.timeoutMs,
+        ).toBe(20 * 60_000);
         expect(capacity.mock.calls.length === 0).toBe(noOp);
         expect(getSnapshotSource).toHaveBeenCalledTimes(noOp ? 0 : 1);
         expect(
@@ -170,9 +158,9 @@ it.each([
             ([prefix]) => prefix.includes("update-preflight-") || prefix.includes("ocu-pf-"),
           ),
         ).toBe(false);
-        expect(candidateCommand).not.toHaveBeenCalled();
-        expect(beforeGitMutation).not.toHaveBeenCalled();
-        expect(validateCandidate).not.toHaveBeenCalled();
+        expect(
+          [candidateCommand, beforeGitMutation, validateCandidate].map((fn) => fn.mock.calls),
+        ).toEqual([[], [], []]);
         expect(await git(root, "rev-parse", "HEAD")).toBe(before);
         expect(await fs.readdir(stateDir)).toEqual(["openclaw.json"]);
       } finally {

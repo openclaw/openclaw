@@ -152,6 +152,24 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let restoreTempRoot = () => {};
 const readinessExit = createCommandResult();
 const signaledReadiness = { termination: "signal", signal: "SIGTERM", killed: true } as const;
+const emptyOutput = { stdout: "", stderr: "" };
+const commandArgs = () => mocks.command.mock.calls.map(([, args]) => args);
+const commandTimeouts = () => mocks.command.mock.calls.map((call) => call[2].timeoutMs);
+const expectNoCalls = (...spies: unknown[]) => {
+  for (const spy of spies) {
+    expect(spy).not.toHaveBeenCalled();
+  }
+};
+async function writeConfig(configPath: string, config: unknown) {
+  await fs.mkdir(path.dirname(configPath), { recursive: true });
+  await fs.writeFile(configPath, JSON.stringify(config));
+}
+async function useRealConfig() {
+  const owner =
+    await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
+  mocks.readConfig.mockImplementation(owner.readConfigFileSnapshot);
+  return owner;
+}
 
 afterEach(() => {
   restoreTempRoot();
@@ -167,7 +185,7 @@ describe("post-plugin update readiness", () => {
     restoreTempRoot = () => coordinator.mockRestore();
     mocks.readConfig.mockReset().mockResolvedValue(validConfigSnapshot);
     mocks.resolveEntrypoint.mockReset().mockResolvedValue("/opt/openclaw/dist/index.js");
-    mocks.command.mockReset().mockResolvedValue({ stdout: "", stderr: "" });
+    mocks.command.mockReset().mockResolvedValue(emptyOutput);
     mocks.cliHelp.mockReset();
     mocks.pendingMigrations.mockReset().mockResolvedValue([]);
     mocks.runUtf8.mockReset().mockResolvedValue({
@@ -205,7 +223,7 @@ describe("post-plugin update readiness", () => {
         if (kind === "data-at-risk") {
           throw childFailure;
         }
-        return { stdout: "", stderr: "" };
+        return emptyOutput;
       });
       const run =
         phase === "pre-plugin"
@@ -220,8 +238,7 @@ describe("post-plugin update readiness", () => {
         expect(onWarnings).toHaveBeenCalledExactlyOnceWith([warning]);
       }
       expect(mocks.command).toHaveBeenCalledOnce();
-      expect(mocks.runUtf8).not.toHaveBeenCalled();
-      expect(mocks.readConfig).not.toHaveBeenCalled();
+      expectNoCalls(mocks.runUtf8, mocks.readConfig);
     },
   );
 
@@ -296,16 +313,15 @@ describe("post-plugin update readiness", () => {
   );
 
   it.each([
-    "success",
-    "advisory",
-    "exit",
-    "timeout",
-    "post-plugin-exit",
-    "post-plugin-timeout",
+    ["success", "pre-plugin", 0],
+    ["advisory", "pre-plugin", UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE],
+    ["exit", "pre-plugin", 23],
+    ["timeout", "pre-plugin", null],
+    ["post-plugin-exit", "post-plugin", 23],
+    ["post-plugin-timeout", "post-plugin", null],
   ] as const)(
     "records the fresh Doctor's traced sections without printing the trace (%s)",
-    async (outcome) => {
-      const phase = outcome.startsWith("post-plugin-") ? "post-plugin" : "pre-plugin";
+    async (outcome, phase, exitCode) => {
       vi.stubEnv("OPENCLAW_GATEWAY_STARTUP_TRACE", undefined);
       vi.mocked(defaultRuntime.error).mockClear();
       const stderr = [
@@ -333,12 +349,7 @@ describe("post-plugin update readiness", () => {
         if (outcome !== "success") {
           throw Object.assign(new Error("Doctor did not finish"), {
             failed: true,
-            exitCode:
-              outcome === "advisory"
-                ? UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE
-                : outcome.endsWith("exit")
-                  ? 23
-                  : undefined,
+            exitCode: exitCode ?? undefined,
             timedOut: outcome.endsWith("timeout"),
             stderr,
           });
@@ -366,14 +377,7 @@ describe("post-plugin update readiness", () => {
           name: `${phase} doctor`,
           deferredInspectionCheckIds:
             outcome === "advisory" ? ["core/doctor/new-target-inspection"] : null,
-          exitCode:
-            outcome === "success"
-              ? 0
-              : outcome === "advisory"
-                ? UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE
-                : outcome.endsWith("exit")
-                  ? 23
-                  : null,
+          exitCode,
           durationMs: expect.any(Number),
           diagnostics: [
             "Doctor sections: config-flow 4.1 s, contributions 2.6 s; slowest contributions: plugins 2.5 s",
@@ -404,7 +408,7 @@ describe("post-plugin update readiness", () => {
       });
       await complete({ opts: { ...updateOptions.opts, fullIntegrityCheck }, timeoutMs });
 
-      expect(mocks.command.mock.calls.map(([, args]) => args)).toEqual([
+      expect(commandArgs()).toEqual([
         [...doctorArgs, ...(fullIntegrityCheck && supported ? ["--full-integrity-check"] : [])],
         validateArgs,
       ]);
@@ -428,10 +432,7 @@ describe("post-plugin update readiness", () => {
           env: { OPENCLAW_UPDATE_IN_PROGRESS: "1", OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1" },
         }),
       );
-      expect(mocks.command.mock.calls.map((call) => call[2].timeoutMs)).toEqual([
-        timeoutMs,
-        timeoutMs ?? 300_000,
-      ]);
+      expect(commandTimeouts()).toEqual([timeoutMs, timeoutMs ?? 300_000]);
     },
   );
 
@@ -472,7 +473,7 @@ describe("post-plugin update readiness", () => {
             await fs.truncate(`${databasePath}-wal`, bytes);
           }
         }
-        return { stdout: "", stderr: "" };
+        return emptyOutput;
       });
       const readdir = fs.readdir;
       const enumeration = vi.spyOn(fs, "readdir").mockImplementation((...args) => {
@@ -489,9 +490,7 @@ describe("post-plugin update readiness", () => {
           timeoutMs: undefined,
         });
         expect(result.pluginUpdate.status).toBe("ok");
-        expect(mocks.command.mock.calls.map((call) => call[2].timeoutMs)).toEqual(
-          configured ? [budget] : [undefined, budget],
-        );
+        expect(commandTimeouts()).toEqual(configured ? [budget] : [undefined, budget]);
         expect(mocks.runUtf8.mock.calls[0]?.[1]).toMatchObject({ timeoutMs: budget });
         if (configured) {
           expect(enumeration).not.toHaveBeenCalledWith(agentsDir, { withFileTypes: true });
@@ -539,8 +538,7 @@ describe("post-plugin update readiness", () => {
         mocks.readConfig.mockImplementation(() => io.readConfigFileSnapshot());
         mocks.command.mockImplementation(async (_command, args: string[]) => {
           if (created && args.includes("--repair")) {
-            await fs.mkdir(path.dirname(configPath), { recursive: true });
-            await fs.writeFile(configPath, '{"gateway":{"mode":"invalid"}}');
+            await writeConfig(configPath, { gateway: { mode: "invalid" } });
           }
           if (args.includes("validate")) {
             if (!created) {
@@ -551,7 +549,7 @@ describe("post-plugin update readiness", () => {
               "Config invalid",
             );
           }
-          return { stdout: "", stderr: "" };
+          return emptyOutput;
         });
         const result = await complete({ pluginUpdate: { ...pluginUpdate, changed } });
         expect(result.configSnapshot).toMatchObject({ exists: created, valid: !created });
@@ -620,9 +618,7 @@ describe("post-plugin update readiness", () => {
     });
     expect(JSON.stringify(result)).not.toContain("private argv");
     expect(JSON.stringify(result)).not.toContain("doctor --fix");
-    expect(mocks.runUtf8).not.toHaveBeenCalled();
-    expect(defaultRuntime.log).not.toHaveBeenCalled();
-    expect(defaultRuntime.error).not.toHaveBeenCalled();
+    expectNoCalls(mocks.runUtf8, defaultRuntime.log, defaultRuntime.error);
   });
 
   it.each(["entrypoint", "maintenance"] as const)(
@@ -650,8 +646,7 @@ describe("post-plugin update readiness", () => {
       });
       if (missing) {
         expect(JSON.stringify(result)).not.toContain("invalid-config");
-        expect(mocks.command).not.toHaveBeenCalled();
-        expect(mocks.runUtf8).not.toHaveBeenCalled();
+        expectNoCalls(mocks.command, mocks.runUtf8);
       } else {
         expect(beforeDoctor).toHaveBeenCalledOnce();
         expect(mocks.command.mock.calls.some(([, args]) => args.includes("--repair"))).toBe(false);
@@ -746,14 +741,11 @@ describe("post-plugin update readiness", () => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
       vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
       vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(
-        configPath,
-        JSON.stringify({ meta: { lastTouchedVersion: "9999.1.0" }, gateway: { mode: "local" } }),
-      );
-      const configOwner =
-        await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
-      mocks.readConfig.mockImplementation(configOwner.readConfigFileSnapshot);
+      await writeConfig(configPath, {
+        meta: { lastTouchedVersion: "9999.1.0" },
+        gateway: { mode: "local" },
+      });
+      const configOwner = await useRealConfig();
       const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
       try {
         const result = await completeUnchanged();
@@ -789,9 +781,7 @@ describe("post-plugin update readiness", () => {
       );
       const beforeSchema = db.prepare("SELECT * FROM sqlite_schema ORDER BY name").all();
       const beforeMeta = db.prepare("SELECT * FROM schema_meta").all();
-      const configOwner =
-        await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
-      mocks.readConfig.mockImplementation(configOwner.readConfigFileSnapshot);
+      await useRealConfig();
 
       const result = await completeUnchanged();
 
@@ -978,13 +968,11 @@ describe("post-plugin update readiness", () => {
 
       expect(result.pluginUpdate.status).toBe("ok");
       expect(result.pluginUpdate.doctorLint).toMatchObject({ exitCode: 0, termination: "exit" });
-      expect(beforeDoctor).not.toHaveBeenCalled();
+      expectNoCalls(beforeDoctor, defaultRuntime.log, defaultRuntime.error);
       expect(result.configSnapshot.valid).toBe(false);
-      expect(mocks.command.mock.calls.map(([, args]) => args)).toEqual([validateArgs]);
+      expect(commandArgs()).toEqual([validateArgs]);
       expect(mocks.runUtf8).toHaveBeenCalledOnce();
       expect(getUpdateRun(run.runId)).toEqual(before);
-      expect(defaultRuntime.log).not.toHaveBeenCalled();
-      expect(defaultRuntime.error).not.toHaveBeenCalled();
       await expect(fs.stat(path.join(home, ".openclaw", "update-reports"))).rejects.toMatchObject({
         code: "ENOENT",
       });

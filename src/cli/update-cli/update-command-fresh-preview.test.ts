@@ -42,6 +42,7 @@ import {
 } from "./update-command-fresh-preview.test-support.js";
 import { installFreshUpdateFixture, targetMetadata } from "./update-command-fresh.test-support.js";
 import * as initialization from "./update-command-initialization.js";
+import { updateResult } from "./update-command-maintenance-fixtures.test-support.js";
 import * as packageUpdate from "./update-command-package.js";
 import * as commandRun from "./update-command-run.js";
 import * as runtimePlan from "./update-command-runtime-preflight.js";
@@ -85,6 +86,24 @@ function runUpdate(opts: shared.UpdateCommandOptions = {}) {
 
 function expectJson(result: unknown) {
   expect(defaultRuntime.writeJson).toHaveBeenCalledWith(expect.objectContaining(result));
+}
+
+function expectMetadataFailure(
+  fact: { code: string; message?: unknown },
+  output: Record<string, unknown> = {},
+) {
+  const failure = expect.objectContaining({
+    name: "target-metadata-preflight",
+    exitCode: 1,
+    failureFacts: [expect.objectContaining(fact)],
+  });
+  expectJson({
+    reason: "target-metadata-preflight",
+    mode: "npm",
+    failedStep: failure,
+    steps: expect.arrayContaining([failure]),
+    ...output,
+  });
 }
 
 function createArtifact(version: string, schema: number | undefined, node?: string) {
@@ -164,10 +183,8 @@ describe("update command admission with fresh state", () => {
   ])(
     "reports an invalid dev target after settlement (dry run=$dryRun, existing=$existing)",
     async ({ dryRun, existing }) => {
-      const config = process.env.OPENCLAW_CONFIG_PATH!;
-      fs.mkdirSync(path.dirname(config), { recursive: true });
+      const config = writeStoredChannel("dev");
       const configBytes = JSON.stringify({ update: { channel: "dev" } });
-      fs.writeFileSync(config, configBytes);
       const packagePath = path.join(fixture.root, "package.json");
       const packageBytes = fs.readFileSync(packagePath, "utf8");
       if (existing) {
@@ -315,13 +332,7 @@ describe("update command admission with fresh state", () => {
         // ledger, executor, and outer staged-package cleanup to prove ordering.
         admittedRun = params.opts.run;
         expect(triagePrepared).toBe(true);
-        const result = {
-          status: "ok" as const,
-          mode: "npm" as const,
-          root: fixture.root,
-          steps: [],
-          durationMs: 1,
-        };
+        const result = updateResult({ root: fixture.root });
         const publish = async (failure?: unknown) => {
           const settled = await resolveSettledUpdateCommandResult(
             { opts: params.opts, root: fixture.root },
@@ -403,18 +414,7 @@ describe("update command admission with fresh state", () => {
 
       await expect(runUpdate(target)).rejects.toMatchObject({ code: 1 });
 
-      const failure = expect.objectContaining({
-        name: "target-metadata-preflight",
-        exitCode: 1,
-        failureFacts: [expect.objectContaining({ code: "target-registry-dist-tag" })],
-      });
-      expectJson({
-        status: "error",
-        reason: "target-metadata-preflight",
-        mode: "npm",
-        failedStep: failure,
-        steps: expect.arrayContaining([failure]),
-      });
+      expectMetadataFailure({ code: "target-registry-dist-tag" }, { status: "error" });
       expectFreshStatePreserved();
     },
   );
@@ -574,22 +574,7 @@ it.each([
       expect(doctor).not.toHaveBeenCalled();
       expect(admission).not.toHaveBeenCalled();
       expect(fs.existsSync(fixture.databasePath)).toBe(false);
-      const failure = expect.objectContaining({
-        name: "target-metadata-preflight",
-        exitCode: 1,
-        failureFacts: [
-          expect.objectContaining({
-            code,
-            message: expect.stringContaining("openclaw update --tag"),
-          }),
-        ],
-      });
-      expectJson({
-        reason: "target-metadata-preflight",
-        mode: "npm",
-        failedStep: failure,
-        steps: expect.arrayContaining([failure]),
-      });
+      expectMetadataFailure({ code, message: expect.stringContaining("openclaw update --tag") });
     } else {
       expect(outcome).toBe("artifact-admitted");
       expect(doctor).toHaveBeenCalledOnce();

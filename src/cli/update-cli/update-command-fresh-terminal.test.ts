@@ -30,6 +30,9 @@ import * as commandRun from "./update-command-run.js";
 import { updateCommand } from "./update-command.js";
 
 const { fixture, dirs } = installFreshUpdateFixture();
+const withExecutor = executorOwner.withUpdateCommandExecutor;
+const updateOptions = { yes: true, json: true, restart: false };
+const metadataRefusal = { version: null, nodeEngine: null, error: "fixture registry unavailable" };
 
 describe("fresh update terminal reporting", () => {
   it.each(["healthy", "release", "no-enter"] as const)(
@@ -53,11 +56,10 @@ describe("fresh update terminal reporting", () => {
             db.close();
           }
         }
-        return { version: null, nodeEngine: null, error: "fixture registry unavailable" };
+        return metadataRefusal;
       });
       const observations: string[] = [];
       const enter = vi.fn();
-      const withExecutor = executorOwner.withUpdateCommandExecutor;
       const execute = vi
         .spyOn(executorOwner, "withUpdateCommandExecutor")
         .mockImplementationOnce((runId, operation, options) =>
@@ -78,9 +80,7 @@ describe("fresh update terminal reporting", () => {
         observations.push(createManagedHandoffLeaseStore().read(fixture.root).kind);
       });
       const failure = await updateCommand({
-        yes: true,
-        json: true,
-        restart: false,
+        ...updateOptions,
         dryRun: cleanup === "no-enter",
       }).then(
         () => undefined,
@@ -148,11 +148,7 @@ describe("fresh update terminal reporting", () => {
       );
       await writePackageDistInventory(swap.params.stage.packageRoot);
       allowPackageRuntime();
-      vi.mocked(packageMetadata.fetchNpmPackageTargetStatus).mockResolvedValue({
-        version: null,
-        nodeEngine: null,
-        error: "fixture registry unavailable",
-      });
+      vi.mocked(packageMetadata.fetchNpmPackageTargetStatus).mockResolvedValue(metadataRefusal);
       if (refusal === "manager") {
         vi.mocked(shared.resolveGlobalManager).mockRejectedValueOnce(
           new shared.UpdatePreMutationError("unmanaged-package-install", "fixture external owner"),
@@ -178,10 +174,9 @@ describe("fresh update terminal reporting", () => {
             const file = path.join(stateDir, String(relative));
             return [relative, fs.statSync(file).isFile() ? fs.readFileSync(file) : null];
           });
+      const anchor = resolvePackageActivationAnchor(fixture.root);
       const detachedRoot = dirs.make("openclaw-detached-refusal-");
       vi.spyOn(os, "tmpdir").mockReturnValue(detachedRoot);
-      const anchor = resolvePackageActivationAnchor(fixture.root);
-      const withExecutor = executorOwner.withUpdateCommandExecutor;
       let before: ReturnType<typeof readState> | undefined;
       let journal: Buffer | undefined;
       let acquired = false;
@@ -200,7 +195,6 @@ describe("fresh update terminal reporting", () => {
                   const fence = await enter(...args);
                   acquired = true;
                   if (refusal === "enter") {
-                    // Acquisition can precede a failing identity/admission check.
                     throw new UnreportedUpdateAdmissionOutcome(
                       {
                         root: fixture.root,
@@ -225,8 +219,7 @@ describe("fresh update terminal reporting", () => {
             expect(createManagedHandoffLeaseStore().read(fixture.root).kind).toBe("absent");
             expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
             expect(fs.existsSync(fixture.databasePath)).toBe(false);
-            // The actual old executor has settled. Publish a real next journal
-            // before the initializer's outer refusal reporter is allowed to run.
+            // Publish a successor after settlement, before the outer refusal reporter runs.
             await withExecutor("fresh-refusal-successor", async (executor) => {
               const fence = await executor.enter(fixture.root);
               const published = await swapStagedPackageInstall({
@@ -248,7 +241,7 @@ describe("fresh update terminal reporting", () => {
           }
         },
       );
-      await expect(updateCommand({ yes: true, json: true, restart: false })).rejects.toMatchObject({
+      await expect(updateCommand(updateOptions)).rejects.toMatchObject({
         code: refusal === "metadata" ? 1 : 0,
       });
       expect(injected).toBe(true);

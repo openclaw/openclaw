@@ -16,8 +16,8 @@ afterEach(() => lifetime.cleanup().finally(() => vi.restoreAllMocks()));
 it(
   "times out a stuck post-activation Doctor and settles its worker tree without an operator timeout",
   { timeout: 15_000 },
-  async ({ signal }) => {
-    await lifetime.run(() =>
+  ({ signal }) =>
+    lifetime.run(() =>
       withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const entryPath = state.path("doctor.mjs");
         const pidsPath = state.path("doctor-pids.json");
@@ -93,6 +93,5 @@ setInterval(() => {}, 1000);
           expect(() => process.kill(pid, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
         }
       }),
-    );
-  },
+    ),
 );

@@ -77,8 +77,7 @@ it.each([false, true])(
       value: { nodeRunner: process.execPath },
     });
     vi.spyOn(execution, "executeMutableUpdate").mockImplementation(async (params) => {
-      // Keep real admission, staging, npm, replay and backup ownership; this synthetic
-      // package has no Gateway lifecycle or post-core plugin convergence to finalize.
+      // Exercise real staging/replay without a Gateway lifecycle in the synthetic package.
       assert(params.stagedPackage);
       const run = params.opts.run;
       assert(run);
@@ -112,10 +111,8 @@ it.each([false, true])(
         added: 1,
         applied: reapplyLocalOverrides ? 1 : 0,
         conflicts: [],
+        warnings: reapplyLocalOverrides ? [] : [expect.stringContaining("were not reapplied")],
       });
-      expect(result.localOverrides?.warnings).toEqual(
-        reapplyLocalOverrides ? [] : [expect.stringContaining("were not reapplied")],
-      );
       const recoveryDir = result.localOverrides!.recoveryDir!;
       expect(fs.readFileSync(path.join(recoveryDir, "files", relativeFile), "utf8")).toBe(marker);
       expect(result.steps).toContainEqual(
