@@ -479,7 +479,10 @@ export class AcpTranslatorPromptStream {
 
     if (state === "final") {
       const rawStopReason = payload.stopReason as string | undefined;
-      const stopReason: StopReason = rawStopReason === "max_tokens" ? "max_tokens" : "end_turn";
+      // The Gateway emits the native LLM "length" stop for output-cap cutoffs;
+      // ACP expresses that terminal as "max_tokens".
+      const stopReason: StopReason =
+        rawStopReason === "max_tokens" || rawStopReason === "length" ? "max_tokens" : "end_turn";
       await this.finishPrompt(pending.sessionId, pending, stopReason);
       return;
     }
@@ -492,7 +495,9 @@ export class AcpTranslatorPromptStream {
     if (state === "error") {
       const errorKind = payload.errorKind as string | undefined;
       const stopReason: StopReason = errorKind === "refusal" ? "refusal" : "end_turn";
-      void this.finishPrompt(pending.sessionId, pending, stopReason);
+      const interruption =
+        typeof payload.errorMessage === "string" ? payload.errorMessage : undefined;
+      await this.finishPrompt(pending.sessionId, pending, stopReason, { interruption });
     }
   }
 

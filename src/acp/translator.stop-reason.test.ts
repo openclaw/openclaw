@@ -81,6 +81,23 @@ it("surfaces the abort cause before cancellation even when delivery rejects", as
   );
 });
 
+it.each([["length"], ["max_tokens"]])(
+  "maps a Gateway %s stop to the ACP max_tokens stop reason",
+  async (stopReason) => {
+    const h = harness();
+    const prompt = h.start();
+    await h.chat(await prompt.sent, { state: "final", stopReason });
+    await expect(prompt.result).resolves.toEqual({ stopReason: "max_tokens" });
+  },
+);
+
+it("keeps other Gateway stop reasons as end_turn", async () => {
+  const h = harness();
+  const prompt = h.start();
+  await h.chat(await prompt.sent, { state: "final", stopReason: "stop" });
+  await expect(prompt.result).resolves.toEqual({ stopReason: "end_turn" });
+});
+
 it("reconciles provisional session keys for subsequent prompts", async () => {
   const h = harness({ sessionKey: "acp:session-1", send: () => ({}) });
   const first = h.start();
