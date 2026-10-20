@@ -3,21 +3,12 @@ import { afterEach, assert, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createGatewayConnectionLifecycle } from "../gateway-connection-lifecycle.ts";
+import { sessionsResult as result } from "./session-capability.test-support.ts";
 import type { ObservedSessionList } from "./session-list-query.ts";
 import { createSessionRosterObservations } from "./session-roster-observations.ts";
 import * as rowProvenance from "./session-row-provenance.ts";
 
 afterEach(() => vi.restoreAllMocks());
-
-function result(sessions: GatewaySessionRow[]): SessionsListResult {
-  return {
-    ts: 1,
-    path: "(synthetic)",
-    count: sessions.length,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
-    sessions,
-  };
-}
 
 function fixture(readResult: () => SessionsListResult | null = () => null) {
   const connection = createGatewayConnectionLifecycle({
@@ -36,9 +27,14 @@ function fixture(readResult: () => SessionsListResult | null = () => null) {
     lists,
   );
   return {
-    connection,
-    lists,
     observations,
+    list: (name: string, rows: GatewaySessionRow[], agentId = "main") =>
+      lists.set(name, {
+        scope: { agentId },
+        connectionEpoch: connection.epoch,
+        snapshot: { result: result(rows), agentId, loading: false, error: null },
+        listeners: new Set(),
+      }),
     stage: (row: GatewaySessionRow, revision: number) =>
       observations.stageObservedRows([row], connection.capture(), "main", revision)(),
     register: (key: string, isValid: (sessionId: string) => boolean = () => true) =>
@@ -77,7 +73,7 @@ it.each(["main", "global"])(
     };
     vi.spyOn(rowProvenance, "createSessionRowProvenance").mockReturnValue(provenance);
     let primary: SessionsListResult | null = null;
-    const { connection, lists, observations, stage, register } = fixture(() => primary);
+    const { list, observations, stage, register } = fixture(() => primary);
     const row: GatewaySessionRow = {
       key,
       sessionId: " selected ",
@@ -91,7 +87,6 @@ it.each(["main", "global"])(
       snapshotAt: 150,
       providerReview: undefined,
     };
-    provenance.observeReadRow(descriptor, 2, "main");
     register(key);
     stage(descriptor, 2);
     const unrelated = Array.from({ length: 300 }, (_, index) => ({
@@ -102,7 +97,6 @@ it.each(["main", "global"])(
     const unrelatedRow = unrelated[0];
     assert(unrelatedRow);
     const validUnrelated = vi.fn(() => true);
-    provenance.observeReadRow(unrelatedRow, 1, "main");
     register(unrelatedRow.key, validUnrelated);
     stage(unrelatedRow, 1);
     provenance.observeReadRow(row, 1, "main");
@@ -115,29 +109,15 @@ it.each(["main", "global"])(
       providerReview: { id: "pause", runId: "run", canContinue: false },
     };
     provenance.observeReadRow(fresh, 3, "main");
-    for (const [name, agentId, rows] of [
-      ["fresh", "main", [...unrelated, fresh]],
-      [
-        "other-owner",
-        "other",
-        [
-          {
-            ...fresh,
-            key: key === "main" ? "agent:other:main" : key,
-            agentId: "other",
-            label: "Other owner",
-          },
-        ],
-      ],
-      ["other-incarnation", "main", [{ ...fresh, sessionId: "selected", label: "Other ID" }]],
-    ] as const) {
-      lists.set(name, {
-        scope: { agentId },
-        connectionEpoch: connection.epoch,
-        snapshot: { result: result([...rows]), agentId, loading: false, error: null },
-        listeners: new Set(),
-      });
-    }
+    list("fresh", [...unrelated, fresh]);
+    const otherOwner = {
+      ...fresh,
+      key: key === "main" ? "agent:other:main" : key,
+      agentId: "other",
+      label: "Other owner",
+    };
+    list("other-owner", [otherOwner], "other");
+    list("other-incarnation", [{ ...fresh, sessionId: "selected", label: "Other ID" }]);
     identity.mockClear();
     validUnrelated.mockClear();
 

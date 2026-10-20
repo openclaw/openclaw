@@ -50,8 +50,7 @@ it("keeps chronological phase and log annotations across canonical refreshes", a
     rows = [...rows, row];
     emitChanged({ ...row, sessionKey: row.key, reason: "create" });
   };
-  type SwarmDisplayRow = GatewaySessionRow & { swarmLog?: string; swarmPhase?: string };
-  const displayRows = () => sessions.state.result?.sessions as SwarmDisplayRow[] | undefined;
+  const displayRows = () => sessions.state.result?.sessions;
   const phase = (name: string) =>
     displayRows()?.find((row) => row.key.endsWith(`:${name}`))?.swarmPhase;
 

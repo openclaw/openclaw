@@ -39,7 +39,6 @@ it.each(["event", "read"] as const)(
       createTestGatewayClient(async () => sessionsResult(listed, 200)),
     );
     const sessions = createTestSessionCapability(gateway);
-    onTestFinished(() => sessions.dispose());
     const target = { key: initial.key, agentId: "main" };
     const delivered = vi.fn<SessionRowEventListener>();
     const currentDelivered = vi.fn<SessionRowEventListener>();
@@ -48,10 +47,8 @@ it.each(["event", "read"] as const)(
       expect(sessions.state.result?.sessions).toEqual([]);
       expect(sessions.captureReconcile()(initial)).toBe(true);
     }
-    // Keep the original handle attached deliberately: retirement must end
-    // admission of new frames without requiring the consumer to dispose it.
+    // Retirement must stop admission without consumer disposal.
     const original = sessions.observeRow(target, () => undefined, { onEvent: delivered });
-    onTestFinished(() => original.dispose());
     expect(original.row).toMatchObject(initial);
     const retiringFrame = frame("sessions.changed", 1, {
       reason: "create",
@@ -73,7 +70,6 @@ it.each(["event", "read"] as const)(
     expect(sessions.state.result?.sessions[0]).toMatchObject(successor);
 
     const replacement = sessions.observeRow(target, () => undefined, { onEvent: currentDelivered });
-    onTestFinished(() => replacement.dispose());
     expect(replacement.isCurrent()).toBe(true);
     expect(replacement.row).toMatchObject(successor);
     const next = frame("session.message", 2, {
@@ -89,8 +85,7 @@ it.each(["event", "read"] as const)(
         admittedRow: expect.objectContaining({ sessionId: successor.sessionId }),
       }),
     );
-    // A current descriptor still receives an unrelated raw frame for shared
-    // recovery; only the already-retired registration loses future admission.
+    // Only the current descriptor receives unrelated frames for recovery.
     const unrelated = frame("session.message", 3, {
       sessionKey: "agent:main:unrelated",
       reason: "patch",
