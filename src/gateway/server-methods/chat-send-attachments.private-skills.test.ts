@@ -25,8 +25,8 @@ vi.mock("../../skills/runtime/session-snapshot.js", () => ({
 
 it.each(["existing", "admitted new"] as const)(
   "uses %s session's private skill identity for both pre-ACK staging calls",
-  async (sessionKind) => {
-    await withOpenClawTestState({ label: "private-preack-stage" }, async (state) => {
+  (sessionKind) =>
+    withOpenClawTestState({ label: "private-preack-stage" }, async (state) => {
       await loadOrCreateProcessDeviceIdentityAsync();
       const selection = {
         skillId: "00000000-0000-0000-0000-000000000001",
@@ -43,17 +43,14 @@ it.each(["existing", "admitted new"] as const)(
         ctx.media[0].path = "media/inbound/private.txt";
         return { staged: new Map([[0, "media/inbound/private.txt"]]) };
       });
-      const cfg = {
-        agents: {
-          defaults: {
-            workspace: state.workspaceDir,
-            sandbox: { mode: "all" as const, backend: "ssh" as const },
-          },
-        },
+      const defaults = {
+        workspace: state.workspaceDir,
+        sandbox: { mode: "all" as const, backend: "ssh" as const },
       };
+      const workspaceDir = state.path("session-workspace");
       const entry = {
         skillLibrarySelections: [selection],
-        spawnedCwd: state.path("session-workspace"),
+        spawnedCwd: workspaceDir,
       };
       const staleEntry = {
         skillLibrarySelections: [{ ...selection, revision: "1".repeat(64) }],
@@ -64,7 +61,7 @@ it.each(["existing", "admitted new"] as const)(
           message: "read this",
         }),
         session: {
-          cfg,
+          cfg: { agents: { defaults } },
           entry: sessionKind === "existing" ? staleEntry : undefined,
         },
         admission: {
@@ -82,16 +79,12 @@ it.each(["existing", "admitted new"] as const)(
       );
       for (const stage of [mocks.ensureSandboxWorkspaceForSession, mocks.stageSandboxMedia]) {
         expect(stage).toHaveBeenCalledWith(
-          expect.objectContaining({
-            skillsSnapshot: snapshot,
-            workspaceDir: state.path("session-workspace"),
-          }),
+          expect.objectContaining({ skillsSnapshot: snapshot, workspaceDir }),
         );
       }
       expect(result.value.mediaPathOffloads[0]).toMatchObject({
         path: "media/inbound/private.txt",
         workspaceDir: state.path("isolated-runtime"),
       });
-    });
-  },
+    }),
 );

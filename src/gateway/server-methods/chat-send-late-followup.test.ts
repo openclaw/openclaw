@@ -36,9 +36,7 @@ describe("chat.send late queued follow-up disposition", () => {
     disposition.recordQueued();
     expect(disposition.deliver.ownsCompletion("discord")).toBe(false);
     const progress = {
-      kind: "queued-followup" as const,
-      runId: "followup-run",
-      originatingChannel: "webchat",
+      ...batch("followup-run"),
       payloads: [{ text: "working", mediaUrl: "https://example.test/progress.png" }],
       completion: { kind: "progress" as const },
     };
