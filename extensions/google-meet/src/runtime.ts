@@ -96,6 +96,7 @@ export class GoogleMeetRuntime extends MeetingSessionRuntime<
       fullConfig: OpenClawConfig;
       runtime: PluginRuntime;
       logger: RuntimeLogger;
+      runInBackground?: <T>(run: () => T) => T;
     },
   ) {
     const adapter = GOOGLE_MEET_PLATFORM_ADAPTER;
@@ -212,6 +213,7 @@ export class GoogleMeetRuntime extends MeetingSessionRuntime<
       durableTranscripts: {
         config: params.fullConfig.transcripts,
         openclawConfig: params.fullConfig,
+        runInBackground: params.runInBackground,
         providerId: "google-meet",
         providerName: "Google Meet",
       },

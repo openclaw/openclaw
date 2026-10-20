@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -227,6 +228,62 @@ it("drains an in-flight periodic capture before the final capture", async () => 
   await expect(stopping).resolves.toBe(true);
 
   expect(finalCapture).toHaveBeenCalledOnce();
+});
+
+it("runs periodic captures in the plugin background context, not the joining request's", async () => {
+  vi.useFakeTimers();
+  // Stands in for request-scoped authority: the joining request ends once it responds.
+  const scope = new AsyncLocalStorage<string>();
+  await bridge.stop(current, async () => {});
+  bridge = createMeetingDurableTranscriptBridge({
+    logger,
+    options: {
+      providerId: "meeting",
+      providerName: "Meeting",
+      stateDir,
+      runInBackground: (run) => scope.run("plugin background", run),
+    },
+  });
+  const seen: Array<string | undefined> = [];
+  await scope.run("join request", () => start(async () => void seen.push(scope.getStore())));
+  await vi.advanceTimersByTimeAsync(10_000);
+
+  // The first capture belongs to the live join request; every later one is background work.
+  expect(seen).toEqual(["join request", "plugin background", "plugin background"]);
+});
+
+it("reports a tick the plugin refuses and keeps capturing once it admits work again", async () => {
+  vi.useFakeTimers();
+  let admitting = true;
+  const debug = vi.fn();
+  await bridge.stop(current, async () => {});
+  bridge = createMeetingDurableTranscriptBridge({
+    logger: { ...logger, debug },
+    options: {
+      providerId: "meeting",
+      providerName: "Meeting",
+      stateDir,
+      runInBackground: (run) => {
+        if (!admitting) {
+          throw new Error("plugin instance is no longer admitting work");
+        }
+        return run();
+      },
+    },
+  });
+  const capture = vi.fn(async () => {});
+  await start(capture);
+  expect(capture).toHaveBeenCalledOnce();
+
+  admitting = false;
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(debug).toHaveBeenCalledWith(
+    expect.stringContaining("plugin instance is no longer admitting work"),
+  );
+
+  admitting = true;
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(capture).toHaveBeenCalledTimes(2);
 });
 
 it("retries final durable delivery before completing the capture", async () => {

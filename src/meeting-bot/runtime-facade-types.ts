@@ -33,6 +33,8 @@ export type MeetingRuntimeParams<Config extends MeetingPluginConfig> = {
   fullConfig: OpenClawConfig;
   runtime: PluginRuntime;
   logger: RuntimeLogger;
+  /** The plugin instance's background runner, for work that outlives the join request. */
+  runInBackground?: <T>(run: () => T) => T;
 };
 
 type MeetingRuntimePlatform<
