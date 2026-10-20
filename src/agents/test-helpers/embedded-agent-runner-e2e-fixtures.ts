@@ -52,9 +52,7 @@ function mockModel(id: string, name: string) {
 
 export function createEmbeddedAgentRunnerOpenAiConfig(modelIds: string[]): OpenClawConfig {
   return {
-    agents: {
-      entries: { main: {}, test: {}, "embedded-agent": {} },
-    },
+    agents: { entries: { main: {}, test: {}, "embedded-agent": {} } },
     models: {
       providers: {
         openai: {
@@ -104,37 +102,27 @@ export function buildEmbeddedRunnerAssistant(
 export function makeEmbeddedRunnerAttempt(
   overrides: Partial<EmbeddedRunAttemptResult>,
 ): EmbeddedRunAttemptResult {
-  const toolMetas = overrides.toolMetas ?? [];
-  const didSendViaMessagingTool = overrides.didSendViaMessagingTool ?? false;
-  const messagingToolSentTexts = overrides.messagingToolSentTexts ?? [];
-  const messagingToolSentMediaUrls = overrides.messagingToolSentMediaUrls ?? [];
-  const messagingToolSentTargets = overrides.messagingToolSentTargets ?? [];
-  const successfulCronAdds = overrides.successfulCronAdds;
+  const evidence = {
+    toolMetas: overrides.toolMetas ?? [],
+    didSendViaMessagingTool: overrides.didSendViaMessagingTool ?? false,
+    messagingToolSentTexts: overrides.messagingToolSentTexts ?? [],
+    messagingToolSentMediaUrls: overrides.messagingToolSentMediaUrls ?? [],
+    messagingToolSentTargets: overrides.messagingToolSentTargets ?? [],
+  };
   return {
     terminal: { kind: "ok" },
     sessionIdUsed: "session:test",
     systemPromptReport: undefined,
     messagesSnapshot: [],
     assistantTexts: [],
-    toolMetas,
     lastAssistant: undefined,
     // The harness backfills omitted provenance; explicit undefined in overrides
     // still represents an attempt that produced no response.
     currentAttemptAssistant: overrides.lastAssistant,
     replayMetadata:
       overrides.replayMetadata ??
-      buildAttemptReplayMetadata({
-        toolMetas,
-        didSendViaMessagingTool,
-        messagingToolSentTexts,
-        messagingToolSentMediaUrls,
-        messagingToolSentTargets,
-        successfulCronAdds,
-      }),
-    didSendViaMessagingTool,
-    messagingToolSentTexts,
-    messagingToolSentMediaUrls,
-    messagingToolSentTargets,
+      buildAttemptReplayMetadata({ ...evidence, successfulCronAdds: overrides.successfulCronAdds }),
+    ...evidence,
     cloudCodeAssistFormatError: false,
     itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
     ...overrides,

@@ -22,22 +22,30 @@ export function createSandboxFsBridgeFromResolver(
     }
     return target;
   };
+  const transfer = async (
+    operation: "copy" | "rename",
+    from: string,
+    to: string,
+    cwd: string | undefined,
+    mkdir = true,
+  ) => {
+    const source = resolvePath(from, cwd);
+    const target = resolvePath(to, cwd);
+    if (!source.hostPath || !target.hostPath) {
+      throw new Error(
+        `Expected hostPath for ${operation}: ${source.containerPath} -> ${target.containerPath}`,
+      );
+    }
+    if (mkdir) {
+      await fs.mkdir(path.dirname(target.hostPath), { recursive: true });
+    }
+    await (operation === "copy" ? fs.copyFile : fs.rename)(source.hostPath, target.hostPath);
+  };
   return {
     ...(pathMappings === undefined ? {} : { pathMappings }),
     resolvePath: ({ filePath, cwd }) => resolvePath(filePath, cwd),
-    copyFile: async ({ sourcePath, destinationPath, cwd, mkdir = true }) => {
-      const source = resolvePath(sourcePath, cwd);
-      const destination = resolvePath(destinationPath, cwd);
-      if (!source.hostPath || !destination.hostPath) {
-        throw new Error(
-          `Expected hostPath for copy: ${source.containerPath} -> ${destination.containerPath}`,
-        );
-      }
-      if (mkdir) {
-        await fs.mkdir(path.dirname(destination.hostPath), { recursive: true });
-      }
-      await fs.copyFile(source.hostPath, destination.hostPath);
-    },
+    copyFile: ({ sourcePath, destinationPath, cwd, mkdir = true }) =>
+      transfer("copy", sourcePath, destinationPath, cwd, mkdir),
     readFile: async ({ filePath, cwd }) => fs.readFile(hostPath(filePath, cwd)),
     writeFile: async ({ filePath, cwd, data, mkdir = true }) => {
       const target = await prepareWrite(filePath, cwd, mkdir);
@@ -66,17 +74,7 @@ export function createSandboxFsBridgeFromResolver(
         force: force ?? false,
       });
     },
-    rename: async ({ from, to, cwd }) => {
-      const source = resolvePath(from, cwd);
-      const target = resolvePath(to, cwd);
-      if (!source.hostPath || !target.hostPath) {
-        throw new Error(
-          `Expected hostPath for rename: ${source.containerPath} -> ${target.containerPath}`,
-        );
-      }
-      await fs.mkdir(path.dirname(target.hostPath), { recursive: true });
-      await fs.rename(source.hostPath, target.hostPath);
-    },
+    rename: ({ from, to, cwd }) => transfer("rename", from, to, cwd),
     stat: async ({ filePath, cwd }) => {
       try {
         const stats = await fs.stat(hostPath(filePath, cwd));

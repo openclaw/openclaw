@@ -12,8 +12,6 @@ const KNOWN_EMPTY_EXTRA_PROBE_MODELS = new Set(["openrouter/amazon/nova-2-lite-v
 const KNOWN_EMPTY_FILE_PROBE_MODELS = new Set([
   "google/gemini-3.1-pro-preview",
   "google/gemini-3.1-pro-preview-customtools",
-  "opencode-go/glm-5.1",
-  "opencode-go/minimax-m2.5",
   "openrouter/deepseek/deepseek-chat-v3.1",
   "openrouter/minimax/minimax-m2.5",
   "openrouter/nvidia/llama-3.3-nemotron-super-49b-v1.5",
@@ -47,10 +45,7 @@ export function isLiveModelProbeEnabled(
   key: string,
 ): boolean {
   const raw = env[key]?.trim().toLowerCase();
-  if (!raw) {
-    return true;
-  }
-  return !["0", "false", "no", "off"].includes(raw);
+  return !raw || !["0", "false", "no", "off"].includes(raw);
 }
 
 export function modelSupportsImageInput(model: Pick<Model, "input">): boolean {
@@ -62,10 +57,7 @@ export function shouldSkipLiveModelExtraProbes(model: Pick<Model, "id" | "provid
 }
 
 export function shouldSkipLiveModelFileProbe(model: Pick<Model, "id" | "provider">): boolean {
-  if (model.provider === "opencode-go") {
-    return true;
-  }
-  return KNOWN_EMPTY_FILE_PROBE_MODELS.has(modelKey(model));
+  return model.provider === "opencode-go" || KNOWN_EMPTY_FILE_PROBE_MODELS.has(modelKey(model));
 }
 
 export function shouldSkipLiveModelImageProbe(model: Pick<Model, "id" | "provider">): boolean {
@@ -84,7 +76,6 @@ export function buildLiveModelFileProbeContext(params: { systemPrompt?: string }
   );
 }
 
-/** Builds the fallback file-label prompt when the primary file probe is ambiguous. */
 export function buildLiveModelFileProbeRetryContext(params: { systemPrompt?: string }): Context {
   return probeContext(
     params.systemPrompt,
@@ -94,7 +85,6 @@ export function buildLiveModelFileProbeRetryContext(params: { systemPrompt?: str
   );
 }
 
-/** Builds the image probe context with a tiny stable PNG fixture. */
 export function buildLiveModelImageProbeContext(params: { systemPrompt?: string }): Context {
   return probeContext(params.systemPrompt, [
     { type: "text", text: "Reply with exactly OK." },
@@ -112,10 +102,7 @@ function imageProbeTextMatches(text: string): boolean {
 
 function formatImageProbeText(text: string): string {
   const normalized = text.replace(/\s+/g, " ").trim();
-  if (!normalized) {
-    return "<empty>";
-  }
-  return `<non-matching response: ${normalized.length} chars>`;
+  return normalized ? `<non-matching response: ${normalized.length} chars>` : "<empty>";
 }
 
 /** Retries one ambiguous image reply without weakening the strict OK matcher. */

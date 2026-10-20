@@ -52,25 +52,19 @@ const { resolveUsableCustomProviderApiKey } = await import("../model-auth-provid
 const { inspectSharedAuthLegacyRowsReadOnly } =
   await import("../auth-profiles/shared-store-bootstrap.js");
 
-function inspectInput(message: { input: CatalogInspectionTask }) {
-  task = message.input;
-  sqliteCopies = 0;
-  plans = [];
-  for (const agentId of task.inspection?.existingAgentIds ?? []) {
-    registerResolvedAgentDir({
-      agentId,
-      agentDir: task.value.input.agentDir,
-      env: task.value.input.env,
-    });
-  }
-}
 // Observe input with the real handler so initialization cannot consume queued tasks early.
 const on = port.on.bind(port);
 port.on = (event, listener) => {
   if (event === "message") {
     port.on = on;
     return on(event, (message: { input: CatalogInspectionTask }) => {
-      inspectInput(message);
+      task = message.input;
+      sqliteCopies = 0;
+      plans = [];
+      const { agentDir, env } = task.value.input;
+      for (const agentId of task.inspection?.existingAgentIds ?? []) {
+        registerResolvedAgentDir({ agentId, agentDir, env });
+      }
       Reflect.apply(listener, port, [message]);
     });
   }
@@ -83,46 +77,36 @@ port.postMessage = (message: { status: string; value?: object }, transferList) =
     const { input, sourceConfigForSecrets } = task.value;
     const runtimeFacts = getConfigResolutionFacts(input.config);
     const sourceFacts = getConfigResolutionFacts(sourceConfigForSecrets);
-    const provider = task.inspection?.provider;
+    const { provider, copyProbePath, existingAgentIds, expectedCredential } = task.inspection ?? {};
     const requestCopies = sqliteCopies;
-    if (task.inspection?.copyProbePath) {
-      inspectSharedAuthLegacyRowsReadOnly(task.inspection.copyProbePath, {
-        artifactPreservingReadOnly: true,
-      });
+    if (copyProbePath) {
+      inspectSharedAuthLegacyRowsReadOnly(copyProbePath, { artifactPreservingReadOnly: true });
     }
     const inspection: CatalogInspection = {
       sqliteCopies: requestCopies,
-      ...(task.inspection?.copyProbePath ? { copyHookObserved: sqliteCopies > requestCopies } : {}),
+      ...(copyProbePath ? { copyHookObserved: sqliteCopies > requestCopies } : {}),
       plans,
       runtimeFactsAbsent: runtimeFacts === null,
       sourceFactsAbsent: sourceFacts === null,
       sameResolutionFacts: runtimeFacts === sourceFacts,
-      ...(task.inspection?.existingAgentIds
-        ? {
-            foreignReleased: unregisterResolvedAgentDir({
-              agentId: "foreign",
-              agentDir: input.agentDir,
-              env: input.env,
-            }),
-            registeredAgentId: resolveRegisteredAgentIdForDir(input.agentDir, input.env),
-          }
-        : {}),
-      ...(provider
-        ? {
-            credentialMatches:
-              resolveUsableCustomProviderApiKey({ cfg: input.config, provider, env: input.env })
-                ?.apiKey === task.inspection?.expectedCredential,
-            authoredRef: getAuthoredConfigSecretRef(
-              input.config,
-              `models.providers.${provider}.apiKey`,
-            ),
-            resolvedEnvRef: getResolvedConfigEnvSecretRef(
-              input.config,
-              `models.providers.${provider}.apiKey`,
-            ),
-          }
-        : {}),
     };
+    const { agentDir, env, config } = input;
+    if (existingAgentIds) {
+      inspection.foreignReleased = unregisterResolvedAgentDir({
+        agentId: "foreign",
+        agentDir,
+        env,
+      });
+      inspection.registeredAgentId = resolveRegisteredAgentIdForDir(agentDir, env);
+    }
+    if (provider) {
+      inspection.credentialMatches =
+        resolveUsableCustomProviderApiKey({ cfg: config, provider, env })?.apiKey ===
+        expectedCredential;
+      const key = `models.providers.${provider}.apiKey`;
+      inspection.authoredRef = getAuthoredConfigSecretRef(config, key);
+      inspection.resolvedEnvRef = getResolvedConfigEnvSecretRef(config, key);
+    }
     response = { ...message, value: { ...message.value, inspection } };
   }
   post(response, transferList);
