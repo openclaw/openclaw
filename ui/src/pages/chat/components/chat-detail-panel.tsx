@@ -20,7 +20,6 @@ import { createFileCopy } from "./chat-file-copy.ts";
 import { captureFileEditorDraft, readFileDraft, setFileDraft } from "./chat-file-drafts.ts";
 import { createFileHtmlPreview } from "./chat-html-preview.ts";
 import type {
-  ChatDetailPanelProps,
   FileSidebarNavigation,
   AttachmentSidebarRuntime,
   FileSidebarContent,
@@ -38,6 +37,7 @@ import {
   loadFileWrapPreference,
   saveFileWrapPreference,
 } from "./chat-sidebar-file-view.tsx";
+import type { ChatDetailPanelProps } from "./chat-sidebar-view-types.ts";
 import type { FileEditorViewHandle } from "./file-editor-view.ts";
 
 registerEnglishCatalog(registerFilePreviewEnglish);

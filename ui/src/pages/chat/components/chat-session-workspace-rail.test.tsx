@@ -9,7 +9,7 @@ import {
   createSessionWorkspaceProps,
   type SessionWorkspaceHost,
 } from "./chat-session-workspace.ts";
-import type { SessionWorkspaceProps } from "./chat-sidebar-content-types.ts";
+import type { SessionWorkspaceProps } from "./chat-sidebar-view-types.ts";
 
 type List = NonNullable<SessionWorkspaceProps["list"]>;
 type WorkspaceFixture = Omit<Partial<SessionWorkspaceProps>, "list"> & {

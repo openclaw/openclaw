@@ -2,12 +2,7 @@ import type { JSX } from "@solidjs/web";
 import type { ChatMessageGetResult } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { SessionFileDownload } from "../../../api/session-file-download.ts";
 import type { SessionWorkspaceListResult } from "../../../api/types.ts";
-import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
-import type { MarkdownFileLinkTarget } from "../../../components/markdown-file-links.ts";
-import type { MarkdownGitHubContext } from "../../../components/markdown-render-options.ts";
-import type { SessionLinkTarget } from "../../../components/markdown-session-links.ts";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
-import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import type { ChatMediaPlaybackMode } from "./chat-media-playback.ts";
 import type {
   AssistantAttachmentItem,
@@ -15,19 +10,11 @@ import type {
   ImageRenderOptions,
   ArtifactDownloadResolver,
 } from "./chat-message-media.ts";
-import type { createSessionWorkspaceProps } from "./chat-session-workspace.ts";
 import type {
   SessionDiffFileTextLoader,
   SessionDiffLoader,
   SessionDiffOwner,
 } from "./session-diff-panel.tsx";
-
-type SessionWorkspaceView = ReturnType<typeof createSessionWorkspaceProps>;
-export type SessionWorkspaceProps = Omit<
-  SessionWorkspaceView,
-  "connectionEpoch" | "onDownloadFile" | "onOpenDiff"
-> &
-  Partial<Pick<SessionWorkspaceView, "connectionEpoch" | "onDownloadFile" | "onOpenDiff">>;
 
 export type SessionWorkspaceFilter = "all" | "changed" | "read" | "artifacts";
 
@@ -289,34 +276,6 @@ export type SidebarSelection = (
   // to unrelated content.
   | { kind: "unavailable"; message: string }
 ) & { fileTab?: { id: string; label: string; disposition?: "pinned" | "preview" } };
-
-export type ChatDetailPanelProps = {
-  content: ChatDetailPanelContent | null;
-  fileNavigation: FileSidebarNavigation | null;
-  execNode: string | null;
-  attachmentRuntime: AttachmentSidebarRuntime;
-  basePath: string;
-  canvasPluginSurfaceUrl: string | null;
-  embedSandboxMode: EmbedSandboxMode;
-  allowExternalEmbedUrls: boolean;
-  githubContext: MarkdownGitHubContext;
-  embedded: boolean;
-  onOpenWorkspaceFile: ((target: MarkdownFileLinkTarget) => void) | null;
-  onOpenSessionLink: ((target: SessionLinkTarget) => void) | null;
-  onRevealInWorkspace: ((path: string) => void) | null;
-  onOpenImage: ((item: ImageLightboxItem) => void) | null;
-};
-
-/** Navigation facts/operations supplied by the workspace/tab owner, never a reader-local stack. */
-export type FileReaderWorkspace = {
-  path: string;
-  rootLabel: string;
-  sourceLabel?: string;
-  catalog: SessionWorkspaceProps;
-  /** The tab owner switches the content mode of this same document tab. */
-  showingFolder: boolean;
-  onBrowsePath: (path: string) => void;
-};
 
 export type FileReaderInteraction = "selection" | "copy" | "link" | "edit";
 
