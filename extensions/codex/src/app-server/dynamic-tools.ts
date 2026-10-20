@@ -1,7 +1,6 @@
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import {
   createAgentToolResultMiddlewareRunner,
-  createCodexAppServerToolResultExtensionRunner,
   extractMessagingToolSend,
   extractMessagingToolSendResult,
   finalizeToolTerminalPresentation,
@@ -288,8 +287,6 @@ export function createCodexDynamicToolBridge(params: {
     }
     return getChannelAgentToolMeta(tool as never) === undefined;
   };
-  const legacyExtensionRunner =
-    createCodexAppServerToolResultExtensionRunner(toolResultHookContext);
   const executionBoundaries = createAgentHarnessToolExecutionBoundaryRegistry();
   const directToolNames = params.directToolNames;
   const specs =
@@ -376,7 +373,6 @@ export function createCodexDynamicToolBridge(params: {
         confirmedMessagingTarget: MessagingToolSend | undefined;
         deliveredSourceReply: boolean;
       };
-      let executedArgsForPresentation = args;
       let rawIsErrorForPresentation = false;
       let finalSourceReplyDelivered = false;
       let telemetryRawResultForPresentation: unknown;
@@ -435,7 +431,6 @@ export function createCodexDynamicToolBridge(params: {
             value,
           }),
         beforeSnapshotResult: ({ rawResult, rawIsError, executedArguments: executedArgs }) => {
-          executedArgsForPresentation = executedArgs;
           rawIsErrorForPresentation = rawIsError;
           const messageDelivery = readEmbeddedMessageDeliveryFact(
             asOptionalRecord(asOptionalRecord(rawResult)?.details)?.messageDelivery,
@@ -526,15 +521,7 @@ export function createCodexDynamicToolBridge(params: {
             isError: rawIsErrorForPresentation,
             result: event.result,
           });
-          const extendedResult = await legacyExtensionRunner.applyToolResultExtensions({
-            threadId: call.threadId,
-            turnId: call.turnId,
-            toolCallId: call.callId,
-            toolName,
-            args: structuredClone(executedArgsForPresentation),
-            result: middlewareResult,
-          });
-          const result = enforceWholeSkillResult(toolName, extendedResult, toolResultMaxChars);
+          const result = enforceWholeSkillResult(toolName, middlewareResult, toolResultMaxChars);
           presentationIsError = rawIsErrorForPresentation || isToolResultError(result);
           // A successful spawn is durable before presentation middleware can rewrite details.
           const acceptedSessionSpawn =

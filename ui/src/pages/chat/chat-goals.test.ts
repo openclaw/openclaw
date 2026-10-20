@@ -1,4 +1,4 @@
-// @vitest-environment node
+// @vitest-environment jsdom
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createEffect, createRoot, flush } from "@solidjs/signals";
 import { Value } from "typebox/value";
@@ -16,11 +16,10 @@ import {
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { projectChatErrors } from "./chat-error-projection.ts";
-import { createChatErrorState } from "./chat-error-state.ts";
 import { chatGoalOperations, chatGoalRecovery, mutateChatGoal } from "./chat-goals.ts";
 import { setChatHistoryLoad } from "./chat-history-state.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { createTestPageState } from "./chat-page-state.test-support.ts";
 
 const goal: SessionGoal = {
   schemaVersion: 1,
@@ -46,8 +45,7 @@ function loseAck(): never {
 }
 
 function goalHost(requestHandlers: Record<string, unknown> = { "sessions.goal.update": loseAck }) {
-  const host = Object.assign(
-    createChatErrorState(),
+  const host = createTestPageState(
     makeChatHost({
       sessionKey: "agent:main:main",
       currentSessionId: "session-a",
@@ -376,9 +374,8 @@ describe("Goal control requests", () => {
     const host = goalHost();
     let renderedError: string | null | undefined;
     const dispose = createRoot((stop) => {
-      const errors = projectChatErrors(host);
       createEffect(
-        () => errors.chatError,
+        () => host.chatError,
         (value) => {
           renderedError = value;
         },
