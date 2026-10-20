@@ -46,9 +46,7 @@ it("retains snapshot order through pending counts and an unchanged live summary"
   expect(pending.listUsers).toBe(cached.listUsers);
   expect(settled.listUsers).toBe(cached.listUsers);
 
-  const changed = resolve({
-    counts: runningCounts(1, 0),
-  });
+  const changed = resolve({ counts: runningCounts(1, 0) });
   expect(names(changed.listUsers)).toEqual(["Ada", "Zed"]);
 });
 
@@ -79,16 +77,10 @@ it.each(["pending", "snapshot"] as const)(
 it("ignores counts outside the selected sort key and retains active-before-idle grouping", () => {
   const order = new SidebarOnlineOrder();
   const options = { users: [idleZed, activeAda], statusFilter: "all", now: NOW } as const;
-  expect(names(order.resolve({ ...options, sortMode: "presence", counts }).users)).toEqual([
-    "Ada",
-    "Zed",
-  ]);
+  const grouped = order.resolve({ ...options, sortMode: "presence", counts });
+  expect(names(grouped.users)).toEqual(["Ada", "Zed"]);
   const before = order.resolve({ ...options, sortMode: "open", counts });
-  const after = order.resolve({
-    ...options,
-    sortMode: "open",
-    counts: runningCounts(2, 0),
-  });
+  const after = order.resolve({ ...options, sortMode: "open", counts: runningCounts(2, 0) });
   expect(names(after.listUsers)).toEqual(["Zed", "Ada"]);
   expect(after.listUsers).toBe(before.listUsers);
 });

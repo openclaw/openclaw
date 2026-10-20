@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { flush } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { WorktreeRecord } from "../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { buildCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
@@ -11,7 +11,6 @@ import {
   createGateway,
   createGatewayHarness,
   createSessions,
-  createSessionsHarness,
   mountSidebar,
   TWO_AGENTS,
 } from "../test-helpers/app-sidebar.ts";
@@ -29,6 +28,7 @@ import { menuItemLabels, openSubmenu } from "../test-helpers/session-menu.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { getAppSidebarOwner } from "./app-sidebar.tsx";
 setupSidebarTest();
+afterEach(clearNativeGatewayTestState);
 
 it("keeps the current catalog session when switching either face", async () => {
   const sessionKey = buildCatalogSessionKey({
@@ -45,8 +45,6 @@ it("keeps the current catalog session when switching either face", async () => {
   Object.assign(context, { basePath: "" });
   const onNavigate = vi.fn();
   Object.assign(sidebar, {
-    activeRouteId: "chat",
-    basePath: "",
     enabledRouteIds: ["chat", "dashboard"],
     sessionKey,
     onNavigate,
@@ -64,80 +62,76 @@ it("keeps the current catalog session when switching either face", async () => {
     view.unmount();
   }
 });
-describe("mounted sidebar menus", () => {
-  afterEach(clearNativeGatewayTestState);
-  async function mountConnected(
-    gateway: Parameters<typeof mountSidebar>[0],
-    sessions = createSessions("main", ["agent:main:main"]),
-  ) {
-    const mounted = await mountSidebar(gateway, sessions);
-    mounted.sidebar.connected = true;
-    await mounted.sidebar.updateComplete;
-    return mounted;
-  }
+async function mountConnected(
+  gateway: Parameters<typeof mountSidebar>[0],
+  sessions = createSessions("main", ["agent:main:main"]),
+) {
+  const mounted = await mountSidebar(gateway, sessions);
+  mounted.sidebar.connected = true;
+  await mounted.sidebar.updateComplete;
+  return mounted;
+}
 
-  it("closes the filter popup when the gateway viewer changes", async () => {
-    const gateway = createGatewayHarness(createTestGatewayClient(async () => ({})));
-    gateway.publish({ selfUser: { id: "profile-ada", name: "Ada" } });
-    const { sidebar } = await mountConnected(gateway.gateway);
-    const trigger = () => sidebar.querySelector<HTMLButtonElement>(".sidebar-session-sort")!;
-    const popup = () => sidebar.querySelector(".sidebar-session-sort-menu");
-    trigger().click();
-    await waitForSolid(() => expect(popup()).not.toBeNull());
+it("closes the filter popup when the gateway viewer changes", async () => {
+  const gateway = createGatewayHarness(createTestGatewayClient(async () => ({})));
+  gateway.publish({ selfUser: { id: "profile-ada", name: "Ada" } });
+  const { sidebar } = await mountConnected(gateway.gateway);
+  const trigger = () => sidebar.querySelector<HTMLButtonElement>(".sidebar-session-sort")!;
+  const popup = () => sidebar.querySelector(".sidebar-session-sort-menu");
+  trigger().click();
+  await waitForSolid(() => expect(popup()).not.toBeNull());
 
-    gateway.publish({ selfUser: { id: "profile-bob", name: "Bob" } });
-    await waitForSolid(() => {
-      expect(trigger()).not.toBeNull();
-      expect(popup()).toBeNull();
-    });
-    trigger().click();
-    await waitForSolid(() => expect(popup()).not.toBeNull());
+  gateway.publish({ selfUser: { id: "profile-bob", name: "Bob" } });
+  await waitForSolid(() => {
+    expect(trigger()).not.toBeNull();
+    expect(popup()).toBeNull();
+  });
+  trigger().click();
+  await waitForSolid(() => expect(popup()).not.toBeNull());
+});
+
+it("keeps the catalog popup and row state live after provider replacement", async () => {
+  vi.useFakeTimers();
+  const request = createGatewayRequestMock().mockResolvedValue(
+    catalogPage([{ threadId: "thread-1", name: "Catalog session" }]),
+  );
+  const gateway = createGatewayHarness(createTestGatewayClient(request));
+  gateway.publish({ hello: gatewayHelloForMethods(["sessions.catalog.list"]) });
+  const { sidebar, provider, context } = await mountConnected(gateway.gateway);
+  await vi.advanceTimersByTimeAsync(0);
+  await sidebar.updateComplete;
+  const trigger = () => sidebar.querySelector<HTMLButtonElement>("[data-catalog-session-menu]")!;
+  const popup = () => sidebar.querySelector("openclaw-catalog-session-menu");
+  const expectOpen = () => {
+    expect(trigger().getAttribute("aria-expanded")).toBe("true");
+    expect(popup()!.querySelector('[data-value="viewer"]')).not.toBeNull();
+  };
+  await waitForSolid(() => expect(trigger()).not.toBeNull());
+  const originalTrigger = trigger();
+  originalTrigger.click();
+  await waitForSolid(expectOpen);
+
+  provider.setContext({ ...context });
+  await sidebar.updateComplete;
+  await waitForSolid(() => {
+    expect(trigger()).not.toBe(originalTrigger);
+    expectOpen();
   });
 
-  it("keeps the catalog popup and row state live after provider replacement", async () => {
-    vi.useFakeTimers();
-    const request = createGatewayRequestMock().mockResolvedValue(
-      catalogPage([{ threadId: "thread-1", name: "Catalog session" }]),
-    );
-    const gateway = createGatewayHarness(createTestGatewayClient(request));
-    gateway.publish({ hello: gatewayHelloForMethods(["sessions.catalog.list"]) });
-    const { sidebar, provider, context } = await mountConnected(gateway.gateway);
-    await vi.advanceTimersByTimeAsync(0);
-    await sidebar.updateComplete;
-    const trigger = () => sidebar.querySelector<HTMLButtonElement>("[data-catalog-session-menu]")!;
-    const popup = () => sidebar.querySelector("openclaw-catalog-session-menu");
-    const expectOpen = () => {
-      expect(trigger().getAttribute("aria-expanded")).toBe("true");
-      expect(popup()!.querySelector('[data-value="viewer"]')).not.toBeNull();
-    };
-    await waitForSolid(() => expect(trigger()).not.toBeNull());
-    const originalTrigger = trigger();
-    originalTrigger.click();
-    await waitForSolid(expectOpen);
-
-    provider.setContext({ ...context });
-    await sidebar.updateComplete;
-    await waitForSolid(() => {
-      expect(trigger()).not.toBe(originalTrigger);
-      expectOpen();
-    });
-
-    popup()!
-      .querySelector('[data-value="viewer"]')!
-      .dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    await waitForSolid(() => {
-      expect(popup()).toBeNull();
-      expect(trigger().getAttribute("aria-expanded")).toBe("false");
-    });
-    trigger().click();
-    await waitForSolid(expectOpen);
+  popup()!
+    .querySelector('[data-value="viewer"]')!
+    .dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  await waitForSolid(() => {
+    expect(popup()).toBeNull();
+    expect(trigger().getAttribute("aria-expanded")).toBe("false");
   });
+  trigger().click();
+  await waitForSolid(expectOpen);
+});
 
-  it.each([
-    "provider replacement",
-    "client replacement",
-    "native disconnect and reconnect",
-  ] as const)("keeps session-menu work scoped across %s", async (transition) => {
+it.each(["provider replacement", "client replacement", "native disconnect and reconnect"] as const)(
+  "keeps session-menu work scoped across %s",
+  async (transition) => {
     setNativeGatewayTestState("local");
     type WorktreePage = { worktrees: Pick<WorktreeRecord, "id" | "path">[] };
     const retired = createDeferred<WorktreePage>();
@@ -146,27 +140,16 @@ describe("mounted sidebar menus", () => {
     const request = createGatewayRequestMock((method) =>
       method === "worktrees.list" ? worktrees() : Promise.resolve({}),
     );
-    const sessions = createSessionsHarness("main", ["agent:main:checkout"]);
-    const result = sessions.sessions.state.result!;
-    sessions.publishList({
-      result: {
-        ...result,
-        sessions: result.sessions.map((row) =>
-          Object.assign({}, row, {
-            worktree: { id: "wt-1", branch: "main", repoRoot: "/synthetic/repo" },
-          }),
-        ),
-      },
+    const sessions = createSessions("main", ["agent:main:checkout"]);
+    Object.assign(sessions.state.result!.sessions[0]!, {
+      worktree: { id: "wt-1", branch: "main", repoRoot: "/synthetic/repo" },
     });
     const response: WorktreePage = {
       worktrees: [{ id: "wt-1", path: "/synthetic/worktrees/checkout" }],
     };
     try {
       const gateway = createGatewayHarness(createTestGatewayClient(request));
-      const { sidebar, provider, context } = await mountConnected(
-        gateway.gateway,
-        sessions.sessions,
-      );
+      const { sidebar, provider, context } = await mountConnected(gateway.gateway, sessions);
       const trigger = () =>
         sidebar.querySelector<HTMLButtonElement>("[data-sidebar-session-menu]")!;
       trigger().click();
@@ -219,5 +202,5 @@ describe("mounted sidebar menus", () => {
       retired.resolve({ worktrees: [] });
       current.resolve({ worktrees: [] });
     }
-  });
-});
+  },
+);

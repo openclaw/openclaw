@@ -1,14 +1,9 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createStorageMock } from "../test-helpers/storage.ts";
-import type { SidebarEmptyGroupsMode } from "./app-sidebar-session-types.ts";
 import { SidebarEmptyGroupsPreference } from "./sidebar-empty-groups.ts";
 
-let storage: Storage;
-beforeEach(() => {
-  storage = createStorageMock();
-  vi.stubGlobal("localStorage", storage);
-});
+beforeEach(() => vi.stubGlobal("localStorage", createStorageMock()));
 afterEach(() => vi.unstubAllGlobals());
 
 function fixture() {
@@ -19,7 +14,7 @@ function fixture() {
   };
   const controller = new SidebarEmptyGroupsPreference(() => ({ gateway }));
   controller.reconcile();
-  const reconcile = (snapshot: Partial<typeof gateway.snapshot>, mode: SidebarEmptyGroupsMode) => {
+  const reconcile = (snapshot: Partial<typeof gateway.snapshot>, mode: typeof controller.mode) => {
     Object.assign(gateway.snapshot, snapshot);
     const changed = controller.reconcile();
     expect(controller.mode).toBe(mode);
@@ -41,10 +36,10 @@ it.each([
   ["true", "always"],
   ["false", "filtering"],
 ] as const)("migrates legacy %s once without copying it to a second user", (legacy, expected) => {
-  storage.setItem("openclaw:sidebar:sessions:hide-empty-groups", legacy);
+  localStorage.setItem("openclaw:sidebar:sessions:hide-empty-groups", legacy);
   const { controller, reconcile } = fixture();
   expect(controller.mode).toBe(expected);
-  expect(storage.getItem("openclaw:sidebar:sessions:hide-empty-groups")).toBeNull();
+  expect(localStorage.getItem("openclaw:sidebar:sessions:hide-empty-groups")).toBeNull();
   reconcile({ selfUser: { id: "lin" } }, "filtering");
   reconcile({ selfUser: { id: "ada" } }, expected);
 });
@@ -52,8 +47,7 @@ it.each([
 it("does not persist effective visibility during rerenders or an identified reconnect", () => {
   const { controller, reconcile } = fixture();
   controller.set("never");
-  const writes = vi.spyOn(storage, "setItem");
-  writes.mockClear();
+  const writes = vi.spyOn(localStorage, "setItem");
   reconcile({ phase: "reconnecting", selfUser: null }, "never");
   reconcile({ phase: "connected", selfUser: { id: "ada" } }, "never");
   expect(writes).not.toHaveBeenCalled();
@@ -77,8 +71,8 @@ it("keeps the view usable when browser persistence is denied", () => {
   const denied = () => {
     throw new Error("denied");
   };
-  vi.spyOn(storage, "getItem").mockImplementation(denied);
-  vi.spyOn(storage, "setItem").mockImplementation(denied);
+  vi.spyOn(localStorage, "getItem").mockImplementation(denied);
+  vi.spyOn(localStorage, "setItem").mockImplementation(denied);
   const { controller } = fixture();
   expect(controller.mode).toBe("filtering");
   controller.set("never");

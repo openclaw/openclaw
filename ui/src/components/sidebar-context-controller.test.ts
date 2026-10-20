@@ -1,9 +1,7 @@
 /* @vitest-environment jsdom */
-import { createRouter, definePage } from "@openclaw/uirouter";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { ApplicationRouter, RouteId } from "../app-routes.ts";
 import { createSidebarTestRouter } from "../test-helpers/app-sidebar-router.ts";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import { createGateway, createSessions, mountSidebar } from "../test-helpers/app-sidebar.ts";
@@ -60,28 +58,12 @@ it("restores destination offsets and updates fades after content commits", async
   await expectFade("none");
 });
 
-type RouteModule = NonNullable<
-  ReturnType<ApplicationRouter["getState"]>["matches"][number]["module"]
->;
-
 it("updates contextual navigation from its router and retires the subscription on detach", async () => {
   const loaded = createDeferred<unknown>();
-  const router = createRouter<RouteId, unknown, RouteModule>({
-    routes: [
-      definePage({
-        id: "systems",
-        path: "/systems",
-        component: () => ({
-          renderSolid: () => "workspace",
-          renderSidebar: (_data: unknown, pending: boolean) =>
-            pending ? "loading machines" : "machine inventory",
-        }),
-        loader: () => loaded.promise,
-      }),
-      definePage({ id: "cron", path: "/cron", component: () => ({ renderSolid: () => "cron" }) }),
-    ],
-  });
-  onTestFinished(() => router.stop());
+  const router = createSidebarTestRouter((_data, pending) =>
+    pending ? "loading machines" : "machine inventory",
+  );
+  router.getRoute("systems")!.loader = () => loaded.promise;
   const { provider, sidebar } = await mountEmptySidebar();
   const element = provider.querySelector<HTMLElement>("openclaw-app-sidebar")!;
   const owner = getAppSidebarOwner(element);

@@ -1,13 +1,14 @@
 import { vi } from "vitest";
+import { makeCronJob } from "../../../src/cron/delivery.test-helpers.ts";
 import type { CronCompactJob, CronJob, CronJobsListResult } from "../api/types.ts";
-import type { ApplicationContext } from "../app/context.ts";
 import { client as mockClient, createGatewayHarness } from "../app/overlays-access.test-support.ts";
 import { createSidebarAttentionStore } from "../app/sidebar-attention-store.ts";
 import { hiddenScopeUpgradeCapability } from "../test-helpers/application-context.ts";
 import { SidebarAttentionStoreOwner } from "./sidebar-attention-store.ts";
 
 export type CompactCronPage = CronJobsListResult<CronCompactJob>;
-const inertCapability = <T>(value: T) => ({ ...value, subscribe: () => () => undefined });
+type Sources = Parameters<typeof createSidebarAttentionStore>[0];
+const inert = <T>(value: T) => ({ ...value, subscribe: () => () => undefined });
 
 export function cronPage(id?: string): CompactCronPage {
   const jobs = id
@@ -39,23 +40,20 @@ export function cronPage(id?: string): CompactCronPage {
 }
 
 export function createStore(
-  gateway: ApplicationContext["gateway"],
-  connectionBootstrap?: ApplicationContext["connectionBootstrap"],
-  selection?: ApplicationContext["agentSelection"],
+  gateway: Sources["gateway"],
+  connectionBootstrap?: Sources["connectionBootstrap"],
+  selection?: Sources["agentSelection"],
 ) {
+  const agentSelection =
+    selection ??
+    (inert({
+      state: { selectedId: "main", scopeId: null },
+    }) as unknown as Sources["agentSelection"]);
   return createSidebarAttentionStore({
     gateway,
-    agentSelection:
-      selection ??
-      (inertCapability({
-        state: { selectedId: "main", scopeId: null },
-      }) as unknown as ApplicationContext["agentSelection"]),
-    agents: inertCapability({
-      state: { agentsList: null },
-    }) as unknown as ApplicationContext["agents"],
-    overlays: inertCapability({
-      snapshot: { approvalQueue: [] },
-    }) as unknown as ApplicationContext["overlays"],
+    agentSelection,
+    agents: inert({ state: { agentsList: null } }) as unknown as Sources["agents"],
+    overlays: inert({ snapshot: { approvalQueue: [] } }) as unknown as Sources["overlays"],
     scopeUpgrade: hiddenScopeUpgradeCapability,
     connectionBootstrap,
   });
@@ -84,19 +82,15 @@ export function startAuthenticatedStore(request: Parameters<typeof mockClient>[0
 }
 
 export function eventJob(overrides: Partial<CronJob> = {}): CronJob {
-  return {
+  return makeCronJob({
     id: "incident",
     name: "incident",
     agentId: "main",
-    enabled: true,
     createdAtMs: 0,
     updatedAtMs: 0,
     configRevision: "fixture-config",
-    schedule: { kind: "every", everyMs: 60_000 },
-    sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
     payload: { kind: "agentTurn", message: "Synthetic scheduled task" },
     state: { lastRunStatus: "error" },
     ...overrides,
-  };
+  });
 }
