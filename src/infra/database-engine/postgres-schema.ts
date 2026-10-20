@@ -35,8 +35,11 @@ const admittedSchemaKey: SqliteDatabaseFactKey<StoreSchema> = {
 };
 export const getAdmittedPostgresSchema = (db: PostgresSqlConnection) =>
   getSqliteDatabaseAdmission(db, admittedSchemaKey);
-export const retainPostgresSchema = (db: PostgresSqlConnection, schema: StoreSchema) =>
-  publishSqliteDatabaseAdmission(db, admittedSchemaKey, schema);
+export const retainPostgresSchema = (db: PostgresSqlConnection, schema: StoreSchema) => {
+  // Upgrade recipes can contain backup callbacks; workers only need the current definition.
+  const { postgresMigrations: _migrations, ...definition } = schema;
+  publishSqliteDatabaseAdmission(db, admittedSchemaKey, definition);
+};
 
 export function admitPostgresCapabilities(db: PostgresSqlConnection): PostgresCapabilities {
   const retained = capabilities.get(db);
