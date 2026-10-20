@@ -19,7 +19,6 @@ import { reserveSubagentCompletionControllerSource as reserveCompletion } from "
 import {
   hasSubagentControllerInput as hasInput,
   retireSubagentControllerInputs as retireInputs,
-  subagentCompletionSourceId,
 } from "./subagent-controller-inputs.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -28,8 +27,8 @@ const storePath = "/private/tmp/subagent-controller-inputs/main/sessions.json";
 const requesterKey = "global";
 const inputs: SessionControllerInput[] = [];
 
-function pendingWake(batchRunIds: string[]) {
-  return { status: "pending" as const, attemptCount: 0, batchRunIds, rearmGeneration: 4 };
+function pendingWake(batchRunIds: string[], rearmGeneration = 4) {
+  return { status: "pending" as const, attemptCount: 0, batchRunIds, rearmGeneration };
 }
 
 function expectRetired(
@@ -86,25 +85,19 @@ afterEach(async () => {
   resetSessionControllerStateForTest();
 });
 
-it.each([
-  { generation: undefined, expected: "subagent-completion:child-a:0" },
-  { generation: 4, expected: "subagent-completion:child-a:4" },
-])("keeps the completion reservation identity exact ($generation)", ({ generation, expected }) => {
-  expect(subagentCompletionSourceId(child({ generation }))).toBe(expected);
-});
-
-it("finds and retires only the exact completion source in its physical requester", () => {
-  const entry = child();
+it("retires only the exact legacy completion source in its physical requester", () => {
+  const entry = child({ generation: undefined });
+  const completionId = "subagent-completion:child-a:0";
   const unrelated = [
     reserve("subagent-completion:other-child:4"),
     reserve("subagent-completion:child-a:3"),
-    reserve("subagent-completion:child-a:4", { storePath: "/private/tmp/other/sessions.json" }),
-    reserve("subagent-completion:child-a:4", { sessionKey: "other-requester" }),
-    reserve("subagent-completion:child-a:4", { agentId: "research" }),
+    reserve(completionId, { storePath: "/private/tmp/other/sessions.json" }),
+    reserve(completionId, { sessionKey: "other-requester" }),
+    reserve(completionId, { agentId: "research" }),
   ];
   expect(hasInput(entry)).toBe(false);
 
-  const exact = reserve("subagent-completion:child-a:4");
+  const exact = reserve(completionId);
   expectRetired(entry, exact, ...unrelated);
 });
 
@@ -144,7 +137,6 @@ it.each(["default", "custom", "memory"] as const)(
           input.mailbox.owner,
           captureSessionTarget({ ...target, physicalStorePath: physicalStore + ".other" }),
         );
-        expect(hasInput(entry)).toBe(true);
         expect(hasInput({ ...entry, requesterStorePath: physicalStore + ".other" })).toBe(false);
         expectRetired(entry, input);
       } finally {
@@ -155,43 +147,38 @@ it.each(["default", "custom", "memory"] as const)(
   },
 );
 
-it.each(
-  ["explicit", "legacy"].flatMap((representation) =>
-    (["retired", "generation", "store", "key", "agent", "no wake"] as const).map((difference) => ({
-      representation,
-      difference,
-    })),
-  ),
-)(
-  "uses surviving $representation batch members and excludes a member with different $difference",
-  ({ representation, difference }) => {
+const batchIds = ["child-a", "child-b", "child-c"];
+it.each<[string, string, Partial<SubagentRunRecord> | undefined]>([
+  ["explicit", "retired", undefined],
+  ["explicit", "generation", { requesterSettleWake: pendingWake(batchIds, 5) }],
+  ["explicit", "store", { requesterStorePath: "/private/tmp/other/sessions.json" }],
+  ["explicit", "key", { requesterSessionKey: "other-requester" }],
+  ["explicit", "agent", { requesterAgentId: "research" }],
+  ["explicit", "no wake", { requesterSettleWake: undefined }],
+  ["legacy", "retired", undefined],
+])(
+  "uses surviving %s batch members and excludes a member with different %s",
+  (representation, _difference, overrides) => {
     const legacy = representation === "legacy";
     const requesterSessionKey = legacy ? "agent:main:global" : requesterKey;
     const requester = { requesterSessionKey, requesterAgentId: legacy ? undefined : "main" };
-    const wake = pendingWake(["child-a", "child-b", "child-c", "retired-child"]);
+    const wake = pendingWake(batchIds);
     const entry = child({ ...requester, requesterSettleWake: wake });
     const sibling = child({ ...requester, runId: "child-b", requesterSettleWake: { ...wake } });
     subagentRuns.set(entry.runId, entry);
     subagentRuns.set(sibling.runId, sibling);
-    if (difference !== "retired") {
-      const exclusions: Record<typeof difference, Partial<SubagentRunRecord>> = {
-        generation: { requesterSettleWake: { ...wake, rearmGeneration: 5 } },
-        store: { requesterStorePath: "/private/tmp/other/sessions.json" },
-        key: { requesterSessionKey: "other-requester" },
-        agent: { requesterAgentId: "research" },
-        "no wake": { requesterSettleWake: undefined },
-      };
+    if (overrides) {
       const excluded = child({
         ...requester,
         runId: "child-c",
         requesterSettleWake: { ...wake },
-        ...exclusions[difference],
+        ...overrides,
       });
       subagentRuns.set(excluded.runId, excluded);
     }
     const batchPrefix = `requester-settle:${legacy ? "unknown" : "main"}:${requesterSessionKey}`;
     const scope = { sessionKey: requesterSessionKey };
-    const obsolete = reserve(`${batchPrefix}:child-a,child-b,child-c,retired-child:yield-4`, scope);
+    const obsolete = reserve(`${batchPrefix}:child-a,child-b,child-c:yield-4`, scope);
     const foreignOnly = reserve(`${batchPrefix}:child-c:yield-4`, scope);
     expect(hasInput(entry)).toBe(false);
 

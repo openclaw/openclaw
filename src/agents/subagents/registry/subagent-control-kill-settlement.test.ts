@@ -87,12 +87,10 @@ it.each(["operations", "claimed inputs"] as const)(
       expect(untouched.operation).toMatchObject({ abortSignal: { aborted: false }, result: null });
 
       joined = settleSubagentKillSources({ cleanup: capture });
-      let settled = false;
-      void joined.then(() => {
-        settled = true;
-      });
+      const settled = vi.fn();
+      void joined.then(settled);
       await vi.advanceTimersByTimeAsync(1);
-      expect(settled).toBe(false);
+      expect(settled).not.toHaveBeenCalled();
 
       cancelled.finish();
       await cancelled.work;

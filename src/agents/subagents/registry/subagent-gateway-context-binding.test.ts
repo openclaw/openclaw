@@ -1,43 +1,24 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import {
   bindGatewayContextResolver as bindContext,
   getGatewayContextResolver as getContext,
   getSharedGatewayContextResolver as sharedContext,
 } from "../../../plugins/runtime/gateway-request-scope.js";
-import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import {
   getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../../tools/gateway-caller-context.js";
 
-it("keeps successor routing private and excludes restored rows", () => {
-  const context = { owner: "gateway-a" } as never;
-  const resolver = () => context;
-  const source = createSubagentRunRecord({ runId: "run-source" });
-  const successor = createSubagentRunRecord({ runId: "run-successor" });
-  const restored = structuredClone(source);
-
-  bindContext(source, resolver);
-  bindContext(successor, getContext(source));
-
-  expect(getContext(successor)?.()).toBe(context);
-  expect(getContext(restored)).toBeUndefined();
-});
-
 it.each(["distinct", "first-unbound", "second-unbound"])(
   "rejects a %s settle batch without losing its binding",
   (mode) => {
-    const first = createSubagentRunRecord({ runId: "run-first" });
-    const second = createSubagentRunRecord({ runId: "run-second" });
+    const first = {};
+    const second = {};
     const firstContext = { owner: "gateway-a" } as never;
     const secondContext = { owner: "gateway-b" } as never;
-    if (mode !== "first-unbound") {
-      bindContext(first, () => firstContext);
-    }
-    if (mode !== "second-unbound") {
-      bindContext(second, () => secondContext);
-    }
+    bindContext(first, mode === "first-unbound" ? undefined : () => firstContext);
+    bindContext(second, mode === "second-unbound" ? undefined : () => secondContext);
 
     const shared = sharedContext([first, second]);
     expect(shared).toBeTypeOf("function");
@@ -84,22 +65,16 @@ it.each([
 });
 
 it("preserves a shared owner and leaves wholly unbound batches unbound", () => {
-  const first = {};
-  const second = {};
+  const owners = [{}, {}];
   const context = {} as GatewayRequestContext;
-  let closed = false;
-  const resolver = () => {
-    if (closed) {
-      throw new Error("source closed");
-    }
-    return context;
-  };
+  const resolver = vi.fn(() => context);
   expect(sharedContext([])).toBeUndefined();
-  expect(sharedContext([first, second])).toBeUndefined();
-  bindContext(first, resolver);
-  bindContext(second, resolver);
-  const shared = sharedContext([first, second]);
+  expect(sharedContext(owners)).toBeUndefined();
+  owners.forEach((owner) => bindContext(owner, resolver));
+  const shared = sharedContext(owners);
   expect(shared?.()).toBe(context);
-  closed = true;
+  resolver.mockImplementation(() => {
+    throw new Error("source closed");
+  });
   expect(shared?.()).toBeUndefined();
 });

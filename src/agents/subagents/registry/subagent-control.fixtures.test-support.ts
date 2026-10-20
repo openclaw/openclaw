@@ -44,6 +44,7 @@ export function createControlRunFixture(stateDir: () => string) {
     return registerSubagentRun(
       createSubagentRunParams({
         runId: id,
+        task: id,
         childSessionKey: sessionKey,
         childAgentId: agentId,
         sessionEntry:

@@ -36,9 +36,7 @@ export function registerAdmissionDrainControlTests({
         childSessionKey,
         childSessionIdentity: { sessionId, lifecycleRevision: sessionId + "-revision" },
         controllerSessionKey,
-        requesterSessionKey: controllerSessionKey,
         task: "hold admission during kill",
-        createdAt: Date.now() - 2_000,
         collect: queued,
         execution: queued
           ? { status: "queued" }
@@ -70,11 +68,8 @@ export function registerAdmissionDrainControlTests({
         controller: controllerFor(controllerSessionKey),
         runs: [entry],
       });
-      let killSettled = false;
-      const markSettled = () => {
-        killSettled = true;
-      };
-      void pendingKill.then(markSettled, markSettled);
+      const settled = vi.fn();
+      void pendingKill.then(settled, settled);
       try {
         await awaitGateBeforeSettlement(
           interrupted.promise,
@@ -82,7 +77,7 @@ export function registerAdmissionDrainControlTests({
           "Cancellation settled before interrupting the held admission",
         );
         await Promise.resolve();
-        expect(killSettled).toBe(false);
+        expect(settled).not.toHaveBeenCalled();
         if (queued) {
           releaseSwarmRun("holder");
         }
