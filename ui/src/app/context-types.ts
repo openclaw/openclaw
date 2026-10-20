@@ -39,12 +39,6 @@ import type { WebPushCapability } from "./web-push.ts";
 
 export type { ApplicationGateway, ApplicationGatewaySnapshot } from "./gateway.ts";
 
-export type ApplicationThemeServerSelection = {
-  readonly revision: number;
-  readonly scope: string;
-  readonly theme: ThemeName | null;
-};
-
 export type ApplicationTheme = {
   readonly branding: ThemeBranding;
   readonly catalog?: ThemeCatalogSnapshot;
@@ -52,7 +46,6 @@ export type ApplicationTheme = {
   readonly settings: UiPreferences;
   readonly mode: ThemeMode;
   readonly resolvedMode: "dark" | "light";
-  readonly serverSelection: ApplicationThemeServerSelection | null;
   readonly appliedPalette: ApplicationThemePalette | null;
   recordServerSelection: (theme: ThemeName | null, scope: string) => void;
   setMode: (mode: ThemeMode, element?: HTMLElement | null) => void;

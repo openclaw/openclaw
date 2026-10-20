@@ -4,7 +4,10 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import type { RuntimeAuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { PreparedModelRuntimeSnapshot } from "../agents/prepared-model-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { publishSessionCostUsageUpdated } from "../infra/session-cost-usage-events.js";
+import {
+  getSessionCostUsageUpdatedAt,
+  publishSessionCostUsageUpdated,
+} from "../infra/session-cost-usage-events.js";
 import {
   bumpSkillsSnapshotVersion,
   getSkillsSnapshotVersion,
@@ -71,6 +74,7 @@ afterEach(async () => {
     await owner.stop();
   }
   sidecarOwners.clear();
+  vi.useRealTimers();
 });
 
 beforeEach(() => {
@@ -107,6 +111,7 @@ function createLifecycle(warn = vi.fn()) {
 it.each([false, true])(
   "publishes usage completion (failed: %s) without rebuilding metadata and retires its listener on stop",
   async (failed) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const broadcast = vi.fn();
     const { lifecycle: pending, sidecarOwner } = createLifecycle();
     const lifecycle = await pending;
@@ -115,6 +120,9 @@ it.each([false, true])(
     mocks.refresh.mockClear();
     expect(sidecarOwner.snapshot()).toHaveLength(1);
     publishSessionCostUsageUpdated("main", failed);
+    if (!failed) {
+      await vi.advanceTimersByTimeAsync(500);
+    }
     expect(broadcast).toHaveBeenCalledExactlyOnceWith(
       "chat.metadata.changed",
       {
@@ -137,6 +145,52 @@ it.each([false, true])(
     expect(broadcast).toHaveBeenCalledTimes(1);
   },
 );
+
+it("coalesces usage batches by agent without delaying failures or extending the window", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const broadcast = vi.fn();
+  const { lifecycle: pending, sidecarOwner } = createLifecycle();
+  const lifecycle = await pending;
+  await lifecycle.attachContext({ ...context, broadcast }, sidecarOwner.publish);
+  for (let index = 0; index < 112; index++) {
+    publishSessionCostUsageUpdated("main");
+    publishSessionCostUsageUpdated("other");
+  }
+  const latestOther = getSessionCostUsageUpdatedAt();
+  await vi.advanceTimersByTimeAsync(499);
+  expect(broadcast).not.toHaveBeenCalled();
+  publishSessionCostUsageUpdated("main");
+  const latestMain = getSessionCostUsageUpdatedAt();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(broadcast.mock.calls.map(([, payload]) => payload.agentId)).toEqual(["main", "other"]);
+  expect(broadcast.mock.calls.map(([, payload]) => payload.usageUpdatedAt)).toEqual([
+    latestMain,
+    latestOther,
+  ]);
+  const firstCommit = broadcast.mock.calls[0]![1].usageUpdatedAt;
+  broadcast.mockClear();
+
+  publishSessionCostUsageUpdated("other");
+  publishSessionCostUsageUpdated("main");
+  publishSessionCostUsageUpdated("main", true);
+  expect(broadcast.mock.calls.map(([, payload]) => payload.agentId)).toEqual(["main", "main"]);
+  expect(broadcast.mock.calls.map(([, payload]) => payload.usageRefreshFailed ?? false)).toEqual([
+    false,
+    true,
+  ]);
+  expect(broadcast.mock.calls[0]![1].usageUpdatedAt).toBeGreaterThan(firstCommit);
+  expect(broadcast.mock.calls[1]![1].usageUpdatedAt).toBeGreaterThan(
+    broadcast.mock.calls[0]![1].usageUpdatedAt,
+  );
+  await vi.advanceTimersByTimeAsync(499);
+  expect(broadcast).toHaveBeenCalledTimes(2);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(broadcast.mock.calls[2]![1].agentId).toBe("other");
+  publishSessionCostUsageUpdated("main");
+  await sidecarOwner.stop();
+  await vi.advanceTimersByTimeAsync(500);
+  expect(broadcast).toHaveBeenCalledTimes(3);
+});
 
 it("retires model choices at its config commit before pending metadata settles", async () => {
   const broadcast = vi.fn();

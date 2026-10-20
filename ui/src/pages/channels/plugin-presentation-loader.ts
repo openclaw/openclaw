@@ -3,7 +3,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import type { PluginListResult } from "../../lib/plugins/index.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { projectMutableSource } from "../../lib/reactive/projection.ts";
 import { PluginIconOwner, pluginIconFetchContext } from "../plugins/plugin-icon-owner.ts";
 import {
   createChannelSettingsPresentation,
@@ -31,16 +31,8 @@ export function createChannelPluginPresentation(hooks: PluginPresentationHooks) 
   let catalog: PluginListResult | null = null;
   let iconUrls: Record<string, string> = {};
   let publish = () => {};
-  const presentation = projectSource(hooks, {
-    read: () => ({ catalog, iconUrls }),
-    subscribe: (_source, notify) => {
-      publish = notify;
-      return () => {
-        publish = () => {};
-      };
-    },
-    equality: "revision",
-  });
+  const presentation = projectMutableSource(hooks, () => ({ catalog, iconUrls }));
+  publish = presentation.publish;
   let request: { client: GatewayBrowserClient; controller: AbortController } | null = null;
   let disposed = false;
   const icons = new PluginIconOwner({

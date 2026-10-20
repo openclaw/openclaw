@@ -90,8 +90,6 @@ import {
   listOwnedRuntimeAuthProfileStoreSnapshots,
   listRuntimeAuthProfileStoreSnapshotsForSharedOwner,
   restoreOwnedRuntimeAuthProfileStoreSnapshot,
-  setRuntimeAuthProfileStoreSnapshot,
-  updateRuntimeAuthProfileStoreSnapshot,
   type OwnedRuntimeAuthProfileStoreSnapshotEntry,
 } from "./runtime-snapshots.js";
 import {
@@ -1311,8 +1309,6 @@ export function createAuthProfileStoreRuntime(
     withPreparedAuthProfileStoreReads,
     overlayExternalAuthProfiles,
     withPreparedExternalAuthProfiles,
-    setRuntimeAuthProfileStoreSnapshot,
-    updateRuntimeAuthProfileStoreSnapshot,
   });
 
   /** Retain read owners, never copies of their migration refusals, for a session facade. */

@@ -31,6 +31,7 @@ import { repairAuditEventsSchema } from "./openclaw-state-db-audit-migration.js"
 import { openDoctorStateSchemaReadAdmission } from "./openclaw-state-db-doctor-schema.js";
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
+import { withStateMigrationBackupForTest } from "./openclaw-state-schema.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -152,7 +153,7 @@ it("rejects a canonical configured agent path owned by another agent before writ
   expect(snapshotPreflightSourceManifest(root)).toEqual(before);
 });
 
-it("admits supported forward state migration after the Doctor-owned audit repair", async () => {
+it("admits supported forward state migration with backup custody after the Doctor-owned audit repair", async () => {
   const fixture = createReleasedStateDatabase();
   const { dir: stateDir, statePath } = fixture;
   {
@@ -162,6 +163,7 @@ it("admits supported forward state migration after the Doctor-owned audit repair
   const before = snapshotPreflightSourceManifest(stateDir);
   await expect(fixture.ready()).resolves.toBeUndefined();
   expect(snapshotPreflightSourceManifest(stateDir)).toEqual(before);
+  await withStateMigrationBackupForTest({ env: fixture.env }, () => fixture.state());
   const migrated = fixture.state();
   expect(migrated.db.prepare("PRAGMA user_version").get()).toEqual({
     user_version: supportedVersions.state,

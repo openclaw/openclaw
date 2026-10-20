@@ -1,12 +1,14 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { applyExecApprovalsUpdate } from "../../infra/exec-approvals-mutation.kernel.js";
+import * as execApprovalsSocket from "../../infra/exec-approvals-socket.js";
 import type { ExecApprovalsFile } from "../../infra/exec-approvals.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withTempDir } from "../../test-utils/temp-dir.js";
+import * as localStateOwner from "./local-state-owner.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const ensureExecApprovalsSnapshotMock = vi.hoisted(() => vi.fn());
@@ -58,6 +60,72 @@ async function callHandler(
 }
 
 describe("exec approvals gateway methods", () => {
+  it.each([false, true])(
+    "reads the owner-routed local socket path without mutation (revoked=%s)",
+    async (revoked) => {
+      await withTempDir("exec-approvals-owner-", async (stateDir) => {
+        await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+          let current = true;
+          const guard = vi
+            .spyOn(localStateOwner, "captureLocalStateMutationGuard")
+            .mockReturnValue(() => {
+              if (!current) {
+                throw new Error("Gateway state owner changed");
+              }
+            });
+          const read = vi
+            .spyOn(execApprovalsSocket, "readExecApprovalsSocket")
+            .mockImplementationOnce(async () => {
+              current = !revoked;
+              return {
+                socket_key: "current",
+                socket_path: "/synthetic/approvals.sock",
+                socket_token: "synthetic-secret",
+                updated_at_ms: 1,
+              };
+            });
+          const ensure = vi.spyOn(execApprovalsSocket, "ensureExecApprovalsSocket");
+          const snapshot = makeSnapshot();
+          readExecApprovalsSnapshotMock.mockResolvedValueOnce(snapshot);
+          ensureExecApprovalsSnapshotMock.mockClear();
+          try {
+            const respond = await callHandler("exec.approvals.get", { expectedOwnerId: "owner" });
+            expect(read).toHaveBeenCalledOnce();
+            expect(ensure).not.toHaveBeenCalled();
+            expect(ensureExecApprovalsSnapshotMock).not.toHaveBeenCalled();
+            expect(snapshot.file.socket).toBeUndefined();
+            if (revoked) {
+              expect(respond).toHaveBeenCalledWith(
+                false,
+                undefined,
+                expect.objectContaining({
+                  code: "UNAVAILABLE",
+                  message: expect.stringContaining("Gateway state owner changed"),
+                }),
+              );
+            } else {
+              expect(respond).toHaveBeenCalledWith(
+                true,
+                expect.objectContaining({
+                  hash: snapshot.hash,
+                  exists: snapshot.exists,
+                  file: { version: 1, agents: {}, socket: { path: "/synthetic/approvals.sock" } },
+                }),
+                undefined,
+              );
+            }
+          } finally {
+            guard.mockRestore();
+            read.mockRestore();
+            ensure.mockRestore();
+            readExecApprovalsSnapshotMock.mockReset();
+            await closeOpenClawStateDatabaseAsync();
+          }
+        });
+      });
+    },
+  );
+
   it("reports runtime defaults for fresh local approval state", async () => {
     ensureExecApprovalsSnapshotMock.mockResolvedValueOnce(makeSnapshot({ version: 1, agents: {} }));
 
@@ -283,13 +351,12 @@ describe("exec approvals gateway methods", () => {
       expect.objectContaining({ baseHash: missingSnapshot.hash }),
       expect.anything(),
     );
-    expect(createdFile?.socket?.path).toBeTruthy();
-    expect(createdFile?.socket?.token).toMatch(/^[A-Za-z0-9_-]{32}$/);
+    expect(createdFile?.socket).toBeUndefined();
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({
         hash: "sha256:created",
-        file: expect.objectContaining({ socket: { path: createdFile?.socket?.path } }),
+        file: expect.objectContaining({ version: 1, agents: { main: {} } }),
       }),
       undefined,
     );

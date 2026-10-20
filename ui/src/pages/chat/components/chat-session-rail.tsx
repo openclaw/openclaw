@@ -1,6 +1,5 @@
 import "../../../styles/chat/session-rail.css";
 import "../../../styles/chat/working-indicator.css";
-import "./chat-comment-controller.ts";
 import { createMemo, For, onSettled, Show } from "solid-js";
 import type { SessionObserverDigest } from "../../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { ControlUiSessionPullRequest } from "../../../../../src/gateway/control-ui-contract.js";
@@ -21,6 +20,7 @@ import type {
 } from "../chat-session-companion.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { createChatAttachmentDropHandlers } from "./chat-attachments.ts";
+import { ChatCommentController } from "./chat-comment-controller.ts";
 import { MessageMarkdown } from "./chat-message-text-view.tsx";
 import { SessionRailComposer, sessionRailQuestion } from "./chat-session-rail-composer.tsx";
 import { ChatWorkingIndicator } from "./chat-working-indicator.tsx";
@@ -341,13 +341,13 @@ function ChatSessionRailContent(props: ChatSessionRailProps, host: ChatSessionRa
           </For>
         </div>
       )}
-      <openclaw-chat-comment-controller
-        prop:onFocusComposer={focusComposer}
-        prop:paneId={`side-chat:${props.sessionKey}`}
-        prop:props={attachmentProps()}
-        prop:disabled={attachmentProps().disabled}
-        prop:sessionKey={props.sessionKey}
-        prop:presented={props.presented}
+      <ChatCommentController
+        onFocusComposer={focusComposer}
+        paneId={`side-chat:${props.sessionKey}`}
+        props={attachmentProps()}
+        disabled={Boolean(attachmentProps().disabled)}
+        sessionKey={props.sessionKey}
+        presented={props.presented}
       />
       <SessionRailComposer
         textareaRef={(element) => (textarea = element)}
@@ -387,18 +387,3 @@ defineSolidBridge<ChatSessionRailProps>("openclaw-chat-session-rail", ChatSessio
     focusRequest: { default: undefined, attribute: false },
   },
 });
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-chat-comment-controller": HTMLAttributes<HTMLElement> & {
-        "prop:paneId": string;
-        "prop:props": ChatAttachmentControlsProps;
-        "prop:disabled"?: boolean;
-        "prop:sessionKey": string;
-        "prop:presented": boolean;
-        "prop:onFocusComposer": () => void;
-      };
-    }
-  }
-}

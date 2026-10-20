@@ -76,8 +76,9 @@ async function recordAgentTurnExecutionOutcome(
     storePath: params.storePath,
   };
   try {
-    await recordMessageToolRunOutcome(values);
-    messageToolOutcomeLog.info("recorded message-tool-only run outcome", values);
+    if (await recordMessageToolRunOutcome(values)) {
+      messageToolOutcomeLog.info("recorded message-tool-only run outcome", values);
+    }
   } catch (error) {
     messageToolOutcomeLog.warn("failed to record message-tool-only run outcome", {
       ...values,

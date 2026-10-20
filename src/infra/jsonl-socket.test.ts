@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { requestExecHostViaSocket } from "./exec-host.js";
+import { requestJsonlSocket } from "./jsonl-socket.js";
 
 async function withSocketServer(
   server: net.Server,
@@ -143,6 +144,51 @@ describe.runIf(process.platform !== "win32")("exec host JSONL framing", () => {
         }),
       ).resolves.toBeNull();
       expect(connected).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rechecks effect authority after connect and rejects without dispatch", async () => {
+    const received: Buffer[] = [];
+    const server = net.createServer((socket) => {
+      socket.on("data", (chunk) =>
+        received.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk),
+      );
+    });
+    await withSocketServer(server, async (socketPath) => {
+      let current = true;
+      const pending = requestJsonlSocket({
+        socketPath,
+        requestLine: "{}",
+        timeoutMs: 500,
+        accept: () => undefined,
+        beforeSend() {
+          if (!current) {
+            throw new Error("authority revoked");
+          }
+        },
+      });
+      current = false;
+      await expect(pending).rejects.toThrow("authority revoked");
+    });
+    expect(received).toEqual([]);
+  });
+
+  it("treats a caller-bounded oversized reply as terminal response loss", async () => {
+    const server = net.createServer((socket) => {
+      socket.on("error", () => {});
+      socket.on("data", () => socket.end(JSON.stringify({ padding: "x".repeat(128) }) + "\n"));
+    });
+    await withSocketServer(server, async (socketPath) => {
+      await expect(
+        requestJsonlSocket({
+          socketPath,
+          requestLine: "{}",
+          timeoutMs: 500,
+          maxResponseLineBytes: 64,
+          accept: () => undefined,
+          onResponseLost: () => ({ kind: "lost" }),
+        }),
+      ).resolves.toEqual({ kind: "lost" });
     });
   });
 

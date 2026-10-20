@@ -27,7 +27,7 @@ import { usePanePresentation } from "../chat-pane-presentation.ts";
 import { AsyncQuestionSummary } from "./chat-async-question-summary.tsx";
 import "../../../components/solid/person-reference.tsx";
 import { ChatBubbleActivity } from "./chat-bubble-activity-view.tsx";
-import { ChatPermissionCard } from "./chat-divider.tsx";
+import { ChatClawHubCard } from "./chat-clawhub-card.tsx";
 import { ActivityOperation } from "./chat-message-activity-operation.tsx";
 import { OmittedMedia } from "./chat-message-attachment-status-solid.tsx";
 import { AssistantAttachments, MessageAttachment } from "./chat-message-attachments-solid.tsx";
@@ -41,7 +41,6 @@ import {
 } from "./chat-message-bubble-presentation.ts";
 import { MessageWorkContext } from "./chat-message-context-view.tsx";
 import { MessageImages } from "./chat-message-images-solid.tsx";
-import "./chat-clawhub-card.ts";
 import type { ChatMessageRenderPreparation } from "./chat-message-markdown-view.tsx";
 import type { MarkdownMedia, PositionedMedia } from "./chat-message-media-markdown.ts";
 import { prepareMarkdownMedia } from "./chat-message-media-markdown.ts";
@@ -52,6 +51,7 @@ import {
   releaseChatMediaResourceOwner,
 } from "./chat-message-media.ts";
 import { MarkdownText, MessageJson, MessageMarkdown } from "./chat-message-text-view.tsx";
+import { ChatPermissionCard } from "./chat-permission-card.tsx";
 import { ReplyLineView } from "./chat-reply-attribution.tsx";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import {
@@ -458,12 +458,7 @@ function BubbleContents(props: ContentProps) {
     <>
       <Show when={props.state().sourceRole === "assistant"}>
         <For each={props.state().clawHubCards} keyed={(card) => card.id}>
-          {(card) => (
-            <openclaw-chat-clawhub-card
-              prop:recommendation={card()}
-              prop:agentId={props.options.agentId}
-            />
-          )}
+          {(card) => <ChatClawHubCard recommendation={card()} agentId={props.options.agentId} />}
         </For>
       </Show>
       <PairingQrNotices count={props.state().expiredPairingQrCount} />

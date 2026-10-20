@@ -20,10 +20,10 @@ import {
   projectChatTranscriptMetadata,
   readChatSessionSnapshot,
   type ChatMessageCache,
+  type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
 import { resolveChatSnapshotKey, resolveChatSnapshotSessionKey } from "./session-snapshot-key.ts";
 import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
-import type { ChatSessionSnapshot } from "./session-snapshot-types.ts";
 
 // Coalesce navigation intent while leaving time to warm history before a click.
 const SESSION_PREFETCH_INTENT_DELAY_MS = 75;
@@ -75,10 +75,6 @@ function mayPrefetchHistory(
     snapshot?.presentedTranscriptsReady === true &&
     Boolean(snapshot.intentSessionKey && (!sessionKey || snapshot.intentSessionKey === sessionKey))
   );
-}
-
-function sessionActivityAt(row: GatewaySessionRow): number {
-  return row.lastActivityAt ?? row.updatedAt ?? 0;
 }
 
 // Synchronous request/cache owner; the page adapter below owns its lifetime.
@@ -338,7 +334,7 @@ class SessionPrefetcher {
     if (openKeys.has(snapshotKey) || openKeys.size >= MAX_CACHED_CHAT_SESSIONS) {
       return null;
     }
-    const activityAt = sessionActivityAt(row);
+    const activityAt = row.lastActivityAt ?? row.updatedAt ?? 0;
     const savedAt = this.snapshotStore.readSavedAt(snapshotKey);
     if (savedAt !== null && savedAt >= activityAt) {
       return null;

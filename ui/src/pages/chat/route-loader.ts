@@ -36,7 +36,6 @@ import {
 import {
   findCachedShortSession,
   findLocalSessionReference,
-  findSnapshotSessionReference,
   sessionKeyUuid,
 } from "./route-loader-short-cache.ts";
 import {
@@ -55,10 +54,6 @@ function sessionRouteHints(location: RouteLocation) {
       ? { dashboardExpanded: true as const }
       : {}),
   };
-}
-
-function isPreferenceDerivedFace(location: RouteLocation): boolean {
-  return new URLSearchParams(location.search).get(SESSION_FACE_PREFERENCE_PARAM) === "1";
 }
 
 function locationWithoutSearchParam(location: RouteLocation, key: string): RouteLocation {
@@ -294,7 +289,8 @@ export async function loadChatRoute(
     signal.throwIfAborted();
   }
   const routeLocation = resolvedTarget.location;
-  const preferenceDerived = isPreferenceDerivedFace(routeLocation);
+  const preferenceDerived =
+    new URLSearchParams(routeLocation.search).get(SESSION_FACE_PREFERENCE_PARAM) === "1";
   const presentation = {
     context,
     isResolutionSourceCurrent,
@@ -420,7 +416,7 @@ export async function loadChatRoute(
           row: resolution.session,
         });
         return resolved
-          ? { ...resolved, ...(cachedRow ? { sessionResolutionFromCache: "roster" as const } : {}) }
+          ? { ...resolved, ...(cachedRow ? { sessionResolutionFromCache: true as const } : {}) }
           : notFound({ routeId: face });
       }
       if (target.slugCandidate) {
@@ -481,21 +477,6 @@ export async function loadChatRoute(
         ? { canonicalLocation, canonicalLocationSource: routeLocation }
         : {}),
     };
-  }
-  if (!cached && !preferenceDerived && !revalidation) {
-    const snapshot = await findSnapshotSessionReference(context, target);
-    signal.throwIfAborted();
-    if (snapshot) {
-      // Only authority canonicalizes; shortening a dashed UUID here can restart discovery.
-      return {
-        kind: "session",
-        sessionKey: snapshot.key,
-        agentId: snapshot.agentId,
-        ...sessionRouteHints(routeLocation),
-        face,
-        sessionResolutionFromCache: "snapshot",
-      };
-    }
   }
   let localRow = cached?.row;
   if (!cached && !preferenceDerived && !revalidation) {
@@ -593,7 +574,7 @@ export async function loadChatRoute(
     ? {
         ...resolved,
         ...(localRow
-          ? { sessionResolutionFromCache: "roster" as const }
+          ? { sessionResolutionFromCache: true as const }
           : { routeLoadingSkeleton: true as const }),
       }
     : notFound({ routeId: face });

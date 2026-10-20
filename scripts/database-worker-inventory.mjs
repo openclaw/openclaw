@@ -30,7 +30,39 @@ const reviewed = new Map([
     {
       tier: "T3",
       evidence:
-        "Preparatory local client owner: production capture imports only its path resolver. Credential operations have no production callers until cutover, which must reclassify their worker/offline entry points.",
+        "Runtime operations enter through client-credential.worker.ts. Synchronous access is limited to Doctor credential/exec-policy migration, verified archive restore, and device-identity-store.ts offline CLI/Doctor adapters; runtime identity and token callers await client-credential-async.ts.",
+    },
+  ],
+  [
+    "src/infra/client-credential-legacy.ts",
+    {
+      tier: "T3",
+      evidence:
+        "Only state-migrations.device-identity.ts and state-migrations.device-auth.ts call the consumed-claim importer under Doctor migration custody.",
+    },
+  ],
+  [
+    "src/infra/client-credential-native-tokens.ts",
+    {
+      tier: "T3",
+      evidence:
+        "Only client-credential-operations.ts calls scoped-token claim/clear. Runtime operations enter client-credential.worker.ts; synchronous consumers are offline Doctor/CLI migration and verified restore.",
+    },
+  ],
+  [
+    "src/infra/client-credential-operations.ts",
+    {
+      tier: "T3",
+      evidence:
+        "Only client-credential-store.ts dispatches these local operations. Runtime identity/token/socket callers use client-credential-async.ts and client-credential.worker.ts; native calls are offline Doctor/CLI identity, legacy exec-policy migration, or verified archive restore.",
+    },
+  ],
+  [
+    "src/infra/client-credential-readiness.ts",
+    {
+      tier: "T3",
+      evidence:
+        "Receipt admission runs in client-credential.worker.ts for runtime operations and in the offline local owner for Doctor/CLI. Other receipt writers are canonical/legacy credential migration and verified archive relocation; no Gateway main-thread runtime caller.",
     },
   ],
   [
@@ -413,7 +445,7 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: [
           "readTranscriptExportSnapshotReadOnlySync",
-          "readTranscriptExportSnapshotFromDatabase",
+          "readTranscriptExportSnapshotReadOnlySync.transaction",
           "readTranscriptExportSnapshotsFromDatabase",
         ],
         evidence:
@@ -1782,7 +1814,7 @@ const reviewedOperations = new Map([
       },
       {
         tier: "W",
-        operations: ["recordSessionStateEventInDatabase"],
+        operations: ["recordSessionStateEventsInDatabase"],
         evidence:
           "All producers await sessionState.record; the only direct production kernel callers are session-state-events.worker.ts and subagent-registry.store.worker.ts",
       },
@@ -3395,7 +3427,6 @@ const workerModules = new Set([
   "src/config/sessions/session-accessor.sqlite-participants.native.ts", // Participant mutation SQL runs only through the sharing worker; host imports are type-only.
   "src/config/sessions/session-group-categories.read.ts", // Category enumeration runs only in session-sharing-store.worker.ts.
   "src/infra/heartbeat-outcome-store.kernel.ts", // Outcome mutations run only in heartbeat-outcome-store.worker.ts.
-  "src/infra/message-tool-run-outcome-store.kernel.ts", // Message outcomes run only in message-tool-run-outcome-store.worker.ts.
   "src/config/sessions/session-pending-input-history.kernel.ts", // History-read worker owns all remaining callers.
   "src/config/sessions/session-pending-input-history-reconcile.ts", // Pending-input execution registry dispatches only in openclaw-agent-execution.worker.ts.
   "src/infra/session-cost-usage-cache-read.ts", // Usage-cache reads run only in session-transcript.worker.ts.

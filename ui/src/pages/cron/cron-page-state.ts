@@ -51,9 +51,9 @@ import {
 } from "./delivery-conversations.ts";
 import { createCronEventEditor } from "./event-editor.ts";
 import { resolveCronEventPatch, validateCronEventSelection } from "./event-source.ts";
+import type { CronActions, CronDetailTab, CronListTab } from "./page-types.ts";
 import { createCronRouteSelection, resolveCronRouteData } from "./route-model.ts";
 import { createCronRunTranscript } from "./run-transcript.tsx";
-import type { CronDetailTab, CronListTab, CronProps } from "./view-types.ts";
 
 registerEnglishCatalog(registerCronEnglish);
 
@@ -726,7 +726,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
         await loadCronRuns(cronState);
       }),
     onViewRunTranscript: (entry, trigger) => void runTranscript.open(entry, trigger),
-  } satisfies Pick<CronProps, Extract<keyof CronProps, `on${string}`>>;
+  } satisfies CronActions;
   return {
     context,
     inventories: { agents, channels, runtimeConfig },

@@ -102,9 +102,9 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   };
 });
 
-vi.mock("../../infra/device-identity.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../infra/device-identity.js")>()),
-  loadDeviceIdentityIfPresent: () => null,
+vi.mock("../../infra/device-identity-async.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/device-identity-async.js")>()),
+  loadDeviceIdentityIfPresentAsync: async () => null,
 }));
 
 vi.mock("../../node-host/config.js", () => ({

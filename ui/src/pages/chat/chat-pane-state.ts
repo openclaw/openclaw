@@ -167,13 +167,11 @@ export function chatSubmitState(
     ? chatSendPendingReason({ client: state.client, connected: state.connected }, state.sessionKey)
     : null;
   const controlCommand = isChatControlCommand(state.chatMessage);
-  const routePending = state.isRouteSessionPending?.() === true;
   return {
-    ...(routePending || (connectionPendingReason && !controlCommand) ? { canSend: false } : {}),
+    ...(connectionPendingReason && !controlCommand ? { canSend: false } : {}),
     submitDisabledReason:
-      pendingReason ?? (routePending || unavailable ? (failure ?? t("chat.thread.loading")) : null),
-    submitPending:
-      routePending || pendingReason !== null || (unavailable && historyLoad.phase !== "failed"),
+      pendingReason ?? (unavailable ? (failure ?? t("chat.thread.loading")) : null),
+    submitPending: pendingReason !== null || (unavailable && historyLoad.phase !== "failed"),
     onDraftChange: (...args: Parameters<ChatPageHost["handleChatDraftChange"]>) => {
       state.handleChatDraftChange(...args);
     },

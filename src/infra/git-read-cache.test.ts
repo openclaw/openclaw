@@ -93,10 +93,100 @@ describe("typed Git read ownership", () => {
     ]);
     expect(phases.map((event) => event.details?.["worker-queue"])).toEqual([7, 7, 2]);
     expect(phases.map((event) => event.details?.["git-wall"])).toEqual([10, 10, 0]);
+    expect(phases.map((event) => event.details?.missReason)).toEqual([
+      "cold",
+      "pending",
+      undefined,
+    ]);
     expect(phases.every((event) => typeof event.details?.["cache-validate"] === "number")).toBe(
       true,
     );
     expect(JSON.stringify(phases)).not.toContain("timing-private");
+  });
+
+  it("reports bounded revision components while retaining independent request shapes", async () => {
+    const events: DiagnosticEventPayload[] = [];
+    const stop = onTrustedInternalDiagnosticEvent((event) => events.push(event), {
+      includeTrusted: ["diagnostic.phase.completed"],
+    });
+    onTestFinished(stop);
+    gitRead.mockResolvedValue(emptyDiff);
+    const unchanged = {
+      head: "private-head",
+      index: "private-index",
+      untrackedSet: "private-paths",
+      worktreeMtime: "private-files",
+      metadata: "private-config",
+    };
+    for (const component of [
+      "head",
+      "index",
+      "untrackedSet",
+      "worktreeMtime",
+      "metadata",
+    ] as const) {
+      const input = { cwd: `/revision-reasons-${component}`, summaryOnly: true };
+      const read = (baseCommit?: string) =>
+        runGitReadOperation({ type: "checkout.diff", input: { ...input, baseCommit } });
+      readRevision.mockResolvedValue(JSON.stringify(unchanged));
+      await read();
+      await read("a".repeat(40));
+      await read();
+      readRevision.mockResolvedValue(
+        JSON.stringify({ ...unchanged, [component]: "private-changed" }),
+      );
+      await read();
+      await read("a".repeat(40));
+      await read();
+    }
+    await waitForDiagnosticEventsDrained();
+    const phases = events
+      .filter((event) => event.type === "diagnostic.phase.completed")
+      .filter((event) => event.name === "checkout.diff");
+    expect(phases.map((event) => event.details?.missReason)).toEqual(
+      ["head", "index", "untracked-set", "worktree-mtime", "metadata"].flatMap((component) => [
+        "cold",
+        "cold",
+        undefined,
+        `revision-changed-${component}`,
+        `revision-changed-${component}`,
+        undefined,
+      ]),
+    );
+    expect(gitRead).toHaveBeenCalledTimes(20);
+    expect(JSON.stringify(phases)).not.toContain("private");
+  });
+
+  it("distinguishes unavailable revisions and bounded capacity eviction history", async () => {
+    const events: DiagnosticEventPayload[] = [];
+    const stop = onTrustedInternalDiagnosticEvent((event) => events.push(event), {
+      includeTrusted: ["diagnostic.phase.completed"],
+    });
+    onTestFinished(stop);
+    const read = (cwd: string) => runGitReadOperation({ type: "checkout.diff", input: { cwd } });
+    vi.mocked(runGitWorkerOperation).mockImplementation(async (operation, options) => {
+      if (operation.type !== "checkout.revision") {
+        return emptyDiff;
+      }
+      if (operation.input.root === "/reason-oversized" && options?.diffTiming) {
+        options.diffTiming.revisionUnavailableReason = "oversized";
+      }
+      return operation.input.root.startsWith("/reason-") ? null : "unchanged";
+    });
+    await read("/reason-unavailable");
+    await read("/reason-oversized");
+    for (let i = 0; i < 65; i++) {
+      await read(`/bounded-eviction-${i}`);
+    }
+    await read("/bounded-eviction-0");
+    await read("/bounded-eviction-2");
+    await waitForDiagnosticEventsDrained();
+    const phases = events
+      .filter((event) => event.type === "diagnostic.phase.completed")
+      .filter((event) => event.name === "checkout.diff");
+    const reasons = phases.map((event) => event.details?.missReason);
+    expect(reasons.slice(0, 2)).toEqual(["no-revision", "oversized"]);
+    expect(reasons.slice(-2)).toEqual(["cold", "evicted"]);
   });
 
   it("serves identity snapshots while one background pass refreshes external metadata", async () => {
@@ -183,7 +273,11 @@ describe("typed Git read ownership", () => {
 
   it("shares summary work until expiry without duplicating a slow scan or reusing full patches", async () => {
     vi.useFakeTimers();
-    readRevision.mockResolvedValue(null);
+    vi.mocked(runGitWorkerOperation).mockImplementation((operation, options) =>
+      operation.type === "checkout.revision"
+        ? Promise.resolve(operation.input.summaryOnly ? null : "unchanged-full-diff")
+        : gitRead(operation, options),
+    );
     const held = createDeferredCore<GitReadOperations["checkout.diff"]["output"]>();
     onTestFinished(() => held.resolve(emptyDiff));
     gitRead.mockReturnValueOnce(held.promise);
@@ -214,6 +308,10 @@ describe("typed Git read ownership", () => {
     gitRead.mockResolvedValueOnce({ ...emptyDiff, additions: 5 });
     await expect(loadCheckoutDiff({ ...input, sessionKey: "first" })).resolves.toMatchObject({
       additions: 5,
+    });
+    expect(gitRead).toHaveBeenCalledTimes(4);
+    await expect(loadCheckoutDiff({ cwd: input.cwd, sessionKey: "first" })).resolves.toMatchObject({
+      additions: 4,
     });
     expect(gitRead).toHaveBeenCalledTimes(4);
   });

@@ -39,7 +39,7 @@ import {
   sweepSessionStateWatchNotices,
 } from "./session-state-events.js";
 import {
-  recordSessionStateEventInDatabase,
+  recordSessionStateEventsInDatabase,
   type SessionStateEventRow,
 } from "./session-state-events.kernel.js";
 import {
@@ -124,7 +124,7 @@ describe("session state events", () => {
     const db = requireNativeSqliteDatabase(openOpenClawStateDatabase(database).db);
     const record = (now: number) =>
       runOpenClawStateWriteTransaction(
-        ({ db: writer }) => recordSessionStateEventInDatabase(writer, input, now),
+        ({ db: writer }) => recordSessionStateEventsInDatabase(writer, [{ event: input, now }]),
         database,
       );
     const reads = trackSqliteStatementExecutions(db, ["events"], (sql) =>
@@ -137,8 +137,8 @@ describe("session state events", () => {
       reads.restore();
     }
     expect(reads.counts.events).toBe(0);
-    expect(first.row?.sequence).toBeGreaterThan(0);
-    expect(first.row).toMatchObject({
+    expect(first.rows[0]?.sequence).toBeGreaterThan(0);
+    expect(first.rows[0]).toMatchObject({
       summary: "event \ufffd",
       payload_json: '{"reason":"requested"}',
       occurred_at: 1000,
@@ -148,11 +148,11 @@ describe("session state events", () => {
       db.prepare("SELECT last_sequence, updated_at FROM session_state_heads").get();
     const head = readHead();
     const cursor = readCursor(database);
-    expect(head).toEqual({ last_sequence: first.row?.sequence, updated_at: 1000 });
-    expect(cursor?.material_sequence).toBe(first.row?.sequence);
+    expect(head).toEqual({ last_sequence: first.rows[0]?.sequence, updated_at: 1000 });
+    expect(cursor?.material_sequence).toBe(first.rows[0]?.sequence);
 
     const replay = record(2000);
-    expect(replay.row).toEqual(first.row);
+    expect(replay.rows[0]).toEqual(first.rows[0]);
     expect(replay.notices).toEqual([]);
     expect(readHead()).toEqual(head);
     expect(readCursor(database)).toEqual(cursor);
@@ -481,15 +481,16 @@ describe("session state watcher cursor batches", () => {
     try {
       event = runOpenClawStateWriteTransaction(
         ({ db: transactionDb }) =>
-          recordSessionStateEventInDatabase(
-            transactionDb,
-            eventInput({
-              actorId: actor,
-              watcherSessionKeys: [watchers[0]!, missing, watchers[0]!, actor, "global", stale],
-              watcherStorePaths: { [stale]: "/synthetic/retired-store.sqlite" },
-            }),
-            Date.now(),
-          ).row,
+          recordSessionStateEventsInDatabase(transactionDb, [
+            {
+              event: eventInput({
+                actorId: actor,
+                watcherSessionKeys: [watchers[0]!, missing, watchers[0]!, actor, "global", stale],
+                watcherStorePaths: { [stale]: "/synthetic/retired-store.sqlite" },
+              }),
+              now: Date.now(),
+            },
+          ]).rows[0],
         database,
       );
     } finally {
@@ -517,20 +518,21 @@ describe("session state watcher cursor batches", () => {
     const second = "agent:main:subagent:\ud801";
     const result = runOpenClawStateWriteTransaction(
       ({ db }) =>
-        recordSessionStateEventInDatabase(
-          db,
-          eventInput({
-            watcherSessionKeys: [first, second],
-            watcherStorePaths: {
-              [first]: "/synthetic/first.sqlite",
-              [second]: "/synthetic/second.sqlite",
-            },
-          }),
-          Date.now(),
-        ),
+        recordSessionStateEventsInDatabase(db, [
+          {
+            event: eventInput({
+              watcherSessionKeys: [first, second],
+              watcherStorePaths: {
+                [first]: "/synthetic/first.sqlite",
+                [second]: "/synthetic/second.sqlite",
+              },
+            }),
+            now: Date.now(),
+          },
+        ]),
       database,
     );
-    expect(result.row?.sequence).toBeGreaterThan(0);
+    expect(result.rows[0]?.sequence).toBeGreaterThan(0);
     expect(result.notices.map((notice) => notice.watcherStorePath)).toEqual([
       "/synthetic/first.sqlite",
       null,

@@ -339,6 +339,11 @@ or protocol-version change.
   `chat.metadata.changed` invalidates commands unless `commandsChanged: false`.
   Usage-only and model-only publications leave commands available without another
   metadata RPC.
+  Successful usage-cache refreshes publish the latest `usageUpdatedAt` for each
+  agent at most once per 500 ms collection window. The underlying commits and
+  usage reads remain immediate. A refresh failure first publishes that agent's
+  pending success, then its failure receipt, so clients retain the last successful commit.
+  Model, authentication, and command invalidations do not use this window.
   Top-level lifecycle and capacity fields
   remain event receipts, including explicit clearing values. When a nested row
   omits an optional field, honor its top-level clearing tombstone; nested values

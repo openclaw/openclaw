@@ -4,9 +4,8 @@ import type { LobsterPetLook, LobsterPetPaletteId } from "./lobster-pet-contract
 import { moonPhaseFraction } from "./lobster-pet-moon.ts";
 import {
   GLITCH_GHOSTS,
-  PALETTE_OVERLAYS,
+  PALETTE_PATTERNS,
   PALETTE_RIGHT_CLAW_PROPS,
-  PATTERNED_PALETTES,
 } from "./lobster-pet-palette-sprites.tsx";
 import { staticSprite } from "./lobster-pet-sprite.tsx";
 import {
@@ -132,11 +131,11 @@ export function LobsterSvg(props: LobsterSvgProps) {
               ? SPLIT_HALF()
               : null}
             {props.look.palette.id === "selene" ? seleneMoon(selenePhase) : null}
-            {PALETTE_OVERLAYS[props.look.palette.id]?.() ?? null}
+            {PALETTE_PATTERNS[props.look.palette.id]?.() ?? null}
             {props.look.palette.id === "tinfoil"
               ? TINFOIL_PARTS(!HEADWEAR.has(props.look.accessory))
               : null}
-            {props.look.freckles && !PATTERNED_PALETTES.has(props.look.palette.id)
+            {props.look.freckles && !Object.hasOwn(PALETTE_PATTERNS, props.look.palette.id)
               ? FRECKLE_SPOTS()
               : null}
             {props.look.palette.id === "invisible" ? null : (

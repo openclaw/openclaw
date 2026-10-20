@@ -7,7 +7,10 @@ import { tryReadJson } from "../../infra/json-files.js";
 import { readPackageName } from "../../infra/package-json.js";
 import { checkGlobalPackageUpdateAdmission } from "../../infra/package-update-manager-preflight.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
-import { resolveUpdateStateContentVersion } from "../../infra/update-candidate-state.versions.js";
+import {
+  resolveUpdateStateContentVersion,
+  resolveUpdateStateTargetVersion,
+} from "../../infra/update-candidate-state.versions.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import type { DevUpdateTarget } from "../../infra/update-dev-target.js";
 import type { UpdateFailureFact } from "../../infra/update-failure-facts.js";
@@ -489,7 +492,11 @@ export async function captureUpdateActivationSchemas(params: {
         const version = resolveUpdateStateContentVersion(entry);
         return (
           version !== null &&
-          version !== candidateSchemaVersions[entry.path === sharedPath ? "state" : "agent"]
+          version !==
+            resolveUpdateStateTargetVersion(entry.path, {
+              sharedPath,
+              candidateSchemaVersions,
+            })
         );
       })
     ) {

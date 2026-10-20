@@ -1,25 +1,16 @@
 import { dynamic, type JSX } from "@solidjs/web";
 import { createMemo, Show } from "solid-js";
-import {
-  isThemeCritterId,
-  type ThemeArtwork,
-} from "../../../packages/gateway-protocol/src/theme.ts";
+import { isThemeCritterId } from "../../../packages/gateway-protocol/src/theme.ts";
 import { lobsterHonorific } from "./lobster-dex.ts";
 import { LobsterSvg } from "./lobster-pet-artwork.tsx";
 import type {
   LobsterPasserKind,
-  LobsterPetEntrance,
   LobsterPetLook,
-  LobsterPetMode,
   LobsterPetPaletteId,
 } from "./lobster-pet-contract.ts";
 import { createLobsterPetLook, lobsterLookStyle, lobsterPetName } from "./lobster-pet-identity.ts";
-import {
-  lobsterLanePoint,
-  lobsterTravelDuration,
-  type LobsterComposerScene,
-  type LobsterSceneTravel,
-} from "./lobster-pet-scene.ts";
+import type { LobsterPetOwner } from "./lobster-pet-owner.ts";
+import { lobsterLanePoint, lobsterTravelDuration } from "./lobster-pet-scene.ts";
 import { Balloon, BottleSvg, PASSER_SPRITES, PASSER_TITLES } from "./lobster-pet-sprites.tsx";
 import { PluginThemeArtwork } from "./plugin-theme-artwork.tsx";
 import {
@@ -61,54 +52,7 @@ function lobsterPetSpriteStyle(
   ].join(";");
 }
 
-export type LobsterPetSceneProps = {
-  look: LobsterPetLook;
-  mode: LobsterPetMode;
-  presence: "out" | "in" | "leaving";
-  shellVisible: boolean;
-  visitsEnabled: boolean;
-  residentEnabled: boolean;
-  critterArtwork?: ThemeArtwork["critters"];
-  dismissed: boolean;
-  passer: {
-    kind: LobsterPasserKind;
-    direction: 1 | -1;
-    crossMs: number;
-    anchor: "top" | "floor";
-    hops: boolean;
-  } | null;
-  twinPlanned: boolean;
-  anniversary: boolean;
-  entering: boolean;
-  entrance: LobsterPetEntrance;
-  grumpy: boolean;
-  vigil: boolean;
-  elder: boolean;
-  act: string | null;
-  spotPct: number;
-  facing: 1 | -1;
-  anchor: "top" | "floor";
-  shellAnchor: "top" | "floor";
-  scene: LobsterComposerScene;
-  travel: LobsterSceneTravel | null;
-  floorEnabled: boolean;
-  shellScale: number;
-  shellSpotPct: number;
-  familiarityVisits: number;
-  seed: number;
-  movingDay: boolean;
-  sailorDay: boolean;
-  nameOverride: string | null;
-  // Extra "· <flavor>" tooltip suffix (elder lore, old-friend returns).
-  flavor: string | null;
-  bottle: { spotPct: number; opened: boolean; fortune: string } | null;
-  onPointerDown: (event: PointerEvent) => void;
-  onSprite?: (element: HTMLElement) => void;
-  onPointerUp: (event: PointerEvent) => void;
-  onPointerCancel: () => void;
-  onContextMenu: (event: MouseEvent) => void;
-  onBottleOpen: () => void;
-};
+export type LobsterPetSceneProps = NonNullable<ReturnType<LobsterPetOwner["snapshot"]>["scene"]>;
 
 export function LobsterPetScene(props: { scene: LobsterPetSceneProps | null }) {
   return <Show when={props.scene}>{(scene) => <Scene {...scene()} />}</Show>;
