@@ -30,6 +30,14 @@ function createDatabase(location: string, sql: string): Buffer {
   return fs.readFileSync(location);
 }
 
+function expectSnapshot(location: string, present: boolean) {
+  expect([
+    fs.existsSync(location),
+    hasSqliteDatabaseSchemaAdmissionForPath(location),
+    captureSqliteDatabaseAdmissions().some((entry) => entry.location === location),
+  ]).toEqual([present, present, present]);
+}
+
 it("keeps synchronous and asynchronous token cleanup in separate snapshot flights", async () => {
   const source = path.join(root, "mixed-source.sqlite");
   const original = createDatabase(
@@ -62,36 +70,29 @@ it("keeps synchronous and asynchronous token cleanup in separate snapshot flight
       expect(reader.prepare("SELECT value FROM probe").get()).toEqual({ value: "preserved" });
     }
     for (const location of [syncSnapshot.location, asyncSnapshot.location, nestedLocation]) {
-      expect(hasSqliteDatabaseSchemaAdmissionForPath(location)).toBe(true);
+      expectSnapshot(location, true);
     }
-    const admittedPaths = () => captureSqliteDatabaseAdmissions().map((entry) => entry.location);
-    expect(admittedPaths()).toEqual(
-      expect.arrayContaining([syncSnapshot.location, asyncSnapshot.location, nestedLocation]),
-    );
     expect(syncSnapshot.cleanup()).toBe(true);
-    expect(fs.existsSync(syncSnapshot.location)).toBe(false);
-    expect(admittedPaths()).not.toContain(syncSnapshot.location);
-    expect(admittedPaths()).toContain(asyncSnapshot.location);
-    expect(fs.existsSync(asyncSnapshot.location)).toBe(true);
+    expectSnapshot(syncSnapshot.location, false);
+    expectSnapshot(asyncSnapshot.location, true);
     const failures: unknown[] = [];
     expect(removeTempDirectory(asyncSnapshot.cleanupRoot!, (error) => failures.push(error))).toBe(
       false,
     );
-    expect(failures).toHaveLength(1);
-    expect(failures[0]).toBeInstanceOf(SqliteSnapshotCleanupError);
-    expect(fs.existsSync(asyncSnapshot.location)).toBe(true);
+    expect(failures).toEqual([expect.any(SqliteSnapshotCleanupError)]);
+    expectSnapshot(asyncSnapshot.location, true);
     const releaseReader = retainSnapshotTempDirectory(path.dirname(asyncSnapshot.location));
     try {
       expect(await removeTempDirectoryAsync(asyncSnapshot.cleanupRoot!)).toBe(false);
-      expect(admittedPaths()).toContain(asyncSnapshot.location);
-      expect(admittedPaths()).toContain(nestedLocation);
+      expectSnapshot(asyncSnapshot.location, true);
+      expectSnapshot(nestedLocation, true);
     } finally {
       releaseReader();
     }
     expect(await asyncSnapshot.cleanupAsync()).toBe(true);
     expect(fs.existsSync(asyncSnapshot.cleanupRoot!)).toBe(false);
-    expect(admittedPaths()).not.toContain(asyncSnapshot.location);
-    expect(admittedPaths()).not.toContain(nestedLocation);
+    expectSnapshot(asyncSnapshot.location, false);
+    expectSnapshot(nestedLocation, false);
     expect(fs.readFileSync(source)).toEqual(original);
   } finally {
     try {
@@ -141,23 +142,20 @@ it("does not throw when the onCleanupFailure callback itself throws", async () =
     throw new Error("callback exploded");
   });
 
-  try {
-    expect(prepared.cleanup()).toBe(false);
-    expect(processWarning).not.toHaveBeenCalled();
-    expect(consoleWarning).not.toHaveBeenCalled();
-  } finally {
-    vi.restoreAllMocks();
-  }
+  expect(prepared.cleanup()).toBe(false);
+  expect([processWarning.mock.calls, consoleWarning.mock.calls]).toEqual([[], []]);
+  vi.restoreAllMocks();
 
   await testApi.flushFileLogQueueForTests();
   const records = (await fs.promises.readFile(path.join(root, "cleanup.log"), "utf8"))
     .trim()
     .split("\n")
     .map((line): unknown => JSON.parse(line));
-  expect(records).toHaveLength(1);
-  expect(records[0]).toMatchObject({
-    "1": { path: ownedRoot, operation: "rm", errorCode: "EBUSY" },
-    message: expect.stringContaining("SQLite read-only snapshot cleanup failed"),
-  });
+  expect(records).toMatchObject([
+    {
+      "1": { path: ownedRoot, operation: "rm", errorCode: "EBUSY" },
+      message: expect.stringContaining("SQLite read-only snapshot cleanup failed"),
+    },
+  ]);
   expect(JSON.stringify(records)).not.toContain("callback exploded");
 });

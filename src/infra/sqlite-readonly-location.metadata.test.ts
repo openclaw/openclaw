@@ -10,7 +10,7 @@ import { startSqliteCheckpointWriter } from "./sqlite-checkpoint-writer.test-sup
 import * as copies from "./sqlite-file-copy.js";
 import { prepareSqliteReadOnlyCopyInProcess } from "./sqlite-readonly-location.js";
 import { MAX_SNAPSHOT_ATTEMPTS } from "./sqlite-snapshot-policy.js";
-import { prepareSqliteReadOnlyLocationAwaited } from "./sqlite-snapshot-source.js";
+import { prepareSqliteReadOnlyLocationAwaited as prepareSnapshot } from "./sqlite-snapshot-source.js";
 import { readDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
 
 const roots = useAutoCleanupTempDirTracker((cleanup) =>
@@ -44,11 +44,7 @@ it("snapshots a verified live writer once despite checkpoints that exhaust raw-c
     );
     expect(raw).toHaveBeenCalledTimes(MAX_SNAPSHOT_ATTEMPTS);
     raw.mockRestore();
-    const prepared = await prepareSqliteReadOnlyLocationAwaited(source, {
-      signal: new AbortController().signal,
-      expectedSourceIdentity: readDatabasePathIdentitySync(source),
-      allowLiveOwner: true,
-    });
+    const prepared = await prepareSnapshot(source, snapshotOptions(source));
     try {
       using db = new (requireNodeSqlite().DatabaseSync)(prepared.location, { readOnly: true });
       expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
@@ -58,14 +54,10 @@ it("snapshots a verified live writer once despite checkpoints that exhaust raw-c
       expect(db.prepare("SELECT length(data) AS bytes FROM snapshot_payload").get()).toEqual({
         bytes: 33554432,
       });
-      expect(fs.statSync(prepared.location).size).toBeLessThan(34 * 1024 * 1024);
+      const directory = path.dirname(prepared.location);
       const retainedBytes = fs
-        .readdirSync(path.dirname(prepared.location))
-        .reduce(
-          (bytes, name) =>
-            bytes + fs.statSync(path.join(path.dirname(prepared.location), name)).size,
-          0,
-        );
+        .readdirSync(directory)
+        .reduce((bytes, name) => bytes + fs.statSync(path.join(directory, name)).size, 0);
       expect(retainedBytes).toBeLessThan(34 * 1024 * 1024);
     } finally {
       expect(await prepared.cleanupAsync()).toBe(true);
@@ -103,25 +95,27 @@ it.each(["absent", "unverifiable"])(
     }
     const entries = fs.readdirSync(root);
     const before = fs.readFileSync(source);
-    const options = {
-      signal: new AbortController().signal,
-      expectedSourceIdentity: readDatabasePathIdentitySync(source),
-      allowLiveOwner: true,
-    };
+    const options = snapshotOptions(source);
     if (owner === "unverifiable") {
-      await expect(prepareSqliteReadOnlyLocationAwaited(source, options)).rejects.toThrow(
+      await expect(prepareSnapshot(source, options)).rejects.toThrow(
         "cannot verify Gateway ownership from this process",
       );
     } else {
-      const prepared = await prepareSqliteReadOnlyLocationAwaited(source, options);
+      const prepared = await prepareSnapshot(source, options);
       expect(await prepared.cleanupAsync()).toBe(true);
     }
     expect(fs.readFileSync(source)).toEqual(before);
     expect(fs.readdirSync(root)).toEqual(entries);
     fs.renameSync(source, path.join(root, "original.sqlite"));
     fs.writeFileSync(source, before);
-    await expect(prepareSqliteReadOnlyLocationAwaited(source, options)).rejects.toThrow(
-      /identity changed/,
-    );
+    await expect(prepareSnapshot(source, options)).rejects.toThrow(/identity changed/);
   },
 );
+
+function snapshotOptions(source: string) {
+  return {
+    signal: new AbortController().signal,
+    expectedSourceIdentity: readDatabasePathIdentitySync(source),
+    allowLiveOwner: true,
+  };
+}

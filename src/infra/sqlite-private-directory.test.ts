@@ -10,40 +10,44 @@ import {
   createPrivateWindowsFile,
 } from "./windows-private-directory.js";
 
-describe("private SQLite snapshot staging root", () => {
-  afterEach(() => vi.restoreAllMocks());
+afterEach(() => vi.restoreAllMocks());
+function captureFailure(create: () => unknown): unknown {
+  try {
+    return create();
+  } catch (error) {
+    return error;
+  }
+}
 
-  it.each([
-    [undefined, "sqlite-local-app-data", "sqlite-local-app-data"],
-    ["relative/cache", "sqlite-local-app-data", "sqlite-local-app-data"],
-    [undefined, undefined, "sqlite-home/AppData/Local"],
-    [undefined, "relative/local-app-data", "sqlite-home/AppData/Local"],
-    ["sqlite-xdg-cache", "sqlite-local-app-data", "sqlite-xdg-cache"],
-  ] as const)(
-    "selects the Windows cache for XDG=%s and LOCALAPPDATA=%s",
-    (xdgCacheHome, localAppData, expectedRoot) => {
-      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-      const resolveTempRoot = vi
-        .spyOn(tmpOpenClawDir, "resolvePreferredOpenClawTmpDir")
-        .mockImplementation((options) => options?.preferredDir ?? "");
+it.each([
+  [undefined, "sqlite-local-app-data", "sqlite-local-app-data"],
+  ["relative/cache", "sqlite-local-app-data", "sqlite-local-app-data"],
+  [undefined, undefined, "sqlite-home/AppData/Local"],
+  [undefined, "relative/local-app-data", "sqlite-home/AppData/Local"],
+  ["sqlite-xdg-cache", "sqlite-local-app-data", "sqlite-xdg-cache"],
+] as const)(
+  "selects the Windows cache for XDG=%s and LOCALAPPDATA=%s",
+  (xdgCacheHome, localAppData, expectedRoot) => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const resolveTempRoot = vi
+      .spyOn(tmpOpenClawDir, "resolvePreferredOpenClawTmpDir")
+      .mockImplementation((options) => options?.preferredDir ?? "");
 
-      const resolveRoot = (root: string | undefined) =>
-        root?.startsWith("sqlite-") ? path.resolve(root) : root;
-      expect(
-        resolvePrivateSqliteSnapshotStagingRoot({
-          HOME: path.resolve("sqlite-home"),
-          LOCALAPPDATA: resolveRoot(localAppData),
-          XDG_CACHE_HOME: resolveRoot(xdgCacheHome),
-        }),
-      ).toBe(path.join(path.resolve(expectedRoot), "openclaw"));
-      expect(resolveTempRoot.mock.calls[0]?.[0]?.tmpdir?.()).toBe(path.resolve(expectedRoot));
-    },
-  );
-});
+    const resolveRoot = (root: string | undefined) =>
+      root?.startsWith("sqlite-") ? path.resolve(root) : root;
+    expect(
+      resolvePrivateSqliteSnapshotStagingRoot({
+        HOME: path.resolve("sqlite-home"),
+        LOCALAPPDATA: resolveRoot(localAppData),
+        XDG_CACHE_HOME: resolveRoot(xdgCacheHome),
+      }),
+    ).toBe(path.join(path.resolve(expectedRoot), "openclaw"));
+    expect(resolveTempRoot.mock.calls[0]?.[0]?.tmpdir?.()).toBe(path.resolve(expectedRoot));
+  },
+);
 
 describe.skipIf(process.platform === "win32")("private creation adapter on the native host", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-  afterEach(() => vi.restoreAllMocks());
 
   it.each(["parent-file", "existing-directory"] as const)(
     "preserves the semantic %s error and records a confirmed refusal",
@@ -56,12 +60,7 @@ describe.skipIf(process.platform === "win32")("private creation adapter on the n
       } else {
         fs.mkdirSync(parent);
       }
-      let failure: unknown;
-      try {
-        createPrivateWindowsDirectory(directory);
-      } catch (error) {
-        failure = error;
-      }
+      const failure = captureFailure(() => createPrivateWindowsDirectory(directory));
       expect(failure).toMatchObject({
         code: kind === "parent-file" ? "not-file" : "already-exists",
       });
@@ -86,12 +85,7 @@ describe.skipIf(process.platform === "win32")("private creation adapter on the n
       }
       return result;
     });
-    let thrown: unknown;
-    try {
-      createPrivateWindowsDirectory(directory);
-    } catch (error) {
-      thrown = error;
-    }
+    const thrown = captureFailure(() => createPrivateWindowsDirectory(directory));
     expect(thrown).toBe(failure);
     expect(isPrivateDirectoryCreationRefused(thrown)).toBe(false);
     expect(fs.statSync(directory).isDirectory()).toBe(true);

@@ -103,11 +103,7 @@ async function inspectFailure(
     expect(read.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
     return { write, observedFailure };
   } finally {
-    for (const database of opened) {
-      if (database.isOpen) {
-        database.close();
-      }
-    }
+    opened.filter((database) => database.isOpen).forEach((database) => database.close());
   }
 }
 

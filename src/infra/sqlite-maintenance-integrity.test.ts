@@ -15,23 +15,18 @@ import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
 const directories = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
-async function withCapture(
-  run: (
-    sourcePath: string,
-    capture: (check?: "quick" | "full") => Promise<unknown>,
-  ) => Promise<void>,
-) {
+type Capture = (check?: "quick" | "full") => Promise<unknown>;
+async function withCapture(run: (sourcePath: string, capture: Capture) => Promise<void>) {
   const directory = fs.realpathSync(directories.make("sqlite-maintenance-integrity-"));
   const sourcePath = path.join(directory, "source.sqlite");
   {
     using source = openNodeSqliteDatabase(sourcePath);
-    source.exec(`
-      PRAGMA journal_mode = WAL;
-      CREATE TABLE touched(value INTEGER CHECK(value > 0));
-      CREATE TABLE untouched(value INTEGER CHECK(value > 0));
-      INSERT INTO touched VALUES(1);
-      INSERT INTO untouched VALUES(1);
-    `);
+    source.exec("PRAGMA journal_mode = WAL");
+    for (const table of ["touched", "untouched"]) {
+      source.exec(
+        `CREATE TABLE ${table}(value INTEGER CHECK(value > 0)); INSERT INTO ${table} VALUES(1);`,
+      );
+    }
   }
   // Doctor's header preflight leaves an empty WAL behind after a read-only open.
   {
@@ -95,12 +90,9 @@ it("refuses untouched-table corruption before publishing a migration backup", as
       const page = source.prepare("PRAGMA page_size").get();
       offset = (Number(root?.rootpage) - 1) * Number(page?.page_size);
     }
-    const file = fs.openSync(sourcePath, "r+");
-    try {
-      fs.writeSync(file, Buffer.from([0xff]), 0, 1, offset);
-    } finally {
-      fs.closeSync(file);
-    }
+    const bytes = fs.readFileSync(sourcePath);
+    bytes[offset] = 0xff;
+    fs.writeFileSync(sourcePath, bytes);
     await expect(capture()).rejects.toThrow(/malformed|quick_check/);
   });
 });
