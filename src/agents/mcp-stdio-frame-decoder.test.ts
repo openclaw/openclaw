@@ -57,9 +57,9 @@ it("preserves a UTF-8 character split across chunks and skips empty lines", () =
 
 it.each([
   ["not-json", "invalid JSON", SyntaxError],
-  ['{"jsonrpc":"1.0","id":0,"result":{}}', "an invalid JSON-RPC version"],
+  ['{"jsonrpc":"1.0","id":0,"result":{}}', "an invalid JSON-RPC version", undefined],
   ['{"jsonrpc":"2.0","id":0}', "an invalid JSON-RPC message", Error],
-  ['{"jsonrpc":"2.0","id":"0","result":{}}', "an invalid response id"],
+  ['{"jsonrpc":"2.0","id":"0","result":{}}', "an invalid response id", undefined],
 ] as const)("classifies %s as %s", (line, message, cause) => {
   const decoder = new McpStdioFrameDecoder(1024);
   decoder.append(Buffer.from(`${line}\n`));

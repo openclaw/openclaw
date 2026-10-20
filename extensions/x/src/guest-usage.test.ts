@@ -15,9 +15,15 @@ function runtime(state: OpenClawTestState, capacity?: number) {
     state: {
       resolveStateDir: () => state.stateDir,
       openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) => {
+        if (capacity !== undefined && options.retention !== "retained") {
+          return createPluginStateKeyedStoreForTests<T>("x", {
+            ...options,
+            maxEntries: capacity,
+            env: state.env,
+          });
+        }
         return createPluginStateKeyedStoreForTests<T>("x", {
           ...options,
-          ...(capacity === undefined ? {} : { maxEntries: capacity }),
           env: state.env,
         });
       },

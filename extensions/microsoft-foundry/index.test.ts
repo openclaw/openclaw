@@ -603,9 +603,12 @@ describe("microsoft-foundry plugin", () => {
       await recovery.started;
       expect(execFileMock).toHaveBeenCalledTimes(2);
       recovery.release();
-      const [first, second] = await Promise.all(retries);
+      const results = await Promise.all(retries);
       expect(execFileMock).toHaveBeenCalledTimes(2);
-      expect([first.apiKey, second.apiKey]).toEqual(["recovered-token", "recovered-token"]);
+      expect(results.map((result) => result.apiKey)).toEqual([
+        "recovered-token",
+        "recovered-token",
+      ]);
     } finally {
       // Broken dedupe can consume the recovery response in the first pair.
       failed.release();
