@@ -297,7 +297,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       this.presented && document.visibilityState !== "hidden";
     const refreshPresentedReads = () => {
       if (pageState.chatMetadataIsPresented?.()) {
-        void refreshChatMetadata(pageState, { automatic: true });
+        void refreshChatMetadata(pageState);
         this.resumeDeferredSessionHydration();
         void this.refreshTaskSuggestions({ automatic: true });
       }
