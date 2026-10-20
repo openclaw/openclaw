@@ -20,14 +20,6 @@ const code = {
   expiresInMs: 60_000,
   pollAfterMs: 1_000,
 } satisfies UsersGitHubAuthorizeStartResult;
-const connected: PersonalGitHubStatus = {
-  state: "connected",
-  generation: "11111111-1111-4111-8111-111111111111",
-  account: { accountId: 1234, login: "my-account" },
-  accessExpiresAtMs: 1_900_000_000_000,
-  refreshState: "available",
-  pending: null,
-};
 const disconnected: PersonalGitHubStatus = {
   state: "disconnected",
   generation: null,
@@ -35,6 +27,14 @@ const disconnected: PersonalGitHubStatus = {
   accessExpiresAtMs: null,
   refreshState: "not_applicable",
   pending: null,
+};
+const connected: PersonalGitHubStatus = {
+  ...disconnected,
+  state: "connected",
+  generation: "11111111-1111-4111-8111-111111111111",
+  account: { accountId: 1234, login: "my-account" },
+  accessExpiresAtMs: 1_900_000_000_000,
+  refreshState: "available",
 };
 const system: UsersGitHubStatusResult["system"] = {
   source: "system-configured",
@@ -48,8 +48,14 @@ const system: UsersGitHubStatusResult["system"] = {
   oauthScopes: ["repo"],
   repositoryGrants: "unknown",
 };
-function setup(respond: (method: string, params?: unknown) => Promise<unknown>) {
-  const request = vi.fn(respond);
+function setup(handlers: Record<string, () => unknown>) {
+  const request = vi.fn(async (method: string) => {
+    const handler = handlers[method];
+    if (!handler) {
+      throw new Error(`unexpected method ${method}`);
+    }
+    return handler();
+  });
   const client = { request } as unknown as GatewayBrowserClient;
   const runExternalMutation = vi.fn(async () => {
     throw new Error("Personal flow touched shared config");
@@ -71,6 +77,13 @@ function setup(respond: (method: string, params?: unknown) => Promise<unknown>) 
   return { controller, request, sync, runExternalMutation };
 }
 
+function expectState(
+  controller: TestGitHubIdentity,
+  state: Partial<ReturnType<TestGitHubIdentity["read"]>>,
+) {
+  expect(controller.read()).toEqual(expect.objectContaining(state));
+}
+
 afterEach(() => {
   cleanupSolid();
   vi.useRealTimers();
@@ -80,36 +93,26 @@ describe("personal GitHub connection ownership", () => {
   it("lets an identified reader connect, reconnect and disconnect only their own OAuth account", async () => {
     vi.useFakeTimers();
     let personal = disconnected;
-    const methods: string[] = [];
-    const { controller, request, runExternalMutation } = setup(async (method) => {
-      methods.push(method);
-      if (method === "users.github.status") {
-        return { personal, system };
-      }
-      if (method === "users.github.authorize.start") {
-        return code;
-      }
-      if (method === "users.github.authorize.poll") {
+    const { controller, request, runExternalMutation } = setup({
+      "users.github.status": () => ({ personal, system }),
+      "users.github.authorize.start": () => code,
+      "users.github.authorize.poll": () => {
         personal = connected;
         return { status: "success", personal };
-      }
-      if (method === "users.github.disconnect") {
+      },
+      "users.github.disconnect": () => {
         personal = disconnected;
         return { disconnected: true };
-      }
-      throw new Error(`unexpected method ${method}`);
+      },
     });
     await controller.verify();
-    expect(controller.read().system).toEqual(system);
-    expect(controller.read().personal).toEqual(disconnected);
-    expect(controller.read().scope).toBe("personal");
+    expectState(controller, { system, personal: disconnected, scope: "personal" });
     controller.showPatFallback();
     controller.setDraft("token", "not-a-personal-PAT");
     await controller.configure();
     await controller.inherit();
     flush();
-    expect(controller.read().patVisible).toBe(false);
-    expect(controller.read().draft.token).toBe("");
+    expectState(controller, { patVisible: false, draft: { token: "", name: "", email: "" } });
     await controller.startAuthorization();
     expect(controller.read().authorization).toMatchObject({
       phase: "code",
@@ -121,9 +124,8 @@ describe("personal GitHub connection ownership", () => {
     expect(controller.read().personal).toEqual(connected);
     await vi.advanceTimersByTimeAsync(1_000);
     await controller.disconnect();
-    expect(controller.read().personal).toEqual(disconnected);
-    expect(controller.read().system).toEqual(system);
-    expect(methods).toEqual([
+    expectState(controller, { personal: disconnected, system });
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
       "users.github.status",
       "users.github.authorize.start",
       "users.github.authorize.poll",
@@ -150,14 +152,10 @@ describe("personal GitHub connection ownership", () => {
       { status: "network_error", retryAfterMs: 6_000 },
       { status: "success", personal: connected },
     ];
-    const { controller, request, runExternalMutation } = setup(async (method) => {
-      if (method === "users.github.status") {
-        return { personal: { ...disconnected, pending: code }, system };
-      }
-      if (method === "users.github.authorize.poll") {
-        return outcomes.shift();
-      }
-      return { cancelled: true };
+    const { controller, request, runExternalMutation } = setup({
+      "users.github.status": () => ({ personal: { ...disconnected, pending: code }, system }),
+      "users.github.authorize.poll": () => outcomes.shift(),
+      "users.github.authorize.cancel": () => ({ cancelled: true }),
     });
     await controller.verify();
     expect(controller.read().authorization).toMatchObject({
@@ -173,8 +171,7 @@ describe("personal GitHub connection ownership", () => {
     await vi.advanceTimersByTimeAsync(5_999);
     expect(request).toHaveBeenCalledTimes(3);
     await vi.advanceTimersByTimeAsync(1);
-    expect(controller.read().authorization).toEqual({ phase: "idle" });
-    expect(controller.read().personal).toEqual(connected);
+    expectState(controller, { authorization: { phase: "idle" }, personal: connected });
     expect(runExternalMutation).not.toHaveBeenCalled();
     controller.dispose();
   });
@@ -183,7 +180,7 @@ describe("personal GitHub connection ownership", () => {
     "drops delayed status and pending codes after %s changes",
     async (change) => {
       const response = deferred<UsersGitHubStatusResult>();
-      const { controller, sync } = setup(async () => response.promise);
+      const { controller, sync } = setup({ "users.github.status": () => response.promise });
       const verification = controller.verify();
       if (change === "profile") {
         sync({ target: { kind: "personal", profileId: "profile-b" } });
@@ -199,10 +196,12 @@ describe("personal GitHub connection ownership", () => {
       }
       response.resolve({ personal: { ...connected, pending: code }, system });
       await verification;
-      expect(controller.read().personal).toBeNull();
-      expect(controller.read().system).toBeNull();
-      expect(controller.read().authorization).toEqual({ phase: "idle" });
-      expect(controller.read().loading).toBe(false);
+      expectState(controller, {
+        personal: null,
+        system: null,
+        authorization: { phase: "idle" },
+        loading: false,
+      });
       controller.dispose();
     },
   );
@@ -212,22 +211,12 @@ describe("personal GitHub connection ownership", () => {
     async (phase) => {
       vi.useFakeTimers();
       const response = deferred<unknown>();
-      const { controller, request, sync, runExternalMutation } = setup(async (method) => {
-        if (method === "users.github.status") {
-          return { personal: connected, system };
-        }
-        if (
-          method === `users.github.${phase === "disconnect" ? "disconnect" : `authorize.${phase}`}`
-        ) {
-          return response.promise;
-        }
-        if (method === "users.github.authorize.start") {
-          return code;
-        }
-        if (method === "users.github.authorize.cancel") {
-          return { cancelled: true };
-        }
-        throw new Error(`unexpected method ${method}`);
+      const delayedMethod = `users.github.${phase === "disconnect" ? phase : `authorize.${phase}`}`;
+      const { controller, request, sync, runExternalMutation } = setup({
+        "users.github.status": () => ({ personal: connected, system }),
+        "users.github.authorize.start": () => code,
+        "users.github.authorize.cancel": () => ({ cancelled: true }),
+        [delayedMethod]: () => response.promise,
       });
       await controller.verify();
       const pending =
@@ -246,9 +235,7 @@ describe("personal GitHub connection ownership", () => {
       );
       await pending;
       await vi.advanceTimersByTimeAsync(0);
-      expect(controller.read().personal).toBeNull();
-      expect(controller.read().authorization).toEqual({ phase: "idle" });
-      expect(controller.read().busy).toBe(false);
+      expectState(controller, { personal: null, authorization: { phase: "idle" }, busy: false });
       if (phase !== "disconnect") {
         expect(request).toHaveBeenCalledWith("users.github.authorize.cancel", {
           requestId: code.requestId,
@@ -260,13 +247,14 @@ describe("personal GitHub connection ownership", () => {
   );
 
   it("does not expose personal authorization when durable identity is absent or status fails", async () => {
-    const { controller, request, sync } = setup(async () => {
-      throw new Error("Identity synchronization failed");
+    const { controller, request, sync } = setup({
+      "users.github.status": () => {
+        throw new Error("Identity synchronization failed");
+      },
     });
     await controller.verify();
     expect(controller.read().error).toContain("Identity synchronization failed");
-    expect(controller.read().personal).toBeNull();
-    expect(controller.read().system).toBeNull();
+    expectState(controller, { personal: null, system: null });
     sync({ target: null, authorizable: false, statusReadable: false });
     await controller.startAuthorization();
     await controller.disconnect();

@@ -1,7 +1,7 @@
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import type { GitHubAuthorizationState } from "./github-identity-shared.ts";
@@ -63,18 +63,18 @@ describe("GitHub identity view", () => {
       };
       return <GitHubConnectionSetup identity={identity} />;
     });
-    const button = view.container.querySelector<HTMLButtonElement>(".github-device-code + button")!;
+    const copyButton = () =>
+      view.container.querySelector<HTMLButtonElement>(".github-device-code + button")!;
+    const button = copyButton();
     button.click();
     expect(writeText).toHaveBeenCalledOnce();
     updateAuthorization({ phase: "pending" });
     flush();
-    expect(view.container.querySelector(".github-device-code + button")).toBe(button);
+    expect(copyButton()).toBe(button);
     expect(view.getByText("Waiting for approval…")).toBeTruthy();
     updateAuthorization({ userCode: "second" });
     flush();
-    const current = view.container.querySelector<HTMLButtonElement>(
-      ".github-device-code + button",
-    )!;
+    const current = copyButton();
     expect(current).not.toBe(button);
     expect(current.disabled).toBe(false);
     pending.reject(new Error("Synthetic clipboard rejection"));
@@ -87,14 +87,11 @@ describe("GitHub identity view", () => {
     expect(current.dataset.copyState).toBe("copied");
   });
 
-  it("keeps the focused PAT field across draft and mutation updates", async () => {
+  it("keeps the focused PAT field and fallback across draft and mutation updates", async () => {
     const stored = createDeferred<unknown>();
-    // SAFETY: this view test exercises only the browser client's request boundary.
-    const client = {
-      request: vi.fn(async (method: string) =>
-        method === "secrets.store.set" ? stored.promise : { ok: true },
-      ),
-    } as unknown as GatewayBrowserClient;
+    const client = createTestGatewayClient(async (method) =>
+      method === "secrets.store.set" ? stored.promise : { ok: true },
+    );
     const identity = createGitHubIdentityForTest({
       runExternalMutation: async () => ({
         ok: false,
@@ -131,9 +128,10 @@ describe("GitHub identity view", () => {
     expect(view.container.querySelector(".settings-secret input")).toBe(input);
     expect(document.activeElement).toBe(input);
     const saving = identity.configure();
+    identity.hidePatFallback();
     flush();
-    expect(input.disabled).toBe(true);
-    expect(input.value).toBe("synthetic-pat");
+    expect(identity.read().patVisible).toBe(true);
+    expect(input).toMatchObject({ disabled: true, value: "synthetic-pat" });
     expect(view.container.querySelector(".settings-secret input")).toBe(input);
     identity.dispose();
     stored.resolve({ ok: true });
