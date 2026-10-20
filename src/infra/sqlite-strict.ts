@@ -190,7 +190,11 @@ function canonicalStrictTablesFromCatalog(catalog: SqliteSchemaCatalog): Canonic
             );
       const columnTypes = new Map<string, string>();
       for (const column of table.columns) {
-        if (column.hidden === 0 && typeof column.name === "string" && typeof column.type === "string") {
+        if (
+          column.hidden === 0 &&
+          typeof column.name === "string" &&
+          typeof column.type === "string"
+        ) {
           columnTypes.set(column.name, column.type.toUpperCase());
         }
       }

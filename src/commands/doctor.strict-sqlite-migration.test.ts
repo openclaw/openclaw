@@ -7,6 +7,10 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import {
+  addPreCutoverClientCredentialTablesForTest,
+  withStateMigrationBackupForTest,
+} from "../state/openclaw-state-schema.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 
 afterEach(() => {
@@ -21,6 +25,7 @@ it("doctor upgrades BLOB-stored TEXT values to STRICT storage", async () => {
 
     const { DatabaseSync } = requireNodeSqlite();
     const legacy = new DatabaseSync(databasePath);
+    addPreCutoverClientCredentialTablesForTest(legacy);
     // The synthetic pre-STRICT database predates this placement index.
     legacy.exec("DROP INDEX IF EXISTS idx_worker_session_placements_environment;");
     legacy.exec(`
@@ -51,13 +56,15 @@ it("doctor upgrades BLOB-stored TEXT values to STRICT storage", async () => {
     legacy.close();
     expect(fs.existsSync(databasePath)).toBe(true);
 
-    const result = await autoMigrateLegacyState({
-      cfg: {},
-      env: state.env,
-      homedir: () => state.home,
-      doctorOnlyStateMigrations: true,
-      legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
-    });
+    const result = await withStateMigrationBackupForTest({ env: state.env }, () =>
+      autoMigrateLegacyState({
+        cfg: {},
+        env: state.env,
+        homedir: () => state.home,
+        doctorOnlyStateMigrations: true,
+        legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+      }),
+    );
     expect(result.warnings).toEqual([]);
     expect(result.changes).toContain("Migrated shared state tables to SQLite STRICT typing (1)");
 
