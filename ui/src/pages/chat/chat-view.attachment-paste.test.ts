@@ -56,8 +56,8 @@ function renderChatView(overrides: Partial<ChatProps>) {
   return container;
 }
 
-const find = <T extends Element = HTMLElement>(container: Element, selector: string): T =>
-  expectDefined(container.querySelector<T>(selector), selector);
+const find = (container: Element, selector: string) =>
+  expectDefined(container.querySelector<HTMLElement>(selector), selector);
 const click = (container: Element, selector: string) =>
   find(container, selector).dispatchEvent(new MouseEvent("click", { bubbles: true }));
 function finishRead(reader: FileReader, value: string, configurable = false) {
@@ -95,7 +95,10 @@ function attachFile(container: Element, file: File, entry: "clipboard" | "file p
     });
     getComposerTextarea(container).dispatchEvent(paste);
   } else if (entry === "file picker") {
-    const input = find<HTMLInputElement>(container, ".agent-chat__file-input");
+    const input = expectDefined(
+      container.querySelector<HTMLInputElement>(".agent-chat__file-input"),
+      "file input",
+    );
     Object.defineProperty(input, "files", { configurable: true, value: [file] });
     input.dispatchEvent(new Event("change", { bubbles: true }));
   } else {
@@ -319,7 +322,10 @@ describe("chat attachment reading", () => {
     expect(status?.classList.contains("sr-only")).toBe(true);
     expect(getComposerTextarea(container).disabled).toBe(false);
     const sendButton = () =>
-      find<HTMLButtonElement>(container, 'button[aria-label="Send message"]');
+      expectDefined(
+        container.querySelector<HTMLButtonElement>('button[aria-label="Send message"]'),
+        "send button",
+      );
     const send = sendButton();
     expect(sendState(send)).toEqual([true, "true"]);
     expect(send.closest("openclaw-tooltip")?.content).toBe("Preparing attachments…");

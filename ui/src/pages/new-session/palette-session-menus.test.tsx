@@ -22,11 +22,8 @@ function expectArrow(target: HTMLElement, key: "ArrowDown" | "ArrowUp", destinat
   expect(document.activeElement).toBe(destination);
 }
 
-function get<T extends HTMLElement = HTMLElement>(
-  root: Pick<ParentNode, "querySelector">,
-  selector: string,
-): T {
-  return expectDefined(root.querySelector<T>(selector), selector);
+function get(root: Pick<ParentNode, "querySelector">, selector: string) {
+  return expectDefined(root.querySelector<HTMLElement>(selector), selector);
 }
 
 async function openSettings(host: Pick<ParentNode, "querySelector">) {
@@ -49,7 +46,10 @@ it("keeps agent navigation and Escape inside the nested menu", async () => {
   );
   const workspace = get(host, ".palette-session-settings__workspace");
   const trigger = get(host, ".agent-select__trigger");
-  const remember = get<HTMLInputElement>(host, ".palette-session-settings__remember input");
+  const remember = expectDefined(
+    host.querySelector<HTMLInputElement>(".palette-session-settings__remember input"),
+    "remember checkbox",
+  );
   expect(remember.disabled).toBe(true);
   expectArrow(workspace, "ArrowDown", trigger);
 
@@ -177,9 +177,15 @@ it("keeps filtered choices and unavailable rows in DOM order before the existing
   );
   const content = get(host, ".palette-session-settings__content");
   const back = get(content, ".palette-session-settings__back");
-  const search = get<HTMLInputElement>(content, ".palette-session-settings__search");
+  const search = expectDefined(
+    content.querySelector<HTMLInputElement>(".palette-session-settings__search"),
+    "settings search",
+  );
   const connect = get(content, ":scope > .palette-session-settings__row");
-  const unavailable = get<HTMLButtonElement>(content, '[data-machine="runtime:hosted"]');
+  const unavailable = expectDefined(
+    content.querySelector<HTMLButtonElement>('[data-machine="runtime:hosted"]'),
+    "unavailable machine",
+  );
   const alpha = get(content, '[data-machine="local"][data-project="alpha"]');
   const beta = get(content, '[data-machine="local"][data-project="beta"]');
   expect(unavailable.getAttribute("aria-disabled")).toBe("true");

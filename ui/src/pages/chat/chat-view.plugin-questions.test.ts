@@ -90,8 +90,6 @@ function createPluginChat(replacement: ControlUiReplacement<"composer">, initial
     provider,
     render,
     reportError,
-    query: <T extends Element = HTMLElement>(selector: string): T | null =>
-      provider.querySelector<T>(selector),
     count: (selector: string) => provider.querySelectorAll(selector).length,
     selectReplacement: () => {
       selected = true;
@@ -109,7 +107,7 @@ it.each([
 ] as const)(
   "keeps one usable async question when switching to a $mode plugin composer",
   async ({ mode, action }) => {
-    const { provider, render, reportError, selectReplacement, query, count } = createPluginChat(
+    const { provider, render, reportError, selectReplacement, count } = createPluginChat(
       {
         id: "custom-draft",
         label: "Custom draft",
@@ -155,13 +153,15 @@ it.each([
       );
     });
     expect(reportError).toHaveBeenCalledTimes(mode === "failing" ? 1 : 0);
-    const answer = query<HTMLInputElement>(".chat-question-panel__other")!;
+    const answer = provider.querySelector<HTMLInputElement>(".chat-question-panel__other")!;
     answer.value = "New contributors";
     answer.dispatchEvent(new Event("input", { bubbles: true }));
     flush();
-    query<HTMLButtonElement>(
-      `.chat-question-panel__${action === "submit" ? "advance" : "skip"}`,
-    )!.click();
+    provider
+      .querySelector<HTMLButtonElement>(
+        `.chat-question-panel__${action === "submit" ? "advance" : "skip"}`,
+      )!
+      .click();
     await vi.waitFor(() => {
       if (action === "submit") {
         expect(submit).toHaveBeenCalledExactlyOnceWith(
@@ -172,15 +172,15 @@ it.each([
       } else {
         expect(submit).not.toHaveBeenCalled();
       }
-      expect(query("openclaw-chat-question-panel")).toBeNull();
-      expect(query(".chat-question-summary")?.textContent).toContain(
+      expect(provider.querySelector("openclaw-chat-question-panel")).toBeNull();
+      expect(provider.querySelector(".chat-question-summary")?.textContent).toContain(
         action === "submit" ? "New contributors" : "Dismissed",
       );
     });
     if (mode === "nondelegating") {
-      expect(query<HTMLTextAreaElement>('textarea[aria-label="Custom draft"]')?.value).toBe(
-        "Keep the plugin draft.",
-      );
+      expect(
+        provider.querySelector<HTMLTextAreaElement>('textarea[aria-label="Custom draft"]')?.value,
+      ).toBe("Keep the plugin draft.");
     }
   },
 );
