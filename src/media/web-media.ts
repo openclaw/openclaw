@@ -615,41 +615,6 @@ function assertImageSatisfiesHardDimensionPolicy(
   throw new Error(`Image dimensions exceed model image limits${detail}`);
 }
 
-function resolvePreservableOriginalImageContentType(params: {
-  buffer: Buffer;
-  cap: number;
-  contentType?: string;
-  policy?: ImageCompressionPolicy;
-}): string | null {
-  if (params.buffer.length > params.cap) {
-    return null;
-  }
-  const declaredContentType = normalizeMimeType(params.contentType);
-  const probe = readImageProbeFromHeader(params.buffer);
-  const actualContentType = probe ? `image/${probe.format}` : undefined;
-  if (!probe || !isPreservableImageMime(actualContentType)) {
-    return null;
-  }
-  const declaredPreservableContentType = isPreservableImageMime(declaredContentType)
-    ? declaredContentType
-    : undefined;
-  if (declaredPreservableContentType && declaredPreservableContentType !== actualContentType) {
-    return null;
-  }
-  if (declaredContentType?.startsWith("image/") && !declaredPreservableContentType) {
-    return null;
-  }
-  const preferredSide =
-    resolveImageCompressionGrid(params.policy).sides[0] ?? DEFAULT_VISION_MAX_SIDE;
-  if (
-    Math.max(probe.width, probe.height) > preferredSide ||
-    !imageSatisfiesHardDimensionPolicy(params.buffer, params.policy, probe)
-  ) {
-    return null;
-  }
-  return declaredPreservableContentType ?? actualContentType;
-}
-
 function isPreservableImageMime(
   contentType: string | undefined,
 ): contentType is "image/png" | "image/jpeg" | "image/webp" {
@@ -729,12 +694,35 @@ export async function optimizeImageBufferForWebMedia(params: {
     }
     assertImageSatisfiesHardDimensionPolicy(params.buffer, params.imageCompression);
   } else {
-    originalContentType = resolvePreservableOriginalImageContentType({
-      buffer: params.buffer,
-      cap,
-      contentType: params.contentType,
-      policy: params.imageCompression,
-    });
+    originalContentType = (() => {
+      const { buffer, contentType, imageCompression: policy } = params;
+      if (buffer.length > cap) {
+        return null;
+      }
+      const declaredContentType = normalizeMimeType(contentType);
+      const probe = readImageProbeFromHeader(buffer);
+      const actualContentType = probe ? `image/${probe.format}` : undefined;
+      if (!probe || !isPreservableImageMime(actualContentType)) {
+        return null;
+      }
+      const declaredPreservableContentType = isPreservableImageMime(declaredContentType)
+        ? declaredContentType
+        : undefined;
+      if (declaredPreservableContentType && declaredPreservableContentType !== actualContentType) {
+        return null;
+      }
+      if (declaredContentType?.startsWith("image/") && !declaredPreservableContentType) {
+        return null;
+      }
+      const preferredSide = resolveImageCompressionGrid(policy).sides[0] ?? DEFAULT_VISION_MAX_SIDE;
+      if (
+        Math.max(probe.width, probe.height) > preferredSide ||
+        !imageSatisfiesHardDimensionPolicy(buffer, policy, probe)
+      ) {
+        return null;
+      }
+      return declaredPreservableContentType ?? actualContentType;
+    })();
   }
   if (originalContentType) {
     return {
