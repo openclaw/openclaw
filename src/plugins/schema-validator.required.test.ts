@@ -22,6 +22,11 @@ function dependency(path: string, valuePath: string[], trigger: string, names = 
   );
 }
 
+function requiredSchema(names: string[], container?: string) {
+  const schema = { type: "object", required: names };
+  return container ? { type: "object", properties: { [container]: schema } } : schema;
+}
+
 function expectValidationFailure(
   params: Parameters<typeof validateJsonSchemaValue>[0],
 ): Extract<ReturnType<typeof validateJsonSchemaValue>, { ok: false }> {
@@ -76,10 +81,7 @@ describe("schema validator", () => {
   it.each([
     {
       title: "multiple nested fields",
-      schema: {
-        type: "object",
-        properties: { settings: { type: "object", required: ["endpoint", "token"] } },
-      },
+      schema: requiredSchema(["endpoint", "token"], "settings"),
       value: { settings: {} },
       expectedErrors: [
         required("settings.endpoint", ["settings", "endpoint"], "endpoint"),
@@ -88,7 +90,7 @@ describe("schema validator", () => {
     },
     {
       title: "terminal controls in a later field",
-      schema: { type: "object", required: ["endpoint", "evil\nkey\t\x1b[31mred\x1b[0m"] },
+      schema: requiredSchema(["endpoint", "evil\nkey\t\x1b[31mred\x1b[0m"]),
       value: {},
       expectedErrors: [
         required("endpoint", ["endpoint"], "endpoint"),
@@ -102,15 +104,7 @@ describe("schema validator", () => {
     },
     {
       title: "literal missing property names",
-      schema: {
-        type: "object",
-        properties: {
-          settings: {
-            type: "object",
-            required: ["dot.name", "slash/name", "tilde~1name", "", "<root>"],
-          },
-        },
-      },
+      schema: requiredSchema(["dot.name", "slash/name", "tilde~1name", "", "<root>"], "settings"),
       value: { settings: {} },
       expectedErrors: [
         required("settings.dot.name", ["settings", "dot.name"], "dot.name"),
@@ -120,73 +114,63 @@ describe("schema validator", () => {
         required("settings.<root>", ["settings", "<root>"], "<root>"),
       ],
     },
-  ])(
-    "reports complete required diagnostics for $title",
-    ({ title, schema, value, expectedErrors }) => {
-      const result = expectValidationFailure({
-        cacheKey: `schema-validator.test.required.complete.${title}`,
-        schema,
-        value,
-      });
+  ])("reports complete required diagnostics for $title", ({ schema, value, expectedErrors }) => {
+    const result = expectValidationFailure({
+      schema,
+      value,
+    });
 
-      expect(result.errors).toEqual(expectedErrors);
+    expect(result.errors).toEqual(expectedErrors);
+  });
+
+  it.each([
+    {
+      title: "all dependencies missing in one condition",
+      schema: { type: "object", dependentRequired: { a: ["b", "c"] } },
+      value: { a: true },
+      expectedErrors: [dependency("<root>", [], "a", "b, c")],
     },
-  );
-
-  describe("dependency diagnostics", () => {
-    it.each([
-      {
-        title: "all dependencies missing in one condition",
-        schema: { type: "object", dependentRequired: { a: ["b", "c"] } },
-        value: { a: true },
-        expectedErrors: [dependency("<root>", [], "a", "b, c")],
-      },
-      {
-        title: "root with the first dependency already present",
-        schema: { type: "object", dependencies: { a: ["b", "c"] } },
-        value: { a: true, b: "present" },
-        expectedErrors: [dependency("<root>", [], "a", "b, c")],
-      },
-      {
-        title: "literal and nested containers with distinct conditions",
-        schema: {
-          type: "object",
-          properties: {
-            "room/one": { type: "object", dependentRequired: { literal: ["left", "right"] } },
-            room: {
-              type: "object",
-              properties: {
-                one: { type: "object", dependentRequired: { nested: ["left", "right"] } },
-              },
+    {
+      title: "root with the first dependency already present",
+      schema: { type: "object", dependencies: { a: ["b", "c"] } },
+      value: { a: true, b: "present" },
+      expectedErrors: [dependency("<root>", [], "a", "b, c")],
+    },
+    {
+      title: "literal and nested containers with distinct conditions",
+      schema: {
+        type: "object",
+        properties: {
+          "room/one": { type: "object", dependentRequired: { literal: ["left", "right"] } },
+          room: {
+            type: "object",
+            properties: {
+              one: { type: "object", dependentRequired: { nested: ["left", "right"] } },
             },
-            "room~1one": { type: "object", dependentRequired: { tilde: ["left", "right"] } },
-            "room%2Fone": { type: "object", dependentRequired: { percent: ["left", "right"] } },
           },
+          "room~1one": { type: "object", dependentRequired: { tilde: ["left", "right"] } },
+          "room%2Fone": { type: "object", dependentRequired: { percent: ["left", "right"] } },
         },
-        value: {
-          "room/one": { literal: true, left: "present" },
-          room: { one: { nested: true, right: "present" } },
-          "room~1one": { tilde: true, left: "present" },
-          "room%2Fone": { percent: true, right: "present" },
-        },
-        expectedErrors: [
-          dependency("room.one", ["room/one"], "literal"),
-          dependency("room.one", ["room", "one"], "nested"),
-          dependency("room~1one", ["room~1one"], "tilde"),
-          dependency("room%2Fone", ["room%2Fone"], "percent"),
-        ],
       },
-    ])(
-      "preserves the dependency condition at $title",
-      ({ title, schema, value, expectedErrors }) => {
-        const result = expectValidationFailure({
-          cacheKey: `schema-validator.test.condition.${title}`,
-          schema,
-          value,
-        });
+      value: {
+        "room/one": { literal: true, left: "present" },
+        room: { one: { nested: true, right: "present" } },
+        "room~1one": { tilde: true, left: "present" },
+        "room%2Fone": { percent: true, right: "present" },
+      },
+      expectedErrors: [
+        dependency("room.one", ["room/one"], "literal"),
+        dependency("room.one", ["room", "one"], "nested"),
+        dependency("room~1one", ["room~1one"], "tilde"),
+        dependency("room%2Fone", ["room%2Fone"], "percent"),
+      ],
+    },
+  ])("preserves the dependency condition at $title", ({ schema, value, expectedErrors }) => {
+    const result = expectValidationFailure({
+      schema,
+      value,
+    });
 
-        expect(result.errors).toEqual(expectedErrors);
-      },
-    );
+    expect(result.errors).toEqual(expectedErrors);
   });
 });
