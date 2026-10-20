@@ -67,6 +67,7 @@ async function otherClient(
               db.exec("UPDATE client_credential_migration SET phase = 'copied' WHERE version = 1");
             } else if (operation === "newer") {
               db.exec("PRAGMA user_version = 2");
+              db.exec("UPDATE client_credential_migration SET source_store = 'future receipt format'");
             } else if (operation === "damage") {
               db.exec("DROP TABLE device_auth_tokens");
             } else {
@@ -110,7 +111,7 @@ it("refuses an in-place copied receipt from another process despite an unchanged
   await expect(read()).rejects.toThrow("migration is incomplete or stale");
 });
 
-it("refuses a newer schema published in place by another process", async () => {
+it("refuses a newer schema before parsing its changed receipt format", async () => {
   const { read, databasePath } = await fixture();
   const observed = await otherClient(databasePath, "newer");
   expect(observed.before.version).toBe(1);

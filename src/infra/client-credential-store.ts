@@ -32,7 +32,7 @@ import { assertSqliteIntegrity } from "./sqlite-integrity.js";
 import { assertSqliteSchemaContains } from "./sqlite-schema-contract.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import { readSqliteUserVersion, writeSqliteUserVersion } from "./sqlite-user-version.js";
-import { resolveDatabasePathKey } from "./sqlite-worker-identity.js";
+import { readDatabaseIdentityBirthtime, resolveDatabasePathKey } from "./sqlite-worker-identity.js";
 import { runUpdateSqliteMigration } from "./update-doctor-migration-attribution.js";
 export type {
   ClientTokenRecord,
@@ -150,7 +150,7 @@ export function openClientCredentialCustody(
     ) {
       throw new Error("Client credential store owner is unsafe.");
     }
-    const identity = `${stat.dev}:${stat.ino}:${stat.birthtimeNs}`;
+    const identity = `${stat.dev}:${stat.ino}:${readDatabaseIdentityBirthtime(stat)}`;
     assertPrivateAcl(pathname);
     db = openNodeSqliteDatabase(resolveExistingSqliteFileUri(pathname), {
       timeout: options.timeoutMs ?? 5000,
@@ -223,11 +223,6 @@ export function openClientCredentialCustody(
       }
       if (!options.migration) {
         const admission = readClientCredentialAdmission(database);
-        if (admission.version !== CLIENT_CREDENTIAL_SCHEMA_VERSION) {
-          throw new Error(
-            `Client credentials have unsupported schema version ${String(admission.version)}. Use a compatible OpenClaw version.`,
-          );
-        }
         admitClientCredentialStore(database, env, {
           initialize: initialized,
           readOnly: options.readOnly ?? false,

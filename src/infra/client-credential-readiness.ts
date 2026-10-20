@@ -12,7 +12,10 @@ import {
   serializeClientCredentialReceipt,
   type ClientCredentialReceipt,
 } from "./client-credential-receipt.js";
-import type { ClientCredentialDatabase } from "./client-credential-schema.js";
+import {
+  CLIENT_CREDENTIAL_SCHEMA_VERSION,
+  type ClientCredentialDatabase,
+} from "./client-credential-schema.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -47,6 +50,11 @@ export function readClientCredentialAdmission(database: DatabaseSync): {
       .get();
   if (!row || typeof row.user_version !== "number") {
     throw notReady();
+  }
+  if (row.user_version !== CLIENT_CREDENTIAL_SCHEMA_VERSION) {
+    throw new Error(
+      `Client credentials have unsupported schema version ${String(row.user_version)}. Use a compatible OpenClaw version.`,
+    );
   }
   const localPath = database.location();
   return {
