@@ -2,19 +2,24 @@ import {
   implicitMentionKindWhen,
   resolveBotThreadMentionPolicy,
 } from "openclaw/plugin-sdk/channel-mention-gating";
+import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import { hasSlackThreadParticipationWithPersistence } from "../../sent-thread-cache.js";
 import type { SlackMessageEvent } from "../../types.js";
 import type { SlackChannelConfigResolved } from "../channel-config.js";
 import type { SlackMonitorContext } from "../context.js";
+import type { SlackEventScope } from "../event-scope.js";
+import { getSlackSessionRuns } from "../session-run-targets.js";
 import type { SlackThreadStarter } from "../thread.js";
 import { isSlackThreadAuthorCurrentBot } from "./prepare-thread-context-root.js";
 
 export async function resolveSlackThreadMentionPolicy(params: {
-  ctx: Pick<SlackMonitorContext, "botUserId" | "botId" | "defaultRequireMention">;
+  ctx: Pick<SlackMonitorContext, "app" | "botUserId" | "botId" | "defaultRequireMention">;
   account: Pick<ResolvedSlackAccount, "accountId" | "config">;
   message: SlackMessageEvent;
+  isBotMessage: boolean;
+  eventScope?: SlackEventScope;
   conversation: {
     isRoom: boolean;
     isDirectMessage: boolean;
@@ -38,12 +43,23 @@ export async function resolveSlackThreadMentionPolicy(params: {
         ? replyToBotKinds
         : implicitMentionKindWhen(
             "bot_thread_participant",
-            await hasSlackThreadParticipationWithPersistence({
-              accountId: account.accountId,
-              channelId: message.channel,
-              threadTs: message.thread_ts,
-              teamId: params.teamId,
-            }),
+            (!params.isBotMessage &&
+              getSlackSessionRuns(ctx, {
+                channelId: message.channel,
+                threadTs: message.thread_ts,
+                eventScope: params.eventScope,
+              }).some(
+                (run) =>
+                  run.route.accountId === account.accountId &&
+                  run.allowImplicitReplies &&
+                  run.isActive(),
+              )) ||
+              (await hasSlackThreadParticipationWithPersistence({
+                accountId: account.accountId,
+                channelId: message.channel,
+                threadTs: message.thread_ts,
+                teamId: params.teamId,
+              })),
           );
   }
 
@@ -69,4 +85,29 @@ export async function resolveSlackThreadMentionPolicy(params: {
     requireMention: isRoom ? (channelConfig?.requireMention ?? ctx.defaultRequireMention) : false,
     implicitMentionKinds,
   });
+}
+
+export function resolveSlackMentionSource(params: {
+  explicitBotMention: boolean;
+  explicitSubteamMention: boolean;
+  matchedImplicitMentionKinds: readonly string[];
+  shouldBypassMention: boolean;
+  wasMentioned: boolean;
+}): NonNullable<FinalizedMsgContext["MentionSource"]> {
+  if (params.explicitBotMention) {
+    return "explicit_bot";
+  }
+  if (params.explicitSubteamMention) {
+    return "subteam";
+  }
+  if (params.shouldBypassMention) {
+    return "command_bypass";
+  }
+  if (params.wasMentioned) {
+    return "mention_pattern";
+  }
+  if (params.matchedImplicitMentionKinds.length > 0) {
+    return "implicit_thread";
+  }
+  return "none";
 }

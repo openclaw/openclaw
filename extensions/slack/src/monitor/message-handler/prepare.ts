@@ -89,7 +89,10 @@ import { resolveSlackRoomHistory } from "./prepare-room-history.js";
 import { resolveSlackRoutingContext } from "./prepare-routing.js";
 import { resolveSlackGroupSessionSubject } from "./prepare-session-presentation.js";
 import { resolveSlackThreadContextData } from "./prepare-thread-context.js";
-import { resolveSlackThreadMentionPolicy } from "./prepare-thread-mentions.js";
+import {
+  resolveSlackMentionSource,
+  resolveSlackThreadMentionPolicy,
+} from "./prepare-thread-mentions.js";
 import {
   collectSlackMentionIds,
   isSlackSubteamMentionForBot,
@@ -237,31 +240,6 @@ function collectSlackMentionMetadata(text: string): SlackMentionMetadata {
     hasAnyMention: SLACK_ANY_MENTION_RE.test(text),
     hasSubteamMention: text.includes(SLACK_SUBTEAM_MENTION_MARKER),
   };
-}
-
-function resolveSlackMentionSource(params: {
-  explicitBotMention: boolean;
-  explicitSubteamMention: boolean;
-  matchedImplicitMentionKinds: readonly string[];
-  shouldBypassMention: boolean;
-  wasMentioned: boolean;
-}): NonNullable<FinalizedMsgContext["MentionSource"]> {
-  if (params.explicitBotMention) {
-    return "explicit_bot";
-  }
-  if (params.explicitSubteamMention) {
-    return "subteam";
-  }
-  if (params.shouldBypassMention) {
-    return "command_bypass";
-  }
-  if (params.wasMentioned) {
-    return "mention_pattern";
-  }
-  if (params.matchedImplicitMentionKinds.length > 0) {
-    return "implicit_thread";
-  }
-  return "none";
 }
 
 async function resolveSlackConversationContext(params: {
@@ -769,6 +747,8 @@ export async function prepareSlackMessage(params: {
       ctx,
       account,
       message,
+      isBotMessage,
+      eventScope: opts.eventScope,
       conversation,
       thread: routing,
       wasMentioned,
@@ -1498,6 +1478,13 @@ export async function prepareSlackMessage(params: {
     message,
     ...(opts.relayIdentity ? { relayIdentity: opts.relayIdentity } : {}),
     eventScope: opts.eventScope,
+    allowImplicitThreadReplies:
+      isRoom &&
+      !isBotMessage &&
+      effectiveWasMentioned &&
+      !hasControlCommandInMessage &&
+      !hasAbortRequest &&
+      !isRoomEvent,
     route,
     channelConfig,
     replyTarget,
