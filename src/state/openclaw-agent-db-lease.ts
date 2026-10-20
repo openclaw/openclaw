@@ -249,7 +249,11 @@ function claimAgentDatabaseLeaseInDatabase(
 export function releaseOpenClawAgentDatabaseLease(
   leaseId: string,
   options: OpenClawStateDatabaseOptions = {},
-  closeOutcome?: { path: string; publishSeal: () => boolean } | "read-only" | "uncheckpointed",
+  closeOutcome?:
+    | { path: string; publishSeal: () => boolean }
+    | "read-only"
+    | "uncheckpointed"
+    | "postgres-closed",
 ): void {
   const release = (database: EngineConnection) => {
     const db = getNodeSqliteKysely<AgentDatabaseLeaseDatabase>(database);
