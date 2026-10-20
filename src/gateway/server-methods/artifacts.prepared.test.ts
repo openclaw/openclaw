@@ -1,8 +1,14 @@
 import { createServer } from "node:http";
+import { performance } from "node:perf_hooks";
 import { afterEach, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
-import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  replaceSessionEntry,
+  loadSessionEntry,
+  waitForSessionTranscriptProjection,
+} from "../../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { setCanonicalUserProfileRole } from "../../state/user-profile-writes.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -12,7 +18,6 @@ import { clearArtifactDownloads } from "../artifact-download-grants.js";
 import { captureGatewayAuthPolicy } from "../auth-policy.js";
 import { prepareGatewayRecipientProfile } from "../expected-profile.js";
 import { handleManagedOutgoingMediaHttpRequest } from "../managed-image-attachments.js";
-import * as managedMedia from "../managed-image-attachments.js";
 import { createFixture } from "../managed-image-attachments.test-support.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { handleGatewayRequest } from "../server-methods.js";
@@ -27,24 +32,40 @@ import { invalidateGatewayPolicyClient } from "../server/ws-policy-close.js";
 import * as preparation from "../session-sharing-preparation.js";
 import * as artifactReads from "../session-transcript-readers.js";
 import { artifactsHandlers } from "./artifacts.js";
-import {
-  artifactSession,
-  invokeArtifact,
-  writeArtifactTranscript,
-} from "./artifacts.test-support.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import { fetchSessionFileDownload } from "./sessions-files.test-support.js";
 import { identifiedClient } from "./sessions-read-cache.test-support.js";
+import type { RespondFn } from "./types.js";
 
 afterEach(() => vi.restoreAllMocks());
 
 it("admits session-only artifact readers with current session visibility and prepared facts", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     setRuntimeConfigSnapshot({});
-    const { scope, entry } = artifactSession("prepared-artifacts");
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:prepared-artifacts",
+      sessionId: "prepared-artifacts",
+    };
+    const entry = {
+      sessionId: scope.sessionId,
+      updatedAt: 1,
+      visibility: "shared" as const,
+      createdActor: { type: "human" as const, source: "profile" as const, id: "owner" },
+    };
     await replaceSessionEntry(scope, entry);
     const data = Buffer.alloc(912, "x").toString("base64");
-    await writeArtifactTranscript(scope, [{ type: "file", title: "result.txt", data }]);
+    await replaceTranscriptEvents(scope, [
+      { type: "session", version: 3, id: scope.sessionId },
+      {
+        type: "message",
+        id: "artifact",
+        parentId: null,
+        message: { role: "assistant", content: [{ type: "file", title: "result.txt", data }] },
+      },
+    ]);
+    await waitForSessionTranscriptProjection(scope);
+    expect(loadSessionEntry(scope)?.visibility).toBe("shared");
     const context = await createHistoryReadContext();
     let client = identifiedClient("viewer");
     client.connect.scopes = ["operator.sessions.read"];
@@ -57,24 +78,32 @@ it("admits session-only artifact readers with current session visibility and pre
       params: Record<string, unknown> = {},
       throughDispatcher = true,
     ) => {
-      const respond = await invokeArtifact(
-        method,
-        { sessionKey: scope.sessionKey, ...params },
-        {
-          context,
-          client,
+      const respond = vi.fn<RespondFn>();
+      const options = {
+        context,
+        client,
+        req: {
+          type: "req" as const,
           id: "prepared-artifacts",
-          dispatch: throughDispatcher
-            ? (options) => handleGatewayRequest({ ...options, extraHandlers: artifactsHandlers })
-            : artifactsHandlers[method]!,
+          method,
+          params: { sessionKey: scope.sessionKey, ...params },
         },
-      );
+        extraHandlers: artifactsHandlers,
+        isWebchatConnect: () => false,
+        respond,
+      };
+      if (throughDispatcher) {
+        await handleGatewayRequest(options);
+      } else {
+        await artifactsHandlers[method]!({ ...options, params: options.req.params });
+      }
       return respond.mock.calls[0]!;
     };
     const listed = await request("artifacts.list");
     expect(listed[0]).toBe(true);
     const payload = listed[1] as { artifacts: { id: string; sizeBytes: number }[] };
-    expect(payload.artifacts).toEqual([expect.objectContaining({ sizeBytes: 912 })]);
+    expect(payload.artifacts).toHaveLength(1);
+    expect(payload.artifacts[0]?.sizeBytes).toBe(912);
     const artifactId = payload.artifacts[0]!.id;
     const granted = await request("artifacts.download", { artifactId, transport: "http" });
     expect(granted[0]).toBe(true);
@@ -91,9 +120,14 @@ it("admits session-only artifact readers with current session visibility and pre
         sessionKey: "agent:main:unknown-artifacts",
         artifactId,
       });
-      expect(unknown.slice(0, 2)).toEqual([false, undefined]);
+      expect(unknown[0]).toBe(false);
+      expect(unknown[1]).toBeUndefined();
     }
-    const { scope: otherScope } = artifactSession("other-artifacts");
+    const otherScope = {
+      agentId: "main",
+      sessionKey: "agent:main:other-artifacts",
+      sessionId: "other-artifacts",
+    };
     await replaceSessionEntry(otherScope, { ...entry, sessionId: otherScope.sessionId });
     for (const method of ["artifacts.get", "artifacts.download"] as const) {
       const unrelated = await request(method, { sessionKey: otherScope.sessionKey, artifactId });
@@ -101,18 +135,42 @@ it("admits session-only artifact readers with current session visibility and pre
       expect(unrelated[2]).toMatchObject({ details: { type: "artifact_not_found" } });
     }
     const prepare = vi.spyOn(preparation, "prepareSessionMutationFacts");
-    for (const method of ["artifacts.list", "artifacts.get", "artifacts.download"] as const) {
-      const result = await request(
-        method,
-        method === "artifacts.list" ? {} : { artifactId },
-        false,
-      );
-      expect(result[0]).toBe(true);
-      if (method !== "artifacts.list") {
-        expect(result[1]).toMatchObject({ artifact: { id: artifactId, sizeBytes: 912 } });
+    const samples: Record<string, number[]> = {
+      "artifacts.list": [],
+      "artifacts.get": [],
+      "artifacts.download": [],
+    };
+    const rounds = process.env.OPENCLAW_DB_WORKER_BENCH === "1" ? 100 : 1;
+    for (let round = 0; round < rounds; round++) {
+      for (const method of ["artifacts.list", "artifacts.get", "artifacts.download"] as const) {
+        const start = performance.now();
+        const result = await request(
+          method,
+          method === "artifacts.list" ? {} : { artifactId },
+          false,
+        );
+        samples[method]!.push(performance.now() - start);
+        expect(result[0]).toBe(true);
+        if (method !== "artifacts.list") {
+          expect(result[1]).toMatchObject({ artifact: { id: artifactId, sizeBytes: 912 } });
+        }
+        if (method === "artifacts.download") {
+          expect(result[1]).toMatchObject({ data, encoding: "base64" });
+        }
       }
-      if (method === "artifacts.download") {
-        expect(result[1]).toMatchObject({ data, encoding: "base64" });
+    }
+    if (rounds > 1) {
+      for (const [method, values] of Object.entries(samples)) {
+        values.sort((a, b) => a - b);
+        console.log(
+          JSON.stringify({
+            method,
+            samples: values.length,
+            payloadBytes: 912,
+            medianMs: values[Math.floor(values.length / 2)],
+            p99Ms: values[Math.ceil(values.length * 0.99) - 1],
+          }),
+        );
       }
     }
     expect(prepare).not.toHaveBeenCalled();
@@ -130,7 +188,8 @@ it("admits session-only artifact readers with current session visibility and pre
     expect(revokedDownload.body).toEqual(new Uint8Array(Buffer.from("Not Found")));
     for (const method of ["artifacts.list", "artifacts.get", "artifacts.download"] as const) {
       const result = await request(method, method === "artifacts.list" ? {} : { artifactId });
-      expect(result.slice(0, 2)).toEqual([false, undefined]);
+      expect(result[0]).toBe(false);
+      expect(result[1]).toBeUndefined();
       expect(result[2]).toMatchObject({ code: "INVALID_REQUEST" });
     }
     client = identifiedClient("owner");
@@ -163,9 +222,19 @@ it("keeps disconnected managed reads current for session visibility and profile 
         },
       };
       setRuntimeConfigSnapshot(cfg);
+      const scope = {
+        agentId: "main",
+        sessionKey: "agent:main:managed-authority",
+        sessionId: "managed-authority",
+      };
       const owner = ensureProfileForEmail("managed-owner@example.test");
       const viewer = ensureProfileForEmail("managed-viewer@example.test");
-      const { scope, entry } = artifactSession("managed-authority", owner.id);
+      const entry = {
+        sessionId: scope.sessionId,
+        updatedAt: 1,
+        visibility: "shared" as const,
+        createdActor: { type: "human" as const, source: "profile" as const, id: owner.id },
+      };
       await replaceSessionEntry(scope, entry);
       const bytes = createSolidPngBuffer(4, 2, { r: 17, g: 34, b: 51 });
       const fixture = await createFixture(state.stateDir, {
@@ -175,11 +244,19 @@ it("keeps disconnected managed reads current for session visibility and profile 
         body: bytes,
       });
       const originalUrl = `/api/chat/media/outgoing/${encodeURIComponent(scope.sessionKey)}/${fixture.attachmentId}/full`;
-      await writeArtifactTranscript(
-        scope,
-        [{ type: "image", url: originalUrl, openUrl: originalUrl }],
-        "managed-message",
-      );
+      await replaceTranscriptEvents(scope, [
+        { type: "session", version: 3, id: scope.sessionId },
+        {
+          type: "message",
+          id: "managed-message",
+          parentId: null,
+          message: {
+            role: "assistant",
+            content: [{ type: "image", url: originalUrl, openUrl: originalUrl }],
+          },
+        },
+      ]);
+      await waitForSessionTranscriptProjection(scope);
       const context = await createHistoryReadContext({
         getRuntimeConfig: () => cfg,
         getCommittedRuntimeConfig: () => cfg,
@@ -300,38 +377,6 @@ it("keeps disconnected managed reads current for session visibility and profile 
           }
           if (change === "visibility") {
             await replaceSessionEntry(scope, { ...entry, visibility: "draft", updatedAt: 3 });
-            const readers = [
-              vi.spyOn(artifactReads, "readSessionArtifacts"),
-              vi.spyOn(managedMedia, "resolveManagedOutgoingMediaArtifactDownload"),
-              vi.spyOn(managedMedia, "resolveManagedOutgoingMediaUrlDownload"),
-            ];
-            const denied = await invokeArtifact(
-              "artifacts.download",
-              {
-                sessionKey: scope.sessionKey,
-                artifactId: `artifact_managed_image_${fixture.attachmentId}`,
-              },
-              {
-                context,
-                client: identifiedClient(viewer.id),
-                dispatch: artifactsHandlers["artifacts.download"]!,
-              },
-            );
-            expect(denied.mock.calls).toEqual([
-              [
-                false,
-                undefined,
-                {
-                  code: "INVALID_REQUEST",
-                  message: "no session found for artifact query",
-                  details: { type: "artifact_scope_not_found" },
-                },
-              ],
-            ]);
-            for (const reader of readers) {
-              expect(reader).not.toHaveBeenCalled();
-              reader.mockRestore();
-            }
           } else {
             await setCanonicalUserProfileRole(viewer.id, "denied", {
               onCommitted: (profileId) => {

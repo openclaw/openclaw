@@ -1,18 +1,16 @@
-import assert from "node:assert/strict";
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 import { createReplyOperation } from "../../sessions/session-controller.js";
-import { createTurn } from "./followup-delivery.test-helpers.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import type { FollowupRun } from "./queue/types.js";
 import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
-import { createMockTypingController } from "./test-helpers.js";
+import { createMockReplyOperation } from "./test-helpers.js";
 
 const followupTurnTestState = vi.hoisted(() => ({
   execute: vi.fn(),
 }));
 
 vi.mock("./agent-runner-execution.js", () => ({
-  executeAgentTurn: followupTurnTestState.execute,
+  executeAgentTurn: (...args: unknown[]) => followupTurnTestState.execute(...args),
 }));
 
 // mock-isolation: Forward the real persistence owners without loading the unrelated accessor barrel graph.
@@ -41,24 +39,63 @@ export function getFollowupTurnTestState() {
   return followupTurnTestState;
 }
 
-export const createFollowupTurnTestTypingController = createMockTypingController;
+export function createFollowupTurnTestTypingController() {
+  return {
+    onReplyStart: vi.fn(async () => {}),
+    startTypingLoop: vi.fn(async () => {}),
+    startTypingOnText: vi.fn(async () => {}),
+    refreshTypingTtl: vi.fn(),
+    isActive: vi.fn(() => false),
+    markRunComplete: vi.fn(),
+    markDispatchIdle: vi.fn(),
+    cleanup: vi.fn(),
+  };
+}
 
 export function createFollowupTurnTestTurn(
   overrides: Partial<AdmittedFollowupTurn> = {},
 ): AdmittedFollowupTurn {
-  const turn = createTurn();
-  Object.assign(turn.queued, {
-    prompt: "queued prompt",
-    transcriptPrompt: "queued transcript",
-    messageId: "message-1",
-    originatingThreadId: "thread-1",
-    originatingAccountId: "acct-1",
-    originatingChatType: "group",
-    media: [{ kind: "audio", contentType: "audio/ogg" }],
-  } satisfies Partial<FollowupRun>);
-  Object.assign(turn.queued.run, { messageProvider: "slack", senderId: "user-1" });
-  turn.session.current = () => ({ sessionId: "session", updatedAt: 1, verboseLevel: "on" });
-  return Object.assign(turn, overrides);
+  return {
+    runId: "run-1",
+    queued: {
+      prompt: "queued prompt",
+      transcriptPrompt: "queued transcript",
+      enqueuedAt: 1,
+      messageId: "message-1",
+      originatingChannel: "discord",
+      originatingTo: "channel:C1",
+      originatingThreadId: "thread-1",
+      originatingAccountId: "acct-1",
+      originatingChatType: "group",
+      media: [{ kind: "audio", contentType: "audio/ogg" }],
+      run: {
+        agentId: "agent",
+        agentDir: "/tmp/agent",
+        sessionId: "session",
+        sessionKey: "main",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        config: {},
+        provider: "anthropic",
+        model: "claude",
+        messageProvider: "slack",
+        senderId: "user-1",
+        timeoutMs: 1_000,
+        blockReplyBreak: "message_end",
+      },
+    },
+    operation: createMockReplyOperation().replyOperation,
+    config: {},
+    session: {
+      kind: "session",
+      key: "main",
+      current: () => ({ sessionId: "session", updatedAt: 1, verboseLevel: "on" }),
+      publish: () => undefined,
+    },
+    sendPolicy: "allow",
+    preflightCompactionApplied: false,
+    ...overrides,
+  };
 }
 
 export async function executeQueuedFollowupTurnForTest(
@@ -88,7 +125,10 @@ export async function executeQueuedFollowupTurnForTest(
         .spyOn(replyAdmission, "admitReplyTurn")
         .mockImplementationOnce(async ({ captureRunSelection, mailboxClaim }) => {
           captureRunSelection?.();
-          assert(mailboxClaim, "queued admission must own its selected source");
+          expect(mailboxClaim, "queued admission must own its selected source").toBeDefined();
+          if (!mailboxClaim) {
+            throw new Error("Expected the queued source's mailbox claim");
+          }
           admittedOperation = createReplyOperation({
             sessionKey: queued.run.sessionKey ?? queued.run.sessionId,
             sessionId: queued.run.sessionId,
@@ -104,7 +144,10 @@ export async function executeQueuedFollowupTurnForTest(
         .mockResolvedValue(undefined);
       try {
         const admission = await prepareReplyAgentTurn({ queued, defaults });
-        assert(admission.kind === "admitted", "Expected queued owner admission");
+        expect(admission.kind).toBe("admitted");
+        if (admission.kind !== "admitted") {
+          throw new Error("Expected queued owner admission");
+        }
         turn = admission.turn;
       } finally {
         lease.mockRestore();

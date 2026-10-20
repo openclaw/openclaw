@@ -30,7 +30,7 @@ import {
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
 } from "../helpers/fixture-receipts.js";
-import { isProcessAlive, waitForDead } from "../helpers/process-wait.js";
+import { isProcessAlive } from "../helpers/process-wait.js";
 import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
@@ -43,11 +43,6 @@ import {
 } from "./update-compat-chunks.test-support.js";
 
 let receipts: FixtureReceiptChannel;
-const modulesDir = path.dirname(
-  path.dirname(createRequire(import.meta.url).resolve("tsx/package.json")),
-);
-const finishOutcome = `if (typeof outcome === "string") process.kill(process.pid, outcome);
-else process.exit(outcome);`;
 beforeAll(async () => {
   receipts = await openFixtureReceiptChannel();
 });
@@ -55,55 +50,17 @@ afterAll(async () => {
   await receipts?.close();
 });
 
-function runnerEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
-  return {
-    ...process.env,
-    PNPM_CONFIG_MODULES_DIR: modulesDir,
-    TSX_TSCONFIG_PATH: path.resolve("tsconfig.json"),
-    ...overrides,
-  };
-}
-
-function writeFiles(root: string, files: Record<string, string>) {
-  for (const [name, contents] of Object.entries(files)) {
-    const file = path.join(root, name);
-    mkdirSync(path.dirname(file), { recursive: true });
-    writeFileSync(file, contents);
-  }
-}
-
-function writeRunner(file: string, body: string, call = "runNodeMain()", capture = true) {
-  writeFileSync(
-    file,
-    `import childProcess from "node:child_process";
-import { syncBuiltinESMExports } from "node:module";
-${capture ? "const spawn = childProcess.spawn;" : ""}
-import { registerSourceRunnerServiceFixture } from ${JSON.stringify(sourceRunnerServiceFixtureUrl)};
-registerSourceRunnerServiceFixture(${JSON.stringify(process.cwd())});
-const { runNodeMain } = await import(${JSON.stringify(pathToFileURL(path.resolve("scripts/run-node.mts")).href)});
-${body}
-syncBuiltinESMExports();
-const outcome = await ${call};
-${finishOutcome}
-`,
-  );
-}
-
-function expectCommand(result: Awaited<ReturnType<typeof runNodeScript>>, status: number) {
-  expect(result.error, formatShimResult(result)).toBeUndefined();
-  expect(result.status, formatShimResult(result)).toBe(status);
-}
-
-async function fixturePid(
+async function fixturePidBeforeSettlement(
   pidPath: string,
   command: ReturnType<typeof runNodeScript>,
   signal: AbortSignal,
+  message: string,
 ): Promise<number> {
   // The fixture commits the PID before its receipt. The command may settle first
   // on the independent process channel; its durable record decides that race.
   const settled = command.then((result) => {
     if (!existsSync(pidPath) || !(Number(readFileSync(pidPath, "utf8")) > 0)) {
-      throw new Error(`Missing PID receipt ${pidPath}: ${formatShimResult(result)}`);
+      throw new Error(`${message}: ${formatShimResult(result)}`);
     }
   });
   await withinTest(Promise.race([receipts.waitFor(pidPath, "ready"), settled]), signal);
@@ -112,17 +69,46 @@ async function fixturePid(
   return pid;
 }
 
+async function waitForFixtureExit(pids: number[], signal: AbortSignal): Promise<void> {
+  // Native owner death can orphan escaped workers, so no retained ChildProcess
+  // can join them. Only test cancellation bounds this foreign-PID observation.
+  let tick: ReturnType<typeof setTimeout> | undefined;
+  try {
+    while (pids.some(isProcessAlive)) {
+      await withinTest(
+        new Promise<void>((resolve) => {
+          tick = setTimeout(resolve, 5);
+        }),
+        signal,
+      ).catch((cause: unknown) => {
+        throw new Error(`process still alive: ${pids.filter(isProcessAlive).join(", ")}`, {
+          cause,
+        });
+      });
+    }
+  } finally {
+    clearTimeout(tick);
+  }
+}
+
 const sourceRunnerServiceFixtureUrl = new URL(
   "./fixtures/source-runner-service.mjs",
   import.meta.url,
 ).href;
 
+const preparedRunnerModules = [
+  [
+    new URL("../../scripts/run-node.mts", import.meta.url),
+    resolveRuntimeWorkerUrl(toolingMtsEntrypoints.runNode),
+  ],
+  [
+    new URL("../../scripts/watch-node.mts", import.meta.url),
+    resolveRuntimeWorkerUrl(scriptModuleEntrypoints.watchNode),
+  ],
+] as const;
+
 function prepareRunnerEnv(env: NodeJS.ProcessEnv, implementations: string[] = []) {
-  const source = (name: string) => new URL(`../../scripts/${name}.mts`, import.meta.url);
-  const modules: Array<readonly [URL, URL]> = [
-    [source("run-node"), resolveRuntimeWorkerUrl(toolingMtsEntrypoints.runNode)],
-    [source("watch-node"), resolveRuntimeWorkerUrl(scriptModuleEntrypoints.watchNode)],
-  ];
+  const modules: Array<readonly [URL, URL]> = [...preparedRunnerModules];
   for (const implementation of implementations) {
     // These generated fixtures are already JavaScript; prepare their bytes before the guard.
     const prepared = `${implementation}.mjs`;
@@ -154,22 +140,31 @@ function writePrebuiltRuntime(root: string) {
 
 it.runIf(process.platform !== "win32").for(["runner", "shim"] as const)(
   "preserves %s interruption while waiting for cleanup custody release",
-  (mode, { signal }) =>
-    withShimFixture("scripts/run-node.mjs", async (fixture) => {
+  async (mode, { signal }) => {
+    await withShimFixture("scripts/run-node.mjs", async (fixture) => {
       const { checkoutRoot, fixtureRoot, implementationPath, wrapperPath } = fixture;
       const interruptedReceipt = path.join(fixtureRoot, "interrupted");
       const signalPreload = path.join(fixtureRoot, "signal-receipt.mjs");
-      writeFiles(fixtureRoot, {
-        "signal-receipt.mjs": `${fixtureReceiptClientSource(receipts.endpoint)}
+      writeFileSync(
+        signalPreload,
+        `${fixtureReceiptClientSource(receipts.endpoint)}
 process.on("SIGTERM", () => sendReceipt(${JSON.stringify(interruptedReceipt)}, "interrupted"));
 `,
-        "checkout/package.json": '{"type":"module"}',
-        "checkout/dist/entry.js": "export {};\n",
-      });
-      if (mode === "runner") {
-        writeRunner(
-          implementationPath,
-          `import { EventEmitter } from "node:events";
+      );
+      mkdirSync(path.join(checkoutRoot, "dist"));
+      writeFileSync(path.join(checkoutRoot, "package.json"), '{"type":"module"}');
+      writeFileSync(path.join(checkoutRoot, "dist/entry.js"), "export {};\n");
+      const sourceRoot = process.cwd();
+      const implementationUrl = pathToFileURL(path.join(sourceRoot, "scripts/run-node.mts")).href;
+      writeFileSync(
+        implementationPath,
+        mode === "runner"
+          ? `import childProcess from "node:child_process";
+import { EventEmitter } from "node:events";
+import { syncBuiltinESMExports } from "node:module";
+import { registerSourceRunnerServiceFixture } from ${JSON.stringify(sourceRunnerServiceFixtureUrl)};
+registerSourceRunnerServiceFixture(${JSON.stringify(sourceRoot)});
+const { runNodeMain } = await import(${JSON.stringify(implementationUrl)});
 childProcess.spawn = (_command, args) => {
   if (!args.includes("openclaw.mjs")) throw new Error("prebuilt fixture unexpectedly requested a build");
   const child = new EventEmitter();
@@ -179,32 +174,34 @@ childProcess.spawn = (_command, args) => {
   });
   return child;
 };
-`,
-          `runNodeMain({ cwd: ${JSON.stringify(checkoutRoot)}, args: ["gateway", "stop"] })`,
-          false,
-        );
-      } else {
-        writeFileSync(
-          implementationPath,
-          `import { writeSync } from "node:fs";
+syncBuiltinESMExports();
+const outcome = await runNodeMain({ cwd: ${JSON.stringify(checkoutRoot)}, args: ["gateway", "stop"] });
+if (typeof outcome === "string") process.kill(process.pid, outcome);
+else process.exit(outcome);
+`
+          : `import { writeSync } from "node:fs";
 writeSync(1, "fixture implementation signaled\\n");
 process.kill(process.pid, "SIGKILL");
 `,
-        );
-      }
-      const env = runnerEnv({
+      );
+      const env: NodeJS.ProcessEnv = {
+        ...process.env,
         OPENCLAW_RUNNER_LOG: "0",
         NODE_OPTIONS: `--import=${pathToFileURL(signalPreload).href}`,
-      });
+        PNPM_CONFIG_MODULES_DIR: path.dirname(
+          path.dirname(createRequire(import.meta.url).resolve("tsx/package.json")),
+        ),
+        TSX_TSCONFIG_PATH: path.resolve("tsconfig.json"),
+      };
       delete env.OPENCLAW_FORCE_BUILD;
       delete env.OPENCLAW_FORCE_RUNTIME_POSTBUILD;
-      const preparedEnv = prepareRunnerEnv(env, [implementationPath]);
+      const runnerEnv = prepareRunnerEnv(env, [implementationPath]);
       const releasePending = createDeferred();
       let runner: ChildProcess | undefined;
       let handoff: Socket | undefined;
       const command = runNodeScript(
         [mode === "runner" ? implementationPath : wrapperPath],
-        preparedEnv,
+        runnerEnv,
         undefined,
         {
           cwd: checkoutRoot,
@@ -231,21 +228,28 @@ process.kill(process.pid, "SIGKILL");
           },
         },
       );
-      const waitForGate = (gate: Promise<unknown>, message: string) =>
-        withinTest(awaitGateBeforeSettlement(gate, command, message), signal);
       try {
-        await waitForGate(
-          releasePending.promise,
-          "Source runner exited before releasing cleanup custody",
+        await withinTest(
+          awaitGateBeforeSettlement(
+            releasePending.promise,
+            command,
+            "Source runner exited before releasing cleanup custody",
+          ),
+          signal,
         );
         expect(runner!.kill("SIGTERM")).toBe(true);
-        await waitForGate(
-          receipts.waitFor(interruptedReceipt, "interrupted"),
-          "Source runner exited before observing interruption",
+        await withinTest(
+          awaitGateBeforeSettlement(
+            receipts.waitFor(interruptedReceipt, "interrupted"),
+            command,
+            "Source runner exited before observing interruption",
+          ),
+          signal,
         );
         handoff!.uncork();
         const result = await withinTest(command, signal);
-        expectCommand(result, 143);
+        expect(result.error, formatShimResult(result)).toBeUndefined();
+        expect(result.status, formatShimResult(result)).toBe(143);
         expect(result.stdout).toContain(
           mode === "runner"
             ? "fixture child completed successfully\n"
@@ -255,14 +259,15 @@ process.kill(process.pid, "SIGKILL");
         handoff?.uncork();
         await command;
       }
-    }),
+    });
+  },
 );
 
 it.runIf(process.platform !== "win32")(
   "preserves gateway watch signal loss across compile-cache process replacement",
-  ({ signal }) =>
-    withShimFixture("scripts/run-node.mjs", async (fixture) => {
-      const nodeArgs = resolveVitestNodeArgs();
+  async ({ signal }) => {
+    const nodeArgs = resolveVitestNodeArgs();
+    await withShimFixture("scripts/run-node.mjs", async (fixture) => {
       const { checkoutRoot, fixtureRoot, implementationPath } = fixture;
       const childPidPath = path.join(fixtureRoot, "child.pid");
       const childArgsPath = path.join(fixtureRoot, "child-args.json");
@@ -286,11 +291,14 @@ it.runIf(process.platform !== "win32")(
       ]) {
         copyFileSync(filename, path.join(checkoutRoot, filename));
       }
+      mkdirSync(path.join(checkoutRoot, "src"));
+      mkdirSync(path.join(checkoutRoot, "dist"));
       mkdirSync(path.join(fixtureRoot, "home"));
-      writeFiles(checkoutRoot, {
-        "package.json": '{"type":"module"}',
-        "src/entry.ts": "export {};\n",
-        "dist/entry.js": `import fs from "node:fs";
+      writeFileSync(path.join(checkoutRoot, "package.json"), '{"type":"module"}');
+      writeFileSync(path.join(checkoutRoot, "src/entry.ts"), "export {};\n");
+      writeFileSync(
+        path.join(checkoutRoot, "dist/entry.js"),
+        `import fs from "node:fs";
 ${fixtureReceiptClientSource(receipts.endpoint)}
 fs.writeFileSync(${JSON.stringify(childArgsPath)}, JSON.stringify(process.execArgv));
 fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));
@@ -300,11 +308,19 @@ setInterval(() => {
   if (fs.existsSync(${JSON.stringify(releasePath)})) process.exit(0);
 }, 20);
 `,
-      });
-      writeRunner(
+      );
+      const sourceRoot = process.cwd();
+      const runnerUrl = pathToFileURL(path.join(sourceRoot, "scripts/run-node.mts")).href;
+      writeFileSync(
         implementationPath,
         `import fs from "node:fs";
 ${fixtureReceiptClientSource(receipts.endpoint)}
+import childProcess from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
+const spawn = childProcess.spawn;
+import { registerSourceRunnerServiceFixture } from ${JSON.stringify(sourceRunnerServiceFixtureUrl)};
+registerSourceRunnerServiceFixture(${JSON.stringify(sourceRoot)});
+const { runNodeMain } = await import(${JSON.stringify(runnerUrl)});
 fs.appendFileSync(${JSON.stringify(invocationsPath)}, JSON.stringify(process.argv.slice(2)) + "\\n");
 // Let a regressed watcher finish after recording its doctor or restart invocation.
 if (fs.existsSync(${JSON.stringify(childPidPath)})) process.exit(0);
@@ -315,6 +331,10 @@ childProcess.spawn = (command, args, options) => {
     sendReceipt(${JSON.stringify(launcherPidPath)}, "ready");
     return child;
 };
+syncBuiltinESMExports();
+const outcome = await runNodeMain();
+if (typeof outcome === "string") process.kill(process.pid, outcome);
+else process.exit(outcome);
 `,
       );
       const watchWrapper = path.join(checkoutRoot, "scripts/watch-node.mjs");
@@ -336,10 +356,12 @@ registerHooks({
 });
 const { runWatchMain } = await import(${JSON.stringify(watcherUrl)});
 const outcome = await runWatchMain();
-${finishOutcome}
+if (typeof outcome === "string") process.kill(process.pid, outcome);
+else process.exit(outcome);
 `,
       );
-      const env = runnerEnv({
+      const env: NodeJS.ProcessEnv = {
+        ...process.env,
         HOME: path.join(fixtureRoot, "home"),
         OPENCLAW_HOME: path.join(fixtureRoot, "home"),
         OPENCLAW_STATE_DIR: path.join(fixtureRoot, "state"),
@@ -347,30 +369,47 @@ ${finishOutcome}
         OPENCLAW_RUNNER_LOG: "0",
         OPENCLAW_GATEWAY_WATCH_AUTO_DOCTOR: "1",
         NODE_COMPILE_CACHE: path.join(fixtureRoot, "compile-cache"),
-      });
+        PNPM_CONFIG_MODULES_DIR: path.dirname(
+          path.dirname(createRequire(import.meta.url).resolve("tsx/package.json")),
+        ),
+        // The copied shim runs from a fixture cwd with no tsconfig; pin this
+        // checkout so run-node.mts's profile graph resolves workspace imports.
+        TSX_TSCONFIG_PATH: path.resolve("tsconfig.json"),
+      };
       delete env.NODE_OPTIONS;
       delete env.NODE_DISABLE_COMPILE_CACHE;
       delete env.OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED;
       delete env.OPENCLAW_FORCE_BUILD;
       delete env.OPENCLAW_FORCE_RUNTIME_POSTBUILD;
-      const preparedEnv = prepareRunnerEnv(env, [
+      const runnerEnv = prepareRunnerEnv(env, [
         implementationPath,
         path.join(checkoutRoot, "scripts/watch-node.mts"),
       ]);
       writePrebuiltRuntime(checkoutRoot);
-      Object.assign(env, preparedEnv);
-      let child: ChildProcess | undefined;
+      Object.assign(env, runnerEnv);
+      let observedExit: { code: number | null; signal: NodeJS.Signals | null } | undefined;
       const command = runNodeScript([...nodeArgs, watchWrapper, "gateway"], env, 10_000, {
         cwd: checkoutRoot,
         requireProcessTreeExit: true,
-        onReady(runner) {
-          child = runner;
+        onReady(child) {
+          child.once("exit", (code, exitSignal) => {
+            observedExit = { code, signal: exitSignal };
+          });
         },
       });
       await runQaGatewayFixture(
         async () => {
-          const [childPid, launcherPid] = await Promise.all(
-            [childPidPath, launcherPidPath].map((pidPath) => fixturePid(pidPath, command, signal)),
+          const childPid = await fixturePidBeforeSettlement(
+            childPidPath,
+            command,
+            signal,
+            "Gateway watch exited before the compile-cache child was ready",
+          );
+          const launcherPid = await fixturePidBeforeSettlement(
+            launcherPidPath,
+            command,
+            signal,
+            "Gateway watch exited before the compile-cache child was ready",
           );
           expect(childPid, "process replacement preserves the supervised Gateway PID").toBe(
             launcherPid,
@@ -381,11 +420,9 @@ ${finishOutcome}
           ).toContain("--no-concurrent-sparkplug");
           process.kill(childPid, "SIGKILL");
           const result = await withinTest(command, signal);
-          expectCommand(result, 137);
-          expect(child, formatShimResult(result)).toMatchObject({
-            exitCode: null,
-            signalCode: "SIGKILL",
-          });
+          expect(result.error, formatShimResult(result)).toBeUndefined();
+          expect(observedExit, formatShimResult(result)).toEqual({ code: null, signal: "SIGKILL" });
+          expect(result.status).toBe(137);
           expect(readFileSync(invocationsPath, "utf8")).toBe('["gateway"]\n');
         },
         async () => {
@@ -406,7 +443,8 @@ ${finishOutcome}
         }
         throw failure;
       });
-    }),
+    });
+  },
 );
 
 it.runIf(process.platform !== "win32").for(["runner", "watch"] as const)(
@@ -416,13 +454,15 @@ it.runIf(process.platform !== "win32").for(["runner", "watch"] as const)(
     const checkout = path.join(root, "checkout");
     const sourceRoot = process.cwd();
     const hook = fileURLToPath(new URL("./fixtures/native-runner-signals.mjs", import.meta.url));
+    mkdirSync(path.join(checkout, "src"), { recursive: true });
     mkdirSync(path.join(checkout, ".git"));
     mkdirSync(path.join(root, "home"));
-    writeFiles(root, {
-      "receipts.mjs": `${fixtureReceiptClientSource(receipts.endpoint)}\nexport { sendReceipt };\n`,
-      "checkout/package.json": '{"name":"openclaw-signal-fixture"}',
-      "checkout/src/index.ts": "export {};\n",
-    });
+    writeFileSync(
+      path.join(root, "receipts.mjs"),
+      `${fixtureReceiptClientSource(receipts.endpoint)}\nexport { sendReceipt };\n`,
+    );
+    writeFileSync(path.join(checkout, "package.json"), '{"name":"openclaw-signal-fixture"}');
+    writeFileSync(path.join(checkout, "src/index.ts"), "export {};\n");
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       HOME: path.join(root, "home"),
@@ -434,18 +474,22 @@ it.runIf(process.platform !== "win32").for(["runner", "watch"] as const)(
       OPENCLAW_TEST_NATIVE_RUNNER_SOURCE: sourceRoot,
       OPENCLAW_TEST_NATIVE_RUNNER_MODE: mode,
       NODE_OPTIONS: `--import=${pathToFileURL(hook).href}`,
-      PNPM_CONFIG_MODULES_DIR: modulesDir,
+      PNPM_CONFIG_MODULES_DIR: path.dirname(
+        path.dirname(createRequire(import.meta.url).resolve("tsx/package.json")),
+      ),
     };
     const entrypoint = path.join(
       sourceRoot,
       "scripts",
       mode === "watch" ? "watch-node.mjs" : "run-node.mjs",
     );
-    let child: ChildProcess | undefined;
+    let observedExit: { code: number | null; signal: NodeJS.Signals | null } | undefined;
     const command = runNodeScript([entrypoint, "gateway"], prepareRunnerEnv(env), 10_000, {
       cwd: checkout,
-      onReady(runner) {
-        child = runner;
+      onReady(child) {
+        child.once("exit", (code, exitSignal) => {
+          observedExit = { code, signal: exitSignal };
+        });
       },
     });
     const pidPaths = ["implementation", "build", "worker"].map((role) =>
@@ -453,14 +497,20 @@ it.runIf(process.platform !== "win32").for(["runner", "watch"] as const)(
     );
     await runQaGatewayFixture(
       async () => {
-        const worker = await fixturePid(path.join(root, "worker.pid"), command, signal);
+        const worker = await fixturePidBeforeSettlement(
+          path.join(root, "worker.pid"),
+          command,
+          signal,
+          `Native ${mode} exited before its worker started`,
+        );
         expect(isProcessAlive(worker)).toBe(true);
         writeFileSync(path.join(root, "terminate"), "terminate");
         const result = await withinTest(command, signal);
+        expect(result.error, formatShimResult(result)).toBeUndefined();
         // The managed test command converts the actual OS signal to its shell
         // status. The old runner returns1; the old watch/doctor path returns0.
-        expectCommand(result, 137);
-        expect(child).toMatchObject({ exitCode: null, signalCode: "SIGKILL" });
+        expect(result.status, formatShimResult(result)).toBe(137);
+        expect(observedExit).toEqual({ code: null, signal: "SIGKILL" });
         expect(existsSync(path.join(root, "doctor-started"))).toBe(false);
         expect(
           isProcessAlive(worker),
@@ -478,7 +528,7 @@ it.runIf(process.platform !== "win32").for(["runner", "watch"] as const)(
       },
       ...pidPaths.map((pidPath) => async () => {
         if (existsSync(pidPath)) {
-          await waitForDead(Number(readFileSync(pidPath, "utf8")), signal);
+          await waitForFixtureExit([Number(readFileSync(pidPath, "utf8"))], signal);
         }
       }),
       () => {
@@ -498,8 +548,8 @@ it.runIf(process.platform !== "win32").for(["runner", "watch"] as const)(
 
 it.runIf(process.platform !== "win32").for(["SIGTERM", "SIGHUP"] as const)(
   "joins the dev runner's resistant child before returning from %s",
-  (stopSignal, { signal }) =>
-    withShimFixture("scripts/run-node.mjs", async (fixture) => {
+  async (stopSignal, { signal }) => {
+    await withShimFixture("scripts/run-node.mjs", async (fixture) => {
       const { checkoutRoot, fixtureRoot, implementationPath, wrapperPath, runNode } = fixture;
       mkdirSync(path.join(checkoutRoot, ".git"));
       const childPidPath = path.join(fixtureRoot, "child.pid");
@@ -516,17 +566,39 @@ sendReceipt(${JSON.stringify(childPidPath)}, "ready");
 setInterval(() => {}, 1000);
 `,
       );
-      writeRunner(
+      const sourceRoot = process.cwd();
+      const implementationUrl = pathToFileURL(path.join(sourceRoot, "scripts/run-node.mts")).href;
+      writeFileSync(
         implementationPath,
         `import fs from "node:fs";
+import childProcess from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
+const spawn = childProcess.spawn;
+import { registerSourceRunnerServiceFixture } from ${JSON.stringify(sourceRunnerServiceFixtureUrl)};
+registerSourceRunnerServiceFixture(${JSON.stringify(sourceRoot)});
+const { runNodeMain } = await import(${JSON.stringify(implementationUrl)});
 fs.writeFileSync(${JSON.stringify(wrapperPidPath)}, String(process.ppid));
 childProcess.spawn = (_command, _args, options) => spawn(process.execPath, [${JSON.stringify(childPath)}], {
   ...options, stdio: "ignore",
 });
+syncBuiltinESMExports();
+const outcome = await runNodeMain({
+  cwd: ${JSON.stringify(checkoutRoot)},
+  env: { ...process.env, OPENCLAW_FORCE_BUILD: "1", OPENCLAW_RUNNER_LOG: "0" },
+});
+if (typeof outcome === "string") process.kill(process.pid, outcome);
+else process.exit(outcome);
 `,
-        `runNodeMain({ cwd: ${JSON.stringify(checkoutRoot)}, env: { ...process.env, OPENCLAW_FORCE_BUILD: "1", OPENCLAW_RUNNER_LOG: "0" } })`,
       );
-      const env = runnerEnv();
+      const env: NodeJS.ProcessEnv = {
+        ...process.env,
+        PNPM_CONFIG_MODULES_DIR: path.dirname(
+          path.dirname(createRequire(import.meta.url).resolve("tsx/package.json")),
+        ),
+        // The copied shim runs from a fixture cwd with no tsconfig; pin this
+        // checkout so run-node.mts's profile graph resolves workspace imports.
+        TSX_TSCONFIG_PATH: path.resolve("tsconfig.json"),
+      };
       delete env.NODE_OPTIONS;
       const command = runNode(
         [wrapperPath],
@@ -534,7 +606,12 @@ childProcess.spawn = (_command, _args, options) => spawn(process.execPath, [${JS
         checkoutRoot,
       );
       try {
-        const childPid = await fixturePid(childPidPath, command, signal);
+        const childPid = await fixturePidBeforeSettlement(
+          childPidPath,
+          command,
+          signal,
+          "Dev runner exited before its child started",
+        );
         // The implementation records its wrapper before runNodeMain can spawn the child.
         const wrapperPid = Number(readFileSync(wrapperPidPath, "utf8"));
         process.kill(wrapperPid, stopSignal);
@@ -544,16 +621,17 @@ childProcess.spawn = (_command, _args, options) => spawn(process.execPath, [${JS
         expect(result.status).not.toBe(0);
       } finally {
         // Negative controls can orphan a separate process group; the test owns its cleanup.
-        const childPid = existsSync(childPidPath)
-          ? Number(readFileSync(childPidPath, "utf8"))
-          : undefined;
-        if (childPid !== undefined && isProcessAlive(childPid)) {
-          process.kill(-childPid, "SIGKILL");
-        }
-        await command;
-        if (childPid !== undefined) {
-          await waitForDead(childPid, signal);
+        if (existsSync(childPidPath)) {
+          const childPid = Number(readFileSync(childPidPath, "utf8"));
+          if (isProcessAlive(childPid)) {
+            process.kill(-childPid, "SIGKILL");
+          }
+          await command;
+          await waitForFixtureExit([childPid], signal);
+        } else {
+          await command;
         }
       }
-    }),
+    });
+  },
 );
