@@ -2,40 +2,30 @@
 // oxfmt-ignore
 import { runSubagentStateWorkerOperation, useSubagentControlFixture } from "./subagent-control.test-support.js";
 import { existsSync } from "node:fs";
-import { beforeEach, expect, it, onTestFinished, type Mock, vi } from "vitest";
+import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import {
-  emptySqliteCounts,
-  observeParentSqlite,
-} from "../../../../test/helpers/sqlite-parent-observer.js";
+import * as sqlite from "../../../../test/helpers/sqlite-parent-observer.js";
 import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../../config/config.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import {
   loadExactSessionEntryReadOnly,
   replaceSessionEntrySync,
 } from "../../../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../../../config/sessions/types.js";
 import { emitAgentEvent } from "../../../infra/agent-events.js";
-import {
-  initializeGlobalHookRunner,
-  resetGlobalHookRunner,
-} from "../../../plugins/hook-runner-global.js";
+import * as pluginHooks from "../../../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../../../plugins/hooks.test-helpers.js";
 import { withSessionTurn } from "../../../sessions/session-controller.admission.js";
-import {
-  beginSessionEffect,
-  type SessionEffectRef,
-} from "../../../sessions/session-controller.lifecycle.js";
+import * as lifecycle from "../../../sessions/session-controller.lifecycle.js";
 import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
-import {
-  detachActiveEmbeddedRun,
-  attachActiveEmbeddedRun,
-} from "../../embedded-agent-runner/runs.js";
+import * as embedded from "../../embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
 import { createOpenClawToolsAsync } from "../../openclaw-tools.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
 import {
+  createSubagentRunParams,
   createSubagentRunRecord,
   isSubagentRegistryWriteCommand,
 } from "../../subagent-test-fixtures.test-helpers.js";
@@ -56,19 +46,52 @@ const fixture = useSubagentControlFixture();
 beforeEach(async () => {
   await captureRuntimeConfigAsyncReader()();
 });
+function seedSession(sessionKey: string, entry: Partial<SessionEntry> = {}, agentId = "main") {
+  replaceSessionEntrySync(
+    { agentId, sessionKey },
+    { sessionId: `${sessionKey.split(":").at(-1)}-session`, updatedAt: Date.now(), ...entry },
+  );
+}
+
+function observeWrites(
+  runId: string,
+  hooks: {
+    before?: (row: ReturnType<typeof rowToSubagentRunRecord>) => void | Promise<void>;
+    after?: (row: ReturnType<typeof rowToSubagentRunRecord>) => void;
+  },
+) {
+  fixture.worker.mockImplementation((context, operation, options) =>
+    runSubagentStateWorkerOperation(
+      context,
+      (scope) =>
+        operation({
+          execute: async (command, commandOptions) => {
+            const value = isSubagentRegistryWriteCommand(command)
+              ? command.input.values.find((candidate) => candidate.run_id === runId)
+              : undefined;
+            const row = value ? rowToSubagentRunRecord(value) : null;
+            const gate = hooks.before?.(row);
+            if (gate) {
+              await gate;
+            }
+            const receipt = await scope.execute(command, commandOptions);
+            hooks.after?.(row);
+            return receipt;
+          },
+        }),
+      options,
+    ),
+  );
+}
 function registration(runId: string, sessionKey: string, task = "original") {
-  return {
+  return createSubagentRunParams({
     runId,
     childSessionKey: sessionKey,
-    childAgentId: "main",
     sessionEntry: loadExactSessionEntryReadOnly({ agentId: "main", sessionKey })?.entry,
-    requesterSessionKey: "agent:main:main",
     requesterAgentId: "main",
-    requesterDisplayKey: "main",
     task,
-    cleanup: "keep" as const,
     expectsCompletionMessage: false,
-  };
+  });
 }
 async function subagentsTool(config = getRuntimeConfig(), agentSessionKey = "agent:main:main") {
   const tool = (
@@ -86,17 +109,20 @@ async function subagentsTool(config = getRuntimeConfig(), agentSessionKey = "age
 }
 
 // Native fixture handles must remain attached to their admitted controller turn until cleanup.
-async function admitNativeRun(
-  sessionId: string,
-  sessionKey: string,
-  handle: ReturnType<typeof createEmbeddedRunHandle>,
-) {
+async function admitNativeRun(runId: string, sessionKey: string, detachOnAbort = true) {
+  const sessionId = `${runId}-session`;
+  const abort = vi.fn(() => {
+    if (detachOnAbort) {
+      embedded.detachActiveEmbeddedRun(sessionId, handle, sessionKey);
+    }
+  });
+  const handle = createEmbeddedRunHandle({ runId, abort });
   const admitted = createDeferred();
   const release = createDeferred();
-  const abort = handle.abort;
+  const originalAbort = handle.abort;
   handle.abort = (...args) => {
     try {
-      abort(...args);
+      originalAbort(...args);
     } finally {
       release.resolve();
     }
@@ -107,28 +133,22 @@ async function admitNativeRun(
       if (!operation) {
         throw new Error("Native fixture did not receive controller turn admission");
       }
-      attachActiveEmbeddedRun(sessionId, handle, sessionKey, undefined, "main", operation);
+      embedded.attachActiveEmbeddedRun(sessionId, handle, sessionKey, undefined, "main", operation);
       admitted.resolve();
       await release.promise;
     },
   );
   await Promise.race([admitted.promise, settlement]);
   return {
+    id: runId,
+    abort,
     finish: async () => {
-      detachActiveEmbeddedRun(sessionId, handle, sessionKey);
+      embedded.detachActiveEmbeddedRun(sessionId, handle, sessionKey);
       release.resolve();
       await settlement;
     },
   };
 }
-
-type NativeRunFixture = {
-  id: string;
-  sessionId: string;
-  handle: ReturnType<typeof createEmbeddedRunHandle>;
-  abort: Mock<() => void>;
-  nativeRun: Awaited<ReturnType<typeof admitNativeRun>>;
-};
 
 it.each(["caller admission", "session generation"] as const)(
   "releases an acknowledged native claim when %s retires before publication",
@@ -136,44 +156,25 @@ it.each(["caller admission", "session generation"] as const)(
     const runId = "retired-after-claim-ack";
     const sessionKey = `agent:main:subagent:${runId}`;
     const sessionId = `${runId}-session`;
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey },
-      { sessionId, updatedAt: Date.now(), lifecycleRevision: "original" },
-    );
+    seedSession(sessionKey, { lifecycleRevision: "original" });
     await registerSubagentRun(registration(runId, sessionKey, "Stop admitted work"));
     const caller = new AbortController();
-    const abort = vi.fn();
-    const handle = createEmbeddedRunHandle({ runId, abort });
-    const nativeRun = await admitNativeRun(sessionId, sessionKey, handle);
+    const nativeRun = await admitNativeRun(runId, sessionKey, false);
+    const { abort } = nativeRun;
     let retiredAfterAck = false;
-    fixture.worker.mockImplementation((context, operation, options) =>
-      runSubagentStateWorkerOperation(
-        context,
-        (scope) =>
-          operation({
-            execute: async (command, commandOptions) => {
-              const row = isSubagentRegistryWriteCommand(command)
-                ? command.input.values.find((candidate) => candidate.run_id === runId)
-                : undefined;
-              const claim = row && rowToSubagentRunRecord(row)?.killIntent;
-              const receipt = await scope.execute(command, commandOptions);
-              if (claim && !retiredAfterAck) {
-                retiredAfterAck = true;
-                if (retirement === "caller admission") {
-                  caller.abort(new Error("Caller retired after commit"));
-                } else {
-                  replaceSessionEntrySync(
-                    { agentId: "main", sessionKey },
-                    { sessionId, updatedAt: Date.now(), lifecycleRevision: "replacement" },
-                  );
-                }
-              }
-              return receipt;
-            },
-          }),
-        options,
-      ),
-    );
+    observeWrites(runId, {
+      after: (row) => {
+        if (!row?.killIntent || retiredAfterAck) {
+          return;
+        }
+        retiredAfterAck = true;
+        if (retirement === "caller admission") {
+          caller.abort(new Error("Caller retired after commit"));
+        } else {
+          seedSession(sessionKey, { lifecycleRevision: "replacement" });
+        }
+      },
+    });
     const tool = await subagentsTool();
     // The session-rotation cell deliberately writes through the native fixture owner.
     const sql = retirement === "caller admission" ? observeMainThreadSql() : undefined;
@@ -199,21 +200,16 @@ it.each(["caller admission", "session generation"] as const)(
     expect(retiredAfterAck).toBe(true);
     expect(abort).not.toHaveBeenCalled();
     const persisted = loadSubagentRegistryFromSqlite().get(runId);
-    expect(
-      persisted?.killIntent,
-      "a committed claim remains owned until it is released",
-    ).toBeUndefined();
-    expect(persisted?.execution.endedAt).toBeUndefined();
+    expect([persisted?.killIntent, persisted?.execution.endedAt]).toEqual([undefined, undefined]);
     if (counts) {
       expect(counts).toEqual(counts.map(() => 0));
     } else {
-      expect(loadExactSessionEntryReadOnly({ agentId: "main", sessionKey })?.entry).toMatchObject({
+      const entry = loadExactSessionEntryReadOnly({ agentId: "main", sessionKey })?.entry;
+      expect(entry).toMatchObject({
         sessionId,
         lifecycleRevision: "replacement",
       });
-      expect(
-        loadExactSessionEntryReadOnly({ agentId: "main", sessionKey })?.entry.abortedLastRun,
-      ).not.toBe(true);
+      expect(entry?.abortedLastRun).not.toBe(true);
     }
   },
 );
@@ -224,11 +220,7 @@ it.each(["same-ID replacement", "cold hydration"] as const)(
     await withEnvAsync({ OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" }, async () => {
       const runId = "replace-during-control-preparation";
       const sessionKey = `agent:main:subagent:${runId}`;
-      const sessionId = `${runId}-session`;
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey },
-        { sessionId, updatedAt: Date.now(), lifecycleRevision: "same-session" },
-      );
+      seedSession(sessionKey, { lifecycleRevision: "same-session" });
       const originalRegistration = registration(runId, sessionKey);
       await registerSubagentRun(originalRegistration);
       const original = subagentRuns.get(runId)!;
@@ -247,8 +239,6 @@ it.each(["same-ID replacement", "cold hydration"] as const)(
           await prepareReadCache();
         },
       );
-      const abort = vi.fn(() => detachActiveEmbeddedRun(sessionId, handle, sessionKey));
-      const handle = createEmbeddedRunHandle({ runId, abort });
       const pending = tool
         .execute("prepared-stop", { action: "cancel", runId })
         .catch((error: unknown) => error);
@@ -273,7 +263,8 @@ it.each(["same-ID replacement", "cold hydration"] as const)(
         } else {
           expect(successor.generation).toBe(original.generation);
         }
-        nativeRun = await admitNativeRun(sessionId, sessionKey, handle);
+        nativeRun = await admitNativeRun(runId, sessionKey);
+        const { abort } = nativeRun;
         release.resolve();
         const outcome = await pending;
         await fixture.settle();
@@ -332,8 +323,8 @@ it.each([
         { hookName: "subagent_ended", handler: endedHook },
       ]);
       vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReturnValue(registry);
-      initializeGlobalHookRunner(registry);
-      onTestFinished(resetGlobalHookRunner);
+      pluginHooks.initializeGlobalHookRunner(registry);
+      onTestFinished(pluginHooks.resetGlobalHookRunner);
       fixture.capture.mockResolvedValue("Completed before Stop");
     }
     const requester = subagentCaller ? "agent:main:subagent:controller" : "agent:main:main";
@@ -342,34 +333,30 @@ it.each([
       const parentId = `agent:${opaqueParentId ? "other" : "main"}:subagent:parent-by-session-id`;
       const parentAgentId = keyedParent ? "other" : "main";
       const parentKey = `agent:${parentAgentId}:controller-parent`;
-      config.agents = {
-        ...config.agents,
-        defaults: {
-          ...config.agents?.defaults,
-          subagents: { ...config.agents?.defaults?.subagents, maxSpawnDepth: 2 },
-        },
+      config.agents ??= {};
+      config.agents.defaults ??= {};
+      config.agents.defaults.subagents = {
+        ...config.agents.defaults.subagents,
+        maxSpawnDepth: 2,
       };
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey: requester },
-        {
-          sessionId: "controller-session",
-          updatedAt: Date.now(),
-          lifecycleRevision: "controller-original",
-          spawnedBy: keyedParent ? parentKey : parentId,
-        },
-      );
-      replaceSessionEntrySync(
-        { agentId: parentAgentId, sessionKey: parentKey },
+      seedSession(requester, {
+        sessionId: "controller-session",
+        lifecycleRevision: "controller-original",
+        spawnedBy: keyedParent ? parentKey : parentId,
+      });
+      seedSession(
+        parentKey,
         {
           sessionId: keyedParent ? "controller-parent-session" : parentId,
-          updatedAt: Date.now(),
           spawnDepth: 0,
         },
+        parentAgentId,
       );
       if (opaqueParentId) {
-        replaceSessionEntrySync(
-          { agentId: "other", sessionKey: "agent:other:controller-decoy" },
-          { sessionId: parentId, updatedAt: Date.now(), spawnDepth: 7 },
+        seedSession(
+          "agent:other:controller-decoy",
+          { sessionId: parentId, spawnDepth: 7 },
+          "other",
         );
       }
       expect(
@@ -381,33 +368,18 @@ it.each([
     const terminalEntered = createDeferred();
     const terminalRelease = createDeferred();
     let heldTerminal = false;
-    let admission: SessionEffectRef | undefined;
+    let admission: lifecycle.SessionEffectRef | undefined;
     let runnerSettlement: Promise<void> | undefined;
     if (completesDuringStop) {
-      fixture.worker.mockImplementation((context, operation, options) =>
-        runSubagentStateWorkerOperation(
-          context,
-          (scope) =>
-            operation({
-              execute: async (command, commandOptions) => {
-                const row = isSubagentRegistryWriteCommand(command)
-                  ? command.input.values.find((candidate) => candidate.run_id === runId)
-                  : undefined;
-                if (
-                  !heldTerminal &&
-                  row &&
-                  rowToSubagentRunRecord(row)?.execution.status === "terminal"
-                ) {
-                  heldTerminal = true;
-                  terminalEntered.resolve();
-                  await terminalRelease.promise;
-                }
-                return scope.execute(command, commandOptions);
-              },
-            }),
-          options,
-        ),
-      );
+      observeWrites(runId, {
+        before: (row) => {
+          if (!heldTerminal && row?.execution.status === "terminal") {
+            heldTerminal = true;
+            terminalEntered.resolve();
+            return terminalRelease.promise;
+          }
+        },
+      });
     }
     if (queued) {
       expect(
@@ -438,18 +410,12 @@ it.each([
         }));
         continue;
       }
-      // Fixture seeding ends before the observed Stop, without scheduling maintenance tails.
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey: key(id) },
-        {
-          sessionId: `${id}-session`,
-          updatedAt: Date.now(),
-          lifecycleRevision: `${id}-revision`,
-          inputTokens: 11,
-          outputTokens: 7,
-          totalTokens: 18,
-        },
-      );
+      seedSession(key(id), {
+        lifecycleRevision: `${id}-revision`,
+        inputTokens: 11,
+        outputTokens: 7,
+        totalTokens: 18,
+      });
       await registerSubagentRun({
         ...registration(id, key(id), id),
         requesterSessionKey: requester,
@@ -460,19 +426,15 @@ it.each([
     if (missingStore) {
       expect(existsSync(missingPath)).toBe(false);
     }
-    const handles: NativeRunFixture[] = [];
+    const handles: Awaited<ReturnType<typeof admitNativeRun>>[] = [];
     for (const id of [runId, siblingId].filter((candidate) => !queued || candidate !== runId)) {
-      const sessionId = `${id}-session`;
-      const abort = vi.fn(() => detachActiveEmbeddedRun(sessionId, handle, key(id)));
-      const handle = createEmbeddedRunHandle({ abort, runId: id });
-      const nativeRun = await admitNativeRun(sessionId, key(id), handle);
-      handles.push({ id, sessionId, handle, abort, nativeRun });
+      handles.push(await admitNativeRun(id, key(id)));
     }
     const tool = await subagentsTool(config, requester);
     const completedAtBeforeStop = earlierSuccess ? fixtureStartedAt + 1 : Date.now();
     clock?.mockReturnValue(fixtureStartedAt + 2);
     if (completesDuringStop) {
-      admission = await beginSessionEffect({
+      admission = await lifecycle.beginSessionEffect({
         scope: resolveSessionStorePathCore(getRuntimeConfig().session?.store, {
           agentId: "main",
         }),
@@ -507,8 +469,8 @@ it.each([
     registryState.clearSubagentRunsReadCacheForTest();
     // Warm initialization ends here. Count all eight host APIs through Stop and
     // its owned settlement; independent durable readbacks begin after restore.
-    const sql = observeParentSqlite();
-    let counts: ReturnType<typeof emptySqliteCounts>;
+    const sql = sqlite.observeParentSqlite();
+    let counts: ReturnType<typeof sqlite.emptySqliteCounts>;
     let unexpectedHold: ReturnType<typeof holdQueuedSwarmRun>;
     let cancellation: ReturnType<typeof tool.execute> | undefined;
     try {
@@ -536,7 +498,6 @@ it.each([
         runId,
         ...(earlierSuccess ? { targetState: { task: { status: "succeeded" } } } : {}),
       });
-      // Include required native finalization work, including tails the baseline fails to await.
       await fixture.settle();
       await runnerSettlement;
     } finally {
@@ -546,9 +507,9 @@ it.each([
       counts = { ...sql.counts };
       sql.restore();
       if (earlierSuccess) {
-        resetGlobalHookRunner();
+        pluginHooks.resetGlobalHookRunner();
       }
-      await Promise.all(handles.map(({ nativeRun }) => nativeRun.finish()));
+      await Promise.all(handles.map((nativeRun) => nativeRun.finish()));
       releaseSwarmRun(capacityOwner);
       if (missingStore) {
         expect
@@ -558,30 +519,21 @@ it.each([
     }
     try {
       const persisted = loadSubagentRegistryFromSqlite();
+      const target = persisted.get(runId);
       if (missingStore) {
-        expect(persisted.get(runId)?.childSessionIdentity).toBeUndefined();
-        expect(persisted.get(runId)).toMatchObject({
-          execution: { suppressSessionEffects: true },
-        });
+        expect(target?.childSessionIdentity).toBeUndefined();
+        expect(target).toMatchObject({ execution: { suppressSessionEffects: true } });
       }
-      expect(persisted.get(runId)).toMatchObject({
-        execution: {
-          status: "terminal",
-          ...(earlierSuccess ? { outcome: { status: "ok" } } : {}),
-        },
+      expect(target).toMatchObject({
+        execution: { status: "terminal" },
         endedReason: earlierSuccess ? "subagent-complete" : "subagent-killed",
-        ...(earlierSuccess
-          ? {
-              endedHookEmittedAt: expect.any(Number),
-              completion: { resultText: "Completed before Stop" },
-            }
-          : {}),
       });
       expect(persisted.get(siblingId)?.execution.endedAt).toBeUndefined();
+      const entry = !missingStore
+        ? loadExactSessionEntryReadOnly({ agentId: "main", sessionKey: key(runId) })?.entry
+        : undefined;
       if (!missingStore) {
-        expect(
-          loadExactSessionEntryReadOnly({ agentId: "main", sessionKey: key(runId) })?.entry,
-        ).toMatchObject({
+        expect(entry).toMatchObject({
           ...(earlierSuccess
             ? { status: "done" }
             : kind === "completion"
@@ -597,20 +549,22 @@ it.each([
         unexpectedHold = holdQueuedSwarmRun(runId);
         expect(unexpectedHold).toBeUndefined();
         if (!missingStore) {
-          expect(persisted.get(runId)?.collectorCompletion?.usage).toMatchObject({
+          expect(target?.collectorCompletion?.usage).toMatchObject({
             inputTokens: 11,
             outputTokens: 7,
           });
         }
       }
       if (earlierSuccess) {
+        expect(target).toMatchObject({
+          execution: { outcome: { status: "ok" } },
+          endedHookEmittedAt: expect.any(Number),
+          completion: { resultText: "Completed before Stop" },
+        });
         expect(endedHook).toHaveBeenCalledOnce();
-        expect(
-          loadExactSessionEntryReadOnly({ agentId: "main", sessionKey: key(runId) })?.entry
-            .abortedLastRun,
-        ).not.toBe(true);
+        expect(entry?.abortedLastRun).not.toBe(true);
       }
-      expect(counts).toEqual(emptySqliteCounts());
+      expect(counts).toEqual(sqlite.emptySqliteCounts());
     } finally {
       await unexpectedHold?.release();
     }

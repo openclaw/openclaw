@@ -37,11 +37,15 @@ describe("subagent child authority policy", () => {
     ["lost known session", {}, null, "mismatch"],
   ] as const)("%s", (_name, entry, current, status) => {
     const result = resolveSubagentChildAuthority({ ...owned, ...entry }, current);
-    expect(result.status).toBe(status);
-    if (result.status !== "mismatch") {
-      expect(result.childAgentId).toBe("worker");
-      expect(result.requesterAgentId).toBe("parent");
-    }
+    expect(result).toMatchObject(
+      status === "mismatch"
+        ? { status }
+        : {
+            status,
+            childAgentId: "worker",
+            requesterAgentId: "parent",
+          },
+    );
   });
 
   it("summarizes unsettled legacy runs once per process, deduplicating only by run ID", () => {
