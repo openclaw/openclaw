@@ -380,6 +380,7 @@ export async function checkGatewayHealth(params: {
         method: "diagnostics.stability",
         params: { type: "telemetry.exporter", limit: 1000 },
         timeoutMs: diagnosticsTimeoutMs,
+        sharedStateMode: "read-only",
         config: params.cfg,
       }),
     ]);
@@ -494,6 +495,7 @@ export async function probeGatewayMemoryStatus(params: {
       method: "doctor.memory.status",
       params: { probe: false },
       timeoutMs,
+      sharedStateMode: "read-only",
       config: params.cfg,
     });
     if (payload.health) {

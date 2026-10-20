@@ -7,15 +7,21 @@ import { resolveClientCredentialStorePath } from "../infra/client-credential-pat
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
-import { checkGatewayHealth } from "./doctor-gateway-health.js";
+import { collectDevicePairingHealthFindings } from "./doctor-device-pairing.js";
+import { checkGatewayHealth, probeGatewayMemoryStatus } from "./doctor-gateway-health.js";
+import { refreshGatewayAuthStateAfterAuthProfileRepair } from "./doctor/auth-profile-repair.js";
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => afterEach(cleanup));
 
-it.each([false, true])(
-  "does not mint an identity while diagnosing an unreachable Gateway (node identity: %s)",
-  async (withNodeIdentity) => {
+it.each(
+  [false, true].flatMap((withNodeIdentity) =>
+    ["health", "pairing", "memory", "auth-refresh"].map((probe) => ({ withNodeIdentity, probe })),
+  ),
+)(
+  "preserves credentials during $probe reads (node identity: $withNodeIdentity)",
+  async ({ withNodeIdentity, probe }) => {
     const home = tempDirs.make("doctor-read-only-credentials-");
     const env = {
       HOME: home,
@@ -41,12 +47,22 @@ it.each([false, true])(
           loadOrCreateDeviceIdentity({ identityKey: "node" });
         }
         const before = readIdentities();
-        const result = await checkGatewayHealth({
-          cfg: { gateway: { mode: "local", port: claim.port } },
-          timeoutMs: 1_000,
-          runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-        });
-        expect(result.healthOk).toBe(false);
+        const cfg = { gateway: { mode: "local" as const, port: claim.port } };
+        fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, JSON.stringify(cfg));
+        if (probe === "health") {
+          const result = await checkGatewayHealth({
+            cfg,
+            timeoutMs: 1_000,
+            runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+          });
+          expect(result.healthOk).toBe(false);
+        } else if (probe === "pairing") {
+          await collectDevicePairingHealthFindings({ cfg, healthOk: true });
+        } else if (probe === "memory") {
+          await probeGatewayMemoryStatus({ cfg, timeoutMs: 1_000 });
+        } else {
+          await refreshGatewayAuthStateAfterAuthProfileRepair();
+        }
         const after = readIdentities();
         expect(after.map((row) => row.identity_key)).toEqual(before.map((row) => row.identity_key));
         expect(after).toEqual(before);

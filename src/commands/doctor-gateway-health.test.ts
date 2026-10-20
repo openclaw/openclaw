@@ -797,6 +797,7 @@ describe("probeGatewayMemoryStatus", () => {
       method: "doctor.memory.status",
       params: { probe: false },
       timeoutMs: 1234,
+      sharedStateMode: "read-only",
       config: cfg,
     });
   });
