@@ -140,7 +140,9 @@ export function validatePreparedConfigWithPlugins(
   warnings.push(
     ...collectHeartbeatOwnerWarnings(config),
     ...collectRedactPatternWarnings(config),
-    ...collectUtilityModelWarnings(config),
+    ...collectUtilityModelWarnings(config, () => ({
+      plugins: ensureLoadedRegistryInfo().registry.plugins,
+    })),
   );
   const hasExplicitPluginsConfig = isRecord(raw) && Object.hasOwn(raw, "plugins");
 

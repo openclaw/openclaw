@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import type { CliBackendPlugin } from "../plugins/cli-backend.types.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 import { validateConfigObjectRawWithPlugins } from "./validation.js";
 
@@ -22,6 +23,7 @@ afterEach(() => cliBackendsTesting.resetDepsForTest());
 function validate(
   config: OpenClawConfig,
   backends: readonly CliBackendPlugin[] = [unsupportedBackend],
+  pluginMetadataSnapshot = createPluginMetadataSnapshotFixture(),
 ) {
   cliBackendsTesting.setDepsForTest({
     resolveRuntimeCliBackends: () => [],
@@ -30,9 +32,7 @@ function validate(
       return backend ? { pluginId: "fixture", backend } : undefined;
     },
   });
-  return validateConfigObjectRawWithPlugins(config, {
-    pluginMetadataSnapshot: { manifestRegistry: { diagnostics: [], plugins: [] } },
-  });
+  return validateConfigObjectRawWithPlugins(config, { pluginMetadataSnapshot });
 }
 
 describe("utility model capability warnings", () => {
@@ -64,6 +64,84 @@ describe("utility model capability warnings", () => {
     expect(result.warnings).toContainEqual(
       expect.objectContaining({ path: "agents.entries.Worker.utilityModel" }),
     );
+  });
+
+  it("resolves manifest model aliases before checking the canonical runtime pin", () => {
+    const utilityModel = "local/small";
+    const result = validate(
+      {
+        agents: {
+          defaults: {
+            utilityModel,
+            models: { "local/canonical": { agentRuntime: { id: "fixture-cli" } } },
+          },
+        },
+      },
+      [unsupportedBackend],
+      createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "local",
+            modelIdNormalization: {
+              providers: { local: { aliases: { small: "canonical" } } },
+            },
+          },
+        ],
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error("Expected valid utility route");
+    }
+    expect(result.config.agents?.defaults?.utilityModel).toBe(utilityModel);
+    expect(result.warnings).toContainEqual({
+      path: "agents.defaults.utilityModel",
+      message:
+        'Utility model "local/canonical" uses CLI backend "fixture-cli", which cannot enforce the tool-free utility contract. Choose a capable utility model or add capable utilityModel fallbacks; the explicit route is unchanged.',
+    });
+  });
+
+  it.each([
+    { runtime: undefined, warnings: 1 },
+    { runtime: "openclaw", warnings: 0 },
+  ])("checks explicit CLI auth profiles with runtime $runtime", ({ runtime, warnings }) => {
+    const utilityModel = "local/small@fixture-cli-profile";
+    const result = validate(
+      {
+        auth: { profiles: { "fixture-cli-profile": { provider: "fixture-cli", mode: "oauth" } } },
+        agents: {
+          defaults: {
+            utilityModel,
+            ...(runtime ? { models: { "local/small": { agentRuntime: { id: runtime } } } } : {}),
+          },
+        },
+      },
+      [unsupportedBackend],
+      createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "local",
+            providerAuthChoices: [
+              {
+                provider: "local",
+                method: "cli",
+                choiceId: "local-cli",
+                deprecatedChoiceIds: ["fixture-cli"],
+                choiceLabel: "Fixture CLI",
+              },
+            ],
+          },
+        ],
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error("Expected valid utility route");
+    }
+    expect(result.config.agents?.defaults?.utilityModel).toBe(utilityModel);
+    expect(result.warnings).toHaveLength(warnings);
   });
 
   it.each([

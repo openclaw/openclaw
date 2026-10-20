@@ -7,7 +7,9 @@ import {
 import {
   cliBackendSupportsExactToolAvailability,
   isCliRuntimeModelBackendForProvider,
+  resolveCliRuntimeProfileAlias,
 } from "../agents/cli-backends.js";
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection-config.js";
 import {
@@ -17,10 +19,17 @@ import {
 import { readUtilityModelSetting } from "../agents/utility-model-setting.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../config/types.js";
 import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
+import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { resolvePluginSetupCliBackend } from "../plugins/setup-registry.js";
 
 /** Known descriptor mismatches only; model quality and live availability remain runtime facts. */
-export function collectUtilityModelWarnings(config: OpenClawConfig): ConfigValidationIssue[] {
+export function collectUtilityModelWarnings(
+  config: OpenClawConfig,
+  loadMetadata: () => Pick<PluginMetadataSnapshot, "plugins"> &
+    Partial<Pick<PluginMetadataSnapshot, "owners">> = () =>
+    loadManifestMetadataSnapshot({ config }),
+): ConfigValidationIssue[] {
   if (
     config.agents?.defaults?.utilityModel === undefined &&
     !Object.values(config.agents?.entries ?? {}).some((agent) => agent.utilityModel !== undefined)
@@ -28,6 +37,7 @@ export function collectUtilityModelWarnings(config: OpenClawConfig): ConfigValid
     return [];
   }
   const warnings = new Map<string, ConfigValidationIssue>();
+  let metadata: ReturnType<typeof loadMetadata> | undefined;
   const resolveBackend = (id: string) => {
     const normalized = normalizeProviderId(id);
     return (
@@ -47,37 +57,60 @@ export function collectUtilityModelWarnings(config: OpenClawConfig): ConfigValid
       if (candidates.length === 0) {
         continue;
       }
+      metadata ??= loadMetadata();
+      const manifestPlugins = metadata.owners ? { owners: metadata.owners } : metadata.plugins;
       const defaultProvider = resolveDefaultModelForAgent({
         cfg: config,
         agentId,
-        manifestPlugins: [],
+        manifestPlugins,
       }).provider;
       const aliasIndex = buildModelAliasIndex({
         cfg: config,
         agentId,
         defaultProvider,
-        manifestPlugins: [],
+        manifestPlugins,
       });
       const agent = resolveAgentEntry(config, agentId);
       const path =
         agent?.utilityModel === undefined
           ? "agents.defaults.utilityModel"
           : `agents.entries.${agent.id}.utilityModel`;
-      for (const raw of candidates) {
+      const profile =
+        utility.kind === "explicit"
+          ? splitTrailingAuthProfile(utility.modelRef).profile
+          : undefined;
+      let primaryProvider: string | undefined;
+      for (const [index, raw] of candidates.entries()) {
         const resolved = resolveModelRefFromString({
           cfg: config,
           agentId,
           raw,
           defaultProvider,
           aliasIndex,
-          manifestPlugins: [],
+          manifestPlugins,
         });
         if (!resolved) {
           continue;
         }
         const { provider, model } = resolved.ref;
-        const runtime = resolveModelRuntimePolicy({ config, agentId, provider, modelId: model })
-          .policy?.id;
+        if (utility.kind === "explicit" && index === 0) {
+          primaryProvider = provider;
+        }
+        let runtime = resolveModelRuntimePolicy({
+          config,
+          agentId,
+          provider,
+          modelId: model,
+        }).policy?.id?.trim();
+        // Utility fallbacks retain the primary profile only within the same provider.
+        if ((!runtime || runtime === "auto") && profile && provider === primaryProvider) {
+          runtime = resolveCliRuntimeProfileAlias({
+            cfg: config,
+            metadataSnapshot: metadata,
+            provider,
+            profileProvider: config.auth?.profiles?.[profile]?.provider,
+          });
+        }
         const direct = resolveBackend(provider);
         // A CLI alias owns its canonical provider; otherwise respect a mapped runtime pin.
         const backend =
