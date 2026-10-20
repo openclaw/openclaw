@@ -40,7 +40,6 @@ import { makeChatHost } from "./chat-host.test-support.ts";
 import { createChatPageSessions, createChatPageStateContext } from "./chat-page.test-support.ts";
 import { removeQueuedMessage, keepVolatileQueuedMessage } from "./chat-queue.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
-import { projectChatRun } from "./chat-run-projection.ts";
 import { requestChatSend } from "./chat-send-request.ts";
 import { createChatState } from "./chat-state-controller.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
@@ -2194,15 +2193,15 @@ describe("chat state render lifecycle", () => {
       return nextFrame;
     });
     vi.spyOn(globalThis, "cancelAnimationFrame").mockImplementation((id) => frames.delete(id));
-    const state: Pick<ChatPageHost, "chatStream" | "chatRunId" | "chatMessages" | "chatMessage"> = {
-      chatStream: null,
-      chatRunId: "run",
-      chatMessages: [],
-      chatMessage: "",
-    };
+    let state: ChatPageHost;
     const rendered: Array<{ stream: string | null; run: string | null }> = [];
     const dispose = createRoot((stop) => {
-      projectChatRun(state);
+      state = createPageState(
+        createChatPageStateContext(),
+        { afterCommit: () => () => {} },
+        { dispatchEvent: () => true },
+      );
+      state.chatRunId = "run";
       createEffect(
         () => ({ stream: state.chatStream, run: state.chatRunId }),
         (value) => {
