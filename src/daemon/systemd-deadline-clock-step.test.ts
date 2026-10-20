@@ -1,10 +1,8 @@
-// The shared systemd manager budgets are measured on a monotonic clock: a wall-clock step
-// while a probe runs must neither drain the remaining budget to the 1 ms floor nor inflate it.
 import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { execFileUtf8 } from "./exec-file.js";
 import {
   buildSystemdManagerPropertyOutput,
@@ -38,6 +36,7 @@ import { readSystemdServiceExecStart } from "./systemd-service-files.js";
 
 const BUDGET_MS = 5_000;
 const STEPS = [60_000, -60_000] as const;
+const dirs = useAutoCleanupTempDirTracker(afterEach);
 
 function unitNotFound(unit: string) {
   return {
@@ -49,12 +48,15 @@ function unitNotFound(unit: string) {
 }
 
 describe.skipIf(process.platform === "win32")("systemd budgets across a wall-clock step", () => {
-  let root: string;
   let env: Record<string, string>;
   let unitPath: string;
   const realNow = Date.now;
   let offset = 0;
   let monotonicNow = 0;
+  const stepClock = (stepMs: number) => {
+    offset = stepMs;
+    monotonicNow += 100;
+  };
 
   beforeEach(async () => {
     offset = 0;
@@ -66,7 +68,7 @@ describe.skipIf(process.platform === "win32")("systemd budgets across a wall-clo
     assertNoSystemOwnership.mockReset().mockResolvedValue(undefined);
     reloadUserManager.mockReset().mockResolvedValue(undefined);
     busctl.mockReset();
-    root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-clock-step-")));
+    const root = await fs.realpath(dirs.make("openclaw-clock-step-"));
     env = {
       HOME: path.join(root, "home"),
       XDG_RUNTIME_DIR: path.join(root, "runtime"),
@@ -79,94 +81,71 @@ describe.skipIf(process.platform === "win32")("systemd budgets across a wall-clo
     await fs.mkdir(env.OPENCLAW_STATE_DIR!, { mode: 0o700 });
   });
 
-  afterEach(async () => {
-    vi.restoreAllMocks();
-    await fs.rm(root, { recursive: true, force: true });
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each(STEPS)("mutation probes retain budget across %s ms wall-clock step", async (stepMs) => {
+    busctl.mockImplementation(async (serviceEnv) => {
+      stepClock(stepMs);
+      return unitNotFound(serviceEnv.OPENCLAW_SYSTEMD_UNIT ?? "openclaw-owned");
+    });
+
+    await withSystemdDefinitionMutation(env, env, async () => undefined, {
+      timeoutMs: BUDGET_MS,
+    });
+
+    // Exact shares prove both the split and the remaining monotonic budget.
+    expect(busctl.mock.calls.map((call) => call[2])).toEqual([1_666, 1_633]);
   });
 
-  it.each(STEPS)(
-    "definition-mutation capability probes keep their budget through a %s ms step",
-    async (stepMs) => {
-      busctl.mockImplementation(async (serviceEnv) => {
-        offset = stepMs;
-        monotonicNow += 100;
-        return unitNotFound(serviceEnv.OPENCLAW_SYSTEMD_UNIT ?? "openclaw-owned");
-      });
+  it.each(STEPS)("loaded queries survive %s ms clock step", async (stepMs) => {
+    const snapshot = {
+      programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+      fragmentPath: "/etc/systemd/user/openclaw-owned.service",
+    };
+    busctl.mockImplementation(async (_serviceEnv, args) => {
+      stepClock(stepMs);
+      const stdout = args.includes("LoadUnit")
+        ? JSON.stringify({
+            type: "o",
+            data: ["/org/freedesktop/systemd1/unit/openclaw_2downed_2eservice"],
+          })
+        : args.includes("org.freedesktop.systemd1.Unit")
+          ? buildSystemdUnitPropertyOutput(snapshot)
+          : buildSystemdManagerPropertyOutput(snapshot);
+      return { code: 0, termination: "exit" as const, stdout, stderr: "" };
+    });
 
-      await withSystemdDefinitionMutation(env, env, async () => undefined, {
-        timeoutMs: BUDGET_MS,
-      });
+    await expect(
+      readSystemdServiceExecStart(env, { requireEffective: true, timeoutMs: BUDGET_MS }),
+    ).resolves.toMatchObject({ programArguments: snapshot.programArguments });
 
-      // Exact shares prove both the split and the remaining monotonic budget.
-      expect(busctl.mock.calls.map((call) => call[2])).toEqual([1_666, 1_633]);
-    },
-  );
+    expect(busctl.mock.calls.map((call) => call[2])).toEqual([1_666, 2_450, 4_800]);
+  });
 
-  it.each(STEPS)(
-    "effective-manager queries for a loaded unit keep their budget through a %s ms step",
-    async (stepMs) => {
-      const snapshot = {
-        programArguments: ["/usr/bin/openclaw", "gateway", "run"],
-        fragmentPath: "/etc/systemd/user/openclaw-owned.service",
-      };
-      busctl.mockImplementation(async (_serviceEnv, args) => {
-        offset = stepMs;
-        monotonicNow += 100;
-        const stdout = args.includes("LoadUnit")
-          ? JSON.stringify({
-              type: "o",
-              data: ["/org/freedesktop/systemd1/unit/openclaw_2downed_2eservice"],
-            })
-          : args.includes("org.freedesktop.systemd1.Unit")
-            ? buildSystemdUnitPropertyOutput(snapshot)
-            : buildSystemdManagerPropertyOutput(snapshot);
-        return { code: 0, termination: "exit" as const, stdout, stderr: "" };
-      });
+  it.each(STEPS)("metadata refresh retains budget across %s ms wall-clock step", async (stepMs) => {
+    await fs.writeFile(
+      unitPath,
+      `[Unit]
+Description=OpenClaw Gateway (v2026.7.1-2)
+[Service]
+ExecStart=/usr/bin/openclaw gateway run
+Environment=OPENCLAW_SERVICE_MARKER=openclaw OPENCLAW_SERVICE_KIND=gateway OPENCLAW_SERVICE_VERSION=2026.7.1-2
+`,
+      { encoding: "utf8", mode: 0o600 },
+    );
+    busctl.mockImplementation(async (serviceEnv) =>
+      unitNotFound(serviceEnv.OPENCLAW_SYSTEMD_UNIT ?? "openclaw-owned"),
+    );
+    assertNoSystemOwnership.mockImplementation(async () => stepClock(stepMs));
 
-      await expect(
-        readSystemdServiceExecStart(env, { requireEffective: true, timeoutMs: BUDGET_MS }),
-      ).resolves.toMatchObject({ programArguments: snapshot.programArguments });
+    await expect(refreshLegacySystemdServiceMetadata(env, BUDGET_MS)).resolves.toBe(true);
 
-      expect(busctl.mock.calls.map((call) => call[2])).toEqual([1_666, 2_450, 4_800]);
-    },
-  );
-
-  it.each(STEPS)(
-    "legacy metadata refresh keeps its operation budget through a %s ms step",
-    async (stepMs) => {
-      await fs.writeFile(
-        unitPath,
-        [
-          "[Unit]",
-          "Description=OpenClaw Gateway (v2026.7.1-2)",
-          "",
-          "[Service]",
-          "ExecStart=/usr/bin/openclaw gateway run",
-          "Environment=OPENCLAW_SERVICE_MARKER=openclaw",
-          "Environment=OPENCLAW_SERVICE_KIND=gateway",
-          'Environment=OPENCLAW_SERVICE_VERSION=2026.7.1-2 "OTHER_SETTING=kept value"',
-          "Environment=OPENCLAW_GATEWAY_PORT=18789",
-          "",
-        ].join("\n"),
-        { encoding: "utf8", mode: 0o600 },
-      );
-      busctl.mockImplementation(async (serviceEnv) =>
-        unitNotFound(serviceEnv.OPENCLAW_SYSTEMD_UNIT ?? "openclaw-owned"),
-      );
-      assertNoSystemOwnership.mockImplementation(async () => {
-        offset = stepMs;
-        monotonicNow += 100;
-      });
-
-      await expect(refreshLegacySystemdServiceMetadata(env, BUDGET_MS)).resolves.toBe(true);
-
-      // Three ownership checks plus the manager reload draw on one operation budget.
-      const timeouts = [
-        ...assertNoSystemOwnership.mock.calls.map((call) => call[1]),
-        ...reloadUserManager.mock.calls.map((call) => call[1]),
-      ];
-      expect(assertNoSystemOwnership).toHaveBeenCalledTimes(3);
-      expect(timeouts).toEqual([5_000, 4_900, 4_800, 4_700]);
-    },
-  );
+    // Three ownership checks plus the manager reload draw on one operation budget.
+    const timeouts = [
+      ...assertNoSystemOwnership.mock.calls.map((call) => call[1]),
+      ...reloadUserManager.mock.calls.map((call) => call[1]),
+    ];
+    expect(assertNoSystemOwnership).toHaveBeenCalledTimes(3);
+    expect(timeouts).toEqual([5_000, 4_900, 4_800, 4_700]);
+  });
 });
