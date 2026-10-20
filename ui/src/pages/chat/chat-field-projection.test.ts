@@ -73,22 +73,16 @@ it("keeps callback values and existing accessor ownership when selecting all fie
 
 it("publishes error changes without letting recovery clear another writer's identical error", () => {
   const { state, frames } = root(() => {
-    const createdState = createTestPageState(makeChatHost());
-    return {
-      state: createdState,
-      frames: observe(() => ({
-        lastError: createdState.lastError,
-        chatError: createdState.chatError,
-      })),
-    };
+    const owner = createTestPageState(makeChatHost());
+    return { state: owner, frames: observe(() => [owner.lastError, owner.chatError]) };
   });
   flush();
   const clear = state.setRecoverableChatError("read failed");
   expect(state).toMatchObject({ lastError: "read failed", chatError: "read failed" });
   flush();
   expect(frames).toEqual([
-    { lastError: null, chatError: null },
-    { lastError: "read failed", chatError: "read failed" },
+    [null, null],
+    ["read failed", "read failed"],
   ]);
 
   state.lastError = "read failed";
@@ -97,7 +91,7 @@ it("publishes error changes without letting recovery clear another writer's iden
   clear();
   expect(state).toMatchObject({ lastError: "read failed", chatError: null });
   flush();
-  expect(frames.at(-1)).toEqual({ lastError: "read failed", chatError: null });
+  expect(frames.at(-1)).toEqual(["read failed", null]);
 
   clear();
   flush();
@@ -105,5 +99,5 @@ it("publishes error changes without letting recovery clear another writer's iden
   state.chatError = "another failure";
   expect(state.chatError).toBe("another failure");
   flush();
-  expect(frames.at(-1)).toEqual({ lastError: "read failed", chatError: "another failure" });
+  expect(frames.at(-1)).toEqual(["read failed", "another failure"]);
 });

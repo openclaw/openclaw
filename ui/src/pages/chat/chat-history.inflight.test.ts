@@ -43,6 +43,14 @@ function assistant(
   emit(state, runId, { state: "delta", ...fields, message: message("assistant", text) });
 }
 
+function publish(
+  state: TestState,
+  runId: string,
+  payload: Parameters<typeof applySessionMessagePayload>[1],
+) {
+  applySessionMessagePayload(state, payload, true, { kind: "live", activeRunId: runId });
+}
+
 async function loadWithTools(state: TestState) {
   vi.stubGlobal("window", globalThis);
   try {
@@ -100,8 +108,7 @@ it("retires an interrupted run after missing its live terminal", async () => {
   await loadChatHistory(state);
   expect(state.chatRunId).toBe("run-interrupted");
   await loadChatHistory(state);
-  expect(state.chatRunId).toBeNull();
-  expect(state.chatStream).toBeNull();
+  expect(state).toMatchObject({ chatRunId: null, chatStream: null });
 });
 
 it("recovers a failure missed before the initial route subscription", async () => {
@@ -210,19 +217,15 @@ it("keeps saved replies before an accepted steer and the live tail after it", as
   const state = createState(history);
   await loadChatHistory(state);
   expect(tail(state)).toBe("After steer.");
-  expect(renderedText(state)).toEqual([
+  const afterSteer = (text: string) => [
     ...persistedText,
     "Steer prompt",
-    "After steer.",
+    text,
     "Queued follow-up.",
-  ]);
+  ];
+  expect(renderedText(state)).toEqual(afterSteer("After steer."));
   assistant(state, "active-run", "After steer. Continued.", { deltaText: " Continued." });
-  expect(renderedText(state)).toEqual([
-    ...persistedText,
-    "Steer prompt",
-    "After steer. Continued.",
-    "Queued follow-up.",
-  ]);
+  expect(renderedText(state)).toEqual(afterSteer("After steer. Continued."));
   expect(state.chatStream).toBe("After steer. Continued.");
   emit(state, "active-run", {
     state: "final",
@@ -231,15 +234,9 @@ it("keeps saved replies before an accepted steer and the live tail after it", as
       openclawDisplayContent: [{ type: "text", text: "After steer. Continued. Final suffix." }],
     },
   });
-  const expected = [
-    ...persistedText,
-    "Steer prompt",
-    "After steer. Continued. Final suffix.",
-    "Queued follow-up.",
-  ];
+  const expected = afterSteer("After steer. Continued. Final suffix.");
   expect(renderedText(state)).toEqual(expected);
-  const transcriptOrder = expected;
-  expect(state.chatMessages.map(extractText)).toEqual(transcriptOrder);
+  expect(state.chatMessages.map(extractText)).toEqual(expected);
   expect(state.chatMessages.at(-2)).toMatchObject({ role: "assistant" });
   reduceChatSessionProjection(
     state,
@@ -254,58 +251,52 @@ it("keeps saved replies before an accepted steer and the live tail after it", as
     },
     { scope: readChatSessionProjectionScope(state), runActive: false },
   );
-  expect(state.chatMessages.map(extractText)).toEqual([
-    ...transcriptOrder,
-    "Later authoritative user.",
-  ]);
+  expect(state.chatMessages.map(extractText)).toEqual([...expected, "Later authoritative user."]);
 });
 
-it("keeps the accepted steer before the whole unpersisted assistant message", async () => {
-  const runId = "active-run";
-  const { original, steer } = steerPrompts(2);
-  const history = activeHistory(runId);
-  history.messages = [original, steer];
-  history.inFlightRun!.text = "Before steer. After steer.";
-  const state = createState(history);
-  state.chatMessages = [original];
-  state.chatRunId = runId;
-  assistant(state, runId, "Before steer.");
-  applySessionMessagePayload(
-    state,
-    { clientRunId: runId, messageId: "steer", messageSeq: 2, message: steer },
-    true,
-    { kind: "live", activeRunId: runId },
-  );
-  expect(renderedText(state)).toEqual(["Original prompt", "Steer prompt", "Before steer."]);
-  assistant(state, runId, "Before steer. After steer.", { deltaText: " After steer." });
-  expect(state.chatRunId).toBe(runId);
-  expect(renderedText(state)).toEqual([
-    "Original prompt",
-    "Steer prompt",
-    "Before steer. After steer.",
-  ]);
-});
-
-it("keeps streaming one message after a live steer is published", async () => {
-  const history = activeHistory("active-run");
-  const { original, steer } = steerPrompts(2, 3);
-  history.messages = [original, steer];
-  history.inFlightRun!.text = "Before steer.";
-  const state = createState(history);
-  state.chatMessages = [original];
-  assistant(state, "active-run", "Before steer.");
-  await loadChatHistory(state);
-  applySessionMessagePayload(state, { message: steer }, true, {
-    kind: "live",
-    activeRunId: "active-run",
-  });
-  assistant(state, "active-run", "Before steer. After steer.", { deltaText: " After steer." });
-  expect(renderedText(state)).toEqual([
-    "Original prompt",
-    "Steer prompt",
-    "Before steer. After steer.",
-  ]);
-});
+it.each([false, true])(
+  "keeps one assistant message after a live steer (history reload: %s)",
+  async (reload) => {
+    const runId = "active-run";
+    const { original, steer } = steerPrompts(2, reload ? 3 : 2);
+    const history = activeHistory(runId);
+    history.messages = [original, steer];
+    history.inFlightRun!.text = reload ? "Before steer." : "Before steer. After steer.";
+    const state = createState(history);
+    state.chatMessages = [original];
+    if (!reload) {
+      state.chatRunId = runId;
+    }
+    assistant(state, runId, "Before steer.");
+    if (reload) {
+      await loadChatHistory(state);
+    }
+    publish(
+      state,
+      runId,
+      reload
+        ? { message: steer }
+        : {
+            clientRunId: runId,
+            messageId: "steer",
+            messageSeq: 2,
+            message: steer,
+          },
+    );
+    if (!reload) {
+      expect(renderedText(state)).toEqual(["Original prompt", "Steer prompt", "Before steer."]);
+    }
+    assistant(state, runId, "Before steer. After steer.", { deltaText: " After steer." });
+    if (!reload) {
+      expect(state.chatRunId).toBe(runId);
+    }
+    expect(renderedText(state)).toEqual([
+      "Original prompt",
+      "Steer prompt",
+      "Before steer. After steer.",
+    ]);
+  },
+);
 
 it("keeps an identical new reply after the Gateway retires its persisted predecessor", () => {
   const state = createState(activeHistory("active-run"));
@@ -314,21 +305,16 @@ it("keeps an identical new reply after the Gateway retires its persisted predece
   ];
   assistant(state, "active-run", "Saved opening.");
   assistant(state, "active-run", "", { replace: true, deltaText: "" });
-  applySessionMessagePayload(
-    state,
-    {
-      runId: "active-run",
-      messageId: "saved",
-      messageSeq: 2,
-      message: message("assistant", "Saved opening.", {
-        id: "saved",
-        idempotencyKey: "active-run",
-        seq: 2,
-      }),
-    },
-    true,
-    { kind: "live", activeRunId: "active-run" },
-  );
+  publish(state, "active-run", {
+    runId: "active-run",
+    messageId: "saved",
+    messageSeq: 2,
+    message: message("assistant", "Saved opening.", {
+      id: "saved",
+      idempotencyKey: "active-run",
+      seq: 2,
+    }),
+  });
   assistant(state, "active-run", "Saved opening.", { deltaText: "Saved opening." });
   expect(renderedText(state)).toEqual(["Original prompt", "Saved opening.", "Saved opening."]);
 });
@@ -356,17 +342,12 @@ it("keeps an identical unpersisted tail through active history reload", async ()
   state.chatMessages = [prompt];
   state.chatRunId = "active-run";
   assistant(state, "active-run", "Repeated answer.");
-  applySessionMessagePayload(
-    state,
-    {
-      clientRunId: "active-run",
-      messageId: "steer",
-      messageSeq: 3,
-      message: steer,
-    },
-    true,
-    { kind: "live", activeRunId: "active-run" },
-  );
+  publish(state, "active-run", {
+    clientRunId: "active-run",
+    messageId: "steer",
+    messageSeq: 3,
+    message: steer,
+  });
   expect(renderedText(state)).toEqual(["Repeat the answer", "Steer prompt", "Repeated answer."]);
   await loadChatHistory(state);
   expect(state.chatRunId).toBe("active-run");
@@ -425,12 +406,7 @@ it("preserves independent unkeyed preamble occurrences through steer then histor
     message("assistant", "Before steer.", { id: "before", seq: 2, runId }, now),
     steer,
   );
-  applySessionMessagePayload(
-    state,
-    { clientRunId: runId, messageId: "steer", messageSeq: 3, message: steer },
-    true,
-    { kind: "live", activeRunId: runId },
-  );
+  publish(state, runId, { clientRunId: runId, messageId: "steer", messageSeq: 3, message: steer });
   expected.push("Before steer.");
   await loadChatHistory(state);
   expect(state.chatRunId).toBe(runId);
@@ -516,8 +492,7 @@ it("does not resurrect delayed history after a newer intervening run completes",
   expect(state.chatRunId).toBeNull();
   response.resolve(history);
   await loading;
-  expect(state.chatRunId).toBeNull();
-  expect(state.chatStream).toBeNull();
+  expect(state).toMatchObject({ chatRunId: null, chatStream: null });
 });
 
 it("retains newer live startup progress through delayed history", async () => {
@@ -628,12 +603,7 @@ describe("chat history run ownership recovery", () => {
     ]);
     expect(state.chatRunId).toBe("run-current");
     expect(state.chatStream).toBe("The current response.");
-    handleChatGatewayEvent(state, {
-      sessionKey: "main",
-      runId: "run-current",
-      state: "delta",
-      message: { role: "assistant", content: "The current response. Continued." },
-    });
+    assistant(state, "run-current", "The current response. Continued.");
     expect(state.chatStream).toBe("The current response. Continued.");
 
     await handleAbortChat(state, { preserveDraft: true });
@@ -645,12 +615,12 @@ describe("chat history run ownership recovery", () => {
   });
 
   it.each([
-    { change: "replacement session", idle: true },
-    { change: "live delta", idle: true },
-    { change: "lifecycle restart", idle: true },
-    { change: "pending send", idle: true },
-    { change: "late consumer", idle: true },
-  ])("retains local ownership across $change (idle history: $idle)", async ({ change }) => {
+    "replacement session",
+    "live delta",
+    "lifecycle restart",
+    "pending send",
+    "late consumer",
+  ])("retains local ownership across %s during idle history", async (change) => {
     const history = activeHistory("run-history");
     history.sessionInfo!.sessionId = "same-session";
     delete history.inFlightRun;
@@ -692,12 +662,7 @@ describe("chat history run ownership recovery", () => {
         sendRunId: "run-pending",
       });
     } else if (change === "live delta") {
-      handleChatGatewayEvent(state, {
-        sessionKey: "main",
-        runId: "run-owned",
-        state: "delta",
-        message: { role: "assistant", content: "Newer live response." },
-      });
+      assistant(state, "run-owned", "Newer live response.");
     }
     const stream = state.chatStream;
     pending.resolve(history);
@@ -711,39 +676,29 @@ describe("chat history run ownership recovery", () => {
   });
 });
 
-describe("chat history state contention", () => {
-  it("restores a quiet state contention wait without a provider retry or a new run", async () => {
-    const history = activeHistory("run-1");
-    history.inFlightRun = {
-      runId: "run-1",
-      text: "",
-      events: [
-        {
-          runId: "run-1",
-          seq: 2,
-          stream: "run_status",
-          ts: 1,
-          data: { phase: "waiting_for_state" },
-        },
-      ],
-    };
-    const state = createState(history);
-    state.chatMessage = "Unsent draft";
-    if (!state.client) {
-      throw new Error("Expected the history fixture client");
-    }
-    const request = vi.spyOn(state.client, "request");
-    await loadChatHistory(state);
-    expect(state.chatRunStartup).toEqual({
-      state: "status",
+it("restores a quiet state contention wait without a provider retry or a new run", async () => {
+  const history = activeHistory("run-1");
+  history.inFlightRun!.events = [
+    {
       runId: "run-1",
       seq: 2,
-      phase: "waiting_for_state",
-    });
-    expect(state.chatRunId).toBe("run-1");
-    expect(state.chatRunError).toBeFalsy();
-    expect(state.chatMessage).toBe("Unsent draft");
-    expect(request.mock.calls.some(([method]) => method === "chat.history")).toBe(true);
-    expect(request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
+      stream: "run_status",
+      ts: 1,
+      data: { phase: "waiting_for_state" },
+    },
+  ];
+  const state = createState(history);
+  state.chatMessage = "Unsent draft";
+  const request = vi.spyOn(state.client!, "request");
+  await loadChatHistory(state);
+  expect(state.chatRunStartup).toEqual({
+    state: "status",
+    runId: "run-1",
+    seq: 2,
+    phase: "waiting_for_state",
   });
+  expect(state).toMatchObject({ chatRunId: "run-1", chatMessage: "Unsent draft" });
+  expect(state.chatRunError).toBeFalsy();
+  expect(request.mock.calls.some(([method]) => method === "chat.history")).toBe(true);
+  expect(request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
 });

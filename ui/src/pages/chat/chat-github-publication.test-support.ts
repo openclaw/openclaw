@@ -69,37 +69,33 @@ export function setup(initialOptions = options) {
     isCurrent: () => true,
   };
   const changed = vi.fn();
-  let current = scope;
-  const create = (owner: GitHubPublicationScope) =>
-    new GitHubPublicationOwner({
-      client: owner.client,
-      target: owner.target,
-      isCurrent: () => current.key === owner.key && current.isCurrent(),
-      reserve: () => {},
-      release: () => {},
-      unbound: () => {},
-    });
-  let operation = create(scope);
-  let binding = operation.bind();
-  binding.subscribe(changed);
-  binding.sync(scope);
+  let current: GitHubPublicationScope;
+  let operation: GitHubPublicationOwner;
+  let binding: GitHubPublicationPresentationBinding;
   const controller = {
     view: () => binding.view(),
     reset: () => operation.reset(),
     sync(next: GitHubPublicationScope) {
-      if (next.key !== current.key) {
-        binding.detach();
-        operation.reset();
+      if (!current || next.key !== current.key) {
+        binding?.detach();
+        operation?.reset();
         current = next;
-        operation = create(next);
+        operation = new GitHubPublicationOwner({
+          client: next.client,
+          target: next.target,
+          isCurrent: () => current.key === next.key && current.isCurrent(),
+          reserve: () => {},
+          release: () => {},
+          unbound: () => {},
+        });
         binding = operation.bind();
         binding.subscribe(changed);
-      } else {
-        current = next;
       }
+      current = next;
       binding.sync(next);
     },
   };
+  controller.sync(scope);
   return { controller, request, scope, changed };
 }
 export async function settled(controller: ReturnType<typeof setup>["controller"]) {
