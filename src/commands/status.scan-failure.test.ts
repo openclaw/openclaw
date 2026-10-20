@@ -58,45 +58,42 @@ describe.each([
     mocks.gateway.mockReset();
   });
 
-  async function runFailure(unavailable: boolean) {
-    const original = new Error(
-      "OpenClaw agent database /state/agents/main/agent.sqlite uses schema version 19; stop active agents and run openclaw doctor --fix to migrate session identities before using it.",
-    );
-    mocks.scan.mockRejectedValue(original);
-    mocks.overview.mockRejectedValue(original);
-    if (unavailable) {
-      mocks.gateway.mockRejectedValue(new Error("native service inspection unavailable"));
-    } else {
-      mocks.gateway.mockResolvedValue({
-        installed: false,
-        loadState: { status: "not-loaded" },
-        running: false,
-        command: null,
-        env: {},
-      });
-    }
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-    const result =
-      mode === "fast JSON"
-        ? statusJsonCommand({ timeoutMs }, runtime)
-        : statusCommand({ all: mode === "all", timeoutMs }, runtime);
-    await expect(result).rejects.toBe(original);
-    expect(mocks.gateway).toHaveBeenCalledExactlyOnceWith(
-      expect.anything(),
-      expect.objectContaining({ timeoutMs: timeoutMs ?? 5000 }),
-    );
-    expect(mocks.node).not.toHaveBeenCalled();
-    expect(runtime.log).not.toHaveBeenCalled();
-    return runtime;
-  }
-
-  it("reports local installation drift without replacing the session schema refusal", async () => {
-    const runtime = await runFailure(false);
-    expect(runtime.error).toHaveBeenCalledExactlyOnceWith(installationDrift);
-  });
-
-  it("preserves the original refusal when optional service inspection also fails", async () => {
-    const runtime = await runFailure(true);
-    expect(runtime.error).not.toHaveBeenCalled();
-  });
+  it.each([false, true])(
+    "preserves schema refusal with service inspection unavailable=%s",
+    async (unavailable) => {
+      const original = new Error(
+        "OpenClaw agent database /state/agents/main/agent.sqlite uses schema version 19; stop active agents and run openclaw doctor --fix to migrate session identities before using it.",
+      );
+      mocks.scan.mockRejectedValue(original);
+      mocks.overview.mockRejectedValue(original);
+      if (unavailable) {
+        mocks.gateway.mockRejectedValue(new Error("native service inspection unavailable"));
+      } else {
+        mocks.gateway.mockResolvedValue({
+          installed: false,
+          loadState: { status: "not-loaded" },
+          running: false,
+          command: null,
+          env: {},
+        });
+      }
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const result =
+        mode === "fast JSON"
+          ? statusJsonCommand({ timeoutMs }, runtime)
+          : statusCommand({ all: mode === "all", timeoutMs }, runtime);
+      await expect(result).rejects.toBe(original);
+      expect(mocks.gateway).toHaveBeenCalledExactlyOnceWith(
+        expect.anything(),
+        expect.objectContaining({ timeoutMs: timeoutMs ?? 5000 }),
+      );
+      expect(mocks.node).not.toHaveBeenCalled();
+      expect(runtime.log).not.toHaveBeenCalled();
+      if (unavailable) {
+        expect(runtime.error).not.toHaveBeenCalled();
+      } else {
+        expect(runtime.error).toHaveBeenCalledExactlyOnceWith(installationDrift);
+      }
+    },
+  );
 });

@@ -4,6 +4,7 @@ import { createNonExitingRuntimeEnv } from "../test-utils/plugin-runtime-env.js"
 import { sessionsCompactCommand } from "./sessions-compact.js";
 
 const callGatewayCli = vi.hoisted(() => vi.fn());
+const runtime = createNonExitingRuntimeEnv();
 
 vi.mock("../cli/gateway-rpc.js", () => ({ callGatewayFromCliWithTransport: callGatewayCli }));
 
@@ -14,12 +15,8 @@ function joinedArgs(mock: RuntimeEnv["log"]): string {
     .join("\n");
 }
 
-async function compact(
-  opts: Parameters<typeof sessionsCompactCommand>[0] = { key: "agent:main:main" },
-) {
-  const runtime = createNonExitingRuntimeEnv();
-  await sessionsCompactCommand(opts, runtime);
-  return runtime;
+function compact(opts: Parameters<typeof sessionsCompactCommand>[0] = { key: "agent:main:main" }) {
+  return sessionsCompactCommand(opts, runtime);
 }
 
 beforeEach(() => vi.clearAllMocks());
@@ -41,7 +38,7 @@ describe("sessionsCompactCommand", () => {
           result: { details: { pending: outcome === "pending" } },
         });
       }
-      const runtime = await compact({ key });
+      await compact({ key });
       expect(callGatewayCli.mock.calls[0]?.[2]).toEqual({ key });
       const output = `${joinedArgs(runtime.log)}${joinedArgs(runtime.error)}`;
       for (const control of ["\u0007", "\u001b", "\r", "\n"]) {
@@ -72,14 +69,12 @@ describe("sessionsCompactCommand", () => {
       reason: "detail\u001b]2;changed\u0007\rnext",
     };
     callGatewayCli.mockResolvedValue(payload);
-    const runtime = await compact({ key: payload.key, json: true });
+    await compact({ key: payload.key, json: true });
     expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(payload, 2);
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
   it("rejects a blank agent before calling the Gateway", async () => {
-    const runtime = createNonExitingRuntimeEnv();
-
     await expect(
       sessionsCompactCommand({ key: "agent:main:main", agent: "" }, runtime),
     ).rejects.toThrow("--agent must not be blank");
@@ -96,7 +91,7 @@ describe("sessionsCompactCommand", () => {
         compacted: true,
         result: { tokensBefore: 243868, tokensAfter: 34941, details: { qualityDegraded } },
       });
-      const runtime = await compact();
+      await compact();
       expect(runtime.exit).not.toHaveBeenCalled();
       expect(callGatewayCli.mock.calls[0]?.[1]).toMatchObject({ timeout: null });
       const logged = joinedArgs(runtime.log);
@@ -112,7 +107,7 @@ describe("sessionsCompactCommand", () => {
 
   it("exits non-zero when the gateway response omits explicit success", async () => {
     callGatewayCli.mockResolvedValue({ key: "agent:main:main", compacted: false });
-    const runtime = await compact();
+    await compact();
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(joinedArgs(runtime.error)).toContain("Compaction failed");
   });

@@ -66,9 +66,6 @@ it.each(["stopped", "running"] as const)(
     const message =
       "Service is masked. Run systemctl --user unmask openclaw-gateway.service, then retry.";
     mockGateway({
-      label: "systemd",
-      loadedText: "enabled",
-      notLoadedText: "disabled",
       readRuntime: async () => ({
         status,
         detail: message,

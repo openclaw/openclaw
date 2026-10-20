@@ -21,30 +21,22 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function report(params = createStatusCommandReportDataParams()) {
-  return stripAnsi((await buildStatusCommandReportLines(params)).join("\n"));
+async function report(overrides: Parameters<typeof createStatusCommandReportDataParams>[0] = {}) {
+  const lines = await buildStatusCommandReportLines(createStatusCommandReportDataParams(overrides));
+  return stripAnsi(lines.join("\n"));
 }
 
 it.each([
-  {
-    channel: "quietchat",
-    accountId: "acct",
-    expected: "ok-token · 5m ago · quietchat · account acct",
-  },
-  { channel: undefined, accountId: undefined, expected: "ok-token · 5m ago" },
-])(
-  "formats heartbeat age and optional metadata: $expected",
-  async ({ channel, accountId, expected }) => {
-    const now = Date.parse("2026-09-01T12:00:00.000Z");
-    vi.spyOn(Date, "now").mockReturnValue(now);
-    const output = await report(
-      createStatusCommandReportDataParams({
-        lastHeartbeat: { ts: now - 300_000, status: "ok-token", channel, accountId },
-      }),
-    );
-    expect(output).toContain(expected);
-  },
-);
+  ["quietchat", "acct", "ok-token · 5m ago · quietchat · account acct"],
+  [undefined, undefined, "ok-token · 5m ago"],
+])("formats heartbeat age with channel %s and account %s", async (channel, accountId, expected) => {
+  const now = Date.parse("2026-09-01T12:00:00.000Z");
+  vi.spyOn(Date, "now").mockReturnValue(now);
+  const output = await report({
+    lastHeartbeat: { ts: now - 300_000, status: "ok-token", channel, accountId },
+  });
+  expect(output).toContain(expected);
+});
 
 it("awaits backup freshness before assembling the overview", async () => {
   const freshness = createDeferred<backupRunRecords.BackupRunFreshness>();
@@ -82,7 +74,7 @@ it("keeps pending startup guidance distinct from reachability failure", async ()
 });
 
 it("shows skipped audit text when fast status omits the security audit", async () => {
-  expect(await report(createStatusCommandReportDataParams({ securityAudit: undefined }))).toContain(
+  expect(await report({ securityAudit: undefined })).toContain(
     "Skipped in fast status. Full report: openclaw security audit\nDeep check: openclaw status --deep",
   );
 });
