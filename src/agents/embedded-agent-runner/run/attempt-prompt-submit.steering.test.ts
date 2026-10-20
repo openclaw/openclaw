@@ -3,11 +3,7 @@
 import { useSubagentControlFixture } from "../../subagents/registry/subagent-control.test-support.js";
 import { access } from "node:fs/promises";
 import path from "node:path";
-import {
-  createAssistantMessageEventStream,
-  type Context,
-  type Model,
-} from "openclaw/plugin-sdk/llm";
+import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import {
@@ -67,6 +63,16 @@ const childRunId = "completed-child";
 const nextRunId = "child-follow-up";
 const answer = `${"<finding>".repeat(700)}complete answer tail`;
 const escapedAnswer = `${"&lt;finding&gt;".repeat(700)}complete answer tail`;
+const lostAuthority = "The queued child results lost authority before requester prompt submission.";
+
+function childMessage(runId: string, text: string) {
+  return {
+    role: "assistant",
+    stopReason: "stop",
+    content: [{ type: "text", text }],
+    __openclaw: { runId },
+  };
+}
 
 afterEach(() => {
   announceTesting.setDepsForTest();
@@ -84,12 +90,7 @@ async function prepareSteering() {
     findTranscriptEvent: async (_target, match) => {
       const event = {
         type: "message",
-        message: {
-          role: "assistant",
-          stopReason: "stop",
-          content: [{ type: "text", text: answer }],
-          __openclaw: { runId: childRunId },
-        },
+        message: childMessage(childRunId, answer),
       };
       return matchesTranscriptEvent(event, match) ? { event } : undefined;
     },
@@ -274,7 +275,7 @@ it("rejects a changed completion source before first delivery and releases its l
     promptFailure: {
       source: "prompt",
       error: expect.objectContaining({
-        message: "The queued child results lost authority before requester prompt submission.",
+        message: lostAuthority,
       }),
     },
   });
@@ -289,22 +290,13 @@ it("keeps source validation until foreground delivery after pre-prompt compactio
   const { leasedSteering } = await prepareSteering();
   const model = { ...testModel, contextWindow: 4_096, maxTokens: 512 };
   const sessionManager = SessionManager.inMemory();
-  sessionManager.appendMessage({
-    role: "user",
-    content: "Earlier investigation details. ".repeat(650),
-    timestamp: 1,
-  });
-  sessionManager.appendMessage(
-    createAssistant(model, [{ type: "text", text: "Earlier result." }], "stop", 5_000),
-  );
-  sessionManager.appendMessage({
-    role: "user",
-    content: "Keep the latest observation.",
-    timestamp: 3,
-  });
-  sessionManager.appendMessage(
-    createAssistant(model, [{ type: "text", text: "Observation kept." }], "stop", 5_000),
-  );
+  for (const [content, reply, timestamp] of [
+    ["Earlier investigation details. ".repeat(650), "Earlier result.", 1],
+    ["Keep the latest observation.", "Observation kept.", 3],
+  ] as const) {
+    sessionManager.appendMessage({ role: "user", content, timestamp });
+    sessionManager.appendMessage(createAssistant(model, reply, "stop", 5_000));
+  }
   const { session } = await createTestSession({
     model,
     sessionManager,
@@ -313,31 +305,20 @@ it("keeps source validation until foreground delivery after pre-prompt compactio
   // The default prompt embeds absolute checkout paths, so its size would decide
   // whether this 4k window leaves compaction any headroom.
   session.setBaseSystemPrompt("Use the child findings.");
-  const requests: Array<{ messages: Context["messages"]; compacting: boolean }> = [];
-  streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
-    requests.push({
-      messages: structuredClone(context.messages),
-      compacting: session.isCompacting,
-    });
-    const stream = createAssistantMessageEventStream();
-    void invalidateCompletion("Completion invalidated during compaction.").then(
-      () => {
-        const message = createAssistant(activeModel, [
-          { type: "text", text: "Earlier investigation summarized." },
-        ]);
-        stream.push({ type: "done", reason: "stop", message });
-        stream.end();
-      },
-      (error: unknown) => {
-        const message = {
-          ...createAssistant(activeModel, [], "error"),
-          errorMessage: String(error),
-        };
-        stream.push({ type: "error", reason: "error", error: message });
-        stream.end();
-      },
-    );
-    return stream;
+  const compacting: boolean[] = [];
+  streamMocks.streamSimple.mockImplementation(async (activeModel: Model) => {
+    compacting.push(session.isCompacting);
+    try {
+      await invalidateCompletion("Completion invalidated during compaction.");
+      return createAssistantResultStream(
+        createAssistant(activeModel, "Earlier investigation summarized."),
+      );
+    } catch (error) {
+      return createAssistantResultStream({
+        ...createAssistant(activeModel, [], "error"),
+        errorMessage: String(error),
+      });
+    }
   });
   await submitEmbeddedAttemptPrompt({
     ...submissionInput(leasedSteering),
@@ -345,12 +326,11 @@ it("keeps source validation until foreground delivery after pre-prompt compactio
     promptActiveSession: (prompt, options) => session.prompt(prompt, options),
   });
 
-  expect(requests).toHaveLength(1);
-  expect(requests[0]?.compacting).toBe(true);
+  expect(compacting).toEqual([true]);
   expect(session.messages.at(-1)).toMatchObject({
     role: "assistant",
     stopReason: "error",
-    errorMessage: "The queued child results lost authority before requester prompt submission.",
+    errorMessage: lostAuthority,
   });
 });
 
@@ -378,12 +358,7 @@ async function publishChild(
   };
   if (persistTranscript) {
     await appendTranscriptMessage(target, {
-      message: {
-        role: "assistant",
-        stopReason: "stop",
-        content: [{ type: "text", text: resultText }],
-        __openclaw: { runId },
-      },
+      message: childMessage(runId, resultText),
     });
   }
   await registerSubagentRun({
@@ -479,12 +454,7 @@ it("submits deferred child results after canonical archive pruning without poiso
   await appendTranscriptMessage(
     { ...archived.target, sessionId: "replacement-session" },
     {
-      message: {
-        role: "assistant",
-        stopReason: "stop",
-        content: [{ type: "text", text: "Unrelated replacement answer." }],
-        __openclaw: { runId: "replacement-run" },
-      },
+      message: childMessage("replacement-run", "Unrelated replacement answer."),
     },
   );
   const leaseId = "retained-results";
@@ -498,15 +468,13 @@ it("submits deferred child results after canonical archive pruning without poiso
   const requests: Context["messages"][] = [];
   streamMocks.streamSimple.mockImplementation((model: Model, context: Context) => {
     requests.push(structuredClone(context.messages));
-    return createAssistantResultStream(
-      createAssistant(model, [{ type: "text", text: "Parent answer complete." }]),
-    );
+    return createAssistantResultStream(createAssistant(model, "Parent answer complete."));
   });
   const input = submissionInput({ ...leased, leaseId });
   await submitEmbeddedAttemptPrompt({
     ...input,
     activeSession: session,
-    promptActiveSession: (text, options) => session.prompt(text, options),
+    promptActiveSession: (prompt, options) => session.prompt(prompt, options),
   });
 
   expect(requests).toHaveLength(1);

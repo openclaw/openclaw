@@ -1,10 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import {
-  AssistantMessageEventStream,
-  type Message,
-  type Model,
-  type ToolCall,
-} from "openclaw/plugin-sdk/llm";
+import { AssistantMessageEventStream, type Message, type ToolCall } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -17,9 +12,11 @@ import type { Deferred } from "../../../shared/deferred.js";
 import { createSubscribedSessionHarness } from "../../embedded-agent-subscribe.e2e-harness.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
+import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { getCoreTtsAttemptResultMediaUrls } from "../../tools/tts-tool-result-provenance.js";
 import { recordEmbeddedToolReceipt } from "../tool-send-receipts.js";
 import { completeEmbeddedAttemptResult, createAttemptCarryover } from "./attempt-result.js";
+import { createSubscriptionMock } from "./attempt-spawn-workspace.subscription-mock.test-support.js";
 import { resolveSettledToolTerminalContinuation } from "./incomplete-turn-recovery.js";
 import { buildPayloads } from "./payloads.test-helpers.js";
 import { normalizeEmbeddedRunAttemptResult } from "./run-attempt-result.js";
@@ -47,22 +44,9 @@ function createResultFixture(params?: {
   toolAutoDeliveryMediaUrls?: string[];
   messagingToolSentMediaUrls?: string[];
   didSendViaMessagingTool?: boolean;
-  yieldDetected?: boolean;
-  yieldAcknowledgment?: string;
-  yieldMessageWaitRegistered?: boolean;
   assistantTexts?: readonly string[];
   allowedToolNames?: string[];
-  toolMetas?: Array<{
-    toolName: string;
-    toolCallId?: string;
-    meta?: string;
-    replaySafe?: boolean;
-    isError?: boolean;
-    terminate?: boolean;
-    asyncStarted?: boolean;
-    asyncTaskRunId?: string;
-    asyncTaskId?: string;
-  }>;
+  toolMetas?: EmbeddedRunAttemptResult["toolMetas"];
 }) {
   const state: Parameters<typeof completeEmbeddedAttemptResult>[0]["state"] = {
     beforeAgentRunBlockedBy: undefined,
@@ -93,39 +77,16 @@ function createResultFixture(params?: {
     messagesSnapshot: settled.messagesSnapshot,
   };
   const subscription = {
+    ...createSubscriptionMock(),
+    answerSegments: undefined,
     assistantTexts: [...(params?.assistantTexts ?? [])],
-    didSendDeterministicApprovalPrompt: () => false,
     didSendViaMessagingTool: () => params?.didSendViaMessagingTool ?? false,
-    getAcceptedSessionSpawns: () => [],
-    getAssistantTurnCount: () => 0,
-    getCompactionCount: () => 0,
     getHeartbeatToolResponse: () => params?.heartbeatToolResponse,
-    getItemLifecycle: (): EmbeddedRunAttemptResult["itemLifecycle"] => ({
-      startedCount: 0,
-      completedCount: 0,
-      activeCount: 0,
-    }),
-    getLastAssistantTextMessageIndex: () => undefined,
-    getKeptAnswer: () => undefined,
-    getLastCompactionTokensAfter: () => undefined,
-    getLastToolError: () => undefined,
     getLatestMcpAppChannelView: () => params?.latestMcpAppChannelView,
-    getLatestMcpConnectAction: () => undefined,
     getMessagingToolSentMediaUrls: () => params?.messagingToolSentMediaUrls ?? [],
-    getMessagingToolSentTargets: () => [],
-    getMessagingToolSentTexts: () => [],
-    getMessagingToolSourceReplyPayloads: () => [],
-    getSourceReplyDelivered: () => undefined,
-    getSourceReplyDeliveryState: () => undefined,
-    endsWithSourceProgress: () => false,
     getPendingToolMediaReply: () => params?.pendingToolMediaReply,
     getToolAutoDeliveryMediaUrls: () => params?.toolAutoDeliveryMediaUrls ?? [],
-    getReplayState: () => ({ replayInvalid: false, hadPotentialSideEffects: false }),
-    getSuccessfulCronAdds: () => 0,
-    getVisibleBlockReplyCount: () => 0,
-    hasToolMediaBlockReply: () => false,
     hasSuccessfulModelResponse: () => params?.hasSuccessfulModelResponse ?? false,
-    setTerminalLifecycleMeta: () => {},
     toolMetas: params?.toolMetas ?? [],
   };
   const hookRunner = createHookRunner({ hooks: [], typedHooks: [], plugins: [] });
@@ -145,11 +106,7 @@ function createResultFixture(params?: {
     diagnostics: { diagnosticTrace: { traceId: "trace-1", spanId: "span-1" } },
     setup: { sessionAgentId: "main" },
     lifecycle: {
-      readYieldState: () => ({
-        yieldDetected: params?.yieldDetected ?? false,
-        yieldAcknowledgment: params?.yieldAcknowledgment,
-        yieldMessageWaitRegistered: params?.yieldMessageWaitRegistered,
-      }),
+      readYieldState: () => ({ yieldDetected: false }),
     },
     prepared: {
       toolCatalog: {
@@ -180,6 +137,17 @@ function createResultFixture(params?: {
 function completeResult(params?: Parameters<typeof createResultFixture>[0]) {
   const { input, settled, prompt } = createResultFixture(params);
   return completeEmbeddedAttemptResult(input as never, settled, prompt);
+}
+
+function textAssistant(
+  text: string,
+  overrides: Parameters<typeof makeAssistantMessageFixture>[0] = {},
+) {
+  return makeAssistantMessageFixture({
+    stopReason: "stop",
+    content: [{ type: "text", text }],
+    ...overrides,
+  });
 }
 
 function settledToolMessages(): EmbeddedRunAttemptResult["messagesSnapshot"] {
@@ -245,10 +213,7 @@ describe("attempt result projection", () => {
     { name: "functions.write", allowedToolNames: ["write"], expected: true },
     { name: "WRITE", allowedToolNames: ["Write", "wriTE"], expected: undefined },
   ])("uses native callable-name matching for $name", ({ name, allowedToolNames, expected }) => {
-    const assistant = makeAssistantMessageFixture({
-      stopReason: "stop",
-      content: [{ type: "text", text: JSON.stringify({ name, arguments: { path: "proof.txt" } }) }],
-    });
+    const assistant = textAssistant(JSON.stringify({ name, arguments: { path: "proof.txt" } }));
     expect(
       completeResult({ currentAttemptCompletedAssistant: assistant, allowedToolNames })
         .textToolCallAttempt,
@@ -267,10 +232,7 @@ describe("attempt result projection", () => {
   )(
     "recognizes text-only terminal calls after a read (native=$nativeCall): $text",
     ({ nativeCall, text }) => {
-      const assistant = makeAssistantMessageFixture({
-        stopReason: "stop",
-        content: [{ type: "text", text }],
-      });
+      const assistant = textAssistant(text);
       if (nativeCall) {
         assistant.content.push({ type: "toolCall", id: "native", name: "write", arguments: {} });
       }
@@ -319,18 +281,20 @@ describe("attempt result projection", () => {
 
     expect(output).toHaveBeenCalledOnce();
     expect(fixture.state.terminal.kind).toBe("failed");
-    expect(result.terminal).toEqual({ kind: "ok" });
     expect(result.lastAssistant).toBe(assistant);
     expect(result.currentAttemptCompletedAssistant).toBe(assistant);
-    expect(result.hasSuccessfulModelResponse).toBe(true);
-    expect(result.successfulNestedToolNames).toEqual(["read", "memory_search"]);
-    expect(result.latestMcpAppChannelView).toEqual({ viewId: "view-latest" });
     expect(result.messagesSnapshot).toBe(messages);
-    expect(result.finalPromptText).toBe("settled prompt");
-    expect(result.attemptUsage).toBeUndefined();
-    expect(result).toHaveProperty("yieldDetected", undefined);
-    expect(result).toHaveProperty("yieldAcknowledgment", undefined);
-    expect(result).toHaveProperty("yieldMessageWaitRegistered", undefined);
+    expect(result).toMatchObject({
+      terminal: { kind: "ok" },
+      hasSuccessfulModelResponse: true,
+      successfulNestedToolNames: ["read", "memory_search"],
+      latestMcpAppChannelView: { viewId: "view-latest" },
+      finalPromptText: "settled prompt",
+      attemptUsage: undefined,
+      yieldDetected: undefined,
+      yieldAcknowledgment: undefined,
+      yieldMessageWaitRegistered: undefined,
+    });
     expect(result).not.toHaveProperty("beforeAgentFinalizeRevisionReason");
   });
 
@@ -344,13 +308,12 @@ describe("attempt result projection", () => {
     });
   });
 
+  const nonDeliverable = "non_deliverable_terminal_turn";
   it.each([
     {
       label: "an uncorroborated messaging flag",
-      assistant: undefined,
       didSendViaMessagingTool: true,
-      expectedStatus: "error",
-      terminalError: "non_deliverable_terminal_turn",
+      terminalError: nonDeliverable,
     },
     {
       label: "a completed refusal",
@@ -358,7 +321,6 @@ describe("attempt result projection", () => {
         content: [],
         diagnostics: [{ type: "provider_refusal", timestamp: 1, details: { category: "cyber" } }],
       }),
-      expectedStatus: "error",
       terminalError: undefined,
     },
     {
@@ -368,18 +330,12 @@ describe("attempt result projection", () => {
         stopReason: "length",
         errorMessage: undefined,
       }),
-      expectedStatus: "error",
-      terminalError: "non_deliverable_terminal_turn",
+      terminalError: nonDeliverable,
     },
-    {
-      label: "an actually empty optional turn",
-      assistant: undefined,
-      expectedStatus: "error",
-      terminalError: "non_deliverable_terminal_turn",
-    },
+    { label: "an actually empty optional turn", terminalError: nonDeliverable },
   ])(
     "records $label after transcript projection",
-    ({ assistant, didSendViaMessagingTool, expectedStatus, terminalError }) => {
+    ({ assistant, didSendViaMessagingTool, terminalError }) => {
       const recordEvent = vi.fn<EmbeddedRunAttemptTrajectoryRecorder["recordEvent"]>();
       const result = completeResult({
         currentAttemptCompletedAssistant: assistant,
@@ -395,17 +351,15 @@ describe("attempt result projection", () => {
       }
       expect(recordEvent).toHaveBeenCalledWith(
         "session.ended",
-        expect.objectContaining({ status: expectedStatus, terminalError }),
+        expect.objectContaining({ status: "error", terminalError }),
       );
     },
   );
 
   type ResultInput = NonNullable<Parameters<typeof createResultFixture>[0]>;
-  const failed = (
-    error: Error,
-    source: "prompt" | "precheck" | "compaction" | "hook:before_agent_run" = "prompt",
-    timeoutObservation?: "compaction" | "tool_execution",
-  ): ResultInput => ({ terminal: { kind: "failed", source, error, timeoutObservation } });
+  const failed = (error: Error): ResultInput => ({
+    terminal: { kind: "failed", source: "prompt", error },
+  });
   const assistantFailure = (errorMessage: string, errorCode?: string): ResultInput => ({
     currentAttemptCompletedAssistant: makeAssistantMessageFixture({
       stopReason: "error",
@@ -453,10 +407,7 @@ describe("attempt result projection", () => {
         ...truncated,
         messagesSnapshot: [
           ...settledToolMessages(),
-          makeAssistantMessageFixture({
-            stopReason: "stop",
-            content: [{ type: "text", text: "MEDIA:https://example.com/result.png" }],
-          }),
+          textAssistant("MEDIA:https://example.com/result.png"),
         ],
       },
       false,
@@ -468,24 +419,19 @@ describe("attempt result projection", () => {
         assistantTexts: ["here is the answer"],
         messagesSnapshot: [
           ...settledToolMessages(),
-          makeAssistantMessageFixture({
-            stopReason: "stop",
-            errorMessage: undefined,
-            timestamp: 2,
-            content: [{ type: "text", text: "here is the answer" }],
-          }),
+          textAssistant("here is the answer", { errorMessage: undefined, timestamp: 2 }),
         ],
       },
       false,
     ],
-    ...(["tool_execution"] as const).map((phase): [string, ResultInput, boolean] => [
-      `assistant ${phase} timeout`,
+    [
+      "assistant tool_execution timeout",
       {
         ...assistantFailure("WebSocket error", "ERR_WEBSOCKET_TRANSPORT"),
-        terminal: { kind: "timeout", phase, source: "observation" },
+        terminal: { kind: "timeout", phase: "tool_execution", source: "observation" },
       },
       false,
-    ]),
+    ],
   ])("limits settled-turn recovery after %s", (_name, params, expected) => {
     const result = completeResult({ messagesSnapshot: settledToolMessages(), ...params });
     if (expected) {
@@ -505,50 +451,47 @@ describe("attempt result projection", () => {
     });
   });
 
-  it.each([{ label: "quiet", notify: false, expectedText: HEARTBEAT_TOKEN }])(
-    "carries a $label heartbeat response and private scratch across empty retry attempts",
-    ({ notify, expectedText }) => {
-      const carryover = createAttemptCarryover();
-      const publicResponse = {
-        outcome: "done" as const,
-        notify,
-        summary: "The task reached its completion condition.",
-        notificationText: "The monitored task is complete.",
-      };
-      const scratch = "Private monitor notes: completion checked; no follow-up needed.";
-      const providerFailure = {
-        kind: "failed" as const,
-        source: "prompt" as const,
-        error: Object.assign(new Error("529 overloaded"), { status: 529 }),
-      };
-      const accepted = completeResult({
-        heartbeatToolResponse: { ...publicResponse, scratch },
-        terminal: providerFailure,
-      });
-      const retry = completeResult({ terminal: providerFailure });
-      const completed = completeResult({ assistantTexts: ["Internal retry fallback."] });
+  it("carries quiet heartbeat output and private scratch across empty retries", () => {
+    const carryover = createAttemptCarryover();
+    const publicResponse = {
+      outcome: "done" as const,
+      notify: false,
+      summary: "The task reached its completion condition.",
+      notificationText: "The monitored task is complete.",
+    };
+    const scratch = "Private monitor notes: completion checked; no follow-up needed.";
+    const providerFailure = {
+      kind: "failed" as const,
+      source: "prompt" as const,
+      error: Object.assign(new Error("529 overloaded"), { status: 529 }),
+    };
+    const accepted = completeResult({
+      heartbeatToolResponse: { ...publicResponse, scratch },
+      terminal: providerFailure,
+    });
+    const retry = completeResult({ terminal: providerFailure });
+    const completed = completeResult({ assistantTexts: ["Internal retry fallback."] });
 
-      carryover.apply(accepted);
-      carryover.apply(retry);
-      carryover.apply(completed);
-      const payloads = buildPayloads({
-        isHeartbeatTrigger: true,
-        assistantTexts: completed.assistantTexts,
-        heartbeatToolResponse: completed.heartbeatToolResponse,
-      });
+    carryover.apply(accepted);
+    carryover.apply(retry);
+    carryover.apply(completed);
+    const payloads = buildPayloads({
+      isHeartbeatTrigger: true,
+      assistantTexts: completed.assistantTexts,
+      heartbeatToolResponse: completed.heartbeatToolResponse,
+    });
 
-      expect(payloads).toHaveLength(1);
-      expect(payloads[0]?.text).toBe(expectedText);
-      const selected = expectDefined(
-        selectHeartbeatToolResponse(payloads),
-        "expected the carried heartbeat response",
-      );
-      expect(selected.response).toEqual(publicResponse);
-      expect(getReplyPayloadMetadata(selected.payload)?.heartbeatScratchProposal).toBe(scratch);
-      expect(JSON.stringify(payloads)).not.toContain(scratch);
-      expect(JSON.stringify(payloads)).not.toContain("Internal retry fallback.");
-    },
-  );
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe(HEARTBEAT_TOKEN);
+    const selected = expectDefined(
+      selectHeartbeatToolResponse(payloads),
+      "expected the carried heartbeat response",
+    );
+    expect(selected.response).toEqual(publicResponse);
+    expect(getReplyPayloadMetadata(selected.payload)?.heartbeatScratchProposal).toBe(scratch);
+    expect(JSON.stringify(payloads)).not.toContain(scratch);
+    expect(JSON.stringify(payloads)).not.toContain("Internal retry fallback.");
+  });
 
   it("starts a fresh run without the previous heartbeat response or scratch", () => {
     const previousRun = createAttemptCarryover();
@@ -612,41 +555,28 @@ describe("attempt result projection", () => {
       pendingToolMediaReply: { mediaUrls: ["/tmp/reply.opus"] },
       toolAutoDeliveryMediaUrls: ["/tmp/reply.opus"],
     });
-    expect(
-      getCoreTtsAttemptResultMediaUrls(
-        autoDeliveryResult,
-        autoDeliveryResult.toolMediaUrls,
-        TEST_OPERATIONAL_RUN_INSTANCE,
-      ),
-    ).toEqual(["/tmp/reply.opus"]);
+    const coreMedia = (result: ReturnType<typeof completeResult>) =>
+      getCoreTtsAttemptResultMediaUrls(result, result.toolMediaUrls, TEST_OPERATIONAL_RUN_INSTANCE);
+    expect(coreMedia(autoDeliveryResult)).toEqual(["/tmp/reply.opus"]);
     const alreadySentResult = completeResult({
       pendingToolMediaReply: { mediaUrls: ["/tmp/reply.opus"] },
       toolAutoDeliveryMediaUrls: ["/tmp/reply.opus"],
       messagingToolSentMediaUrls: ["/tmp/reply.opus"],
     });
-    expect(
-      getCoreTtsAttemptResultMediaUrls(
-        alreadySentResult,
-        alreadySentResult.toolMediaUrls,
-        TEST_OPERATIONAL_RUN_INSTANCE,
-      ),
-    ).toEqual([]);
+    expect(coreMedia(alreadySentResult)).toEqual([]);
   });
 });
 
 describe("trailing source progress at runtime settlement", () => {
-  const testModel: Model = {
+  const testModel = makeProviderModelFixture({
     id: "settle-model",
     name: "Settle Model",
     api: "openai-responses",
     provider: "test",
     baseUrl: "https://example.test",
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 100_000,
     maxTokens: 8_000,
-  };
+  });
   // Native-async calls run while the provider streams; each settles before the next fragment.
   type ModelCall = { tools?: Array<"progress" | "read">; async?: true };
 

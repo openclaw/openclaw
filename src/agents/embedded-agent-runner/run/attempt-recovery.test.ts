@@ -235,29 +235,22 @@ describe("recoverEmbeddedRunAttempt", () => {
   )(
     "continues output-limited work without replay (no tools=$noTools)",
     async ({ scenario, noTools }) => {
-      const {
-        attempt,
-        recovery,
-        markOwnedTranscriptRetry,
-        continueFromCurrentTranscript,
-        failoverRetryController,
-        onAgentEvent,
-      } = await recoverAfterTransportDrop({
+      const fixture = await recoverAfterTransportDrop({
         ...scenario,
         noTools,
         preToolText: noTools ? undefined : "The change is saved. I am checking its results.",
       });
 
-      expect(recovery).toMatchObject({ action: "retry", lastRetryFailoverReason: null });
-      expect(markOwnedTranscriptRetry).toHaveBeenCalledTimes(2);
-      expect(continueFromCurrentTranscript).toHaveBeenCalledExactlyOnceWith({
+      expect(fixture.recovery).toMatchObject({ action: "retry", lastRetryFailoverReason: null });
+      expect(fixture.markOwnedTranscriptRetry).toHaveBeenCalledTimes(2);
+      expect(fixture.continueFromCurrentTranscript).toHaveBeenCalledExactlyOnceWith({
         includeToolFailureInstruction: false,
-        messages: attempt.messagesSnapshot,
+        messages: fixture.attempt.messagesSnapshot,
       });
-      expect(failoverRetryController.transientRetryCount).toBe(1);
-      expect(failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
-      expect(failoverRetryController.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
-      expect(onAgentEvent).toHaveBeenCalledWith(
+      expect(fixture.failoverRetryController.transientRetryCount).toBe(1);
+      expect(fixture.failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
+      expect(fixture.failoverRetryController.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
+      expect(fixture.onAgentEvent).toHaveBeenCalledWith(
         expect.objectContaining({
           stream: "run_status",
           data: expect.objectContaining({ phase: "retrying", reason: "output_limit" }),
@@ -748,27 +741,20 @@ describe("recoverEmbeddedRunAttempt", () => {
       },
     ],
   ])("continues the existing transcript after %s", async (_label, scenario) => {
-    const {
-      attempt,
-      recovery,
-      markOwnedTranscriptRetry,
-      continueFromCurrentTranscript,
-      failoverRetryController,
-      onAgentEvent,
-    } = await recoverAfterTransportDrop(scenario);
-    expect(recovery).toMatchObject({
+    const fixture = await recoverAfterTransportDrop(scenario);
+    expect(fixture.recovery).toMatchObject({
       action: "retry",
       ...(scenario.terminal?.kind === "timeout" ? { lastRetryFailoverReason: "timeout" } : {}),
     });
-    expect(failoverRetryController.transientRetryCount).toBe(1);
-    expect(markOwnedTranscriptRetry).toHaveBeenCalledOnce();
-    expect(continueFromCurrentTranscript).toHaveBeenCalledExactlyOnceWith({
+    expect(fixture.failoverRetryController.transientRetryCount).toBe(1);
+    expect(fixture.markOwnedTranscriptRetry).toHaveBeenCalledOnce();
+    expect(fixture.continueFromCurrentTranscript).toHaveBeenCalledExactlyOnceWith({
       includeToolFailureInstruction: Boolean(scenario.lastToolError),
-      messages: attempt.messagesSnapshot,
+      messages: fixture.attempt.messagesSnapshot,
     });
-    expect(failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
-    expect(failoverRetryController.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
-    expect(onAgentEvent).toHaveBeenCalledWith(
+    expect(fixture.failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
+    expect(fixture.failoverRetryController.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
+    expect(fixture.onAgentEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         stream: "run_status",
         data: expect.objectContaining({ phase: "retrying", retryAttempt: 1 }),
@@ -841,16 +827,11 @@ describe("recoverEmbeddedRunAttempt", () => {
       ["the continuation budget is spent", { retryAvailable: false }],
     ]),
   ])("keeps the replay gate closed: %s", async (_label, scenario) => {
-    const {
-      recovery,
-      markOwnedTranscriptRetry,
-      continueFromCurrentTranscript,
-      failoverRetryController,
-    } = await recoverAfterTransportDrop(scenario);
-    expect(recovery).toEqual({ action: "proceed" });
-    expect(failoverRetryController.transientRetryCount).toBe(0);
-    expect(markOwnedTranscriptRetry).not.toHaveBeenCalled();
-    expect(continueFromCurrentTranscript).not.toHaveBeenCalled();
+    const fixture = await recoverAfterTransportDrop(scenario);
+    expect(fixture.recovery).toEqual({ action: "proceed" });
+    expect(fixture.failoverRetryController.transientRetryCount).toBe(0);
+    expect(fixture.markOwnedTranscriptRetry).not.toHaveBeenCalled();
+    expect(fixture.continueFromCurrentTranscript).not.toHaveBeenCalled();
   });
 
   it("surfaces before_agent_run blocks with current carried usage", async () => {

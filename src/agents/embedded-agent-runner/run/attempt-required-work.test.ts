@@ -107,38 +107,34 @@ it.each(["direct", "cell", "nested", "detached"] as const)(
           ? {}
           : { awaitResults: true }),
     };
+    const toolCall = {
+      type: "toolCall" as const,
+      id: "start-command",
+      name: "exec",
+      arguments: nested
+        ? {
+            code: `return await exec(${JSON.stringify(command)});`,
+            awaitResults: mode !== "nested",
+            title: "Collect required verification",
+          }
+        : command,
+    };
     streamMocks.streamSimple.mockImplementation((model, context) => {
-      requests++;
-      if (requests === 1) {
-        return createAssistantResultStream(
-          createAssistant(
-            model,
-            [
-              {
-                type: "toolCall",
-                id: "start-command",
-                name: "exec",
-                arguments: nested
-                  ? {
-                      code: `return await exec(${JSON.stringify(command)});`,
-                      awaitResults: mode !== "nested",
-                      title: "Collect required verification",
-                    }
-                  : command,
-              },
-            ],
-            "toolUse",
-          ),
-        );
-      }
-      finalRequested.resolve();
-      if (required) {
-        expect(JSON.stringify(context.messages)).toContain("REQUIRED_RESULT");
+      const first = ++requests === 1;
+      if (!first) {
+        finalRequested.resolve();
+        if (required) {
+          expect(JSON.stringify(context.messages)).toContain("REQUIRED_RESULT");
+        }
       }
       return createAssistantResultStream(
-        createAssistant(model, [
-          { type: "text", text: required ? "Result collected." : "Server started." },
-        ]),
+        createAssistant(
+          model,
+          first
+            ? [toolCall]
+            : [{ type: "text", text: required ? "Result collected." : "Server started." }],
+          first ? "toolUse" : "stop",
+        ),
       );
     });
     const running = session.prompt("Run verification and report its result.").then(() => {
@@ -167,9 +163,11 @@ it.each(["direct", "cell", "nested", "detached"] as const)(
       }
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       await vi.advanceTimersByTimeAsync(60_000);
-      expect(requests).toBe(required ? 1 : 2);
-      expect(finished).toBe(!required);
-      expect(codeModeState.activeRuns.size).toBe(0);
+      expect({ requests, finished, activeRuns: codeModeState.activeRuns.size }).toEqual({
+        requests: required ? 1 : 2,
+        finished: !required,
+        activeRuns: 0,
+      });
       vi.useRealTimers();
       finish();
       await running;
