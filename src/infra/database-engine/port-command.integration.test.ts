@@ -15,6 +15,8 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { readClientCredentialReceipt } from "../client-credential-readiness.js";
+import { openClientCredentialCustody } from "../client-credential-store.js";
 import * as recovery from "../database-port-recovery.js";
 import * as disk from "../disk-space.js";
 import { acquireGatewayLock } from "../gateway-lock.js";
@@ -208,6 +210,11 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
       const ported = await doctorDatabasePort({ to: "postgres" });
       const anchor = readBackupEngine(shared);
       assert(anchor.engine === "postgres");
+      {
+        using credentials = openClientCredentialCustody(state.env);
+        assert(credentials);
+        expect(readClientCredentialReceipt(credentials.database)?.receipt.source).toBeNull();
+      }
       expect(
         (
           await client.query(
