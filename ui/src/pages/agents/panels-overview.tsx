@@ -67,9 +67,7 @@ export function AgentOverview(
   const catalogOwnsChoices = createMemo(
     () => params.modelCatalogRetired || params.modelSelectionPolicy?.restricted,
   );
-  const configForm = createMemo(() => (catalogOwnsChoices() ? null : params.configForm), {
-    equals: false,
-  });
+  const configForm = () => (catalogOwnsChoices() ? null : params.configForm);
   const visibleAgent = createMemo(
     () =>
       catalogOwnsChoices()
@@ -92,11 +90,9 @@ export function AgentOverview(
     ),
   );
   const isDefault = createMemo(() => context().isDefault);
-  const primaryModelLabel = createMemo(() =>
-    t(`agents.overview.primaryModel${isDefault() ? "Default" : ""}`),
-  );
+  const primaryModelLabel = () => t(`agents.overview.primaryModel${isDefault() ? "Default" : ""}`);
   const config = createMemo(() => resolveAgentConfig(configForm(), params.agent.id));
-  const agentModel = createMemo(() => visibleAgent().model, { equals: false });
+  const agentModel = () => visibleAgent().model;
   const entryPrimary = createMemo(() => resolveModelPrimary(config().entry?.model));
   const inheritedPrimary = createMemo(() =>
     resolveModelPrimary(config().defaults?.model ?? agentModel()),
@@ -145,7 +141,7 @@ export function AgentOverview(
   const disabled = createMemo(
     () => !params.canUpdateConfig || !configForm() || params.configLoading || params.configSaving,
   );
-  const identityDraft = createMemo(() => params.readData().identityDraft, { equals: false });
+  const identityDraft = () => params.readData().identityDraft;
   const identityName = createMemo(
     () =>
       identityDraft().name ??
