@@ -47,7 +47,7 @@ const target = (storeScope: string, sessionKey = key, incarnation = "incarnation
   captureTarget({ storeScope, sessionKey, incarnation });
 function reserve(
   physical: ReturnType<typeof captureTarget>,
-  options: Parameters<typeof reserveSource>[1] = {},
+  options: Partial<Parameters<typeof reserveSource>[1]> = {},
 ) {
   return reserveSource(physical.sessionKey, {
     target: physical,

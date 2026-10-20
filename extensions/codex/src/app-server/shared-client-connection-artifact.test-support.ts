@@ -8,6 +8,7 @@ import type { CodexAppServerStartOptions } from "./config.js";
 import { readCodexAppServerClientRuntimeArtifact } from "./runtime-artifact.js";
 import { createIsolatedCodexAppServerClient as createClient } from "./shared-client.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
+import { codexWebSocketDataToBuffer } from "./websocket-data.js";
 
 export function registerSharedClientConnectionArtifactTests(): void {
   it.each(["binding reuse", "identity change"] as const)(
@@ -75,7 +76,10 @@ async function withRemoteServer(
   server.on("connection", (socket) => {
     socket.binaryType = "nodebuffer";
     socket.on("message", (data) => {
-      const request = JSON.parse(data.toString()) as { id?: number; method: string };
+      const request = JSON.parse(codexWebSocketDataToBuffer(data).toString()) as {
+        id?: number;
+        method: string;
+      };
       if (request.id === undefined) {
         return;
       }

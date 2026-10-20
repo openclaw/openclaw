@@ -79,7 +79,7 @@ function renderGroup(group: MessageGroup, options: Partial<NativeMessageGroupOpt
 
 function renderFrame(
   input: AgentRunFrameRenderItem | MessageGroup,
-  options: NativeMessageGroupOptions = {},
+  options: Partial<NativeMessageGroupOptions> = {},
 ) {
   return mountSolid(
     () =>

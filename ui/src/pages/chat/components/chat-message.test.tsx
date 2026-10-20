@@ -141,8 +141,8 @@ function requireElement<T extends Element>(
   return expectDefined(found, selector);
 }
 
-function element<T extends Element = HTMLElement>(selector: string, container: Element = view) {
-  return container.querySelector<T>(selector);
+function element(selector: string, container: Element = view) {
+  return container.querySelector<HTMLElement>(selector);
 }
 
 function elements<T extends Element = HTMLElement>(selector: string, container: Element = view) {
@@ -678,7 +678,7 @@ describe("grouped chat rendering", () => {
         },
       );
 
-      const status = element<HTMLElement>(".chat-send-status");
+      const status = element(".chat-send-status");
       expect(status).not.toBeNull();
       expect(status?.title).toBe("Delivery diagnostic");
       const retry = status?.querySelector<HTMLButtonElement>(".chat-send-status__retry");
@@ -788,7 +788,7 @@ describe("grouped chat rendering", () => {
 
     const recent = now - 5 * 60_000;
     expect(renderTimestamp(recent)).toBe("5m ago");
-    expect(element<HTMLTimeElement>(".chat-group-timestamp")?.dateTime).toBe(
+    expect(view.querySelector<HTMLTimeElement>(".chat-group-timestamp")?.dateTime).toBe(
       new Date(recent).toISOString(),
     );
     const oldTimestamp = Date.UTC(2026, 3, 24, 18, 30);
@@ -934,7 +934,7 @@ describe("grouped chat rendering", () => {
       { showAssistantAvatar: false },
     );
     expectAbsent(".chat-bubble.streaming");
-    expect(element<HTMLTimeElement>(".chat-group-timestamp")?.dateTime).toBe(
+    expect(view.querySelector<HTMLTimeElement>(".chat-group-timestamp")?.dateTime).toBe(
       new Date(10).toISOString(),
     );
   });
@@ -1062,7 +1062,7 @@ describe("grouped chat rendering", () => {
       }),
     );
 
-    const notice = element<HTMLElement>(".chat-notice");
+    const notice = element(".chat-notice");
     expect(notice?.querySelector(".chat-divider__title")?.textContent).toBe("System");
     expect(notice?.querySelector("strong")?.textContent).toBe("first line");
     expect(notice?.querySelector("br")).not.toBeNull();
@@ -1096,7 +1096,7 @@ describe("grouped chat rendering", () => {
     });
     renderNotices(host, "run-guardian", "guardian-render-test");
 
-    const notices = elements<HTMLElement>(".chat-notice");
+    const notices = elements(".chat-notice");
     expect(notices).toHaveLength(4);
     expect(notices[0]?.textContent).toContain("Guardian approved git status --short.");
     expect(notices[0]?.classList.contains("danger")).toBe(false);
@@ -1188,7 +1188,7 @@ describe("grouped chat rendering", () => {
     render(renderTestMessageGroup(group, { avatarPlacement: "footer" }));
 
     const image = await vi.waitFor(() => {
-      const result = element<HTMLImageElement>(".chat-author-avatar__image");
+      const result = view.querySelector<HTMLImageElement>(".chat-author-avatar__image");
       expect(result).not.toBeNull();
       expect(result?.getAttribute("src")).toBe("/api/users/alice/avatar");
       return result!;
@@ -1622,7 +1622,7 @@ describe("grouped chat rendering", () => {
     );
 
     expect(elementText(".chat-text")).toContain("Generated image");
-    expect(element<HTMLImageElement>(".chat-message-image")?.getAttribute("src")).toBe(
+    expect(view.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src")).toBe(
       "data:image/png;base64,cG5n",
     );
     expectPresent(".chat-tool-msg-body .chat-tool-msg-summary");
@@ -1943,7 +1943,7 @@ describe("grouped chat rendering", () => {
     vi.useFakeTimers();
     const source = `/tmp/openclaw/${crypto.randomUUID()}-stalled.txt`;
     const fetchMock = stubFetch((_url: string, init?: RequestInit) => {
-      const signal = expectDefined(init?.signal);
+      const signal = expectDefined(init?.signal, "attachment request signal");
       return rejectWhenAborted<Response>(signal, () =>
         signal.reason instanceof Error ? signal.reason : new DOMException("aborted", "AbortError"),
       );
@@ -2001,11 +2001,11 @@ describe("grouped chat rendering", () => {
       { path: firstSource, contentType: "application/octet-stream" },
     ]);
     await waitForSolid(() =>
-      expect(element<HTMLImageElement>(".chat-message-image")?.getAttribute("src")).toContain(
-        `source=${encodeURIComponent(firstSource)}`,
-      ),
+      expect(
+        view.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
+      ).toContain(`source=${encodeURIComponent(firstSource)}`),
     );
-    const firstImageUrl = new URL(element<HTMLImageElement>(".chat-message-image")!.src);
+    const firstImageUrl = new URL(view.querySelector<HTMLImageElement>(".chat-message-image")!.src);
     expect([
       firstImageUrl.searchParams.get("messageId"),
       firstImageUrl.searchParams.get("sessionKey"),
@@ -2042,7 +2042,7 @@ describe("grouped chat rendering", () => {
     renderAssistantMessage(
       createAssistantMessage([{ type: "input_image", image_url: "data:image/png;base64,cG5n" }]),
     );
-    expect(element<HTMLImageElement>(".chat-message-image")?.getAttribute("src")).toBe(
+    expect(view.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src")).toBe(
       "data:image/png;base64,cG5n",
     );
   });
@@ -2065,7 +2065,7 @@ describe("grouped chat rendering", () => {
       );
     renderQr("cXJwbmc=", 1_000);
 
-    const image = element<HTMLImageElement>(".chat-message-image");
+    const image = view.querySelector<HTMLImageElement>(".chat-message-image");
     expect(image).toMatchObject({
       src: "data:image/png;base64,cXJwbmc=",
       alt: "OpenClaw pairing QR code",

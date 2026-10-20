@@ -24,6 +24,7 @@ import type { CoreConfig } from "../types.js";
 import { SqliteBackedMatrixSyncStore } from "./client/file-sync-store.js";
 import { prepareMockMatrixClientStorage } from "./client/shared.test-support.js";
 import {
+  registerCryptoOneOffInitializationTests,
   registerCryptoShutdownTests,
   registerCryptoStartupAbortTest,
   registerCryptoPeriodicShutdownTest,
@@ -37,7 +38,6 @@ import {
   makeMatrixEvent,
   type MatrixEventDecryptor,
 } from "./sdk/event.test-support.js";
-import { clearAllIndexedDbState } from "./sdk/idb-persistence.test-helpers.js";
 import {
   captureRecoveryCacheWrite,
   holdRecoveryKeyPersistence,
@@ -1816,42 +1816,9 @@ describe("MatrixClient crypto bootstrapping", () => {
 
   registerCryptoStartupAbortTest(cryptoPersistenceContext);
 
-  it("single-flights host-authorized one-off crypto initialization", async () => {
+  registerCryptoOneOffInitializationTests(cryptoPersistenceContext, () => {
     captureReadAuthorityMock.mockReturnValue(READ_CALLERS[1].assertReadAuthority);
-    clearMatrixSyncApiForNeverStartedClient();
-    const tempDir = tempDirs.make("matrix-idb-one-off-init-");
-    const databasePrefix = path.basename(tempDir);
-    const initStarted = createDeferred<void>();
-    const finishInit = createDeferred<void>();
-    matrixJsClient.initRustCrypto.mockImplementation(async () => {
-      initStarted.resolve();
-      await finishInit.promise;
-    });
-    const client = createSdkClient({
-      encryption: true,
-      idbSnapshotPath: path.join(tempDir, "crypto-idb-snapshot.json"),
-      cryptoDatabasePrefix: databasePrefix,
-    });
-    const preparations = Promise.allSettled([client.prepareForOneOff(), client.prepareForOneOff()]);
-    try {
-      await initStarted.promise;
-      await setImmediate();
-      expect(matrixJsClient.initRustCrypto).toHaveBeenCalledTimes(1);
-      finishInit.resolve();
-      await expect(preparations).resolves.toEqual([
-        { status: "fulfilled", value: undefined },
-        { status: "fulfilled", value: undefined },
-      ]);
-      expect(matrixJsClient.initRustCrypto).toHaveBeenCalledTimes(1);
-    } finally {
-      finishInit.reject(new Error("crypto initialization fixture cleanup"));
-      await preparations;
-      await client.stopWithoutPersist();
-      await clearAllIndexedDbState({ databasePrefix });
-      resetPluginStateStoreForTests();
-    }
   });
-
   it("trusts the own Matrix identity after completed self-verification", async () => {
     const verifyOwnIdentity = vi.fn(async () => ({}));
     const freeOwnIdentity = vi.fn();

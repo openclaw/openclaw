@@ -1264,24 +1264,23 @@ describe("runCodexAppServerSideQuestion", () => {
       await expect(run).resolves.toEqual({ text: "Side answer." });
 
       expect(approvalResponse).toEqual({ decision: "decline" });
-      expect(approveRequest).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          method: "item/commandExecution/requestApproval",
-          requestParams: {
-            ...codexTestTurnIds("side-thread"),
-            itemId: "cmd-side",
-            command: "/bin/bash -lc 'node -v'",
-            cwd: "/tmp/workspace",
-          },
+      expect(approveRequest).toHaveBeenCalledOnce();
+      expect(approveRequest.mock.calls[0]?.[0]).toMatchObject({
+        method: "item/commandExecution/requestApproval",
+        requestParams: {
           ...codexTestTurnIds("side-thread"),
-          autoApprove: false,
-          paramsForRun: { messageChannel: "discord", messageProvider: "discord-voice" },
-          nativeHookRelay: expect.objectContaining({
-            relayId: relayIdDuringFork,
-            allowedEvents: expect.arrayContaining(["pre_tool_use"]),
-          }),
-        }),
-      );
+          itemId: "cmd-side",
+          command: "/bin/bash -lc 'node -v'",
+          cwd: "/tmp/workspace",
+        },
+        ...codexTestTurnIds("side-thread"),
+        autoApprove: false,
+        paramsForRun: { messageChannel: "discord", messageProvider: "discord-voice" },
+        nativeHookRelay: {
+          relayId: relayIdDuringFork,
+          allowedEvents: expect.arrayContaining(["pre_tool_use"]),
+        },
+      });
       expect(
         nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayIdDuringFork!),
       ).toBeUndefined();
@@ -1982,7 +1981,7 @@ describe("runCodexAppServerSideQuestion", () => {
           ...(!interruptFails ? ["thread/unsubscribe"] : []),
         ]);
         expect(harness.stdinDestroyed).toBe(
-          (interruptFails && !peerRetained) || unsubscribeFails === true,
+          Boolean((interruptFails && !peerRetained) || unsubscribeFails),
         );
         if (peerRetained) {
           expect(retireClient).toHaveBeenCalledExactlyOnceWith(harness.client);

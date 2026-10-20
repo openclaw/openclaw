@@ -324,7 +324,7 @@ function createDiagnosticFixture() {
   const runs: Promise<unknown>[] = [];
   return {
     time,
-    owner(context: PreparedCliRunContext, bind = true) {
+    owner(this: void, context: PreparedCliRunContext, bind = true) {
       const owner = createDiagnosticEmbeddedRunOwner(context.params);
       owners.push(owner);
       if (bind) {
@@ -332,12 +332,12 @@ function createDiagnosticFixture() {
       }
       return owner;
     },
-    hold() {
+    hold(this: void) {
       const held = holdSupervisorRun();
       holds.push(held);
       return held;
     },
-    run(context: PreparedCliRunContext) {
+    run(this: void, context: PreparedCliRunContext) {
       const pending = executePreparedCliRun(context);
       runs.push(pending);
       return pending;

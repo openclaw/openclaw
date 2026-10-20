@@ -34,7 +34,7 @@ function targetFor(label: string, incarnation = `${label}-session`) {
 
 function reserve(
   target: ReturnType<typeof targetFor>,
-  options: Parameters<typeof reserveSessionControllerSource>[1] = {},
+  options: Partial<Parameters<typeof reserveSessionControllerSource>[1]> = {},
 ) {
   return reserveSessionControllerSource(target.sessionKey, {
     target,

@@ -44,7 +44,10 @@ import {
 type Receipt = PilotEvent & { type: "receipt" };
 const deliverySettlement = [{ type: "complete" }, { type: "delivery-settled" }] as const;
 
-function reserve(key: string, options: Parameters<typeof reserveSessionControllerSource>[1] = {}) {
+function reserve(
+  key: string,
+  options: Partial<Parameters<typeof reserveSessionControllerSource>[1]> = {},
+) {
   return reserveSessionControllerSource(key, { policy: { mode: "followup" }, ...options });
 }
 

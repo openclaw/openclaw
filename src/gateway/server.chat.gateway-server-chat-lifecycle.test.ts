@@ -4,7 +4,7 @@ import path from "node:path";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { afterAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { type RawData, WebSocket } from "ws";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import * as acpSessionMetadata from "../acp/runtime/session-meta-readonly.js";
 import type { MessagingToolSourceReplyPayload } from "../agents/embedded-agent-messaging.types.js";
 import { buildSourceReplyPayloadState } from "../agents/embedded-agent-runner/run/source-reply-payloads.js";
@@ -20,6 +20,7 @@ import {
 } from "../infra/agent-run-registry.js";
 import { getRpcSource } from "../sessions/session-controller.rpc-sources.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import * as agentJobs from "./agent-turn/agent-job.js";
 import { persistInternalSourceReply } from "./internal-source-reply-persistence.js";
 import { installGatewayServerChatTestSuite } from "./server.chat.gateway-server-chat.test-support.js";
 import { removeChatTestDirectory as removeTempDir } from "./session-test-directories.test-support.js";
@@ -488,6 +489,43 @@ describe("gateway server chat lifecycle", () => {
         expect(payload).toMatchObject({ sessionKey: "main", stream: "assistant" });
       }
 
+      for (const cached of [false, true]) {
+        const terminalRunId = `run-wait-terminal-${cached}`;
+        const terminal = { phase: "end", startedAt: 200, endedAt: 210 };
+        const registered = createDeferred();
+        const waitForJob = agentJobs.waitForAgentJob;
+        using waitSpy = vi.spyOn(agentJobs, "waitForAgentJob").mockImplementationOnce((params) => {
+          const pending = waitForJob(params);
+          registered.resolve();
+          return pending;
+        });
+        void waitSpy;
+        if (cached) {
+          emitLifecycle(terminalRunId, terminal);
+        }
+        const terminalWait = rpcReq(webchatWs, "agent.wait", {
+          runId: terminalRunId,
+          timeoutMs: 200,
+        });
+        if (!cached) {
+          await awaitGateBeforeSettlement(
+            registered.promise,
+            terminalWait,
+            "agent.wait settled before registering its waiter",
+          );
+          emitLifecycle(terminalRunId, terminal);
+        }
+        expect(await terminalWait).toMatchObject({
+          ok: true,
+          payload: { status: "ok", startedAt: 200, endedAt: 210 },
+        });
+      }
+      expect(
+        await rpcReq(webchatWs, "agent.wait", { runId: "run-wait-empty", timeoutMs: 30 }),
+      ).toMatchObject({
+        ok: true,
+        payload: { status: "timeout" },
+      });
       const runId = "run-wait-start";
       const waiting = rpcReq(webchatWs, "agent.wait", { runId, timeoutMs: 200 });
       emitLifecycle(runId, { phase: "start", startedAt: 123 });

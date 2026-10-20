@@ -55,6 +55,7 @@ it.each<{ outcomes: ("delivered" | "failed")[]; maxLines?: number; plan?: true }
       );
     },
     {
+      mode: "progress",
       toolProgress: false,
       telegramCfg: maxLines
         ? { streaming: { mode: "progress", progress: { toolProgress: false, maxLines } } }

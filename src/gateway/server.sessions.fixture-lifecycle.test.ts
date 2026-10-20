@@ -567,7 +567,7 @@ test("observes retained Gateway owners through fixture teardown", async () => {
   try {
     const close = await observeFailure(() => harness.close());
     const afterClose = readState();
-    await observeFailure(() => runHooks(fixture.afterEach));
+    const afterEach = await observeFailure(() => runHooks(fixture.afterEach));
     const caseReset = await observeFailure(() => runHooks(fixture.reset));
     const afterCaseReset = readState();
     const cleanup = await observeFailure(() => runHooks(fixture.cleanup.toReversed()));
@@ -585,7 +585,7 @@ test("observes retained Gateway owners through fixture teardown", async () => {
     const successor = takeHooks();
     const suiteSetup = await observeFailure(() => runHooks(successor.setup));
     fs.writeFileSync(${JSON.stringify(path.join(root, "journal.json"))}, JSON.stringify({
-      close, caseReset, cleanup, repeatedCleanup, suiteSetup,
+      close, afterEach, caseReset, cleanup, repeatedCleanup, suiteSetup,
       afterClose, afterCaseReset, afterCleanup, afterModuleReset: readState(),
       producer: producerObservation, connectionCleanupFinished, stopCalls,
       harnessRetained,
@@ -606,6 +606,7 @@ test("retains fixture state and fences successors after a required Gateway close
     const retained = { home: true, state: true, sessions: true, selectorsIntact: true };
     expect(journal, text).toMatchObject({
       close: { rejected: true, faultPreserved: true },
+      afterEach: { rejected: true },
       caseReset: { rejected: true },
       cleanup: { rejected: true, faultPreserved: true },
       repeatedCleanup: { rejected: true, faultPreserved: true },
