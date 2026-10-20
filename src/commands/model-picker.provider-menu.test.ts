@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { promptDefaultModel } from "../flows/model-picker.js";
@@ -63,22 +64,20 @@ it.each([
     prepared.catalog = catalog(count, (index) =>
       singleProvider || index < 15 ? "zeta" : index < 30 ? "alpha" : "beta",
     );
+    const modelPrompt = count > 30 && !singleProvider ? 1 : 0;
+    const chosen = selection === "alpha" ? "alpha/model-15" : "zeta/model-0";
     const prompts: WizardSelectParams<unknown>[] = [];
     const prompter = makePrompter({
       select: async (params) => {
         prompts.push(params);
-        const choice =
-          params.message === "Filter models by provider"
-            ? params.options.find((option) => option.value === selection)
-            : params.options.find((option) => String(option.value).includes("/"));
-        if (!choice) {
-          throw new Error("Missing picker choice");
-        }
-        return choice.value;
+        const value = params.message === "Filter models by provider" ? selection : chosen;
+        return expectDefined(
+          params.options.find((option) => option.value === value),
+          "picker choice",
+        ).value;
       },
     });
     const result = await pick(prompter, { "alpha/model-15": { alias: "compact" } });
-    const modelPrompt = count > 30 && !singleProvider ? 1 : 0;
     expect(prompts).toHaveLength(modelPrompt + 1);
     if (modelPrompt === 1) {
       expect(prompts[0]?.options).toEqual([
@@ -102,7 +101,7 @@ it.each([
         prompts[modelPrompt]?.options.find((option) => option.value === "alpha/model-15")?.hint,
       ).toContain("alias: compact");
     }
-    expect(result).toEqual({ model: expectedValues[0] });
+    expect(result).toEqual({ model: chosen });
   },
 );
 

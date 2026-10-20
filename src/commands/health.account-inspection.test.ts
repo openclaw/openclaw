@@ -46,13 +46,11 @@ it.each([false, true])(
   "keeps unavailable accounts visible (resolved sibling=%s)",
   async (withSibling) => {
     const probeAccount = vi.fn(async () => ({ ok: true }));
-    const runtimeOnly = vi.fn(() => {
-      throw new Error("runtime hook received an inspection summary");
-    });
+    const runtimeOnly = vi.fn(() =>
+      expect.unreachable("runtime hook received an inspection summary"),
+    );
     const buildAccountSnapshot = vi.fn(({ account }: { account: unknown }) => {
-      if ((account as { token?: string }).token !== "healthy-token") {
-        runtimeOnly();
-      }
+      expect(account).toMatchObject({ token: "healthy-token" });
       return { accountId: "healthy", configured: true, name: "Resolved healthy account" };
     });
     const accounts = await inspectAccounts(
