@@ -1,5 +1,4 @@
 // @vitest-environment node
-// Control UI tests cover chat responsive behavior.
 import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
@@ -24,7 +23,6 @@ import {
   mountMcpAppSurfaceFixture,
   rectsOverlap,
   waitForLayoutSettled,
-  type ControlRect,
 } from "./chat-layout.browser.test-support.ts";
 
 const TOUCH_TARGET_MIN_PX = 43.5;
@@ -46,11 +44,7 @@ type ChatFixtureOptions = {
   slashMenu?: boolean;
 };
 
-/**
- * Corner radii are expressed as their base step times the live corner scale,
- * so these expectations stay true on engines that draw continuous curvature
- * (`--openclaw-corner-radius-scale: 1.25`) and on engines that do not.
- */
+// CSS scales corners by engine support for continuous curvature.
 async function readCornerScale(page: Page): Promise<number> {
   return await page.evaluate(() =>
     Number.parseFloat(
@@ -58,26 +52,6 @@ async function readCornerScale(page: Page): Promise<number> {
     ),
   );
 }
-
-type MeasuredControl = ControlRect & {
-  top: number;
-  bottom: number;
-  left: number;
-  right: number;
-  center: number;
-  clientWidth: number;
-  scrollWidth: number;
-  clientHeight: number;
-  scrollHeight: number;
-  scrollTop: number;
-  lineHeight: number;
-  paddingTop: number;
-  paddingBottom: number;
-  paddingLeft: number;
-  paddingRight: number;
-  borderRadius: number;
-  cornerShape: string;
-};
 
 // Measure each group in one browser turn, before layout or animations can advance.
 async function readControlRects<Key extends string>(
@@ -93,121 +67,164 @@ async function readControlRects<Key extends string>(
           node.scrollTop = node.scrollHeight;
         }
       }
+      const measure = (node: HTMLElement) => {
+        const { x, y, width, height, top, bottom } = node.getBoundingClientRect();
+        const style = getComputedStyle(node);
+        if (![x, y, width, height].every(Number.isFinite)) {
+          throw new Error("Expected finite control geometry");
+        }
+        return {
+          x,
+          y,
+          width,
+          height,
+          top,
+          bottom,
+          left: x,
+          right: x + width,
+          center: x + width / 2,
+          clientWidth: node.clientWidth,
+          scrollWidth: node.scrollWidth,
+          clientHeight: node.clientHeight,
+          scrollHeight: node.scrollHeight,
+          scrollTop: node.scrollTop,
+          paddingTop: Number.parseFloat(style.paddingTop),
+          paddingBottom: Number.parseFloat(style.paddingBottom),
+          paddingLeft: Number.parseFloat(style.paddingLeft),
+          paddingRight: Number.parseFloat(style.paddingRight),
+          borderRadius: Number.parseFloat(style.borderTopLeftRadius),
+          cornerShape: style.getPropertyValue("corner-shape"),
+          fontSize: Number.parseFloat(style.fontSize),
+          placeholderFontSize: Number.parseFloat(getComputedStyle(node, "::placeholder").fontSize),
+          css: Object.fromEntries<string>(
+            "position background-color color border-color box-shadow border-top-color border-top-style border-top-width outline-style min-height overflow-y margin-top letter-spacing border-bottom-style border-left-style border-radius margin-bottom border-top-left-radius border-top-right-radius border-bottom-left-radius border-bottom-right-radius user-select box-sizing object-fit padding font-size scrollbar-gutter"
+              .split(" ")
+              .map((property) => [property, style.getPropertyValue(property)] as const),
+          ),
+        };
+      };
       const entries = Object.entries(selectors).map(([key, selector]) => {
         const nodes = document.querySelectorAll<HTMLElement>(selector);
         const node = nodes[0];
         if (!node || nodes.length !== 1) {
           throw new Error(`Expected one layout element: ${selector}`);
         }
-        const { x, y, width, height, top, bottom } = node.getBoundingClientRect();
-        const style = getComputedStyle(node);
-        return [
-          key,
-          {
-            x,
-            y,
-            width,
-            height,
-            top,
-            bottom,
-            left: x,
-            right: x + width,
-            center: x + width / 2,
-            clientWidth: node.clientWidth,
-            scrollWidth: node.scrollWidth,
-            clientHeight: node.clientHeight,
-            scrollHeight: node.scrollHeight,
-            scrollTop: node.scrollTop,
-            display: style.display,
-            overflow: style.overflow,
-            textOverflow: style.textOverflow,
-            lineHeight: Number.parseFloat(style.lineHeight),
-            paddingTop: Number.parseFloat(style.paddingTop),
-            paddingBottom: Number.parseFloat(style.paddingBottom),
-            paddingLeft: Number.parseFloat(style.paddingLeft),
-            paddingRight: Number.parseFloat(style.paddingRight),
-            borderRadius: Number.parseFloat(style.borderTopLeftRadius),
-            cornerShape: style.getPropertyValue("corner-shape"),
-          },
-        ];
+        return [key, measure(node)];
       });
-      // SAFETY: each input key produces one measured entry; missing/ambiguous nodes throw.
-      return Object.fromEntries(entries) as Record<Key, MeasuredControl>;
+      // SAFETY: every input key produces one measured entry; invalid nodes throw.
+      return Object.fromEntries(entries) as Record<Key, ReturnType<typeof measure>>;
     },
     { selectors: selectorMap, scroll: scrollSelector },
   );
-  for (const rect of Object.values<MeasuredControl>(rects)) {
-    expectFiniteRect(rect);
-  }
   return rects;
+}
+
+async function expectAligned(
+  page: Page,
+  coordinate: "left" | "centerX" | "centerY",
+  selectorList: string,
+) {
+  const values = await page.evaluate(
+    ({ axis, selectors }) =>
+      selectors.split(",").flatMap((selector) => {
+        const nodes = [...document.querySelectorAll(selector)];
+        if (!nodes.length) {
+          throw new Error(`Expected layout elements: ${selector}`);
+        }
+        return nodes.map((node) => {
+          const box = node.getBoundingClientRect();
+          return axis === "left"
+            ? box.left
+            : axis === "centerX"
+              ? box.left + box.width / 2
+              : box.top + box.height / 2;
+        });
+      }),
+    { axis: coordinate, selectors: selectorList },
+  );
+  expect(Math.max(...values) - Math.min(...values)).toBeLessThan(0.5);
 }
 
 function iconSvg() {
   return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>`;
 }
 
+function textBubble(content: string) {
+  return `<div class="chat-bubble"><div class="chat-text">${content}</div></div>`;
+}
+
+function messageHtml(classes: string, content: string, avatar = "", footer = "", attributes = "") {
+  return `<div class="chat-group ${classes}" ${attributes}>${avatar}
+    <div class="chat-group-messages">${content}</div>${footer}</div>`;
+}
+
+function threadHtml(
+  content: string,
+  classes = "",
+  attributes = 'role="log"',
+  innerAttributes = "",
+) {
+  return `<div class="chat-thread ${classes}" ${attributes}>
+    <div class="chat-thread-inner" ${innerAttributes}>${content}</div></div>`;
+}
+
+function footerHtml(name = "Assistant", actions = chatFooterActionsHtml(), time = "9:41 PM") {
+  return `<div class="chat-group-footer"><div class="chat-group-footer__meta">
+    <span class="chat-sender-name">${name}</span><span class="chat-group-timestamp">${time}</span>
+    </div>${actions}</div>`;
+}
+
+function div(classes: string, content: string, attributes = "") {
+  return `<div class="${classes}" ${attributes}>${content}</div>`;
+}
+
 function activityAlignmentHtml() {
-  return `
-    <div class="chat-thread" role="log">
-      <div class="chat-thread-inner">
-        <div class="chat-group tool">
-          <div class="chat-group-messages" data-tool-column-reference>Inspecting the available tools.</div>
-        </div>
-        <div class="chat-group tool chat-group--activity chat-group--with-footer">
-          <div class="chat-group-messages">
-            <div class="chat-activity-group is-open">
-              <button class="chat-inline-disclosure chat-activity-group__summary" type="button" aria-expanded="true">
-                <span class="chat-activity-group__icon">${iconSvg()}</span>
-                <span class="chat-tool-disclosure__content">
-                  <span class="chat-activity-group__label">Activity: 2 tools</span>
-                </span>
-                <span class="chat-tool-row__chevron">${iconSvg()}</span>
-              </button>
-              <div class="chat-activity-group__body">
-                <div class="chat-bubble chat-bubble--tool-shell" data-activity-call-row>
-                  <div class="chat-tools-inline">
-                    <div class="chat-tool-msg-collapse">
-                      <button class="chat-inline-disclosure chat-tool-msg-summary chat-tool-row" type="button" aria-expanded="false">
-                        <span class="chat-tool-msg-summary__icon">${iconSvg()}</span>
-                        <span class="chat-tool-disclosure__content">
-                          <span class="chat-tool-msg-summary__label">Bash</span>
-                          <span class="chat-tool-msg-summary__names">search a deliberately long workspace path without extra card chrome</span>
-                        </span>
-                        <span class="chat-tool-row__chevron">${iconSvg()}</span>
-                      </button>
-                    </div>
-                  </div>
-                </div>
-                <div class="chat-bubble chat-bubble--tool-shell">
-                  <div class="chat-tool-msg-collapse">
-                    <button class="chat-inline-disclosure chat-tool-msg-summary chat-tool-row" data-failed-call-row type="button" aria-expanded="false">
-                      <span class="chat-tool-msg-summary__icon">${iconSvg()}</span>
-                      <span class="chat-tool-disclosure__content">
-                        <span class="chat-tool-msg-summary__label">Bash</span>
-                        <span class="chat-tool-msg-summary__names">Bash</span>
-                      </span>
-                      <span class="chat-tool-row__chevron">${iconSvg()}</span>
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  `;
+  const disclosure = (classes: string, iconClass: string, content: string, attrs: string) => `
+    <button class="chat-inline-disclosure ${classes}" type="button" ${attrs}>
+      <span class="${iconClass}">${iconSvg()}</span>
+      <span class="chat-tool-disclosure__content">${content}</span>
+      <span class="chat-tool-row__chevron">${iconSvg()}</span>
+    </button>`;
+  const tool = (failed: boolean) => {
+    const row = div(
+      "chat-tool-msg-collapse",
+      disclosure(
+        "chat-tool-msg-summary chat-tool-row",
+        "chat-tool-msg-summary__icon",
+        `<span class="chat-tool-msg-summary__label">Bash</span>
+      <span class="chat-tool-msg-summary__names">${failed ? "Bash" : "search a deliberately long workspace path without extra card chrome"}</span>`,
+        `aria-expanded="false" ${failed ? "data-failed-call-row" : ""}`,
+      ),
+    );
+    return div(
+      "chat-bubble chat-bubble--tool-shell",
+      failed ? row : div("chat-tools-inline", row),
+      failed ? "" : "data-activity-call-row",
+    );
+  };
+  return threadHtml(
+    div(
+      "chat-group tool",
+      div("chat-group-messages", "Inspecting the available tools.", "data-tool-column-reference"),
+    ) +
+      messageHtml(
+        "tool chat-group--activity chat-group--with-footer",
+        div(
+          "chat-activity-group is-open",
+          disclosure(
+            "chat-activity-group__summary",
+            "chat-activity-group__icon",
+            '<span class="chat-activity-group__label">Activity: 2 tools</span>',
+            'aria-expanded="true"',
+          ) + div("chat-activity-group__body", tool(false) + tool(true)),
+        ),
+      ),
+  );
 }
 
 type AvatarPlacement = "gutter" | "footer" | "none";
 
-// Mirrors every group shape the transcript renders: turn-ending own/peer user and
-// assistant groups (hidden, revealed, persistent footers, and a streaming reply
-// whose footer row is still empty), plus work, activity and live narration blocks
-// that belong to the turn of the answer after them and therefore have no footer
-// row. Each avatar
-// placement renders the same turns: gutter avatars, footer avatars in direct
-// threads, or none for subagent sessions.
+// Preserve turn-ending, in-turn, persistent, and streaming footer shapes in every avatar mode.
 function uniformTurnSpacingHtml(placement: AvatarPlacement) {
   const copy = `<div class="chat-group-footer-actions"><button class="chat-copy-btn" type="button" aria-label="Copy">${iconSvg()}</button></div>`;
   const row = (group: string) => `<div class="chat-virtual-row">${group}</div>`;
@@ -349,46 +366,19 @@ function chatFooterActionsHtml() {
 }
 
 function composerControlsHtml() {
-  return `
-    <div class="agent-chat__composer-controls">
-      <div class="chat-composer-model-control">
-        <div class="chat-controls__session chat-controls__model chat-controls__model-settings">
-          <details class="chat-controls__inline-select chat-controls__model-picker">
-          <summary class="chat-controls__inline-select-trigger chat-controls__model-trigger" data-chat-composer-model="true" aria-label="Chat model: GPT-5.6 Luna">
-            <span class="chat-controls__inline-select-label">GPT-5.6 Luna</span>
-          </summary>
-          <div class="chat-controls__inline-select-menu chat-controls__model-menu">
-            <div class="chat-controls__model-search-wrap"><input class="chat-controls__model-search" placeholder="Search models" /></div>
-            <div class="chat-controls__model-options">
-              <button class="chat-controls__inline-select-option chat-controls__model-option chat-controls__inline-select-option--selected">Default model</button>
-              <button class="chat-controls__inline-select-option chat-controls__model-option">gpt-5.5</button>
-              <button class="chat-controls__inline-select-option chat-controls__model-option">claude-sonnet-4-6</button>
-              <button class="chat-controls__inline-select-option chat-controls__model-option">gpt-5.6-luna</button>
-              <button class="chat-controls__inline-select-option chat-controls__model-option">gpt-5.6-sol</button>
-              <button class="chat-controls__inline-select-option chat-controls__model-option">openrouter/auto</button>
-            </div>
-          </div>
-          </details>
-          <details class="chat-controls__inline-select chat-controls__permission-picker">
-          <summary class="chat-controls__inline-select-trigger chat-controls__permission-trigger" aria-label="Permissions: Guarded">
-            <span class="chat-controls__permission-icon" aria-hidden="true">${iconSvg()}</span>
-          </summary>
-          <div class="chat-controls__inline-select-menu chat-controls__permission-menu">
-            <button class="chat-controls__permission-option">Guarded</button>
-          </div>
-          </details>
-          <details class="chat-controls__inline-select chat-controls__effort-picker">
-          <summary class="chat-controls__inline-select-trigger chat-controls__effort-trigger" data-chat-composer-effort="true" aria-label="Effort">
-            <span class="chat-controls__inline-select-label">Medium</span>
-          </summary>
-          <div class="chat-controls__inline-select-menu chat-controls__effort-menu">
-            <div class="chat-controls__reasoning-panel">Effort</div>
-          </div>
-          </details>
-        </div>
-      </div>
-    </div>
-  `;
+  // These fixtures measure closed controls; menu rows never participate in layout.
+  const picker = (kind: string, label: string, attributes: string) => `
+    <details class="chat-controls__inline-select chat-controls__${kind}-picker">
+      <summary class="chat-controls__inline-select-trigger chat-controls__${kind}-trigger" ${attributes}>${label}</summary>
+      <div class="chat-controls__inline-select-menu chat-controls__${kind}-menu"></div>
+    </details>`;
+  const label = (text: string) => `<span class="chat-controls__inline-select-label">${text}</span>`;
+  return `<div class="agent-chat__composer-controls"><div class="chat-composer-model-control">
+    <div class="chat-controls__session chat-controls__model chat-controls__model-settings">
+      ${picker("model", label("GPT-5.6 Luna"), 'data-chat-composer-model="true" aria-label="Chat model: GPT-5.6 Luna"')}
+      ${picker("permission", `<span class="chat-controls__permission-icon" aria-hidden="true">${iconSvg()}</span>`, 'aria-label="Permissions: Guarded"')}
+      ${picker("effort", label("Medium"), 'data-chat-composer-effort="true" aria-label="Effort"')}
+    </div></div></div>`;
 }
 
 function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
@@ -405,35 +395,20 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
         <section class="chat">
           <div class="chat-split-container">
             <div class="chat-main" style="flex: 1 1 100%">
-              <div class="chat-thread${opts.direct ? " chat-thread--direct" : ""}" role="log">
-                <div class="chat-thread-inner">
-                  <div class="chat-group user">
-                    <div class="chat-avatar user">V</div>
-                    <div class="chat-group-messages">
-                      <div class="chat-bubble"><div class="chat-text">Keep this visible.</div></div>
-                    </div>
-                  </div>
-                  <div class="chat-group assistant chat-group--with-footer">
-                    <div class="chat-avatar assistant">A</div>
-                    <div class="chat-group-messages">
-                      <div class="chat-bubble"><div class="chat-text">It stays readable.</div></div>
-                      <div class="chat-bubble">
-                        <div class="chat-text">
-                          <p>The chat shell should stay compact and readable.</p>
-                          <div class="code-block-wrapper"><pre><code>const importantLongIdentifier = "control-ui-chat-responsive-regression-fixture-keeps-code-scrollable"; console.log(importantLongIdentifier);</code></pre></div>
-                        </div>
-                      </div>
-                    </div>
-                    <div class="chat-group-footer">
-                      <div class="chat-group-footer__meta">
-                        <span class="chat-sender-name">Assistant</span>
-                        <span class="chat-group-timestamp">9:41 PM</span>
-                      </div>
-                      ${chatFooterActionsHtml()}
-                    </div>
-                  </div>
-                </div>
-              </div>
+              ${threadHtml(
+                `
+${messageHtml("user", textBubble("Keep this visible."), '<div class="chat-avatar user">V</div>')}
+                  ${messageHtml(
+                    "assistant chat-group--with-footer",
+                    textBubble("It stays readable.") +
+                      textBubble(`
+                      <p>The chat shell should stay compact and readable.</p>
+                      <div class="code-block-wrapper"><pre><code>const importantLongIdentifier = "control-ui-chat-responsive-regression-fixture-keeps-code-scrollable"; console.log(importantLongIdentifier);</code></pre></div>`),
+                    '<div class="chat-avatar assistant">A</div>',
+                    footerHtml(),
+                  )}`,
+                opts.direct ? "chat-thread--direct" : "",
+              )}
               ${
                 opts.crowdedComposerFooter
                   ? `<div class="agent-chat__typing-indicator agent-chat__typing-indicator--outside" role="status">
@@ -453,21 +428,19 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
                       ? `<div class="slash-menu" role="listbox" aria-label="Command suggestions">
                       <div class="slash-menu-group">
                         <div class="slash-menu-group__label">Commands</div>
-                        <div class="slash-menu-item slash-menu-item--active" role="option" aria-selected="true">
+${[
+  ["/plan", "Create a plan"],
+  ["/review", "Review changes"],
+  ["/fix", "Fix current issue"],
+]
+  .map(
+    ([command, description], index) => `
+                        <div class="slash-menu-item${index === 0 ? " slash-menu-item--active" : ""}" role="option" ${index === 0 ? 'aria-selected="true"' : ""}>
                           <span class="slash-menu-icon">${iconSvg()}</span>
-                          <span class="slash-menu-name">/plan</span>
-                          <span class="slash-menu-desc">Create a plan</span>
-                        </div>
-                        <div class="slash-menu-item" role="option">
-                          <span class="slash-menu-icon">${iconSvg()}</span>
-                          <span class="slash-menu-name">/review</span>
-                          <span class="slash-menu-desc">Review changes</span>
-                        </div>
-                        <div class="slash-menu-item" role="option">
-                          <span class="slash-menu-icon">${iconSvg()}</span>
-                          <span class="slash-menu-name">/fix</span>
-                          <span class="slash-menu-desc">Fix current issue</span>
-                        </div>
+                          <span class="slash-menu-name">${command}</span><span class="slash-menu-desc">${description}</span>
+                        </div>`,
+  )
+  .join("")}
                       </div>
                     </div>`
                       : ""
@@ -506,9 +479,6 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
                       <details class="agent-chat__attach-menu">
                         <summary class="agent-chat__input-btn agent-chat__input-btn--attach" aria-label="Add attachment">${iconSvg()}</summary>
                         <div class="agent-chat__attach-menu-popover" role="menu">
-                          <button class="agent-chat__attach-menu-option" role="menuitem">${iconSvg()}<span>Camera</span></button>
-                          <button class="agent-chat__attach-menu-option" role="menuitem">${iconSvg()}<span>Photo</span></button>
-                          <button class="agent-chat__attach-menu-option" role="menuitem">${iconSvg()}<span>File</span></button>
                         </div>
                       </details>
                     </div>
@@ -1090,15 +1060,16 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
   it("hides image avatars when the mobile transcript drops their grid column", async () => {
     await withBrowserPage(openBrowserPage(430, 720), async (page) => {
       await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>
-          <div class="chat-thread">
-            <div class="chat-group assistant chat-group--with-footer">
-              <img class="chat-avatar assistant" alt="Assistant" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='36' height='36'/%3E" />
-              <div class="chat-group-messages">
-                <div class="chat-bubble"><div class="chat-text">Completed work remains readable.</div></div>
-              </div>
-              <div class="chat-group-footer"><span class="chat-sender-name">Assistant</span></div>
-            </div>
-          </div>
+${threadHtml(
+  messageHtml(
+    "assistant chat-group--with-footer",
+    textBubble("Completed work remains readable."),
+    "<img class=\"chat-avatar assistant\" alt=\"Assistant\" src=\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='36' height='36'/%3E\" />",
+    '<div class="chat-group-footer"><span class="chat-sender-name">Assistant</span></div>',
+  ),
+  "",
+  "",
+)}
         </body></html>`);
       const avatar = page.locator(".chat-avatar");
       for (const width of [430, 400, 390, 320, 401, 768, 769, 1366]) {
@@ -1218,16 +1189,11 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           </div>
         </div>
       </body></html>`);
-      const measuredGap = await page.evaluate(() => {
-        const label = document
-          .querySelector<HTMLElement>(".chat-controls__inline-select-label")!
-          .getBoundingClientRect();
-        const chevron = document
-          .querySelector<HTMLElement>(".chat-controls__inline-select-chevron")!
-          .getBoundingClientRect();
-        return chevron.left - label.right;
+      const { label, chevron } = await readControlRects(page, {
+        label: ".chat-controls__inline-select-label",
+        chevron: ".chat-controls__inline-select-chevron",
       });
-      expect(measuredGap).toBeCloseTo(4, 0);
+      expect(chevron.left - label.right).toBeCloseTo(4, 0);
     });
   });
 
@@ -1283,7 +1249,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
                     >
                       <div class="chat-avatar assistant">A</div>
                       <div class="chat-group-messages">
-                        <div class="chat-bubble"><div class="chat-text">A narrow assistant message.</div></div>
+                        ${textBubble("A narrow assistant message.")}
                       </div>
                       <div class="chat-group-footer">
                         <div class="chat-group-footer__meta">
@@ -1338,7 +1304,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
                   <div class="chat-avatar user chat-avatar--sender-initials">C</div>
                 </span>
                 <div class="chat-group-messages">
-                  <div class="chat-bubble"><div class="chat-text">A newly sent message.</div></div>
+                  ${textBubble("A newly sent message.")}
                 </div>
                 <div class="chat-group-footer">
                   <div class="chat-group-footer__meta">
@@ -1787,25 +1753,14 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     async (width, height) => {
       await withBrowserPage(openBrowserPage(width, height), async (page) => {
         await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>
-            <div class="chat-thread" role="log">
-              <div class="chat-thread-inner">
-                <div class="chat-group assistant chat-group--with-footer">
-                  <div class="chat-avatar assistant">A</div>
-                  <div class="chat-group-messages">
-                    <div class="chat-bubble">
-                      <div class="chat-text"><p>Done.</p></div>
-                    </div>
-                  </div>
-                  <div class="chat-group-footer">
-                    <div class="chat-group-footer__meta">
-                      <span class="chat-sender-name">Assistant</span>
-                      <span class="chat-group-timestamp">9:41 PM</span>
-                    </div>
-                    ${chatFooterActionsHtml()}
-                  </div>
-                </div>
-              </div>
-            </div>
+${threadHtml(
+  messageHtml(
+    "assistant chat-group--with-footer",
+    textBubble("<p>Done.</p>"),
+    '<div class="chat-avatar assistant">A</div>',
+    footerHtml(),
+  ),
+)}
           </body></html>`);
         await page.locator(".chat-bubble").hover();
 
@@ -1830,20 +1785,15 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     async (width, height, themeMode) => {
       await withBrowserPage(openBrowserPage(width, height), async (page) => {
         await page.setContent(`<!doctype html><html data-theme-mode="${themeMode}"><head><style>${readUiCss()}</style></head><body>
-          <div class="chat-thread" role="log">
-            <div class="chat-thread-inner">
-              <div class="chat-group assistant">
-                <div class="chat-avatar assistant">A</div>
-                <div class="chat-group-messages">
-                  <div class="chat-bubble">
-                    <div class="chat-text">
-                      <p><code data-long-code>openclaw_message_send_channel_webchat_target_example_com_thread_very_long_identifier_without_spaces_1234567890abcdefghijklmnopqrstuvwxyz</code></p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
+${threadHtml(
+  messageHtml(
+    "assistant",
+    textBubble(
+      "<p><code data-long-code>openclaw_message_send_channel_webchat_target_example_com_thread_very_long_identifier_without_spaces_1234567890abcdefghijklmnopqrstuvwxyz</code></p>",
+    ),
+    '<div class="chat-avatar assistant">A</div>',
+  ),
+)}
           <div class="chat-text" data-inline-punctuation><p>Use <code>status</code>; then <code>restart</code>.</p></div>
         </body></html>`);
 
@@ -1940,32 +1890,17 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         </html>
       `);
 
-      const layout = await page.evaluate(() => {
-        const heading = document
-          .querySelector<HTMLElement>(".chat-controls__effort-heading")!
-          .getBoundingClientRect();
-        const valueNode = document.querySelector<HTMLElement>(".chat-controls__effort-value")!;
-        const value = valueNode.getBoundingClientRect();
-        return {
-          accentColor: getComputedStyle(document.querySelector<HTMLElement>("[data-accent-probe]")!)
-            .color,
-          heading: { right: heading.right, y: heading.y, height: heading.height },
-          value: {
-            color: getComputedStyle(valueNode).color,
-            x: value.x,
-            y: value.y,
-            height: value.height,
-          },
-        };
+      const { heading, value, accent } = await readControlRects(page, {
+        heading: ".chat-controls__effort-heading",
+        value: ".chat-controls__effort-value",
+        accent: "[data-accent-probe]",
       });
 
-      expect(layout.value.x).toBeGreaterThanOrEqual(layout.heading.right);
+      expect(value.x).toBeGreaterThanOrEqual(heading.right);
       expect(
-        Math.abs(
-          layout.value.y + layout.value.height / 2 - (layout.heading.y + layout.heading.height / 2),
-        ),
+        Math.abs(value.y + value.height / 2 - (heading.y + heading.height / 2)),
       ).toBeLessThanOrEqual(1);
-      expect(layout.value.color).toBe(layout.accentColor);
+      expect(value.css.color).toBe(accent.css.color);
     });
   });
 
@@ -2015,14 +1950,13 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         attach,
         attachIcon,
         textarea: textareaRect,
-        textarea: textareaMetrics,
       } = layout;
 
       // The editor grows against the viewport, not against a line count: past a
       // quarter of the screen the surface stops moving and the draft scrolls
       // inside it, so a long draft can never push the thread off the page.
       expect(textareaRect.height).toBeLessThanOrEqual(layout.viewportHeight * 0.25 + 1);
-      expect(textareaMetrics.scrollHeight).toBeGreaterThan(textareaMetrics.clientHeight);
+      expect(textareaRect.scrollHeight).toBeGreaterThan(textareaRect.clientHeight);
       expect(input.y - (thread.y + thread.height)).toBeCloseTo(0, 0);
       expect(shell.x).toBeCloseTo(20, 0);
       expect(layout.viewportWidth - (shell.x + shell.width)).toBeCloseTo(shell.x, 0);
@@ -2142,36 +2076,8 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         expect(
           Math.abs(context.y + context.height / 2 - (model.y + model.height / 2)),
         ).toBeLessThanOrEqual(2);
-        const composerFontSizes = await page.evaluate(() => {
-          const textareaNode = document.querySelector<HTMLTextAreaElement>(
-            ".agent-chat__composer-combobox > textarea",
-          );
-          const selectors = [
-            ".chat-controls__model-trigger .chat-controls__inline-select-label",
-            ".chat-controls__effort-trigger .chat-controls__inline-select-label",
-          ];
-          if (!textareaNode) {
-            throw new Error("Missing composer textarea");
-          }
-          const fontSize = (node: Element, pseudo?: string) =>
-            Number.parseFloat(getComputedStyle(node, pseudo).fontSize);
-          return {
-            labels: selectors.map((selector) => {
-              const label = document.querySelector(selector);
-              if (!label) {
-                throw new Error(`Missing composer label: ${selector}`);
-              }
-              return fontSize(label);
-            }),
-            placeholder: fontSize(textareaNode, "::placeholder"),
-            textarea: fontSize(textareaNode),
-          };
-        });
-        expect(composerFontSizes).toEqual({
-          labels: [14, 14],
-          placeholder: 16,
-          textarea: 16,
-        });
+        expect([controls.modelLabel.fontSize, controls.effortLabel.fontSize]).toEqual([14, 14]);
+        expect(textarea).toMatchObject({ fontSize: 16, placeholderFontSize: 16 });
         if (width === 320) {
           expect(attach.width).toBeGreaterThanOrEqual(36);
           expect(attach.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
@@ -2193,16 +2099,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           expect(modelTrigger.x).toBeGreaterThanOrEqual(model.x - 1);
           expect(effortTrigger.x).toBeGreaterThanOrEqual(modelTrigger.x + modelTrigger.width - 1);
         }
+        expect(send).toMatchObject({ width: expect.closeTo(32, 2), height: expect.closeTo(32, 2) });
         if (width <= 768) {
-          expect(send.width).toBeCloseTo(32, 2);
-          expect(send.height).toBeCloseTo(32, 2);
           expect(footer.height).toBeLessThanOrEqual(53);
-        } else {
-          // The editor reads at input size, while the controls around it stay
-          // chrome-sized — that difference is what marks the text as the
-          // subject of the surface.
-          expect(send.width).toBeCloseTo(32, 2);
-          expect(send.height).toBeCloseTo(32, 2);
         }
 
         if (width >= 1600) {
@@ -2378,26 +2277,13 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         expect(input.height).toBeLessThanOrEqual(320 * 0.38);
         expect(thread.height).toBeGreaterThanOrEqual(320 * 0.4 - 1);
         expect(input.scrollHeight).toBeGreaterThan(input.clientHeight);
-        expect(
-          await page
-            .locator(".agent-chat__input")
-            .evaluate((node) => getComputedStyle(node).overflowY),
-        ).toBe("auto");
-        expect(
-          await page.locator(".agent-chat__goal-mode").evaluate((node) => {
-            const style = getComputedStyle(node);
-            return {
-              borderBottomStyle: style.borderBottomStyle,
-              borderLeftStyle: style.borderLeftStyle,
-              borderRadius: style.borderRadius,
-              marginBottom: style.marginBottom,
-            };
-          }),
-        ).toEqual({
-          borderBottomStyle: "solid",
-          borderLeftStyle: "none",
-          borderRadius: "0px",
-          marginBottom: "0px",
+        expect(input.css["overflow-y"]).toBe("auto");
+        const { goal } = await readControlRects(page, { goal: ".agent-chat__goal-mode" });
+        expect(goal.css).toMatchObject({
+          "border-bottom-style": "solid",
+          "border-left-style": "none",
+          "border-radius": "0px",
+          "margin-bottom": "0px",
         });
         expect(textarea.scrollHeight).toBeGreaterThan(textarea.clientHeight);
 
@@ -2589,26 +2475,16 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       const list = page.locator(".session-progress-card__steps");
       const widthBefore = (await card.boundingBox())?.width;
       const readSummaryState = () =>
-        page.evaluate(() => {
-          const style = (selector: string) =>
-            getComputedStyle(document.querySelector<HTMLElement>(selector)!);
-          const bounds = (selector: string) =>
-            document.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
-          const spinner = style(".session-progress-card__summary-indicator .session-run-spinner");
-          return {
-            cardBackground: style(".session-progress-card--composer").backgroundColor,
-            summaryBackground: style(".session-progress-card__summary").backgroundColor,
-            titleColor: style(".session-progress-card__summary-title").color,
-            actionsColor: style(".session-progress-card__heading-actions").color,
-            currentColor: style(".session-progress-card__current").color,
-            countColor: style(".session-progress-card__summary-count--collapsed").color,
-            chevronColor: style(".session-progress-card__summary-chevron").color,
-            spinnerBorderColor: spinner.borderColor,
-            spinnerBorderTopColor: spinner.borderTopColor,
-            titleLeft: bounds(".session-progress-card__summary-title").left,
-            firstMarkerLeft: bounds(".session-progress-card__step-marker").left,
-            y: bounds(".session-progress-card__summary").y,
-          };
+        readControlRects(page, {
+          card: ".session-progress-card--composer",
+          summary: ".session-progress-card__summary",
+          title: ".session-progress-card__summary-title",
+          actions: ".session-progress-card__heading-actions",
+          current: ".session-progress-card__current",
+          count: ".session-progress-card__summary-count--collapsed",
+          chevron: ".session-progress-card__summary-chevron",
+          spinner: ".session-progress-card__summary-indicator .session-run-spinner",
+          marker: ".session-progress-card__step:first-child .session-progress-card__step-marker",
         });
       const setSummaryHover = async (hovered: boolean) => {
         if (hovered) {
@@ -2626,44 +2502,30 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         await state.dispose();
       };
       const expandedBefore = await readSummaryState();
-      const { shellBounds, stackSurfaces, warnGoalSurfaces } = await page.evaluate(() => {
-        const snapshot = (selector: string) => {
-          const node = document.querySelector<HTMLElement>(selector)!;
-          const bounds = node.getBoundingClientRect();
-          return {
-            background: getComputedStyle(node).backgroundColor,
-            borderColor: getComputedStyle(node).borderColor,
-            boxShadow: getComputedStyle(node).boxShadow,
-            left: bounds.left,
-            right: bounds.right,
-            top: bounds.top,
-            bottom: bounds.bottom,
-            topLeftRadius: getComputedStyle(node).borderTopLeftRadius,
-            topRightRadius: getComputedStyle(node).borderTopRightRadius,
-            bottomLeftRadius: getComputedStyle(node).borderBottomLeftRadius,
-            bottomRightRadius: getComputedStyle(node).borderBottomRightRadius,
-          };
-        };
-        const goal = document.querySelector<HTMLElement>(".agent-chat__goal")!;
-        const activeSurface = snapshot(".agent-chat__goal");
-        const warnSurfaces = ["blocked", "budget_limited", "usage_limited"].map((state) => {
+      const stack = await readControlRects(page, {
+        shell: ".agent-chat__composer-shell",
+        progress: ".session-progress-card--composer",
+        queue: ".chat-queue",
+        goal: ".agent-chat__goal",
+        input: ".agent-chat__input",
+      });
+      const stackSurfaces = [stack.progress, stack.queue, stack.goal, stack.input];
+      const warnGoalSurfaces = await page.locator(".agent-chat__goal").evaluate((goal) => {
+        const surfaces = ["blocked", "budget_limited", "usage_limited"].map((state) => {
           goal.className = `agent-chat__goal agent-chat__goal--${state}`;
-          return { state, surface: snapshot(".agent-chat__goal") };
+          const style = getComputedStyle(goal);
+          return {
+            state,
+            surface: {
+              css: {
+                "background-color": style.backgroundColor,
+                "border-color": style.borderColor,
+              },
+            },
+          };
         });
         goal.className = "agent-chat__goal agent-chat__goal--active";
-        const shell = document
-          .querySelector<HTMLElement>(".agent-chat__composer-shell")!
-          .getBoundingClientRect();
-        return {
-          shellBounds: { left: shell.left, right: shell.right },
-          stackSurfaces: [
-            snapshot(".session-progress-card--composer"),
-            snapshot(".chat-queue"),
-            activeSurface,
-            snapshot(".agent-chat__input"),
-          ],
-          warnGoalSurfaces: warnSurfaces,
-        };
+        return surfaces;
       });
       await setSummaryHover(true);
       const widthAfter = (await card.boundingBox())?.width;
@@ -2671,38 +2533,48 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       expect(widthBefore).toBeCloseTo(760, 1);
       expect(widthAfter).toBeCloseTo(widthBefore ?? 0, 1);
       for (const surface of stackSurfaces) {
-        expect(surface.left).toBeCloseTo(shellBounds.left, 1);
-        expect(surface.right).toBeCloseTo(shellBounds.right, 1);
+        expect(surface.left).toBeCloseTo(stack.shell.left, 1);
+        expect(surface.right).toBeCloseTo(stack.shell.right, 1);
       }
-      expect(new Set(stackSurfaces.slice(0, 3).map(({ background }) => background))).toHaveProperty(
-        "size",
-        1,
-      );
+      expect(
+        new Set(stackSurfaces.slice(0, 3).map(({ css }) => css["background-color"])),
+      ).toHaveProperty("size", 1);
       for (const [index, surface] of stackSurfaces.entries()) {
-        expect(Number.parseFloat(surface.topLeftRadius)).toBeGreaterThan(0);
-        expect(surface.topRightRadius).toBe(surface.topLeftRadius);
-        expect(surface.bottomLeftRadius).toBe(surface.topLeftRadius);
-        expect(surface.bottomRightRadius).toBe(surface.topLeftRadius);
+        expect(Number.parseFloat(surface.css["border-top-left-radius"]!)).toBeGreaterThan(0);
+        expect(surface.css["border-top-right-radius"]).toBe(surface.css["border-top-left-radius"]);
+        expect(surface.css["border-bottom-left-radius"]).toBe(
+          surface.css["border-top-left-radius"],
+        );
+        expect(surface.css["border-bottom-right-radius"]).toBe(
+          surface.css["border-top-left-radius"],
+        );
         if (index > 0) {
           expect(surface.top).toBeGreaterThan(stackSurfaces[index - 1]!.bottom);
         }
       }
-      expect(stackSurfaces[2]?.borderColor).toBe(stackSurfaces[1]?.borderColor);
-      expect(stackSurfaces[2]?.boxShadow).toBe(stackSurfaces[1]?.boxShadow.split(", rgba")[0]);
-      for (const { state, surface } of warnGoalSurfaces) {
-        expect(surface.background, state).not.toBe(stackSurfaces[2]?.background);
-        expect(surface.borderColor, state).not.toBe(stackSurfaces[2]?.borderColor);
-      }
-      expect(new Set(warnGoalSurfaces.map(({ surface }) => surface.borderColor))).toHaveProperty(
-        "size",
-        1,
+      expect(stackSurfaces[2]?.css["border-color"]).toBe(stackSurfaces[1]?.css["border-color"]);
+      expect(stackSurfaces[2]?.css["box-shadow"]).toBe(
+        stackSurfaces[1]?.css["box-shadow"]?.split(", rgba")[0],
       );
-      expect(expandedBefore.titleLeft).toBeCloseTo(expandedBefore.firstMarkerLeft, 1);
-      expect(expandedAfter.cardBackground).toBe(expandedBefore.cardBackground);
-      expect(expandedAfter.summaryBackground).toBe(expandedBefore.summaryBackground);
-      expect(expandedAfter.titleColor).not.toBe(expandedBefore.titleColor);
-      expect(expandedAfter.actionsColor).not.toBe(expandedBefore.actionsColor);
-      expect(expandedAfter.chevronColor).not.toBe(expandedBefore.chevronColor);
+      for (const { state, surface } of warnGoalSurfaces) {
+        expect(surface.css["background-color"], state).not.toBe(
+          stackSurfaces[2]?.css["background-color"],
+        );
+        expect(surface.css["border-color"], state).not.toBe(stackSurfaces[2]?.css["border-color"]);
+      }
+      expect(
+        new Set(warnGoalSurfaces.map(({ surface }) => surface.css["border-color"])),
+      ).toHaveProperty("size", 1);
+      expect(expandedBefore.title.left).toBeCloseTo(expandedBefore.marker.left, 1);
+      expect(expandedAfter.card.css["background-color"]).toBe(
+        expandedBefore.card.css["background-color"],
+      );
+      expect(expandedAfter.summary.css["background-color"]).toBe(
+        expandedBefore.summary.css["background-color"],
+      );
+      expect(expandedAfter.title.css.color).not.toBe(expandedBefore.title.css.color);
+      expect(expandedAfter.actions.css.color).not.toBe(expandedBefore.actions.css.color);
+      expect(expandedAfter.chevron.css.color).not.toBe(expandedBefore.chevron.css.color);
 
       const bodyLayout = await body.evaluate((node) => {
         const bounds = node.getBoundingClientRect();
@@ -2724,45 +2596,25 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       expect(bodyLayout.visibleItems).toBeGreaterThan(0);
       expect(bodyLayout.visibleItems).toBeLessThan(stepCount);
       expect(await list.evaluate((node) => getComputedStyle(node).overflowY)).toBe("visible");
-      const openStackAxes = await page.evaluate(() => {
-        const centerX = (selector: string) => {
-          const rect = document.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
-          return rect.left + rect.width / 2;
-        };
-        const left = (selector: string) =>
-          document.querySelector<HTMLElement>(selector)!.getBoundingClientRect().left;
-        return {
-          iconCenters: [
-            ...[
-              ...document.querySelectorAll<HTMLElement>(".session-progress-card__step-marker > *"),
-            ].map((icon) => {
-              const rect = icon.getBoundingClientRect();
-              return rect.left + rect.width / 2;
-            }),
-            centerX(".chat-queue__leading svg"),
-            centerX(".agent-chat__goal-icon svg"),
-          ],
-          contentLefts: [
-            left(".session-progress-card__step-text"),
-            left(".chat-queue__copy"),
-            left(".agent-chat__goal-label"),
-          ],
-          trailingCenterDelta:
-            centerX(".session-progress-card__summary-chevron svg") -
-            centerX(".agent-chat__goal-expand svg"),
-        };
-      });
-      expect(
-        Math.max(...openStackAxes.iconCenters) - Math.min(...openStackAxes.iconCenters),
-      ).toBeLessThan(0.5);
-      expect(
-        Math.max(...openStackAxes.contentLefts) - Math.min(...openStackAxes.contentLefts),
-      ).toBeLessThan(0.5);
-      expect(Math.abs(openStackAxes.trailingCenterDelta)).toBeLessThan(0.5);
+      await expectAligned(
+        page,
+        "centerX",
+        ".session-progress-card__step-marker > *, .chat-queue__leading svg, .agent-chat__goal-icon svg",
+      );
+      await expectAligned(
+        page,
+        "left",
+        ".session-progress-card__step:first-child .session-progress-card__step-text, .chat-queue__copy, .agent-chat__goal-label",
+      );
+      await expectAligned(
+        page,
+        "centerX",
+        ".session-progress-card__summary-chevron svg, .agent-chat__goal-expand svg",
+      );
       await body.evaluate((node) => {
         node.scrollTop = node.scrollHeight;
       });
-      expect((await summary.boundingBox())?.y).toBeCloseTo(expandedBefore.y, 1);
+      expect((await summary.boundingBox())?.y).toBeCloseTo(expandedBefore.summary.y, 1);
       expect(await page.evaluate(() => window.scrollY)).toBe(0);
 
       const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
@@ -2790,57 +2642,43 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       const collapsedBefore = await readSummaryState();
       await setSummaryHover(true);
       const collapsedAfter = await readSummaryState();
-      expect(collapsedAfter.cardBackground).toBe(collapsedBefore.cardBackground);
-      expect(collapsedAfter.summaryBackground).toBe(collapsedBefore.summaryBackground);
-      expect(collapsedAfter.currentColor).not.toBe(collapsedBefore.currentColor);
-      expect(collapsedAfter.countColor).not.toBe(collapsedBefore.countColor);
-      expect(collapsedAfter.chevronColor).not.toBe(collapsedBefore.chevronColor);
-      expect(collapsedAfter.spinnerBorderColor).toBe(collapsedBefore.spinnerBorderColor);
-      expect(collapsedAfter.spinnerBorderTopColor).toBe(collapsedBefore.spinnerBorderTopColor);
-      const collapsed = await page.evaluate(() => {
-        const rect = (selector: string) =>
-          document.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
-        const current = rect(".session-progress-card__current");
-        const count = rect(".session-progress-card__summary-count--collapsed");
-        const chevron = rect(".session-progress-card__summary-chevron");
-        const iconCenter = (selector: string) => {
-          const bounds = rect(selector);
-          return bounds.left + bounds.width / 2;
-        };
-        return {
-          countLeft: count.left,
-          countRight: count.right,
-          currentRight: current.right,
-          chevronLeft: chevron.left,
-          iconCenters: [
-            iconCenter(".session-progress-card__summary-indicator > *"),
-            iconCenter(".chat-queue__leading svg"),
-            iconCenter(".agent-chat__goal-icon svg"),
-          ],
-          trailingCenterDelta:
-            iconCenter(".session-progress-card__summary-chevron svg") -
-            iconCenter(".agent-chat__goal-expand svg"),
-        };
-      });
-      expect(collapsed.countLeft).toBeGreaterThan(collapsed.currentRight);
-      expect(collapsed.countRight).toBeLessThanOrEqual(collapsed.chevronLeft);
-      expect(Math.max(...collapsed.iconCenters) - Math.min(...collapsed.iconCenters)).toBeLessThan(
-        0.5,
+      expect(collapsedAfter.card.css["background-color"]).toBe(
+        collapsedBefore.card.css["background-color"],
       );
-      expect(Math.abs(collapsed.trailingCenterDelta)).toBeLessThan(0.5);
-      const closedRowCenters = await page.evaluate(() => {
-        const centerY = (selector: string) => {
-          const bounds = document.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
-          return bounds.top + bounds.height / 2;
-        };
-        return [
-          centerY(".session-progress-card__summary-indicator > *"),
-          centerY(".session-progress-card__current"),
-          centerY(".session-progress-card__summary-count--collapsed"),
-          centerY(".session-progress-card__summary-chevron > svg"),
-        ];
+      expect(collapsedAfter.summary.css["background-color"]).toBe(
+        collapsedBefore.summary.css["background-color"],
+      );
+      expect(collapsedAfter.current.css.color).not.toBe(collapsedBefore.current.css.color);
+      expect(collapsedAfter.count.css.color).not.toBe(collapsedBefore.count.css.color);
+      expect(collapsedAfter.chevron.css.color).not.toBe(collapsedBefore.chevron.css.color);
+      expect(collapsedAfter.spinner.css["border-color"]).toBe(
+        collapsedBefore.spinner.css["border-color"],
+      );
+      expect(collapsedAfter.spinner.css["border-top-color"]).toBe(
+        collapsedBefore.spinner.css["border-top-color"],
+      );
+      const { current, count, chevron } = await readControlRects(page, {
+        current: ".session-progress-card__current",
+        count: ".session-progress-card__summary-count--collapsed",
+        chevron: ".session-progress-card__summary-chevron",
       });
-      expect(Math.max(...closedRowCenters) - Math.min(...closedRowCenters)).toBeLessThan(0.5);
+      expect(count.left).toBeGreaterThan(current.right);
+      expect(count.right).toBeLessThanOrEqual(chevron.left);
+      await expectAligned(
+        page,
+        "centerX",
+        ".session-progress-card__summary-indicator > *, .chat-queue__leading svg, .agent-chat__goal-icon svg",
+      );
+      await expectAligned(
+        page,
+        "centerX",
+        ".session-progress-card__summary-chevron svg, .agent-chat__goal-expand svg",
+      );
+      await expectAligned(
+        page,
+        "centerY",
+        ".session-progress-card__summary-indicator > *, .session-progress-card__current, .session-progress-card__summary-count--collapsed, .session-progress-card__summary-chevron > svg",
+      );
       await page.locator("#failed-outcome-probe").evaluate(finishElementAnimations);
       const outcomeColors = await page.evaluate(() => ({
         danger: getComputedStyle(document.querySelector("#danger-color-probe")!).color,
@@ -2905,85 +2743,49 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     async (width, height) => {
       await withBrowserPage(openSessionRailFixture(width, height), async (page) => {
         await expectNoHorizontalOverflow(page);
-        const panel = await page.evaluate(() => {
-          const element = document.querySelector<HTMLElement>(".chat-session-rail")!;
-          const host = document.querySelector<HTMLElement>(".side-panel__panel")!;
-          return {
-            clientHeight: element.clientHeight,
-            hostHeight: host.clientHeight,
-            position: getComputedStyle(element).position,
-          };
+        const { rail, host, thread } = await readControlRects(page, {
+          rail: ".chat-session-rail",
+          host: ".side-panel__panel",
+          thread: ".chat-session-rail__thread",
         });
-        expect(panel.position).toBe("relative");
-        expect(panel.clientHeight).toBeLessThanOrEqual(panel.hostHeight);
-        expect(panel.hostHeight).toBeLessThanOrEqual(height);
-
-        const body = await page.locator(".chat-session-rail__thread").evaluate((node) => ({
-          overflowY: getComputedStyle(node).overflowY,
-          clientHeight: node.clientHeight,
-          scrollHeight: node.scrollHeight,
-        }));
-        expect(body.overflowY).toBe("auto");
-        expect(body.clientHeight).toBeLessThan(body.scrollHeight);
-        const scrollTop = await page.locator(".chat-session-rail__thread").evaluate((node) => {
-          node.scrollTop = node.scrollHeight;
-          return node.scrollTop;
+        expect(rail.css.position).toBe("relative");
+        expect(rail.clientHeight).toBeLessThanOrEqual(host.clientHeight);
+        expect(host.clientHeight).toBeLessThanOrEqual(height);
+        expect(thread.css["overflow-y"]).toBe("auto");
+        expect(thread.clientHeight).toBeLessThan(thread.scrollHeight);
+        const layout = await readControlRects(
+          page,
+          {
+            rail: ".chat-session-rail",
+            thread: ".chat-session-rail__thread",
+            composer: ".chat-session-rail__composer",
+            footer: ".chat-session-rail__composer .agent-chat__composer-footer",
+            input: ".chat-session-rail__input",
+            send: ".chat-session-rail__composer .chat-send-btn",
+            prChecks: ".chat-session-rail__pr-checks",
+            timestamp: ".chat-session-rail__timestamp",
+            hint: ".chat-session-rail__hint",
+          },
+          ".chat-session-rail__thread",
+        );
+        expect(layout.thread.scrollTop).toBeGreaterThan(0);
+        expect(layout.composer.bottom).toBeLessThanOrEqual(layout.rail.bottom + 1);
+        expect(layout.input.width).toBeGreaterThan(layout.composer.width * 0.8);
+        expect(layout.footer.width).toBeGreaterThan(layout.composer.width * 0.8);
+        expect(Math.abs(layout.composer.right - layout.send.right)).toBeLessThanOrEqual(10);
+        expect(layout.thread.css).toMatchObject({
+          "border-top-width": "0px",
+          "margin-top": "0px",
+          "min-height": "96px",
+          "overflow-y": "auto",
         });
-        expect(scrollTop).toBeGreaterThan(0);
-        const rail = await getRect(page, ".chat-session-rail");
-        const composer = await getRect(page, ".chat-session-rail__composer");
-        expect(composer.bottom).toBeLessThanOrEqual(rail.bottom + 1);
-        const geometry = await page.evaluate(() => {
-          const rect = (selector: string) => {
-            const element = document.querySelector<HTMLElement>(selector)!;
-            const box = element.getBoundingClientRect();
-            return { left: box.left, right: box.right, width: box.width };
-          };
-          const thread = document.querySelector<HTMLElement>(".chat-session-rail__thread")!;
-          const threadStyle = getComputedStyle(thread);
-          return {
-            composer: rect(".chat-session-rail__composer"),
-            footer: rect(".chat-session-rail__composer .agent-chat__composer-footer"),
-            input: rect(".chat-session-rail__input"),
-            send: rect(".chat-session-rail__composer .chat-send-btn"),
-            threadBorderTopWidth: threadStyle.borderTopWidth,
-            threadMarginTop: threadStyle.marginTop,
-          };
-        });
-
-        expect(geometry.input.width).toBeGreaterThan(geometry.composer.width * 0.8);
-        expect(geometry.footer.width).toBeGreaterThan(geometry.composer.width * 0.8);
-        expect(Math.abs(geometry.composer.right - geometry.send.right)).toBeLessThanOrEqual(10);
-        expect(geometry.threadBorderTopWidth).toBe("0px");
-        expect(geometry.threadMarginTop).toBe("0px");
-        const styles = await page.evaluate(() => {
-          const read = (selector: string) => {
-            const style = getComputedStyle(document.querySelector(selector) as HTMLElement);
-            return {
-              minHeight: style.minHeight,
-              overflowY: style.overflowY,
-              borderTopWidth: style.borderTopWidth,
-            };
-          };
-          return {
-            thread: read(".chat-session-rail__thread"),
-            prChecks: read(".chat-session-rail__pr-checks"),
-            timestamp: read(".chat-session-rail__timestamp"),
-            hint: read(".chat-session-rail__hint"),
-          };
-        });
-
-        // PR checks, timestamps and hints are metadata inside an exchange. Sharing the
-        // thread's rule would give each one a 96px scrolling bordered box; the
-        // selector list has silently merged before.
-        expect(styles.thread.minHeight).toBe("96px");
-        expect(styles.thread.overflowY).toBe("auto");
-        for (const metadata of [styles.prChecks, styles.timestamp, styles.hint]) {
-          // Relational, not a literal: the point is that these nodes do not share
-          // the thread's rule, whatever the thread's own numbers become.
-          expect(metadata.minHeight).not.toBe(styles.thread.minHeight);
-          expect(metadata.overflowY).toBe("visible");
-          expect(metadata.borderTopWidth).toBe("0px");
+        // Metadata must not inherit the thread's 96px scrolling bordered box.
+        for (const metadata of [layout.prChecks, layout.timestamp, layout.hint]) {
+          expect(metadata.css["min-height"]).not.toBe(layout.thread.css["min-height"]);
+          expect(metadata.css).toMatchObject({
+            "overflow-y": "visible",
+            "border-top-width": "0px",
+          });
         }
       });
     },
@@ -2992,46 +2794,33 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
   it("matches the reading prototype's transcript letter spacing without changing shared text", async () => {
     await withBrowserPage(openBrowserPage(1366, 900), async (page) => {
       await page.setContent(`<!doctype html><html data-theme-mode="dark"><head><style>${readUiCss()}</style></head><body>
-        <div class="chat-thread chat-thread--direct" role="log">
-          <div class="chat-thread-inner">
-            <div class="chat-group assistant">
-              <div class="chat-group-messages">
-                <div class="chat-bubble">
-                  <div class="chat-text">
-                    <p>Aa Bb Cc — Smooth reading depends on the shape, spacing, and contrast of every glyph in a transcript.</p>
-                    <p>Keep this fixture about text rendering; width and block rhythm are intentionally not asserted here.</p>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+${threadHtml(
+  messageHtml(
+    "assistant",
+    textBubble(
+      "<p>Aa Bb Cc — Smooth reading depends on the shape, spacing, and contrast of every glyph in a transcript.</p><p>Keep this fixture about text rendering; width and block rhythm are intentionally not asserted here.</p>",
+    ),
+  ),
+  "chat-thread--direct",
+)}
         <section class="custodian-surface">
-          <div class="chat-bubble"><div class="chat-text">Custodian output</div></div>
+          ${textBubble("Custodian output")}
         </section>
         <div class="chat-notice"><div class="chat-text chat-notice__body">Compact notice</div></div>
         <div class="cron-run-entry__body chat-text">Cron output</div>
       </body></html>`);
 
-      const transcriptLetterSpacing = await page
-        .locator(".chat-thread .chat-bubble .chat-text")
-        .evaluate((element) => getComputedStyle(element).letterSpacing);
-      const custodianLetterSpacing = await page
-        .locator(".custodian-surface .chat-bubble .chat-text")
-        .evaluate((element) => getComputedStyle(element).letterSpacing);
-      const noticeLetterSpacing = await page
-        .locator(".chat-notice .chat-text")
-        .evaluate((element) => getComputedStyle(element).letterSpacing);
-      const cronLetterSpacing = await page
-        .locator(".cron-run-entry__body.chat-text")
-        .evaluate((element) => getComputedStyle(element).letterSpacing);
-      const bodyLetterSpacing = await page
-        .locator("body")
-        .evaluate((element) => getComputedStyle(element).letterSpacing);
-      expect(transcriptLetterSpacing).toBe("normal");
-      expect(custodianLetterSpacing).toBe(bodyLetterSpacing);
-      expect(noticeLetterSpacing).toBe(bodyLetterSpacing);
-      expect(cronLetterSpacing).toBe(bodyLetterSpacing);
+      const { transcript, custodian, notice, cron, body } = await readControlRects(page, {
+        transcript: ".chat-thread .chat-bubble .chat-text",
+        custodian: ".custodian-surface .chat-bubble .chat-text",
+        notice: ".chat-notice .chat-text",
+        cron: ".cron-run-entry__body.chat-text",
+        body: "body",
+      });
+      expect(transcript.css["letter-spacing"]).toBe("normal");
+      for (const surface of [custodian, notice, cron]) {
+        expect(surface.css["letter-spacing"]).toBe(body.css["letter-spacing"]);
+      }
     });
   });
 });
