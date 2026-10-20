@@ -42,63 +42,61 @@ export function registerSharedClientIdleTests() {
     expect(start).toHaveBeenCalledTimes(2);
   });
 
-  it.each(["lease", "claimed", "retained", "ephemeral", "protected", "releasing"] as const)(
-    "idle retirement waits for %s ownership to settle",
-    async (kind) => {
-      const { client } = await startIdleClient();
-      const releaseGate = createDeferred<void>();
-      let finish: () => Promise<unknown>;
-      if (kind === "lease") {
-        finish = async () => releaseLeasedSharedCodexAppServerClient(client);
-      } else if (kind === "claimed") {
-        const thread = await claimThread(client, "thread");
-        expect(thread).toBeDefined();
-        finish = async () => thread!.release("thread");
-      } else if (kind === "protected") {
-        const unprotect = protectThread(client, "thread");
-        finish = async () => unprotect();
-      } else {
-        const waitForRelease = async () => releaseGate.promise;
-        const retention = kind === "ephemeral" ? {} : undefined;
-        expect(
-          await retainThread(client, "thread", waitForRelease, undefined, undefined, retention),
-        ).toBe(true);
-        const releasing = kind === "releasing" && releaseThread(client, "thread");
-        finish = async () => {
-          releaseGate.resolve();
-          await (releasing || releaseThread(client, "thread"));
-        };
-      }
-      if (kind !== "lease") {
-        releaseLeasedSharedCodexAppServerClient(client);
-      }
-      await vi.advanceTimersByTimeAsync(600_000);
-      expect(client.getCloseError()).toBeUndefined();
-      await finish();
-      await vi.advanceTimersByTimeAsync(299_999);
-      expect(client.getCloseError()).toBeUndefined();
-      await vi.advanceTimersByTimeAsync(1);
-      expect(client.getCloseError()).toBeDefined();
-    },
-  );
-
-  it("idle retirement preserves a confirmed background terminal until its completion receipt", async () => {
+  it.each([
+    "lease",
+    "claimed",
+    "retained",
+    "ephemeral",
+    "protected",
+    "releasing",
+    "background",
+  ] as const)("idle retirement waits for %s ownership to settle", async (kind) => {
     const { client, send } = await startIdleClient();
+    const releaseGate = createDeferred<void>();
     const failure = vi.fn();
-    const authority = new CodexNativeProcessAuthority(createCodexTestHostCapabilities(), failure);
-    const turn = { threadId: "thread", turnId: "turn" };
-    authority.bindTurn(client, turn.threadId, turn.turnId);
-    const confirm = authority.prepareBackgroundCommands(client, turn, new Map([["item", "pid"]]));
-    confirm(new Map([["item", "pid"]]));
-    authority.release();
-    releaseLeasedSharedCodexAppServerClient(client);
+    let finish: () => Promise<unknown>;
+    if (kind === "lease") {
+      finish = async () => releaseLeasedSharedCodexAppServerClient(client);
+    } else if (kind === "claimed") {
+      const thread = await claimThread(client, "thread");
+      expect(thread).toBeDefined();
+      finish = async () => thread!.release("thread");
+    } else if (kind === "protected") {
+      const unprotect = protectThread(client, "thread");
+      finish = async () => unprotect();
+    } else if (kind === "background") {
+      const authority = new CodexNativeProcessAuthority(createCodexTestHostCapabilities(), failure);
+      const turn = { threadId: "thread", turnId: "turn" };
+      authority.bindTurn(client, turn.threadId, turn.turnId);
+      const confirm = authority.prepareBackgroundCommands(client, turn, new Map([["item", "pid"]]));
+      confirm(new Map([["item", "pid"]]));
+      authority.release();
+      finish = async () =>
+        send({
+          method: "item/completed",
+          params: { ...turn, item: { id: "item", type: "commandExecution", processId: "pid" } },
+        });
+    } else {
+      const waitForRelease = async () => releaseGate.promise;
+      const retention = kind === "ephemeral" ? {} : undefined;
+      expect(
+        await retainThread(client, "thread", waitForRelease, undefined, undefined, retention),
+      ).toBe(true);
+      const releasing = kind === "releasing" && releaseThread(client, "thread");
+      finish = async () => {
+        releaseGate.resolve();
+        await (releasing || releaseThread(client, "thread"));
+      };
+    }
+    if (kind !== "lease") {
+      releaseLeasedSharedCodexAppServerClient(client);
+    }
     await vi.advanceTimersByTimeAsync(600_000);
     expect(client.getCloseError()).toBeUndefined();
-    send({
-      method: "item/completed",
-      params: { ...turn, item: { id: "item", type: "commandExecution", processId: "pid" } },
-    });
-    await vi.advanceTimersByTimeAsync(300_000);
+    await finish();
+    await vi.advanceTimersByTimeAsync(299_999);
+    expect(client.getCloseError()).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
     expect(client.getCloseError()).toBeDefined();
     expect(failure).not.toHaveBeenCalled();
   });
@@ -123,13 +121,10 @@ function createIdleLifecycleHarness() {
           description: "Fixture",
           hidden: false,
           isDefault: true,
-          inputModalities: ["text"],
           supportedReasoningEfforts: [],
           defaultReasoningEffort: "medium",
-          supportsPersonality: false,
         },
       ],
-      nextCursor: null,
     },
     "thread/unsubscribe": {},
   };

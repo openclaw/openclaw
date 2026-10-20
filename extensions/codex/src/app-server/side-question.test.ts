@@ -959,20 +959,57 @@ describe("runCodexAppServerSideQuestion", () => {
     },
   );
 
-  it("rejects side questions before forking when the tool allowlist excludes native tools", async () => {
-    await expect(
-      runSide({
+  it.each([
+    {
+      name: "rejects side questions before forking when the tool allowlist excludes native tools",
+      params: {
         messageChannel: "telegram",
         messageProvider: "telegram",
         senderId: "restricted-sender",
         toolsAllow: ["message"],
-      }),
-    ).rejects.toThrow(
-      "Codex-native /btw side-question mode is unavailable because the effective tool policy restricts Codex native tools for this session.",
-    );
-
+      },
+      error:
+        "Codex-native /btw side-question mode is unavailable because the effective tool policy restricts Codex native tools for this session.",
+      checkSearch: true,
+    },
+    {
+      name: "checks /btw native execution against the runtime-policy session",
+      params: {
+        cfg: {
+          agents: {
+            defaults: { sandbox: { mode: "non-main", scope: "agent" } },
+            entries: { main: {} },
+          },
+        } as never,
+        sessionKey: "agent:main:main",
+        sandboxSessionKey: "agent:main:whatsapp:personal:direct:15555550123",
+      },
+      error:
+        "Codex-native /btw side-question mode is unavailable because OpenClaw sandboxing is active for this session.",
+      checkSearch: false,
+    },
+    {
+      name: "uses the retained agent for an unscoped explicit-roster side question",
+      params: {
+        agentId: "alpha",
+        cfg: {
+          tools: { exec: { host: "gateway" } },
+          agents: {
+            entries: { alpha: { tools: { exec: { host: "node", node: "worker-1" } } }, beta: {} },
+          },
+        } as never,
+        sessionKey: "node-session",
+      },
+      error:
+        "Codex-native /btw side-question mode is unavailable because OpenClaw exec host=node is active for this session.",
+      checkSearch: false,
+    },
+  ])("$name", async ({ params, error, checkSearch }) => {
+    await expect(runSide(params)).rejects.toThrow(error);
     expect(acquireClient).not.toHaveBeenCalled();
-    expect(resolveSearchSupport).not.toHaveBeenCalled();
+    if (checkSearch) {
+      expect(resolveSearchSupport).not.toHaveBeenCalled();
+    }
   });
 
   it.each([
@@ -1038,44 +1075,6 @@ describe("runCodexAppServerSideQuestion", () => {
         ],
       });
     }
-  });
-
-  it("checks /btw native execution against the runtime-policy session", async () => {
-    await expect(
-      runSide({
-        cfg: {
-          agents: {
-            defaults: { sandbox: { mode: "non-main", scope: "agent" } },
-            entries: { main: {} },
-          },
-        } as never,
-        sessionKey: "agent:main:main",
-        sandboxSessionKey: "agent:main:whatsapp:personal:direct:15555550123",
-      }),
-    ).rejects.toThrow(
-      "Codex-native /btw side-question mode is unavailable because OpenClaw sandboxing is active for this session.",
-    );
-
-    expect(acquireClient).not.toHaveBeenCalled();
-  });
-
-  it("uses the retained agent for an unscoped explicit-roster side question", async () => {
-    await expect(
-      runSide({
-        agentId: "alpha",
-        cfg: {
-          tools: { exec: { host: "gateway" } },
-          agents: {
-            entries: { alpha: { tools: { exec: { host: "node", node: "worker-1" } } }, beta: {} },
-          },
-        } as never,
-        sessionKey: "node-session",
-      }),
-    ).rejects.toThrow(
-      "Codex-native /btw side-question mode is unavailable because OpenClaw exec host=node is active for this session.",
-    );
-
-    expect(acquireClient).not.toHaveBeenCalled();
   });
 
   it("revokes native hook authority on close while projecting caller cancellation", async () => {
@@ -1874,29 +1873,14 @@ describe("runCodexAppServerSideQuestion", () => {
     }
   });
 
-  it.each([
-    { label: "before its request is written", written: false, interruptFails: false },
-    {
-      label: "when its native thread cannot unsubscribe",
-      written: true,
-      interruptFails: false,
-      unsubscribeFails: true,
-    },
-    {
-      label: "when its startup interrupt fails with a retained peer",
-      written: true,
-      interruptFails: true,
-      peerRetained: true,
-    },
-    {
-      label: "when its startup interrupt and client retirement fail",
-      written: true,
-      interruptFails: true,
-      retirementFails: true,
-    },
-  ])(
-    "scopes side-turn abort cleanup $label",
-    async ({ written, interruptFails, retirementFails, unsubscribeFails, peerRetained }) => {
+  it.each(["unwritten", "unsubscribe failure", "retained peer", "retirement failure"] as const)(
+    "scopes side-turn abort cleanup for %s",
+    async (scenario) => {
+      const written = scenario !== "unwritten";
+      const retirementFails = scenario === "retirement failure";
+      const peerRetained = scenario === "retained peer";
+      const interruptFails = retirementFails || peerRetained;
+      const unsubscribeFails = scenario === "unsubscribe failure";
       const controller = new AbortController();
       const harness = createClientHarness();
       const requests = vi.spyOn(harness.client, "request");
@@ -2011,12 +1995,9 @@ describe("runCodexAppServerSideQuestion", () => {
     },
   );
 
-  it.each([
-    { terminationFails: false, projectorFails: false },
-    { terminationFails: true, projectorFails: true },
-  ])(
-    "settles side background-terminal cleanup before cancellation returns (terminal failure: $terminationFails, projector failure: $projectorFails)",
-    async ({ terminationFails, projectorFails }) => {
+  it.each([false, true])(
+    "settles side background-terminal cleanup before cancellation returns (terminal and projector failure: %s)",
+    async (terminationFails) => {
       const controller = new AbortController();
       const client = createFakeClient({ completeTurn: false });
       const request = client.request.getMockImplementation()!;
@@ -2030,7 +2011,7 @@ describe("runCodexAppServerSideQuestion", () => {
       const terminalCleanup = vi.spyOn(clientCleanup, "terminateCodexBackgroundTerminals");
       const finalize = vi.spyOn(CodexNativeToolLifecycleProjector.prototype, "finalizeActive");
       const projectorError = new Error("side projector finalization failed");
-      if (projectorFails) {
+      if (terminationFails) {
         finalize.mockImplementationOnce(() => {
           throw projectorError;
         });
@@ -2117,15 +2098,13 @@ describe("runCodexAppServerSideQuestion", () => {
             "Expected cancellation and terminal cleanup failures",
           );
           expect(error.cause).toBe(primaryError);
-          expect(error.errors).toHaveLength(projectorFails ? 3 : 2);
+          expect(error.errors).toHaveLength(3);
           expect(error.errors[0]).toBe(primaryError);
           expect(error.errors[1]).toBe(cleanupError);
           expect(error.message).toContain("Codex /btw was aborted.");
           expect(error.message).toContain("background-terminal cleanup failed");
-          if (projectorFails) {
-            expect(error.errors[2]).toBe(projectorError);
-            expect(error.message).toContain(projectorError.message);
-          }
+          expect(error.errors[2]).toBe(projectorError);
+          expect(error.message).toContain(projectorError.message);
         } else {
           expect(error).toBe(primaryError);
         }
