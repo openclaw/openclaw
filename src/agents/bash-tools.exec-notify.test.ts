@@ -45,6 +45,14 @@ import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js
 
 const sessionKey = "agent:main:exec-restart";
 const initialConfig: OpenClawConfig = { agents: { entries: { main: {} } } };
+const agentNotifications = (main: boolean, secondary?: boolean): OpenClawConfig["agents"] => ({
+  entries: {
+    main: { tools: { exec: { notifyOnExit: main } } },
+    ...(secondary === undefined
+      ? {}
+      : { secondary: { tools: { exec: { notifyOnExit: secondary } } } }),
+  },
+});
 const route = { channel: "telegram", to: "-100001", accountId: "synthetic-account" };
 const completed: SessionEventOutcome = {
   status: "completed",
@@ -368,7 +376,7 @@ describe("background exec completion obligations", () => {
         const config: OpenClawConfig =
           scope === "global"
             ? { ...initialConfig, tools: { exec: { notifyOnExit: false } } }
-            : { agents: { entries: { main: { tools: { exec: { notifyOnExit: false } } } } } };
+            : { agents: agentNotifications(false) };
         setRuntimeConfigSnapshot(config);
         rotateAgentEventLifecycleGeneration();
         await recover(config);
@@ -393,12 +401,7 @@ describe("background exec completion obligations", () => {
           );
           const recoveryConfig: OpenClawConfig = {
             ...config,
-            agents: {
-              entries: {
-                main: { tools: { exec: { notifyOnExit: notify.main } } },
-                secondary: { tools: { exec: { notifyOnExit: notify.secondary } } },
-              },
-            },
+            agents: agentNotifications(notify.main, notify.secondary),
           };
           setRuntimeConfigSnapshot(recoveryConfig);
           rotateAgentEventLifecycleGeneration();
@@ -418,12 +421,7 @@ describe("background exec completion obligations", () => {
             expect(() => options.assertCurrent?.()).not.toThrow();
             setRuntimeConfigSnapshot({
               ...recoveryConfig,
-              agents: {
-                entries: {
-                  main: { tools: { exec: { notifyOnExit: true } } },
-                  secondary: { tools: { exec: { notifyOnExit: false } } },
-                },
-              },
+              agents: agentNotifications(true, false),
             });
             expect(() => options.assertCurrent?.()).toThrow("notifications are disabled");
             await options.onAdopted?.();

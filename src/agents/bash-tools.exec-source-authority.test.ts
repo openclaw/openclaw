@@ -43,6 +43,23 @@ function createExecOperatorSource() {
   return { controller, authority, retain, release };
 }
 
+const execOptions = (command: string) => ({
+  command,
+  workdir: "/tmp",
+  env: {},
+  usePty: false,
+  warnings: [],
+  maxOutput: 1000,
+  pendingMaxOutput: 1000,
+  notifyOnExit: false,
+  timeoutSec: null,
+});
+const caller = (source: ReturnType<typeof createExecOperatorSource>, sessionKey: string) => ({
+  agentId: "main",
+  sessionKey,
+  operatorAuthority: source.authority,
+});
+
 describe("registered exec source authority", () => {
   it("retains the original operator source through background cancellation and finalization", async () => {
     const source = createExecOperatorSource();
@@ -70,27 +87,15 @@ describe("registered exec source authority", () => {
         cancel: cancelStaff,
         wait: () => staffExit.promise,
       }));
-    const options = {
-      command: "retained-source-command",
-      workdir: "/tmp",
-      env: {},
-      usePty: false,
-      warnings: [],
-      maxOutput: 1000,
-      pendingMaxOutput: 1000,
-      notifyOnExit: false,
-      timeoutSec: null,
-    };
     const guest = await withGatewayToolCallerIdentity(
       {
-        agentId: "main",
-        sessionKey: "agent:main:retained-exec",
-        operatorAuthority: source.authority,
+        ...caller(source, "agent:main:retained-exec"),
         receiptAuthority: () => !turn.signal.aborted,
       },
-      () => runExecProcess({ ...options, startupSignal: turn.signal }),
+      () =>
+        runExecProcess({ ...execOptions("retained-source-command"), startupSignal: turn.signal }),
     );
-    const staff = await runExecProcess(options);
+    const staff = await runExecProcess(execOptions("retained-source-command"));
     markBackgrounded(guest.session);
     markBackgrounded(staff.session);
     try {
@@ -142,23 +147,8 @@ describe("registered exec source authority", () => {
         return { ...runtimeManagedRun(input), cancel };
       });
       const pending = withGatewayToolCallerIdentity(
-        {
-          agentId: "main",
-          sessionKey: "agent:main:source-release",
-          operatorAuthority: source.authority,
-        },
-        () =>
-          runExecProcess({
-            command: "source-release-command",
-            workdir: "/tmp",
-            env: {},
-            usePty: false,
-            warnings: [],
-            maxOutput: 1000,
-            pendingMaxOutput: 1000,
-            notifyOnExit: false,
-            timeoutSec: null,
-          }),
+        caller(source, "agent:main:source-release"),
+        () => runExecProcess(execOptions("source-release-command")),
       );
       if (fails) {
         await expect(pending).rejects.toThrow("process startup failed");

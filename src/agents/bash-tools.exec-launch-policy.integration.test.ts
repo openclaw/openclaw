@@ -49,6 +49,20 @@ vi.mock("../process/terminal-pty.js", async (importOriginal) => {
 describe.runIf(process.platform !== "win32")("launch policy and construction authority", () => {
   let root: string;
   let supervisor: ReturnType<typeof createProcessSupervisor>;
+  const exec = (command: string, usePty: boolean, assertCurrent?: () => void) =>
+    runExecProcess({
+      command,
+      execCommand: command,
+      workdir: root,
+      env: { PATH: "/usr/bin:/bin", HOME: root },
+      usePty,
+      warnings: [],
+      maxOutput: 1_000,
+      pendingMaxOutput: 1_000,
+      notifyOnExit: false,
+      timeoutSec: 10,
+      assertCurrent,
+    });
   beforeEach(() => {
     root = tempDirs.make("exec-launch-policy-");
     supervisor = createProcessSupervisor();
@@ -118,19 +132,7 @@ describe.runIf(process.platform !== "win32")("launch policy and construction aut
         }
       } else {
         const command = `'${process.execPath}' '${script}'`;
-        const pending = runExecProcess({
-          command,
-          execCommand: command,
-          workdir: root,
-          env,
-          usePty: route === "Gateway PTY",
-          warnings: [],
-          maxOutput: 1_000,
-          pendingMaxOutput: 1_000,
-          notifyOnExit: false,
-          timeoutSec: 10,
-          assertCurrent,
-        });
+        const pending = exec(command, route === "Gateway PTY", assertCurrent);
         if (timing === "before") {
           await expect(pending).rejects.toThrow("exec approval changed before execution");
         } else {
@@ -158,22 +160,9 @@ describe.runIf(process.platform !== "win32")("launch policy and construction aut
         abort: (error) => controller.abort(error),
         isCurrent: () => current,
       });
-      await expect(
-        budget.run(() =>
-          runExecProcess({
-            command: "cat",
-            execCommand: "/bin/cat",
-            workdir: root,
-            env: { PATH: "/usr/bin:/bin", HOME: root },
-            usePty,
-            warnings: [],
-            maxOutput: 1_000,
-            pendingMaxOutput: 1_000,
-            notifyOnExit: false,
-            timeoutSec: 10,
-          }),
-        ),
-      ).rejects.toThrow("execution scope is no longer active");
+      await expect(budget.run(() => exec("/bin/cat", usePty))).rejects.toThrow(
+        "execution scope is no longer active",
+      );
       expect(boundary.nativeLaunches).toBe(1);
     },
   );
