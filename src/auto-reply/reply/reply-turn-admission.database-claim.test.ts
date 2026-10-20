@@ -69,14 +69,15 @@ it("keeps incognito admission and its actor with the existing memory owner", asy
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const key = "agent:main:dashboard:incognito-reply-admission";
     const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
+    const database = { agentId: "main", path: storePath };
     const scope = { agentId: "main", storePath, sessionKey: key };
     await sessionEntries.replaceSessionEntry(scope, { sessionId, updatedAt: 1, incognito: true });
-    const owner = memorySessionActorOwners.read({ agentId: "main", path: storePath });
+    const owner = memorySessionActorOwners.read(database);
     expect(owner).toBeDefined();
     const expectMemoryOwner = () => {
       expect(sessionEntries.loadSessionEntry(scope)).toMatchObject({ sessionId, updatedAt: 1 });
-      expect(memorySessionActorOwners.read({ agentId: "main", path: storePath })).toBe(owner);
-      expect(getOpenClawAgentDatabaseIfOpen({ agentId: "main", path: storePath })).toBeUndefined();
+      expect(memorySessionActorOwners.read(database)).toBe(owner);
+      expect(getOpenClawAgentDatabaseIfOpen(database)).toBeUndefined();
       expect(fs.existsSync(storePath)).toBe(false);
     };
     const result = await admit(storePath, { agentId: "main", sessionKey: key });
@@ -86,11 +87,7 @@ it("keeps incognito admission and its actor with the existing memory owner", asy
       expect(getReplyOperationSessionTarget(operation)).toMatchObject({
         agentId: "main",
         storePath,
-        readSource: {
-          agentId: "main",
-          path: storePath,
-          databaseIdentity: owner?.identity.incarnation,
-        },
+        readSource: { ...database, databaseIdentity: owner?.identity.incarnation },
         target: { canonicalKey: key, storeKeys: [key] },
       });
       expect(databaseClaim).toMatchObject({
@@ -184,8 +181,7 @@ it.each(["cancelled", "request-changed"] as const)(
     } finally {
       release.resolve();
       owner.operation.complete();
-      const result = await pending.catch(() => undefined);
-      complete(result);
+      complete(await pending.catch(() => undefined));
     }
   },
 );
@@ -265,8 +261,7 @@ it.for(
       owner.complete();
       release.resolve();
       controller.abort();
-      const result = await pending.catch(() => undefined);
-      complete(result);
+      complete(await pending.catch(() => undefined));
     }
   },
 );
@@ -281,10 +276,7 @@ it("cancels an in-flight admission read when its lifecycle owner interrupts ingr
       assert(signal);
       started.resolve(signal);
       return await new Promise<never>((_resolve, reject) => {
-        const abort = () =>
-          reject(
-            signal.reason instanceof Error ? signal.reason : new Error("Admission read aborted"),
-          );
+        const abort = () => reject(signal.reason);
         signal.addEventListener("abort", abort, { once: true });
         if (signal.aborted) {
           abort();

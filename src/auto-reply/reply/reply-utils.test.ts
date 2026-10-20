@@ -1,4 +1,4 @@
-import { afterEach, assert, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, expect, it, vi } from "vitest";
 import { createChannelReplyTransform } from "../../channels/message/reply-transform.js";
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.public.js";
 import type { TypingMode } from "../../config/types.js";
@@ -22,26 +22,27 @@ import { createMockTypingController } from "./test-helpers.js";
 import { createTypingSignaler, resolveTypingMode } from "./typing-mode.js";
 import { createTypingController } from "./typing.js";
 
-it("combines explicit mentions with regex fallback", () => {
-  for (const [text, isExplicitlyMentioned, expected] of [
-    ["@openclaw hello", false, true],
-    ["<@999999> hello", false, false],
-    ["<@123456>", true, true],
-  ] as const) {
-    expect(
-      matchesMentionWithExplicit({
-        text,
-        mentionRegexes: [/\bopenclaw\b/i],
-        explicit: { hasAnyMention: true, isExplicitlyMentioned, canResolveExplicit: true },
-      }),
+it.each([
+  ["@openclaw hello", /\bopenclaw\b/i, false, true],
+  ["<@999999> hello", /\bopenclaw\b/i, false, false],
+  ["<@123456>", /\bopenclaw\b/i, true, true],
+  ["", /.*/i, undefined, true],
+  ["", /\bopenclaw\b/i, undefined, false],
+] as const)("resolves mention %s with %s (explicit=%s)", (text, regex, explicit, expected) => {
+  expect(
+    matchesMentionWithExplicit({
       text,
-    ).toBe(expected);
-  }
-});
-
-it("lets catch-all regexes activate empty text without matching specific patterns", () => {
-  expect(matchesMentionWithExplicit({ text: "", mentionRegexes: [/.*/i] })).toBe(true);
-  expect(matchesMentionWithExplicit({ text: "", mentionRegexes: [/\bopenclaw\b/i] })).toBe(false);
+      mentionRegexes: [regex],
+      explicit:
+        explicit === undefined
+          ? undefined
+          : {
+              hasAnyMention: true,
+              isExplicitlyMentioned: explicit,
+              canResolveExplicit: true,
+            },
+    }),
+  ).toBe(expected);
 });
 it("keeps channelData-only replies", () => {
   const channelData = { line: { flexMessage: { type: "bubble" } } };
@@ -103,80 +104,74 @@ it.each([
   expect(normalizeReplyPayload({ text })).toMatchObject({ text });
 });
 
-describe("typing controller", () => {
-  afterEach(() => vi.useRealTimers());
-  function createTestTypingController(options: Parameters<typeof createTypingController>[0] = {}) {
-    vi.useFakeTimers();
-    const onReplyStart = options.onReplyStart ?? vi.fn();
-    const typing = createTypingController({
-      onReplyStart,
-      typingIntervalSeconds: 1,
-      keepalive: true,
-      ...options,
-    });
-    return { typing, onReplyStart };
-  }
-
-  it.each([true, false])("stops without restarting (run completes first: %s)", async (runFirst) => {
-    const { typing, onReplyStart } = createTestTypingController();
-    await typing.startTypingLoop();
-    expect(onReplyStart).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(onReplyStart).toHaveBeenCalledTimes(3);
-    const first = runFirst ? typing.markRunComplete : typing.markDispatchIdle;
-    const last = runFirst ? typing.markDispatchIdle : typing.markRunComplete;
-    first();
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(onReplyStart).toHaveBeenCalledTimes(runFirst ? 3 : 5);
-    last();
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(onReplyStart).toHaveBeenCalledTimes(runFirst ? 3 : 5);
-    await typing.startTypingOnText("late tool result");
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(onReplyStart).toHaveBeenCalledTimes(runFirst ? 3 : 5);
+afterEach(() => vi.useRealTimers());
+function createTestTypingController(options: Parameters<typeof createTypingController>[0] = {}) {
+  vi.useFakeTimers();
+  const onReplyStart = options.onReplyStart ?? vi.fn();
+  const typing = createTypingController({
+    onReplyStart,
+    typingIntervalSeconds: 1,
+    keepalive: true,
+    ...options,
   });
+  const advance = async (ms: number, calls: number) => {
+    await vi.advanceTimersByTimeAsync(ms);
+    expect(onReplyStart).toHaveBeenCalledTimes(calls);
+  };
+  return { typing, onReplyStart, advance };
+}
 
-  it("does not start typing after run completion", async () => {
-    const { typing, onReplyStart } = createTestTypingController();
-    typing.markRunComplete();
-    await typing.startTypingOnText("late text");
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(onReplyStart).not.toHaveBeenCalled();
-  });
+it.each([true, false])("stops without restarting (run completes first: %s)", async (runFirst) => {
+  const { typing, onReplyStart, advance } = createTestTypingController();
+  await typing.startTypingLoop();
+  expect(onReplyStart).toHaveBeenCalledTimes(1);
+  await advance(2_000, 3);
+  const first = runFirst ? typing.markRunComplete : typing.markDispatchIdle;
+  const last = runFirst ? typing.markDispatchIdle : typing.markRunComplete;
+  first();
+  await advance(2_000, runFirst ? 3 : 5);
+  last();
+  await advance(2_000, runFirst ? 3 : 5);
+  await typing.startTypingOnText("late tool result");
+  await advance(5_000, runFirst ? 3 : 5);
+});
 
-  it("keeps execution typing alive past its base TTL until the dispatcher settles", async () => {
-    const onCleanup = vi.fn();
-    const { typing, onReplyStart } = createTestTypingController({
-      onReplyStart: vi.fn(async () => undefined),
-      onCleanup,
-      typingIntervalSeconds: 121,
-    });
-    const lifecycle = createReplyDispatcherWithTyping({ deliver: async () => undefined });
-    lifecycle.replyOptions.onTypingController?.(typing);
-    const signaler = createTypingSignaler({ typing, mode: "message", isHeartbeat: false });
-    await signaler.signalExecutionActivity?.();
-    expect(onReplyStart).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(243_000);
-    expect(onReplyStart).toHaveBeenCalledTimes(3);
-    expect(onCleanup).not.toHaveBeenCalled();
-    lifecycle.markRunComplete();
-    lifecycle.dispatcher.markComplete();
-    await lifecycle.dispatcher.waitForIdle();
-    expect(onCleanup).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(243_000);
-    expect(onReplyStart).toHaveBeenCalledTimes(3);
-  });
+it("does not start typing after run completion", async () => {
+  const { typing, onReplyStart } = createTestTypingController();
+  typing.markRunComplete();
+  await typing.startTypingOnText("late text");
+  await vi.advanceTimersByTimeAsync(2_000);
+  expect(onReplyStart).not.toHaveBeenCalled();
+});
 
-  it("sends the first typing signal without periodic keepalive refreshes", async () => {
-    const { typing, onReplyStart } = createTestTypingController({ keepalive: false });
-    await typing.startTypingLoop();
-    expect(onReplyStart).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(onReplyStart).toHaveBeenCalledTimes(1);
-    await typing.startTypingLoop();
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(onReplyStart).toHaveBeenCalledTimes(1);
+it("keeps execution typing alive past its base TTL until the dispatcher settles", async () => {
+  const onCleanup = vi.fn();
+  const { typing, onReplyStart, advance } = createTestTypingController({
+    onReplyStart: vi.fn(async () => undefined),
+    onCleanup,
+    typingIntervalSeconds: 121,
   });
+  const lifecycle = createReplyDispatcherWithTyping({ deliver: async () => undefined });
+  lifecycle.replyOptions.onTypingController?.(typing);
+  const signaler = createTypingSignaler({ typing, mode: "message", isHeartbeat: false });
+  await signaler.signalExecutionActivity?.();
+  expect(onReplyStart).toHaveBeenCalledTimes(1);
+  await advance(243_000, 3);
+  expect(onCleanup).not.toHaveBeenCalled();
+  lifecycle.markRunComplete();
+  lifecycle.dispatcher.markComplete();
+  await lifecycle.dispatcher.waitForIdle();
+  expect(onCleanup).toHaveBeenCalledTimes(1);
+  await advance(243_000, 3);
+});
+
+it("sends the first typing signal without periodic keepalive refreshes", async () => {
+  const { typing, onReplyStart, advance } = createTestTypingController({ keepalive: false });
+  await typing.startTypingLoop();
+  expect(onReplyStart).toHaveBeenCalledTimes(1);
+  await advance(5_000, 1);
+  await typing.startTypingLoop();
+  await advance(5_000, 1);
 });
 
 it("resolves defaults, configured overrides, and heartbeat suppression", () => {
@@ -201,15 +196,13 @@ it("resolves defaults, configured overrides, and heartbeat suppression", () => {
   }
 });
 
-it("preserves unresolved/unknown placeholders and handles static inputs", () => {
-  expect(resolveResponsePrefixTemplate("{model}", {})).toBe("{model}");
-  for (const [template, expected] of [
-    [undefined, undefined],
-    ["[Claude]", "[Claude]"],
-    ["{model}/{provider}/{unknownVar}", "gpt-5.4/{provider}/{unknownVar}"],
-  ] as const) {
-    expect(resolveResponsePrefixTemplate(template, { model: "gpt-5.4" })).toBe(expected);
-  }
+it.each([
+  ["{model}", {}, "{model}"],
+  [undefined, { model: "gpt-5.4" }, undefined],
+  ["[Claude]", { model: "gpt-5.4" }, "[Claude]"],
+  ["{model}/{provider}/{unknownVar}", { model: "gpt-5.4" }, "gpt-5.4/{provider}/{unknownVar}"],
+])("resolves prefix %s", (template, context, expected) => {
+  expect(resolveResponsePrefixTemplate(template, context)).toBe(expected);
 });
 
 function createTestSignaler(mode: TypingMode = "message", isHeartbeat = false) {
@@ -255,15 +248,13 @@ it("does not start typing for non-renderable deltas", async () => {
 it("suppresses tool-start typing in message mode until renderable text arrives", async () => {
   const { typing, signaler } = createTestSignaler();
   await signaler.signalToolStart();
-  expect(typing.startTypingLoop).not.toHaveBeenCalled();
-  expect(typing.refreshTypingTtl).not.toHaveBeenCalled();
+  expectTypingCalls(typing, 0, 0);
   await signaler.signalTextDelta("hello");
   expect(typing.startTypingOnText).toHaveBeenCalledExactlyOnceWith("hello");
   vi.mocked(typing.isActive).mockReturnValue(true);
   vi.mocked(typing.refreshTypingTtl).mockClear();
   await signaler.signalToolStart();
-  expect(typing.refreshTypingTtl).toHaveBeenCalledTimes(1);
-  expect(typing.startTypingLoop).not.toHaveBeenCalled();
+  expectTypingCalls(typing, 0, 1, 1);
 });
 
 it("suppresses typing when disabled", async () => {
@@ -281,59 +272,56 @@ it("suppresses typing when disabled", async () => {
   }
 });
 
-describe("block reply coalescer", () => {
-  afterEach(() => vi.useRealTimers());
-  function createCoalescer(config: Partial<BlockStreamingCoalescing> = {}) {
-    const flushes: ReplyPayload[] = [];
-    const coalescer = createBlockReplyPipeline({
-      timeoutMs: 0,
-      coalescing: { minChars: 1, maxChars: 200, idleMs: 0, joiner: " ", ...config },
-      onBlockReply: (payload) => {
-        flushes.push(payload);
-      },
-    });
-    return { flushes, coalescer };
-  }
-  it("waits until minChars before idle flush", async () => {
-    vi.useFakeTimers();
-    const { flushes, coalescer } = createCoalescer({ minChars: 10, idleMs: 50 });
-    coalescer.enqueue({ text: "short" });
-    await vi.advanceTimersByTimeAsync(50);
-    expect(flushes).toStrictEqual([]);
-    coalescer.enqueue({ text: "message" });
-    await vi.advanceTimersByTimeAsync(50);
-    expect(flushes).toEqual([{ text: "short message" }]);
-    coalescer.stop();
+function createCoalescer(config: Partial<BlockStreamingCoalescing> = {}) {
+  const flushes: ReplyPayload[] = [];
+  const coalescer = createBlockReplyPipeline({
+    timeoutMs: 0,
+    coalescing: { minChars: 1, maxChars: 200, idleMs: 0, joiner: " ", ...config },
+    onBlockReply: (payload) => {
+      flushes.push(payload);
+    },
   });
+  return { flushes, coalescer };
+}
+it("waits until minChars before idle flush", async () => {
+  vi.useFakeTimers();
+  const { flushes, coalescer } = createCoalescer({ minChars: 10, idleMs: 50 });
+  coalescer.enqueue({ text: "short" });
+  await vi.advanceTimersByTimeAsync(50);
+  expect(flushes).toStrictEqual([]);
+  coalescer.enqueue({ text: "message" });
+  await vi.advanceTimersByTimeAsync(50);
+  expect(flushes).toEqual([{ text: "short message" }]);
+  coalescer.stop();
+});
 
-  const mediaUrls = ["https://example.com/a.png"];
-  type FlushCase = [string, ReplyPayload[], ReplyPayload[]?, Partial<BlockStreamingCoalescing>?];
-  it.each<FlushCase>([
+const mediaUrls = ["https://example.com/a.png"];
+type FlushCase = [string, ReplyPayload[], ReplyPayload[]?, Partial<BlockStreamingCoalescing>?];
+it.each<FlushCase>([
+  [
+    "preserves notice markers",
     [
-      "preserves notice markers",
-      [
-        { text: "Compacting context...", isCompactionNotice: true },
-        { text: "Model Fallback: openai/gpt-5.5", isFallbackNotice: true },
-      ],
-      undefined,
-      { joiner: "\n\n" },
+      { text: "Compacting context...", isCompactionNotice: true },
+      { text: "Model Fallback: openai/gpt-5.5", isFallbackNotice: true },
     ],
-    [
-      "merges text with compatible media",
-      [{ text: "Hello", replyToId: "thread-1" }, { text: "world" }, { mediaUrls }],
-      [{ text: "Hello world", mediaUrls, replyToId: "thread-1" }],
-    ],
-    [
-      "separates changed reply targets",
-      [{ text: "Unthreaded caption" }, { mediaUrls, replyToId: "thread-2" }],
-    ],
-  ])("%s", async (_name, payloads, expected, config) => {
-    const { flushes, coalescer } = createCoalescer(config);
-    payloads.forEach((payload) => coalescer.enqueue(structuredClone(payload)));
-    await coalescer.flush({ force: true });
-    expect(flushes).toEqual(expected ?? payloads);
-    coalescer.stop();
-  });
+    undefined,
+    { joiner: "\n\n" },
+  ],
+  [
+    "merges text with compatible media",
+    [{ text: "Hello", replyToId: "thread-1" }, { text: "world" }, { mediaUrls }],
+    [{ text: "Hello world", mediaUrls, replyToId: "thread-1" }],
+  ],
+  [
+    "separates changed reply targets",
+    [{ text: "Unthreaded caption" }, { mediaUrls, replyToId: "thread-2" }],
+  ],
+])("%s", async (_name, payloads, expected, config) => {
+  const { flushes, coalescer } = createCoalescer(config);
+  payloads.forEach((payload) => coalescer.enqueue(structuredClone(payload)));
+  await coalescer.flush({ force: true });
+  expect(flushes).toEqual(expected ?? payloads);
+  coalescer.stop();
 });
 
 it("plans references for off/first/batched/all modes", () => {
@@ -379,14 +367,11 @@ it.each<StreamCase>([
   ],
 ])("parses %s", (_name, chunks, expected, final = false) => {
   const accumulator = createStreamingDirectiveAccumulator();
-  for (const [index, chunk] of chunks.entries()) {
-    const result = accumulator.consume(chunk, { final: final && index === chunks.length - 1 });
-    if (expected[index] === null) {
-      expect(result).toBeNull();
-    } else {
-      expect(result).toMatchObject(expected[index]);
-    }
-  }
+  expect(
+    chunks.map((chunk, i) =>
+      accumulator.consume(chunk, { final: final && i === chunks.length - 1 }),
+    ),
+  ).toMatchObject(expected);
 });
 
 it("preserves split malformed fenced code", () => {

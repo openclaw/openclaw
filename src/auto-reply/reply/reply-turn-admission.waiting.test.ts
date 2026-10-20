@@ -60,40 +60,34 @@ describe("reply turn admission", () => {
     }
   }
 
-  it("does not apply cleanup settle timeout to visible turn admission", async () => {
+  it.each(["visible", "queued_followup"] as const)("bounds only queued waits: %s", async (kind) => {
     vi.useFakeTimers();
     const active = activeReply("agent:main:discord:channel:42", "active-session");
     active.setPhase("running");
-
-    const admitted = admitBehind(active, "waiting-session");
-
+    const admitted = admitBehind(
+      active,
+      kind === "visible" ? "waiting-session" : "queued-session",
+      {
+        kind,
+      },
+    );
     let settled = false;
     void admitted.then(() => {
       settled = true;
     });
-
     await vi.advanceTimersByTimeAsync(15_000);
-    expect(settled).toBe(false);
-
-    active.complete();
-    completeOwned(await admitted);
-  });
-
-  it("keeps the cleanup settle timeout for queued follow-up retry", async () => {
-    vi.useFakeTimers();
-    const active = activeReply("agent:main:discord:channel:42", "active-session");
-    active.setPhase("running");
-
-    const admitted = admitBehind(active, "queued-session", { kind: "queued_followup" });
-
-    await vi.advanceTimersByTimeAsync(15_000);
-
-    await expect(admitted).resolves.toMatchObject({
-      status: "skipped",
-      reason: "active-run",
-      activeOperation: active,
-    });
-    active.complete();
+    if (kind === "visible") {
+      expect(settled).toBe(false);
+      active.complete();
+      completeOwned(await admitted);
+    } else {
+      await expect(admitted).resolves.toMatchObject({
+        status: "skipped",
+        reason: "active-run",
+        activeOperation: active,
+      });
+      active.complete();
+    }
   });
 
   it("keeps an already-waiting follow-up behind the delivery barrier", async () => {
