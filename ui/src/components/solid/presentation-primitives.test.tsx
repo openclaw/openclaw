@@ -3,10 +3,10 @@ import { createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentStartupState, LazyViewError, PanelErrorState } from "./lazy-view-error.tsx";
 import { LoadingState } from "./loading-state.tsx";
-import { PanelEmptyStateContent } from "./panel-empty-state.tsx";
+import { PanelEmptyState } from "./panel-empty-state.tsx";
 import { PanelIconButton } from "./panel-icon-button.tsx";
 import {
-  PanelLoadingSkeletonContent,
+  PanelLoadingSkeleton,
   type PanelLoadingSkeletonVariant,
 } from "./panel-loading-skeleton.tsx";
 
@@ -17,7 +17,7 @@ describe("Solid presentation primitives", () => {
     const action = vi.fn();
     const [heading, setHeading] = createSignal("No files");
     const view = render(() => (
-      <PanelEmptyStateContent
+      <PanelEmptyState
         icon={
           <svg viewBox="0 0 24 24">
             <path d="M1 1h10" />
@@ -53,9 +53,7 @@ describe("Solid presentation primitives", () => {
   ] satisfies Array<[PanelLoadingSkeletonVariant, string, number]>)(
     "renders the %s loading structure",
     (variant, selector, count) => {
-      const view = render(() => (
-        <PanelLoadingSkeletonContent variant={variant} label="Loading panel" />
-      ));
+      const view = render(() => <PanelLoadingSkeleton variant={variant} label="Loading panel" />);
       expect(view.container.querySelectorAll(selector)).toHaveLength(count);
     },
   );
@@ -63,7 +61,7 @@ describe("Solid presentation primitives", () => {
   it("switches the loading structure and updates desktop status without stale content", () => {
     const [variant, setVariant] = createSignal<PanelLoadingSkeletonVariant>("terminal");
     const [label, setLabel] = createSignal("Connecting");
-    const view = render(() => <PanelLoadingSkeletonContent variant={variant()} label={label()} />);
+    const view = render(() => <PanelLoadingSkeleton variant={variant()} label={label()} />);
     setVariant("desktop");
     flush();
     expect(view.container.querySelector(".terminal")).toBeNull();

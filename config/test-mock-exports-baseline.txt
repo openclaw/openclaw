@@ -3,8 +3,6 @@
 # // mock-isolation: reason annotation. Existing entries may only shrink.
 # JSON tuple: source path, specifier, factory/target SHA-256, duplicate ordinal.
 ["extensions/acpx/doctor-contract-api.test.ts","./runtime-api.js","5329539134ab3d7e4c3294ec1fc7a3a0e79a08c1b19497bbc74890b7583af70b",1]
-["extensions/acpx/index.test.ts","./register.runtime.js","e2ecf5538ba5e37b1a635514b416e03c1b1db077ec9d55e1c7b48dece9895824",1]
-["extensions/acpx/index.test.ts","openclaw/plugin-sdk/acp-runtime-backend","df14b197b7e433c9d4f43c0d68d7f51ee09daa037fce2291d2c7ca36b75571fb",1]
 ["extensions/acpx/lazy-import.test.ts","./src/pi-session-catalog-runtime.js","f5751f930c9e318c8aca1f1304941d5aa471ea3c853d99a910fcd7a0ab8528cf",1]
 ["extensions/acpx/src/service.test.ts","../runtime-api.js","91941c01a56741319974e0954147a4250f2af12038577981452270efe23fe30e",1]
 ["extensions/acpx/src/service.test.ts","./codex-auth-bridge.js","de4f723b3c26b0ecf9f064a544d19e0b270b5be2e8954939f1f3281e5fde5aa1",1]
@@ -694,7 +692,6 @@
 ["extensions/line/src/send.test.ts","openclaw/plugin-sdk/ssrf-runtime","8a74e25af5df544e121b9660a3e588bdb31defaae31414506d9c91bf18a67a97",1]
 ["extensions/line/src/setup-surface.test.ts","./monitor.js","0bc85ef964fbfacbd0897061c2cf32af5c2edcd25b245a54940126ba4297d3ae",1]
 ["extensions/lmstudio/src/setup.test.ts","./models.fetch.js","dd6f4487d5fbcd95742e345a6cc8995b553915d67ffd835002173dbe18165707",1]
-["extensions/lmstudio/src/stream.test.ts","./runtime.js","977c08d4e9ad0888bdb03cef54d5267f45ac941ff4d53543d7573bd50f4cbdd8",1]
 ["extensions/logbook/src/node-host.test.ts","openclaw/plugin-sdk/process-runtime","b16471867358979b51355e078b4e9633553fc7957b4c94ea2836b095e67bcec4",1]
 ["extensions/logbook/src/node-host.test.ts","openclaw/plugin-sdk/temp-path","337878b1e8ccbcbeec14b13fecbef62e70cf6f9d45cf4fe9271d9b5b633eacc0",1]
 ["extensions/matrix/index.test.ts","./plugin-entry.handlers.runtime.js","755e3534a854057ed4b62ecba7c42d8e891b65014a1a7beb6073627c9378eabc",1]
@@ -6592,7 +6589,6 @@
 ["src/gateway/tools-invoke-http.test.ts","./auth.js","f53a41e7726bb1d357f55633c5cc722b139098cec68b867be16f808ef22d5b77",1]
 ["src/gateway/update-run-watcher.interruption.test.ts","../../packages/terminal-core/src/note.js","336fc791de8ce9b19eba2b7bc282f83250c9743ee50617878e94ae793b1f1113",1]
 ["src/gateway/update-run-watcher.interruption.test.ts","../cli/daemon-cli/restart-health-probe.js","c4e40ef614385b46856483a3316e2d50c7888caf307e5d14c7d003cb1ed27aca",1]
-["src/gateway/update-run-watcher.interruption.test.ts","../cli/daemon-cli/restart-health.js","7b753bbcd3f94ea7342b05dfa89dccfedc65123a592a0aaeabc88412932f9379",1]
 ["src/gateway/update-run-watcher.interruption.test.ts","../infra/package-json.js","905e030628c1a02432a99b14e545bdf8dbd1fc19c38a544fa11ff7a6e1fd5fe8",1]
 ["src/gateway/update-run-watcher.interruption.test.ts","../infra/update-git-runtime.js","5e05a3c6712ec1a41ea52251bbbb45a43646d0c96ae759ef4b05b2e1cb9cdb15",1]
 ["src/gateway/update-run-watcher.interruption.test.ts","../infra/update-run-interruption-worker.js","fc580be4d8f6c6f49c3f2426486fcb47e965e8991a680ada308afa3d77e8ca3c",1]
@@ -7004,7 +7000,6 @@
 ["src/infra/update-retained-custody.unicode.test.ts","./tmp-openclaw-dir.js","0948479f2b2456f39442ba13186c9abdf07f5ad0e1184c6d73454b10c2211f4f",1]
 ["src/infra/update-run-driver.test.ts","../shared/pid-alive.js","82828f34106091c2edde51ad64bb888999d5030b5047e242bd496829cd8f0293",1]
 ["src/infra/update-run-interruption-health.test.ts","../cli/daemon-cli/restart-health-probe.js","632e4994b545f590c718df3358a626a194df31990117f8a34b2a3c92b99f886f",1]
-["src/infra/update-run-interruption-health.test.ts","../cli/daemon-cli/restart-health.js","dfcf9a31ffcfeab532031038b11921caf4c0d02d1f3ac9138309c0a0586b2eed",1]
 ["src/infra/update-run-interruption-health.test.ts","../config/paths.js","02335c7afda5672389aa997eb718915dde8bbff58f90687b9243061e3fc7ffeb",1]
 ["src/infra/update-run-interruption-health.test.ts","../daemon/service.js","2ae8bc97335ec24b549236f6f215890d37f9481847abec9338452a49532f15f0",1]
 ["src/infra/update-run-interruption-health.test.ts","./openclaw-root.js","76e9b309b8fbcf4ba8566855d6fad05dedf4139f3ba0ad49effd38e99385f92e",1]

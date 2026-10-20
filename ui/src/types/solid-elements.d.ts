@@ -64,6 +64,11 @@ declare module "@solidjs/web" {
       "openclaw-chat-ci-details": HTMLAttributes<HTMLElement> & ElementProperties<ChatCiProperties>;
       "openclaw-chat-ci-automation": HTMLAttributes<HTMLElement> &
         ElementProperties<ChatCiProperties & { sessionId: string }>;
+      "openclaw-panel-empty-state": HTMLAttributes<HTMLElement>;
+      "openclaw-panel-loading-skeleton": HTMLAttributes<HTMLElement> & {
+        compact?: string;
+        overlay?: string;
+      };
       "openclaw-terminal-panel": DockElementAttributes & { fullscreen?: boolean };
       "openclaw-browser-panel": DockElementAttributes;
       "openclaw-link-reader-panel": DockElementAttributes;
@@ -102,6 +107,7 @@ declare module "@solidjs/web" {
       "openclaw-chat-child-attention": HTMLAttributes<HTMLElement>;
       "openclaw-session-diff-menu": HTMLAttributes<HTMLElement>;
       "openclaw-mcp-servers-card": HTMLAttributes<HTMLElement>;
+      "openclaw-mcp-app-catalog": HTMLAttributes<HTMLElement> & { surface?: string };
       "openclaw-update-run-view": HTMLAttributes<HTMLElement>;
       "openclaw-plugins-page": HTMLAttributes<HTMLElement>;
       "openclaw-dashboards-page": HTMLAttributes<HTMLElement>;

@@ -223,6 +223,8 @@ and stage the exact runtime, exercise Retry, and verify a fresh-process relaunch
 
 Native test builds retain coverage and source-line backtraces while omitting IDE indexes and full debugger type metadata. Local development builds keep their normal debug settings.
 
+The macOS app test phase installs the full workspace dependencies and builds the CLI runtime before Swift tests that use the shared exec policy owner. Other native phases keep the filtered Mermaid and protocol dependency install. Policy fixtures exercise the real local CLI rather than building it on their first request.
+
 Short hybrid jobs use a [40-row base threshold and 45-row hosted admission limit](/ci/capacity#bounded-hybrid-hosted-offload), with unchanged coverage and Blacksmith fallback when optional work does not fit.
 
 Additional hybrid check offloads require [fresh hosted assignment evidence](/ci/runners#hybrid-hosted-assignment-guard). Eligible PRs can move dependency, core type and topology checks; main pushes can also move lint and central types within the same hosted row limit. Artifact builds retain Blacksmith because their measured hosted tail leaves no room for the [15-minute routing objective](/ci/routing-costs).

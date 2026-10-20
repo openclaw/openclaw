@@ -196,7 +196,9 @@ describe("SessionDiffPanel", () => {
 
     update({ loader: vi.fn(() => pending.promise) });
     await waitForSolid(() => {
-      expect(panel.querySelector("openclaw-panel-loading-skeleton")?.variant).toBe("review");
+      expect(
+        panel.querySelector("openclaw-panel-loading-skeleton")?.getAttribute("data-panel-skeleton"),
+      ).toBe("review");
       expect(panel.querySelector(".session-diff")?.getAttribute("aria-busy")).toBe("true");
     });
 
@@ -209,7 +211,9 @@ describe("SessionDiffPanel", () => {
     update({ owner: { agentId: "main", sessionKey: "another-session" } });
     update({ loader: () => replacement.promise });
     flush();
-    expect(panel.querySelector("openclaw-panel-loading-skeleton")?.variant).toBe("review");
+    expect(
+      panel.querySelector("openclaw-panel-loading-skeleton")?.getAttribute("data-panel-skeleton"),
+    ).toBe("review");
     expect(panel.textContent).not.toContain("feature/pending");
     replacement.resolve(result("feature/replacement"));
     await waitForSolid(() => expect(panel.textContent).toContain("feature/replacement"));

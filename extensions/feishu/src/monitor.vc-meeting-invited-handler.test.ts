@@ -67,7 +67,6 @@ function buildConfig(): ClawdbotConfig {
 function buildAccount(config?: Partial<ResolvedFeishuAccount["config"]>): ResolvedFeishuAccount {
   return {
     accountId: "default",
-    selectionSource: "explicit",
     enabled: true,
     configured: true,
     appId: "cli_test",

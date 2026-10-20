@@ -19,7 +19,6 @@ extensions/anthropic-vertex/region.ts	1
 extensions/anthropic-vertex/stream-runtime.ts	4
 extensions/anthropic/cli-backend.ts	2
 extensions/anthropic/config-defaults.ts	2
-extensions/anthropic/session-catalog-continue.ts	1
 extensions/anthropic/session-catalog-history.ts	2
 extensions/anthropic/session-catalog-listing.ts	1
 extensions/anthropic/session-catalog-parsing.ts	5
@@ -269,7 +268,7 @@ extensions/discord/src/voice/segment.ts	1
 extensions/elevenlabs/config-compat.ts	2
 extensions/exa/src/exa-web-search-provider.runtime.ts	1
 extensions/fal/video-generation-provider.ts	3
-extensions/feishu/src/accounts.ts	3
+extensions/feishu/src/accounts.ts	2
 extensions/feishu/src/bitable.ts	1
 extensions/feishu/src/bot-content.ts	1
 extensions/feishu/src/bot-identity-cache.ts	1
@@ -635,7 +634,6 @@ extensions/qa-lab/src/live-transports/matrix/substrate/client.ts	3
 extensions/qa-lab/src/live-transports/matrix/substrate/config.ts	8
 extensions/qa-lab/src/live-transports/matrix/substrate/e2ee-client.ts	4
 extensions/qa-lab/src/live-transports/matrix/substrate/fault-proxy.ts	1
-extensions/qa-lab/src/live-transports/matrix/substrate/recording-proxy.ts	1
 extensions/qa-lab/src/live-transports/matrix/substrate/request.ts	3
 extensions/qa-lab/src/live-transports/shared/credential-lease.runtime.ts	1
 extensions/qa-lab/src/live-transports/shared/live-approval-result.ts	2
@@ -2010,7 +2008,6 @@ src/infra/provider-usage.fetch.codex.ts	1
 src/infra/provider-usage.fetch.deepseek.ts	1
 src/infra/provider-usage.fetch.minimax.ts	1
 src/infra/push-apns-http2.ts	1
-src/infra/push-apns.relay.ts	1
 src/infra/push-apns.ts	3
 src/infra/question-gateway-resolver.ts	3
 src/infra/question-reaction-runtime.ts	3
@@ -2500,7 +2497,6 @@ ui/src/lib/sessions/grouping.ts	4
 ui/src/lib/sessions/index.ts	1
 ui/src/lib/sessions/session-key.ts	3
 ui/src/local-storage.ts	2
-ui/src/main.ts	1
 ui/src/pages/chat/chat-gateway.ts	1
 ui/src/pages/chat/chat-page-retained-sessions.ts	1
 ui/src/pages/chat/chat-pane-browser-annotation.ts	2

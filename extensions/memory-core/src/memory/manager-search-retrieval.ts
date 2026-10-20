@@ -200,6 +200,7 @@ export abstract class MemorySearchRetrieval extends MemoryProviderLifecycle {
       results: eligible,
       temporalDecay: params.temporalDecay,
       workspaceDir: this.workspaceDir,
+      extraPaths: this.settings.extraPaths,
       sessionSourceMtimes: this.loadSourceMtimes("sessions", params.results),
       memorySourceMtimes: this.loadSourceMtimes("memory", params.results),
     });

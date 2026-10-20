@@ -16,7 +16,6 @@ import {
   catalogSessionKeyFromSearch,
 } from "../lib/sessions/catalog-key.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
-import "./mcp-app-catalog.tsx";
 import "./sidebar-attention.tsx";
 import "./tooltip.ts";
 import { renderAppSidebarOnline, sidebarOnlineOrder } from "./app-sidebar-online.tsx";
@@ -449,7 +448,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     const SidebarFrame = () => {
       const scrollRef = scroll.createRef();
       const rail = renderSidebarRail(this);
-      const pages = renderSidebarPages(this);
+      const Pages = () => renderSidebarPages(this);
       const toolbar = renderSessionListToolbar(this);
       const online = renderAppSidebarOnline(this);
       const menus = this.sidebarMenus.render(this);
@@ -504,7 +503,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
                     </Show>
                   }
                 >
-                  {pages}
+                  <Pages />
                 </Show>
               </div>
               <Show when={!this.contextualSidebar && this.sessionsStatusFilter !== "archived"}>
