@@ -96,28 +96,21 @@ it("moves the native continuation itself, preserving custody and target backlog"
   releaseSessionControllerClaim(claim);
 });
 
-it("refines policy on the same input without stealing newer interrupt priority", () => {
-  const first = reserve();
-  updateSessionControllerSourcePolicy(first, { mode: "interrupt", cap: 2 });
-  const latest = reserve();
-  updateSessionControllerSourcePolicy(latest, { mode: "interrupt", cap: 3 });
-  updateSessionControllerSourcePolicy(first, { mode: "interrupt", cap: 4 });
-  expect(first.policy).toEqual({ mode: "interrupt", cap: 4 });
-  expect(first.mailbox.priority).toBe(latest);
-  expect(first.mailbox.entries).toEqual([first, latest]);
-  retireSessionControllerInput(first);
-  retireSessionControllerInput(latest);
-});
-
 it("does not invent a mailbox for a sessionless source", () => {
   const prepared = prepareReplySourceInput({}, {}, undefined);
   expect(prepared.input).toBeUndefined();
 });
 
-it("selects the newest interrupt before older preparation without duplicating input", async () => {
+it("keeps newest interrupt priority after older policy refinement and through delivery", async () => {
   const older = reserve();
+  updateSessionControllerSourcePolicy(older, { mode: "interrupt", cap: 2 });
   const newest = reserve();
-  updateSessionControllerSourcePolicy(newest, { mode: "interrupt" });
+  updateSessionControllerSourcePolicy(newest, { mode: "interrupt", cap: 3 });
+  updateSessionControllerSourcePolicy(older, { mode: "interrupt", cap: 4 });
+  expect(older.policy).toEqual({ mode: "interrupt", cap: 4 });
+  expect(older.mailbox.priority).toBe(newest);
+  expect(older.mailbox.entries).toEqual([older, newest]);
+  updateSessionControllerSourcePolicy(older, { mode: "followup" });
   expect(tryClaimSessionControllerTask(older)).toBeUndefined();
   expect(older.phase).toBe("preparing");
   const claim = tryClaimSessionControllerTask(newest)!;

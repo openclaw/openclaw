@@ -60,34 +60,41 @@ it("retains failed admission for the SDK opt-in until completion", async () => {
   createOperation("successor").complete();
 });
 
-it.each([undefined, "message_tool_only"] as const)(
-  "preserves source-reply delivery semantics with active mode %s",
-  async (sourceReplyDeliveryMode) => {
-    const queueMessage = vi.fn(async () => {});
-    const operation = createOperation("session-1", undefined, {
-      sourceReplyDeliveryMode,
-      queueMessage,
-    });
-    const target = captureCurrentReplyMessageInjectionTarget(operation.key)!;
-    const outcome = await queueReplyMessageInjectionTarget(target, "continue", {
-      sourceReplyDeliveryMode: "message_tool_only",
-    });
-
-    if (sourceReplyDeliveryMode === "message_tool_only") {
-      expect(outcome).toEqual({ status: "accepted" });
-      expect(queueMessage).toHaveBeenCalledExactlyOnceWith(
-        "continue",
-        expect.objectContaining({ sourceReplyDeliveryMode: "message_tool_only" }),
-      );
-    } else {
-      expect(outcome).toEqual({
-        status: "rejected",
-        reason: "source_reply_delivery_mode_mismatch",
-      });
-      expect(queueMessage).not.toHaveBeenCalled();
-    }
-  },
-);
+it.each([
+  [
+    "sourceReplyDeliveryMode",
+    undefined,
+    "message_tool_only",
+    "source_reply_delivery_mode_mismatch",
+  ],
+  ["sourceReplyDeliveryMode", "message_tool_only", "message_tool_only", undefined],
+  ["terminalReplyExpectation", "required", "optional", "reply_expectation_mismatch"],
+  ["terminalReplyExpectation", "optional", "required", "reply_expectation_mismatch"],
+] as const)("preserves %s=%s when injecting %s", async (field, incumbent, incoming, reason) => {
+  const queueMessage = vi.fn(async () => {});
+  const policy =
+    field === "sourceReplyDeliveryMode"
+      ? { sourceReplyDeliveryMode: incumbent }
+      : { terminalReplyExpectation: incumbent };
+  const input =
+    field === "sourceReplyDeliveryMode"
+      ? { sourceReplyDeliveryMode: incoming }
+      : { terminalReplyExpectation: incoming };
+  const operation = createOperation("policy-owner", undefined, { ...policy, queueMessage });
+  const target = captureCurrentReplyMessageInjectionTarget(operation.key)!;
+  await expect(queueReplyMessageInjectionTarget(target, "input", input)).resolves.toEqual(
+    reason ? { status: "rejected", reason } : { status: "accepted" },
+  );
+  expect(queueMessage).toHaveBeenCalledTimes(reason ? 0 : 1);
+  if (field === "terminalReplyExpectation") {
+    await expect(
+      queueReplyMessageInjectionTarget(target, "matching input", policy),
+    ).resolves.toEqual({ status: "accepted" });
+    expect(queueMessage).toHaveBeenCalledOnce();
+  } else if (!reason) {
+    expect(queueMessage).toHaveBeenCalledExactlyOnceWith("input", expect.objectContaining(input));
+  }
+});
 
 it.each([false, true])(
   "settles producer handoff before delivery can admit a successor (cleanup expired=%s)",
@@ -154,30 +161,6 @@ it.each([false, true])(
       operation.complete();
       await operation.ownerSettlement;
     }
-  },
-);
-
-it.each(["required", "optional"] as const)(
-  "keeps a mismatched input out of a %s reply owner",
-  async (terminalReplyExpectation) => {
-    const queueMessage = vi.fn(async () => {});
-    const operation = createOperation("session-reply-expectation", undefined, {
-      terminalReplyExpectation,
-      queueMessage,
-    });
-    const target = captureCurrentReplyMessageInjectionTarget(operation.key)!;
-    await expect(
-      queueReplyMessageInjectionTarget(target, "different input", {
-        terminalReplyExpectation: terminalReplyExpectation === "required" ? "optional" : "required",
-      }),
-    ).resolves.toEqual({ status: "rejected", reason: "reply_expectation_mismatch" });
-    expect(queueMessage).not.toHaveBeenCalled();
-    await expect(
-      queueReplyMessageInjectionTarget(target, "matching input", {
-        terminalReplyExpectation,
-      }),
-    ).resolves.toEqual({ status: "accepted" });
-    expect(queueMessage).toHaveBeenCalledOnce();
   },
 );
 
