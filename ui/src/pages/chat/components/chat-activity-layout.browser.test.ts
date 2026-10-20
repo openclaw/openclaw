@@ -36,18 +36,38 @@ function messageGroup(key: string, role: string, messages: unknown[]): MessageGr
   };
 }
 
+function call(id: string, name: string, args: unknown, runId: string, parentToolCallId?: string) {
+  return {
+    type: "toolCall",
+    id,
+    name,
+    runId,
+    arguments: args,
+    ...(parentToolCallId ? { parentToolCallId } : {}),
+  };
+}
+
+function result(toolCallId: string, toolName: string, text: string) {
+  return { type: "toolResult", toolCallId, toolName, content: [{ type: "text", text }] };
+}
+
+function createContainer() {
+  const host = document.body.appendChild(document.createElement("div"));
+  host.style.width = "760px";
+  return host;
+}
+
 function activityFixture(note = "") {
   const runId = "activity-layout";
   const messages: unknown[] = Array.from({ length: 4 }, (_, index) => ({
     role: "assistant",
     content: [
-      {
-        type: "toolCall",
-        id: "batch-" + index,
-        name: "exec",
+      call(
+        "batch-" + index,
+        "exec",
+        { title: "Batch " + (index + 1), code: "// Read project files" },
         runId,
-        arguments: { title: "Batch " + (index + 1), code: "// Read project files" },
-      },
+      ),
     ],
     timestamp: 1000,
   }));
@@ -56,20 +76,14 @@ function activityFixture(note = "") {
     messages.push({
       role: "custom",
       content: [
-        {
-          type: "toolCall",
+        call(
           id,
-          name: "read",
+          "read",
+          { path: "/workspace/source-" + index + ".ts" },
           runId,
-          parentToolCallId: "batch-" + Math.floor(index / 10),
-          arguments: { path: "/workspace/source-" + index + ".ts" },
-        },
-        {
-          type: "toolResult",
-          toolCallId: id,
-          toolName: "read",
-          content: [{ type: "text", text: "Source contents" }],
-        },
+          "batch-" + Math.floor(index / 10),
+        ),
+        result(id, "read", "Source contents"),
         ...(index === 0 && note ? [{ type: "text", text: note }] : []),
       ],
       timestamp: 1000 + index,
@@ -82,8 +96,7 @@ describe.runIf("__vitest_browser__" in globalThis)("activity group sizing", () =
   it.each(["standalone", "inline"] as const)(
     "fits visible rows, caps expanded content, and shrinks after collapse (%s)",
     async (presentation) => {
-      container = document.body.appendChild(document.createElement("div"));
-      container.style.width = "760px";
+      container = createContainer();
       const group = activityFixture();
       const expanded = new Set<string>();
       const opts = {
@@ -162,20 +175,13 @@ describe.runIf("__vitest_browser__" in globalThis)("activity group sizing", () =
   );
 
   it("caps an opened lone step whose nested calls are all routine", async () => {
-    container = document.body.appendChild(document.createElement("div"));
-    container.style.width = "760px";
+    container = createContainer();
     const runId = "lone-step";
     const group = messageGroup("step", "tool", [
       {
         role: "assistant",
         content: [
-          {
-            type: "toolCall",
-            id: "step",
-            name: "exec",
-            runId,
-            arguments: { title: "Watch the build", code: "// Poll until done" },
-          },
+          call("step", "exec", { title: "Watch the build", code: "// Poll until done" }, runId),
         ],
         activity: [
           {
@@ -194,20 +200,8 @@ describe.runIf("__vitest_browser__" in globalThis)("activity group sizing", () =
       ...Array.from({ length: 40 }, (_, index) => ({
         role: "custom",
         content: [
-          {
-            type: "toolCall",
-            id: "poll-" + index,
-            name: "process",
-            runId,
-            parentToolCallId: "step",
-            arguments: { action: "poll" },
-          },
-          {
-            type: "toolResult",
-            toolCallId: "poll-" + index,
-            toolName: "process",
-            content: [{ type: "text", text: "running" }],
-          },
+          call("poll-" + index, "process", { action: "poll" }, runId, "step"),
+          result("poll-" + index, "process", "running"),
         ],
         activity: [],
         timestamp: 1001 + index,

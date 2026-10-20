@@ -106,17 +106,6 @@ function contrast(element: HTMLElement) {
 }
 
 describe("annotation chip and hovercard", () => {
-  it("keeps comment rows adjacent for list numbering and spacing", () => {
-    mountComments(3, 430);
-    const list = container.querySelector(".chat-comment-preview__list")!;
-    expect(list.querySelectorAll(":scope > .chat-comment-preview__item")).toHaveLength(3);
-    const following = list.querySelectorAll<HTMLElement>(
-      ".chat-comment-preview__item + .chat-comment-preview__item",
-    );
-    expect(following).toHaveLength(2);
-    expect(getComputedStyle(following[0]!).marginTop).toBe("12px");
-  });
-
   it.each([1440, 390])(
     "reads the final line of a long comment by keyboard (%ipx)",
     async (width) => {
@@ -201,9 +190,16 @@ describe("annotation chip and hovercard", () => {
             scroll.scrollTop = scroll.scrollHeight;
             expect(scroll.scrollTop).toBeGreaterThan(0);
           }
-          const rows = container.querySelectorAll(".chat-comment-preview__item");
+          const list = container.querySelector(".chat-comment-preview__list")!;
+          const rows = list.querySelectorAll(":scope > .chat-comment-preview__item");
+          expect(rows).toHaveLength(count);
+          const following = list.querySelectorAll(
+            ".chat-comment-preview__item + .chat-comment-preview__item",
+          );
+          expect(following).toHaveLength(count - 1);
           const row = rows[0]!;
           if (count > 1) {
+            expect(getComputedStyle(rows[1]!).marginTop).toBe("12px");
             expect(
               rows[1]!.getBoundingClientRect().top - row.getBoundingClientRect().bottom,
             ).toBeCloseTo(12, 0);

@@ -98,6 +98,14 @@ it("retires old reminders after a later run completes and reconstructs that outc
   }
 });
 
+function expectPending(messages: unknown[], count: number, state = presentationState()) {
+  expect(present(messages, state).pending).toHaveLength(count);
+}
+
+const expectText = () => expect(container.textContent);
+const panelButton = (name: string) =>
+  container.querySelector<HTMLButtonElement>(`.chat-question-panel__${name}`)!;
+
 it("retires a recovered run's older reminder without treating restart input as a human answer", () => {
   const recovery = {
     role: "user",
@@ -113,9 +121,7 @@ it("retires a recovered run's older reminder without treating restart input as a
       terminal("recovered-run"),
     ]).pending,
   ).toEqual([]);
-  expect(present([question(), { ...recovery, runId: undefined }, terminal()]).pending).toHaveLength(
-    1,
-  );
+  expectPending([question(), { ...recovery, runId: undefined }, terminal()], 1);
 });
 
 it("keeps questions from overlapping runs when either run's terminal arrives last", () => {
@@ -124,18 +130,18 @@ it("keeps questions from overlapping runs when either run's terminal arrives las
     ["run-1", "run-2"],
     ["run-2", "run-1"],
   ]) {
-    expect(present([...messages, terminal(order[0])]).pending).toHaveLength(2);
-    expect(present([...messages, ...order.map(terminal)]).pending).toHaveLength(2);
+    expectPending([...messages, terminal(order[0])], 2);
+    expectPending([...messages, ...order.map(terminal)], 2);
   }
 });
 
 it("waits for recorded origin settlement before treating another run as a successor", () => {
   let messages = [question("old", "run-1"), terminal("run-2")];
-  expect(present(messages).pending).toHaveLength(1);
+  expectPending(messages, 1);
   messages = [...messages, terminal("run-1")];
-  expect(present(messages).pending).toHaveLength(1);
+  expectPending(messages, 1);
   messages = [...messages, terminal("run-3")];
-  expect(present(messages).pending).toHaveLength(0);
+  expectPending(messages, 0);
 });
 
 it.each([
@@ -149,10 +155,10 @@ it.each([
   },
   { __openclaw: { mirrorOrigin: "codex-app-server" } },
 ])("does not retire reminders on an unsuccessful or nonterminal reply: %j", (overrides) => {
-  expect(
-    present([question("old", "run-1"), terminal("run-1"), { ...terminal("run-2"), ...overrides }])
-      .pending,
-  ).toHaveLength(1);
+  expectPending(
+    [question("old", "run-1"), terminal("run-1"), { ...terminal("run-2"), ...overrides }],
+    1,
+  );
 });
 
 it("does not mistake an async final-answer item for a later run completion", () => {
@@ -167,18 +173,17 @@ it("does not mistake an async final-answer item for a later run completion", () 
 
 it("requires a completed later human turn when old questions lack run identity", () => {
   const initial = [question(), terminal()];
-  expect(present(initial).pending).toHaveLength(1);
-  expect(present([...initial, { role: "user", content: "Continue." }]).pending).toHaveLength(1);
-  expect(
-    present([...initial, { role: "user", content: "Continue." }, terminal()]).pending,
-  ).toHaveLength(0);
-  expect(
-    present([
+  expectPending(initial, 1);
+  expectPending([...initial, { role: "user", content: "Continue." }], 1);
+  expectPending([...initial, { role: "user", content: "Continue." }, terminal()], 0);
+  expectPending(
+    [
       ...initial,
       { role: "user", content: "One more constraint.", __openclaw: { steerTargetRunId: "run-1" } },
       terminal(),
-    ]).pending,
-  ).toHaveLength(1);
+    ],
+    1,
+  );
 });
 
 it("does not credit a late earlier-run terminal to a newer user turn for an unowned question", () => {
@@ -188,15 +193,15 @@ it("does not credit a late earlier-run terminal to a newer user turn for an unow
     { role: "user", runId: "run-2", content: "Next task" },
     terminal("run-1"),
   ];
-  expect(present(messages).pending).toHaveLength(1);
+  expectPending(messages, 1);
   messages = [...messages, terminal("run-2")];
-  expect(present(messages).pending).toHaveLength(1);
+  expectPending(messages, 1);
   messages = [
     ...messages,
     { role: "user", runId: "run-3", content: "Another task" },
     terminal("run-3"),
   ];
-  expect(present(messages).pending).toHaveLength(0);
+  expectPending(messages, 0);
 });
 
 it("retires the unowned mirrored prompt only after its canonical restart recovery succeeds", async () => {
@@ -227,36 +232,33 @@ it("retires the unowned mirrored prompt only after its canonical restart recover
     recovery,
   ];
   const state = presentationState();
-  expect(present(messages, state).pending).toHaveLength(1);
-  expect(
-    present([...messages, { ...recovered, stopReason: "aborted" }], state).pending,
-  ).toHaveLength(1);
+  expectPending(messages, 1, state);
+  expectPending([...messages, { ...recovered, stopReason: "aborted" }], 1, state);
   const completed = [...messages, recovered];
   const archived = present(completed, state);
   expect(archived.pending).toHaveLength(0);
-  expect(present(completed).pending).toHaveLength(0);
+  expectPending(completed, 0);
   expect(
     present([...messages, question("fresh", "recovery-run"), recovered]).pending.map(
       (entry) => entry.itemId,
     ),
   ).toEqual(["fresh"]);
   await archived.reopen("old");
-  expect(present(completed, state).pending).toHaveLength(1);
-  expect(present([...completed, terminal("next-run")], state).pending).toHaveLength(0);
-  expect(present([...messages.slice(0, -1), recovered]).pending).toHaveLength(1);
-  expect(
-    present([
+  expectPending(completed, 1, state);
+  expectPending([...completed, terminal("next-run")], 0, state);
+  expectPending([...messages.slice(0, -1), recovered], 1);
+  expectPending(
+    [
       ...messages.slice(0, -1),
       { ...recovery, provenance: { kind: "internal_system", sourceTool: "cron" } },
       recovered,
-    ]).pending,
-  ).toHaveLength(1);
-  expect(
-    present([
-      ...messages,
-      { ...recovered, __openclaw: { ...recovered["__openclaw"], runId: "other-run" } },
-    ]).pending,
-  ).toHaveLength(1);
+    ],
+    1,
+  );
+  expectPending(
+    [...messages, { ...recovered, __openclaw: { ...recovered["__openclaw"], runId: "other-run" } }],
+    1,
+  );
 });
 
 it("reopens the archived question with its draft until another later completion", () => {
@@ -269,9 +271,9 @@ it("reopens the archived question with its draft until another later completion"
   const messages = [old, terminal("run-1"), terminal("run-2")];
   let presentation = present(messages, state);
   drawSummary(readAsyncQuestions(old)!, presentation);
-  expect(container.textContent).toContain("Which audience?");
-  expect(container.textContent).toContain("No longer pending");
-  expect(container.textContent).not.toContain("Answer above the message box.");
+  expectText().toContain("Which audience?");
+  expectText().toContain("No longer pending");
+  expectText().not.toContain("Answer above the message box.");
   const answer = container.querySelector<HTMLButtonElement>("button")!;
   expect(answer.textContent?.trim()).toBe("Answer");
   answer.click();
@@ -295,7 +297,7 @@ it("keeps a rejected in-flight answer and its retry error visible after a later 
   );
   const submitting = panel.onSubmit!({ "0": ["Everyone"] });
   messages = [...messages, terminal("run-2")];
-  expect(present(messages, state).pending).toHaveLength(1);
+  expectPending(messages, 1, state);
   send.reject(new Error("Send rejected before admission"));
   await expect(submitting).rejects.toThrow("Send rejected before admission");
   const presentation = present(messages, state);
@@ -312,15 +314,9 @@ it.each(["answered", "failed"] as const)(
     document.body.append(container);
     const pending = createDeferred<boolean>();
     const submit = vi.fn(() => pending.promise);
-    const state = {
-      asyncQuestionDrafts: new Map<string, AsyncQuestionDraft>(),
-      asyncQuestionRevision: 0,
-      transcriptRenderContext: { onAsyncQuestionSubmit: submit },
-    };
-    const questions = {
-      itemId: "question-1",
-      questions: [{ title: "Which audience?", options: ["Engineers", "Everyone"] }],
-    };
+    const state = presentationState();
+    state.transcriptRenderContext.onAsyncQuestionSubmit = submit;
+    const questions = question().openclawAsyncDelivery;
     const viewState = () => {
       const presentation = createAsyncQuestionPresentation(state, {
         sessionKey: "agent:main:main",
@@ -358,10 +354,8 @@ it.each(["answered", "failed"] as const)(
       flush();
     };
     draw();
-    await waitForSolid(() =>
-      expect(container.querySelector(".chat-question-panel__advance")).not.toBeNull(),
-    );
-    container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")!.click();
+    await waitForSolid(() => expect(panelButton("advance")).not.toBeNull());
+    panelButton("advance").click();
     expect(submit).toHaveBeenCalledExactlyOnceWith(
       "> Which audience?\n\nEngineers",
       "question-1",
@@ -371,15 +365,9 @@ it.each(["answered", "failed"] as const)(
     mounted?.unmount();
     mounted = undefined;
     draw();
-    await waitForSolid(() =>
-      expect(container.querySelector(".chat-question-panel__advance")).not.toBeNull(),
-    );
-    expect(
-      container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")!.disabled,
-    ).toBe(true);
-    expect(container.querySelector<HTMLButtonElement>(".chat-question-panel__skip")!.disabled).toBe(
-      true,
-    );
+    await waitForSolid(() => expect(panelButton("advance")).not.toBeNull());
+    expect(panelButton("advance").disabled).toBe(true);
+    expect(panelButton("skip").disabled).toBe(true);
 
     if (outcome === "answered") {
       pending.resolve(true);
@@ -388,10 +376,8 @@ it.each(["answered", "failed"] as const)(
       );
     } else {
       pending.reject(new Error("Synthetic send failure"));
-      await waitForSolid(() => expect(container.textContent).toContain("Synthetic send failure"));
-      expect(
-        container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")!.disabled,
-      ).toBe(false);
+      await waitForSolid(() => expectText().toContain("Synthetic send failure"));
+      expect(panelButton("advance").disabled).toBe(false);
     }
     expect(submit).toHaveBeenCalledTimes(1);
   },
@@ -406,10 +392,10 @@ it("does not retire reminders on an aborted live terminal projection", () => {
 it("reconsiders reminders when a message-less terminal settles a published partial", () => {
   const partial = { role: "assistant", runId: "run-1", content: "Partial work" };
   const messages = [question("old", "run-1"), partial, terminal("run-2")];
-  expect(present(messages).pending).toHaveLength(1);
+  expectPending(messages, 1);
   // The outcome is recorded beside the already published history array.
   rememberLiveTerminalRun(partial, "run-1", "error");
-  expect(present(messages).pending).toHaveLength(0);
+  expectPending(messages, 0);
 });
 
 const historicalQuestion = (itemId = "old-question") => ({
@@ -425,14 +411,19 @@ const historicalAnswer = {
   __openclaw: { id: "saved-answer", seq: 2 },
 };
 function historyPresentation(messages: unknown[], connectionEpoch = 1) {
-  return createAsyncQuestionPresentation(
-    {
-      asyncQuestionDrafts: new Map(),
-      asyncQuestionRevision: 0,
-      transcriptRenderContext: {},
-    },
-    { sessionKey: "agent:main:main", connectionEpoch, messages },
-  );
+  return createAsyncQuestionPresentation(historyState(), {
+    sessionKey: "agent:main:main",
+    connectionEpoch,
+    messages,
+  });
+}
+
+function historyState() {
+  return {
+    asyncQuestionDrafts: new Map<string, AsyncQuestionDraft>(),
+    asyncQuestionRevision: 0,
+    transcriptRenderContext: {},
+  };
 }
 
 it("keeps a persisted answer resolved across remount and reconnect and displays the answer", () => {
@@ -471,11 +462,7 @@ it("does not guess which duplicate question an ambiguous answer belongs to", () 
 });
 
 it("does not retain derived completion after authoritative history replaces the answer", () => {
-  const state = {
-    asyncQuestionDrafts: new Map<string, AsyncQuestionDraft>(),
-    asyncQuestionRevision: 0,
-    transcriptRenderContext: {},
-  };
+  const state = historyState();
   const props = { sessionKey: "agent:main:main" };
   expect(
     createAsyncQuestionPresentation(state, {

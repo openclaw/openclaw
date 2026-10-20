@@ -196,6 +196,34 @@ function prepared(key: string, status: AgentActivityItem["status"] = "running"):
   };
 }
 
+function nestedStep(childName: string, parent: AgentActivityItem, child: AgentActivityItem) {
+  return createToolGroup("current", [
+    createMessageEntry(
+      "nested",
+      createAssistantMessage(
+        [
+          createToolCall(
+            "parent",
+            "exec",
+            { title: parent.title, code: "// Build game" },
+            { runId: "active-run" },
+          ),
+          createToolCall(
+            "child",
+            childName,
+            childName === "write" ? { path: "index.html" } : { plan: [] },
+            {
+              runId: "active-run",
+              parentToolCallId: "parent",
+            },
+          ),
+        ],
+        { runId: "active-run", activity: [parent, child] },
+      ),
+    ),
+  ]);
+}
+
 it.each([
   {
     name: "exec",
@@ -413,29 +441,7 @@ it.each(["failed", "blocked"] as const)(
   async (status) => {
     await renderActivityFixture([group("current", [prepared("first")])], liveOptions);
     const parent = { ...prepared("parent"), name: "exec", title: "Build the snake game" };
-    const child = prepared("child", status);
-    const nested = createToolGroup("current", [
-      createMessageEntry(
-        "nested",
-        createAssistantMessage(
-          [
-            createToolCall(
-              "parent",
-              "exec",
-              { title: parent.title, code: "// Build game" },
-              { runId: "active-run" },
-            ),
-            createToolCall(
-              "child",
-              "write",
-              { path: "index.html" },
-              { runId: "active-run", parentToolCallId: "parent" },
-            ),
-          ],
-          { runId: "active-run", activity: [parent, child] },
-        ),
-      ),
-    ]);
+    const nested = nestedStep("write", parent, prepared("child", status));
     await renderActivityFixture([nested], liveOptions);
     expect(label()).toBe("Build the snake game");
     expect(vi.getTimerCount()).toBe(0);
@@ -447,34 +453,11 @@ it.each(["failed", "blocked"] as const)(
 
 it("keeps the live row for a step with a routine nested call until the run settles", async () => {
   const step = (status: AgentActivityItem["status"]) =>
-    createToolGroup("current", [
-      createMessageEntry(
-        "step",
-        createAssistantMessage(
-          [
-            createToolCall(
-              "parent",
-              "exec",
-              { title: "Build the snake game", code: "// Build game" },
-              { runId: "active-run" },
-            ),
-            createToolCall(
-              "child",
-              "progress_card",
-              { plan: [] },
-              { runId: "active-run", parentToolCallId: "parent" },
-            ),
-          ],
-          {
-            runId: "active-run",
-            activity: [
-              { ...prepared("parent", status), name: "exec", title: "Build the snake game" },
-              { ...prepared("child", "completed"), hideFromChannelProgress: true },
-            ],
-          },
-        ),
-      ),
-    ]);
+    nestedStep(
+      "progress_card",
+      { ...prepared("parent", status), name: "exec", title: "Build the snake game" },
+      { ...prepared("child", "completed"), hideFromChannelProgress: true },
+    );
   await renderActivityFixture([step("running")], liveOptions);
   expect(label()).toBe("Build the snake game…");
   // Finishing mid-run keeps the live row; only settlement swaps in the step's own row.
