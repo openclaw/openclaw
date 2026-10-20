@@ -75,7 +75,7 @@
 .claw-creator__row details summary,
 .claw-creator__archive-file summary,
 .claw-creator__summary summary {
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .claw-creator pre {
