@@ -1,4 +1,3 @@
-/** Tests inbound envelope formatting, timestamps, and sender labels. */
 import { describe, expect, it } from "vitest";
 import {
   formatAgentEnvelope,
@@ -8,8 +7,10 @@ import {
 } from "./envelope.js";
 
 const timestamp = Date.UTC(2025, 0, 2, 3, 4, 5);
+const optionsFor = (userTimezone: string) =>
+  resolveEnvelopeFormatOptions({ agents: { defaults: { userTimezone } } });
 function agentEnvelope(options: Partial<Parameters<typeof formatAgentEnvelope>[0]> = {}) {
-  return formatAgentEnvelope({ channel: "WebChat", body: "hello", ...options });
+  return formatAgentEnvelope({ channel: "WebChat", body: "hello", timestamp, ...options });
 }
 function inboundEnvelope(options: Partial<Parameters<typeof formatInboundEnvelope>[0]> = {}) {
   return formatInboundEnvelope({
@@ -27,7 +28,6 @@ describe("formatAgentEnvelope", () => {
       from: "user1",
       host: "mac-mini",
       ip: "10.0.0.5",
-      timestamp,
       envelope: { timezone: "utc" },
     });
 
@@ -60,7 +60,6 @@ describe("formatAgentEnvelope", () => {
 
   it("formats timestamps in user timezone when configured", () => {
     const body = agentEnvelope({
-      timestamp,
       envelope: { timezone: "user", userTimezone: "Europe/Vienna" },
     });
 
@@ -68,9 +67,7 @@ describe("formatAgentEnvelope", () => {
   });
 
   it("falls back to the host timezone for an invalid configured user timezone", () => {
-    const options = resolveEnvelopeFormatOptions({
-      agents: { defaults: { userTimezone: "Not/A_Timezone" } },
-    });
+    const options = optionsFor("Not/A_Timezone");
     expect(options.timezone).toBe("local");
     expect(formatAgentEnvelopeTimestamp(timestamp, options)).toBe(
       formatAgentEnvelopeTimestamp(timestamp, { timezone: "local" }),
@@ -119,31 +116,19 @@ describe("formatInboundEnvelope", () => {
     expect(inboundEnvelope(options)).toBe(expected);
   });
 
-  it("includes elapsed time when previousTimestamp is provided", () => {
+  it.each([undefined, false])("formats elapsed time (enabled: %s)", (includeElapsed) => {
     const body = inboundEnvelope({
       body: "follow-up message",
       timestamp,
       previousTimestamp: timestamp - 2 * 60 * 1000,
-      envelope: { includeTimestamp: false },
+      envelope: { includeElapsed, includeTimestamp: false },
     });
-    expect(body).toContain("Alice +2m");
-    expect(body).toContain("follow-up message");
-  });
-
-  it("omits elapsed time when disabled", () => {
-    const body = inboundEnvelope({
-      body: "follow-up message",
-      timestamp,
-      previousTimestamp: timestamp - 2 * 60 * 1000,
-      envelope: { includeElapsed: false, includeTimestamp: false },
-    });
-    expect(body).toBe("[Telegram Alice] Alice: follow-up message");
+    const elapsed = includeElapsed === false ? "" : " +2m";
+    expect(body).toBe(`[Telegram Alice${elapsed}] Alice: follow-up message`);
   });
 
   it("uses fixed envelope options while preserving the user timezone", () => {
-    const options = resolveEnvelopeFormatOptions({
-      agents: { defaults: { userTimezone: "Europe/Vienna" } },
-    });
+    const options = optionsFor("Europe/Vienna");
     expect(options).toEqual({
       timezone: "Europe/Vienna",
       includeTimestamp: true,

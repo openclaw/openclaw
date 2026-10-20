@@ -1,4 +1,3 @@
-/** Tests heartbeat prompt and token helpers. */
 import { describe, expect, it } from "vitest";
 import {
   HEARTBEAT_RESPONSE_TOOL_PROMPT,
@@ -76,11 +75,8 @@ describe("isHeartbeatContentEffectivelyEmpty", () => {
     for (const content of [
       "# Header\n# Another comment",
       "## Subheader\n### Another",
-      "<!-- Heartbeat template; comments-only content prevents scheduled heartbeat API calls. -->",
-      `<!--
-Heartbeat template.
-Keep this comment-only scratch quiet.
--->`,
+      "<!-- Template -->",
+      "<!--\nHeartbeat template.\nKeep quiet.\n-->",
       `<!--
 tasks:
   - name: inbox
@@ -107,7 +103,15 @@ tasks:
 });
 
 describe("resolveHeartbeatPromptForResponseTool", () => {
-  function expectToolContract(prompt: string) {
+  const custom = "Check the deployment queue and only interrupt the user for blockers.";
+  it.each([undefined, custom])("preserves custom prompts and the tool contract: %s", (input) => {
+    const prompt = resolveHeartbeatPromptForResponseTool(input);
+    if (input) {
+      expect(prompt).toContain("Check the deployment queue");
+    } else {
+      expect(prompt).toBe(HEARTBEAT_RESPONSE_TOOL_PROMPT);
+      expect(prompt).not.toContain(HEARTBEAT_TOKEN);
+    }
     for (const text of [
       "heartbeat_respond",
       "notify=false",
@@ -116,21 +120,5 @@ describe("resolveHeartbeatPromptForResponseTool", () => {
     ]) {
       expect(prompt).toContain(text);
     }
-  }
-  it("uses the structured heartbeat response tool instead of the legacy ok token", () => {
-    const prompt = resolveHeartbeatPromptForResponseTool();
-
-    expect(prompt).toBe(HEARTBEAT_RESPONSE_TOOL_PROMPT);
-    expectToolContract(prompt);
-    expect(prompt).not.toContain(HEARTBEAT_TOKEN);
-  });
-
-  it("keeps custom heartbeat prompts intact and appends the tool-mode contract", () => {
-    const prompt = resolveHeartbeatPromptForResponseTool(
-      "Check the deployment queue and only interrupt the user for blockers.",
-    );
-
-    expect(prompt).toContain("Check the deployment queue");
-    expectToolContract(prompt);
   });
 });

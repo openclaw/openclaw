@@ -167,50 +167,76 @@ function dispatch(
   return { done, turns, delivered, deliveredPayloads };
 }
 
-describe("agent group thread dispatch", () => {
-  it.each([false, true])(
-    "shares settled post-hook finals in continuation digests (prepared: %s)",
-    async (prepared) => {
-      replyHooks.enabled = true;
-      const publicFinal = "Bob, this is the public final. [[reply_to:999]]";
-      replyHooks.rewriteText = publicFinal;
-      const deliveryFinalization = createDeferred<{ visibleReplySent: true }>();
-      const run = dispatch({
-        cfg: continuationConfig(),
-        enableHooks: true,
-        prepared,
-        deliveryFinalization: deliveryFinalization.promise,
-        reply: (_turn, index) =>
-          index === 0 ? ["Bob, this is the unfiltered draft."] : ["NO_REPLY"],
-      });
-      try {
-        await vi.waitFor(() => expect(run.deliveredPayloads).toHaveLength(1));
-        expect(run.turns).toHaveLength(2);
-        expect(run.deliveredPayloads[0]?.text).toBe(
-          prepared ? publicFinal : "Bob, this is the public final.",
-        );
-        expect(run.deliveredPayloads[0]?.replyToId).toBe(prepared ? undefined : "999");
-        deliveryFinalization.resolve({ visibleReplySent: true });
-        await run.done;
-        expect(run.turns).toHaveLength(4);
-        const continuation = expectDefined(run.turns[3], "expected Bob's continuation");
-        expect(continuation.ctx.BodyForAgent).toContain(publicFinal);
-        expect(continuation.ctx.BodyForAgent).not.toContain("unfiltered draft");
-      } finally {
-        deliveryFinalization.resolve({ visibleReplySent: true });
-        await run.done;
-        replyHooks.enabled = false;
-        replyHooks.rewriteText = undefined;
-      }
+async function completed(params: Parameters<typeof dispatch>[0]) {
+  const run = dispatch(params);
+  await run.done;
+  return run;
+}
+
+// Release blocked participants and drain delivery even if the interleaving assertion fails.
+async function held(
+  params: NonNullable<Parameters<typeof dispatch>[0]> & { initialTurns?: number },
+  inspect?: (run: ReturnType<typeof dispatch>) => void | Promise<void>,
+) {
+  const gate = createDeferred();
+  const run = dispatch({
+    ...params,
+    reply: async (turn, index) => {
+      const replies = await (params.reply?.(turn, index) ?? ["Done."]);
+      await gate.promise;
+      return replies;
     },
-  );
+  });
+  try {
+    await vi.waitFor(() => expect(run.turns).toHaveLength(params.initialTurns ?? 2));
+    await inspect?.(run);
+  } finally {
+    gate.resolve();
+    await run.done;
+  }
+  return run;
+}
+
+describe("agent group thread dispatch", () => {
+  it.each([false, true])("shares settled post-hook finals (prepared: %s)", async (prepared) => {
+    replyHooks.enabled = true;
+    const publicFinal = "Bob, this is the public final. [[reply_to:999]]";
+    replyHooks.rewriteText = publicFinal;
+    const deliveryFinalization = createDeferred<{ visibleReplySent: true }>();
+    const run = dispatch({
+      cfg: continuationConfig(),
+      enableHooks: true,
+      prepared,
+      deliveryFinalization: deliveryFinalization.promise,
+      reply: (_turn, index) =>
+        index === 0 ? ["Bob, this is the unfiltered draft."] : ["NO_REPLY"],
+    });
+    try {
+      await vi.waitFor(() => expect(run.deliveredPayloads).toHaveLength(1));
+      expect(run.turns).toHaveLength(2);
+      expect(run.deliveredPayloads[0]?.text).toBe(
+        prepared ? publicFinal : "Bob, this is the public final.",
+      );
+      expect(run.deliveredPayloads[0]?.replyToId).toBe(prepared ? undefined : "999");
+      deliveryFinalization.resolve({ visibleReplySent: true });
+      await run.done;
+      expect(run.turns).toHaveLength(4);
+      const continuation = expectDefined(run.turns[3], "expected Bob's continuation");
+      expect(continuation.ctx.BodyForAgent).toContain(publicFinal);
+      expect(continuation.ctx.BodyForAgent).not.toContain("unfiltered draft");
+    } finally {
+      deliveryFinalization.resolve({ visibleReplySent: true });
+      await run.done;
+      replyHooks.enabled = false;
+      replyHooks.rewriteText = undefined;
+    }
+  });
 
   it.each([
     { name: "operator UI", context: { Provider: "webchat", Surface: "webchat" } },
     { name: "internal event", context: { InternalTurnSource: "heartbeat" as const } },
   ])("does not fan out an $name with an external reply target", async ({ context }) => {
-    const run = dispatch({ context });
-    await run.done;
+    const run = await completed({ context });
     expect(run.turns).toHaveLength(1);
     expect(run.turns[0]?.ctx.AgentId).toBe("routed");
     expect(expectDefined(run.delivered[0], "expected ordinary reply").participant).toBeUndefined();
@@ -220,8 +246,7 @@ describe("agent group thread dispatch", () => {
     { text: "@Bob, review this.", participants: ["bob"] },
     { text: "@Alice and @Bob, review this.", participants: ["alice", "bob"] },
   ])("selects explicit participant addresses in '$text'", async ({ text, participants }) => {
-    const run = dispatch({ text });
-    await run.done;
+    const run = await completed({ text });
     expect(run.turns.map((turn) => turn.ctx.AgentId)).toEqual(participants);
     expect(run.delivered.map((reply) => reply.participant?.agentId)).toEqual(participants);
     expect(run.delivered.map((reply) => reply.participant?.name)).toEqual(
@@ -230,63 +255,56 @@ describe("agent group thread dispatch", () => {
   });
 
   it("can disable selection and leaves a single configured participant unlabeled", async () => {
-    const all = dispatch({
+    const all = await completed({
       cfg: config({ agents: ["alice", "bob"], mentionGating: false }),
       text: "@Bob",
     });
-    await all.done;
     expect(all.turns.map((turn) => turn.ctx.AgentId)).toEqual(["alice", "bob"]);
-    const single = dispatch({ cfg: config(["bob"]) });
-    await single.done;
+    const single = await completed({ cfg: config(["bob"]) });
     expect(single.delivered).toEqual([{ text: "A useful answer.", participant: undefined }]);
   });
 
-  it("isolates participant sessions across account and thread while retaining conversation scope", async () => {
-    const keys = new Set<string | undefined>();
-    for (const AccountId of ["work", "personal"]) {
-      for (const MessageThreadId of [7, 8]) {
-        const run = dispatch({ context: { AccountId, MessageThreadId } });
-        await run.done;
-        for (const { ctx } of run.turns) {
-          expect(ctx.SessionKey).toBe(
-            `agent:${ctx.AgentId}:telegram:group:-100123:thread:telegram-account-${AccountId}:thread:${MessageThreadId}`,
-          );
-          keys.add(ctx.SessionKey);
-        }
-      }
-    }
-    expect(keys.size).toBe(8);
-  });
-
-  it("preserves resolved DM account and chat-qualified topic namespaces", async () => {
+  it.each(["group", "direct"] as const)("isolates %s account/topic namespaces", async (kind) => {
     const keys = new Set<string>();
     for (const accountId of ["work", "personal"]) {
-      for (const peerId of ["42", "43"]) {
-        const sessionSuffix = `telegram:${accountId}:direct:${peerId}:thread:${peerId}:7`;
-        const run = dispatch({
-          cfg: { agents: roster, broadcast: { [`telegram:${peerId}`]: ["alice", "bob"] } },
-          context: {
-            ChatType: "direct",
-            DmScope: "main",
-            AccountId: accountId,
-            NativeChannelId: peerId,
-            MessageThreadId: 7,
-            SessionKey: `agent:routed:${sessionSuffix}`,
-          },
-        });
-        await run.done;
+      for (const peerId of kind === "group" ? [7, 8] : ["42", "43"]) {
+        const sessionSuffix =
+          kind === "group"
+            ? `telegram:group:-100123:thread:telegram-account-${accountId}:thread:${peerId}`
+            : `telegram:${accountId}:direct:${peerId}:thread:${peerId}:7`;
+        const run = await completed(
+          kind === "group"
+            ? {
+                context: { AccountId: accountId, MessageThreadId: peerId },
+              }
+            : {
+                cfg: { agents: roster, broadcast: { [`telegram:${peerId}`]: ["alice", "bob"] } },
+                context: {
+                  ChatType: "direct",
+                  DmScope: "main",
+                  AccountId: accountId,
+                  NativeChannelId: String(peerId),
+                  MessageThreadId: 7,
+                  SessionKey: `agent:routed:${sessionSuffix}`,
+                },
+              },
+        );
         for (const { ctx } of run.turns) {
           expect(ctx.SessionKey).toBe(`agent:${ctx.AgentId}:${sessionSuffix}`);
-          expect(ctx.RuntimePolicySessionKey).toBe(ctx.SessionKey);
+          if (kind === "direct") {
+            expect(ctx.RuntimePolicySessionKey).toBe(ctx.SessionKey);
+          }
           keys.add(expectDefined(ctx.SessionKey, "expected participant session"));
         }
       }
     }
     expect(keys.size).toBe(8);
-    const shared = dispatch({
+  });
+
+  it("preserves shared main DM sessions", async () => {
+    const shared = await completed({
       context: { ChatType: "direct", DmScope: "main", SessionKey: "agent:routed:main" },
     });
-    await shared.done;
     expect(shared.turns.map(({ ctx }) => ctx.SessionKey)).toEqual([
       "agent:alice:main",
       "agent:bob:main",
@@ -294,7 +312,7 @@ describe("agent group thread dispatch", () => {
   });
 
   it("continues from delivered streamed answers without sharing supplemental blocks", async () => {
-    const run = dispatch({
+    const run = await completed({
       cfg: continuationConfig(),
       reply: (turn, index) => {
         if (index === 0) {
@@ -305,7 +323,6 @@ describe("agent group thread dispatch", () => {
         return [];
       },
     });
-    await run.done;
     expect(run.turns).toHaveLength(4);
     const digest = run.turns[3]?.ctx.BodyForAgent;
     expect(digest).toContain("Bob, the streamed answer is ready.");
@@ -328,24 +345,21 @@ describe("agent group thread dispatch", () => {
       messageId: "physical-1",
     });
     setChannelSourceTurnId(context, originalSourceId);
-    const run = dispatch({
-      cfg: continuationConfig(),
-      context,
-    });
-    await run.done;
+    const run = await completed({ cfg: continuationConfig(), context });
     const continuations = run.turns.slice(2).map((turn) => turn.ctx);
     expect(continuations).toHaveLength(2);
     for (const ctx of continuations) {
-      expect(
-        buildThreadingToolContext({
-          sessionCtx: ctx,
-          config: undefined,
-          hasRepliedRef: undefined,
-        }).currentMessageId,
-      ).toBe("physical-1");
+      const threading = buildThreadingToolContext({
+        sessionCtx: ctx,
+        config: undefined,
+        hasRepliedRef: undefined,
+      });
+      expect(threading.currentMessageId).toBe("physical-1");
       expect(ctx.MessageSid).not.toBe("physical-1");
-      expect(ctx.MessageSidFirst).toBe("physical-first");
-      expect(ctx.MessageSidLast).toBe("physical-last");
+      expect(ctx).toMatchObject({
+        MessageSidFirst: "physical-first",
+        MessageSidLast: "physical-last",
+      });
     }
     expect(new Set(continuations.map((ctx) => ctx.MessageSid)).size).toBe(2);
     const sourceIds = continuations.map(readChannelSourceTurnId);
@@ -354,77 +368,57 @@ describe("agent group thread dispatch", () => {
     expect(new Set(sourceIds).size).toBe(2);
   });
 
-  it.each([2, 4])(
-    "reserves maxTurns=%i before parallel launch without counting physical replies",
-    async (maxTurns) => {
-      const gate = createDeferred();
-      const run = dispatch({
-        cfg: config({ agents: ["alice", "bob", "carol"], maxRounds: 4, maxTurns }),
-        reply: async () => {
-          await gate.promise;
-          return ["First delivery.", "Second delivery."];
-        },
-      });
-      try {
-        await vi.waitFor(() => expect(run.turns).toHaveLength(Math.min(3, maxTurns)));
-      } finally {
-        gate.resolve();
-      }
-      await run.done;
-      expect(run.turns).toHaveLength(maxTurns);
-      expect(run.delivered).toHaveLength(maxTurns * 2);
-    },
-  );
+  it.each([2, 4])("reserves maxTurns=%i before parallel launch", async (maxTurns) => {
+    const run = await held({
+      initialTurns: Math.min(3, maxTurns),
+      cfg: config({ agents: ["alice", "bob", "carol"], maxRounds: 4, maxTurns }),
+      reply: () => ["First delivery.", "Second delivery."],
+    });
+    expect(run.turns).toHaveLength(maxTurns);
+    expect(run.delivered).toHaveLength(maxTurns * 2);
+  });
 
   it.each([
     { beforeStart: true, source: "ordinary" },
     { beforeStart: false, source: "ordinary" },
     { beforeStart: true, source: "lifecycle" },
     { beforeStart: false, source: "lifecycle" },
-  ])(
-    "propagates $source cancellation and stops launches (already aborted: $beforeStart)",
-    async ({ beforeStart, source }) => {
-      const controller = new AbortController();
-      if (beforeStart) {
-        controller.abort();
-      }
-      const cfg = config({ agents: ["alice", "bob"], maxRounds: 4, maxTurns: 8 });
-      cfg.broadcast = { ...cfg.broadcast, strategy: "sequential" };
-      const participantSignals: (AbortSignal | undefined)[] = [];
-      const run = dispatch({
-        cfg,
-        replyOptions:
-          source === "ordinary"
-            ? { abortSignal: controller.signal }
-            : {
-                turnAdoptionLifecycle: {
-                  abortSignal: controller.signal,
-                  onAdopted: async () => {},
-                },
+  ])("$source cancellation (before start: $beforeStart)", async ({ beforeStart, source }) => {
+    const controller = new AbortController();
+    if (beforeStart) {
+      controller.abort();
+    }
+    const cfg = config({ agents: ["alice", "bob"], maxRounds: 4, maxTurns: 8 });
+    cfg.broadcast = { ...cfg.broadcast, strategy: "sequential" };
+    const participantSignals: (AbortSignal | undefined)[] = [];
+    const run = await completed({
+      cfg,
+      replyOptions:
+        source === "ordinary"
+          ? { abortSignal: controller.signal }
+          : {
+              turnAdoptionLifecycle: {
+                abortSignal: controller.signal,
+                onAdopted: async () => {},
               },
-        reply: ({ replyOptions }) => {
-          participantSignals.push(replyOptions?.abortSignal);
-          controller.abort();
-          return ["This turn completed."];
-        },
-      });
-      await run.done;
-      expect(run.turns).toHaveLength(beforeStart ? 0 : 1);
-      expect(participantSignals.every((signal) => signal?.aborted)).toBe(true);
-    },
-  );
+            },
+      reply: ({ replyOptions }) => {
+        participantSignals.push(replyOptions?.abortSignal);
+        controller.abort();
+        return ["This turn completed."];
+      },
+    });
+    expect(run.turns).toHaveLength(beforeStart ? 0 : 1);
+    expect(participantSignals.every((signal) => signal?.aborted)).toBe(true);
+  });
 
   it("adopts the inbound once before participants and settles once after all participants", async () => {
     const events: string[] = [];
-    const run = dispatch({
+    await completed({
       replyOptions: {
         turnAdoptionLifecycle: {
-          onAdopted: async () => {
-            events.push("adopted");
-          },
-          onSettled: () => {
-            events.push("settled");
-          },
+          onAdopted: async () => void events.push("adopted"),
+          onSettled: () => void events.push("settled"),
         },
       },
       reply: async ({ ctx }) => {
@@ -434,7 +428,6 @@ describe("agent group thread dispatch", () => {
         return ["Done."];
       },
     });
-    await run.done;
     expect(events[0]).toBe("adopted");
     expect(events.at(-1)).toBe("settled");
     expect(events.filter((event) => event === "adopted")).toHaveLength(1);
@@ -446,33 +439,26 @@ describe("agent group thread dispatch", () => {
   });
 
   it("shares an in-flight root budget across equivalent thread ids, while isolating accounts and other threads", async () => {
-    const gate = createDeferred();
-    const first = dispatch({
-      context: { AccountId: "work", MessageThreadId: 7 },
-      reply: async () => {
-        await gate.promise;
-        return ["Done."];
+    const first = await held(
+      {
+        context: { AccountId: "work", MessageThreadId: 7 },
       },
-    });
-    try {
-      await vi.waitFor(() => expect(first.turns).toHaveLength(2));
-      const duplicate = dispatch({ context: { AccountId: "work", MessageThreadId: "7" } });
-      const otherAccount = dispatch({ context: { AccountId: "personal", MessageThreadId: 7 } });
-      const otherThread = dispatch({ context: { AccountId: "work", MessageThreadId: 8 } });
-      await Promise.all([duplicate.done, otherAccount.done, otherThread.done]);
-      expect(duplicate.turns).toHaveLength(0);
-      expect(duplicate.delivered).toHaveLength(0);
-      expect(otherAccount.turns).toHaveLength(2);
-      expect(otherThread.turns).toHaveLength(2);
-    } finally {
-      gate.resolve();
-      await first.done;
-    }
+      async () => {
+        const duplicate = dispatch({ context: { AccountId: "work", MessageThreadId: "7" } });
+        const otherAccount = dispatch({ context: { AccountId: "personal", MessageThreadId: 7 } });
+        const otherThread = dispatch({ context: { AccountId: "work", MessageThreadId: 8 } });
+        await Promise.all([duplicate.done, otherAccount.done, otherThread.done]);
+        expect(duplicate.turns).toHaveLength(0);
+        expect(duplicate.delivered).toHaveLength(0);
+        expect(otherAccount.turns).toHaveLength(2);
+        expect(otherThread.turns).toHaveLength(2);
+      },
+    );
     expect(first.turns).toHaveLength(2);
   });
 
   it.each(["session", "native command", "conversation binding"])(
-    "keeps an ACP %s exclusive even in a configured group room",
+    "keeps an ACP %s exclusive",
     async (source) => {
       const targetSessionKey = "agent:routed:acp:bound";
       const binding: SessionBindingRecord = {
@@ -503,8 +489,7 @@ describe("agent group thread dispatch", () => {
                   CommandBody: "/status",
                 }
               : {};
-        const run = dispatch({ context });
-        await run.done;
+        const run = await completed({ context });
         expect(run.turns).toHaveLength(1);
         const dispatched = expectDefined(run.turns[0], "expected exclusive ACP dispatch");
         expect(dispatched.ctx.AgentId).toBe("routed");
@@ -526,24 +511,16 @@ describe("agent group thread dispatch", () => {
   it("attributes parallel reply hooks to each participant's own run and session", async () => {
     replyHooks.events.length = 0;
     replyHooks.enabled = true;
-    const gate = createDeferred();
-    const run = dispatch({
-      enableHooks: true,
-      reply: async ({ ctx, replyOptions }) => {
-        replyOptions?.onAgentRunStart?.(`run-${ctx.AgentId}`);
-        await gate.promise;
-        return [`Answer from ${ctx.AgentId}.`];
-      },
-    });
     try {
-      await vi.waitFor(() => expect(run.turns).toHaveLength(2));
+      await held({
+        enableHooks: true,
+        reply: ({ ctx, replyOptions }) => {
+          replyOptions?.onAgentRunStart?.(`run-${ctx.AgentId}`);
+          return [`Answer from ${ctx.AgentId}.`];
+        },
+      });
     } finally {
-      gate.resolve();
-      try {
-        await run.done;
-      } finally {
-        replyHooks.enabled = false;
-      }
+      replyHooks.enabled = false;
     }
     expect(
       replyHooks.events.map(({ payload, runId, sessionKey }) => ({
@@ -551,18 +528,13 @@ describe("agent group thread dispatch", () => {
         runId,
         sessionKey,
       })),
-    ).toEqual([
-      {
-        text: "Answer from alice.",
-        runId: "run-alice",
-        sessionKey: "agent:alice:telegram:group:-100123",
-      },
-      {
-        text: "Answer from bob.",
-        runId: "run-bob",
-        sessionKey: "agent:bob:telegram:group:-100123",
-      },
-    ]);
+    ).toEqual(
+      ["alice", "bob"].map((id) => ({
+        text: `Answer from ${id}.`,
+        runId: `run-${id}`,
+        sessionKey: `agent:${id}:telegram:group:-100123`,
+      })),
+    );
   });
 
   it("preserves intentional silence for a message-tool-only group without starting follow-up rounds", async () => {
@@ -607,33 +579,29 @@ describe("agent group thread dispatch", () => {
 
 describe("group thread entry compatibility", () => {
   it("prefers a qualified WhatsApp entry and keeps unqualified arrays single-pass and WhatsApp-only", () => {
+    const legacy: OpenClawConfig = { agents: roster, broadcast: { "1203@g.us": ["alice", "bob"] } };
     const cfg: OpenClawConfig = {
-      agents: roster,
+      ...legacy,
       broadcast: {
-        "1203@g.us": ["alice", "bob"],
+        ...legacy.broadcast,
         "whatsapp:1203@g.us": { agents: ["carol"], maxRounds: 3, maxTurns: 8 },
       },
     };
-    expect(
-      resolveGroupThreadConfig({ cfg, channel: "whatsapp", peerId: "1203@g.us" }),
-    ).toMatchObject({
+    const resolve = (value: OpenClawConfig, channel = "whatsapp") =>
+      resolveGroupThreadConfig({ cfg: value, channel, peerId: "1203@g.us" });
+    expect(resolve(cfg)).toMatchObject({
       agents: ["carol"],
       qualified: true,
       maxRounds: 3,
       maxTurns: 8,
     });
-    const legacy: OpenClawConfig = { agents: roster, broadcast: { "1203@g.us": ["alice", "bob"] } };
-    expect(
-      resolveGroupThreadConfig({ cfg: legacy, channel: "whatsapp", peerId: "1203@g.us" }),
-    ).toMatchObject({
+    expect(resolve(legacy)).toMatchObject({
       agents: ["alice", "bob"],
       qualified: false,
       mentionGating: false,
       maxRounds: 1,
       maxTurns: 2,
     });
-    expect(
-      resolveGroupThreadConfig({ cfg: legacy, channel: "telegram", peerId: "1203@g.us" }),
-    ).toBeUndefined();
+    expect(resolve(legacy, "telegram")).toBeUndefined();
   });
 });
