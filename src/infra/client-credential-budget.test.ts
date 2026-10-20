@@ -31,9 +31,10 @@ it("admits the six-call census identity workload once and dispatches one request
     preload,
     `
     const fs = require('node:fs');
+    const path = require('node:path');
     const { DatabaseSync } = require('node:sqlite');
     const record = (db, sql) => {
-      if (db.location()?.endsWith('/client/credentials.sqlite')) {
+      if (db.location()?.endsWith(path.join('client', 'credentials.sqlite'))) {
         fs.appendFileSync(process.env.CREDENTIAL_SQL_TRACE, JSON.stringify(sql) + '\\n');
       }
     };
