@@ -15,18 +15,16 @@ import { emitNodeRuntimeWarning } from "./daemon-install-runtime-warning.js";
 
 afterEach(() => vi.resetAllMocks());
 
-function emit(
-  warn: ReturnType<typeof vi.fn>,
-  nodeProgram = "node",
-  runtime: "node" | "bun" = "node",
-) {
-  return emitNodeRuntimeWarning({
+async function emit(nodeProgram = "node", runtime: "node" | "bun" = "node") {
+  const warn = vi.fn();
+  await emitNodeRuntimeWarning({
     env: { PATH: "/usr/bin" },
     runtime,
     nodeProgram,
     warn,
     title: "Gateway runtime",
   });
+  return warn;
 }
 
 describe("emitNodeRuntimeWarning", () => {
@@ -36,13 +34,12 @@ describe("emitNodeRuntimeWarning", () => {
     { selected: "/opt/node", status: "probe-failed", warns: true },
     { selected: "/usr/bin/node", status: "supported", warns: true },
   ])("scopes system warnings with $selected ($status)", async ({ selected, status, warns }) => {
-    const warn = vi.fn();
     const systemNode = { path: "/usr/bin/node", status: "unsupported" };
     mocks.resolveSystemNodeInfo.mockResolvedValue(systemNode);
     mocks.resolveNodeRuntimeInfo.mockResolvedValue({ status });
     mocks.renderSystemNodeWarning.mockReturnValue("System Node SQLite is unsafe");
 
-    await emit(warn, selected);
+    const warn = await emit(selected);
     expect(mocks.resolveSystemNodeInfo).toHaveBeenCalledWith({ env: { PATH: "/usr/bin" } });
     expect(mocks.renderSystemNodeWarning).toHaveBeenCalledWith(systemNode, selected);
 
@@ -52,19 +49,16 @@ describe("emitNodeRuntimeWarning", () => {
   });
 
   it("does not emit when warning helper returns null", async () => {
-    const warn = vi.fn();
     mocks.resolveSystemNodeInfo.mockResolvedValue(null);
     mocks.renderSystemNodeWarning.mockReturnValue(null);
 
-    await emit(warn);
+    const warn = await emit();
 
     expect(warn).not.toHaveBeenCalled();
   });
 
   it("does not run Node diagnostics for Bun", async () => {
-    const warn = vi.fn();
-
-    await emit(warn, "/home/test/.bun/bin/bun", "bun");
+    const warn = await emit("/home/test/.bun/bin/bun", "bun");
 
     expect(mocks.resolveSystemNodeInfo).not.toHaveBeenCalled();
     expect(warn).not.toHaveBeenCalled();

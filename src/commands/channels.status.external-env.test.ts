@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -31,8 +31,6 @@ vi.mock("../cli/command-config-resolution.js", () => ({
 }));
 
 vi.mock("./channels/shared.js", () => ({
-  formatChannelAccountLabel: ({ channel, accountId }: { channel: string; accountId: string }) =>
-    `${channel} ${accountId}`,
   appendBaseUrlBit: () => undefined,
   appendEnabledConfiguredLinkedBits: () => undefined,
   appendModeBit: () => undefined,
@@ -72,37 +70,32 @@ function writeExternalEnvChannelPlugin() {
   return { pluginDir, fullMarker };
 }
 
-describe("channelsStatusCommand external env-only channel fallback", () => {
-  beforeEach(() => {
-    Object.values(mocks).forEach((mock) => mock.mockReset());
-    mocks.callGateway.mockRejectedValue(new Error("gateway closed"));
+afterEach(resetPluginLoaderTestStateForTest);
+
+it("reports env-only external manifest channels in JSON fallback without full runtime load", async () => {
+  Object.values(mocks).forEach((mock) => mock.mockReset());
+  mocks.callGateway.mockRejectedValue(new Error("gateway closed"));
+  const { pluginDir, fullMarker } = writeExternalEnvChannelPlugin();
+  const config: OpenClawConfig = {
+    plugins: { load: { paths: [pluginDir] }, allow: ["external-env-channel-plugin"] },
+  };
+  mocks.requireValidConfigFileSnapshot.mockResolvedValue({ path: "/tmp/openclaw.json", config });
+  mocks.resolveCommandConfigWithSecrets.mockResolvedValue({
+    resolvedConfig: config,
+    effectiveConfig: config,
+    diagnostics: [],
+  });
+  const { runtime, logs } = createCapturingTestRuntime();
+
+  await withEnvAsync({ EXTERNAL_ENV_CHANNEL_TOKEN: "token" }, async () => {
+    await channelsStatusCommand({ json: true, probe: false }, runtime as never);
   });
 
-  afterEach(resetPluginLoaderTestStateForTest);
-
-  it("reports env-only external manifest channels in JSON fallback without full runtime load", async () => {
-    const { pluginDir, fullMarker } = writeExternalEnvChannelPlugin();
-    const config: OpenClawConfig = {
-      plugins: { load: { paths: [pluginDir] }, allow: ["external-env-channel-plugin"] },
-    };
-    mocks.requireValidConfigFileSnapshot.mockResolvedValue({ path: "/tmp/openclaw.json", config });
-    mocks.resolveCommandConfigWithSecrets.mockResolvedValue({
-      resolvedConfig: config,
-      effectiveConfig: config,
-      diagnostics: [],
-    });
-    const { runtime, logs } = createCapturingTestRuntime();
-
-    await withEnvAsync({ EXTERNAL_ENV_CHANNEL_TOKEN: "token" }, async () => {
-      await channelsStatusCommand({ json: true, probe: false }, runtime as never);
-    });
-
-    expect(fs.existsSync(fullMarker)).toBe(false);
-    expect(JSON.parse(logs.at(-1) ?? "{}")).toMatchObject({
-      gatewayReachable: false,
-      configOnly: true,
-      configuredChannels: ["external-env-channel"],
-    });
+  expect(fs.existsSync(fullMarker)).toBe(false);
+  expect(JSON.parse(logs.at(-1) ?? "{}")).toMatchObject({
+    gatewayReachable: false,
+    configOnly: true,
+    configuredChannels: ["external-env-channel"],
   });
 });
 

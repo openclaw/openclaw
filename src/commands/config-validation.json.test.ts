@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import {
   applyResolvedCommandOutputMode,
   withConsoleLogsRoutedToStderrForJson,
@@ -6,10 +6,10 @@ import {
 import { requireValidConfig, requireValidConfigFileSnapshot } from "./config-validation.js";
 import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
-const reads = vi.hoisted(() => ({ read: vi.fn(), write: vi.fn() }));
+const read = vi.hoisted(() => vi.fn());
 vi.mock("../config/config.js", () => ({
-  readConfigFileSnapshot: reads.read,
-  readConfigFileSnapshotForWrite: reads.write,
+  readConfigFileSnapshot: read,
+  readConfigFileSnapshotForWrite: vi.fn(),
 }));
 
 const configPath = "/synthetic/openclaw.json";
@@ -17,15 +17,9 @@ const invalidSnapshot = {
   ...baseConfigSnapshot,
   path: configPath,
   valid: false,
-  sourceConfig: {},
   issues: [
     { path: " ", message: "Invalid root", allowedValues: [] },
-    {
-      path: "mode",
-      message: "Choose a mode",
-      allowedValues: ["local"],
-      allowedValuesHiddenCount: 2,
-    },
+    { path: "mode", message: "Choose", allowedValues: ["local"], allowedValuesHiddenCount: 2 },
   ],
   warnings: [],
 };
@@ -46,49 +40,35 @@ const expectedFailure = {
   repairHint: "Run `openclaw doctor --fix` to repair, then retry.",
   issues: [
     { path: "<root>", message: "Invalid root" },
-    {
-      path: "mode",
-      message: "Choose a mode",
-      allowedValues: ["local"],
-      allowedValuesHiddenCount: 2,
-    },
+    { path: "mode", message: "Choose", allowedValues: ["local"], allowedValuesHiddenCount: 2 },
   ],
 };
 
 beforeEach(() => {
   vi.clearAllMocks();
-  reads.read.mockResolvedValue(invalidSnapshot);
-  reads.write.mockResolvedValue({ snapshot: invalidSnapshot, writeOptions: {} });
+  read.mockResolvedValue(invalidSnapshot);
 });
-afterEach(() => vi.restoreAllMocks());
 
-describe("command invalid-config JSON", () => {
-  it("writes one enriched JSON failure before exit and no human diagnostic", async () => {
-    const rt = runtime();
-    const order: string[] = [];
-    rt.writeJson.mockImplementation(() => {
-      order.push("json");
-    });
-    rt.exit.mockImplementation(() => {
-      order.push("exit");
-    });
-    await expect(withJsonOutput(() => requireValidConfig(rt))).rejects.toMatchObject({
-      name: "ExitError",
-      code: 1,
-    });
-    expect(rt.writeJson).toHaveBeenCalledExactlyOnceWith(expectedFailure, 2);
-    expect(order).toEqual(["json", "exit"]);
-    expect(rt.exit).toHaveBeenCalledExactlyOnceWith(1);
-    expect(rt.log).not.toHaveBeenCalled();
-    expect(rt.error).not.toHaveBeenCalled();
+it("writes one enriched JSON failure before exit and no human diagnostic", async () => {
+  const rt = runtime();
+  await expect(withJsonOutput(() => requireValidConfig(rt))).rejects.toMatchObject({
+    name: "ExitError",
+    code: 1,
   });
+  expect(rt.writeJson).toHaveBeenCalledExactlyOnceWith(expectedFailure, 2);
+  expect(rt.writeJson.mock.invocationCallOrder[0]).toBeLessThan(
+    rt.exit.mock.invocationCallOrder[0] ?? 0,
+  );
+  expect(rt.exit).toHaveBeenCalledExactlyOnceWith(1);
+  expect(rt.log).not.toHaveBeenCalled();
+  expect(rt.error).not.toHaveBeenCalled();
+});
 
-  it("returns valid config without writing any failure document", async () => {
-    const snapshot = { ...invalidSnapshot, valid: true, config: { plugins: {} } };
-    reads.read.mockResolvedValue(snapshot);
-    const rt = runtime();
-    expect(await withJsonOutput(() => requireValidConfigFileSnapshot(rt))).toBe(snapshot);
-    expect(rt.writeJson).not.toHaveBeenCalled();
-    expect(rt.exit).not.toHaveBeenCalled();
-  });
+it("returns valid config without writing any failure document", async () => {
+  const snapshot = { ...invalidSnapshot, valid: true, config: { plugins: {} } };
+  read.mockResolvedValue(snapshot);
+  const rt = runtime();
+  expect(await withJsonOutput(() => requireValidConfigFileSnapshot(rt))).toBe(snapshot);
+  expect(rt.writeJson).not.toHaveBeenCalled();
+  expect(rt.exit).not.toHaveBeenCalled();
 });
