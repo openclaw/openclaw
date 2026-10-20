@@ -1,11 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const advanceMatrixQaActorCursor = vi.hoisted(() => vi.fn());
 const primeMatrixQaDriverScenarioClient = vi.hoisted(() => vi.fn());
 
 vi.mock("./scenario-runtime-shared.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./scenario-runtime-shared.js")>()),
-  advanceMatrixQaActorCursor,
   primeMatrixQaDriverScenarioClient,
 }));
 
@@ -37,7 +35,7 @@ function createGeneratedImageContext(
     roomId,
     sutAccessToken: "sut-token",
     sutUserId: "@sut:matrix-qa.test",
-    syncState: {},
+    syncStreams: {},
     timeoutMs: 180_000,
     topology: {
       defaultRoomId: roomId,
@@ -92,8 +90,8 @@ describe("Matrix generated image delivery", () => {
 
     expect(sendTextMessage).toHaveBeenCalledTimes(1);
     expect(waitForOptionalRoomEvent).toHaveBeenCalledTimes(1);
-    expect(result.artifacts?.driverEventId).toBe("$driver-trigger");
-    expect(result.artifacts?.attachmentEventId).toBe("$generated-image");
+    expect(result.details).toContain("driver event: $driver-trigger");
+    expect(result.details).toContain("generated image event: $generated-image");
   });
 
   it("bounds timeout diagnostics to the last eight room events", async () => {

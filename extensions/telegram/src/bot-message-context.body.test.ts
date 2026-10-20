@@ -546,23 +546,42 @@ it("inherits disabled group audio preflight when the topic leaves it unset", asy
   expect(harness.replySpy).not.toHaveBeenCalled();
 });
 
-it.each([false, true])(
-  "requests typing before model work for admitted direct/forum input (%s)",
-  async (group) => {
-    const bot = await inputBot(config({ requireMention: false }));
-    const typing = vi.spyOn(bot.api, "sendChatAction");
-    let typingAtModelStart: unknown[] = [];
-    harness.replySpy.mockImplementation(async () => {
-      typingAtModelStart = typing.mock.calls.map((call) => call.slice(0, 3));
-      return undefined;
+it.each([
+  { group: false, denial: "default" },
+  { group: true, denial: "default" },
+  { group: false, denial: "rule" },
+  { group: true, denial: "rule" },
+  { group: false, denial: "session" },
+  { group: true, denial: "session" },
+] as const)(
+  "does not type or deliver when $denial send policy denies input (group=$group)",
+  async ({ group, denial }) => {
+    const cfg = config({ requireMention: false });
+    cfg.session = { ...cfg.session, dmScope: "main", mainKey: "typing-proof" };
+    if (denial === "session") {
+      await upsertSessionEntry({
+        storePath,
+        sessionKey: group
+          ? "agent:main:telegram:group:-10042001:topic:99"
+          : "agent:main:typing-proof",
+        entry: { sessionId: "typing-proof-session", updatedAt: Date.now(), sendPolicy: "deny" },
+      });
+    } else {
+      cfg.session.sendPolicy =
+        denial === "default"
+          ? { default: "deny" }
+          : { default: "allow", rules: [{ action: "deny", match: { channel: "telegram" } }] };
+    }
+    let suppressedAtModelStart: boolean | undefined;
+    harness.replySpy.mockImplementation(async (_ctx, opts) => {
+      suppressedAtModelStart = opts?.suppressTyping;
+      return { text: "FIXED_TYPING_POLICY_FINAL" };
     });
-    await receive(bot, textMessage("start working", group));
-    expect(typingAtModelStart).toContainEqual([
-      group ? groupChat.id : chat.id,
-      "typing",
-      group ? { message_thread_id: 99 } : undefined,
-    ]);
+    await receive(await inputBot(cfg), textMessage("FIXED_TYPING_POLICY_INPUT", group));
     expect(harness.replySpy).toHaveBeenCalledOnce();
+    expect(suppressedAtModelStart).toBe(true);
+    expect(apiCalls).not.toHaveBeenCalledWith("sendMessage", expect.anything());
+    expect(apiCalls).not.toHaveBeenCalledWith("sendChatAction", expect.anything());
   },
 );
 

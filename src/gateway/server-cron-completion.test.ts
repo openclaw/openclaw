@@ -174,6 +174,11 @@ async function createCompletionFixture(
       .map(readTranscriptEventMessage)
       .filter((message) => message?.role === "assistant");
   };
+  const assertText = async (expectedText: string) => {
+    expect(await messages(destination)).toEqual([
+      expect.objectContaining({ content: [{ type: "text", text: expectedText }] }),
+    ]);
+  };
   const assertResult = async (scope = destination) => {
     expect(await messages(scope)).toEqual([
       expect.objectContaining({
@@ -223,7 +228,12 @@ async function createCompletionFixture(
     warn,
     messages,
     assertResult,
+    assertText,
     assertNoOtherResults,
+    async assertNoResults() {
+      expect(await messages(destination)).toEqual([]);
+      await assertNoOtherResults();
+    },
     finalize,
     async loadReleasedRows() {
       // v2026.9.9: types.ts CronStoredJob and store/row-codec.ts persisted config.
@@ -268,33 +278,29 @@ async function createCompletionFixture(
       expect(readActiveCronRunReceiptsInDatabase(database, receipt.storeKey, [job.id])).toEqual([
         receipt,
       ]);
-      const retainedQuery = database.prepare(
-        "SELECT * FROM cron_run_receipts WHERE receipt_id = 'released-receipt'",
-      );
-      const retained = retainedQuery.get();
-      expect(retained).toMatchObject({
+      const snapshot = () => ({
+        retained: database
+          .prepare("SELECT * FROM cron_run_receipts WHERE receipt_id = 'released-receipt'")
+          .get(),
+        schema: database
+          .prepare(
+            "SELECT name, sql FROM sqlite_schema WHERE name IN ('cron_jobs', 'cron_run_receipts') ORDER BY name",
+          )
+          .all(),
+        jobJson: database
+          .prepare("SELECT job_json FROM cron_jobs WHERE store_key = ? AND job_id = ?")
+          .get(receipt.storeKey, job.id)?.job_json,
+      });
+      const before = snapshot();
+      expect(before.retained).toMatchObject({
         request_run_id: "released-request",
         status: "ok",
         started_at_ms: 10,
         finished_at_ms: 20,
         delivery_attempt_state: "unknown",
       });
-      const schemaQuery = database.prepare(
-        "SELECT name, sql FROM sqlite_schema WHERE name IN ('cron_jobs', 'cron_run_receipts') ORDER BY name",
-      );
-      const schema = schemaQuery.all();
-      return {
-        job: loaded,
-        assertPreserved() {
-          expect(retainedQuery.get()).toEqual(retained);
-          expect(schemaQuery.all()).toEqual(schema);
-          expect(
-            database
-              .prepare("SELECT job_json FROM cron_jobs WHERE store_key = ? AND job_id = ?")
-              .get(receipt.storeKey, job.id)?.job_json,
-          ).toBe(jobJson);
-        },
-      };
+      expect(before.jobJson).toBe(jobJson);
+      return { job: loaded, assertPreserved: () => expect(snapshot()).toEqual(before) };
     },
     async removeOccurrence() {
       await saveCronStore(cronStorePath, { version: 1, jobs: [] });
@@ -313,13 +319,23 @@ async function createCompletionFixture(
   };
 }
 
+function deliveryDiagnostics(message: string, contains = false, substring = false) {
+  const entry = expect.objectContaining({
+    source: "delivery",
+    severity: "warn",
+    message: substring ? expect.stringContaining(message) : message,
+  });
+  return { diagnostics: { entries: contains ? expect.arrayContaining([entry]) : [entry] } };
+}
+
 async function withCompletionFixture(
   kind: "script" | "command",
   run: (fixture: Awaited<ReturnType<typeof createCompletionFixture>>) => Promise<void>,
+  hookText?: string,
 ) {
   await withOpenClawTestState({ layout: "state-only" }, async (state) => {
     const registry = captureActivePluginRegistrySnapshot();
-    const fixture = await createCompletionFixture(state, kind);
+    const fixture = await createCompletionFixture(state, kind, hookText);
     try {
       await run(fixture);
     } finally {
@@ -337,28 +353,20 @@ describe("completion announcement", () => {
   const kind = "script";
 
   it("commits the effective post-hook payload shown to the recipient", async () => {
-    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
-      const registry = captureActivePluginRegistrySnapshot();
-      const fixture = await createCompletionFixture(state, "command", "Redacted cron update");
-      try {
+    await withCompletionFixture(
+      "command",
+      async (fixture) => {
         await expect(fixture.finalize({ text: "Sensitive cron update" })).resolves.toMatchObject({
           delivered: true,
         });
         expect(fixture.sendText).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({ text: "Redacted cron update" }),
         );
-        expect(await fixture.messages(fixture.destination)).toEqual([
-          expect.objectContaining({
-            content: [{ type: "text", text: "Redacted cron update" }],
-          }),
-        ]);
+        await fixture.assertText("Redacted cron update");
         await fixture.assertNoOtherResults();
-      } finally {
-        await fixture.dispose();
-        vi.restoreAllMocks();
-        restoreActivePluginRegistrySnapshot(registry);
-      }
-    });
+      },
+      "Redacted cron update",
+    );
   });
 
   it.each([
@@ -420,15 +428,10 @@ describe("completion announcement", () => {
           expect(await fixture.messages(fixture.destination)).toEqual([]);
           if (failure === "uncertain") {
             expect(result).toMatchObject({
-              diagnostics: {
-                entries: expect.arrayContaining([
-                  expect.objectContaining({
-                    source: "delivery",
-                    severity: "warn",
-                    message: "result may have been delivered but was not added to the conversation",
-                  }),
-                ]),
-              },
+              ...deliveryDiagnostics(
+                "result may have been delivered but was not added to the conversation",
+                true,
+              ),
             });
           }
         }
@@ -437,94 +440,69 @@ describe("completion announcement", () => {
     },
   );
 
-  it("still sends when destination conversation preparation fails", async () => {
-    await withCompletionFixture(kind, async (fixture) => {
-      vi.spyOn(outboundSession, "bindOutboundSessionEntry").mockRejectedValueOnce(
-        new Error("conversation binding unavailable"),
-      );
-
-      const result = await fixture.finalize();
-
-      expect(result).toMatchObject({
-        delivered: true,
-        deliveryError: undefined,
-        diagnostics: {
-          entries: [
-            expect.objectContaining({
-              source: "delivery",
-              severity: "warn",
-              message:
-                "result was delivered but was not added to the conversation: conversation binding unavailable",
-            }),
-          ],
-        },
-      });
-      expect(fixture.sendText).toHaveBeenCalledOnce();
-      await fixture.assertNoOtherResults();
-      expect(await fixture.messages(fixture.destination)).toEqual([]);
-    });
-  });
-
-  it("sends a cross-agent destination without writing either conversation", async () => {
-    await withCompletionFixture(kind, async (fixture) => {
-      fixture.cfg.agents = { entries: { main: {}, other: {} } };
-      fixture.cfg.bindings = [
-        {
-          agentId: "other",
-          match: {
+  it.each(["binding failure", "cross-agent destination"] as const)(
+    "delivers without conversation writes after %s",
+    async (reason) => {
+      await withCompletionFixture(kind, async (fixture) => {
+        let otherDestination: typeof fixture.destination | undefined;
+        if (reason === "binding failure") {
+          vi.spyOn(outboundSession, "bindOutboundSessionEntry").mockRejectedValueOnce(
+            new Error("conversation binding unavailable"),
+          );
+        } else {
+          fixture.cfg.agents = { entries: { main: {}, other: {} } };
+          fixture.cfg.bindings = [
+            {
+              agentId: "other",
+              match: {
+                channel: "telegram",
+                accountId: "default",
+                peer: { kind: "direct", id: "123" },
+              },
+            },
+          ];
+          fixture.job.delivery = {
+            mode: "announce",
             channel: "telegram",
+            to: "123",
             accountId: "default",
-            peer: { kind: "direct", id: "123" },
-          },
-        },
-      ];
-      fixture.job.delivery = {
-        mode: "announce",
-        channel: "telegram",
-        to: "123",
-        accountId: "default",
-      };
-      const otherDestination = {
-        ...fixture.destination,
-        agentId: "other",
-        sessionKey: "agent:other:telegram:direct:123",
-        sessionId: "other-recipient-session",
-        storePath: path.resolve(
-          fixture.destination.storePath,
-          "../../../other/sessions/sessions.json",
-        ),
-      };
-      await replaceSessionEntry(otherDestination, {
-        sessionId: otherDestination.sessionId,
-        updatedAt: 1,
+          };
+          otherDestination = {
+            ...fixture.destination,
+            agentId: "other",
+            sessionKey: "agent:other:telegram:direct:123",
+            sessionId: "other-recipient-session",
+            storePath: path.resolve(
+              fixture.destination.storePath,
+              "../../../other/sessions/sessions.json",
+            ),
+          };
+          await replaceSessionEntry(otherDestination, {
+            sessionId: otherDestination.sessionId,
+            updatedAt: 1,
+          });
+        }
+        expect(await fixture.finalize()).toMatchObject({
+          delivered: true,
+          deliveryError: undefined,
+          ...deliveryDiagnostics(
+            reason === "binding failure"
+              ? "result was delivered but was not added to the conversation: conversation binding unavailable"
+              : "Conversation context skipped: the destination belongs to a different agent.",
+          ),
+        });
+        expect(fixture.sendText).toHaveBeenCalledOnce();
+        await fixture.assertNoResults();
+        if (otherDestination) {
+          expect(fixture.sendText.mock.calls[0]?.[0]).toMatchObject({
+            to: "123",
+            accountId: "default",
+          });
+          expect(await fixture.messages(otherDestination)).toEqual([]);
+        }
       });
-
-      const result = await fixture.finalize();
-
-      expect(result).toMatchObject({
-        delivered: true,
-        deliveryError: undefined,
-        diagnostics: {
-          entries: [
-            expect.objectContaining({
-              source: "delivery",
-              severity: "warn",
-              message:
-                "Conversation context skipped: the destination belongs to a different agent.",
-            }),
-          ],
-        },
-      });
-      expect(fixture.sendText).toHaveBeenCalledOnce();
-      expect(fixture.sendText.mock.calls[0]?.[0]).toMatchObject({
-        to: "123",
-        accountId: "default",
-      });
-      await fixture.assertNoOtherResults();
-      expect(await fixture.messages(fixture.destination)).toEqual([]);
-      expect(await fixture.messages(otherDestination)).toEqual([]);
-    });
-  });
+    },
+  );
 
   it.each(["deleted", "reset"] as const)(
     "delivers to the explicit destination when the captured source was %s",
@@ -571,8 +549,7 @@ describe("completion announcement", () => {
         deliveryError: "cron result is missing its occurrence start time",
       });
       expect(fixture.sendText).not.toHaveBeenCalled();
-      expect(await fixture.messages(fixture.destination)).toEqual([]);
-      await fixture.assertNoOtherResults();
+      await fixture.assertNoResults();
     });
   });
 
@@ -620,9 +597,7 @@ describe("completion announcement", () => {
           expect.objectContaining({ text: deliveredText }),
         );
         expect(fixture.warn).not.toHaveBeenCalled();
-        expect(await fixture.messages(fixture.destination)).toEqual([
-          expect.objectContaining({ content: [{ type: "text", text: deliveredText }] }),
-        ]);
+        await fixture.assertText(deliveredText);
         await fixture.assertNoOtherResults();
       });
     },
@@ -639,8 +614,7 @@ describe("completion announcement", () => {
           delivered: false,
         });
         expect(fixture.sendText).not.toHaveBeenCalled();
-        expect(await fixture.messages(fixture.destination)).toEqual([]);
-        await fixture.assertNoOtherResults();
+        await fixture.assertNoResults();
       });
     },
   );
@@ -656,8 +630,7 @@ describe("completion announcement", () => {
         deliveryError: expect.stringContaining("occurrence aborted"),
       });
       expect(fixture.sendText).not.toHaveBeenCalled();
-      expect(await fixture.messages(fixture.destination)).toEqual([]);
-      await fixture.assertNoOtherResults();
+      await fixture.assertNoResults();
     });
   });
 
@@ -698,21 +671,14 @@ describe("completion announcement", () => {
           deliveryAttempted: true,
           delivered: true,
           deliveryError: undefined,
-          diagnostics: {
-            entries: expect.arrayContaining([
-              expect.objectContaining({
-                source: "delivery",
-                severity: "warn",
-                message: expect.stringContaining(
-                  "result was delivered but was not added to the conversation: cron delivery owner retired",
-                ),
-              }),
-            ]),
-          },
+          ...deliveryDiagnostics(
+            "result was delivered but was not added to the conversation: cron delivery owner retired",
+            true,
+            true,
+          ),
         });
         expect(fixture.sendText).toHaveBeenCalledOnce();
-        expect(await fixture.messages(fixture.destination)).toEqual([]);
-        await fixture.assertNoOtherResults();
+        await fixture.assertNoResults();
       });
     },
   );

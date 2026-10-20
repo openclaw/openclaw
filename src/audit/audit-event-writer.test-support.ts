@@ -1,9 +1,9 @@
 import type { DecisionReceiptV1 } from "../../packages/gateway-protocol/src/index.js";
-import type { AuditEventInput } from "./audit-event-types.js";
+import type { AgentRunStartedAuditEventInput } from "./audit-event-types.js";
 import type { ExecutionIdentityAdmissionEnvelope } from "./execution-identity-admission.js";
 import type { TrustedMessageAuditEvent } from "./message-audit-events.js";
 
-export function input(): AuditEventInput {
+export function input(): AgentRunStartedAuditEventInput {
   return {
     sourceId: "run-1:1:started",
     sourceSequence: 1,

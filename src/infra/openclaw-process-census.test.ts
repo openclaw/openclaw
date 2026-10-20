@@ -142,7 +142,7 @@ type CustodyCase = [
   holder: boolean,
 ];
 const custodyCases: CustodyCase[] = [
-  [["/lib/systemd/systemd", "--user", "--deserialize=x"], { cwd: new Error("denied") }, true],
+  [["/lib/systemd/systemd", "--user", "--deserialize=x"], { cwd: new Error("denied") }, false],
   [["node", "dist/index.js"], { cwd: "/unrelated-app" }, false],
   [["node", "/unrelated-app/dist/index.js"], { cwd: "/unrelated-app" }, false],
   [["node", "dist/index.js"], { cwd: "/app" }, true],
@@ -211,7 +211,6 @@ it.each([
 
 it.each([
   ["node", "worker.js"],
-  ["/bin/sh", "worker.sh"],
   ["/usr/bin/node", "-e", "1"],
 ])("retains unavailable cwd for %j without losing scoped holders", (...argv) => {
   const held = "/tmp/openclaw-update-runtime-Held01";
@@ -623,10 +622,8 @@ it.each([
         },
   );
   expect(inspectOtherOpenClawProcesses()).toEqual({
-    pids: partial ? [peer] : [1, peer],
-    warnings: (partial ? [peer] : [1, peer]).map((pid) =>
-      expect.stringContaining(`PID ${pid}: working directory is unavailable`),
-    ),
+    pids: [peer],
+    warnings: [expect.stringContaining(`PID ${peer}: working directory is unavailable`)],
   });
 });
 
@@ -662,10 +659,7 @@ it.each([
   });
   rows.get(peer + 1)!.cwd = denied();
   rows.get(peer + 1)!.ppid = 1;
-  expect(inspectOtherOpenClawProcesses()).toEqual({
-    pids: [peer + 1],
-    warnings: [expect.stringContaining(`PID ${peer + 1}: working directory is unavailable`)],
-  });
+  expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [] });
   expect(inspectOtherOpenClawProcesses(handoffRefs)).toEqual({
     matchingPids: [],
     unverifiedPids: [peer + 1],
@@ -673,17 +667,13 @@ it.each([
   });
 });
 
-it.each([0, 1000])("requires foreign ownership to exempt non-runtime cwd (UID %i)", (uid) => {
-  rows.set(peer, { ppid: 1, argv: ["/bin/sh", "worker.sh"], uid, cwd: denied() });
-  expect(inspectOtherOpenClawProcesses()).toEqual(
-    uid === 0
-      ? { pids: [] }
-      : {
-          pids: [peer],
-          warnings: [expect.stringContaining(`PID ${peer}: working directory is unavailable`)],
-        },
-  );
-});
+it.each([0, 1000])(
+  "ignores unrelated non-runtime commands with unavailable cwd (UID %i)",
+  (uid) => {
+    rows.set(peer, { ppid: 1, argv: ["/bin/sh", "worker.sh"], uid, cwd: denied() });
+    expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [] });
+  },
+);
 
 it.each([
   ["node", "--eval", "1"],

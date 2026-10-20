@@ -1,22 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import type {
-  GatewayServiceCommandConfig,
-  GatewayServiceState,
-} from "../../daemon/service-types.js";
+import type { GatewayServiceState } from "../../daemon/service-types.js";
 import type { GatewayService, readGatewayServiceState } from "../../daemon/service.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import {
   CommandProcessCleanupError,
   hasCommandProcessCleanupError,
 } from "../../process/exec-result.js";
-import {
-  resolveCommandProcessSignal,
-  retainCommandProcessCleanup,
-} from "../../process/exec-spawn.js";
-import { createDeferredCore } from "../../shared/deferred.js";
+import { retainedInspectionCleanup } from "./update-command-inspection-settlement.test-support.js";
 import {
   GatewayServiceUpdateOwnershipError,
   readManagedGatewayServiceForUpdate,
@@ -32,9 +25,8 @@ vi.mock("../../daemon/service.js", async (importOriginal) => ({
   readGatewayServiceState: boundary.read,
 }));
 
-const root = "/synthetic/install";
-const command: GatewayServiceCommandConfig = {
-  programArguments: ["/synthetic/node", `${root}/dist/index.js`, "gateway"],
+const command = {
+  programArguments: ["/synthetic/node", "/synthetic/install/dist/index.js", "gateway"],
 };
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 function state(owned: boolean, serviceCommand = command): GatewayServiceState {
@@ -61,97 +53,65 @@ afterEach(() => {
 });
 
 it.each([
-  { phase: "inspection", cleanupResult: "uncertain", owned: false },
-  { phase: "fallback", cleanupResult: "forced", owned: false },
-  { phase: "inspection", cleanupResult: "forced", owned: true },
-] as const)(
-  "joins $phase cleanup before publishing ownership=$owned ($cleanupResult)",
-  async ({ phase, cleanupResult, owned }) => {
-    let installRoot: string | undefined;
-    let selectedCommand = command;
-    if (owned) {
-      installRoot = await fs.realpath(dirs.make("service-reader-owned-package-"));
-      const entrypoint = path.join(installRoot, "dist", "index.js");
-      await fs.mkdir(path.dirname(entrypoint));
-      await fs.writeFile(
-        path.join(installRoot, "package.json"),
-        JSON.stringify({ name: "openclaw", version: "2026.9.4" }),
-      );
-      await fs.writeFile(entrypoint, "// isolated ownership fixture\n");
-      selectedCommand = { programArguments: [process.execPath, entrypoint, "gateway"] };
+  ["inspection", "uncertain", false],
+  ["fallback", "forced", false],
+  ["inspection", "forced", true],
+  ["inspection", "canonical", false],
+  ["fallback", "canonical", false],
+] as const)("settles %s %s cleanup before publishing ownership=%s", async (phase, kind, owned) => {
+  let installRoot: string | undefined;
+  let selectedCommand = command;
+  if (owned) {
+    installRoot = await fs.realpath(dirs.make("service-reader-owned-package-"));
+    const entrypoint = path.join(installRoot, "dist", "index.js");
+    await fs.mkdir(path.dirname(entrypoint));
+    await fs.writeFile(
+      path.join(installRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.9.4" }),
+    );
+    await fs.writeFile(entrypoint, "// isolated ownership fixture\n");
+    selectedCommand = { programArguments: [process.execPath, entrypoint, "gateway"] };
+  }
+  const cleanup = retainedInspectionCleanup();
+  const failure = new GatewayServiceUpdateOwnershipError(
+    "inspection failed",
+    new CommandProcessCleanupError(),
+  );
+  const read = async () => {
+    if (kind === "canonical") {
+      throw failure;
     }
-    const cleanup = createDeferredCore<"forced" | "uncertain">();
-    const joining = createDeferredCore();
-    const retainCleanup = () => {
-      retainCommandProcessCleanup(cleanup.promise);
-      resolveCommandProcessSignal()?.addEventListener("abort", () => joining.resolve(), {
-        once: true,
-      });
-    };
-    if (phase === "inspection") {
-      boundary.read.mockImplementation(async () => {
-        retainCleanup();
-        return state(owned, selectedCommand);
-      });
-    } else {
-      boundary.read.mockRejectedValue(
-        new GatewayServiceUpdateOwnershipError("recorded selector changed", undefined),
-      );
-      vi.mocked(service.isLoaded).mockImplementation(async () => {
-        retainCleanup();
-        throw new Error("manager unavailable");
-      });
-    }
-    let finished = false;
+    cleanup.retain();
+    return state(owned, selectedCommand);
+  };
+  boundary.read.mockImplementation(read);
+  if (phase === "fallback") {
+    boundary.read.mockRejectedValue(
+      new GatewayServiceUpdateOwnershipError("recorded selector changed", undefined),
+    );
+    vi.mocked(service.isLoaded).mockImplementation(async () => {
+      await read();
+      throw new Error("manager unavailable");
+    });
+  }
+  if (kind === "canonical") {
+    await expect(readManagedGatewayServiceForUpdate({})).rejects.toBe(failure);
+  } else {
+    const finished = vi.fn();
     const work = readManagedGatewayServiceForUpdate({})
       .catch((error: unknown) => error)
-      .finally(() => {
-        finished = true;
-      });
-    try {
-      await Promise.race([
-        joining.promise,
-        work.then(() => {
-          throw new Error("service selection returned before cleanup joined");
-        }),
-      ]);
-      expect(finished).toBe(false);
-    } finally {
-      cleanup.resolve(cleanupResult);
-      await work;
-    }
-    const result = await work;
-    expect(hasCommandProcessCleanupError(result)).toBe(cleanupResult === "uncertain");
+      .finally(finished);
+    const result = await cleanup.join(work, kind, () => expect(finished).not.toHaveBeenCalled());
+    expect(hasCommandProcessCleanupError(result)).toBe(kind === "uncertain");
     if (owned) {
       expect(result).toMatchObject({
-        command: selectedCommand,
         verdict: { kind: "owned", root: installRoot, refreshDefinition: true },
       });
-      if (typeof result !== "object" || result === null || !("command" in result)) {
-        throw new Error("Expected the owned service selection");
-      }
+      assert(typeof result === "object" && result !== null && "command" in result);
       expect(result.command).toBe(selectedCommand);
-    } else if (cleanupResult === "forced") {
+    } else if (kind === "forced") {
       expect(result).toBeNull();
     }
-    expect(service.isLoaded).toHaveBeenCalledTimes(phase === "fallback" ? 1 : 0);
-  },
-);
-
-it.each(["inspection", "fallback"] as const)(
-  "preserves nested canonical cleanup failure from %s",
-  async (phase) => {
-    const cleanup = new CommandProcessCleanupError();
-    const failure = new GatewayServiceUpdateOwnershipError("inspection failed", cleanup);
-    if (phase === "inspection") {
-      boundary.read.mockRejectedValue(failure);
-    } else {
-      boundary.read.mockRejectedValue(
-        new GatewayServiceUpdateOwnershipError("recorded selector changed", undefined),
-      );
-      vi.mocked(service.isLoaded).mockRejectedValue(failure);
-    }
-    await expect(readManagedGatewayServiceForUpdate({})).rejects.toBe(failure);
-    expect(service.isLoaded).toHaveBeenCalledTimes(phase === "fallback" ? 1 : 0);
-  },
-);
+  }
+  expect(service.isLoaded).toHaveBeenCalledTimes(phase === "fallback" ? 1 : 0);
+});

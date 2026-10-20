@@ -21,13 +21,14 @@ import {
   DEFAULT_SANDBOX_WORKSPACE_ROOT,
 } from "./constants.js";
 import { resolveSandboxToolPolicyForAgent } from "./tool-policy.js";
-import type {
-  SandboxBrowserConfig,
-  SandboxConfig,
-  SandboxDockerConfig,
-  SandboxPruneConfig,
-  SandboxScope,
-  SandboxSshConfig,
+import {
+  SANDBOX_DEFAULT_TOOL_ALLOW,
+  type SandboxBrowserConfig,
+  type SandboxConfig,
+  type SandboxDockerConfig,
+  type SandboxPruneConfig,
+  type SandboxScope,
+  type SandboxSshConfig,
 } from "./types.js";
 
 export const DANGEROUS_SANDBOX_DOCKER_BOOLEAN_KEYS = [
@@ -197,6 +198,17 @@ function resolveSandboxSshConfig(
       agentSsh?.knownHostsData ?? globalSsh?.knownHostsData,
     ),
   };
+}
+
+/** Snapshot resolved policy without losing its in-process default-allow provenance. */
+export function captureSandboxConfig(config: SandboxConfig): SandboxConfig {
+  const captured = structuredClone(config);
+  const defaultAllow = config.tools[SANDBOX_DEFAULT_TOOL_ALLOW];
+  if (defaultAllow) {
+    captured.tools[SANDBOX_DEFAULT_TOOL_ALLOW] =
+      defaultAllow === config.tools.allow ? captured.tools.allow : [...defaultAllow];
+  }
+  return captured;
 }
 
 export function resolveSandboxConfigForAgent(

@@ -10,6 +10,7 @@ import {
   mainTab,
 } from "./provider.lease-cases.test-support.ts";
 import type { BoardProvider } from "./provider.ts";
+import { remainingBoardWidgetTicketTtlMs } from "./widget-ticket-lifetime.ts";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -17,6 +18,116 @@ afterEach(() => {
 });
 
 describe("gateway board provider lifecycle", () => {
+  it.each([null, { widgets: [{}] }, { tabs: [{}] }])(
+    "ignores an invalid cached board without blocking a later valid restore (%j)",
+    (raw) => {
+      const snapshot = boardSnapshot("agent:main:invalid-cache", 1, { tabs: [mainTab] });
+      const provider = new GatewayBoardProvider(
+        { sessionKey: snapshot.sessionKey },
+        boardClient(vi.fn()),
+        false,
+      );
+      try {
+        const cached = raw === null ? null : { ...snapshot, ...raw };
+        provider.restoreSnapshot(cached, Date.now());
+        expect(provider.hasLoadedSnapshot).toBe(false);
+        expect(provider.snapshot$.value.widgets).toEqual([]);
+        provider.restoreSnapshot(snapshot, Date.now());
+        expect(provider.snapshot$.value).toEqual(snapshot);
+      } finally {
+        provider.dispose();
+      }
+    },
+  );
+
+  it("rejects foreign cached boards and leaves unconfirmed MCP apps for live revalidation", () => {
+    const snapshot = boardSnapshot("agent:main:confirmed-cache", 1, {
+      tabs: [mainTab],
+      widgets: ["pending", "rejected", "granted"].map((grantState) =>
+        boardWidget(grantState, {
+          contentKind: "mcp-app",
+          grantState: grantState as "pending" | "rejected" | "granted",
+        }),
+      ),
+    });
+    const provider = new GatewayBoardProvider(
+      { sessionKey: snapshot.sessionKey },
+      boardClient(vi.fn()),
+      false,
+    );
+    try {
+      provider.restoreSnapshot(
+        { ...snapshot, sessionKey: "agent:foreign:confirmed-cache" },
+        Date.now(),
+      );
+      expect(provider.hasLoadedSnapshot).toBe(false);
+      provider.restoreSnapshot(snapshot, Date.now());
+      expect(provider.snapshot$.value.widgets.map((widget) => widget.name)).toEqual(["granted"]);
+    } finally {
+      provider.dispose();
+    }
+  });
+
+  it("restores the warm layout before connect and reconciles it without extending ticket lifetime", async () => {
+    vi.useFakeTimers();
+    const now = Date.now();
+    const cached = boardSnapshot("agent:main:warm", 1, {
+      tabs: [mainTab],
+      widgets: [boardWidget("chart", { viewTicket: "cached-ticket", viewTicketTtlMs: 30_000 })],
+    });
+    const response = createDeferred<typeof cached>();
+    const request = vi.fn(() => response.promise);
+    const client = boardClient(request);
+    const persist = vi.fn();
+    const provider = new GatewayBoardProvider({ sessionKey: cached.sessionKey }, client, false);
+    provider.subscribeCacheSnapshot(persist);
+    try {
+      provider.restoreSnapshot(cached, now - 5_000);
+      expect(provider.snapshot$.value.widgets[0]?.viewTicketTtlMs).toBe(25_000);
+      expect(request).not.toHaveBeenCalled();
+      expect(persist).not.toHaveBeenCalled();
+      provider.attachClient(client, true);
+      expect(request).toHaveBeenCalledExactlyOnceWith("board.get", {
+        sessionKey: cached.sessionKey,
+      });
+      response.resolve({ ...cached, revision: 2, widgets: [] });
+      await provider.activate();
+      expect(provider.snapshot$.value.widgets).toEqual([]);
+      expect(persist).toHaveBeenCalledOnce();
+      provider.restoreSnapshot(cached, now);
+      expect(provider.snapshot$.value.widgets).toEqual([]);
+    } finally {
+      provider.dispose();
+    }
+  });
+
+  it("retires a warm snapshot after denied access and ignores late cache hydration", async () => {
+    const cached = boardSnapshot("agent:main:warm-denied", 1, { tabs: [mainTab] });
+    const request = vi.fn(async () => {
+      throw new GatewayProtocolRequestError({ code: "FORBIDDEN", message: "Access removed" });
+    });
+    const persist = vi.fn();
+    const provider = new GatewayBoardProvider(
+      { sessionKey: cached.sessionKey },
+      boardClient(request),
+      false,
+    );
+    provider.subscribeCacheSnapshot(persist);
+    try {
+      provider.restoreSnapshot(cached, Date.now());
+      await provider.activate();
+      // Offline activation does not send; reconnect owns authoritative revalidation.
+      provider.attachClient(boardClient(request), true);
+      await provider.activate();
+      expect(provider.snapshot$.value.tabs).toEqual([]);
+      expect(persist).toHaveBeenCalledWith(null, expect.any(Number));
+      provider.restoreSnapshot(cached, Date.now());
+      expect(provider.snapshot$.value.tabs).toEqual([]);
+    } finally {
+      provider.dispose();
+    }
+  });
+
   it("discards mutation responses from a replaced gateway client", async () => {
     const pending = createDeferred<BoardProvider["snapshot$"]["value"]>();
     const oldClient = boardClient(vi.fn(() => pending.promise));
@@ -38,7 +149,7 @@ describe("gateway board provider lifecycle", () => {
   });
 
   it.each(["UNAVAILABLE", "FORBIDDEN"] as const)(
-    "stops definitive %s polling until reconnect without discarding its snapshot",
+    "stops definitive %s polling until reconnect and retires forbidden content",
     async (code) => {
       vi.useFakeTimers();
       const initial = boardSnapshot("agent:main:unavailable", 1);
@@ -62,7 +173,9 @@ describe("gateway board provider lifecycle", () => {
         await vi.advanceTimersByTimeAsync(61_000);
         expect(request).toHaveBeenCalledTimes(2);
         expect(vi.getTimerCount()).toBe(0);
-        expect(provider.snapshot$.value).toEqual(initial);
+        expect(provider.snapshot$.value).toEqual(
+          code === "FORBIDDEN" ? { ...initial, revision: 0, tabs: [], widgets: [] } : initial,
+        );
         expect(provider.loadError$.value).toBe(unavailable.message);
 
         request.mockResolvedValue(recovered);
@@ -224,6 +337,8 @@ describe("gateway board provider lifecycle", () => {
   );
 
   it("preserves minted view metadata across layout and grant mutation snapshots", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
     const plainWidget = boardWidget("alpha", { grantState: "pending" });
     const widget = {
       ...plainWidget,
@@ -260,16 +375,42 @@ describe("gateway board provider lifecycle", () => {
       { sessionKey: "agent:main:mutation-view-contract" },
       boardClient(request),
     );
-    await vi.waitFor(() => expect(provider.snapshot$.value).toEqual(initial));
+    const persisted =
+      vi.fn<(snapshot: BoardProvider["snapshot$"]["value"] | null, receivedAtMs: number) => void>();
+    provider.subscribeCacheSnapshot(persisted);
+    const restored = new GatewayBoardProvider(
+      { sessionKey: initial.sessionKey },
+      boardClient(vi.fn()),
+      false,
+    );
+    try {
+      await provider.activate();
+      vi.setSystemTime(51_000);
+      await provider.applyOps([{ kind: "widget_resize", name: "alpha", sizeW: 8, sizeH: 4 }]);
+      await provider.grant("alpha", "granted");
 
-    await provider.applyOps([{ kind: "widget_resize", name: "alpha", sizeW: 8, sizeH: 4 }]);
-    await provider.grant("alpha", "granted");
-
-    expect(provider.snapshot$.value.widgets[0]).toEqual({
-      ...widget,
-      sizeW: 8,
-      grantState: "granted",
-    });
+      expect(provider.snapshot$.value.widgets[0]).toEqual({
+        ...widget,
+        sizeW: 8,
+        grantState: "granted",
+      });
+      expect(remainingBoardWidgetTicketTtlMs(provider.snapshot$.value.widgets[0]!)).toBe(10_000);
+      const [cached, receivedAtMs] = persisted.mock.lastCall!;
+      expect(cached?.widgets[0]?.viewTicketTtlMs).toBe(10_000);
+      expect(receivedAtMs).toBe(51_000);
+      vi.setSystemTime(71_000);
+      restored.restoreSnapshot(cached, receivedAtMs);
+      expect(restored.snapshot$.value.widgets[0]?.viewTicketTtlMs).toBe(0);
+      expect(remainingBoardWidgetTicketTtlMs(restored.snapshot$.value.widgets[0]!)).toBe(0);
+      request.mockResolvedValueOnce(grantMutation);
+      await provider.applyOps([]);
+      expect(persisted).toHaveBeenLastCalledWith(null, 71_000);
+      expect(provider.snapshot$.value.widgets[0]?.viewTicketTtlMs).toBe(60_000);
+      expect(remainingBoardWidgetTicketTtlMs(provider.snapshot$.value.widgets[0]!)).toBe(0);
+    } finally {
+      provider.dispose();
+      restored.dispose();
+    }
   });
 
   it.each([

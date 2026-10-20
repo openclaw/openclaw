@@ -22,10 +22,12 @@ import {
   type Operation,
   type TrialDependencies,
 } from "../ios-release-e2e.js";
+import { markIosResourcePhase } from "../ios-resource-timeline.mjs";
 import {
   collectGatewayProcessDiagnostics,
   summarizeGatewayLanes,
   summarizeGatewayLogs,
+  summarizeIOSBuildTiming,
 } from "./ios-release-e2e-diagnostics.js";
 import { prepareIOSReleaseGateway } from "./ios-release-gateway.js";
 import { hasUnjoinedWork, runManagedCommand } from "./managed-child-process.mjs";
@@ -74,6 +76,7 @@ export async function createNativeDependencies(options: {
   }[] = [];
   options.proof.phases = phases;
   let currentTrial: number | undefined;
+  let currentTest: "live-chat" | "reader" | undefined;
   const phase = async <T>(operation: Operation, action: () => Promise<T>): Promise<T> => {
     const entry: (typeof phases)[number] = {
       operation,
@@ -84,6 +87,7 @@ export async function createNativeDependencies(options: {
     if (operation === "simulator-measure") {
       return action();
     }
+    markIosResourcePhase(`qualification-${operation === "native-test" ? currentTest : operation}`);
     phases.push(entry);
     await options.onProgress?.();
     const started = performance.now();
@@ -182,6 +186,9 @@ export async function createNativeDependencies(options: {
         const failure = new OperationError(operation, "exit", code, `${stderr}\n${stdout}`);
         failure.diagnostic.context.push(...context);
         throw failure;
+      }
+      if (operation === "native-build") {
+        options.proof.buildTimings = summarizeIOSBuildTiming(stdout);
       }
       return stdout.trim();
     });
@@ -334,6 +341,7 @@ export async function createNativeDependencies(options: {
       "OpenClawUITests",
       "-configuration",
       "Debug",
+      "-showBuildTimingSummary",
       // Simulator Keychain access needs entitlements, but no signing certificate.
       "CODE_SIGNING_ALLOWED=YES",
       "CODE_SIGN_IDENTITY=-",
@@ -805,6 +813,7 @@ export async function createNativeDependencies(options: {
               }
             },
             async test(test) {
+              currentTest = test === IOS_RELEASE_TESTS[0] ? "live-chat" : "reader";
               if (!instance || !udid || !setupCode) {
                 throw new Error("trial-not-prepared");
               }

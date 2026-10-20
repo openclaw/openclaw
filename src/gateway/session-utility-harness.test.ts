@@ -155,7 +155,6 @@ describe("utility completion with an unavailable implicit harness", () => {
       vi.useFakeTimers();
       const observer = createHarness({
         config,
-        utilityModelRef: "openai/gpt-5.4-mini",
         prepareModel: vi.fn(defaultPrepareModel),
         completeModel: vi.fn(defaultCompleteModel),
         readSession: vi.fn(() => ({

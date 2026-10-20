@@ -1,10 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  parseSageBatchResponse,
-  parseSageResponse,
-  validateSageRequest,
-} from "./sage-validation.js";
-import type { SageBatchRequest, SageContent, SageQuestion, SageRequest } from "./sage-wire.js";
+import { parseSageBatchResponse, parseSageResponse, validateSageImage } from "./sage-validation.js";
+import type { SageBatchRequest, SageContent, SageQuestion } from "./sage-wire.js";
 
 const yesno: SageQuestion = { id: "gate", kind: "yesno", instructions: "Is this urgent?" };
 const choice: SageQuestion = {
@@ -33,11 +29,11 @@ const list: SageContent = {
   ],
 };
 // Synthetic one-pixel PNG; the normal media probe is supplied separately, never downloaded.
-const image: SageContent = {
+const image = {
   kind: "image",
   media:
     "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aOZkAAAAASUVORK5CYII=",
-};
+} satisfies SageContent;
 const meta = {
   model: "levanto-sage-v1.3",
   usage: { input_tokens: 12, output_tokens: 33, image_count: 0 },
@@ -58,14 +54,6 @@ const scaleResult = {
 };
 
 describe("Sage native protocol", () => {
-  it.each([yesno, choice, scale, sort, tags])(
-    "validates native $kind without synthesis",
-    async (q) => {
-      await expect(
-        validateSageRequest({ content: q.kind === "sort" ? list : "document", question: q }),
-      ).resolves.toBeUndefined();
-    },
-  );
   it.each(["yes", "no", null])(
     "preserves %s and P(yes), not confidence in the chosen answer",
     (answer) => {
@@ -200,7 +188,7 @@ describe("Sage native protocol", () => {
       expect(() => parseSageResponse({ ...v, ...patch }, yesno, "doc")).toThrow("Invalid Sage");
     }
   });
-  it("retains serializable grouped partial errors and call-level usage", async () => {
+  it("retains serializable grouped partial errors and call-level usage", () => {
     const request: SageBatchRequest = {
       reasoning: "off",
       requests: [
@@ -208,7 +196,6 @@ describe("Sage native protocol", () => {
         { content: "B", questions: [yesno] },
       ],
     };
-    await validateSageRequest(request);
     const value = {
       results: [
         {
@@ -232,84 +219,25 @@ describe("Sage native protocol", () => {
     value.results[0]!.answers[0] = { ok: true, result: response(choice, {}) };
     expect(() => parseSageBatchResponse(value, request)).toThrow("correlation");
   });
-  it.each([
-    { content: "doc", question: { ...choice, options: [{ option: "a" }] } },
-    { content: "doc", question: { ...scale, levels: [0, 1, 2, 3, 3].map((level) => ({ level })) } },
-    {
-      content: "doc",
-      question: { ...scale, levels: [0, 1, 2, 3, 4.5].map((level) => ({ level })) },
-    },
-    { content: "doc", question: { ...tags, tags: [] } },
-    { content: "doc", question: sort },
-    { content: list, question: sort, grounding: {} },
-    { content: list, question: { ...sort, strategy: "pairwise" } },
-    { content: "doc", question: yesno, model: "levanto-sage-v1.3" },
-    { content: "doc", question: yesno, reasoning: "low" },
-    { requests: [{ content: "doc", questions: [yesno], grounding: {} }] },
-  ])("rejects unsupported native request %#", async (r) => {
-    await expect(validateSageRequest(r as SageRequest)).rejects.toThrow("Invalid Sage");
-  });
-  it("enforces text and image choice limits, dimensions, MIME and combinations", async () => {
+  it("validates the admitted image signature and native dimension limits", async () => {
     const probe = vi.fn(async () => ({ width: 1, height: 1 }));
-    const q = {
-      ...choice,
-      options: Array.from({ length: 120 }, (_, i) => ({ option: String(i) })),
-    };
-    await validateSageRequest({ content: "doc", question: q });
-    await expect(
-      validateSageRequest({
-        content: "doc",
-        question: { ...q, options: [...q.options, { option: "overflow" }] },
-      }),
-    ).rejects.toThrow("count");
-    await validateSageRequest(
-      { content: image, question: { ...q, options: q.options.slice(0, 20) } },
-      probe,
-    );
-    await expect(
-      validateSageRequest(
-        { content: image, question: { ...q, options: q.options.slice(0, 21) } },
-        probe,
-      ),
-    ).rejects.toThrow("count");
-    for (const r of [
-      { content: image, question: sort },
-      { content: image, question: yesno, grounding: {} },
-      {
-        content: {
-          kind: "list",
-          value: [
-            { id: "a", content: image },
-            { id: "b", content: "B" },
-          ],
-        },
-        question: sort,
-      },
-    ]) {
-      await expect(validateSageRequest(r as SageRequest, probe)).rejects.toThrow("Invalid Sage");
-    }
-    await expect(validateSageRequest({ content: image, question: yesno })).rejects.toThrow(
-      "probe required",
-    );
+    await validateSageImage(image.media, probe);
+    expect(probe).toHaveBeenCalledOnce();
     for (const dimensions of [
       { width: 8193, height: 1 },
       { width: 8192, height: 4096 },
       { width: 0, height: 1 },
     ]) {
-      await expect(
-        validateSageRequest({ content: image, question: yesno }, async () => dimensions),
-      ).rejects.toThrow("image");
+      await expect(validateSageImage(image.media, async () => dimensions)).rejects.toThrow("image");
     }
     for (const media of [
-      "https://example.com/a.png",
-      "data:image/gif;base64,R0lGODlh",
-      "data:image/png;base64,AAAA",
-      "data:image/png;base64," + "A".repeat(4 * Math.ceil((4 * 1024 * 1024) / 3) + 4),
+      "data:image/png;base64,AA==",
+      image.media.replace("image/png", "image/jpeg"),
     ]) {
-      await expect(
-        validateSageRequest({ content: { kind: "image", media }, question: yesno }, probe),
-      ).rejects.toThrow("image");
+      await expect(validateSageImage(media, probe)).rejects.toThrow("image");
     }
+  });
+  it("requires explicit applicability in native image tag results", () => {
     const v = response(tags, {
       tags: [
         { id: "a", probability: 0.5, applies: null },

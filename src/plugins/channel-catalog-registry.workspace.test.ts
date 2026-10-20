@@ -100,15 +100,14 @@ it("keeps channel catalog workspace and load-path scopes after Gateway publicati
     { workspaceDir: beta, expected: ["beta-channel"] },
     { workspaceDir: alpha, extraPaths: [extra], expected: ["alpha-channel", "extra-channel"] },
   ];
+  const expectedEntries = scopes.map(({ expected }) => expected);
   const read = () =>
     scopes.map(({ expected: _expected, ...scope }) =>
       listChannelCatalogEntries({ ...scope, env })
         .map((entry) => entry.pluginId)
         .toSorted(),
     );
-  expect(withPluginCache(createPluginCache(), read)).toEqual(
-    scopes.map(({ expected }) => expected),
-  );
+  expect(withPluginCache(createPluginCache(), read)).toEqual(expectedEntries);
   const snapshot = resolveConfigWidePluginMetadataSnapshot({ config, env });
   expect(snapshot.plugins.map((plugin) => plugin.id).toSorted()).toEqual([
     "alpha-channel",
@@ -128,12 +127,12 @@ it("keeps channel catalog workspace and load-path scopes after Gateway publicati
     "fstatSync",
   ] as const;
   const probes = fileReads.map((method) => vi.spyOn(fs, method));
-  expect(read()).toEqual(scopes.map(({ expected }) => expected));
-  expect(read()).toEqual(scopes.map(({ expected }) => expected));
+  expect(read()).toEqual(expectedEntries);
+  expect(read()).toEqual(expectedEntries);
   expect(probes.map((probe) => probe.mock.calls.length)).toEqual(fileReads.map(() => 0));
   vi.restoreAllMocks();
   writeChannelPlugin(path.join(alpha, ".openclaw/extensions/late-channel"), "late-channel");
-  expect(read()).toEqual(scopes.map(({ expected }) => expected));
+  expect(read()).toEqual(expectedEntries);
   clearPluginMetadataLifecycleCaches();
   expect(read()[0]).toEqual(["alpha-channel", "late-channel"]);
 });

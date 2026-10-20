@@ -96,11 +96,11 @@ function normalizeXaiSpeechProviderConfig(rawConfig: Record<string, unknown>) {
 }
 
 export function readXaiSpeechProviderConfig(config: SpeechProviderConfig) {
-  const normalized = normalizeXaiSpeechProviderConfig({});
   return {
     apiKey: normalizeOptionalString(config.apiKey),
-    baseUrl: normalizeOptionalString(config.baseUrl) ?? normalized.baseUrl,
-    voiceId: normalizeOptionalString(config.voiceId ?? config.voice) ?? normalized.voiceId,
+    baseUrl:
+      normalizeOptionalString(config.baseUrl) ?? normalizeXaiTtsBaseUrl(process.env.XAI_BASE_URL),
+    voiceId: normalizeOptionalString(config.voiceId ?? config.voice) ?? "eve",
     language: normalizeXaiLanguageCode(config.language ?? config.languageCode),
     speed: normalizeXaiSpeechSpeed(config.speed),
     responseFormat: normalizeXaiSpeechResponseFormat(config.responseFormat),

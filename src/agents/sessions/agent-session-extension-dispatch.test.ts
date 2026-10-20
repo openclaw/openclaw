@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -11,6 +12,7 @@ import {
   streamMocks,
 } from "./agent-session-loop-correctness.test-support.js";
 import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
+import type { ExtensionAPI } from "./extensions/types.js";
 
 registerAgentSessionLoopTestLifecycle();
 
@@ -38,13 +40,11 @@ describe("AgentSession extension dispatch", () => {
   it.each(["none", "unrelated"])(
     "delivers updates without extension dispatch when handlers are %s",
     async (mode) => {
-      const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>();
-      if (mode === "unrelated") {
-        handlers.set("turn_start", [async () => undefined]);
-      }
       streamMocks.streamSimple.mockImplementation((model) => streamAnswer(model));
       const { session } = await createTestSession({
-        resourceLoader: createResourceLoader(handlers),
+        resourceLoader: await createResourceLoader(
+          mode === "unrelated" ? (api) => api.on("turn_start", async () => undefined) : undefined,
+        ),
       });
       const dispatch = vi.spyOn(session.extensionRunner, "emit");
       const messageEnd = vi.spyOn(session.extensionRunner, "emitMessageEnd");
@@ -68,9 +68,11 @@ describe("AgentSession extension dispatch", () => {
   );
 
   it("keeps tool delivery and turn indices when handlers register after an unobserved turn", async () => {
-    const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
-      ["turn_start", []],
-    ]);
+    const registration: { api?: ExtensionAPI } = {};
+    const loader = await createResourceLoader((api) => {
+      registration.api = api;
+    });
+    const api = expectDefined(registration.api, "loaded extension API");
     let responses = 0;
     streamMocks.streamSimple.mockImplementation((model) =>
       createAssistantResultStream(
@@ -84,7 +86,7 @@ describe("AgentSession extension dispatch", () => {
       ),
     );
     const { session } = await createTestSession({
-      resourceLoader: createResourceLoader(handlers),
+      resourceLoader: loader,
       customTools: [
         {
           name: "read",
@@ -100,6 +102,7 @@ describe("AgentSession extension dispatch", () => {
     });
     const tools: string[] = [];
     const turns: Array<[string, number]> = [];
+    let registered = false;
     const recordTurn = async (event: unknown) => {
       const turn = event as { type: string; turnIndex: number };
       turns.push([turn.type, turn.turnIndex]);
@@ -109,8 +112,11 @@ describe("AgentSession extension dispatch", () => {
         tools.push(event.type);
       }
       if (event.type === "turn_end") {
-        handlers.set("turn_start", [recordTurn]);
-        handlers.set("turn_end", [recordTurn]);
+        if (!registered) {
+          registered = true;
+          api.on("turn_start", recordTurn);
+          api.on("turn_end", recordTurn);
+        }
       }
     });
 
@@ -135,9 +141,12 @@ describe("AgentSession extension dispatch", () => {
   });
 
   it("observes live handler registration and awaits handlers inside write settlement", async () => {
-    const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
-      ["message_update", []],
-    ]);
+    const registration: { api?: ExtensionAPI } = {};
+    const loader = await createResourceLoader((api) => {
+      registration.api = api;
+    });
+    const api = expectDefined(registration.api, "loaded extension API");
+    const handlers = loader.getExtensions().extensions[0]!.handlers;
     let settling = false;
     const observed: string[] = [];
     const consumed = [createDeferred(), createDeferred(), createDeferred()];
@@ -148,7 +157,7 @@ describe("AgentSession extension dispatch", () => {
       ),
     );
     const { session } = await createTestSession({
-      resourceLoader: createResourceLoader(handlers),
+      resourceLoader: loader,
       withSessionWriteSettlement: async (run) => {
         settling = true;
         try {
@@ -165,13 +174,11 @@ describe("AgentSession extension dispatch", () => {
       const delta = event.assistantMessageEvent.delta;
       observed.push(`listener:${delta}:${settling}`);
       if (delta === "a") {
-        handlers.set("message_update", [
-          async () => {
-            await Promise.resolve();
-            observed.push(`handler:${settling}`);
-            handlers.delete("message_update");
-          },
-        ]);
+        api.on("message_update", async () => {
+          await Promise.resolve();
+          observed.push(`handler:${settling}`);
+          handlers.delete("message_update");
+        });
       }
       consumed.shift()?.resolve();
     });

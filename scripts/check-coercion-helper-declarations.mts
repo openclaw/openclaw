@@ -269,12 +269,6 @@ const EXCEPTIONAL_COERCION_HELPER_CARVE_OUTS = [
     reason: "Serialized standalone app closure cannot capture module imports.",
   },
   {
-    file: "extensions/diffs/src/viewer-payload.ts",
-    name: "isViewerRecord",
-    kind: "function",
-    reason: "Standalone browser asset build cannot resolve workspace package imports.",
-  },
-  {
     file: "scripts/lib/kova-report-gate.mts",
     name: "isRecord",
     kind: "function",

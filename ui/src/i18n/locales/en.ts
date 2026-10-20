@@ -1071,6 +1071,18 @@ export const en: TranslationMap & {
       "{count} sensitive values hidden. Use the reveal button above to edit the raw config.",
   },
   execApproval: {
+    watcherApprovalScope:
+      "Approval applies to this saved watcher. Source changes or reactivation may require approval again.",
+    watcherSandboxSummary:
+      "Runs in your sandbox after you leave this chat, until stopped. Restarts automatically after interruptions.",
+    watcherGatewaySummary:
+      "Runs on the Gateway after you leave this chat, until stopped. Restarts automatically after interruptions.",
+    watcherSummary:
+      "Runs after you leave this chat, until stopped. Restarts automatically after interruptions.",
+    startWatcher: "Start watching",
+    saveWatcher: "Save watcher change",
+    cancelWatcher: "Cancel",
+
     scope: {
       standingGrant:
         'Always allow runs this exact command for "{automation}" without asking, until revoked (revocable)',
@@ -1120,6 +1132,15 @@ export const en: TranslationMap & {
       "OpenClaw cannot confirm or record a decision while disconnected. Reconnect to check the current status.",
     retry: "Retry",
     execTitle: "Command approval",
+    watcherTitle: "Watcher approval: {name}",
+    watcherChangeTitle: "Watcher change: {name}",
+    watcherLifetime:
+      "If saved and enabled, this watcher runs after you leave this chat, until stopped. It is configured to restart automatically after interruptions.",
+    watcherAllowed:
+      "This proposal was approved. Approval alone does not confirm that the change was saved or the watcher started. Check its current status in Automations.",
+    watcherNotCreated: "This proposal did not create a watcher.",
+    watcherNotChanged:
+      "This proposal did not save the change. It did not stop or change the existing watcher.",
     pending: "Waiting for your decision",
     pendingDescription: "Review the request carefully. The first answer from any surface wins.",
     approvedHere: "Approved here",
@@ -1135,7 +1156,7 @@ export const en: TranslationMap & {
     allowedAlwaysDescription: "The operation was approved with the always-allow decision.",
     deniedDescription: "The operation was denied and will not continue.",
     expiredDescription: "No decision arrived before the deadline, so the operation was denied.",
-    cancelledDescription: "The requesting run ended before a decision could be used.",
+    cancelledDescription: "This approval request was canceled and can no longer be used.",
     summaryLabel: "Summary",
     commandLabel: "Command",
     requestLabel: "Request details",
@@ -1789,40 +1810,6 @@ export const en: TranslationMap & {
       resize: "Resize",
       autoHeight: "Auto height",
       remove: "Delete",
-      needsApproval: "Needs approval",
-      needsApprovalDetail: "This widget requested additional access.",
-      networkAccess: "Network origins",
-      hostTools: "Host tools and data",
-      activeCapabilities: "Active widget capabilities",
-      networkCapability: "Network: {capability}",
-      toolCapability: "Tool: {capability}",
-      granted: "Granted",
-      allow: "Allow",
-      allowFailed: "Could not allow widget access. Try again.",
-      reject: "Reject",
-      rejectFailed: "Could not reject widget access. Try again.",
-      rejected: "Access rejected",
-      rejectedDetail: "This widget stays inactive until it is removed or replaced.",
-      appLoading: "Restoring app…",
-      appStaleTitle: "This pinned app is stale",
-      appStaleDetail: "Its server, resource, or originating transcript is no longer available.",
-      retry: "Retry",
-      frameResolverMissing: "Widget content is unavailable.",
-      sandboxUnavailable: "Widget sandbox host is unavailable.",
-      accessDenied: "You don’t have access to this widget in this conversation.",
-      waitingForResult: "Waiting for the widget result.",
-      runtimeError: "Script error: {message}",
-      waitingForConnection: "Waiting for the connection. This view will recover automatically.",
-      resourceUnavailable:
-        "A widget resource could not load. Retry when the connection is available.",
-      frameAuthorizationFailed: "Widget authorization failed after repeated refresh attempts.",
-      sandboxOriginRequired:
-        "Widget authorization failed after repeated refresh attempts. If the gateway runs behind a reverse proxy or tunnel that does not route the widget sandbox port, set mcp.apps.sandboxOrigin to a dedicated public origin routed to the sandbox listener.",
-      errorTitle: "This widget could not load",
-      errorDetail: "The problem is contained to this card.",
-      actionErrorTitle: "Widget change failed",
-      actionErrorDetail: "The dashboard kept the previous widget state.",
-      errorShow: "Show details",
       kindMcp: "MCP",
       kindHtml: "HTML",
       kindPlugin: "Plugin",
@@ -2132,12 +2119,9 @@ export const en: TranslationMap & {
       online: "Online",
       offline: "Offline",
       unavailable: "Could not load people. Try again.",
-      accessDenied:
-        "You cannot mention people here. Sign in with a verified profile or ask an administrator to check your access.",
-      profileUnavailable:
-        "Your profile could not be verified. Reconnect, or ask an administrator for help.",
-      rejected:
-        "Mention search was rejected for this conversation. Check your access or choose another conversation.",
+      accessDenied: "Mention access denied. Sign in or contact an admin.",
+      profileUnavailable: "Profile unverified. Reconnect or contact an admin.",
+      rejected: "Mention search rejected. Check access or use another chat.",
       limit: "You can mention up to 10 people per message.",
       selectedLabel: "Will notify",
       selected: "Will notify: {names}",
@@ -2229,7 +2213,6 @@ export const en: TranslationMap & {
     subagentsRunning: "{count} subagents running",
     subagentsRunningOne: "1 subagent running",
     startupStatus: {
-      retrying: "Retrying… {attempt}/{maxAttempts}",
       preparingWorkspace: "Preparing workspace…",
       namingWorktree: "Naming worktree…",
       creatingWorktree: "Creating worktree…",

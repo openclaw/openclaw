@@ -175,6 +175,32 @@ afterEach(async () => {
   await state.cleanup();
 });
 
+function executeWithApproval(overrides: Partial<ExecuteNodeHostCommandParams> = {}) {
+  return executeNodeHostCommand({
+    ...request,
+    security: "allowlist",
+    ask: "on-miss",
+    ...overrides,
+  });
+}
+
+function savePolicy(defaults: NonNullable<Parameters<typeof saveExecApprovals>[0]["defaults"]>) {
+  saveExecApprovals({ version: 1, defaults });
+}
+
+function calledRpc(method: string) {
+  return rpc.mock.calls.some(([called]) => called === method);
+}
+
+async function waitForDecision(execution: Promise<unknown>) {
+  await Promise.race([decisionEntered.promise, execution]);
+  expect(calledRpc("exec.approval.waitDecision")).toBe(true);
+}
+
+function makeAutoReviewer(rationale = "would allow if called") {
+  return vi.fn(async () => ({ decision: "allow-once" as const, risk: "low" as const, rationale }));
+}
+
 it.each([
   { host: "gateway", surface: "subagent" },
   { host: "node", surface: "dashboard" },
@@ -347,11 +373,7 @@ it("honors a retained policy-owner deny when another agent is permissive", async
       worker: { security: "full", ask: "off" },
     },
   });
-  const autoReviewer = vi.fn(async () => ({
-    decision: "allow-once" as const,
-    risk: "low" as const,
-    rationale: "would allow if called",
-  }));
+  const autoReviewer = makeAutoReviewer();
 
   await expect(
     executeNodeHostCommand({
@@ -466,18 +488,11 @@ for (const { policyState, shouldExecute } of [
           return await baseRpc(method, options, params);
         });
 
-        saveExecApprovals({ version: 1, defaults: { security: "allowlist", ask: "on-miss" } });
-        const autoReviewer = vi.fn(async () => ({
-          decision: "allow-once" as const,
-          risk: "low" as const,
-          rationale: "prints fixture output",
-        }));
-        const execution = executeNodeHostCommand({
-          ...request,
+        savePolicy({ security: "allowlist", ask: "on-miss" });
+        const autoReviewer = makeAutoReviewer("prints fixture output");
+        const execution = executeWithApproval({
           agentId: policyAgentId,
           sessionKey: policySessionKey,
-          security: "allowlist",
-          ask: "on-miss",
           autoReview: true,
           autoReviewer,
         });
@@ -529,18 +544,11 @@ it.each([
   "/usr/bin/env /usr/bin/printf node-policy-proof",
   "/bin/sh -c '/usr/bin/printf node-policy-proof'",
 ])("keeps remote unpinned or wrapped %s on the human path", async (command) => {
-  saveExecApprovals({ version: 1, defaults: { security: "allowlist", ask: "on-miss" } });
-  const autoReviewer = vi.fn(async () => ({
-    decision: "allow-once" as const,
-    risk: "low" as const,
-    rationale: "would allow if called",
-  }));
+  savePolicy({ security: "allowlist", ask: "on-miss" });
+  const autoReviewer = makeAutoReviewer();
   const warnings: string[] = [];
-  const execution = executeNodeHostCommand({
-    ...request,
+  const execution = executeWithApproval({
     command,
-    security: "allowlist",
-    ask: "on-miss",
     autoReview: true,
     autoReviewer,
     warnings,
@@ -563,14 +571,9 @@ it.each([
   "'http://127.0.0.1:9876/oauth2/callback?state=x&code=y'",
   String.raw`http://127.0.0.1:9876/oauth2/callback?state=x\&code=y`,
 ])("requests human approval with unchanged argv for callback %s", async (callback) => {
-  saveExecApprovals({ version: 1, defaults: { security: "allowlist", ask: "on-miss" } });
+  savePolicy({ security: "allowlist", ask: "on-miss" });
   const command = `/usr/bin/printf %s ${callback}`;
-  const execution = executeNodeHostCommand({
-    ...request,
-    command,
-    security: "allowlist",
-    ask: "on-miss",
-  });
+  const execution = executeWithApproval({ command });
   const drained = execution.catch(() => undefined);
   try {
     await Promise.race([decisionEntered.promise, execution]);
@@ -640,17 +643,11 @@ it.each([
   "keeps $channel node approval $decision inside the originating tool lifetime",
   async ({ channel, decision }) => {
     let completed = false;
-    const result = executeNodeHostCommand({
-      ...request,
-      ask: "on-miss",
-      security: "allowlist",
-      turnSourceChannel: channel,
-    }).finally(() => {
+    const result = executeWithApproval({ turnSourceChannel: channel }).finally(() => {
       completed = true;
     });
-    await Promise.race([decisionEntered.promise, result]);
+    await waitForDecision(result);
     resolveDecision({ decision });
-    expect(rpc.mock.calls.some(([method]) => method === "exec.approval.waitDecision")).toBe(true);
     expect(completed).toBe(false);
     expect((await result).details).toMatchObject({
       status: "completed",
@@ -673,17 +670,13 @@ it("prompts for target ask=always even when the caller is full/off", async () =>
 it("does not dispatch a late A2A approval after cancellation", async () => {
   const controller = new AbortController();
   const reason = new Error("originating turn closed");
-  const execution = executeNodeHostCommand({
-    ...request,
-    security: "allowlist",
-    ask: "on-miss",
+  const execution = executeWithApproval({
     signal: controller.signal,
     turnSourceChannel: "a2a",
   });
   const drained = execution.catch(() => undefined);
   try {
-    await Promise.race([decisionEntered.promise, execution]);
-    expect(rpc.mock.calls.some(([method]) => method === "exec.approval.waitDecision")).toBe(true);
+    await waitForDecision(execution);
     controller.abort(reason);
     resolveDecision({ decision: "allow-once" });
     await expect(execution).rejects.toBe(reason);
@@ -696,13 +689,8 @@ it("does not dispatch a late A2A approval after cancellation", async () => {
 });
 
 it("preserves a target deny introduced while approval was pending", async () => {
-  const execution = executeNodeHostCommand({
-    ...request,
-    security: "allowlist",
-    ask: "on-miss",
-  });
-  await Promise.race([decisionEntered.promise, execution]);
-  expect(rpc.mock.calls.some(([method]) => method === "exec.approval.waitDecision")).toBe(true);
+  const execution = executeWithApproval();
+  await waitForDecision(execution);
   setRuntimeConfigSnapshot({ tools: { exec: { security: "deny", ask: "off" } } });
   resolveDecision({ decision: "allow-once" });
   const result = await execution;
@@ -731,7 +719,7 @@ it("executes full/off through a symlink cwd using the prepared canonical directo
     workdir: link,
   });
   expect(result.details).toMatchObject({ status: "completed", aggregated: `${targetDir}\n` });
-  expect(rpc.mock.calls.some(([method]) => method === "exec.approval.request")).toBe(false);
+  expect(calledRpc("exec.approval.request")).toBe(false);
 });
 
 it("does not bind a full/off script to approval-time contents", async () => {
@@ -769,7 +757,7 @@ it.each(["caller", "node", "approvals"] as const)(
     if (owner === "node") {
       setRuntimeConfigSnapshot({ tools: { exec: { security: "full", ask: "always" } } });
     } else if (owner === "approvals") {
-      saveExecApprovals({ version: 1, defaults: { security: "full", ask: "always" } });
+      savePolicy({ security: "full", ask: "always" });
     }
     await expect(
       executeNodeHostCommand({
@@ -805,8 +793,7 @@ it("refuses a cwd replaced by a symlink after approval preparation", async () =>
   const moved = path.join(request.workdir, "moved");
   await fs.mkdir(approved);
   const execution = executeNodeHostCommand({ ...request, workdir: approved, ask: "always" });
-  await Promise.race([decisionEntered.promise, execution]);
-  expect(rpc.mock.calls.some(([method]) => method === "exec.approval.waitDecision")).toBe(true);
+  await waitForDecision(execution);
   await fs.rename(approved, moved);
   await fs.symlink(moved, approved, "dir");
   resolveDecision({ decision: "allow-once" });
@@ -855,14 +842,10 @@ it.each(["empty", "always", "deny"] as const)(
       },
       agents: { main: { allowlist: mode === "empty" ? [] : [{ pattern: "/usr/bin/printf" }] } },
     });
-    await expect(
-      executeNodeHostCommand({ ...request, security: "allowlist", ask: "on-miss" }),
-    ).rejects.toThrow(/exec denied/);
+    await expect(executeWithApproval()).rejects.toThrow(/exec denied/);
     expect(invokeCount).toBe(0);
-    expect(rpc.mock.calls.some(([method]) => method === "exec.approvals.node.get")).toBe(false);
-    expect(rpc.mock.calls.some(([method]) => method === "exec.approval.request")).toBe(
-      mode !== "deny",
-    );
+    expect(calledRpc("exec.approvals.node.get")).toBe(false);
+    expect(calledRpc("exec.approval.request")).toBe(mode !== "deny");
   },
 );
 
@@ -891,10 +874,7 @@ it.each(["hit", "argv-miss", "cwd-miss"] as const)(
     });
     const other = path.join(request.workdir, "other-cwd");
     await fs.mkdir(other);
-    const execution = executeNodeHostCommand({
-      ...request,
-      security: "allowlist",
-      ask: "on-miss",
+    const execution = executeWithApproval({
       ...(match === "argv-miss" ? { command: "/usr/bin/printf changed" } : {}),
       ...(match === "cwd-miss" ? { workdir: other } : {}),
     });
@@ -942,12 +922,13 @@ it.each(["exact-command", "patterns"] as const)(
       throw new Error("Expected canonical durable grant");
     }
     saveExecApprovals(file);
-    expect(
-      (await executeNodeHostCommand({ ...request, security: "allowlist", ask: "on-miss" })).details,
-    ).toMatchObject({ status: "completed", aggregated: "node-policy-proof" });
+    expect((await executeWithApproval()).details).toMatchObject({
+      status: "completed",
+      aggregated: "node-policy-proof",
+    });
     expect(invokeCount).toBe(1);
-    expect(rpc.mock.calls.some(([method]) => method === "exec.approvals.node.get")).toBe(false);
-    expect(rpc.mock.calls.some(([method]) => method === "exec.approval.request")).toBe(false);
+    expect(calledRpc("exec.approvals.node.get")).toBe(false);
+    expect(calledRpc("exec.approval.request")).toBe(false);
   },
 );
 
@@ -979,13 +960,11 @@ it("does not let prepared allowlist facts survive policy revocation", async () =
     agents: { main: { allowlist: [{ pattern: "/usr/bin/printf" }] } },
   });
   afterPrepare = async () => {
-    saveExecApprovals({ version: 1, defaults: { security: "deny", ask: "off" } });
+    savePolicy({ security: "deny", ask: "off" });
   };
-  await expect(
-    executeNodeHostCommand({ ...request, security: "allowlist", ask: "on-miss" }),
-  ).rejects.toThrow("security=deny");
+  await expect(executeWithApproval()).rejects.toThrow("security=deny");
   expect(invokeCount).toBe(0);
-  expect(rpc.mock.calls.some(([method]) => method === "exec.approvals.node.get")).toBe(false);
+  expect(calledRpc("exec.approvals.node.get")).toBe(false);
 });
 
 it("warns only about obsolete prepared rules for the current agent", async () => {
@@ -1000,9 +979,7 @@ it("warns only about obsolete prepared rules for the current agent", async () =>
     },
   });
   const warnings: string[] = [];
-  await expect(
-    executeNodeHostCommand({ ...request, security: "allowlist", ask: "on-miss", warnings }),
-  ).rejects.toThrow("user-denied");
+  await expect(executeWithApproval({ warnings })).rejects.toThrow("user-denied");
   expect(warnings).toContainEqual(
     expect.stringContaining("1 older generated exec rule is inactive for this agent"),
   );

@@ -10,9 +10,16 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
-import { readGatewayLockProcessNamespace } from "./gateway-lock-payload.js";
+import {
+  GatewayLockNamespaceError,
+  readGatewayLockProcessNamespace,
+} from "./gateway-lock-payload.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
-import { StateDatabaseMaintenanceScopeError } from "./gateway-state-owner-record.js";
+import {
+  StateDatabaseAdmissionPendingError,
+  StateDatabaseMaintenanceScopeError,
+  StateDatabaseOfflineMaintenanceError,
+} from "./gateway-state-owner-record.js";
 import {
   acquireGatewayStateOwner,
   acquireStateDatabaseSchemaLease,
@@ -606,6 +613,64 @@ describe("Gateway state ownership", () => {
         } finally {
           replacement?.mockRestore();
           lease.release();
+        }
+      });
+    },
+  );
+
+  it.each(["missing", "null", "foreign"] as const)(
+    "defers unverifiable maintenance without reclaiming its owner: %s namespace",
+    async (kind) => {
+      await withTempDir("openclaw-unverifiable-state-access-", async (root) => {
+        const databasePath = path.join(root, "state", "openclaw.sqlite");
+        const seed = acquireGatewayStateOwner({ databasePath });
+        const pathname = seed.path;
+        seed.release();
+        const record = {
+          // A foreign PID can collide with ours without lending local authority.
+          pid: process.pid,
+          createdAt: new Date().toISOString(),
+          configPath: path.join(root, "openclaw.json"),
+          ...(kind === "missing"
+            ? {}
+            : {
+                processNamespace:
+                  kind === "null"
+                    ? null
+                    : {
+                        platform: "linux",
+                        identity: "11111111-1111-1111-1111-111111111111",
+                        host: "foreign-host",
+                        pidNsInode: "1",
+                      },
+              }),
+        };
+        try {
+          for (const role of ["gateway", "agent-embedded", "sqlite-maintenance"] as const) {
+            const raw = JSON.stringify({ ...record, role });
+            fs.writeFileSync(pathname, raw);
+            if (role === "sqlite-maintenance") {
+              expect(() => assertStateDatabaseAccessAllowed(databasePath)).toThrow(
+                StateDatabaseOfflineMaintenanceError,
+              );
+              fs.writeFileSync(
+                pathname,
+                JSON.stringify({ ...record, role, stateOwnerKind: "schema" }),
+              );
+              expect(() => assertStateDatabaseAccessAllowed(databasePath)).toThrow(
+                StateDatabaseAdmissionPendingError,
+              );
+              fs.writeFileSync(pathname, raw);
+            } else {
+              expect(() => assertStateDatabaseAccessAllowed(databasePath)).not.toThrow();
+            }
+            expect(() => acquireGatewayStateOwner({ databasePath })).toThrow(
+              GatewayLockNamespaceError,
+            );
+            expect(fs.readFileSync(pathname, "utf8")).toBe(raw);
+          }
+        } finally {
+          fs.rmSync(pathname, { force: true });
         }
       });
     },

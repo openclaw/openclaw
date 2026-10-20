@@ -18,79 +18,141 @@ async function swipe(
   point: { x: number; y: number },
   direction: -1 | 1,
 ) {
+  const distance = 240;
   const before = await thread.evaluate((element) => element.scrollTop);
-  const timestamp = Date.now() / 1000;
-  // A 160px native text drag can commit only 105px before release on CI.
-  // Travel 240px at the same velocity without relaxing the scroll assertions.
-  const moveCount = 12;
-  const moveSeconds = 0.016;
-  const moves: number[] = [];
-  await cdp.send("Input.dispatchTouchEvent", {
-    type: "touchStart",
-    touchPoints: [{ ...point, id: 1 }],
-    timestamp,
-  });
-  const scrollEnd = await thread.evaluateHandle((element) => {
+  const scroll = await thread.evaluateHandle((element) => {
+    const offsets = [
+      { time: performance.timeOrigin + performance.now(), offset: element.scrollTop },
+    ];
+    const record = (event: Event) =>
+      offsets.push({
+        time: performance.timeOrigin + event.timeStamp,
+        offset: element.scrollTop,
+      });
     let finish!: () => void;
     const done = new Promise<void>((resolve) => {
-      finish = () => resolve();
+      finish = resolve;
     });
+    element.addEventListener("scroll", record, { passive: true });
     element.addEventListener("scrollend", finish, { once: true });
-    return { done, dispose: () => element.removeEventListener("scrollend", finish) };
+    return {
+      offsets,
+      done,
+      dispose: () => {
+        element.removeEventListener("scroll", record);
+        element.removeEventListener("scrollend", finish);
+      },
+    };
   });
+  // Touch does not bubble across sandbox documents. Observe release in each frame
+  // so the drag offset cannot accidentally include the ensuing native fling.
+  const releases = await Promise.all(
+    page.frames().map((frame) =>
+      frame.evaluateHandle(() => {
+        const state = { time: null as number | null };
+        const record = (event: TouchEvent) => {
+          state.time = performance.timeOrigin + event.timeStamp;
+        };
+        window.addEventListener("touchend", record, { capture: true, once: true, passive: true });
+        return {
+          state,
+          dispose: () => window.removeEventListener("touchend", record, { capture: true }),
+        };
+      }),
+    ),
+  );
   try {
-    for (let step = 1; step <= moveCount; step++) {
-      await cdp.send("Input.dispatchTouchEvent", {
-        type: "touchMove",
-        touchPoints: [{ ...point, y: point.y + direction * step * 20, id: 1 }],
-        // Preserve physical gesture velocity independently of CDP round-trip latency.
-        timestamp: timestamp + step * moveSeconds,
-      });
-      // CDP acknowledgment can precede the renderer's scroll offset update.
-      moves.push(
-        await thread.evaluate(
-          (element) =>
-            new Promise<number>((resolve) => {
-              requestAnimationFrame(() => resolve(element.scrollTop));
-            }),
-        ),
-      );
-    }
-    // Observe the drag while the finger is still down, before inertia can start.
-    let released = before;
-    await expect
-      .poll(async () => {
-        released = await thread.evaluate((element) => element.scrollTop);
-        return direction * (before - released);
-      })
-      .toBeGreaterThan(120);
-    await cdp.send("Input.dispatchTouchEvent", {
-      type: "touchEnd",
-      touchPoints: [],
-      timestamp: timestamp + moveCount * moveSeconds + 0.002,
+    // Chromium owns gesture timing; per-event CDP round trips can stall under load.
+    await cdp.send("Input.synthesizeScrollGesture", {
+      ...point,
+      yDistance: direction * distance,
+      speed: 1_250,
+      gestureSourceType: "touch",
+      preventFling: false,
     });
+    const releaseTimes = await Promise.all(
+      releases.map((release) => release.evaluate(({ state }) => state.time)),
+    );
+    const releasedAt = releaseTimes.find((time) => time !== null);
+    if (releasedAt === undefined) {
+      throw new Error("Native touch gesture did not release in the page or its frames");
+    }
+    const { moves, released } = await scroll.evaluate(({ offsets }, time) => {
+      const beforeRelease = offsets
+        .filter((entry) => entry.time <= time)
+        .map((entry) => entry.offset);
+      return { moves: beforeRelease, released: beforeRelease.at(-1) ?? offsets[0]!.offset };
+    }, releasedAt);
+    const dragDistance = direction * (before - released);
+    let dragFailureDetails: string | undefined;
+    if (!(dragDistance > 120)) {
+      // Preserve the failed sample while recording whether native scrolling continued.
+      const [recordedOffsets, current, frameClocks] = await Promise.allSettled([
+        scroll.evaluate(({ offsets }) => offsets),
+        thread.evaluate((element, coordinates) => {
+          const hit = document.elementFromPoint(coordinates.x, coordinates.y);
+          return {
+            scrollTop: element.scrollTop,
+            scrollHeight: element.scrollHeight,
+            clientHeight: element.clientHeight,
+            timeOrigin: performance.timeOrigin,
+            now: performance.timeOrigin + performance.now(),
+            hit: hit ? { tag: hit.tagName, classes: hit.getAttribute("class") } : null,
+          };
+        }, point),
+        Promise.all(
+          releases.map((release) =>
+            release.evaluate(({ state }) => ({
+              releaseTime: state.time,
+              timeOrigin: performance.timeOrigin,
+            })),
+          ),
+        ),
+      ]);
+      dragFailureDetails = JSON.stringify({
+        point,
+        direction,
+        before,
+        released,
+        releasedAt,
+        releaseTimes,
+        moves,
+        offsets: recordedOffsets,
+        current,
+        frameClocks,
+      });
+    }
+    expect(dragDistance, dragFailureDetails).toBeGreaterThan(120);
     // A quiet timer window can occur during native inertia; wait for its actual end.
     const completed = await page.waitForFunction(
       async ({ done }) => {
         await done;
         return true;
       },
-      scrollEnd,
+      scroll,
       { timeout: 10_000 },
     );
     await completed.dispose();
     await waitForChatScrollIdle(page);
-    return {
-      before,
-      moves,
-      released,
-      settled: await thread.evaluate((element) => element.scrollTop),
-    };
+    const settled = await thread.evaluate((element) => element.scrollTop);
+    // The final drag scroll may arrive after touchend. Require motion beyond the
+    // entire requested drag so queued drag updates cannot masquerade as inertia.
+    expect(direction * (before - settled)).toBeGreaterThan(distance + 20);
+    return { before, moves, released, settled };
   } finally {
+    await Promise.all(
+      releases.map(async (release) => {
+        try {
+          await release.evaluate(({ dispose }) => dispose());
+        } finally {
+          await release.dispose();
+        }
+      }),
+    );
     try {
-      await scrollEnd.evaluate(({ dispose }) => dispose());
+      await scroll.evaluate(({ dispose }) => dispose());
     } finally {
-      await scrollEnd.dispose();
+      await scroll.dispose();
     }
   }
 }

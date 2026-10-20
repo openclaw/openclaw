@@ -2,7 +2,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import * as tar from "tar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { runCommandBufferedMock } = vi.hoisted(() => ({ runCommandBufferedMock: vi.fn() }));
@@ -38,26 +37,6 @@ afterEach(async () => {
 });
 
 describe("dir.fetch process wrapper", () => {
-  it("falls back to capped tar when the optional du probe fails", async () => {
-    const chunks: Buffer[] = [];
-    for await (const chunk of tar.c({ cwd: tmpRoot, gzip: true, portable: true }, ["ok.txt"])) {
-      chunks.push(Buffer.from(chunk));
-    }
-    runCommandBufferedMock
-      .mockRejectedValueOnce(new Error("du failed"))
-      .mockResolvedValueOnce(commandResult({ stdout: Buffer.concat(chunks) }));
-
-    await expect(handleDirFetch({ path: tmpRoot, maxBytes: 1024 })).resolves.toMatchObject({
-      ok: true,
-      entries: ["ok.txt"],
-    });
-    expect(runCommandBufferedMock).toHaveBeenNthCalledWith(
-      1,
-      ["du", "-sk", tmpRoot],
-      expect.objectContaining({ discardOutput: { stderr: true } }),
-    );
-  });
-
   it("rejects preflight-only requests once filesystem listing crosses the entry cap", async () => {
     await Promise.all(
       Array.from({ length: 5001 }, (_, index) =>
@@ -93,16 +72,14 @@ describe("dir.fetch process wrapper", () => {
   });
 
   it("rejects invalid producer archive bytes before returning a transfer", async () => {
-    runCommandBufferedMock
-      .mockResolvedValueOnce(commandResult({ stdout: Buffer.from("1\tproject\n") }))
-      .mockResolvedValueOnce(commandResult({ stdout: Buffer.from("archive") }));
+    runCommandBufferedMock.mockResolvedValueOnce(commandResult({ stdout: Buffer.from("archive") }));
 
     await expect(handleDirFetch({ path: tmpRoot, maxBytes: 1024 })).resolves.toMatchObject({
       ok: false,
       code: "READ_ERROR",
       message: expect.stringContaining("archive inspection failed:"),
     });
-    expect(runCommandBufferedMock).toHaveBeenCalledTimes(2);
+    expect(runCommandBufferedMock).toHaveBeenCalledTimes(1);
   });
 
   describe.each([true, false])("archive failures with preflight=%s", (preflightOnly) => {
@@ -140,11 +117,6 @@ describe("dir.fetch process wrapper", () => {
         preflightOnly ? label === "launch error" : label !== "launch error",
       ),
     )("classifies $label failures through handleDirFetch", async ({ result, code, message }) => {
-      if (!preflightOnly) {
-        runCommandBufferedMock.mockResolvedValueOnce(
-          commandResult({ stdout: Buffer.from("1\tproject\n") }),
-        );
-      }
       if (result instanceof Error) {
         runCommandBufferedMock.mockRejectedValueOnce(result);
       } else {
@@ -159,7 +131,7 @@ describe("dir.fetch process wrapper", () => {
         message,
         canonicalPath: tmpRoot,
       });
-      expect(runCommandBufferedMock).toHaveBeenCalledTimes(preflightOnly ? 1 : 2);
+      expect(runCommandBufferedMock).toHaveBeenCalledTimes(1);
     });
   });
 });

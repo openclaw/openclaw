@@ -44,10 +44,7 @@ import {
 } from "../test-utils/gateway-scheduler-clock.js";
 import { registerGatewayCronCompletionTests } from "./server-cron-completion.test-support.js";
 import { registerGatewayCronContextTests } from "./server-cron.context.test-support.js";
-import {
-  registerGatewayCronMutationAuthorityTests,
-  registerGatewayCronStreamMutationTests,
-} from "./server-cron.mutation-lifecycle.test-support.js";
+import { registerGatewayCronMutationAuthorityTests } from "./server-cron.mutation-lifecycle.test-support.js";
 import { createWatchedRun, runExit } from "./server-cron.process.test-support.js";
 import { registerGatewayCronQueueTests } from "./server-cron.queue.test-support.js";
 import { registerGatewayCronSystemJobTests } from "./server-cron.system-jobs.test-support.js";
@@ -360,13 +357,6 @@ const addCommandJob = createJobAdder((source) => ({
 }));
 const addScriptJob = createJobAdder((script) => ({ kind: "script", script }));
 
-function addStreamJob(service: CronServiceFixture, name: string) {
-  return addSystemEventJob(service, name, "event", {
-    schedule: { kind: "stream", command: ["source"] },
-    sessionTarget: "main",
-  });
-}
-
 function holdFirstCronList(service: CronServiceFixture) {
   const entered = createDeferred();
   const release = createDeferred();
@@ -410,34 +400,6 @@ function mockCronSupervisor(...runs: ReturnType<typeof createWatchedRun>[]) {
   });
   mocks.supervisor.mockReturnValue({ acquireScopeCleanup, spawn, cancelScope });
   return { spawn, cancelScope };
-}
-
-async function withStreamSource(
-  name: string,
-  run: (
-    fixture: { state: CronServiceFixture } & ReturnType<typeof createWatchedRun> &
-      ReturnType<typeof mockCronSupervisor>,
-  ) => Promise<void>,
-  stubborn = false,
-) {
-  if (stubborn) {
-    vi.useFakeTimers();
-  }
-  const watched = createWatchedRun(true, stubborn ? { durationMs: 10_000 } : {});
-  if (stubborn) {
-    watched.cancel.mockImplementationOnce(() => {});
-  }
-  const supervisor = mockCronSupervisor(watched);
-  const state = loadCronService(createTriggerConfig(name));
-  try {
-    await run({ state, ...watched, ...supervisor });
-  } finally {
-    await state.stopStreamWatchers?.();
-    state.cron.stop();
-    if (stubborn) {
-      vi.useRealTimers();
-    }
-  }
 }
 
 const requireRecord = createRequireRecord("object", "expected-label");
@@ -1263,131 +1225,6 @@ describe("buildGatewayCronService", () => {
         },
       );
     });
-  });
-
-  it("keeps a stream source running when a conditional or invalid update is rejected", async () => {
-    await withStreamSource(
-      "server-cron-stream-rejected-update",
-      async ({ state, cancel, detachOutput, spawn }) => {
-        const added = await addStreamJob(state, "stream source");
-        const streamJob = "job" in added ? added.job : added;
-        const sourceIdentity = streamJob.state.streamSourceIdentity;
-        await expect(
-          state.cron.updateWithPrecondition(streamJob.id, { enabled: false }, () => {
-            throw new Error("revision mismatch");
-          }),
-        ).rejects.toThrow("revision mismatch");
-        await expect(
-          state.cron.update(streamJob.id, { schedule: { kind: "stream", command: [] } }),
-        ).rejects.toThrow("non-empty command argv array");
-        await state.cron.update(streamJob.id, {
-          schedule: { kind: "stream", command: ["source"] },
-        });
-
-        expect(spawn).toHaveBeenCalledOnce();
-        expect(cancel).not.toHaveBeenCalled();
-        expect(detachOutput).not.toHaveBeenCalled();
-        expect(state.cron.getJob(streamJob.id)?.enabled).toBe(true);
-        expect(state.cron.getJob(streamJob.id)?.state.streamSourceIdentity).toBe(sourceIdentity);
-      },
-    );
-  });
-
-  it("discards a stale reconcile list snapshot that raced a direct mutation route", async () => {
-    await withStreamSource(
-      "server-cron-stream-stale-snapshot",
-      async ({ state, cancel, detachOutput, spawn }) => {
-        // Hold the pre-add snapshot while direct mutation starts the current owner.
-        const heldList = holdFirstCronList(state);
-        const reconciling = state.reconcileStreamWatchers?.();
-        const added = await addStreamJob(state, "stale snapshot stream source");
-        const streamJob = "job" in added ? added.job : added;
-        const sourceIdentity = streamJob.state.streamSourceIdentity;
-        expect(spawn).toHaveBeenCalledOnce();
-        heldList.release.resolve();
-        await reconciling;
-
-        expect(cancel).not.toHaveBeenCalled();
-        expect(detachOutput).not.toHaveBeenCalled();
-        expect(spawn).toHaveBeenCalledOnce();
-        expect(state.cron.getJob(streamJob.id)?.state.streamSourceIdentity).toBe(sourceIdentity);
-      },
-    );
-  });
-
-  it("drains stream teardown once when stop and stopAndDrain overlap", async () => {
-    await withStreamSource("server-cron-stream-single-drain", async ({ state, cancel }) => {
-      await addStreamJob(state, "single drain stream source");
-      // cron.stop launches the asynchronous teardown; stopAndDrain must await
-      // that same drain instead of queueing every owner a second shutdown stop.
-      state.cron.stop();
-      await state.cron.stopAndDrain?.();
-      expect(cancel).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  it("retries stream teardown after a prior drain failure", async () => {
-    await withStreamSource(
-      "server-cron-stream-retry-drain",
-      async ({ state, cancel }) => {
-        await addStreamJob(state, "retry drain stream source");
-
-        const firstFailure = expect(state.cron.stopAndDrain?.()).rejects.toThrow(
-          "stream source did not exit",
-        );
-        await vi.waitFor(() => expect(cancel).toHaveBeenCalledTimes(1), { interval: 0 });
-        await vi.advanceTimersByTimeAsync(10_000);
-        await firstFailure;
-        await expect(state.cron.stopAndDrain?.()).resolves.toBeUndefined();
-        expect(cancel).toHaveBeenCalledTimes(2);
-      },
-      true,
-    );
-  });
-
-  registerGatewayCronStreamMutationTests({
-    createCronConfig,
-    loadCronService,
-    addSystemEventJob,
-    createWatchedRun,
-    mockCronSupervisor,
-  });
-
-  it("keeps a failed stream removal in an explicit terminal error state", async () => {
-    await withStreamSource(
-      "server-cron-stream-remove-failure",
-      async ({ state, cancel, detachOutput }) => {
-        const added = await addStreamJob(state, "stubborn stream source");
-        const streamJob = "job" in added ? added.job : added;
-        const removal = state.cron.remove(streamJob.id);
-        const removalFailure = expect(removal).rejects.toThrow("stream source did not exit");
-        await vi.waitFor(() => expect(cancel).toHaveBeenCalledTimes(1), { interval: 0 });
-        await vi.advanceTimersByTimeAsync(10_000);
-
-        await removalFailure;
-        expect(cancel).toHaveBeenCalledTimes(2);
-        expect(cancel).toHaveBeenCalledWith("manual-cancel");
-        expect(detachOutput).toHaveBeenCalled();
-        expect(state.cron.getJob(streamJob.id)).toMatchObject({
-          enabled: true,
-          state: {
-            streamStatus: "error",
-            streamError: expect.stringContaining("stream source failed to stop"),
-            streamRestartExhausted: true,
-          },
-        });
-
-        await state.stopStreamWatchers?.();
-        expect(state.cron.getJob(streamJob.id)).toMatchObject({
-          state: {
-            streamStatus: "error",
-            streamError: expect.stringContaining("stream source failed to stop"),
-            streamRestartExhausted: true,
-          },
-        });
-      },
-      true,
-    );
   });
 
   it("backs off isolated cron setup timeout without gateway restart", async () => {

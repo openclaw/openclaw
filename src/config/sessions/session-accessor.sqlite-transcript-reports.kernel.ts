@@ -41,6 +41,7 @@ import {
 import { applyAssistantDeliveryDirectives } from "./transcript-assistant-delivery.js";
 import { transcriptEventJsonSql } from "./transcript-payload.js";
 import { SessionTranscriptWriterClaimReboundError } from "./transcript-write-context.js";
+import type { InternalSessionEntry } from "./types.js";
 
 function readReportBranch(database: OpenClawAgentDatabase, sessionId: string) {
   const rows = iterateSqliteQuerySync(
@@ -123,6 +124,7 @@ export function appendAbortedSessionTranscriptPartialInTransaction(
   partial: AbortedSessionTranscriptPartial,
   preparedMessage: PreparedTranscriptMessageAppend<Record<string, unknown>>,
   projection?: { scheduleProjectionReconcile: false; onProjectionReconcileNeeded: () => void },
+  onEntryUpdated?: (entry: InternalSessionEntry) => void,
 ): AbortedSessionTranscriptPartialResult {
   assertSessionTranscriptHot(database.db, resolved.sessionId);
   const entry = readSessionEntryRow(database, resolved.sessionKey)?.entry;
@@ -171,7 +173,7 @@ export function appendAbortedSessionTranscriptPartialInTransaction(
     if (!current || current.sessionId !== resolved.sessionId) {
       throw new SessionTranscriptWriterClaimReboundError();
     }
-    writeSessionEntry(
+    const updatedEntry = writeSessionEntry(
       database,
       resolved.sessionKey,
       {
@@ -185,6 +187,7 @@ export function appendAbortedSessionTranscriptPartialInTransaction(
       },
       { canonicalPreviousEntry: current },
     );
+    onEntryUpdated?.(updatedEntry);
   }
   return {
     skipped: false,

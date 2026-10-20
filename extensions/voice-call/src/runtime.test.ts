@@ -481,10 +481,10 @@ describe("createVoiceCallRuntime lifecycle", () => {
       logger,
     });
 
-    expect(runtime).toMatchObject({
-      webhookUrl: "https://voice.example.com/voice/webhook",
-      publicUrl: "https://voice.example.com/voice/webhook",
-    });
+    expect(mocks.managerInitialize).toHaveBeenCalledWith(
+      expect.anything(),
+      "https://voice.example.com/voice/webhook",
+    );
     expect(logger.info).toHaveBeenCalledWith(
       "[voice-call] Webhook URL: https://voice.example.com/voice/webhook",
     );

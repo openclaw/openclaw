@@ -96,8 +96,7 @@ it("reads the accepted base immediately after a real same-session reset", async 
     });
     expect(reset).toMatchObject({ ok: true });
     const after = await loadGatewaySessionEntryReadOnlyAsync(sessionKey, { agentId: "main" }, cfg);
-    expect(after.entry?.sessionId).toBe(sessionId);
-    expect(after.entry?.worktree?.id).toBe(id);
+    expect(after.entry).toMatchObject({ sessionId, worktree: { id } });
     expect(after.entry?.lifecycleRevision).not.toBe("before-reset");
     expect((await readLocalWorkspaceProjection(id))?.lifecycle_revision).toBe("before-reset");
     const diff = await loadSessionDiff({ sessionKey });

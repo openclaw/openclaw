@@ -1,9 +1,16 @@
+import type { SessionEntryCurrentSource } from "../../config/sessions/session-entry-current.types.js";
 import type { CronConfig } from "../../config/types.cron.js";
+import type {
+  OperatorApprovalConsumptionInput,
+  OperatorApprovalRecord,
+} from "../../gateway/operator-approval-store.types.js";
+import type { ExecApprovalsFile } from "../../infra/exec-approvals-core.js";
 import type { CronJobScratchWriteInput, CronJobScratchWriteOutcome } from "../scratch-contract.js";
 import type {
   CronNotificationIntent,
   CronNotificationRouting,
 } from "../service/notification-intents.js";
+import type { CronStreamExecMutation } from "../stream-exec-authority.js";
 import type {
   CronCompletionStatus,
   CronFailureNotificationDelivery,
@@ -43,6 +50,12 @@ type CronSkippedRunChange =
       scheduleMode: "advance" | "preserve";
     };
 
+export type CronStreamMutationAdmissionFacts = {
+  mutation: CronStreamExecMutation;
+  unchangedDeclaration: boolean;
+  execApprovals?: ExecApprovalsFile;
+};
+
 export type CronJobMutationRefusal = { kind: "store-changed" };
 
 type CronExternalStreamSource = { scheduleKey: string; identity: string };
@@ -75,6 +88,12 @@ export type CronRuntimeMutationInputs = {
   "cron.writeScratch": CronJobScratchWriteInput & { createdAtMsFallback?: number };
   "cron.mutateJobs": {
     storeKey: string;
+    streamSecurity?: {
+      method: "cron.add" | "cron.update";
+      sessionEntryCurrentSource?: SessionEntryCurrentSource;
+      checkExecPolicy: boolean;
+      approval?: { binding: string; input: Readonly<OperatorApprovalConsumptionInput> };
+    };
     jobMutation: CronJobMutation;
     expectedJob?: { id: string; configRevision: string };
     preconditionJob?: CronJob;
@@ -183,6 +202,7 @@ export type CronRuntimeMutationContracts = {
     snapshot: CronJobMutationSnapshot;
     outcome: {
       store: CronStoreFile;
+      consumedStreamApproval?: OperatorApprovalRecord;
       names: Map<string, string | undefined>;
       changed: boolean;
       notifications: CronNotificationIntent[];

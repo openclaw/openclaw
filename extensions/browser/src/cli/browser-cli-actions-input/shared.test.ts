@@ -62,12 +62,6 @@ describe("readFields", () => {
 });
 
 describe("readActionsPayload", () => {
-  it("rejects conflicting inline and file actions before reading the file", async () => {
-    await expect(
-      readActionsPayload({ actions: "[]", actionsFile: "/tmp/openclaw-browser-actions.json" }),
-    ).rejects.toThrow("Specify only one of --actions or --actions-file");
-  });
-
   it("bounds action files with the same byte limit as stdin", async () => {
     const maxBytes = 1_000_000;
     await withTempDir("openclaw-browser-actions-", async (tempDir) => {

@@ -1,7 +1,8 @@
-import { readFileSync, writeFileSync, writeSync } from "node:fs";
+import { readFileSync, realpathSync, writeFileSync, writeSync } from "node:fs";
 import { Session } from "node:inspector/promises";
 import { availableParallelism } from "node:os";
-import { writeHeapSnapshot } from "node:v8";
+import { fileURLToPath } from "node:url";
+import { queryObjects, writeHeapSnapshot } from "node:v8";
 import { isMainThread } from "node:worker_threads";
 import { getWorkerMessageMetrics } from "../../src/infra/worker-message-metrics.ts";
 import { startGatewayBenchDiagnostics } from "./gateway-bench-diagnostics.ts";
@@ -100,6 +101,30 @@ if (isMainThread) {
     }
     if (message.kind === "resource-usage" && message.action === "sample") {
       void (async () => {
+        let sessionCensus: GatewayResourceSnapshot["sessionCensus"];
+        if (message.sessionCensus) {
+          if (!message.collectGarbage || message.initial) {
+            throw new Error("Session census requires a current forced-GC resource sample");
+          }
+          const sourceEntry = fileURLToPath(new URL("../../src/entry.ts", import.meta.url));
+          if (!process.argv[1] || realpathSync(process.argv[1]) !== realpathSync(sourceEntry)) {
+            throw new Error(
+              "Session census requires --entry src/entry.ts; bundled constructors have a different identity",
+            );
+          }
+          // Match the source runtime's module identities; count-only queries never retain instances.
+          const [{ SessionManager }, { AgentSession }, { Agent }] = await Promise.all([
+            import("../../src/agents/sessions/session-manager.js"),
+            import("../../src/agents/sessions/agent-session.js"),
+            import("../../src/agents/runtime/index.js"),
+          ]);
+          sessionCensus = {
+            scope: "source-main-isolate",
+            SessionManager: queryObjects(SessionManager, { format: "count" }),
+            AgentSession: queryObjects(AgentSession, { format: "count" }),
+            Agent: queryObjects(Agent, { format: "count" }),
+          };
+        }
         if (message.collectGarbage) {
           if (!inspectorConnected) {
             inspector.connect();
@@ -107,7 +132,12 @@ if (isMainThread) {
           }
           await inspector.post("HeapProfiler.collectGarbage");
         }
-        const resources = message.initial ? initialResources : sampleResources();
+        const resources = message.initial
+          ? initialResources
+          : {
+              ...sampleResources(),
+              ...(sessionCensus ? { sessionCensus } : {}),
+            };
         if (message.snapshotPath) {
           writeHeapSnapshot(message.snapshotPath);
         }

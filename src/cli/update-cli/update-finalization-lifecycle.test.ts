@@ -50,6 +50,17 @@ function finalization(timeoutMs: number | undefined, json = false, attach = true
   return { lifecycle, stopChildren, read, hold };
 }
 
+it("reports standalone repair as repairing before Doctor maintenance", () => {
+  const lifecycle = new UpdateFinalizationLifecycle(false, undefined, () => {});
+  const runId = lifecycle.attachLedger(true);
+  lifecycle.recordInstallKind("package", "2026.10.5");
+  expect(getUpdateRun(runId)).toMatchObject({
+    phase: "repairing",
+    status: "running",
+    target: { kind: "package", version: "2026.10.5" },
+  });
+});
+
 it("writes successful finalization progress to stderr and failures as errors", async () => {
   const logPath = path.join(dirs.make("openclaw-finalize-log-"), "openclaw.log");
   setLoggerOverride({ level: "info", file: logPath });

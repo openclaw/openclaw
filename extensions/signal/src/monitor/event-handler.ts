@@ -651,13 +651,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       ...(last.messageId ? { messageId: last.messageId } : {}),
       inboundEventKind: "user_request",
     };
-    return await Promise.all(
-      entries.flatMap((entry) =>
-        entry.resolveChannelIngress
-          ? [entry.resolveChannelIngress(contextBinding)]
-          : (entry.channelIngress ?? []).map(async (ingress) => ingress),
-      ),
-    );
+    return await Promise.all(entries.map((entry) => entry.resolveChannelIngress(contextBinding)));
   }
 
   const flushDebouncedSignalInboundEntries = (

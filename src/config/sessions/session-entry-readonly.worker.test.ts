@@ -192,6 +192,36 @@ it("resolves runtime targets through an admitted reader without freshness probes
       queries.restore();
     }
 
+    const logicalKey = "agent:helper:runtime-fallback";
+    writeSessionEntry(database, logicalKey, {
+      sessionId: "helper-current",
+      lifecycleRevision: "helper-lifecycle",
+      updatedAt: 1,
+    });
+    expect(
+      await readSessionEntryWorkerRequest({
+        kind: "session-runtime-target",
+        database: { agentId: database.agentId, path: database.path },
+        scope: {
+          agentId: "helper",
+          env,
+          sessionId: "missing-window",
+          sessionKey: "runtime-fallback",
+          storePath: database.path,
+        },
+        keyFormat: "agent-qualified",
+      }),
+    ).toMatchObject({
+      target: {
+        agentId: "helper",
+        sessionId: "missing-window",
+        sessionKey: logicalKey,
+        selectedSessionId: "helper-current",
+        selectedLifecycleRevision: "helper-lifecycle",
+      },
+      source: { agentId: "main", path: database.path },
+    });
+
     const replacement = `${database.path}.replacement`;
     await backup(requireNativeSqliteDatabase(database.db), replacement);
     await closeOpenClawAgentDatabaseByPathAsync(database.path);
@@ -310,10 +340,12 @@ it.each(["schema-retained", "schema-disposable", "row", "rollback"] as const)(
         ? sqliteError("native selected-row query failed", 1)
         : new Error("selected row could not be decoded");
       let reader: typeof database.db | undefined;
-      const read = vi.spyOn(entryReads, "readSessionEntryRow").mockImplementation((source) => {
-        reader = source.db;
-        throw failure;
-      });
+      const read = vi
+        .spyOn(entryReads, "readSessionEntrySelectionInDatabase")
+        .mockImplementation((source) => {
+          reader = source.db;
+          throw failure;
+        });
       const exec = database.db.exec.bind(database.db);
       const rollback =
         mode === "rollback"

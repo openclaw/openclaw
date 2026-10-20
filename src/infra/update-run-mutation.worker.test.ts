@@ -42,9 +42,34 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
+async function fixture(trigger: "cli" | "api" = "cli") {
+  const options = { env: { OPENCLAW_STATE_DIR: tempDirs.make("update-mutations-") } };
+  const { runId } = await createUpdateRunAsync({ trigger }, options);
+  return {
+    read: () => getUpdateRunAsync(runId, options),
+    step: (
+      value: Parameters<typeof recordUpdateRunStepAsync>[1],
+      extra: { requireNoRecovery?: true } = {},
+    ) => recordUpdateRunStepAsync(runId, value, { ...options, ...extra }),
+    phase: (
+      value: Parameters<typeof recordUpdateRunPhaseAsync>[1],
+      patch: Parameters<typeof recordUpdateRunPhaseAsync>[2] = {},
+    ) => recordUpdateRunPhaseAsync(runId, value, patch, options),
+    verify: (
+      value: Parameters<typeof recordUpdateRunVerificationAsync>[1],
+      extra: { onlyIfRunning?: true } = {},
+    ) => recordUpdateRunVerificationAsync(runId, value, { ...options, ...extra }),
+    finish: (value: Parameters<typeof finishUpdateRunAsync>[1]) =>
+      finishUpdateRunAsync(runId, value, options),
+    diagnostics: (
+      value: Parameters<typeof recordUpdateRunDiagnosticsAsync>[1],
+      warn: (message: string) => void,
+    ) => recordUpdateRunDiagnosticsAsync(runId, value, warn, options),
+  };
+}
+
 it("warns when the real broker refuses optional progress but preserves required receipts", async () => {
-  const options = { env: { OPENCLAW_STATE_DIR: tempDirs.make("update-progress-capacity-") } };
-  const run = await createUpdateRunAsync({ trigger: "cli" }, options);
+  const run = await fixture();
   const held = createDeferred();
   let release = () => {};
   const messages = vi.spyOn(Worker.prototype, "emit").mockImplementation(function (
@@ -63,9 +88,7 @@ it("warns when the real broker refuses optional progress but preserves required 
     return EventEmitter.prototype.emit.call(this, event, ...args);
   });
   const step = { step: "candidate-state-snapshot", status: "in_progress" as const };
-  const accepted = Promise.allSettled(
-    Array.from({ length: 128 }, () => recordUpdateRunStepAsync(run.runId, step, options)),
-  );
+  const accepted = Promise.allSettled(Array.from({ length: 128 }, () => run.step(step)));
   const waiting = createDeferred();
   const expirations: Array<() => void> = [];
   const schedule = globalThis.setTimeout;
@@ -85,12 +108,8 @@ it("warns when the real broker refuses optional progress but preserves required 
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
   try {
     await held.promise;
-    const optional = recordUpdateRunStepAsync(run.runId, step, options);
-    const required = recordUpdateRunStepAsync(
-      run.runId,
-      { step: "finalize:checkpoint", status: "completed" },
-      options,
-    );
+    const optional = run.step(step);
+    const required = run.step({ step: "finalize:checkpoint", status: "completed" });
     const outcomes = Promise.allSettled([optional, required]);
     await waiting.promise;
     for (const expire of expirations) {
@@ -106,14 +125,11 @@ it("warns when the real broker refuses optional progress but preserves required 
     release();
     expect((await accepted).every((result) => result.status === "fulfilled")).toBe(true);
   }
-  expect((await finishUpdateRunAsync(run.runId, { status: "succeeded" }, options)).status).toBe(
-    "succeeded",
-  );
+  expect(await run.finish({ status: "succeeded" })).toMatchObject({ status: "succeeded" });
 });
 
 it("warns on exhausted progress admission and keeps the real worker usable", async () => {
-  const options = { env: { OPENCLAW_STATE_DIR: tempDirs.make("update-progress-admission-") } };
-  const run = await createUpdateRunAsync({ trigger: "cli" }, options);
+  const run = await fixture();
   admissionClock.now = process.hrtime.bigint();
   admissionClock.commits = 0;
   vi.spyOn(process.hrtime, "bigint").mockImplementation(() => admissionClock.now);
@@ -121,10 +137,9 @@ it("warns on exhausted progress admission and keeps the real worker usable", asy
   admissionClock.delayCommit = true;
   try {
     await expect(
-      recordUpdateRunStepAsync(
-        run.runId,
+      run.step(
         { step: "candidate-state-snapshot", status: "in_progress" },
-        { ...options, requireNoRecovery: true },
+        { requireNoRecovery: true },
       ),
     ).resolves.toBeUndefined();
   } finally {
@@ -132,68 +147,46 @@ it("warns on exhausted progress admission and keeps the real worker usable", asy
   }
   expect(admissionClock.commits).toBe(3);
   expect(warn).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("The update will continue"));
-  await recordUpdateRunPhaseAsync(run.runId, "validating", {}, options);
-  const saved = await getUpdateRunAsync(run.runId, options);
+  await run.phase("validating");
+  const saved = await run.read();
   expect(saved?.phase).toBe("validating");
   expect(saved?.steps.some((step) => step.step === "candidate-state-snapshot")).toBe(false);
 });
 
 it("records Gateway update history off-thread and publishes merged writes to warm readers", async () => {
-  const options = { env: { OPENCLAW_STATE_DIR: tempDirs.make("update-mutations-") } };
   const warn = vi.fn();
   const sql = observeMainThreadSql();
   sql.calibrate();
   let nativeCalls = 0;
   try {
-    const run = await createUpdateRunAsync({ trigger: "api" }, options);
-    expect(await getUpdateRunAsync(run.runId, options)).toMatchObject({ status: "running" });
+    const run = await fixture("api");
+    expect(await run.read()).toMatchObject({ status: "running" });
     await Promise.all([
-      recordUpdateRunPhaseAsync(
-        run.runId,
-        "validating",
-        { target: { version: "2026.10.1" } },
-        options,
-      ),
-      recordUpdateRunStepAsync(
-        run.runId,
-        { step: "notice:activating", status: "completed" },
-        options,
-      ),
-      recordUpdateRunVerificationAsync(run.runId, { booted: true }, options),
-      recordUpdateRunDiagnosticsAsync(
-        run.runId,
-        {
-          rollbackOutcome: { status: "not-needed", reason: "fixture update" },
-        },
+      run.phase("validating", { target: { version: "2026.10.1" } }),
+      run.step({ step: "notice:activating", status: "completed" }),
+      run.verify({ booted: true }),
+      run.diagnostics(
+        { rollbackOutcome: { status: "not-needed", reason: "fixture update" } },
         warn,
-        options,
       ),
     ]);
-    expect(await getUpdateRunAsync(run.runId, options)).toMatchObject({
+    expect(await run.read()).toMatchObject({
       phase: "validating",
       target: { version: "2026.10.1" },
       verification: { booted: true, rollbackOutcome: { status: "not-needed" } },
       steps: expect.arrayContaining([{ step: "notice:activating", status: "completed" }]),
     });
-    await finishUpdateRunAsync(
-      run.runId,
-      { status: "succeeded", after: { version: "2026.10.1" } },
-      options,
-    );
-    await recordUpdateRunVerificationAsync(
-      run.runId,
-      { booted: false },
-      { ...options, onlyIfRunning: true },
-    );
-    expect(await getUpdateRunAsync(run.runId, options)).toMatchObject({
+    await run.finish({ status: "succeeded", after: { version: "2026.10.1" } });
+    await run.verify({ booted: false }, { onlyIfRunning: true });
+    expect(await run.read()).toMatchObject({
       phase: "finished",
       status: "succeeded",
       after: { version: "2026.10.1" },
       verification: { booted: true },
     });
-    await recordUpdateRunVerificationAsync(run.runId, { noticeDelivered: true }, options);
-    await recordUpdateRunVerificationAsync(run.runId, { noticeDelivered: false }, options);
-    expect((await getUpdateRunAsync(run.runId, options))?.verification.noticeDelivered).toBe(true);
+    await run.verify({ noticeDelivered: true });
+    await run.verify({ noticeDelivered: false });
+    expect((await run.read())?.verification.noticeDelivered).toBe(true);
     expect(warn).not.toHaveBeenCalled();
     nativeCalls = sql.count();
   } finally {

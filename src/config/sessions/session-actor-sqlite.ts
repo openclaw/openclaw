@@ -342,6 +342,7 @@ export function createSqliteSessionActorExecutor(
                       previousEntry,
                       true,
                       entry,
+                      entry,
                     );
                     if (entry) {
                       // Actor delivery settlement can release the last durable recovery claim.

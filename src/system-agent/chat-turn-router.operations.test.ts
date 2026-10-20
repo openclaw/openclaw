@@ -751,9 +751,6 @@ describe("SystemAgentChatEngine CLI loop backends", () => {
     } satisfies OpenClawConfig;
     const snapshot = configSnapshot(config);
     const inference = await createCliVerifiedBinding(config);
-    const inferenceDeps = {
-      readConfigFileSnapshot: (async () => snapshot) as never,
-    };
     const runCliAgent = vi.fn(async (_params: Record<string, unknown>) => ({
       payloads: [{ text: "*click* CLI loop checked your shell." }],
       meta: {
@@ -767,12 +764,11 @@ describe("SystemAgentChatEngine CLI loop backends", () => {
       },
     }));
     vi.spyOn(cliRunner, "runCliAgent").mockImplementation(runCliAgent);
-    mocks.readConfigFileSnapshot.mockImplementation(inferenceDeps.readConfigFileSnapshot);
+    mocks.readConfigFileSnapshot.mockImplementation(async () => snapshot);
     const engine = new SystemAgentChatEngine({
       verifiedInference: inference.binding,
       runAgentTurn: runSystemAgentTurn,
       deps: {
-        ...inferenceDeps,
         loadOverview: fakeOverviewLoader({ defaultModel: "claude-cli/claude-opus-4-8" }),
       },
     });

@@ -168,9 +168,7 @@ describe("msTeamsApprovalNativeRuntime", () => {
         value: { openclawAction: "approval", token },
       },
       sendActivity: vi.fn(async () => undefined),
-      sendActivities: vi.fn(async () => []),
       updateActivity: vi.fn(async () => undefined),
-      deleteActivity: vi.fn(async () => undefined),
     };
     const deps = createMSTeamsMessageHandlerDeps({
       cfg: {

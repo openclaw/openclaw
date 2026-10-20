@@ -9,6 +9,10 @@ import {
   createTrustedCronScheduledToolPolicy,
   type CronScheduledToolPolicy,
 } from "../../cron/scheduled-tool-policy.js";
+import {
+  CRON_STREAM_EXEC_AUTHORITY_ERROR,
+  type CronStreamExecPolicy,
+} from "../../cron/stream-exec-authority.js";
 import type {
   CronJob,
   CronJobCreate,
@@ -21,6 +25,8 @@ import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
   consumeCronCreatorAuthorityGrant,
+  resolveCronCreatorStreamExecPolicy,
+  getCronManagementStreamExecPolicy,
   getCronManagementAuthority,
   getCronManagementCallerOrigin,
   getCronManagementChannelRequester,
@@ -63,6 +69,27 @@ export function resolveCronCreatorAuthorityCapture(
       consumed?.assertCurrent();
     },
   };
+}
+
+export function resolveCronStreamExecPolicy(
+  client: GatewayClient | null,
+  required: boolean,
+  context: GatewayRequestContext,
+): CronStreamExecPolicy | undefined {
+  const identity = client?.internal?.agentRuntimeIdentity;
+  if (!identity || !required) {
+    return undefined;
+  }
+  const execPolicy = getCronManagementAuthority(identity)
+    ? getCronManagementStreamExecPolicy(identity)
+    : identity.cronCreatorAuthorityGrant
+      ? resolveCronCreatorStreamExecPolicy(identity.cronCreatorAuthorityGrant)
+      : undefined;
+  if (!execPolicy) {
+    assertActiveAgentRuntimeAuthority(client, context);
+    throw new TypeError(CRON_STREAM_EXEC_AUTHORITY_ERROR);
+  }
+  return execPolicy;
 }
 
 export function resolveCronMutationCommitGuard(
@@ -300,7 +327,7 @@ function isOperatorCommandCronJob(job: CronJob): boolean {
   return (
     job.payload.kind === "command" ||
     job.schedule.kind === "on-exit" ||
-    job.schedule.kind === "stream"
+    (job.schedule.kind === "stream" && job.scheduledToolPolicy?.mode !== "account")
   );
 }
 

@@ -65,6 +65,13 @@ it("loads packaged Settings independently and retires its assets with the runtim
   loaded.dispose();
   expect(f.stop).toHaveBeenCalledOnce();
 });
+it("does not start a Settings view after disposal during its lazy import", async () => {
+  const f = fixture();
+  const pending = f.runtime.loadSettingsView(placement, new AbortController().signal);
+  f.runtime.dispose();
+  await expect(pending).rejects.toThrow("The plugin UI runtime has ended.");
+  expect(loadControlUiPluginAssets).not.toHaveBeenCalled();
+});
 it("selects Memories from a package that also owns Overview without runtime activation", async () => {
   const f = fixture();
   const memories: ControlUiSettingsView = {

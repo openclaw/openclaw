@@ -57,39 +57,27 @@ export async function withVerifiedUpdateRecoveryBackup<T>(
     if (manifest.entries.length > 4096) {
       throw new Error("Preservation inspection exceeds its 4096-resource bound.");
     }
-    const verify = async () => {
-      for (const entry of manifest.entries) {
-        if (entry.kind !== "file") {
-          continue;
-        }
-        const pathname = path.join(ref.directory, entry.archivePath);
-        if (entry.sqlite) {
-          for (const suffix of SQLITE_SIDECAR_SUFFIXES) {
-            if (await lstatIfExists(`${pathname}${suffix}`, "ENOENT")) {
-              throw new Error(
-                `Preservation requires a consolidated SQLite payload: ${entry.sourcePath}`,
-              );
-            }
+    for (const entry of manifest.entries) {
+      if (entry.kind !== "file") {
+        continue;
+      }
+      const pathname = path.join(ref.directory, entry.archivePath);
+      if (entry.sqlite) {
+        for (const suffix of SQLITE_SIDECAR_SUFFIXES) {
+          if (await lstatIfExists(`${pathname}${suffix}`, "ENOENT")) {
+            throw new Error(
+              `Preservation requires a consolidated SQLite payload: ${entry.sourcePath}`,
+            );
           }
         }
-        const actual = await fileDigest(pathname);
-        if (actual.sha256 !== entry.sha256 || actual.size !== entry.size) {
-          throw new Error(`Preservation payload does not match its manifest: ${entry.sourcePath}`);
-        }
       }
-      await pin.assertCurrent();
-    };
-    await verify();
-    const result = await inspect(manifest);
-    await verify();
-    const source = await safeRoot(ref.directory, { symlinks: "reject", hardlinks: "reject" });
-    if (
-      sha256Hex(await source.readBytes("manifest.json", { maxBytes: MAX_MANIFEST_BYTES })) !==
-      ref.manifestSha256
-    ) {
-      throw new Error("Preservation manifest changed during inspection.");
+      const actual = await fileDigest(pathname);
+      if (actual.sha256 !== entry.sha256 || actual.size !== entry.size) {
+        throw new Error(`Preservation payload does not match its manifest: ${entry.sourcePath}`);
+      }
     }
-    return result;
+    await pin.assertCurrent();
+    return await inspect(manifest);
   });
 }
 

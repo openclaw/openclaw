@@ -17,9 +17,9 @@ import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatSubagentsPanel } from "./chat-subagents-panel.tsx";
 
 it("retains detail while hidden and applies a show request after its complete scope change", async () => {
-  const parent = "agent:main:parent";
+  const key = (agentId: string) => `agent:${agentId}:subagent:child`;
   const child = (agentId: string, spawnedBy: string): GatewaySessionRow => ({
-    key: `agent:${agentId}:subagent:child`,
+    key: key(agentId),
     agentId,
     sessionId: `${agentId}-child-session`,
     spawnedBy,
@@ -27,7 +27,6 @@ it("retains detail while hidden and applies a show request after its complete sc
     classification: "subagent",
     status: "done",
     sharingRole: "owner",
-    label: `${agentId} task`,
     updatedAt: 1,
   });
   const request = vi.fn((method: string, params?: unknown): unknown => {
@@ -40,11 +39,9 @@ it("retains detail while hidden and applies a show request after its complete sc
       return { ...sessionsResult(rows, 1), hasMore: false, nextOffset: null };
     }
     if (method === "chat.history") {
+      const agentId = values?.sessionKey === key("worker") ? "worker" : "main";
       return {
-        sessionId:
-          values?.sessionKey === "agent:worker:subagent:child"
-            ? "worker-child-session"
-            : "main-child-session",
+        sessionId: `${agentId}-child-session`,
         messages: [],
         hasMore: false,
         totalMessages: 0,
@@ -68,12 +65,18 @@ it("retains detail while hidden and applies a show request after its complete sc
   const provider = createSolidApplicationContextProvider(
     createContext(connection.gateway, sessions),
   );
-  const view = mountSolid(() => createComponent(ChatSubagentsPanel, { sessionKey: parent }), {
-    wrapper: provider.wrapper,
-  });
+  const view = mountSolid(
+    () => createComponent(ChatSubagentsPanel, { sessionKey: "agent:main:parent" }),
+    { wrapper: provider.wrapper },
+  );
   const panel = view.container.querySelector<
     HTMLElementTagNameMap["openclaw-chat-subagents-panel"]
   >("openclaw-chat-subagents-panel")!;
+  const pane = () => panel.querySelector("openclaw-chat-pane");
+  const setPresented = async (presented: boolean) => {
+    panel.presented = presented;
+    await panel.updateComplete;
+  };
   onTestFinished(() => {
     view.unmount();
     sessions.dispose();
@@ -82,40 +85,31 @@ it("retains detail while hidden and applies a show request after its complete sc
   await waitForSolid(() => expect(panel.querySelector(".chat-subagents__open")).not.toBeNull());
   panel.querySelector<HTMLButtonElement>(".chat-subagents__open")!.click();
   await panel.updateComplete;
-  const retained = panel.querySelector("openclaw-chat-pane")!;
-  expect(retained.sessionKey).toBe("agent:main:subagent:child");
+  const retained = pane()!;
+  expect(retained.sessionKey).toBe(key("main"));
 
-  panel.presented = false;
-  await panel.updateComplete;
-  expect(panel.querySelector("openclaw-chat-pane")).toBe(retained);
-  panel.presented = true;
-  await panel.updateComplete;
-  await waitForSolid(() => expect(panel.querySelector("openclaw-chat-pane")).toBe(retained));
+  await setPresented(false);
+  expect(pane()).toBe(retained);
+  await setPresented(true);
+  await waitForSolid(() => expect(pane()).toBe(retained));
 
-  panel.showRequest = () => "agent:worker:subagent:child";
+  panel.showRequest = () => key("worker");
   panel.sessionKey = "global";
   panel.agentId = "worker";
   await panel.updateComplete;
+  await waitForSolid(() => expect(pane()).toMatchObject({ sessionKey: key("worker") }));
+  expect(pane()).toMatchObject({ agentId: "worker" });
   await waitForSolid(() =>
-    expect(panel.querySelector("openclaw-chat-pane")?.sessionKey).toBe(
-      "agent:worker:subagent:child",
-    ),
-  );
-  const detail = panel.querySelector("openclaw-chat-pane")!;
-  expect(detail.agentId).toBe("worker");
-  await waitForSolid(() =>
-    expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toContainEqual([
+    expect(request).toHaveBeenCalledWith(
       "sessions.list",
       expect.objectContaining({ spawnedBy: "global", agentId: "worker" }),
-    ]),
+    ),
   );
-  detail.onBackToSubagents?.();
+  pane()!.onBackToSubagents?.();
   await panel.updateComplete;
-  expect(panel.querySelector("openclaw-chat-pane")).toBeNull();
-  panel.presented = false;
-  await panel.updateComplete;
-  panel.presented = true;
-  await panel.updateComplete;
+  expect(pane()).toBeNull();
+  await setPresented(false);
+  await setPresented(true);
   await waitForSolid(() => expect(panel.querySelector(".chat-subagents__open")).not.toBeNull());
-  expect(panel.querySelector("openclaw-chat-pane")).toBeNull();
+  expect(pane()).toBeNull();
 });

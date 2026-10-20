@@ -298,8 +298,10 @@ it.each(["message_end", "before_message_write"] as const)(
     });
     const resourceLoader =
       hook === "message_end"
-        ? createResourceLoader(new Map([["message_end", [replaceEndedMessage]]]))
-        : createResourceLoader();
+        ? await createResourceLoader((api) => {
+            api.on("message_end", replaceEndedMessage);
+          })
+        : await createResourceLoader();
     if (hook === "before_message_write") {
       initializeGlobalHookRunner(
         createMockPluginRegistry([

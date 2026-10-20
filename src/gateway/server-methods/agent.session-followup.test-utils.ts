@@ -15,7 +15,10 @@ import {
   resumeSubagentRun,
   registerSubagentRun,
 } from "../../agents/subagents/registry/subagent-registry.js";
-import { settleSubagentRegistryPersistenceWork } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
+import {
+  settleSubagentRegistryPersistenceWork,
+  writeSubagentSessionEntry,
+} from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import {
   addSubagentRunForTests,
   getSubagentRunByChildSessionKey,
@@ -209,6 +212,13 @@ describe("gateway agent follow-up activity", () => {
           canonicalKey: childSessionKey,
         }));
         if (persisted) {
+          await writeSubagentSessionEntry({
+            stateDir: root,
+            agentId: "main",
+            sessionKey: childSessionKey,
+            defaultSessionId: currentEntry.sessionId,
+            lifecycleRevision: currentEntry.lifecycleRevision,
+          });
           seedReleasedYieldedSubagentRun({
             previousRunId,
             childSessionKey,
@@ -280,7 +290,7 @@ describe("gateway agent follow-up activity", () => {
         };
         const terminal = createDeferred();
         const respond = vi.fn((ok, payload) => {
-          if (ok && payload?.status === "ok") {
+          if (!ok || payload?.status === "ok" || payload?.status === "error") {
             terminal.resolve();
           }
         });

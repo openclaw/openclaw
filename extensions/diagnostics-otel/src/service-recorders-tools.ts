@@ -103,27 +103,24 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
       metadata: DiagnosticEventMetadata,
     ) {
       if (!runtime.tracesEnabled || !metadata.trusted) {
-        return undefined;
+        return;
       }
-      const trackedSpan = runtime.getTrackedInternalOrTrustedSpan(evt, metadata);
-      if (trackedSpan) {
-        return trackedSpan.spanContext();
+      if (runtime.getTrackedInternalOrTrustedSpan(evt, metadata)) {
+        return;
       }
       const spanAttrs = {
         ...toolExecutionBaseAttrs(evt),
         ...runtime.paramsSummaryAttrs(evt.paramsSummary),
       };
       assignOtelToolIdentityAttributes(spanAttrs, evt);
-      return runtime
-        .trackInternalOrTrustedSpan(
-          evt,
-          metadata,
-          runtime.spanWithDuration("openclaw.tool.execution", spanAttrs, undefined, {
-            parentContext: runtime.activeTrustedParentContext(evt, metadata),
-            startTimeMs: toolTimestampMs(evt),
-          }),
-        )
-        .spanContext();
+      runtime.trackInternalOrTrustedSpan(
+        evt,
+        metadata,
+        runtime.spanWithDuration("openclaw.tool.execution", spanAttrs, undefined, {
+          parentContext: runtime.activeTrustedParentContext(evt, metadata),
+          startTimeMs: toolTimestampMs(evt),
+        }),
+      );
     },
     recordToolExecutionFinished(
       evt: Extract<
