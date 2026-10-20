@@ -1,9 +1,7 @@
-import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import path from "node:path";
-import { threadId, Worker } from "node:worker_threads";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { threadId } from "node:worker_threads";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import * as captureDirectory from "../plugins/plugin-source-capture-directory.js";
 import { sweepPluginSourceCapturesForTest } from "../plugins/plugin-source-capture-directory.test-support.js";
@@ -19,23 +17,14 @@ import {
   usePreparedCatalogWorkerFixtures,
 } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
 
-const { makeTempDir, retireAfterTest, waitForWorkers } = usePreparedCatalogWorkerFixtures();
+const { makeTempDir, retireAfterTest, waitForWorkers, readCatalogWorkers } =
+  usePreparedCatalogWorkerFixtures();
 const createStaticSnapshot = createStaticCatalogSnapshotFixture({ makeTempDir, retireAfterTest });
-const workers: Worker[] = [];
-const workerChannel = channel("worker_threads");
-const recordWorker = (message: unknown) => {
-  if (isRecord(message) && message.worker instanceof Worker) {
-    workers.push(message.worker);
-  }
-};
 
 describe("catalog worker capture custody", () => {
   beforeEach(() => {
-    workers.length = 0;
-    workerChannel.subscribe(recordWorker);
     vi.stubEnv("CODEX_HOME", makeTempDir("openclaw-worker-empty-codex-"));
   });
-  afterEach(() => workerChannel.unsubscribe(recordWorker));
 
   it.for([
     { owner: "configured Gateway", prepareInboundPluginRegistry: true, version: "built" },
@@ -60,9 +49,7 @@ describe("catalog worker capture custody", () => {
             },
           };
         });
-      retireAfterTest(() => {
-        observeCapture.mockRestore();
-      });
+      retireAfterTest(() => observeCapture.mockRestore());
       const fixture = await createStaticSnapshot(
         0,
         {},
@@ -115,7 +102,7 @@ describe("catalog worker capture custody", () => {
       expect(fs.existsSync(filename)).toBe(true);
       const exitRequested = createDeferredCore();
       const allowExit = createDeferredCore();
-      const worker = workers.find(
+      const worker = readCatalogWorkers().find(
         (candidate) => candidate.threadId === workerCaptures[0]!.threadId,
       );
       expect(worker).toBeDefined();

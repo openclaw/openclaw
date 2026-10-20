@@ -4,7 +4,7 @@ import { threadId } from "node:worker_threads";
 import { expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePluginRuntimeLoadContext } from "../plugins/runtime/load-context.resolve.js";
-import { PROVIDER_ID } from "./prepared-model-catalog-worker.test-support.js";
+import { PROVIDER_ID, writeFixtureFiles } from "./prepared-model-catalog-worker.test-support.js";
 import { createCatalogFleetFixture } from "./test-helpers/prepared-model-catalog-fleet-fixture.js";
 import {
   loadCompletedFullCatalog,
@@ -27,37 +27,27 @@ it.each([true, false])(
           `require("node:fs").appendFileSync(${JSON.stringify(observations)}, JSON.stringify({ event: ${JSON.stringify(event)}, threadId: require("node:worker_threads").threadId }) + "\\n");`;
         const setupDir = path.join(seed.root, setupId);
         fs.mkdirSync(setupDir);
-        fs.writeFileSync(
-          path.join(setupDir, "package.json"),
-          JSON.stringify({
+        writeFixtureFiles(setupDir, {
+          "package.json": {
             name: setupId,
             version: "1.0.0",
             type: "commonjs",
             openclaw: { extensions: ["./index.cjs"], setupEntry: "./setup-api.cjs" },
-          }),
-        );
-        fs.writeFileSync(
-          path.join(setupDir, "openclaw.plugin.json"),
-          JSON.stringify({
+          },
+          "openclaw.plugin.json": {
             id: setupId,
             setup: { requiresRuntime: true },
             configSchema: { type: "object", properties: { configured: { type: "boolean" } } },
-          }),
-        );
-        fs.writeFileSync(
-          path.join(setupDir, "index.cjs"),
-          `module.exports = { id: ${JSON.stringify(setupId)}, register() {} };`,
-        );
-        fs.writeFileSync(
-          path.join(setupDir, "setup-api.cjs"),
-          `${observe("setup-import")}
+          },
+          "index.cjs": `module.exports = { id: ${JSON.stringify(setupId)}, register() {} };`,
+          "setup-api.cjs": `${observe("setup-import")}
 module.exports = { id: ${JSON.stringify(setupId)}, register(api) {
   api.registerAutoEnableProbe(({ config }) => {
     ${observe("setup-probe")}
     return config.acp?.enabled ? "fixture setup configured" : null;
   });
 } };`,
-        );
+        });
         seed.config.plugins.allow.push(setupId);
         if (!explicitAllowlist) {
           const plugins: NonNullable<OpenClawConfig["plugins"]> = seed.config.plugins;

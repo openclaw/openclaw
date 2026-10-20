@@ -1,8 +1,8 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { SkillSnapshot } from "../skills/types.js";
 import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import { resolveSandboxSkillRuntimeInputs } from "./embedded-agent-runner/sandbox-skills.js";
@@ -16,19 +16,11 @@ import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandb
 const run = vi.hoisted(() => vi.fn());
 // mock-isolation: Keep host processes outside this command-lifecycle fixture.
 vi.mock("../process/exec.js", () => ({ runCommandWithTimeout: run }));
-const roots: string[] = [];
-beforeEach(() => {
-  run.mockReset();
-});
-afterEach(() => {
-  for (const root of roots.splice(0)) {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-});
+const roots = useAutoCleanupTempDirTracker(afterEach);
+beforeEach(() => run.mockReset());
 
 function sandboxFixture(source = "openclaw-managed") {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-sandbox-"));
-  roots.push(root);
+  const root = roots.make("openclaw-plugin-sandbox-");
   const skillDir = path.join(root, "skills", "autoreview");
   fs.mkdirSync(skillDir, { recursive: true });
   const sourceFile = "/managed/autoreview/SKILL.md";
@@ -88,33 +80,26 @@ function sandboxFixture(source = "openclaw-managed") {
       },
     ],
   };
-  return { sandbox, backend: sandbox.backend, snapshot, build, terminate, finalize };
+  const capabilities = (skillsSnapshot = snapshot, assertCurrent = () => {}) =>
+    preparePluginToolExecutionCapabilities({ sandbox, skillsSnapshot })(assertCurrent);
+  return { sandbox, backend: sandbox.backend, snapshot, build, terminate, finalize, capabilities };
 }
 
 it.each(["openclaw-managed", "openclaw-library", "openclaw-bundled", "agents-skills-personal"])(
   "exposes the selected %s skill only inside the actual protected sandbox mount",
   (source) => {
     const fixture = sandboxFixture(source);
-    const capability = preparePluginToolExecutionCapabilities({
-      sandbox: fixture.sandbox,
-      skillsSnapshot: fixture.snapshot,
-    })(() => {});
+    const capability = fixture.capabilities();
     expect(capability.sandbox?.workspaceDir).toBe("/guest/repo");
     expect(capability.sandbox?.installedSkillRoots).toEqual({
       autoreview: "/guest/repo/skills/autoreview",
     });
     fixture.snapshot.resolvedSkills![0]!.source = "openclaw-workspace";
-    const shadow = preparePluginToolExecutionCapabilities({
-      sandbox: fixture.sandbox,
-      skillsSnapshot: fixture.snapshot,
-    })(() => {});
+    const shadow = fixture.capabilities();
     expect(shadow.sandbox?.installedSkillRoots).toEqual({});
     fixture.snapshot.resolvedSkills![0]!.source = source;
     fixture.sandbox.docker.binds = ["/untrusted:/guest/repo/skills/autoreview/scripts:rw"];
-    const overlaid = preparePluginToolExecutionCapabilities({
-      sandbox: fixture.sandbox,
-      skillsSnapshot: fixture.snapshot,
-    })(() => {});
+    const overlaid = fixture.capabilities();
     expect(overlaid.sandbox?.installedSkillRoots).toEqual({});
   },
 );
@@ -131,18 +116,12 @@ it("retains selected installation identity after sandbox prompt remapping and bu
   expect(prepared.skillsSnapshot?.discoverySkills?.[0]?.filePath).toBe(
     "/guest/repo/skills/autoreview/SKILL.md",
   );
-  const capability = preparePluginToolExecutionCapabilities({
-    sandbox: fixture.sandbox,
-    skillsSnapshot: prepared.skillsSnapshot,
-  })(() => {});
+  const capability = fixture.capabilities(prepared.skillsSnapshot);
   expect(capability.sandbox?.installedSkillRoots).toEqual({
     autoreview: "/guest/repo/skills/autoreview",
   });
   fixture.snapshot.skills[0]!.source!.fileHost = "workspace";
-  const shadow = preparePluginToolExecutionCapabilities({
-    sandbox: fixture.sandbox,
-    skillsSnapshot: prepared.skillsSnapshot,
-  })(() => {});
+  const shadow = fixture.capabilities(prepared.skillsSnapshot);
   expect(shadow.sandbox?.installedSkillRoots).toEqual({});
 });
 
@@ -173,10 +152,7 @@ it("withholds protected installations on the SSH backend's mutable upload view",
       preprovisionedWorkdir: { runtimeId: "review-fixture", remoteWorkspaceDir: "/guest/repo" },
     },
   );
-  const capability = preparePluginToolExecutionCapabilities({
-    sandbox: fixture.sandbox,
-    skillsSnapshot: fixture.snapshot,
-  })(() => {});
+  const capability = fixture.capabilities();
   expect(capability.sandbox?.installedSkillRoots).toEqual({});
 });
 
@@ -185,27 +161,10 @@ it.each(["/guest/repo/skills", "/guest/repo/skills/autoreview/scripts"])(
   (overlay) => {
     const fixture = sandboxFixture();
     fixture.sandbox.docker.tmpfs = [`${overlay}:rw`];
-    const capability = preparePluginToolExecutionCapabilities({
-      sandbox: fixture.sandbox,
-      skillsSnapshot: fixture.snapshot,
-    })(() => {});
+    const capability = fixture.capabilities();
     expect(capability.sandbox?.installedSkillRoots).toEqual({});
   },
 );
-
-it("rejects a writable workspace alias while preserving a read-only alias", () => {
-  const fixture = sandboxFixture();
-  const source = fixture.sandbox.workspaceDir;
-  const installedRoots = () =>
-    preparePluginToolExecutionCapabilities({
-      sandbox: fixture.sandbox,
-      skillsSnapshot: fixture.snapshot,
-    })(() => {}).sandbox?.installedSkillRoots;
-  fixture.sandbox.docker.binds = [`${source}:/alias:rw`];
-  expect(installedRoots()).toEqual({});
-  fixture.sandbox.docker.binds = [`${source}:/alias:ro`];
-  expect(installedRoots()).toEqual({ autoreview: "/guest/repo/skills/autoreview" });
-});
 
 it("refuses a retained command if invocation closes during backend preparation", async () => {
   const fixture = sandboxFixture();

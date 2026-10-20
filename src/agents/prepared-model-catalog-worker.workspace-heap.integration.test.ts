@@ -7,7 +7,11 @@ import {
   createPreparedModelCatalogWorker,
   getPreparedModelCatalogWorkerPoolSnapshot,
 } from "./prepared-model-catalog-worker.js";
-import { createCatalogFixture, PROVIDER_ID } from "./prepared-model-catalog-worker.test-support.js";
+import {
+  createCatalogFixture,
+  PROVIDER_ID,
+  writeFixtureFiles,
+} from "./prepared-model-catalog-worker.test-support.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
 import { usePreparedCatalogWorkerFixtures } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
 
@@ -26,19 +30,15 @@ it("bounds native ESM payloads across alternating unchanged loader workspaces", 
     vi.stubEnv(key, fixture.env[key]);
   }
   const plugin = path.join(fixture.root, "plugin");
-  fs.writeFileSync(
-    path.join(plugin, "payload.mjs"),
-    `
+  writeFixtureFiles(plugin, {
+    "payload.mjs": `
 export class CatalogWorkspacePayload {
   rows = Array.from({ length: 100_000 }, (_, index) => ({ index }));
   buffer = new Uint8Array(1024 * 1024);
 }
 export const payload = new CatalogWorkspacePayload();
 `,
-  );
-  fs.writeFileSync(
-    path.join(plugin, "index.cjs"),
-    `
+    "index.cjs": `
 const { payload } = require("./payload.mjs");
 const v8 = require("node:v8");
 const fs = require("node:fs");
@@ -62,16 +62,13 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
   api.registerProvider({id:${JSON.stringify(PROVIDER_ID)},label:"Workspace fixture",auth:[],catalog:{run}});
 } };
 `,
-  );
-  fs.writeFileSync(
-    path.join(plugin, "openclaw.plugin.json"),
-    JSON.stringify({
+    "openclaw.plugin.json": {
       id: PROVIDER_ID,
       providers: [PROVIDER_ID],
       modelCatalog: { discovery: { [PROVIDER_ID]: "runtime" }, runtimeAugment: true },
       configSchema: { type: "object", additionalProperties: false },
-    }),
-  );
+    },
+  });
   const inventories: ReturnType<typeof loadPluginMetadataSnapshot>[] = [];
   const workers = ["one", "two"].map((agentId) => {
     const workspaceDir = path.join(fixture.root, `workspace-${agentId}`);
@@ -119,10 +116,6 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
   expect(getPluginMetadataSnapshotCache(inventories[0]!)).toBe(
     getPluginMetadataSnapshotCache(inventories[1]!),
   );
-  console.log(
-    "Parent catalog inventory admission",
-    JSON.stringify({ sameInventory: true, workspaceViews: inventories.length }),
-  );
   const samples: Array<{
     memory: NodeJS.MemoryUsage;
     payloads: number;
@@ -143,14 +136,8 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
     );
     samples.push(JSON.parse(fs.readFileSync(fixture.marker, "utf8")));
   }
-  console.log("Workspace heap samples", JSON.stringify(samples));
-  expect(samples.at(-1)!.threadId).toBe(samples[0]!.threadId);
-  expect(samples.at(-1)!.payloads).toBe(2);
-  expect(samples.at(-1)!.callbacks).toBe(2);
-  expect(samples.at(-1)!.memory.heapUsed - samples[4]!.memory.heapUsed).toBeLessThan(
-    16 * 1024 * 1024,
-  );
-  expect(samples.at(-1)!.memory.arrayBuffers - samples[4]!.memory.arrayBuffers).toBeLessThan(
-    2 * 1024 * 1024,
-  );
+  const last = samples.at(-1)!;
+  expect(last).toMatchObject({ threadId: samples[0]!.threadId, payloads: 2, callbacks: 2 });
+  expect(last.memory.heapUsed - samples[4]!.memory.heapUsed).toBeLessThan(16 * 1024 * 1024);
+  expect(last.memory.arrayBuffers - samples[4]!.memory.arrayBuffers).toBeLessThan(2 * 1024 * 1024);
 }, 30_000);
