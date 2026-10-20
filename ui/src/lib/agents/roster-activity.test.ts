@@ -3,6 +3,51 @@ import type { AgentsListResult, GatewaySessionRow } from "../../api/types.ts";
 import { agentRosterCards } from "./roster-activity.ts";
 
 describe("agent roster activity", () => {
+  it.each([
+    { key: "agent:main:subagent:recap", label: "Conversation recap" },
+    { key: "agent:main:delegated", spawnedBy: "agent:main:main" },
+    { key: "agent:main:internal-status", createdVia: "run" },
+    { key: "agent:main:heartbeat", classification: "heartbeat" },
+  ] satisfies Partial<GatewaySessionRow>[])(
+    "keeps internal assistant output out of the preview: $key",
+    (internal) => {
+      const roster: AgentsListResult = {
+        defaultId: "main",
+        mainKey: "main",
+        scope: "per-sender",
+        agents: [{ id: "main" }],
+      };
+      const internalRow: GatewaySessionRow = {
+        kind: "direct",
+        updatedAt: 40,
+        hasActiveRun: true,
+        lastAssistantMessage: { text: '{"title":"Internal recap"}', timestamp: 30 },
+        ...internal,
+      };
+      const cards = agentRosterCards(roster, [
+        {
+          key: "agent:main:main",
+          kind: "direct",
+          lastAssistantMessage: { text: "Earlier reply", timestamp: 10 },
+        },
+        {
+          key: "agent:main:dashboard:delegated-work",
+          kind: "direct",
+          spawnedBy: "agent:main:main",
+          lastAssistantMessage: { text: "The validation is running.", timestamp: 20 },
+        },
+        internalRow,
+      ]);
+
+      expect(cards[0]).toMatchObject({
+        assistantPreview: "The validation is running.",
+        activeNow: true,
+        lastActiveAt: 40,
+      });
+      expect(agentRosterCards(roster, [internalRow])[0]?.assistantPreview).toBeUndefined();
+    },
+  );
+
   it("selects the latest assistant reply across sessions without using user activity", () => {
     const cards = agentRosterCards(
       {

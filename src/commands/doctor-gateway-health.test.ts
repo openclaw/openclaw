@@ -635,6 +635,15 @@ describe("checkGatewayHealth", () => {
     );
   });
 
+  it("shows the Gateway's observed model reasoning mismatch and remediation", async () => {
+    const warning = "Model ollama/qwen3:4b emitted hidden reasoning; set reasoning:true.";
+    callGateway.mockResolvedValue({ modelReasoningWarning: warning });
+
+    await checkGatewayHealth({ runtime: sharedRuntime, cfg, timeoutMs: 3000 });
+
+    expect(note).toHaveBeenCalledWith(warning, "Model reasoning");
+  });
+
   it("reports a typed close without depending on gateway error wording", async () => {
     const error = new GatewayTransportError({
       message: "transport closed: \u001B]52;c;YXR0YWNr\u0007protocol version mismatch",

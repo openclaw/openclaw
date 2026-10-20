@@ -96,6 +96,8 @@ const repositoryScriptEntries = [
   // scripts/perf/README.md invokes this isolated session-roster measurement CLI.
   "scripts/perf/session-roster-churn-measure.ts!",
   "scripts/perf/seal-version-restart.ts!",
+  // #178599 documents: node --expose-gc scripts/perf/heap-headroom.ts.
+  "scripts/perf/heap-headroom.ts!",
   // Worker-environment shutdown proof invokes this measurement CLI by path.
   "scripts/perf/worker-environment-shutdown-measure.ts!",
   // The branch-rotation guide invokes the driver, which loads its IPC preload by path.

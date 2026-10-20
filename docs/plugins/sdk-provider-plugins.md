@@ -662,6 +662,12 @@ implementation helpers, not new third-party SDK contracts.
 policy with pass-through adapters through that private seam. Callers qualify
 the endpoint and normalize vendor-prefixed model IDs before applying it.
 
+Bundled transports use `recordSuppressedReasoning` from that same private seam
+when a model marked `reasoning: false` returns thought fields. It records only
+their presence and returns an error for a completed response with no visible
+answer or tool call. Transports publish that error through their ordinary error
+terminal; the host owns per-session warning limits and status hints.
+
 Injected-client adapters also reuse the Anthropic thinking and output-cap owners
 through the private `provider-transport-runtime` seam. Client creation and
 provider-specific defaults stay with the adapter; the shared request builder

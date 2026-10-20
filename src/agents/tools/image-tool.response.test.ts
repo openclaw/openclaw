@@ -32,7 +32,7 @@ describe("image tool response validation", () => {
     vi.spyOn(modelNormalization, "resolveManifestModelIdNormalizationPolicies").mockReturnValue(
       new Map(),
     );
-    vi.spyOn(imageModelRuntime, "resolveImageRuntime").mockResolvedValue({
+    vi.spyOn(imageModelRuntime, "resolveImageRuntime").mockImplementation(async (params) => ({
       runtimeValue: "test-key",
       model: makeProviderModelFixture({
         id: "gpt-5.4-mini",
@@ -41,7 +41,10 @@ describe("image tool response validation", () => {
         input: ["text", "image"],
         baseUrl: "https://image-fixture.invalid/v1",
       }),
-    });
+      cfg: params.cfg,
+      agentDir: params.agentDir,
+      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    }));
     vi.spyOn(providerStream, "registerProviderStreamForModel").mockReturnValue(undefined);
     vi.spyOn(llmStream, "complete");
   });

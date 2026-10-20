@@ -3,6 +3,7 @@ import { For, Show, createSignal } from "solid-js";
 import type { SessionGoal } from "../../../api/types.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
+import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
 import { registerChatGoalsEnglish } from "../../../i18n/locales/en-chat-goals.ts";
 import type { ChatGoalAction, ChatGoalRecovery } from "../../../lib/chat/chat-types.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
@@ -19,20 +20,11 @@ registerEnglishCatalog(registerChatGoalsEnglish);
 
 function GoalIcon() {
   return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="2"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-      aria-hidden="true"
-    >
+    <StrokeIcon aria-hidden="true">
       <path d="M12 13V2l8 4-8 4" />
       <path d="M20.561 10.222a9 9 0 1 1-12.55-5.29" />
       <path d="M8.002 9.997a5 5 0 1 0 8.9 2.02" />
-    </svg>
+    </StrokeIcon>
   );
 }
 

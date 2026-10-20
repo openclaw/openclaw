@@ -246,7 +246,11 @@ describe("Gateway catalog worker pool", () => {
       const originalError = await renewal.catch((error: unknown) => error);
       expect(catalogFailures[0]).toMatchObject({ modelFactsChanged: false });
       expect(originalError).toBe(await queuedAuth.catch((error: unknown) => error));
-      expect(originalError).toMatchObject({ message: "worker exited with code 1" });
+      expect(originalError).toMatchObject({
+        message: expect.stringMatching(
+          /^worker exited with code 1 \[task=preparedModelCatalog\.task /,
+        ),
+      });
       taskChannel.unsubscribe(recordFailure);
       expect(failedTasks).toEqual([
         { activeTasks: 1, pendingTasks: 1 },

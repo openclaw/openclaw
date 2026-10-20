@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -20,6 +21,7 @@ import { readChatInputRecoveryAdmission } from "./chat-input-recovery-source.js"
 import { resumeChatInput } from "./chat-input-recovery.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { createOperatorRecoveryFixture } from "./operator-run-recovery.test-support.js";
+import { createPendingInputRecoveryTrace } from "./pending-input-recovery-trace.js";
 import {
   createChatInputRecovery,
   normalizeChatSendRequest,
@@ -187,6 +189,8 @@ describe("interrupted chat input recovery", () => {
   it("retains approved input, media, identity, provenance and chat options under the original operator", () =>
     withInput(
       async ({ fixture, target, message, options }) => {
+        const now = vi.spyOn(performance, "now").mockReturnValue(0);
+        const trace = createPendingInputRecoveryTrace();
         dispatch.mockImplementation(async (method, params, requestOptions) => {
           expect(method).toBe("chat.send");
           expect(
@@ -229,10 +233,20 @@ describe("interrupted chat input recovery", () => {
           expect(requestOptions.client.internal.operatorRunAuthority.profileId).toBe(
             fixture.client.authenticatedUserProfile?.profileId,
           );
+          now.mockReturnValue(250);
         });
-        await resumeChatInput(fixture.context, target, options);
+        await resumeChatInput(fixture.context, target, { ...options, trace });
         expect(dispatch).toHaveBeenCalledOnce();
         expect(readChatInputRecoveryAdmission(target.runId)).toBeUndefined();
+        expect(trace.finish()).toEqual({
+          totalMs: 250,
+          sourceLoadMs: 0,
+          sessionLoadMs: 0,
+          authorityRestoreMs: 0,
+          communicationAdmissionMs: 0,
+          dispatchAckMs: 250,
+          retryWaitMs: 0,
+        });
       },
       "Approved redacted input",
       true,

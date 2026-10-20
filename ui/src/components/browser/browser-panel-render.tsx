@@ -10,6 +10,7 @@ import { Icon } from "../solid/icon.tsx";
 import { PanelEmptyState } from "../solid/panel-empty-state.tsx";
 import { PanelIconButton } from "../solid/panel-icon-button.tsx";
 import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
+import { StrokeIcon } from "../solid/stroke-icon.tsx";
 import type { BrowserPanel } from "./browser-panel-owner.ts";
 import { BrowserPanelTabs } from "./browser-panel-tabs.tsx";
 
@@ -188,17 +189,9 @@ function Toolbar(props: ControllerProps & { embedded: boolean }) {
             : "browser.inspect",
         )}
         icon={
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
-          >
+          <StrokeIcon aria-hidden="true">
             <path d="m4 4 7.07 17 2.51-7.39L21 11.07z" />
-          </svg>
+          </StrokeIcon>
         }
         disabled={!hasView() || (!nativeTab() && props.controller.evaluateUnavailable)}
         onClick={() => props.controller.setMode("inspect")}

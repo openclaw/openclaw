@@ -24,6 +24,7 @@ import { projectSource } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { ChatQuestionCard } from "../chat/components/chat-question-card-view.tsx";
 import { createGatewayQuestionPanelProps } from "../chat/components/chat-question-card.ts";
+import { terminalAnswer } from "../chat/components/chat-question-summary.tsx";
 
 type QuestionPageRequestError = "connection" | "load" | "unavailable" | null;
 
@@ -251,25 +252,6 @@ function createQuestionPage(
 }
 
 function QuestionSummary(props: { prompt: QuestionPrompt }) {
-  const answer = (question: QuestionPrompt["questions"][number]) => {
-    const prompt = props.prompt;
-    if (prompt.status === "cancelled") {
-      return t("chat.questions.skipped");
-    }
-    if (prompt.status === "expired") {
-      return t("chat.questions.expired");
-    }
-    if (prompt.status === "unavailable") {
-      return t("chat.questions.unavailable");
-    }
-    if (question.isSecret) {
-      return t("chat.questions.answered");
-    }
-    return (
-      prompt.answers?.answers[question.questionId]?.join(", ") ||
-      t(prompt.answeredElsewhere ? "chat.questions.answeredElsewhere" : "chat.questions.answered")
-    );
-  };
   return (
     <div class="chat-question-summary" aria-label={t("chat.questions.summaryLabel")}>
       <For each={props.prompt.questions} keyed={(question) => question.questionId}>
@@ -278,7 +260,7 @@ function QuestionSummary(props: { prompt: QuestionPrompt }) {
             <div class="chat-question-summary__prompt">{question().question}</div>
             <div class="chat-question-summary__line">
               <strong>{question().header}:</strong>
-              <span>{answer(question())}</span>
+              <span>{terminalAnswer(props.prompt, question())}</span>
             </div>
           </div>
         )}

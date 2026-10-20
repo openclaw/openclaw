@@ -8,7 +8,7 @@ import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-anchor.js";
 import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.js";
 import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
-import { prepareSessionMemoryEntries } from "./session-memory-entry.worker.js";
+import { collectSessionMemoryEntries } from "./session-memory-entry.worker.test-support.js";
 
 it("batches export metadata while observing committed appends, rewrites and cold transitions", async () => {
   await withOpenClawTestState({ label: "session-memory-entry-batch" }, async (state) => {
@@ -35,12 +35,12 @@ it("batches export metadata while observing committed appends, rewrites and cold
     const readBatch = async () => {
       const observer = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
       try {
-        const entries = await prepareSessionMemoryEntries(requests);
+        const entries = await collectSessionMemoryEntries(requests);
         expect(
           observer.queries.filter(
             (sql) => /\bcount\(/i.test(sql) && /transcript_events/i.test(sql),
           ),
-        ).toHaveLength(1);
+        ).toHaveLength(2);
         expect(
           observer.queries.filter((sql) =>
             /\bfrom\s+"session_transcript_cold_archives"/i.test(sql),
@@ -118,7 +118,7 @@ it("keeps repeated sessions isolated by their admitted input bounds", async () =
       ]),
     ).toBe(true);
     const request = { absPath: scope.sessionKey, options: scope };
-    expect(await prepareSessionMemoryEntries([request])).toMatchObject([
+    expect(await collectSessionMemoryEntries([request])).toMatchObject([
       { entry: { content: "User: First.\nUser: Second.\nUser: Third." } },
     ]);
     const requests = ["second", "third"].map((entryId) => {
@@ -134,7 +134,7 @@ it("keeps repeated sessions isolated by their admitted input bounds", async () =
     });
     const observer = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
     try {
-      expect(await prepareSessionMemoryEntries(requests)).toMatchObject([
+      expect(await collectSessionMemoryEntries(requests)).toMatchObject([
         { entry: { content: "User: First." } },
         { entry: { content: "User: First.\nUser: Second." } },
       ]);
@@ -142,5 +142,82 @@ it("keeps repeated sessions isolated by their admitted input bounds", async () =
     } finally {
       observer.restore();
     }
+  });
+});
+
+it("waits for delivery before reading later export batches and retries a failed delivery", async () => {
+  await withOpenClawTestState({ label: "session-memory-entry-delivery" }, async (state) => {
+    const requests = Array.from({ length: 3 }, (_, index) => ({
+      absPath: "agent:main:chat:delivery-" + index,
+      options: {
+        agentId: "main",
+        sessionId: "delivery-" + index,
+        sessionKey: "agent:main:chat:delivery-" + index,
+        storePath: path.join(state.sessionsDir(), "sessions.json"),
+      },
+    }));
+    const body = "bounded fixture ".repeat(150_000);
+    for (const { options } of requests) {
+      replaceSessionEntrySync(options, { sessionId: options.sessionId, updatedAt: 1 });
+      expect(
+        replaceTranscriptEventsSync(options, [
+          {
+            type: "message",
+            id: "initial",
+            message: { role: "user", content: body },
+          },
+        ]),
+      ).toBe(true);
+    }
+    const entered = Promise.withResolvers<void>();
+    const resume = Promise.withResolvers<void>();
+    const observer = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+    const pending = collectSessionMemoryEntries(requests, async (index, value) => {
+      expect(index).toBe(0);
+      if (!("entry" in value) || !value.entry) {
+        throw new Error("Expected a hot export");
+      }
+      expect(value.entry.content.startsWith("User: bounded fixture ")).toBe(true);
+      expect(value.entry.content.endsWith("fixture")).toBe(true);
+      entered.resolve();
+      await resume.promise;
+      throw new Error("delivery unavailable");
+    });
+    const observed = pending.catch((error: unknown) => error);
+    try {
+      await Promise.race([
+        entered.promise,
+        pending.then(() => {
+          throw new Error("Export finished before delivery was acknowledged");
+        }),
+      ]);
+      // Two sources exceed the byte group: none of the later bodies may be prefetched.
+      expect(observer.queries.filter((sql) => sql.includes(' as "event_json"'))).toHaveLength(1);
+      resume.resolve();
+      await expect(pending).rejects.toThrow("delivery unavailable");
+    } finally {
+      resume.resolve();
+      await observed;
+      observer.restore();
+    }
+    expect(
+      replaceTranscriptEventsSync(requests[2]!.options, [
+        {
+          type: "message",
+          id: "newer",
+          message: { role: "user", content: "Committed after failure." },
+        },
+      ]),
+    ).toBe(true);
+    const delivered: number[] = [];
+    expect(
+      await collectSessionMemoryEntries(requests, async (index, value) => {
+        delivered.push(index);
+        if (index === 2) {
+          expect(value).toMatchObject({ entry: { content: "User: Committed after failure." } });
+        }
+      }),
+    ).toHaveLength(3);
+    expect(delivered).toEqual([0, 1, 2]);
   });
 });

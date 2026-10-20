@@ -5,7 +5,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { normalizeToolParameters } from "../agents/agent-tools.schema.js";
+import { finalizeAgentTools } from "../agents/agent-tools.finalize.js";
 import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY } from "../agents/tool-policy.js";
 import { createInvalidConfigError, throwInvalidConfig } from "../config/io.invalid-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -25,7 +25,9 @@ import { createPluginRecord } from "./status.test-helpers.js";
 import { appendRuntimePluginToolGrant } from "./tool-grant-allowlist.js";
 import {
   createNamedToolEntry,
+  createFeishuToolManifest,
   createToolRegistry,
+  createXaiToolManifest,
   makeTool,
   type MockRegistryToolEntry,
 } from "./tools.optional.test-helpers.js";
@@ -346,63 +348,6 @@ function installToolManifestSnapshots(params: {
     workspaceDir: "/tmp",
   });
   return snapshot;
-}
-
-function createXaiToolManifest() {
-  return {
-    id: "xai",
-    origin: "bundled",
-    enabledByDefault: true,
-    channels: [],
-    providers: ["xai"],
-    setup: {
-      providers: [{ id: "xai", envVars: ["XAI_API_KEY"] }],
-    },
-    contracts: {
-      tools: ["x_search"],
-    },
-    toolMetadata: {
-      x_search: {
-        replaySafe: true,
-        authSignals: [{ provider: "xai" }],
-        configSignals: [
-          {
-            rootPath: "plugins.entries.xai.config",
-            overlayPath: "webSearch",
-            required: ["apiKey"],
-          },
-        ],
-      },
-    },
-  };
-}
-
-function createFeishuToolManifest() {
-  return {
-    id: "feishu",
-    origin: "bundled",
-    enabledByDefault: true,
-    channels: ["feishu"],
-    providers: [],
-    contracts: {
-      tools: ["feishu_doc"],
-    },
-    toolMetadata: {
-      feishu_doc: {
-        configSignals: [
-          {
-            rootPath: "channels.feishu",
-            required: ["appId", "appSecret"],
-          },
-          {
-            rootPath: "channels.feishu",
-            overlayMapPath: "accounts",
-            required: ["appId", "appSecret"],
-          },
-        ],
-      },
-    },
-  };
 }
 
 function expectResolvedToolNames(
@@ -1784,9 +1729,13 @@ describe("resolvePluginTools optional tools", () => {
     resolvePluginTools(
       createResolveToolsParams({ context: { ...createContext(), sessionId: "initial" } }),
     );
-    const tools = resolvePluginTools(
-      createResolveToolsParams({ context: { ...createContext(), sessionId: "current" } }),
-    ).map((tool) => normalizeToolParameters(tool));
+    const tools = finalizeAgentTools({
+      tools: resolvePluginTools(
+        createResolveToolsParams({ context: { ...createContext(), sessionId: "current" } }),
+      ),
+      hookContext: {},
+      wrapBeforeToolCallHook: false,
+    });
     expectResolvedToolNames(tools, names);
 
     for (const [index, tool] of tools.entries()) {
@@ -1833,9 +1782,13 @@ describe("resolvePluginTools optional tools", () => {
         ),
         [...names, "healthy_tool"],
       );
-      const tools = resolvePluginTools(
-        createResolveToolsParams({ context: { ...context, sessionId: "current" } }),
-      ).map((tool) => normalizeToolParameters(tool));
+      const tools = finalizeAgentTools({
+        tools: resolvePluginTools(
+          createResolveToolsParams({ context: { ...context, sessionId: "current" } }),
+        ),
+        hookContext: {},
+        wrapBeforeToolCallHook: false,
+      });
 
       expectResolvedToolNames(tools, ["healthy_tool"]);
       await expect(tools[0]?.execute("healthy", {}, undefined)).resolves.toEqual({

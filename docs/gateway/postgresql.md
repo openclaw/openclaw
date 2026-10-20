@@ -139,6 +139,10 @@ namespace separate cache entries. Session setup runs when a backend connects,
 and an idle connection lost by the server is replaced at the next open. Workers
 close their cached connections on shutdown.
 
+Usage reports retain their reader in the existing history worker between requests.
+Each report still uses a fresh read snapshot; database maintenance and worker
+shutdown close the retained connection before releasing custody.
+
 ## Requirements
 
 ### Provision a database and runtime role
@@ -712,6 +716,14 @@ not create an approximate-nearest-neighbor index.
 Scores and tokenization are engine-local. Expect different ordering from SQLite
 BM25, particularly for punctuation, compound words, and Unicode. Hybrid retrieval
 keeps the existing text/vector weighting, not cross-engine score equivalence.
+Memory full-text rank uses unnormalized `ts_rank_cd` and maps its rank `r` to
+`r / (r + 0.1)` before the shared hybrid merge. This engine-specific calibration
+makes keyword relevance contribute meaningfully alongside vectors. It does not
+include corpus-wide inverse document frequency (IDF), so common-term and
+mixed-frequency queries remain a ranking limitation compared with SQLite BM25.
+Memory keyword search retrieves body, exact-path, and broad-path candidates in
+one statement, retaining each branch's ranking and limit. The match-any body
+fallback runs separately only when both body and path searches return no matches.
 Memory transcript visibility retains the same 200-candidate ACL postfilter as
 SQLite; it does not promise complete recall beyond that candidate window. The
 separate transcript search API applies its agent/session/role filters before its
