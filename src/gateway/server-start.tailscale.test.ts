@@ -22,11 +22,11 @@ it("stops a ready Tailscale claim while the Gateway is still preparing its close
   const finishing = createDeferred();
   const resume = createDeferred();
   const stopped = createDeferred();
-  const cleanup = vi.fn(async () => {
-    stopped.resolve();
-  });
-  const exposure = vi.spyOn(tailscale, "startGatewayTailscaleExposure").mockResolvedValue(cleanup);
-  const finish = vi.spyOn(startup, "finishGatewayStartup").mockImplementation(async (params) => {
+  const cleanup = vi.fn(async () => stopped.resolve());
+  const wait = (gate: Promise<void>, work: Promise<unknown>, message: string) =>
+    withinTest(awaitGateBeforeSettlement(gate, work, message), signal);
+  vi.spyOn(tailscale, "startGatewayTailscaleExposure").mockResolvedValue(cleanup);
+  vi.spyOn(startup, "finishGatewayStartup").mockImplementation(async (params) => {
     await params.kernelRuntime.startListening();
     finishing.resolve();
     await resume.promise;
@@ -45,40 +45,21 @@ it("stops a ready Tailscale claim while the Gateway is still preparing its close
     });
     state.applyEnv();
     starting = startGatewayServerCore(port.port, { startupOperation: operations.run });
-    const result = starting.then(
-      () => "started",
-      (error: unknown) => error,
-    );
-    await withinTest(
-      awaitGateBeforeSettlement(
-        finishing.promise,
-        result,
-        "Gateway never reached the post-exposure phase",
-      ),
-      signal,
-    );
+    const result = starting.catch((error: unknown) => error);
+    await wait(finishing.promise, result, "Startup settled before the post-exposure phase");
     operations.close();
     const draining = operations.drain();
-    await withinTest(
-      awaitGateBeforeSettlement(
-        stopped.promise,
-        draining,
-        "Native stop left its Tailscale claim active",
-      ),
-      signal,
-    );
+    await wait(stopped.promise, draining, "Native stop left its Tailscale claim active");
     // The claimant is gone while startup is still blocked, before any close handle exists.
     expect(cleanup).toHaveBeenCalledOnce();
     resume.resolve();
-    const error = await result;
-    expect(operations.cancelledWith(error)).toBe(true);
+    expect(operations.cancelledWith(await result)).toBe(true);
     await draining;
   } finally {
     resume.resolve();
     const server = await starting?.catch(() => undefined);
     await server?.close();
-    exposure.mockRestore();
-    finish.mockRestore();
+    vi.restoreAllMocks();
     await state.cleanup();
     await port.release();
   }

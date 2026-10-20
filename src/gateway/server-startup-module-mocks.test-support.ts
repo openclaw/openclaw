@@ -6,21 +6,7 @@ import * as systemCa from "./system-ca-warmup.js";
 
 type SystemCaWarmup = typeof systemCa.beginMacOSSystemCaWarmupOnce;
 
-const systemCaMock = vi.hoisted(() => {
-  let warmSystemCa: SystemCaWarmup | undefined;
-  return {
-    install(next: SystemCaWarmup): () => void {
-      const previous = warmSystemCa;
-      warmSystemCa = next;
-      return () => {
-        warmSystemCa = previous;
-      };
-    },
-    run(fallback: SystemCaWarmup, options: Parameters<SystemCaWarmup>[0]) {
-      return (warmSystemCa ?? fallback)(options);
-    },
-  };
-});
+const systemCaMock = vi.hoisted(() => ({ current: undefined as SystemCaWarmup | undefined }));
 
 // Bind before startup captures the static import; unmodified fixtures use the real owner.
 vi.mock("./system-ca-warmup.js", async (importOriginal) => {
@@ -28,7 +14,7 @@ vi.mock("./system-ca-warmup.js", async (importOriginal) => {
   return {
     ...actual,
     beginMacOSSystemCaWarmupOnce: (options?: Parameters<SystemCaWarmup>[0]) =>
-      systemCaMock.run(actual.beginMacOSSystemCaWarmupOnce, options),
+      (systemCaMock.current ?? actual.beginMacOSSystemCaWarmupOnce)(options),
   };
 });
 
@@ -64,7 +50,11 @@ export function installGatewayStartupModuleMocks(
     restorers.push(() => spy.mockRestore());
   }
   if (systemCa.beginMacOSSystemCaWarmupOnce !== mocks.warmSystemCa) {
-    restorers.push(systemCaMock.install(mocks.warmSystemCa));
+    const previous = systemCaMock.current;
+    systemCaMock.current = mocks.warmSystemCa;
+    restorers.push(() => {
+      systemCaMock.current = previous;
+    });
   }
 }
 
@@ -79,10 +69,8 @@ export async function installGatewayHookModuleLoad(
     await waitForLoad();
     return owner;
   });
-  restorers.push(() => {
-    // mock-isolation: Restore the same hook namespace without resetting Gateway singletons.
-    vi.doMock("../plugins/hooks.js", () => owner);
-  });
+  // mock-isolation: Restore captured namespaces without resetting Gateway singletons.
+  restorers.push(() => vi.doMock("../plugins/hooks.js", () => owner));
 }
 
 export async function installGatewaySubagentModuleLoad(
@@ -96,8 +84,5 @@ export async function installGatewaySubagentModuleLoad(
     await waitForLoad();
     return { ...owner, activateSubagentRegistry: activate };
   });
-  restorers.push(() => {
-    // mock-isolation: Restore the captured registry namespace, including its original test state.
-    vi.doMock("../agents/subagents/registry/subagent-registry.js", () => owner);
-  });
+  restorers.push(() => vi.doMock("../agents/subagents/registry/subagent-registry.js", () => owner));
 }

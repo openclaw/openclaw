@@ -2,16 +2,16 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
+import { createSnapshot } from "../config/mutate.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   listAmbientOnlyConfiguredChannelIds,
-  listGatewayActivatedChannelIds,
+  listGatewayActivatedChannelIds as activatedChannelIds,
 } from "../plugins/channel-presence-policy.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { resolveGatewayReloadPluginActivationCandidate } from "./plugin-activation-runtime-config.js";
 import { loadGatewayStartupConfigSnapshot } from "./server-startup-config-helpers.js";
-import { buildTestConfigSnapshot } from "./test-helpers.config-snapshots.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const metadata = createPluginMetadataSnapshotFixture({
@@ -40,27 +40,20 @@ describe("Gateway channel activation consent", () => {
     "preserves %s through initial config loading and reload",
     async (_name, ambientEnvTriggers, channels, enabled) => {
       const sourceConfig: OpenClawConfig = { channels };
-      const snapshot = buildTestConfigSnapshot({
+      const snapshot = createSnapshot({
         path: process.env.OPENCLAW_CONFIG_PATH!,
-        exists: true,
-        raw: JSON.stringify(sourceConfig),
-        parsed: sourceConfig,
-        valid: true,
-        config: sourceConfig,
-        issues: [],
-        legacyIssues: [],
+        sourceConfig,
+        hash: "ambient-channels",
       });
       const log = { info: vi.fn(), warn: vi.fn() };
-      const startupParams = {
+      const startup = await loadGatewayStartupConfigSnapshot({
         minimalTestGateway: false,
         ambientEnvTriggers,
         log,
         initialSnapshotRead: { snapshot, pluginMetadataSnapshot: metadata },
-      };
-      const startup = await loadGatewayStartupConfigSnapshot(startupParams);
-      const reloadSource = { ...sourceConfig, logging: { level: "debug" as const } };
+      });
       const reload = resolveGatewayReloadPluginActivationCandidate({
-        sourceConfig: reloadSource,
+        sourceConfig: { ...sourceConfig, logging: { level: "debug" } },
         env: process.env,
         manifestRegistry: metadata.manifestRegistry,
         ambientEnvTriggers,
@@ -69,7 +62,7 @@ describe("Gateway channel activation consent", () => {
       for (const config of [startup.snapshot.config, reload]) {
         expect(config.channels?.discord?.enabled === true).toBe(enabled);
         expect(
-          listGatewayActivatedChannelIds({
+          activatedChannelIds({
             config,
             activationSourceConfig: sourceConfig,
             env: process.env,
@@ -96,8 +89,6 @@ describe("Gateway channel activation consent", () => {
       includePersistedAuthState: false,
     };
     expect(listAmbientOnlyConfiguredChannelIds(params)).toEqual(["discord"]);
-    expect(listGatewayActivatedChannelIds({ ...params, ambientEnvTriggers: "suppress" })).toEqual(
-      [],
-    );
+    expect(activatedChannelIds({ ...params, ambientEnvTriggers: "suppress" })).toEqual([]);
   });
 });

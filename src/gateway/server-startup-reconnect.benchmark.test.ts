@@ -79,29 +79,19 @@ it.runIf(process.env.OPENCLAW_STARTUP_RECONNECT_BENCH === "1")(
             timeoutMs: 30_000,
           });
           clients.push(client);
+          const key = `agent:main:reconnect-${index}`;
+          const requests = {
+            "sessions.list": [{ limit: 100 }, { totalCount: 5_000 }],
+            "sessions.messages.subscribe": [{ key }, { subscribed: true, key }],
+            "cron.list": [{}, { jobs: [] }],
+          } as const;
           let round = 0;
           do {
             await Promise.all(
               methods.map(async (method) => {
                 const start = performance.now();
-                const result = await client.request(
-                  method,
-                  method === "sessions.list"
-                    ? { limit: 100 }
-                    : method === "sessions.messages.subscribe"
-                      ? { key: `agent:main:reconnect-${index}` }
-                      : {},
-                );
-                if (method === "sessions.list") {
-                  expect(result).toMatchObject({ totalCount: 5_000 });
-                } else if (method === "sessions.messages.subscribe") {
-                  expect(result).toMatchObject({
-                    subscribed: true,
-                    key: `agent:main:reconnect-${index}`,
-                  });
-                } else {
-                  expect(result).toMatchObject({ jobs: [] });
-                }
+                const [params, expected] = requests[method];
+                expect(await client.request(method, params)).toMatchObject(expected);
                 const ms = performance.now() - start;
                 samples[method].push(ms);
                 if (round === 0) {

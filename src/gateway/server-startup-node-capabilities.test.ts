@@ -76,20 +76,17 @@ it("reconnects affected nodes when plugins attach after their handshake", async 
   let kernel: Awaited<ReturnType<typeof createGatewayKernel>> | undefined;
   let server: GatewayServer | undefined;
   let databaseReady = false;
-  const admission = vi
-    .spyOn(
-      await import("./server-agent-database-startup.js"),
-      "activateGatewayAgentDatabaseStartup",
-    )
-    .mockImplementation(({ preparationReady }) => {
-      void preparationReady.then(() => {
-        databaseReady = true;
-      });
+  vi.spyOn(
+    await import("./server-agent-database-startup.js"),
+    "activateGatewayAgentDatabaseStartup",
+  ).mockImplementation(({ preparationReady }) => {
+    void preparationReady.then(() => {
+      databaseReady = true;
     });
+  });
   const createKernel = createGatewayKernel;
-  const factory = vi
-    .spyOn(await import("./server-kernel.js"), "createGatewayKernel")
-    .mockImplementation(async (...args) => {
+  vi.spyOn(await import("./server-kernel.js"), "createGatewayKernel").mockImplementation(
+    async (...args) => {
       kernel = await createKernel(...args);
       expect(kernel.workerPlacementRuntime).toBeDefined();
       vi.spyOn(kernel.workerPlacementRuntime!, "startRuntime").mockImplementation(async () => {
@@ -101,19 +98,21 @@ it("reconnects affected nodes when plugins attach after their handshake", async 
         kernel.clients.add(client);
       }
       return kernel;
-    });
-  const postAttach = vi
-    .spyOn(await import("./server-startup-post-attach.js"), "startGatewayPostAttachRuntime")
-    .mockImplementation(async (params) => {
-      expect(databaseReady).toBe(false);
-      await params.onStartupPluginsLoaded?.({ pluginRegistry: registry, gatewayMethods: [] });
-      await params.startWorkerEnvironmentRuntime?.();
-      return {
-        stopGatewayUpdateCheck: async () => {},
-        startupSettled: Promise.resolve(),
-        subagentRecoverySettled: Promise.resolve(),
-      };
-    });
+    },
+  );
+  vi.spyOn(
+    await import("./server-startup-post-attach.js"),
+    "startGatewayPostAttachRuntime",
+  ).mockImplementation(async (params) => {
+    expect(databaseReady).toBe(false);
+    await params.onStartupPluginsLoaded?.({ pluginRegistry: registry, gatewayMethods: [] });
+    await params.startWorkerEnvironmentRuntime?.();
+    return {
+      stopGatewayUpdateCheck: async () => {},
+      startupSettled: Promise.resolve(),
+      subagentRecoverySettled: Promise.resolve(),
+    };
+  });
   try {
     const token = "startup-node-capability-token";
     const claim = await acquireTestPortBlock({ offsets: [0] });
@@ -140,9 +139,7 @@ it("reconnects affected nodes when plugins attach after their handshake", async 
     try {
       await server?.close();
     } finally {
-      factory.mockRestore();
-      admission.mockRestore();
-      postAttach.mockRestore();
+      vi.restoreAllMocks();
       restoreActivePluginRegistrySnapshot(previousRegistry);
       await state.cleanup();
     }

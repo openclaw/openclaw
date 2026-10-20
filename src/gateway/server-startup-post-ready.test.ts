@@ -33,7 +33,6 @@ it.each(["settles", "closes", "repair-closes"] as const)(
     });
     state.envVars.OPENCLAW_TEST_MINIMAL_GATEWAY = undefined;
     const startup = createDeferred();
-    const repairStarted = createDeferred();
     const repairRelease = createDeferred();
     const resumed = vi.fn<(closing: boolean) => void>();
     const startMaintenance = vi.fn(async () => null);
@@ -47,37 +46,30 @@ it.each(["settles", "closes", "repair-closes"] as const)(
     const optionalRepair = vi
       .spyOn(plugins, "runGatewayPostReadyStartupMaintenance")
       .mockImplementation(async () => {
-        repairStarted.resolve();
         await repairRelease.promise;
         throw new Error("synthetic optional repair failure");
       });
     const earlyModule = await import("./server-startup-early.js");
     const startEarlyRuntime = earlyModule.startGatewayEarlyRuntime;
-    const earlyFactory = vi
-      .spyOn(earlyModule, "startGatewayEarlyRuntime")
-      .mockImplementation(async (...args) => ({
-        ...(await startEarlyRuntime(...args)),
-        startMaintenance,
-      }));
+    vi.spyOn(earlyModule, "startGatewayEarlyRuntime").mockImplementation(async (...args) => ({
+      ...(await startEarlyRuntime(...args)),
+      startMaintenance,
+    }));
     const startupModule = await import("./server-startup-finish.js");
     const finishStartup = startupModule.finishGatewayStartup;
-    const startupFactory = vi
-      .spyOn(startupModule, "finishGatewayStartup")
-      .mockImplementation(async (params) => {
-        const result = await finishStartup(params);
-        realStartup = result.startupSettled;
-        const owner = params.kernelRuntime;
-        postReadyWork = owner.connectionWork.track(() =>
-          params.waitForPostReadyWork().then(() => {
-            resumed(owner.lifecycle.closePreludeStarted);
-          }),
-        );
-        const startupSettled = owner.connectionWork.track(async () => {
-          await result.startupSettled;
-          await startup.promise;
-        });
-        return { ...result, startupSettled };
+    vi.spyOn(startupModule, "finishGatewayStartup").mockImplementation(async (params) => {
+      const result = await finishStartup(params);
+      realStartup = result.startupSettled;
+      const owner = params.kernelRuntime;
+      postReadyWork = owner.connectionWork.track(() =>
+        params.waitForPostReadyWork().then(() => resumed(owner.lifecycle.closePreludeStarted)),
+      );
+      const startupSettled = owner.connectionWork.track(async () => {
+        await result.startupSettled;
+        await startup.promise;
       });
+      return { ...result, startupSettled };
+    });
     try {
       const token = "gateway-post-ready-maintenance-token";
       await state.writeConfig({
@@ -120,7 +112,6 @@ it.each(["settles", "closes", "repair-closes"] as const)(
           },
           { timeout: 10_000, interval: 10 },
         );
-        await repairStarted.promise;
         expect(resumed).toHaveBeenCalledExactlyOnceWith(false);
         const readiness = await fetch(`http://127.0.0.1:${port}/readyz`);
         expect(readiness.status).toBe(200);
@@ -134,7 +125,6 @@ it.each(["settles", "closes", "repair-closes"] as const)(
         }
         repairRelease.resolve();
         await repairWake;
-        await beforeReadyWake;
         await closeOutcome;
         if (outcome === "settles") {
           // Failed optional repair must not suppress the periodic maintenance owner.
@@ -153,8 +143,6 @@ it.each(["settles", "closes", "repair-closes"] as const)(
         await state.cleanup();
       } finally {
         schedulerClock.current = undefined;
-        startupFactory.mockRestore();
-        earlyFactory.mockRestore();
         vi.restoreAllMocks();
       }
     }
