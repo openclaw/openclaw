@@ -255,7 +255,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([
       makeSettledChild({ runId: "run-old-1", createdAt: 100, startedAt: 100, endedAt: 200 }),
       makeSettledChild({ runId: "run-old-2", createdAt: 100, startedAt: 110, endedAt: 250 }),
-      makeSettledChild({ runId: "run-b" }),
+      makeSettledChild({ runId: "run-b", delivery: { status: "delivered" } }),
     ]);
 
     const woke = await maybeWakeRequesterAfterAllChildrenSettled(wakeParams());
@@ -611,6 +611,38 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       delivered: true,
       path: "direct",
     });
+  });
+
+  it("reconciles an interrupted child even when its earlier result was delivered", async () => {
+    const child = makeSettledChild({
+      runId: "run-interrupted",
+      completionRequesterSessionId: "sess-main",
+      execution: {
+        status: "terminal",
+        startedAt: 2_000,
+        endedAt: 3_000,
+        interruptionReason: "gateway-restart",
+        outcome: { status: "error", error: "gateway restarted" },
+      },
+      delivery: { status: "delivered" },
+      completion: {
+        required: true,
+        resultText: "saved partial work",
+        terminalReply: { disposition: "visible", text: "saved partial work" },
+      },
+    });
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([child]);
+
+    expect(
+      await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: child })),
+    ).toBe(true);
+
+    expect(deliverSpy).toHaveBeenCalledOnce();
+    const message = String(deliveredCallArg().triggerMessage);
+    expect(message).toContain("Unfinished child sessions to reconcile:");
+    expect(message).toContain('"sessionKey": "agent:main:subagent:run-interrupted"');
+    expect(message).toContain("saved partial work");
+    expect(message).not.toContain("Already delivered child results");
   });
 
   it("wakes the settled batch's parent with interrupted child identities and continuation guidance", async () => {

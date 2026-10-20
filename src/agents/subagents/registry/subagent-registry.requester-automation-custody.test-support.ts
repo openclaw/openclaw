@@ -190,7 +190,7 @@ export function registerRequesterAutomationCustodyTests({
               resultText: "Original child result",
               terminalReply: { disposition: "visible", text: "Original child result" },
             };
-            draft.delivery = { status: "delivered" };
+            draft.delivery = { status: "pending" };
           });
           if (authority === "revoked") {
             revoked.abort(new Error("original operator source revoked"));

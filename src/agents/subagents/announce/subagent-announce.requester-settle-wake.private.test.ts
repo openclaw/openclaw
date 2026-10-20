@@ -89,8 +89,8 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
     });
 
   it.each([
-    { name: "delivered private pair", mixed: false, single: false, yielded: false },
-    { name: "delivered mixed pair", mixed: true, single: false, yielded: false },
+    { name: "pending private pair", mixed: false, single: false, yielded: false },
+    { name: "pending mixed pair", mixed: true, single: false, yielded: false },
     { name: "yielded private child", mixed: false, single: true, yielded: true },
     { name: "yielded mixed pair", mixed: true, single: false, yielded: true },
   ])("preserves the admitted reply policy: $name", async ({ mixed, single, yielded }) => {

@@ -11,6 +11,8 @@ import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs, promisify } from "node:util";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
+const operationChannel = channel("openclaw.git.operation");
+
 const { values } = parseArgs({
   options: {
     "state-dir": { type: "string" },
@@ -453,7 +455,6 @@ async function measureRpc(fixture: object) {
   const server = await startGatewayServer(port, { bind: "loopback", controlUiEnabled: false });
   const peers: InstanceType<typeof GatewayClient>[] = [];
   const operationSamples: Record<string, unknown>[] = [];
-  const operationChannel = channel("openclaw.git.operation");
   let measured = false;
   const phaseSamples: {
     name: string;
