@@ -1,10 +1,9 @@
 import { writeFileSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import * as workerUrls from "openclaw/plugin-sdk/process-runtime";
-import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, assert, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { observeWorkerActivity } from "../../test/helpers/worker-activity.js";
 import { resolveBundledPublicSurfaceLocation } from "../plugin-sdk/facade-loader.js";
@@ -22,9 +21,7 @@ const executorArtifact = resolveBundledPublicSurfaceLocation({
   preferSource: true,
   env: { ...process.env, OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions") },
 });
-if (!executorArtifact) {
-  throw new Error("QuickJS executor public artifact is unavailable");
-}
+assert(executorArtifact, "QuickJS executor public artifact is unavailable");
 const { codeModeExecutor } = await vi.importActual<{ codeModeExecutor: CodeModeExecutor }>(
   executorArtifact.modulePath,
 );
@@ -35,8 +32,7 @@ it.each(["exec", "resume"] as const)(
   "terminates a real CPU-active %s worker when its catalog closes",
   async (phase) => {
     // Finish hooks stop workers before restoring spies and releasing files.
-    const tempDirs = useAutoCleanupTempDirTracker(onTestFinished);
-    const dir = tempDirs.make("code-mode-catalog-cpu-");
+    const dir = useAutoCleanupTempDirTracker(onTestFinished).make("code-mode-catalog-cpu-");
     const channelName = `catalog-cpu-${phase}-${crypto.randomUUID()}`;
     const executing = observeWorkerActivity(channelName);
     // Keep the real executor in Vitest's graph so the worker URL spy observes it.
@@ -51,23 +47,20 @@ it.each(["exec", "resume"] as const)(
       parked = await h.run("await yield_control(); while (true) {}", "park-cpu");
       expect(parked.status).toBe("waiting");
     }
-    const workerPath = path.join(dir, "observed-worker.ts");
-    await writeFile(path.join(dir, "package.json"), '{"type":"module"}');
+    const workerUrl = pathToFileURL(path.join(dir, "observed-worker.mts"));
     const originalResolveWorker = workerUrls.resolveRuntimeWorkerUrl;
     const resolveWorker = vi
       .spyOn(workerUrls, "resolveRuntimeWorkerUrl")
       .mockImplementation((params) => {
         const productionWorkerUrl = originalResolveWorker(params);
-        const quickJsUrl = pathToFileURL(
-          createRequire(productionWorkerUrl).resolve("quickjs-wasi"),
-        );
+        const quickJsPath = createRequire(productionWorkerUrl).resolve("quickjs-wasi");
         // Observe the real QuickJS interrupt callback, not merely thread startup.
         writeFileSync(
-          workerPath,
+          workerUrl,
           `
         import { BroadcastChannel, threadId } from "node:worker_threads";
         const channel = new BroadcastChannel(${JSON.stringify(channelName)});
-        const { QuickJS } = await import(${JSON.stringify(quickJsUrl.href)});
+        const { QuickJS } = await import(${JSON.stringify(pathToFileURL(quickJsPath).href)});
         for (const method of ["create", "restore"]) {
           const original = QuickJS[method];
           QuickJS[method] = function (...args) {
@@ -85,7 +78,7 @@ it.each(["exec", "resume"] as const)(
         await import(${JSON.stringify(productionWorkerUrl.href)});
       `,
         );
-        return pathToFileURL(workerPath);
+        return workerUrl;
       });
     onTestFinished(() => resolveWorker.mockRestore());
     const execution =
@@ -112,15 +105,13 @@ it.each([
 ] as const)(
   "bounds oversized %s before sending it across worker threads",
   async (_label, source, status) => {
-    const config = resolveCodeModeConfig({
-      tools: { codeMode: { enabled: true, maxOutputBytes: 1_024 } },
-    } as never);
-
     const result = await codeModeExecutor.execute(
       {
         kind: "exec",
         source,
-        config,
+        config: resolveCodeModeConfig({
+          tools: { codeMode: { enabled: true, maxOutputBytes: 1_024 } },
+        } as never),
         catalog: [],
         namespaces: [],
       },
@@ -140,18 +131,11 @@ it.each([
     const valueBytes = result.status === "completed" ? Buffer.byteLength(result.value.json) : 0;
     const errorBytes =
       result.status === "failed" ? Buffer.byteLength(JSON.stringify(result.error)) : 0;
-    expect(outputBytes).toBeLessThanOrEqual(1_024);
-    expect(valueBytes).toBeLessThanOrEqual(1_024);
+    expect(Math.max(outputBytes, valueBytes)).toBeLessThanOrEqual(1_024);
     expect(outputBytes + valueBytes + errorBytes).toBeLessThanOrEqual(2 * 1_024);
     const state = new CodeModeOutputState(1_024);
     state.append(result.output);
-    const projected = state.take(
-      result.status === "completed"
-        ? { value: result.value }
-        : result.status === "failed"
-          ? { error: result.error }
-          : {},
-    );
+    const projected = state.take(result.status === "waiting" ? {} : result);
     expect(JSON.stringify(projected)).toContain("rerun with narrower args");
   },
 );

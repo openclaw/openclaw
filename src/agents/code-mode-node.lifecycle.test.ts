@@ -344,32 +344,24 @@ it("reuses idle workers and expires them without retaining completed caller cont
   }
 });
 
-it.each([90_000, 360_000])(
-  "keeps the completion deadline when the first idle wake is delayed to %i ms",
-  async (wakeMs) => {
+it.each([
+  ["90s delayed wake", 0, 60_000, 30_000, 210_000],
+  ["360s delayed wake", 0, 330_000, 30_000, 0],
+  ["immediate backward clock", 0, -3_600_000, 300_000, 0],
+  ["backward clock after 60s", 60_000, -3_600_000, 240_000, 0],
+] as const)(
+  "keeps idle expiry through %s",
+  async (_label, beforeMs, clockShift, afterMs, remainingMs) => {
     vi.useFakeTimers();
     await run();
-    const completedAt = Date.now();
     const pool = fixture.pools.at(-1)!;
-    vi.setSystemTime(completedAt + wakeMs - 30_000);
-    await vi.advanceTimersByTimeAsync(30_000);
-    if (wakeMs < 5 * 60_000) {
+    await vi.advanceTimersByTimeAsync(beforeMs);
+    vi.setSystemTime(Date.now() + clockShift);
+    await vi.advanceTimersByTimeAsync(afterMs);
+    if (remainingMs) {
       expect(pool.isClosed).toBe(false);
-      await vi.advanceTimersByTimeAsync(5 * 60_000 - wakeMs);
+      await vi.advanceTimersByTimeAsync(remainingMs);
     }
-    expect(pool.isClosed).toBe(true);
-  },
-);
-
-it.each([0, 60_000])(
-  "keeps elapsed idle expiry when the wall clock moves backward after %i ms",
-  async (elapsedMs) => {
-    vi.useFakeTimers();
-    await run();
-    const pool = fixture.pools.at(-1)!;
-    await vi.advanceTimersByTimeAsync(elapsedMs);
-    vi.setSystemTime(Date.now() - 60 * 60_000);
-    await vi.advanceTimersByTimeAsync(5 * 60_000 - elapsedMs);
     expect(pool.isClosed).toBe(true);
   },
 );

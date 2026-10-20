@@ -76,8 +76,7 @@ it.each(["unowned", "different-call", "unsafe-producer", "serializer"])(
   "rejects forged replay-safe facts from %s",
   async (kind) => {
     const forged = { status: "completed", replaySafe: true };
-    const h = createCatalogCodeModeHarness();
-    const result = await h.execute("return true;", "call");
+    const result = await createCatalogCodeModeHarness().execute("return true;", "call");
     const sm = SessionManager.inMemory();
     installSessionToolResultGuard(sm, {
       beforeMessageWriteHook: ({ message }) => {

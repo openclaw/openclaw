@@ -17,6 +17,8 @@ import {
 } from "./code-mode.test-support.js";
 
 afterEach(resetCodeModeTestState);
+const quickjs = { codeMode: { executor: "quickjs" as const } };
+const textOutput = (...texts: string[]) => texts.map((text) => ({ type: "text", text }));
 
 function snapshotFixture() {
   const pendingStarted = createDeferred<AbortSignal>();
@@ -50,7 +52,7 @@ function snapshotFixture() {
 }
 
 it("yields and resumes a direct executor call without an inline host", async () => {
-  const { ctx } = createCodeModeHarness({ codeMode: { executor: "quickjs" } });
+  const { ctx } = createCodeModeHarness(quickjs);
   const config = testing.resolveCodeModeHeadlessConfig(ctx);
   const options = {
     executor: "quickjs" as const,
@@ -88,16 +90,12 @@ it.each(["exec", "wait", "headless"] as const)(
     let result: CodeModeHeadlessResult | ReturnType<typeof resultDetails>;
     if (mode === "headless") {
       result = await runCodeModeScriptHeadless({
-        ctx: createHeadlessCodeModeHarness([pending, fixture, fresh], {
-          codeMode: { executor: "quickjs" },
-        }),
+        ctx: createHeadlessCodeModeHarness([pending, fixture, fresh], quickjs),
         code,
       });
       expect(result.toolCallCount).toBe(2);
     } else {
-      const h = createCatalogCodeModeHarness([pending, fixture, fresh], {
-        codeMode: { executor: "quickjs" },
-      });
+      const h = createCatalogCodeModeHarness([pending, fixture, fresh], quickjs);
       const first =
         mode === "wait"
           ? await h.run(`text("delivered"); await yield_control(); ${code}`)
@@ -105,7 +103,7 @@ it.each(["exec", "wait", "headless"] as const)(
       if (first) {
         expect(first).toMatchObject({
           status: "waiting",
-          output: [{ type: "text", text: "delivered" }],
+          output: textOutput("delivered"),
         });
       }
       result = first ? await h.resume(first) : await h.run(code);
@@ -114,10 +112,7 @@ it.each(["exec", "wait", "headless"] as const)(
     expectToolCalls(1, pending, fixture);
     expectToolCalls(0, fresh);
     expect((await pendingStarted.promise).aborted).toBe(true);
-    expect(result.output).toEqual([
-      { type: "text", text: "accepted first" },
-      { type: "text", text: "accepted inline" },
-    ]);
+    expect(result.output).toEqual(textOutput("accepted first", "accepted inline"));
     expect(testing.activeRuns.size).toBe(0);
   },
 );
@@ -146,9 +141,7 @@ it.each(["abort", "restart-safe"])("shares the output budget with %s diagnostics
     code: mode === "abort" ? "aborted" : "invalid_input",
   });
   expect(fixture.execute).toHaveBeenCalledTimes(mode === "abort" ? 1 : 0);
-  expectOriginalCodeModeMarker((result.output as unknown[])[0], [
-    { type: "text", text: "🦞".repeat(1000) },
-  ]);
+  expectOriginalCodeModeMarker((result.output as unknown[])[0], textOutput("🦞".repeat(1000)));
   expectCodeModeSharedBudget(result, 1024);
   expect(testing.activeRuns.size).toBe(0);
 });

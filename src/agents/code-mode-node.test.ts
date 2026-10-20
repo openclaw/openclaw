@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { channel } from "node:diagnostics_channel";
+import { once } from "node:events";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { BroadcastChannel, getEnvironmentData, setEnvironmentData } from "node:worker_threads";
@@ -534,15 +535,10 @@ it("joins worker cancellation while the host owns a pending bridge exchange", as
     timeoutMs: 7_000,
     signal: controller.signal,
     inlineHost: {
-      onBoundary: async (_value, context) => {
+      onBoundary: async (_value, { signal }) => {
         boundary.resolve();
-        return new Promise((_resolve, reject) => {
-          context.signal.addEventListener(
-            "abort",
-            () => reject(new Error("Host bridge aborted", { cause: context.signal.reason })),
-            { once: true },
-          );
-        });
+        await once(signal, "abort");
+        throw new Error("Host bridge aborted", { cause: signal.reason });
       },
     },
   });
