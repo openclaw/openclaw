@@ -25,6 +25,31 @@ beforeEach(() => {
   mocks.resolveSystemNodeInfo.mockResolvedValue(null);
 });
 
+function repair(prompter: ReturnType<typeof makeDoctorPrompts>, clearToken = false) {
+  return withEnvAsync(
+    {
+      ...(clearToken ? { OPENCLAW_GATEWAY_TOKEN: undefined } : {}),
+      OPENCLAW_PROFILE: "preview-proof",
+      OPENCLAW_CONTAINER_HINT: undefined,
+    },
+    () =>
+      maybeRepairGatewayServiceConfig({ gateway: {} }, "local", makeDoctorIo(), prompter, {
+        writeConfig: mocks.writeConfig,
+      }),
+  );
+}
+
+function repairPreview() {
+  return mocks.note.mock.calls.find(([, title]) => title === "Gateway service repair preview")?.[0];
+}
+
+function expectInstallGuidance() {
+  expect(mocks.note).toHaveBeenCalledWith(
+    expect.stringContaining("`openclaw --profile preview-proof gateway install --force`"),
+    "Gateway service config",
+  );
+}
+
 it.each([false, true])(
   "previews unresolved runtime and source findings before consent (approved=%s)",
   async (approved) => {
@@ -64,9 +89,7 @@ it.each([false, true])(
     });
     const prompter = makeDoctorPrompts();
     prompter.confirmRuntimeRepair.mockImplementation(async ({ message }) => {
-      const preview = mocks.note.mock.calls.find(
-        ([, title]) => title === "Gateway service repair preview",
-      )?.[0];
+      const preview = repairPreview();
       expect(preview).toContain(`Runtime: ${node} -> ${node}`);
       expect(preview).toContain(`Entrypoint: ${entrypoint} -> ${entrypoint}`);
       expect(preview).toContain("PATH: /old/bin -> /usr/bin:/bin");
@@ -74,25 +97,11 @@ it.each([false, true])(
       expect(preview).toContain("No supported system Node is available");
       expect(preview).toContain("retains a source-checkout entrypoint");
       expect(preview).toContain("`openclaw --profile preview-proof gateway install --force`");
-      expect(mocks.note).toHaveBeenCalledWith(
-        expect.stringContaining("`openclaw --profile preview-proof gateway install --force`"),
-        "Gateway service config",
-      );
+      expectInstallGuidance();
       expect(message).not.toContain("recommended defaults");
       return approved;
     });
-    await withEnvAsync(
-      {
-        OPENCLAW_GATEWAY_TOKEN: undefined,
-        OPENCLAW_PROFILE: "preview-proof",
-        OPENCLAW_CONTAINER_HINT: undefined,
-      },
-      async () => {
-        await maybeRepairGatewayServiceConfig({ gateway: {} }, "local", makeDoctorIo(), prompter, {
-          writeConfig: mocks.writeConfig,
-        });
-      },
-    );
+    await repair(prompter, true);
     expect(prompter.confirmRuntimeRepair).toHaveBeenCalledOnce();
     expect(mocks.install).toHaveBeenCalledTimes(Number(approved));
     if (approved) {
@@ -137,21 +146,9 @@ it("previews a supported system runtime instead of claiming the runtime warning 
   });
   const prompter = makeDoctorPrompts();
   prompter.confirmRuntimeRepair.mockResolvedValue(false);
-  await withEnvAsync(
-    { OPENCLAW_PROFILE: "preview-proof", OPENCLAW_CONTAINER_HINT: undefined },
-    async () => {
-      await maybeRepairGatewayServiceConfig({ gateway: {} }, "local", makeDoctorIo(), prompter, {
-        writeConfig: mocks.writeConfig,
-      });
-    },
-  );
-  expect(mocks.note).toHaveBeenCalledWith(
-    expect.stringContaining("`openclaw --profile preview-proof gateway install --force`"),
-    "Gateway service config",
-  );
-  const preview = mocks.note.mock.calls.find(
-    ([, title]) => title === "Gateway service repair preview",
-  )?.[0];
+  await repair(prompter);
+  expectInstallGuidance();
+  const preview = repairPreview();
   expect(preview).toContain("Runtime: /home/test/.nvm/bin/node -> /usr/bin/node");
   expect(preview).toContain("PATH: not set -> not set");
   expect(preview).not.toContain("No supported system Node");

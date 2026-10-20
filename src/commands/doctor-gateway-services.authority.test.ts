@@ -64,19 +64,31 @@ const refusals = [
   },
 ] as const;
 type Scenario = (typeof refusals)[number]["scenario"] | "writable" | "repairable" | "rejected";
-type CustodyLoss =
-  | "before-publication"
-  | "backup-published"
-  | "environment-published"
-  | "definition-published"
-  | "daemon-reload"
-  | "enable"
-  | "restart";
+type CustodyLoss = keyof typeof custodyActions;
 
 // All tokens are synthetic. Assertions report equality booleans, never token bytes.
 const embeddedToken = "doctor-fixture-embedded-token";
 const existingToken = "doctor-fixture-config-token";
 const inspectionCanary = "doctor-fixture-private-inspection-detail";
+const untouchedRepair = {
+  configBytesPreserved: true,
+  configTokenPreserved: true,
+  returnedConfigPreserved: true,
+  unitBytesPreserved: true,
+  environmentBytesPreserved: true,
+  installedEnvironmentBytesPreserved: true,
+  unitDirectoryEntries: ["openclaw-gateway.service"],
+  nativeActions: [],
+};
+const custodyActions = {
+  "before-publication": [],
+  "backup-published": [],
+  "environment-published": [],
+  "definition-published": ["daemon-reload"],
+  "daemon-reload": ["daemon-reload", "daemon-reload"],
+  enable: ["daemon-reload", "enable", "daemon-reload"],
+  restart: ["daemon-reload", "enable", "restart", "daemon-reload", "stop"],
+};
 
 describe.skipIf(process.platform === "win32")("Doctor native repair authority ordering", () => {
   let state: OpenClawTestState | undefined;
@@ -494,23 +506,13 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
     "restart",
   ])("Doctor custody fences real native installation at %s", async (custodyLoss) => {
     const { observations } = await runRepair("writable", { tokenPresent: true, custodyLoss });
-    expect.soft(observations.unitBytesPreserved).toBe(true);
-    expect.soft(observations.environmentBytesPreserved).toBe(true);
-    expect.soft(observations.running).toBe(false);
-    expect.soft(observations.unitDirectoryEntries).toEqual(["openclaw-gateway.service"]);
-    expect
-      .soft(observations.nativeActions)
-      .toEqual(
-        custodyLoss === "restart"
-          ? ["daemon-reload", "enable", "restart", "daemon-reload", "stop"]
-          : custodyLoss === "enable"
-            ? ["daemon-reload", "enable", "daemon-reload"]
-            : custodyLoss === "daemon-reload"
-              ? ["daemon-reload", "daemon-reload"]
-              : custodyLoss === "definition-published"
-                ? ["daemon-reload"]
-                : [],
-      );
+    expect.soft(observations).toMatchObject({
+      unitBytesPreserved: true,
+      environmentBytesPreserved: true,
+      running: false,
+      unitDirectoryEntries: ["openclaw-gateway.service"],
+      nativeActions: custodyActions[custodyLoss],
+    });
     expect(observations.authorityFailure).toMatchObject({
       code: "service-authority-revoked",
       outcome: custodyLoss === "before-publication" ? "unchanged" : "restored",
@@ -524,22 +526,8 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
       expect(observations.capability).toMatchObject({ kind, reason });
       expect(diagnostics).toContain(`SERVICE_DEFINITION_${kind.toUpperCase()}: [${reason}]`);
       expect(diagnostics).toContain(guidance);
-      expect(observations.unitBytesPreserved).toBe(true);
-      expect(observations.environmentBytesPreserved).toBe(true);
-      expect(observations.installedEnvironmentBytesPreserved).toBe(true);
-      expect(observations.unitDirectoryEntries).toEqual(["openclaw-gateway.service"]);
-      expect(observations.nativeActions).toEqual([]);
+      expect.soft(observations).toMatchObject({ ...untouchedRepair, returnedTokenPreserved: true });
       expect(observations.events).not.toContain("service-published");
-      expect
-        .soft(observations.configTokenPreserved, "refused repair must preserve the config token")
-        .toBe(true);
-      expect
-        .soft(observations.configBytesPreserved, "refused repair must preserve config bytes")
-        .toBe(true);
-      expect
-        .soft(observations.returnedTokenPreserved, "refused repair must return the original token")
-        .toBe(true);
-      expect(observations.returnedConfigPreserved).toBe(true);
     },
   );
 
@@ -547,14 +535,8 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
     const { observations, diagnostics } = await runRepair("writable", { update: true });
     expect(observations.capability).toEqual({ kind: "writable" });
     expect(diagnostics).toContain("deferred to update finalization");
-    expect(observations.configBytesPreserved).toBe(true);
-    expect(observations.configTokenPreserved).toBe(true);
-    expect(observations.returnedConfigPreserved).toBe(true);
-    expect(observations.unitBytesPreserved).toBe(true);
-    expect(observations.environmentBytesPreserved).toBe(true);
-    expect(observations.unitDirectoryEntries).toEqual(["openclaw-gateway.service"]);
+    expect(observations).toMatchObject(untouchedRepair);
     expect(observations.events).not.toContain("service-published");
-    expect(observations.nativeActions).toEqual([]);
   });
 
   it.each(["installed", "planned"] as const)(
@@ -570,16 +552,7 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
       );
       expect(diagnostics).toContain("SERVICE_DEFINITION_UNKNOWN: [unsafe-permissions]");
       expect(diagnostics).toContain("chmod go-w");
-      expect(observations).toMatchObject({
-        configBytesPreserved: true,
-        configTokenPreserved: true,
-        returnedConfigPreserved: true,
-        unitBytesPreserved: true,
-        environmentBytesPreserved: true,
-        installedEnvironmentBytesPreserved: true,
-        unitDirectoryEntries: ["openclaw-gateway.service"],
-        nativeActions: [],
-      });
+      expect(observations).toMatchObject(untouchedRepair);
       expect(observations.events).not.toContain("service-published");
     },
   );
@@ -588,16 +561,7 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
     const { observations, diagnostics } = await runRepair("rejected");
     expect(diagnostics).toContain("SERVICE_DEFINITION_UNKNOWN: [inspection-failed]");
     expect(diagnostics).toContain("native service-manager availability");
-    expect(observations).toMatchObject({
-      configBytesPreserved: true,
-      configTokenPreserved: true,
-      returnedConfigPreserved: true,
-      unitBytesPreserved: true,
-      environmentBytesPreserved: true,
-      installedEnvironmentBytesPreserved: true,
-      unitDirectoryEntries: ["openclaw-gateway.service"],
-      nativeActions: [],
-    });
+    expect(observations).toMatchObject(untouchedRepair);
     expect(observations.events).not.toContain("service-published");
   });
 
@@ -607,16 +571,16 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
       const { observations, errors } = await runRepair(scenario);
       expect(observations.capability).toEqual({ kind: "writable" });
       expect(errors).toEqual([]);
-      expect(observations.embeddedTokenReferenced).toBe(true);
-      expect(observations.unitBytesPreserved).toBe(false);
-      expect(observations.unitMode).toBe(0o600);
-      expect(observations.events).toEqual(
-        expect.arrayContaining(["config-published", "service-published"]),
-      );
+      expect(observations).toMatchObject({
+        embeddedTokenReferenced: true,
+        unitBytesPreserved: false,
+        unitMode: 0o600,
+        events: expect.arrayContaining(["config-published", "service-published"]),
+        nativeActions: ["daemon-reload", "enable", "restart"],
+      });
       expect(observations.events.indexOf("config-published")).toBeLessThan(
         observations.events.indexOf("service-published"),
       );
-      expect(observations.nativeActions).toEqual(["daemon-reload", "enable", "restart"]);
       expect(observations.unitDirectoryEntries.toSorted()).toEqual([
         "openclaw-gateway.service",
         "openclaw-gateway.service.bak",

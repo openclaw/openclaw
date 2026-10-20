@@ -29,16 +29,34 @@ function commandResult(code: number) {
   };
 }
 
+const hostConfig = { desktop: { host: { enabled: true } } };
+const managedConfig = { desktop: { host: { enabled: true, managed: true } } };
+
+function prepareRepair(approved: boolean, code = 0) {
+  const inspection = vi
+    .spyOn(hostSource, "inspectHostDesktop")
+    .mockResolvedValue(unavailableInspection);
+  vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+  const runCommand = vi
+    .spyOn(execRunner, "runCommandWithTimeout")
+    .mockResolvedValue(commandResult(code));
+  const confirmRuntimeRepair = vi.fn(async () => approved);
+  return {
+    inspection,
+    runCommand,
+    confirmRuntimeRepair,
+    run: () =>
+      noteHostDesktopHealth(hostConfig, {
+        prompter: { shouldRepair: true, confirmRuntimeRepair },
+      }),
+  };
+}
+
 describe("host desktop doctor section", () => {
   it("reports managed configured and failed states distinctly", async () => {
     vi.spyOn(hostSource, "inspectHostDesktop")
       .mockResolvedValueOnce({
-        status: {
-          enabled: true,
-          state: "managed",
-          managedState: "unknown",
-          port: 5900,
-        },
+        status: { enabled: true, state: "managed", managedState: "unknown", port: 5900 },
         detail: "managed (configured; runtime state is available from the running Gateway status)",
       })
       .mockResolvedValueOnce({
@@ -54,16 +72,12 @@ describe("host desktop doctor section", () => {
       });
 
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    await noteHostDesktopHealth({ desktop: { host: { enabled: true, managed: true } } });
+    await noteHostDesktopHealth(managedConfig);
     expect(note).toHaveBeenCalledWith(
       "managed (configured; runtime state is available from the running Gateway status)",
       "Host desktop",
     );
-    await expect(
-      collectHostDesktopHealthFindings({
-        desktop: { host: { enabled: true, managed: true } },
-      }),
-    ).resolves.toEqual([
+    await expect(collectHostDesktopHealthFindings(managedConfig)).resolves.toEqual([
       expect.objectContaining({
         severity: "warning",
         message: "managed (failed: startxfce4 not installed)",
@@ -72,24 +86,12 @@ describe("host desktop doctor section", () => {
   });
 
   it("runs the exact Screen Sharing launchctl repair only after interactive confirmation", async () => {
-    vi.spyOn(hostSource, "inspectHostDesktop")
-      .mockResolvedValueOnce(unavailableInspection)
-      .mockResolvedValueOnce({
-        status: { enabled: true, state: "attached", port: 5900, security: "ARD" },
-        detail: "attached (127.0.0.1:5900, security: ARD)",
-      });
-    const confirmRuntimeRepair = vi.fn(async () => true);
-    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-    const runCommand = vi
-      .spyOn(execRunner, "runCommandWithTimeout")
-      .mockResolvedValue(commandResult(0));
-
-    await noteHostDesktopHealth(
-      { desktop: { host: { enabled: true } } },
-      {
-        prompter: { shouldRepair: true, confirmRuntimeRepair },
-      },
-    );
+    const { inspection, runCommand, confirmRuntimeRepair, run } = prepareRepair(true);
+    inspection.mockResolvedValueOnce(unavailableInspection).mockResolvedValueOnce({
+      status: { enabled: true, state: "attached", port: 5900, security: "ARD" },
+      detail: "attached (127.0.0.1:5900, security: ARD)",
+    });
+    await run();
 
     expect(confirmRuntimeRepair).toHaveBeenCalledWith({
       message:
@@ -105,15 +107,8 @@ describe("host desktop doctor section", () => {
   });
 
   it("prints the System Settings path when interactive repair is declined", async () => {
-    vi.spyOn(hostSource, "inspectHostDesktop").mockResolvedValue(unavailableInspection);
-    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-    const runCommand = vi.spyOn(execRunner, "runCommandWithTimeout");
-    await noteHostDesktopHealth(
-      { desktop: { host: { enabled: true } } },
-      {
-        prompter: { shouldRepair: true, confirmRuntimeRepair: vi.fn(async () => false) },
-      },
-    );
+    const { runCommand, run } = prepareRepair(false);
+    await run();
     expect(runCommand).not.toHaveBeenCalled();
     expect(note).toHaveBeenCalledWith(
       "Enable Screen Sharing manually in System Settings → General → Sharing → Screen Sharing.",
@@ -122,17 +117,8 @@ describe("host desktop doctor section", () => {
   });
 
   it("stops after a failed sudo command and prints both manual repair paths", async () => {
-    vi.spyOn(hostSource, "inspectHostDesktop").mockResolvedValue(unavailableInspection);
-    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-    const runCommand = vi
-      .spyOn(execRunner, "runCommandWithTimeout")
-      .mockResolvedValue(commandResult(1));
-    await noteHostDesktopHealth(
-      { desktop: { host: { enabled: true } } },
-      {
-        prompter: { shouldRepair: true, confirmRuntimeRepair: vi.fn(async () => true) },
-      },
-    );
+    const { runCommand, run } = prepareRepair(true, 1);
+    await run();
     expect(runCommand).toHaveBeenCalledTimes(1);
     expect(note).toHaveBeenCalledWith(
       expect.stringContaining(

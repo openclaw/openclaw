@@ -25,47 +25,44 @@ export function registerDoctorServiceDefaultsTests({
   mockProcessPlatform,
   expectNoNoteContaining,
 }: ServiceDefaultsTestContext) {
-  it.each([true])(
-    "reports definition facts without creating repair work (command available: %s)",
-    async (hasCommand) => {
-      const command = { programArguments: gatewayProgramArguments, environment: {} };
-      mocks.readCommand.mockResolvedValue(hasCommand ? command : null);
-      mocks.buildGatewayInstallPlan.mockResolvedValue(command);
-      mocks.auditGatewayServiceConfig.mockResolvedValue({
-        ok: true,
-        issues: [],
-        definitionDrift: [
-          {
-            kind: "outdated",
-            key: "Service.KillMode",
-            current: null,
-            expected: "mixed",
-            message: "Service.KillMode: missing; installer expects mixed.",
-          },
-          {
-            kind: "unknown-edit",
-            key: "Service.ExecStartPre",
-            reason: "Operator-authored directive",
-            message: "Service.ExecStartPre: unknown edit; preserved.",
-          },
-        ],
-        definitionDriftError: "Could not inspect a service drop-in.",
-      });
+  it("reports definition facts without creating repair work", async () => {
+    const command = { programArguments: gatewayProgramArguments, environment: {} };
+    mocks.readCommand.mockResolvedValue(command);
+    mocks.buildGatewayInstallPlan.mockResolvedValue(command);
+    mocks.auditGatewayServiceConfig.mockResolvedValue({
+      ok: true,
+      issues: [],
+      definitionDrift: [
+        {
+          kind: "outdated",
+          key: "Service.KillMode",
+          current: null,
+          expected: "mixed",
+          message: "Service.KillMode: missing; installer expects mixed.",
+        },
+        {
+          kind: "unknown-edit",
+          key: "Service.ExecStartPre",
+          reason: "Operator-authored directive",
+          message: "Service.ExecStartPre: unknown edit; preserved.",
+        },
+      ],
+      definitionDriftError: "Could not inspect a service drop-in.",
+    });
 
-      await runRepair({ gateway: {} });
+    await runRepair({ gateway: {} });
 
-      const output = mocks.note.mock.calls
-        .filter(([, title]) => title === "Gateway service definition")
-        .map(([message]) => String(message))
-        .join("\n");
-      expect(output).toContain("Service.KillMode: missing");
-      expect(output).toContain("Service.ExecStartPre: unknown edit; preserved");
-      expect(output).toContain("Could not inspect a service drop-in");
-      expect(mocks.stage).not.toHaveBeenCalled();
-      expect(mocks.install).not.toHaveBeenCalled();
-      expect(mocks.restart).not.toHaveBeenCalled();
-    },
-  );
+    const output = mocks.note.mock.calls
+      .filter(([, title]) => title === "Gateway service definition")
+      .map(([message]) => String(message))
+      .join("\n");
+    expect(output).toContain("Service.KillMode: missing");
+    expect(output).toContain("Service.ExecStartPre: unknown edit; preserved");
+    expect(output).toContain("Could not inspect a service drop-in");
+    expect(mocks.stage).not.toHaveBeenCalled();
+    expect(mocks.install).not.toHaveBeenCalled();
+    expect(mocks.restart).not.toHaveBeenCalled();
+  });
 
   it("repairs managed port drift even when an operator overrides the working directory", async () => {
     mockProcessPlatform("linux");

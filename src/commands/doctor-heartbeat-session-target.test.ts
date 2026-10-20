@@ -1,4 +1,3 @@
-// Doctor heartbeat session-target tests cover heartbeat target checks and repair output.
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -17,21 +16,19 @@ describe("describeHeartbeatSessionTargetIssues", () => {
     tmpDir = sessionDirs.make();
   });
 
-  function cfgWithSession(session: string, target: string | null = "slack"): OpenClawConfig {
-    const heartbeat = target === null ? { session } : { session, target };
+  function cfgWithSession(
+    session: string,
+    heartbeat: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["heartbeat"] = {
+      target: "slack",
+    },
+  ): OpenClawConfig {
     return {
       session: {
         mainKey: "work",
         store: path.join(tmpDir, "agents", "{agentId}", "sessions", "sessions.json"),
       },
-      agents: {
-        entries: {
-          ops: {
-            heartbeat,
-          },
-        },
-      },
-    } as OpenClawConfig;
+      agents: { entries: { ops: { heartbeat: { session, ...heartbeat } } } },
+    };
   }
 
   function writeStore(cfg: OpenClawConfig, entries: Record<string, unknown>) {
@@ -43,10 +40,7 @@ describe("describeHeartbeatSessionTargetIssues", () => {
   it("uses runtime session canonicalization before warning", async () => {
     const cfg = cfgWithSession("agent:ops:main");
     writeStore(cfg, {
-      "agent:ops:work": {
-        sessionId: "work-session",
-        updatedAt: Date.now(),
-      },
+      "agent:ops:work": { sessionId: "work-session", updatedAt: Date.now() },
     });
 
     expect(await describeHeartbeatSessionTargetIssues(cfg)).toEqual([]);
@@ -85,42 +79,24 @@ describe("describeHeartbeatSessionTargetIssues", () => {
   });
 
   it("does not warn when an explicit heartbeat recipient does not need session history", async () => {
-    const cfg = cfgWithSession("slack:channel:c123");
-    const agent = cfg.agents?.entries?.ops;
-    if (!agent?.heartbeat) {
-      throw new Error("expected test config to include heartbeat config");
-    }
-    agent.heartbeat.target = "telegram";
-    agent.heartbeat.to = "-100123";
+    const cfg = cfgWithSession("slack:channel:c123", { target: "telegram", to: "-100123" });
     writeStore(cfg, {});
 
     expect(await describeHeartbeatSessionTargetIssues(cfg)).toEqual([]);
   });
 
   it("does not warn when the heartbeat cadence is disabled", async () => {
-    const cfg = cfgWithSession("slack:channel:c123");
-    const agent = cfg.agents?.entries?.ops;
-    if (!agent?.heartbeat) {
-      throw new Error("expected test config to include heartbeat config");
-    }
-    agent.heartbeat.every = "0m";
+    const cfg = cfgWithSession("slack:channel:c123", { target: "slack", every: "0m" });
     writeStore(cfg, {});
 
     expect(await describeHeartbeatSessionTargetIssues(cfg)).toEqual([]);
   });
 
   it("warns for missing sessions owned by every agent sharing heartbeat defaults", async () => {
-    const cfg: OpenClawConfig = {
-      session: {
-        mainKey: "work",
-        store: path.join(tmpDir, "agents", "{agentId}", "sessions", "sessions.json"),
-      },
-      agents: {
-        defaults: {
-          heartbeat: { session: "slack:channel:c123", target: "slack" },
-        },
-        entries: { main: {}, ops: {} },
-      },
+    const cfg = cfgWithSession("slack:channel:c123");
+    cfg.agents = {
+      defaults: { heartbeat: { session: "slack:channel:c123", target: "slack" } },
+      entries: { main: {}, ops: {} },
     };
     writeStore(cfg, {});
 
@@ -136,7 +112,7 @@ describe("describeHeartbeatSessionTargetIssues", () => {
   });
 
   it("warns when the default owner target has no configured owner route", async () => {
-    const cfg = cfgWithSession("slack:channel:c123", null);
+    const cfg = cfgWithSession("slack:channel:c123", {});
     writeStore(cfg, {});
 
     const warning = (await describeHeartbeatSessionTargetIssues(cfg))[0];
