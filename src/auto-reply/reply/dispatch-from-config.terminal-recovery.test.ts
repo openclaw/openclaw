@@ -41,6 +41,8 @@ let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+type ReplyResolver = NonNullable<DispatchFromConfigParams["replyResolver"]>;
+
 const sessionKey = "agent:main:telegram:direct:1";
 const sessionTarget = captureSessionTarget({
   storeScope: "/tmp/mock-sessions.json",
@@ -48,9 +50,18 @@ const sessionTarget = captureSessionTarget({
   agentId: "main",
 });
 
-function createVisibleDispatchParams(
-  replyResolver: NonNullable<DispatchFromConfigParams["replyResolver"]>,
-) {
+function createActiveOperation() {
+  const operation = createReplyOperation({
+    sessionKey,
+    sessionId: "active-session",
+    resetTriggered: false,
+    target: sessionTarget,
+  });
+  operation.setPhase("running");
+  return operation;
+}
+
+function createVisibleDispatchParams(replyResolver: ReplyResolver) {
   return {
     ctx: buildTestCtx({
       Provider: "telegram",
@@ -126,13 +137,7 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
   });
 
   it("does not force-clear a live raw owner because its persisted row is terminal", async () => {
-    const activeOperation = createReplyOperation({
-      sessionKey,
-      sessionId: "active-session",
-      resetTriggered: false,
-      target: sessionTarget,
-    });
-    activeOperation.setPhase("running");
+    const activeOperation = createActiveOperation();
     const inspected = createDeferred();
     const tick = vi.spyOn(activeOperation.watchdog, "tick").mockImplementation(async () => {
       inspected.resolve();
@@ -208,10 +213,7 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
         `provider failed after partial: ${secret} ${customSecret} preserved-after-redaction ${"🦞".repeat(1_100)}`,
       );
       let replyOperation: ReturnType<typeof createReplyOperation> | undefined;
-      const replyResolver: NonNullable<DispatchFromConfigParams["replyResolver"]> = async (
-        _ctx,
-        options,
-      ) => {
+      const replyResolver: ReplyResolver = async (_ctx, options) => {
         if (!options) {
           throw new Error("reply options required for partial recovery");
         }
@@ -268,10 +270,7 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
   it("reads lazy partial text only until a visible partial has content", async () => {
     const resolverError = new Error("provider failed after partials");
     const textReads: string[] = [];
-    const replyResolver: NonNullable<DispatchFromConfigParams["replyResolver"]> = async (
-      _ctx,
-      options,
-    ) => {
+    const replyResolver: ReplyResolver = async (_ctx, options) => {
       let text = "";
       for (let index = 0; index < 256; index++) {
         await options?.onPartialReply?.({
@@ -302,10 +301,7 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
 
   it("rethrows post-run dispatch errors after a completed run with no visible reply", async () => {
     const resolverError = new Error("final delivery failed after completion");
-    const replyResolver: NonNullable<DispatchFromConfigParams["replyResolver"]> = async (
-      _ctx,
-      options,
-    ) => {
+    const replyResolver: ReplyResolver = async (_ctx, options) => {
       options?.onAgentRunTerminalOutcome?.("completed");
       throw resolverError;
     };
@@ -318,10 +314,7 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
   it("records a terminal agent failure before the first visible reply", async () => {
     const resolverError = new Error("provider failed before output");
     let replyOperation: ReturnType<typeof createReplyOperation> | undefined;
-    const replyResolver: NonNullable<DispatchFromConfigParams["replyResolver"]> = async (
-      _ctx,
-      options,
-    ) => {
+    const replyResolver: ReplyResolver = async (_ctx, options) => {
       if (!options) {
         throw new Error("reply options required for terminal failure");
       }
@@ -369,10 +362,7 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
         return { ok: true, delivered: true };
       });
       let operation: ReturnType<typeof createReplyOperation> | undefined;
-      const replyResolver: NonNullable<DispatchFromConfigParams["replyResolver"]> = async (
-        _ctx,
-        options,
-      ) => {
+      const replyResolver: ReplyResolver = async (_ctx, options) => {
         operation = options?.replyOperation;
         await options?.turnAdoptionLifecycle?.onAdopted();
         if (progress) {
@@ -444,12 +434,10 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
       throw resolverError;
     });
     const dispatcher = createReplyDispatcher({ deliver: vi.fn(async () => {}) });
-    const replyResolver = vi.fn<NonNullable<DispatchFromConfigParams["replyResolver"]>>(
-      async (_ctx, options) => {
-        await options?.turnAdoptionLifecycle?.onAdopted();
-        throw resolverError;
-      },
-    );
+    const replyResolver = vi.fn<ReplyResolver>(async (_ctx, options) => {
+      await options?.turnAdoptionLifecycle?.onAdopted();
+      throw resolverError;
+    });
     const params = {
       ...createVisibleDispatchParams(replyResolver),
       dispatcher,
@@ -493,12 +481,10 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
   it("retains adopted dedupe when failure-notice preparation also fails", async () => {
     const resolverError = new Error("accepted turn failed");
     const deliveryError = new Error("final preparation failed");
-    const replyResolver = vi.fn<NonNullable<DispatchFromConfigParams["replyResolver"]>>(
-      async (_ctx, options) => {
-        await options?.turnAdoptionLifecycle?.onAdopted();
-        throw resolverError;
-      },
-    );
+    const replyResolver = vi.fn<ReplyResolver>(async (_ctx, options) => {
+      await options?.turnAdoptionLifecycle?.onAdopted();
+      throw resolverError;
+    });
     const params = {
       ...createVisibleDispatchParams(replyResolver),
       replyOptions: { turnAdoptionLifecycle: { onAdopted: vi.fn(async () => {}) } },
@@ -512,13 +498,7 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
 
   it("waits for fresh visible reply work without invoking diagnostic recovery", async () => {
     vi.useFakeTimers();
-    const activeOperation = createReplyOperation({
-      sessionKey,
-      sessionId: "active-session",
-      resetTriggered: false,
-      target: sessionTarget,
-    });
-    activeOperation.setPhase("running");
+    const activeOperation = createActiveOperation();
     activeOperation.abortSignal.addEventListener("abort", () => activeOperation.complete(), {
       once: true,
     });
@@ -546,13 +526,7 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
 
   it("retains a stalled producer until its real settlement before admitting the next turn", async () => {
     vi.useFakeTimers();
-    const activeOperation = createReplyOperation({
-      sessionKey,
-      sessionId: "active-session",
-      resetTriggered: false,
-      target: sessionTarget,
-    });
-    activeOperation.setPhase("running");
+    const activeOperation = createActiveOperation();
     const releaseProducer = activeOperation.retainExecution();
     expect(activeOperation.abortForStall()).toBe(true);
     activeOperation.complete();
@@ -631,13 +605,7 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
   );
 
   it("keeps a queued channel turn accepted when the busy session frees before final admission", async () => {
-    const activeOperation = createReplyOperation({
-      sessionKey,
-      sessionId: "active-session",
-      resetTriggered: false,
-      target: sessionTarget,
-    });
-    activeOperation.setPhase("running");
+    const activeOperation = createActiveOperation();
     sessionStoreMocks.currentEntry = { sessionId: "active-session", updatedAt: Date.now() };
     const runState: ReplyOperationRunState = {};
     const dispatchParams = createVisibleDispatchParams(async () => {
