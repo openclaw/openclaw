@@ -1,7 +1,8 @@
+// Simple completion runtime tests cover model resolution, provider auth, and
+// one-shot completion wiring before requests reach the shared LLM stream path.
 import { createApiRegistry } from "@openclaw/ai";
-import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { Model } from "../llm/types.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { looksLikeSecretSentinel, resolveSecretSentinel } from "../secrets/sentinel.js";
 import { OAuthRefreshFailureError } from "./auth-profiles/oauth-refresh-failure.js";
@@ -11,7 +12,6 @@ import {
   fingerprintAuthProfileCredential,
   fingerprintResolvedProviderAuth,
 } from "./execution-auth-binding.js";
-import type { ResolvedProviderAuth } from "./model-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
 import { AuthStorage, ModelRegistry } from "./sessions/index.js";
 import { completeWithAuthProfileFailover } from "./simple-completion-profile-failover.js";
@@ -19,25 +19,29 @@ import type { SimpleCompletionModelResolver } from "./simple-completion-scope.js
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
-const m = vi.hoisted(() => ({
-  acquireLease: vi.fn(),
-  resolveModel: vi.fn(),
-  resolveModelAsync: vi.fn(),
-  getAuth: vi.fn(),
-  localAuth: vi.fn(),
-  storeKey: vi.fn(),
-  runtimeAuth: vi.fn(),
-  authStore: vi.fn(),
-  markFailure: vi.fn<typeof import("./auth-profiles/usage.js").markAuthProfileFailure>(),
-  markSuccess: vi.fn<typeof import("./auth-profiles/profiles.js").markAuthProfileSuccess>(),
-  metadata:
+// Hoisted mocks keep Vitest module replacement stable while the implementation
+// under test imports auth, model resolution, and transport helpers at module load.
+const hoisted = vi.hoisted(() => ({
+  acquireRuntimeLeaseMock: vi.fn(),
+  resolveModelMock: vi.fn(),
+  resolveModelAsyncMock: vi.fn(),
+  getApiKeyForModelMock: vi.fn(),
+  applyLocalNoAuthHeaderOverrideMock: vi.fn(),
+  setRuntimeApiKeyMock: vi.fn(),
+  prepareProviderRuntimeAuthMock: vi.fn(),
+  ensureAuthProfileStoreMock: vi.fn(),
+  markAuthProfileFailureMock:
+    vi.fn<typeof import("./auth-profiles/usage.js").markAuthProfileFailure>(),
+  markAuthProfileSuccessMock:
+    vi.fn<typeof import("./auth-profiles/profiles.js").markAuthProfileSuccess>(),
+  getCurrentPluginMetadataSnapshotMock:
     vi.fn<
       typeof import("../plugins/current-plugin-metadata-snapshot.js").getCurrentPluginMetadataSnapshot
     >(),
 }));
 
 vi.mock("./prepared-model-runtime.js", () => ({
-  acquireAgentRunPreparedModelRuntime: m.acquireLease,
+  acquireAgentRunPreparedModelRuntime: hoisted.acquireRuntimeLeaseMock,
 }));
 
 // mock-isolation: preparation runs without a published plugin generation.
@@ -63,25 +67,25 @@ vi.mock("./sessions/model-registry-runtime.js", () => ({
 }));
 
 vi.mock("./embedded-agent-runner/model.js", () => ({
-  resolveModel: m.resolveModel,
-  resolveModelAsync: m.resolveModelAsync,
+  resolveModel: hoisted.resolveModelMock,
+  resolveModelAsync: hoisted.resolveModelAsyncMock,
 }));
 
 // mock-isolation: Completion credential binding uses the fixture store without loading host profiles.
 vi.mock("./auth-profiles/store-runtime.js", () => ({
-  ensureAuthProfileStore: m.authStore,
-  ensureAuthProfileStoreAsync: m.authStore,
+  ensureAuthProfileStore: hoisted.ensureAuthProfileStoreMock,
+  ensureAuthProfileStoreAsync: hoisted.ensureAuthProfileStoreMock,
 }));
 
 // mock-isolation: Keep quota probes and credential-health writes out of the model-preparation fixture.
 vi.mock("./auth-profiles/usage.js", () => ({
   reconcileAuthProfileQuotaBlocks: vi.fn(async () => {}),
-  markAuthProfileFailure: m.markFailure,
+  markAuthProfileFailure: hoisted.markAuthProfileFailureMock,
 }));
 
 vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/current-plugin-metadata-snapshot.js")>()),
-  getCurrentPluginMetadataSnapshot: m.metadata,
+  getCurrentPluginMetadataSnapshot: hoisted.getCurrentPluginMetadataSnapshotMock,
 }));
 
 vi.mock("./model-auth.js", () => ({
@@ -90,13 +94,13 @@ vi.mock("./model-auth.js", () => ({
     (auth: { source: string; mode: string }, provider: string) =>
       `No API key resolved for provider "${provider}" (auth mode: ${auth.mode}, checked: ${auth.source}).`,
   ),
-  getApiKeyForModelCore: m.getAuth,
-  resolveApiKeyForProviderCore: m.getAuth,
-  applyLocalNoAuthHeaderOverride: m.localAuth,
+  getApiKeyForModelCore: hoisted.getApiKeyForModelMock,
+  resolveApiKeyForProviderCore: hoisted.getApiKeyForModelMock,
+  applyLocalNoAuthHeaderOverride: hoisted.applyLocalNoAuthHeaderOverrideMock,
 }));
 
 vi.mock("../plugins/provider-runtime.runtime.js", () => ({
-  prepareProviderRuntimeAuth: m.runtimeAuth,
+  prepareProviderRuntimeAuth: hoisted.prepareProviderRuntimeAuthMock,
 }));
 
 import {
@@ -105,73 +109,20 @@ import {
 } from "./simple-completion-runtime.js";
 
 let preparedModelRuntime: PreparedModelRuntimeSnapshot;
-const subscriptionRoute = {
-  api: "openai-chatgpt-responses",
-  baseUrl: "https://chatgpt.com/backend-api/codex",
-} as const;
-const platformRoute = { api: "openai-responses", baseUrl: "https://api.openai.com/v1" } as const;
-const customRoute = { api: "openai-responses", baseUrl: "https://relay.example/v1" } as const;
-const openaiDefaults = { model: "openai/gpt-5.5" };
-function profileAuth(
-  profileId: string,
-  apiKey: string,
-  mode: ResolvedProviderAuth["mode"] = "api-key",
-): ResolvedProviderAuth {
-  return { apiKey, profileId, source: `profile:${profileId}`, mode };
-}
-function apiProfile(key: string, provider = "openai") {
-  return { type: "api_key" as const, provider, key };
-}
-function setProfiles(profiles: AuthProfileStore["profiles"]) {
-  const store: AuthProfileStore = { version: 1, profiles };
-  m.authStore.mockReturnValue(store);
-  return store;
-}
-
-function resolvedModel(model: Pick<Model, "provider" | "id" | "api"> & Partial<Model>) {
-  return {
-    model,
-    authStorage: { setRuntimeApiKey: m.storeKey },
-    modelRegistry: {},
-  };
-}
-function mockModel(provider: string, id: string, api: Model["api"], baseUrl?: string) {
-  m.resolveModel.mockReturnValueOnce(
-    resolvedModel({ provider, id, api, ...(baseUrl ? { baseUrl } : {}) }),
-  );
-}
-function prepare(overrides: Partial<Parameters<typeof prepareSimpleCompletionModel>[0]> = {}) {
-  return prepareSimpleCompletionModel({
-    preparedModelRuntime,
-    cfg: undefined,
-    provider: "anthropic",
-    modelId: "claude-opus-4-6",
-    ...overrides,
-  });
-}
-async function acquire(params: Parameters<typeof acquireSimpleCompletionModelForAgent>[0]) {
-  const result = await acquireSimpleCompletionModelForAgent({
-    agentId: "main",
-    skipAgentDiscovery: true,
-    ...params,
-  });
-  return {
-    result,
-    async [Symbol.asyncDispose]() {
-      if (!("error" in result)) {
-        await result[Symbol.asyncDispose]();
-      }
-    },
-  };
-}
 
 beforeEach(() => {
-  for (const mock of Object.values(m)) {
-    mock.mockReset();
-  }
-  m.authStore.mockReturnValue({ version: 1, profiles: {} });
-  m.markFailure.mockResolvedValue(undefined);
-  m.markSuccess.mockResolvedValue(undefined);
+  hoisted.acquireRuntimeLeaseMock.mockReset();
+  hoisted.resolveModelMock.mockReset();
+  hoisted.resolveModelAsyncMock.mockReset();
+  hoisted.getApiKeyForModelMock.mockReset();
+  hoisted.applyLocalNoAuthHeaderOverrideMock.mockReset();
+  hoisted.setRuntimeApiKeyMock.mockReset();
+  hoisted.prepareProviderRuntimeAuthMock.mockReset();
+  hoisted.ensureAuthProfileStoreMock.mockReset();
+  hoisted.ensureAuthProfileStoreMock.mockReturnValue({ version: 1, profiles: {} });
+  hoisted.markAuthProfileFailureMock.mockReset().mockResolvedValue(undefined);
+  hoisted.markAuthProfileSuccessMock.mockReset().mockResolvedValue(undefined);
+  hoisted.getCurrentPluginMetadataSnapshotMock.mockReset();
   const authStorage = AuthStorage.inMemory({});
   const modelRegistry = ModelRegistry.inMemory(authStorage);
   preparedModelRuntime = {
@@ -191,49 +142,87 @@ beforeEach(() => {
     activeProjectKeys: [],
     createStores: () => ({ authStorage, modelRegistry }),
   };
-  m.acquireLease.mockResolvedValue({
+  hoisted.acquireRuntimeLeaseMock.mockResolvedValue({
     snapshot: preparedModelRuntime,
     [Symbol.asyncDispose]: vi.fn(async () => {}),
   });
 
-  m.localAuth.mockImplementation((model: unknown) => model);
+  hoisted.applyLocalNoAuthHeaderOverrideMock.mockImplementation((model: unknown) => model);
 
-  m.resolveModel.mockReturnValue(
-    resolvedModel({
+  hoisted.resolveModelMock.mockReturnValue({
+    model: {
       provider: "anthropic",
       id: "claude-opus-4-6",
       api: "anthropic-messages",
-    }),
+    },
+    authStorage: {
+      setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
+    },
+    modelRegistry: {},
+  });
+  hoisted.resolveModelAsyncMock.mockImplementation((...args: unknown[]) =>
+    Promise.resolve(hoisted.resolveModelMock(...args)),
   );
-  m.resolveModelAsync.mockImplementation((...args: unknown[]) =>
-    Promise.resolve(m.resolveModel(...args)),
-  );
-  m.getAuth.mockResolvedValue({
+  hoisted.getApiKeyForModelMock.mockResolvedValue({
     apiKey: "sk-test",
     source: "env:TEST_API_KEY",
     mode: "api-key",
   });
-  const openai = { defaultUtilityModel: "gpt-5.5", models: [{ id: "gpt-5.5" }] };
-  m.metadata.mockReturnValue(
+  hoisted.prepareProviderRuntimeAuthMock.mockImplementation(
+    async (params: { provider: string }) => {
+      return params.provider === "github-copilot"
+        ? {
+            apiKey: "copilot-runtime-token",
+            baseUrl: "https://api.individual.githubcopilot.com",
+          }
+        : undefined;
+    },
+  );
+  hoisted.getCurrentPluginMetadataSnapshotMock.mockReturnValue(
     createPluginMetadataSnapshotFixture({
-      plugins: [{ id: "openai", modelCatalog: { providers: { openai } } }],
+      plugins: [
+        {
+          id: "openai",
+          modelCatalog: {
+            providers: {
+              openai: {
+                defaultUtilityModel: "gpt-5.5",
+                models: [{ id: "gpt-5.5" }],
+              },
+            },
+          },
+        },
+      ],
     }),
   );
 });
 
-function assertPrepared<T extends Awaited<ReturnType<typeof prepareSimpleCompletionModel>>>(
-  result: T,
-): asserts result is Exclude<T, { error: string }> {
-  assert(!("error" in result), "Expected a prepared model");
+function expectPreparedModelResult<
+  T extends Awaited<ReturnType<typeof prepareSimpleCompletionModel>>,
+>(result: T): asserts result is Exclude<T, { error: string }> {
+  expect(result).not.toHaveProperty("error");
+  if ("error" in result) {
+    throw new Error(result.error);
+  }
 }
 
-function routeResolver(params: {
+function callArg(mock: { mock: { calls: unknown[][] } }, index = 0): unknown {
+  const call = mock.mock.calls[index];
+  if (!call) {
+    throw new Error(`Expected mock call ${index}`);
+  }
+  return call[0];
+}
+
+function createOpenAIRouteModelResolver(params: {
   api: "openai-responses" | "openai-chatgpt-responses";
   baseUrl: string;
 }) {
   return vi.fn<SimpleCompletionModelResolver>(
     async (provider, modelId, _agentDir, cfg, options) => {
-      assert(options?.authStorage && options.modelRegistry, "Prepared stores were not bound");
+      if (!options?.authStorage || !options.modelRegistry) {
+        throw new Error("Prepared model stores were not bound");
+      }
       const configured = cfg?.models?.providers?.openai;
       return {
         model: makeProviderModelFixture({
@@ -250,35 +239,61 @@ function routeResolver(params: {
 }
 
 describe("prepareSimpleCompletionModel", () => {
-  it("blocks helper inference under the admitted required policy with empty caller config", async () => {
-    preparedModelRuntime = {
-      ...preparedModelRuntime,
-      config: { cloudWorkers: { requiredProfile: "required" } },
-    };
-    const result = await prepare({
-      cfg: {},
-      modelResolver: m.resolveModelAsync as SimpleCompletionModelResolver,
-    });
-    expect(result).toMatchObject({ error: expect.stringContaining("Sessionless model helpers") });
-    expect(m.resolveModelAsync).not.toHaveBeenCalled();
-    expect(m.getAuth).not.toHaveBeenCalled();
-  });
+  it.each([{}])(
+    "blocks helper inference under the admitted required policy with caller config %j",
+    async (cfg) => {
+      preparedModelRuntime = {
+        ...preparedModelRuntime,
+        config: { cloudWorkers: { requiredProfile: "required" } },
+      };
+      const result = await prepareSimpleCompletionModel({
+        preparedModelRuntime,
+        cfg,
+        provider: "anthropic",
+        modelId: "claude-opus-4-6",
+        modelResolver: hoisted.resolveModelAsyncMock as SimpleCompletionModelResolver,
+      });
+      expect(result).toMatchObject({ error: expect.stringContaining("Sessionless model helpers") });
+      expect(hoisted.resolveModelAsyncMock).not.toHaveBeenCalled();
+      expect(hoisted.getApiKeyForModelMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("captures the exact locked auth owner used by a bound completion", async () => {
-    const store = setProfiles({ "anthropic:p2": apiProfile("sk-p2", "anthropic") });
-    const auth = profileAuth("anthropic:p2", "sk-p2");
-    m.getAuth.mockResolvedValueOnce(auth);
+    const credential = {
+      type: "api_key" as const,
+      provider: "anthropic",
+      key: "sk-p2",
+    };
+    const store = { version: 1, profiles: { "anthropic:p2": credential } };
+    hoisted.ensureAuthProfileStoreMock.mockReturnValueOnce(store);
+    hoisted.getApiKeyForModelMock.mockResolvedValueOnce({
+      apiKey: "sk-p2",
+      profileId: "anthropic:p2",
+      source: "profile:anthropic:p2",
+      mode: "api-key",
+    });
 
-    const result = await prepare({
+    const result = await prepareSimpleCompletionModel({
+      preparedModelRuntime,
       cfg: {},
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
       agentDir: "/tmp/openclaw-agent",
       profileId: "anthropic:p2",
       bindAuthOwner: true,
     });
 
-    assertPrepared(result);
-    expect(result.sourceAuthFingerprint).toBe(fingerprintResolvedProviderAuth(auth));
-    expect(m.getAuth).toHaveBeenCalledWith(
+    expectPreparedModelResult(result);
+    expect(result.sourceAuthFingerprint).toBe(
+      fingerprintResolvedProviderAuth({
+        apiKey: "sk-p2",
+        profileId: "anthropic:p2",
+        source: "profile:anthropic:p2",
+        mode: "api-key",
+      }),
+    );
+    expect(hoisted.getApiKeyForModelMock).toHaveBeenCalledWith(
       expect.objectContaining({
         profileId: "anthropic:p2",
         lockedProfile: true,
@@ -298,26 +313,36 @@ describe("prepareSimpleCompletionModel", () => {
       expires: Date.now() + 60_000,
       accountId: "workspace",
     };
-    m.authStore.mockImplementation((_agentDir: string, options?: { profileId?: string }) => ({
-      version: 1,
-      profiles: options?.profileId === profileId ? { [profileId]: credential } : {},
+    hoisted.ensureAuthProfileStoreMock.mockImplementation(
+      (_agentDir: string, options?: { profileId?: string }) => ({
+        version: 1,
+        profiles: options?.profileId === profileId ? { [profileId]: credential } : {},
+      }),
+    );
+    hoisted.getApiKeyForModelMock.mockImplementation(async () => ({
+      apiKey: credential.access,
+      profileId,
+      source: `profile:${profileId}`,
+      mode: "oauth",
     }));
-    m.getAuth.mockImplementation(async () => profileAuth(profileId, credential.access, "oauth"));
     const params = {
       cfg: {},
       provider: "openai",
       modelId: "gpt-5.5",
       profileId,
       bindAuthOwner: true,
-      modelResolver: routeResolver(subscriptionRoute),
+      modelResolver: createOpenAIRouteModelResolver({
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+      }),
     };
 
-    const before = await prepare(params);
+    const before = await prepareSimpleCompletionModel({ ...params, preparedModelRuntime });
     credential = { ...credential, access: "access-after-refresh", refresh: "refresh-after" };
-    const after = await prepare(params);
+    const after = await prepareSimpleCompletionModel({ ...params, preparedModelRuntime });
 
-    assertPrepared(before);
-    assertPrepared(after);
+    expectPreparedModelResult(before);
+    expectPreparedModelResult(after);
     expect(before.auth.apiKey).toBe("access-before-refresh");
     expect(after.auth.apiKey).toBe("access-after-refresh");
     expect(before.sourceAuthFingerprint).toBe(after.sourceAuthFingerprint);
@@ -327,89 +352,144 @@ describe("prepareSimpleCompletionModel", () => {
   });
 
   it("returns error when model resolution fails", async () => {
-    m.resolveModel.mockReturnValueOnce({
+    hoisted.resolveModelMock.mockReturnValueOnce({
       error: "Unknown model: anthropic/missing-model",
+      authStorage: {
+        setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
+      },
+      modelRegistry: {},
     });
 
-    const result = await prepare({ modelId: "missing-model" });
+    const result = await prepareSimpleCompletionModel({
+      preparedModelRuntime,
+      cfg: undefined,
+      provider: "anthropic",
+      modelId: "missing-model",
+    });
 
     expect(result).toEqual({
       error: "Unknown model: anthropic/missing-model",
     });
-    expect(m.getAuth).not.toHaveBeenCalled();
+    expect(hoisted.getApiKeyForModelMock).not.toHaveBeenCalled();
   });
 
   it("returns error when api key is missing and mode is not allowlisted", async () => {
-    const auth = { source: "models.providers.anthropic", mode: "api-key" };
-    m.getAuth.mockResolvedValueOnce(auth);
+    hoisted.getApiKeyForModelMock.mockResolvedValueOnce({
+      source: "models.providers.anthropic",
+      mode: "api-key",
+    });
 
-    const result = await prepare();
+    const result = await prepareSimpleCompletionModel({
+      preparedModelRuntime,
+      cfg: undefined,
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+    });
 
     expect(result).toEqual({
       error:
         'No API key resolved for provider "anthropic" (auth mode: api-key, checked: models.providers.anthropic).',
-      auth,
+      auth: {
+        source: "models.providers.anthropic",
+        mode: "api-key",
+      },
     });
-    expect(m.storeKey).not.toHaveBeenCalled();
+    expect(hoisted.setRuntimeApiKeyMock).not.toHaveBeenCalled();
   });
 
   it("continues without api key when auth mode is allowlisted", async () => {
-    mockModel("amazon-bedrock", "anthropic.claude-sonnet-4-6", "bedrock-converse-stream");
-    const auth = { source: "aws-sdk default chain", mode: "aws-sdk" };
-    m.getAuth.mockResolvedValueOnce(auth);
+    hoisted.resolveModelMock.mockReturnValueOnce({
+      model: {
+        provider: "amazon-bedrock",
+        id: "anthropic.claude-sonnet-4-6",
+        api: "bedrock-converse-stream",
+      },
+      authStorage: {
+        setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
+      },
+      modelRegistry: {},
+    });
+    hoisted.getApiKeyForModelMock.mockResolvedValueOnce({
+      source: "aws-sdk default chain",
+      mode: "aws-sdk",
+    });
 
-    const result = await prepare({
+    const result = await prepareSimpleCompletionModel({
+      preparedModelRuntime,
+      cfg: undefined,
       provider: "amazon-bedrock",
       modelId: "anthropic.claude-sonnet-4-6",
       allowMissingApiKeyModes: ["aws-sdk"],
     });
 
-    assertPrepared(result);
-    expect(result.model).toMatchObject({
-      provider: "amazon-bedrock",
-      id: "anthropic.claude-sonnet-4-6",
+    expectPreparedModelResult(result);
+    expect(result.model.provider).toBe("amazon-bedrock");
+    expect(result.model.id).toBe("anthropic.claude-sonnet-4-6");
+    expect(result.auth).toEqual({
+      source: "aws-sdk default chain",
+      mode: "aws-sdk",
     });
-    expect(result.auth).toEqual(auth);
-    expect(m.storeKey).not.toHaveBeenCalled();
+    expect(hoisted.setRuntimeApiKeyMock).not.toHaveBeenCalled();
   });
 
   it("applies provider runtime auth before storing simple-completion credentials", async () => {
-    const baseUrl = "https://bedrock-mantle.us-east-1.api.aws/anthropic";
-    mockModel("amazon-bedrock-mantle", "anthropic.claude-opus-4-7", "anthropic-messages", baseUrl);
-    m.getAuth.mockResolvedValueOnce({
+    hoisted.resolveModelMock.mockReturnValueOnce({
+      model: {
+        provider: "amazon-bedrock-mantle",
+        id: "anthropic.claude-opus-4-7",
+        api: "anthropic-messages",
+        baseUrl: "https://bedrock-mantle.us-east-1.api.aws/anthropic",
+      },
+      authStorage: {
+        setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
+      },
+      modelRegistry: {},
+    });
+    hoisted.getApiKeyForModelMock.mockResolvedValueOnce({
       apiKey: "__amazon_bedrock_mantle_iam__",
       source: "models.providers.amazon-bedrock-mantle.apiKey",
       mode: "api-key",
       profileId: "mantle",
     });
-    m.runtimeAuth.mockResolvedValueOnce({
+    hoisted.prepareProviderRuntimeAuthMock.mockResolvedValueOnce({
       apiKey: "bedrock-runtime-token",
-      baseUrl,
+      baseUrl: "https://bedrock-mantle.us-east-1.api.aws/anthropic",
     });
 
-    const result = await prepare({
+    const result = await prepareSimpleCompletionModel({
+      preparedModelRuntime,
+      cfg: undefined,
       provider: "amazon-bedrock-mantle",
       modelId: "anthropic.claude-opus-4-7",
       agentDir: "/tmp/openclaw-agent",
     });
 
-    expect(m.runtimeAuth.mock.calls[0]?.[0]).toMatchObject({
-      provider: "amazon-bedrock-mantle",
-      workspaceDir: "/tmp/runtime-workspace",
-      context: {
-        apiKey: "__amazon_bedrock_mantle_iam__",
-        authMode: "api-key",
-        modelId: "anthropic.claude-opus-4-7",
-        profileId: "mantle",
-      },
-    });
-    const [storedProvider, storedKey] = m.storeKey.mock.calls[0] as [string, string];
+    const runtimeAuthInput = callArg(hoisted.prepareProviderRuntimeAuthMock) as {
+      provider?: string;
+      workspaceDir?: string;
+      context?: {
+        apiKey?: string;
+        authMode?: string;
+        modelId?: string;
+        profileId?: string;
+      };
+    };
+    expect(runtimeAuthInput.provider).toBe("amazon-bedrock-mantle");
+    expect(runtimeAuthInput.workspaceDir).toBe("/tmp/runtime-workspace");
+    expect(runtimeAuthInput.context?.apiKey).toBe("__amazon_bedrock_mantle_iam__");
+    expect(runtimeAuthInput.context?.authMode).toBe("api-key");
+    expect(runtimeAuthInput.context?.modelId).toBe("anthropic.claude-opus-4-7");
+    expect(runtimeAuthInput.context?.profileId).toBe("mantle");
+    const [storedProvider, storedKey] = hoisted.setRuntimeApiKeyMock.mock.calls[0] as [
+      string,
+      string,
+    ];
     expect(storedProvider).toBe("amazon-bedrock-mantle");
     expect(looksLikeSecretSentinel(storedKey)).toBe(true);
     expect(storedKey).not.toBe("bedrock-runtime-token");
     expect(resolveSecretSentinel(storedKey)).toBe("bedrock-runtime-token");
-    assertPrepared(result);
-    expect(result.model.baseUrl).toBe(baseUrl);
+    expectPreparedModelResult(result);
+    expect(result.model.baseUrl).toBe("https://bedrock-mantle.us-east-1.api.aws/anthropic");
     expect(looksLikeSecretSentinel(result.auth.apiKey ?? "")).toBe(true);
     expect(resolveSecretSentinel(result.auth.apiKey ?? "")).toBe("bedrock-runtime-token");
   });
@@ -418,7 +498,12 @@ describe("prepareSimpleCompletionModel", () => {
 describe("acquireSimpleCompletionModelForAgent", () => {
   it("materializes a derived utility model on the Platform route for API-key auth", async () => {
     const signal = new AbortController().signal;
-    setProfiles({ "openai:platform": apiProfile("placeholder") });
+    hoisted.ensureAuthProfileStoreMock.mockReturnValue({
+      version: 1,
+      profiles: {
+        "openai:platform": { type: "api_key", provider: "openai", key: "placeholder" },
+      },
+    });
     const cfg = {
       agents: {
         entries: {
@@ -433,52 +518,78 @@ describe("acquireSimpleCompletionModelForAgent", () => {
         },
       },
     } as unknown as OpenClawConfig;
-    const modelResolver = routeResolver(subscriptionRoute);
-    m.getAuth.mockResolvedValue(profileAuth("openai:platform", "placeholder"));
+    const modelResolver = createOpenAIRouteModelResolver({
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    });
+    hoisted.getApiKeyForModelMock.mockResolvedValue({
+      apiKey: "placeholder",
+      profileId: "openai:platform",
+      source: "profile:openai:platform",
+      mode: "api-key",
+    });
 
-    await using lease = await acquire({
+    const result = await acquireSimpleCompletionModelForAgent({
       cfg,
+      agentId: "main",
       useUtilityModel: true,
+      skipAgentDiscovery: true,
       modelResolver,
       signal,
     });
-    const { result } = lease;
-    assertPrepared(result);
-    expect(result).toMatchObject({
-      selection: { provider: "openai", modelId: "gpt-5.5" },
-      model: { id: "gpt-5.5", ...platformRoute },
-    });
-    expect(modelResolver).toHaveBeenCalledTimes(2);
-    expect(m.getAuth.mock.calls[0]?.[0]?.model?.api).toBe("openai-responses");
-    // Both resolutions must preserve the admitted agent and cancellation signal.
-    for (const call of modelResolver.mock.calls) {
-      expect(call[4]).toMatchObject({ agentId: "main" });
-      expect(call[4]?.abortSignal).toBe(signal);
+
+    try {
+      expectPreparedModelResult(result);
+      expect(result.selection.provider).toBe("openai");
+      expect(result.selection.modelId).toBe("gpt-5.5");
+      expect(result.model).toMatchObject({
+        id: "gpt-5.5",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+      });
+      expect(modelResolver).toHaveBeenCalledTimes(2);
+      expect(
+        (callArg(hoisted.getApiKeyForModelMock, 0) as { model?: { api?: string } }).model?.api,
+      ).toBe("openai-responses");
+      // Route materialization re-resolves the model on a multi-agent config; both
+      // calls must keep the authorized agentId or the second falls back to
+      // resolveDefaultAgentId, which throws on a multi-agent config.
+      expect(modelResolver.mock.calls[0]?.[4]).toMatchObject({ agentId: "main" });
+      expect(modelResolver.mock.calls[1]?.[4]).toMatchObject({ agentId: "main" });
+      expect(modelResolver.mock.calls[0]?.[4]?.abortSignal).toBe(signal);
+      expect(modelResolver.mock.calls[1]?.[4]?.abortSignal).toBe(signal);
+    } finally {
+      if (!("error" in result)) {
+        await result[Symbol.asyncDispose]();
+      }
     }
   });
 
   it.each(["mixed credentials", "same-route fallback", "pinned profile"])(
     "preserves subscription selection with %s",
     async (scenario) => {
-      const authLookup = m.getAuth;
+      const authLookup = hoisted.getApiKeyForModelMock;
       const mixed = scenario === "mixed credentials";
       const pinned = scenario === "pinned profile";
       const oauth = {
-        type: "oauth" as const,
+        type: "oauth",
         provider: "openai",
         access: "fixture-access",
         refresh: "fixture-refresh",
         expires: Date.now() + 60_000,
       };
-      setProfiles({
-        "openai:ready": oauth,
-        ...((mixed || pinned) && {
-          "openai:platform": apiProfile("placeholder"),
-        }),
-        ...(!mixed && { "openai:expired": { ...oauth, expires: Date.now() - 60_000 } }),
+      hoisted.ensureAuthProfileStoreMock.mockReturnValue({
+        version: 1,
+        profiles: {
+          "openai:ready": oauth,
+          ...((mixed || pinned) && {
+            "openai:platform": { type: "api_key", provider: "openai", key: "placeholder" },
+          }),
+          ...(!mixed && { "openai:expired": { ...oauth, expires: Date.now() - 60_000 } }),
+        },
       });
       const cfg: OpenClawConfig = {
-        agents: { defaults: openaiDefaults },
+        agents: { defaults: { model: "openai/gpt-5.5" } },
         ...(!mixed && !pinned
           ? { auth: { order: { openai: ["openai:expired", "openai:ready"] } } }
           : {}),
@@ -488,35 +599,55 @@ describe("acquireSimpleCompletionModelForAgent", () => {
           const failure = { provider: "openai", message: "Fixture refresh rejected" };
           throw pinned ? new Error(failure.message) : new OAuthRefreshFailureError(failure);
         }
-        return profileAuth(
-          profileId ?? "openai:platform",
-          "fixture-access",
-          profileId === "openai:ready" ? "oauth" : "api-key",
-        );
+        return {
+          apiKey: "fixture-access",
+          profileId: profileId ?? "openai:platform",
+          source: `profile:${profileId ?? "openai:platform"}`,
+          mode: profileId === "openai:ready" ? "oauth" : "api-key",
+        };
       });
-      const modelResolver = routeResolver(subscriptionRoute);
-      await using lease = await acquire({
+      const modelResolver = createOpenAIRouteModelResolver({
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+      });
+      const result = await acquireSimpleCompletionModelForAgent({
         cfg,
+        agentId: "main",
         modelRef: `openai/gpt-5.5${pinned ? "@openai:expired" : ""}`,
         bindAuthOwner: pinned,
+        skipAgentDiscovery: true,
         modelResolver,
       });
-      const { result } = lease;
-      if (pinned) {
-        expect(result).toMatchObject({
-          error: expect.stringContaining("Fixture refresh rejected"),
-        });
-      } else {
-        assertPrepared(result);
-        expect(result).toMatchObject({
-          selection: { modelId: "gpt-5.5" },
-          auth: { profileId: "openai:ready" },
-          model: subscriptionRoute,
-        });
+      try {
+        if (pinned) {
+          expect(result).toMatchObject({
+            error: expect.stringContaining("Fixture refresh rejected"),
+          });
+        } else {
+          expectPreparedModelResult(result);
+          expect(result.selection.modelId).toBe("gpt-5.5");
+          expect(result.auth.profileId).toBe("openai:ready");
+          expect(result.model).toMatchObject({
+            api: "openai-chatgpt-responses",
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+          });
+        }
+        expect(authLookup).toHaveBeenCalledTimes(mixed || pinned ? 1 : 2);
+        expect(authLookup).toHaveBeenNthCalledWith(
+          1,
+          expect.objectContaining({ profileId: mixed ? "openai:ready" : "openai:expired" }),
+        );
+        if (!mixed && !pinned) {
+          expect(authLookup).toHaveBeenNthCalledWith(
+            2,
+            expect.objectContaining({ profileId: "openai:ready" }),
+          );
+        }
+      } finally {
+        if (!("error" in result)) {
+          await result[Symbol.asyncDispose]();
+        }
       }
-      expect(authLookup.mock.calls.map(([args]) => args.profileId)).toEqual(
-        mixed ? ["openai:ready"] : pinned ? ["openai:expired"] : ["openai:expired", "openai:ready"],
-      );
     },
   );
 
@@ -525,54 +656,82 @@ describe("acquireSimpleCompletionModelForAgent", () => {
       models: {
         providers: {
           openai: {
-            ...customRoute,
+            api: "openai-responses",
             apiKey: "fixture-api-key",
+            baseUrl: "https://relay.example/v1",
             models: [{ id: "gpt-5.5" }],
           },
         },
       },
-      agents: { defaults: openaiDefaults },
+      agents: { defaults: { model: "openai/gpt-5.5" } },
     } as unknown as OpenClawConfig;
-    const modelResolver = routeResolver(customRoute);
-    m.getAuth.mockResolvedValue({
+    const modelResolver = createOpenAIRouteModelResolver({
+      api: "openai-responses",
+      baseUrl: "https://relay.example/v1",
+    });
+    hoisted.getApiKeyForModelMock.mockResolvedValue({
       apiKey: "placeholder",
       source: "models.providers.openai",
       mode: "api-key",
     });
 
-    await using lease = await acquire({
+    const result = await acquireSimpleCompletionModelForAgent({
       cfg,
+      agentId: "main",
+      skipAgentDiscovery: true,
       modelResolver,
     });
-    const { result } = lease;
-    assertPrepared(result);
-    expect(result.model).toMatchObject(customRoute);
-    expect(modelResolver).toHaveBeenCalledTimes(1);
+
+    try {
+      expectPreparedModelResult(result);
+      expect(result.model).toMatchObject({
+        api: "openai-responses",
+        baseUrl: "https://relay.example/v1",
+      });
+      expect(modelResolver).toHaveBeenCalledTimes(1);
+    } finally {
+      if (!("error" in result)) {
+        await result[Symbol.asyncDispose]();
+      }
+    }
   });
 });
 
 describe("acquired simple completion profile failover", () => {
   // Mock health writes; exercise real planning, classification, and advancement.
   beforeEach(() => {
-    vi.spyOn(authProfileRecords, "markAuthProfileSuccess").mockImplementation(m.markSuccess);
+    vi.spyOn(authProfileRecords, "markAuthProfileSuccess").mockImplementation(
+      hoisted.markAuthProfileSuccessMock,
+    );
   });
   afterEach(() => {
     vi.mocked(authProfileRecords.markAuthProfileSuccess).mockRestore();
   });
 
   async function acquireProfiles(pinned = false) {
-    const store = setProfiles({
-      "openai:p1": apiProfile("fixture-p1"),
-      "openai:p2": apiProfile("fixture-p2"),
-    });
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:p1": { type: "api_key", provider: "openai", key: "fixture-p1" },
+        "openai:p2": { type: "api_key", provider: "openai", key: "fixture-p2" },
+      },
+    };
     const cfg: OpenClawConfig = {
-      agents: { defaults: openaiDefaults },
+      agents: { defaults: { model: "openai/gpt-5.5" } },
       auth: { order: { openai: ["openai:p1", "openai:p2"] } },
     };
-    m.getAuth.mockImplementation(({ profileId }: { profileId?: string }) => {
+    hoisted.ensureAuthProfileStoreMock.mockReturnValue(store);
+    hoisted.getApiKeyForModelMock.mockImplementation(({ profileId }: { profileId?: string }) => {
       const credential = profileId ? store.profiles[profileId] : undefined;
-      assert(profileId && credential?.type === "api_key", "Expected a configured fixture profile");
-      return profileAuth(profileId, credential.key);
+      if (!profileId || credential?.type !== "api_key") {
+        throw new Error("The auth planner must select a configured fixture profile.");
+      }
+      return {
+        apiKey: credential.key,
+        profileId,
+        source: `profile:${profileId}`,
+        mode: "api-key",
+      };
     });
     const prepared = await acquireSimpleCompletionModelForAgent({
       cfg,
@@ -580,30 +739,14 @@ describe("acquired simple completion profile failover", () => {
       profileFailover: true,
       preferredProfile: "openai:p1",
       ...(pinned ? { modelRef: "openai/gpt-5.5@openai:p1", bindAuthOwner: true } : {}),
-      modelResolver: routeResolver(platformRoute),
+      modelResolver: createOpenAIRouteModelResolver({
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+      }),
     });
-    assertPrepared(prepared);
+    expectPreparedModelResult(prepared);
     return { cfg, store, prepared };
   }
-  type FailoverParams = Parameters<typeof completeWithAuthProfileFailover>[0];
-  function failover(
-    prepared: FailoverParams["prepared"],
-    cfg: OpenClawConfig,
-    complete: FailoverParams["complete"],
-    options: Partial<Pick<FailoverParams, "signal" | "assertCurrent" | "warn">> = {},
-  ) {
-    return completeWithAuthProfileFailover({
-      cfg,
-      prepared,
-      complete,
-      agentDir: prepared.selection.agentDir,
-      assertCurrent: () => {},
-      warn: vi.fn(),
-      ...options,
-    });
-  }
-  const failureMessage = (errorMessage = "429: rate limit exceeded", errorCode?: string) =>
-    makeAssistantMessageFixture({ errorMessage, errorCode, content: [] });
 
   it.each([
     ["rate_limit", "429: rate limit exceeded", "rate_limit_exceeded"],
@@ -614,22 +757,31 @@ describe("acquired simple completion profile failover", () => {
     async (reason, errorMessage, errorCode) => {
       const fixture = await acquireProfiles();
       await using prepared = fixture.prepared;
-      const failure = failureMessage(errorMessage, errorCode);
+      const failure = makeAssistantMessageFixture({ errorMessage, errorCode, content: [] });
       const success = makeAssistantMessageFixture({
         stopReason: "stop",
         errorMessage: undefined,
         content: [{ type: "text", text: "backup reply" }],
       });
-      const complete = vi.fn<FailoverParams["complete"]>(async ({ auth }) =>
-        auth.profileId === "openai:p1" ? failure : success,
+      const complete = vi.fn<Parameters<typeof completeWithAuthProfileFailover>[0]["complete"]>(
+        async ({ auth }) => (auth.profileId === "openai:p1" ? failure : success),
       );
 
-      expect(await failover(prepared, fixture.cfg, complete)).toBe(success);
+      const result = await completeWithAuthProfileFailover({
+        prepared,
+        cfg: fixture.cfg,
+        agentDir: prepared.selection.agentDir,
+        assertCurrent: () => {},
+        complete,
+        warn: vi.fn(),
+      });
+
+      expect(result).toBe(success);
       expect(complete.mock.calls.map(([{ auth }]) => auth.profileId)).toEqual([
         "openai:p1",
         "openai:p2",
       ]);
-      expect(m.markFailure).toHaveBeenCalledExactlyOnceWith(
+      expect(hoisted.markAuthProfileFailureMock).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
           store: fixture.store,
           profileId: "openai:p1",
@@ -637,14 +789,14 @@ describe("acquired simple completion profile failover", () => {
           reason,
         }),
       );
-      expect(m.markSuccess).toHaveBeenCalledExactlyOnceWith(
+      expect(hoisted.markAuthProfileSuccessMock).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
           store: fixture.store,
           profileId: "openai:p2",
           modelId: "gpt-5.5",
         }),
       );
-      expect(m.acquireLease).toHaveBeenCalledOnce();
+      expect(hoisted.acquireRuntimeLeaseMock).toHaveBeenCalledOnce();
     },
   );
 
@@ -662,26 +814,39 @@ describe("acquired simple completion profile failover", () => {
     await using prepared = fixture.prepared;
     const bookkeepingFails = !pinned && !aborted;
     if (bookkeepingFails) {
-      m.markFailure.mockRejectedValue(new Error("Fixture write rejected"));
+      hoisted.markAuthProfileFailureMock.mockRejectedValue(new Error("Fixture write rejected"));
     }
-    const failure = failureMessage();
-    const controller = new AbortController();
-    const complete = vi.fn<FailoverParams["complete"]>(async () => {
-      if (aborted) {
-        controller.abort();
-      }
-      return failure;
+    const failure = makeAssistantMessageFixture({
+      errorMessage: "429: rate limit exceeded",
+      content: [],
     });
+    const controller = new AbortController();
+    const complete = vi.fn<Parameters<typeof completeWithAuthProfileFailover>[0]["complete"]>(
+      async () => {
+        if (aborted) {
+          controller.abort();
+        }
+        return failure;
+      },
+    );
     const warn = vi.fn();
 
-    expect(
-      await failover(prepared, fixture.cfg, complete, { signal: controller.signal, warn }),
-    ).toBe(failure);
+    const result = await completeWithAuthProfileFailover({
+      prepared,
+      cfg: fixture.cfg,
+      agentDir: prepared.selection.agentDir,
+      signal: controller.signal,
+      assertCurrent: () => {},
+      complete,
+      warn,
+    });
+
+    expect(result).toBe(failure);
     expect(complete.mock.calls.map(([{ auth }]) => auth.profileId)).toEqual(attempted);
-    expect(m.markFailure.mock.calls.map(([input]) => input.profileId)).toEqual(
+    expect(hoisted.markAuthProfileFailureMock.mock.calls.map(([input]) => input.profileId)).toEqual(
       aborted ? [] : attempted,
     );
-    expect(m.markSuccess).not.toHaveBeenCalled();
+    expect(hoisted.markAuthProfileSuccessMock).not.toHaveBeenCalled();
     expect(warn).toHaveBeenCalledTimes(bookkeepingFails ? 2 : 0);
   });
 
@@ -689,23 +854,30 @@ describe("acquired simple completion profile failover", () => {
     const fixture = await acquireProfiles();
     await using prepared = fixture.prepared;
     let current = true;
-    m.markFailure.mockImplementation(async () => {
+    hoisted.markAuthProfileFailureMock.mockImplementation(async () => {
       current = false;
     });
-    const complete = vi.fn(async () => failureMessage());
+    const complete = vi.fn(async () =>
+      makeAssistantMessageFixture({ errorMessage: "429: rate limit exceeded", content: [] }),
+    );
 
     await expect(
-      failover(prepared, fixture.cfg, complete, {
+      completeWithAuthProfileFailover({
+        prepared,
+        cfg: fixture.cfg,
+        agentDir: prepared.selection.agentDir,
         assertCurrent: () => {
           if (!current) {
             throw new Error("Fixture completion authority expired");
           }
         },
+        complete,
+        warn: vi.fn(),
       }),
     ).rejects.toThrow("Fixture completion authority expired");
 
     expect(complete).toHaveBeenCalledOnce();
-    expect(m.getAuth).toHaveBeenCalledOnce();
-    expect(m.markSuccess).not.toHaveBeenCalled();
+    expect(hoisted.getApiKeyForModelMock).toHaveBeenCalledOnce();
+    expect(hoisted.markAuthProfileSuccessMock).not.toHaveBeenCalled();
   });
 });
