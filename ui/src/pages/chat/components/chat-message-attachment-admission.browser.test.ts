@@ -19,22 +19,18 @@ beforeAll(async () => {
 
 function admissionHarness(label: string, body?: string, withSidebar = false) {
   const metadata = createDeferred<Response>();
-  const fetchMock = vi.fn<typeof fetch>((input) => {
+  const fetchMock = vi.fn<typeof fetch>(async (input) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-    return body === undefined || url.includes("meta=1")
-      ? metadata.promise
-      : Promise.resolve(new Response(body));
+    return body === undefined || url.includes("meta=1") ? metadata.promise : new Response(body);
   });
   vi.stubGlobal("fetch", fetchMock);
   const onOpenSidebar = vi.fn<(content: SidebarContent) => void>();
   const scroller = document.body.appendChild(document.createElement("main"));
   scroller.style.cssText = "height:300px;overflow:auto;";
   const before = scroller.appendChild(document.createElement("button"));
-  before.textContent = "Before attachment";
   const target = scroller.appendChild(document.createElement("section"));
   target.style.cssText = "margin-top:1200px;max-width:400px;";
   const after = scroller.appendChild(document.createElement("button"));
-  after.textContent = "After attachment";
   const attachments = [
     {
       type: "attachment" as const,
@@ -42,7 +38,7 @@ function admissionHarness(label: string, body?: string, withSidebar = false) {
         kind: "document" as const,
         label,
         ...(body === undefined ? {} : { mimeType: "text/plain" }),
-        url: `/tmp/openclaw/${crypto.randomUUID()}/${body === undefined ? "keyboard.pdf" : "text-chip.txt"}`,
+        url: `/tmp/openclaw/${crypto.randomUUID()}/${body !== undefined ? "text-chip.txt" : label}`,
       },
     },
   ];
@@ -67,7 +63,10 @@ function admissionHarness(label: string, body?: string, withSidebar = false) {
     onOpenSidebar,
     metadata,
     fetchMock,
-    async admit(element: HTMLElement, selector: string, bounds: Element = element) {
+    async admit(selector: string, wholeCard = false) {
+      await expect.poll(() => target.querySelector(selector)).not.toBeNull();
+      const element = expectDefined(target.querySelector<HTMLElement>(selector), selector);
+      const bounds = wholeCard ? target : element;
       expect(bounds.getBoundingClientRect().top).toBeGreaterThan(
         scroller.getBoundingClientRect().bottom + 240,
       );
@@ -76,6 +75,7 @@ function admissionHarness(label: string, body?: string, withSidebar = false) {
       await userEvent.tab();
       await expect.poll(() => fetchMock.mock.calls.length).toBe(1);
       this.expectRetained(element, selector);
+      return element;
     },
     expectRetained(element: HTMLElement, selector: string) {
       expect(document.activeElement).toBe(element);
@@ -91,65 +91,46 @@ const available = (mediaTicket: string) =>
     mediaTicketExpiresAt: new Date(Date.now() + 300_000).toISOString(),
   });
 
-describe.runIf(browserMode)("deferred attachment keyboard access", () => {
-  it.each([true, false])(
-    "retains native Tab focus while metadata loads with sidebar=%s",
-    async (withSidebar) => {
-      const harness = admissionHarness("keyboard.pdf", undefined, withSidebar);
-      const { target, after, onOpenSidebar, metadata } = harness;
-      const link = target.querySelector<HTMLAnchorElement>("a[download]");
-      expect(link).not.toBeNull();
-      const download = expectDefined(link, "deferred download");
-      await harness.admit(download, "a[download]", target);
-      expect(download.hasAttribute("href")).toBe(false);
-      expect(download.getAttribute("aria-disabled")).toBe("true");
-      const pageUrl = location.href;
-      await userEvent.keyboard("{Enter}");
-      expect(location.href).toBe(pageUrl);
-      expect(onOpenSidebar).not.toHaveBeenCalled();
-      metadata.resolve(available("keyboard"));
-      await expect.poll(() => download.getAttribute("href")).toContain("mediaTicket=keyboard");
-      harness.expectRetained(download, "a[download]");
-      expect(download.hasAttribute("aria-disabled")).toBe(false);
-      await userEvent.tab();
-      if (withSidebar) {
-        expect(document.activeElement).toBe(
-          target.querySelector(".chat-assistant-attachment-card__expand"),
-        );
-        await userEvent.keyboard("{Enter}");
-        expect(onOpenSidebar).toHaveBeenCalledOnce();
-      } else {
-        expect(document.activeElement).toBe(after);
-      }
-    },
-  );
-});
-
-describe.runIf(browserMode)("history text chip keyboard admission", () => {
-  it.each(["comment", "paste"] as const)(
-    "retains native Tab focus through held %s metadata and body loading",
-    async (kind) => {
-      const body =
-        kind === "comment"
-          ? "Selected text:\nhello\n\nSource session: agent:main:main\nDOM text UTF-16 range: [0, 5)"
-          : "Visible pasted excerpt";
-      const harness = admissionHarness(
-        kind === "comment" ? "selection-comment.txt" : "pasted-text-123.txt",
-        body,
+describe.runIf(browserMode)("attachment keyboard admission", () => {
+  it.each([true, false])("retains Tab focus through metadata, sidebar=%s", async (withSidebar) => {
+    const harness = admissionHarness("keyboard.pdf", undefined, withSidebar);
+    const { target, after, onOpenSidebar, metadata } = harness;
+    const download = await harness.admit("a[download]", true);
+    expect(download.hasAttribute("href")).toBe(false);
+    expect(download.getAttribute("aria-disabled")).toBe("true");
+    const pageUrl = location.href;
+    await userEvent.keyboard("{Enter}");
+    expect(location.href).toBe(pageUrl);
+    expect(onOpenSidebar).not.toHaveBeenCalled();
+    metadata.resolve(available("keyboard"));
+    await expect.poll(() => download.getAttribute("href")).toContain("mediaTicket=keyboard");
+    harness.expectRetained(download, "a[download]");
+    expect(download.hasAttribute("aria-disabled")).toBe(false);
+    await userEvent.tab();
+    if (withSidebar) {
+      expect(document.activeElement).toBe(
+        target.querySelector(".chat-assistant-attachment-card__expand"),
       );
-      const { target, metadata, fetchMock } = harness;
-      await expect
-        .poll(() => target.querySelector(".chat-selection-annotations__chip"))
-        .not.toBeNull();
-      const chip = target.querySelector<HTMLElement>(".chat-selection-annotations__chip");
-      const textChip = expectDefined(chip, "history text chip");
-      await harness.admit(textChip, ".chat-selection-annotations__chip");
-      metadata.resolve(available("keyboard-chip"));
-      await expect
-        .poll(() => target.textContent)
-        .toContain(kind === "comment" ? "hello" : "Visible pasted excerpt");
-      expect(fetchMock).toHaveBeenCalledTimes(2);
-      harness.expectRetained(textChip, ".chat-selection-annotations__chip");
-    },
-  );
+      await userEvent.keyboard("{Enter}");
+      expect(onOpenSidebar).toHaveBeenCalledOnce();
+    } else {
+      expect(document.activeElement).toBe(after);
+    }
+  });
+  it.each([
+    [
+      "selection-comment.txt",
+      "Selected text:\nhello\n\nSource session: agent:main:main\nDOM text UTF-16 range: [0, 5)",
+      "hello",
+    ],
+    ["pasted-text-123.txt", "Visible pasted excerpt", "Visible pasted excerpt"],
+  ])("retains Tab focus through %s text loading", async (label, body, excerpt) => {
+    const harness = admissionHarness(label, body);
+    const { target, metadata, fetchMock } = harness;
+    const textChip = await harness.admit(".chat-selection-annotations__chip");
+    metadata.resolve(available("keyboard-chip"));
+    await expect.poll(() => target.textContent).toContain(excerpt);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    harness.expectRetained(textChip, ".chat-selection-annotations__chip");
+  });
 });
