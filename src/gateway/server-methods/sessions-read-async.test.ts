@@ -66,32 +66,24 @@ it.each([
         },
       };
       replaceSessionEntrySync(scope, selected);
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey: replacementKey },
-        {
-          sessionId: "replacement-page",
-          updatedAt: 200,
-          visibility: "shared",
-          createdActor: {
-            type: "human",
-            source: "profile",
-            id: change === "identity" ? owner : viewer,
+      for (const [sessionId, updatedAt] of [
+        ["replacement-page", 200],
+        ["tail-page", 100],
+      ] as const) {
+        replaceSessionEntrySync(
+          { agentId: "main", sessionKey: `agent:main:${sessionId}` },
+          {
+            sessionId,
+            updatedAt,
+            visibility: "shared",
+            createdActor: {
+              type: "human",
+              source: "profile",
+              id: change === "identity" ? owner : viewer,
+            },
           },
-        },
-      );
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey: "agent:main:tail-page" },
-        {
-          sessionId: "tail-page",
-          updatedAt: 100,
-          visibility: "shared",
-          createdActor: {
-            type: "human",
-            source: "profile",
-            id: change === "identity" ? owner : viewer,
-          },
-        },
-      );
+        );
+      }
       if (membershipChange) {
         addSessionMember(scope, { identityId: viewer, addedBy: owner });
       }
@@ -145,11 +137,7 @@ it.each([
           }
         });
 
-      const result = await listSessions({
-        client,
-        context,
-        request,
-      });
+      const result = await listSessions({ client, context, request });
       expect(readiness).toHaveBeenCalled();
       if (membershipChange) {
         expect(result.sessions).toMatchObject([

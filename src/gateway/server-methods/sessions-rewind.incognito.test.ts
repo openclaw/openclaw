@@ -27,7 +27,7 @@ const sessionKey = "agent:main:dashboard:incognito-source";
 const authority = { assertCurrent() {}, authorize() {} };
 const lifetime = { assertCurrent() {}, assertReadable() {} };
 
-async function listBranches() {
+async function expectBranches(branches: [string, boolean][]) {
   const method = "sessions.branches.list";
   const params = { sessionKey };
   const respond = vi.fn<RespondFn>();
@@ -42,7 +42,15 @@ async function listBranches() {
     client: null,
     isWebchatConnect: () => false,
   });
-  return respond;
+  expect(respond).toHaveBeenCalledWith(
+    true,
+    {
+      branches: expect.arrayContaining(
+        branches.map(([leafEntryId, active]) => expect.objectContaining({ leafEntryId, active })),
+      ),
+    },
+    undefined,
+  );
 }
 
 it.each(mutationMethods)("acquires memory history for unbound %s", async (method) => {
@@ -62,16 +70,10 @@ it.each(mutationMethods)("acquires memory history for unbound %s", async (method
     );
     const sql = observeHostDataSql();
     try {
-      expect(await listBranches()).toHaveBeenCalledWith(
-        true,
-        {
-          branches: expect.arrayContaining([
-            expect.objectContaining({ leafEntryId: "user-2", active: true }),
-            expect.objectContaining({ leafEntryId: "alternate-user", active: false }),
-          ]),
-        },
-        undefined,
-      );
+      await expectBranches([
+        ["user-2", true],
+        ["alternate-user", false],
+      ]);
       const mutation = invokeMessageCut(method, scope);
       expect(await mutation.error).toBeUndefined();
       expect(mutation.respond).toHaveBeenCalledWith(
@@ -89,18 +91,9 @@ it.each(mutationMethods)("acquires memory history for unbound %s", async (method
       } else {
         expect(current?.previousSessionId).toBe(scope.sessionId);
         expect(current?.sessionId).not.toBe(scope.sessionId);
-        expect(await listBranches()).toHaveBeenCalledWith(
-          true,
-          {
-            branches: expect.arrayContaining([
-              expect.objectContaining({
-                active: true,
-                leafEntryId: method === "sessions.rewind" ? "assistant-1" : "alternate-user",
-              }),
-            ]),
-          },
-          undefined,
-        );
+        await expectBranches([
+          [method === "sessions.rewind" ? "assistant-1" : "alternate-user", true],
+        ]);
       }
       expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
     } finally {

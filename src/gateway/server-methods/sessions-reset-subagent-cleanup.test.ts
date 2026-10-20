@@ -123,12 +123,14 @@ let cfg: OpenClawConfig;
 const env = captureEnv(["OPENCLAW_STATE_DIR"]);
 const key = "agent:main:subagent:reset-cleanup";
 const runId = "reset-cleanup-run";
+const readSession = () => loadSessionEntry({ sessionKey: key });
+const storedRun = (id: string) => loadSubagentRegistryFromSqlite().get(id);
 let attempts = 0;
 let harnesses: ReturnType<typeof listRegisteredAgentHarnesses>;
 
 async function request(
   method: "sessions.reset" | "sessions.delete",
-  params: Record<string, unknown>,
+  params: Record<string, unknown> = { key },
 ) {
   const handler = expectDefined(
     (method === "sessions.reset" ? sessionMutationHandlers : sessionDeleteHandlers)[method],
@@ -178,8 +180,8 @@ beforeEach(async () => {
   expect(await settleFailedQueuedSubagentLaunch(runId, "launch failed")).toBe(true);
   await testing.sweepOnceForTests();
   expect(attempts).toBe(1);
-  expect(loadSubagentRegistryFromSqlite().get(runId)?.collectorLaunchCleanupPending).toBe(true);
-  expect(loadSessionEntry({ sessionKey: key })?.lifecycleRevision).toBe("original");
+  expect(storedRun(runId)?.collectorLaunchCleanupPending).toBe(true);
+  expect(readSession()?.lifecycleRevision).toBe("original");
 });
 
 async function registerCollector(id: string, childSessionKey = key, agentId = "main") {
@@ -240,15 +242,15 @@ test.each(["unchanged", "reopen-reset-reopen"])("collector cleanup retry: %s", a
     await reopen();
   }
   if (reset) {
-    await request("sessions.reset", { key });
-    expect(loadSessionEntry({ sessionKey: key })?.lifecycleRevision).not.toBe("original");
+    await request("sessions.reset");
+    expect(readSession()?.lifecycleRevision).not.toBe("original");
   }
-  const beforeRetry = loadSessionEntry({ sessionKey: key });
+  const beforeRetry = readSession();
   if (mode.endsWith("reopen")) {
     await reopen();
   }
   await testing.sweepOnceForTests();
-  expect(loadSessionEntry({ sessionKey: key })).toEqual(reset ? beforeRetry : undefined);
+  expect(readSession()).toEqual(reset ? beforeRetry : undefined);
   expect(attempts).toBe(reset ? 1 : 2);
   await expectResultRetained();
 });
@@ -262,7 +264,7 @@ async function reopen() {
 }
 
 async function expectResultRetained() {
-  expect(loadSubagentRegistryFromSqlite().get(runId)?.collectorLaunchCleanupPending).toBe(false);
+  expect(storedRun(runId)?.collectorLaunchCleanupPending).toBe(false);
   await expect(
     waitForCollectorCompletion({
       runId,
@@ -280,30 +282,28 @@ async function expectResultRetained() {
 
 test("a real registry write failure blocks reset publication and leaves cleanup retryable", async () => {
   Atomics.store(writeFault, 0, 1);
-  const before = loadSessionEntry({ sessionKey: key });
-  await expect(request("sessions.reset", { key })).rejects.toThrow("revocation write rejected");
-  expect(loadSessionEntry({ sessionKey: key })).toEqual(before);
+  const before = readSession();
+  await expect(request("sessions.reset")).rejects.toThrow("revocation write rejected");
+  expect(readSession()).toEqual(before);
   expect(subagentRuns.get(runId)?.execution.suppressSessionEffects).not.toBe(true);
-  expect(loadSubagentRegistryFromSqlite().get(runId)?.execution.suppressSessionEffects).not.toBe(
-    true,
-  );
+  expect(storedRun(runId)?.execution.suppressSessionEffects).not.toBe(true);
   Atomics.store(writeFault, 0, 0);
   await reopen();
   await testing.sweepOnceForTests();
-  expect(loadSessionEntry({ sessionKey: key })).toBeUndefined();
+  expect(readSession()).toBeUndefined();
   expect(attempts).toBe(2);
   await expectResultRetained();
 });
 
 test("durable revocation survives reset-store failure and reopen without reviving deletion", async () => {
   Atomics.store(writeFault, 0, 2);
-  const before = loadSessionEntry({ sessionKey: key });
-  await expect(request("sessions.reset", { key })).rejects.toThrow("reset store rejected");
+  const before = readSession();
+  await expect(request("sessions.reset")).rejects.toThrow("reset store rejected");
   Atomics.store(writeFault, 0, 0);
-  expect(loadSubagentRegistryFromSqlite().get(runId)?.execution.suppressSessionEffects).toBe(true);
+  expect(storedRun(runId)?.execution.suppressSessionEffects).toBe(true);
   await reopen();
   await testing.sweepOnceForTests();
-  expect(loadSessionEntry({ sessionKey: key })).toEqual(before);
+  expect(readSession()).toEqual(before);
   expect(attempts).toBe(1);
   await expectResultRetained();
 });
@@ -320,26 +320,38 @@ test("postcommit failure cannot restore cleanup authority after a successful res
       },
     }),
   ).rejects.toThrow("reset response lost");
-  const successor = loadSessionEntry({ sessionKey: key });
+  const successor = readSession();
   expect(successor?.lifecycleRevision).not.toBe("original");
   await reopen();
   await testing.sweepOnceForTests();
-  expect(loadSessionEntry({ sessionKey: key })).toEqual(successor);
+  expect(readSession()).toEqual(successor);
   expect(attempts).toBe(1);
   await expectResultRetained();
 });
+
+function installResetHarness(reset: () => Promise<void>) {
+  registerAgentHarness({
+    id: "reset-cleanup-race",
+    label: "Reset cleanup race",
+    supports: () => ({ supported: false }),
+    runAttempt: async () => {
+      throw new Error("not used");
+    },
+    reset,
+  });
+}
 
 async function startCollector(id: string) {
   await registerCollector(id);
   await emitSubagentStart(id);
 }
 
+function emitLifecycle(id: string, data: Parameters<typeof emitAgentEvent>[0]["data"]) {
+  emitAgentEvent({ runId: id, stream: "lifecycle", data });
+}
+
 async function emitSubagentStart(id: string) {
-  emitAgentEvent({
-    runId: id,
-    stream: "lifecycle",
-    data: { phase: "start", startedAt: Date.now() },
-  });
+  emitLifecycle(id, { phase: "start", startedAt: Date.now() });
   await waitForRegistryPublication(() => subagentRuns.get(id)?.execution.status === "running");
   expect(subagentRuns.get(id)?.execution.status).toBe("running");
 }
@@ -405,16 +417,12 @@ test("same-turn reset keeps its active continuation unsuppressed", async () => {
       assertAllowed: () => {},
       onInterrupt: interrupt,
     });
-    await admission.run(() => request("sessions.reset", { key }));
+    await admission.run(() => request("sessions.reset"));
     expect(admission.isActive()).toBe(true);
     expect(interrupt).not.toHaveBeenCalled();
     expect(subagentRuns.get(activeId)?.execution).toMatchObject({ status: "running" });
-    expect(
-      loadSubagentRegistryFromSqlite().get(activeId)?.execution.suppressSessionEffects,
-    ).not.toBe(true);
-    expect(loadSubagentRegistryFromSqlite().get(runId)?.execution.suppressSessionEffects).toBe(
-      true,
-    );
+    expect(storedRun(activeId)?.execution.suppressSessionEffects).not.toBe(true);
+    expect(storedRun(runId)?.execution.suppressSessionEffects).toBe(true);
     await settleSubagentRegistryPersistenceWork();
   } finally {
     admission?.release();
@@ -427,22 +435,10 @@ test.each(["new", "replacement"])(
   async (mode) => {
     const original = expectDefined(subagentRuns.get(runId), "registered collector");
     const activeId = mode === "replacement" ? runId : "new-active-owner";
-    registerAgentHarness({
-      id: "reset-cleanup-race",
-      label: "Reset cleanup race",
-      supports: () => ({ supported: false }),
-      runAttempt: async () => {
-        throw new Error("not used");
-      },
-      reset: async () => {
-        await startCollector(activeId);
-      },
-    });
-    await request("sessions.reset", { key });
+    installResetHarness(() => startCollector(activeId));
+    await request("sessions.reset");
     expect(subagentRuns.get(activeId)?.execution.status).toBe("running");
-    expect(
-      loadSubagentRegistryFromSqlite().get(activeId)?.execution.suppressSessionEffects,
-    ).not.toBe(true);
+    expect(storedRun(activeId)?.execution.suppressSessionEffects).not.toBe(true);
     if (mode === "replacement") {
       expect(subagentRuns.get(runId)).not.toBe(original);
       expect(original.execution.suppressSessionEffects).not.toBe(true);
@@ -451,29 +447,19 @@ test.each(["new", "replacement"])(
 );
 
 test("a changed session generation skips revocation together with reset", async () => {
-  registerAgentHarness({
-    id: "reset-cleanup-replacement",
-    label: "Reset cleanup replacement",
-    supports: () => ({ supported: false }),
-    runAttempt: async () => {
-      throw new Error("not used");
-    },
-    reset: async () => {
-      replaceSessionEntrySync(
-        { sessionKey: key },
-        {
-          sessionId: "reset-cleanup-session",
-          lifecycleRevision: "replacement",
-          updatedAt: Date.now(),
-        },
-      );
-    },
+  installResetHarness(async () => {
+    replaceSessionEntrySync(
+      { sessionKey: key },
+      {
+        sessionId: "reset-cleanup-session",
+        lifecycleRevision: "replacement",
+        updatedAt: Date.now(),
+      },
+    );
   });
-  await request("sessions.reset", { key });
-  expect(loadSessionEntry({ sessionKey: key })?.lifecycleRevision).toBe("replacement");
-  expect(loadSubagentRegistryFromSqlite().get(runId)?.execution.suppressSessionEffects).not.toBe(
-    true,
-  );
+  await request("sessions.reset");
+  expect(readSession()?.lifecycleRevision).toBe("replacement");
+  expect(storedRun(runId)?.execution.suppressSessionEffects).not.toBe(true);
 });
 
 test("revocation rechecks terminal owners after awaited entry planning", async () => {
@@ -504,10 +490,10 @@ test("revocation rechecks terminal owners after awaited entry planning", async (
     }),
   );
   try {
-    await request("sessions.reset", { key });
+    await request("sessions.reset");
     expect(settled).toBe(true);
     expect(await settlement).toEqual({ value: true });
-    expect(loadSubagentRegistryFromSqlite().get(id)?.execution.suppressSessionEffects).toBe(true);
+    expect(storedRun(id)?.execution.suppressSessionEffects).toBe(true);
   } finally {
     unsubscribe();
     await settlement;
@@ -518,7 +504,7 @@ test.each([false, true])(
   "custom-store reset revokes only its worker child (incognito: %s)",
   async (incognito) => {
     await testing.sweepOnceForTests();
-    expect(loadSubagentRegistryFromSqlite().get(runId)?.collectorLaunchCleanupPending).toBe(false);
+    expect(storedRun(runId)?.collectorLaunchCleanupPending).toBe(false);
     const agentId = "worker";
     cfg = {
       agents: {
@@ -556,7 +542,7 @@ test.each([false, true])(
     await testing.sweepOnceForTests();
     expect(attempts).toBe(1);
     await request("sessions.reset", { key: childSessionKey, agentId });
-    expect(loadSubagentRegistryFromSqlite().get(id)?.execution.suppressSessionEffects).toBe(true);
+    expect(storedRun(id)?.execution.suppressSessionEffects).toBe(true);
     if (incognito) {
       expect(loadSessionEntry(scope)).toBeUndefined();
       await replaceSessionEntry(scope, {
@@ -604,22 +590,13 @@ test("reset cannot publish while a terminal completion owns an awaited capture",
   const id = "completing-owner";
   await startCollector(id);
   // Leave producer metadata absent to hold the completion lock during transcript capture.
-  emitAgentEvent({
-    runId: id,
-    stream: "lifecycle",
-    data: {
-      phase: "end",
-      endedAt: Date.now(),
-    },
-  });
+  emitLifecycle(id, { phase: "end", endedAt: Date.now() });
   await entered.promise;
-  const original = loadSessionEntry({ sessionKey: key });
+  const original = readSession();
   try {
-    await expect(request("sessions.reset", { key })).rejects.toThrow(/completion.*settling/i);
-    expect(loadSessionEntry({ sessionKey: key })).toEqual(original);
-    expect(loadSubagentRegistryFromSqlite().get(id)?.execution.suppressSessionEffects).not.toBe(
-      true,
-    );
+    await expect(request("sessions.reset")).rejects.toThrow(/completion.*settling/i);
+    expect(readSession()).toEqual(original);
+    expect(storedRun(id)?.execution.suppressSessionEffects).not.toBe(true);
   } finally {
     release.resolve();
     await expectDefined(completion.mock.results[0]?.value, "completion attempt");
@@ -659,11 +636,7 @@ test.each([false, true])(
             return completion;
           },
         );
-        emitAgentEvent({
-          runId: id,
-          stream: "lifecycle",
-          data: { phase: "end", aborted: true, stopReason: "aborted", endedAt },
-        });
+        emitLifecycle(id, { phase: "end", aborted: true, stopReason: "aborted", endedAt });
         // Row publication precedes terminal effects and the retained session's release.
         await (
           await observed.promise
@@ -674,30 +647,25 @@ test.each([false, true])(
       expect(subagentRuns.get(id)?.killReconciliation?.killedAt).toBe(claim.requestedAt);
       expect(subagentRuns.get(id)?.killIntent).toBeUndefined();
       expect(subagentRuns.get(id)?.execution.suppressSessionEffects).not.toBe(true);
-      expect(loadSessionEntry({ sessionKey: key })?.lifecycleRevision).toBe("original");
+      expect(readSession()?.lifecycleRevision).toBe("original");
       if (reset) {
-        await request("sessions.reset", { key });
+        await request("sessions.reset");
       }
-      successor = loadSessionEntry({ sessionKey: key });
+      successor = readSession();
       lateEndedAt = Date.now();
       await emitKilledCompletion(lateEndedAt);
       await settleSubagentRegistryPersistenceWork();
-      const stored = expectDefined(
-        loadSubagentRegistryFromSqlite().get(id),
-        "settled cancellation",
-      );
+      const stored = expectDefined(storedRun(id), "settled cancellation");
       expect(stored.killReconciliation).toMatchObject({ killedAt: claim.requestedAt });
       expect(stored.execution.suppressSessionEffects === true).toBe(reset);
     });
     await testing.sweepOnceForTests();
-    expect(loadSessionEntry({ sessionKey: key })).toEqual(
-      reset ? successor : { ...successor, endedAt: lateEndedAt },
-    );
+    expect(readSession()).toEqual(reset ? successor : { ...successor, endedAt: lateEndedAt });
   },
 );
 
 test("reset persists suppression after a rejected cleanup write", async () => {
-  await request("sessions.delete", { key });
+  await request("sessions.delete");
   const database = openOpenClawStateDatabase();
   database.db.exec(`CREATE TRIGGER reject_best_effort BEFORE UPDATE ON subagent_runs
     WHEN json_extract(NEW.payload_json, '$.execution.suppressSessionEffects') = 1
@@ -705,16 +673,14 @@ test("reset persists suppression after a rejected cleanup write", async () => {
   await expect(testing.sweepOnceForTests()).rejects.toThrow("best effort write rejected");
   expect(subagentRuns.get(runId)?.execution.suppressSessionEffects).not.toBe(true);
   expect(subagentRuns.get(runId)?.collectorLaunchCleanupPending).toBe(true);
-  expect(loadSubagentRegistryFromSqlite().get(runId)?.execution.suppressSessionEffects).not.toBe(
-    true,
-  );
+  expect(storedRun(runId)?.execution.suppressSessionEffects).not.toBe(true);
   database.db.exec("DROP TRIGGER reject_best_effort");
-  await request("sessions.reset", { key });
-  const successor = loadSessionEntry({ sessionKey: key });
+  await request("sessions.reset");
+  const successor = readSession();
   expect(successor).toBeDefined();
   await reopen();
   await testing.sweepOnceForTests();
-  expect(loadSessionEntry({ sessionKey: key })).toEqual(successor);
+  expect(readSession()).toEqual(successor);
 });
 
 test("reset preserves a yielded continuation instead of revoking it as completed cleanup", async () => {
@@ -722,31 +688,23 @@ test("reset preserves a yielded continuation instead of revoking it as completed
   // A yielded collector is settled at its terminal (#141474), so it is not a continuation to
   // preserve; this case uses an announcing subagent, and the sibling case below pins the collector.
   await startAnnouncingSubagent(id);
-  emitAgentEvent({
-    runId: id,
-    stream: "lifecycle",
-    data: { phase: "end", yielded: true, endedAt: Date.now() },
-  });
+  emitLifecycle(id, { phase: "end", yielded: true, endedAt: Date.now() });
   await waitForRegistryPublication(() => subagentRuns.get(id)?.pauseReason === "sessions_yield");
   expect(subagentRuns.get(id)?.pauseReason).toBe("sessions_yield");
-  await request("sessions.reset", { key });
-  expect(loadSubagentRegistryFromSqlite().get(id)).toMatchObject({ pauseReason: "sessions_yield" });
-  expect(loadSubagentRegistryFromSqlite().get(id)?.execution.suppressSessionEffects).not.toBe(true);
+  await request("sessions.reset");
+  expect(storedRun(id)).toMatchObject({ pauseReason: "sessions_yield" });
+  expect(storedRun(id)?.execution.suppressSessionEffects).not.toBe(true);
 });
 
 test("reset revokes a yielded collector that settled at its own terminal", async () => {
   const id = "yielded-collector";
   await startCollector(id);
-  emitAgentEvent({
-    runId: id,
-    stream: "lifecycle",
-    data: { phase: "end", yielded: true, endedAt: Date.now() },
-  });
+  emitLifecycle(id, { phase: "end", yielded: true, endedAt: Date.now() });
   await settleCollectorCleanup(id);
   const settled = expectDefined(subagentRuns.get(id), "settled collector");
   expect(settled.pauseReason).toBeUndefined();
   expect(settled.execution.status).toBe("terminal");
   expect(settled.collectorCompletion).toBeDefined();
-  await request("sessions.reset", { key });
-  expect(loadSubagentRegistryFromSqlite().get(id)?.execution.suppressSessionEffects).toBe(true);
+  await request("sessions.reset");
+  expect(storedRun(id)?.execution.suppressSessionEffects).toBe(true);
 });
