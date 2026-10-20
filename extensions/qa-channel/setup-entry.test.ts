@@ -27,7 +27,7 @@ describe("qa-channel setup entry", () => {
     ).toMatchObject({ accountId: "limited", mediaMaxBytes: 1024 });
   });
 
-  it.each(["default", "named"])("updates only the selected %s account", async (accountId) => {
+  it.each(["default", "named"])("updates only the selected %s account", (accountId) => {
     const cfg = {
       channels: {
         "qa-channel": {
@@ -40,7 +40,7 @@ describe("qa-channel setup entry", () => {
         },
       },
     };
-    const next = await setupPlugin.setupContract?.applyAccountConfig({
+    const next = setupPlugin.setupContract?.applyAccountConfig({
       cfg,
       accountId,
       input: { baseUrl: "https://updated.example", botDisplayName: "Updated" },
