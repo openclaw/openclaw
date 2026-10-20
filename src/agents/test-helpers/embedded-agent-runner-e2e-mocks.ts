@@ -20,10 +20,7 @@ type EmbeddedRunnerFastRunMockOptions = {
 };
 
 type EmbeddedRunnerBackoffMockOptions = {
-  computeBackoff: (
-    policy: { initialMs: number; maxMs: number; factor: number; jitter: number },
-    attempt: number,
-  ) => number;
+  computeBackoff: typeof import("../../infra/backoff.js").computeBackoff;
   sleepWithAbort: (ms: number, abortSignal?: AbortSignal) => unknown;
 };
 
@@ -127,15 +124,12 @@ export function installEmbeddedRunnerBaseE2eMocks(options?: {
   });
   vi.doMock("../../plugins/provider-hook-runtime.js", () => ({
     attachModelProviderRuntimePluginHandle: (model: unknown) => model,
-    prepareProviderExtraParams: vi.fn(() => undefined),
     resolveLoadedProviderPluginsForHooks: vi.fn(() => undefined),
     resolveLoadedProviderRuntimePlugin: vi.fn(() => undefined),
-    resolveProviderExtraParamsForTransport: vi.fn(() => undefined),
     resolveProviderHookPlugin: vi.fn(() => undefined),
     resolveProviderPluginsForHooks: vi.fn(() => []),
     resolveProviderRuntimePlugin: vi.fn(() => undefined),
     resolveProviderRuntimePluginHandle: vi.fn((params: object) => params),
-    wrapProviderStreamFn: vi.fn(() => undefined),
   }));
   vi.doMock("../harness/runtime-plugin.js", () => ({
     ensureSelectedAgentHarnessPlugin: vi.fn(async () => {}),
@@ -226,28 +220,19 @@ export function installEmbeddedRunnerFastRunE2eMocks(
             params.harnessId === "codex" || params.harnessRuntime === "codex"
               ? "openai"
               : params.provider;
-          const requestedProfileId = params.sessionAuthProfileId?.trim() || undefined;
-          const requestedCredential = requestedProfileId
-            ? store.profiles[requestedProfileId]
-            : undefined;
-          const matchingRequestedProfileId =
-            requestedCredential?.provider === authProvider ? requestedProfileId : undefined;
-          const userPinnedProfileId =
-            params.sessionAuthProfileSource === "user" ? matchingRequestedProfileId : undefined;
-          const resolvedProfileIds = resolveAuthProfileOrder({
+          const requested = params.sessionAuthProfileId?.trim() || undefined;
+          const requestedCredential = requested ? store.profiles[requested] : undefined;
+          const preferred = requestedCredential?.provider === authProvider ? requested : undefined;
+          const pinned = params.sessionAuthProfileSource === "user" ? preferred : undefined;
+          const resolved = resolveAuthProfileOrder({
             cfg: params.config,
             store,
             provider: authProvider,
-            preferredProfile: matchingRequestedProfileId,
+            preferredProfile: preferred,
             forModel: params.modelId,
           });
-          const orderedProfileIds = userPinnedProfileId
-            ? [
-                userPinnedProfileId,
-                ...resolvedProfileIds.filter((profileId) => profileId !== userPinnedProfileId),
-              ]
-            : resolvedProfileIds;
-          const profileIds = orderedProfileIds.length > 0 ? orderedProfileIds : [undefined];
+          const ordered = pinned ? [pinned, ...resolved.filter((id) => id !== pinned)] : resolved;
+          const profileIds = ordered.length > 0 ? ordered : [undefined];
           const attempts = profileIds.map((profileId, index) => {
             const credential = profileId ? store.profiles[profileId] : undefined;
             const canForwardProfile = credential?.provider === authProvider;
@@ -259,7 +244,7 @@ export function installEmbeddedRunnerFastRunE2eMocks(
                 ? {
                     forwardedAuthProfileId: profileId,
                     forwardedAuthProfileSource:
-                      userPinnedProfileId === profileId ? ("user" as const) : ("auto" as const),
+                      pinned === profileId ? ("user" as const) : ("auto" as const),
                     forwardedAuthProfileCandidateIds: profileIds
                       .slice(index)
                       .filter((candidate): candidate is string => Boolean(candidate)),
@@ -271,11 +256,7 @@ export function installEmbeddedRunnerFastRunE2eMocks(
               ? { kind: "profile" as const, profileId, plan }
               : { kind: "implicit" as const, plan };
           });
-          const firstAttempt = attempts[0];
-          if (!firstAttempt) {
-            throw new Error("fast embedded runner auth mock produced no attempts");
-          }
-          return { plan: firstAttempt.plan, attempts };
+          return { plan: attempts[0]!.plan, attempts };
         },
       ),
     };
@@ -303,7 +284,6 @@ export function installEmbeddedRunnerFastRunE2eMocks(
     prepareProviderRuntimeAuth: options.prepareProviderRuntimeAuth ?? vi.fn(async () => undefined),
     prepareProviderSyntheticAuthWithPlugin: vi.fn(async () => undefined),
     resolveProviderAuthProfileId: vi.fn(() => undefined),
-    resolveProviderCapabilitiesWithPlugin: vi.fn(() => undefined),
     resolveProviderDeprecatedAuthProfileIds: vi.fn(() => []),
     resolveProviderReasoningOutputModeWithPlugin: vi.fn(() => undefined),
     resolveProviderSyntheticAuthWithPlugin: vi.fn(() => undefined),

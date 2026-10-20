@@ -3,7 +3,6 @@ import path from "node:path";
 import { resolveSandboxPath } from "../sandbox-paths.js";
 import type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "../sandbox/fs-bridge.js";
 
-/** Creates a sandbox fs bridge from a caller-provided path resolver. */
 export function createSandboxFsBridgeFromResolver(
   resolvePath: (filePath: string, cwd?: string) => SandboxResolvedPath,
   pathMappings?: SandboxFsBridge["pathMappings"],
@@ -93,38 +92,33 @@ export function createSandboxFsBridgeFromResolver(
   };
 }
 
-/** Creates a sandbox fs bridge rooted at a real host directory. */
-export function createHostSandboxFsBridge(rootDir: string): SandboxFsBridge {
-  const root = path.resolve(rootDir);
-
-  const resolvePath = (filePath: string, cwd?: string): SandboxResolvedPath => {
-    // Operations may receive the container path returned by an earlier resolution.
-    const input =
-      filePath === "/workspace" || filePath.startsWith("/workspace/")
-        ? path.join(root, filePath.slice("/workspace".length))
-        : filePath;
-    const resolved = resolveSandboxPath({
-      filePath: input,
-      cwd: cwd ?? root,
-      root,
-    });
-    const relativePath = resolved.relative
-      ? resolved.relative.split(path.sep).filter(Boolean).join(path.posix.sep)
-      : "";
-    const containerPath = relativePath ? path.posix.join("/workspace", relativePath) : "/workspace";
-    return {
-      hostPath: resolved.resolved,
-      relativePath,
-      containerPath,
-    };
-  };
-
-  return createSandboxFsBridgeFromResolver(resolvePath, [
-    { hostRoot: root, containerRoot: "/workspace" },
-  ]);
+function resolvedPath(hostPath: string, relativePath: string): SandboxResolvedPath {
+  return { hostPath, relativePath, containerPath: path.posix.join("/workspace", relativePath) };
 }
 
-/** Creates a host-backed bridge that accepts the Docker-style /workspace mount path. */
+export function createHostSandboxFsBridge(rootDir: string): SandboxFsBridge {
+  const root = path.resolve(rootDir);
+  return createSandboxFsBridgeFromResolver(
+    (filePath, cwd) => {
+      // Operations may receive the container path returned by an earlier resolution.
+      const input =
+        filePath === "/workspace" || filePath.startsWith("/workspace/")
+          ? path.join(root, filePath.slice("/workspace".length))
+          : filePath;
+      const resolved = resolveSandboxPath({
+        filePath: input,
+        cwd: cwd ?? root,
+        root,
+      });
+      return resolvedPath(
+        resolved.resolved,
+        resolved.relative.split(path.sep).filter(Boolean).join(path.posix.sep),
+      );
+    },
+    [{ hostRoot: root, containerRoot: "/workspace" }],
+  );
+}
+
 export function createContainerWorkspaceSandboxFsBridge(rootDir: string): SandboxFsBridge {
   const root = path.resolve(rootDir);
   return createSandboxFsBridgeFromResolver(
@@ -135,11 +129,7 @@ export function createContainerWorkspaceSandboxFsBridge(rootDir: string): Sandbo
         : normalized === "/workspace" || path.resolve(filePath) === root
           ? ""
           : path.relative(root, path.resolve(cwd ?? root, filePath)).replace(/\\/g, "/");
-      return {
-        hostPath: path.join(root, relativePath),
-        relativePath,
-        containerPath: relativePath ? path.posix.join("/workspace", relativePath) : "/workspace",
-      };
+      return resolvedPath(path.join(root, relativePath), relativePath);
     },
     [{ hostRoot: root, containerRoot: "/workspace" }],
   );
