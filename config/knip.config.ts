@@ -96,6 +96,8 @@ const repositoryScriptEntries = [
   // scripts/perf/README.md invokes this isolated session-roster measurement CLI.
   "scripts/perf/session-roster-churn-measure.ts!",
   "scripts/perf/seal-version-restart.ts!",
+  // #178599 documents: node --expose-gc scripts/perf/heap-headroom.ts.
+  "scripts/perf/heap-headroom.ts!",
   // Worker-environment shutdown proof invokes this measurement CLI by path.
   "scripts/perf/worker-environment-shutdown-measure.ts!",
   // The branch-rotation guide invokes the driver, which loads its IPC preload by path.
@@ -647,7 +649,6 @@ const bundledPluginEntries = [
 
 const bundledPluginIgnoredRuntimeDependencies = [
   "@agentclientprotocol/claude-agent-acp",
-  "@a2ui/lit",
   "@azure/identity",
   "@clawdbot/lobster",
   "@discord/embedded-app-sdk",
@@ -688,7 +689,6 @@ const rootBundledPluginRuntimeDependencies = [
 // Root installation and build workflows deliberately mirror these dependencies from their
 // owning workspace, or invoke their package binaries/loaders without a static module import.
 const rootToolingAndWorkspaceDependencies = [
-  "@a2ui/lit",
   "@copilotkit/aimock",
   // scripts/ui.mts anchors these lookups at ui/package.json before invoking the UI workspace.
   "@vitest/browser-playwright",

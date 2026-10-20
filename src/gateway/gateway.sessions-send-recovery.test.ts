@@ -21,6 +21,7 @@ import {
 } from "./gateway-provider-fixture.test-support.js";
 import {
   printRecoveryFailureDiagnostics,
+  readRecoveryDiagnosticSnapshot,
   RECOVERY_PROBE_ID,
   writeRecoveryDiagnosticProbe,
 } from "./gateway.sessions-send-recovery.diagnostics.test-support.js";
@@ -276,6 +277,15 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
         idempotencyKey: string;
         queueMode: "followup";
       }> = [];
+      let beforeRestartLogs: number | undefined;
+      let startupSnapshot: unknown;
+      const cancelledChatId = randomUUID();
+      const inputMarkers = () =>
+        Object.fromEntries([
+          ...[...accepted].map(([marker, runId]) => [runId, marker]),
+          ...chatRequests.map(({ idempotencyKey, message }) => [idempotencyKey, message.trim()]),
+          [cancelledChatId, "CANCELLED_CHAT"],
+        ]);
       const expectedDelivery = expectedUpdates.flatMap((message, i) => [
         message,
         `CHAT_UPDATE_${i + 1}`,
@@ -456,7 +466,6 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
         await send(resetSource, "RESET_SOURCE_UPDATE");
         await send(revokedSource, "REVOKED_UPDATE");
         await send(archivedSource, "ARCHIVED_SOURCE_UPDATE");
-        const cancelledChatId = randomUUID();
         await client.request(
           "chat.send",
           {
@@ -511,7 +520,15 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
           expect(oldProcess?.signalCode).not.toBe("SIGKILL");
         }
         hold = false;
-        const beforeRestartLogs = gateway.logs().length;
+        // Capture after the old child is gone, so this read cannot affect which
+        // accepted writes survive its crash. Emit it only if the scenario fails.
+        startupSnapshot = await readRecoveryDiagnosticSnapshot(
+          path.join(gateway.state.agentDir("main"), "openclaw-agent.sqlite"),
+          target,
+          chatRequests[4]!.idempotencyKey,
+          inputMarkers(),
+        ).catch(() => ({ unavailable: true }));
+        beforeRestartLogs = gateway.logs().length;
         const startAt = Number(process.env.OPENCLAW_RECOVERY_BENCH_START_AT);
         if (startAt) {
           expect(startAt).toBeGreaterThan(Date.now());
@@ -714,6 +731,11 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
           sessionKey: target,
           runId: chatRequests[4]?.idempotencyKey,
           frames: providerRequests,
+          restartedLogs:
+            beforeRestartLogs === undefined ? "" : gateway.logs().slice(beforeRestartLogs),
+          startupSnapshot,
+          logPath: gateway.state.path("gateway.log"),
+          markers: inputMarkers(),
         }).catch(() => console.error("[session-recovery-failure] diagnostics unavailable"));
         throw error;
       } finally {

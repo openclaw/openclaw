@@ -177,6 +177,11 @@ installations use an engine-aware driver with local-family capture support, so
 rollback restores the shared and local stores together. See
 [credential migration and recovery](/reference/database-schemas/versioning#local-client-credentials).
 
+Updates started by 2026.10.4 keep the client credential store's independent
+schema out of the older updater's agent-schema check. Credential-aware updaters
+verify that store against its own schema, and both paths retain its backup and
+recovery coverage.
+
 Independent native credential sources remain unchanged during import and remain
 readable by the previous app after rollback. Reusing the same source preserves
 local refreshes; a changed or restored source rebuilds its local copy while

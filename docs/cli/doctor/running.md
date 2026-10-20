@@ -240,6 +240,10 @@ rows, or infer execution policy. Repeating the same repair invocation cannot
 resolve these conditions. After manual recovery, verify readiness before starting
 the service through its owner.
 
+Doctor prints each check or repair section to stderr when it starts. Sections
+still running after 10 seconds repeat their name with elapsed time every 10
+seconds. JSON output does not include these progress messages.
+
 ## Examples
 
 ```bash

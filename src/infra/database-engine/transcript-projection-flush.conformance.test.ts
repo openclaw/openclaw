@@ -48,6 +48,12 @@ function projection(db: EngineConnection, sessionId: string) {
   };
 }
 
+function transcriptIdentities(db: EngineConnection, sessionId: string) {
+  return db
+    .prepare("SELECT * FROM transcript_event_identities WHERE session_id = ? ORDER BY seq")
+    .all(sessionId);
+}
+
 function observePgTrips(db: EngineConnection) {
   const statements: string[] = [];
   if (!isPostgresSqlConnection(db)) {
@@ -176,6 +182,11 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
             ),
           );
           expect(writes).toHaveLength(3);
+          expect(
+            trips.statements.filter((sql) =>
+              /insert into\s+"?transcript_(?:events|event_identities)"?/iu.test(sql),
+            ),
+          ).toHaveLength(3);
           expect(trips.statements.filter((sql) => /^BEGIN\b/iu.test(sql))).toHaveLength(3);
           expect(trips.statements.filter((sql) => /^COMMIT\b/iu.test(sql))).toHaveLength(3);
           expect(
@@ -187,6 +198,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
             JSON.parse(row.eventJson),
           ),
           projection: projection(f.database.db, f.scope.sessionId),
+          identities: transcriptIdentities(f.database.db, f.scope.sessionId),
           search: searchSessionTranscriptsReadOnlySync(
             { agentId: "main", sessionId: f.scope.sessionId, query: "Needle", order: "recent" },
             { agentId: "main", path: f.database.path },
@@ -246,8 +258,10 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
         const stable = withEngineStoreAdmission(() => ({
           transcript: readTranscriptEventRows(f.database, f.scope.sessionId),
           projection: projection(f.database.db, f.scope.sessionId),
+          identities: transcriptIdentities(f.database.db, f.scope.sessionId),
         }));
         expect(stable.projection).toEqual(persisted.projection);
+        expect(stable.identities).toEqual(persisted.identities);
         expect(stable.transcript.map((row) => JSON.parse(row.eventJson))).toEqual(
           persisted.transcript,
         );
@@ -280,6 +294,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
             withEngineStoreAdmission(() => ({
               transcript: readTranscriptEventRows(f.database, f.scope.sessionId),
               projection: projection(f.database.db, f.scope.sessionId),
+              identities: transcriptIdentities(f.database.db, f.scope.sessionId),
             })),
           ).toEqual(stable);
         }

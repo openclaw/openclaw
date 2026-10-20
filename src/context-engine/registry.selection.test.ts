@@ -193,13 +193,12 @@ it.each(["standalone", "logical-turn"] as const)(
 it("plugin disable produces ordinary logical turns without registration or degradation warnings", async () => {
   const { registry, factory } = fixture(engineId, false);
   const config = setPluginEnabledInConfig(selectedConfig, engineId, false);
-  const warn = vi.fn();
+  using warn = vi.spyOn(console, "warn").mockImplementation(() => {});
   await withPluginRuntimeRegistryScope(registry, async () => {
     for (const runId of ["first", "second"]) {
       const lease = await createContextEngineLogicalTurnLease({
         config,
         identity: { runId, sessionId: "synthetic-session" },
-        warn,
       });
       try {
         lease.begin();

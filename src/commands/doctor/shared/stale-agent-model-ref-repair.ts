@@ -8,6 +8,7 @@ import {
   tryResolveDefaultAgentId,
 } from "../../../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
+import { parseModelCatalogJson } from "../../../agents/model-catalog-json.js";
 import { normalizeProviderId } from "../../../agents/model-selection.js";
 import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.roster.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -46,8 +47,7 @@ function providerFromModelRef(ref: string): string | undefined {
   if (slash <= 0 || slash === trimmed.length - 1) {
     return undefined;
   }
-  const provider = normalizeProviderId(trimmed.slice(0, slash));
-  return provider || undefined;
+  return normalizeProviderId(trimmed.slice(0, slash)) || undefined;
 }
 
 function collectPluginProviderIds(
@@ -131,12 +131,12 @@ function collectPersistedProviderIds(params: {
     };
   }
   try {
-    const parsed = JSON.parse(raw) as { providers?: unknown };
-    if (!isRecord(parsed.providers)) {
+    const providers = asOptionalRecord(parseModelCatalogJson(raw))?.providers;
+    if (!isRecord(providers)) {
       return { providerIds: new Set() };
     }
     return {
-      providerIds: new Set(Object.keys(parsed.providers).map(normalizeProviderId).filter(Boolean)),
+      providerIds: new Set(Object.keys(providers).map(normalizeProviderId).filter(Boolean)),
     };
   } catch {
     return {

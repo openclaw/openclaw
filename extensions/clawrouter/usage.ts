@@ -13,8 +13,6 @@ import { normalizeClawRouterRootUrl } from "./provider-catalog.js";
 
 const CLAWROUTER_USAGE_RESPONSE_MAX_BYTES = 1024 * 1024;
 
-type ClawRouterUsageFetchGuard = typeof fetchWithSsrFGuard;
-
 type ClawRouterBudget = {
   configured?: unknown;
   ledger?: unknown;
@@ -91,15 +89,12 @@ export async function fetchClawRouterUsage(params: {
   baseUrl?: string;
   timeoutMs: number;
   signal?: AbortSignal;
-  /** Test-only seam; production keeps the shared SSRF guard owning transport. */
-  fetchGuard?: ClawRouterUsageFetchGuard;
 }): Promise<ProviderUsageSnapshot> {
   // Operator-configured baseUrl can redirect anywhere. The guard owns transport and
   // rechecks every hop; env proxy mode preserves provider-usage proxy support while
   // direct and NO_PROXY requests retain pinned DNS.
   const rootUrl = normalizeClawRouterRootUrl(params.baseUrl);
-  const fetchGuard = params.fetchGuard ?? fetchWithSsrFGuard;
-  const { response, release } = await fetchGuard(
+  const { response, release } = await fetchWithSsrFGuard(
     withTrustedEnvProxyGuardedFetchMode({
       url: `${rootUrl}/v1/usage`,
       init: {

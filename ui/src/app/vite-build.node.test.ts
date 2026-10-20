@@ -10,6 +10,7 @@ import { build, createLogger, type InlineConfig } from "vite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { controlUiCodeSplitting } from "../../config/control-ui-chunking.ts";
 import controlUiViteConfig from "../../vite.config.ts";
+import { normalizeControlUiBuildInfo } from "../build-info-normalizers.ts";
 
 function readBuiltIdentity(html: string): { buildId: string } {
   const encoded = /globalThis\.OPENCLAW_CONTROL_UI_BUILD_INFO=(.*?);<\/script>/u.exec(html)?.[1];
@@ -86,7 +87,15 @@ async function buildOutput(config: InlineConfig) {
 function createConfig(level: "info" | "silent" = "silent"): InlineConfig {
   info.mockReset();
   return {
-    ...controlUiViteConfig({ outDir }),
+    ...controlUiViteConfig({
+      outDir,
+      buildInfo: normalizeControlUiBuildInfo({
+        version: "1.0.0",
+        commit: "a".repeat(40),
+        dirty: false,
+        release: process.env.OPENCLAW_CONTROL_UI_RELEASE_BUILD?.trim() === "1",
+      }),
+    }),
     configFile: false,
     root,
     publicDir: false,

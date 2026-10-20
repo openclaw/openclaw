@@ -550,7 +550,7 @@ describe("update repair ledger recovery", () => {
       await updateRepairCommand({ json: true });
 
       expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
-        expect.objectContaining({ reconciledRuns: [run.runId] }),
+        expect.objectContaining({ coreUpdate: "completed", reconciledRuns: [run.runId] }),
       );
       expect(getUpdateRun(run.runId)).toMatchObject({
         status: "failed",
@@ -587,6 +587,7 @@ describe("update repair ledger recovery", () => {
     expect(mocks.finalize).not.toHaveBeenCalled();
     expect(mocks.runtime.writeJson).toHaveBeenCalledExactlyOnceWith({
       status: "warning",
+      coreUpdate: "pending",
       mode: "repair",
       restart: false,
       reconciledRuns: [run.runId],

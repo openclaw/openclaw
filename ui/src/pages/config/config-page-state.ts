@@ -934,7 +934,8 @@ export function createConfigPage(
       onNativeNotificationsRequestPermission: () =>
         context.nativeNotifications?.requestPermission(),
       onNativeNotificationsSendTest: () => context.nativeNotifications?.sendTest(),
-      webPush: webPush.read(),
+      // Downstream equality checks need a new value for the mutable owner snapshot.
+      webPush: { ...webPush.read() },
       onWebPushSubscribe: () => void context.webPush.run({ kind: "enable" }),
       onWebPushUnsubscribe: () => void context.webPush.run({ kind: "disable" }),
       onWebPushTest: () => void context.webPush.run({ kind: "test" }),
