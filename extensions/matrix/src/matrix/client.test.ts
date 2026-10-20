@@ -17,7 +17,8 @@ vi.mock("./credentials-read.js", () => ({
   credentialsMatchConfig: vi.fn(() => false),
 }));
 
-vi.mock("./credentials.js", () => ({
+vi.mock("./credentials.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./credentials.js")>()),
   saveBackfilledMatrixDeviceId: saveBackfilledMatrixDeviceIdMock,
   saveMatrixCredentials: saveMatrixCredentialsMock,
 }));

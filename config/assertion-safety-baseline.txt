@@ -219,7 +219,7 @@ extensions/discord/src/internal/interactions.ts	1
 extensions/discord/src/internal/modal-fields.ts	4
 extensions/discord/src/internal/rest-body.ts	5
 extensions/discord/src/internal/rest-errors.ts	1
-extensions/discord/src/internal/structures.ts	7
+extensions/discord/src/internal/structures.ts	6
 extensions/discord/src/internal/undefined-fields.ts	1
 extensions/discord/src/internal/voice.ts	1
 extensions/discord/src/markdown.ts	1
@@ -236,7 +236,6 @@ extensions/discord/src/monitor/message-text.ts	1
 extensions/discord/src/monitor/model-picker-preferences.ts	1
 extensions/discord/src/monitor/native-command-reply.ts	2
 extensions/discord/src/monitor/presence.ts	1
-extensions/discord/src/monitor/provider.allowlist.ts	1
 extensions/discord/src/monitor/provider.deploy-errors.ts	9
 extensions/discord/src/monitor/provider.deploy.ts	3
 extensions/discord/src/monitor/provider.lifecycle.ts	2

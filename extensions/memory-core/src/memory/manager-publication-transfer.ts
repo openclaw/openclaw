@@ -212,9 +212,7 @@ export function memoryPublicationInline(replacement: MemorySourceIndexReplacemen
       }
       head.push(batch.value);
     }
-    probe = {
-      ...(head.length < 2 ? { fragments: head[0] ?? [] } : { staged: { head, rest } }),
-    };
+    probe = head.length < 2 ? { fragments: head[0] ?? [] } : { staged: { head, rest } };
     publicationProbes.set(replacement.chunks, probe);
   }
   return probe.fragments
