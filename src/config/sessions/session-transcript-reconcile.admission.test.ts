@@ -16,7 +16,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
-import { persistSessionTranscriptTurn } from "./session-accessor.js";
+import * as fixtures from "./session-transcript-reconcile.fixtures.test-support.js";
 import {
   reconcileSessionTranscriptIndexes,
   startSessionTranscriptIndexReconcile,
@@ -56,15 +56,11 @@ async function fixture() {
   roots.push(root);
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
   setRuntimeConfigSnapshot({});
-  const options = { agentId: "main", env: { ...process.env, OPENCLAW_STATE_DIR: root } };
-  const scope = { ...options, sessionId: "cold", sessionKey: "agent:main:cold" };
-  await persistSessionTranscriptTurn(scope, {
-    messages: [{ eventId: "seed", message: { role: "user", content: "cold admission fixture" } }],
-    touchSessionEntry: false,
-  });
+  const { options, scope } = fixtures.reconcileScope(root, "cold");
+  await fixtures.seedTranscript(scope, "seed", "cold admission fixture");
   await waitForSessionTranscriptIndexReconcile(options);
   const database = openOpenClawAgentDatabase(options);
-  database.db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1").run();
+  fixtures.markRebuild(database.db);
   await closeOpenClawAgentDatabaseByPathAsync(database.path);
   return {
     root,
