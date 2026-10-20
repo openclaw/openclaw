@@ -138,7 +138,6 @@ function createPluginMetadataCache(): PluginCache["metadata"] {
       agentWorkspaceFingerprint: undefined,
       envFingerprint: undefined,
       defaultDiscoveryCompatible: false,
-      compatiblePolicyHashes: undefined,
       compatibleConfigFingerprints: undefined,
       revision: Symbol("plugin-metadata-snapshot"),
       configIdentities: new WeakSet(),
