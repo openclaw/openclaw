@@ -7,7 +7,6 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import type { ControlUiSessionFixture } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { captureSidebarUiProof } from "./sidebar-customization.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Agent-first sidebar geometry" });
 const imageAvatar =
@@ -95,13 +94,13 @@ suite.define(() => {
             methodResponses: {
               "agents.list": agentsList,
               "agent.identity.get": {
-                cases: agentsList.agents.map((agent) => ({
-                  match: { agentId: agent.id },
+                cases: agentsList.agents.map(({ id, name, identity }) => ({
+                  match: { agentId: id },
                   response: {
-                    agentId: agent.id,
-                    name: agent.name,
-                    emoji: agent.identity?.emoji,
-                    avatar: agent.identity?.avatarUrl ?? "",
+                    agentId: id,
+                    name,
+                    emoji: identity?.emoji,
+                    avatar: identity?.avatarUrl ?? "",
                   },
                 })),
               },
@@ -120,7 +119,9 @@ suite.define(() => {
 
           const sidebar = page.locator("openclaw-app-sidebar");
           const main = sidebar.locator('[data-agent-group="main"]');
-          const row = main.locator(".sidebar-agent-roster__row");
+          const roster = (part: string) => main.locator(`.sidebar-agent-roster__${part}`);
+          const row = roster("row");
+          const attention = roster('signals [data-session-attention="error"]');
           await main.waitFor({ state: "visible" });
           expect(await sidebar.locator(".sidebar-agent-roster__group").count()).toBe(3);
           expect(await sidebar.locator("[data-agent-collapse]").count()).toBe(0);
@@ -130,97 +131,68 @@ suite.define(() => {
           ).toBe(width + 52);
 
           await expect
-            .poll(() => main.locator(".sidebar-agent-roster__preview").textContent())
+            .poll(() => roster("preview").textContent())
             .toContain("I've set up the template");
           expect(
-            await main.locator(".sidebar-agent-roster__avatar .session-glyph--running").count(),
-          ).toBe(1);
+            await Promise.all([
+              roster("avatar .session-glyph--running").count(),
+              roster("signals .session-glyph__ring").count(),
+              attention.count(),
+            ]),
+          ).toEqual([1, 0, 1]);
+          const avatar = (agent: string) =>
+            sidebar.locator(`[data-agent-group="${agent}"] .sidebar-agent-roster__avatar`);
           expect(
-            await main.locator(".sidebar-agent-roster__signals .session-glyph__ring").count(),
-          ).toBe(0);
-          expect(
-            await main
-              .locator('.sidebar-agent-roster__signals [data-session-attention="error"]')
-              .count(),
-          ).toBe(1);
-          expect(
-            await sidebar
-              .locator('[data-agent-group="research"] .sidebar-agent-roster__avatar [data-avatar]')
-              .getAttribute("data-avatar"),
+            await avatar("research").locator("[data-avatar]").getAttribute("data-avatar"),
           ).toContain("🔬");
-          expect(
-            await sidebar
-              .locator('[data-agent-group="writing"] .sidebar-agent-roster__avatar img')
-              .getAttribute("src"),
-          ).toBe(imageAvatar);
+          expect(await avatar("writing").locator("img").getAttribute("src")).toBe(imageAvatar);
 
-          // Roster status sits inline at the row end, centered on the row, never on
-          // its own line beneath the preview.
-          const headerLocator = main.locator(".sidebar-agent-roster__header");
-          const attention = main.locator(
-            '.sidebar-agent-roster__signals [data-session-attention="error"]',
-          );
+          const headerLocator = roster("header");
+          const right = (box: { x: number; width: number }) => box.x + box.width;
+          const center = (box: { y: number; height: number }) => box.y + box.height / 2;
           await page.mouse.move(640, 880);
           const restingHeader = (await headerLocator.boundingBox())!;
           const restingIcon = (await attention.boundingBox())!;
-          const copy = (await main.locator(".sidebar-agent-roster__copy").boundingBox())!;
+          const copy = (await roster("copy").boundingBox())!;
           expect(restingHeader.height).toBe(44);
-          expect(
-            Math.abs(
-              restingIcon.y + restingIcon.height / 2 - (restingHeader.y + restingHeader.height / 2),
-            ),
-          ).toBeLessThanOrEqual(1);
-          expect(restingIcon.x).toBeGreaterThanOrEqual(copy.x + copy.width);
-          expect(restingIcon.x + restingIcon.width).toBeLessThanOrEqual(
-            restingHeader.x + restingHeader.width,
-          );
-          await captureSidebarUiProof(
-            suite,
-            page,
-            `attention-inline-${mode}-${width}-${touch}.png`,
-          );
+          expect(Math.abs(center(restingIcon) - center(restingHeader))).toBeLessThanOrEqual(1);
+          expect(restingIcon.x).toBeGreaterThanOrEqual(right(copy));
+          expect(right(restingIcon)).toBeLessThanOrEqual(right(restingHeader));
 
           if (!touch) {
-            // Sidebar attention tooltips open inline to the right of the icon.
             await attention.hover();
             const tooltip = main.locator(".tooltip-surface[popover]:popover-open");
             await expect
               .poll(() => tooltip.textContent())
               .toContain("caller authority is no longer active");
-            await captureSidebarUiProof(suite, page, `attention-tooltip-${mode}-${width}.png`);
             const icon = (await attention.boundingBox())!;
             const surface = (await tooltip.boundingBox())!;
-            expect(surface.x).toBeGreaterThanOrEqual(icon.x + icon.width);
-            expect(surface.y).toBeLessThan(icon.y + icon.height / 2);
-            expect(surface.y + surface.height).toBeGreaterThan(icon.y + icon.height / 2);
+            expect(surface.x).toBeGreaterThanOrEqual(right(icon));
+            expect(surface.y).toBeLessThan(center(icon));
+            expect(surface.y + surface.height).toBeGreaterThan(center(icon));
             await page.mouse.move(640, 880);
             await tooltip.waitFor({ state: "hidden" });
           }
 
-          // Rows without status reserve the revealed actions inside the link; rows
-          // with status step the status left of the actions instead.
           const plainRow = sidebar.locator(
             '[data-agent-group="research"] .sidebar-agent-roster__row',
           );
-          expect(await plainRow.evaluate((el) => getComputedStyle(el).paddingRight)).toBe(
-            touch ? "32px" : "0px",
-          );
-          expect(await row.evaluate((el) => getComputedStyle(el).paddingRight)).toBe("0px");
+          const expectPadding = async (target: typeof row, value: string) =>
+            expect(await target.evaluate((el) => getComputedStyle(el).paddingRight)).toBe(value);
+          await expectPadding(plainRow, touch ? "32px" : "0px");
+          await expectPadding(row, "0px");
           if (!touch) {
             await plainRow.hover();
-            expect(await plainRow.evaluate((el) => getComputedStyle(el).paddingRight)).toBe("32px");
+            await expectPadding(plainRow, "32px");
             await headerLocator.hover();
-            expect(await row.evaluate((el) => getComputedStyle(el).paddingRight)).toBe("0px");
+            await expectPadding(row, "0px");
           }
           const header = (await headerLocator.boundingBox())!;
-          const actions = (await main.locator(".sidebar-agent-roster__actions").boundingBox())!;
+          const actions = (await roster("actions").boundingBox())!;
           const icon = (await attention.boundingBox())!;
-          expect(actions.x + actions.width).toBeLessThanOrEqual(header.x + header.width);
-          expect(icon.x + icon.width).toBeLessThanOrEqual(actions.x);
-          expect(
-            Math.abs(icon.y + icon.height / 2 - (header.y + header.height / 2)),
-          ).toBeLessThanOrEqual(1);
-          await captureSidebarUiProof(suite, page, `agent-only-${mode}-${width}-${touch}.png`);
+          expect(right(actions)).toBeLessThanOrEqual(right(header));
+          expect(right(icon)).toBeLessThanOrEqual(actions.x);
+          expect(Math.abs(center(icon) - center(header))).toBeLessThanOrEqual(1);
         },
       );
     },
