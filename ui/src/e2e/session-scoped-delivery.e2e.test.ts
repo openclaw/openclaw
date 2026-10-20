@@ -11,7 +11,6 @@ import {
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { seedStorage } from "./sidebar-assertions.test-support.ts";
-import { closeSidebarMenu, openSidebarMenu } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI scoped stream delivery",
@@ -100,14 +99,11 @@ suite.define(() => {
           .locator(".chat-thread-inner")
           .getByText("Visible chat stays live", { exact: true })
           .waitFor();
-        if (mode === "preview-off") {
-          const row = page.locator(`[data-session-key="${keys[1]}"]`);
-          expect(await row.locator(".sidebar-recent-session__subtitle").count()).toBe(0);
-          await page.locator(".sidebar-session-toolbar .sidebar-session-sort").click();
-          await openSidebarMenu(page);
-          await page.getByRole("switch", { name: "Show message preview", exact: true }).click();
-          await closeSidebarMenu(page);
-          await row.getByText("Waiting for the next instruction", { exact: true }).waitFor();
+        if (mode === "preview-on") {
+          await page
+            .locator(`[data-session-key="${keys[1]}"]`)
+            .getByText("Waiting for the next instruction", { exact: true })
+            .waitFor();
         }
       });
     },

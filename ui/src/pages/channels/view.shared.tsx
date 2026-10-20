@@ -161,7 +161,7 @@ export function ChannelAccount(params: {
   lastInboundAt?: number | null;
   lastError?: string | null;
 }) {
-  const factLine = createMemo(() => [params.accountId, ...(params.facts ?? [])].join(" · "));
+  const factLine = () => [params.accountId, ...(params.facts ?? [])].join(" · ");
   return (
     <div class="settings-row">
       <div class="settings-row__text">

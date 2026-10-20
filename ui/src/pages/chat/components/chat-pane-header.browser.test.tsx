@@ -74,21 +74,31 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
         actions.getBoundingClientRect().left,
       );
       expect(header.scrollWidth).toBeLessThanOrEqual(header.clientWidth);
-      // Idle pill is only avatar and name; settings is hover-only, outside the
-      // pill, and has no title tooltip.
+      // Idle pill is only avatar and name; settings is collapsed inside it and
+      // has no title tooltip.
+      const pill = container.querySelector<HTMLElement>(".chat-pane__agent-identity")!;
       expect(trigger.querySelector(":scope > svg")).toBeNull();
       expect(settings.hasAttribute("title")).toBe(false);
       expect(getComputedStyle(settings).opacity).toBe("0");
+      expect(settings.getBoundingClientRect().width).toBe(0);
+      const idlePill = pill.getBoundingClientRect();
+      const idleTriggerLeft = trigger.getBoundingClientRect().left;
       const idleBackground = getComputedStyle(settings).backgroundColor;
       await userEvent.hover(trigger);
+      // Hover widens the pill rightward to hold settings; the avatar stays put.
+      const hoverPill = pill.getBoundingClientRect();
+      const hoverSettings = settings.getBoundingClientRect();
       expect(getComputedStyle(settings).opacity).toBe("1");
       expect(getComputedStyle(settings).backgroundColor).toBe(idleBackground);
-      expect(settings.getBoundingClientRect().left).toBeGreaterThanOrEqual(
+      expect(hoverPill.width).toBeGreaterThan(idlePill.width + 10);
+      expect(hoverPill.left).toBeCloseTo(idlePill.left, 0);
+      expect(trigger.getBoundingClientRect().left).toBeCloseTo(idleTriggerLeft, 0);
+      expect(hoverSettings.width).toBe(28);
+      expect(hoverSettings.left).toBeGreaterThanOrEqual(
         trigger.getBoundingClientRect().right - 0.5,
       );
-      expect(settings.getBoundingClientRect().right).toBeLessThanOrEqual(
-        actions.getBoundingClientRect().left,
-      );
+      expect(hoverSettings.right).toBeLessThanOrEqual(hoverPill.right);
+      expect(hoverPill.right).toBeLessThanOrEqual(actions.getBoundingClientRect().left);
       trigger.focus();
       await userEvent.keyboard("{Enter}");
       const context = container.querySelector<HTMLElement>(".chat-pane__agent-context")!;
@@ -117,7 +127,7 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
       header.style[side] = value;
       const headerRect = header.getBoundingClientRect();
       const trigger = container
-        .querySelector<HTMLElement>(".chat-pane__agent-identity > button")!
+        .querySelector<HTMLElement>(".chat-pane__agent-identity")!
         .getBoundingClientRect();
       const actions = container
         .querySelector<HTMLElement>(".chat-pane__header-trailing")!

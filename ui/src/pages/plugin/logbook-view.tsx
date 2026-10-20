@@ -5,13 +5,16 @@ import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import { i18n } from "../../i18n/index.ts";
+import { registerLogbookEnglish } from "../../i18n/locales/en-logbook.ts";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatTimeMs } from "../../lib/format.ts";
-import { projectI18n, t } from "../../lib/reactive/i18n.ts";
+import { projectI18n, registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import "../../styles/logbook.css";
 import { createLogbook, localDayKey, shiftDay, type LogbookModel } from "./logbook-state.ts";
 import type { LogbookCardPayload, LogbookStatusPayload, LogbookUiState } from "./logbook-types.ts";
+
+registerEnglishCatalog(registerLogbookEnglish);
 
 export type LogbookProps = {
   initialClient: GatewayBrowserClient | null;
