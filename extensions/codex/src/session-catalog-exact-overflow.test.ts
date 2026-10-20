@@ -1,5 +1,5 @@
 import { performance } from "node:perf_hooks";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { CodexThread } from "./app-server/protocol.js";
 import { memoryCatalogState } from "./session-catalog-index.test-support.js";
 import { lookupNodeCodexCatalogRecord } from "./session-catalog-node-lookup.js";
@@ -34,8 +34,7 @@ async function remoteFixture(count: number) {
       return { thread: target };
     }
     if (method === "thread/list") {
-      expect(requestParams.archived).toBe(false);
-      expect(requestParams.cwd).toBe(target.cwd);
+      expect(requestParams).toMatchObject({ archived: false, cwd: target.cwd });
       const offset = Number(requestParams.cursor ?? 0);
       const data = activeRows.slice(offset, offset + Number(requestParams.limit));
       const next = offset + data.length;
@@ -49,93 +48,79 @@ async function remoteFixture(count: number) {
     control,
     target,
     stored,
-    clearActiveRows: () => {
-      activeRows = [];
-    },
-    restoreActiveRows: () => {
-      activeRows = [target];
+    setActiveRows: (rows: CodexThread[]) => {
+      activeRows = rows;
     },
   };
 }
 
-describe("exact Codex lookup beyond resident retention", () => {
-  it("opens an evicted remote thread after hydrating more than 20,000 rows", async () => {
-    const f = await remoteFixture(20_001);
+it.each(["evicted", "not-member", "archived"])(
+  "checks fresh remote membership for %s rows",
+  async (kind) => {
+    const f = await remoteFixture(kind === "evicted" ? 20_001 : 1);
     const rows = [...f.stored.values()].flatMap((entry) =>
       entry.kind === "row" ? [entry.row] : [],
     );
-    expect(rows).toHaveLength(20_000);
-    expect(rows.some((row) => row.threadId === f.target.id)).toBe(false);
+    if (kind === "evicted") {
+      expect(rows).toHaveLength(20_000);
+      expect(rows.some((row) => row.threadId === f.target.id)).toBe(false);
+    } else if (kind === "not-member") {
+      expect(rows.some((row) => row.threadId === f.target.id)).toBe(true);
+      f.setActiveRows([]);
+    } else {
+      await f.control.archiveThread(f.target.id);
+      f.setActiveRows([f.target]);
+    }
+    const result = expect(f.control.requireEligibleThread(f.target.id));
+    if (kind === "not-member") {
+      await result.rejects.toThrow("eligibility could not be verified");
+    } else {
+      await result.resolves.toMatchObject({ id: f.target.id });
+    }
+    if (kind === "evicted") {
+      expect(pinnedConnectionMocks.request.mock.calls.map(([request]) => request.method)).toEqual(
+        expect.arrayContaining(["thread/read", "thread/list"]),
+      );
+    }
+  },
+);
 
-    await expect(f.control.requireEligibleThread(f.target.id)).resolves.toMatchObject({
-      id: f.target.id,
-    });
+it("finds a paired-node thread after more than 100 catalog pages", async () => {
+  const record = {
+    threadId: "older-node-thread",
+    status: "notLoaded",
+    source: "cli",
+    archived: false,
+  };
+  let page = 0;
+  const invoke = vi.fn(async () => ({
+    payloadJSON: JSON.stringify({
+      sessions: ++page === 125 ? [record] : [],
+      ...(page < 125 ? { nextCursor: `page-${page}` } : {}),
+    }),
+  }));
+  const { runtime } = createRuntime({ invoke });
+  await expect(
+    lookupNodeCodexCatalogRecord({
+      agentId: "main",
+      runtime,
+      nodeId: "node",
+      threadId: record.threadId,
+    }),
+  ).resolves.toEqual({ kind: "found", record });
+  expect(invoke).toHaveBeenCalledTimes(125);
+});
 
-    expect(pinnedConnectionMocks.request.mock.calls.map(([request]) => request.method)).toEqual(
-      expect.arrayContaining(["thread/read", "thread/list"]),
-    );
+it("keeps one node lookup deadline across advancing pages", async () => {
+  let elapsed = 0;
+  vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+  const invoke = vi.fn(async () => {
+    elapsed += NODE_INVOKE_TIMEOUT_MS / 2 + 1;
+    return { payloadJSON: JSON.stringify({ sessions: [], nextCursor: String(elapsed) }) };
   });
-
-  it("requires fresh non-archived membership even when a cached thread/read succeeds", async () => {
-    const f = await remoteFixture(1);
-    expect(
-      [...f.stored.values()].some(
-        (entry) => entry.kind === "row" && entry.row.threadId === f.target.id,
-      ),
-    ).toBe(true);
-    f.clearActiveRows();
-    await expect(f.control.requireEligibleThread(f.target.id)).rejects.toThrow(
-      "eligibility could not be verified",
-    );
-  });
-
-  it("uses fresh native membership after a remote resident row was archived", async () => {
-    const f = await remoteFixture(1);
-    await f.control.archiveThread(f.target.id);
-    f.restoreActiveRows();
-    await expect(f.control.requireEligibleThread(f.target.id)).resolves.toMatchObject({
-      id: f.target.id,
-    });
-  });
-
-  it("finds a paired-node thread after more than 100 catalog pages", async () => {
-    const record = {
-      threadId: "older-node-thread",
-      status: "notLoaded",
-      source: "cli",
-      archived: false,
-    };
-    let page = 0;
-    const invoke = vi.fn(async () => ({
-      payloadJSON: JSON.stringify({
-        sessions: ++page === 125 ? [record] : [],
-        ...(page < 125 ? { nextCursor: `page-${page}` } : {}),
-      }),
-    }));
-    const { runtime } = createRuntime({ invoke });
-
-    await expect(
-      lookupNodeCodexCatalogRecord({
-        agentId: "main",
-        runtime,
-        nodeId: "node",
-        threadId: record.threadId,
-      }),
-    ).resolves.toEqual({ kind: "found", record });
-    expect(invoke).toHaveBeenCalledTimes(125);
-  });
-
-  it("keeps one node lookup deadline across advancing pages", async () => {
-    let elapsed = 0;
-    vi.spyOn(performance, "now").mockImplementation(() => elapsed);
-    const invoke = vi.fn(async () => {
-      elapsed += NODE_INVOKE_TIMEOUT_MS / 2 + 1;
-      return { payloadJSON: JSON.stringify({ sessions: [], nextCursor: String(elapsed) }) };
-    });
-    const { runtime } = createRuntime({ invoke });
-    await expect(
-      lookupNodeCodexCatalogRecord({ agentId: "main", runtime, nodeId: "node", threadId: "older" }),
-    ).rejects.toThrow("eligibility could not be verified");
-    expect(invoke).toHaveBeenCalledTimes(2);
-  });
+  const { runtime } = createRuntime({ invoke });
+  await expect(
+    lookupNodeCodexCatalogRecord({ agentId: "main", runtime, nodeId: "node", threadId: "older" }),
+  ).rejects.toThrow("eligibility could not be verified");
+  expect(invoke).toHaveBeenCalledTimes(2);
 });

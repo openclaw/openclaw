@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
@@ -30,21 +31,18 @@ it.each([false, true])(
   "excludes helper-owned ephemeral completions across SQLite restart (existing row: %s)",
   async (existing) => {
     const agentDir = tempDirs.make("codex-catalog-ephemeral-");
-    const home = path.join(agentDir, "codex-home");
     const pluginConfig = {};
     const { start } = resolveCodexAppServerRuntimeOptions({ pluginConfig });
     const homeId = await codexCatalogResidentHomeKey({ startOptions: start, agentDir });
-    const started = threadStartResult("gpt-5.4");
-    const thread: CodexThread = {
-      ...started.thread,
+    const native = threadStartResult("gpt-5.4");
+    Object.assign(native.thread, {
       status: { type: "idle" },
       path: null,
       recencyAt: 100,
       preview: "Name this conversation.",
       source: "cli",
       originator: "codex_cli_rs",
-    };
-    const native = { ...started, thread };
+    } satisfies Partial<CodexThread>);
     const openState = () =>
       createPluginStateKeyedStoreForTests<StoredCodexCatalogEntry>("codex", {
         namespace: `ephemeral-${existing}`,
@@ -54,7 +52,7 @@ it.each([false, true])(
     const createIndex = () =>
       new CodexCatalogIndex({
         homeId,
-        localSessionsRoot: path.join(home, "sessions"),
+        localSessionsRoot: path.join(agentDir, "codex-home", "sessions"),
         state: openState(),
         readNative,
         assertCurrent: () => {},
@@ -62,11 +60,8 @@ it.each([false, true])(
     const index = createIndex();
     const harness = createClientHarness({
       onWrite: (line, send) => {
-        const request = JSON.parse(line) as {
-          id: number;
-          method: string;
-          params: { ephemeral?: boolean };
-        };
+        const request: { id: number; method: string; params: { ephemeral?: boolean } } =
+          JSON.parse(line);
         const responses: Record<string, unknown> = {
           "model/list": { data: [codexModel()], nextCursor: null },
           "thread/start": native,
@@ -76,7 +71,6 @@ it.each([false, true])(
         expect(request.method in responses).toBe(true);
         if (request.method === "thread/start") {
           expect(request.params.ephemeral).toBe(true);
-          // Existing rows exercise completion refresh, independent of the start payload.
           if (!existing) {
             send({ method: "thread/started", params: { thread: native.thread } });
           }
@@ -94,9 +88,7 @@ it.each([false, true])(
     });
     vi.spyOn(sharedClient, "createIsolatedCodexAppServerClient").mockImplementation(
       async (options) => {
-        if (!options?.startOptions) {
-          throw new Error("Expected bounded-turn start options");
-        }
+        assert(options?.startOptions, "Expected bounded-turn start options");
         await observeCodexCatalogClient(harness.client, {
           startOptions: options.startOptions,
           agentDir: options.agentDir,

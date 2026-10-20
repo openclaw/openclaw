@@ -1,7 +1,7 @@
 import type { SessionCatalogProvider } from "openclaw/plugin-sdk/session-catalog";
 import { vi } from "vitest";
 import { runCatalogListInline } from "./session-catalog-list-operation.js";
-import { catalogFactory } from "./session-catalog-resident.test-support.js";
+import { catalogFactory, catalogProvider } from "./session-catalog-resident.test-support.js";
 import type {
   CodexSessionCatalogPage,
   CodexSessionCatalogPageParams,
@@ -11,9 +11,7 @@ import {
   config,
   createCodexTestBindingStore,
   createControl,
-  createGatewayApi,
   createRuntime,
-  registerCodexSessionCatalog,
 } from "./session-catalog.test-helpers.js";
 
 export function page(ids: string[], nextCursor?: string): CodexSessionCatalogPage {
@@ -63,11 +61,8 @@ export async function fixture(homeCount = 1) {
   const bindingStore = Object.assign(createCodexTestBindingStore(), {
     managedThreads: { has: vi.fn(async () => false), mark: vi.fn(async () => true), snapshot },
   });
-  const { api, getProvider } = createGatewayApi(runtime, config);
-  registerCodexSessionCatalog({
-    api,
-    bindingStore,
-    control: {
+  const provider = catalogProvider(
+    {
       ...base,
       homesForAgent: async () => homes,
       forRequest: (_agentId, source) =>
@@ -75,13 +70,13 @@ export async function fixture(homeCount = 1) {
           listPage: (params) => listPage(source!.sourceHomeId, params),
         }),
     },
-    getRuntimeConfig: () => config,
-  });
+    runtime,
+    bindingStore,
+  );
   const controller = new AbortController();
   const onHost = vi.fn();
   const publications: Promise<void>[] = [];
   const start = (params: Partial<Parameters<SessionCatalogProvider["list"]>[0]> = {}) => {
-    const provider = getProvider()!;
     if (!provider.createListOperation) {
       throw new Error("Codex list operation is unavailable");
     }
