@@ -20,10 +20,14 @@ afterEach(() => {
   resetDiagnosticEventsForTest();
 });
 
-async function publicationFixture() {
+const baseRow: GatewaySessionRow = { key: "agent:main:one", kind: "direct", updatedAt: 1 };
+
+async function publicationFixture(controlState = false) {
   const projection = await createSessionRowProjection({ cfg: {}, modelCatalog: [] });
   let state = projection.state;
-  let stateMocked = false;
+  if (controlState) {
+    vi.spyOn(projection, "state", "get").mockImplementation(() => state);
+  }
   const causes: string[] = [];
   let retainedBytes = 0;
   const unsubscribe = onInternalDiagnosticEvent((event) => {
@@ -38,18 +42,10 @@ async function publicationFixture() {
     projection,
     present: () => prepareSessionRowPublication(projection, 1)(),
     invalidate(cause: "projection-revision" | "config" | "identity") {
-      if (!stateMocked) {
-        vi.spyOn(projection, "state", "get").mockImplementation(() => state);
-        stateMocked = true;
-      }
       if (cause === "identity") {
         state.rowContext.identityProjection?.invalidate();
       } else {
-        state = {
-          ...state,
-          revision: {},
-          ...(cause === "config" ? { cfg: { ...state.cfg } } : {}),
-        };
+        state = { ...state, revision: {}, cfg: cause === "config" ? { ...state.cfg } : state.cfg };
       }
     },
     async flush() {
@@ -75,9 +71,7 @@ it("accounts for conditional encodings after legacy reads and releases shared ro
     const publication = prepareSessionRowPublicationView(projection)();
     const opts = { rowMode: "compact" } as const;
     const row: GatewaySessionRow = {
-      key: "agent:main:one",
-      kind: "direct",
-      updatedAt: 1,
+      ...baseRow,
       rowMode: "compact",
       label: "synthetic ".repeat(256),
     };
@@ -108,14 +102,9 @@ it("accounts for conditional encodings after legacy reads and releases shared ro
 
 it("counts each retirement event once across invalidations and bounded evictions", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    using fixture = await publicationFixture();
+    using fixture = await publicationFixture(true);
     const { projection, present, invalidate, expectCauses } = fixture;
-    const row: GatewaySessionRow = {
-      key: "agent:main:one",
-      kind: "direct",
-      updatedAt: 1,
-      rowMode: "sidebar",
-    };
+    const row: GatewaySessionRow = { ...baseRow, rowMode: "sidebar" };
     const opts = { rowMode: "sidebar" } as const;
     invalidate("projection-revision");
     present();
@@ -162,7 +151,7 @@ it("counts each retirement event once across invalidations and bounded evictions
 
 it("does not count selection-only or non-sidebar views as retired baselines", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    using fixture = await publicationFixture();
+    using fixture = await publicationFixture(true);
     const { projection, present, invalidate, expectCauses } = fixture;
     const populate = () => {
       present().select({ rowMode: "sidebar" }, () => ({
@@ -175,9 +164,7 @@ it("does not count selection-only or non-sidebar views as retired baselines", as
         hasMore: false,
       }));
       for (const rowMode of [undefined, "compact", "dashboard"] as const) {
-        present().list([{ key: "agent:main:one", kind: "direct", updatedAt: 1, rowMode }], {
-          rowMode,
-        });
+        present().list([{ ...baseRow, rowMode }], { rowMode });
       }
     };
     for (const cause of ["projection-revision", "config", "identity"] as const) {
