@@ -2,9 +2,9 @@ import { once } from "node:events";
 import { createServer } from "node:http";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, expect, it, vi } from "vitest";
+import openrouterPlugin from "../../extensions/openrouter/index.js";
 import type { OpenClawConfig } from "../../src/config/config.js";
 import { loadProviderUsageSummary } from "../../src/infra/provider-usage.load.js";
-import openrouterPlugin from "./index.js";
 
 const resolveProviderUsageSnapshotWithPluginMock = vi.hoisted(() => vi.fn());
 
