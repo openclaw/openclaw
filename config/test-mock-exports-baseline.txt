@@ -321,7 +321,6 @@
 ["extensions/codex/src/app-server/turn-router.mcp-app.test.ts","openclaw/plugin-sdk/extension-shared","323bb2752602831ad2c6dff91f7b63741eead81a1e825da49ddb743873fd6ca1",1]
 ["extensions/codex/src/app-server/upstream-fork-boundary.test.ts","openclaw/plugin-sdk/session-transcript-runtime","55dd4b99874ab35292c5c9eb12355df2bc41ff558d9154bb5687631014f8b1e0",1]
 ["extensions/codex/src/conversation-binding.test.ts","openclaw/plugin-sdk/agent-runtime","19d4dcd3223afa37f91eef52de71eb8671c1dbf49ba78b545db3b0320126753b",1]
-["extensions/codex/src/migration/provider.test-support.ts","../app-server/client.js","b0a0fae0e37476919bbc466fde3e6969d7173aa5d21bf27a93ea016e3b88b8a5",1]
 ["extensions/codex/src/migration/provider.test-support.ts","../app-server/request.js","ffb7bac3c9662aae23bdb0ec89cda259f2e370ff1a00651e057ca145b70691e7",1]
 ["extensions/codex/src/native-thread-tool-selection.test.ts","./app-server/shared-client.js","ed8c362d32e1bfa6ffbd53db6e760cf6fdb981eb89d5003fcb2ad71bb413acd9",1]
 ["extensions/codex/src/node-exec-server.workspace.test.ts","./node-exec-server.runtime.js","60cd69f07facf9712fbd0e1b45bbd3ec2d6a6aa56acf8aa2c9e9e9582c57e779",1]

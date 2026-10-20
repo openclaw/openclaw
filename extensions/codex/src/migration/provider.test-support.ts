@@ -41,6 +41,7 @@ vi.mock("../app-server/managed-binary.js", async (importOriginal) => ({
   resolveManagedCodexNativeCommand: () => "/fixture/codex",
 }));
 
+// mock-isolation: the native app-server client owns a stdio child process and per-instance notification state.
 vi.mock("../app-server/client.js", () => ({
   CodexAppServerClient: {
     async start(options: { env: { CODEX_HOME: string } }) {
