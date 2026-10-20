@@ -11,6 +11,8 @@ import {
 } from "./doctor-sandbox.js";
 
 const fixture = vi.hoisted(() => ({ root: "" }));
+const at = (name: string) => path.join(fixture.root, name);
+const read = (file: string) => fs.readFileSync(file, "utf8");
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
 vi.mock("../agents/sandbox/docker.js", () => ({}));
 vi.mock("../agents/sandbox/constants.js", () => ({
@@ -43,13 +45,17 @@ it.each([
   { name: "browsers.json", sharded: false, bytes: "{malformed original bytes\n" },
   { name: "containers", sharded: true, bytes: '{"containerName":"retained-container"}' },
   { name: "browsers", sharded: true, bytes: '{"containerName":"retained-browser"}' },
-])("reports then archives $name byte-for-byte", async ({ name, sharded, bytes }) => {
-  const source = path.join(fixture.root, name);
+  { name: "containers", sharded: true, bytes: "original bytes", occupied: true },
+])("archives $name byte-for-byte ($occupied)", async ({ name, sharded, bytes, occupied }) => {
+  const source = at(name);
   if (sharded) {
     fs.mkdirSync(source);
   }
   const contentPath = sharded ? path.join(source, "entry.json") : source;
   fs.writeFileSync(contentPath, bytes);
+  if (occupied) {
+    fs.symlinkSync(at("missing-archive"), `${source}.migrated`);
+  }
 
   await repair(false);
   expect(note).toHaveBeenCalledWith(expect.stringContaining("doctor --fix"), "Sandbox");
@@ -65,31 +71,20 @@ it.each([
   });
 
   await repair();
-  const archive = sharded ? `${source}.migrated/entry.json.migrated` : `${source}.migrated`;
+  const destination = `${source}.migrated${occupied ? ".2" : ""}`;
+  const archive = sharded ? `${destination}/entry.json.migrated` : destination;
   expect(fs.existsSync(source)).toBe(false);
-  expect(fs.readFileSync(archive, "utf8")).toBe(bytes);
+  expect(read(archive)).toBe(bytes);
   expect(await detectLegacySandboxRegistryFileIssues()).toEqual([]);
-  expectArchiveNote(".migrated");
-});
-
-it("preserves occupied archive paths and reports the final sharded archive location", async () => {
-  const source = path.join(fixture.root, "containers");
-  fs.mkdirSync(source);
-  fs.writeFileSync(path.join(source, "entry.json"), "original bytes");
-  fs.symlinkSync(path.join(fixture.root, "missing-archive"), `${source}.migrated`);
-
-  await repair();
-
-  expect(fs.readlinkSync(`${source}.migrated`)).toBe(path.join(fixture.root, "missing-archive"));
-  expect(fs.readFileSync(`${source}.migrated.2/entry.json.migrated`, "utf8")).toBe(
-    "original bytes",
-  );
-  expectArchiveNote(`${source}.migrated.2/entry.json.migrated`);
+  expectArchiveNote(archive);
+  if (occupied) {
+    expect(fs.readlinkSync(`${source}.migrated`)).toBe(at("missing-archive"));
+  }
 });
 
 it("preserves broken source links when a byte-for-byte backup is impossible", async () => {
-  const source = path.join(fixture.root, "containers.json");
-  const target = path.join(fixture.root, "missing-original.json");
+  const source = at("containers.json");
+  const target = at("missing-original.json");
   fs.symlinkSync(target, source);
 
   await expect(repair()).rejects.toThrow(/symlink|symbolic|regular|link|ENOENT/i);
@@ -97,15 +92,15 @@ it("preserves broken source links when a byte-for-byte backup is impossible", as
 });
 
 it("refuses an uninspectable source path instead of treating it as absent", async () => {
-  fixture.root = path.join(fixture.root, "not-a-directory");
+  fixture.root = at("not-a-directory");
   fs.writeFileSync(fixture.root, "retained bytes");
 
   await expect(repair()).rejects.toThrow(/Cannot inspect potentially retired state/);
-  expect(fs.readFileSync(fixture.root, "utf8")).toBe("retained bytes");
+  expect(read(fixture.root)).toBe("retained bytes");
 });
 
 it("leaves current installations alone when retired registry paths are absent", async () => {
-  fs.writeFileSync(path.join(fixture.root, "current-state"), "current installation");
+  fs.writeFileSync(at("current-state"), "current installation");
   expect(await detectLegacySandboxRegistryFileIssues()).toEqual([]);
   await repair();
   expect(note).not.toHaveBeenCalled();

@@ -12,6 +12,13 @@ import { seedDeferredPluginSessionSource } from "./doctor-session-sqlite.deferre
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 import { noteSessionTranscriptHealth } from "./doctor-session-transcripts.js";
 
+const message = (id: string, content: string, parentId: string | null = null) => ({
+  type: "message",
+  id,
+  parentId,
+  message: { role: "user", content },
+});
+
 it.each(["import", "recover"] as const)(
   "%s settles a missing retained primary only when its recorded bytes match canonical history",
   async (mode) => {
@@ -25,12 +32,13 @@ it.each(["import", "recover"] as const)(
       const transcript = path.join(path.dirname(storePath), "legacy-kept.jsonl");
       const rows = [
         { type: "session", version: 3, id: "legacy-kept", timestamp: "", cwd: "" },
-        ...Array.from({ length: 10 }, (_, index) => ({
-          type: "message",
-          id: `message-${index}`,
-          parentId: index ? `message-${index - 1}` : null,
-          message: { role: "user", content: `Synthetic message ${index}` },
-        })),
+        ...Array.from({ length: 10 }, (_, index) =>
+          message(
+            `message-${index}`,
+            `Synthetic message ${index}`,
+            index ? `message-${index - 1}` : null,
+          ),
+        ),
       ];
       fs.writeFileSync(transcript, rows.map((row) => JSON.stringify(row)).join("\n") + "\n");
       const target = (await run("import")).targets[0]!;
@@ -59,15 +67,7 @@ it.each(["import", "recover"] as const)(
       expect(() => readDeferredPluginSessionImport(receiptParams)).toThrow(
         "Retained session migration source changed",
       );
-      const extended = [
-        ...canonical,
-        {
-          type: "message",
-          id: "later",
-          parentId: "message-9",
-          message: { role: "user", content: "Newer canonical history" },
-        },
-      ];
+      const extended = [...canonical, message("later", "Newer canonical history", "message-9")];
       await replaceTranscriptEvents(transcriptScope, extended);
 
       const recovered = await run(mode);
@@ -85,23 +85,22 @@ it.each(["import", "recover"] as const)(
       expect(readTranscript()).toEqual(extended);
 
       if (mode === "import") {
-        const pluginRoot = state.path("fixture-plugin");
+        const pluginRoot = state.statePath("fixture-plugin");
         const marker = state.statePath("post-session-completed");
-        fs.mkdirSync(pluginRoot);
-        writeJson(path.join(pluginRoot, "package.json"), {
+        await state.writeJson("fixture-plugin/package.json", {
           name: "@example/fixture-plugin",
           version: "1.0.0",
           openclaw: { extensions: ["./index.cjs"] },
         });
-        fs.writeFileSync(path.join(pluginRoot, "index.cjs"), "module.exports = {};\n");
+        await state.writeText("fixture-plugin/index.cjs", "module.exports = {};\n");
         const action = { id: "session-state", phase: "after-session-repair", doctorOnly: true };
-        writeJson(path.join(pluginRoot, "openclaw.plugin.json"), {
+        await state.writeJson("fixture-plugin/openclaw.plugin.json", {
           id: "fixture-plugin",
           configSchema: {},
           doctorContract: { stateMigrations: [action] },
         });
-        fs.writeFileSync(
-          path.join(pluginRoot, "doctor-contract-api.cjs"),
+        await state.writeText(
+          "fixture-plugin/doctor-contract-api.cjs",
           `
 const fs = require("node:fs");
 module.exports = { stateMigrations: [{
@@ -119,9 +118,7 @@ module.exports = { stateMigrations: [{
           entries: { "fixture-plugin": { enabled: true } },
         };
         await state.writeConfig(cfg);
-        const legacyAgentDir = state.statePath("agent");
-        fs.mkdirSync(legacyAgentDir);
-        fs.writeFileSync(path.join(legacyAgentDir, "settings.json"), "{}");
+        await state.writeJson("agent/settings.json", {});
         const migration = await autoMigrateLegacyState({
           cfg,
           env: state.env,
@@ -142,12 +139,10 @@ module.exports = { stateMigrations: [{
           postSessionPluginMigration: migration.postSessionPluginMigration,
           onStepReceipt: (step) => postSessionReceipts.push(step),
         });
-        expect(postSessionReceipts).toContainEqual(
-          expect.objectContaining({
-            id: "plugin-doctor-post-session-state",
-            outcome: "completed",
-          }),
-        );
+        expect(postSessionReceipts.map(({ id, outcome }) => [id, outcome])).toContainEqual([
+          "plugin-doctor-post-session-state",
+          "completed",
+        ]);
         expect(fs.readFileSync(marker, "utf8")).toBe("completed");
         expect(readDeferredPluginMigrations({ env: state.env })).toEqual([]);
       }

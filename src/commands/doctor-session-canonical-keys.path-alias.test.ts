@@ -15,6 +15,10 @@ import {
   repairCanonicalSessionKeys,
 } from "./doctor-session-canonical-keys.test-support.js";
 
+function expectHistory(events: unknown, id: string, content: string) {
+  expect(events).toEqual([expect.objectContaining({ id, message: { role: "user", content } })]);
+}
+
 it.each([false, true])(
   "preserves history through case-variant agent paths (foreign winner: %s)",
   async (foreignWinner) => {
@@ -30,39 +34,31 @@ it.each([false, true])(
       if (!fs.existsSync(lowerDirectory)) {
         fs.symlinkSync(upperDirectory, lowerDirectory, "junction");
       }
-      const scope = {
-        agentId: "ba-ea",
+      const scopeFor = (directory: string, agentId = "ba-ea") => ({
+        agentId,
         env: state.env,
-        storePath: agentPath("BA-EA", "sessions", "sessions.json"),
-      };
-      const canonicalScope = {
-        ...scope,
-        storePath: agentPath("ba-ea", "sessions", "sessions.json"),
-      };
+        storePath: agentPath(directory, "sessions", "sessions.json"),
+      });
+      const scope = scopeFor("BA-EA");
+      const canonicalScope = scopeFor("ba-ea");
       const cfg: OpenClawConfig = {
         agents: { entries: { "ba-ea": {}, ...(foreignWinner ? { main: {} } : {}) } },
       };
       setRuntimeConfigSnapshot(cfg);
       const legacyKey = "agent:BA-EA:telegram:direct:123";
       const canonicalKey = "agent:ba-ea:telegram:direct:123";
-      const source = foreignWinner
-        ? {
-            ...scope,
-            agentId: "main",
-            storePath: agentPath("main", "sessions", "sessions.json"),
-          }
-        : scope;
+      const source = foreignWinner ? scopeFor("main", "main") : scope;
       insertLegacySession({
         ...canonicalScope,
         sessionKey: canonicalKey,
         entry: { sessionId: "older-history", updatedAt: 1 },
-        eventText: "Retain the older destination in its archive.",
+        eventText: "older history",
       });
       insertLegacySession({
         ...source,
         sessionKey: legacyKey,
         entry: { sessionId: "kept-history", updatedAt: 2 },
-        eventText: "Preserve this transcript through Doctor.",
+        eventText: "kept history",
       });
       const repair = () => repairCanonicalSessionKeys({ apply: true, cfg, env: state.env });
       const load = (alias: typeof scope, sessionKey: string) =>
@@ -74,18 +70,15 @@ it.each([false, true])(
       }
       for (const aliasScope of [scope, canonicalScope]) {
         expect(load(aliasScope, canonicalKey)?.entry.sessionId).toBe("kept-history");
-        expect(
+        expectHistory(
           await loadTranscriptEvents({
             ...aliasScope,
             sessionKey: canonicalKey,
             sessionId: "kept-history",
           }),
-        ).toEqual([
-          expect.objectContaining({
-            id: "kept-history-message",
-            message: { role: "user", content: "Preserve this transcript through Doctor." },
-          }),
-        ]);
+          "kept-history-message",
+          "kept history",
+        );
       }
       const olderArchives = report.archivedTranscriptDirectories.flatMap((directory) =>
         fs
@@ -94,17 +87,14 @@ it.each([false, true])(
           .map((name) => readSessionArchiveContentSync(path.join(directory, name))),
       );
       expect(olderArchives).toHaveLength(1);
-      expect(
+      expectHistory(
         olderArchives[0]!
           .trim()
           .split("\n")
           .map((line) => JSON.parse(line)),
-      ).toEqual([
-        expect.objectContaining({
-          id: "older-history-message",
-          message: { role: "user", content: "Retain the older destination in its archive." },
-        }),
-      ]);
+        "older-history-message",
+        "older history",
+      );
       expect(await repair()).toMatchObject({ foundGroups: 0, repairedGroups: 0 });
     });
   },

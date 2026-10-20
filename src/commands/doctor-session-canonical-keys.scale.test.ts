@@ -4,6 +4,7 @@ import { promisify } from "node:util";
 import { afterEach, expect, it } from "vitest";
 import { createTranscriptEventInserter } from "../config/sessions/transcript-payload.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { doctorConfigRuntimeEntrypoints } from "./doctor-config-runtime.test-support.js";
@@ -31,8 +32,7 @@ it("repairs deep owner aliases without losing a large healthy transcript", async
     );
     const sessionId = `scale-${aliasCount}`;
     const insertEvent = createTranscriptEventInserter(db, sessionId);
-    db.exec("BEGIN");
-    try {
+    runSqliteDeferredTransactionSync(db, () => {
       for (let index = 0; index <= aliasCount; index += 1) {
         const currentId = `scale-${Math.min(index + 1, aliasCount)}`;
         node.run(
@@ -58,11 +58,7 @@ it("repairs deep owner aliases without losing a large healthy transcript", async
         });
         identity.run(sessionId, id, seq, parentId);
       }
-      db.exec("COMMIT");
-    } catch (error) {
-      db.exec("ROLLBACK");
-      throw error;
-    }
+    });
     expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
     expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
     closeOpenClawAgentDatabasesForTest();
@@ -79,15 +75,17 @@ it("repairs deep owner aliases without losing a large healthy transcript", async
       removedRows: aliasCount,
     });
     const { db: verified } = database();
-    const count = (table: string) =>
-      verified.prepare(`SELECT count(*) AS count FROM ${table}`).get();
-    expect(count("transcript_events")).toEqual({ count: eventCount });
-    expect(count("session_nodes")).toEqual({ count: 1 });
     expect(
-      verified.prepare("SELECT session_key, current_session_id FROM session_nodes").get(),
+      verified
+        .prepare(
+          "SELECT session_key, current_session_id, (SELECT count(*) FROM transcript_events) AS events, (SELECT count(*) FROM session_nodes) AS nodes FROM session_nodes",
+        )
+        .get(),
     ).toEqual({
       session_key: key(aliasCount),
       current_session_id: sessionId,
+      events: eventCount,
+      nodes: 1,
     });
     expect(verified.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
   });

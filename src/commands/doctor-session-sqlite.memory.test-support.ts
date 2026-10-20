@@ -87,7 +87,6 @@ async function main() {
   }
   fs.writeFileSync(storePath, JSON.stringify(store));
   process.stderr.write(`seeded ${sessionCount} sessions x ${eventCount} events; importing\n`);
-  const started = performance.now();
   if (scenario === "public") {
     await withSuppressedNotes(() =>
       noteSessionTranscriptHealth({
@@ -109,6 +108,9 @@ async function main() {
     readOnly: true,
   });
   try {
+    const projection = db.prepare(
+      "SELECT active_event_count, active_message_count, leaf_event_id, needs_rebuild FROM session_transcript_index_state WHERE session_id = ?",
+    );
     const read = prepareSqliteQueryIterator<string, { event_json: string }>(db, (parameter) =>
       getNodeSqliteKysely<Pick<DB, "transcript_events">>(db)
         .selectFrom("transcript_events")
@@ -127,13 +129,7 @@ async function main() {
       }
       assert.equal(hash.digest("hex"), digest);
       assert.deepEqual(
-        {
-          ...db
-            .prepare(
-              "SELECT active_event_count, active_message_count, leaf_event_id, needs_rebuild FROM session_transcript_index_state WHERE session_id = ?",
-            )
-            .get(sessionId),
-        },
+        { ...projection.get(sessionId) },
         {
           active_event_count: eventCount - 1,
           active_message_count: eventCount - 1,
@@ -149,15 +145,7 @@ async function main() {
   assert.equal(rerun.totals.importedEntries, 0);
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
-  process.stdout.write(
-    JSON.stringify({
-      scenario,
-      sessionCount,
-      eventCount,
-      elapsedMs: performance.now() - started,
-      maxRssKiB: process.resourceUsage().maxRSS,
-    }),
-  );
+  process.stdout.write(JSON.stringify({ scenario }));
 }
 // Node resolves the bundled module through a worktree's shared node_modules
 // symlink; resolve argv too or the child exits without running the proof.
