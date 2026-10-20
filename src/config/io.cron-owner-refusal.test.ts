@@ -67,20 +67,15 @@ it("refuses an unproven live Gateway without suggesting doctor", async () => {
 });
 
 it("refuses ownerless and corrupt cron rows with an ownership-safe live Gateway", async () => {
-  await expect(
-    prepare(
-      deps(
-        activeGateway,
-        state([
-          { id: "null", agentId: null },
-          { id: "blank", agentId: " " },
-        ]),
-      ),
-    ),
-  ).rejects.toThrow("contains 2 ownerless legacy cron job");
-
-  const corrupt = deps(activeGateway, state([], [{ id: "corrupt", reason: "invalid config" }]));
-  await expect(prepare(corrupt)).rejects.toThrow("contains 1 corrupt row");
+  const ownerless = state([
+    { id: "null", agentId: null },
+    { id: "blank", agentId: " " },
+  ]);
+  await expect(prepare(deps(activeGateway, ownerless))).rejects.toThrow(
+    "contains 2 ownerless legacy cron job",
+  );
+  const corrupt = state([], [{ id: "corrupt", reason: "invalid config" }]);
+  await expect(prepare(deps(activeGateway, corrupt))).rejects.toThrow("contains 1 corrupt row");
 });
 
 it("keeps include-owned binding writes fail closed", () => {

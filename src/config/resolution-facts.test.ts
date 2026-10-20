@@ -47,17 +47,15 @@ describe("resolution facts through config rewrites", () => {
 
   it("carries pending references and invalidates their unresolved-path facts together", () => {
     const source = { keep: "${PENDING_KEEP}", drop: "${PENDING_DROP}" };
+    const pending = new Map([
+      ["keep", "PENDING_KEEP"],
+      ["drop", "PENDING_DROP"],
+    ]);
     setConfigResolutionFacts(
       source,
       createConfigResolutionFacts(
-        [
-          { configPath: "keep", varName: "PENDING_KEEP" },
-          { configPath: "drop", varName: "PENDING_DROP" },
-        ],
-        new Map([
-          ["keep", "PENDING_KEEP"],
-          ["drop", "PENDING_DROP"],
-        ]),
+        [...pending].map(([configPath, varName]) => ({ configPath, varName })),
+        pending,
       ),
     );
     const target = { keep: source.keep };

@@ -1,96 +1,83 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { collectChannelSchemaMetadataWithOwnership } from "./channel-config-metadata.js";
 import { widenOfficialExternalChannelSecretSchema } from "./official-external-channel-secret-schema.js";
 
-describe("official external channel secret schema", () => {
-  it("widens Tencent QQBot root and account clientSecret fields to SecretRefs", () => {
-    const schema = widenOfficialExternalChannelSecretSchema({
-      channelId: "qqbot",
-      schema: {
+const object = (properties: Record<string, unknown>) => ({ type: "object", properties });
+
+it("widens Tencent QQBot root and account clientSecret fields to SecretRefs", () => {
+  const schema = widenOfficialExternalChannelSecretSchema({
+    channelId: "qqbot",
+    schema: object({
+      clientSecret: { type: "string" },
+      accounts: {
         type: "object",
-        properties: {
-          clientSecret: { type: "string" },
-          accounts: {
-            type: "object",
-            additionalProperties: {
-              type: "object",
-              properties: { clientSecret: { type: "string" } },
+        additionalProperties: object({ clientSecret: { type: "string" } }),
+      },
+    }),
+  });
+
+  expect(schema).toHaveProperty("properties.clientSecret.anyOf.length", 2);
+  expect(schema).toHaveProperty(
+    "properties.accounts.additionalProperties.properties.clientSecret.anyOf.length",
+    2,
+  );
+});
+
+it("does not widen channels without a catalog secret contract", () => {
+  const schema = object({ token: { type: "string" } });
+
+  expect(widenOfficialExternalChannelSecretSchema({ channelId: "unknown", schema })).toBe(schema);
+});
+
+it("widens the installed Tencent manifest schema selected for channel validation", () => {
+  const registry = {
+    plugins: [
+      {
+        id: "openclaw-qqbot",
+        origin: "global",
+        channels: ["qqbot"],
+        channelConfigs: {
+          qqbot: {
+            schema: {
+              ...object({ clientSecret: { type: "string" } }),
+              additionalProperties: true,
             },
           },
         },
       },
-    });
+    ],
+  } as unknown as PluginManifestRegistry;
 
-    expect(schema).toHaveProperty("properties.clientSecret.anyOf.length", 2);
-    expect(schema).toHaveProperty(
-      "properties.accounts.additionalProperties.properties.clientSecret.anyOf.length",
-      2,
-    );
+  const [metadata] = collectChannelSchemaMetadataWithOwnership(registry);
+  expect(metadata?.configSchema).toHaveProperty("properties.clientSecret.anyOf.length", 2);
+  expect(metadata?.configSchema?.allOf).toHaveLength(1);
+});
+
+it("fails closed on QQBot configs that have not run the Tencent 2.0 migration", () => {
+  const schema = widenOfficialExternalChannelSecretSchema({
+    channelId: "qqbot",
+    schema: { type: "object", additionalProperties: true },
   });
+  if (!schema) {
+    throw new Error("expected QQBot host schema");
+  }
+  const validate = (value: unknown) =>
+    validateJsonSchemaValue({
+      cacheKey: `qqbot-host-schema-${JSON.stringify(value)}`,
+      schema,
+      value,
+    }).ok;
 
-  it("does not widen channels without a catalog secret contract", () => {
-    const schema = { type: "object", properties: { token: { type: "string" } } };
-
-    expect(widenOfficialExternalChannelSecretSchema({ channelId: "unknown", schema })).toBe(schema);
+  expect(validate({})).toBe(false);
+  expect(validate({ allowFrom: ["*"] })).toBe(false);
+  expect(validate({ allowFrom: ["user123"] })).toBe(false);
+  expect(validate({ defaultAccount: "ops", allowFrom: ["OWNER"] })).toBe(false);
+  const account = (id: string) => ({
+    allowFrom: ["openclaw:approval-disabled"],
+    accounts: { [id]: { allowFrom: ["OWNER"] } },
   });
-
-  it("widens the installed Tencent manifest schema selected for channel validation", () => {
-    const registry = {
-      plugins: [
-        {
-          id: "openclaw-qqbot",
-          origin: "global",
-          channels: ["qqbot"],
-          channelConfigs: {
-            qqbot: {
-              schema: {
-                type: "object",
-                additionalProperties: true,
-                properties: { clientSecret: { type: "string" } },
-              },
-            },
-          },
-        },
-      ],
-    } as unknown as PluginManifestRegistry;
-
-    const [metadata] = collectChannelSchemaMetadataWithOwnership(registry);
-    expect(metadata?.configSchema).toHaveProperty("properties.clientSecret.anyOf.length", 2);
-    expect(metadata?.configSchema?.allOf).toHaveLength(1);
-  });
-
-  it("fails closed on QQBot configs that have not run the Tencent 2.0 migration", () => {
-    const schema = widenOfficialExternalChannelSecretSchema({
-      channelId: "qqbot",
-      schema: { type: "object", additionalProperties: true },
-    });
-    if (!schema) {
-      throw new Error("expected QQBot host schema");
-    }
-    const validate = (value: unknown) =>
-      validateJsonSchemaValue({
-        cacheKey: `qqbot-host-schema-${JSON.stringify(value)}`,
-        schema,
-        value,
-      }).ok;
-
-    expect(validate({})).toBe(false);
-    expect(validate({ allowFrom: ["*"] })).toBe(false);
-    expect(validate({ allowFrom: ["user123"] })).toBe(false);
-    expect(validate({ defaultAccount: "ops", allowFrom: ["OWNER"] })).toBe(false);
-    expect(
-      validate({
-        allowFrom: ["openclaw:approval-disabled"],
-        accounts: { default: { allowFrom: ["OWNER"] } },
-      }),
-    ).toBe(false);
-    expect(
-      validate({
-        allowFrom: ["openclaw:approval-disabled"],
-        accounts: { ops: { allowFrom: ["OWNER"] } },
-      }),
-    ).toBe(true);
-  });
+  expect(validate(account("default"))).toBe(false);
+  expect(validate(account("ops"))).toBe(true);
 });

@@ -30,35 +30,33 @@ export function createWriteEffectsFixture(dir: string) {
     targetPathProof: proof,
     preserveDirectoryMode: true,
   };
-  const backups = () =>
-    ["", ".1", ".2", ".3", ".4"].map((suffix) => {
-      try {
-        return fs.readFileSync(`${target}.bak${suffix}`, "utf8");
-      } catch {
-        return null;
-      }
-    });
-  const rollback = (
-    io: typeof fs,
-    rollbackProof: ConfigFileWriteRollbackProof,
-    overrides: Partial<Parameters<typeof rollbackConfigFileWriteIfUnchanged>[0]> = {},
-  ) =>
-    rollbackConfigFileWriteIfUnchanged({
-      configPath: target,
-      previousSnapshot: options.snapshot,
-      committedHash: hashConfigRaw(content),
-      fsModule: io,
-      ...rollbackProof,
-      ...overrides,
-    });
   return {
     dir,
     target,
     assertCurrent,
     refusal,
     options,
-    backups,
-    rollback,
+    backups: () =>
+      ["", ".1", ".2", ".3", ".4"].map((suffix) => {
+        try {
+          return fs.readFileSync(`${target}.bak${suffix}`, "utf8");
+        } catch {
+          return null;
+        }
+      }),
+    rollback: (
+      io: typeof fs,
+      rollbackProof: ConfigFileWriteRollbackProof,
+      overrides: Partial<Parameters<typeof rollbackConfigFileWriteIfUnchanged>[0]> = {},
+    ) =>
+      rollbackConfigFileWriteIfUnchanged({
+        configPath: target,
+        previousSnapshot: options.snapshot,
+        committedHash: hashConfigRaw(content),
+        fsModule: io,
+        ...rollbackProof,
+        ...overrides,
+      }),
     revoke: () => (current = false),
   };
 }
@@ -95,12 +93,9 @@ export async function prepareClosedWrite(
   publish = true,
 ) {
   const { prepared, guarded } = await prepareWriteEffects(f);
-  try {
-    if (publish) {
-      prepared.publish();
-    }
-  } finally {
-    await prepared[Symbol.asyncDispose]();
+  await using pending = prepared;
+  if (publish) {
+    pending.publish();
   }
   return guarded;
 }
