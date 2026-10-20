@@ -1,6 +1,6 @@
 import { vi, type Mock } from "vitest";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
-import { EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
+import { EmbeddedBlockChunker, type BlockReplyChunking } from "./embedded-agent-block-chunker.js";
 import { handleMessageEnd } from "./embedded-agent-subscribe.handlers.messages.lifecycle.js";
 import { handleMessageUpdate } from "./embedded-agent-subscribe.handlers.messages.update.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
@@ -107,6 +107,7 @@ export function createMessageEndContext(
     sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
     enforceFinalTag?: boolean;
     bufferedText?: string;
+    blockReplyChunking?: BlockReplyChunking;
     state?: Record<string, unknown>;
   } = {},
 ) {
@@ -126,7 +127,8 @@ export function createMessageEndContext(
     captureModelEvent: vi.fn(),
     log: { debug: vi.fn(), info: vi.fn(), warn: params.warn ?? vi.fn() },
     builtinToolNames: params.builtinToolNames,
-    blockChunker: new EmbeddedBlockChunker(),
+    blockChunking: params.blockReplyChunking,
+    blockChunker: new EmbeddedBlockChunker(params.blockReplyChunking),
   } as unknown as EmbeddedAgentSubscribeContext;
   ctx.state = Object.assign(new EmbeddedAgentSubscribeState(ctx.params), {
     blockReplyBreak: "message_end",
