@@ -33,13 +33,11 @@ suite.define(() => {
                 media.add(element);
                 const requestFrame = element.requestVideoFrameCallback.bind(element);
                 element.requestVideoFrameCallback = (callback) =>
-                  requestFrame((now, metadata) => {
-                    if (holdFrames) {
-                      frames.push(() => callback(now, metadata));
-                    } else {
-                      callback(now, metadata);
-                    }
-                  });
+                  requestFrame((now, metadata) =>
+                    holdFrames
+                      ? frames.push(() => callback(now, metadata))
+                      : callback(now, metadata),
+                  );
               }
               return element;
             },
@@ -63,9 +61,7 @@ suite.define(() => {
             holdFrames() {
               holdFrames = true;
             },
-            releaseNextFrame() {
-              frames.shift()?.();
-            },
+            releaseNextFrame: () => frames.shift()?.(),
             releaseFrames() {
               holdFrames = false;
               frames.splice(0).forEach((callback) => callback());

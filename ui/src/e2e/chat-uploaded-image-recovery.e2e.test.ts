@@ -16,8 +16,8 @@ suite.define(() => {
         { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
         async ({ page }) => {
           await page.clock.install();
-          const source = "media://inbound/uploaded-image.png";
-          const prompt = "Please inspect this uploaded image.";
+          const source = "media://inbound/a.png";
+          const prompt = "Inspect this image.";
           const denied = failure === "revoked" || failure === "removed";
           const denialStatus = failure === "revoked" ? 403 : 404;
           let metadataRequests = 0;
@@ -25,43 +25,34 @@ suite.define(() => {
           let retry = false;
           await page.route("**/__openclaw__/assistant-media?**", async (route) => {
             const request = route.request();
-            const url = new URL(request.url());
-            const query = url.searchParams;
-            expect([query.get("source"), request.method(), query.has("allow")]).toEqual([
-              source,
-              "GET",
-              false,
-            ]);
-            if (url.searchParams.get("meta") === "1") {
+            const query = new URL(request.url()).searchParams;
+            const target = [query.get("source"), request.method(), query.has("allow")];
+            expect(target).toEqual([source, "GET", false]);
+            if (query.get("meta") === "1") {
               metadataRequests += 1;
-              if (retry && denied) {
-                await route.fulfill({
-                  status: denialStatus,
-                  json: { error: "Attachment unavailable" },
-                });
-              } else {
-                await route.fulfill({
-                  json: {
-                    available: true,
-                    mediaTicket: "upload-ticket-" + metadataRequests,
-                    mediaTicketExpiresAt: new Date(Date.now() + 300_000).toISOString(),
-                  },
-                });
-              }
+              await route.fulfill(
+                retry && denied
+                  ? { status: denialStatus, json: { error: "Attachment unavailable" } }
+                  : {
+                      json: {
+                        available: true,
+                        mediaTicket: "upload-ticket-" + metadataRequests,
+                        mediaTicketExpiresAt: new Date(Date.now() + 300_000).toISOString(),
+                      },
+                    },
+              );
               return;
             }
             imageRequests += 1;
-            expect(url.searchParams.get("mediaTicket")).toBe("upload-ticket-" + metadataRequests);
-            if (retry) {
-              await route.fulfill({ contentType: "image/png", body: png });
-            } else if (failure === "network") {
+            expect(query.get("mediaTicket")).toBe("upload-ticket-" + metadataRequests);
+            if (!retry && failure === "network") {
               await route.abort("connectionreset");
-            } else if (failure === "decode") {
-              await route.fulfill({ contentType: "image/png", body: "not a PNG" });
             } else {
-              await route.fulfill({
-                status: failure === "503" ? 503 : denialStatus,
-              });
+              await route.fulfill(
+                retry || failure === "decode"
+                  ? { contentType: "image/png", body: retry ? png : "not a PNG" }
+                  : { status: failure === "503" ? 503 : denialStatus },
+              );
             }
           });
           await installMockGateway(page, {
@@ -70,11 +61,9 @@ suite.define(() => {
                 role: "user",
                 content: [{ type: "text", text: prompt }],
                 __openclaw: {
-                  id: "uploaded-image-message",
+                  id: "upload",
                   seq: 1,
-                  media: [
-                    { path: source, contentType: "image/png", fileName: "uploaded-image.png" },
-                  ],
+                  media: [{ path: source, contentType: "image/png", fileName: "a.png" }],
                   mediaImageLayout: { slots: [{ kind: "inline", factIndex: 0 }] },
                 },
                 timestamp: 1,
@@ -101,13 +90,10 @@ suite.define(() => {
           } else {
             await expect
               .poll(() =>
-                image.evaluate((element: HTMLImageElement) =>
-                  element.complete ? element.naturalWidth : 0,
-                ),
+                image.evaluate((img: HTMLImageElement) => [img.complete, img.naturalWidth]),
               )
-              .toBe(1);
-            expect(imageRequests).toBe(2);
-            expect(await card.count()).toBe(0);
+              .toEqual([true, 1]);
+            expect([imageRequests, await card.count()]).toEqual([2, 0]);
           }
         },
       ),

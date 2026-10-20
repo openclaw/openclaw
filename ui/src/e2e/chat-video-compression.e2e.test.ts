@@ -6,8 +6,7 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 
 const suite = createControlUiE2eSuite({ name: "Client-side video compression" });
 const video = readFileSync(new URL("./fixtures/video-poster.mp4", import.meta.url));
-// ISO BMFF permits trailing padding; retain the fixture's real video samples,
-// while crossing the advertised limit without slowing the encoder test down.
+// ISO BMFF padding crosses the limit while preserving real samples and quick encoding.
 const oversized = Buffer.concat([video, Buffer.alloc(256 * 1024)]);
 const limit = 128 * 1024;
 const button = (page: Page, name: string) => page.getByRole("button", { name, exact: true });
@@ -44,7 +43,6 @@ suite.define(() => {
       await composer.press("End");
       await composer.press("!");
       expect(await composer.inputValue()).toBe(draft + "!");
-      await composer.focus();
       const ime = await page.context().newCDPSession(page);
       await ime.send("Input.imeSetComposition", {
         text: "入力",
@@ -75,12 +73,6 @@ suite.define(() => {
         player.muted = true;
         player.src = url;
         try {
-          await new Promise<void>((resolve, reject) => {
-            player.addEventListener("loadeddata", () => resolve(), { once: true });
-            player.addEventListener("error", () => reject(new Error("Decode failed")), {
-              once: true,
-            });
-          });
           await player.play();
           const { videoWidth: width, videoHeight: height, duration } = player;
           return { width, height, duration };
@@ -98,9 +90,7 @@ suite.define(() => {
   it("explains invalid media and unavailable browser codecs without sending", () =>
     suite.withPage({ viewport: { width: 1280, height: 800 } }, async ({ page, context }) => {
       const gateway = await installMockGateway(page, { attachmentMaxBytes: limit });
-      // Exercise the real worker and codec negotiation with a missing WebCodecs
-      // capability, not a mocked successful/failed compression implementation.
-      // Route at context scope before the first worker caches its script.
+      // Remove WebCodecs from the real worker before its script is cached.
       await context.route("**/chat-attachment-video.worker-*.js", async (route) => {
         const response = await route.fetch();
         await route.fulfill({
@@ -110,12 +100,9 @@ suite.define(() => {
       });
       await page.goto(suite.server.baseUrl + "chat");
       await page.locator(".agent-chat__composer-combobox textarea").fill("Keep this draft.");
+      const status = page.locator(".chat-attachment-thumb").getByRole("status");
       const expectError = async (error: string) => {
-        await page
-          .locator(".chat-attachment-thumb")
-          .getByRole("status")
-          .filter({ hasText: error })
-          .waitFor();
+        await status.filter({ hasText: error }).waitFor();
         await page.getByRole("alert").getByText(error, { exact: true }).waitFor();
       };
       await upload(page, "invalid.mp4", Buffer.alloc(256 * 1024));

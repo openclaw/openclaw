@@ -38,10 +38,8 @@ export async function installWidgetPromptDiagnostics(context: BrowserContext): P
     }
     window.addEventListener("message", (event) => {
       const type = event.data?.type;
-      const allowed = ["size", "prompt-offer", "bridge-ready"].map(
-        (kind) => `openclaw:widget-${kind}`,
-      );
-      if (!allowed.includes(type)) {
+      const allowed = ["size", "prompt-offer", "bridge-ready"];
+      if (!allowed.some((kind) => type === `openclaw:widget-${kind}`)) {
         return;
       }
       record(type, {
@@ -53,11 +51,11 @@ export async function installWidgetPromptDiagnostics(context: BrowserContext): P
       if (type === "openclaw:widget-prompt-offer") {
         // Observe the transferred port without starting it or changing its owner.
         for (const port of event.ports) {
-          port.addEventListener("message", (message) => {
-            if (message.data?.type === "openclaw:widget-prompt") {
-              record("prompt-received");
-            }
-          });
+          port.addEventListener(
+            "message",
+            (message) =>
+              message.data?.type === "openclaw:widget-prompt" && record("prompt-received"),
+          );
         }
       }
     });
@@ -80,8 +78,6 @@ export async function retainWidgetPromptFailure(page: Page, artifactDir: string)
     }
   }
   const report = { fixture: "chat-widget-sandbox", synthetic: true, version: 1, frames };
-  await writeFile(
-    path.join(artifactDir, "widget-prompt-failure.json"),
-    JSON.stringify(report, null, 2),
-  );
+  const file = path.join(artifactDir, "widget-prompt-failure.json");
+  await writeFile(file, JSON.stringify(report, null, 2));
 }

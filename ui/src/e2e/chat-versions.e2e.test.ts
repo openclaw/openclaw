@@ -8,18 +8,18 @@ const key = "agent:main:release-notes";
 const previousKey = "agent:main:planning";
 const helpText =
   "Saved copies of this conversation from rewinds or repairs. You can return to an earlier version here.";
+const branch = (id: string, headline: string, count: number, active = false) => ({
+  leafEntryId: id,
+  headline,
+  messageCount: count,
+  active,
+});
 
 suite.define(() => {
   it("explains versions on demand without switching, and preserves keyboard selection", () =>
     suite.withPage(
       { viewport: { width: 1200, height: 800 }, colorScheme: "dark" },
       async ({ page }) => {
-        const branch = (
-          leafEntryId: string,
-          headline: string,
-          messageCount: number,
-          active = false,
-        ) => ({ leafEntryId, headline, messageCount, active });
         const draft = "Here is a concise draft:";
         const gateway = await installMockGateway(page, {
           sessionKey: key,
@@ -29,10 +29,7 @@ suite.define(() => {
             { key, label: "Release notes", kind: "direct", updatedAt: Date.now() },
             { key: previousKey, label: "Planning", kind: "direct", updatedAt: Date.now() - 1 },
           ],
-          historyMessages: [
-            { id: "prompt", role: "user", content: "Write a release announcement." },
-            { id: "answer", role: "assistant", content: draft },
-          ],
+          historyMessages: [{ id: "answer", role: "assistant", content: draft }],
           methodResponses: {
             "sessions.branches.list": {
               branches: [
@@ -106,9 +103,7 @@ suite.define(() => {
 
         await info.press("Enter");
         await help.waitFor();
-        expect((await menu.locator(".chat-pane__versions-help").textContent())?.trim()).toBe(
-          helpText,
-        );
+        expect((await helpSurface.textContent())?.trim()).toBe(helpText);
         expect(await gateway.getRequests("sessions.branches.switch")).toHaveLength(0);
 
         await page.keyboard.press("Escape");
