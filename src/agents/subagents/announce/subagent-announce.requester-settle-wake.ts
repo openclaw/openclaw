@@ -68,6 +68,7 @@ import { createRequesterSettleReceiptAdmission } from "./subagent-announce.reque
 import {
   readSharedBatchState,
   REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS,
+  needsRequesterSettleFindings,
   resolveRequesterSettleRetryState,
   captureRequesterRunOwner,
   isRequesterSettleDeliveryClosed,
@@ -356,7 +357,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
   // Ordinary nested waves remain owned by the descendant-settle path.
   if (
     !pauseNotice &&
-    ((requiredSettled.every((entry) => entry.delivery?.status === "delivered") &&
+    ((requiredSettled.every((entry) => !needsRequesterSettleFindings(entry)) &&
       (requiredSettled.length === 0 || !requesterYieldedAfterDelivery)) ||
       (!requesterYieldedAfterDelivery &&
         interruptedContinuations.length === 0 &&
@@ -418,9 +419,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     }
     const preparedFindings = pauseNotice
       ? { text: pauseNotice.acknowledgment, isCurrent: () => true }
-      : await readChildCompletionFindings(
-          completionRows.filter((entry) => entry.delivery?.status !== "delivered"),
-        );
+      : await readChildCompletionFindings(completionRows.filter(needsRequesterSettleFindings));
     if (await retireReplacedStore()) {
       return false;
     }

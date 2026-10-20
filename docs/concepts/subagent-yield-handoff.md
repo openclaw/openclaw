@@ -209,6 +209,10 @@ owner, so callbacks from the closed Gateway cannot settle the recovered wake.
   already delivered children are referenced in one short line without their
   payloads. An explicit `sessions_yield` still owes one continuation, using the
   same rule even when every result was already delivered.
+  Restart-interrupted children still need reconciliation: their retained partial
+  results remain in the continuation even if an earlier result was delivered.
+  The unfinished-child roster is independent of result delivery and includes
+  only children whose captured requester identity still matches.
   A Stop, reset, or deletion
   of the parent itself retires its children without a report. So does a kill
   that lands while the parent's own turn still holds the child. Descendants of a

@@ -14,6 +14,7 @@ import {
   buildSubagentRestartRecoveryRoster,
   SUBAGENT_RESTART_RECOVERY_INSTRUCTION,
 } from "../subagent-restart-recovery-prompt.js";
+import { needsRequesterSettleFindings } from "./subagent-announce.requester-settle-state.js";
 
 const REQUESTER_SETTLE_WAKE_ROUTE_NOTICE_MAX_CHARS = 1_024;
 const ROUTE_NOTICE_TRUNCATION = "\n[model-route changes truncated]";
@@ -55,16 +56,14 @@ export function buildRequesterSettleWakeMessage(params: {
       ...(retryInstruction ? [retryInstruction] : []),
     ].join("\n");
   }
-  const deliveredChildren = params.children.filter(
-    (entry) => entry.delivery?.status === "delivered",
-  );
+  const deliveredChildren = params.children.filter((entry) => !needsRequesterSettleFindings(entry));
   // The scheduling row need not be the rerouted child. Keep every current
-  // undelivered child's producer-owned notice, with stable bytes and one batch-wide cap.
+  // needed child's producer-owned notice, with stable bytes and one batch-wide cap.
   const routeNotices = [
     ...new Set(
-      params.children.flatMap(({ completion, delivery }) => {
-        const reply = completion?.terminalReply;
-        return delivery?.status !== "delivered" &&
+      params.children.flatMap((entry) => {
+        const reply = entry.completion?.terminalReply;
+        return needsRequesterSettleFindings(entry) &&
           reply?.disposition === "visible" &&
           reply.modelRouteChange
           ? [reply.modelRouteChange]
@@ -78,9 +77,7 @@ export function buildRequesterSettleWakeMessage(params: {
     routeNotices.length > REQUESTER_SETTLE_WAKE_ROUTE_NOTICE_MAX_CHARS
       ? `${truncateUtf16Safe(routeNotices, REQUESTER_SETTLE_WAKE_ROUTE_NOTICE_MAX_CHARS - ROUTE_NOTICE_TRUNCATION.length)}${ROUTE_NOTICE_TRUNCATION}`
       : routeNotices;
-  const recoveryRoster = buildSubagentRestartRecoveryRoster(
-    params.recoveryChildren.filter((entry) => entry.delivery?.status !== "delivered"),
-  );
+  const recoveryRoster = buildSubagentRestartRecoveryRoster(params.recoveryChildren);
   const completionChannel = normalizeMessageChannel(params.completionChannel);
   return [
     params.descendantsUnsettled
