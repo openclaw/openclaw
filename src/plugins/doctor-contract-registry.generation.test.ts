@@ -25,17 +25,13 @@ it("binds replaced Codex declarations and callbacks to their own package generat
   };
   const before = [sidecars, orphans];
   const after = [sidecars, assignments, orphans];
+  const write = (name: string, content: string) =>
+    fs.writeFileSync(path.join(rootDir, name), content);
   function install(version: string, actions: typeof before) {
-    fs.writeFileSync(
-      path.join(rootDir, "package.json"),
-      JSON.stringify({ version, type: "module" }),
-    );
-    fs.writeFileSync(
-      path.join(rootDir, "actions.mjs"),
-      `export const actions = ${JSON.stringify(actions)};`,
-    );
-    fs.writeFileSync(
-      source,
+    write("package.json", JSON.stringify({ version, type: "module" }));
+    write("actions.mjs", `export const actions = ${JSON.stringify(actions)};`);
+    write(
+      "doctor-contract-api.mjs",
       `
       import { actions } from "./actions.mjs";
       export const stateMigrations = actions.map(action => ({
@@ -45,8 +41,8 @@ it("binds replaced Codex declarations and callbacks to their own package generat
       }));
     `,
     );
-    fs.writeFileSync(
-      path.join(rootDir, "openclaw.plugin.json"),
+    write(
+      "openclaw.plugin.json",
       JSON.stringify({
         id: "codex",
         configSchema: {},
@@ -95,18 +91,15 @@ it("binds replaced Codex declarations and callbacks to their own package generat
       },
     },
   };
-  expect(
-    await expectDefined(previous[0], "previous migration").migration.migrateLegacyState(input),
-  ).toEqual({
-    changes: ["2026.9.6"],
-    warnings: [],
-  });
-  expect(
-    await expectDefined(next[0], "replacement migration").migration.migrateLegacyState(input),
-  ).toEqual({
-    changes: ["2026.9.7"],
-    warnings: [],
-  });
+  for (const [entries, version] of [
+    [previous, "2026.9.6"],
+    [next, "2026.9.7"],
+  ] as const) {
+    expect(await expectDefined(entries[0], version).migration.migrateLegacyState(input)).toEqual({
+      changes: [version],
+      warnings: [],
+    });
+  }
   for (const declaration of [
     after.toReversed(),
     [{ id: "foreign-action" }, ...after.slice(1)],

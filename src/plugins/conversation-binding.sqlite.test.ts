@@ -37,6 +37,28 @@ function installGenericBindingChannel(): void {
   );
 }
 
+async function closeState() {
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
+}
+
+async function approve(
+  request: Awaited<ReturnType<typeof requestPluginConversationBinding>>,
+  decision: "allow-always" | "allow-once",
+) {
+  expect(request.status).toBe("pending");
+  if (request.status !== "pending") {
+    throw new Error("Expected a plugin binding approval request");
+  }
+  await expect(
+    resolvePluginConversationBindingApproval({
+      approvalId: request.approvalId,
+      decision,
+      senderId: "user-1",
+    }),
+  ).resolves.toMatchObject({ status: "approved" });
+}
+
 describe("plugin conversation bindings through SQLite", () => {
   const tempDirs: string[] = [];
   let envSnapshot: ReturnType<typeof captureEnv>;
@@ -46,16 +68,14 @@ describe("plugin conversation bindings through SQLite", () => {
     envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
     registrySnapshot = captureActivePluginRegistrySnapshot();
     await drainGlobalSingletonLifecycleState();
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
+    await closeState();
     setTestEnvValue("OPENCLAW_STATE_DIR", makeTrackedTempDir("plugin-binding-sqlite", tempDirs));
     installGenericBindingChannel();
   });
 
   afterEach(async () => {
     await drainGlobalSingletonLifecycleState();
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
+    await closeState();
     restoreActivePluginRegistrySnapshot(registrySnapshot);
     envSnapshot.restore();
     cleanupTrackedTempDirs(tempDirs);
@@ -87,18 +107,8 @@ describe("plugin conversation bindings through SQLite", () => {
       const service = getSessionBindingService();
       const requested = await requestPluginConversationBinding(input);
       if (approval === "pending approval") {
-        expect(requested.status).toBe("pending");
-        if (requested.status !== "pending") {
-          throw new Error("Expected a plugin binding approval request");
-        }
         expect(service.resolveByConversation(conversation)).toBeNull();
-        await expect(
-          resolvePluginConversationBindingApproval({
-            approvalId: requested.approvalId,
-            decision: "allow-always",
-            senderId: "user-1",
-          }),
-        ).resolves.toMatchObject({ status: "approved" });
+        await approve(requested, "allow-always");
       } else {
         expect(requested.status).toBe("bound");
       }
@@ -116,18 +126,8 @@ describe("plugin conversation bindings through SQLite", () => {
         ...input,
         conversation: workConversation,
       });
-      expect(workRequest.status).toBe("pending");
-      if (workRequest.status !== "pending") {
-        throw new Error("A different account must require its own approval");
-      }
       expect(service.resolveByConversation(workConversation)).toBeNull();
-      await expect(
-        resolvePluginConversationBindingApproval({
-          approvalId: workRequest.approvalId,
-          decision: "allow-once",
-          senderId: "user-1",
-        }),
-      ).resolves.toMatchObject({ status: "approved" });
+      await approve(workRequest, "allow-once");
       const workRecord = expectDefined(
         service.resolveByConversation(workConversation),
         "separate account binding persisted",
@@ -135,8 +135,7 @@ describe("plugin conversation bindings through SQLite", () => {
       expect(workRecord.targetSessionKey).not.toBe(record.targetSessionKey);
 
       await drainGlobalSingletonLifecycleState();
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
+      await closeState();
       installGenericBindingChannel();
 
       await expect(
@@ -151,8 +150,7 @@ describe("plugin conversation bindings through SQLite", () => {
       expect(service.listBySession(workRecord.targetSessionKey)).toEqual([workRecord]);
       const touchedAt = record.boundAt + 1_000;
       service.touch(record.bindingId, touchedAt, record.conversation);
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
+      await closeState();
       expect(service.resolveByConversation(conversation)?.metadata).toMatchObject({
         ...record.metadata,
         lastActivityAt: touchedAt,
@@ -178,8 +176,7 @@ describe("plugin conversation bindings through SQLite", () => {
       await expect(
         service.unbind({ targetSessionKey: workRecord.targetSessionKey, reason: "session-ended" }),
       ).resolves.toEqual([workRecord]);
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
+      await closeState();
       expect(service.resolveByConversation(workConversation)).toBeNull();
       expect(service.listBySession(workRecord.targetSessionKey)).toEqual([]);
     },

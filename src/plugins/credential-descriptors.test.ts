@@ -31,6 +31,11 @@ const manifest = {
   origin: "global",
   contracts: { webSearchProviders: ["example"] },
 } as PluginManifestRecord;
+const descriptor = {
+  path: ["plugins", "entries", "example", "config", "key"],
+  label: "Example key",
+  envVars: ["EXAMPLE_KEY"],
+};
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.registry.mockReturnValue(undefined);
@@ -46,24 +51,19 @@ describe("nonactivating credential descriptor discovery", () => {
     };
     mocks.registry.mockReturnValue({
       webSearchProviders: [
-        { pluginId: "example", provider: declared },
-        { pluginId: "example", provider: declared },
+        declared,
+        declared,
         ...[
           "gateway.auth.token",
           "plugins.entries.other.config.key",
           "plugins.entries.example.config.__proto__.key",
           "",
-        ].map((credentialPath) => ({
-          pluginId: "example",
-          provider: { ...declared, credentialPath },
-        })),
-      ],
+        ].map((credentialPath) => Object.assign({}, declared, { credentialPath })),
+      ].map((entry) => ({ pluginId: "example", provider: entry })),
     });
     expect(resolvePluginCredentialDescriptors(manifest)).toEqual([
       {
-        path: ["plugins", "entries", "example", "config", "key"],
-        label: "Example key",
-        envVars: ["EXAMPLE_KEY"],
+        ...descriptor,
         placeholder: "example-…",
         signupUrl: "https://example.com/keys",
       },
@@ -86,11 +86,7 @@ describe("nonactivating credential descriptor discovery", () => {
   it("exposes bundled credential metadata independently of runtime activation", () => {
     mocks.bundledSearch.mockReturnValue([{ ...provider, pluginId: "example" }]);
     expect(resolvePluginCredentialDescriptors({ ...manifest, origin: "bundled" })).toEqual([
-      {
-        path: ["plugins", "entries", "example", "config", "key"],
-        label: "Example key",
-        envVars: ["EXAMPLE_KEY"],
-      },
+      descriptor,
     ]);
     expect(provider.getConfiguredCredentialValue).not.toHaveBeenCalled();
   });
