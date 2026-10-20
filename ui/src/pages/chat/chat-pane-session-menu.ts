@@ -61,9 +61,12 @@ import { buildContinueInTerminalCommand } from "./continue-in-terminal-command.t
 export abstract class ChatPaneSessionMenu extends ChatPaneContext {
   private readonly headerSessionDataMemo = new ChatPaneHeaderMemo<SessionMenuData>();
   protected resolveHeaderSessionTitle(row: GatewaySessionRow | undefined): string {
+    // Scoped descriptors can arrive before the reconnect roster projection catches up.
     return chatSessionPresentationTitle(
       this.state,
-      row ?? this.transcriptSessionProps(row).transcriptMetadata,
+      row ??
+        this.resourceSessionObservation()?.row ??
+        this.transcriptSessionProps(row).transcriptMetadata,
       this.sessionKey,
     );
   }

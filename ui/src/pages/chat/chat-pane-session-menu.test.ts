@@ -3,6 +3,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { createComponent, flush, merge } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
@@ -406,6 +407,74 @@ describe("chat pane session menu boundary", () => {
       "openclaw-chat-header-session-menu",
     );
     expect(menu?.session.label).toBe("Reviewed ledger");
+  });
+
+  it("keeps an off-page observed title while the pane roster catches up", async () => {
+    const row: GatewaySessionRow = {
+      key: "agent:main:dashboard:off-page",
+      agentId: "main",
+      sessionId: "off-page-session",
+      kind: "direct",
+      label: "Observed conversation",
+      updatedAt: 1,
+    };
+    const pendingList = createDeferred<ReturnType<typeof sessionsResult>>();
+    const { sessions, context, mount } = createMountedPanes([row], "main", undefined, {
+      "sessions.list": () => pendingList.promise,
+      "sessions.patch": () => ({
+        ok: true,
+        key: row.key,
+        entry: { key: row.key, sessionId: row.sessionId, kind: row.kind, updatedAt: 2 },
+      }),
+    });
+    sessions.reconcile(
+      {
+        key: "agent:main:other",
+        sessionId: "other-session",
+        kind: "direct",
+        label: "Other conversation",
+      },
+      undefined,
+      { resultAgentId: "main" },
+    );
+    const connected = context.gateway.snapshot;
+    context.publishGatewaySnapshot({ ...connected, phase: "reconnecting" });
+    context.publishGatewaySnapshot(connected);
+    const pane = mount(row.key);
+    const container = document.createElement("div");
+    const title = () => {
+      renderPaneHeaderInto(
+        pane.renderPaneHeader(
+          createPaneHeaderWorkspaceFixture(pane.state),
+          undefined,
+          false,
+          undefined,
+          false,
+          null,
+        ),
+        container,
+      );
+      return container.querySelector(".chat-pane__session-title-text")?.textContent?.trim();
+    };
+    try {
+      await refreshPane(pane);
+      expect(
+        sessions.presentation.result?.sessions.some((candidate) => candidate.key === row.key),
+      ).not.toBe(true);
+      expect(title()).toBe("Observed conversation");
+      pane.state.sessionKey = "agent:research:dashboard:other";
+      expect(title()).toBe("New session");
+      pane.state.sessionKey = row.key;
+      expect(title()).toBe("Observed conversation");
+      await sessions.patch(
+        row.key,
+        { label: null },
+        { agentId: "main", expectedSessionId: row.sessionId, deferListRefresh: true },
+      );
+      expect(title()).toBe("New session");
+    } finally {
+      pendingList.resolve(sessionsResult([], 2));
+    }
   });
 
   it("resolves cached titles for Home aliases using the current hello defaults", () => {
