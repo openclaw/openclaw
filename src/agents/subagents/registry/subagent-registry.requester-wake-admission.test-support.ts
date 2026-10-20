@@ -1,6 +1,5 @@
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import * as sessionAccessor from "../../../config/sessions/session-accessor.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import { resolveRuntimeWorkerUrl } from "../../../infra/runtime-worker-url.js";
 import { workerTaskPoolEntrypoints } from "../../../infra/worker-task-pool-runtime.test-support.js";
@@ -18,6 +17,7 @@ import { withAgentDatabaseStartupAdmission } from "../../../state/agent-database
 import { openOpenClawAgentDatabase } from "../../../state/openclaw-agent-db.js";
 import type { OpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
+import * as deliveryRuntime from "../announce/subagent-announce-delivery.runtime.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
 import type {
   GatewayRequest,
@@ -148,9 +148,13 @@ export function registerRequesterStartupAdmissionTests({
       const { sessionStorePath } = getFixture();
       const original = registry.getSubagentRunByRunId(runId)!;
       await using capacity = holdWorkerCapacity();
+      const captureRequester = deliveryRuntime.captureRequesterSessionEntryCurrent;
       const read = vi
-        .spyOn(sessionAccessor, "findTranscriptEvent")
-        .mockImplementation(() => capacity.pool.run(undefined, {}));
+        .spyOn(deliveryRuntime, "captureRequesterSessionEntryCurrent")
+        .mockImplementation(async (...args) => {
+          await capacity.pool.run(undefined, {});
+          return captureRequester(...args);
+        });
       const context = createGatewayContext();
       await activate(context);
       const source = getExistingSessionControllerMailbox(
@@ -196,7 +200,7 @@ export function registerRequesterStartupAdmissionTests({
         expect(getRequesterWakeCalls()).toHaveLength(0);
         expect(readWake(runId)).toEqual(original.requesterSettleWake);
       }
-      read.mockResolvedValue(undefined);
+      read.mockRestore();
       await capacity.release();
       await flushOwnedWork();
       const wakes = getRequesterWakeCalls();
@@ -205,7 +209,8 @@ export function registerRequesterStartupAdmissionTests({
         expect(wakes[0]?.params?.idempotencyKey).toBe(
           `announce:requester-settle:main:${MAIN_REQUESTER_SESSION_KEY}:${runId}:yield-1`,
         );
-        expect(wakes[0]?.params?.message).toContain("old result");
+        expect(wakes[0]?.params?.message).toContain("Already delivered child results");
+        expect(wakes[0]?.params?.message).not.toContain("old result");
         expect(registry.getSubagentRunByRunId(runId)).toBeUndefined();
       } else if (outcome === "cancel") {
         expect(readWake(runId)).toBeUndefined();
