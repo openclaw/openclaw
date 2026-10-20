@@ -19,24 +19,26 @@ function wire(value: unknown): unknown {
   return JSON.parse(JSON.stringify(value));
 }
 
-it("clears transient title pending in both event and nested session snapshots", () => {
-  expectBoth(snapshot({ titlePending: true }, { includeSession: true }), { titlePending: true });
-  expectBoth(snapshot({}, { includeSession: true }), { titlePending: false });
-});
-
-it("clears assistant previews in event and nested session snapshots", () => {
-  const previous = snapshot(
-    { lastAssistantMessage: { text: "Previous answer", timestamp: 100 } },
-    { includeSession: true },
-  );
-  const cleared = snapshot({}, { includeSession: true });
-  expectBoth({ ...previous, ...cleared }, { lastAssistantMessage: null });
-});
-
-it("clears automatic-label metadata when a subscribed client merges a later snapshot", () => {
-  const previous = snapshot({ autoLabel: "Device", displayName: "Device" });
-  expect({ ...previous, ...snapshot() }).toMatchObject({ autoLabel: null, displayName: null });
-});
+it.each([
+  ["titlePending", true, false, true],
+  ["lastAssistantMessage", { text: "Previous answer", timestamp: 100 }, null, true],
+  ["autoLabel", "Device", null, false],
+  ["displayName", "Device", null, false],
+  ["contextBudgetStatus", contextBudgetStatusFixture(), null, false],
+  ["deviceFolder", { deviceId: "paired-device", path: "/home/example/project" }, null, false],
+] as const)(
+  "publishes and clears %s in subscribed snapshots",
+  (field, value, cleared, includeSession) => {
+    const previous = snapshot({ [field]: value }, { includeSession });
+    expect(previous).toHaveProperty(field, value);
+    if (includeSession) {
+      expect(previous).toHaveProperty(`session.${field}`, value);
+    }
+    const expected = { [field]: cleared };
+    const current = { ...previous, ...snapshot({}, { includeSession }) };
+    expect(current).toMatchObject(includeSession ? { ...expected, session: expected } : expected);
+  },
+);
 
 it("projects the prepared permission boundary only for an explicit mode", () => {
   const ordinary = snapshot({ sessionRoot: "/workspace/private", updatedAt: 3 });
@@ -218,20 +220,4 @@ it.each([
     ),
     { status, unread: true, lastActivityAt: 200, hasActiveRun: true, endedAt: 200, runtimeMs: 100 },
   );
-});
-
-it("publishes prompt budgets and their invalidation to subscribed sessions", () => {
-  const status = contextBudgetStatusFixture();
-  expect(snapshot({ updatedAt: 2, contextBudgetStatus: status })).toHaveProperty(
-    "contextBudgetStatus",
-    status,
-  );
-  expect(snapshot({ updatedAt: 2 })).toHaveProperty("contextBudgetStatus", null);
-});
-
-it("publishes and clears device folder bindings in subscribed snapshots", () => {
-  const deviceFolder = { deviceId: "paired-device", path: "/home/example/project" };
-  const previous = snapshot({ deviceFolder });
-  expect(previous.deviceFolder).toEqual(deviceFolder);
-  expect({ ...previous, ...snapshot() }).toMatchObject({ deviceFolder: null });
 });

@@ -15,56 +15,54 @@ import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.
 import { readSessionCreateTarget } from "./session-create-target.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
 
-const params = { cfg: {}, commandSource: "test", operatorRoleActor: { kind: "system" as const } };
-function seed(env: NodeJS.ProcessEnv, sessionKey: string) {
-  const scope = { agentId: "main", sessionKey, env };
+const key = "agent:main:create-target";
+const params = {
+  cfg: {},
+  key,
+  commandSource: "test",
+  operatorRoleActor: { kind: "system" as const },
+};
+async function prepareTarget(env: NodeJS.ProcessEnv) {
+  const scope = { agentId: "main", sessionKey: key, env };
   replaceSessionEntrySync(scope, { sessionId: "original", updatedAt: 1 });
-  return scope;
+  const target = await resolveGatewaySessionStoreTargetInWorker({ ...params, env });
+  const database = {
+    agentId: target.agentId,
+    path: resolveOpenClawAgentSqlitePath({ agentId: target.agentId, env }),
+    env,
+  };
+  const read = (commitGuard?: () => void) =>
+    readSessionCreateTarget({ ...params, commitGuard }, target, "original", [key]);
+  return { scope, database, read };
 }
-const readTarget = (
-  target: Parameters<typeof readSessionCreateTarget>[1],
-  commitGuard?: () => void,
-) => readSessionCreateTarget({ ...params, commitGuard }, target, "original", [target.canonicalKey]);
 
-it("prepares the current creation target metadata without caller-thread SQLite", async () => {
+it("prepares current target metadata without caller-thread SQLite", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-    const key = "agent:main:create-target";
-    const scope = seed(env, key);
-    const target = await resolveGatewaySessionStoreTargetInWorker({ ...params, key, env });
-    replaceSessionEntrySync(scope, {
-      sessionId: "original",
-      updatedAt: 2,
+    const { scope, read } = await prepareTarget(env);
+    const metadata = {
       sessionRoot: "/synthetic/current-root",
       skillsSnapshot: { prompt: "current metadata", skills: [] },
-    });
+    };
+    replaceSessionEntrySync(scope, { sessionId: "original", updatedAt: 2, ...metadata });
     const sibling = "agent:main:matrix:channel:!mixed:example.org";
-    replaceSessionEntrySync(
-      { ...scope, sessionKey: sibling },
-      { sessionId: "unrelated", updatedAt: 1 },
-    );
-    const database = openOpenClawAgentDatabase({ agentId: "main", env });
-    database.db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
+    const siblingEntry = { sessionId: "unrelated", updatedAt: 1 };
+    replaceSessionEntrySync({ ...scope, sessionKey: sibling }, siblingEntry);
+    const { db } = openOpenClawAgentDatabase({ agentId: "main", env });
+    db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
       JSON.stringify({
-        sessionId: "unrelated",
-        updatedAt: 1,
+        ...siblingEntry,
         delivery: normalizeSessionDeliveryState({
           context: { channel: "matrix", to: "!Mixed:example.org" },
         }),
       }),
       sibling,
     );
-    database.db
-      .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
-      .run(sibling);
+    db.prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?").run(sibling);
     const sql = observeHostDataSql();
     try {
-      expect(await readTarget(target)).toMatchObject({
+      expect(await read()).toMatchObject({
         ok: true,
-        value: {
-          sessionId: "original",
-          sessionRoot: "/synthetic/current-root",
-          skillsSnapshot: { prompt: "current metadata", skills: [] },
-        },
+        value: { sessionId: "original", ...metadata },
       });
       expect(sql.queries).toEqual([]);
     } finally {
@@ -73,62 +71,39 @@ it("prepares the current creation target metadata without caller-thread SQLite",
   });
 });
 
-it("rechecks creation authority after queued reader admission", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-    const key = "agent:main:create-target-revoked";
-    seed(env, key);
-    const target = await resolveGatewaySessionStoreTargetInWorker({ cfg: {}, key, env });
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const writer = runOpenClawAgentWriteAdmission({ agentId: target.agentId, env }, async () => {
-      entered.resolve();
-      await release.promise;
-    });
-    await entered.promise;
-    let current = true;
-    const revoked = new Error("creation caller revoked");
-    const read = readTarget(target, () => {
-      if (!current) {
-        throw revoked;
-      }
-    });
-    current = false;
-    const refused = expect(read).rejects.toBe(revoked);
-    release.resolve();
-    await Promise.all([writer, refused]);
-  });
-});
-
-it.for(["metadata", "database"] as const)(
-  "prepares creation %s while an unrelated writer remains admitted",
+it.for(["revoked caller", "metadata", "database"] as const)(
+  "prepares creation with an admitted writer: %s",
   async (preparation, { signal }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-      const key = "agent:main:create-target-unblocked";
-      seed(env, key);
-      const target = await resolveGatewaySessionStoreTargetInWorker({ cfg: {}, key, env });
-      const database = {
-        agentId: target.agentId,
-        path: resolveOpenClawAgentSqlitePath({ agentId: target.agentId, env }),
-        env,
-      };
+      const { database, read } = await prepareTarget(env);
       const execution = captureOpenClawAgentDatabaseExecution(database);
+      const prepare = () => prepareSessionEntryReplacementDatabase(database, () => {}, execution);
       const entered = createDeferredCore();
       const release = createDeferredCore();
       let writer: Promise<void> | undefined;
       try {
-        await prepareSessionEntryReplacementDatabase(database, () => {}, execution);
+        await prepare();
         writer = runOpenClawAgentWriteAdmission(database, async () => {
           entered.resolve();
           await release.promise;
         });
         await withinTest(entered.promise, signal);
-        if (preparation === "database") {
-          await withinTest(
-            prepareSessionEntryReplacementDatabase(database, () => {}, execution),
-            signal,
-          );
+        if (preparation === "revoked caller") {
+          let current = true;
+          const revoked = new Error("creation caller revoked");
+          const pending = read(() => {
+            if (!current) {
+              throw revoked;
+            }
+          });
+          current = false;
+          const refused = expect(pending).rejects.toBe(revoked);
+          release.resolve();
+          await Promise.all([writer, refused]);
+        } else if (preparation === "database") {
+          await withinTest(prepare(), signal);
         } else {
-          expect(await withinTest(readTarget(target), signal)).toMatchObject({
+          expect(await withinTest(read(), signal)).toMatchObject({
             ok: true,
             value: { sessionId: "original", updatedAt: 1 },
           });
