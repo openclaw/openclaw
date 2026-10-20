@@ -1,22 +1,32 @@
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
-import type { ChannelInboundTurnPlan } from "openclaw/plugin-sdk/channel-inbound";
-import path from "node:path";
 import { mkdir, writeFile } from "node:fs/promises";
-import { createPluginRuntimeMock, createTestRegistry, setActivePluginRegistry } from "openclaw/plugin-sdk/channel-test-helpers";
-import { closeOpenClawStateDatabaseAsync, closeOpenClawStateDatabaseForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import path from "node:path";
+import type { ChannelInboundTurnPlan } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  createPluginRuntimeMock,
+  createTestRegistry,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/channel-test-helpers";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
+import { nextcloudTalkPlugin } from "../channel-plugin-api.js";
 import type { PluginRuntime } from "../runtime-api.js";
 import { resolveNextcloudTalkAccount, type ResolvedNextcloudTalkAccount } from "./accounts.js";
-import { nextcloudTalkPlugin } from "../channel-plugin-api.js";
-import { withNextcloudTalkOutboundFixture, type NextcloudTalkOutboundFixture } from "./outbound-media.test-harness.js";
 import {
   createAccount as createFixtureAccount,
   createMessage,
   requireFirstMockArg,
 } from "./inbound-media.test-fixtures.js";
 import { handleNextcloudTalkInbound } from "./inbound.js";
+import {
+  withNextcloudTalkOutboundFixture,
+  type NextcloudTalkOutboundFixture,
+} from "./outbound-media.test-harness.js";
 import { setNextcloudTalkRuntime } from "./runtime.js";
 import type { CoreConfig } from "./types.js";
 
@@ -130,6 +140,9 @@ function dispatched(runtime: ReturnType<typeof createPluginRuntimeMock>) {
 type AutomaticReplyFixture = NextcloudTalkOutboundFixture & { mediaUrl: string };
 type ProviderReplyDelivery = ChannelInboundTurnPlan<"provider_message_sending">["delivery"];
 type NativeReplyDelivery = ProviderReplyDelivery["deliverWithProviderMessageSending"];
+type ProviderReplyDispatch = (
+  request: ChannelInboundTurnPlan<"provider_message_sending">,
+) => ReturnType<PluginRuntime["channel"]["inbound"]["dispatch"]>;
 
 type AutomaticReplyContext = {
   fixture: AutomaticReplyFixture;
@@ -202,7 +215,8 @@ async function withNativeAutomaticReply(
           onAbandoned: async () => {},
         },
       });
-      const request = vi.mocked(core.channel.inbound.dispatch).mock.calls[0]?.[0];
+      const request = vi.mocked<ProviderReplyDispatch>(core.channel.inbound.dispatch).mock
+        .calls[0]?.[0];
       if (!request) {
         throw new Error("expected admitted automatic reply delivery");
       }
@@ -222,10 +236,11 @@ async function withNativeAutomaticReply(
           if (prepared === null) {
             return { visibleReplySent: false };
           }
-          if (!("deliverWithProviderMessageSending" in request.delivery)) {
+          const delivery = request.delivery;
+          if (typeof delivery.deliverWithProviderMessageSending !== "function") {
             throw new Error("expected provider message sending");
           }
-          return await request.delivery.deliverWithProviderMessageSending(prepared, info);
+          return await delivery.deliverWithProviderMessageSending(prepared, info);
         },
       });
     } finally {

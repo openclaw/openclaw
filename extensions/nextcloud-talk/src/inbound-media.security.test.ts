@@ -349,7 +349,7 @@ describe("nextcloud-talk inbound media security", () => {
     );
 
     const request = requireFirstMockArg(
-      coreRuntime.channel.inbound.dispatchReply as ReturnType<typeof vi.fn>,
+      coreRuntime.channel.inbound.dispatch as ReturnType<typeof vi.fn>,
       "Nextcloud Talk group staged-media dispatch",
     ) as {
       accountId?: string;

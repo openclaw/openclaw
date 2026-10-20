@@ -7,27 +7,25 @@ import {
   recordOutboundMessageIdentity,
   type ChannelMessageSendMediaContext,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import {
   readProviderJsonResponse,
   readProviderTextResponse,
 } from "openclaw/plugin-sdk/provider-http";
 import { sanitizeUntrustedFileName } from "openclaw/plugin-sdk/security-runtime";
+import { ssrfPolicyFromPrivateNetworkOptIn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
+import { fetchWithSsrFGuard } from "../runtime-api.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 import { resolveNextcloudTalkAccount } from "./accounts.js";
 import { resolveNextcloudTalkApiCredentialsResult } from "./api-credentials.js";
 import { releaseNextcloudTalkGuardedResponse } from "./guarded-response.js";
 import { stripNextcloudTalkTargetPrefix } from "./normalize.js";
-import {
-  convertMarkdownTables,
-  fetchWithSsrFGuard,
-  getOptionalNextcloudTalkRuntime,
-  resolveMarkdownTableMode,
-  ssrfPolicyFromPrivateNetworkOptIn,
-} from "./send.runtime.js";
-import type { CoreConfig, NextcloudTalkInboundMessage, NextcloudTalkSendResult } from "./types.js";
+import { getOptionalNextcloudTalkRuntime } from "./runtime.js";
+import type { NextcloudTalkInboundMessage, NextcloudTalkSendResult } from "./types.js";
 import { parseWebDavFileId } from "./webdav.js";
 
 const OUTBOUND_FILE_PREFIX = /^openclaw-([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})-/u;
@@ -245,7 +243,7 @@ export async function sendMediaNextcloudTalk(
   ctx: ChannelMessageSendMediaContext,
 ): Promise<NextcloudTalkSendResult> {
   const account = resolveNextcloudTalkAccount({
-    cfg: ctx.cfg as CoreConfig,
+    cfg: ctx.cfg,
     accountId: ctx.accountId,
   });
   if (!account.enabled || !account.baseUrl || !account.secret) {

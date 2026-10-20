@@ -72,6 +72,23 @@ function sendNextcloudTalkMessage(
   });
 }
 
+function isWebAttachmentUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (
+      (url.protocol === "https:" || url.protocol === "http:") &&
+      !url.username &&
+      !url.password &&
+      !Array.from(value).some((character) => {
+        const code = character.charCodeAt(0);
+        return code <= 0x20 || code === 0x7f;
+      })
+    );
+  } catch {
+    return false;
+  }
+}
+
 const nextcloudTalkMessageAdapter = defineChannelMessageAdapter({
   id: "nextcloud-talk",
   durableFinal: {
@@ -83,11 +100,33 @@ const nextcloudTalkMessageAdapter = defineChannelMessageAdapter({
   },
   send: {
     text: sendNextcloudTalkMessage,
-    media: (ctx) =>
-      sendNextcloudTalkMessage(
-        ctx,
-        ctx.mediaUrl ? `${ctx.text}\n\nAttachment: ${ctx.mediaUrl}` : ctx.text,
-      ),
+    media: async (ctx) => {
+      if (!ctx.mediaUrl) {
+        return sendNextcloudTalkMessage(ctx);
+      }
+      const account = resolveNextcloudTalkAccount({ cfg: ctx.cfg, accountId: ctx.accountId });
+      if (
+        account.enabled &&
+        !account.config.apiUser?.trim() &&
+        account.config.apiPassword === undefined &&
+        !account.config.apiPasswordFile?.trim() &&
+        isWebAttachmentUrl(ctx.mediaUrl)
+      ) {
+        ctx.signal?.throwIfAborted();
+        return sendNextcloudTalkMessage(
+          {
+            ...ctx,
+            assertDirectAdapterHandoff: () => {
+              ctx.signal?.throwIfAborted();
+              ctx.assertDirectAdapterHandoff?.();
+            },
+          },
+          `${ctx.text}\n\nAttachment: ${ctx.mediaUrl}`,
+        );
+      }
+      const { sendMediaNextcloudTalk } = await import("./outbound-media.js");
+      return sendMediaNextcloudTalk(ctx);
+    },
   },
 });
 

@@ -616,7 +616,7 @@ export async function handleNextcloudTalkInbound(params: {
         deliverWithProviderMessageSending: async (payload, info) => {
           const { deliverNextcloudTalkReply } = await import("./reply.js");
           return await deliverNextcloudTalkReply({
-            cfg: config as OpenClawConfig,
+            cfg: config,
             accountId: account.accountId,
             agentId: route.agentId,
             ctxPayload,
