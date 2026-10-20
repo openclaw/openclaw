@@ -383,9 +383,8 @@ async function executeJobCoreWithTimeoutUnfinalized(
       streamBatch: opts?.streamBatch,
       streamScheduleKey: opts?.streamScheduleKey,
       streamSourceIdentity: opts?.streamSourceIdentity,
-      // Pending main-session events retain cancellation until their exact occurrence is adopted.
-      onPayloadExecutionStarted:
-        detachedPayload || awaitsEventAdoption ? undefined : releaseCronTaskRun,
+      // Main-session receipt adapters defer this handoff until their occurrence is adopted.
+      onPayloadExecutionStarted: detachedPayload ? undefined : releaseCronTaskRun,
       onExecutionStarted: trackExecution ? noteRunnerStarted : undefined,
       onExecutionPhase: trackExecution ? (watchdog?.notePhase ?? accumulateExecution) : undefined,
       onLaneWait: watchdog && deferTimeoutUntilExecutionStart ? noteLaneState : undefined,

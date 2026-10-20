@@ -144,7 +144,13 @@ export async function executeJobCore(
       };
     }
   }
-  options?.onPayloadExecutionStarted?.();
+  if (
+    effectiveJob.sessionTarget !== "main" ||
+    effectiveJob.payload.kind !== "systemEvent" ||
+    isHeartbeatTaskCronJob(effectiveJob)
+  ) {
+    options?.onPayloadExecutionStarted?.();
+  }
   if (effectiveJob.payload.kind === "script") {
     const result = await executeScriptCronJob(state, effectiveJob, abortSignal, options);
     return triggerEval ? { ...result, triggerEval } : result;
@@ -205,12 +211,7 @@ export async function executeJobCore(
     return triggerEval ? { ...result, triggerEval } : result;
   }
   if (effectiveJob.sessionTarget === "main") {
-    const result = await executeMainSessionCronJob(
-      state,
-      effectiveJob,
-      abortSignal,
-      options?.onHeartbeatExecutionStarted,
-    );
+    const result = await executeMainSessionCronJob(state, effectiveJob, abortSignal, options);
     return triggerEval ? { ...result, triggerEval } : result;
   }
 
@@ -222,7 +223,7 @@ async function executeMainSessionCronJob(
   state: CronServiceState,
   job: CronJob,
   abortSignal: AbortSignal | undefined,
-  onHeartbeatExecutionStarted?: ExecuteJobCoreOptions["onHeartbeatExecutionStarted"],
+  options?: ExecuteJobCoreOptions,
 ): Promise<
   CronRunOutcome &
     CronRunTelemetry &
@@ -254,6 +255,10 @@ async function executeMainSessionCronJob(
       ...(deliveryContext ? { deliveryContext } : {}),
     }),
   );
+  if (!queuedSystemEvent.adopted) {
+    // Legacy adapters transfer custody at enqueue; receipt adapters retain it through adoption.
+    options?.onPayloadExecutionStarted?.();
+  }
   const heartbeatWake = {
     source: "cron" as const,
     intent: job.wakeMode === "now" ? ("immediate" as const) : ("event" as const),
@@ -263,7 +268,7 @@ async function executeMainSessionCronJob(
   };
   const removeQueuedSystemEvent = () =>
     removeQueuedSystemEventHandle(state, job, queuedSystemEvent);
-  const heartbeatWaitLifecycle = onHeartbeatExecutionStarted?.(heartbeatWake);
+  const heartbeatWaitLifecycle = options?.onHeartbeatExecutionStarted?.(heartbeatWake);
   const settleAdoption = async () => {
     if (!queuedSystemEvent.accepted) {
       return { status: "error" as const, error: "main-session event was not accepted" };
