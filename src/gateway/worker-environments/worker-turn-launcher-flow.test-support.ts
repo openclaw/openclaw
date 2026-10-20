@@ -10,22 +10,7 @@ import {
   type WorkerLaunchPlan,
 } from "../../worker/launch-descriptor.js";
 import type { WorkerTunnelHandle, WorkerTurnTunnelHandle } from "./tunnel-contract.js";
-import {
-  attachedEnvironment,
-  credential,
-  SESSION_ID,
-  sessionTarget,
-  turn,
-  openSessionManager,
-  acknowledgeCompletedWorkerTurn,
-  createWorkerSessionTurnPlacementProvider,
-  placements,
-  unusedEnvironments,
-  ENVIRONMENT_ID,
-  OWNER_EPOCH,
-  reconcileUnchangedLocalWorkspace,
-  type WorkerTurnEnvironmentService,
-} from "./worker-turn-launcher.test-support.js";
+import * as fx from "./worker-turn-launcher.test-support.js";
 
 export const localResult = async () => ({ meta: { durationMs: 1 } });
 
@@ -36,10 +21,14 @@ export const completedWorkerMessage = () =>
   });
 
 export function createLauncher(
-  options: Partial<Parameters<typeof createWorkerSessionTurnPlacementProvider>[0]> = {},
+  options: Partial<Parameters<typeof fx.createWorkerSessionTurnPlacementProvider>[0]> = {},
 ) {
-  const { environments = unusedEnvironments(), ...overrides } = options;
-  return createWorkerSessionTurnPlacementProvider({ placements, environments, ...overrides });
+  const { environments = fx.unusedEnvironments(), ...overrides } = options;
+  return fx.createWorkerSessionTurnPlacementProvider({
+    placements: fx.placements,
+    environments,
+    ...overrides,
+  });
 }
 
 export function expectUncalled(...mocks: unknown[]) {
@@ -53,10 +42,8 @@ export async function completeTurn(
   text: string,
   timestamp: number,
 ) {
-  const leaf = await (
-    await openSessionManager()
-  ).appendMessageAsync(makeAgentAssistantMessage({ content: [{ type: "text", text }], timestamp }));
-  return acknowledgeCompletedWorkerTurn(request.turnClaim, leaf);
+  const leaf = await fx.appendWorkerReply(text, timestamp);
+  return fx.acknowledgeCompletedWorkerTurn(request.turnClaim, leaf);
 }
 
 export function launchDescriptor(plan: WorkerLaunchPlan) {
@@ -71,14 +58,14 @@ export async function revocableTurn(
   authority: "source" | "admitted",
   boundary: string,
 ) {
-  const base = turn(runId);
+  const base = fx.turn(runId);
   let sourceLive = true;
   const admission = prepareAgentRunAdmission({
     cfg: base.config,
     operationalRunInstance: createOperationalRunInstanceRef(base.runId),
     facts: {
       runId,
-      agentId: sessionTarget.agentId,
+      agentId: fx.sessionTarget.agentId,
       ingress: { kind: "worker", boundary, state: "present" },
     },
     assertSourceCurrent: () => {
@@ -89,51 +76,46 @@ export async function revocableTurn(
   });
   const admitted = authority === "admitted" ? await admission.admit("embedded") : undefined;
   const close = () => admission.close();
+  const revoke = admitted
+    ? () => closeAdmittedRunDelegatedAuthority(admitted)
+    : () => {
+        sourceLive = false;
+      };
   return {
     input: {
       ...base,
       preparedRunAdmission: admitted ? undefined : admission,
       admittedRunContext: admitted,
     },
-    revoke: () => {
-      if (admitted) {
-        closeAdmittedRunDelegatedAuthority(admitted);
-      } else {
-        sourceLive = false;
-      }
-    },
+    revoke,
     close,
     [Symbol.dispose]: close,
   };
 }
 
 export function runIdentity(runId: string) {
-  return {
-    sessionId: SESSION_ID,
-    sessionKey: sessionTarget.sessionKey,
-    agentId: sessionTarget.agentId,
-    runId,
-  };
+  const { sessionKey, agentId } = fx.sessionTarget;
+  return { sessionId: fx.SESSION_ID, sessionKey, agentId, runId };
 }
 
 export function executeTurn(
-  provider: ReturnType<typeof createWorkerSessionTurnPlacementProvider>,
+  provider: ReturnType<typeof fx.createWorkerSessionTurnPlacementProvider>,
   runId: string,
   runLocal = localResult,
 ) {
-  return provider.executeTurn(runIdentity(runId), turn(runId), runLocal);
+  return provider.executeTurn(runIdentity(runId), fx.turn(runId), runLocal);
 }
 
 export function environmentForTunnel(
-  overrides: Pick<WorkerTurnEnvironmentService, "startTunnel"> &
-    Partial<WorkerTurnEnvironmentService>,
-): WorkerTurnEnvironmentService {
+  overrides: Pick<fx.WorkerTurnEnvironmentService, "startTunnel"> &
+    Partial<fx.WorkerTurnEnvironmentService>,
+): fx.WorkerTurnEnvironmentService {
   return {
-    get: vi.fn(attachedEnvironment),
-    acquireTurnCredential: vi.fn(async () => credential()),
+    get: vi.fn(fx.attachedEnvironment),
+    acquireTurnCredential: vi.fn(async () => fx.credential()),
     acknowledgeCredentialDelivery: vi.fn(async () => true),
     stopTunnel: vi.fn(async () => {}),
-    destroy: vi.fn(async () => attachedEnvironment()),
+    destroy: vi.fn(async () => fx.attachedEnvironment()),
     ...overrides,
   };
 }
@@ -143,17 +125,17 @@ export function remoteExecEnvironment(
   onStart?: () => void,
 ) {
   const tunnel: WorkerTunnelHandle = {
-    environmentId: ENVIRONMENT_ID,
-    ownerEpoch: OWNER_EPOCH,
+    environmentId: fx.ENVIRONMENT_ID,
+    ownerEpoch: fx.OWNER_EPOCH,
     runWorkspaceCommand,
     quiesceWorkspace: async () => ({ assertActive: async () => {}, resume: async () => {} }),
-    reconcileWorkspace: reconcileUnchangedLocalWorkspace,
+    reconcileWorkspace: fx.reconcileUnchangedLocalWorkspace,
     syncWorkspace: vi.fn(),
     stop: async () => {},
   };
   return {
-    ...unusedEnvironments(),
-    get: vi.fn(attachedEnvironment),
+    ...fx.unusedEnvironments(),
+    get: vi.fn(fx.attachedEnvironment),
     startTunnel: vi.fn(async () => {
       onStart?.();
       return tunnel;

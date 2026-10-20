@@ -33,29 +33,7 @@ import {
   localResult as defaultLocalResult,
   runIdentity,
 } from "./worker-turn-launcher-flow.test-support.js";
-import {
-  createWorkerTurnTunnel,
-  ENVIRONMENT_ID,
-  MANIFEST_REF,
-  root,
-  sessionTarget,
-  withWorkerCompactionAdoption,
-  type WorkerTurnEnvironmentService,
-  OWNER_EPOCH,
-  SESSION_ID,
-  SESSION_KEY,
-  attachedEnvironment,
-  credential,
-  cleanupWorkerTurnLauncherTest,
-  computerDescriptor,
-  readLaunchToolNames,
-  measureLaunchTurn,
-  placements,
-  seedActivePlacement,
-  setupWorkerTurnLauncherTest,
-  turn,
-  unusedEnvironments,
-} from "./worker-turn-launcher.test-support.js";
+import * as fx from "./worker-turn-launcher.test-support.js";
 
 afterAll(closeStateDatabaseForTest);
 
@@ -65,12 +43,34 @@ vi.mock("../github-publication-discovery.js", () => ({
   readGitHubPublicationFact: readGitHubFact,
 }));
 
+const primaryModes = [
+  "provider",
+  "overload",
+  "http-507",
+  "abort",
+  "timeout",
+  "returned",
+  "returned-abort",
+  "returned-timeout",
+  "returned-success",
+] as const;
+const remoteCase = (
+  label: string,
+  nodeDeviceId: string | undefined,
+  providerId = "device",
+  overrides: {
+    primary?: (typeof primaryModes)[number];
+    closeFails?: boolean;
+    pauseSkillCleanup?: boolean;
+  } = {},
+) => ({ label, nodeDeviceId, providerId, closeFails: false, ...overrides });
+
 describe("worker launch capabilities", () => {
-  beforeEach(setupWorkerTurnLauncherTest);
+  beforeEach(fx.setupWorkerTurnLauncherTest);
   beforeEach(() => {
     readGitHubFact.mockReset().mockReturnValue({ available: false });
   });
-  afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
+  afterEach(() => fx.cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
 
   it.each([
     { label: "available", available: true, revoked: false },
@@ -79,7 +79,7 @@ describe("worker launch capabilities", () => {
   ])(
     "carries only a current GitHub identity in the launch envelope ($label)",
     async ({ available, revoked }) => {
-      await seedActivePlacement();
+      await fx.seedActivePlacement();
       const github: WorkerGitHubLaunchBinding = {
         token: "synthetic-turn-bound-github-token",
         login: "shared-bot",
@@ -113,7 +113,7 @@ describe("worker launch capabilities", () => {
           throw new WorkerRunnerCapacityError();
         },
       );
-      const tunnel: WorkerTunnelHandle = createWorkerTurnTunnel({
+      const tunnel: WorkerTunnelHandle = fx.createWorkerTurnTunnel({
         launchTurn: async (request) => {
           request.assertCurrent?.();
           return dispatchLaunch(request);
@@ -123,7 +123,7 @@ describe("worker launch capabilities", () => {
             expect(plan.assignment.github).toEqual(github);
             current = false;
           }
-          return measureLaunchTurn(plan, claim);
+          return fx.measureLaunchTurn(plan, claim);
         },
         stageAttachments: vi.fn(),
         quiesceWorkspace: vi.fn(),
@@ -132,17 +132,17 @@ describe("worker launch capabilities", () => {
       });
       let publicationOffered = false;
       const createGatewayTools: NonNullable<
-        WorkerTurnEnvironmentService["createGatewayTools"]
+        fx.WorkerTurnEnvironmentService["createGatewayTools"]
       > = async ({ prepareTools }) => {
         const tools = (await prepareTools?.([])) ?? [];
         publicationOffered = tools.some((tool) => tool.name === "github_publish");
         return tools;
       };
       const environments = {
-        ...unusedEnvironments(),
+        ...fx.unusedEnvironments(),
         createGatewayTools,
-        get: vi.fn(() => attachedEnvironment()),
-        acquireTurnCredential: vi.fn(async () => credential()),
+        get: vi.fn(() => fx.attachedEnvironment()),
+        acquireTurnCredential: vi.fn(async () => fx.credential()),
         startTunnel: vi.fn(async () => tunnel),
       };
       const provider = createLauncher({ environments });
@@ -168,12 +168,12 @@ describe("worker launch capabilities", () => {
   ])(
     "grants computer with negotiated features, supervisor vocabulary, and model vision (%j)",
     async ({ missingFeature, modelHasVision, supervisorAdmitsComputer = true, allowed }) => {
-      await seedActivePlacement();
-      const environment = attachedEnvironment();
+      await fx.seedActivePlacement();
+      const environment = fx.attachedEnvironment();
       if (!missingFeature) {
         environment.bootstrapReceipt!.protocolFeatures.push(WORKER_COMPUTER_PROTOCOL_FEATURE);
       }
-      const computer = computerDescriptor("worker-desktop");
+      const computer = fx.computerDescriptor("worker-desktop");
       const image = {
         type: "image" as const,
         data: createSolidPngBuffer(2, 2, { r: 255, g: 0, b: 0 }).toString("base64"),
@@ -193,10 +193,10 @@ describe("worker launch capabilities", () => {
         expect(plan.assignment.toolAuthority.allowedToolNames.includes("computer")).toBe(allowed);
         throw new WorkerRunnerCapacityError();
       });
-      const tunnel: WorkerTunnelHandle = createWorkerTurnTunnel({
+      const tunnel: WorkerTunnelHandle = fx.createWorkerTurnTunnel({
         launchTurn,
         readLaunchToolNames: async () =>
-          (await readLaunchToolNames()).filter(
+          (await fx.readLaunchToolNames()).filter(
             (name) => supervisorAdmitsComputer || name !== "computer",
           ),
         stageAttachments: vi.fn(async () => {}),
@@ -205,9 +205,9 @@ describe("worker launch capabilities", () => {
         reconcileWorkspace: vi.fn(),
       });
       const environments = {
-        ...unusedEnvironments(),
+        ...fx.unusedEnvironments(),
         get: vi.fn(() => environment),
-        acquireTurnCredential: vi.fn(async () => credential()),
+        acquireTurnCredential: vi.fn(async () => fx.credential()),
         startTunnel: vi.fn(async () => tunnel),
         prepareComputer,
       };
@@ -215,7 +215,7 @@ describe("worker launch capabilities", () => {
       await expect(
         provider.executeTurn(
           runIdentity("run-computer"),
-          { ...turn("run-computer"), toolsAllow: ["computer"], modelHasVision, images: [image] },
+          { ...fx.turn("run-computer"), toolsAllow: ["computer"], modelHasVision, images: [image] },
           defaultLocalResult,
         ),
       ).rejects.toBeInstanceOf(WorkerRunnerCapacityError);
@@ -228,59 +228,16 @@ describe("worker launch capabilities", () => {
     },
   );
 
-  it.each<{
-    label: string;
-    nodeDeviceId?: string;
-    providerId: string;
-    closeFails: boolean;
-    primary?:
-      | "provider"
-      | "overload"
-      | "http-507"
-      | "abort"
-      | "timeout"
-      | "returned"
-      | "returned-abort"
-      | "returned-timeout"
-      | "returned-success";
-    pauseSkillCleanup?: boolean;
-  }>([
-    { label: "SSH", providerId: "fake", closeFails: false },
-    {
-      label: "paired-device",
-      nodeDeviceId: "paired-node-1",
-      providerId: "device",
-      closeFails: false,
-    },
-    { label: "cloud-node", nodeDeviceId: "cloud-node-1", providerId: "crabbox", closeFails: false },
-    { label: "cloud-node", nodeDeviceId: "cloud-node-1", providerId: "crabbox", closeFails: true },
-    {
-      label: "paused skill cleanup",
-      nodeDeviceId: "paired-node-1",
-      providerId: "device",
-      closeFails: false,
-      pauseSkillCleanup: true,
-    },
-    ...(
-      [
-        "provider",
-        "overload",
-        "http-507",
-        "abort",
-        "timeout",
-        "returned",
-        "returned-abort",
-        "returned-timeout",
-        "returned-success",
-      ] as const
-    ).flatMap((primary) =>
-      (primary.startsWith("returned") ? [true] : [false, true]).map((closeFails) => ({
-        label: primary,
-        nodeDeviceId: "paired-node-1",
-        providerId: "device",
-        primary,
-        closeFails,
-      })),
+  it.each([
+    remoteCase("SSH", undefined, "fake"),
+    remoteCase("paired-device", "paired-node-1"),
+    remoteCase("cloud-node", "cloud-node-1", "crabbox"),
+    remoteCase("cloud-node", "cloud-node-1", "crabbox", { closeFails: true }),
+    remoteCase("paused skill cleanup", "paired-node-1", "device", { pauseSkillCleanup: true }),
+    ...primaryModes.flatMap((primary) =>
+      (primary.startsWith("returned") ? [true] : [false, true]).map((closeFails) =>
+        remoteCase(primary, "paired-node-1", "device", { primary, closeFails }),
+      ),
     ),
   ])(
     "settles $label remote-exec output and restores attachment prompts before cleanup (close fails: $closeFails)",
@@ -350,17 +307,17 @@ describe("worker launch capabilities", () => {
         attachErrorDiagnostic(primaryError, "original provider diagnostic");
         Object.freeze(primaryError);
       }
-      const remote = path.join(await realpath(root), "remote");
+      const remote = path.join(await realpath(fx.root), "remote");
       await mkdir(remote);
       const bytes = Buffer.from("remote attachment");
       const saved = await saveMediaBuffer(bytes, "text/plain", "inbound", bytes.length, "note.txt");
       const inputTurn = {
-        ...turn("run-remote-exec"),
+        ...fx.turn("run-remote-exec"),
         transcriptPrompt: "Canonical transcript request",
         media: [{ path: saved.path, contentType: "text/plain" }],
       };
       const originalPrompt = inputTurn.prompt;
-      await seedActivePlacement("remote-exec", remote);
+      await fx.seedActivePlacement("remote-exec", remote);
       const order: string[] = [];
       const launchTurn = vi.fn();
       const quiesceWorkspace = vi.fn(async () => {
@@ -378,9 +335,9 @@ describe("worker launch capabilities", () => {
             throw new Error("expected a local workspace source");
           }
           order.push("reconcile");
-          await request.source.journal.commit(MANIFEST_REF);
+          await request.source.journal.commit(fx.MANIFEST_REF);
           return {
-            manifestRef: MANIFEST_REF,
+            manifestRef: fx.MANIFEST_REF,
             changed: false,
             verifyStable: vi.fn(async () => {}),
             verifyLocalStable: vi.fn(async () => {}),
@@ -389,7 +346,7 @@ describe("worker launch capabilities", () => {
           };
         },
       );
-      const tunnel: WorkerTunnelHandle = createWorkerTurnTunnel({
+      const tunnel: WorkerTunnelHandle = fx.createWorkerTurnTunnel({
         launchTurn,
         runWorkspaceCommand: async (command) =>
           await runCommandWithTimeout([...command.argv], {
@@ -414,18 +371,18 @@ describe("worker launch capabilities", () => {
         }
       });
       const computer: PreparedWorkerComputer = {
-        descriptor: computerDescriptor(nodeDeviceId ?? "unused-ssh-node"),
+        descriptor: fx.computerDescriptor(nodeDeviceId ?? "unused-ssh-node"),
         bind: () => {
           throw new Error("unexpected computer binding");
         },
         close: closeComputer,
       };
-      const environments: WorkerTurnEnvironmentService = {
-        ...unusedEnvironments(),
+      const environments: fx.WorkerTurnEnvironmentService = {
+        ...fx.unusedEnvironments(),
         get: vi.fn(() =>
           nodeDeviceId
-            ? { ...attachedEnvironment(), providerId, nodeDeviceId, sshEndpoint: null }
-            : attachedEnvironment(),
+            ? { ...fx.attachedEnvironment(), providerId, nodeDeviceId, sshEndpoint: null }
+            : fx.attachedEnvironment(),
         ),
         startTunnel: vi.fn(async () => tunnel),
         prepareComputer: vi.fn(async () => (nodeDeviceId ? computer : undefined)),
@@ -434,24 +391,24 @@ describe("worker launch capabilities", () => {
       const successorGate = vi.spyOn(provider, "assertCompactionSuccessorAllowed");
       let retainedNodeAuthority: (() => void) | undefined;
       const runLocal = vi.fn(() =>
-        withWorkerCompactionAdoption("run-remote-exec", async (adopt) => {
+        fx.withWorkerCompactionAdoption("run-remote-exec", async (adopt) => {
           order.push("local");
           expect(inputTurn.prompt).toContain(`${originalPrompt}\n\nCurrent attachment originals`);
           expect(inputTurn.transcriptPrompt).toBe("Canonical transcript request");
-          const placementBefore = placements.get(SESSION_ID);
-          const entryBefore = loadSessionEntry(sessionTarget);
+          const placementBefore = fx.placements.get(fx.SESSION_ID);
+          const entryBefore = loadSessionEntry(fx.sessionTarget);
           expect(placementBefore?.turnClaim).toMatchObject({
             owner: "local",
             runId: "run-remote-exec",
           });
-          await expect(adopt(SESSION_ID)).resolves.toBeUndefined();
+          await expect(adopt(fx.SESSION_ID)).resolves.toBeUndefined();
           expect(successorGate).not.toHaveBeenCalled();
           await expect(adopt("session-remote-successor")).rejects.toThrow(
             /worker placement.*same session ID/u,
           );
-          expect(placements.get(SESSION_ID)).toEqual(placementBefore);
-          expect(loadSessionEntry(sessionTarget)).toEqual(entryBefore);
-          expect(await placements.getAsync("session-remote-successor")).toBeUndefined();
+          expect(fx.placements.get(fx.SESSION_ID)).toEqual(placementBefore);
+          expect(loadSessionEntry(fx.sessionTarget)).toEqual(entryBefore);
+          expect(await fx.placements.getAsync("session-remote-successor")).toBeUndefined();
           if (nodeDeviceId) {
             const assertCurrent = getPluginRuntimeGatewayRequestScope()?.assertNodeExecutionCurrent;
             expect(assertCurrent).toBeTypeOf("function");
@@ -461,10 +418,10 @@ describe("worker launch capabilities", () => {
               nodeId: nodeDeviceId,
               workspace: {
                 workspaceDir: remote,
-                environmentId: ENVIRONMENT_ID,
-                sessionId: SESSION_ID,
-                sessionKey: SESSION_KEY,
-                ownerEpoch: OWNER_EPOCH,
+                environmentId: fx.ENVIRONMENT_ID,
+                sessionId: fx.SESSION_ID,
+                sessionKey: fx.SESSION_KEY,
+                ownerEpoch: fx.OWNER_EPOCH,
               },
             };
             retainedNodeAuthority = () => assertCurrent!(request);
@@ -473,7 +430,7 @@ describe("worker launch capabilities", () => {
               { ...request, runId: "other" },
               { ...request, nodeId: "other" },
               ...[
-                { ownerEpoch: OWNER_EPOCH + 1 },
+                { ownerEpoch: fx.OWNER_EPOCH + 1 },
                 { environmentId: "other" },
                 { sessionId: "other" },
                 { workspaceDir: "/other" },
@@ -485,7 +442,7 @@ describe("worker launch capabilities", () => {
             ]) {
               expect(() => assertCurrent!(changed)).toThrow("no longer current");
             }
-            const original = environments.get(ENVIRONMENT_ID)!;
+            const original = environments.get(fx.ENVIRONMENT_ID)!;
             if (original.state !== "attached") {
               throw new Error("expected an attached environment");
             }
@@ -527,7 +484,7 @@ describe("worker launch capabilities", () => {
       try {
         if (resourceCleanup) {
           await resourceCleanup.entered.promise;
-          expect(placements.get(SESSION_ID)?.turnClaim).not.toBeNull();
+          expect(fx.placements.get(fx.SESSION_ID)?.turnClaim).not.toBeNull();
           expect(retainedNodeAuthority).toThrow("no longer current");
           expect(closeComputer).not.toHaveBeenCalled();
           resourceCleanup.release.resolve();
@@ -604,14 +561,11 @@ describe("worker launch capabilities", () => {
             if (localResult.meta.error) {
               expect(result.meta.error?.message).toContain(localResult.meta.error.message);
             }
-            expect(result.meta).toEqual({
-              ...localResult.meta,
-              error: result.meta.error,
-              replayInvalid: true,
+            expect(result).toEqual({
+              ...localResult,
+              payloads: [...(localResult.payloads ?? []), diagnostic],
+              meta: { ...localResult.meta, error: result.meta.error, replayInvalid: true },
             });
-            expect(result.payloads?.slice(0, -1)).toEqual(localResult.payloads);
-            expect(result.didSendViaMessagingTool).toBe(localResult.didSendViaMessagingTool);
-            expect(result.messagingToolSentTexts).toEqual(localResult.messagingToolSentTexts);
             expect(JSON.stringify(result)).not.toContain(secret);
             const runCandidate = vi.fn(async () => result);
             const entry = await runEmbeddedAgentEntry({
@@ -622,10 +576,10 @@ describe("worker launch capabilities", () => {
                 manifestPlugins: [],
                 fallbacksOverride: ["fixture-next/fixture-model"],
               },
-              identity: { runId: "settlement-entry", agentId: "main", sessionId: SESSION_ID },
+              identity: { runId: "settlement-entry", agentId: "main", sessionId: fx.SESSION_ID },
               harness: {
-                workspaceDir: root,
-                sessionKey: SESSION_KEY,
+                workspaceDir: fx.root,
+                sessionKey: fx.SESSION_KEY,
                 preparation: { kind: "direct" },
                 resolveRuntimeOverride: () => "openclaw",
               },
@@ -640,8 +594,10 @@ describe("worker launch capabilities", () => {
             );
             expect(entry.terminal.metadata.replayInvalid).toBe(true);
             if (returnedInterruption) {
-              expect(entry.terminal.metadata.aborted).toBe(true);
-              expect(entry.terminal.metadata.stopReason).toBe(localResult.meta.stopReason);
+              expect(entry.terminal.metadata).toMatchObject({
+                aborted: true,
+                stopReason: localResult.meta.stopReason,
+              });
             }
           }
         }
@@ -663,8 +619,8 @@ describe("worker launch capabilities", () => {
         "resume",
       ]);
       expectUncalled(launchTurn, environments.acquireTurnCredential);
-      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
-      const placement = placements.get(SESSION_ID);
+      expect(await fx.placements.listPendingWorkspaceResultsAsync()).toEqual([]);
+      const placement = fx.placements.get(fx.SESSION_ID);
       expect([placement?.state, placement?.turnClaim]).toEqual(["active", null]);
       if (retainedNodeAuthority) {
         expect(retainedNodeAuthority).toThrow("no longer current");
