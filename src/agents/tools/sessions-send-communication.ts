@@ -44,7 +44,10 @@ import {
   resolveSandboxedSessionToolContext,
   resolveSessionToolAccess,
 } from "./sessions-access.js";
-import { readSessionCommunicationEndpoint } from "./sessions-send-communication-endpoint.js";
+import {
+  matchesSessionCommunicationParent,
+  readSessionCommunicationEndpoint,
+} from "./sessions-send-communication-endpoint.js";
 
 /** A current permission decision rejected delivery, rather than an unavailable dependency. */
 export class SessionCommunicationDeniedError extends Error {}
@@ -233,10 +236,13 @@ export async function prepareSessionsSendCommunication(params: {
         entry: undefined,
       });
       if (
-        !parent.entry ||
-        (child.entry?.parentSessionId && child.entry.parentSessionId !== parent.entry.sessionId)
+        !(await matchesSessionCommunicationParent(
+          parent,
+          child.entry?.parentSessionId,
+          assertSource,
+        ))
       ) {
-        throw new Error("The communication policy's parent session is no longer current.");
+        throw new Error("The child's parent session lineage changed; re-spawn the child.");
       }
       chain.push(parent);
     }

@@ -1,6 +1,8 @@
+import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as runtimeConfig from "../../config/config.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readSessionSendDeliveryAdmission } from "../../gateway/session-send-delivery.js";
@@ -10,8 +12,10 @@ import {
 } from "../../sessions/communication-admission.js";
 import { sessionChanges, type SessionRowChange } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { callAgentToolGatewayRequest } from "./in-process-gateway.js";
 import { prepareSessionsSendCommunication } from "./sessions-send-communication.js";
+const tempDirs = useSessionStoreTempDirs(afterAll, "sessions-send-lineage-");
 const state = vi.hoisted(() => ({
   config: {} as OpenClawConfig,
   rows: new Map<string, CommunicationEndpoint>(),
@@ -278,6 +282,60 @@ describe("sessions_send communication boundary", () => {
     );
     await expect(prepareSessionsSendCommunication(input)).rejects.toThrow("disabled");
   });
+  it("delivers parent and peer sends through recorded same-key rollover/recovery lineage", async () => {
+    const parent = endpoint("parent");
+    parent.storePath = path.join(tempDirs.make(), "sessions.sqlite");
+    for (const sessionId of ["original", "rollover", "recovered"]) {
+      await upsertSessionEntryCore(parent, { sessionId, updatedAt: 1 });
+    }
+    parent.entry.sessionId = "recovered";
+    const target = endpoint("child", {
+      spawnedBy: parent.sessionKey,
+      parentSessionId: "original",
+    });
+    for (const source of [parent, endpoint("source")]) {
+      const input = operation(source, target);
+      input.callGateway.mockClear();
+      await withGate(input, async (gate) => {
+        await gate.callGateway(agentRequest(input));
+        expect(input.callGateway).toHaveBeenCalledOnce();
+      });
+    }
+    parent.entry.communication = { receive: "never" };
+    vi.mocked(callAgentToolGatewayRequest).mockClear();
+    await denied(operation(undefined, target), "disabled");
+  });
+  it.each([undefined, "missing-original", "foreign-original"])(
+    "refuses unconnected parent lineage (predecessor=%s) with respawn guidance",
+    async (previousSessionId) => {
+      const parent = endpoint("parent");
+      parent.storePath = path.join(tempDirs.make(), "sessions.sqlite");
+      if (previousSessionId === "foreign-original") {
+        await upsertSessionEntryCore(
+          { ...parent, sessionKey: "agent:main:other-parent" },
+          {
+            sessionId: previousSessionId,
+            updatedAt: 1,
+          },
+        );
+      }
+      await upsertSessionEntryCore(parent, {
+        sessionId: "parent",
+        previousSessionId,
+        updatedAt: 1,
+      });
+      await denied(
+        operation(
+          undefined,
+          endpoint("child", {
+            spawnedBy: parent.sessionKey,
+            parentSessionId: previousSessionId ?? "missing-original",
+          }),
+        ),
+        "The child's parent session lineage changed; re-spawn the child.",
+      );
+    },
+  );
   it("does not request fresh consent during durable delivery recovery", async () => {
     const input = operation(endpoint("source", askSend));
     await expect(
