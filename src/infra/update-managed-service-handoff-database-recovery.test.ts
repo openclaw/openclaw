@@ -121,57 +121,28 @@ it.each(["live", "unknown"])(
   },
 );
 
-it.each([
-  "child",
-  "foreign",
-  "bound",
-  "custody",
-  "mirror",
-  "version4",
-  "unknown",
-  "repair-metadata",
-])("preserves %s custody for its original recovery owner", async (kind) => {
-  let key = installKey;
-  let payload: unknown = original();
-  if (kind === "child") {
-    key = `${installKey}/.openclaw-update-child-1`;
-  }
-  if (kind === "foreign") {
-    key = `${installKey}-foreign`;
-  }
-  if (kind === "bound") {
-    payload = { ...original(), executor: { ...dead, pid: dead.pid - 1 } };
-  }
-  if (kind === "custody") {
-    payload = { ...original(), action: { ...original().action, custody: "bound" } };
-  }
-  if (kind === "mirror") {
-    payload = {
-      ...original(),
-      mutationOriginal: {
-        key: `${installKey}-original`,
-        owner: "original-owner",
-        payload: JSON.stringify(original()),
-        updatedAt: 0,
-      },
-    };
-  }
-  if (kind === "version4") {
-    payload = {
-      ...original(),
-      version: 4,
-      cancellation: {
-        key: installKey,
-        owner: "committed-owner",
-        payload: JSON.stringify(original()),
-        updatedAt: 0,
-      },
-    };
-  }
-  if (kind === "unknown") {
-    payload = { ...original(), futureWriter: true };
-  }
-  seed(payload, key, kind === "repair-metadata" ? "retained recovery metadata" : null);
+function retained(key: string, owner: string) {
+  return { key, owner, payload: JSON.stringify(original()), updatedAt: 0 };
+}
+it.each<[string, () => Parameters<typeof seed>]>([
+  ["child", () => [original(), `${installKey}/.openclaw-update-child-1`]],
+  ["foreign", () => [original(), `${installKey}-foreign`]],
+  ["bound", () => [{ ...original(), executor: { ...dead, pid: dead.pid - 1 } }]],
+  ["custody", () => [{ ...original(), action: { ...original().action, custody: "bound" } }]],
+  [
+    "mirror",
+    () => [
+      { ...original(), mutationOriginal: retained(`${installKey}-original`, "original-owner") },
+    ],
+  ],
+  [
+    "version4",
+    () => [{ ...original(), version: 4, cancellation: retained(installKey, "committed-owner") }],
+  ],
+  ["unknown", () => [{ ...original(), futureWriter: true }]],
+  ["repair-metadata", () => [original(), installKey, "retained recovery metadata"]],
+])("preserves %s custody for its original recovery owner", async (_kind, fixture) => {
+  seed(...fixture());
   const before = row();
   await expect(recover()).rejects.toThrow("foreign or retained executor custody");
   expect(row()).toEqual(before);
