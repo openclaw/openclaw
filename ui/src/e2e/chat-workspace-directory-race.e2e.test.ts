@@ -3,6 +3,8 @@ import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-sup
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+const listMethod = "sessions.files.list";
+const dir = (name: string) => ({ kind: "directory", name, path: name });
 function listing<T>(sessionKey: string, folder: string, entries: T[], parentPath?: string) {
   return {
     sessionKey,
@@ -18,15 +20,7 @@ suite.define(() => {
     async (missing) => {
       await suite.withPage({}, async ({ page }) => {
         const baseListing = { sessionKey: "main", root: "/workspace", files: [] };
-        const rootListing = listing(
-          "main",
-          "",
-          ["reports", "other"].map((name) => ({
-            kind: "directory",
-            name,
-            path: name,
-          })),
-        );
+        const rootListing = listing("main", "", [dir("reports"), dir("other")]);
         const directoryListing = (folder: string, name: string) =>
           listing(
             "main",
@@ -37,7 +31,7 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           methodResponses: {
             "artifacts.list": { artifacts: [] },
-            "sessions.files.list": rootListing,
+            [listMethod]: rootListing,
           },
         });
         await page.goto(`${suite.server.baseUrl}chat`);
@@ -45,17 +39,14 @@ suite.define(() => {
         const rail = page.locator(".chat-workspace-rail");
         const file = (name: string) => rail.getByRole("button", { name, exact: true });
         await file("reports").waitFor();
-        await gateway.setMethodResponse(
-          "sessions.files.list",
-          directoryListing("reports", "notes.md"),
-        );
+        await gateway.setMethodResponse(listMethod, directoryListing("reports", "notes.md"));
         await file("reports").click();
         const originalFile = file("reports/notes.md");
         await originalFile.waitFor();
 
         // A removed or renamed directory returns a successful listing without browser.
         await gateway.setMethodResponse(
-          "sessions.files.list",
+          listMethod,
           missing ? baseListing : directoryListing("reports", "refreshed.md"),
         );
         await gateway.emitChatFinal({ runId: "folder-change", text: "Workspace updated." });
@@ -66,7 +57,7 @@ suite.define(() => {
         const parent = file("..");
         await expect.poll(() => parent.isVisible()).toBe(true);
 
-        await gateway.setMethodResponse("sessions.files.list", {
+        await gateway.setMethodResponse(listMethod, {
           ...rootListing,
           browser: {
             ...rootListing.browser,
@@ -77,10 +68,7 @@ suite.define(() => {
         });
         await parent.click();
         await file("other").waitFor();
-        await gateway.setMethodResponse(
-          "sessions.files.list",
-          directoryListing("other", "keep.md"),
-        );
+        await gateway.setMethodResponse(listMethod, directoryListing("other", "keep.md"));
         await file("other").click();
         await file("other/keep.md").waitFor();
       });
@@ -89,9 +77,7 @@ suite.define(() => {
 
   it("keeps a newly opened project file selected after an older directory response", async () => {
     await suite.withPage({}, async ({ page }) => {
-      const rootListing = listing("agent:main:main", "", [
-        { kind: "directory", name: "reports", path: "reports" },
-      ]);
+      const rootListing = listing("agent:main:main", "", [dir("reports")]);
       const reportsListing = listing("agent:main:main", "reports", [
         { kind: "file", name: "inventory.csv", path: "reports/inventory.csv", size: 24 },
       ]);
@@ -101,7 +87,7 @@ suite.define(() => {
         ],
         methodResponses: {
           "artifacts.list": { artifacts: [] },
-          "sessions.files.list": rootListing,
+          [listMethod]: rootListing,
           "sessions.files.get": {
             sessionKey: "agent:main:main",
             root: "/workspace",
@@ -120,11 +106,9 @@ suite.define(() => {
       await openChatSidePanelType(page, "Files");
       const rail = page.locator(".chat-workspace-rail");
       await rail.getByRole("button", { name: "reports", exact: true }).waitFor();
-      await gateway.deferNext("sessions.files.list");
+      await gateway.deferNext(listMethod);
       await gateway.emitChatFinal({ runId: "directory-refresh", text: "Report is ready." });
-      await expect
-        .poll(async () => (await gateway.getRequests("sessions.files.list")).length)
-        .toBe(2);
+      await expect.poll(async () => (await gateway.getRequests(listMethod)).length).toBe(2);
       await page.locator('a.markdown-file-link[data-file-path="reports/inventory.csv"]').click();
       await expect
         .poll(() => page.locator(".chat-files-panel__page:not([hidden]) .cm-content").textContent())
@@ -134,11 +118,9 @@ suite.define(() => {
         .getByRole("button", { name: "Files", exact: true })
         .click();
       await rail.getByRole("button", { name: "reports", exact: true }).click();
-      await gateway.setMethodResponse("sessions.files.list", reportsListing);
-      await gateway.resolveDeferred("sessions.files.list", rootListing);
-      await expect
-        .poll(async () => (await gateway.getRequests("sessions.files.list")).length)
-        .toBe(3);
+      await gateway.setMethodResponse(listMethod, reportsListing);
+      await gateway.resolveDeferred(listMethod, rootListing);
+      await expect.poll(async () => (await gateway.getRequests(listMethod)).length).toBe(3);
       const row = rail.locator(".chat-workspace-rail__file").filter({ hasText: "inventory.csv" });
       await row.waitFor();
       await page.mouse.click(600, 300);

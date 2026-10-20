@@ -1,6 +1,7 @@
 import type { Request } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiChatHistoryMessage } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI YouTube embeds" });
@@ -39,16 +40,11 @@ suite.define(() => {
         );
         await installMockGateway(page, {
           historyMessages: [
-            {
-              role: "assistant",
-              content: [
-                {
-                  type: "text",
-                  text: '[embed url="https://youtu.be/AbCdEfGhI_1?t=1m30s" title="Synthetic trailer" /]\n\n[embed url="https://youtu.be/JkLmNoPqR_2" title="Missing cover" /]',
-                },
-              ],
-              timestamp: 100,
-            },
+            createControlUiChatHistoryMessage(
+              "assistant",
+              '[embed url="https://youtu.be/AbCdEfGhI_1?t=1m30s" title="Synthetic trailer" /]\n\n[embed url="https://youtu.be/JkLmNoPqR_2" title="Missing cover" /]',
+              100,
+            ),
           ],
         });
         // The standard mock bootstrap disables generic external embed URLs.
@@ -64,8 +60,7 @@ suite.define(() => {
         await expect
           .poll(() => card.locator("img").evaluate((image: HTMLImageElement) => image.naturalWidth))
           .toBe(480);
-        expect(playerRequests).toHaveLength(0);
-        expect(await frame.count()).toBe(0);
+        expect([playerRequests.length, await frame.count()]).toEqual([0, 0]);
         expect(thumbnailRequests[0]?.headers().referer).toBeUndefined();
         const watch = card.getByRole("link", { name: "Open on YouTube", exact: true });
         expect(await watch.getAttribute("href")).toBe(
@@ -83,10 +78,11 @@ suite.define(() => {
           playsinline: "1",
           start: "90",
         });
-        expect(playerRequests[0]!.headers().referer).toBe(
-          `${new URL(suite.server.baseUrl).origin}/`,
-        );
-        expect(playerRequests[0]!.headers().authorization).toBeUndefined();
+        const { referer, authorization } = playerRequests[0]!.headers();
+        expect({ referer, authorization }).toEqual({
+          referer: `${new URL(suite.server.baseUrl).origin}/`,
+          authorization: undefined,
+        });
         expect(await watch.isVisible()).toBe(true);
 
         const missing = page.locator("openclaw-youtube-video").filter({ hasText: "Missing cover" });

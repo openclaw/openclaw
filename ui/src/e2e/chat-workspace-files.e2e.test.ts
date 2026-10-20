@@ -15,67 +15,58 @@ const previewArtifact = {
 
 suite.define(() => {
   it("retries a failed post-run listing without hiding a rejected retry", async () => {
-    await suite.withPage(
-      {
-        ...createControlUiE2eContextOptions(),
-        viewport: { width: 1280, height: 900 },
-      },
-      async ({ page }) => {
-        const gateway = await installMockGateway(page, {
-          methodResponses: {
-            "sessions.files.list": {
-              sessionKey: "main",
-              root: "/workspace",
-              files: [{ kind: "modified", name: "checklist.md", path: "checklist.md", size: 42 }],
-            },
-            "artifacts.list": { artifacts: [] },
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "sessions.files.list": {
+            sessionKey: "main",
+            root: "/workspace",
+            files: [{ kind: "modified", name: "checklist.md", path: "checklist.md", size: 42 }],
           },
-        });
-        await page.goto(`${suite.server.baseUrl}chat`);
-        await openChatSidePanelType(page, "Files");
-        const rail = page.locator(".chat-workspace-rail");
-        await rail.getByText("checklist.md", { exact: true }).waitFor();
-        await gateway.deferNext("sessions.files.list");
-        await gateway.emitChatFinal({ runId: "files-revision", text: "Checklist updated." });
-        await expect
-          .poll(async () => (await gateway.getRequests("sessions.files.list")).length)
-          .toBe(2);
-        await gateway.rejectDeferred("sessions.files.list", {
-          code: "UNAVAILABLE",
-          message: "Session workspace changed during file read",
-        });
-        const error = rail.getByText("Session workspace changed during file read", { exact: true });
-        await error.waitFor();
-        await page.getByRole("button", { name: "Close Files" }).click();
-        await rail.waitFor({ state: "detached" });
-        await openChatSidePanelType(page, "Files");
-        await error.waitFor();
-        expect(await gateway.getRequests("sessions.files.list")).toHaveLength(2);
-        const retry = rail.getByRole("button", { name: "Retry", exact: true });
-        await retry.waitFor();
-        await gateway.deferNext("sessions.files.list");
-        await retry.click();
-        await expect
-          .poll(async () => (await gateway.getRequests("sessions.files.list")).length)
-          .toBe(3);
-        await gateway.rejectDeferred("sessions.files.list", {
-          code: "FORBIDDEN",
-          message: "Session files are unavailable",
-        });
-        const denied = rail.getByRole("alert");
-        await expect.poll(() => denied.textContent()).toBe("Session files are unavailable");
-        expect(await rail.locator(".chat-workspace-rail__file-name").count()).toBe(0);
-        expect(await gateway.getRequests("sessions.files.list")).toHaveLength(3);
-        await retry.click();
-        await rail.getByText("checklist.md", { exact: true }).waitFor();
-        const requests = await gateway.getRequests("sessions.files.list");
-        expect(requests).toHaveLength(4);
-        expect(requests[2]?.params).toEqual(requests[1]?.params);
-        expect(requests[3]?.params).toEqual(requests[1]?.params);
-        expect(await denied.count()).toBe(0);
-        expect(await retry.count()).toBe(0);
-      },
-    );
+          "artifacts.list": { artifacts: [] },
+        },
+      });
+      const listRequests = () => gateway.getRequests("sessions.files.list");
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await openChatSidePanelType(page, "Files");
+      const rail = page.locator(".chat-workspace-rail");
+      await rail.getByText("checklist.md", { exact: true }).waitFor();
+      await gateway.deferNext("sessions.files.list");
+      await gateway.emitChatFinal({ runId: "files-revision", text: "Checklist updated." });
+      await expect.poll(listRequests).toHaveLength(2);
+      await gateway.rejectDeferred("sessions.files.list", {
+        code: "UNAVAILABLE",
+        message: "Session workspace changed during file read",
+      });
+      const error = rail.getByText("Session workspace changed during file read", { exact: true });
+      await error.waitFor();
+      await page.getByRole("button", { name: "Close Files" }).click();
+      await rail.waitFor({ state: "detached" });
+      await openChatSidePanelType(page, "Files");
+      await error.waitFor();
+      expect(await listRequests()).toHaveLength(2);
+      const retry = rail.getByRole("button", { name: "Retry", exact: true });
+      await retry.waitFor();
+      await gateway.deferNext("sessions.files.list");
+      await retry.click();
+      await expect.poll(listRequests).toHaveLength(3);
+      await gateway.rejectDeferred("sessions.files.list", {
+        code: "FORBIDDEN",
+        message: "Session files are unavailable",
+      });
+      const denied = rail.getByRole("alert");
+      await expect.poll(() => denied.textContent()).toBe("Session files are unavailable");
+      expect(await rail.locator(".chat-workspace-rail__file-name").count()).toBe(0);
+      expect(await listRequests()).toHaveLength(3);
+      await retry.click();
+      await rail.getByText("checklist.md", { exact: true }).waitFor();
+      const requests = await listRequests();
+      expect(requests).toHaveLength(4);
+      expect(requests[2]?.params).toEqual(requests[1]?.params);
+      expect(requests[3]?.params).toEqual(requests[1]?.params);
+      expect(await denied.count()).toBe(0);
+      expect(await retry.count()).toBe(0);
+    });
   });
 
   it("starts the workspace files panel collapsed and toggles it open", async () => {
@@ -95,10 +86,8 @@ suite.define(() => {
             files: [
               {
                 kind: "modified",
-                missing: false,
                 name: "AGENTS.md",
                 path: "/workspace/AGENTS.md",
-                size: 2048,
               },
             ],
             root: "/workspace",
@@ -123,8 +112,9 @@ suite.define(() => {
         gateway.setMethodResponse("sessions.files.list", {
           files: [{ kind: "modified", name, path: `/workspace/${name}` }],
         });
+      const listRequests = () => gateway.getRequests("sessions.files.list");
       await page.goto(`${suite.server.baseUrl}chat`);
-      expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
+      expect(await listRequests()).toHaveLength(0);
       expect(await page.locator(".chat-workspace-rail").count()).toBe(0);
 
       await openChatSidePanelType(page, "Files");
@@ -133,7 +123,7 @@ suite.define(() => {
       await waitForFile("preview.png");
       await page.getByText("Project files").waitFor({ timeout: 10_000 });
       await waitForFile("package.json");
-      expect(await gateway.getRequests("sessions.files.list")).toHaveLength(1);
+      expect(await listRequests()).toHaveLength(1);
       expect(await gateway.getRequests("artifacts.list")).toHaveLength(1);
       expect(
         await page.locator(".chat-workspace-rail").evaluate((element) => {
@@ -150,22 +140,18 @@ suite.define(() => {
         text: "Workspace stayed closed.",
       });
       await expect.poll(() => page.getByText("Workspace stayed closed.").count()).toBe(1);
-      expect(await gateway.getRequests("sessions.files.list")).toHaveLength(1);
+      expect(await listRequests()).toHaveLength(1);
 
       await openChatSidePanelType(page, "Files");
-      await expect
-        .poll(async () => (await gateway.getRequests("sessions.files.list")).length)
-        .toBe(2);
+      await expect.poll(listRequests).toHaveLength(2);
       await waitForFile("AFTER_RUN.md");
-      expect(await gateway.getRequests("sessions.files.list")).toHaveLength(2);
+      expect(await listRequests()).toHaveLength(2);
 
       await openChatSidePanelType(page, "Review");
       await page.locator('[data-panel-slot="detail"]:not([hidden])').waitFor();
       await page.getByRole("button", { name: "Actions for AFTER_RUN.md" }).click();
       await page.locator('openclaw-session-diff-menu button[value="reveal-file"]').click();
-      await expect
-        .poll(async () => (await gateway.getRequests("sessions.files.list")).length)
-        .toBe(3);
+      await expect.poll(listRequests).toHaveLength(3);
       await waitForFile("AFTER_RUN.md");
       await page.locator(".tabstrip-tab").filter({ hasText: "Review" }).click();
       await setModifiedFile("AFTER_REVIEW.md");
@@ -174,12 +160,10 @@ suite.define(() => {
         text: "Workspace stayed inactive.",
       });
       await page.getByText("Workspace stayed inactive.").first().waitFor();
-      expect(await gateway.getRequests("sessions.files.list")).toHaveLength(3);
+      expect(await listRequests()).toHaveLength(3);
 
       await page.locator(".tabstrip-tab").filter({ hasText: "Files" }).click();
-      await expect
-        .poll(async () => (await gateway.getRequests("sessions.files.list")).length)
-        .toBe(4);
+      await expect.poll(listRequests).toHaveLength(4);
       await waitForFile("AFTER_REVIEW.md");
 
       await page.setViewportSize({ height: 900, width: 640 });
@@ -208,7 +192,6 @@ suite.define(() => {
           kind: "file" as const,
           name: `file-${String(index + 1).padStart(2, "0")}.ts`,
           path: `src/file-${String(index + 1).padStart(2, "0")}.ts`,
-          size: 2048 + index,
         }));
         const gateway = await installMockGateway(page, {
           methodResponses: {
@@ -219,13 +202,11 @@ suite.define(() => {
                   kind: "modified",
                   name: `changed-${index + 1}.ts`,
                   path: `src/changed-${index + 1}.ts`,
-                  missing: false,
                 })),
                 ...["read-file-1.ts", "read-file-2.ts", "notes.md"].map((name) => ({
                   kind: "read",
                   name,
                   path: `src/${name}`,
-                  missing: false,
                 })),
               ],
               root: "/workspace",

@@ -1,11 +1,8 @@
 import { expect, it } from "vitest";
 import type { SessionPlacementDiskSpace } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
-import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
-import {
-  controlUiSessionUrl,
-  installMockGateway,
-  startControlUiE2eServer,
-} from "../test-helpers/control-ui-e2e.ts";
+import type { SessionsListResult } from "../api/types.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { activePlacement, cloudSession, cloudSessionList } from "./cloud-session.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const sessionKey = "agent:main:disk-monitor";
@@ -16,44 +13,22 @@ const observedAtMs = Date.parse("2026-08-13T16:00:00.000Z");
 
 const suite = createControlUiE2eSuite({
   name: "Control UI cloud-session disk-space monitoring",
-  startServer: startControlUiE2eServer,
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 
 function sessionsList(diskSpace: SessionPlacementDiskSpace): SessionsListResult {
   const placementUpdatedAtMs = diskSpace.observedAtMs;
-  const session: GatewaySessionRow = {
-    displayName: "Disk monitor",
-    hasActiveRun: false,
-    key: sessionKey,
-    kind: "direct",
-    label: "Disk monitor",
-    model: "gpt-5.6-luna",
-    modelProvider: "openai",
-    placement: {
-      state: "active",
-      generation: 1,
-      createdAtMs: observedAtMs - 60_000,
-      updatedAtMs: placementUpdatedAtMs,
-      stateChangedAtMs: observedAtMs - 30_000,
-      environmentId: "worker:disk-monitor",
-      activeOwnerEpoch: 1,
-      workerBundleHash: "a".repeat(64),
-      workspaceBaseManifestRef: "sha256:disk-monitor-base",
-      remoteWorkspaceDir: "/workspace/disk-monitor",
-      diskSpace,
-    },
-    status: "done",
-    totalTokens: 0,
-    updatedAt: placementUpdatedAtMs,
-  };
-  return {
-    count: 1,
-    defaults: { contextTokens: null, model: "gpt-5.6-luna", modelProvider: "openai" },
-    path: "",
-    sessions: [session],
-    ts: placementUpdatedAtMs,
-  };
+  return cloudSessionList(
+    cloudSession(
+      sessionKey,
+      "Disk monitor",
+      placementUpdatedAtMs,
+      activePlacement(observedAtMs, {
+        updatedAtMs: placementUpdatedAtMs,
+        diskSpace,
+      }),
+    ),
+  );
 }
 
 suite.define(() => {
@@ -117,38 +92,33 @@ suite.define(() => {
       expect(await page.locator(".chat-cloud-disk-space-notice").count()).toBe(0);
       await expectAccessibleBadge("ok", "Placement: active");
 
-      await refresh({
-        status: "warning",
-        availableBytes: 247 * mebibyte,
-        totalBytes: 6 * gibibyte,
-        observedAtMs: observedAtMs + 1_000,
-      });
-      const warning = page
-        .getByRole("status")
-        .filter({ hasText: "Cloud session disk space is low" });
-      await warning.waitFor();
-      expect(await warning.textContent()).toContain(
-        "96% used · 247 MB free. Delete unneeded files or stop the cloud worker before large writes.",
-      );
-      await expectAccessibleBadge("warning", "Placement: active · Cloud session disk space is low");
-
-      await refresh({
-        status: "critical",
-        availableBytes: 80 * mebibyte,
-        totalBytes: 6 * gibibyte,
-        observedAtMs: observedAtMs + 2_000,
-      });
-      const critical = page
-        .getByRole("alert")
-        .filter({ hasText: "Cloud session disk space is critically low" });
-      await critical.waitFor();
-      expect(await critical.textContent()).toContain(
-        "99% used · 80 MB free. New writes may fail and stop the agent. Delete unneeded files or stop the cloud worker before large writes.",
-      );
-      await expectAccessibleBadge(
-        "critical",
-        "Placement: active · Cloud session disk space is critically low",
-      );
+      for (const [status, freeMb, role, title, description] of [
+        [
+          "warning",
+          247,
+          "status",
+          "Cloud session disk space is low",
+          "96% used · 247 MB free. Delete unneeded files or stop the cloud worker before large writes.",
+        ],
+        [
+          "critical",
+          80,
+          "alert",
+          "Cloud session disk space is critically low",
+          "99% used · 80 MB free. New writes may fail and stop the agent. Delete unneeded files or stop the cloud worker before large writes.",
+        ],
+      ] as const) {
+        await refresh({
+          status,
+          availableBytes: freeMb * mebibyte,
+          totalBytes: 6 * gibibyte,
+          observedAtMs: observedAtMs + (status === "warning" ? 1_000 : 2_000),
+        });
+        const notice = page.getByRole(role).filter({ hasText: title });
+        await notice.waitFor();
+        expect(await notice.textContent()).toContain(description);
+        await expectAccessibleBadge(status, `Placement: active · ${title}`);
+      }
 
       await refresh({ ...healthy, observedAtMs: observedAtMs + 3_000 });
       await expect.poll(() => page.locator(".chat-cloud-disk-space-notice").count()).toBe(0);

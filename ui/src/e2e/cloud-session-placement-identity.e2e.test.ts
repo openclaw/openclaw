@@ -1,36 +1,21 @@
 import { expect, it } from "vitest";
-import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { activePlacement, cloudSession, cloudSessionList } from "./cloud-session.test-support.ts";
 import {
-  controlUiSessionUrl,
-  installMockGateway,
-  startControlUiE2eServer,
-} from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+  createControlUiE2eContextOptions,
+  createControlUiE2eSuite,
+} from "./control-ui-e2e-suite.test-support.ts";
 import { pollLocatorText } from "./new-session-page.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI cloud-session placement identity",
-  startServer: startControlUiE2eServer,
 });
-const contextOptions = {
-  locale: "en-US",
-  serviceWorkers: "block",
-  viewport: { width: 1280, height: 900 },
-} as const;
-
-function placementSession(
-  key: string,
-  label: string,
-  now: number,
-  placement: NonNullable<GatewaySessionRow["placement"]>,
-): GatewaySessionRow {
-  return { key: `agent:main:${key}`, kind: "direct", label, updatedAt: now, placement };
-}
+const contextOptions = createControlUiE2eContextOptions();
 
 suite.define(() => {
   it("shows provisioning in the conversation when opening a session without local startup state", async () => {
     const now = Date.now();
-    const session = placementSession("provisioning", "Prepare the cloud workspace", now, {
+    const session = cloudSession("agent:main:provisioning", "Prepare the cloud workspace", now, {
       state: "provisioning",
       generation: 1,
       createdAtMs: now,
@@ -58,32 +43,21 @@ suite.define(() => {
 
   it("shows the cloud service, profile, and machine in the placement menu", async () => {
     const now = Date.now();
-    const session = placementSession("cloud-identity", "Cloud identity", now, {
-      state: "active",
-      generation: 1,
-      createdAtMs: now - 60_000,
-      updatedAtMs: now,
-      stateChangedAtMs: now - 30_000,
-      environmentId: "worker:9f2c4e7a81d24b06a5c3f8e1b7d94c1a",
-      providerId: "machine0",
-      profileId: "team",
-      machine: { class: "medium", os: "linux", osLabel: "Linux", cpu: 4, memoryGb: 16 },
-      activeOwnerEpoch: 1,
-      workerBundleHash: "a".repeat(64),
-      workspaceBaseManifestRef: "sha256:cloud-identity-base",
-      remoteWorkspaceDir: "/workspace/cloud-identity",
-    });
-    const sessions: SessionsListResult = {
-      count: 1,
-      defaults: { contextTokens: null, model: "gpt-5.6-luna", modelProvider: "openai" },
-      path: "",
-      sessions: [session],
-      ts: now,
-    };
+    const session = cloudSession(
+      "agent:main:cloud-identity",
+      "Cloud identity",
+      now,
+      activePlacement(now, {
+        environmentId: "worker:9f2c4e7a81d24b06a5c3f8e1b7d94c1a",
+        providerId: "machine0",
+        profileId: "team",
+        machine: { class: "medium", os: "linux", osLabel: "Linux", cpu: 4, memoryGb: 16 },
+      }),
+    );
     await suite.withPage(contextOptions, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         sessionKey: session.key,
-        methodResponses: { "sessions.list": sessions },
+        methodResponses: { "sessions.list": cloudSessionList(session) },
       });
       const response = await page.goto(controlUiSessionUrl(suite.server.baseUrl, session.key));
       expect(response?.status()).toBe(200);

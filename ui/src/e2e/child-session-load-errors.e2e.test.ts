@@ -11,6 +11,7 @@ import {
 
 const suite = createSessionManagementE2eSuite(true);
 const rosterMatch = { includeGlobal: true };
+const listMethod = "sessions.list";
 
 suite.define(() => {
   it("keeps one failed child load and alert until the operator retries", async () => {
@@ -39,9 +40,7 @@ suite.define(() => {
     const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "sessions.list": listCases(),
-      },
+      methodResponses: { [listMethod]: listCases() },
       sessionKey: mainKey,
     });
 
@@ -49,44 +48,34 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, mainKey));
       const parent = page.locator(`[data-session-key="${parentKey}"]`);
       await parent.waitFor({ state: "visible", timeout: 10_000 });
-      await page.evaluate(() => {
+      const alertMarker = await page.evaluateHandle(() => {
         const marker = { insertions: 0 };
-        Object.assign(globalThis, { childSessionAlertMarker: marker });
         new MutationObserver((records) => {
-          for (const record of records) {
-            for (const node of record.addedNodes) {
-              if (!(node instanceof Element)) {
-                continue;
-              }
-              if (node.matches('[role="alert"]')) {
-                marker.insertions += 1;
-              }
+          for (const node of records.flatMap((record) => [...record.addedNodes])) {
+            if (node instanceof Element) {
+              marker.insertions += Number(node.matches('[role="alert"]'));
               marker.insertions += node.querySelectorAll('[role="alert"]').length;
             }
           }
         }).observe(document.body, { childList: true, subtree: true });
+        return marker;
       });
       await parent.locator(`[data-child-session-toggle="${parentKey}"]`).click();
 
       const alert = page.locator(`[data-child-session-error="${parentKey}"]`);
       await alert.waitFor({ state: "visible" });
-      const mountedAlert = await alert.elementHandle();
+      const mounted = await alert.elementHandle();
       const childRequestCount = async () =>
-        (await gateway.getRequests("sessions.list")).filter(
-          (request) =>
-            typeof request.params === "object" &&
-            request.params !== null &&
-            "spawnedBy" in request.params &&
-            request.params.spawnedBy === parentKey,
-        ).length;
+        (await gateway.getRequests(listMethod, { spawnedBy: parentKey })).length;
+      const rosterRequests = () => gateway.getRequests(listMethod, rosterMatch);
       expect(await childRequestCount()).toBe(1);
 
       await page.clock.install();
       await pauseVirtualClock(page);
       for (let revision = 1; revision <= 3; revision += 1) {
         const unrelatedLabel = `Unrelated active task ${revision}`;
-        await gateway.setMethodResponse("sessions.list", listCases(childFailure, unrelatedLabel));
-        const listRequests = await gateway.deferNext("sessions.list", rosterMatch);
+        await gateway.setMethodResponse(listMethod, listCases(childFailure, unrelatedLabel));
+        const listRequests = await gateway.deferNext(listMethod, rosterMatch);
         await gateway.emitGatewayEvent("sessions.changed", {
           key: unrelatedKey,
           reason: "run",
@@ -95,14 +84,12 @@ suite.define(() => {
         });
         // Allow the shared refresh policy's maximum cooldown; the fixture owns response delivery.
         await page.clock.runFor(15_001);
-        expect((await gateway.getRequests("sessions.list", rosterMatch)).length).toBeGreaterThan(
-          listRequests,
-        );
+        expect((await rosterRequests()).length).toBeGreaterThan(listRequests);
         // Exercise a slow successful refresh without leaving a mock timer behind the paused clock.
         if (revision === 1) {
           await page.clock.runFor(2_000);
         }
-        await gateway.resolveDeferred("sessions.list", undefined, { match: rosterMatch });
+        await gateway.resolveDeferred(listMethod, undefined, { match: rosterMatch });
         await page.clock.runFor(50);
         await page
           .locator(`.sidebar-recent-session[data-session-key="${unrelatedKey}"]`)
@@ -110,23 +97,12 @@ suite.define(() => {
           .waitFor();
         expect(await childRequestCount()).toBe(1);
         expect(await alert.count()).toBe(1);
-        expect(await alert.evaluate((node, original) => node === original, mountedAlert)).toBe(
-          true,
-        );
+        expect(await alert.evaluate((node, original) => node === original, mounted)).toBe(true);
       }
-      expect(
-        await page.evaluate(
-          () =>
-            (
-              globalThis as typeof globalThis & {
-                childSessionAlertMarker: { insertions: number };
-              }
-            ).childSessionAlertMarker.insertions,
-        ),
-      ).toBe(1);
+      expect(await alertMarker.evaluate((marker) => marker.insertions)).toBe(1);
 
       await page.clock.resume();
-      await gateway.setMethodResponse("sessions.list", listCases(childResponse));
+      await gateway.setMethodResponse(listMethod, listCases(childResponse));
       await alert.getByRole("button", { name: "Retry" }).click();
       await page.getByText("Recovered child", { exact: true }).waitFor();
       expect(await childRequestCount()).toBe(2);
